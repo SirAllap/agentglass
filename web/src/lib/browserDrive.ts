@@ -551,8 +551,29 @@ interface ShotClip { x: number; y: number; width: number; height: number }
  * `querySelectorAll` catches both in one pass — a throw is the syntax error,
  * a length is the count — before `body` ever runs against a real element.
  */
-function resolveOne(selLit: string, body: string): string {
+function resolveOne(selLit: string, body: string, lenient = false): string {
   return `(() => {
+    const __got = ${ONE}(${selLit}, ${lenient});
+    if (__got.kind !== "ok") return __got;
+    const e = __got.e;
+    ${body}
+  })()`;
+}
+
+/**
+ * The page half of `resolveOne`, on its own so a verb that needs two elements
+ * (`drag`), a list of them (`fill`), a poll (`wait`) or a DevTools handle
+ * (`upload`, `listeners`, `debug dom`) finds them the same way `click` does —
+ * those used to build their own querySelector, and each one that did missed
+ * something: the id rewrite (`select`, `fill`, `wait`), the ambiguity check
+ * (`drag`, `upload`, `scroll`), or both.
+ *
+ * `lenient` is for the verbs that only READ an element (`text`, `html`,
+ * `region`, `listeners`, `debug dom`) and for `wait`, which asks whether
+ * anything matches at all: several matches there mean the first, as they
+ * always have. A verb that acts refuses several.
+ */
+const ONE = `((__raw, __lenient) => {
     let __all;
     /*
        An id from an observation is accepted wherever a selector is, because
@@ -561,12 +582,11 @@ function resolveOne(selLit: string, body: string): string {
        with extra steps. It is a data attribute on the node, so it needs no
        special path — just the selector it stands for.
     */
-    const __raw = ${selLit};
     const __sel = /^e[0-9]+$/.test(__raw) ? '[data-agx-e="' + __raw + '"]' : __raw;
     try { __all = document.querySelectorAll(__sel); }
     catch (__e) { return { kind: "invalid", message: String((__e && __e.message) || __e) }; }
     if (__all.length === 0) return { kind: "none" };
-    if (__all.length > 1) {
+    if (__all.length > 1 && !__lenient) {
       /* Something that TELLS THEM APART. It described a node by tag, id and
          testid, which on a page whose elements have none of the last two says
          "p, p" — true, and no help at all to somebody being asked to narrow
@@ -587,9 +607,34 @@ function resolveOne(selLit: string, body: string): string {
       };
       return { kind: "many", count: __all.length, samples: [...__all].slice(0, 5).map(__describe) };
     }
-    const e = __all[0];
-    ${body}
-  })()`;
+    return { kind: "ok", e: __all[0] };
+  })`;
+
+/**
+ * A DevTools handle on the element a selector names, for the verbs that go
+ * through the protocol rather than a page script. The page answers with the
+ * node itself, or — when there is not exactly one — with the refusal as a
+ * JSON string, so it is still one round trip and the sentence is the same
+ * one `click` would have said.
+ */
+async function nodeFor(
+  cdp: (method: string, params?: unknown) => Promise<{ ok: boolean; result?: unknown; error?: string }>,
+  selLit: string, raw: string, lenient: boolean,
+): Promise<{ objectId: string } | { error: string }> {
+  const ev = await cdp("Runtime.evaluate", {
+    expression: `(() => { const __r = ${resolveOne(selLit, "return e;", lenient)};
+      return (__r && __r.nodeType === 1) ? __r : JSON.stringify(__r || { kind: "none" }); })()`,
+    includeCommandLineAPI: true,
+  }) as { ok: boolean; result?: { result?: { objectId?: string; subtype?: string; type?: string; value?: unknown } }; error?: string };
+  if (!ev.ok) return { error: ev.error || "the DevTools protocol refused that" };
+  const res = ev.result?.result;
+  if (res?.type === "string") {
+    let why: { kind?: string } | null = null;
+    try { why = JSON.parse(String(res.value)); } catch { /* not ours: say it matched nothing */ }
+    return { error: selectorError(raw, why as never) };
+  }
+  if (!res?.objectId || res.subtype === "null") return { error: `nothing on the page matches ${raw}` };
+  return { objectId: res.objectId };
 }
 
 /** The sentence for whichever way `resolveOne` failed. */
@@ -1357,13 +1402,11 @@ async function runVerb(
           `(() => {
              const pairs = [${pairs}];
              const filled = [];
+             const one = ${ONE};
              for (const [fsel, text] of pairs) {
-               let all;
-               try { all = document.querySelectorAll(fsel); }
-               catch (err) { return { kind: "invalid", selector: fsel, message: String((err && err.message) || err) }; }
-               if (all.length === 0) return { kind: "none", selector: fsel };
-               if (all.length > 1) return { kind: "many", selector: fsel, count: all.length };
-               const fe = all[0];
+               const got = one(fsel, false);
+               if (got.kind !== "ok") return { ...got, selector: fsel };
+               const fe = got.e;
                fe.focus();
                const proto = fe instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
                const set = Object.getOwnPropertyDescriptor(proto, "value");
@@ -1374,7 +1417,7 @@ async function runVerb(
              }
              return { kind: "ok", filled };
            })()`,
-        ) as { kind: string; selector?: string; message?: string; count?: number; filled?: string[] };
+        ) as { kind: string; selector?: string; message?: string; count?: number; samples?: string[]; filled?: string[] };
         if (result?.kind !== "ok") {
           const badSel = result?.selector ?? "";
           return { ok: false, error: `could not fill ${badSel} — ${selectorError(badSel, result as never)}` };
@@ -1432,16 +1475,20 @@ async function runVerb(
         const found = await el.executeJavaScript(
           `new Promise((resolve) => {
              const deadline = Date.now() + 30000;
+             const one = ${ONE};
              const tick = () => {
-               if (document.querySelector(${sel})) return resolve(true);
+               const got = one(${sel}, true);
+               if (got.kind === "ok") return resolve(true);
+               if (got.kind === "invalid") return resolve(got);
                if (Date.now() > deadline) return resolve(false);
                setTimeout(tick, 120);
              };
              tick();
            })`,
-        );
-        return found === true
-          ? { ok: true, value: { appeared: ask.args.selector } }
+        ) as boolean | { kind: string; message?: string };
+        if (found === true) return { ok: true, value: { appeared: ask.args.selector } };
+        return typeof found === "object" && found
+          ? { ok: false, error: selectorError(String(ask.args.selector ?? ""), found) }
           : { ok: false, error: `${ask.args.selector} never appeared` };
       }
 
@@ -1497,13 +1544,12 @@ async function runVerb(
            the page rather than by curling the server and opening the .vue
            file it was built from — which is what somebody did today. */
         const max = Number(ask.args.max ?? 20_000);
-        const value = await el.executeJavaScript(
-          `(() => { const e = document.querySelector(${sel});
-             return e ? { html: e.outerHTML.slice(0, ${max}), truncated: e.outerHTML.length > ${max} } : null; })()`,
-        );
-        return value
-          ? { ok: true, value }
-          : { ok: false, error: `nothing on the page matches ${ask.args.selector}` };
+        const got = await el.executeJavaScript(resolveOne(sel,
+          `return { kind: "ok", html: e.outerHTML.slice(0, ${max}), truncated: e.outerHTML.length > ${max} };`, true,
+        )) as { kind: string; html?: string; truncated?: boolean };
+        return got?.kind === "ok"
+          ? { ok: true, value: { html: got.html, truncated: got.truncated } }
+          : { ok: false, error: selectorError(String(ask.args.selector ?? ""), got as never) };
       }
       case "waitfor": {
         /* A CONDITION rather than an element appearing. "Until this text
@@ -1976,12 +2022,9 @@ async function runVerb(
         if (action === "dom") {
           /* "Who deleted this row." The one question a debugger answers that
              nothing else here can. */
-          const ev = await cdp("Runtime.evaluate", { expression: `document.querySelector(${sel})` }) as
-            { ok: boolean; result?: { result?: { objectId?: string; subtype?: string } }; error?: string };
-          const objectId = ev.result?.result?.objectId;
-          if (!objectId || ev.result?.result?.subtype === "null") {
-            return { ok: false, error: `nothing on the page matches ${String(a.selector ?? "")}` };
-          }
+          const found = await nodeFor(cdp, sel, String(a.selector ?? ""), true);
+          if ("error" in found) return { ok: false, error: found.error };
+          const objectId = found.objectId;
           await cdp("DOM.enable", {});
           /* The same protocol rule `upload` was caught by: DOM.requestNode
              translates a Runtime object through the DOM agent's node map, and
@@ -2061,10 +2104,11 @@ async function runVerb(
          */
         const to = jsLit(String((ask.args as Record<string, unknown>).to ?? ""));
         const r = await el.executeJavaScript(`(async () => {
-          const pick = (q) => document.querySelector(/^e[0-9]+$/.test(q) ? '[data-agx-e="' + q + '"]' : q);
-          const a = pick(${sel}), b = pick(${to});
-          if (!a) return { kind: "none", which: "source" };
-          if (!b) return { kind: "none", which: "target" };
+          const one = ${ONE};
+          const ga = one(${sel}, false), gb = one(${to}, false);
+          if (ga.kind !== "ok") return { ...ga, which: "source" };
+          if (gb.kind !== "ok") return { ...gb, which: "target" };
+          const a = ga.e, b = gb.e;
           const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
           const at = (r) => [r.left + r.width / 2, r.top + r.height / 2];
           const [x1, y1] = at(ra), [x2, y2] = at(rb);
@@ -2161,7 +2205,8 @@ async function runVerb(
           return { kind: "ok" };
         })()`) as { kind: string; which?: string };
         if (r.kind !== "ok") {
-          return { ok: false, error: `nothing on the page matches the ${r.which} of the drag` };
+          const raw = String((r.which === "target" ? (ask.args as Record<string, unknown>).to : ask.args.selector) ?? "");
+          return { ok: false, error: `the ${r.which} of the drag: ${selectorError(raw, r as never)}` };
         }
         /*
          * A DRAG DOES NOT NAVIGATE, so it must not wait for a load.
@@ -2185,13 +2230,9 @@ async function runVerb(
          * thin here and real over there.
          */
         const paths = ((ask.args as Record<string, unknown>).paths ?? []) as string[];
-        const node = await cdp("Runtime.evaluate", {
-          expression: `document.querySelector(${sel})`,
-        }) as { ok: boolean; result?: { result?: { objectId?: string; subtype?: string } }; error?: string };
-        const objectId = node.result?.result?.objectId;
-        if (!objectId || node.result?.result?.subtype === "null") {
-          return { ok: false, error: `nothing on the page matches ${String(ask.args.selector ?? "")}` };
-        }
+        const found = await nodeFor(cdp, sel, String(ask.args.selector ?? ""), false);
+        if ("error" in found) return { ok: false, error: found.error };
+        const objectId = found.objectId;
         await cdp("DOM.enable", {});
         /*
          * getDocument, and it is not decoration.
@@ -2390,10 +2431,8 @@ async function runVerb(
          * other two hundred and eighty-five are paid for on every turn after
          * (§14). Same shape as `observe`, scoped.
          */
-        const r = await el.executeJavaScript(`(() => {
-          const pick = (q) => document.querySelector(/^e[0-9]+$/.test(q) ? '[data-agx-e="' + q + '"]' : q);
-          const root = pick(${sel});
-          if (!root) return { kind: "none" };
+        const r = await el.executeJavaScript(resolveOne(sel, `
+          const root = e;
           const name = ${ACC_NAME};
           const stamp = ${STAMP};
           const tree = [];
@@ -2410,10 +2449,10 @@ async function runVerb(
             });
           }
           return { kind: "ok", e: stamp(root), text: (root.innerText || "").trim().slice(0, 4000), tree };
-        })()`) as { kind: string; e?: string; text?: string; tree?: unknown[] };
-        return r.kind === "ok"
+        `, true)) as { kind: string; e?: string; text?: string; tree?: unknown[] };
+        return r?.kind === "ok"
           ? { ok: true, value: { region: ask.args.selector, e: r.e, text: r.text, tree: r.tree } }
-          : { ok: false, error: `nothing on the page matches ${String(ask.args.selector ?? "")}` };
+          : { ok: false, error: selectorError(String(ask.args.selector ?? ""), r as never) };
       }
 
       case "throttle": {
@@ -2609,14 +2648,9 @@ async function runVerb(
            — §5. `DOMDebugger.getEventListeners` wants a remote object id, so
            the node is resolved through Runtime first; doing it in one verb is
            the difference between one call and four. */
-        const ev = await cdp("Runtime.evaluate", {
-          expression: `document.querySelector(${sel})`, includeCommandLineAPI: true,
-        }) as { ok: boolean; result?: { result?: { objectId?: string; subtype?: string } }; error?: string };
-        const objectId = ev.result?.result?.objectId;
-        if (!ev.ok) return { ok: false, error: ev.error || "the DevTools protocol refused that" };
-        if (!objectId || ev.result?.result?.subtype === "null") {
-          return { ok: false, error: `nothing on the page matches ${String(ask.args.selector ?? "")}` };
-        }
+        const found = await nodeFor(cdp, sel, String(ask.args.selector ?? ""), true);
+        if ("error" in found) return { ok: false, error: found.error };
+        const objectId = found.objectId;
         const got = await cdp("DOMDebugger.getEventListeners", { objectId, depth: 1 }) as
           { ok: boolean; result?: { listeners?: unknown[] }; error?: string };
         return got.ok
@@ -2951,34 +2985,29 @@ async function runVerb(
         return { ok: true, value: { width: got.w ?? w, height: got.h ?? h, asked: { width: w, height: h } } };
       }
       case "text": {
-        const value = await el.executeJavaScript(
-          `(() => { const e = document.querySelector(${sel});
-             return e ? { text: (e.innerText || e.textContent || "").slice(0, ${MAX_TEXT}) } : null; })()`,
-        );
-        return value
-          ? { ok: true, value }
-          : { ok: false, error: `nothing on the page matches ${ask.args.selector}` };
+        const got = await el.executeJavaScript(resolveOne(sel,
+          `return { kind: "ok", text: (e.innerText || e.textContent || "").slice(0, ${MAX_TEXT}) };`, true,
+        )) as { kind: string; text?: string };
+        return got?.kind === "ok"
+          ? { ok: true, value: { text: got.text } }
+          : { ok: false, error: selectorError(String(ask.args.selector ?? ""), got as never) };
       }
 
       case "scroll": {
         // Answers with where it ended up rather than "done": scrolling to the
         // bottom of a page that was already at the bottom, and scrolling a page
         // that cannot scroll at all, are both invisible from a bare success.
-        const move = ask.args.selector !== undefined
-          ? `{ const e = document.querySelector(${sel});
-               if (!e) return null;
-               e.scrollIntoView({ block: "center" }); }`
-          : ask.args.to !== undefined
+        const where = `return { kind: "ok", y: Math.round(window.scrollY),
+                      atBottom: Math.ceil(window.scrollY + window.innerHeight) >= document.body.scrollHeight - 1 };`;
+        const code = ask.args.selector !== undefined
+          ? resolveOne(sel, `e.scrollIntoView({ block: "center" }); ${where}`)
+          : `(() => { ${ask.args.to !== undefined
             ? `window.scrollTo({ top: ${ask.args.to === "top" ? "0" : "document.body.scrollHeight"} });`
-            : `window.scrollBy({ top: ${Number(ask.args.by)} });`;
-        const value = await el.executeJavaScript(
-          `(() => { ${move}
-             return { y: Math.round(window.scrollY),
-                      atBottom: Math.ceil(window.scrollY + window.innerHeight) >= document.body.scrollHeight - 1 }; })()`,
-        );
-        return value
-          ? { ok: true, value }
-          : { ok: false, error: `nothing on the page matches ${ask.args.selector}` };
+            : `window.scrollBy({ top: ${Number(ask.args.by)} });`} ${where} })()`;
+        const got = await el.executeJavaScript(code) as { kind: string; y?: number; atBottom?: boolean };
+        return got?.kind === "ok"
+          ? { ok: true, value: { y: got.y, atBottom: got.atBottom } }
+          : { ok: false, error: selectorError(String(ask.args.selector ?? ""), got as never) };
       }
 
       case "press": {

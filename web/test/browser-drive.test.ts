@@ -354,20 +354,20 @@ describe("driving a page", () => {
   });
 
   test("text reads one element, and says so when there is none", async () => {
-    const found = await runBrowserAsk(fakeGuest(() => ({ text: "Total: 41" })), ask("text", { selector: ".total" }));
+    const found = await runBrowserAsk(fakeGuest(() => ({ kind: "ok", text: "Total: 41" })), ask("text", { selector: ".total" }));
     expect((found.value as any).text).toBe("Total: 41");
-    const missing = await runBrowserAsk(fakeGuest(() => null), ask("text", { selector: ".total" }));
+    const missing = await runBrowserAsk(fakeGuest(() => ({ kind: "none" })), ask("text", { selector: ".total" }));
     expect(missing.ok).toBe(false);
     expect(missing.error).toContain(".total");
   });
 
   test("scroll answers with where it ended up, not just 'done'", async () => {
-    const el = fakeGuest(() => ({ y: 900, atBottom: true }));
+    const el = fakeGuest(() => ({ kind: "ok", y: 900, atBottom: true }));
     const r = await runBrowserAsk(el, ask("scroll", { to: "bottom" }));
     expect(r.value).toEqual({ y: 900, atBottom: true });
     expect(el.ran[0]).toContain("document.body.scrollHeight");
     // Scrolling by pixels goes through scrollBy, and the number is a number.
-    const by = fakeGuest(() => ({ y: 400, atBottom: false }));
+    const by = fakeGuest(() => ({ kind: "ok", y: 400, atBottom: false }));
     await runBrowserAsk(by, ask("scroll", { by: -250 }));
     expect(by.ran[0]).toContain("scrollBy({ top: -250 })");
   });

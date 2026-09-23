@@ -29,6 +29,7 @@ class N {
   labels: N[] = [];
   options: Array<{ value: string; text: string }> = [];
   dataset: Record<string, string>;
+  nodeType = 1;
   constructor(tag: string, attrs: Record<string, string> = {}, ...kids: Array<N | string>) {
     this.tagName = tag.toUpperCase();
     this.attrs = { ...attrs };
@@ -193,5 +194,115 @@ describe("select, which did not take an id from an observation", () => {
     const r = await runBrowserAsk(guest, ask("select", { selector: "e2", value: "team" }));
     expect(r.ok).toBe(false);
     expect(r.error).toContain("not a <select>");
+  });
+});
+
+/** A DevTools stand-in that evaluates the expression in `run`'s page and
+ *  answers the way Runtime.evaluate does: a node is a remote object, a string
+ *  is a value. */
+function cdpOver(run: (code: string) => Promise<unknown>) {
+  const calls: string[] = [];
+  const cdp = async (method: string, params?: unknown) => {
+    calls.push(method);
+    if (method === "Runtime.evaluate") {
+      const v = await run((params as { expression: string }).expression);
+      return typeof v === "string"
+        ? { ok: true, result: { result: { type: "string", value: v } } }
+        : { ok: true, result: { result: { type: "object", subtype: "node", objectId: "obj-1" } } };
+    }
+    if (method === "DOM.requestNode") return { ok: true, result: { nodeId: 7 } };
+    if (method === "DOMDebugger.getEventListeners") return { ok: true, result: { listeners: [] } };
+    return { ok: true, result: {} };
+  };
+  return { cdp, calls };
+}
+
+describe("every verb that takes an element finds it the way click does", () => {
+  /*
+   * `fill`, `wait`, `drag`, `scroll`, `upload`, `listeners`, `debug dom` and
+   * `region` each built their own querySelector. Each one that did missed
+   * something — the id rewrite, or the refusal when several match — and the
+   * caller could not know which verb had which gap.
+   */
+  function twoButtons() {
+    const body = h("body", {},
+      h("label", { for: "email" }, "Email"),
+      h("input", { id: "email", type: "email", "data-agx-e": "e2" }),
+      h("input", { id: "file", type: "file" }),
+      h("input", { id: "file2", type: "file" }),
+      h("button", {}, "Save"),
+      h("button", {}, "Save draft"),
+    );
+    return { body, ...page(body) };
+  }
+
+  test("fill takes an id from an observation", async () => {
+    const { guest, body } = twoButtons();
+    const r = await runBrowserAsk(guest, ask("fill", { fields: { e2: "ada@orbit.example" } }));
+    expect(r.error).toBeUndefined();
+    expect(body.querySelector("#email")!.events).toContain("input");
+  });
+
+  test("wait takes one too", async () => {
+    const { guest } = twoButtons();
+    const r = await runBrowserAsk(guest, ask("wait", { selector: "e2" }));
+    expect(r.ok).toBe(true);
+  });
+
+  test("wait says an unparseable selector is one, rather than waiting thirty seconds", async () => {
+    const { guest } = twoButtons();
+    const r = await runBrowserAsk(guest, ask("wait", { selector: "a:has-text(Save)" }));
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("invalid selector");
+  });
+
+  test("scroll refuses to pick one of several, and names them", async () => {
+    const { guest } = twoButtons();
+    const r = await runBrowserAsk(guest, ask("scroll", { selector: "button" }));
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("matched 2 elements");
+    expect(r.error).toContain('"Save draft"');
+  });
+
+  test("drag says which end it could not find, and why", async () => {
+    const { guest } = twoButtons();
+    const r = await runBrowserAsk(guest, ask("drag", { selector: "e2", to: "button" }));
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("the target of the drag");
+    expect(r.error).toContain("matched 2 elements");
+  });
+
+  test("text still reads the first of several, as a read always has", async () => {
+    const { guest } = twoButtons();
+    const r = await runBrowserAsk(guest, ask("text", { selector: "button" }));
+    expect(r.ok).toBe(true);
+    expect((r.value as { text: string }).text).toBe("Save");
+  });
+
+  test("upload refuses an ambiguous input through the protocol with the same sentence", async () => {
+    const { guest } = twoButtons();
+    const run = (code: string) => guest.executeJavaScript(code);
+    const { cdp, calls } = cdpOver(run);
+    const r = await runBrowserAsk(guest, ask("upload", { selector: "input[type=\"file\"]", paths: ["/tmp/a.txt"] }),
+      undefined, undefined, undefined, cdp);
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("matched 2 elements");
+    expect(calls).toEqual(["Runtime.evaluate"]);
+  });
+
+  test("listeners reach the node an id names", async () => {
+    const { guest } = twoButtons();
+    const { cdp, calls } = cdpOver((code) => guest.executeJavaScript(code));
+    const r = await runBrowserAsk(guest, ask("listeners", { selector: "e2" }),
+      undefined, undefined, undefined, cdp);
+    expect(r.error).toBeUndefined();
+    expect(calls).toEqual(["Runtime.evaluate", "DOMDebugger.getEventListeners"]);
+  });
+
+  test("region takes an id and a refusal says what it looked for", async () => {
+    const { guest } = twoButtons();
+    const r = await runBrowserAsk(guest, ask("region", { selector: "#nowhere" }));
+    expect(r.ok).toBe(false);
+    expect(r.error).toBe("nothing on the page matches #nowhere");
   });
 });
