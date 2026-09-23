@@ -1,8 +1,8 @@
 # agentglass
 
-> Every AI coding agent on your machine, on one screen. agentglass attaches to the tmux sessions and repositories already open on a developer's machine — Claude Code, Codex, Gemini CLI, OpenCode — and shows every tool call, what each costs, who is waiting on a human, and holds anything dangerous until somebody says go. Local by default: a Bun + SQLite server on loopback, a desktop app (Linux, macOS, Windows) and an Android companion. Open source, MIT.
+> The workspace for your coding agents. One window on a developer's own machine holds the terminals (real tmux panes), the agents — Claude Code, Codex, Gemini CLI, OpenCode — their pull requests and reviews, the diffs they write, git and Docker, a browser they can drive, and every approval they are waiting on, so nobody has to switch to another app. Local by default: a Bun + SQLite server on loopback, a desktop app (Linux, macOS, Windows) and an Android companion. Open source, MIT.
 
-It does not launch or replace agents. It observes them through their own hook and transcript streams, gates the tool calls a person chose to gate, and gives the agents a browser of their own — one already signed in to what the person is signed in to — driven from a CLI and an MCP server.
+It attaches to agents already running in tmux and in the repositories already open, and it can start them too: a task cuts a worktree and seats an agent in it with the prompt written. It reads them through their own hook and transcript streams, holds the tool calls a person chose to gate until somebody says go, and gives the agents a browser of their own — one already signed in to what the person is signed in to — driven from a CLI and an MCP server.
 
 ## Docs
 
