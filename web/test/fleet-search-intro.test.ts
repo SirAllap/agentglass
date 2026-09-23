@@ -28,6 +28,16 @@ describe("fleetSearchIntro", () => {
     expect(s).not.toMatch(/ever/i);
   });
 
+  test("a cockpit window shorter than the retention is the span named, not the retention", () => {
+    const s = fleetSearchIntro(8, 3_600_000);
+    expect(s).toContain("current window");
+    expect(s).not.toContain("8 days");
+  });
+
+  test("a cockpit window longer than the retention leaves the retention named", () => {
+    expect(fleetSearchIntro(8, 30 * 86_400_000)).toContain("last 8 days");
+  });
+
   test("one day is singular", () => {
     expect(fleetSearchIntro(1)).toContain("last day");
   });
@@ -56,7 +66,7 @@ describe("the screen uses it", () => {
     expect(code).not.toMatch(/\d+k\+/);
     expect(code).not.toContain("ever captured");
     expect(code).not.toMatch(/prompts, commands, outputs/);
-    expect(code).toContain("fleetSearchIntro(days)");
+    expect(code).toContain("fleetSearchIntro(days, windowMs)");
   });
 });
 

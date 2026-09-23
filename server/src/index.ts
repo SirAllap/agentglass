@@ -5139,7 +5139,7 @@ const server = Bun.serve<WsData>({
           // Only what an earlier run left behind. A fresh install has none,
           // and seeds nothing but a scope written in its config by hand.
           const history = projectsKnownAtStart();
-          const known = history.length ? await knownProjectRoots(getChanges(300).map((c) => c.file_path), history) : [];
+          const known = history.length ? await knownProjectRoots(getChanges(300, undefined, false).map((c) => c.file_path), history) : [];
           const r = seedRepoDirs([...fileRoots(), ...known]);
           if (!r.ok) console.error(`[picker] could not save the folders an upgrade seeds: ${r.error}`);
         })().catch((e) => console.error(`[picker] could not seed the folders: ${e instanceof Error ? e.message : e}`)));
