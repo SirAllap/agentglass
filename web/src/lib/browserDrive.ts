@@ -163,6 +163,9 @@ export interface DrivableWebview {
   reloadIgnoringCache(): void;
   addEventListener(type: string, fn: (e: Event) => void): void;
   removeEventListener(type: string, fn: (e: Event) => void): void;
+  /** Whether the main frame is loading. Optional: a stand-in may not have it,
+   *  and a guest that cannot say is treated as not loading. */
+  isLoading?(): boolean;
 }
 
 /** How much page text is worth sending back. An agent reading a page needs the
@@ -1449,6 +1452,39 @@ async function runVerb(
         // history is a silent no-op — and an agent that reads the same page
         // twice concludes the page did not change, not that it never moved.
         if (!can) return { ok: false, error: `there is nothing ${ask.op === "back" ? "back" : "forward"} from here` };
+        /*
+         * THROUGH THE PAGE'S OWN HISTORY, not the browser's button.
+         *
+         * Chromium skips, on a back the BROWSER initiates, every entry a page
+         * added without a user gesture — and a click an agent makes carries
+         * none. Measured: open /spa/, click Items, click About, `back` landed
+         * on the page before /spa/; on a multi-page site, before the first
+         * page reached by a click. `history.back()` run in the page is not
+         * browser-initiated and skips nothing: the same sequence landed on
+         * /spa/items. A page that cannot run script — or is still loading,
+         * where Electron would hold the script until it finished — gets the
+         * browser's back as before. One that ran it is never ALSO sent the
+         * browser's back: a navigation that starts late would go back twice.
+         */
+        const w = watchNavigation(el);
+        let ran: unknown = false;
+        try {
+          if (!el.isLoading?.()) {
+            ran = await el.executeJavaScript(`(() => { history.${ask.op}(); return true; })()`).catch(() => false);
+          }
+          if (ran === true) {
+            const t = Date.now();
+            while (!w.inPage && !w.started && !w.subframe && Date.now() - t < NAV_CAP_MS) await new Promise((r) => setTimeout(r, 20));
+            if (w.started) await w.untilStopped(NAV_CAP_MS - (Date.now() - t));
+          }
+        } finally {
+          w.dispose();
+        }
+        if (ran === true) {
+          if (w.failed) return { ok: false, error: w.failed };
+          if (!w.inPage && !w.started && !w.subframe) return { ok: false, error: `history.${ask.op}() went nowhere in ${NAV_CAP_MS / 1000} s` };
+          return { ok: true, value: { url: el.getURL(), title: el.getTitle() } };
+        }
         const nav = settled(el);
         if (ask.op === "back") el.goBack(); else el.goForward();
         const err = await nav;

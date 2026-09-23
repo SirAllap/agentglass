@@ -183,6 +183,21 @@ describe("the caps hold while a document is loading", () => {
     // Nothing was sent to a page that could not answer until it loaded.
     expect(el.ran.some((c) => c.includes("newErrors:"))).toBe(false);
   }, 10_000);
+
+  test("back on a page still loading is the browser's back, never a script queued behind the load", async () => {
+    const el = guest({ loading: true, onAct: (emit) => setTimeout(() => emit("did-stop-loading"), 5) });
+    const r = await runBrowserAsk(el, { id: "b4", op: "back", args: {} } as never);
+    expect(r.ok).toBe(true);
+    expect(el.ran).toContain("goBack");
+    expect(el.ran.some((c) => c.includes("history.back()"))).toBe(false);
+  });
+
+  test("a history step that moved only a frame is a step, not \"went nowhere\"", async () => {
+    const el = guest({ onAct: (emit) => emit("did-navigate-in-page", { isMainFrame: false }) });
+    const r = await runBrowserAsk(el, { id: "b5", op: "back", args: {} } as never);
+    expect(r.ok).toBe(true);
+    expect(el.ran).not.toContain("goBack");
+  });
 });
 
 describe("press settles the same way", () => {
@@ -199,5 +214,60 @@ describe("press settles the same way", () => {
     expect(e.settledBy).toBe("navigation");
     expect(e.newDocument).toBe(true);
     expect(el.listening()).toBe(0);
+  });
+});
+
+describe("back and forward go through the page's own history", () => {
+  /*
+   * Measured in the app: after open /spa/, click Items, click About, the
+   * `back` verb landed on the page BEFORE /spa/ — and on a multi-page site,
+   * before the first page reached by a click. Chromium skips, on a back the
+   * BROWSER initiates, every entry a page added without a user gesture, and a
+   * click an agent makes carries none. `history.back()` run in the page is not
+   * a browser-initiated back and skips nothing: the same sequence with it
+   * landed on /spa/items.
+   */
+  const back = (el: DrivableWebview) => runBrowserAsk(el, { id: "b3", op: "back", args: {} } as never);
+
+  test("a client-side route back is the page's history.back(), answered on the in-page navigation", async () => {
+    let url = "http://127.0.0.1:4000/spa/about";
+    const el = guest({ url: () => url, onAct: (emit) => { url = "http://127.0.0.1:4000/spa/items"; emit("did-navigate-in-page", { isMainFrame: true }); } });
+    const t = Date.now();
+    const r = await back(el);
+    expect(r.ok).toBe(true);
+    expect(el.ran.some((c) => c.includes("history.back()"))).toBe(true);
+    expect(el.ran).not.toContain("goBack");
+    expect((r.value as { url: string }).url).toBe("http://127.0.0.1:4000/spa/items");
+    expect(Date.now() - t).toBeLessThan(1_000);
+    expect(el.listening()).toBe(0);
+  });
+
+  test("a back to another document waits for it to load", async () => {
+    let url = "http://127.0.0.1:4000/docs/3";
+    const el = guest({
+      url: () => url,
+      onAct: (emit) => {
+        emit("did-start-navigation", { isMainFrame: true, isInPlace: false });
+        setTimeout(() => { url = "http://127.0.0.1:4000/docs/2"; emit("did-stop-loading"); }, 200);
+      },
+    });
+    const r = await back(el);
+    expect(r.ok).toBe(true);
+    expect((r.value as { url: string }).url).toBe("http://127.0.0.1:4000/docs/2");
+  });
+
+  test("a page that ran it and went nowhere is told so — never sent a second, browser back", async () => {
+    const el = guest();
+    const r = await back(el);
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("went nowhere");
+    expect(el.ran).not.toContain("goBack");
+  }, 8_000);
+
+  test("a page that cannot run it falls back to the browser's back", async () => {
+    const el = guest({ pageHistory: "throws", onAct: (emit) => setTimeout(() => emit("did-stop-loading"), 5) });
+    const r = await back(el);
+    expect(r.ok).toBe(true);
+    expect(el.ran).toContain("goBack");
   });
 });
