@@ -1135,7 +1135,7 @@ export default function App() {
         <MachinePanel tab={machine} onTab={setMachine} onClose={() => setMachine(null)}
           onOpenBrowser={() => { setMachine(null); goView("browser"); }} />
       )}
-      <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} onSelectApp={(app) => setFilter((f) => ({ ...f, app }))} windowMs={windowMs} provider={filter.provider} />
+      <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} onSelectApp={(app) => setFilter((f) => ({ ...f, app }))} retentionDays={stats?.retention_days} windowMs={windowMs} provider={filter.provider} />
 
       {/* Find, mounted at the shell for the same reason the palette is: the
           chord has to work from a board, a pull request or a settings page,
