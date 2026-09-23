@@ -289,7 +289,7 @@ function BodyImpl({ id, active, openChat, openChatWith, openBrowser, openLantern
        can be shown, and the board itself is rendered once, below. */
     case "tasks": return <BoardSlot kind="tasks" place="rail" visible={active} />;
     case "git": return <GitView active={active} onOpenChat={openChat} />;
-    case "diff": return <DiffPage active={active} onOpenChatWith={openChatWith} />;
+    case "diff": return <DiffPage active={active} />;
     case "pr": return <BoardSlot kind="pr" place="rail" visible={active} />;
     case "docker": return <DockerView active={active} onOpenBrowser={openBrowser} />;
     case "term": return <TermView active={active} />;

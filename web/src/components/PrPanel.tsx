@@ -482,7 +482,7 @@ function Bar({ parts }: { parts: { pct: number; tint: string }[] }) {
 }
 
 
-function Btn({ children, onClick, disabled, danger, primary, ok, warn, title, small, pending }: {
+export function Btn({ children, onClick, disabled, danger, primary, ok, warn, title, small, pending }: {
   children: React.ReactNode; onClick?: () => void; disabled?: boolean;
   danger?: boolean; primary?: boolean; ok?: boolean; warn?: boolean; title?: string; small?: boolean;
   /**
