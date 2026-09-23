@@ -6,7 +6,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import vm from "node:vm";
-import { MARKS_ID, MARKS_SCRIPT } from "../src/lib/browserDrive.ts";
+import { MARKS_ID, MARKS_SCRIPT } from "../src/lib/browserMarks.ts";
 
 type Box = { x: number; y: number; width: number; height: number };
 function node(name: string, box: Box, style: Partial<{ display: string; visibility: string; opacity: string }> = {}) {
@@ -55,6 +55,20 @@ describe("shot --marks", () => {
     const root = body.children[0];
     expect(root.children).toHaveLength(1);
     expect(root.children[0].children[0].textContent).toBe("e1");
+  });
+
+  test("looks only for what can be acted on: the selector leaves headings out", async () => {
+    let asked = "";
+    const heading = node("h1", { x: 0, y: 0, width: 100, height: 20 });
+    const ctx: any = { innerWidth: 800, innerHeight: 600, scrollX: 0, scrollY: 0, WeakSet, Math, Number,
+      getComputedStyle: (e: any) => e.cs,
+      document: { body: node("body", { x: 0, y: 0, width: 1, height: 1 }), createElement: () => node("made", { x: 0, y: 0, width: 0, height: 0 }),
+        querySelectorAll: (sel: string) => { asked = sel; return [heading]; }, elementFromPoint: () => heading } };
+    ctx.window = ctx;
+    vm.createContext(ctx);
+    vm.runInContext(MARKS_SCRIPT, ctx);
+    expect(asked).toContain("button");
+    expect(asked).not.toContain("h1");
   });
 
   test("a control another element covers is not labelled", () => {
