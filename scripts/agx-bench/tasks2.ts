@@ -34,7 +34,7 @@ export const PHASE2_TASKS: Task[] = [
   {
     id: "p2-dialog-cancel",
     family: "phase2",
-    title: "Item 6, dialog: cancel a delete that asks \"are you sure?\" — the report must still be there",
+    title: "dialog: cancel a delete that asks \"are you sure?\" — the report must still be there",
     arms: {
       // Before: every confirm() is answered yes, so the cancel path cannot be taken.
       async baseline(s) {
@@ -57,7 +57,7 @@ export const PHASE2_TASKS: Task[] = [
   {
     id: "p2-shot-marks",
     family: "phase2",
-    title: "Item 6, shot --marks: the picture carries the same ids observe gives — visible, uncovered controls only",
+    title: "shot --marks: the picture carries the same ids observe gives — visible, uncovered controls only",
     arms: {
       // Before: a picture has no ids on it; all an arm can hand back is what the tree says.
       async baseline(s) {
@@ -104,7 +104,7 @@ export const PHASE2_TASKS: Task[] = [
   {
     id: "p2-real-input",
     family: "phase2",
-    title: "Item 7, input a page can tell from nothing: a click with user activation (clipboard), a real :hover, a rich editor",
+    title: "input a page can tell from nothing: a click with user activation (clipboard), a real :hover, a rich editor",
     arms: {
       // Before: what an agent could do was script the page — a synthetic click
       // (no activation), a synthetic mouseover (no :hover), a value assignment.
@@ -134,7 +134,7 @@ export const PHASE2_TASKS: Task[] = [
   {
     id: "p2-handoff",
     family: "phase2",
-    title: "Item 11, handoff: a code only the person has — the agent hands the tab over and carries on when they are done",
+    title: "handoff: a code only the person has — the agent hands the tab over and carries on when they are done",
     arms: {
       // Before: nothing to do but try and stop. The agent has no code.
       async baseline(s) {
@@ -159,7 +159,7 @@ export const PHASE2_TASKS: Task[] = [
   {
     id: "p2-audit",
     family: "phase2",
-    title: "Item 13, vitals and a11y: a measurement answered as data — the faults of a page, with ids, and an honest verdict",
+    title: "vitals and a11y: a measurement answered as data — the faults of a page, with ids, and an honest verdict",
     arms: {
       // Before: checkup's advice lines (unlabelled controls, images without alt) — no heading
       // outline, no lang, no rated vitals.
@@ -194,7 +194,7 @@ export const PHASE2_TASKS: Task[] = [
   {
     id: "p2-clean-html",
     family: "phase2",
-    title: "Item 9, html --clean: the page's markup without what a model cannot use, and with ids it can act on",
+    title: "html --clean: the page's markup without what a model cannot use, and with ids it can act on",
     arms: {
       async baseline(s) {
         await s.cli("open", [s.url("/audit")]);
@@ -218,7 +218,7 @@ export const PHASE2_TASKS: Task[] = [
   {
     id: "p2-handoff-hostile",
     family: "phase2",
-    title: "Item 11, handoff safety: a page that forges every signal of \"done\" does not end the handoff",
+    title: "handoff safety: a page that forges every signal of \"done\" does not end the handoff",
     arms: {
       // Before: no handoff at all, so nothing can be forged and nothing is protected — the arm just looks.
       async baseline(s) {
@@ -239,7 +239,7 @@ export const PHASE2_TASKS: Task[] = [
   {
     id: "p2-handoff-nav",
     family: "phase2",
-    title: "Item 11, handoff: the person submits and the page navigates — that ends the handoff as navigated, not as an error",
+    title: "handoff: the person submits and the page navigates — that ends the handoff as navigated, not as an error",
     arms: {
       async baseline(s) {
         await s.cli("open", [s.url("/gate-nav")]);
@@ -259,7 +259,7 @@ export const PHASE2_TASKS: Task[] = [
   {
     id: "p2-wait-slot",
     family: "phase2",
-    title: "Item 6, --wait-slot: with every slot taken, a new tab queues for the one that frees up",
+    title: "--wait-slot: with every slot taken, a new tab queues for the one that frees up",
     arms: {
       async baseline(s) {
         const held = await fill(s);
@@ -290,7 +290,7 @@ export const PHASE2_TASKS: Task[] = [
   {
     id: "p2-mcp-core",
     family: "phase2",
-    title: "Item 5, MCP diet: the same three-step task through the full tool list and through core + the generic tool",
+    title: "MCP diet: the same three-step task through the full tool list and through core + the generic tool",
     arms: {
       async baseline(s) {
         const { replies } = await s.mcp("full", [
