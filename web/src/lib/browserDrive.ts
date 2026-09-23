@@ -859,6 +859,189 @@ function settled(el: DrivableWebview, timeoutMs = 40_000): Promise<string | null
   });
 }
 
+/*
+ * AFTER AN ACTION, WAIT FOR WHAT IT CAUSED — AND SAY WHAT THAT WAS.
+ *
+ * `click` and `press` used to sleep a flat 250 ms and report the URL. Too long
+ * for a click that changes nothing (measured on agx-bench: click p50 550 ms
+ * against type's 210), too short for one whose request takes longer, and
+ * silent about what happened — so every step was followed by an observe.
+ *
+ * Now: if the click starts a navigation, until it finishes (capped); else
+ * until the DOM has been still for QUIET_MS with no request in flight, capped
+ * at SETTLE_CAP_MS. The clock is the panel's, not the page's: a page that is
+ * not in front has its timers throttled to a second or worse, and a page
+ * under the `clock` verb has a clock of its own. Mutations are counted in the
+ * page by an observer installed just before the act (childList and text only
+ * — a style attribute animating every frame would never be quiet) and read
+ * from here; the observer is removed when the answer is read.
+ */
+const QUIET_MS = 100;
+const SETTLE_CAP_MS = 1_000;
+const NAV_CAP_MS = 5_000;
+
+/** Installed inside the act's own script, right before the act, so its first
+ *  mutation is counted. Evaluates to the page's clock at that moment. */
+const MUTATIONS_ON = `(() => {
+  const m = { n: 0, mo: null };
+  try {
+    m.mo = new MutationObserver((recs) => { m.n += recs.length; });
+    m.mo.observe(document, { subtree: true, childList: true, characterData: true });
+  } catch {}
+  if (window.__agxMut && window.__agxMut.mo) window.__agxMut.mo.disconnect();
+  window.__agxMut = m;
+  return Date.now();
+})()`;
+
+const SETTLE_POLL = `(() => {
+  const m = window.__agxMut, l = window.__agxLog;
+  return [m ? m.n : -1, l ? l.inflight : 0];
+})()`;
+
+/** What the act caused, read off the buffers the collector fills, from the
+ *  page clock `t0` taken as it acted. Also removes the mutation observer. */
+const effectScript = (t0: number) => `(() => {
+  const m = window.__agxMut;
+  if (m && m.mo) m.mo.disconnect();
+  window.__agxMut = undefined;
+  const log = window.__agxLog || { console: [], network: [] };
+  const d = window.__agxDialog;
+  return {
+    newErrors: log.console.filter((r) => r.level === "error" && r.at >= ${t0}).slice(-5).map((r) => String(r.text).slice(0, 300)),
+    failedRequests: log.network.filter((r) => (r.status === 0 || r.status >= 400) && r.at + (r.ms || 0) >= ${t0})
+      .slice(-5).map((r) => ({ method: r.method, url: String(r.url).slice(0, 300), status: r.status })),
+    dialog: d && d.at >= ${t0} ? d : undefined,
+  };
+})()`;
+
+/** `p`, or null once `ms` have passed. Electron holds an executeJavaScript
+ *  until the main frame stops loading, so every call made while a navigation
+ *  may be under way is bounded, or a cap would not be a cap. */
+function within<T>(p: Promise<T>, ms: number): Promise<T | null> {
+  return new Promise((resolve) => {
+    const t = setTimeout(() => resolve(null), Math.max(0, ms));
+    p.then((v) => { clearTimeout(t); resolve(v); }, () => { clearTimeout(t); resolve(null); });
+  });
+}
+
+type ActWatch = {
+  /** A main-frame navigation to another document started. */
+  started: boolean;
+  /** The URL changed within the same document (pushState, a fragment). */
+  inPage: boolean;
+  /** A subframe navigated — not the page, but it is where a history step went. */
+  subframe: boolean;
+  stopped: boolean;
+  failed: string | null;
+  untilStopped(ms: number): Promise<void>;
+  dispose(): void;
+};
+
+/** Listen BEFORE acting: a local page can start and finish loading before a
+ *  listener attached after the act would hear either. */
+function watchNavigation(el: DrivableWebview): ActWatch {
+  let wake: (() => void) | null = null;
+  const w: ActWatch = {
+    started: false, inPage: false, subframe: false, stopped: false, failed: null,
+    untilStopped: (ms) => new Promise<void>((resolve) => {
+      if (w.stopped) return resolve();
+      const t = setTimeout(() => { wake = null; resolve(); }, ms);
+      wake = () => { clearTimeout(t); wake = null; resolve(); };
+    }),
+    dispose: () => {
+      el.removeEventListener("did-start-navigation", onStart);
+      el.removeEventListener("did-navigate-in-page", onInPage);
+      el.removeEventListener("did-stop-loading", onStop);
+      el.removeEventListener("did-fail-load", onFail);
+    },
+  };
+  type NavEvent = Event & { isMainFrame?: boolean; isInPlace?: boolean; errorCode?: number; errorDescription?: string };
+  const onStart = (e: Event) => {
+    const d = e as NavEvent;
+    if (d.isMainFrame === false) { w.subframe = true; return; }
+    if (d.isInPlace) { w.inPage = true; return; }
+    w.started = true;
+  };
+  const onInPage = (e: Event) => {
+    if ((e as NavEvent).isMainFrame === false) w.subframe = true; else w.inPage = true;
+  };
+  const onStop = () => { if (w.started) { w.stopped = true; wake?.(); } };
+  const onFail = (e: Event) => {
+    const d = e as NavEvent;
+    if (d.isMainFrame === false || d.errorCode === -3) return;
+    w.failed = d.errorDescription || "the page could not be loaded";
+    w.stopped = true;
+    wake?.();
+  };
+  el.addEventListener("did-start-navigation", onStart);
+  el.addEventListener("did-navigate-in-page", onInPage);
+  el.addEventListener("did-stop-loading", onStop);
+  el.addEventListener("did-fail-load", onFail);
+  return w;
+}
+
+export type ActEffect = {
+  /** The URL is not what it was, or a new document loaded. */
+  navigated: boolean;
+  newDocument?: true;
+  /** A navigation that failed to load, in the browser's words. */
+  loadFailed?: string;
+  dialog?: unknown;
+  newErrors?: string[];
+  failedRequests?: Array<{ method: string; url: string; status: number }>;
+  /** What ended the wait: the navigation finishing, a quiet page, or the cap. */
+  settledBy: "navigation" | "quiet" | "cap";
+  settleMs: number;
+};
+
+/** The wait, and then the effect. Never throws: a failure to read the effect
+ *  is not a failed act — the act already happened. */
+async function settleAfterAct(
+  el: DrivableWebview, w: ActWatch, before: string, t0: number,
+): Promise<ActEffect> {
+  const started = Date.now();
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  let settledBy: ActEffect["settledBy"] = "cap";
+  let last: unknown = undefined;
+  let quietSince = Date.now();
+  try {
+    while (Date.now() - started < SETTLE_CAP_MS) {
+      if (w.started) break;
+      const poll = await within(el.executeJavaScript(SETTLE_POLL), SETTLE_CAP_MS - (Date.now() - started));
+      const [n, inflight] = Array.isArray(poll) ? poll as [number, number] : [-1, 0];
+      const now = Date.now();
+      if (n !== last || inflight > 0) { last = n; quietSince = now; }
+      else if (now - quietSince >= QUIET_MS) { settledBy = "quiet"; break; }
+      await sleep(25);
+    }
+    if (w.started) {
+      await w.untilStopped(NAV_CAP_MS - (Date.now() - started));
+      settledBy = w.stopped ? "navigation" : "cap";
+    }
+  } finally {
+    w.dispose();
+  }
+  /* Not while the new document is still loading: the call would wait for it,
+     past every cap. The act is reported without those three fields then —
+     `settledBy: "cap"` says why. */
+  const seen = (w.started && !w.stopped) ? null
+    : await within(el.executeJavaScript(effectScript(t0)), 1_000) as
+      { newErrors?: string[]; failedRequests?: ActEffect["failedRequests"]; dialog?: unknown } | null;
+  const effect: ActEffect = {
+    navigated: w.started || w.inPage || el.getURL() !== before,
+    settledBy,
+    settleMs: Date.now() - started,
+  };
+  if (w.started) effect.newDocument = true;
+  if (w.failed) effect.loadFailed = w.failed;
+  if (seen && typeof seen === "object") {
+    if (seen.dialog) effect.dialog = seen.dialog;
+    if (Array.isArray(seen.newErrors) && seen.newErrors.length) effect.newErrors = seen.newErrors;
+    if (Array.isArray(seen.failedRequests) && seen.failedRequests.length) effect.failedRequests = seen.failedRequests;
+  }
+  return effect;
+}
+
 /** §8's `freezeAnimations`: a stylesheet the page cannot out-rank, plus
  *  pausing whatever the Web Animations API already has running. Idempotent —
  *  a second call finds the tag already there and pauses nothing twice. */
@@ -1087,24 +1270,29 @@ async function runVerb(
         // click itself: §3's gate — visible, enabled, stable, unobstructed —
         // so a click against a covered or still-animating element fails with
         // WHAT is wrong rather than landing on the wrong thing in silence.
+        const before = el.getURL();
+        const watch = watchNavigation(el);
         const hit = await el.executeJavaScript(resolveOne(sel,
           `return (${actionable()}).then((r) => {
              if (!r.ok) return { kind: "blocked", reason: r.reason };
+             const t0 = ${MUTATIONS_ON};
              e.click();
-             return { kind: "ok" };
+             return { kind: "ok", t0 };
            });`,
-        )) as { kind: string; reason?: string } | boolean;
+        )).catch((err: unknown) => { watch.dispose(); throw err; }) as { kind: string; reason?: string; t0?: number } | boolean;
         if (!hit || (hit as { kind: string }).kind !== "ok") {
+          watch.dispose();
           return { ok: false, error: actionError(String(ask.args.selector ?? ""), hit as never) };
         }
-        // Then a beat, and where we are now. A click is the commonest way a page
-        // moves, and answering the instant the element was hit tells an agent
-        // nothing about whether it did — measured: a click that navigated was
-        // followed by a `back` that acted on the history from before it, because
-        // the navigation had not started yet. Not a wait for a navigation that
-        // may never come: 250ms and an honest url.
-        await new Promise((r) => setTimeout(r, 250));
-        return { ok: true, value: { clicked: ask.args.selector, url: el.getURL(), title: el.getTitle() } };
+        // Then what it caused, and where we are now. A click is the commonest
+        // way a page moves, and answering the instant the element was hit
+        // tells an agent nothing about whether it did — measured: a click
+        // that navigated was followed by a `back` that acted on the history
+        // from before it, because the navigation had not started yet. See
+        // `settleAfterAct` for how long "after" is.
+        const t0 = Number((hit as { t0?: number }).t0) || Date.now();
+        const effect = await settleAfterAct(el, watch, before, t0);
+        return { ok: true, value: { clicked: ask.args.selector, url: el.getURL(), title: el.getTitle(), effect } };
       }
 
       case "dblclick":
@@ -2781,7 +2969,10 @@ async function runVerb(
          * page that calls preventDefault is obeyed: `prevented` says so, and
          * nothing is applied.
          */
+        const before = el.getURL();
+        const watch = watchNavigation(el);
         const r = await el.executeJavaScript(`(() => {
+          const t0 = ${MUTATIONS_ON};
           const spec = ${jsLit(key)};
           const parts = spec.split("+");
           const name = parts.pop() || "";
@@ -2882,19 +3073,20 @@ async function runVerb(
           }
           send("keyup");
           return {
-            kind: "ok", applied, prevented: !wentThrough,
+            kind: "ok", applied, prevented: !wentThrough, t0,
             on: (target.id ? "#" + target.id : (target.tagName || "").toLowerCase()),
           };
-        })()`) as { kind: string; applied?: string; prevented?: boolean; on?: string };
+        })()`).catch((err: unknown) => { watch.dispose(); throw err; }) as { kind: string; applied?: string; prevented?: boolean; on?: string; t0?: number };
         // Enter and the like commonly navigate. Waiting on a navigation that
-        // never comes would cost forty seconds a keystroke, so this gives the
-        // page a beat and reports where it is, rather than promising either way.
-        await new Promise((r2) => setTimeout(r2, 250));
+        // never comes would cost forty seconds a keystroke, so this waits the
+        // way a click does — for the navigation if one starts, else for a
+        // quiet page, capped — and says what happened.
+        const effect = await settleAfterAct(el, watch, before, Number(r?.t0) || Date.now());
         return {
           ok: true,
           value: {
             pressed: key, on: r?.on, applied: r?.applied, prevented: !!r?.prevented,
-            url: el.getURL(), title: el.getTitle(),
+            url: el.getURL(), title: el.getTitle(), effect,
           },
         };
       }
