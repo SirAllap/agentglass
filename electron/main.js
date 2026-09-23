@@ -3638,8 +3638,9 @@ function createWindow() {
     width: st.width,
     height: st.height,
     ...place,
-    // Until a theme has been painted once: the default theme's own ground.
-    backgroundColor: ground || "#0d1117",
+    // Until a theme has been painted once: the ground a first run opens on,
+    // Graphite's or Porcelain's by the OS, as the page's own first run does.
+    backgroundColor: ground || (nativeTheme.shouldUseDarkColors ? "#1e1e1e" : "#ffffff"),
     title: "agentglass",
     autoHideMenuBar: true,
     /*

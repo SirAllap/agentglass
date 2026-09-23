@@ -223,6 +223,19 @@
           try { osDark = matchMedia("(prefers-color-scheme: dark)").matches; } catch (e) { osDark = true; }
           pick = (osDark ? pick.system.dark : pick.system.light) || pick;
         }
+        // NOTHING CHOSEN, NOTHING PAINTED: a first run. The app opens it in
+        // System, Graphite or Porcelain by the OS (initialTheme in
+        // lib/themes.ts), so the cover wears the same rather than the
+        // stylesheet's own defaults, which are GitHub Dark's. Only what the
+        // cover draws with; the values are those two themes' own, and
+        // cover.test.ts holds them to it.
+        if (read("agentglass-boot-paint") === null && read("agentglass-theme") === null && read("agentglass-theme-mode") === null) {
+          var firstDark = true;
+          try { firstDark = matchMedia("(prefers-color-scheme: dark)").matches; } catch (e) { firstDark = true; }
+          pick = firstDark
+            ? { id: "graphite", dark: true, vars: { "--bg": "#1e1e1e", "--bg2": "#262626", "--text": "#fafafa", "--text3": "#a1a1a1", "--border": "#383840", "--primary": "#e5e5e5" } }
+            : { id: "porcelain", dark: false, vars: { "--bg": "#ffffff", "--bg2": "#f5f5f5", "--text": "#0a0a0a", "--text3": "#737373", "--border": "#d9d9de", "--primary": "#171717" } };
+        }
         if (pick && pick.vars && typeof pick.vars === "object") {
           for (var k in pick.vars) {
             var v = pick.vars[k];
