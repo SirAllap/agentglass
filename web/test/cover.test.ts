@@ -184,6 +184,8 @@ function node(): Stub {
 
 /** Run the page's inline script against a stub page. What it schedules and
  *  listens for is kept, not run, so a test can run it when it chooses. */
+const THEMES_SRC = readFileSync(new URL("../src/lib/themes.ts", import.meta.url), "utf8");
+
 function boot(store: Record<string, string>, { osDark = true, storageThrows = false } = {}) {
   const props = new Map<string, string>();
   const classes = new Set<string>();
@@ -233,8 +235,35 @@ describe("the boot script paints the first frame in the last theme", () => {
     expect(BOOT[0]).toContain(`"${SPLASH_KEY}"`);
   });
 
-  test("with nothing saved it covers in the default palette and changes nothing", () => {
-    const r = boot({});
+  /* A first run used to cover in the stylesheet's defaults, GitHub Dark's
+     ground, and then open the app in Graphite or Porcelain. */
+  test("a first run covers in the palette the app will open in, by the OS", () => {
+    const dark = boot({}, { osDark: true });
+    expect(dark.props.get("--bg")).toBe("#1e1e1e");
+    expect(dark.attrs.get("data-theme")).toBe("graphite");
+    expect(dark.classes.has("agc-light")).toBe(false);
+    const light = boot({}, { osDark: false });
+    expect(light.props.get("--bg")).toBe("#ffffff");
+    expect(light.attrs.get("data-theme")).toBe("porcelain");
+    expect(light.classes.has("agc-light")).toBe(true);
+    expect(light.meta.content).toBe("#ffffff");
+  });
+
+  test("the first-run cover is Graphite's and Porcelain's own colours, not a copy that drifts", () => {
+    for (const [id, bg] of [["graphite", "#1e1e1e"], ["porcelain", "#ffffff"]] as const) {
+      /* Read off the palette's own line: importing themes.ts needs the DOM
+         stubs the round-trip block below sets up. */
+      const line = THEMES_SRC.match(new RegExp(`\\{ id: "${id}",[^\\n]*`))?.[0] ?? "";
+      const vars = JSON.parse(line.match(/vars: (\{[^}]*\})/)?.[1] ?? "{}") as Record<string, string>;
+      expect(vars["--bg"]).toBe(bg);
+      const r = boot({}, { osDark: id === "graphite" });
+      expect(r.props.size).toBeGreaterThan(0);
+      for (const [k, v] of r.props) expect(v, `${id} ${k}`).toBe(vars[k]);
+    }
+  });
+
+  test("anything already chosen is not a first run: no stand-in over the app's own paint", () => {
+    const r = boot({ "agentglass-theme": "dracula" });
     expect(r.props.size).toBe(0);
     expect([...r.classes]).toEqual(["ag-covering"]);
     expect(r.meta.content).toBe("#17181b");
@@ -512,6 +541,8 @@ describe("the window's own ground (electron/main.js)", () => {
   test("opens the next window on it, and in system mode on the ground the OS is in", () => {
     const create = main.slice(main.indexOf("function createWindow() {"), main.indexOf("new BrowserWindow({", main.indexOf("function createWindow() {")));
     expect(create).toContain("nativeTheme.shouldUseDarkColors ? st.bgSystem.dark : st.bgSystem.light");
-    expect(main).toMatch(/backgroundColor: ground \|\| "#0d1117"/);
+    /* Before any paint, the first run's ground by the OS — never GitHub Dark's. */
+    expect(main).toMatch(/backgroundColor: ground \|\| \(nativeTheme\.shouldUseDarkColors \? "#1e1e1e" : "#ffffff"\)/);
+    expect(main).not.toContain('"#0d1117"');
   });
 });
