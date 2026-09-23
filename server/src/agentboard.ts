@@ -49,6 +49,7 @@ const lastBySession = db.query<{ at: number }, [string]>(
   "SELECT MAX(at) AS at FROM agent_status WHERE session_id = ?",
 );
 const drop = db.query<never, [string, string]>("DELETE FROM agent_status WHERE name = ? AND session_id = ?");
+const dropNamed = db.query<never, [string]>("DELETE FROM agent_status WHERE name = ?");
 const dropOld = db.query<never, [number]>("DELETE FROM agent_status WHERE at < ?");
 
 /**
@@ -107,6 +108,24 @@ export function forgetAgent(name: string, session: string): boolean {
   const s = (session || "").trim();
   if (!n || !s) return false;
   try { return drop.run(n, s).changes > 0; } catch { return false; }
+}
+
+/**
+ * Clear a line because a PERSON said so, whoever wrote it.
+ *
+ * `forgetAgent` is keyed on the session because its route is tokenless on
+ * loopback: any local process could otherwise erase any line. A person is
+ * not any local process — the view they click in carries the machine's
+ * token, and the route that calls this is authenticated like every other.
+ * The board kept lines nobody could clear: a session that ended without
+ * saying `done` left its name on the field for fourteen days, and by the
+ * second day a field of twenty read as twenty agents. Measured on the
+ * owner's board: twenty-five rows, five of them alive.
+ */
+export function dropLine(name: string): boolean {
+  const n = (name || "").trim();
+  if (!n) return false;
+  try { return dropNamed.run(n).changes > 0; } catch { return false; }
 }
 
 /**

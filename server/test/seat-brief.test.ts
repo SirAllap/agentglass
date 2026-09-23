@@ -93,6 +93,25 @@ describe("the seat is told to hand it out", () => {
     expect(Seat.houseBlock("assign", 4, ROOT)).toContain(briefPath(ROOT));
   });
 
+  test("through the app, never a bare tmux window, so the tab outlives the CLI", () => {
+    /* It was told to run `claude … "$(cat brief)"` itself, and did — and ran
+       its one-shots with `tmux new-window "cli …"` the same way: a CLI that
+       exited 0 closed its tab and took its answer with it. */
+    const house = Seat.houseBlock("assign", 4, ROOT);
+    expect(house).toContain("--keep");
+    /* Forbidden, not recommended: the words around the command say which. */
+    expect(house).toContain("never with a bare `tmux new-window");
+    expect(house).not.toContain("`claude --dangerously-skip-permissions");
+  });
+
+  test("a nudge is spelled the way the CLI takes it", () => {
+    /* `prompt` takes the name as its first argument; `--name` is an argparse
+       error, and the seat's first nudge would fail on its own instructions. */
+    const house = Seat.houseBlock("nudge", 4, ROOT);
+    expect(house).toContain("agentglass-agent prompt <name>");
+    expect(house).not.toContain("prompt --name");
+  });
+
   test("and with one report shape, not two spellings of it", () => {
     expect(Seat.houseBlock("assign", 4, ROOT)).toContain(REPORT_SHAPE);
   });

@@ -11,23 +11,26 @@
 //
 //   * the session/window/pane tree, each pane's working directory and size;
 //   * each pane's scrollback (up to 2000 lines, replayed into the new pane);
-//   * each pane's start command — which for agent panes is the exact CLI
-//     invocation the chat engine used, including `--resume` when the pane was
-//     itself a resumed session. "all" mode replays those commands, so a fleet
-//     of agents comes back with every conversation resumed; "lazy" (default)
+//   * what was RUNNING in each pane, as the argv it was running with — an
+//     agent CLI, or whatever command the pane was born from. "all" mode brings
+//     it back: a Claude conversation is resumed by its id, any other program is
+//     started again with the same argv, and a prompt that was on a command
+//     line is never sent a second time (see `runArgs`); "lazy" (default)
 //     restores the tree and lets the chat reopen resume each session.
 //
 // Nothing here touches the user's tmux. Only the engine's own socket is read,
 // and the data lands in the engine's state dir. The user's ~/.tmux/resurrect
 // saves are nobody's business but theirs (see tmuxsnapshot.ts).
-import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, renameSync, copyFileSync } from "node:fs";
+import { readFileSync, readlinkSync, writeFileSync, mkdirSync, existsSync, rmSync, renameSync, copyFileSync } from "node:fs";
 import { failed } from "./refused.ts";
 import { join } from "node:path";
 import { tmuxStateDir } from "./tmuxbin.ts";
-import { tmux, listPanes, validSessionName, tmuxSocket, setCaptureHook } from "./tmuxpane.ts";
+import { tmux, validSessionName, tmuxSocket, setCaptureHook, KEPT_MARK } from "./tmuxpane.ts";
 import { confPath } from "./tmuxconf.ts";
 import { resolveTmuxBin } from "./tmuxbin.ts";
 import { paneAgentNote } from "./panewt.ts";
+import { wasPromptOf, wasPromptAnywhere, newestPromptId, promptedSince, firstPromptSince } from "./db.ts";
+import { agentNamed } from "./paneloc.ts";
 import { claudeCode } from "./agents/claudecode.ts";
 import { LANTERN_PROMPT_MARK } from "./lanternmark.ts";
 import { windowTree, LAYOUT_RE, type TmuxWindowDetail, type TmuxPaneRow } from "./tmuxlayout.ts";
@@ -53,8 +56,17 @@ export interface CapturedPane extends TmuxPaneRow {
    */
   agentSession?: string;
   /** The flags the agent in this pane was actually started with — everything
-   *  on its command line except the binary and the id. See `agentArgsOf`. */
+   *  on its command line except the binary, the id and the prompt. See
+   *  `agentArgsOf`. */
   agentArgs?: string[];
+  /**
+   * What was running in the pane, as its own argv, for a pane holding no
+   * Claude conversation: another agent CLI with its prompt taken off, or the
+   * command the pane was born from (`bash -c "…"`, `lazygit`). Replayed as
+   * argv, so it comes back exactly and never one shell deeper — see
+   * `startCommand` for why the string tmux reports cannot be.
+   */
+  startArgv?: string[];
 }
 
 export interface CapturedWindow extends TmuxWindowDetail {
@@ -72,10 +84,13 @@ export interface CapturedSession {
 export interface RestoreState {
   capturedAt: number;
   sessions: CapturedSession[];
+  /** The tmux server this was photographed on (`liveSessions().engine`).
+   *  The window and pane ids in the file are only that server's. */
+  engine?: string;
 }
 
 /*
- * WHY THIS FILE ONLY EVER GROWS.
+ * WHY THIS FILE NEVER SHRINKS AT BOOT.
  *
  * On the morning of 2026-08-25 the machine rebooted and Electron crash-looped
  * — six launches in twenty-three minutes, one of them a hard
@@ -92,9 +107,11 @@ export interface RestoreState {
  * simply whichever session outlasted the final interruption.
  *
  * So the invariant is: a session missing from a live snapshot is NOT evidence
- * that it should be forgotten. It might be gone; it might be mid-restore; the
- * app might be in the middle of dying. Only an explicit close removes an
- * entry — `forgetSession`, and nothing else.
+ * that it should be forgotten — until this process has put the desk back on
+ * this engine. Before that it might be gone; it might be mid-restore; the
+ * app might be in the middle of dying. After that, a session that leaves is
+ * one somebody closed (see `writeMerged`), and an explicit close removes an
+ * entry at any time — `forgetSession`.
  */
 
 /** A session is remembered until somebody explicitly closes it. This is how
@@ -167,18 +184,9 @@ async function startCommandOf(name: string, windowId: string, paneId: string): P
   return r.ok ? r.stdout.trim() : "";
 }
 
-/**
- * Is this pane running an agent at all?
- *
- * `pane_current_command` is the binary of the foreground process — `claude`,
- * `fish`, `nvim`. Compared against the CLI's own basename rather than a literal,
- * so a machine whose binary is named otherwise is not silently excluded.
- */
-function looksLikeAgent(command: string | undefined): boolean {
-  if (!command) return false;
-  const bin = (claudeCode.bin() || "claude").split("/").pop() || "claude";
-  return command === bin;
-}
+/** The Claude CLI's own basename rather than a literal, so a machine whose
+ *  binary is named otherwise is not silently excluded. */
+const claudeName = (): string => (claudeCode.bin() || "claude").split("/").pop() || "claude";
 
 /**
  * The conversation id from the command line of what is running in the pane.
@@ -223,7 +231,26 @@ const NOT_REPLAYED = new Set(["--resume", "--session-id", "-p", "--print"]);
  * unfamiliar. Anything with a newline in it is dropped, because a command line
  * is one line.
  */
-export function agentArgsOf(argv: string[]): string[] {
+/*
+ * AND THE PROMPT IS NOT A FLAG.
+ *
+ * A prompt typed on the command line — `claude --model opus 'Read the brief
+ * and follow it'` — sits among the flags as one more positional argument,
+ * and there is no list of flags that says which positional is a value and
+ * which is a sentence somebody meant once. Kept, it is sent again on every
+ * resume: measured on 2026-09-21, a finished session's brief re-ran itself
+ * after a restart and the tokens went with it. Dropped by guess — "the last
+ * argument with a space in it" — it takes `--disallowedTools 'Bash(x) Bash(y)'`
+ * with it, which is the flattened-flags mistake this file has already made
+ * once.
+ *
+ * So the caller says which arguments were prompts, and it can say so exactly:
+ * a prompt on the command line arrives through the same UserPromptSubmit hook
+ * as one typed at the box, and the events table remembers it (`wasPromptOf`).
+ * Nothing is guessed; a session whose hooks never reported keeps its prompt
+ * and replays it, which is the stated ceiling.
+ */
+export function agentArgsOf(argv: string[], isPrompt: (text: string) => boolean = () => false): string[] {
   const out: string[] = [];
   for (let i = 1; i < argv.length; i++) {
     const a = argv[i]!;
@@ -234,6 +261,7 @@ export function agentArgsOf(argv: string[]): string[] {
       if (!a.includes("=") && i + 1 < argv.length && !argv[i + 1]!.startsWith("-")) i++;
       continue;
     }
+    if (!a.startsWith("-") && isPrompt(a)) continue;
     out.push(a);
   }
   /* A command line this long is not a command line any more. */
@@ -262,6 +290,14 @@ export interface ProcReader {
   run: (argv: string[]) => string;
   /** A file's text; throws when it is not there. */
   read: (path: string) => string;
+  /** A process's working directory, or "" when the machine cannot say. Linux
+   *  reads the link in /proc; a Mac has no cheap answer and says nothing,
+   *  which only means a pane's note is taken at its word there. */
+  cwd?: (pid: number) => string;
+  /** When a process started, as epoch milliseconds, or 0 when the machine
+   *  cannot say. Linux: field 22 of /proc/<pid>/stat over the boot time in
+   *  /proc/stat. A Mac says nothing, with the same consequence as `cwd`. */
+  startedAt?: (pid: number) => number;
 }
 
 const machineProc: ProcReader = {
@@ -273,14 +309,52 @@ const machineProc: ProcReader = {
     } catch { return ""; }
   },
   read: (path) => readFileSync(path, "utf8"),
+  cwd: (pid) => { try { return readlinkSync(`/proc/${pid}/cwd`); } catch { return ""; } },
+  startedAt: (pid) => startedAtOf(pid, machineProc),
 };
+
+/**
+ * When a process started, from /proc.
+ *
+ * `/proc/<pid>/stat` field 22 is the start time in clock ticks since boot;
+ * `/proc/stat`'s `btime` is the boot, in whole seconds. USER_HZ is 100 on
+ * every Linux userspace ABI, so a tick is 10 ms and nothing is asked of
+ * `getconf`. The comm in field 2 is in parentheses and may itself contain
+ * spaces or a `)` — a process named `node (main)` is real — so the fields
+ * are counted from the LAST `)`, never split on whitespace from the front.
+ * Whole seconds on the boot time make the answer good to about a second;
+ * callers that compare it with a millisecond clock leave that much slack.
+ */
+export function startedAtOf(pid: number, proc: ProcReader = machineProc): number {
+  if (proc.platform !== "linux") return 0;
+  try {
+    const stat = proc.read(`/proc/${pid}/stat`);
+    const rest = stat.slice(stat.lastIndexOf(")") + 1).trim().split(/\s+/);
+    /* `rest[0]` is field 3 (state); field 22 is therefore rest[19]. */
+    const ticks = Number(rest[19]);
+    const btime = Number((/^btime (\d+)/m.exec(proc.read("/proc/stat")) ?? [])[1]);
+    if (!Number.isFinite(ticks) || !Number.isFinite(btime) || !btime) return 0;
+    return btime * 1000 + ticks * 10;
+  } catch { return 0; }
+}
 
 /** Direct children of a pid, or an empty list. */
 export function childPidsOf(pid: number, proc: ProcReader = machineProc): number[] {
   // `pgrep -P` is in BSD pgrep and procps alike, but the Linux branch keeps
   // the `ps` it was measured with rather than trading a known answer for a
   // portable one.
-  const out = proc.platform === "linux"
+  //
+  // Before the `ps`, the kernel's own list: `/proc/<pid>/task/<pid>/children`
+  // is one read where `ps` is one process, and the walk below asks this once
+  // per process on the desk every ten seconds. Absent (CONFIG_PROC_CHILDREN
+  // off, or a test that states a machine without it) it throws, and the
+  // measured `ps` answers as it always did.
+  let listed: string | null = null;
+  if (proc.platform === "linux") {
+    try { listed = proc.read(`/proc/${pid}/task/${pid}/children`); } catch { listed = null; }
+  }
+  const out = listed !== null ? listed.replace(/\s+/g, "\n")
+    : proc.platform === "linux"
     ? proc.run(["ps", "-o", "pid=", "--ppid", String(pid)])
     : proc.run(["pgrep", "-P", String(pid)]);
   const pids: number[] = [];
@@ -312,50 +386,246 @@ export function argvOf(pid: number, proc: ProcReader = machineProc): string[] {
   return proc.run(["ps", "-ww", "-o", "args=", "-p", String(pid)]).trim().split(/\s+/).filter(Boolean);
 }
 
-/** Among a shell's children, the one running the agent CLI: its argv, or []. */
-export function agentArgvAmong(children: number[], bin: string, proc: ProcReader = machineProc): string[] {
-  for (const child of children) {
-    const argv = argvOf(child, proc);
-    const head = (argv[0] || "").split("/").pop();
-    if (head === bin) return argv;
-  }
-  return [];
-}
+/** How far down a pane's process tree to look for the agent: a shell, a
+ *  wrapper or two, the agent. Deeper than that is somebody's build. And a
+ *  ceiling on processes visited, because a pane running a build is a tree
+ *  with hundreds of leaves and this runs every ten seconds. */
+const WALK_DEPTH = 6;
+/* Lower on a Mac, where every process visited is a `ps` and a `pgrep` spawned
+   on the event loop: a dev server's tree would stall the server every sweep. */
+const WALK_MAX = process.platform === "darwin" ? 12 : 60;
 
-/** The agent under a pane: its argv, or an empty list. */
-async function agentArgvOf(name: string, windowId: string, paneId: string): Promise<string[]> {
-  const r = await tmux(["display-message", "-t", `=${name}:${windowId}.${paneId}`, "-p", "#{pane_pid}"]);
-  const pid = Number(r.stdout.trim());
-  if (!r.ok || !Number.isInteger(pid) || pid <= 1) return [];
-  try {
-    const bin = (claudeCode.bin() || "claude").split("/").pop() || "claude";
-    return agentArgvAmong(childPidsOf(pid), bin);
-  } catch { /* the process went away between asking and looking */ }
-  return [];
+/** What an agent CLI under a pane is: which one, its argv, where it runs. */
+export interface AgentUnder { name: string; argv: string[]; cwd: string; startedAt: number }
+
+/**
+ * The agent running in a pane, or null.
+ *
+ * Breadth-first from the pane's own process, so the pane's agent is found
+ * before anything it shelled out to. The pane's own pid is asked first, and
+ * that is the measured half of this: a window born from
+ * `tmux new-window "exec claude …"` has no shell left in it — `exec`
+ * replaced it — so the agent IS the pane's process and a walk that started
+ * at its children found nothing. Six windows on the owner's desk were
+ * photographed that way with no flags and no way to resume.
+ *
+ * Named by `agentNamed` (paneloc.ts): the binary's basename, or the npm
+ * package when the binary is `node` — which is how a qwen is told apart
+ * from a build.
+ */
+export function agentUnder(panePid: number, proc: ProcReader = machineProc): AgentUnder | null {
+  let level = [panePid];
+  let seen = 0;
+  for (let depth = 0; depth <= WALK_DEPTH && level.length; depth++) {
+    const next: number[] = [];
+    for (const pid of level) {
+      if (++seen > WALK_MAX) return null;
+      const argv = argvOf(pid, proc);
+      const name = agentNamed(argv);
+      if (name) return { name, argv, cwd: proc.cwd?.(pid) ?? "", startedAt: proc.startedAt?.(pid) ?? 0 };
+      next.push(...childPidsOf(pid, proc));
+    }
+    level = next;
+  }
+  return null;
 }
 
 /**
- * The `--resume <uuid>` under a shell, when one of its children carries it.
+ * Is the hook's note about THIS agent, or about one that had the pane id
+ * before it, or about a pane of the same id on another tmux?
  *
- * The pane's process is a shell; the agent is its child. On Linux `ps` walks
- * that for us in one call — `-o args= --ppid` prints every child's command
- * line — rather than us reading /proc by hand for every pane on the desk. BSD
- * `ps` has no `--ppid`, so a Mac asks for the children first and then each
- * one's argv; the regex over the result is the same one.
+ * A pane id is only one server's. Hooks fire from every tmux on the
+ * machine, so a Claude in the person's own tmux on `%2` writes a note for
+ * `%2` too; and ids start at %0 again on the server that restores a desk, so
+ * a note from the server that died can name a pane of this one. The hook
+ * says which server it fired in (`notePaneFromHook`), the note is kept per
+ * server and pane (`ensurePaneNoteTable`), it is read for this server, and
+ * a note from another is never this pane's.
+ *
+ * Within one server, the question is when, not where. The first guard
+ * compared the note's directory with the process's, and set aside the notes
+ * of live agents by the dozen: the note's cwd is the hook payload's, which
+ * follows the Bash tool's `cd` — one session reported thirteen directories
+ * over its life — while the CLI never moves for it (`chdir` only at start and
+ * on entering or leaving a worktree, read off the installed binary). A note
+ * written after this process was born, on this server, was written by a hook
+ * this process fired; one written before belongs to whatever had the pane
+ * before it — a Claude somebody quit — even in the same directory, because
+ * many agents share a checkout. The slack covers the boot time being whole
+ * seconds.
+ *
+ * A note from a hook that does not name its server (installed before it
+ * did) is taken by time only when its directory is inside the process's:
+ * that cannot be told from another tmux's pane otherwise, and a `cd` out of
+ * the checkout is the ceiling. A machine that cannot say when a process
+ * started (a Mac) keeps the directory rule, and takes a note at its word when
+ * it cannot say that either.
+ *
+ * Also a ceiling: a wall-clock step after the agent started (NTP correcting a
+ * clock that was behind at boot) moves the computed start by the step, and
+ * the agent's notes are set aside until its next hook.
  */
-export function resumeIdUnder(pid: number, proc: ProcReader = machineProc): string | undefined {
-  const lines = proc.platform === "linux"
-    ? proc.run(["ps", "-o", "args=", "--ppid", String(pid)])
-    : childPidsOf(pid, proc).map((c) => argvOf(c, proc).join(" ")).join("\n");
-  const m = /--resume[= ]\s*([0-9a-fA-F-]{36})/.exec(lines);
-  return m?.[1] && SESSION_ID_RE.test(m[1]) ? m[1] : undefined;
+export const NOTE_SLACK_MS = 2_000;
+const within = (dir: string, root: string): boolean =>
+  !root || dir === root || dir.startsWith(root.endsWith("/") ? root : `${root}/`);
+export function noteIsThisAgents(note: { cwd: string; at: number; server?: string }, under: { cwd: string; startedAt: number }, server = ""): boolean {
+  if (note.server && server && note.server !== server) return false;
+  const sameServer = !!note.server && !!server;
+  if (under.startedAt) {
+    if (note.at < under.startedAt - NOTE_SLACK_MS) return false;
+    return sameServer || within(note.cwd, under.cwd);
+  }
+  if (sameServer) return true;
+  return !under.cwd || note.cwd === under.cwd;
 }
 
-async function resumeIdOf(name: string, windowId: string, paneId: string): Promise<string | undefined> {
-  const r = await tmux(["display-message", "-t", `=${name}:${windowId}.${paneId}`, "-p", "#{pane_pid}"]);
-  const pid = Number(r.stdout.trim());
-  if (!r.ok || !Number.isInteger(pid) || pid <= 1) return undefined;
-  try { return resumeIdUnder(pid); } catch { return undefined; }
+/** The `--resume <uuid>` on a command line, when it carries one. A pane
+ *  that was itself restored has the id here before any hook has fired, and
+ *  that is what lets a restored desk survive a SECOND reboot. */
+export function resumeIdIn(argv: readonly string[]): string | undefined {
+  for (let i = 1; i < argv.length; i++) {
+    const a = argv[i]!;
+    const v = a.startsWith("--resume=") ? a.slice(9) : a === "--resume" ? argv[i + 1] : undefined;
+    if (v && SESSION_ID_RE.test(v)) return v;
+  }
+  return undefined;
+}
+
+/**
+ * The flags that carry a prompt on the command lines of the other CLIs this
+ * machine runs, by CLI. Replaying one re-runs a task from hours ago, which
+ * is the same mistake `NOT_REPLAYED` exists for, in another binary. Only
+ * NAMED flags: a positional prompt (codex) cannot be told from a positional
+ * value without knowing every flag, and is replayed — the stated ceiling.
+ */
+const PROMPT_FLAGS: Record<string, string[]> = {
+  opencode: ["--prompt"],
+  qwen: ["-p", "--prompt", "-i", "--prompt-interactive"],
+  gemini: ["-p", "--prompt", "-i", "--prompt-interactive"],
+};
+
+/**
+ * Invocations that run one job and exit. Replayed, the job runs again at
+ * boot — the same mistake as a replayed prompt, by another door — and before
+ * the argv was photographed such a pane came back as a shell. It still does.
+ * A short known list, not a rule: a CLI's one-shot spelling is its own.
+ */
+const ONE_SHOT: Record<string, string[]> = {
+  codex: ["exec"],
+  opencode: ["run"],
+  crush: ["run"],
+  amp: ["-x", "--execute"],
+};
+
+export function withoutPromptFlags(name: string, argv: readonly string[]): string[] {
+  if ((ONE_SHOT[name] ?? []).some((m) => argv.slice(1).includes(m))) return [];
+  const drop = new Set(PROMPT_FLAGS[name] ?? []);
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
+    if (/[\n\r\0]/.test(a)) continue;
+    const bare = a.includes("=") ? a.slice(0, a.indexOf("=")) : a;
+    if (drop.has(bare)) {
+      if (!a.includes("=") && i + 1 < argv.length && !argv[i + 1]!.startsWith("-")) i++;
+      continue;
+    }
+    out.push(a);
+  }
+  return out.slice(0, 64);
+}
+
+/** A login shell with nothing to run is the pane's default, not a command
+ *  to bring back: tmux gives a restored pane one anyway. `bash -c "…"` is a
+ *  command. */
+const SHELLS = new Set(["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "nu", "elvish", "xonsh", "pwsh"]);
+export function isBareShell(argv: readonly string[]): boolean {
+  const head = (argv[0] || "").replace(/^-/, "").split("/").pop() || "";
+  /* `-c` on its own or folded into `-lc`, `-ec`, `-ic`: all of them run the
+     next argument. */
+  return SHELLS.has(head) && !argv.slice(1).some((a) => a === "--command" || /^-[A-Za-z]*c[A-Za-z]*$/.test(a));
+}
+
+/**
+ * Is the agent the walk found what the pane is actually running?
+ *
+ * The walk takes any descendant, and a pane whose program spawns workers — a
+ * script running `claude -p`, a dev server with a helper — would be
+ * photographed as a Claude pane holding a worker's conversation, and come
+ * back as that worker instead of its program. `#{pane_current_command}` is
+ * tmux's name for the foreground process, and it has to be the agent's own
+ * binary: `claude` under a shell, `opencode`, the `node` a launcher is.
+ */
+export function isForeground(found: Omit<AgentUnder, "startedAt"> & { startedAt?: number }, paneCommand: string): boolean {
+  const head = (found.argv[0] || "").split("/").pop() || "";
+  return !!paneCommand && head === paneCommand;
+}
+
+/** The chat pane's own wrapper ends in `exec sleep 86400` once the CLI has
+ *  exited, to keep the pane for reading (newSessionArgv, paneCommand). That
+ *  sleep, by its exact spelling, is nothing to bring back. */
+const isKeepAlive = (argv: readonly string[]): boolean =>
+  argv.length === 2 && ((argv[0] || "").split("/").pop() || "") === "sleep" && argv[1] === "86400";
+
+/** A pane forked a moment ago still carries the tmux server's own argv until
+ *  it execs — measured: photographed right after `new-window`, the pane read
+ *  as the tmux binary with the server's arguments. Not a command anybody
+ *  ran, and the next sweep sees the real one. */
+const bornYet = (argv: readonly string[]): boolean =>
+  (argv[0] || "").split("/").pop() !== ((resolveTmuxBin() || "tmux").split("/").pop() || "tmux");
+
+/**
+ * Whether an argument of a running CLI was a prompt, remembered per process.
+ *
+ * Asked of the pane's own conversation first (an indexed lookup), then of
+ * every session — after `/clear` the pane holds a new conversation and the
+ * argument on its command line was submitted to the old one, which the note
+ * no longer names. The argv of a process never changes, so a YES is kept for
+ * the process's life.
+ *
+ * A NO IS ONLY AS GOOD AS THE PROMPTS SEEN SO FAR. The first photograph of a
+ * new pane can run before the CLI has submitted its command-line prompt: the
+ * sweep is every ten seconds and on every app window, and in interactive
+ * mode the prompt goes in after the TUI is up — on a fresh worktree, after
+ * the person has accepted the trust dialog, which can take minutes. A no
+ * cached for good at that moment photographed the brief as a flag at every
+ * later sweep, and the restore ran it again. Asked again at every sweep
+ * instead, the no of every flag value of every pane was a scan of every
+ * prompt ever recorded, every ten seconds, forever. So a no is kept against
+ * the newest prompt row it was asked against (`newestPromptId`), and asked
+ * again only when a newer one exists; and it is FINAL once one of the pane's
+ * conversations has been sent any prompt since the process started — the
+ * command-line prompt is always the first, so by then it has been seen.
+ *
+ * The maps die with this server, which is the stated ceiling: a prompt older
+ * than the retention window reappears after an app restart.
+ */
+const promptVerdicts = new Set<string>();
+/** A no, with the newest prompt row it was asked against, or `FINAL_NO`. */
+const promptNos = new Map<string, number>();
+const FINAL_NO = -1;
+/** How many times the database was asked, for the test that holds the cache
+ *  to its promise. */
+const promptLookups = new Map<number, number>();
+export function __promptLookups(pid: number): number { return promptLookups.get(pid) ?? 0; }
+function wasPromptFor(pid: number, text: string, sessions: (string | undefined)[], bornAt: number, newest: number): boolean {
+  const key = `${pid}\0${text}`;
+  if (promptVerdicts.has(key)) return true;
+  const no = promptNos.get(key);
+  if (no !== undefined && (no === FINAL_NO || no >= newest)) return false;
+  /* Only since this process was born, of its own conversations as of every
+     other: a prompt on its command line was submitted after that, and a
+     flag's value typed as a prompt last month — in another session, or in
+     the very conversation a restored pane resumes — is not it. */
+  const since = bornAt ? bornAt - NOTE_SLACK_MS : 0;
+  if (promptLookups.size > 2000) promptLookups.clear();
+  promptLookups.set(pid, (promptLookups.get(pid) ?? 0) + 1);
+  const yes = sessions.some((id) => !!id && wasPromptOf(id, text, since)) || wasPromptAnywhere(text, since);
+  if (promptVerdicts.size > 2000) promptVerdicts.clear();
+  if (promptNos.size > 2000) promptNos.clear();
+  if (yes) { promptVerdicts.add(key); promptNos.delete(key); return true; }
+  const final = sessions.some((id) => !!id && promptedSince(id, since));
+  promptNos.set(key, final ? FINAL_NO : newest);
+  return false;
 }
 
 /**
@@ -396,16 +666,34 @@ async function resumeIdOf(name: string, windowId: string, paneId: string): Promi
  * Matched by name, then by the working directory of the first pane, because
  * the ids in the file belong to the tmux server that died.
  */
-function mergeWindows(old: CapturedWindow[], freshWins: CapturedWindow[]): CapturedWindow[] {
-  if (settled) return freshWins;
+function mergeWindows(old: CapturedWindow[], freshWins: CapturedWindow[], whole: boolean): CapturedWindow[] {
+  if (whole) return freshWins;
   const key = (w: CapturedWindow) => `${w.name ?? ""}\u0000${w.panes[0]?.path ?? ""}`;
   const have = new Set(freshWins.map(key));
   const missing = old.filter((w) => !have.has(key(w)));
   return missing.length ? [...freshWins, ...missing] : freshWins;
 }
 
-function writeMerged(fresh: CapturedSession[], now: number): RestoreState {
+/*
+ * AND THE SAME RULE FOR THE SESSION ITSELF, once the desk is whole.
+ *
+ * A session an orchestrator opened for one job finished and was killed on
+ * purpose, and stayed in the file for a fortnight: every boot in "all" mode
+ * rebuilt it as `claude --resume <id>`, an idle process on a conversation
+ * that was over. "Merge, never replace" was written for the boot, where a
+ * missing session is ambiguous, and it is bounded here exactly as the window
+ * rule is: while this process has not put the desk back on THIS engine, a
+ * missing session is kept; after that, a session that is not there is one
+ * somebody closed. `whole` is false again the moment the engine is a
+ * different server from the one the desk was put back on — the tmux server
+ * dying and the engine remaking one session is the morning this file was
+ * written for, and a photograph of that is not evidence of anything.
+ */
+function writeMerged(fresh: CapturedSession[], now: number, whole: boolean, engine: string, live: ReadonlySet<string>): RestoreState {
   const seenNow = new Map(fresh.map((s) => [s.name, s]));
+  /* Read at write time, not when the capture began: what another writer put
+     in the file meanwhile (`forgetSession`, a restore) is what this merges
+     with. */
   const before = readRestoreState();
   const kept: CapturedSession[] = [];
   const carried = new Map<string, CapturedWindow[]>();
@@ -413,11 +701,16 @@ function writeMerged(fresh: CapturedSession[], now: number): RestoreState {
     if (seenNow.has(old.name)) {
       /* The fresh photograph of a live session wins — except for the windows
          it has not had a chance to bring back yet. */
-      const wins = mergeWindows(old.windows, seenNow.get(old.name)!.windows);
+      const wins = mergeWindows(old.windows, seenNow.get(old.name)!.windows, whole);
       if (wins.length !== seenNow.get(old.name)!.windows.length) carried.set(old.name, wins);
       continue;
     }
     if (forgotten.has(old.name)) continue;    // explicitly closed
+    /* Closed: the desk was whole and tmux no longer lists it. A session tmux
+       still lists but this sweep could not photograph — its windows did not
+       answer in time, or all it holds is left out of the picture — is kept
+       as it was: only tmux saying it is gone is a close. */
+    if (whole && !live.has(old.name)) continue;
     /* Nor carried forward: every file written before this rule still names the
        nine mirrors, and keeping them for fourteen days would mean fourteen days
        of a file that heals only if somebody edits it by hand. */
@@ -429,25 +722,28 @@ function writeMerged(fresh: CapturedSession[], now: number): RestoreState {
     kept.push({ ...old, lastSeen });
   }
   const sessions = [...fresh.map((s) => ({ ...s, windows: carried.get(s.name) ?? s.windows, lastSeen: now })), ...kept];
-  const state: RestoreState = { capturedAt: now, sessions };
+  const state: RestoreState = { capturedAt: now, sessions, ...(engine ? { engine } : {}) };
   mkdirSync(restoreDir(), { recursive: true });
   const tmp = `${layoutPath()}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(state));
+  /* The person's own, and now with the arguments of what they were running
+     in it — prompts included. Not for the other accounts on the machine. */
+  writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 });
   swapInLayout(tmp);
   return state;
 }
 
-/** Sessions a person explicitly closed. The ONE way an entry leaves the file:
- *  everything else only ever adds. */
+/** Sessions a person explicitly closed. The one way an entry leaves the file
+ *  BEFORE the desk is whole: until then everything else only ever adds. */
 const forgotten = new Set<string>();
 
 /**
  * Forget a session because somebody closed it — not because it stopped
  * answering.
  *
- * This is the only subtraction in the whole file, and it is deliberate that it
- * takes an explicit call rather than being inferred: "it is not in the live
- * list" was exactly the inference that lost a day of work.
+ * The one subtraction that takes an explicit call rather than being
+ * inferred, and it is the only one that applies at boot: "it is not in the
+ * live list" was exactly the inference that lost a day of work, and it is
+ * trusted only once the desk has been put back (`writeMerged`).
  */
 export function forgetSession(name: string): void {
   forgotten.add(name);
@@ -457,13 +753,26 @@ export function forgetSession(name: string): void {
   if (sessions.length === before.sessions.length) return;
   mkdirSync(restoreDir(), { recursive: true });
   const tmp = `${layoutPath()}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify({ ...before, sessions }));
+  writeFileSync(tmp, JSON.stringify({ ...before, sessions }), { mode: 0o600 });
   swapInLayout(tmp);
 }
 
 /** Capture every session on the engine's socket into the state dir. Safe to
- *  call on a timer and safe to call twice — both are the same overwrite. */
-export async function captureLayout(now = Date.now()): Promise<RestoreState | null> {
+ *  call on a timer and safe to call twice — both are the same overwrite.
+ *
+ *  ONE AT A TIME. The ten second sweep, a new app window and the Settings
+ *  button each start one, and now that a whole desk forgets what tmux no
+ *  longer lists, a slow capture that listed the sessions before one was made
+ *  would, finishing last, write its list over the capture that had it. The
+ *  one that starts second photographs after the first has written. */
+let captureInFlight: Promise<unknown> = Promise.resolve();
+export function captureLayout(now?: number): Promise<RestoreState | null> {
+  const run = captureInFlight.then(() => captureOnce(now ?? Date.now()), () => captureOnce(now ?? Date.now()));
+  captureInFlight = run.catch(() => undefined);
+  return run;
+}
+
+async function captureOnce(now: number): Promise<RestoreState | null> {
   /*
    * NOT WHILE A RESTORE IS RUNNING. This is the race that did the damage.
    *
@@ -480,7 +789,22 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
    */
   if (restoring) { captureWanted = true; return null; }
   if (capturingHalted()) return null;
-  const names = await listPanes();
+  const { names, engine, startedAt, server } = await liveSessions();
+  /* A server this process has not put the desk back on (see `settledOn`):
+     photographed as a desk that is not whole — nothing is forgotten — and put
+     back once it has been seen on two sweeps. Not on the first: a server seen
+     once may be one somebody is in the middle of killing and starting again
+     (the conf reset, a script), and a pass racing that builds on the dying
+     one. */
+  let putBack = false;
+  if (engine) {
+    const on = settledOn.get(deskKey());
+    if (on === "") settledOn.set(deskKey(), engine);
+    else if (on && on !== engine && !putBackOn.has(engine)) {
+      if (seenNew === engine) { putBackOn.add(engine); putBack = true; }
+      else seenNew = engine;
+    }
+  }
   /*
    * An empty socket is not "no sessions" — it is far more often tmux not
    * answering yet, or the app racing its own engine at boot. Writing an empty
@@ -488,6 +812,12 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
    * concluding nothing is the habit that caused this, so it stops here too.
    */
   if (!names.length) return null;
+  /* The last photograph, when its pane ids are this server's: a pane that
+     has died since is still in it as it was alive. */
+  const lastShot = readRestoreState();
+  /* Read once per sweep: a prompt verdict can only change when this does. */
+  const newestPrompt = newestPromptId();
+  const previous = lastShot?.engine === engine ? lastShot : null;
   const sessions: CapturedSession[] = [];
   for (const name of names) {
     if (!validSessionName(name)) continue;
@@ -524,22 +854,155 @@ export async function captureLayout(now = Date.now()): Promise<RestoreState | nu
          * back as agents where their owner had left a prompt. What is running
          * now is the question, so ask what is running now.
          */
-        const agentSession = looksLikeAgent(p.command)
-          ? (paneAgentNote(p.id)?.session_id || await resumeIdOf(name, w.id, p.id))
-          : undefined;
-        /* Only for a pane that is running one, same as the id: a shell has no
-           flags to keep, and a stale note must not put flags on a plain
-           prompt. */
-        const agentArgs = looksLikeAgent(p.command)
-          ? agentArgsOf(await agentArgvOf(name, w.id, p.id))
-          : undefined;
-        panes.push({ ...p, startCommand, agentSession, agentArgs: agentArgs?.length ? agentArgs : undefined });
+        /*
+         * A CORPSE IS PHOTOGRAPHED AS THE CONVERSATION IT HELD, OR AS A SHELL.
+         *
+         * The engine keeps a pane whose command failed (tmuxconf.ts), and tmux
+         * still reports the command it was born with. Replaying that at the
+         * next boot would run the failure again and hand back another corpse.
+         * But a Claude that crashed mid-conversation had a conversation, and
+         * a shell in its place after a reboot loses it. There is no process to
+         * ask any more, so the answer comes from what was known while it
+         * lived: the last photograph of this very pane, on this same server
+         * (ids are only ever one server's), which has the id and the flags;
+         * or, for a pane that died before a sweep ever saw it, the hook's
+         * note — only for a pane BORN as the Claude CLI, and only a note from
+         * this server since it started (`noteIsThisAgents`, with the server's
+         * start for the process's). A pane born as a wrapper that Claude
+         * once ran inside is that wrapper's corpse, and so is a pane last
+         * photographed running something else: both come back as a shell;
+         * so does a Claude that lived less than a sweep in a pane born as
+         * something else, which is the ceiling.
+         */
+        if (p.dead) {
+          /* By id, and by window name as well: while a desk is not whole,
+             windows are carried with the ids of the server that died, and
+             this one hands the same ids out again. The directory too, when
+             tmux still says one — for a dead pane it says "" (measured), so
+             the photograph's is the only one left, and the pane is given it
+             back rather than restored wherever the server was started. */
+          const was = previous?.sessions.find((s) => s.name === name)?.windows
+            .find((x) => x.id === w.id && (x.name ?? "") === (w.name ?? ""))?.panes
+            .find((x) => x.id === p.id && (!p.path || x.path === p.path));
+          const bornClaude = startCommand.split(/[\s"']+/).some((t) => (t.split("/").pop() || "") === claudeName());
+          const note = was || !bornClaude ? null : paneAgentNote(p.id, server);
+          const noteFits = !!note && noteIsThisAgents(note, { cwd: p.path, startedAt }, server);
+          const agentSession = was ? was.agentSession : noteFits ? note!.session_id : undefined;
+          /* The flags of the last live photograph — which may have been
+             taken before the command-line prompt's hook came in, when the
+             prompt could not yet be told from a flag. It can now: the
+             conversation's first prompt since this server started is the
+             one a command line carries, so that is taken off. Only that one,
+             and only exactly: a flag's value typed later as an answer stays
+             a value. */
+          const first = was?.agentArgs?.length && agentSession ? firstPromptSince(agentSession, startedAt - NOTE_SLACK_MS) : "";
+          const agentArgs = was?.agentArgs ? agentArgsOf(["", ...was.agentArgs], (text) => !!first && text === first) : undefined;
+          panes.push({ ...p, path: p.path || was?.path || "", startCommand: "", ...(agentSession ? { agentSession, ...(agentArgs?.length ? { agentArgs } : {}) } : {}) });
+          continue;
+        }
+        /*
+         * WHAT IS RUNNING NOW is the question, so ask what is running now.
+         *
+         * Not the pane's born-with command, which tmux reports as a string it
+         * has already quoted for a shell — a window made from one string
+         * comes back as `"exec claude --model …"`, quotes included, and
+         * `sh -c` on that looks for a program called `exec claude --model …`
+         * (measured: six windows back as shells). Not the note alone, which
+         * outlives the agent: pane ids are reused, and two plain shells were
+         * once photographed carrying conversation ids. The process tree under
+         * the pane says what is there, which CLI it is, and with what flags.
+         */
+        const pid = p.pid ?? 0;
+        /*
+         * THE WRAPPER THAT KEEPS A PANE AFTER ITS CLI EXITS is a shell by
+         * name, and not one a person types in: `sh -c '<cli>; printf …;
+         * exec sleep 86400'` (`agentglass-agent start --keep`, a layout tab
+         * opened with a command). Its `sh` is the pane's foreground for as
+         * long as the CLI runs, so the rule below took it for a shell with
+         * nothing running and photographed the whole line — a one-shot's
+         * prompt came back at the next boot and ran again, and a Claude in
+         * one lost its conversation. The walk goes through it to the CLI,
+         * which is its only child; once the CLI has exited there is only the
+         * `sleep`, and the pane is a shell. The line itself is never kept.
+         */
+        const wrapped = startCommand.includes(KEPT_MARK);
+        /* No walk under a pane whose foreground is its shell: nothing is
+           running in it, and a job a person backgrounded is not its agent. */
+        const found = pid && (wrapped || !SHELLS.has(p.command)) ? agentUnder(pid) : null;
+        const under = found && (wrapped || isForeground(found, p.command)) ? found : null;
+        if (under && under.name === claudeName()) {
+          /*
+           * The id: the hook's note first, because it is the newer fact — a
+           * `/clear` gives the pane a new conversation the argv knows nothing
+           * about — but only a note this agent's own hooks wrote
+           * (`noteIsThisAgents`): one from a previous life of the pane id is
+           * not its. Then the argv's own `--resume`, which a restored pane
+           * carries before any hook has fired.
+           */
+          const note = paneAgentNote(p.id, server);
+          const noteFits = !!note && noteIsThisAgents(note, under, server);
+          const resumed = resumeIdIn(under.argv);
+          const agentSession = (noteFits ? note!.session_id : undefined) || resumed;
+          /* The note's conversation only when the note is this agent's. */
+          const agentArgs = agentArgsOf(under.argv, (text) => wasPromptFor(pid, text, [agentSession, resumed, noteFits ? note!.session_id : undefined], under.startedAt, newestPrompt));
+          /* A conversation, or nothing: the born-with line is blanked so a
+             pane whose id could not be found comes back as a shell rather
+             than as its command line, prompt and all. */
+          panes.push({ ...p, startCommand: "", agentSession, agentArgs: agentArgs.length ? agentArgs : undefined });
+          continue;
+        }
+        /* Another CLI: itself, with its prompt taken off. Nothing else: the
+           command the pane was born from, unless that is a login shell with
+           nothing to run — which tmux gives a restored pane anyway.
+           In the wrapper with no agent under it, the command is the
+           wrapper's child — a layout tab's dev server or `tail -f`, which
+           came back running before the wrapper was walked through, and a
+           bare shell after. Only while the wrapper's `sh` is still the
+           foreground: once the `sleep` has taken over, the command has
+           finished and is not run again. A child caught between its fork and
+           its exec still carries the wrapper's line, and is not the command. */
+        const clean = (argv: string[]) => argv.filter((a) => !/[\n\r\0]/.test(a)).slice(0, 64);
+        const root = !pid ? []
+          : !wrapped ? clean(argvOf(pid))
+          : !under && SHELLS.has(p.command) ? clean(childPidsOf(pid).slice(0, 1).flatMap((c) => argvOf(c))) : [];
+        const startArgv = under ? withoutPromptFlags(under.name, under.argv)
+          : bornYet(root) && !isBareShell(root) && !isKeepAlive(root) && !root.some((a) => a.includes(KEPT_MARK)) ? root : [];
+        panes.push({ ...p, startCommand: wrapped ? "" : startCommand, ...(startArgv.length ? { startArgv } : {}) });
       }
       if (panes.length) out.push({ ...w, panes });
     }
     if (out.length) sessions.push({ name, windows: out });
   }
-  return writeMerged(sessions, now);
+  const state = writeMerged(sessions, now, deskIsWhole(engine), engine, new Set(names));
+  /* The pass photographs again when it is done (`captureWanted`). */
+  if (putBack) { void restoreLayout(); captureWanted = true; }
+  return state;
+}
+
+/**
+ * The sessions on the engine, and which server that is.
+ *
+ * `#{pid}` and `#{start_time}` are the tmux server's own, the same on every
+ * line; together they name a server for its life, and a different pair is a
+ * server that died and was started again. That is what `deskIsWhole` asks.
+ */
+async function liveSessions(): Promise<{ names: string[]; engine: string; startedAt: number; server: string }> {
+  const r = await tmux(["list-sessions", "-F", "#{session_name}\t#{pid}\t#{start_time}\t#{socket_path}"]);
+  if (!r.ok) return { names: [], engine: "", startedAt: 0, server: "" }; // no server running yet is the common case, not an error
+  const names: string[] = [];
+  let engine = "";
+  let startedAt = 0;
+  let server = "";
+  for (const line of r.stdout.split("\n")) {
+    const [name = "", pid = "", started = "", socket = ""] = line.split("\t");
+    if (!name.trim()) continue;
+    names.push(name.trim());
+    engine ||= `${pid.trim()}.${started.trim()}`;
+    startedAt ||= Number(started.trim()) * 1000 || 0;
+    /* The spelling the hook uses for the same server (`notePaneFromHook`). */
+    server ||= socket.trim() && pid.trim() ? `${socket.trim()},${pid.trim()}` : "";
+  }
+  return { names, engine, startedAt, server };
 }
 
 /**
@@ -561,10 +1024,15 @@ export function captureLayoutSync(now = Date.now()): void {
     if (restoring || capturingHalted()) return;
     const bin = resolveTmuxBin();
     if (!bin) return;
-    const r = Bun.spawnSync([bin, "-L", tmuxSocket(), "-f", confPath(), "list-sessions", "-F", "#{session_name}"],
+    /* The server too, as `liveSessions` spells it: a photograph that does not
+       say which server it was taken on leaves the next sweep without a
+       previous one to read a dead pane from. */
+    const r = Bun.spawnSync([bin, "-L", tmuxSocket(), "-f", confPath(), "list-sessions", "-F", "#{session_name}\t#{pid}\t#{start_time}"],
       { stdout: "pipe", stderr: "pipe", env: process.env });
-    const names = new TextDecoder().decode(r.stdout).split("\n").map((n) => n.trim())
-      .filter((n) => n && validSessionName(n));
+    const rows = new TextDecoder().decode(r.stdout).split("\n").map((l) => l.split("\t"));
+    const names = rows.map(([n = ""]) => n.trim()).filter((n) => n && validSessionName(n));
+    const [, pid = "", started = ""] = rows[0] ?? [];
+    const engine = pid.trim() && started.trim() ? `${pid.trim()}.${started.trim()}` : "";
     if (!names.length) return;
     const before = readRestoreState();
     const known = new Map((before?.sessions ?? []).map((s) => [s.name, s]));
@@ -574,7 +1042,7 @@ export function captureLayoutSync(now = Date.now()): void {
     }
     mkdirSync(restoreDir(), { recursive: true });
     const tmp = `${layoutPath()}.${process.pid}.tmp`;
-    writeFileSync(tmp, JSON.stringify({ capturedAt: now, sessions: [...known.values()] }));
+    writeFileSync(tmp, JSON.stringify({ capturedAt: now, sessions: [...known.values()], ...(engine ? { engine } : {}) }), { mode: 0o600 });
     swapInLayout(tmp);
   } catch { /* never block an exit on bookkeeping */ }
 }
@@ -618,28 +1086,50 @@ export function lastCaptureAt(): number | null {
  * "lazy" is a login shell in the pane's directory, always: the desk comes back
  * and nothing starts talking to a model until somebody asks it to.
  *
- * "all" resumes the conversation. Two ways in, and the second is the one that
- * covers a real desk: a pane the app CREATED carries its whole command line in
- * `startCommand` and is replayed verbatim; a `claude` typed into a shell leaves
- * that empty — measured — so the conversation id recorded for the pane is used
- * to build `claude --resume <id>` instead.
+ * "all" brings back what was running, in this order:
  *
- * The command is passed as argv, never through a shell, and the id it contains
- * came from our own hook rather than from anything a page could set.
+ *   1. A CONVERSATION IS RESUMED, NEVER REPLAYED. A pane that held a Claude
+ *      session comes back as `claude <its flags> --resume <id>`, whatever
+ *      command line it was born from. The born-with line used to win here
+ *      whenever there was one, and it carried the prompt: a session the
+ *      orchestrator had opened with `claude … 'Read the brief and follow
+ *      it'`, finished and closed, was rebuilt at the next restart and RAN THE
+ *      BRIEF AGAIN — measured on 2026-09-21, tokens included. Worse, each
+ *      restart wrapped the line in one more `sh -c`: eight deep by the time
+ *      it was read. The id is the conversation; the flags are the desk; the
+ *      prompt was said once.
+ *   2. Any other program comes back as the argv it was running with
+ *      (`startArgv`), passed to tmux as argv, so it is exact and never one
+ *      level deeper. (tmux runs a ONE-word argv through the login shell —
+ *      its own rule for a single argument — which for a bare program name
+ *      is the same program.)
+ *   3. A photograph from before `startArgv` existed still has the string tmux
+ *      reported, and gets the old `sh -c` on it: right for a line tmux
+ *      printed unquoted, a shell for one it quoted, and gone at the first
+ *      sweep after boot.
+ *
+ * The id came from our own hook or from a running process's arguments, and
+ * is still checked against a UUID before it can reach a command line.
  */
-export function runArgs(mode: "lazy" | "all", pane: CapturedPane | undefined): string[] {
+export function runArgs(mode: "lazy" | "all", pane: CapturedPane | undefined, bin: string | null = claudeCode.bin()): string[] {
   if (mode !== "all" || !pane) return [];
   /* A photograph from before the capture learned to leave the Lantern out:
      its chat comes back as a shell, never as the chat. */
   if (pane.startCommand.includes(LANTERN_PROMPT_MARK)) return [];
-  if (pane.startCommand) return ["sh", "-c", pane.startCommand];
   const id = pane.agentSession;
-  if (!id || !SESSION_ID_RE.test(id)) return [];
-  const bin = claudeCode.bin();
-  if (!bin) return [];
-  /* The flags first, then the id: the id is the one part of this line this
-     file built itself, and it goes last so nothing captured can displace it. */
-  return [bin, ...(pane.agentArgs ?? []), "--resume", id];
+  if (id && SESSION_ID_RE.test(id)) {
+    /* A conversation with no CLI on this machine to resume it is a shell,
+       not a replay of whatever line started it. */
+    if (!bin) return [];
+    /* The flags first, then the id: the id is the one part of this line this
+       file built itself, and it goes last so nothing captured can displace it. */
+    return [bin, ...(pane.agentArgs ?? []), "--resume", id];
+  }
+  if (pane.startArgv?.length) return [...pane.startArgv];
+  /* A photograph from before the capture knew the wrapper carries its line;
+     replayed, it runs the CLI's prompt again. */
+  if (pane.startCommand && !pane.startCommand.includes(KEPT_MARK)) return ["sh", "-c", pane.startCommand];
+  return [];
 }
 
 /** A conversation id as the CLI writes them: a UUID, and nothing else goes on
@@ -740,21 +1230,59 @@ export function __clearCrashLoop(): void { crashLoop = null; }
 let restoring = false;
 let captureWanted = false;
 /*
- * WHETHER THIS PROCESS HAS HAD ITS GO AT PUTTING THE DESK BACK.
+ * WHETHER THIS PROCESS HAS HAD ITS GO AT PUTTING THE DESK BACK — ON THIS
+ * ENGINE.
  *
- * Until it has, a photograph is not evidence that a window is gone — see
- * `writeMerged`. After it has, the desk is whatever a person has made of it
- * and the camera is believed. False at boot, true from the end of the first
- * restore pass, and never false again in this process.
+ * Until it has, a photograph is not evidence that a window or a session is
+ * gone — see `writeMerged`. After it has, the desk is whatever a person has
+ * made of it and the camera is believed.
+ *
+ * Per engine, because the ids and the desk are one tmux server's: the value
+ * is the server (`liveSessions().engine`) the desk was put back on, read at
+ * the end of the pass. "" when no server was running then — the pass had
+ * nothing to build, and whatever server starts next begins from this
+ * process's desk, so the first one a capture sees is adopted. A DIFFERENT
+ * server later — the last session closed and tmux exited, the conf was
+ * reset, tmux crashed — is a desk this process has not had its go at, and
+ * `captureLayout` runs one restore pass on it (`putBackOn`). Bound to the
+ * first server alone, the desk was never whole again after either case, and
+ * a tab closed after that was kept and rebuilt at the next boot (measured).
+ *
+ * Keyed by socket and state directory as well: every test file shares one
+ * process, and a desk put back on one file's socket is not another's.
  */
-let settled = false;
-export function __resetRestoreSettled(): void { settled = false; }
+const settledOn = new Map<string, string>();
+const deskKey = (): string => `${tmuxSocket()}\u0000${restoreDir()}`;
+/** Engines a pass has already been asked for, so a pass that fails is not
+ *  asked for again every sweep. */
+const putBackOn = new Set<string>();
+/** A new server seen by one sweep, waiting for a second. */
+let seenNew = "";
+export function __resetRestoreSettled(): void { settledOn.delete(deskKey()); }
+/** Whether the desk on THIS engine is the one this process put back. */
+function deskIsWhole(engine: string): boolean {
+  const on = settledOn.get(deskKey());
+  return on !== undefined && !!engine && on === engine;
+}
 
 /** Whether a restore pass is in flight — a capture during one would be a
  *  photograph of a half-built desk. */
 export function isRestoring(): boolean { return restoring; }
 
+/*
+ * ONE PASS AT A TIME. The boot, the Settings button and a new server
+ * (`captureLayout`) can each ask for one; two at once would each see the
+ * other's half-built sessions as missing windows and build them twice.
+ */
+let passInFlight: Promise<unknown> | null = null;
 export async function restoreLayout(mode: "lazy" | "all" = tmuxResume()): Promise<{ ok: boolean; restored: number; error?: string }> {
+  while (passInFlight) await passInFlight.catch(() => undefined);
+  const pass = restoreOnce(mode);
+  passInFlight = pass;
+  try { return await pass; } finally { if (passInFlight === pass) passInFlight = null; }
+}
+
+async function restoreOnce(mode: "lazy" | "all"): Promise<{ ok: boolean; restored: number; error?: string }> {
   restoring = true;
   try {
     const r = await restorePass(mode);
@@ -774,7 +1302,7 @@ export async function restoreLayout(mode: "lazy" | "all" = tmuxResume()): Promis
      * harmlessly — the trade this whole file already makes, in the direction
      * it already chose.
      */
-    settled = true;
+    settledOn.set(deskKey(), (await liveSessions()).engine);
     return r;
   } catch (e: any) {
     /* And it comes back as an answer rather than an unhandled rejection: the
@@ -795,6 +1323,7 @@ async function restorePass(mode: "lazy" | "all"): Promise<{ ok: boolean; restore
   if (!state || !state.sessions.length) return { ok: false, restored: 0, error: "nothing captured yet — no restore state" };
   /* Everything this pass built, so the sweep below can ask what survived. */
   const made: Made[] = [];
+  const { engine } = await liveSessions();
   for (const s of state.sessions) {
     /*
      * A mirror in the file is a mirror this build must not rebuild.
@@ -831,7 +1360,7 @@ async function restorePass(mode: "lazy" | "all"): Promise<{ ok: boolean; restore
        * process has finished its first pass, true forever after, so the repair
        * happens at boot and the promise holds every other minute of the day.
        */
-      if (settled) continue;
+      if (deskIsWhole(engine)) continue;
       const live = await windowTree(s.name).catch(() => [] as TmuxWindowDetail[]);
       const key = (n: string | undefined, path: string | undefined) => `${n ?? ""}\u0000${path ?? ""}`;
       const here = new Set(live.map((w) => key(w.name, w.panes[0]?.path)));
@@ -891,12 +1420,22 @@ async function restorePass(mode: "lazy" | "all"): Promise<{ ok: boolean; restore
 
 type Made = { session: string; window: CapturedWindow; id: string };
 
+/** The shell the engine gives a new pane — `default-shell`, which tmux takes
+ *  from $SHELL at start. Asked once per process; `/bin/sh` if it will not say. */
+let shellCache: string | null = null;
+async function engineShell(): Promise<string> {
+  if (shellCache) return shellCache;
+  const r = await tmux(["show-options", "-gv", "default-shell"]);
+  shellCache = r.ok && r.stdout.trim().startsWith("/") ? r.stdout.trim() : "/bin/sh";
+  return shellCache;
+}
+
 /**
  * How long to wait before asking whether what was built is still standing.
  *
- * A window is created WITH its command inside it, and tmux closes a window
- * whose command has exited — nothing here sets `remain-on-exit`, and it must
- * not: the understudy depends on a finished run's window closing itself.
+ * A window is created WITH its command inside it. tmux closes a window whose
+ * command ended cleanly, and the engine keeps one whose command failed as a
+ * dead pane (tmuxconf.ts) — either way it is not the pane that was asked for.
  *
  * So the failure is: `claude --resume <id>` cannot start — the conversation is
  * already open in another pane, the id is unknown to the CLI, the binary moved
@@ -968,8 +1507,31 @@ async function keepTheDesk(made: Made[], mode: "lazy" | "all"): Promise<number> 
      * directory, which is `lazy`.
      */
     const want = m.window.panes.length;
-    const now = await tmux(["list-panes", "-t", `=${m.session}:${id}`, "-F", "#{pane_id}"]);
-    const have = now.ok ? now.stdout.split("\n").filter((l) => l.trim()).length : 0;
+    const now = await tmux(["list-panes", "-t", `=${m.session}:${id}`, "-F", "#{pane_id}\t#{pane_dead}"]);
+    const rows = now.ok ? now.stdout.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => l.split("\t")) : [];
+    /*
+     * AND A PANE WHOSE COMMAND DIED IS GIVEN A SHELL.
+     *
+     * The engine keeps a pane whose command failed (`remain-on-exit failed`,
+     * tmuxconf.ts), which is what saves a person's tab when a CLI crashes at
+     * three in the afternoon. At boot it is the wrong thing to keep: a
+     * `claude --resume` that would not start leaves "Pane is dead (status 1)"
+     * where the desk promised a place to type. `respawn-pane -k` with the
+     * engine's own shell turns the corpse back into that place, in the same
+     * directory, with the window, its name and its position untouched.
+     */
+    for (const [paneId = "", dead = ""] of rows) {
+      if (dead !== "1") continue;
+      const at = m.window.panes[rows.findIndex((r) => r[0] === paneId)]?.path || cwd;
+      /* Two arguments, so tmux execs the shell itself rather than wrapping
+         one word in `default-shell -c`: a login shell, and not `fish -c fish`
+         photographed as a command for ever. And the pane goes back to closing
+         on exit, the way a plain tab does: it was born with a command, so the
+         hook for shells (tmuxconf.ts) would not cover it. */
+      await tmux(["respawn-pane", "-k", "-t", paneId, "-c", at, await engineShell(), "-l"]);
+      await tmux(["set-option", "-p", "-t", paneId, "remain-on-exit", "off"]);
+    }
+    const have = rows.length;
     if (have < want) await restorePanes(m.session, id, m.window.panes.slice(have), "lazy");
     await applyLayout(m.session, id, m.window.layout, want);
   }

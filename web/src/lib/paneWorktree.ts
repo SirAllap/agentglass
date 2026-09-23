@@ -35,7 +35,13 @@ export interface PaneSeen {
  * `null` means forget: the chip falls back to the panel's own checkout rather
  * than to the last thing anybody saw.
  */
-export function nextSeen(prev: PaneSeen | undefined, found: string | null, session: string): PaneSeen | null {
+export function nextSeen(prev: PaneSeen | undefined, found: string | null, session: string, read = true): PaneSeen | null {
+  /* A read that did not happen is not news. The server was busy or offline,
+     and forgetting on that dropped the chip to the panel's own checkout on
+     every hiccup — for a pane whose agent has no hooked session most of all,
+     because nothing else could keep it: an opencode or a qwen has no session
+     id here, so its memory lives only as long as every poll succeeds. */
+  if (!read && !found) return prev ?? null;
   if (found) return { root: found, session };
   // Nothing found, and the same agent is still there: it has simply not
   // mentioned the worktree since. This is the case stickiness exists for.
@@ -45,6 +51,32 @@ export function nextSeen(prev: PaneSeen | undefined, found: string | null, sessi
   // else's conversation.
   return null;
 }
+
+/**
+ * A worktree the candidate list has not caught up with.
+ *
+ * The list is read when the view opens, and a worktree cut after that — by an
+ * agent, in another tab — is not in it: the pane's agent stands in a directory
+ * no candidate names, so the chip cannot name it and falls back to the panel's
+ * own checkout until the view is reopened. That directory is the one to ask
+ * the list about again. Asked about ONCE: a directory that is no worktree at
+ * all (a home directory, a scratch folder) would otherwise be asked about on
+ * every poll.
+ */
+export function unlistedWorktree(dirs: string[], cands: { root: string }[], asked: Map<string, number>, now = Date.now()): string | null {
+  const dir = dirs[0];
+  if (!dir) return null;
+  if (cands.some((r) => dir === r.root || dir.startsWith(r.root + "/"))) return null;
+  /* Asked again after a while, not never: the server keeps its own list for
+     some seconds, so the first read after a worktree is cut can still be the
+     old one. A minute is longer than that cache and shorter than a person's
+     patience. */
+  const last = asked.get(dir);
+  if (last !== undefined && now - last < ASK_AGAIN_MS) return null;
+  asked.set(dir, now);
+  return dir;
+}
+const ASK_AGAIN_MS = 60_000;
 
 /*
  * The memory, across restarts.

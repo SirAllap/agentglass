@@ -1,7 +1,7 @@
 import type { Budget, BudgetPeriod, BudgetStatus } from "../../shared/types.ts";
 import { spendBetween } from "./db.ts";
 import { readBudgets, inScope } from "./config.ts";
-import { paneForSession, paneAgentNote } from "./panewt.ts";
+import { noteForSession } from "./panewt.ts";
 
 /**
  * A number you chose, instead of one this app picked.
@@ -195,8 +195,7 @@ export function budgetHoldFor(session: string, failClosed: boolean): string | un
     // which is how describeSession recovers it too. No pane note means no
     // project, and no project means no project budget — overBudgetFor refuses
     // to guess one.
-    const pane = paneForSession(session);
-    const over = overBudgetFor(pane ? paneAgentNote(pane)?.cwd ?? "" : "");
+    const over = overBudgetFor(noteForSession(session)?.cwd ?? "");
     return over ? budgetHoldReason(over, failClosed) : undefined;
   } catch (e) {
     console.warn("[gate] budget check skipped:", e instanceof Error ? e.message : e);

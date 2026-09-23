@@ -11,10 +11,33 @@
  *
  * The assertion has two halves on Linux, because neither alone is the whole
  * promise:
- *   - `systemd-inhibit --what=sleep:handle-lid-switch` is a *child process*
- *     holding a logind inhibitor lock for as long as it runs. `handle-lid-switch`
+ *   - `systemd-inhibit` is a *child process* holding a logind inhibitor lock
+ *     for as long as it runs — two of them, one per lock, because the two
+ *     locks need different modes (see `spawnInhibit`). `handle-lid-switch`
  *     is deliberate: closing the lid must not end a run.
  *   - Electron's `powerSaveBlocker` covers the display, which systemd does not.
+ *
+ * A PERSON'S OWN SUSPEND WINS. The sleep lock is held in BLOCK-WEAK mode:
+ * logind enforces it against its own idle action and against other users,
+ * and not against a request from the user who holds it — so `systemctl
+ * suspend` from the menu goes through while an agent works, and the machine
+ * still does not doze off on its own. Plain block was the first version, and
+ * it did what it says to every suspend, that one included: with an agent
+ * mid-turn the menu entry answered "Operation inhibited" and nothing happened,
+ * with nothing on screen saying why. Measured on the owner's laptop.
+ *
+ * `block-weak` arrived in systemd 257. An older logind refuses the mode at
+ * once ("Invalid mode specification", exit 1, measured on 261 with a bogus
+ * mode), and the lock is then taken in plain BLOCK mode instead — which,
+ * before 257, is the same thing under the old name: org.freedesktop.login1(5)
+ * says block locks were "honoured only by unprivileged users, excluding the
+ * user owning the inhibitor", and that 257 enforces them on everyone and
+ * offers the old behaviour as block-weak. So on a logind too old for the
+ * weak spelling, block already lets the owner's own suspend through. The
+ * first version fell back to DELAY, which holds a suspend for
+ * InhibitDelayMaxSec and then lets it go — nothing at all, on every Debian 12
+ * and Ubuntu 24.04 (systemd 252 and 255). The lid switch has no weak or
+ * delay mode in logind, and blocking it is what was wanted.
  *
  * Three failure modes are the whole difference between this working and this
  * being a lie, and each gets its own paragraph below: `systemd-inhibit` not
@@ -52,8 +75,20 @@ let mode = "off";
 let getApiOrigin = () => "";
 let getToken = () => "";
 
-/** @type {import("child_process").ChildProcess | null} */
-let inhibitChild = null;
+/**
+ * The two logind locks, each its own child. They cannot be one: `block-weak`
+ * and `delay` are only offered for `sleep` and `shutdown`, so
+ * `sleep:handle-lid-switch` would have to be block for both, and block on
+ * sleep is the bug above.
+ * @type {{ sleep: import("child_process").ChildProcess | null, lid: import("child_process").ChildProcess | null }}
+ */
+const inhibitChild = { sleep: null, lid: null };
+/** The mode each running child was spawned with, for `status`: the sleep
+ *  lock's is `block-weak` or, on a logind too old for it, `block`. */
+const modeOfChild = new WeakMap();
+/** Children this process ended itself, so their exit is not read as logind
+ *  refusing the mode. */
+const releasedByUs = new WeakSet();
 /** Set once `systemd-inhibit` comes back ENOENT. Checked before every spawn,
  *  and never cleared for the life of the process — a binary that is not on
  *  this machine at second 10 is not going to appear at second 40, and
@@ -72,6 +107,9 @@ let platform = process.platform;
 let pollTimer = null;
 /** Last poll's answer — `agent` mode's only input besides the mode itself. */
 let lastKnownWorking = false;
+/** And the server's reasons for it, by source (`workingWhy` on the server),
+ *  or null from a server that does not send them. Shown, never decided on. */
+let lastKnownWhy = null;
 /** Whether the assertion is currently held, independent of *why*. */
 let held = false;
 
@@ -93,16 +131,27 @@ function saveMode(m) {
   } catch { /* the mode still applies for this run; it just won't survive a restart */ }
 }
 
-/** Spawn the inhibitor. Idempotent: a second call while one is already
- *  running is a no-op, not a leaked second lock. */
-function assertLinuxInhibit() {
-  if (inhibitChild || inhibitUnavailable) return;
+/** Set once logind has refused `block-weak` (systemd before 257). */
+let weakRefused = false;
+
+/**
+ * Spawn one lock. Idempotent: a second call while it is already running is a
+ * no-op, not a leaked second lock.
+ * @param {"sleep" | "lid"} which
+ * @param {string} [mode] the logind mode; the sleep lock's default is
+ *   `block-weak`, and `block` is what it falls back to when logind refuses it
+ *   (see the header: before 257, block is weak).
+ */
+function spawnInhibit(which, mode = which === "sleep" && !weakRefused ? "block-weak" : "block") {
+  if (inhibitChild[which] || inhibitUnavailable) return;
+  const what = which === "sleep" ? "--what=sleep" : "--what=handle-lid-switch";
   const child = spawn(
     "systemd-inhibit",
-    ["--what=sleep:handle-lid-switch", "--who=agentglass", "--why=Agents are working", "--mode=block", "sleep", "infinity"],
+    [what, "--who=agentglass", "--why=Agents are working", `--mode=${mode}`, "sleep", "infinity"],
     { stdio: "ignore" },
   );
-  inhibitChild = child;
+  inhibitChild[which] = child;
+  modeOfChild.set(child, mode);
   /*
    * ENOENT means the tool is not on this machine — not every Linux ships
    * systemd, and a laptop without it must not busy-loop trying to spawn a
@@ -111,22 +160,45 @@ function assertLinuxInhibit() {
    * poll, so only ENOENT sets the permanent flag.
    */
   child.on("error", (e) => {
-    if (inhibitChild === child) inhibitChild = null;
+    if (inhibitChild[which] === child) inhibitChild[which] = null;
     if (/** @type {NodeJS.ErrnoException} */ (e).code === "ENOENT") inhibitUnavailable = true;
   });
-  child.on("exit", () => {
+  child.on("exit", (code) => {
     // A suspend does not necessarily leave this child alive to see the
     // resume — the `resume` handler below is what re-asserts, not this.
-    if (inhibitChild === child) inhibitChild = null;
+    if (inhibitChild[which] === child) inhibitChild[which] = null;
+    // Refused at once, by a logind too old for the mode: the next best lock.
+    // Only a refusal (exit 1) that this process did not cause; a child killed
+    // by `killInhibit` exits by signal, and one killed by the suspend itself
+    // is the resume handler's to replace.
+    if (mode === "block-weak" && code === 1 && !releasedByUs.has(child) && held) {
+      /* The logind's version spoke, and it does not change while the app
+         runs: every later lock — the resume handler re-asserts them all —
+         goes straight to block. */
+      weakRefused = true;
+      spawnInhibit(which, "block");
+    }
   });
 }
 
-/** Idempotent, and ESRCH — the process already gone — is not an error. */
-function releaseLinuxInhibit() {
-  const child = inhibitChild;
-  inhibitChild = null;
+/** Idempotent, and ESRCH — the process already gone — is not an error.
+ *  @param {"sleep" | "lid"} which */
+function killInhibit(which) {
+  const child = inhibitChild[which];
+  inhibitChild[which] = null;
   if (!child) return;
+  releasedByUs.add(child);
   try { child.kill(); } catch { /* already gone */ }
+}
+
+function assertLinuxInhibit() {
+  spawnInhibit("sleep");
+  spawnInhibit("lid");
+}
+
+function releaseLinuxInhibit() {
+  killInhibit("sleep");
+  killInhibit("lid");
 }
 
 function assertDisplay() {
@@ -209,6 +281,7 @@ async function pollWorking() {
     if (!res.ok) return; // a hiccup — hold last known state rather than flap on it
     const body = await res.json();
     lastKnownWorking = body.working === true;
+    lastKnownWhy = body.why && typeof body.why === "object" ? body.why : null;
     sync();
   } catch { /* server not up yet, or the request timed out — try again next tick */ } finally {
     clearTimeout(timer);
@@ -229,7 +302,7 @@ function stopPolling() {
 
 function applyMode() {
   if (mode === "agent") startPolling(); else stopPolling();
-  if (mode !== "agent") lastKnownWorking = false;
+  if (mode !== "agent") { lastKnownWorking = false; lastKnownWhy = null; }
   sync();
 }
 
@@ -253,6 +326,17 @@ function init(opts) {
     releaseAwake();
     assertAwake();
   });
+  /*
+   * And the moment logind announces the suspend, the sleep lock is let go.
+   *
+   * By then the suspend is happening whatever the lock says: the lock is
+   * weak, and the person's own request went through it. Letting go here is
+   * bookkeeping — a child that would otherwise be found dead after the
+   * resume, and a lock that must not read as "held" while the machine is
+   * asleep. `held` is left as it is: the resume handler above re-asserts
+   * everything on the way back.
+   */
+  powerMonitor?.on("suspend", () => { killInhibit("sleep"); });
   applyMode();
 }
 
@@ -265,8 +349,32 @@ function setMode(m) {
   return status();
 }
 
+/**
+ * What is held and why, for the header.
+ *
+ * `awake` alone was all it said, and it could not tell a person the two
+ * things they need before closing a lid or picking suspend from the menu:
+ * WHICH locks are held — the lid switch, and the sleep lock whose weak mode
+ * lets their own suspend through — and WHY, which is the server's count of
+ * what is working. It also said "awake" on a machine with no systemd-inhibit,
+ * where only the display is held and the machine sleeps on the lid as ever.
+ *
+ * `locks` is read off the children that are running now, not off `held`: a
+ * sleep lock let go on the way into a suspend, or never taken, is null.
+ */
 function status() {
-  return { mode, awake: held, working: lastKnownWorking };
+  const sleepChild = inhibitChild.sleep;
+  return {
+    mode, awake: held, working: lastKnownWorking, why: lastKnownWhy,
+    locks: {
+      sleep: sleepChild ? modeOfChild.get(sleepChild) ?? null : null,
+      lid: !!inhibitChild.lid,
+      display: displayBlockerId !== null,
+      app: suspensionBlockerId !== null,
+    },
+    inhibitMissing: platform === "linux" && inhibitUnavailable,
+    platform,
+  };
 }
 
 function shutdown() {

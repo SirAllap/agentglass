@@ -11,7 +11,7 @@
 // and no agents — the walk itself is the one part that cannot be tested without
 // a process tree, and it is deliberately small.
 import { describe, expect, test } from "bun:test";
-import { parsePanes, paneForCwd, panesForCwd, withAgentSessions, paneForAgentSession, PANE_FORMAT } from "../src/paneloc.ts";
+import { parsePanes, paneForCwd, panesForCwd, withAgentSessions, paneForAgentSession, PANE_FORMAT, agentCwdsUnder } from "../src/paneloc.ts";
 
 const APP = "/home/dev/code/orbit";
 const WT = "/home/dev/code/orbit-WEB-1042";
@@ -261,5 +261,46 @@ describe("two panes claiming one session", () => {
     const withNotes = withAgentSessions(two, () => ({ sessionId: "sess-ambiguous", at: 5_000 }));
     expect(withNotes.every((r) => r.agentSession === null)).toBe(true);
     expect(paneForAgentSession(withNotes, "sess-ambiguous")).toBeNull();
+  });
+});
+
+describe("the walk under a pane", () => {
+  /* A stated process tree: the pane's shell with one child. */
+  const tree = (child: { comm: string; argv: string[]; cwd: string }) => ({
+    comm: (pid: number) => (pid === 1 ? "bash" : pid === 2 ? child.comm : null),
+    cwd: (pid: number) => (pid === 1 ? APP : pid === 2 ? child.cwd : null),
+    children: (pid: number) => (pid === 1 ? [2] : []),
+    argv: (pid: number) => (pid === 1 ? ["bash"] : pid === 2 ? child.argv : []),
+  });
+
+  test("a CLI named for itself is found by its name", () => {
+    expect(agentCwdsUnder(1, 6, tree({ comm: "opencode", argv: ["opencode", "-s", "ses_1"], cwd: WT }))).toEqual([WT]);
+  });
+
+  test("a CLI that is a script run by node is found by the package on its command line", () => {
+    /* `comm` says `node` for it — measured on the owner's machine, where
+       `/usr/bin/qwen` is `#!/usr/bin/env node` — so a tab running it was read
+       as a plain shell, and its chip never named the worktree it stood in. */
+    const qwen = ["node", "/usr/lib/node_modules/@qwen-code/qwen-code/scripts/cli-entry.js", "-i", "go on"];
+    expect(agentCwdsUnder(1, 6, tree({ comm: "node", argv: qwen, cwd: WT }))).toEqual([WT]);
+  });
+
+  test("a node process that is not one of them is a build, not an agent", () => {
+    const vite = ["node", `${APP}/node_modules/.bin/vite`];
+    expect(agentCwdsUnder(1, 6, tree({ comm: "node", argv: vite, cwd: WT }))).toEqual([]);
+  });
+
+  test("Node 26 calls itself node-MainThread, and the launcher names its script by a symlink on PATH", () => {
+    /* Both measured on the owner's machine: /proc/self/comm reads
+       `node-MainThread`, and `/usr/bin/qwen` is a symlink into the package.
+       Neither spelling names the package until the link is followed. */
+    const io = { ...tree({ comm: "node-MainThread", argv: ["node", "/usr/bin/qwen"], cwd: WT }),
+      realpath: (p: string) => (p === "/usr/bin/qwen" ? "/usr/lib/node_modules/@qwen-code/qwen-code/scripts/cli-entry.js" : p) };
+    expect(agentCwdsUnder(1, 6, io)).toEqual([WT]);
+  });
+
+  test("the process the launcher starts puts a flag before the script", () => {
+    const child = ["node", "--expose-gc", "/usr/lib/node_modules/@qwen-code/qwen-code/cli.js"];
+    expect(agentCwdsUnder(1, 6, tree({ comm: "node-MainThread", argv: child, cwd: WT }))).toEqual([WT]);
   });
 });

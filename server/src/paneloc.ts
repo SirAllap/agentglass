@@ -25,7 +25,7 @@
  * reads as null, and the caller finds no match — which lands on the same
  * "nothing here can answer this" it showed before, rather than on a wrong pane.
  */
-import { readFileSync, readlinkSync } from "node:fs";
+import { readFileSync, readlinkSync, realpathSync } from "node:fs";
 
 export interface PaneRow {
   /** tmux session NAME, for display, and its id for addressing. */
@@ -48,6 +48,58 @@ export interface PaneRow {
  *  kernel, so these are compared whole against what /proc actually reports. */
 const AGENT_COMMS = new Set(["claude", "codex", "gemini", "amp", "opencode", "crush", "antigravity"]);
 
+/**
+ * The CLIs that are a JavaScript file run by `node`, by the npm package the
+ * file lives in.
+ *
+ * `comm` says `node` for every one of them, so a walk that matches names
+ * never sees a qwen or a gemini at all: measured on the owner's machine,
+ * `/usr/bin/qwen` is `#!/usr/bin/env node` and its process is
+ * `node /usr/lib/node_modules/@qwen-code/qwen-code/scripts/cli-entry.js`,
+ * which is why a tab running it was read as a plain shell — no agent, no
+ * worktree, and nothing to bring back after a reboot. The package directory
+ * is on that path, and it is the one part of it that is the same on every
+ * install.
+ */
+const NODE_CLIS: [pkg: string, name: string][] = [
+  ["@qwen-code/qwen-code", "qwen"],
+  ["@google/gemini-cli", "gemini"],
+  ["@anthropic-ai/claude-code", "claude"],
+  ["@openai/codex", "codex"],
+  ["opencode-ai", "opencode"],
+];
+
+/** What node calls itself: `node`, or on Node 26 `node-MainThread` (measured
+ *  in /proc/self/comm). The argv[0] is still `node`. */
+const NODE_RE = /^(node|bun)(-MainThread)?$/;
+
+const realpathOf = (p: string): string => { try { return realpathSync(p); } catch { return p; } };
+
+/**
+ * Which agent CLI a process is, from its argv, or null.
+ *
+ * The binary's basename when it is one of the CLIs by name; the npm package
+ * when the binary is `node` or `bun` running one of them. The package is
+ * looked for on the SCRIPT — the first argument that is not a flag — and on
+ * the script's real path, because neither spelling on this machine names it
+ * outright: `/usr/bin/qwen` is a symlink into the package, and the process it
+ * starts is `node --expose-gc <package>/cli.js` (measured). Pure apart from
+ * the injectable realpath, so the restore and the pane walk share it and a
+ * test can state a process.
+ */
+export function agentNamed(argv: readonly string[], realpath: (p: string) => string = realpathOf): string | null {
+  const head = (argv[0] || "").split("/").pop() || "";
+  if (AGENT_COMMS.has(head)) return head;
+  if (NODE_RE.test(head)) {
+    const script = argv.slice(1).find((a) => !a.startsWith("-"));
+    if (!script) return null;
+    for (const path of [script, realpath(script)]) {
+      for (const [pkg, name] of NODE_CLIS) if (path.includes(`/node_modules/${pkg}/`)) return name;
+    }
+  }
+  return null;
+}
+
 /** How far down a pane's tree to look. A shell, a wrapper or two, the agent —
  *  deeper than that and we are walking somebody's build. */
 const MAX_DEPTH = 6;
@@ -58,6 +110,10 @@ const comm = (pid: number): string | null => {
 
 const cwdOf = (pid: number): string | null => {
   try { return readlinkSync(`/proc/${pid}/cwd`); } catch { return null; }
+};
+
+const argvOf = (pid: number): string[] => {
+  try { return readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").filter(Boolean); } catch { return []; }
 };
 
 const childrenOf = (pid: number): number[] => {
@@ -78,19 +134,36 @@ const childrenOf = (pid: number): number[] => {
  * shallow answer named the wrong directory every time. Walking on costs a few
  * more reads of /proc and removes a whole class of confident wrong answer.
  */
-export function agentCwdsUnder(panePid: number, depth = MAX_DEPTH): string[] {
-  if (process.platform !== "linux") return [];
+/** How the walk reads a process, as a seam: the walk is the one part of this
+ *  module that cannot be exercised without a process tree, so a test states
+ *  one. The default is the machine's /proc. */
+export interface ProcIo {
+  comm: (pid: number) => string | null;
+  cwd: (pid: number) => string | null;
+  children: (pid: number) => number[];
+  argv: (pid: number) => string[];
+  /** A path with its symlinks resolved; the path itself when it cannot be. */
+  realpath?: (p: string) => string;
+}
+const machine: ProcIo = { comm, cwd: cwdOf, children: childrenOf, argv: argvOf, realpath: realpathOf };
+
+export function agentCwdsUnder(panePid: number, depth = MAX_DEPTH, io: ProcIo = machine): string[] {
+  if (process.platform !== "linux" && io === machine) return [];
   const found: string[] = [];
   let level = [panePid];
   for (let d = 0; d <= depth && level.length; d++) {
     const next: number[] = [];
     for (const pid of level) {
-      const c = comm(pid);
-      if (c && AGENT_COMMS.has(c)) {
-        const cwd = cwdOf(pid);
+      const c = io.comm(pid);
+      /* By name — or, for a CLI that is a script run by node, by the package
+         on its command line: `comm` says `node` for every one of those, and
+         a name match alone read a tab running one as a plain shell. */
+      const agent = !!c && (AGENT_COMMS.has(c) || (NODE_RE.test(c) && agentNamed(io.argv(pid), io.realpath ?? realpathOf) !== null));
+      if (agent) {
+        const cwd = io.cwd(pid);
         if (cwd && !found.includes(cwd)) found.push(cwd);
       }
-      next.push(...childrenOf(pid));
+      next.push(...io.children(pid));
     }
     level = next;
   }

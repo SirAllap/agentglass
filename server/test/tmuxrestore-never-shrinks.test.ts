@@ -35,6 +35,8 @@ let pane: typeof import("../src/tmuxpane.ts");
 const NAME = (n: string) => `ab12cd34-0000-4000-8000-${String(process.pid).padStart(9, "0")}${n}`;
 const LIVE = NAME("aaa");
 const GONE = NAME("bbb");
+const DONE = NAME("ccc");
+const AGAIN = NAME("ddd");
 
 function layout(): { sessions: { name: string }[] } | null {
   const p = join(process.env.AGENTGLASS_STATE_DIR!, "tmux", "restore", "layout.json");
@@ -46,6 +48,10 @@ beforeAll(async () => {
   process.env.TMUX_TMPDIR = TMPDIR;
   restore = await import("../src/tmuxrestore.ts");
   pane = await import("../src/tmuxpane.ts");
+  /* Every test file shares one process, and a restore pass in another file
+     leaves the desk "settled" here: the boot-time rules below are about a
+     process that has NOT yet had its go. */
+  restore.__resetRestoreSettled();
 });
 
 afterAll(async () => {
@@ -84,17 +90,17 @@ test("a session that is not alive right now is NOT forgotten", async () => {
   expect(names, "A SESSION WAS FORGOTTEN because it was not running").toContain(GONE);
 });
 
-test("and repeated captures never shrink it, however many times they run", async () => {
+test("and repeated captures never shrink it at boot, however many times they run", async () => {
   /* Six launches in twenty minutes is what happened. Ten here, for margin. */
   const start = layout()!.sessions.length;
   for (let i = 0; i < 10; i++) await restore.captureLayout();
   expect(layout()!.sessions.length, "capture shrank the recorded state").toBeGreaterThanOrEqual(start);
 });
 
-test("only an explicit close removes an entry", async () => {
+test("before the desk is whole, only an explicit close removes an entry", async () => {
   /*
-   * The one subtraction in the file, and it takes a deliberate call. "It is
-   * not in the live list" was precisely the inference that lost a day.
+   * The one subtraction at boot, and it takes a deliberate call. "It is not
+   * in the live list" was precisely the inference that lost a day.
    */
   expect(layout()!.sessions.map((s) => s.name)).toContain(GONE);
   restore.forgetSession(GONE);
@@ -102,6 +108,56 @@ test("only an explicit close removes an entry", async () => {
   // And it stays gone: a later capture must not resurrect it from a stale read.
   await restore.captureLayout();
   expect(layout()!.sessions.map((s) => s.name)).not.toContain(GONE);
+});
+
+test("once this process has put the desk back, a session that leaves is forgotten", async () => {
+  /*
+   * THE OTHER HALF OF A REPLAYED BRIEF. A session an orchestrator opened for
+   * one job finished and was killed on purpose, and stayed in the file for a
+   * fortnight: every boot rebuilt it as `claude --resume <id>` — an idle
+   * process on a conversation that was over. "Merge, never replace" was
+   * written for the boot, where a missing session is ambiguous; after the
+   * desk has been put back, a session that is not there is one somebody
+   * closed — the rule `mergeWindows` already applies to windows.
+   */
+  const r = await restore.restoreLayout("lazy");
+  expect(r.ok, r.error).toBe(true);
+  const mk = await pane.tmux(["new-session", "-d", "-s", DONE, "-c", "/tmp"]);
+  expect(mk.ok, mk.stderr).toBe(true);
+  await restore.captureLayout();
+  expect(layout()!.sessions.map((s) => s.name)).toContain(DONE);
+  await pane.tmux(["kill-session", "-t", `=${DONE}`]);
+  await restore.captureLayout();
+  expect(layout()!.sessions.map((s) => s.name), "a session killed after the desk settled was carried forward").not.toContain(DONE);
+  expect(layout()!.sessions.map((s) => s.name), "the live one is still there").toContain(LIVE);
+});
+
+test("but not a session missing because the engine died: that desk has not been put back yet", async () => {
+  /*
+   * The exact morning again, in steady state: the tmux server dies, the
+   * engine makes one session again, and the sweep sees one session where
+   * the file has several. A process that finished its restore on the OLD
+   * server has not had its go at this one, and a photograph of it is not
+   * evidence that anything was closed.
+   */
+  const mk = await pane.tmux(["new-session", "-d", "-s", AGAIN, "-c", "/tmp"]);
+  expect(mk.ok, mk.stderr).toBe(true);
+  await restore.captureLayout();
+  expect(layout()!.sessions.map((s) => s.name)).toContain(AGAIN);
+  await pane.tmux(["kill-server"]);
+  await Bun.sleep(300);
+  const re = await pane.tmux(["new-session", "-d", "-s", LIVE, "-c", "/tmp"]);
+  expect(re.ok, re.stderr).toBe(true);
+  for (let i = 0; i < 3; i++) await restore.captureLayout();
+  expect(layout()!.sessions.map((s) => s.name), "a session lost with the engine was forgotten").toContain(AGAIN);
+  /* Put back on the new engine, the desk is settled again — and a close
+     after that is a close. */
+  const r = await restore.restoreLayout("lazy");
+  expect(r.ok, r.error).toBe(true);
+  expect((await pane.tmux(["has-session", "-t", `=${AGAIN}`])).ok, "the restore rebuilt it").toBe(true);
+  await pane.tmux(["kill-session", "-t", `=${AGAIN}`]);
+  await restore.captureLayout();
+  expect(layout()!.sessions.map((s) => s.name)).not.toContain(AGAIN);
 });
 
 test("the file is written atomically, so a crash mid-write cannot truncate it", () => {

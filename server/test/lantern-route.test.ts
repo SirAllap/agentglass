@@ -240,3 +240,16 @@ test("a ticket for the Lantern's chat: minted here, with the field as its first 
   expect(typeof r.ticket).toBe("string");
   expect(r.cwd).toBe(dir);
 });
+
+test("a person can clear a line whoever posted it — through the authenticated route, not the tokenless done", async () => {
+  await post("/agents/status", { name: "orbit-2001-migration", doing: "the migration", session: "lantern-c" });
+  const names = async () => (await fetch(base + "/agents/board").then((r) => r.json() as Promise<{ agents: { name: string }[] }>)).agents.map((a) => a.name);
+  expect(await names()).toContain("orbit-2001-migration");
+  const nameless = await post("/agents/forget", {});
+  expect(nameless.status).toBe(400);
+  const cleared = await post("/agents/forget", { name: "orbit-2001-migration" });
+  expect(cleared.status).toBe(200);
+  expect(await names()).not.toContain("orbit-2001-migration");
+  const again = await post("/agents/forget", { name: "orbit-2001-migration" });
+  expect(again.status, "nothing left by that name").toBe(404);
+});

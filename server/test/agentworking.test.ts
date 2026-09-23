@@ -8,7 +8,7 @@
  * real thing would be asserting against whatever they happened to leave.
  */
 import { describe, expect, test } from "bun:test";
-import { agentIsWorking } from "../src/agentworking.ts";
+import { agentIsWorking, workingWhy } from "../src/agentworking.ts";
 
 const deps = (opts: { turns?: string[]; running?: { startedAt: number }[] }) => ({
   activeTurns: () => opts.turns ?? [],
@@ -61,3 +61,38 @@ describe("the sessions this app did not start", () => {
   });
 });
 
+
+describe("why the machine is being kept awake", () => {
+  /* The desktop draws this: "awake" alone does not say whether it is a chat
+     mid-turn, a run, or somebody's agent in their own terminal. */
+  test("each source is counted on its own, and a stale run is not counted", () => {
+    const now = Date.now();
+    const why = workingWhy(now, {
+      activeTurns: () => ["a", "b"],
+      runningRuns: () => [{ startedAt: now }, { startedAt: now - 3 * 60 * 60 * 1000 }],
+      hookedWorking: () => 3,
+      namedAlive: () => 1,
+    });
+    expect(why).toEqual({ chats: 2, runs: 1, hooked: 3, named: 1 });
+  });
+  test("nothing at work is all zeroes, and agrees with agentIsWorking", () => {
+    const now = Date.now();
+    const quiet = { ...deps({}), hookedWorking: () => 0, namedAlive: () => 0 };
+    expect(workingWhy(now, quiet)).toEqual({ chats: 0, runs: 0, hooked: 0, named: 0 });
+    expect(agentIsWorking(now, quiet)).toBe(false);
+  });
+});
+
+describe("the named agents are a tmux question, asked at most every ten seconds", () => {
+  test("a second poll inside the window reuses the answer instead of asking tmux again", async () => {
+    let calls = 0;
+    const d = { ...deps({}), hookedWorking: () => 0, namedAlive: () => { calls++; return Promise.resolve(2); } };
+    const now = Date.now();
+    workingWhy(now, d);
+    await Promise.resolve();
+    expect(workingWhy(now + 1_000, d).named, "the answer from the first ask").toBe(2);
+    expect(calls, "asked once in ten seconds").toBe(1);
+    workingWhy(now + 11_000, d);
+    expect(calls).toBe(2);
+  });
+});

@@ -108,7 +108,7 @@ afterAll(() => {
   for (const table of ["events", "sessions", "transcript_files"]) {
     try { db.db.run(`DELETE FROM ${table} WHERE session_id IN (?, ?)`, [SESSION, HOOK_SESSION]); } catch { /* no such column */ }
   }
-  try { db.db.run("DELETE FROM pane_agent WHERE pane_id = ?", [PANE]); } catch { /* table may not exist */ }
+  try { db.db.run("DELETE FROM pane_note WHERE pane_id = ?", [PANE]); } catch { /* table may not exist */ }
 });
 
 // ---------------------------------------------------------------------------

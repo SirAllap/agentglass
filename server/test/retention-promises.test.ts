@@ -238,6 +238,14 @@ describe("the promises SECURITY.md makes about retention", () => {
     // somebody wrote by mistake would be an odd reading of a promise about
     // telemetry. Ours records nothing about it either way.
     "/clickup/comment/delete",
+    // DOES remove a row, and SECURITY.md says so: a status line on the
+    // Lantern's board, by name, whoever posted it — the fourth of the rows the
+    // document names as removable, beside `/agents/status` with `done`, which
+    // drops the same kind of line for the session that wrote it. Behind the
+    // token, unlike `done`. The delete is agentboard.ts's (`dropLine`), so the
+    // check below only shows the handler itself opens no database; the claim
+    // it is held to is the document's, which names it.
+    "/agents/forget",
   ]);
 
   test("the reviewed exceptions still touch no stored data", () => {

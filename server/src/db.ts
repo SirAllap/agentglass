@@ -3331,6 +3331,78 @@ export function sessionsWhosePromptStarts(mark: string): string[] {
   return [...out];
 }
 
+/**
+ * Was this text ever typed at the session as a prompt?
+ *
+ * Asked by the tmux restore about the arguments of a running `claude`: a
+ * prompt given on the command line arrives through the same UserPromptSubmit
+ * hook as one typed at the box, so the events table can say which of a
+ * process's arguments is the prompt and which is a flag's value — exactly,
+ * with no list of flags to keep up to date. One indexed lookup per candidate.
+ */
+const promptSeen = db.query<{ one: number }, [string, number, string]>(
+  `SELECT 1 AS one FROM events WHERE session_id = ? AND timestamp >= ? AND hook_event_type = 'UserPromptSubmit' AND json_extract(payload, '$.prompt') = ? LIMIT 1`);
+/** `sinceMs`: see `wasPromptAnywhere` — a resumed conversation carries its
+ *  whole history, and a flag's value typed there once as an answer is not a
+ *  prompt on this process's command line. */
+export function wasPromptOf(sessionId: string, text: string, sinceMs = 0): boolean {
+  if (!sessionId || !text) return false;
+  try { return promptSeen.get(sessionId, Math.max(0, sinceMs), text) !== null; } catch { return false; }
+}
+
+/**
+ * The same question of every session, for when the pane's conversation is not
+ * the one the prompt was given to: `/clear` starts a new session in the same
+ * pane, and the argument on the command line was submitted to the old one.
+ *
+ * SINCE A MOMENT, and the caller gives the moment the process was born. Asked
+ * of everything ever, the question matched a flag's VALUE — `--model opus`,
+ * with "opus" typed as a prompt in some session weeks ago; prompts of one
+ * word are in this table — and the value was dropped from the flags, so the
+ * resume line read `claude --model --resume <id>`: the flag eats the id, and
+ * the id becomes a positional prompt. A prompt on this process's command line
+ * was submitted after this process started, so nothing older can be it. Zero
+ * asks of everything, for a machine that cannot say when a process started.
+ *
+ * Not cheap: with no statistics the planner walks every UserPromptSubmit row
+ * (idx_events_type) and extracts each payload's prompt, tens of milliseconds
+ * on a large table. The caller asks again only when a prompt has arrived
+ * since it last asked (`newestPromptId`).
+ */
+const promptSeenSince = db.query<{ one: number }, [number, string]>(
+  `SELECT 1 AS one FROM events WHERE timestamp >= ? AND hook_event_type = 'UserPromptSubmit' AND json_extract(payload, '$.prompt') = ? LIMIT 1`);
+export function wasPromptAnywhere(text: string, sinceMs = 0): boolean {
+  if (!text) return false;
+  try { return promptSeenSince.get(Math.max(0, sinceMs), text) !== null; } catch { return false; }
+}
+
+/** The row id of the newest prompt recorded, or 0: an answer about prompts
+ *  can only change when this does. One step down idx_events_type. */
+const newestPrompt = db.query<{ id: number | null }, []>(
+  `SELECT MAX(id) AS id FROM events WHERE hook_event_type = 'UserPromptSubmit'`);
+export function newestPromptId(): number {
+  try { return newestPrompt.get()?.id ?? 0; } catch { return 0; }
+}
+
+/** The first prompt this conversation was sent since a moment, or "": the
+ *  one a command line carries, when it carried one. idx_events_first_prompt
+ *  to the row, then its payload. */
+const firstPromptSinceQ = db.query<{ prompt: string | null }, [string, number]>(
+  `SELECT json_extract(payload, '$.prompt') AS prompt FROM events WHERE hook_event_type = 'UserPromptSubmit' AND session_id = ? AND timestamp >= ? ORDER BY timestamp LIMIT 1`);
+export function firstPromptSince(sessionId: string, sinceMs = 0): string {
+  if (!sessionId) return "";
+  try { return firstPromptSinceQ.get(sessionId, Math.max(0, sinceMs))?.prompt ?? ""; } catch { return ""; }
+}
+
+/** Has this conversation been sent any prompt since a moment? A covering
+ *  lookup on idx_events_first_prompt. */
+const promptedSinceQ = db.query<{ one: number }, [string, number]>(
+  `SELECT 1 AS one FROM events WHERE hook_event_type = 'UserPromptSubmit' AND session_id = ? AND timestamp >= ? LIMIT 1`);
+export function promptedSince(sessionId: string, sinceMs = 0): boolean {
+  if (!sessionId) return false;
+  try { return promptedSinceQ.get(sessionId, Math.max(0, sinceMs)) !== null; } catch { return false; }
+}
+
 export function noteWaitFromHook(e: { session_id?: unknown; hook_event_type?: unknown; payload?: unknown; role?: unknown }, at = Date.now()): void {
   /* The Lantern's own chat never waits on anybody in the board's sense: a
      person asked it something and it answered. Its notifications are dropped

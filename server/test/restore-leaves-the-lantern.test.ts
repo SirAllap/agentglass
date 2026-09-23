@@ -25,8 +25,11 @@ describe("the restore and the Lantern's chat", () => {
 
   test("the capture leaves such a pane out of the picture, and a window or session with nothing else goes with it", async () => {
     const src = await Bun.file(new URL("../src/tmuxrestore.ts", import.meta.url)).text();
-    const at = src.indexOf("export async function captureLayout(");
-    const body = src.slice(at, src.indexOf("return writeMerged(sessions, now);", at));
+    const at = src.indexOf("async function captureOnce(");
+    const end = src.indexOf("const state = writeMerged(", at);
+    expect(at, "the capture's body").toBeGreaterThan(-1);
+    expect(end, "the capture's write").toBeGreaterThan(at);
+    const body = src.slice(at, end);
     expect(body).toContain("if (startCommand.includes(LANTERN_PROMPT_MARK)) continue;");
     expect(body).toContain("if (panes.length) out.push({ ...w, panes });");
     expect(body).toContain("if (out.length) sessions.push({ name, windows: out });");

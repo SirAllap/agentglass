@@ -1361,7 +1361,7 @@ import { ask, compiledRules } from "./understudy-ask.ts";
 import * as Shift from "./understudy-shift.ts";
 import { judge, JUDGE_AVAILABLE } from "./understudy-judge.ts";
 import * as Work from "./understudy-work.ts";
-import { agentIsWorking } from "./agentworking.ts";
+import { anyWorking, workingWhy } from "./agentworking.ts";
 import * as Loop from "./understudy-loop.ts";
 // Registers the readers. Imported for the side effect, which is the whole
 // point of a source: it announces itself rather than being wired in by hand.
@@ -3003,6 +3003,26 @@ const server = Bun.serve<WsData>({
         session,
       });
       return json(ok ? { ok: true } : { ok: false, error: "could not write that down" }, ok ? 200 : 500);
+    }
+
+    /*
+     * A PERSON CLEARING A LINE, whoever posted it.
+     *
+     * `done` above is the agent's own way out and is keyed on its session,
+     * because that route is tokenless on loopback whatever the install. This
+     * one is authenticated like every other route: behind the token where one
+     * is set, and on a loopback-only install without one, open to local
+     * callers like the rest. A line whose session ended without saying done —
+     * the case the board filled up with — can then be taken off by the person
+     * at the view.
+     */
+    if (pathname === "/agents/forget" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const name = String(b.name ?? "").slice(0, 512).trim();
+      if (!name) return json({ ok: false, error: "which agent?" }, 400);
+      const cleared = AgentBoard.dropLine(name);
+      return json(cleared ? { ok: true, cleared: true } : { ok: false, error: "no line by that name" }, cleared ? 200 : 404);
     }
 
     /*
@@ -7391,12 +7411,17 @@ const server = Bun.serve<WsData>({
           prompt: typeof b.prompt === "string" ? b.prompt : "",
           yolo: b.yolo === true, yoloAllowed: chatBypassAllowed(), args,
           remoteControl: typeof b.remoteControl === "string" ? b.remoteControl : undefined,
+          keep: b.keep === true,
         });
         if (!r.ok) {
-          const why: Record<string, string> = {
+          /* `arg-refused` is answered below, with the flag in it. */
+          const why: Record<Exclude<AgentOps.StartError, "arg-refused">, string> = {
             exists: "an agent by that name is still running",
             "no-cli": "that agent CLI is not installed here",
             "no-window": "tmux would not open a window for it",
+            died: b.keep === true
+              ? `the agent CLI exited as soon as it was launched; its tab is kept: agentglass-agent read ${name}`
+              : "the agent CLI exited as soon as it was launched",
             "bad-name": "bad name",
             "yolo-refused": "skipping permissions is off in Settings (chatBypass)",
             "bad-args": "args must be plain strings",
@@ -7440,7 +7465,15 @@ const server = Bun.serve<WsData>({
       }
 
       const a = AgentOps.agentNamed(name);
-      if (!a || a.endedAt !== null) return json({ ok: false, error: "no agent by that name" }, 404);
+      /* An ended agent can still be READ while its own tab is on screen: a
+         `--keep` one-shot's answer is what it was kept for. And STOPPED, which
+         closes that tab: otherwise it stays for the wrapper's day — only a
+         tab this app opened, never one somebody lent it by enlisting. Its own
+         tab, by the window name it was opened under — a pane id outlives
+         nothing across a reboot, and an old row's id may name somebody's pane
+         now. */
+      const readable = !!a && (verb === "read" || (verb === "stop" && !a.adopted)) && a.endedAt !== null && await AgentOps.keptTabOf(a);
+      if (!a || (a.endedAt !== null && !readable)) return json({ ok: false, error: "no agent by that name" }, 404);
 
       if (verb === "prompt") {
         const text = typeof b.text === "string" ? b.text : "";
@@ -7462,7 +7495,7 @@ const server = Bun.serve<WsData>({
         /* The bottom of a pane is blank rows, not content: trimmed before the
            tail is cut, or "the last 3 lines" of a 50-row pane are three blanks. */
         const text = lines > 0 ? screen.trimEnd().split("\n").slice(-lines).join("\n") : screen;
-        return json({ ok: true, result: { name, state: AgentOps.stateOfScreen(screen), text } });
+        return json({ ok: true, result: { name, state: readable ? "gone" : AgentOps.stateOfScreen(screen), text } });
       }
       if (verb === "keys") {
         const key = AgentOps.keyNamed(b.key);
@@ -7872,7 +7905,10 @@ const server = Bun.serve<WsData>({
     if (pathname === "/chat/active") return json({ ids: activeTurns() });
     // Whether an agent is working right now, anywhere — what the desktop
     // shell's "keep the machine awake while an agent works" mode polls.
-    if (pathname === "/agents/working") return json({ working: agentIsWorking() });
+    if (pathname === "/agents/working") {
+      const why = workingWhy();
+      return json({ working: anyWorking(why), why });
+    }
     if (pathname === "/session") {
       const id = url.searchParams.get("id") || "";
       if (!id) return json({ error: "not found" }, 404);
