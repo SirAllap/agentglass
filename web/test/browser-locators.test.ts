@@ -715,6 +715,13 @@ describe("what the review of the first version found", () => {
     expect(r.error).toContain("type=password");
   });
 
+  test("a submit input is still described by its label, which is its value", async () => {
+    const { guest } = page(h("body", {}, h("input", { type: "submit", value: "Save" }), h("input", { type: "submit", value: "Save" })));
+    const r = await runBrowserAsk(guest, ask("click", { selector: "input" }));
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('"Save"');
+  });
+
   test("the hostile suite reaches fill and drag too", async () => {
     const g = globalThis as unknown as { __canary: { hit: number } };
     g.__canary = { hit: 0 };

@@ -603,12 +603,13 @@ const ONE = `((__spec, __lenient) => {
       /* A field is described by what it IS, never by its value: the value
          of a password field that a fill had just written ended up in this
          refusal, and a refusal goes to the audit log. */
-      const __field = /^(INPUT|TEXTAREA|SELECT)$/.test(__n.tagName);
+      const __field = /^(INPUT|TEXTAREA|SELECT)$/.test(__n.tagName)
+        && !/^(submit|button|reset)$/.test(__n.type || "");
       const __attr = (__k) => (__n.getAttribute && __n.getAttribute(__k)) || "";
       const __text = (__field
         ? [__n.type ? "type=" + __n.type : "", __attr("name") ? "name=" + __attr("name") : "",
            __attr("aria-label") || __attr("placeholder")].filter(Boolean).join(" ")
-        : (__n.innerText || __n.textContent || "")).trim().replace(/\\s+/g, " ").slice(0, 40);
+        : (__n.innerText || __n.textContent || (__n.tagName === "INPUT" ? __n.value : "") || "")).trim().replace(/\\s+/g, " ").slice(0, 40);
       return __stamp(__n) + " " + __n.tagName.toLowerCase()
         + (__n.id ? "#" + __n.id : "")
         + (__n.getAttribute && __n.getAttribute("data-testid") ? "[data-testid=" + __n.getAttribute("data-testid") + "]" : "")
