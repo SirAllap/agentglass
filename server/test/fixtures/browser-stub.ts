@@ -30,3 +30,26 @@ export async function runCli(server: string, args: string[], env: Record<string,
   const [stdout, stderr, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
   return { stdout, stderr, code };
 }
+
+const MCP = new URL("../../../bin/agentglass-browser-mcp", import.meta.url).pathname;
+
+/** Call one MCP tool against `server`, start to finish over stdio, with a
+ *  private tab map. Returns the tool's result, or null when none came back. */
+export async function runMcpTool(server: string, stateDir: string, name: string, args: Record<string, unknown>) {
+  const p = Bun.spawn(["python3", MCP], {
+    env: { PATH: process.env.PATH ?? "", AGENTGLASS_SERVER: server, AGENTGLASS_BROWSER_STATE_DIR: stateDir, AGENTGLASS_PROFILE: "orbit-mcp" },
+    stdin: "pipe", stdout: "pipe", stderr: "pipe",
+  });
+  const lines = [
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {} } },
+    { jsonrpc: "2.0", method: "notifications/initialized" },
+    { jsonrpc: "2.0", id: 100, method: "tools/call", params: { name, arguments: args } },
+  ];
+  const w = p.stdin as { write: (s: string) => void; end: () => void };
+  for (const l of lines) w.write(`${JSON.stringify(l)}\n`);
+  w.end();
+  const [out] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+  const reply = out.split("\n").filter(Boolean).map((l) => JSON.parse(l) as { id?: number; result?: { content: { text?: string }[]; isError?: boolean } })
+    .find((l) => l.id === 100);
+  return reply?.result ?? null;
+}

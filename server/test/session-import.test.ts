@@ -15,7 +15,7 @@ import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseAsk, redactAskForTest, type BrowserOp } from "../src/browserdrive.ts";
-import { startBrowserStub, runCli } from "./fixtures/browser-stub.ts";
+import { startBrowserStub, runCli, runMcpTool } from "./fixtures/browser-stub.ts";
 
 const HAVE_PY = !!Bun.which("python3");
 const DAY = 86_400_000;
@@ -203,6 +203,42 @@ test.skipIf(!HAVE_PY)("session load writes storage through the same redacted pat
     for (const value of ["cookie-not-in-audit", "local-not-in-audit", "session-not-in-audit"]) {
       expect(log, `${value} reached the audit log`).not.toContain(value);
     }
+  } finally { s.stop(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test.skipIf(!HAVE_PY)("the MCP's set_storage_state writes storage through the same redacted path", async () => {
+  /*
+   * The MCP twin of `session load` is a second door to the same write, and it
+   * was built beside the fix above rather than on it: one `eval` script per
+   * origin, every value inside it, so the audit kept them word for word. The
+   * lock covers both clients, and the origin check that stays an `eval` must
+   * carry no value at all.
+   */
+  const dir = mkdtempSync(join(tmpdir(), "agx-mcpload-"));
+  const s = startBrowserStub((op, body) => {
+    if (op === "eval" && body.js === "location.origin") return { ok: true, value: { value: "https://www.orbit.example" } };
+    // What the old one-script write answered, so the leak is what fails, not the count.
+    if (op === "eval") return { ok: true, value: { value: { written: true, at: "https://www.orbit.example" } } };
+    return { ok: true, value: {} };
+  });
+  try {
+    const state = {
+      cookies: [{ name: "orbit_sid", value: "cookie-not-in-audit", domain: ".orbit.example", path: "/", secure: true }],
+      origins: [{
+        origin: "https://www.orbit.example",
+        localStorage: [{ name: "orbit_device_key", value: "local-not-in-audit" }],
+        sessionStorage: [{ name: "orbit_tab", value: "session-not-in-audit" }],
+      }],
+    };
+    const r = await runMcpTool(s.url, dir, "browser_set_storage_state", { page: "tab-1", state });
+    expect(r?.isError, JSON.stringify(r)).toBeFalsy();
+    expect(r!.content[0]!.text).toContain("1 localStorage keys, 1 sessionStorage keys");
+    const log = audited(s.calls);
+    for (const value of ["cookie-not-in-audit", "local-not-in-audit", "session-not-in-audit"]) {
+      expect(log, `${value} reached the audit log`).not.toContain(value);
+    }
+    const sets = s.calls.filter((c) => c.op === "storage").map((c) => [c.body.where, c.body.key, c.body.value, c.body.page]);
+    expect(sets).toEqual([["local", "orbit_device_key", "local-not-in-audit", "tab-1"], ["session", "orbit_tab", "session-not-in-audit", "tab-1"]]);
   } finally { s.stop(); rmSync(dir, { recursive: true, force: true }); }
 });
 

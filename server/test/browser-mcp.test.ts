@@ -547,9 +547,10 @@ describe.skipIf(!HAVE_PY)("the MCP surface addresses its own tab", () => {
    * The session as one object: `browser_storage_state` is `session save`
    * without the file — cookies through CDP so httpOnly ones are in it, the
    * page's storage under its origin, in Playwright's shape — and
-   * `browser_set_storage_state` puts one back. Both are made of `cdp` and
-   * `eval`, and both parts carry the caller's page, so a state can never be
-   * read from, or written onto, a tab the caller did not name.
+   * `browser_set_storage_state` puts one back. Both are made of `cdp`,
+   * `eval` and (the write) `storage`, and every part carries the caller's
+   * page, so a state can never be read from, or written onto, a tab the
+   * caller did not name.
    */
   test("storage_state reads cookies and storage into Playwright's shape, and set_storage_state writes them back", async () => {
     sent = [];
@@ -567,32 +568,31 @@ describe.skipIf(!HAVE_PY)("the MCP surface addresses its own tab", () => {
     expect((sent[0]!.body as { method: string }).method).toBe("Network.getCookies");
 
     sent = [];
-    says = { cdp: { ok: true, value: { result: {} } }, eval: { ok: true, value: { value: { written: true, at: "https://orbit.example" } } } };
+    says = { cdp: { ok: true, value: { result: {} } }, eval: { ok: true, value: { value: "https://orbit.example" } } };
     const [put] = await client("orbit-s", freshState(), [{ name: "browser_set_storage_state", arguments: { page: "t-s", state } }]);
     expect(put!.isError, JSON.stringify(put)).toBeFalsy();
     expect(put!.content[0]!.text).toContain("1 of 1 cookies");
-    expect(put!.content[0]!.text).toContain("1 localStorage");
+    expect(put!.content[0]!.text).toContain("1 localStorage keys, 1 sessionStorage keys");
     const setCookie = sent.find((s) => s.op === "cdp")!.body as { method: string; params: { url?: string; httpOnly?: boolean } };
     expect(setCookie.method).toBe("Network.setCookie");
     // getCookies answers with a domain and never a url; setCookie wants one.
     expect(setCookie.params.url).toBe("https://orbit.example/");
     expect(setCookie.params.httpOnly).toBe(true);
-    const write = sent.find((s) => s.op === "eval")!.body as { js: string; page: string };
-    expect(write.js).toContain('"token": "t1"');
-    expect(write.js).toContain("sessionStorage.setItem");
-    expect(write.page).toBe("t-s");
+    // Each key through `storage`, whose value the audit blanks by position;
+    // the one `eval` left is the origin check, with no value in it.
+    const writes = sent.filter((s) => s.op === "storage").map((s) => [s.body.where, s.body.key, s.body.value, s.body.page]);
+    expect(writes).toEqual([["local", "token", "t1", "t-s"], ["session", "step", "2", "t-s"]]);
+    expect(sent.filter((s) => s.op === "eval").map((s) => [s.body.js, s.body.page])).toEqual([["location.origin", "t-s"]]);
 
-    // Storage is written only into the origin it came from: the page checks
-    // its own location.origin against the state's, and says no otherwise.
-    // The first version ran every origin's writes in whatever page was open,
-    // so one site's tokens landed in another site's storage, where that
-    // site's scripts read them.
-    expect(write.js).toContain('"https://orbit.example"');
-    expect(write.js).toMatch(/location\.origin/);
+    // Storage is written only into the origin it came from: the tab's own
+    // location.origin is checked against the state's first. The first version
+    // ran every origin's writes in whatever page was open, so one site's
+    // tokens landed in another site's storage, where that site's scripts read
+    // them.
     sent = [];
     says = {
       cdp: { ok: true, value: { result: {} } },
-      eval: { ok: true, value: { value: { written: false, at: "https://other.example" } } },
+      eval: { ok: true, value: { value: "https://other.example" } },
     };
     const two = {
       cookies: [],
@@ -607,7 +607,19 @@ describe.skipIf(!HAVE_PY)("the MCP surface addresses its own tab", () => {
     expect(elsewhere!.content[0]!.text).toContain("https://orbit.example");
     expect(elsewhere!.content[0]!.text).toContain("https://acme.example");
     expect(elsewhere!.content[0]!.text).toContain("https://other.example");
-    expect(sent.filter((s) => s.op === "eval").length, "each origin was asked, none was written").toBe(2);
+    expect(sent.filter((s) => s.op === "eval").length, "each origin was asked").toBe(2);
+    expect(sent.filter((s) => s.op === "storage"), "none was written").toEqual([]);
+
+    // A key the tab refuses is named, and the keys after it are still written.
+    sent = [];
+    says = {
+      eval: { ok: true, value: { value: "https://orbit.example" } },
+      storage: { ok: false, error: "QuotaExceededError" },
+    };
+    const many = { cookies: [], origins: [{ origin: "https://orbit.example", localStorage: [{ name: "a", value: "1" }, { name: "b", value: "2" }] }] };
+    const [full] = await client("orbit-s", freshState(), [{ name: "browser_set_storage_state", arguments: { page: "t-s", state: many } }]);
+    expect(sent.filter((s) => s.op === "storage").map((s) => s.body.key)).toEqual(["a", "b"]);
+    expect(full!.content[0]!.text).toContain("local a: QuotaExceededError");
 
     // A state that is not one is refused before anything goes out.
     sent = [];
