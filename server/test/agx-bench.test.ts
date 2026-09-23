@@ -444,6 +444,32 @@ describe("phase-2 fixtures and graders", () => {
     expect(g({ gotTab: false, refusedBy: "12 pages awake at once" }, freshState())).toContain("no tab");
   });
 
+  test("real-input: activation, the clipboard, :hover and the editor's text are all required", () => {
+    const g = task("p2-real-input").grade;
+    const ok = { click: { active: true, clipboard: "ok" }, hover: { hover: true }, text: "bye" };
+    expect(g(ok, freshState())).toBeNull();
+    expect(g({ ...ok, click: { active: false, clipboard: "NotAllowedError" } }, freshState())).toContain("user activation");
+    expect(g({ ...ok, hover: { hover: false } }, freshState())).toContain(":hover");
+    expect(g({ ...ok, text: "" }, freshState())).toContain("editor text");
+  });
+
+  test("handoff: the server must have seen the gate passed, and the handoff end for a reason", () => {
+    const g = task("p2-handoff").grade;
+    const passed = { ...freshState(), beacons: { "gate-passed": 1 } };
+    expect(g({ state: "condition" }, passed)).toBeNull();
+    expect(g({ state: "done" }, passed)).toBeNull();
+    expect(g({ state: "stuck" }, freshState())).toContain("never passed");
+    expect(g({ state: "waiting" }, passed)).toContain("ended as");
+  });
+
+  test("audit: every seeded fault is named, and an unpainted page may not be called good", () => {
+    const g = task("p2-audit").grade;
+    const a11y = { unlabelled: { n: 1 }, imgNoAlt: { n: 1 }, headingSkips: { n: 1 }, noLang: true };
+    expect(g({ a11y, vitals: { verdict: "unmeasured: this page has not painted", vitals: {} } }, freshState())).toBeNull();
+    expect(g({ a11y, vitals: { verdict: "good", vitals: { cls: { value: 0 } } } }, freshState())).toContain("honest verdict");
+    expect(g({ a11y: { imgNoAlt: 1 }, vitals: null }, freshState())).toContain("heading jump");
+  });
+
   test("mcp-core: a failed call is the answer, and the heading is what grades it", () => {
     const g = task("p2-mcp-core").grade;
     expect(g({ heading: "Items", listBytes: 1 }, freshState())).toBeNull();

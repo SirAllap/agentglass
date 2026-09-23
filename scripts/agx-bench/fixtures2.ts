@@ -88,6 +88,20 @@ const GATE = doc(
   });`,
 );
 
+/** Measurable faults: an image with no alt, a heading that jumps, no lang, a control with no name, a late banner that shifts the layout. */
+export const MEASURE2_PROBLEMS = { imgNoAlt: 1, headingSkips: 1, unlabelled: 1 };
+const AUDIT = () =>
+  new Response(
+    `<!doctype html><html><head><meta charset="utf-8"><title>Audit</title></head><body>
+     <h1>Shop</h1><h3>Deals</h3>
+     <img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="40" height="40">
+     <button><svg width="10" height="10"></svg></button>
+     <p>Some text under the fold that a late banner will push.</p>
+     <script>setTimeout(() => { const b = document.createElement("div"); b.style.cssText = "height:120px;background:#fdd"; b.textContent = "Sale"; document.body.prepend(b); }, 300);</script>
+     </body></html>`,
+    { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } },
+  );
+
 /** A trivial page a lot of tabs can hold. */
 const BLANK = (n: string) => doc(`Slot ${n}`, `<h1>Slot ${n}</h1>`)();
 
@@ -96,6 +110,7 @@ export async function phase2Routes(p: string, req: Request, state: BenchState): 
   if (p === "/marks") return MARKS();
   if (p === "/gesture") return GESTURE();
   if (p === "/gate") return GATE();
+  if (p === "/audit") return AUDIT();
   const slot = /^\/slot\/(\d+)$/.exec(p);
   if (slot) return BLANK(slot[1]!);
   if (p === "/__bench/beacon" && req.method === "POST") {

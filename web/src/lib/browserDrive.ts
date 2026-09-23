@@ -1,6 +1,7 @@
 import type { BrowserAskFrame } from "../../../shared/types.ts";
 import { ACC_NAME, COLLECTOR, PICK, STAMP, observeScript } from "./browserObserve.ts";
 import { MARKS_ID, MARKS_SCRIPT } from "./browserMarks.ts";
+import { A11Y_SCRIPT, VITALS_SCRIPT, VITAL_LIMITS, rate, type VitalName } from "./browserVitals.ts";
 import { jsLit } from "../../../shared/jsLit.ts";
 import { FIND, locatorLit, parseLocator } from "./browserLocator.ts";
 import { CHECKUP_PAGE, classifyCollector, classifyEvents, collectorSince, trackInflight, type CdpEvent } from "./browserCheckup.ts";
@@ -1672,6 +1673,19 @@ async function runVerb(
         const r = await navigateTo(el, String(ask.args.url ?? ""));
         return r.ok ? { ok: true, value: { url: r.url, title: el.getTitle() } } : r;
       }
+
+      case "vitals": {
+        const r = await el.executeJavaScript(VITALS_SCRIPT) as { url: string; title: string; vitals: Record<string, number> };
+        const rated: Record<string, { value: number; rating: string }> = {};
+        for (const k of Object.keys(r.vitals) as VitalName[]) if (k in VITAL_LIMITS) rated[k] = { value: r.vitals[k]!, rating: rate(k, r.vitals[k]!) };
+        const worst = Object.values(rated).some((x) => x.rating === "poor") ? "poor" : Object.values(rated).some((x) => x.rating !== "good") ? "needs-improvement" : "good";
+        return { ok: true, value: { url: r.url, title: r.title, /* A page that never painted has no LCP, and its CLS of 0 is not
+             "good", it is nothing measured. Said, rather than rated. */
+          verdict: !("lcpMs" in rated) && !("fcpMs" in rated) ? "unmeasured: this page has not painted (a pane nobody is looking at paints nothing)" : worst, vitals: rated, note: "Measured on the load of this document; INP needs a real interaction, and a page nobody has looked at may never paint an LCP." } };
+      }
+
+      case "a11y":
+        return { ok: true, value: await el.executeJavaScript(A11Y_SCRIPT) };
 
       case "handoff": {
         const a = ask.args as { reason?: string; until?: string; check?: boolean; waitMs?: number; cancel?: boolean };

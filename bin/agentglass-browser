@@ -1663,6 +1663,8 @@ def main():
     p.add_argument("reason", help="one line: what the person is needed for")
     p.add_argument("--until", help="also done when this CSS selector exists, or the url contains this (starts with / or http)")
     p.add_argument("--timeout", type=int, default=300, help="give up after this many seconds (default 300, max 3600)")
+    p = sub.add_parser("vitals", help="LCP, CLS, INP, TTFB, FCP of this page, each rated good / needs-improvement / poor")
+    p = sub.add_parser("a11y", help="what a screen reader would miss: unlabelled controls, images without alt, heading jumps, no lang — with ids to act on")
     p = sub.add_parser("region", help="the tree of ONE subtree — a modal is 15 nodes inside 300")
     p.add_argument("selector", help="an id from an observation, a locator (role=dialog) or CSS")
     p = sub.add_parser("throttle", help="make the machine slow — the bug that never reproduces locally")

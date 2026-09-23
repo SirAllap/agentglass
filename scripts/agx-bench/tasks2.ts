@@ -157,6 +157,41 @@ export const PHASE2_TASKS: Task[] = [
         : a?.state !== "condition" && a?.state !== "done" ? `the handoff ended as ${JSON.stringify(a?.state)}` : null,
   },
   {
+    id: "p2-audit",
+    family: "phase2",
+    title: "Item 13, vitals and a11y: a measurement answered as data — the faults of a page, with ids, and an honest verdict",
+    arms: {
+      // Before: checkup's advice lines (unlabelled controls, images without alt) — no heading
+      // outline, no lang, no rated vitals.
+      async baseline(s) {
+        await s.cli("open", [s.url("/audit")]);
+        await Bun.sleep(600);
+        const c = (await s.cli("checkup", ["--no-shot"])).json;
+        return { a11y: c?.a11y ?? {}, vitals: null };
+      },
+      async phase2(s) {
+        await s.cli("open", [s.url("/audit")]);
+        await Bun.sleep(600);
+        const a = (await s.cli("a11y")).json;
+        const v = (await s.cli("vitals")).json;
+        return { a11y: a?.problems ?? {}, vitals: v };
+      },
+    },
+    grade: (a) => {
+      const p = a?.a11y ?? {};
+      const missing: string[] = [];
+      if (!(p.unlabelled?.n >= 1 || p.unlabelled >= 1)) missing.push("the unlabelled button");
+      if (!(p.imgNoAlt?.n >= 1 || p.imgNoAlt >= 1)) missing.push("the image without alt");
+      if (!(p.headingSkips?.n >= 1)) missing.push("the heading jump");
+      if (!p.noLang) missing.push("the missing lang");
+      const v = a?.vitals;
+      if (!v || typeof v.verdict !== "string") missing.push("a vitals verdict");
+      // A page that never painted (this bench's hidden pane) must say so, not claim "good".
+      else if (v.vitals?.lcpMs === undefined && v.verdict === "good") missing.push("an honest verdict for an unpainted page");
+      return missing.length ? `missing ${missing.join(", ")}` : null;
+    },
+  },
+  {
     id: "p2-wait-slot",
     family: "phase2",
     title: "Item 6, --wait-slot: with every slot taken, a new tab queues for the one that frees up",

@@ -74,7 +74,7 @@ export type BrowserOp =
   | "cdp" | "listeners" | "coverage" | "profiles" | "emulate" | "events" | "record" | "audit"
   | "debug" | "clock" | "download" | "settings" | "drag" | "upload" | "storage" | "permission"
   | "pdf" | "throttle" | "har" | "region" | "clipboard" | "save" | "headers" | "fake"
-  | "trace" | "intercept" | "checkup" | "dialog" | "handoff"
+  | "trace" | "intercept" | "checkup" | "dialog" | "handoff" | "vitals" | "a11y"
   | "inspect"
   | "whoami"
   | "health";
@@ -92,7 +92,7 @@ export const BROWSER_OPS: readonly BrowserOp[] = [
   "inspect",
   "clock", "download", "settings", "drag", "upload", "storage", "permission", "pdf",
   "throttle", "har", "region", "clipboard", "save", "headers", "fake", "trace", "intercept",
-  "checkup", "dialog", "handoff",
+  "checkup", "dialog", "handoff", "vitals", "a11y",
   "whoami",
   "health",
 ];
@@ -233,6 +233,7 @@ const TIMEOUT_MS: Record<BrowserOp, number> = {
   dialog: 15_000,
   /* One check waits up to 25 s inside the page; the CLI loops over checks. */
   handoff: 45_000,
+  vitals: 15_000, a11y: 15_000,
   /* The clipboard is a round trip; a snapshot is Chromium serialising every
      subresource the page pulled in. */
   clipboard: 15_000, save: 60_000, headers: 15_000,
@@ -649,7 +650,7 @@ function readonlyMode(): boolean {
  *  quietly falling on the safe-to-run side because nobody classified it. */
 const OBSERVE_OPS: ReadonlySet<BrowserOp> = new Set([
   "read", "shot", "text", "html", "console", "network", "observe",
-  "tabs", "frames", "health", "waitfor", "wait",
+  "tabs", "frames", "health", "waitfor", "wait", "vitals", "a11y",
   /* `listeners` and a coverage READ only look. `cdp` is deliberately NOT
      here: the protocol can navigate, click, set a breakpoint and evaluate, so
      classifying it as observing would be a hole shaped exactly like the one

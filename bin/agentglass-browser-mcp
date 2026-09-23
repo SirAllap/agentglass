@@ -1116,6 +1116,16 @@ TOOLS = [
         },
     },
     {
+        "name": "browser_vitals",
+        "description": "Web vitals of the current page as data: LCP, CLS, INP, TTFB, FCP, each with a rating (good / needs-improvement / poor) by web.dev's thresholds, and a verdict. Cheaper and more exact than a screenshot of DevTools.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "browser_a11y",
+        "description": "An accessibility scan of the current page as data: controls with no accessible name, images without alt, heading levels that jump, missing lang and title — each with ids (eN) you can act on.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "browser_reload",
         "description": "Reload, ignoring the cache by default — with assets versioned by query string there is no other way to force a new bundle.",
         "inputSchema": {

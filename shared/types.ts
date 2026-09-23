@@ -1174,6 +1174,8 @@ export interface BrowserAskFrame {
     | "dialog"
     /* Give the tab to the person for a CAPTCHA, a 2FA code or a consent. */
     | "handoff"
+    /* Measurement as data: web vitals with ratings, and an accessibility scan. */
+    | "vitals" | "a11y"
     /* §11: the clipboard through the route that works, and the page as one
        file that still renders offline. */
     | "clipboard" | "save"
