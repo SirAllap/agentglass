@@ -1247,20 +1247,27 @@ def _snapshot_sqlite(db):
     import shutil
     import tempfile
     d = tempfile.mkdtemp(prefix="agx-import-")
-    os.chmod(d, 0o700)
-    copy = os.path.join(d, os.path.basename(db))
-    shutil.copyfile(db, copy)
-    if os.path.exists(db + "-wal"):
-        try:
-            shutil.copyfile(db + "-wal", copy + "-wal")
-        except OSError:
-            pass
 
     def dispose():
         try:
             shutil.rmtree(d, ignore_errors=True)
         except OSError:
             pass
+    # The caller can only dispose of a copy it was handed: one that raises
+    # halfway (a full disk, a directory where the file should be, Ctrl-C)
+    # cleans up here, or a partial jar stays in the temp dir.
+    try:
+        os.chmod(d, 0o700)
+        copy = os.path.join(d, os.path.basename(db))
+        shutil.copyfile(db, copy)
+        if os.path.exists(db + "-wal"):
+            try:
+                shutil.copyfile(db + "-wal", copy + "-wal")
+            except OSError:
+                pass
+    except BaseException:
+        dispose()
+        raise
     return copy, dispose
 
 

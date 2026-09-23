@@ -11,7 +11,7 @@
  */
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseAsk, redactAskForTest, type BrowserOp } from "../src/browserdrive.ts";
@@ -248,4 +248,26 @@ test("the CLI's public suffixes include every one the picker groups by", async (
   const inPy = new Set(names(pyBlock![1]!));
   expect(names(tsBlock![1]!).length).toBeGreaterThan(10);
   for (const suffix of names(tsBlock![1]!)) expect(inPy.has(suffix), suffix).toBe(true);
+});
+
+test.skipIf(!HAVE_PY)("the private copy of the profile is gone afterwards, when the import worked and when the copy failed", async () => {
+  /* The copy holds every cookie value in the profile. A copy that raised
+     halfway left its directory behind, because the caller's cleanup only
+     starts once the copy has returned. A directory where cookies.sqlite
+     should be makes the copy fail the same way on any machine, root included. */
+  const tmp = mkdtempSync(join(tmpdir(), "agx-importtmp-"));
+  const broken = mkdtempSync(join(tmpdir(), "agx-ffbroken-"));
+  mkdirSync(join(broken, "cookies.sqlite"));
+  const left = () => readdirSync(tmp).filter((n) => n.startsWith("agx-import-"));
+  try {
+    const ok = await runCli(stub.url, ["--page", "tab-1", "session", "import", "--from", "firefox-profile", profile,
+      "--domain", "orbit.example"], { TMPDIR: tmp });
+    expect(ok.code, ok.stderr).toBe(0);
+    expect(left()).toEqual([]);
+    const failed = await runCli(stub.url, ["--page", "tab-1", "session", "import", "--from", "firefox-profile", broken,
+      "--domain", "orbit.example"], { TMPDIR: tmp });
+    expect(failed.code).toBe(1);
+    expect(failed.stderr).toContain("could not read");
+    expect(left()).toEqual([]);
+  } finally { rmSync(tmp, { recursive: true, force: true }); rmSync(broken, { recursive: true, force: true }); }
 });
