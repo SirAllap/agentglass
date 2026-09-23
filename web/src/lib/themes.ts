@@ -11,7 +11,8 @@ import { floorTiers } from "./contrast.ts";
 
 import { SERVER, authHeaders, whenServerUp } from "./api.ts";
 import type { AnsiPalette } from "./termPalette.ts";
-import { applyAccent } from "./accent.ts";
+import { ACCENTS, applyAccent, currentAccent } from "./accent.ts";
+import { bootEntry, writeBootPaint } from "./bootPaint.ts";
 import { BASE, cssVars } from "../../../shared/palettes.ts";
 import type { DesktopTheme } from "../../../shared/desktopPalette.ts";
 
@@ -133,9 +134,11 @@ export function applyTheme(id: string, { sync = false } = {}) {
      road. */
   if (id === DESKTOP_ID && desktop) {
     const root = document.documentElement;
-    for (const [k, v] of Object.entries(floorTiers(desktop.vars))) root.style.setProperty(k, v);
+    const floored = floorTiers(desktop.vars);
+    for (const [k, v] of Object.entries(floored)) root.style.setProperty(k, v);
     root.setAttribute("data-theme", DESKTOP_ID);
     applyAccent();
+    rememberPaint(DESKTOP_ID, Object.keys(floored));
     if (sync) syncTheme(desktop as unknown as Theme);
     return;
   }
@@ -151,11 +154,50 @@ export function applyTheme(id: string, { sync = false } = {}) {
   root.setAttribute("data-theme", t.id);
   // Lay the chosen accent over the theme's primary, so it survives a switch.
   applyAccent();
+  rememberPaint(t.id, Object.keys(vars));
   // Only ever persist a theme that exists. An id we don't recognise still gets
   // painted in the fallback, but writing that fallback back to storage would
   // turn one bad read into the permanent loss of a real choice.
   if (known) { try { localStorage.setItem("agentglass-theme", t.id); } catch {} }
   if (sync) syncTheme(t);
+}
+
+/**
+ * Leave the palette just painted where the launch cover can read it before the
+ * bundle loads (see bootPaint.ts), and tell the desktop shell its background,
+ * which it paints the window with before the page has drawn anything at all.
+ */
+function rememberPaint(id: string, keys: string[]) {
+  const style = document.documentElement.style;
+  const vars: Record<string, string> = {};
+  for (const k of new Set([...keys, "--primary", "--primary-hover", "--theme-primary"])) {
+    const v = style.getPropertyValue(k).trim();
+    if (v) vars[k] = v;
+  }
+  const system = themeMode() === "system"
+    ? { dark: bootEntry(SERIOUS_DARK, paintOf(SERIOUS_DARK)), light: bootEntry(SERIOUS_LIGHT, paintOf(SERIOUS_LIGHT)) }
+    : undefined;
+  if (!writeBootPaint({ v: 1, ...bootEntry(id, vars), ...(system ? { system } : {}) })) return;
+  if (vars["--bg"]) {
+    // In system mode both grounds go, and the shell picks by the OS at the next
+    // launch — the same choice the boot script makes for the page.
+    const both = system ? { dark: system.dark.vars["--bg"] ?? "", light: system.light.vars["--bg"] ?? "" } : undefined;
+    try {
+      (window as unknown as { agentglass?: { setWindowBackground?: (c: string, both?: { dark: string; light: string }) => void } })
+        .agentglass?.setWindowBackground?.(vars["--bg"], both);
+    } catch { /* an older shell without the call: its window keeps the default */ }
+  }
+}
+
+/** What applyTheme would set for a listed theme, accent included, without
+ *  painting it — the half of a "system" choice that is not on screen. */
+function paintOf(id: string): Record<string, string> {
+  const t = THEMES.find((x) => x.id === id) ?? THEMES[0];
+  const vars: Record<string, string> = { ...floorTiers(t.vars as Record<string, string>) };
+  if (vars["--primary"]) vars["--theme-primary"] = vars["--primary"];
+  const a = ACCENTS.find((x) => x.id === currentAccent());
+  if (a && a.primary) { vars["--primary"] = a.primary; vars["--primary-hover"] = a.hover; }
+  return vars;
 }
 
 /**

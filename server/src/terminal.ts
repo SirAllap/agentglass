@@ -1016,6 +1016,10 @@ export function ptyOpen(ws: PtyWs) {
   // the desk's width and the columns past the phone's own never arrive.
   ctl(ws, {
     t: "ready", mode, shell: basename(shell), cwd: startIn, resize: !!sizeDir,
+    // Whether this shell is the app's own tmux, which reports its windows
+    // shortly after it draws: the desk's launch cover waits for that strip
+    // rather than guessing whether one is coming.
+    engine: !!engine,
     // The handle for "where is the cursor". Absent unless this pty is an nvim
     // we started with a socket of its own.
     ...(editorSock ? { editor: editorSock.id } : {}),
@@ -1416,7 +1420,11 @@ export function ptyOpen(ws: PtyWs) {
    */
   let nudgeFrom = 0;
   const nudgeTmux = () => {
-    if (!session.tmux || session.closed) return;
+    // On the app's own tmux the strip is due from the very first redraw: the
+    // pty IS tmux, so there is nothing to detect first. Waiting for the poll to
+    // notice it cost up to half a second before the strip first appeared — and
+    // the desk's launch cover waits for that strip before it lets the app show.
+    if ((!session.tmux && !session.onEngine) || session.closed) return;
     const now = Date.now();
     if (session.tmuxNudge) clearTimeout(session.tmuxNudge);
     else nudgeFrom = now;

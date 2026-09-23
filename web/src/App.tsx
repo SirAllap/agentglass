@@ -13,6 +13,7 @@ import { publishFleet } from "./lib/demoBridge.ts";
 import { publishAgents } from "./lib/fleetAgents.ts";
 import { providerOf } from "./lib/format.ts";
 import { api, IS_DEMO } from "./lib/api.ts";
+import { refusalFinal, useCoverHold } from "./lib/cover.ts";
 import { initialTheme, applyTheme, THEMES } from "./lib/themes.ts";
 import { subscribeControl } from "./lib/controlBus.ts";
 import { latchChatIntent } from "./lib/chatIntent.ts";
@@ -244,6 +245,14 @@ export default function App() {
   // to start as null, which is a real answer ("no scope"), so a cockpit that
   // never got an answer displayed one anyway.
   const [workspace, setWorkspace] = useState<string | null | undefined>(undefined);
+  // Until the scope is known the title bar says "…" and the terminal, git and
+  // command list have no directory to open: the launch cover waits for the
+  // first answer. The first answer, not the first success: an HTTP error is an
+  // answer (a 401 would otherwise keep the cover up to its cap over the app
+  // that explains it), and so is a refusal once the server's fate is known.
+  // A refusal while the server is still starting is not — see refusalFinal.
+  const [projectsAnswered, setProjectsAnswered] = useState(false);
+  useCoverHold("project", !IS_DEMO && !projectsAnswered);
 
   const [projectOpen, setProjectOpen] = useState(false);
   const mountedAt = useRef(Date.now());
@@ -304,6 +313,9 @@ export default function App() {
   // fleet spine reads them in every view, and holding them would freeze a
   // streaming answer mid-word.
   const { events, conn, lastEvent, openTools } = useLive(anyPanelOpen);
+  // The dashboard draws from the live feed; on screen at launch, the cover waits
+  // for the feed's first answer rather than showing an empty board fill in.
+  useCoverHold("dashboard", !IS_DEMO && dashActive && conn === "connecting");
   /*
    * The saved commands marked "run when the app starts" fire exactly once per
    * app load, when the live socket first opens — the moment the server is
@@ -369,6 +381,7 @@ export default function App() {
     const ask = () => {
       api.projects().then((p) => {
         if (!live) return;
+        setProjectsAnswered(true);
         setWorkspace(p.workspace);
         // The app filter is hidden while a project is open (the scope already
         // says whose data this is). Clear it on the way in, or a filter set in
@@ -378,10 +391,14 @@ export default function App() {
         let answered = false;
         try { answered = localStorage.getItem(PICKER_ANSWERED_KEY) === "1"; } catch { /* ignore */ }
         if (!p.workspace && !answered) setProjectOpen(true);
-      }).catch(() => {
+      }).catch((e) => {
         if (!live) return;
+        const starting = e instanceof TypeError && !refusalFinal();
+        if (!starting) setProjectsAnswered(true);
         timer = setTimeout(ask, wait);
-        wait = Math.min(wait * 2, 5000);
+        // No backing off while the server is still starting: the answer is due
+        // the moment it is up, and every ask already waits in get().
+        wait = starting ? 300 : Math.min(wait * 2, 5000);
       });
     };
     ask();

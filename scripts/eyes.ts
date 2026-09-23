@@ -150,7 +150,7 @@ async function main() {
 
     const cdp = await connect(dport);
     await cdp.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: scale, mobile: false });
-    await until(cdp, `document.querySelector('#root')?.children.length`, "the app to mount", 25_000);
+    await until(cdp, `document.querySelector('#root')?.children.length && !document.documentElement.classList.contains('ag-covering')`, "the app to mount", 25_000);
     await Bun.sleep(1200); // one settle beat for layout/fonts, not a substitute for the wait above
 
     if (doJs) {

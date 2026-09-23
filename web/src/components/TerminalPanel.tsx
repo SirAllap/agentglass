@@ -42,6 +42,8 @@ import { paneFoot } from "../lib/paneBox.ts";
 import { paneActionsMode, subscribePaneActions } from "../lib/paneActionsPref.ts";
 import { useClickupSetup } from "../lib/clickupSetup.ts";
 import { api, IS_DEMO, ptyWsUrl, hasToken, probeAuth, reauthPrompt, whenServerUp } from "../lib/api.ts";
+import { coverIsUp, refusalFinal, useCoverHold } from "../lib/cover.ts";
+import { shellSettled } from "../lib/coverStep.ts";
 import { playDemoSession } from "../lib/demoTerm.ts";
 import { CommandBar, loadCommands } from "./CommandBar.tsx";
 import { ResumeSessions } from "./ResumeSessions.tsx";
@@ -224,6 +226,12 @@ type Sess = {
    *  so the strip says it instead. */
   tmuxPrefixAt: number;
   pending: string[]; // input queued while (re)connecting — flushed on ready
+  /** First paint, for the launch cover (lib/cover.ts): the shell has drawn
+   *  something, and — on the app's own tmux, which says so in `ready` — the
+   *  window strip has arrived too. Set once; a reconnect does not unset it. */
+  drawn?: boolean;
+  tmuxDue?: boolean;
+  settled?: boolean;
   createdAt: number;
   lastUsed: number;
   retries: number;        // consecutive failed reconnects
@@ -572,6 +580,25 @@ function applyThemeLive(s: Sess): () => void {
  */
 const ptyFrame = (frame: PtyClientFrame): string => JSON.stringify(frame);
 
+/**
+ * Mark a shell settled once it has drawn and, on the app's own tmux, its window
+ * strip has come in. The strip rides the server's sweep, a beat after the
+ * first bytes; if it never comes, the shell counts as settled anyway after
+ * STRIP_WAIT_MS rather than holding the launch cover to its cap.
+ */
+const STRIP_WAIT_MS = 1200;
+function settle(s: Sess) {
+  if (s.settled || !s.drawn) return;
+  // Only the launch waits on this; every shell opened after it is left alone.
+  if (!coverIsUp()) { s.settled = true; return; }
+  if (s.tmuxDue) {
+    setTimeout(() => { if (!s.settled) { s.tmuxDue = false; settle(s); } }, STRIP_WAIT_MS);
+    return;
+  }
+  s.settled = true;
+  notify(s);
+}
+
 function connect(s: Sess) {
   if (s.ws || IS_DEMO) return;
   s.status = "connecting";
@@ -590,6 +617,7 @@ function connect(s: Sess) {
       // Only while the user is dragging inside a terminal — see mouseModeGuard.
       // Every other chunk of every other second goes through untouched.
       s.term.write(fitHold.active() ? guardFor(s).filter(bytes) : bytes);
+      if (!s.drawn) { s.drawn = true; settle(s); }
       return;
     }
     /*
@@ -607,6 +635,7 @@ function connect(s: Sess) {
     if (f.t === "ready") {
       reconnected(s);
       s.status = "live"; s.mode = f.mode ?? null; s.shell = f.shell || "shell"; s.canResize = f.resize !== false;
+      if (!s.settled) s.tmuxDue = f.engine === true;
       // Names the cure, not only the symptom: this mode is what a host with no
       // python3 gets, and "TUI apps won't render" alone left people believing
       // the terminal itself was broken.
@@ -637,6 +666,8 @@ function connect(s: Sess) {
       s.tmuxSession = typeof f.session === "string" ? f.session : null;
       s.tmuxClient = f.client ?? null;
       s.tmuxPrefix = Array.isArray(f.prefix) ? f.prefix : [];
+      s.tmuxDue = false;
+      settle(s);
       notify(s);
     } else if (f.t === "openfail") {
       // Not fatal to the shell — the socket is fine and this pane keeps
@@ -1809,11 +1840,12 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
    * `open` stays in the deps so the list is also re-read when you come back to
    * this view, which is where a worktree made elsewhere shows up.
    */
+  const [reposKnown, setReposKnown] = useState(false);
   useEffect(() => {
     api.gitRepos().then(({ repos }) => {
       setRepos(repos);
       setRoot((cur) => (cur && repos.some((r) => r.root === cur) ? cur : repos[0]?.root || ""));
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => setReposKnown(true));
   }, [open]);
   /*
    * Still written, even though nobody picks it.
@@ -2119,6 +2151,15 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   }, [open, prRoot, prBranch]);
 
   const tabs = root ? termSessionsFor(root) : [];
+
+  /* On screen at launch, the terminal holds the launch cover until every shell
+     in view has drawn (see `settle`) — the checkout first, then the shells it
+     opens. Re-read on every render, which each of those shells triggers. */
+  const shellsSettled = paneIds.length > 0 && paneIds.every((id) => {
+    const s = sessions.get(id);
+    return !!s && shellSettled(s, refusalFinal());
+  });
+  useCoverHold("terminal", open && !IS_DEMO && (!reposKnown || (root !== "" && !shellsSettled)));
 
   // Every repo opens with a shell, and the panes always name shells that still
   // exist — closing one must not leave an empty frame behind.

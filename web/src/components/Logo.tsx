@@ -45,3 +45,45 @@ export function Logo({ size = 22, className, style, title }: {
     </svg>
   );
 }
+
+/**
+ * The mark, alive: the landing's header mark, contact and all, riding its
+ * orbit once every sixteen seconds. It is the brand mark in the title bar and
+ * the one the launch cover flies in to — `coverTarget` is where it lands (see
+ * lib/cover.ts), which is why there is exactly one of them.
+ *
+ * Always the full cut, though the title bar draws it at 22px — under the 32
+ * at which the static mark switches to its simplified cut — because this is
+ * the landing's mark and the flight ends on it: a different drawing at the end
+ * of the flight is a visible swap. The ceiling that buys: at 1x it is 22
+ * device pixels, and the graticule there is a hint of texture, not a line.
+ *
+ * It moves on CSS animations of transform and opacity only, which the
+ * compositor runs off the main thread, and the sheet it is drawn by lives in
+ * web/index.html because the cover has to paint before the bundle does. It
+ * stops for reduced motion and while the window is not being looked at.
+ *
+ * DO NOT EDIT the drawing below by hand either — scripts/logo.mjs again.
+ */
+export function LivingMark({ size = 22, className, style, title, coverTarget = false }: {
+  size?: number;
+  className?: string;
+  style?: React.CSSProperties;
+  title?: string;
+  coverTarget?: boolean;
+}) {
+  const sheen = useId();
+  return (
+    <span
+      role="img"
+      aria-label={title ?? "agentglass"}
+      className={className}
+      data-cover-target={coverTarget ? "" : undefined}
+      style={{ display: "block", flex: "none", width: size, height: size, ...style }}
+    >
+      {/* living:start */}
+      <span className="ag-lm"><svg viewBox="0 0 64 64" aria-hidden="true"><path d="M14.1 54.9 A29 8 -52 0 1 49.9 9.1" fill="none" stroke="currentColor" strokeOpacity=".4" strokeWidth="3.2" strokeLinecap="round"/></svg><span className="ag-lm-o ag-lm-b"><span className="ag-lm-arm"><span className="ag-lm-dot"></span></span></span><svg viewBox="0 0 64 64" aria-hidden="true"><defs><radialGradient id={sheen} cx=".34" cy=".28" r=".82"><stop offset="0" stopColor="#fff" stopOpacity=".72"/><stop offset=".5" stopColor="#fff" stopOpacity=".15"/><stop offset="1" stopColor="#fff" stopOpacity="0"/></radialGradient></defs><circle cx="30" cy="34" r="12.5" fill="currentColor"/><circle cx="30" cy="34" r="12.5" fill={`url(#${sheen})`}/><g fill="none" stroke="#fff" strokeOpacity=".2" strokeWidth="1.1"><ellipse cx="30" cy="34" rx="12.5" ry="4.5"/><ellipse cx="30" cy="34" rx="6" ry="12.1"/></g><path d="M30 21.5 A12.5 12.5 0 0 1 30 46.5 A17.0 17.0 0 0 0 30 21.5 Z" fill="#1b0b38" fillOpacity=".42"/><path d="M49.9 9.1 A29 8 -52 0 1 14.1 54.9" fill="none" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round"/></svg><span className="ag-lm-o ag-lm-f"><span className="ag-lm-arm"><span className="ag-lm-dot"></span></span></span></span>
+      {/* living:end */}
+    </span>
+  );
+}

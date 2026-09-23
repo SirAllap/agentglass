@@ -88,7 +88,7 @@ async function main() {
 
   try {
     const cdp = await connect(port);
-    await until(cdp, `document.querySelector('#root')?.children.length`, "the app to mount");
+    await until(cdp, `document.querySelector('#root')?.children.length && !document.documentElement.classList.contains('ag-covering')`, "the app to mount");
     await Bun.sleep(2500); // let the demo stream seed a few events
 
     // Serious dark for every shot — the house dark is Graphite (SERIOUS_DARK),
@@ -101,7 +101,7 @@ async function main() {
       cdp.ev(`(()=>{try{localStorage.setItem('agentglass-theme',${jsLit(id)});localStorage.setItem('agentglass-theme-mode',${jsLit(mode)});return 1}catch{return 0}})()`);
     await setTheme("graphite", "dark");
     await cdp.ev(`location.reload()`);
-    await until(cdp, `document.querySelector('#root')?.children.length`, "the graphite theme");
+    await until(cdp, `document.querySelector('#root')?.children.length && !document.documentElement.classList.contains('ag-covering')`, "the graphite theme");
     await Bun.sleep(2500);
 
     // Size the viewport to the dashboard rather than cropping the dashboard to
