@@ -10,7 +10,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { callerKey, runBrowserAsk } from "../src/lib/browserDrive.ts";
-import { OBSERVE_DIFF, observeScript, type ObserveOpts } from "../src/lib/browserObserve.ts";
+import { OBSERVE_DIFF, STAMP, observeScript, type ObserveOpts } from "../src/lib/browserObserve.ts";
 
 type FakeEl = {
   tagName: string;
@@ -289,6 +289,37 @@ describe("observe --delta", () => {
   });
 });
 
+describe("ids stay one node each", () => {
+  /* Measured in the app: `cloneNode` copies the data attribute, so a list
+     that clones a row it had already shown put the same id on two nodes — the
+     tree carried it twice, a delta keyed on it merged them, and a click on it
+     was refused as ambiguous. The copy is the node that was never stamped. */
+  test("a clone of a stamped node gets its own id; the original keeps its", () => {
+    const p = signupPage();
+    const first = p.run();
+    const button = p.nodes[4]!;
+    const id = button.dataset.agxE;
+    const clone = el("button", "Create account", { dataset: { ...button.dataset } });
+    p.nodes.splice(4, 0, clone); // the copy lands BEFORE the original
+    const v = p.run();
+    const ids = v.tree.map((n: { e: string }) => n.e);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(button.dataset.agxE).toBe(id);
+    expect(clone.dataset.agxE).not.toBe(id);
+    expect(first.tree.map((n: { e: string }) => n.e)).toContain(id);
+  });
+
+  test("markup copied with its attributes (outerHTML into innerHTML) is a new node too", () => {
+    const p = signupPage();
+    p.run();
+    const copied = el("h1", "Sign up", { dataset: { agxE: p.nodes[2]!.dataset.agxE! } });
+    p.nodes.push(copied);
+    const v = p.run();
+    const ids = v.tree.map((n: { e: string }) => n.e);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
 describe("the driver hands the page what the relay recorded", () => {
   async function sent(args: Record<string, unknown>, op = "observe") {
     const ran: string[] = [];
@@ -305,6 +336,12 @@ describe("the driver hands the page what the relay recorded", () => {
     expect(callerKey("orbit-a")).not.toBe(callerKey("orbit-b"));
     expect(code).toContain('const base = {"doc":"k3x9","seq":4};');
     expect(code).toContain("if (!true) return full;");
+  });
+
+  test("region stamps with the same rule as observe", async () => {
+    // Two copies of the stamp are two answers to "which node is e7".
+    expect(await sent({ selector: "main" }, "region")).toContain(STAMP);
+    expect(await sent({})).toContain(STAMP);
   });
 
   test("a malformed base is no base, and no delta flag is a plain observe", async () => {

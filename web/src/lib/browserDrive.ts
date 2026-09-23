@@ -1,5 +1,5 @@
 import type { BrowserAskFrame } from "../../../shared/types.ts";
-import { COLLECTOR, observeScript } from "./browserObserve.ts";
+import { COLLECTOR, STAMP, observeScript } from "./browserObserve.ts";
 import { jsLit } from "../../../shared/jsLit.ts";
 
 /**
@@ -2176,13 +2176,7 @@ async function runVerb(
             el2.getAttribute("title") ||
             (el2.innerText || "").trim().slice(0, 80) || ""
           ).trim().slice(0, 80);
-          const stamp = (el2) => {
-            if (!el2.dataset.agxE) {
-              window.__agxSeq = (window.__agxSeq || 0) + 1;
-              el2.dataset.agxE = "e" + window.__agxSeq;
-            }
-            return el2.dataset.agxE;
-          };
+          const stamp = ${STAMP};
           const tree = [];
           for (const el2 of root.querySelectorAll("a,button,input,select,textarea,[role],[data-testid],summary,h1,h2,h3")) {
             if (tree.length >= 120) break;

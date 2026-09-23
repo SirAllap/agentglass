@@ -253,6 +253,27 @@ export const diagnosisScript = (): string => `(() => {
 })()`;
 
 /*
+ * Put an id on a node, once — shared by `observe` and `region`, so the two
+ * cannot disagree about which node an id names.
+ *
+ * The attribute alone is not proof the node was stamped: `cloneNode` and
+ * markup copied from outerHTML carry it too, and measured in the app a cloned
+ * row put one id on two nodes — the tree listed it twice and a click on it was
+ * refused as ambiguous. So the nodes this page stamped are remembered in a
+ * WeakSet, and a node carrying an id it was never given gets its own. The
+ * original keeps its id whichever of the two comes first in the document.
+ */
+export const STAMP = `(el) => {
+    const mine = window.__agxStamped || (window.__agxStamped = new WeakSet());
+    if (!el.dataset.agxE || !mine.has(el)) {
+      window.__agxSeq = (window.__agxSeq || 0) + 1;
+      el.dataset.agxE = "e" + window.__agxSeq;
+      mine.add(el);
+    }
+    return el.dataset.agxE;
+  }`;
+
+/*
  * WHAT CHANGED SINCE THE LAST LOOK, computed in the page.
  *
  * Measured on the agx-bench suite: observe was 85 of 220 calls and three
@@ -335,13 +356,7 @@ export const observeScript = (since: number, treeMax: number, opts: ObserveOpts 
      starts a fresh page and a fresh counter, which is correct — the ids
      described a document that is gone.
   */
-  const stamp = (el) => {
-    if (!el.dataset.agxE) {
-      window.__agxSeq = (window.__agxSeq || 0) + 1;
-      el.dataset.agxE = "e" + window.__agxSeq;
-    }
-    return el.dataset.agxE;
-  };
+  const stamp = ${STAMP};
   /*
      WHY A THING IS NOT VISIBLE, and WHAT COVERS IT — section 2. A zero-sized
      box was silently skipped before, so an element that is there and hidden
