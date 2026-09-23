@@ -112,10 +112,16 @@ CREATE TABLE IF NOT EXISTS pane_note (
   const cols = d.query<{ name: string }, []>("PRAGMA table_info(pane_agent)").all().map((c) => c.name);
   if (!cols.length) return;
   const server = cols.includes("server") ? "server" : "''";
-  /* `WHERE true`: without it SQLite reads the `ON` as the start of a join. */
+  /* A WHERE is required: without one SQLite reads the `ON` as the start of a
+     join. And it is this one because `notePaneAgent` writes the legacy row
+     too, as the newest hook from EITHER server: copied back under "no server"
+     it would be read as this server's pane. Only a row newer than every note
+     for that pane id is one an older build wrote since, and only that is
+     brought forward. */
   try {
     d.exec(`INSERT INTO pane_note (pane_id, session_id, transcript_path, cwd, at, server)
-SELECT pane_id, session_id, transcript_path, cwd, at, ${server} FROM pane_agent WHERE true
+SELECT pane_id, session_id, transcript_path, cwd, at, ${server} FROM pane_agent
+WHERE NOT EXISTS (SELECT 1 FROM pane_note n WHERE n.pane_id = pane_agent.pane_id AND n.at >= pane_agent.at)
 ON CONFLICT(pane_id, server) DO UPDATE SET session_id = excluded.session_id, transcript_path = excluded.transcript_path,
   cwd = excluded.cwd, at = excluded.at WHERE excluded.at > pane_note.at`);
   } catch { /* a read-only database keeps the notes it has */ }
@@ -189,12 +195,50 @@ const recentPanes = db.query<{ pane_id: string; session_id: string; cwd: string;
  */
 export function notePaneAgent(n: { pane: string; sessionId: string; transcriptPath: string; cwd: string; at?: number; server?: string }): boolean {
   if (!PANE_ID.test(n.pane) || !n.transcriptPath || !n.cwd) return false;
-  noteUpsert.run({
+  const row = {
     $pane_id: n.pane, $session_id: n.sessionId || "unknown",
     $transcript_path: n.transcriptPath, $cwd: n.cwd, $at: n.at ?? Date.now(),
-    $server: n.server && TMUX_SERVER.test(n.server) ? n.server : "",
-  } as never);
+  };
+  const full = { ...row, $server: n.server && TMUX_SERVER.test(n.server) ? n.server : "" };
+  noteUpsert.run(full as never);
+  noteLegacy(full);
   return true;
+}
+
+/*
+ * THE OLD TABLE IS KEPT CURRENT, NOT ONLY LEFT STANDING. An older build reads
+ * `pane_agent` and nothing else, so a note that went only to `pane_note` was
+ * one a downgrade never saw: the pane still held the conversation from before
+ * every `/clear` since the upgrade, and the restore resumed that one. So the
+ * row is written here as well, in the five columns the oldest reader has and
+ * with the conflict target its own upsert names.
+ *
+ * Only a table keyed by the pane id alone. No table is created (an older
+ * build makes its own), and one keyed by two columns — a rebuild some branch
+ * made — is left to the next start rather than failing the note that matters.
+ * Asked at every write, not once, because the table can be made after this
+ * module loads. Ceiling: one row per pane id across every tmux server, the
+ * older build's own rule, so the newest hook from either server wins.
+ */
+function noteLegacy(row: { $pane_id: string; $session_id: string; $transcript_path: string; $cwd: string; $at: number; $server: string }): void {
+  const cols = db.query<{ name: string; pk: number }, []>("PRAGMA table_info(pane_agent)").all();
+  const key = cols.filter((c) => c.pk > 0);
+  if (key.length !== 1 || key[0]!.name !== "pane_id") return;
+  /* A build between the two added the server column and reads it: the row
+     names the server it now describes, not the one that wrote it before. */
+  const withServer = cols.some((c) => c.name === "server");
+  const { $server: _server, ...five } = row;
+  try {
+    db.query(withServer
+      ? `INSERT INTO pane_agent (pane_id, session_id, transcript_path, cwd, at, server)
+VALUES ($pane_id, $session_id, $transcript_path, $cwd, $at, $server)
+ON CONFLICT(pane_id) DO UPDATE SET session_id = excluded.session_id, transcript_path = excluded.transcript_path,
+  cwd = excluded.cwd, at = excluded.at, server = excluded.server`
+      : `INSERT INTO pane_agent (pane_id, session_id, transcript_path, cwd, at)
+VALUES ($pane_id, $session_id, $transcript_path, $cwd, $at)
+ON CONFLICT(pane_id) DO UPDATE SET session_id = excluded.session_id, transcript_path = excluded.transcript_path,
+  cwd = excluded.cwd, at = excluded.at`).run((withServer ? row : five) as never);
+  } catch { /* a read-only or locked database: the note that counts is already written */ }
 }
 
 /** The same, from a raw hook body — the shape /ingest already has in hand. */
