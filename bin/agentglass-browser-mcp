@@ -1328,6 +1328,7 @@ TOOLS = [
                 },
                 "highlight": {"type": "string", "description": "Draw a box around this element, on the image."},
                 "label": {"type": "string", "description": "A caption beside the highlight box."},
+                "marks": {"type": "boolean", "description": "Label every interactive thing in view with its observe id (eN), drawn on the image, and return the ids as `marks`. For canvas-heavy or visually ambiguous pages."},
                 "page": {"type": "string", "description": "A tab id, instead of the active tab."},
             },
         },
@@ -1789,7 +1790,8 @@ def run(name, args):
             return {"content": [{"type": "text", "text": "the page produced no image"}], "isError": True}
         return {"content": [
             {"type": "image", "data": data, "mimeType": "image/png"},
-            {"type": "text", "text": f"{value.get('title', '')}\n{value.get('url', '')}"},
+            {"type": "text", "text": f"{value.get('title', '')}\n{value.get('url', '')}"
+                + (f"\nmarks: {' '.join(value['marks'])}" if value.get("marks") else "")},
         ]}
     if verb == "checkup" and value.get("png"):
         # A path, not an image: the picture is evidence for later, and an image

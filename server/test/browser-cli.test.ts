@@ -1481,6 +1481,18 @@ describe.skipIf(!HAVE_PY)("checkup, the dev loop in one call", () => {
     expect(asked).toEqual(["checkup", "checkup"]);
   });
 
+  test("shot --marks reaches the window as a flag, and the ids come back in the answer", async () => {
+    await openWindow();
+    answers = { shot: { ok: true, value: { url: "u", title: "t", png: PNG, marks: ["e1", "e2"] } } };
+    askedArgs = []; asked = [];
+    const cache = mkdtempSync(join(dir, "cache-"));
+    const out = join(dir, "marked.png");
+    const r = await cliCache(cache, "shot", out, "--marks");
+    expect(r.code, r.err).toBe(0);
+    expect(verbArgs(0)).toMatchObject({ marks: true });
+    expect(r.out).toContain("e2");
+  });
+
   test("dialog: the flags reach the window as booleans, and both sides are refused there", async () => {
     await openWindow();
     answers = { dialog: { ok: true, value: { armed: null, last: null } } };

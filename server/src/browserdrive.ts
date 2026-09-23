@@ -2776,6 +2776,11 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
         if (!label || label.length > 200 || /[\r\n]/.test(label)) return { error: "label must be a short, single-line caption under 200 chars" };
         args.label = label;
       }
+      /* Numbered `eN` labels on everything interactive in view (set-of-mark). */
+      if (b.marks !== undefined) {
+        if (typeof b.marks !== "boolean") return { error: "marks is a flag" };
+        args.marks = b.marks;
+      }
       if (b.omitBackground !== undefined) {
         args.omitBackground = b.omitBackground === true || b.omitBackground === "true";
       }

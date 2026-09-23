@@ -106,7 +106,7 @@ inspect     cdp · debug · listeners · coverage · trace
 devtools    inspect open|close · inspect panel <id> · inspect zoom <n> · inspect shot
 network     fake · intercept · throttle · headers · har
 pretend     emulate · resize · clock · settings
-evidence    shot · shot --with-inspector · record · pdf · save · download · audit --script
+evidence    shot · shot --marks (eN labels on the picture) · shot --with-inspector · record · pdf · save · download · audit --script
 batch       do (and `lanes` for several pages at once)
 ```
 

@@ -469,6 +469,13 @@ describe("§16 — origins, read-only, audit, redaction", () => {
     expect("error" in parseAsk("cookies", { set: { name: "a", value: "b" } })).toBe(true);
   });
 
+  test("shot: marks is a flag and combines with a crop or a highlight", () => {
+    const ok = parseAsk("shot", { marks: true, selector: "#panel", highlight: "#status" });
+    if (!("ask" in ok)) throw new Error(ok.error);
+    expect(ok.ask.args).toMatchObject({ marks: true, selector: "#panel", highlight: "#status" });
+    expect("error" in parseAsk("shot", { marks: "yes" })).toBe(true);
+  });
+
   test("dialog: accept or dismiss, never both; text needs an accept; always needs a side", () => {
     const ok = parseAsk("dialog", { dismiss: true, always: true });
     if (!("ask" in ok)) throw new Error(ok.error);

@@ -1377,6 +1377,8 @@ def main():
     p.add_argument("--with-inspector", dest="withInspector", action="store_true",
                    help="the page AND the inspector, joined side by side into one png")
     p.add_argument("--label", help="a caption next to --highlight's box")
+    p.add_argument("--marks", action="store_true",
+                   help="label every interactive thing in view with its observe id (eN) — for a picture a model must point into")
     # DECLARED, because the code below already reads it. It did not, so every
     # `shot --out file.png` died on an AttributeError and exited 1 with nothing
     # written — and `--out` before the verb hit the global one, which skips
@@ -2272,6 +2274,8 @@ def main():
                 print("--label needs --highlight — it captions the box, not the whole picture", file=sys.stderr)
                 return 1
             body["label"] = a.label
+        if a.marks:
+            body["marks"] = True
         if a.omitBackground:
             body["omitBackground"] = True
     elif a.cmd in ("click", "wait"):
@@ -2865,6 +2869,10 @@ def main():
             print(dest)
         else:
             print(png)
+        # --marks drew eN labels; the ids are what a caller acts on next, and
+        # the picture alone cannot be read back into a list of them.
+        if value.get("marks"):
+            print("marks: " + " ".join(value["marks"]))
         # ASKED FOR TWO HALVES, GIVEN ONE, AND TOLD NOTHING.
         #
         # `--with-inspector` falls back to the page alone when the inspector
