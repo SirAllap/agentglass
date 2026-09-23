@@ -397,6 +397,21 @@ export interface TmuxWindow {
    */
   status?: import("./windowStatus.ts").WindowStatus;
   /**
+   * The tab group this window was put in by hand — tmux's `@agx-group` window
+   * option. Absent means "group it by its folder", which is the default.
+   */
+  group?: string;
+  /** Pinned first in its group — the `@agx-pin` window option. */
+  pinned?: boolean;
+  /** The active pane's directory. */
+  cwd?: string;
+  /**
+   * The project that directory belongs to — the main checkout's root, so every
+   * worktree of one repository answers the same. Null when the directory is in
+   * no repository; absent while the server is still finding out (one sweep).
+   */
+  repo?: string | null;
+  /**
    * How big tmux is drawing this window right now.
    *
    * Here because `phone` cannot answer the question the desk actually has. A
@@ -675,14 +690,16 @@ export type PtyClientFrame =
      elsewhere — which took four windows of somebody's own work off their screen.
      Asked for by a person it is the opposite: they know where they are going,
      and the strip they came from is one choice away. */
-  | { t: "tmux"; cmd: "select" | "new" | "kill" | "rename" | "move" | "takeover" | "fit" | "session" | "endsession" | "locksession"; window?: string; name?: string;
+  /* `group` sets or clears a window's `@agx-group` (no `name` clears it);
+     `pin` sets or clears `@agx-pin`, switched by `after`. */
+  | { t: "tmux"; cmd: "select" | "new" | "kill" | "rename" | "move" | "takeover" | "fit" | "session" | "endsession" | "locksession" | "group" | "pin"; window?: string; name?: string;
       /** `fit` only: the asking panel's own grid. Range-checked on the server —
        *  it ends up in a `resize-window`, so it is a number to validate rather
        *  than to trust. */
       cols?: number; rows?: number;
-      /** `move` only: land AFTER the named window instead of before it. What
-       *  the trailing drop zone at the end of the tab strip sends — it is the
-       *  only way to make a window the last one. */
+      /** `move`: land AFTER the named window instead of before it. What the
+       *  trailing drop zone at the end of the tab strip sends — it is the only
+       *  way to make a window the last one. `pin`: pin (true) or unpin. */
       after?: boolean;
       /** `new` only: the project the panel is showing, so the tab opens in it.
        *  Without it tmux starts the window in the SESSION's directory, which is
