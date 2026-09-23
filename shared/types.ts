@@ -2991,6 +2991,9 @@ export interface PrCheck {
   /** Terminal means it will not change without a new push or a re-run. */
   done: boolean;
   url?: string;
+  /** GitHub will not merge until this one passes. Absent when GitHub was not
+   *  asked, which is not the same as "not required". */
+  required?: boolean;
 }
 
 export interface PrCheckRollup {
@@ -3508,6 +3511,49 @@ export interface PrMergePolicy {
   deletesBranch: boolean;
 }
 
+/**
+ * The rules a merge into the base branch has to satisfy.
+ *
+ * Two sources and they are not equally visible. Rulesets are readable by anyone
+ * who can read the repository; classic branch protection only by an admin, so
+ * for everybody else the fields that live only there — the lock above all —
+ * are `null`, meaning "GitHub did not say", never `false`.
+ */
+export interface PrMergeGate {
+  /** The viewer's role: ADMIN, MAINTAIN, WRITE, TRIAGE or READ. */
+  permission?: string;
+  /** GitHub offers this viewer a merge past the rules ("merge without waiting"). */
+  canBypass: boolean;
+  /** Classic branch protection was readable (or the viewer is an admin, for
+   *  whom a null rule means there is none), so its null fields are real. */
+  protectionVisible: boolean;
+  /** The base is read-only — "Lock branch", or a ruleset that restricts
+   *  updates. `null` when only an admin could have told. */
+  locked: boolean | null;
+  /** Where the lock comes from: a ruleset's name, or "branch protection". */
+  lockedBy?: string;
+  /** False when branch protection refuses this viewer's pushes to the base,
+   *  which refuses their merges too. */
+  viewerCanPush?: boolean;
+  /** Approving reviews required, the largest any rule asks for. */
+  approvals: number;
+  codeOwners: boolean;
+  /** The most recent push needs approving by somebody other than who made it. */
+  lastPushApproval: boolean;
+  /** A new push dismisses approvals. `null` when that is not visible. */
+  dismissStale: boolean | null;
+  conversationResolution: boolean;
+  /** The branch must be up to date with the base before merging. */
+  upToDate: boolean | null;
+  signatures: boolean;
+  deployments: string[];
+  /** The status contexts required on the base, by name. A required one that
+   *  never shows up in the rollup is a reason of its own. */
+  requiredContexts: string[];
+  mergeQueue: boolean;
+  inQueue: boolean;
+}
+
 export interface PrDetail extends PrSummary {
   body: string;
   mergeState: PrMergeState;
@@ -3559,6 +3605,9 @@ export interface PrDetail extends PrSummary {
    *  before this existed, and the demo fixture, have no opinion — the UI falls
    *  back to offering all three rather than to an empty menu. */
   mergePolicy?: PrMergePolicy;
+  /** What the base branch demands, as far as GitHub lets the viewer see it.
+   *  Absent when it could not be asked — see mergeGateOf. */
+  gate?: PrMergeGate;
   /** Who owns the head branch. GitHub's own merge commit names it
    *  ("Merge pull request #7 from owner/branch"), and a merge made from here
    *  should read like every other merge on the base branch. */
