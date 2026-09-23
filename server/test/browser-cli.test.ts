@@ -30,7 +30,9 @@ const HAVE_PY = !!Bun.which("python3");
 let dir = "", base = "", proc: ReturnType<typeof Bun.spawn> | null = null;
 let ws: WebSocket | null = null;
 /** What the stand-in window should do with the next ask, by op. */
-let answers: Record<string, { ok: boolean; value?: unknown; error?: string }> = {};
+type Answer = { ok: boolean; value?: unknown; error?: string };
+/** A function answers differently each time it is asked: a slot that frees up. */
+let answers: Record<string, Answer | (() => Answer)> = {};
 /** Every ask the window was sent, so a test can assert on a retry. */
 let asked: string[] = [];
 /** The args of every ask, so a test can assert on what the CLI actually sent
@@ -90,7 +92,9 @@ async function openWindow() {
     if (frame.type !== "browser") return;
     asked.push(frame.data.op);
     askedArgs.push(frame.data.args ?? {});
-    const reply = answers[frame.data.op] ?? { ok: false, error: "the stand-in was not told what to say" };
+    const scripted = answers[frame.data.op];
+    const reply = (typeof scripted === "function" ? scripted() : scripted)
+      ?? { ok: false, error: "the stand-in was not told what to say" };
     await fetch(base + "/browser/result", {
       method: "POST",
       headers: { "content-type": "application/json", Origin: base },
@@ -431,6 +435,28 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     expect(r.code).toBe(0);
     expect(asked).toEqual(["shot", "shot", "shot"]);
     expect(controls).toContainEqual({ cmd: "view", to: "browser" });
+  });
+
+  test("--wait-slot queues for a free slot instead of refusing, and only for that refusal", async () => {
+    await openWindow();
+    const full = { ok: false, error: "12 pages awake at once is the limit — each one is a live browser" };
+    let n = 0;
+    answers = { newtab: () => (++n < 3 ? full : { ok: true, value: { id: "t9", url: "u" } }) };
+    asked = [];
+    const waited = await cli("newtab", "http://localhost:5173/", "--wait-slot", "10");
+    expect(waited.code, waited.err).toBe(0);
+    expect(asked).toEqual(["newtab", "newtab", "newtab"]);
+    // Without it, the refusal stands, once.
+    n = -100; asked = [];
+    const plain = await cli("newtab", "http://localhost:5173/");
+    expect(plain.code).toBe(1);
+    expect(asked).toEqual(["newtab"]);
+    // A different refusal is not a full house and is not waited on.
+    answers = { newtab: { ok: false, error: "url must be an http(s) address" } };
+    asked = [];
+    const other = await cli("newtab", "http://localhost:5173/", "--wait-slot", "10");
+    expect(other.code).toBe(1);
+    expect(asked).toEqual(["newtab"]);
   });
 
   test("but a refusal a retry cannot fix is not retried", async () => {

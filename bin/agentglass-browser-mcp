@@ -289,7 +289,8 @@ TOOLS = [
         ),
         "inputSchema": {
             "type": "object",
-            "properties": {"url": {"type": "string", "description": "http(s) address"}},
+            "properties": {"url": {"type": "string", "description": "http(s) address"},
+                           "waitSlot": {"type": "number", "description": "When 12 pages are already awake, queue this many seconds (max 120) for a free slot instead of being refused."}},
             "required": ["url"],
         },
     },
@@ -1147,6 +1148,7 @@ TOOLS = [
             "properties": {
                 "profile": {"type": "string", "description": "An isolated context by name — see browser_profiles."},
                 "shared": {"type": "boolean", "description": "Open it in the person's own container instead of this client's — the old behaviour, on purpose."},
+                "waitSlot": {"type": "number", "description": "When 12 pages are already awake, queue this many seconds (max 120) for a free slot instead of being refused."},
                 "url": {"type": "string"}},
             "required": ["url"],
         },
@@ -1698,6 +1700,13 @@ def run(name, args):
         else "own-container"))
 
     res = call(verb, body)
+    # `waitSlot`: queue for a free tab instead of being refused at 12 awake.
+    wait = args.get("waitSlot")
+    if verb in ("open", "newtab") and isinstance(wait, (int, float)) and wait > 0:
+        end = time.time() + min(float(wait), 120.0)
+        while not res.get("ok") and "pages awake at once" in (res.get("error") or "") and time.time() < end:
+            time.sleep(min(1.0, max(0.0, end - time.time())))
+            res = call(verb, body)
     # One retry, and only for the failure a retry can fix: no pane is mounted,
     # so nothing can answer until one is. "Not on screen" is deliberately NOT
     # retried — the capture works behind another view, and pulling the window

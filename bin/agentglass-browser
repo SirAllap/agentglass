@@ -224,6 +224,22 @@ def _token_on_disk():
         return None
 
 
+# What the panel says when it will not wake another guest. The one place a
+# caller can tell "no room right now" from every other refusal.
+SLOT_FULL = "pages awake at once"
+
+
+def wait_for_slot(op, body, res, seconds):
+    """Queue instead of refusing: ask again once a second until a tab frees or
+    `seconds` run out, and only for THAT refusal. A person closing a tab or a
+    page going to sleep is what frees one, and nothing here can hurry it."""
+    end = time.time() + seconds
+    while not res.get("ok") and SLOT_FULL in (res.get("error") or "") and time.time() < end:
+        time.sleep(min(1.0, max(0.0, end - time.time())))
+        res = call(op, body)
+    return res
+
+
 def call(op, body):
     def send(token):
         req = urllib.request.Request(
@@ -1352,6 +1368,8 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("open", help="go to a page and wait for it to load")
     p.add_argument("url")
+    p.add_argument("--wait-slot", dest="waitSlot", type=float, default=None, metavar="SECONDS",
+                   help="when 12 pages are already awake, queue for a free slot this long instead of refusing")
     p = sub.add_parser("read", help="the page's url, title and visible text")
     p = sub.add_parser("click", help="click one element: an id from observe (e12), a locator (role=button[name=\"Save\"], label=Email, text=Continue) or CSS")
     p.add_argument("selector")
@@ -1436,6 +1454,8 @@ def main():
     p.add_argument("which", help="index from `tabs`, or a tab id")
     p = sub.add_parser("newtab", help="open a url in a NEW tab, leaving this one where it is")
     p.add_argument("url")
+    p.add_argument("--wait-slot", dest="waitSlot", type=float, default=None, metavar="SECONDS",
+                   help="when 12 pages are already awake, queue for a free slot this long instead of refusing")
     p = sub.add_parser("closetab", help="close a tab by index or id")
     p.add_argument("which")
 
@@ -2513,6 +2533,8 @@ def main():
         print("--show: the browser pane is brought forward for this tab", file=sys.stderr)
 
     res = call(a.cmd, body)
+    if getattr(a, "waitSlot", None):
+        res = wait_for_slot(a.cmd, body, res, a.waitSlot)
     # A tab of ours that is gone stops being ours, so the next call opens a
     # fresh one instead of addressing a ghost forever.
     if body.get("page") and str(res.get("error") or "").startswith("no tab called"):
