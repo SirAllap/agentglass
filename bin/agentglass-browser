@@ -1834,7 +1834,8 @@ def main():
         for pair in a.field:
             k, v = split_field(pair)
             if k is None:
-                print(f"--field takes SELECTOR=VALUE, got {pair!r}", file=sys.stderr)
+                why = " (a [ in it is never closed)" if pair.count("[") > pair.count("]") else ""
+                print(f"--field takes SELECTOR=VALUE, got {pair!r}{why}", file=sys.stderr)
                 return 2
             fields[k] = v
         if not fields:

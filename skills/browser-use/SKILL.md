@@ -107,9 +107,10 @@ agentglass-browser fill --field 'label=Email=ada@orbit.example' --field 'placeho
 # also testid=submit (exact, hidden ones included)
 ```
 
-Case-insensitive substring; quote for exact (`text="Save"`,
-`[name="Save" s]`). When several fit and exactly one is the whole name, that
-one is used. Only what is on screen matches. None or several is refused, and
+Case-insensitive substring. Exact: quote it (`text="Save"`, `label="Email"`);
+a role's name only with `s` (`[name="Save" s]`). A whole name beats a part
+of one, so "Save" is not confused with "Save draft". Only what is on screen
+matches (`upload` also finds a hidden file input). None or several is refused, and
 the refusal lists ids to use next (`e4 button "Save"`), the hidden matches,
 and what of that kind IS there.
 
