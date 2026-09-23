@@ -7,7 +7,7 @@
  * window. The script is the real string handed to executeJavaScript — the
  * thing under test is what it finds, which reading its source cannot pin.
  */
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { runBrowserAsk, type DrivableWebview } from "../src/lib/browserDrive.ts";
 import { parseLocator } from "../src/lib/browserLocator.ts";
 
@@ -161,6 +161,9 @@ function page(body: N) {
 }
 
 const ask = (op: string, args: Record<string, unknown> = {}) => ({ id: "b1", op, args }) as never;
+
+/* The hostile suites plant a canary on the global; every suite shares this process. */
+afterAll(() => { delete (globalThis as { __canary?: unknown }).__canary; });
 
 /** The sign-up form every suite below points at. Ids are stamped the way
  *  observe stamps them, so `e2` means what an observation said it meant. */
