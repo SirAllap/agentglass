@@ -39,8 +39,10 @@ import { CloseButton } from "./CloseButton.tsx";
  */
 export interface LanternRow {
   name: string;
-  /** The Lantern's own chat, when it is on the field: shown aside, never counted. */
-  role?: "lantern";
+  /** The Lantern's own chat, when it is on the field: shown aside, never
+   *  counted. Or the project's seat, which the view counts like any agent.
+   *  The server's BoardRow.role, both values. */
+  role?: "lantern" | "orchestrator";
   doing?: string;
   saidAt?: number;
   startedAt?: number;

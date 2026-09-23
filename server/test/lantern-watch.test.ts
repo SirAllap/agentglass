@@ -6,6 +6,7 @@ import { describe, expect, test } from "bun:test";
 import { findings, notice, FORGOTTEN_AFTER_MS } from "../src/lanternwatch.ts";
 import type { BoardRow } from "../src/agentboard.ts";
 import type { NamedAgent } from "../src/agentops.ts";
+import { attention } from "../../shared/fieldRules.ts";
 
 const NOW = 1_800_000_000_000;
 const row = (p: Partial<BoardRow> & { name: string }): BoardRow => ({ from: "seen", state: "idle", ...p });
@@ -173,3 +174,61 @@ describe("the two readers of this board are not work on it", () => {
     expect(f.map((x) => x.kind)).toEqual(["forgotten"]);
   });
 });
+
+/*
+ * THE NOTIFICATION AND THE DASHBOARD'S STRIP ARE ONE RULE.
+ *
+ * The watch pushed "orbit-api is waiting for your next prompt — 3h" while the
+ * strip read calm: each had its own copy of which waits count. Both sort a
+ * row by `attention` in shared/fieldRules.ts now; the strip's side is asserted
+ * in web/test/fleet-verdict.test.ts.
+ */
+describe("the watch flags what the shared rule flags", () => {
+  const H = 60 * 60_000;
+  const rows = [
+    row({ name: "a-api", state: "working", doing: "the migration", saidAt: NOW - 60_000 }),
+    row({ name: "b-shell", saidAt: NOW - 5 * H }),
+    row({ name: "c-web", state: "waiting", needsYou: { kind: "permission", why: "Claude needs your permission to use Bash", since: NOW - 60_000 } }),
+    row({ name: "d-docs", state: "waiting", needsYou: { kind: "gate", why: "", since: NOW - 60_000 } }),
+    row({ name: "e-fresh", state: "waiting", needsYou: { kind: "input", why: "", since: NOW - 20 * 60_000 } }),
+    row({ name: "f-stale", state: "waiting", needsYou: { kind: "input", why: "", since: NOW - 3 * H } }),
+    row({ name: "g-migrate", paneId: "%3", doing: "migrate the billing tables", saidAt: NOW - 90 * 60_000 }),
+    row({ name: "h-soon", paneId: "%4", doing: "migrate the billing tables", saidAt: NOW - 30 * 60_000 }),
+    row({ name: "i-dead", doing: "migrate the billing tables", saidAt: NOW - 72 * H }),
+  ];
+
+  test("row for row, and kind for kind", () => {
+    const f = findings({ rows, namedNow: [], namedBefore: null, now: NOW });
+    const want = rows.filter((r) => attention(r, NOW)).map((r) => [r.name, attention(r, NOW) === "forgotten" ? "forgotten" : "waiting"]);
+    expect(f.map((x) => [x.name, x.kind]).sort()).toEqual(want.sort());
+    expect(f.map((x) => x.name).sort()).toEqual(["c-web", "d-docs", "f-stale", "g-migrate"]);
+  });
+
+  test("says how long floored, with the helper the strip uses", () => {
+    const f = findings({ rows, namedNow: [], namedBefore: null, now: NOW });
+    expect(f.find((x) => x.name === "g-migrate")!.line).toContain("quiet for 1h — done, or stuck?");
+    expect(f.find((x) => x.name === "f-stale")!.line).toContain("waiting for your next prompt — 3h");
+  });
+
+  test("the push's \"need you\" is the strip's: a turn left for an hour is counted apart", () => {
+    // The strip, the rail's pip and the "Needs you" tile count only what is
+    // blocked; the push counted every wait under the same words.
+    const left = rows.filter((r) => r.name === "f-stale");
+    expect(notice(findings({ rows: left, namedNow: [], namedBefore: null, now: NOW }))!.title).toBe("🔦 Lantern: 1 waiting for a prompt");
+    const n = notice(findings({ rows, namedNow: [], namedBefore: null, now: NOW }))!;
+    const blocked = rows.filter((r) => attention(r, NOW) === "blocked").length;
+    expect(n.title).toBe(`🔦 Lantern: ${blocked} need you · 1 waiting for a prompt · 1 looks forgotten`);
+  });
+
+  test("the watch keeps no copy of the rule", () => {
+    const src = watchSrc.slice(watchSrc.indexOf("export function findings("));
+    const body = src.slice(0, src.indexOf("\n}\n") + 2)
+      .split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+    expect(body).toContain("attention(");
+    expect(body).not.toContain("isForgotten(");
+    expect(body).not.toContain("FORGOTTEN_AFTER_MS");
+    expect(body).toContain("howLong(");
+  });
+});
+
+const watchSrc = await Bun.file(new URL("../src/lanternwatch.ts", import.meta.url)).text();
