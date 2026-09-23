@@ -18,6 +18,17 @@
  * scratch directory, and every child that is handed `process.env`, or a copy
  * of its `HOME`, inherits the scratch one without anybody having to remember.
  *
+ * "Handed" is literal. A spawn that names no `env` at all — git, tmux, `sh`,
+ * most of them — is not given `process.env` by bun but the environment the
+ * process was LAUNCHED with, so nothing this file sets or deletes reaches it.
+ * Measured on 1.3.9: every git the suite ran read the person's own
+ * `~/.config/git/config`, and where that turns `rerere` on, the conflict test
+ * in gitwork-rebase.test.ts failed 5 runs in 70 — the `git commit` inside
+ * `git rebase --continue` starts git's detached auto-maintenance, whose
+ * `git rerere gc` held `MERGE_RR.lock` just as the next pick needed it. Such
+ * a spawn is handed a copy of `process.env` below: node's default, and what
+ * every call site here was written against.
+ *
  * `AGENTGLASS_DB` and `AGENTGLASS_STATE_DIR` are cleared rather than set. Set
  * to one scratch path, they made every process of the run share one database:
  * `db.ts` already gives each test process a fresh one of its own, a child that
@@ -60,10 +71,11 @@
  *     any path inside a real agentglass directory — `agentglass` or
  *     `agentglass-*` under the person's real config, data, state or cache base;
  *   - for a child, whose opens cannot be seen from here, `Bun.spawn` and
- *     `Bun.spawnSync` (which `node:child_process` goes through as well) fill
- *     in a missing HOME, work out where that child would put its database,
- *     config and state from the environment it ends up with, and refuse the
- *     spawn if the answer is real.
+ *     `Bun.spawnSync` (which `node:child_process` goes through as well) hand
+ *     a spawn without `env` a copy of `process.env`, fill in a missing HOME,
+ *     work out where that child would put its database, config and state
+ *     from the environment it ends up with, and refuse the spawn if the
+ *     answer is real.
  *
  * Each refusal throws where it happens and is kept, and the run exits non-zero
  * at the end with the list — a refusal inside a `try` that falls back quietly
@@ -281,17 +293,21 @@ export function childTargets(env: Record<string, string | undefined>): string[] 
   ];
 }
 
-/** The spawn's arguments with a missing HOME filled in, and judged. */
+/** The spawn's arguments with the child's environment made explicit, a missing HOME filled in, and judged. */
 function isolateSpawn(what: string, a: unknown[]): unknown[] {
   const arrayForm = Array.isArray(a[0]);
   type Opts = { env?: Record<string, string | undefined>; cmd?: unknown };
   let opts = (arrayForm ? a[1] : a[0]) as Opts | undefined;
-  if (opts?.env && !opts.env.HOME) {
-    opts = { ...opts, env: { AGX_TEST_REAL_HOME: REAL_HOME, ...opts.env, HOME: process.env.HOME } };
+  // No `env` would mean the launch environment, not this one: see the top.
+  const env = !opts?.env ? { ...process.env }
+    : !opts.env.HOME ? { AGX_TEST_REAL_HOME: REAL_HOME, ...opts.env, HOME: process.env.HOME }
+    : opts.env;
+  if (env !== opts?.env) {
+    opts = { ...opts, env };
     a = arrayForm ? [a[0], opts, ...a.slice(2)] : [opts, ...a.slice(1)];
   }
   const cmd = arrayForm ? a[0] : opts?.cmd;
-  for (const t of childTargets(opts?.env ?? process.env)) {
+  for (const t of childTargets(env)) {
     if (isRealAgentglassPath(t)) refuse(`${what} ${JSON.stringify(cmd)} would use`, t);
   }
   return a;

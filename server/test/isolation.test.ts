@@ -7,6 +7,7 @@
  * only be watched from outside that run.
  */
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -35,6 +36,19 @@ describe("the redirect", () => {
   test("a child handed a HOME-less environment gets the scratch HOME, not the passwd one", () => {
     const r = Bun.spawnSync(["sh", "-c", "printf %s \"$HOME\""], { env: { PATH: process.env.PATH ?? "" } });
     expect(r.stdout.toString()).toBe(process.env.HOME!);
+  });
+
+  test("a child handed no environment at all gets this process's, not the one bun was launched with", async () => {
+    /* The common spawn — git, tmux, sh — names no `env`, and bun gives it the
+       environment the process STARTED with. Measured on 1.3.9: every git the
+       suite ran read the real ~/.config/git/config. */
+    const sh = 'printf "%s|%s" "$HOME" "$XDG_CONFIG_HOME"';
+    const want = `${process.env.HOME}|${process.env.XDG_CONFIG_HOME}`;
+    expect(Bun.spawnSync(["sh", "-c", sh]).stdout.toString()).toBe(want);
+    expect(Bun.spawnSync({ cmd: ["sh", "-c", sh] }).stdout.toString()).toBe(want);
+    expect(spawnSync("sh", ["-c", sh]).stdout.toString()).toBe(want);
+    const p = Bun.spawn(["sh", "-c", sh], { stdout: "pipe" });
+    expect(await new Response(p.stdout).text()).toBe(want);
   });
 });
 
