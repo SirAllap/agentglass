@@ -111,6 +111,10 @@ describe("the requirements catalogue matches what the app actually runs", () => 
     // says so and the file simply stays where it is — nothing else changes.
     open: "the macOS opener; the finder falls back to saying it cannot",
     gio: "the GNOME opener, tried beside xdg-open, which has the row",
+    // Ties the notification monitor to the server with PR_SET_PDEATHSIG, for
+    // the deaths that run no exit hook. Without it the monitor is spawned bare
+    // and the exit hook still covers every clean close — nothing stands down.
+    setpriv: "the notification monitor spawns bare without it; nothing stands down",
   };
 
   test("every binary the app runs is catalogued, or exempt with a reason", () => {
