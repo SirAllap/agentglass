@@ -297,8 +297,9 @@ export function closeTab(root: string, id: string): void {
   commit({ ...state, byRoot });
 }
 
-/** Where a web tab is pointed. In the store because minimising unmounts the
- *  window, and a URL kept in the component goes with it. */
+/** Where a web tab is pointed. In the store because a reload, or checking out
+ *  another root, unmounts the tab, and a URL kept in the component goes with
+ *  it. */
 export function setTabUrl(root: string, id: string, url: string): void {
   const held = state.byRoot[root];
   if (!held) return;
