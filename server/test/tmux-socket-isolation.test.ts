@@ -21,7 +21,7 @@
  */
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { engineSocketArgs, tmuxSocket } from "../src/tmuxbin.ts";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
@@ -75,7 +75,9 @@ describe("the engine's socket name", () => {
   test("a redirected config that is not a temporary one keeps the plain name", () => {
     // Somebody's XDG_CONFIG_HOME can live anywhere. Renaming an installed app's
     // socket would orphan every pane on the server it is running. Never created.
-    process.env.XDG_CONFIG_HOME = join(homedir(), ".agx-sock-never-made", "config");
+    // Not under homedir(): the test preload moves HOME into the temp dir, and a
+    // config there is exactly the throwaway one this must not be mistaken for.
+    process.env.XDG_CONFIG_HOME = join("/nonexistent-agx-sock", "config");
     delete process.env.TMUX_TMPDIR;
     delete process.env.AGENTGLASS_TMUX_SOCKET;
     expect(tmuxSocket()).toBe("agentglass");
