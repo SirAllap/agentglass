@@ -19,7 +19,7 @@
 // eight, and the dashboard — fourteen panels and a poll every four seconds — is
 // not among them until you ask for it.
 import { PluginsView } from "../plugins/PluginsView.tsx";
-import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { hiddenOnly } from "./hiddenOnly.ts";
 import { ViewRail, type RailPip } from "./ViewRail.tsx";
@@ -320,7 +320,11 @@ const BOARDS: BoardKind[] = ["pr", "tasks"];
  * Portal is lifted above the bench — see PortalFloor.
  */
 function BoardInstance({ kind, ...props }: Omit<BoardBodyProps, "active">) {
-  const active = useSyncExternalStore(subscribeBoards, () => boardActive(kind), () => false);
+  /* Deferred, because the place that shows the board is already on screen with
+     the board in it: re-rendering the whole board for its new `active` inside
+     the same frame only held that frame back — measured at a third of the
+     first frame when the bench opened on a card with its activity showing. */
+  const active = useDeferredValue(useSyncExternalStore(subscribeBoards, () => boardActive(kind), () => false));
   const inBench = useSyncExternalStore(subscribeBoards, () => boardPlace(kind) === "bench", () => false);
   const node = boardNode(kind);
   if (!node) return null;
