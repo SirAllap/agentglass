@@ -22,6 +22,7 @@
  */
 import type { LanternRow } from "../components/LanternView.tsx";
 import { attention, howLong } from "../../../shared/fieldRules.ts";
+import { groupLantern } from "./lanternStore.ts";
 
 export type VerdictTone = "calm" | "warn" | "critical";
 
@@ -57,7 +58,10 @@ export function fleetVerdict(all: LanternRow[] | null, now = Date.now(), failed 
   const rows = all.filter((r) => r.role !== "lantern");
   const need = rows.filter((r) => attention(r, now) === "blocked");
   const stuck = rows.filter((r) => { const a = attention(r, now); return a === "left" || a === "forgotten"; });
-  const running = rows.filter((r) => !r.needsYou && r.state === "working");
+  /* The view's own Working group, not a second filter beside it: a row the
+     server marked `gone` can still say `state: "working"`, and the view files
+     it under Gone. */
+  const running = groupLantern(rows).working;
 
   const calm = !need.length && !stuck.length;
   const clauses: VerdictClause[] = [{

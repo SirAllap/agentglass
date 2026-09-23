@@ -112,6 +112,16 @@ test("a working seat counts as running, as the Lantern view counts it", () => {
   expect(v.clauses[0].text).toBe("1 running · all nominal");
 });
 
+test("a working row the server marked gone is not running — the view files it under Gone", () => {
+  /* A row can be `state: "working"` and `gone` at once: the server's gone mark
+     reads the pane and the claim, not the state. The strip said "1 running"
+     while the Working group it opens was empty. */
+  const rows = [working("orbit-ghost", { paneId: undefined, gone: true }), working("orbit-api")];
+  const v = fleetVerdict(rows, now)!;
+  expect(v.counts.running).toBe(groupLantern(rows).working.length);
+  expect(v.counts.running).toBe(1);
+});
+
 test("a board that could not be read is unknown, not 'nothing running'", () => {
   // The store answers [] when its first read fails, so the rows alone would
   // draw a calm green line over a field nobody could see.
