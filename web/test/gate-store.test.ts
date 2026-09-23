@@ -123,6 +123,35 @@ test("a gate that resolves and is later reissued is announced again", () => {
   unsub?.();
 });
 
+/*
+ * A gate that starts and resolves while the tab is hidden.
+ *
+ * The regular poll (tick(), at the bottom of gateStore.ts) is paused while
+ * `document.hidden` — nobody can approve anything they cannot see. But the
+ * server's push for the same hold (useLive.ts's "gate" alert frame) still
+ * arrives while hidden, and used to only pop a toast (firePopupOnly) without
+ * touching the durable row: a hold that both starts and resolves before the
+ * tab is looked at left no bell record at all. pollGatesNow is the seam that
+ * frame reaches for — an immediate ingest that does not check `document.hidden`.
+ */
+test("pollGatesNow ingests even while the tab is hidden", async () => {
+  (globalThis as any).document = { hidden: true, addEventListener() {} };
+  const realFetch = globalThis.fetch;
+  (globalThis as any).fetch = (...args: unknown[]) => {
+    if (String(args[0]).includes("/gate/pending")) {
+      return Promise.resolve(new Response(JSON.stringify({ gates: [gate("hidden-hold")] }), { headers: { "content-type": "application/json" } }));
+    }
+    return Promise.resolve(new Response("{}", { headers: { "content-type": "application/json" } }));
+  };
+  try {
+    await store.pollGatesNow();
+    expect(store.listGates().map((g) => g.id)).toContain("hidden-hold");
+    expect(gateNotes().some((n) => n.key === "gate:hidden-hold")).toBe(true);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 /**
  * The poll is started by someone listening, not by the module being imported.
  *

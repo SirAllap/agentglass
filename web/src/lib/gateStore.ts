@@ -333,6 +333,26 @@ async function tick() {
   timer = setTimeout(tick, POLL_MS);
 }
 
+/**
+ * Ingest the pending list right now, whether or not the tab is hidden.
+ *
+ * The regular poll (tick, below) skips itself while `document.hidden` — right
+ * for the interval poll, since nobody can approve what they cannot see. But
+ * the server's own push for a new hold (the "gate" alert frame in useLive.ts)
+ * still reaches a hidden tab, and a hold that both starts and resolves before
+ * the tab is ever looked at left no bell record at all: tick() never ran, so
+ * ingestGates() never did either. This is the seam that push reaches for
+ * instead of duplicating announce()'s note-recording logic — it forces the
+ * one read tick() would have done, so the durable row exists exactly as it
+ * would have for a tab that was visible.
+ */
+export async function pollGatesNow(): Promise<void> {
+  try {
+    const { gates } = await api.gatePending();
+    ingestGates(gates);
+  } catch { /* offline or starting up: keep the last known list */ }
+}
+
 let started = false;
 
 /**

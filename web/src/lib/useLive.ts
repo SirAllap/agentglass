@@ -8,6 +8,7 @@ import { emitBrowserAsk } from "./browserBus.ts";
 import { emitUnderstudy } from "./understudyBus.ts";
 import { emitPlugin } from "./pluginBus.ts";
 import { recordNote, fireDesktopAlert, firePopupOnly } from "./sysNotify.ts";
+import { pollGatesNow } from "./gateStore.ts";
 import { ciShouldNotify } from "./ciNotifyPref.ts";
 import { talkBody, talkShouldNotify, talkSummary, talkUrgency } from "./talkNotify.ts";
 import { raiseAlarm } from "./alarm.ts";
@@ -286,12 +287,16 @@ export function useLive(paused = false): LiveData {
         //
         // A gate hold is the one case where the notch already HAS the in-app
         // copy, through gateStore's own poll — announce() there recordNotes it
-        // under `gate:<id>` the moment it arrives, well before this push can
-        // reach the socket. fireDesktopAlert would recordNote a second, unkeyed
-        // row for the same hold: measured, two rows for one Approve, neither
-        // one ever clearing on its own (urgency 2 never folds). So only the
-        // transient popup runs here; the durable row is gateStore's alone.
-        if (frame.data.source === "gate") { firePopupOnly(frame.data); return; }
+        // under `gate:<id>` the moment it arrives. fireDesktopAlert would
+        // recordNote a second, unkeyed row for the same hold: measured, two
+        // rows for one Approve, neither one ever clearing on its own (urgency
+        // 2 never folds). So only the transient popup runs here; the durable
+        // row is gateStore's alone — but gateStore's poll is PAUSED while
+        // `document.hidden`, so a hold that starts and resolves entirely while
+        // the tab is hidden (timeout, fail-open deny, another device) would
+        // otherwise leave no bell record at all. Force the one read the poll
+        // would have done, hidden or not, so the row exists either way.
+        if (frame.data.source === "gate") { firePopupOnly(frame.data); void pollGatesNow(); return; }
         fireDesktopAlert(frame.data);
         return;
       }
