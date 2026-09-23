@@ -217,22 +217,37 @@ test.skipIf(!HAVE_PY)("--domain must name one site: a top-level domain, a public
    * The matcher takes subdomains by default, so `--domain com` matched every
    * .com login in the profile and copied all of them, cookies and storage —
    * the opposite of bringing one login over. A URL matched nothing, silently.
+   * The profile path does not exist: a refusal that came after reading it
+   * would say "could not read" and exit 1.
    */
+  const missing = join(tmpdir(), "agx-no-such-profile");
   for (const [domain, says] of [
     ["com", "top-level"], [".com", "top-level"], ["co.uk", "public suffix"], ["github.io", "public suffix"],
     ["https://www.orbit.example/", "bare site name"], ["orbit.example:8443", "bare site name"],
+    ["*.orbit.example", "bare site name"], ["orbit.example?x", "bare site name"],
   ] as const) {
     stub.calls.length = 0;
-    const r = await runCli(stub.url, ["--page", "tab-1", "session", "import", "--from", "firefox-profile", profile, "--domain", domain]);
+    const r = await runCli(stub.url, ["--page", "tab-1", "session", "import", "--from", "firefox-profile", missing, "--domain", domain]);
     expect(r.code, `${domain}: ${r.stderr}`).toBe(2);
     expect(r.stderr).toContain(says);
     expect(stub.calls, `${domain} reached the browser`).toHaveLength(0);
   }
-  // A site under a public suffix is a site, and localhost is one too.
-  for (const domain of ["acme.co.uk", "localhost"]) {
-    const r = await runCli(stub.url, ["--page", "tab-1", "session", "import", "--from", "firefox-profile", profile, "--domain", domain]);
-    expect(r.stderr).toContain(`no live cookies for ${domain}`);
+  // A site under a public suffix is a site, localhost is one too, and so is a
+  // single-label host when only that exact host is asked for.
+  for (const args of [["acme.co.uk"], ["localhost"], ["intranet", "--no-subdomains"]]) {
+    const r = await runCli(stub.url, ["--page", "tab-1", "session", "import", "--from", "firefox-profile", profile, "--domain", ...args]);
+    expect(r.stderr).toContain(`no live cookies for ${args[0]}`);
   }
+});
+
+test.skipIf(!HAVE_PY)("--domain is matched the way it is meant, not the way it was typed", async () => {
+  /* A stray space, a trailing dot or capitals passed the check and then
+     matched nothing, which is the silent miss the check is there to stop. */
+  stub.calls.length = 0;
+  const r = await runCli(stub.url, ["--page", "tab-1", "session", "import", "--from", "firefox-profile", profile,
+    "--domain", " ORBIT.example. "]);
+  expect(r.code, r.stderr).toBe(0);
+  expect(r.stdout).toContain("orbit.example: 4 cookies imported");
 });
 
 test("the CLI's public suffixes include every one the picker groups by", async () => {

@@ -1229,20 +1229,27 @@ _PUBLIC_SUFFIXES = frozenset({
 })
 
 
-def _domain_refusal(domain):
-    """Why DOMAIN cannot be imported, or None. The matcher takes subdomains
-    by default, so a top-level domain or a public suffix would copy every site
-    under it rather than one login; a URL would silently match nothing."""
-    d = (domain or "").strip().lower().lstrip(".")
-    if not d or any(c in d for c in "/:@") or any(c.isspace() for c in d):
-        return f"--domain takes a bare site name like orbit.example, not {domain!r}"
-    if "." not in d and d != "localhost":
-        return (f"--domain {d} is a top-level domain: it would copy every {d} login in the "
-                f"profile. Name the site, e.g. orbit.{d}")
+def _canonical_domain(domain, subdomains=True):
+    """(domain, None) with DOMAIN as the profile stores hosts — lower case, no
+    stray dots or spaces, punycode — or (None, why) when it cannot be
+    imported. The matcher takes subdomains by default, so a top-level domain
+    or a public suffix would copy every site under it rather than one login,
+    and a URL or a pattern would silently match nothing."""
+    d = (domain or "").strip().lower().strip(".")
+    if not d or any(c in d for c in "/:@*?#") or any(c.isspace() for c in d):
+        return None, f"--domain takes a bare site name like orbit.example, not {domain!r}"
+    try:
+        d = d.encode("idna").decode("ascii")
+    except UnicodeError:
+        return None, f"--domain takes a bare site name like orbit.example, not {domain!r}"
+    if "." not in d and d != "localhost" and subdomains:
+        return None, (f"--domain {d} is a top-level domain: it would copy every {d} login in the "
+                      f"profile. Name the site, e.g. orbit.{d}, or pass --no-subdomains for one "
+                      f"host called {d}")
     if d in _PUBLIC_SUFFIXES:
-        return (f"--domain {d} is a public suffix: every site under it is a different one. "
-                f"Name the site, e.g. acme.{d}")
-    return None
+        return None, (f"--domain {d} is a public suffix: every site under it is a different one. "
+                      f"Name the site, e.g. acme.{d}")
+    return d, None
 
 
 def _domain_matches(host, domain, subdomains=True):
@@ -1511,7 +1518,7 @@ def session_import(a, page):
         print(f"unknown source {kind!r} — the only source is firefox-profile <path> "
               "(Firefox, Zen and LibreWolf share the format)", file=sys.stderr)
         return 2
-    refusal = _domain_refusal(a.domain)
+    a.domain, refusal = _canonical_domain(a.domain, subdomains=not a.no_subdomains)
     if refusal:
         print(refusal, file=sys.stderr)
         return 2
