@@ -6,7 +6,7 @@
  * `key = "value"` with a mode, an accent, four backgrounds, the foregrounds and
  * the terminal colours — with invented values.
  */
-import { describe, test, expect, beforeEach, afterAll } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, afterAll } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -85,21 +85,28 @@ describe("the palette, as this app's tokens", () => {
 });
 
 describe("where the desktop keeps it", () => {
-  const prior = process.env.XDG_STATE_HOME;
+  const prior = { home: process.env.HOME, state: process.env.XDG_STATE_HOME };
+  let home = "";
+  /* Where Omarchy stages the theme: under HOME, whatever XDG_STATE_HOME says. */
   let root = "";
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), "agx-desk-"));
-    process.env.XDG_STATE_HOME = root;
+    home = mkdtempSync(join(tmpdir(), "agx-desk-"));
+    root = join(home, ".local", "state");
+    process.env.HOME = home;
+    delete process.env.XDG_STATE_HOME;
     __forgetDesktopPalette();
   });
+  /* Here rather than at the end of each test, so a failed assertion does not
+     leave its directory behind. */
+  afterEach(() => { rmSync(home, { recursive: true, force: true }); });
   afterAll(() => {
-    if (prior === undefined) delete process.env.XDG_STATE_HOME; else process.env.XDG_STATE_HOME = prior;
+    if (prior.home === undefined) delete process.env.HOME; else process.env.HOME = prior.home;
+    if (prior.state === undefined) delete process.env.XDG_STATE_HOME; else process.env.XDG_STATE_HOME = prior.state;
     __forgetDesktopPalette();
   });
 
   test("a desktop that publishes nothing answers null — the whole cost elsewhere", () => {
     expect(desktopPalette()).toBeNull();
-    rmSync(root, { recursive: true, force: true });
   });
 
   test("Omarchy's staged theme is read and named the way its menu names it", () => {
@@ -111,7 +118,22 @@ describe("where the desktop keeps it", () => {
     expect(p.source).toBe("omarchy");
     expect(p.name).toBe("Orbit Night");
     expect(p.theme.vars["--bg"]).toBe("#1a1b26");
-    rmSync(root, { recursive: true, force: true });
+  });
+
+  /* Omarchy's theme switch writes to $HOME/.local/state/omarchy/current and
+     never reads XDG_STATE_HOME. An instance started with its own
+     XDG_STATE_HOME — the way an isolated second copy of the app is run — read
+     an empty directory there, answered null, and offered no Omarchy mode on a
+     machine that was wearing an Omarchy theme. */
+  test("an XDG_STATE_HOME moved elsewhere does not hide the desktop's palette", () => {
+    const dir = join(root, "omarchy", "current");
+    mkdirSync(join(dir, "theme"), { recursive: true });
+    writeFileSync(join(dir, "theme", "colors.toml"), COLORS);
+    writeFileSync(join(dir, "theme.name"), "orbit-night");
+    const elsewhere = mkdtempSync(join(tmpdir(), "agx-desk-state-"));
+    process.env.XDG_STATE_HOME = elsewhere;
+    try { expect(desktopPalette()?.name).toBe("Orbit Night"); }
+    finally { rmSync(elsewhere, { recursive: true, force: true }); }
   });
 
   test("a switch on the desktop changes the stamp a client repaints on", () => {
@@ -128,7 +150,6 @@ describe("where the desktop keeps it", () => {
     expect(second.stamp).not.toBe(first);
     expect(second.name).toBe("Acme Dusk");
     expect(second.theme.vars["--bg"]).toBe("#0b0c10");
-    rmSync(root, { recursive: true, force: true });
   });
 });
 
