@@ -202,6 +202,8 @@ export type SidecarFailure = {
 type ShellBridge = {
   sidecarFailure?: SidecarFailure | null;
   onServerFailed?: (fn: (f: SidecarFailure | null) => void) => () => void;
+  /** The shell's verdict at call time; older shells do not have it. */
+  sidecarFailureNow?: () => SidecarFailure | null;
   /** Whether the shell has CONFIRMED a server, as opposed to not having seen
    *  one fail. Asked at call time; see whenServerUp. */
   sidecarUp?: () => boolean;
@@ -217,10 +219,29 @@ export function sidecarFailure(): SidecarFailure | null {
 }
 
 /** Everything the shell learns after that, failures and recoveries alike. A
- *  no-op unsubscribe outside the desktop, so the caller needs no branch. */
+ *  no-op unsubscribe outside the desktop, so the caller needs no branch.
+ *
+ *  Plus the failure it missed. What the preload read at load can be older than
+ *  the subscription: a server that exits on its first line fails after that
+ *  read and before the banner has mounted, and the push went to nobody — the
+ *  window then waited for ever on panels with no banner above them. Asked once,
+ *  after subscribing, so nothing can fall between the two. */
 export function onSidecarFailure(fn: (f: SidecarFailure | null) => void): () => void {
   if (!SHELL?.onServerFailed) return () => {};
-  return SHELL.onServerFailed(fn);
+  const off = SHELL.onServerFailed(fn);
+  const ask = SHELL.sidecarFailureNow;
+  if (ask) {
+    /* A recovery missed the same way leaves a stale banner up, so any change
+       from what the page read at load is handed over, null included. After
+       this returns, so a caller that unsubscribes from inside `fn` has its
+       handle by then. */
+    const loaded = JSON.stringify(SHELL.sidecarFailure ?? null);
+    queueMicrotask(() => {
+      const now = ask() ?? null;
+      if (JSON.stringify(now) !== loaded) fn(now);
+    });
+  }
+  return off;
 }
 
 /** What is answering at `SERVER`. `foreign` is the interesting one: something

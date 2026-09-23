@@ -87,7 +87,8 @@ Or run it from source:
 
 ```bash
 git clone https://github.com/SirAllap/agentglass && cd agentglass
-bun install && bun run dev          # http://localhost:4000
+bun install
+AGENTGLASS_STATE_DIR=~/.local/state/agentglass-dev bun run dev   # http://localhost:4000, its own database
 python3 hooks/install_hooks.py      # so Claude Code reports to it
 ```
 
