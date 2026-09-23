@@ -4432,7 +4432,7 @@ export function getSession(sessionId: string): import("../../shared/types.ts").S
   };
 }
 
-/** Full-text search across every event's prompts, commands and outputs. */
+/** Full-text search across every event's prompts, commands, paths, messages and errors — what `ftsText` indexes, which is not tool output. */
 /**
  * Turn what somebody typed into an fts5 MATCH expression.
  *

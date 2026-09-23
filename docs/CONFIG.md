@@ -270,7 +270,7 @@ Every route is behind the token and the origin/Host gates described in [Security
 | `POST /workspace` | Scope the cockpit at runtime: `{roots: [...]}` opens several projects together, all or nothing; `{root}` opens one; an empty list or `null` = whole machine. Persisted; what the project picker calls. |
 | `GET /git/repos?all=1` | The picker's list: repos under the added folders (`roots` in the answer). `&scan=1` is its explicit "look for projects" — every repo agents have run in. |
 | `GET /sessions?limit=` · `/session?id=` · `/agent/sessions?root=` | Session rollups; one session in full; resumable agent sessions for a repo, joined with the live panes. |
-| `GET /stats?window=` · `/insights` · `/search?q=` | The analytics summary; derived warnings (loops, fast burn, failure rate); full-text search over prompts, commands and outputs. |
+| `GET /stats?window=` · `/insights` · `/search?q=` | The analytics summary; derived warnings (loops, fast burn, failure rate); full-text search over prompts, commands, file paths, search patterns, notifications, final answers and errors (not tool output). |
 | `GET /usage` · `/usage/daily?days=` · `/usage/providers` · `POST /usage/codex/refresh` | Plan-limit windows; daily totals across the retention seam (rollup + live events); every provider's quota; a Codex quota refresh (spends a little quota, so opt-in). |
 | `POST /statusline` | A live Claude Code session hands over its plan-limit windows. Authenticated like any route, not an intake sink. |
 | `GET /skills` | Skills and commands scanned from `~/.claude` and `$AGENTGLASS_CODE_DIR/*/.claude`, joined with recorded usage. |
