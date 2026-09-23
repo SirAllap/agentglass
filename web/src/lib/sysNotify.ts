@@ -29,6 +29,10 @@ export type SystemNote = {
   key?: string;
   /** How many identical notes this row stands for, when more than one. */
   count?: number;
+  /** Counted on the badge until the bell is opened. A flag on the row rather
+   *  than a counter beside the list, so a row that is superseded, cleared,
+   *  dismissed or muted takes its count with it. */
+  unread?: true;
   /**
    * Somewhere in THIS app the note is about.
    *
@@ -106,7 +110,7 @@ export type NotifyCapability = {
 };
 
 import { gitDestination } from "./gitNote.ts";
-import { DESKTOP, deliveryFor, mutedSources, type Delivery } from "./notePolicy.ts";
+import { DESKTOP, deliveryFor, mutedSources, sourceOf, subscribeMuted, type Delivery } from "./notePolicy.ts";
 import { NOTIFY_VOICES, findVoice, playVoice } from "./sounds.ts";
 
 /* ---------------------------------------------------------------------------
@@ -426,7 +430,10 @@ function loadHistory(): SystemNote[] {
       && typeof (n as SystemNote).id === "string"
       && typeof (n as SystemNote).summary === "string"
       && typeof (n as SystemNote).at === "number"
-      && !!(n as SystemNote).goto).slice(0, HISTORY_MAX);
+      && !!(n as SystemNote).goto)
+      // Starting the app is looking — see `unread` below.
+      .map(({ unread: _, ...n }: SystemNote) => n)
+      .slice(0, HISTORY_MAX);
   } catch { return []; }
 }
 
@@ -441,9 +448,19 @@ let history: SystemNote[] = loadHistory();
  *
  * The badge means "new since you last looked", and starting the app is looking.
  * Restoring a count of eleven would make every launch shout about things you
- * read yesterday, which is how a badge stops being read at all.
+ * read yesterday, which is how a badge stops being read at all. So the flag is
+ * stripped on load.
+ *
+ * Counted off the rows rather than kept beside them: a counter had to be
+ * adjusted by every path that removes a row, and the ones that forgot — a
+ * keyed card cleared, a source muted — left a lit badge over nothing new.
  */
-let unread = 0;
+const unreadCount = (): number => {
+  // A muted source's rows are hidden, not deleted, so they must not light the
+  // bell either; an urgent one is never hidden.
+  const muted = mutedSources();
+  return history.reduce((n, h) => n + (h.unread && (h.urgency === 2 || !muted.has(sourceOf(h))) ? 1 : 0), 0);
+};
 const historyListeners = new Set<() => void>();
 
 /*
@@ -473,7 +490,10 @@ function fileNotesAlreadyHere(): void {
 setTimeout(fileNotesAlreadyHere, 2000);
 
 export const notifyHistory = (): SystemNote[] => history;
-export const notifyUnread = (): number => unread;
+export const notifyUnread = (): number => unreadCount();
+
+// A mute changes what the badge counts, so the bell is told as it is for a row.
+subscribeMuted(() => { for (const fn of historyListeners) fn(); });
 
 export function subscribeNotifyHistory(fn: () => void): () => void {
   historyListeners.add(fn);
@@ -540,7 +560,9 @@ export function fireDesktopAlert(a: {
   // are about a row that is already here, and neither is news: no popup, no
   // sound, no badge.
   if (a.key && a.clear) { dropKeyed(a.key); return; }
-  if (a.key && a.update) { redrawKeyed(a.key, a.title, a.body, a.pane); return; }
+  if (a.key && a.update) { redrawKeyed({ ...a, key: a.key }); return; }
+  // News about a keyed situation brings its row back even if it was dismissed.
+  if (a.key) dismissedKeys.delete(a.key);
   /*
    * The bell FIRST, above both guards.
    *
@@ -665,10 +687,7 @@ export function recordNote(n: {
   // way to say it that nobody has to clear afterwards.
   if (!said.keep) return said;
   const kept = supersede(history, note);
-  // The badge counted rows the list had already thrown away, so it climbed past
-  // what it was counting — sixty unread over a list that had never held sixty.
-  // Whatever supersede removed cannot still be waiting to be read.
-  unread = Math.max(0, unread - (history.length - kept.length));
+  if (said.badge) note.unread = true;
   history = [note, ...kept].slice(0, HISTORY_MAX);
   // Urgency 0 is the tier that was defined end to end and then honoured
   // nowhere: it survived the server, the socket and the frame, and died here on
@@ -679,7 +698,6 @@ export function recordNote(n: {
   // its pane, and silent. This is the line that makes the demotion in
   // alerts.ts mean anything; without it that change moves a number and nothing
   // else.
-  if (said.badge) unread++;
   if (said.interrupt) ding();
   historyChanged();
   return said;
@@ -694,15 +712,40 @@ function dropKeyed(key: string): void {
   historyChanged();
 }
 
-/** A keyed situation changed with nothing new in it: the row is redrawn where
- *  it stands, and only if it is still there — a row somebody dismissed stays
- *  dismissed until there is news. */
-function redrawKeyed(key: string, summary: string, body: string, pane?: string): void {
-  const i = history.findIndex((n) => n.key === key);
-  if (i < 0) return;
-  history = [...history];
-  const was = history[i]!;
-  history[i] = { ...was, summary, body, ...(pane ? { goto: { kind: "pane" as const, pane } } : {}) };
+/** Keys somebody dismissed by hand. A redraw does not bring their row back —
+ *  only news does. Session memory: a restart is a fresh look. */
+const dismissedKeys = new Set<string>();
+
+/**
+ * A keyed situation changed with nothing new in it: its row is redrawn where it
+ * stands, silently — no badge, no sound.
+ *
+ * Also how a client that was not attached when the card was announced gets it
+ * (the server sends the card as it stands on every attach), so a missing row
+ * is added rather than ignored. Unless somebody dismissed it: a row dismissed
+ * stays dismissed until there is news.
+ */
+function redrawKeyed(a: { key: string; title: string; body: string; urgency?: 0 | 1 | 2; pane?: string; source?: string }): void {
+  const i = history.findIndex((n) => n.key === a.key);
+  const drawn = (was?: SystemNote): SystemNote => {
+    const { goto: _, ...base } = was ?? { id: `app-${++localSeq}`, app: OUR_APP, at: Date.now() } as SystemNote;
+    return {
+      ...base,
+      summary: a.title, body: a.body, urgency: a.urgency ?? was?.urgency ?? 1, key: a.key,
+      ...(a.source ? { source: a.source } : {}),
+      // The pane the card points at NOW; one that resolved is not a destination.
+      ...(a.pane ? { goto: { kind: "pane" as const, pane: a.pane } } : {}),
+    };
+  };
+  if (i < 0) {
+    if (dismissedKeys.has(a.key)) return;
+    const row = drawn();
+    if (!deliveryFor(row, { muted: mutedSources(), quiet: notifyQuiet() }).keep) return;
+    history = [row, ...history].slice(0, HISTORY_MAX);
+  } else {
+    history = [...history];
+    history[i] = drawn(history[i]);
+  }
   historyChanged();
 }
 
@@ -756,19 +799,25 @@ function supersede(list: SystemNote[], next: SystemNote): SystemNote[] {
 const OUR_APP = "agentglass";
 
 export function markNotifyRead() {
-  if (!unread) return;
-  unread = 0;
+  if (!history.some((n) => n.unread)) return;
+  history = history.map((n) => {
+    if (!n.unread) return n;
+    const { unread: _, ...read } = n;
+    return read;
+  });
   historyChanged();
 }
 
 export function dismissNote(id: string) {
+  const key = history.find((n) => n.id === id)?.key;
+  if (key) dismissedKeys.add(key);
   history = history.filter((n) => n.id !== id);
   historyChanged();
 }
 
 export function clearNotes() {
+  for (const n of history) if (n.key) dismissedKeys.add(n.key);
   history = [];
-  unread = 0;
   historyChanged();
 }
 
@@ -955,8 +1004,8 @@ export function receiveMirrored(n: SystemNote): void {
   const twin = history.find((h) => h.source === src && h.summary === n.summary && h.body === n.body);
   if (twin) n = { ...n, count: (twin.count ?? 1) + 1 };
   const rest = supersede(history, n).filter((h) => h !== twin);
+  if (said.badge) n = { ...n, unread: true };
   history = [n, ...rest].slice(0, HISTORY_MAX);
-  if (said.badge) unread++;
   historyChanged();
   // …and the one that has to be asked rather than read. Fires after the row
   // is already on screen, because a card that resolves in 20ms is not worth

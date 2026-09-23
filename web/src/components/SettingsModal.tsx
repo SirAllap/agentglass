@@ -4207,7 +4207,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                     <Group>From agentglass</Group>
                     <Toggle on={own} onClick={() => setAppNotify(!own)}
                       label="agentglass's own notifications"
-                      hint="Chats finishing, branches falling behind, checks going red. Anything held waiting on you still speaks — that one cannot be caught up on later — and everything keeps landing in the bell either way." />
+                      hint="Chats finishing, branches falling behind, checks going red. With Quiet on, above, only what is stopped interrupts either way; this switch decides the rest once Quiet is off. Everything keeps landing in the bell." />
                     <Toggle on={sound} onClick={onSound}
                       label="Alert sounds"
                       hint="A chime when a session errors or needs you" />

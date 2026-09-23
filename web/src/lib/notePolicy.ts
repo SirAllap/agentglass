@@ -29,7 +29,7 @@ import type { SystemNote } from "./sysNotify.ts";
 /** Sources that stop an agent or answer a promise the person made. Muting
  *  one would turn "stop interrupting me" into "an agent blocked and nobody
  *  said", so the mute control is not offered for them. */
-const UNMUTABLE = new Set(["gate", "understudy", "reminder"]);
+const UNMUTABLE = new Set(["gate", "understudy", "reminder", "devices"]);
 export const canMute = (source: string): boolean => !UNMUTABLE.has(source);
 
 export const DESKTOP = "desktop:";
@@ -48,6 +48,7 @@ const LABELS: Record<string, string> = {
   errors: "Failing agents",
   understudy: "Deputy",
   reminder: "Reminders",
+  devices: "Paired devices",
   schedule: "Scheduled starts",
   chat: "Chats",
   git: "Branches behind",

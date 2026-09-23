@@ -127,6 +127,43 @@ describe("the list", () => {
     expect(rows("lantern")).toHaveLength(0);
   });
 
+  test("the badge goes with its row: a cleared card or a muted source leaves no lit bell", () => {
+    sysNotify.clearNotes();
+    sysNotify.fireDesktopAlert({ title: "🔦 Lantern: 1 looks forgotten", body: "a", urgency: 1, key: "lantern", source: "lantern" });
+    expect(sysNotify.notifyUnread()).toBe(1);
+    sysNotify.fireDesktopAlert({ title: "", body: "", urgency: 0, key: "lantern", clear: true });
+    expect(sysNotify.notifyUnread()).toBe(0);
+    sysNotify.fireDesktopAlert({ title: "t", body: "b", urgency: 1, key: "lantern", source: "lantern" });
+    policy.setMuted("lantern", true);
+    expect(sysNotify.notifyUnread(), "a muted row does not light the bell").toBe(0);
+    policy.setMuted("lantern", false);
+    expect(sysNotify.notifyUnread()).toBe(1);
+    sysNotify.markNotifyRead();
+    expect(sysNotify.notifyUnread()).toBe(0);
+  });
+
+  test("a redraw carries the card's standing level, both ways", () => {
+    sysNotify.clearNotes();
+    sysNotify.fireDesktopAlert({ title: "1 needs you", body: "a", urgency: 2, key: "lantern", source: "lantern", pane: "%1" });
+    sysNotify.fireDesktopAlert({ title: "1 looks forgotten", body: "b", urgency: 1, key: "lantern", source: "lantern", update: true });
+    expect(rows("lantern")[0]).toMatchObject({ urgency: 1, summary: "1 looks forgotten" });
+    expect(rows("lantern")[0]!.goto, "a resolved pane is not a destination").toBeUndefined();
+    sysNotify.fireDesktopAlert({ title: "1 needs you", body: "c", urgency: 2, key: "lantern", source: "lantern", update: true });
+    expect(rows("lantern")[0]).toMatchObject({ urgency: 2 });
+  });
+
+  test("a client that missed the announcement gets the card from the snapshot, silently", () => {
+    sysNotify.clearNotes();
+    // clearNotes counts as dismissing; a fresh session has no dismissed keys,
+    // which news restores.
+    sysNotify.fireDesktopAlert({ title: "x", body: "", urgency: 1, key: "lantern", source: "lantern" });
+    sysNotify.fireDesktopAlert({ title: "", body: "", urgency: 0, key: "lantern", clear: true });
+    sysNotify.markNotifyRead();
+    sysNotify.fireDesktopAlert({ title: "🔦 Lantern: 1 needs you", body: "a", urgency: 2, key: "lantern", source: "lantern", update: true });
+    expect(rows("lantern")).toHaveLength(1);
+    expect(sysNotify.notifyUnread(), "a snapshot is not news").toBe(0);
+  });
+
   test("a redraw does not bring back a card somebody dismissed", () => {
     sysNotify.clearNotes();
     sysNotify.fireDesktopAlert({ title: "t", body: "b", urgency: 1, key: "lantern", source: "lantern" });
