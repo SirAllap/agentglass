@@ -37,7 +37,7 @@ describe("the console's engine session", () => {
     if (!desk || !con) return;
     expect(con.length).toBe(desk.length);
     expect(con.filter((a, i) => a !== desk[i]).length).toBe(1);
-    expect(con).toContain("-L");
+    expect(con).toContain("-S");
     expect(con).toContain("-f");
     expect(con).toContain("-A");
   });

@@ -30,10 +30,11 @@
 //
 // The user's own ~/.tmux.conf is never involved in any of this: the conf the
 // engine runs is agentglass's own (see tmuxconf.ts), whatever binary wins.
-import { existsSync, accessSync, constants } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, accessSync, constants, lstatSync, mkdirSync, realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join, dirname } from "node:path";
-import { tmuxSource, tmuxPathSetting } from "./config.ts";
+import { join, dirname, resolve } from "node:path";
+import { tmuxSource, tmuxPathSetting, configDirRedirected } from "./config.ts";
 
 /** Override that beats everything: AGENTGLASS_TMUX_PATH=/usr/bin/tmux. */
 const ENV_OVERRIDE = "AGENTGLASS_TMUX_PATH";
@@ -87,7 +88,89 @@ function usable(p: string): boolean {
  *  process, so a module-level constant would be decided by whichever test file
  *  imported this module first — and here that means a test's redirected socket
  *  silently reverting to the real one the running app is using. */
-export const tmuxSocket = (): string => process.env.AGENTGLASS_TMUX_SOCKET || "agentglass";
+export const tmuxSocket = (): string => {
+  const asked = process.env.AGENTGLASS_TMUX_SOCKET;
+  if (asked) return asked;
+  if (!throwawayConfig() || !sharedTmuxDir()) return "agentglass";
+  return throwawaySocketName();
+};
+
+/*
+ * A THROWAWAY INSTANCE DOES NOT SHARE THE ENGINE'S SOCKET.
+ *
+ * tmuxconf.ts already gives an instance with a redirected config a conf file of
+ * its own, and that stopped it rewriting the real engine's file. It did not stop
+ * it SOURCING its own file into the real engine: every boot runs `source-file
+ * <conf>` on the engine socket (see reloadEngineConf), and with no TMUX_TMPDIR
+ * of its own that socket is /tmp/tmux-<uid>/agentglass — the installed app's.
+ * A throwaway config sets no prefix, so its conf says `set -g prefix C-b`, and
+ * the real engine sat on C-b until the real app's prefix heal (once per 30 s
+ * per socket) put its own conf back.
+ *
+ * Measured with a read-only poller on the engine: C-f to C-b for 30 s, 15 s,
+ * 28 s and 24 s within half an hour, the server never restarting. Booting one
+ * server with a temporary XDG_CONFIG_HOME and no TMUX_TMPDIR, behind a tmux
+ * that records where each call lands:
+ *   tmux -L agentglass -f <tmp>/state/tmux/tmux-<hash>.conf source-file <same>
+ *
+ * "Throwaway" is a config dir under the temp directory, not any redirected
+ * XDG_CONFIG_HOME. A person can point XDG_CONFIG_HOME anywhere, and renaming
+ * the socket of an installed app would orphan every pane on its running server;
+ * nobody keeps a real config in /tmp. The hash is over the config dir, so a
+ * restart finds the server it left. Those servers are not reaped: one exists
+ * only once the instance started a session, which used to land on the real
+ * engine instead.
+ */
+function throwawayConfig(): boolean {
+  if (!configDirRedirected()) return false;
+  const dir = configHome();
+  return tempRoots().some((t) => dir === t || dir.startsWith(`${t}/`));
+}
+
+/** XDG_CONFIG_HOME itself rather than its `agentglass/` child: the child is made
+ *  lazily, and a path that does not exist yet cannot be realpathed — so the
+ *  answer, and the hash below, would change the moment a setting is saved. */
+function configHome(): string {
+  return real(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"));
+}
+
+/** Both spellings of each: where /tmp or $TMPDIR is a symlink (macOS), a path
+ *  that exists realpaths through it and one that does not yet stays lexical. */
+function tempRoots(): string[] {
+  return [...new Set(["/tmp", tmpdir()].flatMap((t) => [resolve(t), real(t)]))];
+}
+
+function sharedTmuxDir(): boolean {
+  const dir = process.env.TMUX_TMPDIR;
+  return !dir || real(dir) === real("/tmp");
+}
+
+/** realpath of the nearest part that exists, with the rest appended: tmux
+ *  realpaths TMUX_TMPDIR, so a link to /tmp is /tmp, and a directory that is not
+ *  made yet must spell the same as it will once it is. */
+function real(p: string): string {
+  const abs = resolve(p);
+  let head = abs;
+  const rest: string[] = [];
+  for (;;) {
+    try { return join(realpathSync(head), ...rest.reverse()); } catch { /* not there yet */ }
+    const up = dirname(head);
+    if (up === head) return abs;
+    rest.push(head.slice(up.length).replace(/^\//, ""));
+    head = up;
+  }
+}
+
+let throwawayFor = "";
+let throwawayName = "";
+function throwawaySocketName(): string {
+  const dir = configHome();
+  if (dir !== throwawayFor) {
+    throwawayFor = dir;
+    throwawayName = `agentglass-${createHash("sha256").update(dir).digest("hex").slice(0, 8)}`;
+  }
+  return throwawayName;
+}
 
 /** The socket file tmux would create for it: `$TMUX_TMPDIR/tmux-<uid>/<name>`,
  *  with /tmp as the default base — tmux's own rule. */
@@ -95,6 +178,54 @@ function socketFile(): string {
   const base = process.env.TMUX_TMPDIR || "/tmp";
   const uid = typeof process.getuid === "function" ? process.getuid() : 0;
   return join(base, `tmux-${uid}`, tmuxSocket());
+}
+
+/*
+ * HOW EVERY ENGINE CALL NAMES ITS SERVER: by path, never by label.
+ *
+ * `-L <name>` does not mean "$TMUX_TMPDIR/tmux-<uid>/<name>". It means that
+ * when the directory can be made, and /tmp/tmux-<uid>/<name> when it cannot —
+ * tmux walks "$TMUX_TMPDIR:/tmp" and takes the first entry that works, so a
+ * TMUX_TMPDIR that does not exist is silently the developer's own directory.
+ * Measured: `TMUX_TMPDIR=/nonexistent tmux -L x ls` answers "error connecting
+ * to /tmp/tmux-1000/x".
+ *
+ * That was not hypothetical here. The test helper handed every server it
+ * booted the same /tmp/agx-test-tmux, and the run that created it removed it
+ * when it finished while other runs on the machine were still booting servers
+ * with it:
+ * each of those, isolated config and all, sourced its C-b conf into the real
+ * engine. The prefix flipped twice more that way after the socket rename above
+ * was in place, each time as such a server started.
+ *
+ * `-S` has no fallback, so a missing directory is an error instead of a
+ * stranger's server. A call that may START the server passes `make`, and the
+ * directory is made then, 0700 as tmux makes its own, because `-S` does not
+ * create the directory that `-L` would have. The rest only ever talk to a
+ * server that is already there, and stay free of side effects. For the ordinary install
+ * the path is the same socket file as before, and the running server is kept.
+ */
+export function engineSocketArgs(make = false): string[] {
+  const file = socketFile();
+  if (!make) return ["-S", file];
+  const dir = dirname(file);
+  try { mkdirSync(dir, { recursive: true, mode: 0o700 }); } catch { /* tmux will say why */ }
+  /*
+   * And the check `-L` made for us, made here. tmux refuses a socket directory
+   * that is a link, not ours, or open to anyone else ("has unsafe
+   * permissions"); `-S` skips that check entirely — measured on tmux 3.7c with
+   * a 0777 `tmux-<uid>`. mkdir on a directory that already exists changes
+   * nothing, so a directory somebody else made first would be used as it is.
+   * Handed back to `-L` in that case, where tmux refuses it itself.
+   */
+  try {
+    const st = lstatSync(dir);
+    const uid = typeof process.getuid === "function" ? process.getuid() : null;
+    if (!st.isDirectory() || (uid !== null && st.uid !== uid) || (st.mode & 0o077) !== 0) {
+      return ["-L", tmuxSocket()];
+    }
+  } catch { /* not there after all: -S fails, which is the point */ }
+  return ["-S", file];
 }
 
 /** Is there a server to be compatible WITH? Just the socket's existence: a
@@ -127,7 +258,7 @@ const PROBE_SESSION = "__agentglass_probe__";
  *  two above means the two speak. */
 function speaksToServer(bin: string): boolean {
   try {
-    const r = Bun.spawnSync([bin, "-L", tmuxSocket(), "has-session", "-t", PROBE_SESSION], { stdout: "pipe", stderr: "pipe" });
+    const r = Bun.spawnSync([bin, ...engineSocketArgs(), "has-session", "-t", PROBE_SESSION], { stdout: "pipe", stderr: "pipe" });
     return !/protocol version mismatch|server exited unexpectedly/i.test(r.stderr.toString());
   } catch {
     return false; // unaskable binary: wrong arch, missing loader, not a tmux

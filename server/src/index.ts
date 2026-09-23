@@ -149,7 +149,7 @@ import { withAgentSessions } from "./paneloc.ts";
 import { notePaneFromHook, paneDirs, paneAgentNote } from "./panewt.ts";
 import { chatSend, activeTurns, CHAT_ENABLED, CHAT_BYPASS_ALLOWED, CHAT_ENGINE_DEFAULT } from "./chat.ts";
 import { paneEngineCapability, attachCommand, validPaneName } from "./chatpane.ts";
-import { tmuxBinStatus, tmuxSocket } from "./tmuxbin.ts";
+import { tmuxBinStatus, tmuxSocket, engineSocketArgs } from "./tmuxbin.ts";
 import { applyTmuxConf, resetTmuxConf, confHealth, ensureConf, sweepStaleConfs } from "./tmuxconf.ts";
 import { captureLayout, restoreLayout, clearRestoreState, lastCaptureAt, startRestoreSweeper, noteLaunch, forgetSession, noteCrashLoop, crashLoopWarning, captureLayoutSync } from "./tmuxrestore.ts";
 import {
@@ -8354,7 +8354,7 @@ reapMirrorSessions();
    an hour from now is not this moment's problem. Measured: nine live mirrors
    against zero records, each one carrying its own copy of four windows with a
    `claude --resume` inside every one — 525 MCP processes and 13 GB. */
-startMirrorSweeper(["-L", tmuxSocket()]);
+startMirrorSweeper(engineSocketArgs());
 
 /*
  * Runs left `running` by a server that is no longer here.

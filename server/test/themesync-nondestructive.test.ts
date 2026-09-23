@@ -130,7 +130,10 @@ describe("syncTheme never edits the user's own config", () => {
     const saved = process.env.AGENTGLASS_TMUX_SOCKET;
     process.env.AGENTGLASS_TMUX_SOCKET = "agx-theme-test";
     try {
-      expect(ts.themeTmuxTarget()).toEqual(["-L", "agx-theme-test"]);
+      // By path: `-L` falls back to /tmp/tmux-<uid> when TMUX_TMPDIR is gone.
+      const [flag, file] = ts.themeTmuxTarget();
+      expect(flag).toBe("-S");
+      expect(file!.endsWith("/agx-theme-test")).toBe(true);
     } finally {
       if (saved === undefined) delete process.env.AGENTGLASS_TMUX_SOCKET;
       else process.env.AGENTGLASS_TMUX_SOCKET = saved;

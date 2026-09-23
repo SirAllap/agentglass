@@ -17,7 +17,7 @@
 // thing to hand them.
 import { tmpdir } from "node:os";
 import { failed } from "./refused.ts";
-import { resolveTmuxBin, tmuxSocket } from "./tmuxbin.ts";
+import { resolveTmuxBin, tmuxSocket, engineSocketArgs } from "./tmuxbin.ts";
 import { confPath, confHealth, ensureConf } from "./tmuxconf.ts";
 /* The restore layer is bookkeeping ON TOP of this one, and it already imports
    this file — so it hands its recorder down here instead of us reaching up for
@@ -81,7 +81,7 @@ export function engineAttachArgv(root: string): string[] | null {
   if (!bin) return null;
   if (!confHealth().ok) return null;
   ensureConf();
-  return [bin, "-L", tmuxSocket(), "-f", confPath(), "new-session", "-A", "-s", engineSessionName(root), "-c", root];
+  return [bin, ...engineSocketArgs(true), "-f", confPath(), "new-session", "-A", "-s", engineSessionName(root), "-c", root];
 }
 
 /**
@@ -206,7 +206,7 @@ export interface TmuxResult { ok: boolean; stdout: string; stderr: string }
 export async function tmux(args: string[], stdin?: string): Promise<TmuxResult> {
   const bin = resolveTmuxBin();
   if (!bin) return { ok: false, stdout: "", stderr: "tmux is not installed" };
-  const argv = [bin, "-L", tmuxSocket(), "-f", confPath(), ...args];
+  const argv = [bin, ...engineSocketArgs(true), "-f", confPath(), ...args];
   try {
     const proc = Bun.spawn(argv, {
       stdin: stdin === undefined ? "ignore" : new TextEncoder().encode(stdin),

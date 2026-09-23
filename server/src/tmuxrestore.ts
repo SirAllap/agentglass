@@ -26,7 +26,7 @@ import { join } from "node:path";
 import { tmuxStateDir } from "./tmuxbin.ts";
 import { tmux, listPanes, validSessionName, tmuxSocket, setCaptureHook } from "./tmuxpane.ts";
 import { confPath } from "./tmuxconf.ts";
-import { resolveTmuxBin } from "./tmuxbin.ts";
+import { resolveTmuxBin, engineSocketArgs } from "./tmuxbin.ts";
 import { paneAgentNote } from "./panewt.ts";
 import { claudeCode } from "./agents/claudecode.ts";
 import { LANTERN_PROMPT_MARK } from "./lanternmark.ts";
@@ -561,7 +561,7 @@ export function captureLayoutSync(now = Date.now()): void {
     if (restoring || capturingHalted()) return;
     const bin = resolveTmuxBin();
     if (!bin) return;
-    const r = Bun.spawnSync([bin, "-L", tmuxSocket(), "-f", confPath(), "list-sessions", "-F", "#{session_name}"],
+    const r = Bun.spawnSync([bin, ...engineSocketArgs(), "-f", confPath(), "list-sessions", "-F", "#{session_name}"],
       { stdout: "pipe", stderr: "pipe", env: process.env });
     const names = new TextDecoder().decode(r.stdout).split("\n").map((n) => n.trim())
       .filter((n) => n && validSessionName(n));
