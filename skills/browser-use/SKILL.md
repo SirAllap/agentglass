@@ -114,11 +114,17 @@ batch       do (and `lanes` for several pages at once)
 
 ## The things worth knowing before you start
 
-Acts are as close to a person as a page can tell without lying. `click` and
-the point acts run with a user activation and the page believing it has focus
-for the length of the act, so a clipboard write or a popup a click is allowed
-to make works; `hover` also moves a real pointer, so `:hover` matches. Events
-you cause from a script are still `isTrusted: false`; nothing here fakes that.
+Acts are as close to a person as a page can tell without lying. `click`
+runs with a user activation and the page believing it has focus for the length
+of the act, so a clipboard write or a popup a click is allowed to make works.
+That is a real grant: a hostile page can use it to write the person's clipboard
+or open a window, so click only what the task needs. `hover`, `dblclick`,
+`rightclick` and `check` carry no activation. `hover` also moves a real pointer,
+so `:hover` matches. Events you cause from a script are still `isTrusted:
+false`; nothing here fakes that. `type` reaches rich editors (contenteditable).
+`handoff` ends only on the person's own click on its Done button, on `--until`
+(a selector, or a path judged on the URL's pathname, never its query), or on a
+navigation (`navigated`); a page cannot end it by itself.
 Raw `cdp Input.*` stays refused: it lands in the app's own window.
 
 **Stable ids beat invented selectors.** Every node in an `observe` comes with an

@@ -1247,7 +1247,7 @@ export function auditAsScript(entries: AuditEntry[]): string {
       case "back": case "forward": line = `agentglass-browser ${e.op}`; break;
       case "dialog":
         line = a.accept === true || a.dismiss === true
-          ? `agentglass-browser dialog --${a.accept === true ? "accept" : "dismiss"}${a.always === true ? " --always" : ""}` : null;
+          ? `agentglass-browser dialog --${a.accept === true ? "accept" : "dismiss"}${a.always === true ? " --always" : ""}${typeof a.text === "string" ? " --text '<withheld>'" : ""}` : null;
         break;
       default: line = null;
     }
@@ -2225,6 +2225,8 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
         if (typeof b.text !== "string" || b.text.length > 2000) return { error: "text must be a string of at most 2000 characters" };
         if (args.dismiss === true) return { error: "text answers a prompt that is accepted; a dismissed one has none" };
         args.text = b.text;
+        /* A text answers a prompt that is accepted: naming it arms an accept, not nothing. */
+        if (args.accept !== true) args.accept = true;
       }
       if (args.always === true && args.accept !== true && args.dismiss !== true) return { error: "always needs accept or dismiss" };
       break;

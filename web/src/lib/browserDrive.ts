@@ -1210,66 +1210,155 @@ async function navigateTo(el: DrivableWebview, url: string): Promise<{ ok: true;
  * whatever the route produces — and it is switched off in `finally`, so a page
  * does not go on believing it has focus after the agent has left.
  */
-async function withFocus<T>(cdp: (m: string, p?: unknown) => Promise<{ ok: boolean; error?: string }>, act: () => Promise<T>): Promise<T> {
-  const on = await cdp("Emulation.setFocusEmulationEnabled", { enabled: true }).catch(() => ({ ok: false }));
+const focusUsers = new WeakMap<object, number>();
+export async function withFocus<T>(
+  el: object,
+  cdp: (m: string, p?: unknown) => Promise<{ ok: boolean; error?: string }>,
+  act: () => Promise<T>,
+  boundMs = 40_000,
+): Promise<T> {
+  /* One switch per guest, shared by every act on it: the first turns it on and
+     the last turns it off, so an act that ends cannot take the focus out from
+     under another that is still typing. And the act is bounded, so a page that
+     froze or navigated away cannot leave the flag on for ever. */
+  const n = focusUsers.get(el) ?? 0;
+  focusUsers.set(el, n + 1);
+  if (n === 0) await cdp("Emulation.setFocusEmulationEnabled", { enabled: true }).catch(() => ({ ok: false }));
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await act();
+    return await Promise.race([
+      act(),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("the act did not finish in time")), boundMs); }),
+    ]);
   } finally {
-    if (on.ok) await cdp("Emulation.setFocusEmulationEnabled", { enabled: false }).catch(() => {});
+    clearTimeout(timer);
+    const left = (focusUsers.get(el) ?? 1) - 1;
+    if (left <= 0) {
+      focusUsers.delete(el);
+      await cdp("Emulation.setFocusEmulationEnabled", { enabled: false }).catch(() => {});
+    } else focusUsers.set(el, left);
   }
 }
 
 /**
- * `handoff`: the page, given to the person for what an agent must not do —
- * a CAPTCHA, a 2FA code, a consent. A banner on the page says why and has a
- * Done button; the agent's side checks in short waits (the CLI loops), so no
- * request is held open for minutes. The plan lives in the document: if the
- * page navigates the plan is gone, and a check says `navigated` — for a
- * sign-in that is usually the person finishing, and it is reported as what it
- * is rather than as success.
+ * `handoff`: the page, given to the person for what an agent must not do — a
+ * CAPTCHA, a 2FA code, a consent.
+ *
+ * WHO SAYS "DONE" IS NOT THE PAGE. The plan lives here, in the shell, keyed by
+ * the guest; nothing about it is in the page's reach. The banner is drawn in a
+ * closed shadow root, and its Done button counts only for a TRUSTED click (a
+ * script's `click()` or `dispatchEvent` is not one), which reports through a
+ * pristine console taken from a throwaway frame with a nonce the page never
+ * sees. The wait runs here too, so a navigation cannot destroy it: it ends the
+ * handoff as `navigated`. The ceiling: a page that hooks the DOM before the
+ * handoff is armed can watch it being set up; it still cannot press Done.
+ * `until` is judged from the URL the shell reads (path, never the query), or
+ * for a selector from the page, which is the agent's own condition to trust.
  */
-function handoffScript(a: { reason?: string; until?: string; check?: boolean; waitMs?: number; cancel?: boolean }): string {
-  return `(async () => {
+type HandoffState = { nonce: string; until: string | null; done: boolean; navigated: boolean; off: () => void };
+const handoffs = new WeakMap<object, HandoffState>();
+
+/** Whether `until` (a path from `/`, or an http url) holds for `url`: the
+ *  PATHNAME equal to it or under it at a `/` boundary. A query never matches, so
+ *  a login page carrying `?next=/dashboard` is not the dashboard. */
+export function handoffUrlMet(until: string, url: string): boolean {
+  let u: URL;
+  try { u = new URL(url); } catch { return false; }
+  let want = "";
+  if (until.startsWith("/")) want = until.split(/[?#]/)[0]!;
+  else if (/^https?:\/\//i.test(until)) {
+    try {
+      const w = new URL(until);
+      if (w.origin !== u.origin) return false;
+      want = w.pathname;
+    } catch { return false; }
+  } else return false;
+  const base = want.endsWith("/") ? want.slice(0, -1) : want;
+  return u.pathname === want || u.pathname === base || u.pathname.startsWith(base + "/");
+}
+
+const isUrlUntil = (u: string) => u.startsWith("/") || /^https?:\/\//i.test(u);
+
+function bannerScript(reason: string, nonce: string): string {
+  return `(() => {
     const ID = "__agx_handoff__";
-    const clear = () => { const b = document.getElementById(ID); if (b) b.remove(); };
-    const info = (state) => ({ state, url: location.href, title: document.title });
-    ${a.cancel ? `clear(); window.__agxHandoff = null; return info("cancelled");` : ""}
-    ${a.reason ? `
-    clear();
-    const fresh = { done: false, reason: ${jsLit(a.reason)}, until: ${a.until ? jsLit(a.until) : "null"} };
-    window.__agxHandoff = fresh;
+    const old = document.getElementById(ID);
+    if (old) old.remove();
+    /* A console the page has not touched: from a frame made for the purpose. */
+    const f = document.createElement("iframe");
+    f.style.display = "none";
+    document.documentElement.appendChild(f);
+    const say = f.contentWindow.console.log.bind(f.contentWindow.console);
+    const host = document.createElement("div");
+    host.id = ID;
+    host.style.cssText = "position:fixed;left:0;right:0;top:0;z-index:2147483647";
+    const root = host.attachShadow({ mode: "closed" });
     const bar = document.createElement("div");
-    bar.id = ID;
-    bar.style.cssText = "position:fixed;left:0;right:0;top:0;z-index:2147483647;display:flex;gap:12px;align-items:center;padding:10px 16px;background:#1f3a5f;color:#fff;font:600 14px system-ui,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.4)";
+    bar.style.cssText = "display:flex;gap:12px;align-items:center;padding:10px 16px;background:#1f3a5f;color:#fff;font:600 14px system-ui,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.4)";
     const msg = document.createElement("span");
-    msg.textContent = "An agent needs you: " + fresh.reason;
+    msg.textContent = "An agent needs you: " + ${jsLit(reason)};
     const done = document.createElement("button");
     done.textContent = "Done";
     done.style.cssText = "margin-left:auto;padding:4px 14px;font:600 14px system-ui;cursor:pointer";
-    done.addEventListener("click", () => { fresh.done = true; clear(); });
+    done.addEventListener("click", (e) => {
+      if (!e.isTrusted) return;
+      say("agx-handoff-done:" + ${jsLit(nonce)});
+      host.remove();
+    });
     bar.append(msg, done);
-    document.body.appendChild(bar);
-    return info("armed");` : ""}
-    ${a.check ? `
-    const plan = window.__agxHandoff;
-    if (!plan) return info("navigated");
-    const met = () => {
-      if (plan.done) return "done";
-      if (plan.until) {
-        if (plan.until[0] === "/" || plan.until.startsWith("http")) { if (location.href.indexOf(plan.until) !== -1) return "condition"; }
-        else { try { if (document.querySelector(plan.until)) return "condition"; } catch (e) {} }
-      }
-      return null;
-    };
-    const end = Date.now() + ${Math.max(0, Math.min(25000, Number(a.waitMs ?? 0)))};
-    for (;;) {
-      const m = met();
-      if (m) { clear(); window.__agxHandoff = null; return info(m); }
-      if (!window.__agxHandoff) return info("navigated");
-      if (Date.now() >= end) return info("waiting");
-      await new Promise((r) => setTimeout(r, 300));
-    }` : ""}
+    root.append(bar);
+    document.body.appendChild(host);
+    return true;
   })()`;
+}
+
+async function runHandoff(
+  el: DrivableWebview,
+  a: { reason?: string; until?: string; check?: boolean; waitMs?: number; cancel?: boolean },
+): Promise<{ ok: true; value: Record<string, unknown> } | { ok: false; error: string }> {
+  const info = (state: string) => ({ state, url: el.getURL(), title: el.getTitle() });
+  const end = async () => {
+    const st = handoffs.get(el);
+    if (!st) return;
+    handoffs.delete(el);
+    st.off();
+    await within(el.executeJavaScript(`(() => { const b = document.getElementById("__agx_handoff__"); if (b) b.remove(); })()`), 1500);
+  };
+  if (a.cancel) { await end(); return { ok: true, value: info("cancelled") }; }
+  if (a.reason) {
+    await end();
+    const until = a.until ?? null;
+    if (until && isUrlUntil(until) && handoffUrlMet(until, el.getURL())) {
+      return { ok: false, error: `until ${until} is already true for this page — the handoff would end before the person had done anything` };
+    }
+    const nonce = crypto.randomUUID();
+    const st: HandoffState = { nonce, until, done: false, navigated: false, off: () => {} };
+    const onMsg = (e: Event) => { if ((e as unknown as { message?: string }).message === "agx-handoff-done:" + nonce) st.done = true; };
+    const onNav = () => { st.navigated = true; };
+    el.addEventListener("console-message", onMsg);
+    el.addEventListener("did-navigate", onNav);
+    st.off = () => { el.removeEventListener("console-message", onMsg); el.removeEventListener("did-navigate", onNav); };
+    handoffs.set(el, st);
+    const drew = await within(el.executeJavaScript(bannerScript(a.reason, nonce)), 5000);
+    if (drew !== true) { await end(); return { ok: false, error: "could not put the banner on this page" }; }
+    return { ok: true, value: info("armed") };
+  }
+  const st = handoffs.get(el);
+  if (!st) return { ok: true, value: info("none") };
+  const stop = Date.now() + Math.max(0, Math.min(25_000, Number(a.waitMs ?? 0)));
+  for (;;) {
+    let state: string | null = null;
+    if (st.done) state = "done";
+    else if (st.until && isUrlUntil(st.until) && handoffUrlMet(st.until, el.getURL())) state = "condition";
+    else if (st.until && !isUrlUntil(st.until)) {
+      const hit = await within(el.executeJavaScript(`(() => { try { return !!document.querySelector(${jsLit(st.until)}); } catch (e) { return false; } })()`), 1500);
+      if (hit === true) state = "condition";
+    }
+    if (!state && st.navigated) state = "navigated";
+    if (state) { await end(); return { ok: true, value: info(state) }; }
+    if (Date.now() >= stop) return { ok: true, value: info("waiting") };
+    await new Promise((r) => setTimeout(r, 200));
+  }
 }
 
 /** `reload`'s: hard by default, and wait for it. */
@@ -1688,11 +1777,8 @@ async function runVerb(
       case "a11y":
         return { ok: true, value: await el.executeJavaScript(A11Y_SCRIPT) };
 
-      case "handoff": {
-        const a = ask.args as { reason?: string; until?: string; check?: boolean; waitMs?: number; cancel?: boolean };
-        const value = await el.executeJavaScript(handoffScript(a));
-        return { ok: true, value };
-      }
+      case "handoff":
+        return await runHandoff(el, ask.args as { reason?: string; until?: string; check?: boolean; waitMs?: number; cancel?: boolean });
 
       case "dialog": {
         const a = ask.args as { accept?: boolean; dismiss?: boolean; text?: string; always?: boolean };
@@ -1726,7 +1812,7 @@ async function runVerb(
         // WHAT is wrong rather than landing on the wrong thing in silence.
         const before = el.getURL();
         const watch = watchNavigation(el);
-        const hit = await withFocus(cdp, () => el.executeJavaScript(resolveOne(sel,
+        const hit = await withFocus(el, cdp, () => el.executeJavaScript(resolveOne(sel,
           `return (${actionable()}).then((r) => {
              if (!r.ok) return { kind: "blocked", reason: r.reason };
              const t0 = ${MUTATIONS_ON};
@@ -1773,14 +1859,17 @@ async function runVerb(
                  if (set && set.set) set.set.call(e, wantOn); else e.checked = wantOn;
                  e.dispatchEvent(new Event("input", { bubbles: true }));
                  e.dispatchEvent(new Event("change", { bubbles: true }));`;
-        const hit = await withFocus(cdp, () => el.executeJavaScript(resolveOne(sel,
+        /* No user activation and no emulated focus here: a hover, a right-click or a
+           checkbox must not be able to open a window or write the clipboard, which
+           a real one never grants a page. `click` alone carries a gesture. */
+        const hit = await el.executeJavaScript(resolveOne(sel,
           `return (${actionable()}).then((r) => {
              if (!r.ok) return { kind: "blocked", reason: r.reason };
              ${dispatch}
              const b = e.getBoundingClientRect();
              return { kind: "ok", x: b.x + b.width / 2, y: b.y + b.height / 2 };
            });`,
-        ), true)) as { kind: string; reason?: string; x?: number; y?: number } | boolean;
+        ))  as { kind: string; reason?: string; x?: number; y?: number } | boolean;
         if (!hit || (hit as { kind: string }).kind !== "ok") {
           return { ok: false, error: actionError(String(ask.args.selector ?? ""), hit as never) };
         }
@@ -1859,7 +1948,7 @@ async function runVerb(
         /* Focus is emulated for the WHOLE act: focusing an editor while the
            page believes it is unfocused leaves it without a caret, and the
            debugger's insertText then lands nowhere. Measured. */
-        return await withFocus(cdp, async () => {
+        return await withFocus(el, cdp, async () => {
           const text = jsLit(String(ask.args.text ?? ""));
           const submit = ask.args.submit === true;
           const hit = await el.executeJavaScript(resolveOne(sel,
@@ -1876,7 +1965,8 @@ async function runVerb(
                if (sel && e.textContent) sel.selectAllChildren(e);
                const did = document.execCommand("insertText", false, ${text});
                if (!did) return { kind: "blocked", reason: "the editor refused the text" };
-               return { kind: "ok", secret: false };
+               ${submit ? `e.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));` : ""}
+               return { kind: "ok", secret: false, rich: true };
              }
              // The native setter, then an input event: React and every other
                // framework listens for the event and ignores a value assigned
@@ -1905,7 +1995,7 @@ async function runVerb(
           if (!hit || (hit as { kind: string }).kind !== "ok") {
             return { ok: false, error: selectorError(String(ask.args.selector ?? ""), hit as never) };
           }
-          if (submit) await settled(el, 20_000);
+          if (submit && !(hit as { rich?: boolean }).rich) await settled(el, 20_000);
           return {
             ok: true,
             value: {

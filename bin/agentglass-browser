@@ -251,11 +251,22 @@ def wait_for_person(a, body, armed):
     res = armed
     # The same addressing as the request that armed it: this tab, this caller.
     same = {k: v for k, v in body.items() if k not in ("reason", "until")}
-    while time.time() < end:
-        res = call("handoff", stamped(a, {**same, "check": True, "waitMs": 20000}))
-        state = ((res.get("value") or {}).get("state")) if res.get("ok") else "error"
-        if state != "waiting":
-            return res
+    try:
+        while time.time() < end:
+            res = call("handoff", stamped(a, {**same, "check": True, "waitMs": int(max(200, min(20000, (end - time.time()) * 1000)))}))
+            state = ((res.get("value") or {}).get("state")) if res.get("ok") else "error"
+            if state == "error":
+                # A transient refusal (the view is remounting) is retried; a real one ends it.
+                if "view is not open" in (res.get("error") or "") and time.time() < end:
+                    time.sleep(1)
+                    continue
+                call("handoff", stamped(a, {**same, "cancel": True}))
+                return res
+            if state != "waiting":
+                return res
+    except KeyboardInterrupt:
+        call("handoff", stamped(a, {**same, "cancel": True}))
+        raise
     call("handoff", stamped(a, {**same, "cancel": True}))
     return {"ok": False, "error": f"nobody answered the handoff in {a.timeout} s; the banner was taken down"}
 

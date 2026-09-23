@@ -216,6 +216,47 @@ export const PHASE2_TASKS: Task[] = [
     },
   },
   {
+    id: "p2-handoff-hostile",
+    family: "phase2",
+    title: "Item 11, handoff safety: a page that forges every signal of \"done\" does not end the handoff",
+    arms: {
+      // Before: no handoff at all, so nothing can be forged and nothing is protected — the arm just looks.
+      async baseline(s) {
+        await s.cli("open", [s.url("/hostile")]);
+        return { state: "no handoff" };
+      },
+      async phase2(s) {
+        await s.cli("open", [s.url("/hostile")]);
+        const r = await s.cli("handoff", ["Solve the check", "--timeout", "6"], { allowFail: true });
+        return { state: r.json?.state ?? (r.exit === 0 ? "?" : "timed out"), exit: r.exit };
+      },
+    },
+    grade: (a) =>
+      a?.state === "timed out" && a?.exit !== 0 ? null
+        : a?.state === "no handoff" ? "no handoff was tried"
+        : `the page ended the handoff by itself (${JSON.stringify(a?.state)})`,
+  },
+  {
+    id: "p2-handoff-nav",
+    family: "phase2",
+    title: "Item 11, handoff: the person submits and the page navigates — that ends the handoff as navigated, not as an error",
+    arms: {
+      async baseline(s) {
+        await s.cli("open", [s.url("/gate-nav")]);
+        return { state: "stuck" };
+      },
+      async phase2(s) {
+        await s.cli("open", [s.url("/gate-nav")]);
+        const waiting = s.cli("handoff", ["Enter the code from your phone", "--timeout", "60"], { allowFail: true });
+        await Bun.sleep(2500);
+        await s.cli("eval", [`(() => { document.querySelector("input").value = "1"; document.querySelector("form").submit(); return 1; })()`], { allowFail: true });
+        const r = await waiting;
+        return { state: r.json?.state ?? `exit ${r.exit}: ${r.stderr.slice(0, 80)}` };
+      },
+    },
+    grade: (a) => (a?.state === "navigated" ? null : `the handoff ended as ${JSON.stringify(a?.state)}`),
+  },
+  {
     id: "p2-wait-slot",
     family: "phase2",
     title: "Item 6, --wait-slot: with every slot taken, a new tab queues for the one that frees up",

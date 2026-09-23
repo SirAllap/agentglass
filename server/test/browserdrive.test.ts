@@ -483,6 +483,15 @@ describe("§16 — origins, read-only, audit, redaction", () => {
     expect("error" in parseAsk("html", { selector: "body", clean: "yes" })).toBe(true);
   });
 
+  test("dialog: a text alone arms an accept, and the replayed line says the text was withheld", () => {
+    const r = parseAsk("dialog", { text: "ada" });
+    if (!("ask" in r)) throw new Error(r.error);
+    expect(r.ask.args).toEqual({ text: "ada", accept: true });
+    const script = auditAsScript([{ ts: 1, op: "dialog", args: { accept: true, text: "[redacted]" }, ok: true } as any]);
+    expect(script).toContain("dialog --accept --text '<withheld>'");
+    expect(script).not.toContain("[redacted]");
+  });
+
   test("handoff: arm, check or cancel — exactly one, with sane bounds", () => {
     const arm = parseAsk("handoff", { reason: "Enter the code from your phone", until: "#welcome" });
     if (!("ask" in arm)) throw new Error(arm.error);

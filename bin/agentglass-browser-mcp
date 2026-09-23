@@ -1419,13 +1419,13 @@ def listed_tools(profile=None):
 def _generic_call(args):
     verb = str(args.get("verb", "")).removeprefix("browser_")
     inner = args.get("args") or {}
+    if not isinstance(inner, dict):
+        return {"content": [{"type": "text", "text": "args must be an object"}], "isError": True}
     if verb == "help":
         want = str(inner.get("verb", "")).removeprefix("browser_")
         tool = next((t for t in TOOLS if VERB[t["name"]] == want), None)
         text = json.dumps(tool) if tool else "verbs: " + ", ".join(sorted(VERB.values()))
         return {"content": [{"type": "text", "text": text}]}
-    if not isinstance(inner, dict):
-        return {"content": [{"type": "text", "text": "args must be an object"}], "isError": True}
     if f"browser_{verb}" not in VERB:
         return {"content": [{"type": "text", "text": f"no such verb: {verb} — verb \"help\" lists them"}], "isError": True}
     return run(f"browser_{verb}", inner)
@@ -1952,7 +1952,11 @@ def main():
             reply(msg_id, {"tools": listed_tools()})
         elif method == "tools/call":
             params = msg.get("params") or {}
-            reply(msg_id, run(params.get("name", ""), params.get("arguments") or {}))
+            try:
+                result = run(params.get("name", ""), params.get("arguments") or {})
+            except Exception as e:  # one bad call must not end the session
+                result = {"content": [{"type": "text", "text": f"the tool failed: {type(e).__name__}: {e}"}], "isError": True}
+            reply(msg_id, result)
         elif method == "ping":
             reply(msg_id, {})
         else:

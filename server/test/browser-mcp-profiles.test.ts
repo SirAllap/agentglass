@@ -97,6 +97,16 @@ describe.skipIf(!HAVE_PY)("MCP tool profiles", () => {
     expect(none!.result!.content![0]!.text).toContain("har");
   });
 
+  test("help with args that are not an object is refused and the session lives on", async () => {
+    const replies = await talk({ AGENTGLASS_MCP_TOOLS: "generic" }, [
+      call(2, "browser", { verb: "help", args: "x" }),
+      { jsonrpc: "2.0", id: 3, method: "ping" },
+    ]);
+    expect(replies).toHaveLength(2);
+    expect(replies[0]!.result!.isError).toBe(true);
+    expect(replies[1]!.result).toEqual({});
+  });
+
   test("an unknown verb is refused by name, not sent", async () => {
     seen.length = 0;
     const [r] = await talk(

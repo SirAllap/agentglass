@@ -27,7 +27,8 @@ export const cleanHtmlBody = (max: number): string => `
   for (const n of [copy].concat([...copy.querySelectorAll("*")])) {
     for (const a of [...n.attributes]) {
       if (!KEEP.test(a.name)) { n.removeAttribute(a.name); continue; }
-      if ((a.name === "src" || a.name === "href") && /^data:/i.test(a.value)) n.setAttribute(a.name, "data:…");
+      if (a.name === "value" && /^(hidden|password)$/i.test(n.getAttribute("type") || "")) n.setAttribute("value", "…");
+      else if ((a.name === "src" || a.name === "href") && /^data:/i.test(a.value)) n.setAttribute(a.name, "data:…");
       else if (a.name === "class" && a.value.length > 80) n.setAttribute("class", a.value.slice(0, 80));
       else if (a.value.length > 300) n.setAttribute(a.name, a.value.slice(0, 300) + "…");
     }

@@ -15,12 +15,13 @@ const body = (from: string) => {
 };
 
 describe("real input", () => {
-  test("click and the point acts run as a user gesture, under emulated focus", () => {
-    for (const from of ['      case "click": {', '      case "dblclick":']) {
-      const s = body(from);
-      expect(s).toContain("withFocus(cdp");
-      expect(s).toMatch(/\), true\)\)/);
-    }
+  test("only click carries a user gesture; the point acts run plain", () => {
+    const click = body('      case "click": {');
+    expect(click).toContain("withFocus(el, cdp");
+    expect(click).toMatch(/\), true\)\)/);
+    const point = body('      case "dblclick":');
+    expect(point).not.toContain("withFocus(");
+    expect(point).not.toMatch(/\), true\)/);
   });
 
   test("reads never claim a gesture", () => {
@@ -48,7 +49,61 @@ describe("real input", () => {
     expect(s).toContain('execCommand("insertText"');
   });
 
+  test("html --clean blanks the value of a hidden or password input", async () => {
+    const clean = await Bun.file(new URL("../src/lib/browserCleanHtml.ts", import.meta.url)).text();
+    expect(clean).toMatch(/a\.name === "value" && \/\^\(hidden\|password\)\$\/i/);
+  });
+
   test("the raw cdp verb still refuses Input.*", () => {
     expect(SRC).toContain('if (/^Input\\./.test(method)) {');
+  });
+});
+
+import { handoffUrlMet, withFocus } from "../src/lib/browserDrive.ts";
+
+describe("handoff until", () => {
+  test("a path matches the pathname at a boundary, never the query or a longer word", () => {
+    expect(handoffUrlMet("/dashboard", "https://acme.test/dashboard")).toBe(true);
+    expect(handoffUrlMet("/dashboard", "https://acme.test/dashboard/home")).toBe(true);
+    expect(handoffUrlMet("/dashboard", "https://acme.test/login?next=/dashboard")).toBe(false);
+    expect(handoffUrlMet("/app", "https://acme.test/apple")).toBe(false);
+    expect(handoffUrlMet("/app/", "https://acme.test/app")).toBe(true);
+  });
+
+  test("an http url must share the origin", () => {
+    expect(handoffUrlMet("https://acme.test/home", "https://acme.test/home")).toBe(true);
+    expect(handoffUrlMet("https://acme.test/home", "https://evil.test/home")).toBe(false);
+    expect(handoffUrlMet("https://acme.test/home", "https://acme.test/login?u=https://acme.test/home")).toBe(false);
+  });
+
+  test("a selector is not a url condition", () => {
+    expect(handoffUrlMet("#welcome", "https://acme.test/welcome")).toBe(false);
+  });
+});
+
+describe("withFocus", () => {
+  const rig = () => {
+    const calls: boolean[] = [];
+    const cdp = async (_m: string, p?: unknown) => { calls.push((p as { enabled: boolean }).enabled); return { ok: true }; };
+    return { calls, cdp };
+  };
+
+  test("two overlapping acts on one guest switch it on once and off once, after the last", async () => {
+    const { calls, cdp } = rig();
+    const el = {};
+    let release!: () => void;
+    const slow = withFocus(el, cdp, () => new Promise<void>((r) => { release = r; }));
+    await Bun.sleep(5);
+    await withFocus(el, cdp, async () => {});
+    expect(calls).toEqual([true]); // the short act ending did not switch it off under the long one
+    release();
+    await slow;
+    expect(calls).toEqual([true, false]);
+  });
+
+  test("an act that never settles is cut off, and the flag still goes off", async () => {
+    const { calls, cdp } = rig();
+    await expect(withFocus({}, cdp, () => new Promise(() => {}), 20)).rejects.toThrow("did not finish");
+    expect(calls).toEqual([true, false]);
   });
 });

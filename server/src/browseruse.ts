@@ -53,14 +53,14 @@ export const cliLink = (): string => join(home(), ".local", "bin", "agentglass-b
  * rung is first and the checkout rung saves the developer, whose
  * `process.execPath` is bun's own binary and says nothing about this repo.
  */
-export function shippedSkill(): string | null {
+export function shippedSkill(installedOnly = false): string | null {
   const candidates = [
     join(dirname(process.execPath), "resources", "skills", "browser-use", "SKILL.md"),
     join(dirname(process.execPath), "skills", "browser-use", "SKILL.md"),
     join(import.meta.dir, "..", "..", "skills", "browser-use", "SKILL.md"),
     join(process.cwd(), "skills", "browser-use", "SKILL.md"),
     join(process.cwd(), "..", "skills", "browser-use", "SKILL.md"),
-  ];
+  ].slice(0, installedOnly ? 2 : undefined);
   for (const c of candidates) {
     try { if (statSync(c).isFile()) return resolve(c); } catch { /* next rung */ }
   }
@@ -155,8 +155,10 @@ const readMark = (): string | null => {
  * install from before there was a mark cannot be told from an edit. The pane's
  * Install button remains the way in for both, and it writes the mark.
  */
-export function refreshSkill(): "updated" | "current" | "kept" | "unshipped" | "missing" {
-  const src = shippedSkill();
+export function refreshSkill(src: string | null = shippedSkill(true)): "updated" | "current" | "kept" | "unshipped" | "missing" {
+  /* Only the copy inside the app: never one found in the directory the app was
+     launched from, which may be an older checkout or somebody else's repo, and
+     is read by every agent once it overwrites the installed skill. */
   if (!src) return "unshipped";
   let shipped: Buffer, current: Buffer;
   try { shipped = readFileSync(src); } catch { return "unshipped"; }

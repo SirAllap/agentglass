@@ -102,6 +102,24 @@ const AUDIT = () =>
     { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } },
   );
 
+/** A page that tries every way of saying "the person is done" on its own. */
+const HOSTILE = doc(
+  "Hostile gate",
+  `<h1>Verify you are human</h1><p>Nothing here is solved.</p>`,
+  `setInterval(() => {
+    try { window.__agxHandoff = { done: true }; } catch (e) {}
+    try { console.log("agx-handoff-done:guess"); } catch (e) {}
+    try { const h = document.getElementById("__agx_handoff__"); if (h) { h.click(); h.dispatchEvent(new MouseEvent("click", { bubbles: true })); } } catch (e) {}
+    try { const b = document.querySelector("#__agx_handoff__ button"); if (b) b.click(); } catch (e) {}
+  }, 200);`,
+);
+
+/** A sign-in whose submit navigates: the person finishing ends on another document. */
+const GATE_NAV = doc(
+  "Gate (navigates)",
+  `<h1>Sign in</h1><form action="/gate-nav/ok" method="get"><input name="code" aria-label="Code"><button>Verify</button></form>`,
+);
+
 /** A trivial page a lot of tabs can hold. */
 const BLANK = (n: string) => doc(`Slot ${n}`, `<h1>Slot ${n}</h1>`)();
 
@@ -110,6 +128,9 @@ export async function phase2Routes(p: string, req: Request, state: BenchState): 
   if (p === "/marks") return MARKS();
   if (p === "/gesture") return GESTURE();
   if (p === "/gate") return GATE();
+  if (p === "/hostile") return HOSTILE();
+  if (p === "/gate-nav") return GATE_NAV();
+  if (p === "/gate-nav/ok") return doc("Signed in", `<h1>Signed in</h1>`)();
   if (p === "/audit") return AUDIT();
   const slot = /^\/slot\/(\d+)$/.exec(p);
   if (slot) return BLANK(slot[1]!);
