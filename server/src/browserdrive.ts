@@ -2605,6 +2605,11 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
         if (!Number.isInteger(n) || n < 100 || n > 200_000) return { error: "max must be 100..200000" };
         args.max = n;
       }
+      /* Markup a model can read: scripts, styles, svg paths and noise attributes out. */
+      if (b.clean !== undefined) {
+        if (typeof b.clean !== "boolean") return { error: "clean is a flag" };
+        args.clean = b.clean;
+      }
       break;
     }
     case "waitfor": {

@@ -1,6 +1,7 @@
 import type { BrowserAskFrame } from "../../../shared/types.ts";
 import { ACC_NAME, COLLECTOR, PICK, STAMP, observeScript } from "./browserObserve.ts";
 import { MARKS_ID, MARKS_SCRIPT } from "./browserMarks.ts";
+import { cleanHtmlBody } from "./browserCleanHtml.ts";
 import { A11Y_SCRIPT, VITALS_SCRIPT, VITAL_LIMITS, rate, type VitalName } from "./browserVitals.ts";
 import { jsLit } from "../../../shared/jsLit.ts";
 import { FIND, locatorLit, parseLocator } from "./browserLocator.ts";
@@ -1999,7 +2000,8 @@ async function runVerb(
            file it was built from — which is what somebody did today. */
         const max = Number(ask.args.max ?? 20_000);
         const got = await el.executeJavaScript(resolveOne(sel,
-          `return { kind: "ok", html: e.outerHTML.slice(0, ${max}), truncated: e.outerHTML.length > ${max} };`, true,
+          ask.args.clean === true ? cleanHtmlBody(max)
+            : `return { kind: "ok", html: e.outerHTML.slice(0, ${max}), truncated: e.outerHTML.length > ${max} };`, true,
         )) as { kind: string; html?: string; truncated?: boolean };
         return got?.kind === "ok"
           ? { ok: true, value: { html: got.html, truncated: got.truncated } }

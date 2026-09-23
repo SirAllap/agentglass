@@ -192,6 +192,30 @@ export const PHASE2_TASKS: Task[] = [
     },
   },
   {
+    id: "p2-clean-html",
+    family: "phase2",
+    title: "Item 9, html --clean: the page's markup without what a model cannot use, and with ids it can act on",
+    arms: {
+      async baseline(s) {
+        await s.cli("open", [s.url("/audit")]);
+        const raw = (await s.cli("html", ["body"])).json;
+        return { html: String(raw?.html ?? ""), rawLength: String(raw?.html ?? "").length };
+      },
+      async phase2(s) {
+        await s.cli("open", [s.url("/audit")]);
+        const raw = (await s.cli("html", ["body"])).json;
+        const clean = (await s.cli("html", ["body", "--clean"])).json;
+        return { html: String(clean?.html ?? ""), rawLength: String(raw?.html ?? "").length };
+      },
+    },
+    grade: (a) => {
+      const h: string = a?.html ?? "";
+      if (/<script|<style|<svg[^>]*><path/i.test(h)) return "scripts, styles or svg paths are still in the markup";
+      if (!/<button[^>]*data-agx-e="e\d+"/.test(h)) return "the button carries no observe id";
+      return h.length < a.rawLength * 0.85 ? null : `${h.length} B is not smaller than the raw ${a.rawLength} B`;
+    },
+  },
+  {
     id: "p2-wait-slot",
     family: "phase2",
     title: "Item 6, --wait-slot: with every slot taken, a new tab queues for the one that frees up",

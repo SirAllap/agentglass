@@ -470,6 +470,15 @@ describe("phase-2 fixtures and graders", () => {
     expect(g({ a11y: { imgNoAlt: 1 }, vitals: null }, freshState())).toContain("heading jump");
   });
 
+  test("clean-html: no scripts or styles, an id on the button, and smaller than the raw markup", () => {
+    const g = task("p2-clean-html").grade;
+    const html = '<body><button data-agx-e="e1">Go</button></body>';
+    expect(g({ html, rawLength: 900 }, freshState())).toBeNull();
+    expect(g({ html: html + "<script>x</script>", rawLength: 900 }, freshState())).toContain("still in the markup");
+    expect(g({ html: "<body><button>Go</button></body>", rawLength: 900 }, freshState())).toContain("no observe id");
+    expect(g({ html, rawLength: html.length }, freshState())).toContain("not smaller");
+  });
+
   test("mcp-core: a failed call is the answer, and the heading is what grades it", () => {
     const g = task("p2-mcp-core").grade;
     expect(g({ heading: "Items", listBytes: 1 }, freshState())).toBeNull();

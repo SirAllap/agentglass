@@ -476,6 +476,13 @@ describe("§16 — origins, read-only, audit, redaction", () => {
     expect("error" in parseAsk("shot", { marks: "yes" })).toBe(true);
   });
 
+  test("html: clean is a flag", () => {
+    const ok = parseAsk("html", { selector: "body", clean: true });
+    if (!("ask" in ok)) throw new Error(ok.error);
+    expect(ok.ask.args).toMatchObject({ selector: "body", clean: true });
+    expect("error" in parseAsk("html", { selector: "body", clean: "yes" })).toBe(true);
+  });
+
   test("handoff: arm, check or cancel — exactly one, with sane bounds", () => {
     const arm = parseAsk("handoff", { reason: "Enter the code from your phone", until: "#welcome" });
     if (!("ask" in arm)) throw new Error(arm.error);

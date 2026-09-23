@@ -1503,6 +1503,8 @@ def main():
     p = sub.add_parser("html", help="the markup of one element, not just its text")
     p.add_argument("selector")
     p.add_argument("--max", type=int, default=None)
+    p.add_argument("--clean", action="store_true",
+                   help="markup a model can read: scripts, styles, svg paths and noise attributes out, observe's eN ids stamped on everything actionable")
     p = sub.add_parser("waitfor", help="wait until a javascript expression is true in the page, or until a named condition")
     p.add_argument("js", nargs="?")
     p.add_argument("--timeout-ms", dest="timeoutMs", type=int, default=None)
@@ -2306,6 +2308,8 @@ def main():
         body = {"selector": a.selector}
         if a.max is not None:
             body["max"] = a.max
+        if a.clean:
+            body["clean"] = True
     elif a.cmd == "waitfor":
         if not a.js and not a.until:
             print("waitfor needs an expression, or --until network-idle|no-timers", file=sys.stderr)

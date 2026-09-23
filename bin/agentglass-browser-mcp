@@ -1237,7 +1237,8 @@ TOOLS = [
         "description": "The markup of one element, not just its text — for choosing a selector without reading the source that built the page.",
         "inputSchema": {
             "type": "object",
-            "properties": {"selector": {"type": "string"}, "max": {"type": "number"}},
+            "properties": {"selector": {"type": "string"}, "max": {"type": "number"},
+                           "clean": {"type": "boolean", "description": "Markup a model can read: scripts, styles, svg paths and noise attributes out, with observe's eN ids on everything actionable."}},
             "required": ["selector"],
         },
     },

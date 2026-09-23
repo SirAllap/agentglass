@@ -93,7 +93,7 @@ once. "Nothing happened in thirty seconds" is an answer, not a failure.
 ```
 dev loop    checkup (did it break — errors from load on, failed requests, visible errors)
 measure     vitals (LCP/CLS/INP/TTFB/FCP, rated) · a11y (unlabelled controls, alt, heading jumps, lang)
-look        observe · read · text · html · region · shot · frames · console · network
+look        observe · read · text · html (--clean: scripts/styles out, eN ids in) · region · shot · frames · console · network
 page        resize · zoom (the one Ctrl+/Ctrl- move) · emulate · throttle
 handoff     handoff "why" [--until sel|/path] — the person does the CAPTCHA/2FA/consent, you continue
 act         click · type (also rich editors: contenteditable) · select · check · fill · hover · dblclick · rightclick
