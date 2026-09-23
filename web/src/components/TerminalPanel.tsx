@@ -22,6 +22,7 @@ import { checkoutConfirm, needsCheckoutConfirm } from "../lib/checkoutWarning.ts
 import { keepTermFocus } from "../lib/keepFocus.ts";
 import { focusFollowsMouse, subscribeFocusFollowsMouse, shouldFocusOnHover } from "../lib/termFocusPref.ts";
 import { cellAt, paneAt } from "../lib/tmuxHover.ts";
+import { heldWindow } from "../lib/heldWindow.ts";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -2539,62 +2540,8 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     const deepest = (sess?.tmuxPanes ?? []).reduce((n, p) => Math.max(n, p.bottom + 1), 0);
     return deepest > rows ? deepest - rows : 0;
   })();
-  /*
-   * The window on screen is narrower than the terminal drawing it.
-   *
-   * tmux sizes a shared window to fit every client, so a phone attaching with a
-   * fit reflows this desk to 80 columns and the desk is given no explanation
-   * whatsoever — the panes just get small and stay small.
-   *
-   * The condition is the size comparison, never `w.phone` and never a
-   * server-side list of who is attached. A phone with no fit costs the desk
-   * nothing and is the common case, so a notice keyed on presence would cry
-   * wolf on it; and a registry disagrees with tmux the moment a fit fails, a
-   * phone changes window, or a phone's socket dies without cleanup running.
-   * This asks tmux what the window is, which cannot be wrong about it.
-   *
-   * Columns ONLY. Measured: a 200×50 client gives a 200×49 window, because tmux
-   * spends a row on the status line — so a rows comparison fires on every desk
-   * that has a bar, forever.
-   *
-   * A window with no `cols` is one tmux did not answer a size for, which is not
-   * the same claim as "narrow" — it takes the notice off, not on.
-   */
-  const activeWin = tmuxWindows.find((w) => w.id === activeWindow) ?? null;
-  /*
-   * And the second way a phone takes this window: it zooms it.
-   *
-   * A phone attaches to a WINDOW, so a four-pane window gave it four tabs
-   * drawing the same 2x2 grid — the server now zooms the pane that was tapped
-   * so one tab means one pane. That flag is on the shared window, so the desk
-   * gets a window with one pane where it had four. It is not narrow, so the
-   * comparison above cannot see it, and it is just as much of a "what happened
-   * to my layout" as the width is.
-   *
-   * `phone` IS the condition here, and that is the opposite of the rule above
-   * on purpose. Zoom is a key people press for themselves several times a day
-   * (`prefix z`); a notice on every zoomed window would be an explanation for
-   * something that needs none, forever. So it fires only while a phone is on
-   * the window. The cost is the mirror image of what the width notice avoids: a
-   * desk that zoomed a window ITSELF while a phone happened to be on it is told
-   * the phone did it. Wrong attribution on a rare case beats a permanent false
-   * alarm on a common one — and the button gives the panes back either way.
-   *
-   * The other end of it — a phone that dies without its teardown running leaves
-   * the window zoomed and this notice gone — is left alone deliberately. That
-   * state is one `prefix z` from fixed, which is a key the person already has,
-   * unlike a window pinned at 80 columns.
-   */
-  const zoomedByPhone = tmuxActive && !!activeWin?.phone && !!activeWin?.flags.includes("Z");
-  const narrow = tmuxActive && activeWin?.cols && tmuxClient && activeWin.cols < tmuxClient.cols
-    ? { winCols: activeWin.cols, deskCols: tmuxClient.cols }
-    : null;
-  // One card for both reasons rather than two that can stack: they have the
-  // same cause, the same button, and the same fix — and a desk that has lost
-  // both its width and its panes has one problem, not two.
-  const held = activeWin && (narrow || zoomedByPhone)
-    ? { win: activeWin, narrow, zoomed: zoomedByPhone }
-    : null;
+  // Narrowed or zoomed by somebody else — see heldWindow for what counts.
+  const held = heldWindow(tmuxActive, tmuxWindows, activeWindow, tmuxClient);
   /**
    * The state the card is describing, as one string.
    *
@@ -3587,7 +3534,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                             button still works on either.
                             The zoom sentence has one state, because it is only
                             ever shown while a phone is here (see
-                            `zoomedByPhone`), and it says the panes are still
+                            `heldWindow`), and it says the panes are still
                             RUNNING: that is the actual question — a window that
                             went from four panes to one reads like three
                             programs died. */}
