@@ -105,6 +105,12 @@ contextBridge.exposeInMainWorld("agentglass", {
   sidecarFailure: (() => {
     try { return ipcRenderer.sendSync("ag:sidecarFailure") || null; } catch { return null; }
   })(),
+  /** The same, asked now. A page subscribes a moment after it loads, and a
+   *  server that dies inside that moment is reported to nobody; the
+   *  subscriber asks this once to catch up. */
+  sidecarFailureNow: () => {
+    try { return ipcRenderer.sendSync("ag:sidecarFailure") || null; } catch { return null; }
+  },
   /** Whether a server has been CONFIRMED, as opposed to not having failed yet.
    *  A function and not a captured value on purpose: the answer changes a few
    *  hundred milliseconds after this page loads, and the caller asks precisely

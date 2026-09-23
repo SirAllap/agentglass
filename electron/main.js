@@ -1099,7 +1099,14 @@ async function ensureServer(adopt) {
  * @returns {SidecarFailure}
  */
 function describeSidecarFailure(port, exit, spawnError, stderr, hadStarted) {
-  const detail = (stderr || "").trim().split("\n").filter(Boolean).slice(-3).join(" · ").slice(0, 400);
+  /* The error line first, then the last lines. An uncaught error at module
+     load prints its sentence and THEN its stack and bun's version, so the last
+     three lines alone were two frames and "Bun v1.3.9" — and the banner never
+     said what went wrong. */
+  const lines = (stderr || "").trim().split("\n").map((l) => l.trim()).filter(Boolean);
+  const named = lines.findLast((l) => /^(error:|\w*(Error|Exception)\b)/.test(l));
+  const tail = lines.slice(-3).filter((l) => l !== named);
+  const detail = (named ? [named, ...tail] : tail).join(" · ").slice(0, 400);
   if (spawnError?.code === "ENOENT") {
     return {
       reason: "missing",

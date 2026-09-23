@@ -161,6 +161,27 @@ describe.if(HAVE)("the shell when its sidecar will not start", () => {
     expect(String(said[0]!.fix)).toContain(String(port));
   }, 60_000);
 
+  test("a crash's own error line survives the stack printed after it", async () => {
+    /* What bun prints for an uncaught error at module load: the error first,
+       then the stack, then its version. The last three lines were all that was
+       kept, so the banner showed two stack frames and "Bun v1.3.9" and not
+       the sentence that named the cause. */
+    const home = scratch();
+    const fake = join(home, "bin", "bun");
+    writeFileSync(fake, "#!/bin/sh\n" +
+      "echo 'SQLiteError: ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint' >&2\n" +
+      "echo '      errno: 1,' >&2\n" +
+      "echo '      at prepare (bun:sqlite:350:10)' >&2\n" +
+      "echo '      at query (bun:sqlite:353:28)' >&2\n" +
+      "echo '      at /$bunfs/root/agentglass-server:22412:26' >&2\n" +
+      "echo '' >&2\necho 'Bun v1.3.9 (Linux x64)' >&2\nexit 1\n");
+    chmodSync(fake, 0o755);
+    const r = await runShell({ path: `${join(home, "bin")}:${SYS_PATH}`, port: await freePort(), home, expect: 1 });
+    const said = failure(r);
+    expect(said).toHaveLength(1);
+    expect(String(said[0]!.detail)).toContain("SQLiteError: ON CONFLICT clause does not match");
+  }, 60_000);
+
   test("a server that comes up says so, and its later death is its own event", async () => {
     const home = scratch();
     const fake = join(home, "bin", "bun");
