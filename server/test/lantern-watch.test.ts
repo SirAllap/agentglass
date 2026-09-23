@@ -192,9 +192,9 @@ describe("the watch flags what the shared rule flags", () => {
     row({ name: "d-docs", state: "waiting", needsYou: { kind: "gate", why: "", since: NOW - 60_000 } }),
     row({ name: "e-fresh", state: "waiting", needsYou: { kind: "input", why: "", since: NOW - 20 * 60_000 } }),
     row({ name: "f-stale", state: "waiting", needsYou: { kind: "input", why: "", since: NOW - 3 * H } }),
-    row({ name: "g-migrate", paneId: "%3", doing: "migrate the billing tables", saidAt: NOW - 90 * 60_000 }),
-    row({ name: "h-soon", paneId: "%4", doing: "migrate the billing tables", saidAt: NOW - 30 * 60_000 }),
-    row({ name: "i-dead", doing: "migrate the billing tables", saidAt: NOW - 72 * H }),
+    row({ name: "g-migrate", paneId: "%3", doing: "migrate the orbit tables", saidAt: NOW - 90 * 60_000 }),
+    row({ name: "h-soon", paneId: "%4", doing: "migrate the orbit tables", saidAt: NOW - 30 * 60_000 }),
+    row({ name: "i-dead", doing: "migrate the orbit tables", saidAt: NOW - 72 * H }),
   ];
 
   test("row for row, and kind for kind", () => {

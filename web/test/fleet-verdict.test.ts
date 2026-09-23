@@ -24,7 +24,7 @@ const working = (name: string, over: Partial<LanternRow> = {}) => row(name, { st
 const blocked = (name: string, kind: "permission" | "gate" = "permission", over: Partial<LanternRow> = {}) =>
   row(name, { state: "waiting", needsYou: { kind, why: kind === "gate" ? "held at the gate: Bash — rm -rf dist" : "Claude needs your permission to use Bash", since: now - 4 * min }, ...over });
 const quiet = (name: string, over: Partial<LanternRow> = {}) =>
-  row(name, { from: "said", doing: "migrate the billing tables", saidAt: now - 90 * min, ...over });
+  row(name, { from: "said", doing: "migrate the orbit tables", saidAt: now - 90 * min, ...over });
 
 test("nothing read yet is not 'all nominal'", () => {
   expect(fleetVerdict(null, now)).toBeNull();
@@ -74,7 +74,7 @@ test("claimed work quiet for over an hour is stuck — the watch's own rule", ()
   const v = fleetVerdict([quiet("orbit-migrate", { paneId: "%3" })], now)!;
   expect(v.tone).toBe("warn");
   expect(v.clauses.find((c) => c.kind === "stuck")).toMatchObject({
-    count: 1, paneId: "%3", tone: "warn", text: "orbit-migrate quiet for 1h on \"migrate the billing tables\"",
+    count: 1, paneId: "%3", tone: "warn", text: "orbit-migrate quiet for 1h on \"migrate the orbit tables\"",
   });
 });
 
