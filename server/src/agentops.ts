@@ -26,11 +26,16 @@
  * `__submitVerdict`), so the four surfaces cannot disagree about what a Claude
  * prompt looks like.
  */
+import { mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { db } from "./db.ts";
 import { tmux, engineWindowRunning, KEPT_MARK } from "./tmuxpane.ts";
 import { paneCommand } from "./tmuxlayout.ts";
 import { agentBinFor, agentArgv } from "./agentticket.ts";
-import { agentKind } from "../../shared/agentKinds.ts";
+import { AGENT_PROVIDERS, agentKind, agentProvider } from "../../shared/agentKinds.ts";
+import { roleLaunch, workerRole } from "../../shared/workerRoles.ts";
+import { workerRoles } from "./config.ts";
 import { claudeCode, supportsSessionName } from "./agents/claudecode.ts";
 import { SPELLINGS } from "./agents/launch.ts";
 import { inputBox, __submitVerdict, __needsYou, __running } from "./chatpane.ts";
@@ -152,7 +157,9 @@ export type StartResult =
   /** The CLI exited before the window was a moment old: a bad flag, a
    *  wrapper for a binary that is not there. The window is already closed. */
   | { ok: false; error: "died" }
-  | { ok: false; error: "no-cli" | "no-window" | "bad-name" | "yolo-refused" | "bad-args" };
+  /** A worker role's lock that the configs in that directory loosen, and how. */
+  | { ok: false; error: "lock-loosened"; detail: string }
+  | { ok: false; error: "no-cli" | "no-window" | "bad-name" | "yolo-refused" | "yolo-role" | "bad-args" };
 /** Every refusal `startAgent` can answer, so a caller's table of wordings is
  *  checked for a new one rather than printing `undefined`. */
 export type StartError = Extract<StartResult, { ok: false }>["error"];
@@ -190,11 +197,63 @@ const PERMISSION_FLAGS = new Set<string>([
   /* Claude Code: the mode by name, additional settings (a permissions block
      rides in there), an MCP config file, tool allow/deny lists and extra
      writable directories. Codex: the approval policy (`-a`) and the sandbox
-     level. Gemini: the yolo shorthand. Kept with both spellings where the CLI
+     level. Gemini, and the Qwen Code CLI forked from it: the yolo shorthand
+     and the approval mode, whose value is a separate word the pattern below
+     never sees. OpenCode: `--auto`, which approves whatever is not explicitly
+     denied — "dangerous" is in its help text, not in its name. Codex again:
+     `-s`, the short `--sandbox`, and `--approve-for-me`, which hands its
+     approvals to an automatic reviewer. Kept with both spellings where the CLI
      accepts both. */
   "--permission-mode", "--settings", "--mcp-config", "--sandbox", "-a", "--ask-for-approval",
+  "-y", "--approval-mode", "--auto", "-s", "--approve-for-me",
   "--allowedTools", "--allowed-tools", "--disallowedTools", "--disallowed-tools", "--add-dir",
+  /* Gemini's and Qwen Code's own name for the option `--add-dir` is only an
+     alias of. */
+  "--include-directories",
 ]);
+
+/**
+ * The refused flags that are one letter. yargs (Gemini, Qwen Code, OpenCode)
+ * groups short options, so `-cy` is `-c -y`, and clap (Codex) takes a short
+ * flag's value glued on, so `-anever` is `-a never`. Either way a refused
+ * letter anywhere in a single-dash arg is that flag. Over-refuses a glued
+ * value that happens to contain one (`-mclaude`); the refusal names the arg,
+ * and `-m claude` passes.
+ */
+const SHORT_REFUSED = new Set([...PERMISSION_FLAGS].filter((f) => /^-[A-Za-z]$/.test(f)).map((f) => f[1]!));
+
+/**
+ * Codex's `-c key=value` / `--config key=value` overrides any key of its
+ * config.toml, so `-c approval_policy=never` is `-a never` by another name, and
+ * its value is a separate word the flag checks above never read. A key is
+ * refused when any segment of its dotted path is one of these: the approval
+ * policy and its reviewer, the sandbox and its permissions, a project's trust
+ * level (a trusted project gets looser defaults), a profile (which can carry
+ * any of them) and MCP servers (tools the operator never saw, as
+ * `--mcp-config` is for Claude). Names as codex-cli 0.155.1 has them.
+ */
+const CODEX_LOOSE_KEY = /approv|sandbox|permission|trust_level|^profiles?$|mcp_servers/;
+
+/** Whether one Codex override loosens what the agent may do. Quotes are the
+ *  TOML's or the caller's and change nothing: `"approval_policy"="never"` is
+ *  the same key. A whole table set at once is read for the same names inside
+ *  it, since `projects={…={trust_level=…}}` names the key only in its value. */
+function codexOverrideLoosens(override: string): boolean {
+  const eq = override.indexOf("=");
+  if (eq < 0) return false;
+  const key = override.slice(0, eq).replace(/["']/g, "").trim();
+  if (key.split(".").some((seg) => CODEX_LOOSE_KEY.test(seg.trim()))) return true;
+  const value = override.slice(eq + 1).trim();
+  return value.startsWith("{") && /approv|sandbox|permission|trust_level|profile|mcp_servers/.test(value);
+}
+
+/**
+ * Flags refused for one CLI only, because another CLI spells something
+ * harmless the same way. Codex's `-p`/`--profile` layers a profile file over
+ * its config, and a profile can set `approval_policy = "never"`; Claude's `-p`
+ * is print mode.
+ */
+const KIND_FLAGS: Record<string, Set<string>> = { codex: new Set(["-p", "--profile"]) };
 
 /** The words a permission flag is made of, whatever the flag is called. */
 const PERMISSION_WORDS = /bypass|skip-permission|dangerous|yolo|full-auto/;
@@ -204,15 +263,217 @@ const PERMISSION_WORDS = /bypass|skip-permission|dangerous|yolo|full-auto/;
  * do, or null. Exported so the test can enumerate the gate rather than probe
  * it one string at a time.
  */
-export function refusedArg(args: string[]): string | null {
-  for (const a of args) {
+export function refusedArg(args: string[], kind?: string): string | null {
+  const own = (kind && KIND_FLAGS[kind]) || new Set<string>();
+  const letters = new Set([...SHORT_REFUSED, ...[...own].filter((f) => /^-[A-Za-z]$/.test(f)).map((f) => f[1]!)]);
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
     if (!a.startsWith("-")) continue;
     const name = a.split("=", 1)[0]!;
-    if (PERMISSION_FLAGS.has(name)) return a;
+    if (PERMISSION_FLAGS.has(name) || own.has(name)) return a;
+    if (!name.startsWith("--") && [...name.slice(1)].some((c) => letters.has(c))) return a;
     if (a.startsWith("--dangerously-")) return a;
     if (PERMISSION_WORDS.test(a.toLowerCase())) return a;
+    // A Codex override: `-c k=v` as two words, `--config=k=v` / `-c=k=v` as
+    // one, or clap's glued short form `-ck=v`. Named with its value, so the
+    // refusal says which key.
+    if (name === "-c" || name === "--config") {
+      const joined = a.length > name.length;
+      const override = joined ? a.slice(name.length + 1) : args[i + 1];
+      if (override !== undefined && codexOverrideLoosens(override)) return joined ? a : `${a} ${override}`;
+    } else if (/^-c[^-=]/.test(a) && codexOverrideLoosens(a.slice(2))) return a;
   }
   return null;
+}
+
+/** What a worker role decides and a caller's args may not restate: the model,
+ *  and which OpenCode agent runs — a project-defined agent carries its own
+ *  permission rules, which come after the lock's and win. */
+const ROLE_FIXED = new Set(["--model", "-m", "--agent"]);
+
+/**
+ * Where a role's lock file is written: beside the rest of this app's state,
+ * owner-only, one file per role and CLI so two roles never share one.
+ */
+function lockDir(): string {
+  const state = process.env.AGENTGLASS_STATE_DIR
+    || join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "agentglass");
+  return join(state, "worker-locks");
+}
+
+/**
+ * What starting a worker in this role means: the CLI Settings picked for it,
+ * and that CLI's lock and model as flags and environment.
+ *
+ * `no-lock` when the CLI has no lock this app can apply. Settings will not
+ * store such a choice, so this is a hand-edited config or a CLI whose row
+ * lost its lock — and the answer is to refuse, never to start it unlocked.
+ *
+ * Qwen Code's lock is a SYSTEM settings file, and naming one replaces
+ * /etc/qwen-code/settings.json for that process. A machine that keeps rules
+ * there loses them for the worker; the ones this writes are the floor.
+ */
+export function roleStart(
+  roleId: unknown,
+  roles: ReturnType<typeof workerRoles> = workerRoles(),
+  dir: string = lockDir(),
+): { ok: true; kind: string; args: string[]; env: Record<string, string> } | { ok: false; error: "no-role" | "no-lock" } {
+  const role = workerRole(roleId);
+  if (!role) return { ok: false, error: "no-role" };
+  const choice = roles[role.id];
+  const row = agentProvider(choice.provider);
+  const launch = row && agentKind(row.id) ? roleLaunch(row, role, choice.model) : null;
+  if (!row || !launch) return { ok: false, error: "no-lock" };
+  const env = { ...launch.env };
+  if (launch.env.OPENCODE_CONFIG_CONTENT) for (const k of OPENCODE_ENV_LAYERS) env[k] = process.env[k] ?? "";
+  if (launch.file) {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const path = join(dir, `${role.id}-${row.id}.json`);
+    // Written aside and renamed into place: two workers started in the same
+    // role share this file, and a truncating write in place is a moment when
+    // the one already starting reads an empty lock. The new file is created
+    // here each time, so its mode is always the one asked for.
+    const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
+    writeFileSync(tmp, launch.file.content, { mode: 0o600 });
+    renameSync(tmp, path);
+    env[launch.file.env] = path;
+  }
+  return { ok: true, kind: row.id, args: launch.args, env };
+}
+
+/**
+ * OpenCode's config layers that come from the environment. A tmux window
+ * inherits the tmux SERVER's environment, not this process's, so the check
+ * below and the window could otherwise read two different sets. Each is handed
+ * to the window as this process has it, empty when unset, which OpenCode reads
+ * as absent (measured: the same 101 rules either way). HOME and the XDG dirs,
+ * where the person's global config lives, are not pinned: they are the same
+ * user's on both sides.
+ */
+const OPENCODE_ENV_LAYERS = ["OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_PERMISSION", "OPENCODE_DISABLE_PROJECT_CONFIG"];
+
+type OpenCodeRule = { permission: string; pattern: string; action: string };
+
+const globs = new Map<string, RegExp>();
+/** OpenCode's own wildcard, as its 1.18 bundle has it: `*` any run, `?` one
+ *  character, and a trailing ` *` optional, so `git push *` is also bare
+ *  `git push`. */
+function openCodeMatch(subject: string, pattern: string): boolean {
+  let re = globs.get(pattern);
+  if (!re) {
+    let src = pattern.replaceAll("\\", "/").replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
+    if (src.endsWith(" .*")) src = src.slice(0, -3) + "( .*)?";
+    re = new RegExp("^" + src + "$", "s");
+    globs.set(pattern, re);
+  }
+  return re.test(subject.replaceAll("\\", "/"));
+}
+
+/**
+ * The first command the lock denies that OpenCode, with these rules, would
+ * not deny — or null when the lock holds.
+ *
+ * `rules` is an agent's merged ruleset in OpenCode's order, and OpenCode
+ * applies the LAST rule whose permission and pattern both match. The lock is
+ * deep-merged over the project's config, and a merge keeps a key where the
+ * project had it: a project with `"git push *"` and then `"git *": "allow"`
+ * leaves the lock's deny before the allow, and a push goes through. So what is
+ * checked is the rule that wins, not whether the lock's rule is present.
+ *
+ * Asked of concrete command lines: each denied pattern with its wildcards
+ * filled, and every later non-deny rule's pattern filled the same way (a `?`
+ * takes the denied pattern's own character at that place) — whichever of those
+ * falls inside a denied pattern must be denied by the rule that wins. What it
+ * cannot see: a glob that only reaches a denied command through a fill none
+ * of these produce. Anything short of deny counts as loosened, `ask` included:
+ * a worker runs with nobody there to answer.
+ */
+export function lockLoosened(rules: OpenCodeRule[], lock: string): { subject: string; rule: OpenCodeRule | null } | null {
+  const perms = (JSON.parse(lock) as { permission: Record<string, string | Record<string, string>> }).permission;
+  const denied: [string, string][] = [];
+  for (const [perm, v] of Object.entries(perms)) {
+    if (v === "deny") denied.push([perm, "*"]);
+    else if (v && typeof v === "object") for (const [pat, a] of Object.entries(v)) if (a === "deny") denied.push([perm, pat]);
+  }
+  const fill = (pat: string, star: string, against = "") =>
+    [...pat].map((c, i) => c === "*" ? star : c === "?" ? (against[i] && !"*?".includes(against[i]!) ? against[i]! : "x") : c).join("");
+  for (const [perm, pat] of denied) {
+    const subjects = new Set([pat, fill(pat, ""), fill(pat, "x"), fill(pat, "x y")]);
+    for (const r of rules) {
+      if (r.action === "deny" || !openCodeMatch(perm, r.permission)) continue;
+      for (const star of ["", "x", "x y"]) subjects.add(fill(r.pattern, star, pat));
+    }
+    for (const subject of subjects) {
+      if (!openCodeMatch(subject, pat)) continue;
+      const rule = rules.findLast((r) => openCodeMatch(perm, r.permission) && openCodeMatch(subject, r.pattern)) ?? null;
+      if (rule?.action !== "deny") return { subject: perm === "bash" ? subject : `${perm} ${subject}`, rule };
+    }
+  }
+  return null;
+}
+
+/**
+ * Ask OpenCode itself what the role's agent will run under — every layer it
+ * merges: the person's global config, the project's opencode.json and
+ * `.opencode/`, the environment's, and the lock — and name what the lock no
+ * longer denies. Null when it holds.
+ *
+ * Fails closed: an OpenCode that will not say, or says something this cannot
+ * read, is a lock nobody checked. About two seconds per start, measured.
+ */
+export async function openCodeLockLoosened(bin: string, cwd: string, env: Record<string, string>): Promise<string | null> {
+  const lock = env.OPENCODE_CONFIG_CONTENT;
+  if (!lock) return "the role carries no OpenCode lock";
+  const agent = (JSON.parse(lock) as { default_agent?: string }).default_agent ?? "build";
+  let out = "";
+  try {
+    const proc = Bun.spawn([bin, "debug", "agent", agent], {
+      cwd, env: { ...process.env, ...env }, stdin: "ignore", stdout: "pipe", stderr: "ignore",
+    });
+    const timer = setTimeout(() => proc.kill(), 20_000);
+    [out] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    clearTimeout(timer);
+    if (proc.exitCode !== 0) return `OpenCode would not show its ${agent} agent's rules`;
+  } catch {
+    return `OpenCode would not show its ${agent} agent's rules`;
+  }
+  let rules: OpenCodeRule[];
+  try {
+    rules = (JSON.parse(out) as { permission: OpenCodeRule[] }).permission;
+    if (!Array.isArray(rules)) throw new Error("no rules");
+  } catch {
+    return `OpenCode's ${agent} agent's rules could not be read`;
+  }
+  const hit = lockLoosened(rules, lock);
+  if (!hit) return null;
+  return hit.rule
+    ? `\`${hit.subject}\` is allowed by the ${hit.rule.permission} rule \`${hit.rule.pattern}\`: ${hit.rule.action}`
+    : `\`${hit.subject}\` is not denied by any rule`;
+}
+
+/** The CLIs a worker role may be put on — the ones with a lock — and whether
+ *  each is installed here. The roles themselves the pane reads from
+ *  shared/workerRoles.ts. */
+export function workerRoleChoices() {
+  return {
+    providers: AGENT_PROVIDERS.filter((p) => p.lock && p.tab).map((p) => ({ id: p.id, title: p.title, installed: !!agentBinFor(p.id) })),
+  };
+}
+
+/**
+ * The command line a named agent starts with: the one `agentArgv` builds, with
+ * Claude's `--remote-control` and the caller's pass-through flags added.
+ *
+ * Out of `startAgent` so it can be asked without a tmux server.
+ */
+export function namedAgentArgv(
+  bin: string,
+  kind: string,
+  p: { name: string; prompt?: string; yolo?: boolean; remoteControl?: string; serverArgs?: string[]; args: string[] },
+  canName: boolean,
+): string[] {
+  const remote = p.remoteControl && validName(p.remoteControl) && kind === "claude" ? ["--remote-control", p.remoteControl] : [];
+  return agentArgv(bin, { prompt: p.prompt ?? "", yolo: p.yolo === true, title: p.name, kind }, canName, [...remote, ...(p.serverArgs ?? []), ...p.args]);
 }
 
 export async function startAgent(p: {
@@ -221,6 +482,13 @@ export async function startAgent(p: {
   args?: string[];
   /** Claude's `--remote-control <name>`: the worker asks for it by name. */
   remoteControl?: string;
+  /** Flags this server built — a worker role's lock and model, from
+   *  `roleStart`. Not gated by `refusedArg` because they are not a caller's:
+   *  NOT reachable from a request body, for the same reason as `env`. */
+  serverArgs?: string[];
+  /** Started as a worker role: its model and OpenCode agent are the role's,
+   *  so a caller's `--model`, `-m` or `--agent` is refused as well. */
+  lockedRole?: boolean;
   /** Extra environment for the window. NOT reachable from `/agents/named/start`
    *  on purpose: this is how the server hands a seat its own credential
    *  (seat.ts), and a body that could set environment would be a body that
@@ -237,9 +505,21 @@ export async function startAgent(p: {
   if (!kind) return { ok: false, error: "no-cli" };
   const args = p.args ?? [];
   if (args.some((a) => typeof a !== "string" || /[\n\r\0]/.test(a))) return { ok: false, error: "bad-args" };
-  const refused = refusedArg(args);
+  const refused = refusedArg(args, kind.id) ?? (p.lockedRole ? args.find((a) => ROLE_FIXED.has(a.split("=", 1)[0]!)) ?? null : null);
   if (refused !== null) return { ok: false, error: "arg-refused", flag: refused };
+  /* A role's lock is a deny list handed to the CLI, and whether each CLI still
+     applies it with its prompts skipped is not measured here. A locked worker
+     gains nothing from yolo, so the two are never combined. */
+  if (p.yolo && p.lockedRole) return { ok: false, error: "yolo-role" };
   if (p.yolo && !p.yoloAllowed) return { ok: false, error: "yolo-refused" };
+  /* OpenCode's lock is merged into the configs around it rather than laid over
+     them, so whether it holds depends on the directory: asked of OpenCode, in
+     that directory, before anything opens. */
+  if (p.lockedRole && kind.id === "opencode") {
+    const bin = agentBinFor(kind.id);
+    const why = bin ? await openCodeLockLoosened(bin, p.cwd, p.env ?? {}) : null;
+    if (why) return { ok: false, error: "lock-loosened", detail: why };
+  }
 
   /* A live name is somebody's session; starting another under it would leave
      one of them unreachable by name. The caller decides (`proj1234-2` is the
@@ -254,13 +534,8 @@ export async function startAgent(p: {
 
   const bin = agentBinFor(kind.id);
   if (!bin) return { ok: false, error: "no-cli" };
-  const base = agentArgv(bin, { prompt: p.prompt ?? "", yolo: p.yolo === true, title: p.name, kind: kind.id }, supportsSessionName(bin));
-  if (!base.length) return { ok: false, error: "no-cli" };
-  /* The prompt is the LAST element of `base`; the flags go before it. */
-  const head = p.prompt ? base.slice(0, -1) : base;
-  const tail = p.prompt ? base.slice(-1) : [];
-  const remote = p.remoteControl && validName(p.remoteControl) && kind.id === "claude" ? ["--remote-control", p.remoteControl] : [];
-  const argv = [...head, ...remote, ...args, ...tail];
+  const argv = namedAgentArgv(bin, kind.id, { ...p, args }, supportsSessionName(bin));
+  if (!argv.length) return { ok: false, error: "no-cli" };
 
   /* One tmux session for every named agent, apart from the project's own:
      Herdr gave each worker its own workspace, and a person's strip is not the

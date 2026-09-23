@@ -34,6 +34,7 @@
  * CLI a word it will refuse to start with.
  */
 import { ROSTER } from "../agentprobe.ts";
+import { AGENT_PROVIDERS, type RunSpelling } from "../../../shared/agentKinds.ts";
 import { agentArgv } from "../agentticket.ts";
 import { supportsSessionName } from "./claudecode.ts";
 
@@ -57,51 +58,20 @@ export function agentBin(id: unknown): string | null {
   return entry ? Bun.which(entry.bin) : null;
 }
 
-/** What one vendor's CLI wants said to it when a window opens running it. */
-export interface CliSpelling {
-  /**
-   * The single flag that turns permission prompts off.
-   *
-   * One flag, and it is the server's word rather than the client's — the same
-   * rule agentticket.ts states: a socket reachable from the UI sends a boolean
-   * and never an argument.
-   */
-  bypass: string;
-  /**
-   * The flag that carries the prompt when a bare positional argument would run
-   * the CLI headlessly instead of opening it.
-   *
-   * Empty means positional, which is Claude Code's form, Codex's, and what
-   * every path in this server did before this file existed. It is also the
-   * FALLBACK when the flag below cannot be confirmed on this machine, and that
-   * is deliberate: a flag we can prove is an improvement on the shipped
-   * behaviour, and a flag we cannot prove must degrade back to it rather than
-   * to some third thing nobody has run.
-   */
-  promptFlag: string;
-}
+/** What one vendor's CLI wants said to it when a window opens running it —
+ *  the fields are documented where the rows are. */
+export type CliSpelling = RunSpelling;
 
-export const SPELLINGS: Record<string, CliSpelling> = {
-  // claudecode.ts and agentticket.ts, and the path everything shipped on.
-  [CLAUDE_CODE]: { bypass: "--dangerously-skip-permissions", promptFlag: "" },
-  // codex.ts:codexArgs, where the same flag drives the `full-access` sandbox.
-  // The interactive form takes the prompt as a positional; `codex exec --json`
-  // is the streaming form the chat panel drives and would fill a tmux pane with
-  // JSON instead of a TUI.
-  codex: { bypass: "--dangerously-bypass-approvals-and-sandbox", promptFlag: "" },
-  // The Gemini CLI answers a bare positional non-interactively and exits, so
-  // the prompt goes through the flag that keeps the TUI up. Both words are
-  // probed before they are used — this is the entry with the least evidence
-  // behind it in this repo, and the probe is what makes that safe rather than
-  // hopeful: an unrecognised flag is dropped and the leg still opens.
-  gemini: { bypass: "--yolo", promptFlag: "-i" },
-  // antigravity.ts:antigravityArgs, same spelling as Claude's by that CLI's own
-  // choice. Its `-p` is the print-and-exit form the chat panel drives and is
-  // deliberately NOT listed as the prompt flag: sending a run's leg through it
-  // would answer once and close the window. Positional is what is left, and it
-  // is the form every other path here already uses.
-  antigravity: { bypass: "--dangerously-skip-permissions", promptFlag: "" },
-};
+/**
+ * Keyed by roster id, and read off the `run` facet of shared/agentKinds.ts,
+ * where each spelling now sits with the note on which file of this server it
+ * was taken from. A row needs a `probe` facet too: a run leg is started by
+ * roster id, so a spelling for a CLI the roster does not list could never be
+ * reached.
+ */
+export const SPELLINGS: Record<string, CliSpelling> = Object.fromEntries(
+  AGENT_PROVIDERS.flatMap((p) => (p.run && p.probe ? [[p.probe.id ?? p.id, p.run]] : [])),
+);
 
 /**
  * Does this binary admit to knowing this flag?

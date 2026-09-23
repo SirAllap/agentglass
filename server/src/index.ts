@@ -147,7 +147,6 @@ import { agentBinFor, mintAgentTicket } from "./agentticket.ts";
 import { makeViewTempDir } from "./viewtemp.ts";
 import { transcribe, transcriberOn } from "./dictate.ts";
 import { AGENT_KINDS, agentKind } from "../../shared/agentKinds.ts";
-import { claudeCode } from "./agents/claudecode.ts";
 /* Both sides' imports: main added five, this branch still uses `panesWithPids`
    and `reapMirrorSessions`. Neither list is a superset of the other. */
 import { listPanes, withTmuxServer, focusPaneAnywhere, activePane, panesWithPids, sweepPinnedWindows, pinnedSockets, reapMirrorSessions, startMirrorSweeper, stopMirrorSweeper } from "./tmuxctl.ts";
@@ -166,7 +165,7 @@ import {
   windowTree, newWindow, splitPane, killWindow, killPane as killLayoutPane, selectWindow, selectPane,
   renameWindow, resizePane,
 } from "./tmuxlayout.ts";
-import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource, tmuxPrefix, tmuxTerminal, validTmuxPrefix, writeTmuxSettings, lanternNudge, lanternWatch, lanternWatchMinutes, cacheTtlMinutes, lanternNudgeMinutes, writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN, seatWakeHours, writeSeatSettings } from "./config.ts";
+import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource, tmuxPrefix, tmuxTerminal, validTmuxPrefix, writeTmuxSettings, lanternNudge, lanternWatch, lanternWatchMinutes, cacheTtlMinutes, lanternNudgeMinutes, writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN, seatWakeHours, writeSeatSettings, workerRoles, writeWorkerRole } from "./config.ts";
 import { claudeModels } from "./claudemodels.ts";
 import { codexStream, codexModels, codexTranscript, codexCwd, CODEX_ENABLED, CODEX_BYPASS_ALLOWED } from "./codex.ts";
 import { antigravityStream, antigravityModels, ANTIGRAVITY_ENABLED, ANTIGRAVITY_BYPASS_ALLOWED } from "./antigravity.ts";
@@ -7202,6 +7201,21 @@ const server = Bun.serve<WsData>({
      * composes it here from the project's doctrine and the board, the same
      * property `/lantern/ticket` keeps.
      */
+    /*
+     * Which CLI and model each worker role runs on. The choices offered are
+     * the CLIs with a lock (shared/agentKinds.ts), each said with whether it
+     * is installed here, so the pane never offers a role something it would
+     * refuse at start.
+     */
+    if (pathname === "/agents/roles" && req.method === "GET") {
+      return json({ ok: true, roles: workerRoles(), ...AgentOps.workerRoleChoices() });
+    }
+    if (pathname === "/agents/roles" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { role?: unknown; provider?: unknown; model?: unknown }; try { b = (await req.json()) as typeof b; } catch { b = {}; }
+      const r = writeWorkerRole(b.role, { provider: b.provider, model: b.model });
+      return json({ ...r, roles: workerRoles() }, r.ok ? 200 : 400);
+    }
     if (pathname === "/seat/wake" && req.method === "GET") return json({ ok: true, hours: seatWakeHours() });
     if (pathname === "/seat/wake" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
@@ -7567,7 +7581,19 @@ const server = Bun.serve<WsData>({
         if (!cwd || (!inScope(cwd) && !sameProject) || !fsExists(cwd)) {
           return json({ ok: false, error: "that directory is not in the open project, nor a worktree of it" }, 400);
         }
-        const wanted = typeof b.kind === "string" ? b.kind : "claude";
+        /* A worker ROLE picks the CLI itself — Settings says which one each
+           role runs on — and brings that CLI's lock and model with it. The
+           lock is built here from the role table, never taken from the body:
+           naming a kind as well is refused unless it is the same one, so a
+           caller cannot ask for a role and quietly get another CLI unlocked. */
+        const role = b.role === undefined ? null : AgentOps.roleStart(b.role);
+        if (role && !role.ok) {
+          return json({ ok: false, error: role.error === "no-role" ? "no such role" : "the CLI this role is set to has no lock this app can apply" }, 400);
+        }
+        const wanted = role?.ok ? role.kind : typeof b.kind === "string" ? b.kind : "claude";
+        if (role?.ok && typeof b.kind === "string" && b.kind !== role.kind) {
+          return json({ ok: false, error: `this role runs on ${role.kind} (Settings ▸ Worker roles), not ${b.kind}` }, 400);
+        }
         if (!agentKind(wanted)) return json({ ok: false, error: "no such agent" }, 400);
         const args = Array.isArray(b.args) ? b.args.filter((a): a is string => typeof a === "string") : [];
         const r = await AgentOps.startAgent({
@@ -7576,10 +7602,11 @@ const server = Bun.serve<WsData>({
           yolo: b.yolo === true, yoloAllowed: chatBypassAllowed(), args,
           remoteControl: typeof b.remoteControl === "string" ? b.remoteControl : undefined,
           keep: b.keep === true,
+          ...(role?.ok ? { serverArgs: role.args, env: role.env, lockedRole: true } : {}),
         });
         if (!r.ok) {
-          /* `arg-refused` is answered below, with the flag in it. */
-          const why: Record<Exclude<AgentOps.StartError, "arg-refused">, string> = {
+          /* `arg-refused` and `lock-loosened` are answered below, with their detail in them. */
+          const why: Record<Exclude<AgentOps.StartError, "arg-refused" | "lock-loosened">, string> = {
             exists: "an agent by that name is still running",
             "no-cli": "that agent CLI is not installed here",
             "no-window": "tmux would not open a window for it",
@@ -7588,11 +7615,15 @@ const server = Bun.serve<WsData>({
               : "the agent CLI exited as soon as it was launched",
             "bad-name": "bad name",
             "yolo-refused": "skipping permissions is off in Settings (chatBypass)",
+            "yolo-role": "a worker role runs under its lock, and skipping permissions is never combined with one",
             "bad-args": "args must be plain strings",
           };
           /* Named, so the caller learns which arg and why in one answer: what
              an agent is allowed to do is decided in Settings (yolo) or by this
              server, never by a flag riding in `args` — see refusedArg. */
+          if (r.error === "lock-loosened") {
+            return json({ ok: false, error: `this directory's OpenCode config loosens the role's lock, so it was not started: ${r.detail}` }, 400);
+          }
           if (r.error === "arg-refused") {
             return json({ ok: false, error: `${r.flag} is not an arg a start may carry: it changes what the agent is allowed to do, and that is decided in Settings, not in args` }, 400);
           }
@@ -7698,9 +7729,7 @@ const server = Bun.serve<WsData>({
           id: a.id,
           title: a.title,
           what: a.what,
-          /* Claude answers through its own resolver, which knows about a
-             pinned version and a shim as well as PATH. */
-          installed: a.id === "claude" ? !!claudeCode.bin() : !!agentBinFor(a.id),
+          installed: !!agentBinFor(a.id),
           /* Whether "permissions off" is a thing this one HAS. A phone must
              not draw a switch that buys no flag. */
           canBypass: !!a.yoloFlag,

@@ -6,6 +6,8 @@
 // two — one that happens to work today only because of the order two lines
 // appear in. This is the thing both of them depend on, so it sits below both.
 
+import { agentProvider } from "../../../shared/agentKinds.ts";
+
 /**
  * Which CLI is behind a conversation.
  *
@@ -61,39 +63,37 @@ export type AgentSpec = {
   canPane: boolean;
 };
 
-export const DEFAULT_MODEL = "claude-opus-5";
-export const DEFAULT_MODE = "default";
-/** Codex's counterparts. The mode is its sandbox rather than a permission
- *  policy, so the two vocabularies stay apart. Keep in step with
- *  DEFAULT_SANDBOX in server/src/codex.ts. */
-export const DEFAULT_CODEX_MODEL = "gpt-5.6-sol";
-export const DEFAULT_CODEX_MODE = "read-only";
-/** Antigravity's. Its four modes happen to line up with Claude's, which is a
- *  property of the CLI rather than a mapping imposed here. Keep in step with
- *  DEFAULT_MODE in server/src/antigravity.ts. */
-export const DEFAULT_ANTIGRAVITY_MODEL = "gemini-3.6-flash-medium";
-export const DEFAULT_ANTIGRAVITY_MODE = "request-review";
+/**
+ * The rows themselves are the `chat` facet of shared/agentKinds.ts — one table
+ * for every place that asks "which CLI", so the chat panel's roster cannot
+ * drift from the tab menu's or the requirements panel's again. What this file
+ * adds is the closed type the store narrows to, and the binary under `cli`.
+ *
+ * A row that loses its `chat` facet fails here, at load, rather than as a
+ * chat that silently gets Claude's defaults; a test pins that every one of
+ * the three is there.
+ */
+function chatSpec(id: AgentKind): AgentSpec {
+  const row = agentProvider(id);
+  if (!row?.chat) throw new Error(`shared/agentKinds.ts has no chat facet for ${id}`);
+  return { ...row.chat, cli: row.bin };
+}
 
 export const AGENTS: Record<AgentKind, AgentSpec> = {
-  claude: {
-    label: "Claude", cli: "claude",
-    defaultModel: DEFAULT_MODEL, defaultMode: DEFAULT_MODE,
-    bypassMode: "bypassPermissions", canAttach: true, hasTranscript: true,
-    hasEffort: true, canPane: true,
-  },
-  codex: {
-    label: "Codex", cli: "codex",
-    defaultModel: DEFAULT_CODEX_MODEL, defaultMode: DEFAULT_CODEX_MODE,
-    bypassMode: "full-access", canAttach: false, hasTranscript: true,
-    hasEffort: false, canPane: false,
-  },
-  antigravity: {
-    label: "Antigravity", cli: "agy",
-    defaultModel: DEFAULT_ANTIGRAVITY_MODEL, defaultMode: DEFAULT_ANTIGRAVITY_MODE,
-    bypassMode: "always-proceed", canAttach: false, hasTranscript: false,
-    hasEffort: false, canPane: false,
-  },
+  claude: chatSpec("claude"),
+  codex: chatSpec("codex"),
+  antigravity: chatSpec("antigravity"),
 };
+
+export const DEFAULT_MODEL = AGENTS.claude.defaultModel;
+export const DEFAULT_MODE = AGENTS.claude.defaultMode;
+/** Codex's counterparts. The mode is its sandbox rather than a permission
+ *  policy, so the two vocabularies stay apart. */
+export const DEFAULT_CODEX_MODEL = AGENTS.codex.defaultModel;
+export const DEFAULT_CODEX_MODE = AGENTS.codex.defaultMode;
+/** Antigravity's. */
+export const DEFAULT_ANTIGRAVITY_MODEL = AGENTS.antigravity.defaultModel;
+export const DEFAULT_ANTIGRAVITY_MODE = AGENTS.antigravity.defaultMode;
 
 /** Narrow an untrusted string to an agent. Anything unrecognised is Claude:
  *  everything written down before chats had a second agent was a Claude chat,

@@ -163,7 +163,9 @@ def main():
     p = sub.add_parser("start", help="seat an agent by name in a checkout")
     p.add_argument("name")
     p.add_argument("--cwd", required=True, help="the checkout (a worktree) it runs in")
-    p.add_argument("--kind", default="claude", help="which CLI: claude (default), codex, ...")
+    p.add_argument("--kind", default=None, help="which CLI: claude (default), codex, ...")
+    p.add_argument("--role", choices=["scout", "builder", "verifier"],
+                   help="a worker role: the CLI and model Settings pick for it, locked against push, commit and merge")
     p.add_argument("--yolo", action="store_true", help="skip permissions, if Settings allow it")
     p.add_argument("--remote-control", metavar="NAME", help="Claude's --remote-control NAME")
     p.add_argument("--prompt", default="", help="a first message on the command line (prefer `prompt` after `start`)")
@@ -316,8 +318,14 @@ def main():
     if a.cmd == "list":
         return emit(call("/agents/named" + ("?all=1" if a.all else ""), method="GET", timeout=60))
     if a.cmd == "start":
-        body = {"name": a.name, "cwd": os.path.abspath(os.path.expanduser(a.cwd)), "kind": a.kind,
+        body = {"name": a.name, "cwd": os.path.abspath(os.path.expanduser(a.cwd)),
                 "yolo": bool(a.yolo), "prompt": a.prompt, "timeout": a.timeout, "args": list(a.args) + passthrough}
+        # Absent rather than "claude": the server defaults it, and a role picks
+        # its own CLI and refuses a different one named beside it.
+        if a.kind:
+            body["kind"] = a.kind
+        if a.role:
+            body["role"] = a.role
         if a.remote_control:
             body["remoteControl"] = a.remote_control
         if a.keep:

@@ -211,3 +211,24 @@ describe("the Claude-only controls", () => {
     expect(store.AGENTS.claude.canPane).toBe(true);
   });
 });
+
+describe("the chat roster, read off the shared provider table", () => {
+  test("says what it said when it was its own list", () => {
+    // The rows moved into shared/agentKinds.ts so the chat panel cannot drift
+    // from the tab menu again. Moving them must not change a single value.
+    expect(store.AGENTS).toEqual({
+      claude: {
+        label: "Claude", cli: "claude", defaultModel: "claude-opus-5", defaultMode: "default",
+        bypassMode: "bypassPermissions", canAttach: true, hasTranscript: true, hasEffort: true, canPane: true,
+      },
+      codex: {
+        label: "Codex", cli: "codex", defaultModel: "gpt-5.6-sol", defaultMode: "read-only",
+        bypassMode: "full-access", canAttach: false, hasTranscript: true, hasEffort: false, canPane: false,
+      },
+      antigravity: {
+        label: "Antigravity", cli: "agy", defaultModel: "gemini-3.6-flash-medium", defaultMode: "request-review",
+        bypassMode: "always-proceed", canAttach: false, hasTranscript: false, hasEffort: false, canPane: false,
+      },
+    });
+  });
+});
