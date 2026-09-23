@@ -501,6 +501,28 @@ describe("the living mark rides the landing's orbit", () => {
   });
 });
 
+/*
+ * The title mark stands still once the cover is gone.
+ *
+ * `.ag-lm-arm`/`.ag-lm-dot` had exactly one gate on running: idle. So the
+ * title bar's own copy of the mark (Logo.tsx) orbited any time the app was
+ * not idle — including long after the cover it was meant to hand off to had
+ * come down and gone. Paused by default now, running only while `.ag-covering`
+ * is on `<html>`: the cover's own big mark is unaffected (already forced
+ * linear, see `#ag-cover :is(.ag-lm-arm, .ag-lm-dot)` below), and the title
+ * bar's copy freezes the moment the handoff ends.
+ */
+describe("the title mark stands still once the cover is gone", () => {
+  test("paused outside the cover, running only under .ag-covering", () => {
+    expect(HTML).toContain(".ag-lm-arm,.ag-lm-dot{animation-play-state:paused}");
+    expect(HTML).toContain(":root.ag-covering :is(.ag-lm-arm,.ag-lm-dot){animation-play-state:running}");
+    // Before the idle rule, which only ever adds a SECOND reason to pause —
+    // never a reason to run outside the cover.
+    expect(HTML.indexOf(".ag-lm-arm,.ag-lm-dot{animation-play-state:paused}"))
+      .toBeLessThan(HTML.indexOf(':root[data-idle="1"]'));
+  });
+});
+
 describe("one mark lands, and it is the title bar's", () => {
   test("TopBar draws the living mark as the cover's target, and nothing else claims to be one", () => {
     const top = src("../src/components/TopBar.tsx");

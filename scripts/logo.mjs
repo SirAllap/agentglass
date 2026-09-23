@@ -195,6 +195,15 @@ function livingCss() {
        cover's big mark sets it back to every frame (web/index.html). */
     orbitCss("ag-lm", o, { dur: 16, halo: n.halo, r: n.r, color: "var(--success,#3fb950)", haloAlpha: 0.18, coreAlpha: 1, easing: "steps(2,jump-none)" }),
     orbitCss("agc-far", FAR, { dur: 48, halo: 2.2, r: 0.9, color: "var(--warning,#d29922)", haloAlpha: 0.16, coreAlpha: 0.8 }),
+    /* The title bar's own copy of the arm and dot (Logo.tsx) orbited any time
+       the app was not idle — including long after the cover it was meant to
+       hand off to had come down and gone, so the mark in the title bar never
+       actually stood still. Paused outside the cover; the idle rule below
+       only ever adds a second reason to pause, never a reason to run beyond
+       it. The cover's own big mark is unaffected — it is forced linear, see
+       `#ag-cover :is(.ag-lm-arm, .ag-lm-dot)` in web/index.html. */
+    `.ag-lm-arm,.ag-lm-dot{animation-play-state:paused}`,
+    `:root.ag-covering :is(.ag-lm-arm,.ag-lm-dot){animation-play-state:running}`,
     /* Frozen with the rest of the app's ambient loops while nobody is looking
        (useLive.ts sets data-idle) — but never while the cover is up: the mark
        in the title bar takes over from the one flying in, orbit and all. */
