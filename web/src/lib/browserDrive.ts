@@ -2741,21 +2741,26 @@ async function runVerb(
            `<select>` whose value changes without `change` leaves Vue and
            React holding the old one, which is the bug this verb exists to
            stop reproducing. */
+        /* Through `resolveOne` like every other act verb. It used to build its
+           own querySelector and was the one verb that missed the id rewrite:
+           measured on the bench, `select e3` on the <select> an observation
+           had just called e3 answered "nothing matched". */
         const value = jsLit(String(ask.args.value ?? ""));
-        const done = await el.executeJavaScript(
-          `(() => { const e = document.querySelector(${sel});
-             if (!e || e.tagName !== "SELECT") return { ok: false, why: e ? "not a <select>" : "nothing matched" };
+        const done = await el.executeJavaScript(resolveOne(sel,
+          `if (e.tagName !== "SELECT") return { kind: "refused", why: "not a <select>" };
              const opts = [...e.options];
              const hit = opts.find((o) => o.value === ${value}) || opts.find((o) => (o.text || "").trim() === ${value});
-             if (!hit) return { ok: false, why: "no such option", options: opts.map((o) => o.value).slice(0, 40) };
+             if (!hit) return { kind: "refused", why: "no such option", options: opts.map((o) => o.value).slice(0, 40) };
              e.value = hit.value;
              e.dispatchEvent(new Event("input", { bubbles: true }));
              e.dispatchEvent(new Event("change", { bubbles: true }));
-             return { ok: true, value: hit.value, text: (hit.text || "").trim() }; })()`,
-        ) as { ok: boolean; why?: string; options?: string[] };
-        return done?.ok
-          ? { ok: true, value: done }
-          : { ok: false, error: `${done?.why ?? "could not select"}${done?.options ? ` — options: ${done.options.join(", ")}` : ""}` };
+             return { kind: "ok", value: hit.value, text: (hit.text || "").trim() };`,
+        )) as { kind: string; value?: string; text?: string; why?: string; options?: string[] };
+        if (done?.kind === "ok") return { ok: true, value: { ok: true, value: done.value, text: done.text } };
+        if (done?.kind === "refused") {
+          return { ok: false, error: `${done.why}${done.options ? ` — options: ${done.options.join(", ")}` : ""}` };
+        }
+        return { ok: false, error: selectorError(String(ask.args.selector ?? ""), done as never) };
       }
       case "reload": {
         const hard = ask.args.bypassCache !== false;
