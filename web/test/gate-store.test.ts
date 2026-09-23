@@ -102,7 +102,10 @@ test("answering a gate does not let an in-flight poll re-announce it", () => {
 
   store.ingestGates([gate("a"), gate("b"), gate("c")]); // the stale reply
   expect(arrivals.map((g) => g.id)).toEqual(["c"]);
-  expect(gateNotes()).toHaveLength(1);
+  // forgetGate cleared c's row the moment the decision was sent — see
+  // gate-bell-single-row.test.ts. It does not come back because the stale
+  // reply above did not re-announce it either.
+  expect(gateNotes()).toHaveLength(0);
   // And the card stays gone. Republishing the stale list verbatim would flick
   // the gate you just answered back onto the screen, reading as a click that
   // did not register — until the server confirms the removal, it is suppressed.
@@ -114,7 +117,9 @@ test("a gate that resolves and is later reissued is announced again", () => {
   store.ingestGates([gate("a"), gate("b")]); // b comes back as a new hold
 
   expect(arrivals.map((g) => g.id)).toEqual(["c", "b"]);
-  expect(gateNotes()).toHaveLength(2);
+  // c's own row is long gone (see above); only the reissued b's is on screen.
+  expect(gateNotes()).toHaveLength(1);
+  expect(gateNotes()[0]!.key).toBe("gate:b");
   unsub?.();
 });
 

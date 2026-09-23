@@ -1,5 +1,5 @@
 import { api } from "./api.ts";
-import { recordNote } from "./sysNotify.ts";
+import { clearNote, recordNote } from "./sysNotify.ts";
 import { getNotifyPrefs } from "./notifyPrefsStore.ts";
 import { notifies } from "../../../shared/notifyPrefs.ts";
 import type { PendingGate } from "../../../shared/types.ts";
@@ -25,6 +25,11 @@ import type { PendingGate } from "../../../shared/types.ts";
 const POLL_MS = 2000;
 
 const subs = new Set<() => void>();
+
+/** The bell row a hold's own note is kept under, so exactly one exists per
+ *  hold and it can be cleared without guessing at the sentence announce()
+ *  wrote for it. */
+const keyFor = (id: string): string => `gate:${id}`;
 
 // Compared by identity by useSyncExternalStore, so it is replaced only when
 // the contents actually change. Polling every two seconds and handing back a
@@ -118,6 +123,11 @@ function announce(g: PendingGate) {
     summary: `Approve ${g.tool_name}?`,
     body: g.summary ? `${agent} · ${g.summary}` : `${agent} is held until you decide`,
     urgency: 2,
+    // One row per hold, cleared by keyFor(g.id) below rather than left to pile
+    // up: urgency 2 never folds (notePolicy.ts), and the server's own push for
+    // this same hold (alerts.ts pushGate → the "alert" frame) used to write a
+    // second, unkeyed row for it — see useLive.ts's handling of source "gate".
+    key: keyFor(g.id),
     // Somewhere to go while you decide: the pane it is held in, so you can read
     // what it was doing before you answer. The approve buttons live in the notch
     // itself; this is the other half of the question.
@@ -150,7 +160,11 @@ export function ingestGates(gates: PendingGate[]) {
   }
 
   const live = new Set(gates.map((g) => g.id));
-  for (const id of announced) if (!live.has(id)) announced.delete(id);
+  // A hold that left the pending list resolved somehow — decided, timed out,
+  // or answered from another device — and its row goes with it. Dropped
+  // rather than downgraded: /gate/history already carries the record of what
+  // happened, and a quiet row nobody asked to keep is one more thing to read.
+  for (const id of announced) if (!live.has(id)) { announced.delete(id); clearNote(keyFor(id)); }
 
   // Reconcile the optimistic forgets: an id the server has finally stopped
   // listing is confirmed gone and stops being suppressed; one it still lists
@@ -179,6 +193,10 @@ export function forgetGate(id: string) {
   // overlaps the decision still lists it, and ingestGates would otherwise
   // republish it. Cleared once the server confirms it gone — see `forgotten`.
   forgotten.add(id);
+  // The bell row goes the moment the decision is sent — waiting for the next
+  // poll to prune `announced` would leave it on screen for up to two seconds
+  // after the click that answered it.
+  clearNote(keyFor(id));
   const next = snapshot.filter((g) => g.id !== id);
   if (next.length === snapshot.length) return;
   snapshot = next;

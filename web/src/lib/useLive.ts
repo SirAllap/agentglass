@@ -7,7 +7,7 @@ import { emitControl } from "./controlBus.ts";
 import { emitBrowserAsk } from "./browserBus.ts";
 import { emitUnderstudy } from "./understudyBus.ts";
 import { emitPlugin } from "./pluginBus.ts";
-import { recordNote, fireDesktopAlert } from "./sysNotify.ts";
+import { recordNote, fireDesktopAlert, firePopupOnly } from "./sysNotify.ts";
 import { ciShouldNotify } from "./ciNotifyPref.ts";
 import { talkBody, talkShouldNotify, talkSummary, talkUrgency } from "./talkNotify.ts";
 import { raiseAlarm } from "./alarm.ts";
@@ -282,9 +282,16 @@ export function useLive(paused = false): LiveData {
       if (frame.type === "alert") {
         // agentglass's own push alert (gate hold, permission wait, tool error),
         // opted into on the server. Raise it as a native OS notification — the
-        // cross-platform replacement for notify-send. The notch already has the
-        // in-app copy through its own paths (gateStore et al.), so this does not
-        // also recordNote, which would double it there.
+        // cross-platform replacement for notify-send.
+        //
+        // A gate hold is the one case where the notch already HAS the in-app
+        // copy, through gateStore's own poll — announce() there recordNotes it
+        // under `gate:<id>` the moment it arrives, well before this push can
+        // reach the socket. fireDesktopAlert would recordNote a second, unkeyed
+        // row for the same hold: measured, two rows for one Approve, neither
+        // one ever clearing on its own (urgency 2 never folds). So only the
+        // transient popup runs here; the durable row is gateStore's alone.
+        if (frame.data.source === "gate") { firePopupOnly(frame.data); return; }
         fireDesktopAlert(frame.data);
         return;
       }
