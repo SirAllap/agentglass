@@ -1,5 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 
@@ -112,6 +112,56 @@ function read(): DeviceFile {
   }
 }
 
+/**
+ * The store as this server holds it: read once, and after that changed only by
+ * this server's own pairing calls.
+ *
+ * It used to be read from disk on every lookup, and the file is 0600 and this
+ * user's — so a process running as the user could add a row with the hash of a
+ * token it chose and, on the next request, hold a paired device's credential:
+ * one that answers gates on every server, the desktop app's included, where the
+ * desk key closed the Origin way in (desk.ts). Now a row written behind this
+ * server's back is not read. The file is still stat'ed on each lookup, never
+ * parsed, so the change is noticed and said — once, on stderr and to the desk —
+ * and the set in memory stays what pairing made it. The next write from pairing
+ * puts that set back on disk.
+ *
+ * Its ceiling: a restart reads the file again, so a row planted and followed by
+ * a restart is loaded; and a process that can do that can as well replace this
+ * server's code. SECURITY.md names both as out of reach for any check here.
+ * Keyed by path because tests point XDG_CONFIG_HOME at a new directory per file.
+ */
+let held: { path: string; file: DeviceFile; stamp: string | null; told: boolean } | null = null;
+let onTampered: ((path: string) => void) | null = null;
+
+/** Who hears that the file changed behind this server's back (index.ts: the desk). */
+export function whenStoreTampered(fn: ((path: string) => void) | null): void { onTampered = fn; }
+
+function stampOf(p: string): string | null {
+  try { const st = statSync(p); return `${st.ino}:${st.size}:${st.mtimeMs}`; } catch { return null; }
+}
+
+function store(): DeviceFile {
+  const p = devicesPath();
+  if (!held || held.path !== p) {
+    held = { path: p, file: read(), stamp: stampOf(p), told: false };
+  } else if (!held.told && stampOf(p) !== held.stamp) {
+    held.told = true;
+    console.error(`[agentglass] ${p} changed outside agentglass; its paired devices are the ones it had at start, `
+      + "plus any paired since, and the change is ignored until a restart");
+    try { onTampered?.(p); } catch { /* the warning is the point, not its delivery */ }
+  }
+  return held.file;
+}
+
+function save(f: DeviceFile): boolean {
+  store();
+  held!.file = f;
+  const ok = write(f);
+  held!.stamp = stampOf(held!.path);
+  return ok;
+}
+
 function write(f: DeviceFile): boolean {
   const p = devicesPath();
   if (offLimits(p)) return false;
@@ -132,7 +182,7 @@ function write(f: DeviceFile): boolean {
 export const hashToken = (t: string): string => createHash("sha256").update(t).digest("hex");
 
 export function devices(): Device[] {
-  return read().devices ?? [];
+  return store().devices ?? [];
 }
 
 /** Only the ones that can still be used. */
@@ -158,8 +208,8 @@ export function issueDevice(
     scope,
     createdAt: now,
   };
-  const f = read();
-  write({ ...f, devices: [...(f.devices ?? []), device] });
+  const f = store();
+  save({ ...f, devices: [...(f.devices ?? []), device] });
   return { device, token };
 }
 
@@ -193,12 +243,12 @@ export function deviceFor(token: string): Device | null {
 /** Note that a device was used, at most once a minute. */
 const MARK_EVERY_MS = 60_000;
 export function markSeen(id: string, now = Date.now()): void {
-  const f = read();
+  const f = store();
   const d = (f.devices ?? []).find((x) => x.id === id);
   // Every request would otherwise rewrite the file, which on a phone polling
   // four endpoints is a write per second for a field nobody reads that often.
   if (!d || (d.lastSeenAt && now - d.lastSeenAt < MARK_EVERY_MS)) return;
-  write({ ...f, devices: (f.devices ?? []).map((x) => (x.id === id ? { ...x, lastSeenAt: now } : x)) });
+  save({ ...f, devices: (f.devices ?? []).map((x) => (x.id === id ? { ...x, lastSeenAt: now } : x)) });
 }
 
 /**
@@ -209,14 +259,14 @@ export function markSeen(id: string, now = Date.now()): void {
  * cannot be used to answer "did I definitely cut that phone off".
  */
 export function revokeDevice(id: string, now = Date.now()): boolean {
-  const f = read();
+  const f = store();
   const found = (f.devices ?? []).some((d) => d.id === id && !d.revokedAt);
   if (!found) return false;
-  write({ ...f, devices: (f.devices ?? []).map((d) => (d.id === id ? { ...d, revokedAt: now } : d)) });
+  save({ ...f, devices: (f.devices ?? []).map((d) => (d.id === id ? { ...d, revokedAt: now } : d)) });
   return true;
 }
 
 /** Only for tests, which run several servers against one scratch directory. */
 export function __resetDevices(): void {
-  write({ devices: [] });
+  save({ devices: [] });
 }

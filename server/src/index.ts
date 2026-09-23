@@ -1,6 +1,10 @@
 // FIRST, and it must stay first: `agentglass-server cookies …` is answered
 // here, before the imports below open the database and start their timers.
 import "./cookieentry.ts";
+// SECOND, for the same reason: it reads the desktop app's key off the pipe the
+// app started this process with and closes it, before any import below can
+// spawn a child that would inherit the descriptor (desk.ts).
+import "./desk.ts";
 import type { ServerWebSocket } from "bun";
 import type { IngestBody, WsFrame, WorkingTree, PanesResponse, AgentSessionRow, GitRepoRef, TreeAuthorsInfo, ChangeRow } from "../../shared/types.ts";
 import { slackReachable } from "./slackreach.ts";
@@ -37,7 +41,7 @@ import {
   releaseDatabaseClaim,
   noteWaitFromHook,
 } from "./db.ts";
-import { maybeAlert, setAlertSink, lanternSnapshot } from "./alerts.ts";
+import { maybeAlert, setAlertSink, pushDeviceStoreChanged, lanternSnapshot } from "./alerts.ts";
 import { noteAction, actorOf, type ActorSource } from "./actions.ts";
 import { getSkills, catalogMarkdown, catalogCsv, usageSince } from "./skills.ts";
 import { getInsights } from "./insights.ts";
@@ -179,7 +183,8 @@ import { probeAgents, ROSTER } from "./agentprobe.ts";
 import { join as joinPath, basename } from "node:path";
 import { hostname, tmpdir } from "node:os";
 import { privateHost, resolvePeer, originOf, guardedFetch, hostsOnly } from "./net.ts";
-import { resolveToken, tokenOk, isIntake, isAuthExempt, callerFor, allowed, scopeNeeded, pluginOfRequest, answersFromADevice, understudyRequiresToken, UNDERSTUDY_NO_TOKEN_ERROR, mintUnderstudyToken, revokeUnderstudyToken, type Caller, type Origin } from "./auth.ts";
+import { DESK_HEADER, DESK_STARTED } from "./desk.ts";
+import { resolveToken, tokenOk, isIntake, isAuthExempt, callerFor, allowed, scopeNeeded, pluginOfRequest, answersFromADevice, deskKeyOk, understudyRequiresToken, UNDERSTUDY_NO_TOKEN_ERROR, mintUnderstudyToken, revokeUnderstudyToken, type Caller, type Origin } from "./auth.ts";
 import {
   listPlugins, masterEnabled, setMaster, installPlugin, installFromCatalogue, updatePlugin, enablePlugin, disablePlugin, removePlugin,
   contributesOf, isRunning, pluginSettings, setPluginSettings, resumeEnabledPlugins, stopAllPluginsSync, pluginIcon,
@@ -1376,7 +1381,7 @@ import { bunBin, NO_BUN } from "./bunbin.ts";
 import { understudyRunEnv } from "./understudy-runenv.ts";
 import { recoverAfterRestart, startUnderstudyWatchdog, stopUnderstudyWatchdog, setResumeHook, setGitHook, setFenceHook, setAliveHook, setBunHook, setBusyHook } from "./understudy-watchdog.ts";
 import { openRequests, helpHistory, markAnswered } from "./understudy-help.ts";
-import { activeDevices, markSeen, revokeDevice, devices, publicDevice, type Scope } from "./devices.ts";
+import { activeDevices, markSeen, revokeDevice, devices, publicDevice, whenStoreTampered, type Scope } from "./devices.ts";
 import { credentialsPath, hasCredential } from "./credentials.ts";
 import { startCardWatch, cardForTitle } from "./clickupwatch.ts";
 import * as CardIndex from "./clickupindex.ts";
@@ -1498,7 +1503,9 @@ function corsFor(req: Request): Record<string, string> {
     "Access-Control-Allow-Origin": origin || "*",
     Vary: "Origin",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-    "Access-Control-Allow-Headers": "content-type, authorization",
+    // The desk's header is the desktop app's renderer answering a gate from its
+    // own scheme, which is a cross-origin request here (desk.ts).
+    "Access-Control-Allow-Headers": `content-type, authorization, ${DESK_HEADER}`,
   };
 }
 
@@ -1630,6 +1637,19 @@ function trustedCaller(req: Request, from: Origin): boolean {
 const attachmentHostError = hostsOnly(["clickup.com", "clickup-attachments.com"]);
 
 /**
+ * A caller as the action log wants it. `Caller.kind` grew a third value —
+ * `plugin`, see auth.ts — and ActorSource has two. A plugin's token was logged
+ * as an unnamed device before, which came out as the address it arrived from;
+ * it still does, because a plugin has no `device` to name, and the log line is
+ * about WHERE a write came from when nobody can be named. What changed is the
+ * gate (answersFromADevice), not the log.
+ */
+function asActor(c: Caller | null | undefined): ActorSource | null {
+  if (!c) return null;
+  return c.kind === "plugin" ? { kind: "device" } : { kind: c.kind, device: c.device };
+}
+
+/**
  * Who may let a held tool call go — the one gate the held party must not open.
  *
  * A gate is worth exactly one thing: an agent is stopped, and it stays stopped
@@ -1648,21 +1668,21 @@ const attachmentHostError = hostsOnly(["clickup.com", "clickup-attachments.com"]
  *   * a **paired device** with the `answer` grant. Its credential was minted at
  *     the desk, lives on that phone, is stored here only as a hash and is never
  *     in any environment an agent inherits (auth.ts, devices.ts).
- *   * or an **Origin**. The desktop shell serves its renderer from a scheme no
- *     browser can be served from, and a browser attaches `Origin` to every POST
- *     it makes, same-origin ones included — so the web UI on this machine and
- *     the companion over the tailnet keep working untouched, while `curl`,
- *     `urllib` and every other library that sends no such header do not.
- *
- * The honest limit, because it belongs next to the code and not in a commit
- * message: a header is a string, and a local process determined to forge one
- * can. This does not make the gate a security boundary — SECURITY.md is right
- * that nothing here can be, against code running as you. What it does is make
- * self-release deliberate rather than incidental: the helpful agent reaching
- * for the obvious `curl`, and the injected instruction that says "approve it",
- * both now get a refusal that explains itself instead of an approval the log
- * records as a person. Closing it properly needs a credential the agent cannot
- * read, which means one the desk holds and the token file does not.
+ *   * or, where the desktop app started this server, **the app's key**
+ *     (desk.ts): minted for each sidecar, handed down a pipe to this process
+ *     and through the preload to the renderer, in no file, environment or argv
+ *     an agent can read. There an Origin opens nothing. It used to, and a header
+ *     is a string: `curl -H "Origin: agentglass://app"` with the machine token
+ *     released the agent's own call, for the helpful agent that reads "approve
+ *     it" as the next step and for the one an injected instruction sends alike.
+ *     The device store above it is read once, at start, for the same reason:
+ *     a row planted in devices.json afterwards is not a device (devices.ts).
+ *   * or, on a server started by hand, an **Origin** this server vouches for.
+ *     No desk started it, so there is no key, and the client a person uses
+ *     there without pairing first is a browser, which attaches `Origin` to
+ *     every POST and cannot hold a secret an agent on the same machine could
+ *     not read as well. That keeps the obvious `curl` out and lets a deliberate
+ *     forgery through: the limit SECURITY.md states for a hand-started server.
  *
  * And the case that is easy to read past: with no token configured at all,
  * `caller` is always null — `resolveToken` returns none on a loopback-only box
@@ -1674,21 +1694,9 @@ const attachmentHostError = hostsOnly(["clickup.com", "clickup-attachments.com"]
  * server, never the packaged app, which mints a secret for its own sidecar. If
  * it is you, set `AGENTGLASS_TOKEN` — see resolveToken in auth.ts.
  */
-/**
- * A caller as the action log wants it. `Caller.kind` grew a third value —
- * `plugin`, see auth.ts — and ActorSource has two. A plugin's token was logged
- * as an unnamed device before, which came out as the address it arrived from;
- * it still does, because a plugin has no `device` to name, and the log line is
- * about WHERE a write came from when nobody can be named. What changed is the
- * gate (answersFromADevice), not the log.
- */
-function asActor(c: Caller | null | undefined): ActorSource | null {
-  if (!c) return null;
-  return c.kind === "plugin" ? { kind: "device" } : { kind: c.kind, device: c.device };
-}
-
 function mayReleaseAHold(req: Request, caller: Caller | null): boolean {
   if (answersFromADevice(caller)) return true;
+  if (DESK_STARTED) return deskKeyOk(req);
   const o = req.headers.get("origin");
   return !!o && vouchedOrigin(o);
 }
@@ -1961,6 +1969,10 @@ setInterval(() => {
   }
   // Never a reason to hold the process open on its own.
 }, LIVE_PING_MS).unref?.();
+
+// Read once, now: a row planted in the file after this is not a device (devices.ts).
+whenStoreTampered(pushDeviceStoreChanged);
+devices();
 
 // Let the alert path reach a connected client, which raises a native OS
 // notification (cross-platform) instead of the Linux-only notify-send.
@@ -2434,10 +2446,13 @@ const server = Bun.serve<WsData>({
      */
     const heldPartyBlocked = () => json({
       ok: false,
-      error: "a held call is released by a person, not by the process being held — "
-        + "this request carried no Origin and no paired-device credential, which is "
-        + "what an agent's own shell looks like. Answer it in the desktop app, in the "
-        + "web UI, or on a paired phone.",
+      error: "a held call is released by a person, not by the process being held — " + (DESK_STARTED
+        ? "the desktop app started this server, and it takes that from the app's own key or a "
+          + "paired-device credential; this request carried neither, whatever its Origin says. "
+          + "Answer it in the desktop app, or on a paired phone or browser."
+        : "this request carried no Origin and no paired-device credential, which is "
+          + "what an agent's own shell looks like. Answer it in the desktop app, in the "
+          + "web UI, or on a paired phone."),
     }, 403);
     const rebindBlocked = () =>
       json({ ok: false, error: "request Host is not a local or private address (DNS-rebinding guard — set AGENTGLASS_ALLOWED_HOSTS for a reverse-proxy name)" }, 403);

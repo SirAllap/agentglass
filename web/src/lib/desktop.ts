@@ -27,7 +27,7 @@ type DesktopBridge = {
   remoteEnabled?: () => Promise<boolean>;
   setRemote?: (on: boolean) => Promise<boolean>;
   revokeRemote?: () => Promise<boolean>;
-  onServerChanged?: (fn: (p: { origin?: string | null; token?: string | null }) => void) => () => void;
+  onServerChanged?: (fn: (p: { origin?: string | null; token?: string | null; deskKey?: string | null }) => void) => () => void;
   /** A link somebody clicked on a web page: today only "install this plugin".
    *  Absent on a shell built before the app claimed its own scheme, and in a
    *  browser tab, where there is no scheme to claim. */

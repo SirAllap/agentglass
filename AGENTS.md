@@ -18,6 +18,9 @@ using it is signed in to, and two ways to drive it:
   instead, so nobody invents CSS.
 - `agentglass-browser-mcp` — the same verbs as MCP tools (`browser_observe`,
   `browser_click`, …), over stdio or Streamable HTTP.
+- `agentglass-cockpit-mcp` — what the cockpit knows about your own work, as
+  read-only MCP tools: sessions and their spend, tool latency, recent errors,
+  and what is waiting on a person.
 
 What to know before the first call, all of it in
 [skills/browser-use/SKILL.md](skills/browser-use/SKILL.md):

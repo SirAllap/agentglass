@@ -20,6 +20,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "n
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { deviceFor, scopeAllows, type Device, type Scope } from "./devices.ts";
+import { DESK_HEADER, deskKey } from "./desk.ts";
 
 const TOKEN_PATH = join(
   process.env.XDG_CONFIG_HOME || join(homedir(), ".config"),
@@ -683,4 +684,15 @@ export function answersFromADevice(caller: Caller | null | undefined): boolean {
   // the machine's".
   if (caller?.kind === "plugin") return false;
   return caller?.kind === "device" && scopeAllows(caller.scope, "answer");
+}
+
+/**
+ * The request carries the key the desktop app handed this server (desk.ts):
+ * the credential for letting a hold go that no process on this machine but the
+ * app's own renderer holds. False wherever there is no key.
+ */
+export function deskKeyOk(req: Request): boolean {
+  const key = deskKey();
+  const given = req.headers.get(DESK_HEADER) || "";
+  return !!key && !!given && eq(given, key);
 }

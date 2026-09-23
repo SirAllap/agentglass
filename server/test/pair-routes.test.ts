@@ -355,7 +355,7 @@ describe("the ceremony a machine token cannot complete on its own", () => {
    * that merely cannot tell you which machine it was.
    *
    * Refusing here does not make this a security boundary — a process running
-   * as you can still append a row to devices.json, and SECURITY.md says so.
+   * as you can still replace this server's code, and SECURITY.md says so.
    * What it removes is the accident: the helpful agent, and the injected one
    * following an instruction it read in a pull request.
    */

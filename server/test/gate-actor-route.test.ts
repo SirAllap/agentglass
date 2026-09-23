@@ -25,9 +25,8 @@ const savedXdg = process.env.XDG_CONFIG_HOME;
 
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "agx-gateactor-"));
-  // Mint the credential into the same store the server will read. `devices.ts`
-  // re-reads the file on every lookup, so there is no ordering trap here beyond
-  // writing it before the first authenticated request.
+  // Mint the credential into the same store the server will read. The server
+  // loads it once, when it starts, so it is written before the spawn below.
   process.env.XDG_CONFIG_HOME = dir;
   const { issueDevice } = await import("../src/devices.ts");
   const issued = issueDevice("Pixel 9", "answer");

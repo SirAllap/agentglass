@@ -32,12 +32,13 @@
 APPCTL_DERIVED=(
   AGENTGLASS_TOKEN AGENTGLASS_PORT AGENTGLASS_BIND AGENTGLASS_TRUST_LAN
   AGENTGLASS_WEB_DIR AGENTGLASS_DIE_WITH_PARENT AGENTGLASS_PTY_SIZE_FILE
+  AGENTGLASS_DESK_FD
 )
 APPCTL_UNSET=()
 for _n in "${APPCTL_DERIVED[@]}"; do APPCTL_UNSET+=(-u "$_n"); done
 unset _n
 # `^AGENTGLASS_(TOKEN|PORT|…)=`, built from the list above so there is nowhere
-# for a seventh variable to be added to one of them and not the other.
+# for another variable to be added to one of them and not the other.
 APPCTL_DERIVED_RE="^($(IFS='|'; printf '%s' "${APPCTL_DERIVED[*]}"))="
 
 # The resolved binary behind a pid, or nothing.
