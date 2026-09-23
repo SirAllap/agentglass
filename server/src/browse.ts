@@ -24,7 +24,7 @@ import { failed } from "./refused.ts";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { diskAllows, diskRoots } from "./disk.ts";
 import { safeAbs } from "./git.ts";
-import { inScope, workspaceRoot } from "./config.ts";
+import { inScope, workspaceRoots } from "./config.ts";
 
 /** How many entries one folder hands back. A directory with 40,000 files in it
  *  is not a list anybody reads, and the count says what was left. */
@@ -120,8 +120,8 @@ export function browseReal(p: unknown): string | null {
    * makes the absence of one mean "no door" instead of "every door", which is
    * what the test that caught it now pins.
    */
-  const root = workspaceRoot();
-  return root && inScope(real, root) ? real : null;
+  const roots = workspaceRoots();
+  return roots.length && inScope(real, roots) ? real : null;
 }
 
 /** The folder above, unless that would leave everywhere this may look. */

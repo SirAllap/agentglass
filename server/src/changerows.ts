@@ -26,7 +26,7 @@
 import { statSync, readFileSync } from "node:fs";
 import { resolve, dirname, sep } from "node:path";
 import { gitAsync } from "./git.ts";
-import { inScope } from "./config.ts";
+import { inScope, type Scope } from "./config.ts";
 import type { ChangeRow, ChangeRowsResult, FileDiff, DiffHunk, GitRepoRef } from "../../shared/types.ts";
 
 /** Git's empty tree, so a repo's first commit (which has no parent) diffs as
@@ -194,7 +194,7 @@ function countUntracked(abs: string): { add: number; binary: boolean; tooBig: bo
 
 /* ── one repo ─────────────────────────────────────────────────────────────── */
 
-async function workingRows(repo: GitRepoRef, scope: string | null): Promise<ChangeRow[]> {
+async function workingRows(repo: GitRepoRef, scope: Scope): Promise<ChangeRow[]> {
   const root = repo.root;
   const [status, unstaged, staged] = await Promise.all([
     gitAsync(root, ["-c", "core.quotePath=false", "status", "--porcelain=v2", "-z", "--untracked-files=all"]),
@@ -266,7 +266,7 @@ async function ignoredSet(root: string, paths: string[]): Promise<Set<string>> {
  * commit touching every file the merge brought — none of it yours, and hundreds
  * of files of it.
  */
-async function committedRows(repo: GitRepoRef, scope: string | null): Promise<ChangeRow[]> {
+async function committedRows(repo: GitRepoRef, scope: Scope): Promise<ChangeRow[]> {
   const root = repo.root;
   const head = (await gitAsync(root, ["rev-list", "--no-merges", "--max-count=1", "HEAD"])).stdout.trim();
   if (!head) return [];
@@ -348,7 +348,7 @@ export function parseNameStatus(out: string): Map<string, { status: ChangeRow["s
 export async function changeRows(
   repos: GitRepoRef[],
   mode: Mode,
-  scope: string | null,
+  scope: Scope,
   max = 2000,
 ): Promise<ChangeRowsResult> {
   const failed: string[] = [];

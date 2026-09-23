@@ -33,7 +33,7 @@ import * as AgentOps from "./agentops.ts";
 import type * as AgentBoard from "./agentboard.ts";
 import { mintSeatToken, revokeSeatTokens } from "./auth.ts";
 import { claudeModels } from "./claudemodels.ts";
-import { chatBypassAllowed, inScope, workspaceRoot } from "./config.ts";
+import { chatBypassAllowed, inScope, workspaceRoots } from "./config.ts";
 import { db } from "./db.ts";
 import { projectRootOf } from "./git.ts";
 import { fieldReadout, boardNow, isGone } from "./lantern.ts";
@@ -179,7 +179,7 @@ export function seatable(rootIn: unknown): { root: string } | { error: string } 
      — and the first thing a person does is open the view for the project they
      are looking at. Measured by running it: without this line a new install
      answered "that is not a project this app knows" about its own checkout. */
-  if (root === workspaceRoot()) return { root };
+  if (workspaceRoots().includes(root)) return { root };
   if (knownProjects().some((p) => p.path === root)) return { root };
   /*
    * A WORKTREE IS THE PROJECT.
@@ -198,7 +198,7 @@ export function seatable(rootIn: unknown): { root: string } | { error: string } 
    */
   const folded = projectRootOf(root);
   if (folded && folded !== root) {
-    if (folded === workspaceRoot()) return { root: folded };
+    if (workspaceRoots().includes(folded)) return { root: folded };
     if (knownProjects().some((p) => p.path === folded)) return { root: folded };
   }
   return { error: "that is not a project this app knows" };

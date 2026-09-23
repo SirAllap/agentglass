@@ -58,7 +58,7 @@ import { decodeOtlpTraces, decodeOtlpLogs } from "./otlp_pb.ts";
 import { statusForPaths, commit as gitCommit, amend as gitAmend, COMMIT_ENABLED, gitAsync, gitCapability, repoRootOf, projectRootOf, safeAbs as gitSafeAbs } from "./git.ts";
 import { dependencyReport } from "./deps.ts";
 import {
-  workingTree, lastCommitChanges, discoverRepos, stage, unstage, stageAll, unstageAll, discard,
+  workingTree, lastCommitChanges, discoverRepos, knownProjectRoots, stage, unstage, stageAll, unstageAll, discard,
   commitStaged, push as gitPush, pull as gitPull, fetch as gitFetch,
   protectedBranches, setProtectedBranches,
   branches as gitBranches, checkout as gitCheckout, createBranch, deleteBranch,
@@ -167,8 +167,8 @@ import { antigravityStream, antigravityModels, ANTIGRAVITY_ENABLED, ANTIGRAVITY_
 import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs, reloadEngineConf, tmuxCapability, engineWindowRunning, tmux } from "./tmuxpane.ts";
 import { takeLease, endLease, leaseHeld, reapLeases } from "./panelease.ts";
 import { runAgentInteractivePane } from "./understudy-pane.ts";
-import { startScanner, ownsSession, knownProjects, resyncScope, scanningEnabled } from "./transcripts.ts";
-import { workspaceRoot, setWorkspaceRoot, inScope, sessionInScope, chatBypassAllowed, readBudgets, writeBudgets, hiddenProjects, setProjectHidden, configPath } from "./config.ts";
+import { startScanner, ownsSession, knownProjects, projectsKnownAtStart, resyncScope, scanningEnabled } from "./transcripts.ts";
+import { workspaceRoot, workspaceRoots, setWorkspaceRoot, setWorkspaceRoots, inScope, sessionInScope, chatBypassAllowed, readBudgets, writeBudgets, hiddenProjects, setProjectHidden, setRepoDir, configuredRepoDirs, configPath, repoDirsUnstated, seedRepoDirs, fileRoots } from "./config.ts";
 import { cloneProject, createProject } from "./projectadd.ts";
 import { budgetStatus } from "./budget.ts";
 import type { Budget } from "../../shared/types.ts";
@@ -1434,6 +1434,9 @@ const TRUST_LAN = process.env.AGENTGLASS_TRUST_LAN === "1";
 // already documents TRUST_LAN as something used on top of a token.
 /** So a misconfigured exporter explains itself once rather than every batch. */
 let warnedNoMetrics = false;
+/** The upgrade's one seeding of the picker's folders, shared by every read that
+ *  asks at once. See the /git/repos route. */
+let pickerSeed: Promise<void> | null = null;
 
 const AUTH = resolveToken(LOOPBACK_ONLY && !TRUST_LAN);
 const AUTH_TOKEN = AUTH.token;
@@ -2941,20 +2944,23 @@ const server = Bun.serve<WsData>({
       // from an earlier machine-wide run; they're not this cockpit's business.
       // inScope rather than a prefix test, so a cockpit opened *on* a linked
       // worktree still lists the project its sessions roll up to.
-      const ws = workspaceRoot();
-      const projects = knownProjects().filter((p) => inScope(p.path, ws));
+      const workspaces = workspaceRoots();
+      const projects = knownProjects().filter((p) => inScope(p.path, workspaces));
       // `scanning` is what this process is actually doing, not what it was
       // configured to do: it is also false when another live server holds the
-      // database file and this one stood its scanner down.
-      return json({ projects, scanning: scanningEnabled(), workspace: ws });
+      // database file and this one stood its scanner down. `workspace` is the
+      // first open project, kept for the callers that only ever had one.
+      return json({ projects, scanning: scanningEnabled(), workspace: workspaces[0] ?? null, workspaces });
     }
-    // Pick the project this cockpit is about (or null → the whole machine).
-    // Applied live and persisted for the next launch.
+    // Pick the projects this cockpit is about (or none → the whole machine).
+    // Applied live and persisted for the next launch. `roots` is the list the
+    // picker sends; `root` is the one-project shape older clients still send.
     if (pathname === "/workspace" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
-      const res = setWorkspaceRoot(b.root == null ? null : String(b.root));
+      const res = Array.isArray(b.roots) ? setWorkspaceRoots(b.roots)
+        : setWorkspaceRoot(b.root == null ? null : String(b.root));
       // Catch the scanner up under the new scope BEFORE answering — silently,
       // so widening doesn't replay months of backfill as live events. The
       // client reloads on this response; answering earlier would show it a
@@ -2991,6 +2997,15 @@ const server = Bun.serve<WsData>({
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const res = setProjectHidden(b.path, b.hidden !== false);
+      return json(res, res.ok ? 200 : 400);
+    }
+    // Add a folder the picker lists projects from, or forget one. Only the
+    // config file changes; the folder is never touched either way.
+    if (pathname === "/projects/roots" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const res = setRepoDir(b.path, b.added !== false);
       return json(res, res.ok ? 200 : 400);
     }
     if (pathname === "/projects/new" && req.method === "POST") {
@@ -5045,15 +5060,16 @@ const server = Bun.serve<WsData>({
        * The client has the workspace too, but a label from one source and a
        * filter from another is how a button ends up lying about what it did.
        */
-      const scope = workspaceRoot();
+      const scope = workspaceRoots();
       return json({
-        project: scope ? basename(scope) : null,
+        // Named when there is one project to name; several have no one name.
+        project: scope.length === 1 ? basename(scope[0]!) : null,
         changes: changes.map((c) => ({
           ...c,
           ignored: ignored.get(c.file_path) === true,
           // Unscoped there is no project to be outside of, and the flag stays
           // off rather than becoming "everything" — absent means never hidden.
-          outside: scope ? !inScope(c.file_path, scope) : false,
+          outside: scope.length ? !inScope(c.file_path, scope) : false,
         })),
       });
     }
@@ -5103,21 +5119,42 @@ const server = Bun.serve<WsData>({
     // want to pay for the probes again inside the cache window.
     if (pathname === "/dependencies") return json(await dependencyReport(url.searchParams.get("force") === "1"));
     if (pathname === "/git/repos") {
-      // `all=1` is the project picker: it needs the whole machine even when the
-      // cockpit is currently scoped to one project, or there'd be no way out.
+      // `all=1` is the project picker: it needs to see past the open projects,
+      // or there'd be no way out. It lists what is under the folders the person
+      // added (`roots` in the answer); `scan=1` is its explicit "look for
+      // projects", the sweep of everywhere the app has seen an agent run, which
+      // is never what it shows by default.
       const ignoreScope = url.searchParams.get("all") === "1";
+      const rootsOnly = ignoreScope && url.searchParams.get("scan") !== "1";
+      // A config from before there were folders gets them on the picker's first
+      // read, from the open projects and the ones the old list showed — see
+      // seedRepoDirs. Once per process: a file that cannot be written must not
+      // be retried on every open.
+      if (ignoreScope && repoDirsUnstated()) {
+        // Never rejects: a seed that threw would otherwise answer every later
+        // read with the same error, and the picker is the way out of anything.
+        await (pickerSeed ??= (async () => {
+          // Only what an earlier run left behind. A fresh install has none,
+          // and seeds nothing but a scope written in its config by hand.
+          const history = projectsKnownAtStart();
+          const known = history.length ? await knownProjectRoots(getChanges(300).map((c) => c.file_path), history) : [];
+          const r = seedRepoDirs([...fileRoots(), ...known]);
+          if (!r.ok) console.error(`[picker] could not save the folders an upgrade seeds: ${r.error}`);
+        })().catch((e) => console.error(`[picker] could not seed the folders: ${e instanceof Error ? e.message : e}`)));
+      }
       // Single-flighted: this sweep is a `git status` per repo across every
       // checkout, and several open tabs asking at the same instant would each
       // launch the whole fan-out. They share one now. (The 15s repoCache behind
       // it still handles reuse across time; this handles reuse across callers.)
-      return body(await singleFlight(`repos:${ignoreScope}`, async () => {
+      return body(await singleFlight(`repos:${ignoreScope}:${rootsOnly}`, async () => {
         const paths = getChanges(300, undefined, false).map((c) => c.file_path);
         // `hidden` rides along rather than being filtered out here: the picker
         // is the one surface that has to be able to show them again, and a list
         // it cannot see is a list it cannot restore from.
         return JSON.stringify({
-          repos: await discoverRepos(paths, knownProjects().map((p) => p.path), { ignoreScope }),
+          repos: await discoverRepos(paths, knownProjects().map((p) => p.path), { ignoreScope, rootsOnly }),
           hidden: hiddenProjects(),
+          roots: configuredRepoDirs(),
         });
       }));
     }
@@ -5168,8 +5205,7 @@ const server = Bun.serve<WsData>({
            and not committed", and it left anyone whose project has a single
            trunk checkout looking at a permanently empty view. */
         const repos = await discoverRepos(paths, knownProjects().map((p) => p.path), {});
-        const scope = workspaceRoot();
-        const result = await changeRows(repos, mode, scope, ROWS_MAX);
+        const result = await changeRows(repos, mode, workspaceRoots(), ROWS_MAX);
         // Committed rows are history; who is writing into a tree NOW is not a question about them.
         if (mode === "working") result.authors = authorsNow(repos, result.rows);
         const out = JSON.stringify(result);
@@ -7479,7 +7515,7 @@ const server = Bun.serve<WsData>({
          * `--git-common-dir` — and it is the same fold the seat uses to decide
          * where a report lands.
          */
-        const sameProject = !!cwd && !!workspaceRoot() && projectRootOf(cwd) === workspaceRoot();
+        const sameProject = !!cwd && workspaceRoots().includes(projectRootOf(cwd) ?? "");
         if (!cwd || (!inScope(cwd) && !sameProject) || !fsExists(cwd)) {
           return json({ ok: false, error: "that directory is not in the open project, nor a worktree of it" }, 400);
         }
@@ -8864,8 +8900,8 @@ console.log(`   WebSocket   → ws://localhost:${server.port}/stream`);
 console.log(`   Stats API   → http://localhost:${server.port}/stats`);
 console.log(`   Retention   → ${RETENTION_DAYS ? `${RETENTION_DAYS} days` : "unlimited"}`);
 startPricingRefresh();
-const ws = workspaceRoot();
-console.log(ws ? `   Project     → ${ws} (this project only)` : "   Project     → every project on this machine");
+const ws = workspaceRoots();
+console.log(ws.length ? `   Project     → ${ws.join(", ")} (${ws.length === 1 ? "this project" : "these projects"} only)` : "   Project     → every project on this machine");
 // Only meaningful once a project is open — see startAutoFetch().
 startAutoFetch();
 // A pull request's checks finished. The latch is on the server so the message
