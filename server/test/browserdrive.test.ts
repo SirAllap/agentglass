@@ -774,6 +774,28 @@ describe("§15 — every verb that carries a value, not just `type`", () => {
     expect(JSON.stringify(logged), "the password reached the exportable log").not.toContain("hunter2");
     expect((logged.args.fields as Record<string, string>)["#user"]).toBe("alice");
   });
+
+  test("a refused fill does not carry the password into the log through its error", async () => {
+    /* The args were masked and the error was stored as the panel wrote it —
+       and a refusal that listed the candidates quoted a field's value. The
+       panel no longer does; the relay must not rely on that. */
+    setBrowserSink({
+      send: (a) => queueMicrotask(() => settleBrowser(a.id, {
+        ok: false,
+        error: 'could not fill label=Pass — selector matched 2 elements — e1 input#j1 "Verano2026!", e2 input#j2 ghp_' + "b".repeat(30),
+        value: { secretFields: ["#j1"] },
+      })),
+      listeners: () => 1,
+    });
+    noteBrowserReady("w1", true);
+    const p = parseAsk("fill", { fields: { "#j1": "Verano2026!", "label=Pass": "x" } });
+    if (!("ask" in p)) throw new Error("unreachable");
+    await askBrowser(p.ask);
+    const logged = JSON.stringify(exportAudit()[0]!);
+    expect(logged, "the typed secret reached the log through the error").not.toContain("Verano2026!");
+    expect(logged, "a token reached the log through the error").not.toContain("ghp_");
+    expect(logged).toContain("matched 2 elements");
+  });
 });
 
 describe("§16 — reply redaction masks the span, and says it fired", () => {

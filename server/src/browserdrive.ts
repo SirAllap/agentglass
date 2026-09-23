@@ -1039,6 +1039,29 @@ function readAuditFile(): AuditEntry[] | null {
   return out;
 }
 
+/**
+ * An error is text the panel wrote, and a refusal that quotes the page can
+ * quote a field's value: one listed the candidates of an ambiguous `fill` by
+ * their values, a password that had just been filled among them, while the
+ * args beside it were masked. So every value the ask's own redaction masked
+ * is cut out of the error as well, and token shapes go as they do anywhere.
+ * Values shorter than three characters are left: cutting "x" out of a
+ * sentence destroys the sentence and hides nothing.
+ */
+function scrubError(error: string, args: unknown, masked: unknown): string {
+  const hidden: string[] = [];
+  const walk = (a: unknown, m: unknown): void => {
+    if (typeof a === "string") { if (m === REDACTED && a !== REDACTED && a.length >= 3) hidden.push(a); return; }
+    if (a && typeof a === "object" && m && typeof m === "object") {
+      for (const [k, v] of Object.entries(a as Record<string, unknown>)) walk(v, (m as Record<string, unknown>)[k]);
+    }
+  };
+  walk(args, masked);
+  let out = redactValue(error) as string;
+  for (const h of hidden.sort((x, y) => y.length - x.length)) out = out.split(h).join(REDACTED);
+  return out;
+}
+
 /** What the caller said about itself, lifted off the body once so every
  *  refusal inside `parseAsk` carries it too — a refused call is exactly the
  *  one somebody will want attributed. */
@@ -1083,11 +1106,13 @@ function recordAudit(op: BrowserOp, args: Record<string, unknown>, ok: boolean, 
   const how: AuditHow = declaredHow ?? (page ? "explicit-page" : profile ? "own-container" : "shared");
   const tab = resolved?.tab ?? page;
   const owner = resolved?.owner ?? profile;
+  const masked = redactAsk(op, clean, secrets);
   const entry: AuditEntry = {
     /* The redaction lane's richer signal, kept: `secrets` is a list of
        selectors for the verbs that touch several fields (`fill`), where a
        single boolean could only ever say "one of them". */
-    id: nextAuditId(), ts: Date.now(), op, args: redactAsk(op, clean, secrets), ok, error,
+    id: nextAuditId(), ts: Date.now(), op, args: masked, ok,
+    ...(error === undefined ? {} : { error: scrubError(error, clean, masked) }),
     ...(declaredAs ? { as: declaredAs } : {}),
     ...(tab ? { tab } : {}),
     ...(owner ? { owner } : {}),

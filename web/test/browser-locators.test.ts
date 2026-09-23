@@ -693,6 +693,25 @@ describe("what the review of the first version found", () => {
     expect((r.value as { secretFields?: string[] }).secretFields).toEqual(["label=Access code"]);
   });
 
+  test("a refusal describes an input by what it is, never by what was typed into it", async () => {
+    /* The refusal lists the candidates so the caller can narrow the
+       selector. An input has no text, and describing it by its value put a
+       password that had just been filled into the error — which the audit
+       log keeps. */
+    const l1 = h("label", {}, "Password");
+    const p1 = h("input", { type: "password", id: "p1", name: "pw" });
+    p1.labels = [l1];
+    const l2 = h("label", {}, "Password");
+    const p2 = h("input", { type: "password", id: "p2", placeholder: "Repeat it" });
+    p2.labels = [l2];
+    const { guest } = page(h("body", {}, l1, p1, l2, p2));
+    const r = await runBrowserAsk(guest, ask("fill", { fields: { "#p1": "Hunter2secret", "#p2": "Hunter2secret", "label=Password": "x" } }));
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("matched 2 elements");
+    expect(r.error).not.toContain("Hunter2secret");
+    expect(r.error).toContain("type=password");
+  });
+
   test("the hostile suite reaches fill and drag too", async () => {
     const g = globalThis as unknown as { __canary: { hit: number } };
     g.__canary = { hit: 0 };
