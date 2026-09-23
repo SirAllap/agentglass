@@ -211,3 +211,41 @@ test.skipIf(!HAVE_PY)("an unknown source is refused by name", async () => {
   expect(r.code).toBe(2);
   expect(r.stderr).toContain("firefox-profile");
 });
+
+test.skipIf(!HAVE_PY)("--domain must name one site: a top-level domain, a public suffix or a URL is refused before the profile is read", async () => {
+  /*
+   * The matcher takes subdomains by default, so `--domain com` matched every
+   * .com login in the profile and copied all of them, cookies and storage —
+   * the opposite of bringing one login over. A URL matched nothing, silently.
+   */
+  for (const [domain, says] of [
+    ["com", "top-level"], [".com", "top-level"], ["co.uk", "public suffix"], ["github.io", "public suffix"],
+    ["https://www.orbit.example/", "bare site name"], ["orbit.example:8443", "bare site name"],
+  ] as const) {
+    stub.calls.length = 0;
+    const r = await runCli(stub.url, ["--page", "tab-1", "session", "import", "--from", "firefox-profile", profile, "--domain", domain]);
+    expect(r.code, `${domain}: ${r.stderr}`).toBe(2);
+    expect(r.stderr).toContain(says);
+    expect(stub.calls, `${domain} reached the browser`).toHaveLength(0);
+  }
+  // A site under a public suffix is a site, and localhost is one too.
+  for (const domain of ["acme.co.uk", "localhost"]) {
+    const r = await runCli(stub.url, ["--page", "tab-1", "session", "import", "--from", "firefox-profile", profile, "--domain", domain]);
+    expect(r.stderr).toContain(`no live cookies for ${domain}`);
+  }
+});
+
+test("the CLI's public suffixes include every one the picker groups by", async () => {
+  /* Two lists in two languages: the Python CLI cannot import the TypeScript
+     one, so this keeps the copy from drifting behind the original. */
+  const ts = await Bun.file(join(import.meta.dir, "../src/cookieimport.ts")).text();
+  const py = await Bun.file(join(import.meta.dir, "../../bin/agentglass-browser")).text();
+  const tsBlock = ts.match(/const TWO_LABEL_SUFFIXES = new Set\(\[([^\]]*)\]\)/);
+  const pyBlock = py.match(/_PUBLIC_SUFFIXES = frozenset\(\{([^}]*)\}\)/);
+  expect(tsBlock).not.toBeNull();
+  expect(pyBlock).not.toBeNull();
+  const names = (s: string) => [...s.matchAll(/"([a-z.]+)"/g)].map((m) => m[1]);
+  const inPy = new Set(names(pyBlock![1]!));
+  expect(names(tsBlock![1]!).length).toBeGreaterThan(10);
+  for (const suffix of names(tsBlock![1]!)) expect(inPy.has(suffix), suffix).toBe(true);
+});

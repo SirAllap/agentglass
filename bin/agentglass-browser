@@ -1204,6 +1204,37 @@ def _ff_same_site(raw):
     return {0: "None", 1: "Lax", 2: "Strict"}.get(int(raw) if str(raw).lstrip("-").isdigit() else 256)
 
 
+# Names under which anybody registers a site: `co.uk` is nobody's domain,
+# `acme.co.uk` is. The two-label ones mirror TWO_LABEL_SUFFIXES in
+# server/src/cookieimport.ts (a test keeps this a superset of it); the rest are
+# hosts that hand every customer a subdomain. Not the Public Suffix List — the
+# standard library has none — so a suffix missing here is still accepted.
+_PUBLIC_SUFFIXES = frozenset({
+    "co.uk", "org.uk", "ac.uk", "gov.uk", "co.jp", "or.jp", "ne.jp", "co.kr",
+    "com.au", "net.au", "org.au", "com.br", "com.mx", "com.ar", "co.nz",
+    "co.za", "com.tr", "com.cn", "com.sg", "com.hk", "co.in", "com.es",
+    "github.io", "gitlab.io", "pages.dev", "workers.dev", "vercel.app", "netlify.app",
+    "web.app", "firebaseapp.com", "herokuapp.com", "appspot.com", "blogspot.com",
+    "cloudfront.net", "azurewebsites.net", "fly.dev", "onrender.com", "glitch.me",
+})
+
+
+def _domain_refusal(domain):
+    """Why DOMAIN cannot be imported, or None. The matcher takes subdomains
+    by default, so a top-level domain or a public suffix would copy every site
+    under it rather than one login; a URL would silently match nothing."""
+    d = (domain or "").strip().lower().lstrip(".")
+    if not d or any(c in d for c in "/:@") or any(c.isspace() for c in d):
+        return f"--domain takes a bare site name like orbit.example, not {domain!r}"
+    if "." not in d and d != "localhost":
+        return (f"--domain {d} is a top-level domain: it would copy every {d} login in the "
+                f"profile. Name the site, e.g. orbit.{d}")
+    if d in _PUBLIC_SUFFIXES:
+        return (f"--domain {d} is a public suffix: every site under it is a different one. "
+                f"Name the site, e.g. acme.{d}")
+    return None
+
+
 def _domain_matches(host, domain, subdomains=True):
     bare = host.lstrip(".").lower()
     domain = domain.lstrip(".").lower()
@@ -1462,6 +1493,10 @@ def session_import(a, page):
     if kind != "firefox-profile":
         print(f"unknown source {kind!r} — the only source is firefox-profile <path> "
               "(Firefox, Zen and LibreWolf share the format)", file=sys.stderr)
+        return 2
+    refusal = _domain_refusal(a.domain)
+    if refusal:
+        print(refusal, file=sys.stderr)
         return 2
     try:
         payloads, skipped = read_firefox_cookies(src, a.domain, subdomains=not a.no_subdomains)
