@@ -40,16 +40,24 @@ class N {
       if (typeof k === "string") this.text += k;
       else { k.parentElement = this; this.children.push(k); }
     }
-    const node = this;
     /* STAMP writes `dataset.agxE`, and a CSS lookup reads `data-agx-e`: the
        same attribute, as in a page. */
+    const key = (k: string) => "data-" + k.replace(/[A-Z]/g, (c) => "-" + c.toLowerCase());
     this.dataset = new Proxy({} as Record<string, string>, {
-      get: (_t, k: string) => node.attrs["data-" + k.replace(/[A-Z]/g, (c) => "-" + c.toLowerCase())],
-      set: (_t, k: string, v: string) => { node.attrs["data-" + k.replace(/[A-Z]/g, (c) => "-" + c.toLowerCase())] = v; return true; },
+      get: (_t, k: string) => this.attrs[key(k)],
+      set: (_t, k: string, v: string) => { this.attrs[key(k)] = v; return true; },
     });
   }
   get id() { return this.attrs.id ?? ""; }
-  get textContent(): string { return this.text + this.children.map((c) => c.textContent).join(""); }
+  /* How many times a script asked a node for its text — one native call in
+     a page, however deep the node, so the recursion below counts once. */
+  static reads = 0;
+  static depth = 0;
+  get textContent(): string {
+    if (N.depth === 0) N.reads++;
+    N.depth++;
+    try { return this.text + this.children.map((c) => c.textContent).join(""); } finally { N.depth--; }
+  }
   /* Chromium's rule: a node that is not rendered answers with its
      textContent; one that is leaves out its children that are not. */
   get innerText(): string {
@@ -344,6 +352,7 @@ describe("parseLocator: what a locator string means", () => {
     ['role=button[name="Save"', "expects ]"],
     ['role=button[name="Save"] extra', "expects ]"],
     ["role=button[name=]", "empty name"],
+    ['role=button[name=""]', "empty name"],
     ["text=", "needs something to look for"],
     ['text="unclosed', "never closed"],
     ['text="Save" now', "after its closing quote"],
@@ -548,13 +557,16 @@ describe("a locator finds what a person would point at", () => {
     const fileLabel = h("label", {}, "Attachment");
     const input = h("input", { type: "file" });
     input.labels = [fileLabel];
+    // The usual kind: display:none behind a styled button.
+    input.style.display = "none";
     const { guest } = page(h("body", {}, fileLabel, input));
     const { cdp, calls } = cdpOver((code) => guest.executeJavaScript(code));
     const r = await runBrowserAsk(guest, ask("upload", { selector: "label=Attachment", paths: ["/tmp/a.txt"] }),
       undefined, undefined, undefined, cdp);
     expect(calls[0]).toBe("Runtime.evaluate");
     expect(calls).toContain("DOM.requestNode");
-    expect(r.error ?? "").not.toContain("matches");
+    expect(r.error).toBeUndefined();
+    expect(r.ok).toBe(true);
   });
 });
 
@@ -602,6 +614,74 @@ describe("fill says which fields were secret, as type does", () => {
     expect(r.error).toBeUndefined();
     expect((r.value as { secretFields?: string[] }).secretFields).toEqual(["label=Access code", "#otp"]);
   });
+});
+
+describe("what the review of the first version found", () => {
+  test("a hidden whole name is refused as hidden, not answered with a visible part-match", async () => {
+    const save = h("button", {}, "Save");
+    save.style.display = "none";
+    const draft = h("button", {}, "Save draft");
+    const { guest } = page(h("body", {}, save, draft));
+    for (const selector of ['role=button[name="Save"]', "text=Save"]) {
+      const r = await runBrowserAsk(guest, ask("click", { selector }));
+      expect(r.ok, selector).toBe(false);
+      expect(r.error, selector).toContain("1 hidden");
+      expect(draft.events).not.toContain("click");
+    }
+  });
+
+  test("a hidden or one-pixel child does not take the place of the visible element around it", async () => {
+    const tip = h("span", {}, " Save changes");
+    tip.style.display = "none";
+    const sr = h("span", { class: "sr-only" }, "Close panel");
+    sr.box = { width: 1, height: 1 };
+    const save = h("button", {}, "Save", tip);
+    const close = h("button", {}, h("svg", {}), sr);
+    const { guest } = page(h("body", {}, save, close));
+    expect((await runBrowserAsk(guest, ask("click", { selector: "text=Save" }))).error).toBeUndefined();
+    expect(save.events).toContain("click");
+    expect((await runBrowserAsk(guest, ask("click", { selector: "text=Close panel" }))).error).toBeUndefined();
+    expect(close.events).toContain("click");
+  });
+
+  test("text= does not read the text of every element on the page", async () => {
+    const sections = Array.from({ length: 50 }, (_, i) => {
+      let n = h("div", {}, `item ${i}`);
+      for (let d = 0; d < 20; d++) n = h("div", {}, n);
+      return n;
+    });
+    const target = h("button", {}, "Checkout");
+    const { guest } = page(h("body", {}, ...sections, target));
+    N.reads = 0;
+    const r = await runBrowserAsk(guest, ask("focus", { selector: "text=Checkout" }));
+    expect(r.error).toBeUndefined();
+    // 1051 elements; one read per top-level subtree and the path to the hit.
+    // Reading every element would be well over a thousand.
+    expect(N.reads).toBeLessThan(200);
+  });
+
+  test("landmark roles and an image's alt", async () => {
+    const { guest } = page(h("body", {},
+      h("dialog", { "aria-label": "Invite" }, h("p", {}, "Invite a teammate")),
+      h("img", { alt: "Orbit logo" }),
+      h("nav", {}, h("a", { href: "/" }, "Home")),
+    ));
+    for (const selector of ['role=dialog[name="Invite"]', 'role=img[name="Orbit logo"]', "role=navigation"]) {
+      expect((await runBrowserAsk(guest, ask("focus", { selector }))).error, selector).toBeUndefined();
+    }
+  });
+
+  test("a label that wraps its select is read without the options", async () => {
+    const plan = h("select", {});
+    plan.text = "Team Solo";
+    plan.options = [{ value: "team", text: "Team" }, { value: "solo", text: "Solo" }];
+    const label = h("label", {}, "Plan ", plan);
+    plan.labels = [label];
+    const { guest } = page(h("body", {}, label));
+    const r = await runBrowserAsk(guest, ask("select", { selector: 'label="Plan"', value: "solo" }));
+    expect(r.error).toBeUndefined();
+    expect(plan.value).toBe("solo");
+  });
 
   test("fill that fails on a later field still names the secret it already filled", async () => {
     const pinLabel = h("label", {}, "Access code");
@@ -611,5 +691,17 @@ describe("fill says which fields were secret, as type does", () => {
     const r = await runBrowserAsk(guest, ask("fill", { fields: { "label=Access code": "4242", "#nowhere": "x" } }));
     expect(r.ok).toBe(false);
     expect((r.value as { secretFields?: string[] }).secretFields).toEqual(["label=Access code"]);
+  });
+
+  test("the hostile suite reaches fill and drag too", async () => {
+    const g = globalThis as unknown as { __canary: { hit: number } };
+    g.__canary = { hit: 0 };
+    const { guest } = app();
+    const p = 'text=x"); globalThis.__canary.hit = 1; ("';
+    await runBrowserAsk(guest, ask("fill", { fields: { [p]: "</script>" } }));
+    await runBrowserAsk(guest, ask("drag", { selector: p, to: p }));
+    expect(g.__canary.hit).toBe(0);
+    // drag's own code has comparisons in it, so the check is the payload's.
+    for (const code of guest.ran) expect(code).not.toContain("</script>");
   });
 });

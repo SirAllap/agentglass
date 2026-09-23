@@ -15,15 +15,17 @@
  *
  * Matching is Playwright's: case-insensitive and a substring, and a quoted
  * value is exact (`text="Save"`, `label="Email"`); a role's name is exact with
- * the `s` flag (`role=button[name="Save" s]`). One addition, because the
- * caller here is an agent paying a round trip for every refusal: when several
- * match and exactly ONE of them is the whole name, that one is used — "Save"
- * next to "Save draft" is not ambiguous to anyone who wrote "Save". The cost
- * is that `text=Save` cannot mean "Save draft" while a plain "Save" is on the
- * page; say `text=draft` for that.
+ * the `s` flag only (`role=button[name="Save" s]`; quoting a role's name does
+ * not make it exact). One addition, because the caller here is an agent paying
+ * a round trip for every refusal: a node whose whole name is the words beats
+ * one whose name only contains them — "Save" next to "Save draft" is not
+ * ambiguous to anyone who wrote "Save". The cost is that `text=Save` cannot
+ * mean "Save draft" while a plain "Save" is on the page, even a hidden one;
+ * say `text=draft` for that.
  *
  * Only what is on screen is found (display, visibility, a box), except by
- * testid, which is a hook a test put there on purpose. A hidden match is not
+ * testid, which is a hook a test put there on purpose, and for `upload`,
+ * whose file input is usually hidden on purpose. A hidden match is not
  * silently dropped — the refusal names it.
  *
  * The prefixes cannot collide with CSS: `role=…` is not a selector Chromium
@@ -36,7 +38,10 @@
  * either); role attributes other than `name` (`level`, `checked`, `pressed`)
  * are refused rather than ignored; the name is observe's, not Chromium's
  * accessible name, so a name built from aria-labelledby or an <input
- * type=submit>'s value is not one — `label=` and `text=` reach those.
+ * type=submit>'s value is not one — `label=` and `text=` reach those — and it
+ * is cut at 80 characters, so an exact name longer than that never matches;
+ * text= counts an inline script's text as its parent's; and when an input and
+ * its button share an aria-label, label= names both and is refused.
  */
 import { jsLit } from "../../../shared/jsLit.ts";
 import { ACC_NAME, PICK } from "./browserObserve.ts";
@@ -80,6 +85,7 @@ function role(rest: string): Locator {
   if (tail[0] === '"' || tail[0] === "'") {
     const v = value(tail);
     if ("invalid" in v) return v;
+    if (!v.value.trim()) return { invalid: `role= has an empty name, e.g. ${EXAMPLE.role}` };
     const f = /^\s*([is])?\s*\]\s*$/.exec(v.rest);
     if (!f) return { invalid: `role= expects ] after the name, e.g. ${EXAMPLE.role}` };
     return { by: "role", role: r, name: v.value, exact: f[1] === "s" };
@@ -135,6 +141,12 @@ export const FIND = `((spec) => {
     const cs = getComputedStyle(n);
     return cs.display !== "none" && cs.visibility !== "hidden";
   };
+  /* For text=: a one-pixel box is a screen-reader-only label, there to be
+     read and not clicked, so it counts as hidden and the visible element
+     around it is the match. Measured: text= on an icon button landed on its
+     sr-only span, and the click was refused as covered. */
+  const big = (n) => { const r = n.getBoundingClientRect(); return r.width > 1 && r.height > 1 && onScreen(n); };
+  const seen = spec.by === "text" ? big : onScreen;
   const want = norm(spec.by === "role" ? spec.name : spec.value);
   const lower = want.toLowerCase();
   const fits = (t) => spec.exact ? norm(t) === want : norm(t).toLowerCase().includes(lower);
@@ -148,6 +160,9 @@ export const FIND = `((spec) => {
       if (t === "select") return n.multiple || n.size > 1 ? "listbox" : "combobox";
       if (t === "textarea") return "textbox";
       if (/^h[1-6]$/.test(t)) return "heading";
+      const landmark = { dialog: "dialog", img: "img", nav: "navigation", main: "main", li: "listitem",
+        ul: "list", ol: "list", table: "table", article: "article", form: "form", aside: "complementary" }[t];
+      if (landmark) return landmark;
       if (t !== "input") return "";
       return ({ button: "button", submit: "button", reset: "button", image: "button",
         checkbox: "checkbox", radio: "radio", range: "slider", number: "spinbutton", search: "searchbox",
@@ -158,12 +173,19 @@ export const FIND = `((spec) => {
       const own = norm(n.getAttribute("role")).split(" ")[0];
       return own ? [own] : [n.tagName.toLowerCase(), implicit(n)];
     };
-    pool = [...document.querySelectorAll(${jsLit(PICK + ",h4,h5,h6")})].filter((n) => roles(n).includes(spec.role));
-    texts = spec.name === undefined ? null : (n) => [name(n)];
+    pool = [...document.querySelectorAll(${jsLit(PICK + ",h4,h5,h6,dialog,img,nav,main,li,ul,ol,table,article,form,aside")})]
+      .filter((n) => roles(n).includes(spec.role));
+    texts = spec.name === undefined ? null : (n) => [name(n) || n.getAttribute("alt") || ""];
   } else if (spec.by === "label") {
     pool = [...document.querySelectorAll("input,select,textarea,[aria-label],[aria-labelledby]")];
     texts = (n) => [
-      ...[...(n.labels || [])].map((l) => l.innerText || l.textContent),
+      /* A label that wraps its control also reads the control's own text —
+         a wrapped select's label says "Plan Team Solo" — so that is taken out. */
+      ...[...(n.labels || [])].map((l) => {
+        const lt = l.innerText || l.textContent || "";
+        const ct = l.contains(n) ? (n.innerText || n.textContent || "") : "";
+        return ct ? lt.replace(ct, "") : lt;
+      }),
       n.getAttribute("aria-label"),
       ...norm(n.getAttribute("aria-labelledby")).split(" ").filter(Boolean)
         .map((id) => { const t = document.getElementById(id); return t ? t.textContent : ""; }),
@@ -176,22 +198,43 @@ export const FIND = `((spec) => {
     texts = (n) => [n.getAttribute("data-testid")];
   } else {
     const skip = { SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEMPLATE: 1 };
-    const own = (n) => n.tagName === "INPUT" && /^(button|submit|reset)$/.test(n.type) ? n.value : n.textContent;
-    const hits = [...(document.body || document.documentElement).querySelectorAll("*")]
-      .filter((n) => !skip[n.tagName] && fits(own(n)));
-    /* The innermost: in document order a node's descendants come straight
-       after it, so a hit followed by one it contains is an ancestor of it. */
-    pool = hits.filter((n, i) => !(hits[i + 1] && n.contains(hits[i + 1])));
-    texts = (n) => [own(n)];
+    /* Pruned, not every element: a node's text holds all its descendants'
+       text, so a subtree whose text lacks the words holds no match. Reading
+       every element's text was measured at ~600 ms on a 68k-element page,
+       and wait repeats a lookup every 120 ms. */
+    const hits = [];
+    const walk = (el) => {
+      for (const c of el.children) {
+        if (skip[String(c.tagName).toUpperCase()]) continue;
+        const t = c.textContent;
+        if (!norm(t).toLowerCase().includes(lower)) continue;
+        if (fits(t)) hits.push(c);
+        walk(c);
+      }
+    };
+    walk(document.body || document.documentElement);
+    /* The innermost ON SCREEN, so a hidden or one-pixel child (a tooltip, a
+       screen-reader-only label) does not take the place of the visible thing
+       around it. In document order a node's descendants come straight after
+       it, so a hit followed by one it contains is an ancestor of it; that
+       holds for any subsequence too. */
+    const innermost = (list) => list.filter((n, i) => !(list[i + 1] && n.contains(list[i + 1])));
+    pool = [...innermost(hits.filter(big)), ...innermost(hits.filter((n) => !big(n)))]
+      .concat([...document.querySelectorAll('input[type="button"],input[type="submit"],input[type="reset"]')]
+        .filter((n) => fits(n.value)));
+    texts = (n) => [n.tagName === "INPUT" ? n.value : n.textContent];
   }
-  const matched = texts ? pool.filter((n) => texts(n).some(fits)) : pool;
-  const everywhere = spec.by === "testid";
-  let all = everywhere ? matched : matched.filter(onScreen);
-  const hidden = everywhere ? [] : matched.filter((n) => !onScreen(n));
-  if (all.length > 1 && !spec.exact && texts) {
-    const exactly = all.filter((n) => texts(n).some(whole));
-    if (exactly.length === 1) all = exactly;
+  let matched = texts ? pool.filter((n) => texts(n).some(fits)) : pool;
+  /* The whole name before a part of one, whether or not it is on screen: a
+     hidden "Save" beside a visible "Save draft" is refused as hidden rather
+     than answered with the draft button. */
+  if (!spec.exact && texts) {
+    const exactly = matched.filter((n) => texts(n).some(whole));
+    if (exactly.length) matched = exactly;
   }
+  const everywhere = spec.by === "testid" || spec.hidden === true;
+  const all = everywhere ? matched : matched.filter(seen);
+  const hidden = everywhere ? [] : matched.filter((n) => !seen(n));
   const near = all.length || hidden.length || spec.by === "text" ? [] : pool
     .filter((n) => everywhere || onScreen(n))
     .map((n) => ({ n, t: norm(texts ? texts(n)[0] : name(n)).slice(0, 40) }))

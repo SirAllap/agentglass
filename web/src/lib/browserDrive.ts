@@ -1,7 +1,7 @@
 import type { BrowserAskFrame } from "../../../shared/types.ts";
 import { ACC_NAME, COLLECTOR, PICK, STAMP, observeScript } from "./browserObserve.ts";
 import { jsLit } from "../../../shared/jsLit.ts";
-import { FIND, locatorLit } from "./browserLocator.ts";
+import { FIND, locatorLit, parseLocator } from "./browserLocator.ts";
 
 /**
  * The window's half of "let an agent drive the browser".
@@ -2266,7 +2266,10 @@ async function runVerb(
          * thin here and real over there.
          */
         const paths = ((ask.args as Record<string, unknown>).paths ?? []) as string[];
-        const found = await nodeFor(cdp, sel, String(ask.args.selector ?? ""), false);
+        /* A file input is usually display:none behind a styled button, so a
+           locator here finds hidden ones too. */
+        const raw = String(ask.args.selector ?? "");
+        const found = await nodeFor(cdp, jsLit({ ...parseLocator(raw), hidden: true }), raw, false);
         if ("error" in found) return { ok: false, error: found.error };
         const objectId = found.objectId;
         await cdp("DOM.enable", {});
