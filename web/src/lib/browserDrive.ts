@@ -1,5 +1,5 @@
 import type { BrowserAskFrame } from "../../../shared/types.ts";
-import { COLLECTOR, STAMP, observeScript } from "./browserObserve.ts";
+import { ACC_NAME, COLLECTOR, PICK, STAMP, observeScript } from "./browserObserve.ts";
 import { jsLit } from "../../../shared/jsLit.ts";
 
 /**
@@ -2394,15 +2394,10 @@ async function runVerb(
           const pick = (q) => document.querySelector(/^e[0-9]+$/.test(q) ? '[data-agx-e="' + q + '"]' : q);
           const root = pick(${sel});
           if (!root) return { kind: "none" };
-          const name = (el2) => (
-            el2.getAttribute("aria-label") ||
-            el2.getAttribute("placeholder") ||
-            el2.getAttribute("title") ||
-            (el2.innerText || "").trim().slice(0, 80) || ""
-          ).trim().slice(0, 80);
+          const name = ${ACC_NAME};
           const stamp = ${STAMP};
           const tree = [];
-          for (const el2 of root.querySelectorAll("a,button,input,select,textarea,[role],[data-testid],summary,h1,h2,h3")) {
+          for (const el2 of root.querySelectorAll(${jsLit(PICK)})) {
             if (tree.length >= 120) break;
             const rect = el2.getBoundingClientRect();
             tree.push({

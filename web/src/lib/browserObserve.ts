@@ -332,21 +332,31 @@ export type ObserveOpts = {
   base?: { doc: string; seq: number } | null;
 };
 
-/** Everything at once. `since` filters the two logs; 0 means "from the top". */
-export const observeScript = (since: number, treeMax: number, opts: ObserveOpts = {}): string => `(() => {
-  const log = window.__agxLog || { console: [], network: [] };
-  const seen = (arr) => arr.filter((r) => !${since} || r.at > ${since});
-  const name = (el) => (
+/**
+ * The name a node goes by in an observation: the same function wherever a node
+ * is named or looked up by name, so a name read off the tree is a name a
+ * locator finds (`role=button[name="Save"]`). Not Chromium's accessible name —
+ * a page script cannot read that — but the parts of it a person points at.
+ */
+export const ACC_NAME = `(el) => (
     el.getAttribute("aria-label") ||
     (el.labels && el.labels[0] && el.labels[0].innerText) ||
     el.getAttribute("placeholder") ||
     el.getAttribute("title") ||
     (el.innerText || "").trim().slice(0, 80) || ""
-  ).trim().slice(0, 80);
-  /* Role, accessible name and data-testid — what a person points at, and what
-     survives a class name changing. Interactive things only: a tree of every
-     div is the wall of text this was meant to replace. */
-  const PICK = "a,button,input,select,textarea,[role],[data-testid],summary,h1,h2,h3";
+  ).trim().slice(0, 80)`;
+
+/** Role, accessible name and data-testid — what a person points at, and what
+ *  survives a class name changing. Interactive things only: a tree of every
+ *  div is the wall of text this was meant to replace. */
+export const PICK = "a,button,input,select,textarea,[role],[data-testid],summary,h1,h2,h3";
+
+/** Everything at once. `since` filters the two logs; 0 means "from the top". */
+export const observeScript = (since: number, treeMax: number, opts: ObserveOpts = {}): string => `(() => {
+  const log = window.__agxLog || { console: [], network: [] };
+  const seen = (arr) => arr.filter((r) => !${since} || r.at > ${since});
+  const name = ${ACC_NAME};
+  const PICK = ${JSON.stringify(PICK)};
   /*
      STABLE IDS, section 17: "do not force people to invent CSS selectors when
      stable ids can be given". The id is stamped ON the node as a data
