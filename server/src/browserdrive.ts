@@ -870,11 +870,14 @@ const VALUE_CARRYING: Record<string, (
   storage(out, args) {
     if (args.set === true && typeof args.value === "string") out.value = REDACTED;
   },
-  /* The same two positions, reached through the raw protocol: `session load`
-     and `session import` write cookies and localStorage with `cdp`, so the
-     rows above never see a single value of a whole imported session. Only the
-     methods that WRITE a cookie or a stored item — a `value` anywhere else in
-     the protocol is not a credential by position. */
+  /* The same two positions, reached through the raw protocol: an agent can
+     write a whole session with `cdp`, and the rows above never see a single
+     value of it. Only the methods that WRITE a cookie or a stored item — a
+     `value` anywhere else in the protocol is not a credential by position.
+     `session load` and `session import` do not come this way: they write
+     cookies with `cookies --set` and storage with `storage --set`, one key at
+     a time. `eval` is the one door no row can cover — a script has no value
+     position — which is why neither of them writes storage with one. */
   cdp(out, args) {
     const params = args.params;
     if (!params || typeof params !== "object" || Array.isArray(params)) return;
@@ -886,6 +889,8 @@ const VALUE_CARRYING: Record<string, (
       out.params = blank({ ...(out.params as Record<string, unknown>), value: p.value });
     } else if ((args.method === "Network.setCookies" || args.method === "Storage.setCookies") && Array.isArray(p.cookies)) {
       out.params = { ...(out.params as Record<string, unknown>), cookies: p.cookies.map(blank) };
+    } else if (args.method === "Storage.setStorageItems" && Array.isArray(p.items)) {
+      out.params = { ...(out.params as Record<string, unknown>), items: p.items.map(blank) };
     }
   },
 };

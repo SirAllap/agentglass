@@ -1106,6 +1106,21 @@ def session_save(path, page="", a=None):
     return 0
 
 
+def _write_storage(a, page, where, entries):
+    """Write ENTRIES into the tab's local or session storage, one `storage
+    --set` per key. Returns the first error, or None.
+
+    Never as one `eval` script with the values inside it: the audit log keeps
+    every ask, and an `eval` script has no position it can blank — an opaque
+    token that is not token-shaped went into the log verbatim. `storage --set`
+    carries the value in a field the audit redacts by position."""
+    for k, v in entries.items():
+        r = call("storage", stamped(a, _at(page, {"where": where, "set": True, "key": k, "value": v})))
+        if not r.get("ok"):
+            return f"{k}: {r.get('error') or 'could not write storage'}"
+    return None
+
+
 def session_load(path, page="", a=None):
     """The reverse of `session save`. Cookies go back through CDP so they
     keep httpOnly and Secure; storage is written by the page itself, which
@@ -1139,13 +1154,9 @@ def session_load(path, page="", a=None):
         ss = {e["name"]: e["value"] for e in o.get("sessionStorage") or []}
         ls_count += len(ls)
         ss_count += len(ss)
-        js = (
-            f"(() => {{ const ls = {json.dumps(ls)}; for (const k in ls) localStorage.setItem(k, ls[k]); "
-            f"const ss = {json.dumps(ss)}; for (const k in ss) sessionStorage.setItem(k, ss[k]); return true; }})()"
-        )
-        r = call("eval", stamped(a, _at(page, {"js": js, "await": False})))
-        if not r.get("ok"):
-            print(r.get("error") or "could not write storage", file=sys.stderr)
+        err = _write_storage(a, page, "local", ls) or _write_storage(a, page, "session", ss)
+        if err:
+            print(err, file=sys.stderr)
             return 1
     print(f"{path}: {len(cookies)} cookies, {ls_count} localStorage keys, {ss_count} sessionStorage keys restored")
     return 0
@@ -1490,13 +1501,11 @@ def session_import(a, page):
             current = ((here.get("value") or {}).get("value") or "") if here.get("ok") else ""
             for origin, entries in by_origin.items():
                 if origin == current:
-                    js = ("(() => { const ls = " + json.dumps(entries)
-                          + "; for (const k in ls) localStorage.setItem(k, ls[k]); return true; })()")
-                    w = call("eval", stamped(a, _at(page, {"js": js, "await": False})))
-                    if w.get("ok"):
-                        ls_written += len(entries)
+                    err = _write_storage(a, page, "local", entries)
+                    if err:
+                        print(f"localStorage for {origin}: {err}", file=sys.stderr)
                     else:
-                        print(f"localStorage for {origin}: {w.get('error')}", file=sys.stderr)
+                        ls_written += len(entries)
                 else:
                     pending.append(origin)
     # Names and counts only — never a value.

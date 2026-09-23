@@ -670,11 +670,10 @@ describe("§15 — every verb that carries a value, not just `type`", () => {
 
   test("a cookie or a stored value sent through `cdp` goes by position as well", () => {
     /*
-     * `session load` and `session import` write cookies with
-     * `Network.setCookie` and localStorage with `DOMStorage.setDOMStorageItem`,
-     * through the `cdp` verb — so the `cookies` and `storage` rows above never
-     * see them, and every value of an imported session would sit in the audit
-     * log in clear.
+     * An agent can write a whole session with `Network.setCookie` and
+     * `DOMStorage.setDOMStorageItem` through the `cdp` verb — the `cookies`
+     * and `storage` rows above never see those, and every value would sit in
+     * the audit log in clear.
      */
     const sid = "kq3zr9x1v7b2n5m8t4w6y0p3s1d7f9g2";
     const one = redactAskForTest("cdp", args("cdp", {
@@ -693,6 +692,13 @@ describe("§15 — every verb that carries a value, not just `type`", () => {
     }));
     expect((stored.params as Record<string, unknown>).key).toBe("device");
     expect(JSON.stringify(stored)).not.toContain(sid);
+    // The batch form carries its values in a list, the same position times N.
+    const batch = redactAskForTest("cdp", args("cdp", {
+      method: "Storage.setStorageItems",
+      params: { storageKey: "https://www.orbit.example/", items: [{ key: "device", value: sid }, { key: "theme", value: `${sid}2` }] },
+    }));
+    expect(JSON.stringify(batch)).not.toContain(sid);
+    expect(JSON.stringify(batch)).toContain('"key":"theme"');
     // Any other method keeps its params: a `value` in Runtime.evaluate's
     // answer shape is not a credential by position.
     const other = redactAskForTest("cdp", args("cdp", { method: "Emulation.setTimezoneOverride", params: { timezoneId: "Europe/Madrid" } }));

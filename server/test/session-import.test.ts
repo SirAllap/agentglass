@@ -11,9 +11,10 @@
  */
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parseAsk, redactAskForTest, type BrowserOp } from "../src/browserdrive.ts";
 import { startBrowserStub, runCli } from "./fixtures/browser-stub.ts";
 
 const HAVE_PY = !!Bun.which("python3");
@@ -46,6 +47,16 @@ function fakeProfile(dir: string): string {
   add({ n: "contained", v: "x", h: "www.orbit.example", e: soon, s: 1, ho: 1, oa: "^userContextId=2" });
   db.close();
   return dir;
+}
+
+/** Every call the CLI made, as the audit log would hold it: the same parse and
+ *  the same redaction the server applies before `persistAudit`. A call the
+ *  parser refuses is kept raw, so a value in it still fails the assertion. */
+function audited(calls: { op: string; body: Record<string, unknown> }[]): string {
+  return calls.map((c) => {
+    const p = parseAsk(c.op, c.body);
+    return JSON.stringify("ask" in p ? redactAskForTest(c.op as BrowserOp, p.ask.args) : c.body);
+  }).join("\n");
 }
 
 let stub: ReturnType<typeof startBrowserStub>, profile = "";
@@ -125,30 +136,73 @@ test.skipIf(!HAVE_PY)("localStorage for the origin the tab is on is written; a c
   fakeProfile(dir);
   withLocalStorage(dir, "https+++www.orbit.example");
   withLocalStorage(dir, "https+++app.orbit.example");
-  const writes: string[] = [];
   const s = startBrowserStub((op, body) => {
-    if (op === "eval") {
-      const js = String(body.js ?? "");
-      if (js === "location.origin") return { ok: true, value: { value: "https://www.orbit.example" } };
-      writes.push(js);
-      return { ok: true, value: { value: true } };
-    }
+    if (op === "eval" && body.js === "location.origin") return { ok: true, value: { value: "https://www.orbit.example" } };
     return { ok: true, value: {} };
   });
   try {
     const r = await runCli(s.url, ["--page", "tab-1", "session", "import", "--from", "firefox-profile", dir, "--domain", "orbit.example"]);
     expect(r.code, r.stderr).toBe(0);
     // The origin the tab is on: its keys written, the compressed one left out.
-    const wrote = writes.join("\n");
-    expect(wrote).toContain("orbit_device_key");
-    expect(wrote).toContain("hola");
-    expect(wrote).not.toContain("big");
-    expect(r.stdout).toContain("localStorage keys");
+    const sets = s.calls.filter((c) => c.op === "storage" && c.body.set === true);
+    expect(Object.fromEntries(sets.map((c) => [c.body.key, c.body.value])))
+      .toEqual({ orbit_device_key: "dev-not-printed", greeting: "hola" });
+    expect(sets.every((c) => c.body.where === "local")).toBe(true);
+    expect(r.stdout).toContain("2 localStorage keys");
     expect(r.stdout).toContain("compressed localStorage skipped");
     // The other origin cannot be written from this tab, and is named for a second pass.
     expect(r.stderr).toContain("https://app.orbit.example");
     // A value never printed.
     expect(r.stdout + r.stderr).not.toContain("dev-not-printed");
+  } finally { s.stop(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test.skipIf(!HAVE_PY)("no imported value reaches the audit log, a stored one included", async () => {
+  /*
+   * The stored values used to travel inside an `eval` script, and `eval` has
+   * no value position the audit can blank: an opaque token that is not
+   * token-SHAPED went into the log verbatim. Every call the import makes is
+   * put through the audit's own redaction here, not only its stdout.
+   */
+  const dir = mkdtempSync(join(tmpdir(), "agx-ffls-"));
+  fakeProfile(dir);
+  withLocalStorage(dir, "https+++www.orbit.example");
+  const s = startBrowserStub((op, body) => {
+    if (op === "eval" && body.js === "location.origin") return { ok: true, value: { value: "https://www.orbit.example" } };
+    return { ok: true, value: {} };
+  });
+  try {
+    const r = await runCli(s.url, ["--page", "tab-1", "session", "import", "--from", "firefox-profile", dir, "--domain", "orbit.example"]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(s.calls.some((c) => c.op === "storage")).toBe(true);
+    const log = audited(s.calls);
+    for (const value of ["sid-not-printed", "sess-not-printed", "ss-not-printed", "dev-not-printed", "hola"]) {
+      expect(log, `${value} reached the audit log`).not.toContain(value);
+    }
+  } finally { s.stop(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test.skipIf(!HAVE_PY)("session load writes storage through the same redacted path", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "agx-sessload-"));
+  const file = join(dir, "state.json");
+  writeFileSync(file, JSON.stringify({
+    cookies: [{ name: "orbit_sid", value: "cookie-not-in-audit", domain: ".orbit.example", path: "/", secure: true }],
+    origins: [{
+      origin: "https://www.orbit.example",
+      localStorage: [{ name: "orbit_device_key", value: "local-not-in-audit" }],
+      sessionStorage: [{ name: "orbit_tab", value: "session-not-in-audit" }],
+    }],
+  }));
+  const s = startBrowserStub(() => ({ ok: true, value: {} }));
+  try {
+    const r = await runCli(s.url, ["--page", "tab-1", "session", "load", file]);
+    expect(r.code, r.stderr).toBe(0);
+    const sets = s.calls.filter((c) => c.op === "storage").map((c) => [c.body.where, c.body.key, c.body.value]);
+    expect(sets).toEqual([["local", "orbit_device_key", "local-not-in-audit"], ["session", "orbit_tab", "session-not-in-audit"]]);
+    const log = audited(s.calls);
+    for (const value of ["cookie-not-in-audit", "local-not-in-audit", "session-not-in-audit"]) {
+      expect(log, `${value} reached the audit log`).not.toContain(value);
+    }
   } finally { s.stop(); rmSync(dir, { recursive: true, force: true }); }
 });
 
