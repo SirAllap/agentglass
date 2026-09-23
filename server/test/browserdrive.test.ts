@@ -469,6 +469,21 @@ describe("§16 — origins, read-only, audit, redaction", () => {
     expect("error" in parseAsk("cookies", { set: { name: "a", value: "b" } })).toBe(true);
   });
 
+  test("cookies --set's optional flags are type-checked, not just name/value", () => {
+    delete process.env.AGENTGLASS_BROWSER_READONLY;
+    expect("ask" in parseAsk("cookies", { set: { name: "a", value: "b", secure: true, httpOnly: false, sameSite: "Lax" } }))
+      .toBe(true);
+    const badSecure = parseAsk("cookies", { set: { name: "a", value: "b", secure: "yes" } });
+    if (!("error" in badSecure)) throw new Error("unreachable");
+    expect(badSecure.error).toContain("secure");
+    const badHttpOnly = parseAsk("cookies", { set: { name: "a", value: "b", httpOnly: 1 } });
+    if (!("error" in badHttpOnly)) throw new Error("unreachable");
+    expect(badHttpOnly.error).toContain("httpOnly");
+    const badSameSite = parseAsk("cookies", { set: { name: "a", value: "b", sameSite: 3 } });
+    if (!("error" in badSameSite)) throw new Error("unreachable");
+    expect(badSameSite.error).toContain("sameSite");
+  });
+
   test("every op OBSERVE_OPS does not name is acting by default", () => {
     // Every verb in the real op set is either explicitly observing or refused
     // under read-only — none of them slip through unclassified.

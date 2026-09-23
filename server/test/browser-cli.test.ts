@@ -239,6 +239,25 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     expect(asked).toEqual([]);
   });
 
+  test("cookies --set carries --domain/--http-only/--same-site/--insecure only when given", async () => {
+    await openWindow();
+    answers = { cookies: { ok: true, value: { cookies: "", note: "x" } } };
+    asked = []; askedArgs = [];
+    await cli("cookies", "--set", "session", "abc123", "--domain", "orbit.example",
+      "--http-only", "--same-site", "Lax");
+    expect(verbArgs(0)).toEqual({
+      set: { name: "session", value: "abc123", path: "/", domain: "orbit.example", httpOnly: true, sameSite: "Lax" },
+    });
+
+    asked = []; askedArgs = [];
+    await cli("cookies", "--set", "pref", "dark", "--insecure");
+    expect(verbArgs(0)).toEqual({ set: { name: "pref", value: "dark", path: "/", secure: false } });
+
+    asked = []; askedArgs = [];
+    await cli("cookies", "--set", "pref", "dark");
+    expect(verbArgs(0)).toEqual({ set: { name: "pref", value: "dark", path: "/" } });
+  });
+
   test("scroll insists on exactly one of its three ways", async () => {
     await openWindow();
     const r = await cli("scroll", "--by", "100", "--to", "top");

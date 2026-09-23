@@ -2391,7 +2391,16 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
       if (b.set !== undefined) {
         const c = b.set as Record<string, unknown>;
         if (!c || typeof c !== "object" || typeof c.name !== "string" || typeof c.value !== "string") {
-          return { error: "set must be { name, value, domain?, path? }" };
+          return { error: "set must be { name, value, domain?, path?, secure?, httpOnly?, sameSite? }" };
+        }
+        if (c.secure !== undefined && typeof c.secure !== "boolean") {
+          return { error: "secure must be a boolean" };
+        }
+        if (c.httpOnly !== undefined && typeof c.httpOnly !== "boolean") {
+          return { error: "httpOnly must be a boolean" };
+        }
+        if (c.sameSite !== undefined && typeof c.sameSite !== "string") {
+          return { error: "sameSite must be a string" };
         }
         args.set = c;
       }

@@ -923,6 +923,87 @@ const PENDING_TIMERS_SCRIPT = `(() => {
   window.clearInterval = (id) => { active.delete(id); note(); return real.ci.call(window, id); };
 })()`;
 
+export type CookieSetArgs = {
+  name: string; value: string; path?: string; domain?: string;
+  secure?: boolean; httpOnly?: boolean; sameSite?: string;
+};
+
+/**
+ * Chromium treats `localhost` (and its subdomains) and the IPv4/IPv6
+ * loopback literals as a secure context even over plain http — its own
+ * "potentially trustworthy origin" rule, not a special case this file
+ * invented. Every local dev target is one of these, and refusing
+ * `__Host-`/`__Secure-` there (or defaulting `secure` to false) would sever
+ * local testing for the exact verb this fix exists to keep honest.
+ */
+function isSecureContextHost(hostname: string): boolean {
+  return hostname === "localhost" || hostname.endsWith(".localhost")
+    || hostname === "127.0.0.1" || hostname.startsWith("127.")
+    || hostname === "[::1]";
+}
+
+/**
+ * Turn a `cookies --set` ask into the params `Network.setCookie` takes, or an
+ * error — pure, so the prefix rules are tested without a page or a debugger
+ * session behind them.
+ *
+ * `secure` defaults to the page being a secure context (https, or the
+ * loopback/`localhost` exception above); an explicit `secure:false` is only
+ * honoured for a name without a `__Host-`/`__Secure-` prefix, because
+ * Chromium enforces those regardless of what is asked for — same rule this
+ * fix exists to route around on the way in, so it is enforced here rather
+ * than left to fail silently at the CDP call.
+ */
+export function cookieSetParams(
+  pageUrl: string,
+  set: CookieSetArgs,
+): { ok: true; params: Record<string, unknown> } | { ok: false; error: string } {
+  let page: URL;
+  try {
+    page = new URL(pageUrl);
+  } catch {
+    return { ok: false, error: "open a page on the cookie's site first" };
+  }
+  if (page.protocol !== "http:" && page.protocol !== "https:") {
+    return { ok: false, error: "open a page on the cookie's site first" };
+  }
+  const isSecureContext = page.protocol === "https:" || isSecureContextHost(page.hostname);
+  const isHost = set.name.startsWith("__Host-");
+  const isSecurePrefix = set.name.startsWith("__Secure-");
+  let secure = set.secure ?? isSecureContext;
+
+  if (isHost) {
+    if (!isSecureContext) return { ok: false, error: `"__Host-" cookies require a secure page (https, or http://localhost)` };
+    if (set.domain) return { ok: false, error: `"__Host-" cookies cannot carry a domain` };
+    if (set.path && set.path !== "/") return { ok: false, error: `"__Host-" cookies must use path "/"` };
+    secure = true;
+  } else if (isSecurePrefix) {
+    if (!isSecureContext) return { ok: false, error: `"__Secure-" cookies require a secure page (https, or http://localhost)` };
+    secure = true;
+  }
+
+  let sameSite: string | undefined;
+  if (set.sameSite !== undefined) {
+    const cased: Record<string, string> = { strict: "Strict", lax: "Lax", none: "None" };
+    sameSite = cased[String(set.sameSite).toLowerCase()];
+    if (!sameSite) return { ok: false, error: `sameSite must be "Strict", "Lax", or "None"` };
+    if (sameSite === "None" && !secure) return { ok: false, error: `sameSite "None" requires a secure cookie` };
+  }
+
+  const path = isHost ? "/" : (set.path || "/");
+  const params: Record<string, unknown> = {
+    name: set.name,
+    value: set.value,
+    url: `${page.origin}${path}`,
+    path,
+    secure,
+    httpOnly: !!set.httpOnly,
+  };
+  if (sameSite) params.sameSite = sameSite;
+  if (set.domain && !isHost) params.domain = set.domain;
+  return { ok: true, params };
+}
+
 /**
  * Poll the GUEST's `Date.now()` from the HOST's real clock, not the guest's.
  *
@@ -2540,34 +2621,80 @@ async function runVerb(
         return { ok: true, value: { url: el.getURL(), bypassedCache: hard } };
       }
       case "cookies": {
-        /* Through the page rather than the session: document.cookie is what
-           the page itself sees, which is the thing an agent is reasoning
-           about. HttpOnly cookies are invisible here and that is honest —
-           they are invisible to the page too. */
+        /* A set goes through the network stack, not the page: measured in
+           headless Chromium, a `document.cookie = "__Host-x=..."` write is
+           silently dropped — no throw, nothing in the jar — because it never
+           carries Secure, and every other cookie it writes lands non-Secure,
+           non-HttpOnly, SameSite unset regardless of what was asked for.
+           `Network.setCookie` is the only door in this file that can set
+           those flags, so that is what a set goes through, checked against
+           `Network.getCookies` — the jar the network stack (and a site
+           checking a same-site twin of its session cookie on POST) actually
+           reads. The read below is unchanged: `document.cookie` is what the
+           page itself sees, and HttpOnly is invisible here honestly, because
+           it is invisible to the page too. */
         if (ask.args.set) {
-          const c = ask.args.set as { name: string; value: string; path?: string; domain?: string };
-          await el.executeJavaScript(
-            `(() => { document.cookie = ${jsLit(`${c.name}=${c.value}; path=${c.path || "/"}${c.domain ? `; domain=${c.domain}` : ""}`)}; return 1; })()`,
-          );
+          const set = ask.args.set as {
+            name: string; value: string; path?: string; domain?: string;
+            secure?: boolean; httpOnly?: boolean; sameSite?: string;
+          };
+          const parsed = cookieSetParams(el.getURL(), set);
+          if (!parsed.ok) return { ok: false, error: parsed.error };
+          const wrote = await cdp("Network.setCookie", parsed.params);
+          if (!wrote.ok) {
+            /* The relay itself refused — most often because DevTools is
+               already attached to this tab (electron/main.js only lets one
+               debugger session own a guest at a time) and a second `attach`
+               cannot happen alongside it. document.cookie is NOT a fallback
+               here: it is the write that silently drops Secure/HttpOnly/
+               SameSite, which is the defect this whole fix routes around —
+               falling back to it on a busy relay would just reopen it on a
+               schedule nobody controls. Closing the inspector is the actual
+               way out, so the error says so when that looks like what
+               happened, instead of repeating the generic relay line. */
+            const inspectorAttached = /inspector|debugger/i.test(wrote.error ?? "");
+            return {
+              ok: false,
+              error: `cookie "${set.name}" needs the DevTools relay to set${wrote.error ? ` — ${wrote.error}` : ""}`
+                + (inspectorAttached ? " — close the inspector and retry" : ""),
+            };
+          }
+          const success = (wrote.result as { success?: boolean } | undefined)?.success;
+          if (success === false) {
+            /* The relay answered fine; Chromium itself refused the cookie —
+               a prefix rule broken, an invalid domain, an unparseable value.
+               A different failure than the relay being unreachable, and
+               worded as one: "needs the DevTools relay" here would send
+               someone chasing a debugger connection that was never the
+               problem. */
+            return {
+              ok: false,
+              error: `Chromium refused cookie "${set.name}" — check the prefix rules (__Host-/__Secure-) and the domain`,
+            };
+          }
+          const got = await cdp("Network.getCookies", { urls: [parsed.params.url] });
+          const jar = (got.result as { cookies?: Array<Record<string, unknown>> } | undefined)?.cookies ?? [];
+          const match = jar.find((c) => c.name === set.name && c.value === set.value);
+          if (!match) {
+            return { ok: false, error: `cookie "${set.name}" was not set — it is not in the page's jar after the write` };
+          }
+          const value = await el.executeJavaScript(
+            `(() => ({ cookies: document.cookie, note: "httpOnly cookies are not visible to the page and so not here" }))()`,
+          ) as { cookies: string };
+          return {
+            ok: true,
+            value: {
+              ...value,
+              set: {
+                name: match.name, domain: match.domain, path: match.path,
+                secure: match.secure, httpOnly: match.httpOnly, sameSite: match.sameSite,
+              },
+            },
+          };
         }
         const value = await el.executeJavaScript(
           `(() => ({ cookies: document.cookie, note: "httpOnly cookies are not visible to the page and so not here" }))()`,
         ) as { cookies: string };
-        /* document.cookie can take a write and drop it without a throw — a
-           domain that does not match the page, a path outside the current
-           one, a session cookie policy. Answering `ok` because the script
-           didn't throw was reporting the write, not the result: check the
-           jar the same read just brought back before saying so. */
-        if (ask.args.set) {
-          const c = ask.args.set as { name: string; value: string };
-          const landed = value.cookies.split("; ").some((p) => {
-            const eq = p.indexOf("=");
-            return eq !== -1 && p.slice(0, eq) === c.name && p.slice(eq + 1) === c.value;
-          });
-          if (!landed) {
-            return { ok: false, error: `cookie "${c.name}" was not set — it is not in the page's jar after the write` };
-          }
-        }
         return { ok: true, value };
       }
       case "frames": {
