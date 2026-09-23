@@ -34,7 +34,7 @@ describe("a plugin's words, drawn", () => {
       categories: [],
       source: { kind: "git", url: "https://github.com/acme/clock", ref: null },
     };
-    const html = renderToStaticMarkup(React.createElement(Offer, { entry, owner: "acme", onInstalled: () => {} }));
+    const html = renderToStaticMarkup(React.createElement(Offer, { entry, owner: "acme", onInstalled: () => {}, mode: "install" }));
     expect(html).toContain("Puts the time in the top bar.");
     expect(html).toContain("&lt;img src=x onerror=");
     expect(html).toContain("&lt;script&gt;");
