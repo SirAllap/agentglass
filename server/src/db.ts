@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, chmodSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, chmodSync, readFileSync, copyFileSync, linkSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, hostname, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type {
@@ -14,6 +14,7 @@ import type {
   TypeCount,
   OpenToolCall,
   UsageDay,
+  DbNotice,
 } from "../../shared/types.ts";
 import type { NormalizedEvent } from "./ingest.ts";
 import { costUsd, modelLabel, hasPrice, equivalentTokens } from "./pricing.ts";
@@ -27,10 +28,9 @@ import { changeRisks, sessionRisks, SESSION_RISK_CAP } from "../../shared/riskFl
  * A relative path resolves against the working directory, which is fine when
  * the server is started from the repo but not when it's launched from a
  * desktop icon — the cwd is then arbitrary, and each launch would quietly
- * start a fresh database somewhere new. Fall back to the XDG data dir so the
- * history is the same no matter how the server was started. An explicit
- * AGENTGLASS_DB still wins, and a plain `bun run dev` in a checkout keeps
- * using the local file if one is already there.
+ * start a fresh database somewhere new. Use the XDG data dir so the history
+ * is the same no matter how the server was started. An explicit AGENTGLASS_DB
+ * still wins.
  */
 function defaultDbPath(): string {
   /*
@@ -60,7 +60,6 @@ function defaultDbPath(): string {
     } catch { /* unwritable: fall through to the ordinary answer */ }
   }
   const local = resolve("agentglass.db");
-  if (existsSync(local)) return local;
   const base =
     process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
   const dir = join(base, "agentglass");
@@ -71,11 +70,110 @@ function defaultDbPath(): string {
     tmp: tmpdir(),
   });
   if (refused) throw new Error(refused);
+  const data = join(dir, "agentglass.db");
+  /*
+   * A FILE IN THE WORKING DIRECTORY NO LONGER WINS.
+   *
+   * It used to: a pre-existing `./agentglass.db` beat the data dir, so a
+   * server started from `server/` in a checkout that once had one read that
+   * old history instead of the current one — real sessions, weeks stale, and
+   * nothing on screen to say which file it was. The data dir is the answer
+   * whatever the cwd.
+   *
+   * That same file is the whole history of anyone who ran from source before
+   * the data dir won, and part of it — gate decisions, notes, the activity
+   * log — is hook-only and no transcript rescan brings it back. So when the
+   * data dir has no database yet, the stray one is COPIED there, once. Never
+   * moved, never merged: two histories are not combined automatically, and
+   * the original stays byte for byte where it was. When both exist, the
+   * stray one is not opened, and it is named on stderr and to the app
+   * (`dbNotice`), because a line among the dev server's output is a line
+   * nobody reads.
+   */
   try {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    return join(dir, "agentglass.db");
+    if (local !== data && existsSync(local)) {
+      // No database here means no copy of one either: a marker left from an
+      // earlier copy must not hide the stray file if this copy fails.
+      if (!existsSync(data)) rmSync(importedMarker(data), { force: true });
+      if (!existsSync(data) && copyInto(local, data)) {
+        notice = { kind: "copied", stray: local, db: data };
+        console.warn(`[db] copied ${local} to ${data}, which is the database from now on; the original is untouched and no longer used`);
+      } else if (readImported(data) !== local) {
+        notice = { kind: "ignored", stray: local, db: data, switchCommand: switchCommand(local, data) };
+        console.warn(`[db] ignoring ${local} in the working directory; the database is ${data} (to use the other file instead: stop agentglass, then ${switchCommand(local, data)} — that replaces the current history; or set AGENTGLASS_DB)`);
+      }
+    }
+    return data;
   } catch {
     return local; // unwritable data dir — better a local file than no database
+  }
+}
+
+let notice: DbNotice | null = null;
+/** What the app should say about a second database, or null. Decided once,
+ *  at startup, with the path. */
+export const dbNotice = (): DbNotice | null => notice;
+
+/** The shell line that puts `stray` where `db` is, for a person to run with
+ *  agentglass stopped. The -wal files are part of it: a server that was
+ *  killed leaves rows in `stray-wal` that a move of the main file alone
+ *  loses, and a `db-wal` left in place would be replayed over the moved
+ *  file. Written to work in bash, zsh and fish alike. */
+export function switchCommand(stray: string, db: string): string {
+  const q = (p: string) => `'${p.replace(/'/g, `'\\''`)}'`;
+  return `rm -f ${q(db + "-wal")} ${q(db + "-shm")} && mv ${q(stray)} ${q(db)}; mv ${q(stray + "-wal")} ${q(db + "-wal")} 2>/dev/null`;
+}
+
+/** Next to the database: which stray file it was copied from, so the next
+ *  start does not report that file as a second history. It only ever silences
+ *  the notice — a data dir whose database was deleted gets a fresh copy. Its
+ *  ceiling: an old build that keeps writing to the stray file after the copy
+ *  is not noticed. */
+const importedMarker = (data: string): string => `${data}.imported-from`;
+function readImported(data: string): string | null {
+  try { return readFileSync(importedMarker(data), "utf8").trim(); } catch { return null; }
+}
+
+/**
+ * Copy a database, with whatever of it is still in its `-wal` file, and only
+ * if the copy opens as a database. The source is read and nothing else: no
+ * connection is opened on it, because even a read-only one can leave a
+ * `-shm` behind. The copy is assembled under a temporary name, checked,
+ * checkpointed and linked into place, so a crash half-way never leaves a
+ * data-dir database for the next start to trust. The temporary name is this
+ * process's own, and the link fails if the database appeared meanwhile: two
+ * servers starting together neither delete each other's copy nor put one
+ * over a database the other has already opened. A `-wal` or `-shm` a deleted
+ * database left behind is removed first — SQLite would replay it over the
+ * copy. A copy taken while another server is writing the source can be torn;
+ * `quick_check` refuses that one, and the start goes on with an empty
+ * database and the "ignored" notice. That start is not retried: the data dir
+ * has a database from then on.
+ */
+function copyInto(src: string, dst: string): boolean {
+  const tmp = `${dst}.copying-${process.pid}`;
+  const clear = () => { for (const s of ["", "-wal", "-shm"]) rmSync(tmp + s, { force: true }); };
+  try {
+    clear();
+    copyFileSync(src, tmp);
+    if (existsSync(src + "-wal")) copyFileSync(src + "-wal", tmp + "-wal");
+    const c = new Database(tmp);
+    let ok = false;
+    try {
+      ok = (c.query("PRAGMA quick_check").get() as { quick_check: string } | null)?.quick_check === "ok";
+      if (ok) c.run("PRAGMA wal_checkpoint(TRUNCATE)");
+    } finally { c.close(); }
+    if (!ok) { clear(); return false; }
+    chmodSync(tmp, 0o600);
+    if (!existsSync(dst)) for (const s of ["-wal", "-shm"]) rmSync(dst + s, { force: true });
+    linkSync(tmp, dst);
+    clear();
+    try { writeFileSync(importedMarker(dst), src + "\n", { mode: 0o600 }); } catch { /* the copy stands; the next start just says "ignored" */ }
+    return true;
+  } catch {
+    clear();
+    return false;
   }
 }
 
@@ -511,8 +609,7 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_pat
  * events and 5,000 input tokens instead of 4,000.
  *
  * It is easy to reach: `defaultDbPath()` resolves to the XDG data dir, so any
- * checkout without a local `agentglass.db` — none of the worktrees on this
- * machine have one — runs its scanner over the real history. The README's
+ * checkout runs its scanner over the real history. The README's
  * "attaches, never duplicates" only fires on a `:4000` port collision, and a
  * second server started on another port on purpose sails straight past it.
  *
@@ -802,7 +899,7 @@ export function actionLog(limit = 200, before?: number): ActionRow[] {
 //
 // `decision` NULL means still pending. `resolution` records *who* decided:
 // human, timeout, restart (expired while the server was down), or rule
-// (a tool allow/deny policy that answered without waiting).
+// (a gate rule in config.json that answered on arrival).
 /**
  * What survives the prune.
  *
@@ -4432,7 +4529,7 @@ export function getSession(sessionId: string): import("../../shared/types.ts").S
   };
 }
 
-/** Full-text search across every event's prompts, commands and outputs. */
+/** Full-text search across every event's prompts, commands, paths, messages and errors — what `ftsText` indexes, which is not tool output. */
 /**
  * Turn what somebody typed into an fts5 MATCH expression.
  *

@@ -11,6 +11,8 @@ import {
   ErrorStreaks, ERROR_STREAK, STOP_QUIET_MS, lanternStep, lanternState, REMIND_MS,
   type LanternFinding,
 } from "../src/notePolicy.ts";
+import { DEFAULT_NOTIFY_PREFS } from "../../shared/notifyPrefs.ts";
+import { writeNotifyPrefs } from "../src/notifyPrefs.ts";
 
 const post = (session: string, is_error: 0 | 1, tool = "Bash") =>
   ({ hook_event_type: "PostToolUse", session_id: session, is_error, tool_name: tool, error_text: is_error ? "exit code 1" : null });
@@ -165,10 +167,17 @@ beforeAll(async () => {
   alerts = await import(`../src/alerts.ts?noise=${Math.random()}`);
   alerts.setAlertSink({ broadcast: (a) => frames.push(a), census: () => census });
   alerts.setDesktopNotifier(() => {});
+  // This whole block is about the SHAPE of the frames (one keyed card, a
+  // redraw, a clear) rather than which kinds are on — that gate is
+  // notify-prefs-gate.test.ts's job. Every kind exercised here (failures,
+  // idle, autopilot) is off by default, so it is turned on for the
+  // duration of this file's own "through alerts.ts" describe block.
+  writeNotifyPrefs({ ...DEFAULT_NOTIFY_PREFS, kinds: { ...DEFAULT_NOTIFY_PREFS.kinds, failures: true, idle: true, autopilot: true } });
 });
 afterAll(() => {
   alerts.setAlertSink(null);
   alerts.setDesktopNotifier(null);
+  writeNotifyPrefs(DEFAULT_NOTIFY_PREFS);
   if (HOOK0 !== undefined) process.env.AGENTGLASS_WEBHOOK = HOOK0;
   if (NOTIFY0 === undefined) delete process.env.AGENTGLASS_NOTIFY; else process.env.AGENTGLASS_NOTIFY = NOTIFY0;
 });

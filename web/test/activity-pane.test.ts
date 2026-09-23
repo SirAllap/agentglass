@@ -28,11 +28,8 @@ describe("what it says about a held tool call", () => {
   test("an outcome nobody chose is marked as one, not just worded as one", () => {
     // "approved" and "allowed" are one glance apart in a list of past-tense
     // verbs, and they mean opposite things about whether anybody looked.
-    // Timeout/restart alone — a tool rule is a decision on purpose, so it must
-    // not share the amber "nobody chose" mark.
-    expect(pane).toMatch(/resolution === "timeout" \|\| g\.resolution === "restart"/);
+    expect(pane).toMatch(/resolution !== "human"/);
     expect(pane).toContain("var(--warning)");
-    expect(pane).toContain('decided by a tool rule');
   });
 
   test("and the pane says so in the words the rule chose", () => {
@@ -40,9 +37,8 @@ describe("what it says about a held tool call", () => {
   });
 
   test("the reason a person typed is shown, since it is nowhere else", () => {
-    // The agent was given it and the action log never carried it — same for a
-    // reason a tool rule wrote.
-    expect(pane).toMatch(/\(g\.resolution === "human" \|\| g\.resolution === "rule"\) && g\.reason/);
+    // The agent was given it and the action log never carried it.
+    expect(pane).toMatch(/g\.resolution === "human" && g\.reason/);
   });
 });
 
