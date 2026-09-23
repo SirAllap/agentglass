@@ -183,15 +183,6 @@ too — see the control-plane section of INSTALL.md. The older key `gateTools`
 asking for the move; beside `gateRules` its rows only add denials. One that is
 not a list is an error line and applies nothing.
 
-`gateTools` is file-only (no env var): an array of `{ root, allow, deny }`
-rules the PreToolUse gate evaluates before asking a human — denylist hard-
-denies (union across matching roots), allowlist auto-allows from the longest
-matching root only (Claude Code's own permissions still apply), anything else
-on a non-empty allowlist soft-holds. `config.json` is cached in-process, so
-editing `gateTools` needs an agentglass restart. See
-[INSTALL.md](INSTALL.md#tool-allowlist--denylist-rule-based-gate).
-`budgets` is the spend side of the same idea (annotates a hold when over).
-
 > **Pricing is a user-editable default.** Numbers in `pricing.ts` are per 1M
 > tokens and matched against `model_name` by substring. Set
 > `AGENTGLASS_PRICING_REFRESH=1` to prefer validated exact-model rates from

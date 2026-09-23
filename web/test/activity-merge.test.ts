@@ -96,12 +96,6 @@ describe("what a resolved gate is called", () => {
     expect(gateLine(gate({ resolution: "human" })).note).toBe("");
   });
 
-  test("a tool rule is a decision, not an unanswered timeout", () => {
-    expect(gateLine(gate({ resolution: "rule" })).verb).toBe("approved");
-    expect(gateLine(gate({ decision: "deny", resolution: "rule" })).verb).toBe("denied");
-    expect(gateLine(gate({ resolution: "rule" })).note).toMatch(/allow\/deny rule/);
-  });
-
   test("a denial reads as a denial either way", () => {
     expect(gateLine(gate({ decision: "deny", resolution: "human" })).verb).toBe("denied");
     // Fail-closed: the timeout blocked it, and nobody chose that either.

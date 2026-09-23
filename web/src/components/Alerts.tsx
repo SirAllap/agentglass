@@ -76,7 +76,7 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump, active = true }
       .then((r) => {
         if (!alive.current) return;
         const cutoff = Date.now() - 30 * 60_000;
-        setAutoResolved(r.gates.filter((g) => (g.resolution === "timeout" || g.resolution === "restart") && (g.decided_at ?? 0) > cutoff).slice(0, 3));
+        setAutoResolved(r.gates.filter((g) => g.resolution !== "human" && (g.decided_at ?? 0) > cutoff).slice(0, 3));
       })
       .catch(() => {});
   };
