@@ -118,9 +118,14 @@ describe("harness meta-tools", () => {
     expect(gateRuleVerdict("ToolSearch", IN_ORBIT, strict, null).kind).toBe("allow");
   });
 
-  test("never held or denied, even by a rule that explicitly names it", () => {
+  test("a rule that explicitly names it on the deny list still wins — an explicit deny always beats the exemption", () => {
     const named = [rule({ deny: ["ToolSearch"], otherwise: "deny" })];
-    expect(gateRuleVerdict("ToolSearch", IN_ORBIT, named, null).kind).toBe("allow");
+    expect(gateRuleVerdict("ToolSearch", IN_ORBIT, named, null).kind).toBe("deny");
+  });
+
+  test("but a rule that merely defaults to deny (otherwise), without naming it, still exempts it", () => {
+    const strict = [rule({ otherwise: "deny" })];
+    expect(gateRuleVerdict("ToolSearch", IN_ORBIT, strict, null).kind).toBe("allow");
   });
 
   test("an ordinary tool is unaffected — this is not a second allow list", () => {

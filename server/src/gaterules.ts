@@ -105,14 +105,20 @@ function ruleFor(cwd: string, rules: GateRule[]): GateRule | null {
 const HARNESS_META_TOOLS = new Set(["ToolSearch"]);
 
 export function gateRuleVerdict(tool: string, cwd: string, rules: GateRule[], over: BudgetStatus | null): RuleVerdict {
-  if (HARNESS_META_TOOLS.has(tool)) return { kind: "allow", exact: true };
   const r = ruleFor(cwd, rules);
-  if (!r) return { kind: "none" };
-  const where = scopeLabel(r);
   const retry = "Do not retry it — it will be denied again. Take a different approach, or ask a person to change the rule.";
-  if (r.deny.some((p) => matches(tool, p))) {
+  // A written deny always wins. The exemption below is for a tool nobody's
+  // rule ever names — the harness fetching a deferred tool's own schema — and
+  // running it BEFORE the deny check silently overrode an explicit
+  // `deny: ["ToolSearch"]`: a person's decision losing to a default meant for
+  // the case where nobody made one.
+  if (r && r.deny.some((p) => matches(tool, p))) {
+    const where = scopeLabel(r);
     return { kind: "deny", reason: `This call was denied by a rule in agentglass, not by a person: ${tool} is on the deny list for ${where}. ${retry}` };
   }
+  if (HARNESS_META_TOOLS.has(tool)) return { kind: "allow", exact: true };
+  if (!r) return { kind: "none" };
+  const where = scopeLabel(r);
   if (over) {
     return r.overBudget === "deny"
       ? { kind: "deny", reason: `This call was denied by a rule in agentglass, not by a person: ${overBudgetLine(over)}, and the rule for ${where} denies calls once a budget is over. Every further call will be denied too until the period rolls over or the limit is raised — stop and tell a person rather than trying another tool.` }
