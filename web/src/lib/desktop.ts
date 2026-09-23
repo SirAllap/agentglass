@@ -80,7 +80,7 @@ type DesktopBridge = {
   /** The PERSON's zoom — `webContents.setZoomFactor` in the shell, which scales
    *  the page inside the box it has. Omit the factor to read. */
   zoom?: (factor?: number, guestId?: number) => Promise<{ ok: boolean; factor?: number; percent?: number; error?: string }>;
-  cdpEvents?: () => Promise<{ ok: boolean; events?: Array<{ at: number; method: string; params: unknown }>; error?: string }>;
+  cdpEvents?: (guestId?: number) => Promise<{ ok: boolean; events?: Array<{ at: number; method: string; params: unknown }>; error?: string }>;
   /** All absent on shells built before session-level settings existed. */
   sessionSettings?: (req: Record<string, unknown>) => Promise<{ ok: boolean; applied?: string[]; error?: string }>;
   /** All absent on shells built before cookie import existed. */
@@ -487,11 +487,11 @@ export async function browserZoom(
 /** Whatever CDP sent while nobody was asking — a debugger pause, a DOM
  *  breakpoint firing, a console call. Draining empties the buffer, so two
  *  callers do not both get the same pause and both act on it. */
-export async function browserCdpEvents(): Promise<Array<{ at: number; method: string; params: unknown }>> {
+export async function browserCdpEvents(guestId?: number): Promise<Array<{ at: number; method: string; params: unknown }>> {
   const b = bridge();
   if (!b?.cdpEvents) return [];
   try {
-    const r = await b.cdpEvents();
+    const r = await b.cdpEvents(guestId);
     return r.ok && Array.isArray(r.events) ? r.events : [];
   } catch { return []; }
 }

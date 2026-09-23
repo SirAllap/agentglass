@@ -75,6 +75,19 @@ describe("two agents, two tabs, no crossed evidence", () => {
     expect(src, "the capture still goes out without a guest id").toContain("guestIdOf(el)");
   });
 
+  test("the CDP events are drained from the named tab too", () => {
+    /* Measured on an isolated instance: an agent on a background tab ran
+       Runtime/Network enable, reloaded a page that threw and got a 500, and
+       drained zero events: the drain carried no id and main.js read the front
+       tab's buffer. */
+    const src = readFileSync(new URL("../src/lib/browserBus.ts", import.meta.url), "utf8");
+    expect(src, "the drain still goes out without a guest id").toMatch(/browserCdpEvents\(guest/);
+    const preload = readFileSync(new URL("../../electron/preload.js", import.meta.url), "utf8");
+    expect(preload).toMatch(/cdpEvents: \(guestId\) => ipcRenderer\.invoke\("ag:browserCdp", \{ drain: true, guestId \}\)/);
+    const desk = readFileSync(new URL("../src/lib/desktop.ts", import.meta.url), "utf8");
+    expect(desk).toContain("b.cdpEvents(guestId)");
+  });
+
   test("and the shell refuses an id it does not know rather than falling back", () => {
     /*
      * A fallback to the active tab is exactly how this bug returns: it would

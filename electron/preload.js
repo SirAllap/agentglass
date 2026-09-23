@@ -288,7 +288,10 @@ contextBridge.exposeInMainWorld("agentglass", {
    *  violations a launch and starts showing icons again.
    *  @param {string} url @param {number} [guestId] */
   browserFavicon: (url, guestId) => ipcRenderer.invoke("ag:browserFavicon", { url, guestId }),
-  cdpEvents: () => ipcRenderer.invoke("ag:browserCdp", { drain: true }),
+  /** Drains the buffer of the tab the caller names, like `cdp` above: without
+   *  the id main.js drained whichever tab was in front.
+   *  @param {number} [guestId] */
+  cdpEvents: (guestId) => ipcRenderer.invoke("ag:browserCdp", { drain: true, guestId }),
   /** §13: apply session-level settings (proxy, extensions, cookies, DNS)
    *  through the Electron main process. */
   /** @param {Record<string, unknown>} req */

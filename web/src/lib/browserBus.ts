@@ -361,7 +361,14 @@ export async function serveBrowserAsk(el: DrivableWebview | null, ask: BrowserAs
           }
           return browserCdp(method, params, guest ?? undefined);
         },
-        browserCdpEvents, applySessionSettings,
+        /* The same tab for the events: this drained whichever tab was in
+           front, so an agent on a background tab read an empty buffer after
+           every enable and never saw one event its page sent. */
+        async () => {
+          const guest = guestIdOf(el);
+          return guest === null ? [] : browserCdpEvents(guest ?? undefined);
+        },
+        applySessionSettings,
         /*
          * The inspector, keyed on the same guest the rest of the verbs act on.
          *
