@@ -137,8 +137,12 @@ test("importing the store does not start a poll; subscribing does", async () => 
   const realDocument = (globalThis as any).document;
   let calls = 0;
   (globalThis as any).fetch = (...args: unknown[]) => {
-    calls++;
-    void args;
+    // Only this store's own endpoint counts. `bun test` runs every file in one
+    // process, and a request another file left in flight — a notification
+    // filed after its own wait for a server that is never coming — lands in
+    // whatever fetch is installed when that wait ends, which is sometimes this
+    // one. That request is not this module polling.
+    if (String(args[0]).includes("/gate/")) calls++;
     return Promise.resolve(new Response(JSON.stringify({ gates: [] }), { headers: { "content-type": "application/json" } }));
   };
   // A window, so the poll is allowed to start at all — its absence is why the
