@@ -374,39 +374,50 @@ an unreachable control plane **denies** instead of allows — the fleet stops
 until you decide. Off by default; turn it on only when blocking is safer than
 proceeding, and remember agentglass being down then blocks every gated call.
 
-### Tool allowlist / denylist (rule-based gate)
+### Rules — decide without waiting for you
 
-Beyond "hold until a human clicks", you can let the gate decide some tools by
-rule. In `~/.config/agentglass/config.json`:
+A hold only helps while somebody is watching. `gateRules` in
+`~/.config/agentglass/config.json` lets the gate answer a call on arrival:
 
 ```jsonc
-{
-  "gateTools": [
-    {
-      "root": "",                    // empty = whole machine; or "~/code/prod"
-      "allow": ["Read", "Glob", "Grep", "Edit"],
-      "deny": ["Bash"]
-    }
-  ]
-}
+"gateRules": [
+  // everywhere: reading is fine, fetching the web is not, the rest waits for you
+  { "allow": ["Read", "Grep", "Glob"], "deny": ["WebFetch"] },
+  // one project, stricter: only these tools run, and nothing once its budget is spent
+  { "root": "~/code/orbit", "allow": ["Read", "Edit", "Bash", "mcp__orbit__*"],
+    "otherwise": "deny", "overBudget": "deny" }
+]
 ```
 
-- **deny** — hard deny with a reason, no wait (surfaces only in history). Denies
-  accumulate across every matching `root` — a more-specific allow-only row
-  cannot override an ancestor deny.
-- **allow** — agentglass does not need a human for listed tools; Claude Code's
-  own permissions still apply (the hook gets an empty reason, so it does not
-  force-skip the local permission prompt)
-- tool **not** on a non-empty allowlist — soft hold in "What needs you"
-- a deny-only list leaves unlisted tools on the normal human path
-- `root` scopes like a spend budget; allow/hold use the longest matching root;
-  unknown cwd (no pane note) applies denials only and never auto-allows
-- `config.json` is cached in-process — editing `gateTools` needs an agentglass
-  restart before the new rules take effect
+- `allow` — runs without a hold. agentglass answers with no opinion, so Claude
+  Code's own permission prompt still applies.
+- `deny` — denied at once. The agent is told a rule did it, not a person, and
+  the denial shows up in "What needs you" and in gate history.
+- `otherwise` — a tool on neither list: `hold` (default), `allow` or `deny`.
+- `overBudget` — once a spend budget (Settings → Budgets) covering the project
+  is over: `hold` (default: even an allowed tool waits for you) or `deny`.
+  Only budgets on every model count; the gate does not know which model a call
+  comes from.
+- Tool names are exact and case-sensitive; a trailing `*` matches a prefix. The
+  deepest `root` that covers the call wins; a rule without one covers
+  everything. A project's linked worktrees count.
+- An outward action agentglass recognises (a push, a comment, a message) is
+  never let through by an allow list — it is still held for you, closed. It
+  reads inside `bash -c`, `sh -c` and `eval` (after `env` or `sudo` too),
+  treats `gh api` with fields as a write (GraphQL only when it is a mutation),
+  and counts any MCP tool whose name says push, create, send, merge, delete,
+  post or comment. It is still a heuristic: `g=git; $g push` is not
+  recognised, so allow `Bash` only where that is fine.
+- A local MCP tool caught only by that verb list — a memory store's
+  `create_entities` — is released by an allow rule that names it exactly.
+  A `*` prefix does not release it.
 
-The spend-threshold annotation (over-budget holds) is separate and already
-worked; this is the tool-list half of [#109](https://github.com/SirAllap/agentglass/issues/109).
-Per-project governance beyond this list shape is [#14](https://github.com/SirAllap/agentglass/issues/14).
+Rules only see calls the hook is wired for, so an allow list is most useful
+with a broad matcher (`"matcher": "*"`). They name tools, not arguments, and a
+rule follows the directory the session runs in, not the file a call touches.
+They are read at startup: restart agentglass after editing them. A rule that
+cannot be read is logged and holds every call under its root for you, rather
+than handing that project to a laxer rule.
 
 ---
 

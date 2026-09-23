@@ -11,6 +11,7 @@ import { Panel } from "./Panel.tsx";
 import { api } from "../lib/api.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import { fmtAgo } from "../lib/format.ts";
+import { nobodyDecidedWhy } from "../lib/activity.ts";
 
 const LEVEL: Record<Alert["level"], { color: string; icon: ReactNode }> = {
   error: { color: "var(--error)", icon: <CrossIcon size={ICON.xs} /> },
@@ -195,7 +196,7 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump, active = true }
                     {g.tool_name} {g.decision === "deny" ? "denied" : "allowed"} without you
                   </div>
                   <div className="text-[9.5px] t-dim2 truncate">
-                    {g.resolution === "restart" ? "Window closed while the server was down" : "No decision before the timeout"} · {g.source_app}
+                    {nobodyDecidedWhy(g)} · {g.source_app}
                   </div>
                 </div>
                 <span className="text-[9.5px] t-dim2 shrink-0">{fmtAgo(g.decided_at ?? g.created)}</span>

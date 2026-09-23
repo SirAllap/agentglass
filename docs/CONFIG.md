@@ -177,7 +177,8 @@ Prefer a file over env vars? Drop a `~/.config/agentglass/config.json` (or
 `$XDG_CONFIG_HOME/agentglass/config.json`) with `root`, `repoDirs`,
 `terminalDisabled` and/or `chatBypass`; env vars override it. The last two
 matter for a desktop-launched app, which inherits no shell environment and so
-cannot be configured by `export` at all.
+cannot be configured by `export` at all. Gate rules (`gateRules`) live there
+too — see the control-plane section of INSTALL.md.
 
 `gateTools` is file-only (no env var): an array of `{ root, allow, deny }`
 rules the PreToolUse gate evaluates before asking a human — denylist hard-

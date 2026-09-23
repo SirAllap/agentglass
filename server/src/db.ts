@@ -926,6 +926,19 @@ CREATE INDEX IF NOT EXISTS idx_reminders_live ON reminders(fired_at, due);
  * would invent one — the same reason `actorOf` refuses to invent a name.
  */
 try { db.exec("ALTER TABLE gates ADD COLUMN decided_by TEXT"); } catch { /* already present */ }
+/*
+ * Whether this one request is denied when nobody answers, whatever the
+ * machine's policy — an outward action is. It lived only on the timer, so a
+ * restart re-armed a held push under the fail-open default and let it through.
+ * 0 on every row written before the column existed, which is what they were.
+ */
+try { db.exec("ALTER TABLE gates ADD COLUMN fail_closed INTEGER NOT NULL DEFAULT 0"); } catch { /* already present */ }
+/* The line a person decides from — what an outward action does and the text
+ * it would send, or why a budget made this worth an interruption. It lived in
+ * memory beside the timer, so a request restored after a restart came back as
+ * a bare summary while still being denied if nobody answered. NULL when there
+ * was none, which is most rows. */
+try { db.exec("ALTER TABLE gates ADD COLUMN note TEXT"); } catch { /* already present */ }
 
 // ---------------------------------------------------------------------------
 /*
@@ -1743,11 +1756,15 @@ export interface GateRow {
   /** Who, when a person decided. NULL for a timeout, a restart, a rule, and for
    *  every row written before this column existed — an absent actor is not `local`. */
   decided_by: string | null;
+  /** 1 when this request is denied on timeout whatever the machine's policy. */
+  fail_closed: number;
+  /** The hold's own line, shown beside the summary. */
+  note: string | null;
 }
 
 const gateInsert = db.query(`
-  INSERT OR REPLACE INTO gates (id, source_app, session_id, tool_name, summary, created, expires)
-  VALUES ($id, $source_app, $session_id, $tool_name, $summary, $created, $expires)`);
+  INSERT OR REPLACE INTO gates (id, source_app, session_id, tool_name, summary, created, expires, fail_closed, note)
+  VALUES ($id, $source_app, $session_id, $tool_name, $summary, $created, $expires, $fail_closed, $note)`);
 // Only ever resolves a still-pending row: a decision already recorded wins over
 // a late timeout, so a human's approve can't be overwritten by the clock.
 const gateResolve = db.query(`
@@ -1761,11 +1778,12 @@ const gatesRecent = db.query<GateRow, [number]>(
 
 export function recordGate(g: {
   id: string; source_app: string; session_id: string; tool_name: string;
-  summary: string; created: number; expires: number;
+  summary: string; created: number; expires: number; fail_closed?: boolean; note?: string;
 }): void {
   gateInsert.run({
     $id: g.id, $source_app: g.source_app, $session_id: g.session_id, $tool_name: g.tool_name,
-    $summary: g.summary, $created: g.created, $expires: g.expires,
+    $summary: g.summary, $created: g.created, $expires: g.expires, $fail_closed: g.fail_closed ? 1 : 0,
+    $note: g.note ?? null,
   } as any);
 }
 

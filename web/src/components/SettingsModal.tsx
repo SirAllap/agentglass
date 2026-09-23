@@ -1054,14 +1054,13 @@ function ActionLine({ a, times = 1 }: { a: ActionRecord; times?: number }) {
  */
 function GateLine({ g }: { g: GateRecord }) {
   const { verb: did, note } = gateLine(g);
-  // Timeout/restart are the ones nobody chose. A rule is a decision on purpose.
-  const nobody = g.resolution === "timeout" || g.resolution === "restart";
+  const nobody = g.resolution !== "human";
   return (
     <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] gap-x-3 items-baseline py-1.5 rounded-lg agx-hover">
       <span
         className="text-[9.5px] font-semibold tabular-nums shrink-0"
         style={{ color: nobody ? "var(--warning)" : g.decision === "deny" ? "var(--error)" : "var(--text4)" }}
-        title={nobody ? "nobody decided this" : g.resolution === "rule" ? "decided by a tool rule" : "decided by a person"}
+        title={g.resolution === "rule" ? "a gate rule decided this" : nobody ? "nobody decided this" : "decided by a person"}
       >
         {nobody ? <ClockIcon size={ICON.xs} /> : "·"}
       </span>
@@ -1069,9 +1068,9 @@ function GateLine({ g }: { g: GateRecord }) {
         <span className="text-[11.5px]" style={{ color: "var(--text)" }}>{did}</span>
         <span className="text-[11.5px] t-dim"> {g.tool_name}{g.summary ? ` · ${g.summary}` : ""}</span>
         {note && <span className="block text-[10px] mt-1.5" style={{ color: "var(--warning)" }}>{note}</span>}
-        {/* The reason a person typed — or a rule wrote — which lives nowhere
-            else: the agent was given it and the action log never carried it. */}
-        {(g.resolution === "human" || g.resolution === "rule") && g.reason && (
+        {/* The reason a person typed, which lives nowhere else: the agent was
+            given it and the action log never carried it. */}
+        {g.resolution === "human" && g.reason && (
           <span className="block text-[10px] mt-1.5 t-dim2">“{g.reason}”</span>
         )}
       </span>

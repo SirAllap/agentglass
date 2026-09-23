@@ -85,10 +85,12 @@ function timeoutOutcome(failClosed = FAIL_CLOSED): GateOutcome {
   // one is emphatically NOT a judgement about the call — nobody looked at it —
   // and an agent that treats it as one will start avoiding a perfectly fine
   // approach for the rest of the session.
-  if (FAIL_CLOSED) {
+  // The argument, not FAIL_CLOSED: an outward action arrives here closed on a
+  // machine that is not, and reading the global let it through on timeout.
+  if (failClosed) {
     return {
       decision: "deny",
-      reason: "Nobody answered this request in time and agentglass is configured fail-closed, so it was blocked without a human seeing it. This is not a judgement about the call. Say that you were blocked waiting for approval rather than assuming the approach was wrong.",
+      reason: `Nobody answered this request in time and ${FAIL_CLOSED ? "agentglass is configured fail-closed" : "agentglass holds a call that leaves the machine closed"}, so it was blocked without a human seeing it. This is not a judgement about the call. Say that you were blocked waiting for approval rather than assuming the approach was wrong.`,
     };
   }
   // Empty reason so the hook falls through to Claude Code's own permission
@@ -107,8 +109,8 @@ function finish(
   id: string,
   out: GateOutcome,
   resolution: "human" | "timeout" | "restart" | "rule",
-  /** Who, when a person decided. The timeout / rule paths leave this null on
-   *  purpose: an outcome nobody chose must not arrive carrying an actor. */
+  /** Who, when a person decided. The timeout path leaves this null on purpose:
+   *  an outcome nobody chose must not arrive carrying an actor. */
   by: string | null = null,
 ): void {
   const w = waiters.get(id);
@@ -199,7 +201,7 @@ export function submitGate(
   const { source_app, session_id, tool_name, summary } = req;
   // Persist before holding the connection: if the process dies a millisecond
   // later, the request still exists somewhere a restart can find it.
-  recordGate({ id, source_app, session_id, tool_name, summary, created, expires });
+  recordGate({ id, source_app, session_id, tool_name, summary, created, expires, fail_closed: failClosed, note: budget });
   // Resolved once, here, so the dashboard and the phone say the same thing
   // about the same request rather than each composing its own name — and so the
   // pane lookup behind them is one query rather than one per surface.
@@ -227,46 +229,36 @@ export function submitGate(
 }
 
 /**
- * Record a gate outcome decided by a tool allow/deny rule, with no human wait.
+ * Deny a call on arrival because a rule said so — see gaterules.ts.
  *
- * The hold path (`submitGate`) is for things a person still has to see. A
- * denylist hit and an allowlist hit are already answered — putting them in
- * "What needs you" would only add a card nobody needs to click. They still get
- * a row in history, with `resolution: "rule"`, so the activity log can say why
- * the call never appeared in the queue.
+ * Written to the same table as every other gate, and resolved in the same
+ * breath, so the denial shows up in gate history and in "What needs you" beside
+ * the timeouts the next time either is read: a call stopped with nobody watching is exactly the kind of outcome
+ * a person has to be able to find afterwards. It never enters the queue and
+ * never pushes a notification — there is nothing to decide, and a runaway loop
+ * being denied fifty times must not become fifty buzzes.
  *
- * Idempotent on a hook-supplied id: a reconnect that already has an outcome
- * replays it. The route calls this *before* submitGate, so a still-pending id
- * is not the expected path; if one exists, the rule finishes it rather than
- * stranding the waiter.
+ * The route asks awaitGate first, so a hook retrying an id it already sent is
+ * answered from the recorded row and never reaches here twice.
  */
-export function resolveByRule(
+export function denyByRule(
   req: { source_app: string; session_id: string; tool_name: string; summary: string; id?: string },
-  out: GateOutcome,
+  reason: string,
 ): GateOutcome {
-  if (validGateId(req.id)) {
-    const row = getGate(req.id);
-    if (row?.decision) return { decision: row.decision, reason: row.reason || "" };
-    if (row) {
-      finish(req.id, out, "rule");
-      return out;
-    }
+  const id = validGateId(req.id) ? req.id : crypto.randomUUID();
+  const now = Date.now();
+  const { source_app, session_id, tool_name, summary } = req;
+  // The record is for the person; the answer is for the hook. A database that
+  // throws here must not turn the denial into a 500 — a fail-open hook reads
+  // that as "allow", and the call the rule stopped would run.
+  try {
+    recordGate({ id, source_app, session_id, tool_name, summary, created: now, expires: now });
+    resolveGateRow(id, "deny", reason, "rule", now);
+    onChange();
+  } catch (e) {
+    console.warn("[gate] a rule's denial was not recorded:", e instanceof Error ? e.message : e);
   }
-  const id = validGateId(req.id) ? req.id! : crypto.randomUUID();
-  const created = Date.now();
-  // expires == created: there is no window to wait out; the decision is now.
-  recordGate({
-    id,
-    source_app: req.source_app,
-    session_id: req.session_id,
-    tool_name: req.tool_name,
-    summary: req.summary,
-    created,
-    expires: created,
-  });
-  resolveGateRow(id, out.decision, out.reason, "rule", created);
-  onChange();
-  return out;
+  return { decision: "deny", reason };
 }
 
 /**
@@ -288,14 +280,6 @@ export function awaitGate(id: string): Promise<GateOutcome> | GateOutcome | null
   }
   const row = getGate(id);
   if (!row || !row.decision) return null;
-  // Rule-allow must match the POST /gate hook contract: history keeps the
-  // allowlist reason, but reattach (/gate/status → awaitGate) must omit it so
-  // gate_event falls through to allow_silently() instead of allow-with-reason
-  // (which would skip Claude Code's own prompt). Human/timeout/restart allows
-  // and any deny keep the stored reason.
-  if (row.decision === "allow" && row.resolution === "rule") {
-    return { decision: "allow", reason: "" };
-  }
   return { decision: row.decision, reason: row.reason || "" };
 }
 
@@ -418,8 +402,11 @@ export function restoreGates(): { restored: number; expired: number } {
   const now = Date.now();
   let restored = 0, expired = 0;
   for (const row of undecidedGates()) {
+    // Held closed when it was taken, held closed now: the row carries it,
+    // because the timer that did is gone with the process.
+    const failClosed = row.fail_closed ? true : undefined;
     if (row.expires <= now) {
-      const out = timeoutOutcome();
+      const out = timeoutOutcome(failClosed);
       // out.reason verbatim — never backfilled. timeoutOutcome() leaves the
       // reason EMPTY on a fail-open allow on purpose, so the re-attaching hook
       // falls through to Claude Code's own permission prompt; a non-empty reason
@@ -438,7 +425,8 @@ export function restoreGates(): { restored: number; expired: number } {
       summary: row.summary,
       created: row.created,
       expires: row.expires,
-      timer: arm(row.id, row.expires),
+      budget: row.note ?? undefined,
+      timer: arm(row.id, row.expires, failClosed),
     });
     restored++;
   }

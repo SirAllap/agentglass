@@ -746,9 +746,9 @@ export interface PendingGate {
 
 /** A gate request that has been resolved. `resolution` is who resolved it:
  *  a human from the dashboard, the timeout, a restart that found the window
- *  already closed, or a tool allow/deny rule that decided without waiting. The
- *  ones nobody chose are why this record exists — an outcome that must not
- *  disappear. */
+ *  already closed, or a rule in config.json that denied it on arrival. The
+ *  last three are why this record exists — an outcome nobody chose is exactly
+ *  the one that must not disappear. */
 export interface GateRecord extends PendingGate {
   expires: number;
   decision: "allow" | "deny";
@@ -760,6 +760,11 @@ export interface GateRecord extends PendingGate {
    *  a restart. Also NULL on rows written before the column existed, which is
    *  why an absent value is never read as "this machine". */
   decided_by: string | null;
+  /** 1 when it was denied on timeout whatever the machine's policy — an
+   *  outward action. Absent on rows from before the column existed. */
+  fail_closed?: number;
+  /** The hold's own line, when it had one. */
+  note?: string | null;
 }
 
 /**
@@ -3708,30 +3713,6 @@ export interface AgentProbe extends KnownAgent {
   seenAt: number | null;
 }
 
-/**
- * A tool allow/deny rule for the gate (#109).
- *
- * Evaluated when a PreToolUse hook POSTs /gate — before a human is asked. A
- * denylist entry hard-denies; an allowlist auto-allows listed tools and soft-
- * holds anything else (surfaces in What needs you). Empty lists mean "no rule
- * of that kind". `root` scopes like a budget: empty is the whole machine.
- *
- * Deny accumulates across every matching root; allow/hold come only from the
- * longest matching root. Unknown cwd applies denials only (no auto-allow).
- *
- * Deliberately a flat array rather than the per-root `policies` map proposed
- * in #14: same longest-root matching for allow, room to grow into that shape
- * later, without boiling the broader governance work.
- */
-export interface GateToolsPolicy {
-  /** Project root this applies to. Empty means the whole machine. */
-  root: string;
-  /** Tools that may proceed without a human. Non-empty → anything else holds. */
-  allow: string[];
-  /** Tools that are denied outright, with a reason, without waiting. */
-  deny: string[];
-}
-
 /** How often a budget resets. Calendar periods, not trailing windows — the
  *  reset is what makes a number feel like a budget rather than an average. */
 export type BudgetPeriod = "day" | "week" | "month";
@@ -3751,6 +3732,23 @@ export interface Budget {
   /** In USD, matching every other cost in this app. */
   limit: number;
   period: BudgetPeriod;
+}
+
+/**
+ * What the gate does with a call by rule, without waiting for a person. See
+ * server/src/gaterules.ts. Read from `gateRules` in config.json.
+ */
+export interface GateRule {
+  /** Project root this applies to. Empty means the whole machine. */
+  root: string;
+  /** Tool names let through without a hold. A trailing `*` matches a prefix. */
+  allow: string[];
+  /** Tool names denied outright. Wins over `allow`. */
+  deny: string[];
+  /** What happens to a tool on neither list. */
+  otherwise: "allow" | "hold" | "deny";
+  /** What happens to a call once a budget covering it is over. */
+  overBudget: "hold" | "deny";
 }
 
 /** A budget, and where it stands right now. */
