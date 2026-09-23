@@ -43,6 +43,8 @@ PORT=${3:-${AGX_BENCH_PORT:-4831}}
 # character that would end or escape that string is refused.
 case "$DIR" in *[[:space:]\"\\]*) echo "DIR must not contain whitespace, quotes or backslashes: '$DIR'" >&2; exit 2;; esac
 DIR=$(realpath -m -- "$DIR")
+# A directory somebody else made is a launch.env somebody else wrote.
+if [ -e "$DIR" ] && [ ! -O "$DIR" ]; then echo "DIR $DIR belongs to another user; not using it" >&2; exit 2; fi
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
 WS=${AGX_BENCH_WORKSPACE:-5}
@@ -127,7 +129,8 @@ start)
     # Where did the window land? Anywhere but its workspace is a window on
     # somebody's screen: stop at once rather than run the benchmark there.
     for _ in $(seq 1 100); do
-      AT=$(hyprctl clients -j | python3 -c "import json,sys; print(next((str(c['workspace']['id']) for c in json.load(sys.stdin) if c['pid']==$PID), ''))")
+      # A failed read is "not yet", never an exit before the check below.
+      AT=$(hyprctl clients -j | python3 -c "import json,sys; print(next((str(c['workspace']['id']) for c in json.load(sys.stdin) if c['pid']==$PID), ''))" || true)
       [ -n "$AT" ] && break; sleep 0.2
     done
     if [ "${AT:-}" != "$WS" ]; then

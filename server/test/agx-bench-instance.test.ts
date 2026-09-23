@@ -77,3 +77,16 @@ describe("a relative DIR is the same instance as its absolute path", () => {
     }
   });
 });
+
+describe("start does not trust what it did not make", () => {
+  test("a DIR owned by somebody else is refused before launch.env is sourced from it", () => {
+    expect(CODE).toContain('[ ! -O "$DIR" ]');
+    expect(CODE.indexOf('[ ! -O "$DIR" ]')).toBeLessThan(CODE.indexOf('. "$DIR/launch.env"'));
+  });
+
+  test("a failed window lookup is 'not yet', so the wrong-workspace check still runs", () => {
+    const line = CODE.split("\n").find((l) => l.includes("AT=$(hyprctl clients -j"));
+    expect(line).toBeDefined();
+    expect(line!).toMatch(/\|\| true\)$/);
+  });
+});
