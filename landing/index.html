@@ -26,7 +26,7 @@
 <!-- logo:favicon:end -->
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-:root{--void:#07060d;--txt:#f2f1f8;--dim:#8b88a4;--dim2:#57546e;
+:root{--void:#07060d;--txt:#f2f1f8;--dim:#8b88a4;--dim2:#807d9a;
  --vio:#a78bfa;--vio2:#7c5cf5;--run:#34d399;--wait:#fbbf24;--held:#f472b6;
  --line:rgba(167,139,250,.13);--line2:rgba(167,139,250,.3);--l:rgba(167,139,250,.2);
  /* The phone's status-bar inset. Zero on a desktop. */
@@ -441,7 +441,6 @@ body.scene .one{padding-bottom:clamp(64px,12vh,140px)}
 
 
 /* ── the window IS the header ──────────────────────────────── */
-.one{padding-top:52px}
 .wbar{gap:9px}
 .wnav{margin-left:auto;display:flex;gap:20px;align-items:center;
  font:11.5px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--dim2)}
@@ -534,7 +533,7 @@ body.scene .one{padding-bottom:clamp(64px,12vh,140px)}
  mask-image:linear-gradient(#000 calc(100% - 4px),transparent)}
 .hd-lock{position:absolute;left:26px;top:calc(3px + var(--safe));transform-origin:0 0;
  display:flex;align-items:center;gap:9px;pointer-events:auto}
-.hd-lock .mk{width:3.2em;height:3.2em;font-size:14px;flex:none;display:block;margin-right:.62em;margin-bottom:.8em}
+.hd-lock .mk{overflow:visible;width:3.2em;height:3.2em;font-size:14px;flex:none;display:block;margin-right:.62em;margin-bottom:.8em}
 /*
  * The wordmark, as a line you could have typed.
  *
@@ -577,89 +576,102 @@ body.scene .one{padding-bottom:clamp(64px,12vh,140px)}
 .hd-nav a{white-space:nowrap}
 .hd-nav a:hover{color:var(--txt)}
 .hd-nav .dl{color:var(--vio)}
+.hd-nav a.here{color:var(--txt)}
 
-/* The rings. Radii at 1.45x the mark's rather than 2.07x: they read as a
-   halo and not as a target. vector-effect keeps the stroke at 1px whatever
-   happens to it. */
-.hd-ring,.hd-halo{position:fixed;top:0;width:0;height:0;overflow:visible;
- pointer-events:none}
-/* Centred on the planet and sized from it: `--ring-x`/`--ring-y` are where
-   the mark actually lands and `--ring-s` is how big it actually is, all
-   measured. The three numbers that used to be typed here were right at one
-   window width and put the planet off-centre at every other. */
-.hd-ring,.hd-halo{left:var(--ring-x,50%);top:var(--ring-y,120px);
- /* The svg inside already sits at -110,-110, so the point IS the centre:
-    translating the box as well pushed it a radius off. Scale about that
-    same point and the ring grows around the planet. */
- transform:scale(var(--ring-s,1));transform-origin:0 0}
-.hd-ring{z-index:79}
-.hd-halo{z-index:78}
-.hd-ring svg,.hd-halo svg{overflow:visible;position:absolute;left:-110px;top:-110px;
- width:220px;height:220px}
-.hd-ring g{transform-origin:110px 110px}
-
-
+/* The hero planet: the market's drawing and its rules, unchanged apart from
+   where it sits. The market's own copy is `.pass` in its styles.css; keep the
+   two the same. Hidden until the scroll drives it: without that it would sit
+   over the page for ever. */
+.hd-world{display:none;position:fixed;left:0;top:0;width:var(--pass-w,400px);aspect-ratio:1;z-index:81;
+ pointer-events:none;transform-origin:0 0}
+.hd-world::before{content:"";position:absolute;inset:-18%;z-index:-1;border-radius:50%;pointer-events:none;
+ background:radial-gradient(closest-side,rgba(167,139,250,.24),rgba(124,92,245,.08) 55%,transparent 100%);
+ animation:breathe 9s ease-in-out infinite}
+@keyframes breathe{0%,100%{opacity:.75;transform:scale(.97)}50%{opacity:1;transform:scale(1.03)}}
+.hd-world.spent .star,.hd-world.spent::before{animation-play-state:paused}
+.hd-world svg{display:block;width:100%;height:100%;overflow:visible;transform:translate3d(var(--px,0),var(--py,0),0)}
+.hd-world .far{color:#8b88a4}
+.hd-world .star{fill:#f2f1f8;animation:twinkle 4.6s ease-in-out infinite}
+.hd-world .star:nth-of-type(2n){animation-duration:6.1s;animation-delay:-2s}
+.hd-world .star:nth-of-type(3n){animation-duration:3.7s;animation-delay:-1.1s}
+@keyframes twinkle{0%,100%{opacity:.15}50%{opacity:.7}}
 /* The rule draws from where the planet was, not from the edge: that is why
    it reads as the ring laid flat and not as a bar that appears. */
 .hd-rule{position:fixed;left:0;right:0;top:calc(61px + var(--safe));height:1px;
  background:linear-gradient(90deg,transparent,var(--vio) 50%,transparent);
- opacity:.6;z-index:81;pointer-events:none;transform:scaleX(0);transform-origin:50% 50%}
+ opacity:.6;z-index:81;pointer-events:none;transform:scaleX(0);transform-origin:var(--rule-ox,50%) 50%}
 .hd-sweep{position:fixed;left:0;top:calc(61px + var(--safe));width:7px;height:7px;
  border-radius:50%;background:var(--run);box-shadow:0 0 10px 1px rgba(52,211,153,.55);
  z-index:82;pointer-events:none;opacity:0;margin-top:-3px}
 
+/* ═══ The choreography: one planet, then the header ═════════════════════
+   Two phases on the one scroll range (0 to 78vh), strictly in order.
+
+   FLIGHT (the first 60%): only the planet. It is the market's hero drawing in
+   its own element, and it shrinks and travels to where the header's mark will
+   be, on a strong ease-in-out so it leaves gently and lands gently (the curve
+   is the animate skill's on-screen-movement one). Nothing of the header is
+   visible: not the bar, not the line, not the mark, not the name.
+
+   BUILD (the last 40%): the planet is the mark, handed over in the last few
+   pixels of the flight where the two drawings coincide, and only then does the
+   header assemble: bar, then the line drawn outward from the planet, then the
+   name in four beats (the prompt, the pill growing from the left, the window
+   unfolding out of it, its three dots, the cursor), then the links. Each beat
+   is 8 to 30% of the build with the next one starting before the last has
+   finished, the stagger the skill asks for.
+
+   Scroll-linked, so it reverses exactly. Where it starts and ends (--w-*) is
+   measured in centre(): it depends on the window. */
 @supports (animation-timeline: scroll()) {
- .hd-bar,.hd-lock,.hd-nav,.hd-ring,.hd-ring g,.hd-halo,.hd-rule,.hd-sweep{
-  animation-timeline:scroll(root block);animation-range:0 78vh;
+ .hd-bar,.hd-lock .lk-cue,.hd-lock .lk-pl,.hd-lock .lk-wi,.hd-lock .lk-d1,.hd-lock .lk-d2,
+ .hd-lock .lk-d3,.hd-nav,.hd-rule{
+  animation-timeline:scroll(root block);animation-range:47.6vh 78vh;
   animation-timing-function:linear;animation-fill-mode:both}
- .hd-lock{animation-name:dock}
- @keyframes dock{from{transform:translate(var(--dock-x,calc(50vw - 521.6px)),64px) scale(4.2)}
-  50%{transform:translate(calc(13vw - 44px),12px) scale(1.24)}
-  to{transform:translate(0,0) scale(1)}}
- .hd-bar{animation-name:pane}
- @keyframes pane{0%{opacity:0;height:calc(230px + var(--safe))}
-  20%{opacity:.55;height:calc(196px + var(--safe))}
-  56%{opacity:1;height:calc(118px + var(--safe))}
-  100%{opacity:1;height:calc(62px + var(--safe))}}
+ .hd-world,.hd-world .stars,.hd-lock .mk{animation-timeline:scroll(root block);animation-range:0 47.6vh;
+  animation-timing-function:linear;animation-fill-mode:both}
+ .hd-world{display:block;animation-name:world;animation-timing-function:cubic-bezier(.77,0,.175,1)}
+ @keyframes world{from{transform:translate(var(--w-x0,0px),var(--w-y0,40px)) scale(1);opacity:1}
+  98.3%{transform:translate(var(--w-x1,0px),var(--w-y1,0px)) scale(var(--w-s,.13));opacity:1}
+  to{transform:translate(var(--w-x1,0px),var(--w-y1,0px)) scale(var(--w-s,.13));opacity:0}}
+ .hd-world .stars{animation-name:stars}
+ @keyframes stars{0%{opacity:1}60%,100%{opacity:0}}
+ .hd-world .stars{animation-range:0 46.8vh}
+ .hd-lock .mk{animation-name:mkin;animation-range:46.6vh 47.6vh}
+ @keyframes mkin{0%{opacity:0}100%{opacity:1}}
+ .hd-bar{animation-name:barin}
+ @keyframes barin{0%{opacity:0;transform:translateY(-10px)}30%,100%{opacity:1;transform:none}}
+ .hd-rule{animation-name:draw;animation-timing-function:cubic-bezier(.23,1,.32,1)}
+ @keyframes draw{0%,4%{transform:scaleX(0)}46%,100%{transform:scaleX(1)}}
+ .hd-lock .lk-cue{animation-name:wcue}
+ @keyframes wcue{0%,22%{opacity:0;transform:translateX(-8px)}40%,100%{opacity:1;transform:none}}
+ .hd-lock .lk-pl{animation-name:wpill}
+ @keyframes wpill{0%,30%{opacity:0;clip-path:inset(0 100% 0 0)}34%{opacity:1}58%,100%{opacity:1;clip-path:inset(0 0 0 0)}}
+ .hd-lock .lk-wi{animation-name:wwin}
+ @keyframes wwin{0%,46%{clip-path:inset(0 100% 0 0);transform:translateX(-10px)}78%,100%{clip-path:inset(0 0 0 0);transform:none}}
+ .hd-lock .lk-d1{animation-name:pop1}
+ .hd-lock .lk-d2{animation-name:pop2}
+ .hd-lock .lk-d3{animation-name:pop3}
+ @keyframes pop1{0%,70%{opacity:0;transform:scale(.2)}84%,100%{opacity:1;transform:none}}
+ @keyframes pop2{0%,76%{opacity:0;transform:scale(.2)}90%,100%{opacity:1;transform:none}}
+ @keyframes pop3{0%,82%{opacity:0;transform:scale(.2)}96%,100%{opacity:1;transform:none}}
+ .hd-lock .lk-car{transform-origin:50% 100%;animation:blink 1.15s steps(1) infinite,carin linear both;
+  animation-timeline:auto,scroll(root block);animation-range:normal,47.6vh 78vh}
+ @keyframes carin{0%,88%{transform:scaleY(0)}100%{transform:scaleY(1)}}
  .hd-nav{animation-name:shorts}
- @keyframes shorts{0%,62%{opacity:0;transform:translateY(-7px)}100%{opacity:1;transform:none}}
- /* They shrink away instead of sweeping the screen. */
- .hd-ring g{animation-name:shrink}
- @keyframes shrink{from{transform:scale(1)}to{transform:scale(.34)}}
- .hd-ring{animation-name:veil}
- @keyframes veil{0%{opacity:1}58%,100%{opacity:0}}
- .hd-halo{animation-name:fadehalo}
- @keyframes fadehalo{0%{opacity:1}34%,100%{opacity:0}}
- /* The same run of heights as the bar, one pixel above it. */
- .hd-rule{animation-name:draw}
- @keyframes draw{
-  0%{top:calc(229px + var(--safe));transform:scaleX(0)}
-  20%{top:calc(195px + var(--safe))}
-  30%{transform:scaleX(0)}
-  56%{top:calc(117px + var(--safe))}
-  88%{transform:scaleX(1)}
-  100%{top:calc(61px + var(--safe));transform:scaleX(1)}}
- .hd-sweep{animation-name:armsweep}
- /* The satellite rides the rule, so it makes the same journey. */
- @keyframes armsweep{0%{opacity:0;top:calc(229px + var(--safe))}
-  20%{top:calc(195px + var(--safe))}
-  56%{top:calc(117px + var(--safe))}
-  80%{opacity:0}
-  100%{opacity:1;top:calc(61px + var(--safe))}}
- .one{padding-top:330px}
+ @keyframes shorts{0%,24%{opacity:0;transform:translateY(-7px)}70%,100%{opacity:1;transform:none}}
+ .hd-world .stars{animation-name:stars}
+ .one{padding-top:var(--hero-top,330px)}
 }
 /* `html.byhand` means the script is playing the choreography itself, so the
    no-support fallback has to get out of the way — it exists for the page that
    has no script at all. */
-html.byhand .hd-ring,html.byhand .hd-halo{display:block}
+html.byhand .hd-world{display:block}
 html.byhand .hd-rule{transform:scaleX(0)}
 html.byhand .hd-sweep{opacity:0}
-html.byhand .one{min-height:100vh;padding-top:330px}
-@media(max-width:1099px){html.byhand .one{padding-top:280px}}
-@media(max-width:860px){html.byhand .one{padding-top:200px}}
+html.byhand .one{min-height:100vh;padding-top:var(--hero-top,330px)}
 @supports not (animation-timeline: scroll()) {
  .hd-bar,.hd-nav{opacity:1}
- .hd-ring,.hd-halo{display:none}
  .hd-rule{transform:scaleX(1)}
  .hd-sweep{opacity:1}
  /* The header is already formed here, so the room the hero keeps for a
@@ -670,35 +682,22 @@ html.byhand .one{min-height:100vh;padding-top:330px}
 }
 @media (prefers-reduced-motion:reduce){
  .hd-bar,.hd-nav{opacity:1!important;animation:none!important}
- .hd-lock{transform:none!important;animation:none!important}
- .hd-ring,.hd-halo,.hd-sweep{display:none}
+ .hd-lock .mk,.hd-lock .lk-cue,.hd-lock .lk-pl,.hd-lock .lk-wi,.hd-lock .lk-d1,.hd-lock .lk-d2,.hd-lock .lk-d3{animation:none!important;opacity:1!important;transform:none!important;clip-path:none!important}
+ .hd-lock .lk-car{animation:none!important;transform:none!important}
+ .hd-world{display:none!important}
+ .hd-sweep{display:none}
  .hd-rule{animation:none!important;transform:scaleX(1)!important}
  .one{padding-top:110px!important}
 }
 .hd-sweep{animation:sweep 7s cubic-bezier(.55,0,.45,1) infinite}
 @keyframes sweep{0%{left:-2%}50%{left:101%}100%{left:-2%}}
 @supports (animation-timeline: scroll()){
- .hd-sweep{animation:sweep 7s cubic-bezier(.55,0,.45,1) infinite,armsweep linear both;
-  animation-timeline:auto,scroll(root block);animation-range:normal,0 78vh}
-}
-/* Middle tier: the lockup at 4.6x does not fit below 1100. */
-@media(max-width:1099px){
- @supports (animation-timeline: scroll()){
-  @keyframes dock{from{transform:translate(var(--dock-x,calc(50vw - 403.1px)),57px) scale(3.4)}
-   50%{transform:translate(calc(11vw - 36px),12px) scale(1.2)}
-   to{transform:translate(0,0) scale(1)}}
-
-  .one{padding-top:280px}}
- .hd-halo{transform:scale(0.761)}
+ .hd-sweep{animation:sweep 7s cubic-bezier(.55,0,.45,1) infinite,sweepin linear both;
+  animation-timeline:auto,scroll(root block);animation-range:normal,47.6vh 78vh}
+ @keyframes sweepin{0%,30%{opacity:0}60%,100%{opacity:1}}
 }
 @media(max-width:860px){
  .hd-nav a:not(.dl){display:none}
- @supports (animation-timeline: scroll()){
-  @keyframes dock{from{transform:translate(var(--dock-x,calc(50vw - 198.4px)),46px) scale(1.8)}
-   50%{transform:translate(7px,10px) scale(1.14)}
-   to{transform:translate(0,0) scale(1)}}
-
-  .one{padding-top:200px}}
 }
 /* The lockup is drawn 1.8 times its header size in the hero and the scale is
    fixed in the keyframes above, so on a narrow phone the only thing left to
@@ -1204,21 +1203,22 @@ body.scene .sec>.w{position:relative;z-index:1}
    home, which is how a product site is usually laid out and what keeps the
    home about one thing. They are hash routes so the prototype stays a single
    file: each has its own URL, its own scroll and a working back button, and
-   each maps to a real file the day this lands in landing/.
-
-   The header's scroll choreography belongs to the home, which is the only page
-   with a hero for it to come out of. On the other two the header is simply
-   already formed — the same state the no-support fallback shows. */
+   each maps to a real file the day this lands in landing/. */
 main[hidden]{display:none}
 body:not([data-route="home"]) .hd-bar,
 body:not([data-route="home"]) .hd-nav{opacity:1;animation:none}
 body:not([data-route="home"]) .hd-bar{height:calc(62px + var(--safe))}
-body:not([data-route="home"]) .hd-lock{transform:none;animation:none}
-body:not([data-route="home"]) .hd-ring,
-body:not([data-route="home"]) .hd-halo{display:none}
+body:not([data-route="home"]) .hd-lock .mk,
+body:not([data-route="home"]) .hd-lock .lk-cue,
+body:not([data-route="home"]) .hd-lock .lk-pl,
+body:not([data-route="home"]) .hd-lock .lk-wi,
+body:not([data-route="home"]) .hd-lock .lk-d1,
+body:not([data-route="home"]) .hd-lock .lk-d2,
+body:not([data-route="home"]) .hd-lock .lk-d3{animation:none;opacity:1;transform:none;clip-path:none}
+body:not([data-route="home"]) .hd-lock .lk-car{animation:blink 1.15s steps(1) infinite;transform:none}
+body:not([data-route="home"]) .hd-world{display:none}
 body:not([data-route="home"]) .hd-rule{animation:none;transform:scaleX(1)}
 body:not([data-route="home"]) .page{padding-top:calc(118px + var(--safe))}
-.hd-nav a.here{color:var(--txt)}
 
 .page{padding-inline:28px;padding-bottom:20px}
 .page .w{max-width:1000px;padding:0}
@@ -1342,7 +1342,7 @@ body:not([data-route="home"]) .page{padding-top:calc(118px + var(--safe))}
    and the last one, pushed right on wide screens, can drop its own. */
 .foot2{margin-top:34px;border-top:1px solid var(--line);padding:44px 28px 30px;font-size:13.5px;color:var(--dim2)}
 .fw{width:100%;max-width:1000px;margin:0 auto;display:grid;
- grid-template-columns:1.4fr repeat(3,1fr);gap:40px}
+ grid-template-columns:1.4fr repeat(4,1fr);gap:40px}
 /* The mark here is stamped by scripts/logo.mjs between its markers, so the
    page carries no second copy of it to drift. Its ink is currentColor. */
 .fw .me2 .lock2{display:inline-flex;align-items:center;gap:8px;color:var(--vio)}
@@ -1369,7 +1369,7 @@ body:not([data-route="home"]) .page{padding-top:calc(118px + var(--safe))}
 @media(max-width:820px){
  .page{padding-inline:22px}
  .foot2{margin-top:26px;padding:34px 22px 24px}
- .fw{grid-template-columns:repeat(3,1fr);gap:22px 14px}
+ .fw{grid-template-columns:repeat(2,1fr);gap:22px 14px}
  /* Links first: that is what people come down here for. */
  .fw .me2{grid-column:1/-1;order:2;display:flex;align-items:center;gap:11px;
   flex-wrap:wrap;padding-top:22px;border-top:1px solid var(--line)}
@@ -1631,7 +1631,36 @@ body:not([data-route="home"]) .page{padding-top:calc(118px + var(--safe))}
 
 <div class="hd-rule"></div>
 <div class="hd-sweep"></div>
-<header class="hd"><div class="hd-bar"></div><div class="hd-halo"><svg viewBox="0 0 220 220"><ellipse cx="110" cy="110" rx="82" ry="82" fill="none" stroke="#a78bfa" stroke-opacity=".11" stroke-width="1" vector-effect="non-scaling-stroke"/></svg></div><div class="hd-ring"><svg viewBox="0 0 220 220"><g><ellipse cx="110" cy="110" rx="100" ry="100" fill="none" stroke="#a78bfa" stroke-opacity=".2" stroke-width="1" vector-effect="non-scaling-stroke"/></g></svg></div><a class="hd-lock" href="#"><svg class="mk" viewBox="0 0 64 64" aria-hidden="true"><defs><radialGradient id="hsheen" cx=".34" cy=".28" r=".82"><stop offset="0" stop-color="#fff" stop-opacity=".72"/><stop offset=".5" stop-color="#fff" stop-opacity=".15"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient></defs><path d="M14.1 54.9 A29 8 -52 0 1 49.9 9.1" fill="none" stroke="#a78bfa" stroke-opacity=".4" stroke-width="3.2" stroke-linecap="round"/><g opacity="0"><animate attributeName="opacity" values="0;1" keyTimes="0;.5" dur="16s" calcMode="discrete" repeatCount="indefinite"/><animateMotion dur="16s" repeatCount="indefinite" path="M49.9 9.1 A29 8 -52 0 1 14.1 54.9 A29 8 -52 0 1 49.9 9.1"/><circle r="6.8" fill="#34d399" fill-opacity=".18"/><circle r="3.6" fill="#34d399"/></g><circle cx="30" cy="34" r="12.5" fill="#a78bfa"/><circle cx="30" cy="34" r="12.5" fill="url(#hsheen)"/><g fill="none" stroke="#fff" stroke-opacity=".2" stroke-width="1.1"><ellipse cx="30" cy="34" rx="12.5" ry="4.5"/><ellipse cx="30" cy="34" rx="6" ry="12.1"/></g><path d="M30 21.5 A12.5 12.5 0 0 1 30 46.5 A17 17 0 0 0 30 21.5 Z" fill="#1b0b38" fill-opacity=".42"/><path d="M49.9 9.1 A29 8 -52 0 1 14.1 54.9" fill="none" stroke="#a78bfa" stroke-width="3.2" stroke-linecap="round"/><g><animate attributeName="opacity" values="1;0" keyTimes="0;.5" dur="16s" calcMode="discrete" repeatCount="indefinite"/><animateMotion dur="16s" repeatCount="indefinite" path="M49.9 9.1 A29 8 -52 0 1 14.1 54.9 A29 8 -52 0 1 49.9 9.1"/><circle r="6.8" fill="#34d399" fill-opacity=".18"/><circle r="3.6" fill="#34d399"/></g></svg><span class="lk"><span class="lk-cue">&gt;</span><span class="lk-tag"><span class="lk-pl">agent</span><span class="lk-wi"><i class="lk-bar"></i><i class="lk-d1"></i><i class="lk-d2"></i><i class="lk-d3"></i>glass</span></span><span class="lk-car"></span></span></a><nav class="hd-nav"><a href="#/" data-r="home">Home</a><a href="#/guide" data-r="guide">Guide</a><a href="#/plugins" data-r="plugins">Plugins</a><a href="#/faq" data-r="faq">Questions</a><a class="dl" href="#/#get">Get it →</a></nav></header>
+<div class="hd-world" aria-hidden="true"><svg viewBox="-6 -6 76 76" focusable="false">
+        <defs>
+          <radialGradient id="psheen" cx=".34" cy=".28" r=".82"><stop offset="0" stop-color="#fff" stop-opacity=".72"/><stop offset=".5" stop-color="#fff" stop-opacity=".15"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
+          <radialGradient id="patmo"><stop offset=".8" stop-color="#a78bfa" stop-opacity="0"/><stop offset=".88" stop-color="#a78bfa" stop-opacity=".22"/><stop offset="1" stop-color="#a78bfa" stop-opacity="0"/></radialGradient>
+        </defs>
+        <g class="stars">
+          <circle class="star" cx="-2" cy="8" r=".32"/><circle class="star" cx="8" cy="-3" r=".24"/><circle class="star" cx="60" cy="-2" r=".3"/>
+          <circle class="star" cx="67" cy="22" r=".22"/><circle class="star" cx="63" cy="58" r=".34"/><circle class="star" cx="44" cy="67" r=".24"/>
+          <circle class="star" cx="-3" cy="46" r=".28"/><circle class="star" cx="4" cy="66" r=".22"/><circle class="star" cx="22" cy="2" r=".2"/>
+          <circle class="star" cx="52" cy="40" r=".18"/>
+        </g>
+        <!-- A far, shallow orbit behind everything, for depth. -->
+        <g class="far">
+          <path d="M-2.2 43.1 A36 14 -18 0 1 66.2 20.9" fill="none" stroke="currentColor" stroke-opacity=".16" stroke-width="1" stroke-dasharray="2 5" vector-effect="non-scaling-stroke"/>
+          <g opacity="0"><animate attributeName="opacity" values="0;1" keyTimes="0;.5" dur="48s" calcMode="discrete" repeatCount="indefinite"/><animateMotion dur="48s" repeatCount="indefinite" path="M66.2 20.9 A36 14 -18 0 1 -2.2 43.1 A36 14 -18 0 1 66.2 20.9"/><circle r=".9" fill="#fbbf24" fill-opacity=".55"/></g>
+        </g>
+        <path d="M14.1 54.9 A29 8 -52 0 1 49.9 9.1" fill="none" stroke="#a78bfa" stroke-opacity=".4" stroke-width="3" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
+        <g opacity="0"><animate attributeName="opacity" values="0;1" keyTimes="0;.5" dur="16s" calcMode="discrete" repeatCount="indefinite"/><animateMotion dur="16s" repeatCount="indefinite" path="M49.9 9.1 A29 8 -52 0 1 14.1 54.9 A29 8 -52 0 1 49.9 9.1"/><circle r="3.4" fill="#34d399" fill-opacity=".14"/><circle r="1.7" fill="#34d399"/></g>
+        <circle cx="30" cy="34" r="14.6" fill="url(#patmo)"/>
+        <circle cx="30" cy="34" r="12.5" fill="#a78bfa"/>
+        <circle cx="30" cy="34" r="12.5" fill="url(#psheen)"/>
+        <g fill="none" stroke="#fff" stroke-opacity=".2" stroke-width="1" vector-effect="non-scaling-stroke"><ellipse cx="30" cy="34" rx="12.5" ry="4.5" vector-effect="non-scaling-stroke"/><ellipse cx="30" cy="34" rx="6" ry="12.1" vector-effect="non-scaling-stroke"/></g>
+        <path d="M30 21.5 A12.5 12.5 0 0 1 30 46.5 A17 17 0 0 0 30 21.5 Z" fill="#1b0b38" fill-opacity=".42"/>
+        <path d="M49.9 9.1 A29 8 -52 0 1 14.1 54.9" fill="none" stroke="#a78bfa" stroke-width="3" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
+        <g><animate attributeName="opacity" values="1;0" keyTimes="0;.5" dur="16s" calcMode="discrete" repeatCount="indefinite"/><animateMotion dur="16s" repeatCount="indefinite" path="M49.9 9.1 A29 8 -52 0 1 14.1 54.9 A29 8 -52 0 1 49.9 9.1"/><circle r="3.4" fill="#34d399" fill-opacity=".14"/><circle r="1.7" fill="#34d399"/></g>
+        <g class="far"><path d="M66.2 20.9 A36 14 -18 0 1 -2.2 43.1" fill="none" stroke="currentColor" stroke-opacity=".22" stroke-width="1" stroke-dasharray="2 5" vector-effect="non-scaling-stroke"/>
+          <g><animate attributeName="opacity" values="1;0" keyTimes="0;.5" dur="48s" calcMode="discrete" repeatCount="indefinite"/><animateMotion dur="48s" repeatCount="indefinite" path="M66.2 20.9 A36 14 -18 0 1 -2.2 43.1 A36 14 -18 0 1 66.2 20.9"/><circle r=".9" fill="#fbbf24" fill-opacity=".8"/></g>
+        </g>
+      </svg></div>
+<header class="hd"><div class="hd-bar"></div><a class="hd-lock" href="#"><svg class="mk" viewBox="0 0 64 64" aria-hidden="true"><defs><radialGradient id="hsheen" cx=".34" cy=".28" r=".82"><stop offset="0" stop-color="#fff" stop-opacity=".72"/><stop offset=".5" stop-color="#fff" stop-opacity=".15"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient><radialGradient id="hatmo"><stop offset=".8" stop-color="#a78bfa" stop-opacity="0"/><stop offset=".88" stop-color="#a78bfa" stop-opacity=".22"/><stop offset="1" stop-color="#a78bfa" stop-opacity="0"/></radialGradient></defs><g fill="none" stroke="#8b88a4" stroke-opacity=".16" stroke-dasharray="2 5"><path d="M-2.2 43.1 A36 14 -18 0 1 66.2 20.9"/></g><g opacity="0"><animate attributeName="opacity" values="0;1" keyTimes="0;.5" dur="48s" calcMode="discrete" repeatCount="indefinite"/><animateMotion dur="48s" repeatCount="indefinite" path="M66.2 20.9 A36 14 -18 0 1 -2.2 43.1 A36 14 -18 0 1 66.2 20.9"/><circle r="1.1" fill="#fbbf24" fill-opacity=".55"/></g><path d="M14.1 54.9 A29 8 -52 0 1 49.9 9.1" fill="none" stroke="#a78bfa" stroke-opacity=".4" stroke-width="3.2" stroke-linecap="round"/><g opacity="0"><animate attributeName="opacity" values="0;1" keyTimes="0;.5" dur="16s" calcMode="discrete" repeatCount="indefinite"/><animateMotion dur="16s" repeatCount="indefinite" path="M49.9 9.1 A29 8 -52 0 1 14.1 54.9 A29 8 -52 0 1 49.9 9.1"/><circle r="6.8" fill="#34d399" fill-opacity=".18"/><circle r="3.6" fill="#34d399"/></g><circle cx="30" cy="34" r="14.6" fill="url(#hatmo)"/><circle cx="30" cy="34" r="12.5" fill="#a78bfa"/><circle cx="30" cy="34" r="12.5" fill="url(#hsheen)"/><g fill="none" stroke="#fff" stroke-opacity=".2" stroke-width="1.1"><ellipse cx="30" cy="34" rx="12.5" ry="4.5"/><ellipse cx="30" cy="34" rx="6" ry="12.1"/></g><path d="M30 21.5 A12.5 12.5 0 0 1 30 46.5 A17 17 0 0 0 30 21.5 Z" fill="#1b0b38" fill-opacity=".42"/><path d="M49.9 9.1 A29 8 -52 0 1 14.1 54.9" fill="none" stroke="#a78bfa" stroke-width="3.2" stroke-linecap="round"/><g><animate attributeName="opacity" values="1;0" keyTimes="0;.5" dur="16s" calcMode="discrete" repeatCount="indefinite"/><animateMotion dur="16s" repeatCount="indefinite" path="M49.9 9.1 A29 8 -52 0 1 14.1 54.9 A29 8 -52 0 1 49.9 9.1"/><circle r="6.8" fill="#34d399" fill-opacity=".18"/><circle r="3.6" fill="#34d399"/></g><g fill="none" stroke="#8b88a4" stroke-opacity=".22" stroke-dasharray="2 5"><path d="M66.2 20.9 A36 14 -18 0 1 -2.2 43.1"/></g><g><animate attributeName="opacity" values="1;0" keyTimes="0;.5" dur="48s" calcMode="discrete" repeatCount="indefinite"/><animateMotion dur="48s" repeatCount="indefinite" path="M66.2 20.9 A36 14 -18 0 1 -2.2 43.1 A36 14 -18 0 1 66.2 20.9"/><circle r="1.1" fill="#fbbf24" fill-opacity=".8"/></g></svg><span class="lk"><span class="lk-cue">&gt;</span><span class="lk-tag"><span class="lk-pl">agent</span><span class="lk-wi"><i class="lk-bar"></i><i class="lk-d1"></i><i class="lk-d2"></i><i class="lk-d3"></i>glass</span></span><span class="lk-car"></span></span></a><nav class="hd-nav"><a href="#/" data-r="home">Home</a><a href="#/guide" data-r="guide">Guide</a><a href="#/plugins" data-r="plugins">Plugins</a><a href="#/faq" data-r="faq">Questions</a><a class="dl" href="#/#get">Get it →</a></nav></header>
 <main id="home"><section class="one">
  <div class="kick">Everything you alt-tab to</div>
  <div class="field"><div class="chip" data-k="diff" style="--cx:-344px;--cy:-198px"><svg class="ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M12 11.5v5M9.5 14h5"/><path d="M9.5 18.4h5"/></svg><span>nvim</span></div><div class="chip" data-k="terminal" style="--cx:322px;--cy:-208px"><svg class="ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 10l2.5 2.5L7 15"/><path d="M12.5 15.5H17"/></svg><span>tmux</span></div><div class="chip" data-k="git" style="--cx:-408px;--cy:-52px"><svg class="ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="5" r="2.6"/><circle cx="7" cy="19" r="2.6"/><circle cx="17.5" cy="12" r="2.6"/><path d="M7 7.6v8.8"/><path d="M9.6 5h3.4a2 2 0 0 1 2 2v2.6"/></svg><span>lazygit</span></div><div class="chip" data-k="docker" style="--cx:386px;--cy:-46px"><svg class="ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="9.5" width="3.2" height="3.2" rx=".5"/><rect x="7.4" y="9.5" width="3.2" height="3.2" rx=".5"/><rect x="11.8" y="9.5" width="3.2" height="3.2" rx=".5"/><rect x="7.4" y="5.8" width="3.2" height="3.2" rx=".5"/><rect x="11.8" y="5.8" width="3.2" height="3.2" rx=".5"/><rect x="11.8" y="2.1" width="3.2" height="3.2" rx=".5"/><path d="M2 14.2c.4 3.4 2.8 5.6 7.2 5.6 5.2 0 8.8-2.6 10-6.6 1.4.2 2.6-.3 3.2-1.3-1.2-.9-2.5-.8-3.5-.2"/></svg><span>lazydocker</span></div><div class="chip" data-k="issues" style="--cx:-366px;--cy:106px"><svg class="ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 6.5l2 2 3.5-3.5"/><path d="M12 7h9"/><path d="M3.5 15.5l2 2 3.5-3.5"/><path d="M12 16h9"/></svg><span>ClickUp</span></div><div class="chip" data-k="pr" style="--cx:346px;--cy:94px"><svg class="ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><path d="M6 9v12"/><circle cx="18" cy="18" r="3"/><path d="M18 15V8a2 2 0 0 0-2-2h-4.5"/><path d="M13.5 3.5 11 6l2.5 2.5"/></svg><span>GitHub PRs</span></div><div class="chip" data-k="browser" style="--cx:-266px;--cy:218px"><svg class="ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18Z"/></svg><span>Chrome</span></div><div class="chip" data-k="chat" style="--cx:272px;--cy:224px"><svg class="ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 4.5h-17v12h5v4l5-4h7z"/></svg><span>Claude</span></div>
@@ -2122,16 +2151,25 @@ agentglass-plugin remove your-plugin</code></pre>
 <footer class="foot2">
  <div class="fw">
   <div class="me2"><span class="lock2"><!-- logo:mark:start --><svg class="mark" viewBox="0 0 64 64" width="20" height="20" aria-hidden="true"><path d="M14.1 54.9 A29 8.5 -52 0 1 49.9 9.1" fill="none" stroke="currentColor" stroke-opacity=".45" stroke-width="6" stroke-linecap="round"/><circle cx="30" cy="34" r="15" fill="currentColor"/><circle cx="30" cy="34" r="15" fill="#fff" fill-opacity=".34"/><path d="M30 19 A15 15 0 0 1 30 49 A21.0 21.0 0 0 0 30 19 Z" fill="#1b0b38" fill-opacity=".52"/><path d="M49.9 9.1 A29 8.5 -52 0 1 14.1 54.9" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round"/><circle cx="50.7" cy="10.4" r="6" fill="var(--success)"/></svg><!-- logo:mark:end --><b>agentglass</b></span>
-   <p>Built by <a href="https://github.com/SirAllap">SirAllap</a>. It runs on your own machine — no account, no cloud, no telemetry.</p>
+   <p>Built by <a href="https://github.com/SirAllap">SirAllap</a>. It runs on your own machine — no account, no cloud, no telemetry. These pages are static: no cookies, no analytics.</p>
   </div>
-  <div><h4>Product</h4><nav><a href="#/">Home</a><a href="#/guide">Guide</a><a href="#/plugins">Plugins</a><a href="#/faq">Questions</a><a href="#/#get">Download</a><a href="https://sirallap.github.io/agentglass/demo/">Live demo</a></nav></div>
-  <div><h4>Docs</h4><nav><a href="https://github.com/SirAllap/agentglass/blob/main/docs/INSTALL.md">Install</a><a href="https://github.com/SirAllap/agentglass/blob/main/docs/WORKSPACE.md">Every view</a><a href="https://github.com/SirAllap/agentglass/blob/main/docs/CONFIG.md">Config & API</a><a href="https://github.com/SirAllap/agentglass/blob/main/docs/PLUGINS.md">Plugins</a><a href="https://github.com/SirAllap/agentglass/blob/main/SECURITY.md">Security</a></nav></div>
-  <div><h4>Project</h4><nav><a href="https://github.com/SirAllap/agentglass">Source</a><a href="https://github.com/SirAllap/agentglass/releases">Releases</a><a href="https://github.com/SirAllap/agentglass/blob/main/CHANGELOG.md">Changelog</a><a href="https://github.com/SirAllap/agentglass/discussions">Discussions</a><a href="https://github.com/SirAllap/agentglass/issues">Issues</a></nav></div>
+  <div><h4 role="heading" aria-level="2">Product</h4><nav aria-label="Product"><a href="#/">Home</a><a href="#/guide">Guide</a><a href="#/faq">Questions</a><a href="#/#get">Download</a><a href="https://sirallap.github.io/agentglass/demo/">Live demo</a></nav></div>
+  <div><h4 role="heading" aria-level="2">Plugins</h4><nav aria-label="Plugins"><a href="https://sirallap.github.io/agentglass-plugins/#browse">Browse plugins</a><a href="https://sirallap.github.io/agentglass-plugins/#list-yours">List yours</a><a href="https://sirallap.github.io/agentglass-plugins/plugins.json">plugins.json</a><a href="https://github.com/SirAllap/agentglass-plugins">Catalogue source</a></nav></div>
+  <div><h4 role="heading" aria-level="2">Docs</h4><nav aria-label="Docs"><a href="https://github.com/SirAllap/agentglass/blob/main/docs/INSTALL.md">Install</a><a href="https://github.com/SirAllap/agentglass/blob/main/docs/WORKSPACE.md">Every view</a><a href="https://github.com/SirAllap/agentglass/blob/main/docs/CONFIG.md">Config &amp; API</a><a href="https://github.com/SirAllap/agentglass/blob/main/SECURITY.md">Security</a></nav></div>
+  <div><h4 role="heading" aria-level="2">Project</h4><nav aria-label="Project"><a href="https://github.com/SirAllap/agentglass">Source</a><a href="https://github.com/SirAllap/agentglass/releases">Releases</a><a href="https://github.com/SirAllap/agentglass/blob/main/CHANGELOG.md">Changelog</a><a href="https://github.com/SirAllap/agentglass/discussions">Discussions</a><a href="https://github.com/SirAllap/agentglass/issues">Issues</a></nav></div>
  </div>
  <div class="fbar"><span>MIT © 2026 SirAllap</span><span>Mark and artwork CC BY 4.0 — <a href="https://github.com/SirAllap/agentglass/blob/main/NOTICE.md">NOTICE.md</a></span><span class="end"><a href="https://github.com/SirAllap/agentglass/blob/main/SECURITY.md">Report a vulnerability</a></span></div>
 </footer>
 <script>
 const calm=matchMedia('(prefers-reduced-motion: reduce)').matches;
+/* Served from this machine next to the market, the links that lead to it
+   lead to it: the header's PLUGINS and every footer link on the market's
+   address. Deployed, nothing here runs and the links stay as written. */
+if(/^(127\.0\.0\.1|localhost)$/.test(location.hostname)){
+ for(const a of document.querySelectorAll('.hd-nav a[data-r="plugins"]')){ a.removeAttribute('data-r'); a.href='http://127.0.0.1:4780/'; }
+ for(const a of document.querySelectorAll('a[href^="https://sirallap.github.io/agentglass-plugins/"]'))
+  a.href=a.href.replace('https://sirallap.github.io/agentglass-plugins/','http://127.0.0.1:4780/');
+}
 /*
  * The header's scroll choreography, for an engine that says yes and means no.
  *
@@ -2148,7 +2186,15 @@ const calm=matchMedia('(prefers-reduced-motion: reduce)').matches;
  * bar is 230px and the mark is at 4.6x at the top again.
  */
 if(!calm){
- const NAMES=new Set(['dock','pane','shorts','shrink','veil','fadehalo','draw','armsweep']);
+ const NAMES=new Set(['world','stars','mkin','barin','draw','sweepin','shorts','wcue','wpill','wwin','pop1','pop2','pop3','carin']);
+ /* The scroll range is two phases: the planet's flight, then the header's
+    build. Each animation plays over its own phase, which is what the CSS
+    `animation-range` says and what a hand-driven copy has to say too. */
+ const RANGE={world:[0,47.6/78],stars:[0,46.8/78],mkin:[46.6/78,47.6/78]};
+ const BUILD=[47.6/78,1];
+ const EASE={world:'cubic-bezier(.77,0,.175,1)',draw:'cubic-bezier(.23,1,.32,1)'};
+ const phase=(a,p)=>{ const r=RANGE[a.animationName||a._n]||BUILD;
+  return Math.min(1,Math.max(0,(p-r[0])/(r[1]-r[0]))); };
  let saved=false;
  /* One rAF was not enough: on a heavier page the callback can run before the
     animations are registered, and the rescue silently did nothing — the
@@ -2179,9 +2225,9 @@ if(!calm){
       stylesheet, so the driver has to hold it at the end itself. Reported as
       the lockup drawn at hero size across the guide. */
    const paint=()=>{queued=false;
-    const home=document.body.dataset.route==='home';
+    const home=(document.body.dataset.route||(/^#\/(guide|faq|plugins)/.test(location.hash)?'':'home'))==='home';
     const p=home?Math.min(1,Math.max(0,scrollY/(innerHeight*0.78))):1;
-    for(const a of driven)a.currentTime=p*1000;};
+    for(const a of driven)a.currentTime=phase(a,p)*1000;};
    drive=()=>{ if(!queued){queued=true;requestAnimationFrame(paint);} };
    addEventListener('scroll',drive,{passive:true});
    addEventListener('resize',paint);
@@ -2190,6 +2236,10 @@ if(!calm){
   } else drive();
   saved=true;
  };
+ /* Once now, before the first paint: a page reloaded half-way down has its
+    scroll restored already, and waiting for the next frame drew the hero's
+    start state (planet in the middle, no header) for that frame. */
+ rescue();
  requestAnimationFrame(rescue);
  for(const t of [120,400,1000,2000]) setTimeout(rescue,t);
 
@@ -2224,13 +2274,16 @@ if(!calm){
     if(r.cssRules) dig(r.cssRules);
    }};
    for(const sheet of document.styleSheets){ try{ dig(sheet.cssRules); }catch{} }
-   const pairs=[['.hd-lock','dock'],['.hd-bar','pane'],['.hd-nav','shorts'],['.hd-ring g','shrink'],
-                ['.hd-ring','veil'],['.hd-halo','fadehalo'],['.hd-rule','draw'],['.hd-sweep','armsweep']];
+   const pairs=[['.hd-world','world'],['.hd-world .stars','stars'],['.hd-lock .mk','mkin'],['.hd-bar','barin'],
+                ['.hd-rule','draw'],['.hd-lock .lk-cue','wcue'],['.hd-lock .lk-pl','wpill'],['.hd-lock .lk-wi','wwin'],
+                ['.hd-lock .lk-d1','pop1'],['.hd-lock .lk-d2','pop2'],['.hd-lock .lk-d3','pop3'],['.hd-lock .lk-car','carin'],
+                ['.hd-nav','shorts'],['.hd-sweep','sweepin']];
    const made=[];
    for(const [sel,name] of pairs){
     const el=document.querySelector(sel), kf=frames[name];
     if(!el||!kf||kf.length<2) continue;
-    const a=el.animate(kf,{duration:1000,fill:'both',easing:'linear'});
+    const a=el.animate(kf,{duration:1000,fill:'both',easing:EASE[name]||'linear'});
+    a._n=name;
     a.pause();
     a.currentTime=0;
     made.push(a);
@@ -2242,9 +2295,9 @@ if(!calm){
    dispatchEvent(new Event('agx:relayout'));
    let q=false;
    const paint=()=>{q=false;
-    const home=document.body.dataset.route==='home';
+    const home=(document.body.dataset.route||(/^#\/(guide|faq|plugins)/.test(location.hash)?'':'home'))==='home';
     const p=home?Math.min(1,Math.max(0,scrollY/(innerHeight*0.78))):1;
-    for(const a of made)a.currentTime=p*1000;};
+    for(const a of made)a.currentTime=phase(a,p)*1000;};
    addEventListener('scroll',()=>{if(!q){q=true;requestAnimationFrame(paint);}},{passive:true});
    addEventListener('resize',paint);
    addEventListener('hashchange',()=>setTimeout(paint,0));
@@ -2254,6 +2307,54 @@ if(!calm){
  };
  requestAnimationFrame(byHand);
  for(const t of [150,500,1200]) setTimeout(byHand,t);
+}
+/* The planet leans a few pixels toward the pointer, and eases after it: the
+   market's code for its hero planet, taken as it is (site/motion.js, "The pass
+   leans"). Two differences, both about the flight: it only leans while the page
+   is at the top, and the first scroll eases it back to rest, so there is no jump
+   when the flight starts with the pointer off-centre. */
+{
+ const pass=document.querySelector('.hd-world');
+ const hero=document.querySelector('.one');
+ const rm=matchMedia('(prefers-reduced-motion: reduce)');
+ if(pass&&hero&&!rm.matches&&matchMedia('(hover: hover) and (pointer: fine)').matches){
+  let tx=0,ty=0,x=0,y=0,running=false;
+  const step=()=>{
+   if(rm.matches){ tx=x; ty=y; running=false; return; }
+   x+=(tx-x)*0.08;
+   y+=(ty-y)*0.08;
+   pass.style.setProperty('--px',x.toFixed(2)+'px');
+   pass.style.setProperty('--py',y.toFixed(2)+'px');
+   if(Math.abs(tx-x)>0.05||Math.abs(ty-y)>0.05) requestAnimationFrame(step); else running=false;
+  };
+  const aim=(nx,ny)=>{ tx=nx; ty=ny; if(!running){ running=true; requestAnimationFrame(step); } };
+  hero.addEventListener('pointermove',(ev)=>{
+   if(scrollY>4) return;
+   const r=pass.getBoundingClientRect();
+   aim(((ev.clientX-(r.left+r.width/2))/innerWidth)*-18,((ev.clientY-(r.top+r.height/2))/innerHeight)*-14);
+  });
+  hero.addEventListener('pointerleave',()=>aim(0,0));
+  addEventListener('scroll',()=>{ if(scrollY>4&&(tx||ty)) aim(0,0); },{passive:true});
+ }
+}
+/* Nothing runs that nobody can see: once the planet has been handed to the
+   header its own clocks (the satellites' orbit, the twinkle, the glow) rest, and
+   they pick up where they were when it comes back. Pausing, not hiding, so a
+   fling back up shows it on the very next frame. One passive listener, one
+   frame at a time, reading only the scroll position. */
+{
+ const w=document.querySelector('.hd-world'), sv=w&&w.querySelector('svg');
+ if(w&&sv){
+  let spent=null,queued=false;
+  const rest=()=>{ queued=false;
+   const gone=scrollY>0.66*0.78*innerHeight;
+   if(gone===spent) return;
+   spent=gone; w.classList.toggle('spent',gone);
+   if(gone) sv.pauseAnimations(); else sv.unpauseAnimations();
+  };
+  addEventListener('scroll',()=>{ if(!queued){ queued=true; requestAnimationFrame(rest); } },{passive:true});
+  rest();
+ }
 }
 /* The chips start on a ring 408px wide and 208px tall around the middle. That
    is a fine ring on a 1500px viewport and off the screen at 140% zoom, where
@@ -2697,28 +2798,28 @@ if(calm){document.body.classList.add('go');rks.forEach(r=>r.classList.add('shown
  const lock=document.querySelector('.hd-lock');
  const centre=()=>{
   if(!lock) return;
-  const tier=innerWidth<=860?1.8:innerWidth<=1099?3.4:4.2;
-  /* `transform-origin: 0 0` and the lockup sits at left:26px, so the travel
-     that centres it is: half the viewport, minus half the SCALED width, minus
-     where the box already starts. Measured, not typed — the three constants
-     that used to be here were each right at exactly one window width. */
-  const w=lock.offsetWidth*tier;
-  const x=innerWidth/2-w/2-lock.offsetLeft;
-  document.documentElement.style.setProperty('--dock-x',x.toFixed(1)+'px');
-  /* The rings belong to the PLANET, not to the lockup: centred on the whole
-     thing they sat out to the left of it with nothing inside them. */
-  /* `.mk` is an <svg>, and an SVG element has no `offsetLeft` — reading it
-     gave NaN and the rings parked at x=0, empty, off to the left. It is the
-     first thing in the lockup, so its centre is half its own width in. */
   const mk=lock.querySelector('.mk');
   const mw=mk?parseFloat(getComputedStyle(mk).width)||30:30;
-  const dy=innerWidth<=860?46:innerWidth<=1099?57:64;
-  /* The planet is not in the middle of its own box — it sits at (30,34) of a
-     64 viewBox — so the rings are centred on THAT, not on the svg. */
+  /* The hero planet's size is the market's: 400px, at most 84% of the width
+     and 40% of the height; 300px, 78% and 38% on a phone. */
+  const size=innerWidth<760?Math.min(300,innerWidth*.78,innerHeight*.38):Math.min(400,innerWidth*.84,innerHeight*.40);
+  const top=36;
+  /* Where the mark's drawing is once the header has formed: `.mk` is the
+     first thing in the lockup and is centred in it, box and bottom margin
+     together. The planet's picture is 76 units to the mark's 64, with the
+     mark's corner 6 units in, so it lands 6 units up and to the left. */
+  const mb=parseFloat(getComputedStyle(mk).marginBottom)||0;
+  const u=mw/64;
+  const mx=lock.offsetLeft, my=lock.offsetTop+(lock.offsetHeight-(mw+mb))/2;
   const st=document.documentElement.style;
-  st.setProperty('--ring-x',(lock.offsetLeft+x+mw*(30/64)*tier).toFixed(1)+'px');
-  st.setProperty('--ring-y',(lock.offsetTop+dy+mw*(34/64)*tier).toFixed(1)+'px');
-  st.setProperty('--ring-s',((mw*tier*1.45)/200).toFixed(3));
+  st.setProperty('--pass-w',size.toFixed(1)+'px');
+  st.setProperty('--w-x0',((innerWidth-size)/2).toFixed(1)+'px');
+  st.setProperty('--w-y0',top+'px');
+  st.setProperty('--w-x1',(mx-6*u).toFixed(1)+'px');
+  st.setProperty('--w-y1',(my-6*u).toFixed(1)+'px');
+  st.setProperty('--w-s',((76*u)/size).toFixed(4));
+  st.setProperty('--rule-ox',(mx+mw/2).toFixed(1)+'px');
+  st.setProperty('--hero-top',(top+size+46)+'px');
  };
  centre();
  addEventListener('resize',centre);
