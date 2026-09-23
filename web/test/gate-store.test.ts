@@ -135,6 +135,7 @@ test("a gate that resolves and is later reissued is announced again", () => {
  * frame reaches for — an immediate ingest that does not check `document.hidden`.
  */
 test("pollGatesNow ingests even while the tab is hidden", async () => {
+  const realDocument = (globalThis as any).document;
   (globalThis as any).document = { hidden: true, addEventListener() {} };
   const realFetch = globalThis.fetch;
   (globalThis as any).fetch = (...args: unknown[]) => {
@@ -149,6 +150,7 @@ test("pollGatesNow ingests even while the tab is hidden", async () => {
     expect(gateNotes().some((n) => n.key === "gate:hidden-hold")).toBe(true);
   } finally {
     globalThis.fetch = realFetch;
+    (globalThis as any).document = realDocument;
   }
 });
 
