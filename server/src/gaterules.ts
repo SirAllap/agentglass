@@ -94,7 +94,18 @@ function ruleFor(cwd: string, rules: GateRule[]): GateRule | null {
  * did it and not a person — a model told a human looked at a call nobody looked
  * at has been given the wrong fact — and that retrying is pointless.
  */
+/**
+ * A harness-internal call nobody's rule ever names, because nobody chose to
+ * gate it — it is the agent fetching a deferred tool's own schema, not a call
+ * against the project. Exempted before the deny/budget/allow/otherwise chain
+ * runs at all: a strict allow-list rule (`otherwise: "hold"` or `"deny"`)
+ * stalled every normal session on its first deferred-tool call, held for a
+ * tool the person never saw to decide about.
+ */
+const HARNESS_META_TOOLS = new Set(["ToolSearch"]);
+
 export function gateRuleVerdict(tool: string, cwd: string, rules: GateRule[], over: BudgetStatus | null): RuleVerdict {
+  if (HARNESS_META_TOOLS.has(tool)) return { kind: "allow", exact: true };
   const r = ruleFor(cwd, rules);
   if (!r) return { kind: "none" };
   const where = scopeLabel(r);

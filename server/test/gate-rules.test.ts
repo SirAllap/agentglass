@@ -106,6 +106,29 @@ describe("allow and deny lists", () => {
   });
 });
 
+describe("harness meta-tools", () => {
+  // ToolSearch is a harness-internal schema fetch: nobody's rule ever lists
+  // it, so a strict allow-list rule stalled a normal session on its first
+  // deferred-tool call, waiting on a hold for a tool the person never chose
+  // to gate. Exempted before the deny/budget/allow/otherwise chain runs at
+  // all — it is not a fourth outcome the rule picked, it is not this rule's
+  // business.
+  test("never held, even under a rule whose otherwise is hold", () => {
+    const strict = [rule({ otherwise: "hold" })];
+    expect(gateRuleVerdict("ToolSearch", IN_ORBIT, strict, null).kind).toBe("allow");
+  });
+
+  test("never held or denied, even by a rule that explicitly names it", () => {
+    const named = [rule({ deny: ["ToolSearch"], otherwise: "deny" })];
+    expect(gateRuleVerdict("ToolSearch", IN_ORBIT, named, null).kind).toBe("allow");
+  });
+
+  test("an ordinary tool is unaffected — this is not a second allow list", () => {
+    const strict = [rule({ otherwise: "hold" })];
+    expect(gateRuleVerdict("Bash", IN_ORBIT, strict, null).kind).toBe("hold");
+  });
+});
+
 describe("over budget", () => {
   test("an allowed tool is held once a budget covering the call is over", () => {
     // The runaway loop is made of calls somebody had waved through. A limit
