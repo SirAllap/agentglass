@@ -45,7 +45,12 @@
    `getAnimations()` finds `dock` with a ScrollTimeline and `currentTime: null`;
    Chrome 152 papers over it, which is why it looked fine here and broken
    there. */
-html{scroll-behavior:smooth;overflow-x:hidden}
+/* No scroll anchoring. The hero scene changes its own padding and height from
+   the scroll position, and the browser answered each change by moving the scroll
+   position: a jump to 702 came to rest at 464 through a damped bounce
+   (702, 460, 466, 463...) over seven frames, on main as well. Measured with the
+   anchoring off: every jump stays where it was put. */
+html{scroll-behavior:smooth;overflow-x:hidden;overflow-anchor:none}
 body{background:var(--void);color:var(--txt);
  font:16.5px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
  -webkit-font-smoothing:antialiased}
@@ -548,7 +553,10 @@ body.scene .one{padding-bottom:clamp(64px,12vh,140px)}
 .hd{position:fixed;inset:0 0 auto 0;height:calc(62px + var(--safe));z-index:80;
  pointer-events:none}
 .hd-bar{position:absolute;left:0;right:0;top:0;height:calc(62px + var(--safe));
- background:rgba(7,6,13,.72);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+ /* Near-opaque, not a backdrop blur: blurring what scrolls underneath cost
+    about fifteen dropped frames on a desktop, and over a page this dark the two
+    read the same. */
+ background:rgba(7,6,13,.94);
  opacity:0;-webkit-mask-image:linear-gradient(#000 calc(100% - 4px),transparent);
  mask-image:linear-gradient(#000 calc(100% - 4px),transparent)}
 .hd-lock{position:absolute;left:26px;top:calc(3px + var(--safe));transform-origin:0 0;
@@ -650,7 +658,7 @@ html.idle .hd-sweep,html.idle .hd-lock .lk-car{animation-play-state:paused,runni
    name in four beats (the prompt, the pill growing from the left, the window
    unfolding out of it, its three dots, the cursor), then the links. Each beat
    is 8 to 30% of the build with the next one starting before the last has
-   finished, the stagger the skill asks for. Only clip-path and visibility move
+   finished, the stagger the skill asks for. Only clip-path moves
    the beats of the name: an opacity or transform animation is a composited
    layer for as long as it holds its end state, and there were ten of them.
 
@@ -671,9 +679,10 @@ html.idle .hd-sweep,html.idle .hd-lock .lk-car{animation-play-state:paused,runni
  @keyframes stars{0%{opacity:1}60%,100%{opacity:0}}
  .hd-world .stars{animation-range:0 46.8vh}
  .hd-lock .mk{animation-name:mkin;animation-range:46.6vh 47.6vh}
- /* The hand-off is a switch, not a fade: the two drawings coincide, and a
-    visibility that flips is not a composited layer (an opacity animation was). */
- @keyframes mkin{0%{visibility:hidden}100%{visibility:visible}}
+ /* An opacity animation, on the compositor with the planet's own: a
+    visibility that flips is updated on the main thread and was seen one frame
+    late after a fling, with the planet and the mark on screen together. */
+ @keyframes mkin{0%{opacity:0}100%{opacity:1}}
  .hd-bar{animation-name:barin}
  @keyframes barin{0%{opacity:0;transform:translateY(-10px)}30%,100%{opacity:1;transform:none}}
  .hd-rule{animation-name:draw;animation-timing-function:cubic-bezier(.23,1,.32,1)}
