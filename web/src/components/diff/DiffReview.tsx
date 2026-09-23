@@ -8,6 +8,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { anchorLabel, inReviewOrder, type Review, type ReviewComment, type StaleFile } from "../../lib/diffReview.ts";
+import { MOD_KEY } from "../../lib/format.ts";
 import { Btn } from "../PrPanel.tsx";
 
 const CARD = {
@@ -41,7 +42,7 @@ export function CommentBox({ label, initial = "", onText, onSave, onCancel, save
         className="w-full resize-y rounded px-2 py-1.5 text-[11.5px] outline-none"
         style={{ background: "var(--surface-inset)", color: "var(--text)", border: "1px solid var(--surface-line)" }} />
       <div className="mt-1.5 flex items-center gap-1.5">
-        <span className="text-[10px]" style={{ color: "var(--text3)" }}>⌘↵ to add · Esc to cancel</span>
+        <span className="text-[10px]" style={{ color: "var(--text3)" }}>{MOD_KEY}↵ to add · Esc to cancel</span>
         <span className="ml-auto flex items-center gap-1.5">
           <Btn small onClick={onCancel}>Cancel</Btn>
           <Btn small onClick={save} disabled={!text.trim()} primary title={!text.trim() ? "Write something first" : undefined}>{saveLabel}</Btn>
