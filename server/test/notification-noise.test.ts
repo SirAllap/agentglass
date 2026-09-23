@@ -8,10 +8,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { AlertNote } from "../../shared/types.ts";
 import {
-  ErrorStreaks, ERROR_STREAK, lanternStep, lanternState, REMIND_MS, NO_SCREEN,
-  type LanternFinding, type Screen,
+  ErrorStreaks, ERROR_STREAK, STOP_QUIET_MS, lanternStep, lanternState, REMIND_MS,
+  type LanternFinding,
 } from "../src/notePolicy.ts";
-import { parseClientPanes } from "../src/tmuxctl.ts";
 
 const post = (session: string, is_error: 0 | 1, tool = "Bash") =>
   ({ hook_event_type: "PostToolUse", session_id: session, is_error, tool_name: tool, error_text: is_error ? "exit code 1" : null });
@@ -41,19 +40,48 @@ describe("failed tool calls", () => {
     expect(out.every((x) => x === null)).toBe(true);
   });
 
-  test("a turn that ends on a failure is said; one that ends after recovering is not", () => {
+  test("a turn that ends on a failure is said once it has been quiet; one that recovered is not", () => {
     const s = new ErrorStreaks();
-    s.note(post("a", 1, "Edit"));
-    expect(s.note({ hook_event_type: "Stop", session_id: "a" })).toMatchObject({ kind: "stopped", tool: "Edit" });
-    s.note(post("b", 1));
-    s.note(post("b", 0));
-    expect(s.note({ hook_event_type: "Stop", session_id: "b" })).toBeNull();
+    s.note(post("a", 1, "Edit"), 0);
+    expect(s.note({ hook_event_type: "Stop", session_id: "a" }, 1_000)).toBeNull();
+    expect(s.settle("a", 1_000 + STOP_QUIET_MS - 1), "not before the quiet period").toBeNull();
+    expect(s.settle("a", 1_000 + STOP_QUIET_MS)).toMatchObject({ kind: "stopped", tool: "Edit" });
+    expect(s.settle("a", 1_000 + 2 * STOP_QUIET_MS), "said once").toBeNull();
+    s.note(post("b", 1), 0);
+    s.note(post("b", 0), 1);
+    s.note({ hook_event_type: "Stop", session_id: "b" }, 2);
+    expect(s.settle("b", 2 + STOP_QUIET_MS)).toBeNull();
+  });
+
+  test("the scanner's mid-turn Stop — a thinking line after a failure — is not the end of a turn", () => {
+    // The transcript scanner emits a Stop for every assistant line without a
+    // tool call, and a thinking block is its own line: fail, "Stop", then the
+    // agent carries on. Measured, that is what follows about half of failures.
+    const s = new ErrorStreaks();
+    s.note(post("a", 1), 0);
+    s.note({ hook_event_type: "Stop", session_id: "a" }, 500);
+    s.note({ hook_event_type: "PreToolUse", session_id: "a", tool_name: "Bash" }, 3_000);
+    expect(s.settle("a", 500 + STOP_QUIET_MS)).toBeNull();
+    s.note(post("a", 0), 4_000);
+    expect(s.settle("a", 60_000)).toBeNull();
+  });
+
+  test("a mid-turn Stop does not reset a streak in the making", () => {
+    const s = new ErrorStreaks();
+    s.note(post("a", 1), 0);
+    s.note({ hook_event_type: "Stop", session_id: "a" }, 1);
+    s.note({ hook_event_type: "PreToolUse", session_id: "a" }, 2);
+    s.note(post("a", 1), 3);
+    s.note({ hook_event_type: "Stop", session_id: "a" }, 4);
+    s.note({ hook_event_type: "PreToolUse", session_id: "a" }, 5);
+    expect(s.note(post("a", 1), 6)).toMatchObject({ kind: "streak", count: ERROR_STREAK });
   });
 
   test("a streak already said is not said again when the turn ends", () => {
     const s = new ErrorStreaks();
-    for (let i = 0; i < ERROR_STREAK; i++) s.note(post("a", 1));
-    expect(s.note({ hook_event_type: "Stop", session_id: "a" })).toBeNull();
+    for (let i = 0; i < ERROR_STREAK; i++) s.note(post("a", 1), i);
+    s.note({ hook_event_type: "Stop", session_id: "a" }, 10);
+    expect(s.settle("a", 10 + STOP_QUIET_MS)).toBeNull();
   });
 });
 
@@ -74,10 +102,16 @@ describe("the Lantern's card", () => {
     expect(acts).toEqual(["announce", "none", "none", "none", "none"]);
   });
 
-  test("urgency: critical only when something new is blocked", () => {
+  test("urgency is the card's standing level: critical while anything in it is blocked", () => {
     expect(lanternStep([left("a", "%1")], lanternState(), NOW)).toMatchObject({ act: "announce", urgency: 1 });
     expect(lanternStep([forgotten("a", "%1")], lanternState(), NOW)).toMatchObject({ act: "announce", urgency: 1 });
     expect(lanternStep([blocked("a", "%1")], lanternState(), NOW)).toMatchObject({ act: "announce", urgency: 2 });
+    // A forgotten claim turning up next to a blocked agent does not demote the
+    // card, and the blocked one resolving does.
+    const st = lanternState();
+    lanternStep([blocked("a", "%1")], st, NOW);
+    expect(lanternStep([blocked("a", "%1"), forgotten("b", "%2")], st, NOW + MIN)).toMatchObject({ act: "announce", urgency: 2 });
+    expect(lanternStep([forgotten("b", "%2")], st, NOW + 2 * MIN)).toMatchObject({ act: "update", urgency: 1 });
   });
 
   test("a blocked session is reminded once after the cooldown, and never a third time", () => {
@@ -111,34 +145,9 @@ describe("the Lantern's card", () => {
     expect(lanternStep([blocked("a", "%1", NOW + 40 * MIN)], st, NOW + 45 * MIN).act).toBe("announce");
   });
 
-  test("a pane on screen is not announced; a blocked one only when its terminal has focus", () => {
-    const shown: Screen = { shown: new Set(["%3", "%4"]), focused: new Set() };
-    expect(lanternStep([left("orch", "%3")], lanternState(), NOW, shown).act).toBe("none");
-    expect(lanternStep([forgotten("w", "%4")], lanternState(), NOW, shown).act).toBe("none");
-    expect(lanternStep([blocked("b", "%3")], lanternState(), NOW, shown).act, "shown behind another window is not seen").toBe("announce");
-    const focused: Screen = { shown: new Set(["%3"]), focused: new Set(["%3"]) };
-    expect(lanternStep([blocked("b", "%3")], lanternState(), NOW, focused).act).toBe("none");
-  });
-
-  test("looking away from a pane that was on screen makes it news", () => {
-    const st = lanternState();
-    const f = [left("orch", "%3")];
-    expect(lanternStep(f, st, NOW, { shown: new Set(["%3"]), focused: new Set() }).act).toBe("none");
-    expect(lanternStep(f, st, NOW + 15 * MIN, NO_SCREEN).act).toBe("announce");
-  });
-
-  test("the panes it names are all of them, for the client's own focus check", () => {
+  test("the panes it names are all of them", () => {
     const step = lanternStep([left("a", "%1"), forgotten("b", "%2"), { kind: "gone", name: "c", since: NOW }], lanternState(), NOW);
     expect(step).toMatchObject({ act: "announce", panes: ["%1", "%2"] });
-  });
-});
-
-describe("which pane is on screen", () => {
-  test("list-clients' pane and focus flag", () => {
-    const shown = new Set<string>(), focused = new Set<string>();
-    parseClientPanes("%2\tattached,focused,UTF-8\n%7\tattached,UTF-8\n\nnot-a-pane\tfocused", shown, focused);
-    expect([...shown]).toEqual(["%2", "%7"]);
-    expect([...focused]).toEqual(["%2"]);
   });
 });
 
@@ -160,7 +169,6 @@ beforeAll(async () => {
 afterAll(() => {
   alerts.setAlertSink(null);
   alerts.setDesktopNotifier(null);
-  alerts.setScreenProbe(null);
   if (HOOK0 !== undefined) process.env.AGENTGLASS_WEBHOOK = HOOK0;
   if (NOTIFY0 === undefined) delete process.env.AGENTGLASS_NOTIFY; else process.env.AGENTGLASS_NOTIFY = NOTIFY0;
 });
@@ -182,23 +190,8 @@ describe("the frames that reach the client", () => {
     expect(frames.map((f) => f.urgency)).toEqual([0]);
   });
 
-  test("a waiting prompt in a pane on screen is not sent at all; a permission there with focus is silent", async () => {
-    const { notePaneAgent } = await import("../src/panewt.ts");
-    notePaneAgent({ pane: "%81", sessionId: "noise-c", transcriptPath: "/tmp/noise-c.jsonl", cwd: "/home/u/code/orbit" });
-    alerts.setScreenProbe(() => ({ shown: new Set(["%81"]), focused: new Set(["%81"]) }));
-    frames = [];
-    alerts.maybeAlert(ev({ hook_event_type: "Notification", session_id: "noise-c", payload: { message: "Claude is waiting for your input" } }));
-    alerts.maybeAlert(ev({ hook_event_type: "Notification", session_id: "noise-c", payload: { message: "Claude needs your permission to use Bash" } }));
-    expect(frames.map((f) => f.urgency)).toEqual([0]);
-    alerts.setScreenProbe(() => NO_SCREEN);
-    frames = [];
-    alerts.maybeAlert(ev({ hook_event_type: "Notification", session_id: "noise-c", payload: { message: "Claude needs your permission to use Edit" } }));
-    expect(frames.map((f) => f.urgency), "off screen it interrupts as before").toEqual([2]);
-  });
-
   test("the Lantern: announce, then silence, then an in-place redraw, then a clear", () => {
     alerts.__resetLanternMemory();
-    alerts.setScreenProbe(() => NO_SCREEN);
     const notice = (f: LanternFinding[]) => ({ title: `🔦 Lantern: ${f.length}`, body: f.map((x) => x.name).join("\n") });
     frames = [];
     const two = [blocked("orbit-api", "%1"), left("orbit-web", "%2")];
@@ -211,6 +204,16 @@ describe("the frames that reach the client", () => {
       [1, "lantern", true, false],
       [0, "lantern", false, true],
     ]);
+  });
+
+  test("a client that attaches later is told the card as it stands, or that there is none", () => {
+    alerts.__resetLanternMemory();
+    expect(alerts.lanternSnapshot()).toMatchObject({ key: "lantern", clear: true });
+    const notice = (f: LanternFinding[]) => ({ title: `🔦 Lantern: ${f.length}`, body: f.map((x) => x.name).join("\n"), pane: "%1" });
+    alerts.pushLanternFindings([blocked("orbit-api", "%1")], notice, NOW);
+    expect(alerts.lanternSnapshot()).toMatchObject({ key: "lantern", update: true, urgency: 2, title: "🔦 Lantern: 1", pane: "%1" });
+    alerts.pushLanternFindings([], notice, NOW + MIN);
+    expect(alerts.lanternSnapshot()).toMatchObject({ key: "lantern", clear: true });
   });
 
   test("a redraw and a clear never reach the desktop fallback", () => {

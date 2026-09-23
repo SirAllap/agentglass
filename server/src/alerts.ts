@@ -18,8 +18,8 @@
 // for when nobody is looking at agentglass at all.
 import type { WatchEvent, AlertNote } from "../../shared/types.ts";
 import { paneForSession, paneAgentNote } from "./panewt.ts";
-import { listPanes, panesOnScreen } from "./tmuxctl.ts";
-import { ErrorStreaks, lanternStep, lanternState, NO_SCREEN, type LanternFinding, type Screen } from "./notePolicy.ts";
+import { listPanes } from "./tmuxctl.ts";
+import { ErrorStreaks, STOP_QUIET_MS, lanternStep, lanternState, type ErrorAlert, type LanternFinding } from "./notePolicy.ts";
 import { webhookDestination } from "./egress.ts";
 
 // Resolved once, here, because the boot line below reports it and a boot line
@@ -134,16 +134,15 @@ async function deliver(
   // it goes only where that row lives: never to a webhook, never to
   // notify-send, and never to a client that is not attached to see it.
   const redraw = !!(extra?.key && (extra.update || extra.clear));
+  // Not awaited. The clients' frames go out in the order things happened, and
+  // a slow or hung webhook ahead of them would deliver an announcement after
+  // the clear that followed it — bringing back a card for work that finished.
   if (WEBHOOK.configured && !IS_TEST && !redraw) {
-    try {
-      await fetch(WEBHOOK.url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text: `*${title}*\n${body}` }),
-      });
-    } catch (e) {
-      console.warn("[alerts] webhook failed:", e);
-    }
+    fetch(WEBHOOK.url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: `*${title}*\n${body}` }),
+    }).catch((e) => console.warn("[alerts] webhook failed:", e));
   }
   // An attached client is not an operating-system side effect.
   //
@@ -347,29 +346,6 @@ export function pushLantern(title: string, body: string, pane?: string) {
 }
 
 /**
- * Which panes are on somebody's screen — a seam, like the notifier above.
- *
- * Asked at most every few seconds: it spawns tmux once per server, and a
- * burst of hook events from one agent would otherwise spawn one per event.
- * Empty under `bun test` unless a test installs a probe, so the suite never
- * reads the developer's own tmux to decide what to say.
- */
-let screenProbe: (() => Screen) | null = null;
-let screenCache: { at: number; screen: Screen } | null = null;
-const SCREEN_CACHE_MS = 3_000;
-export function setScreenProbe(p: (() => Screen) | null) { screenProbe = p; screenCache = null; }
-export function screenNow(): Screen {
-  if (screenProbe) return screenProbe();
-  if (IS_TEST) return NO_SCREEN;
-  const now = Date.now();
-  if (screenCache && now - screenCache.at < SCREEN_CACHE_MS) return screenCache.screen;
-  let screen: Screen = NO_SCREEN;
-  try { screen = panesOnScreen(); } catch { /* no tmux: say everything */ }
-  screenCache = { at: now, screen };
-  return screen;
-}
-
-/**
  * The Lantern's watch, said once per finding — see notePolicy.ts for the rule.
  *
  * One card, keyed `lantern`: an announcement interrupts (critical only when
@@ -378,22 +354,41 @@ export function screenNow(): Screen {
  * and an empty board removes it.
  */
 let lanternMemory = lanternState();
-export function __resetLanternMemory() { lanternMemory = lanternState(); }
+/** The card as the clients should have it now, for one that attaches later. */
+let lanternCard: AlertNote | null = null;
+export function __resetLanternMemory() { lanternMemory = lanternState(); lanternCard = null; }
 export function pushLanternFindings<F extends LanternFinding>(
   all: F[],
   notice: (f: F[]) => { title: string; body: string; pane?: string } | null,
   now = Date.now(),
 ) {
-  const step = lanternStep(all, lanternMemory, now, screenNow());
+  const step = lanternStep(all, lanternMemory, now);
   if (step.act === "none") return;
-  if (step.act === "clear") { deliver("", "", 0, undefined, { key: "lantern", clear: true, source: "lantern" }); return; }
-  const n = notice(step.findings);
-  if (!n) return;
-  if (step.act === "update") {
-    deliver(n.title, n.body, 1, n.pane, { key: "lantern", update: true, panes: step.panes, source: "lantern" });
+  if (step.act === "clear") {
+    lanternCard = null;
+    deliver("", "", 0, undefined, { key: "lantern", clear: true, source: "lantern" });
     return;
   }
-  deliver(n.title, n.body, step.urgency, n.pane, { key: "lantern", panes: step.panes, source: "lantern" });
+  const n = notice(step.findings);
+  if (!n) return;
+  const extra = { key: "lantern", panes: step.panes, source: "lantern" };
+  lanternCard = { title: n.title, body: n.body, urgency: step.urgency, ...(n.pane ? { pane: n.pane } : {}), ...extra, update: true };
+  if (step.act === "update") { deliver(n.title, n.body, step.urgency, n.pane, { ...extra, update: true }); return; }
+  deliver(n.title, n.body, step.urgency, n.pane, extra);
+}
+
+/**
+ * The Lantern card for a client that has just attached.
+ *
+ * A keyed card is only ever redrawn or cleared after it is announced, and both
+ * of those reach only the clients attached at that moment. A window that was
+ * closed or reloading when the announcement went out would otherwise show
+ * nothing until the next new finding, and one that missed the clear would keep
+ * a persisted "needs you" row for work that finished. So every attach is told
+ * the card as it stands: a silent upsert, or a clear when there is none.
+ */
+export function lanternSnapshot(): AlertNote {
+  return lanternCard ?? { title: "", body: "", urgency: 0, key: "lantern", clear: true, source: "lantern" };
 }
 
 export function pushReminder(id: string, title: string, when: string) {
@@ -532,17 +527,9 @@ export function maybeAlert(e: WatchEvent) {
     // once. At 1 it was a sound and a badge per turn per agent — the largest
     // single source of rows on a desk running five of them.
     const blocking = /needs your (permission|approval)/i.test(msg);
-    let urgency: 0 | 1 | 2 = blocking ? 2
+    const urgency: 0 | 1 | 2 = blocking ? 2
       : /usage limit reset|waiting for your input/i.test(msg) ? 0
         : 1;
-    // The pane somebody is typing in does not need to be announced to them. A
-    // blockage is still recorded when its terminal has focus, silently; a
-    // prompt waiting in a pane that is merely on screen is not recorded at all.
-    if (pane) {
-      const screen = screenNow();
-      if (blocking && screen.focused.has(pane)) urgency = 0;
-      else if (!blocking && screen.shown.has(pane)) return;
-    }
     if (shouldSend(`notify:${e.session_id}:${msg}`)) deliver(`🔔 ${msg}`, agent, urgency, pane, { source: blocking ? "gate" : "agents" });
     return;
   }
@@ -560,13 +547,26 @@ export function maybeAlert(e: WatchEvent) {
   // the last thing a session ever did. The agent had already recovered before
   // the popup finished animating.
   const failed = errorStreaks.note(e);
-  if (!failed) return;
+  if (failed && shouldSend(`streak:${e.session_id}`)) sayFailed(failed, agent, pane);
+  // A Stop after a failure is only the end of the turn if nothing follows it.
+  // Asked again once the quiet period is over; see notePolicy.ts for why a
+  // Stop alone is not enough.
+  if (e.hook_event_type === "Stop") {
+    const session = e.session_id;
+    const t = setTimeout(() => {
+      const ended = errorStreaks.settle(session);
+      if (ended && shouldSend(`stopped:${session}`)) sayFailed(ended, agent, pane);
+    }, STOP_QUIET_MS + 50);
+    (t as { unref?: () => void }).unref?.();
+  }
+}
+
+function sayFailed(failed: ErrorAlert, agent: string, pane?: string) {
   const why = failed.text ? `: ${failed.text}` : "";
-  const failedKey = `errors:${e.session_id}`;
+  const extra = { key: `errors:${failed.session}`, source: "errors" };
   if (failed.kind === "streak") {
-    if (shouldSend(`streak:${e.session_id}`))
-      deliver("❌ Keeps failing", `${agent} — ${failed.count} ${failed.tool} calls failed in a row${why}`, 1, pane, { key: failedKey, source: "errors" });
-  } else if (shouldSend(`stopped:${e.session_id}`)) {
-    deliver("⏹ Stopped on an error", `${agent} — the turn ended right after ${failed.tool} failed${why}`, 1, pane, { key: failedKey, source: "errors" });
+    deliver("❌ Keeps failing", `${agent} — ${failed.count} ${failed.tool} calls failed in a row${why}`, 1, pane, extra);
+  } else {
+    deliver("⏹ Stopped on an error", `${agent} — the turn ended right after ${failed.tool} failed${why}`, 1, pane, extra);
   }
 }

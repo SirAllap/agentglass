@@ -36,7 +36,7 @@ import {
   releaseDatabaseClaim,
   noteWaitFromHook,
 } from "./db.ts";
-import { maybeAlert, setAlertSink } from "./alerts.ts";
+import { maybeAlert, setAlertSink, lanternSnapshot } from "./alerts.ts";
 import { noteAction, actorOf, type ActorSource } from "./actions.ts";
 import { getSkills, catalogMarkdown, catalogCsv, usageSince } from "./skills.ts";
 import { getInsights } from "./insights.ts";
@@ -8039,6 +8039,9 @@ const server = Bun.serve<WsData>({
       const initialData = getRecent(300).map((e) => ({ ...e, payload: capPayloadStrings(e.payload) }));
       const frame: WsFrame = { type: "initial", data: initialData, openTools: withEvidence(openToolCalls()) };
       ws.send(JSON.stringify(frame));
+      // The Lantern's card as it stands, which a client that was closed when it
+      // was announced or cleared would otherwise never hear. See lanternSnapshot.
+      ws.send(JSON.stringify({ type: "alert", data: lanternSnapshot() } satisfies WsFrame));
     },
     close(ws: ServerWebSocket<WsData>) {
       sockets.delete(ws);
