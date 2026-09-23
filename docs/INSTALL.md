@@ -399,8 +399,26 @@ A hold only helps while somebody is watching. `gateRules` in
   Only budgets on every model count; the gate does not know which model a call
   comes from.
 - Tool names are exact and case-sensitive; a trailing `*` matches a prefix. The
-  deepest `root` that covers the call wins; a rule without one covers
-  everything. A project's linked worktrees count.
+  deepest `root` that covers the call decides `allow`, `otherwise` and
+  `overBudget`; a rule without one covers everything. A project's linked
+  worktrees count.
+- Deny lists add up: a tool denied by any rule that covers the call is denied,
+  so a project's own allow list cannot lift a deny the machine-wide rule or a
+  parent directory's rule put there.
+- A session agentglass cannot place (no directory from the hook or its pane)
+  is covered only by the machine-wide rule, and only its denials bind there:
+  what that rule would allow is held for you instead, with the notification
+  every hold sends. A hook installed before it reported `cwd`, run outside
+  tmux, is that case on every call: reinstall the hook.
+- Every call a rule decides is written to gate history, allows included.
+  Allows stay out of "What needs you". A broad matcher with a long allow list
+  adds a row per call, kept as long as the events are
+  (`AGENTGLASS_RETENTION_DAYS`).
+- `gateTools`, an earlier name for these rules with `{ root, allow, deny }`
+  rows, is still read, as `gateRules` with the defaults above; agentglass says
+  so at startup. Beside a `gateRules` key its rows only add denials, and an
+  allow entry with a `*` is dropped, because that key matched names exactly.
+  Move the rows to `gateRules`.
 - An outward action agentglass recognises (a push, a comment, a message) is
   never let through by an allow list — it is still held for you, closed. It
   reads inside `bash -c`, `sh -c` and `eval` (after `env` or `sudo` too),

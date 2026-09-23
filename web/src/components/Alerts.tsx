@@ -72,7 +72,7 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump, active = true }
   // drops anything that aged out while nobody was looking.
   const loadHistory = () => {
     api
-      .gateHistory(25)
+      .gateHistory(25, { ruleAllows: false })
       .then((r) => {
         if (!alive.current) return;
         const cutoff = Date.now() - 30 * 60_000;

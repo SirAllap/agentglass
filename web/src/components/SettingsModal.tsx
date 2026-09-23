@@ -933,8 +933,16 @@ function ActivityPane({ open }: { open: boolean }) {
     // happened without anybody asking. See lib/activity.ts.
     Promise.all([
       api.actions(200).then((r) => r.actions).catch(() => [] as ActionRecord[]),
-      api.gateHistory(200).then((r) => r.gates).catch(() => [] as GateRecord[]),
-    ]).then(([a, g]) => { if (alive) setRows(mergeActivity(a, g)); });
+      // A rule writes a row for every call its allow list waves through, so
+      // those are read on their own: in one list of 200 they pushed out the
+      // gates nobody decided, which are what this pane exists to show.
+      api.gateHistory(200, { ruleAllows: false }).then((r) => r.gates).catch(() => [] as GateRecord[]),
+      api.gateHistory(50).then((r) => r.gates).catch(() => [] as GateRecord[]),
+    ]).then(([a, g, recent]) => {
+      if (!alive) return;
+      const seen = new Set(g.map((x) => x.id));
+      setRows(mergeActivity(a, [...g, ...recent.filter((x) => !seen.has(x.id))]));
+    });
     return () => { alive = false; };
   }, [open]);
 

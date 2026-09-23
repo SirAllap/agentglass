@@ -172,10 +172,53 @@ describe("which rule speaks", () => {
     expect(gateRuleVerdict("Bash", ELSEWHERE, rules, null).kind).toBe("allow");
   });
 
-  test("the deeper of two project rules wins, whatever order the file lists them in", () => {
-    const rules = [rule({ root: `${ORBIT}/web`, allow: ["Bash"] }), rule({ root: ORBIT, deny: ["Bash"] })];
+  test("the deeper of two project rules decides what is allowed, whatever order the file lists them in", () => {
+    const rules = [rule({ root: `${ORBIT}/web`, allow: ["Bash"] }), rule({ root: ORBIT, otherwise: "deny" })];
     expect(gateRuleVerdict("Bash", `${ORBIT}/web/src`, rules, null).kind).toBe("allow");
     expect(gateRuleVerdict("Bash", `${ORBIT}/api`, rules, null).kind).toBe("deny");
+  });
+
+  test("but a deny list binds everywhere its rule covers: a deeper allow list cannot lift it", () => {
+    // Taken from the deepest rule alone, a checkout escaped a parent's stop by
+    // having an allow-only rule of its own.
+    const rules = [rule({ root: `${ORBIT}/web`, allow: ["Bash"] }), rule({ root: ORBIT, deny: ["Bash"] })];
+    expect(gateRuleVerdict("Bash", `${ORBIT}/web/src`, rules, null).kind).toBe("deny");
+    const machine = [rule({ deny: ["WebFetch"] }), rule({ root: ORBIT, allow: ["WebFetch"], otherwise: "allow" })];
+    const v = gateRuleVerdict("WebFetch", IN_ORBIT, machine, null);
+    expect(v.kind).toBe("deny");
+    expect(v.kind === "deny" && v.reason).toContain("every project");
+  });
+
+  test("a deny list says nothing outside the directory its rule covers", () => {
+    const rules = [rule({ allow: ["Bash"] }), rule({ root: ORBIT, deny: ["Bash"] })];
+    expect(gateRuleVerdict("Bash", ELSEWHERE, rules, null).kind).toBe("allow");
+  });
+});
+
+describe("a call nobody could place", () => {
+  test("is never allowed: the machine's allow list and its otherwise: allow both hold instead", () => {
+    expect(gateRuleVerdict("Read", "", [rule({ allow: ["Read"] })], null).kind).toBe("hold");
+    expect(gateRuleVerdict("Edit", "", [rule({ otherwise: "allow" })], null).kind).toBe("hold");
+  });
+
+  test("a relative directory is not a place either", () => {
+    // The fallback behind gateCwd is a pane note written from whatever a
+    // payload said, so a relative path can reach here.
+    expect(gateRuleVerdict("Read", "code/orbit", [rule({ allow: ["Read"] })], null).kind).toBe("hold");
+  });
+
+  test("the same rule still allows a call it can place", () => {
+    expect(gateRuleVerdict("Read", ELSEWHERE, [rule({ allow: ["Read"] })], null).kind).toBe("allow");
+  });
+
+  test("its denials still bind, from the deny list and from otherwise: deny", () => {
+    expect(gateRuleVerdict("WebFetch", "", [rule({ deny: ["WebFetch"] })], null).kind).toBe("deny");
+    expect(gateRuleVerdict("Edit", "", [rule({ allow: ["Read"], otherwise: "deny" })], null).kind).toBe("deny");
+  });
+
+  test("the harness fetching a tool's schema is not a rule's allow, and is marked so", () => {
+    const v = gateRuleVerdict("ToolSearch", "", [rule({ otherwise: "hold" })], null);
+    expect(v).toEqual({ kind: "allow", exact: true, meta: true });
   });
 });
 
@@ -234,6 +277,62 @@ describe("reading the rules from config.json", () => {
     const rules = readGateRules();
     expect(rules.map((r) => r.root)).toEqual([ORBIT]);
     expect(gateRuleVerdict("Bash", ORBIT, rules, null).kind).toBe("deny");
+  });
+
+  const withLegacy = (gateTools: unknown, gateRules?: unknown) => {
+    const d = mkdtempSync(join(tmpdir(), "agx-gatetools-"));
+    mkdirSync(join(d, "agentglass"), { recursive: true });
+    writeFileSync(join(d, "agentglass", "config.json"), JSON.stringify({ gateTools, gateRules }));
+    process.env.XDG_CONFIG_HOME = d;
+  };
+
+  test("the older `gateTools` key is read as gateRules, not ignored", () => {
+    withLegacy([{ root: "", allow: ["Read"], deny: ["Bash"] }]);
+    expect(readGateRules()).toEqual([{ root: "", allow: ["Read"], deny: ["Bash"], otherwise: "hold", overBudget: "hold" }]);
+  });
+
+  test("beside gateRules its rows only add denials", () => {
+    withLegacy([{ root: "", deny: ["WebFetch"] }], [{ root: "", allow: ["WebFetch"] }]);
+    const rules = readGateRules();
+    expect(rules.length).toBe(2);
+    expect(rules[1]).toMatchObject({ deny: ["WebFetch"], denyOnly: true });
+    expect(gateRuleVerdict("WebFetch", ELSEWHERE, rules, null).kind).toBe("deny");
+  });
+
+  test("beside gateRules a deeper leftover row never becomes the rule that speaks", () => {
+    // Deepest root decides allow and otherwise, so a leftover allow-list row on
+    // a subdirectory would have opened what the stricter gateRules kept shut.
+    withLegacy([{ root: `${ORBIT}/web`, allow: ["Bash"] }], [{ root: ORBIT, otherwise: "deny" }]);
+    const v = gateRuleVerdict("Bash", `${ORBIT}/web/src`, readGateRules(), null);
+    expect(v.kind).toBe("deny");
+  });
+
+  test("a starred allow entry from the old key is dropped: it matched names exactly there", () => {
+    withLegacy([{ root: "", allow: ["*", "Read"], deny: ["mcp__x__*"] }]);
+    const [r] = readGateRules();
+    expect(r).toMatchObject({ allow: ["Read"], deny: ["mcp__x__*"] });
+    expect(gateRuleVerdict("Bash", ELSEWHERE, readGateRules(), null).kind).toBe("hold");
+  });
+
+  test("a gateTools row that cannot be read holds its root instead of vanishing", () => {
+    withLegacy([{ root: "", allow: "Read" }]);
+    expect(readGateRules()).toEqual([{ root: "", allow: [], deny: [], otherwise: "hold", overBudget: "hold" }]);
+  });
+
+  test("a padded name from the old key still names its tool: that key trimmed", () => {
+    withLegacy([{ root: "", deny: [" Bash "] }]);
+    expect(gateRuleVerdict("Bash", ELSEWHERE, readGateRules(), null).kind).toBe("deny");
+  });
+
+  test("a root that is there but not a path holds its calls, and is never read as the whole machine's allow", () => {
+    withLegacy([{ root: ["/nonexistent/code/orbit"], allow: ["Bash"] }]);
+    expect(readGateRules()).toEqual([{ root: "", allow: [], deny: [], otherwise: "hold", overBudget: "hold" }]);
+    expect(gateRuleVerdict("Bash", ELSEWHERE, readGateRules(), null).kind).toBe("hold");
+  });
+
+  test("a gateTools that is not a list applies nothing", () => {
+    withLegacy({ allow: ["Read"] });
+    expect(readGateRules()).toEqual([]);
   });
 
   test("no gateRules at all is no rules, and a non-list is no rules", () => {

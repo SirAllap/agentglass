@@ -3749,6 +3749,10 @@ export interface GateRule {
   otherwise: "allow" | "hold" | "deny";
   /** What happens to a call once a budget covering it is over. */
   overBudget: "hold" | "deny";
+  /** Only its deny list counts: it never becomes the rule that speaks for a
+   *  call. Set on a row read from the old `gateTools` key when `gateRules`
+   *  exists too — see legacyGateTools() in server/src/config.ts. */
+  denyOnly?: boolean;
 }
 
 /** A budget, and where it stands right now. */

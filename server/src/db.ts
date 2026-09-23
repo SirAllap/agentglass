@@ -867,6 +867,9 @@ CREATE TABLE IF NOT EXISTS gates (
 );
 CREATE INDEX IF NOT EXISTS idx_gates_pending ON gates(decision, expires);
 CREATE INDEX IF NOT EXISTS idx_gates_created ON gates(created);
+-- History reads newest-decided first, polled every 15 s, and a rule's allows
+-- make the table one row per allowed call.
+CREATE INDEX IF NOT EXISTS idx_gates_decided ON gates(decided_at);
 
 /*
  * When to tell somebody about something.
@@ -1775,6 +1778,9 @@ const gateById = db.query<GateRow, [string]>(`SELECT * FROM gates WHERE id = ?`)
 const gatesPending = db.query<GateRow, []>(`SELECT * FROM gates WHERE decision IS NULL ORDER BY created ASC`);
 const gatesRecent = db.query<GateRow, [number]>(
   `SELECT * FROM gates WHERE decision IS NOT NULL ORDER BY decided_at DESC LIMIT ?`);
+const gatesRecentUnlisted = db.query<GateRow, [number]>(
+  `SELECT * FROM gates WHERE decision IS NOT NULL AND NOT (resolution = 'rule' AND decision = 'allow')
+   ORDER BY decided_at DESC LIMIT ?`);
 
 export function recordGate(g: {
   id: string; source_app: string; session_id: string; tool_name: string;
@@ -1816,8 +1822,12 @@ export function undecidedGates(): GateRow[] {
 
 /** Recently resolved gates, newest first — the "what happened while you were
  *  away" record, including the ones a timeout or a restart decided for you. */
-export function gateHistory(limit = 50): GateRow[] {
-  return gatesRecent.all(Math.max(1, Math.min(500, limit)));
+export function gateHistory(limit = 50, opts: { ruleAllows?: boolean } = {}): GateRow[] {
+  const n = Math.max(1, Math.min(500, limit));
+  // A rule's allows are one row per waved-through call; a reader looking for
+  // what nobody chose asks without them, or twenty-five allowed Reads push the
+  // one denial it is looking for out of its window.
+  return opts.ruleAllows === false ? gatesRecentUnlisted.all(n) : gatesRecent.all(n);
 }
 
 /** Coarse vendor for a model name — the provider dimension. Returns null for an

@@ -19,6 +19,9 @@ const TOKEN = "machine-token-for-this-test";
 let dir: string, base: string, proc: ReturnType<typeof Bun.spawn> | null = null;
 // Nothing on disk, so inScope answers from the prefix test alone.
 const ORBIT = "/nonexistent/code/orbit";
+// Somewhere the machine-wide rule covers and no project rule does. A call with
+// no directory at all is not placed, and an unplaced call is never allowed.
+const OTHER = "/nonexistent/code/other";
 
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "agx-gaterules-route-"));
@@ -86,14 +89,50 @@ const pending = async () => ((await fetch(base + "/gate/pending", { headers }).t
 const history = async () => ((await fetch(base + "/gate/history?limit=50", { headers }).then((r) => r.json())) as Json).gates as Json[];
 
 describe("the route acts on a rule", () => {
-  test("an allowed tool answers at once, queues nothing and records nothing", async () => {
+  test("an allowed tool answers at once, queues nothing, and is written down with an empty reason", async () => {
     const id = nextId();
     // An empty reason on purpose: the hook reads it as "agentglass has no
     // opinion" and Claude Code's own permission prompt still runs. An allow
     // list means "do not hold this", never "skip every other check".
-    expect(await ask(id, "Read", { file_path: "/tmp/x" })).toEqual({ decision: "allow", reason: "" });
+    expect(await ask(id, "Read", { file_path: "/tmp/x" }, OTHER)).toEqual({ decision: "allow", reason: "" });
     expect((await pending()).some((g) => g.id === id)).toBe(false);
-    expect((await history()).some((g) => g.id === id)).toBe(false);
+    const row = (await history()).find((g) => g.id === id);
+    expect(row).not.toBeUndefined();
+    expect(row!.resolution).toBe("rule");
+    expect(row!.decision).toBe("allow");
+    expect(row!.decided_by).toBeNull();
+  });
+
+  test("a retry of an id a rule allowed replays the allow with the empty reason, and no second row", async () => {
+    // A reason on an allow is what makes the hook skip Claude Code's own
+    // permission prompt; the replay reads the stored row, so the row must not
+    // carry one either.
+    const id = nextId();
+    await ask(id, "Read", { file_path: "/tmp/x" }, OTHER);
+    expect(await ask(id, "Read", { file_path: "/tmp/x" }, OTHER)).toEqual({ decision: "allow", reason: "" });
+    expect((await history()).filter((g) => g.id === id).length).toBe(1);
+  });
+
+  test("the unattended history leaves a rule's allows out, and keeps its denials", async () => {
+    const allowed = nextId(), denied = nextId();
+    await ask(allowed, "Read", { file_path: "/tmp/x" }, OTHER);
+    await ask(denied, "WebFetch", { url: "https://example.com" }, OTHER);
+    const r = (await fetch(base + "/gate/history?limit=50&rule_allows=0", { headers }).then((x) => x.json())) as Json;
+    const ids = (r.gates as Json[]).map((g) => g.id);
+    expect(ids).toContain(denied);
+    expect(ids).not.toContain(allowed);
+  });
+
+  test("a call nobody could place is never allowed: the machine's allow list holds it instead", async () => {
+    const id = nextId();
+    expect(await ask(id, "Read", { file_path: "/tmp/x" })).toBe("held");
+    expect((await pending()).some((g) => g.id === id)).toBe(true);
+  });
+
+  test("but the machine's deny list still binds a call nobody could place", async () => {
+    const out = await ask(nextId(), "WebFetch", { url: "https://example.com" });
+    expect(out).not.toBe("held");
+    expect((out as Json).decision).toBe("deny");
   });
 
   test("a denied tool answers at once and is written down as the rule's decision", async () => {
@@ -168,12 +207,12 @@ describe("a local tool whose name reads as outward", () => {
   test("is released by an allow rule that names it exactly", async () => {
     // `create` is the verb of a memory store as well as of a pull request.
     // Naming the one tool is a person saying which this is.
-    expect(await ask(nextId(), "mcp__memory__create_entities", { entities: [] })).toEqual({ decision: "allow", reason: "" });
+    expect(await ask(nextId(), "mcp__memory__create_entities", { entities: [] }, OTHER)).toEqual({ decision: "allow", reason: "" });
   });
 
   test("but not by a prefix, which never saw the tool it would be releasing", async () => {
     const id = nextId();
-    expect(await ask(id, "mcp__notes__delete_note", { id: "n-1" })).toBe("held");
+    expect(await ask(id, "mcp__notes__delete_note", { id: "n-1" }, OTHER)).toBe("held");
     expect((await pending()).some((g) => g.id === id)).toBe(true);
   });
 });

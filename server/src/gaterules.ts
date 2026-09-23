@@ -44,7 +44,7 @@ export type RuleVerdict =
   | { kind: "none" }
   /** `exact` when the allow list names this tool rather than matching it by a
    *  prefix — the only allow that may release a generic outward match. */
-  | { kind: "allow"; exact?: boolean }
+  | { kind: "allow"; exact?: boolean; meta?: boolean }
   | { kind: "hold" }
   | { kind: "deny"; reason: string };
 
@@ -60,9 +60,11 @@ const scopeLabel = (r: GateRule): string =>
  * The rule that speaks for a call made in `cwd`: the deepest root that covers
  * it, and the machine-wide rule when no project's does.
  *
- * One rule, not a merge. A project is where somebody said something specific,
- * and a merge would let the machine's allow list quietly widen a project that
- * was meant to be strict. A tie keeps the first in the file.
+ * One rule, not a merge — for everything but the deny list, which is read from
+ * every rule that covers the call (see gateRuleVerdict). A project is where
+ * somebody said something specific, and a merge would let the machine's allow
+ * list quietly widen a project that was meant to be strict. A tie keeps the
+ * first in the file.
  *
  * `inScope` decides coverage, as it does for budgets, so a rule on a checkout
  * also covers its linked worktrees, and a rule with a root does not cover a
@@ -71,7 +73,7 @@ const scopeLabel = (r: GateRule): string =>
 function ruleFor(cwd: string, rules: GateRule[]): GateRule | null {
   let best: GateRule | null = null;
   for (const r of rules) {
-    if (!inScope(cwd, r.root)) continue;
+    if (r.denyOnly || !inScope(cwd, r.root)) continue;
     if (!best || r.root.length > best.root.length) best = r;
   }
   return best;
@@ -107,28 +109,39 @@ const HARNESS_META_TOOLS = new Set(["ToolSearch"]);
 export function gateRuleVerdict(tool: string, cwd: string, rules: GateRule[], over: BudgetStatus | null): RuleVerdict {
   const r = ruleFor(cwd, rules);
   const retry = "Do not retry it — it will be denied again. Take a different approach, or ask a person to change the rule.";
-  // A written deny always wins. The exemption below is for a tool nobody's
-  // rule ever names — the harness fetching a deferred tool's own schema — and
-  // running it BEFORE the deny check silently overrode an explicit
-  // `deny: ["ToolSearch"]`: a person's decision losing to a default meant for
-  // the case where nobody made one.
-  if (r && r.deny.some((p) => matches(tool, p))) {
-    const where = scopeLabel(r);
+  // A written deny always wins, and every rule that covers the call can write
+  // one: a deeper project's allow list must not lift a deny the machine's or a
+  // parent's rule put there. Taken from the deepest rule alone, a checkout
+  // could escape a stop by having an allow-only rule of its own.
+  // The exemption below is for a tool nobody's rule ever names — the harness
+  // fetching a deferred tool's own schema — and running it BEFORE the deny
+  // check silently overrode an explicit `deny: ["ToolSearch"]`: a person's
+  // decision losing to a default meant for the case where nobody made one.
+  const denier = rules.find((d) => inScope(cwd, d.root) && d.deny.some((p) => matches(tool, p)));
+  if (denier) {
+    const where = scopeLabel(denier);
     return { kind: "deny", reason: `This call was denied by a rule in agentglass, not by a person: ${tool} is on the deny list for ${where}. ${retry}` };
   }
-  if (HARNESS_META_TOOLS.has(tool)) return { kind: "allow", exact: true };
+  if (HARNESS_META_TOOLS.has(tool)) return { kind: "allow", exact: true, meta: true };
   if (!r) return { kind: "none" };
+  // A call nobody could place is only ever stopped, never waved through: the
+  // machine-wide rule covers it, but letting its allow list through would be
+  // guessing that the agent is not in a project somebody made stricter.
+  // What would have been allowed is held for a person instead.
+  // Only an absolute path is a place: the pane note behind gateCwd's fallback
+  // is written from whatever a payload said.
+  const allow = (v: RuleVerdict): RuleVerdict => (cwd.startsWith("/") ? v : { kind: "hold" });
   const where = scopeLabel(r);
   if (over) {
     return r.overBudget === "deny"
       ? { kind: "deny", reason: `This call was denied by a rule in agentglass, not by a person: ${overBudgetLine(over)}, and the rule for ${where} denies calls once a budget is over. Every further call will be denied too until the period rolls over or the limit is raised — stop and tell a person rather than trying another tool.` }
       : { kind: "hold" };
   }
-  if (r.allow.some((p) => matches(tool, p))) return { kind: "allow", exact: r.allow.includes(tool) };
+  if (r.allow.some((p) => matches(tool, p))) return allow({ kind: "allow", exact: r.allow.includes(tool) });
   if (r.otherwise === "deny") {
     return { kind: "deny", reason: `This call was denied by a rule in agentglass, not by a person: ${tool} is not on the allow list for ${where}. ${retry}` };
   }
-  return { kind: r.otherwise };
+  return r.otherwise === "allow" ? allow({ kind: "allow" }) : { kind: r.otherwise };
 }
 
 /**

@@ -44,7 +44,7 @@ import { getUsage, ingestStatusline } from "./usage.ts";
 import { chooseModel, type UsageNow, type Choice } from "./understudy-model.ts";
 import { allProviderUsage } from "./providerusage.ts";
 import { refreshCodexUsage } from "./codexusage.ts";
-import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, typedReason, GATE_MAX_MS, gateFailClosed, denyByRule, validGateId } from "./gate.ts";
+import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, typedReason, GATE_MAX_MS, gateFailClosed, denyByRule, allowByRule, validGateId } from "./gate.ts";
 import { budgetHoldFor } from "./budget.ts";
 import { gateCwd, gateRuleFor } from "./gaterules.ts";
 import { parseControlCmd } from "./control.ts";
@@ -3244,7 +3244,12 @@ const server = Bun.serve<WsData>({
       // (`create_entities` on a memory store) is released by an allow rule
       // that names that exact tool. A prefix never saw the tool it would be
       // releasing; a name is a person saying which kind of `create` this is.
-      if (rule.kind === "allow" && (!out || (out.generic && rule.exact))) return json({ decision: "allow", reason: "" });
+      // Written to history like a denial, unless it is the harness fetching a
+      // tool's schema — no rule made that call, and it would be one row per
+      // deferred tool in every session.
+      if (rule.kind === "allow" && (!out || (out.generic && rule.exact))) {
+        return json(rule.meta ? { decision: "allow", reason: "" } : allowByRule(greq));
+      }
       const hold = out
         ? [outwardLine(out), out.text ? `“${out.text.replace(/\s+/g, " ").trim().slice(0, 240)}”` : ""].filter(Boolean).join(" · ")
         : budgetHoldFor(greq.session_id, gateFailClosed(), cwd);
@@ -3306,7 +3311,7 @@ const server = Bun.serve<WsData>({
       // history quoting that back is boilerplate on every row — see
       // typedReason().
       return json({
-        gates: gateHistory(Number(url.searchParams.get("limit") || 50))
+        gates: gateHistory(Number(url.searchParams.get("limit") || 50), { ruleAllows: url.searchParams.get("rule_allows") !== "0" })
           .map((g) => ({ ...g, reason: typedReason(g) || null })),
       });
     }

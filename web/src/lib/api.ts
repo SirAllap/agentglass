@@ -906,7 +906,8 @@ const realApi = {
     return get<{ hits: SearchHit[] }>(`/search?${p}`);
   },
   gatePending: () => get<{ gates: PendingGate[] }>(`/gate/pending`),
-  gateHistory: (limit = 25) => get<{ gates: GateRecord[] }>(`/gate/history?limit=${limit}`),
+  gateHistory: (limit = 25, opts?: { ruleAllows?: boolean }) =>
+    get<{ gates: GateRecord[] }>(`/gate/history?limit=${limit}${opts?.ruleAllows === false ? "&rule_allows=0" : ""}`),
   // Unscoped, unlike every other metric call: "who merged that" is at its most
   // useful when the answer is somewhere you were not looking.
   actions: (limit = 200, before?: number) =>

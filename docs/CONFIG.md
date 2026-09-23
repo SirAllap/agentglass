@@ -178,7 +178,10 @@ Prefer a file over env vars? Drop a `~/.config/agentglass/config.json` (or
 `terminalDisabled` and/or `chatBypass`; env vars override it. The last two
 matter for a desktop-launched app, which inherits no shell environment and so
 cannot be configured by `export` at all. Gate rules (`gateRules`) live there
-too — see the control-plane section of INSTALL.md.
+too — see the control-plane section of INSTALL.md. The older key `gateTools`
+(`{ root, allow, deny }` rows) is read as `gateRules`, with a warning at startup
+asking for the move; beside `gateRules` its rows only add denials. One that is
+not a list is an error line and applies nothing.
 
 `gateTools` is file-only (no env var): an array of `{ root, allow, deny }`
 rules the PreToolUse gate evaluates before asking a human — denylist hard-

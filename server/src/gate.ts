@@ -245,20 +245,48 @@ export function denyByRule(
   req: { source_app: string; session_id: string; tool_name: string; summary: string; id?: string },
   reason: string,
 ): GateOutcome {
+  return recordByRule(req, { decision: "deny", reason });
+}
+
+/**
+ * Allow a call on arrival because a rule said so, and keep the row.
+ *
+ * An allow is not something anybody has to find, but it is what somebody
+ * auditing a rule needs: "which calls did this allow list wave through" has no
+ * answer if only the stops are written. The reason is EMPTY, in the row too:
+ * a hook that reattaches reads the recorded reason back through awaitGate, and
+ * a non-empty one on an allow is what makes the hook skip Claude Code's own
+ * permission prompt. A rule's allow means "agentglass has no opinion", never
+ * "skip every other check".
+ *
+ * Its ceiling: this writes a row per allowed call, so a broad matcher with a
+ * long allow list grows the gates table by one row per tool call, kept for the
+ * retention window like every other resolved gate.
+ */
+export function allowByRule(
+  req: { source_app: string; session_id: string; tool_name: string; summary: string; id?: string },
+): GateOutcome {
+  return recordByRule(req, { decision: "allow", reason: "" });
+}
+
+function recordByRule(
+  req: { source_app: string; session_id: string; tool_name: string; summary: string; id?: string },
+  out: GateOutcome,
+): GateOutcome {
   const id = validGateId(req.id) ? req.id : crypto.randomUUID();
   const now = Date.now();
   const { source_app, session_id, tool_name, summary } = req;
   // The record is for the person; the answer is for the hook. A database that
-  // throws here must not turn the denial into a 500 — a fail-open hook reads
-  // that as "allow", and the call the rule stopped would run.
+  // throws here must not turn the decision into a 500 — a fail-open hook reads
+  // that as "allow", and a call the rule stopped would run.
   try {
     recordGate({ id, source_app, session_id, tool_name, summary, created: now, expires: now });
-    resolveGateRow(id, "deny", reason, "rule", now);
+    resolveGateRow(id, out.decision, out.reason, "rule", now);
     onChange();
   } catch (e) {
-    console.warn("[gate] a rule's denial was not recorded:", e instanceof Error ? e.message : e);
+    console.warn(`[gate] a rule's ${out.decision} was not recorded:`, e instanceof Error ? e.message : e);
   }
-  return { decision: "deny", reason };
+  return out;
 }
 
 /**
