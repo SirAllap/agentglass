@@ -25,6 +25,7 @@ import { Chevron, useClipped } from "./TopBarNotes.tsx";
 import { Portal } from "./Portal.tsx";
 import { TOP_BAR_H } from "./TopBar.tsx";
 import { CloseButton } from "./CloseButton.tsx";
+import { canMute, mutedSources, setMuted, sourceLabel, sourceOf, subscribeMuted } from "../lib/notePolicy.ts";
 
 /** How long an ordinary card holds the corner. Long enough to read two lines of
  *  someone else's message without hurrying, short enough that a busy minute does
@@ -168,12 +169,23 @@ function Card({ n, onGone, onGoto }: {
           className={open ? "agx-note-body agx-note-toast-open" : "agx-note-body agx-note-toast-body"}>{n.body}</span>
       )}
 
-      {n.url && (
-        <button className="agx-note-link self-start" title={n.url}
-          onClick={(e) => { e.stopPropagation(); void openNote(n.id); }}>
-          ↗ Open {hostOf(n.url)}
-        </button>
-      )}
+      <span className="flex items-center gap-2 flex-wrap">
+        {n.url && (
+          <button className="agx-note-link" title={n.url}
+            onClick={(e) => { e.stopPropagation(); void openNote(n.id); }}>
+            ↗ Open {hostOf(n.url)}
+          </button>
+        )}
+        {/* "Not this app again", from the card that just interrupted — the
+            moment somebody knows the answer. Undone from the bell's footer. */}
+        {canMute(sourceOf(n)) && n.urgency < 2 && (
+          <button className="agx-note-btn" style={{ marginTop: 6 }}
+            onClick={(e) => { e.stopPropagation(); setMuted(sourceOf(n), true); }}
+            title={`Stop collecting notifications from ${sourceLabel(sourceOf(n))}. Unmute from the bell.`}>
+            Mute {sourceLabel(sourceOf(n))}
+          </button>
+        )}
+      </span>
     </motion.div>
   );
 }
@@ -202,6 +214,11 @@ export function NoteToasts({ onGoto }: {
   }), []);
 
   const drop = (key: string) => setLive((prev) => prev.filter((x) => x.key !== key));
+  // Muting an app takes its cards off the screen with it, not only the next one.
+  useEffect(() => subscribeMuted(() => {
+    const m = mutedSources();
+    setLive((prev) => prev.filter((x) => x.n.urgency === 2 || !m.has(sourceOf(x.n))));
+  }), []);
 
   if (!live.length) return null;
   return (
