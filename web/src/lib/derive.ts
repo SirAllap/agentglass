@@ -639,11 +639,16 @@ export function deriveAlerts(agents: AgentCard[]): Alert[] {
     if (a.status === "stalled" && a.runningTool) {
       out.push({ id: "stuck:" + a.key, level: "error", agent: a.key, ts: a.runningSince,
         text: `${a.runningTool} open ${fmtMs(now - a.runningSince)} with nothing to show for it — ${stuckBecause(a)}` });
-    } else if (a.status === "working" && a.runningTool && a.liveness === "unknown"
-      && now - a.runningSince >= TOOL_RUN_WARN_MS) {
-      out.push({ id: "long:" + a.key, level: "warn", agent: a.key, ts: a.runningSince,
-        text: `${a.runningTool} running ${fmtMs(now - a.runningSince)} — nothing local to check, so this could be either` });
     }
+    // A call nothing local can vouch for — a Bash whose effects land outside
+    // the working directory, a WebFetch — raised a soft "could be either"
+    // alert here once it passed TOOL_RUN_WARN_MS. Every alert is the amber
+    // chip in the title bar and a row under WAITING ON YOU, and a running
+    // tool is not waiting on anybody: the agent is busy, and nothing in the
+    // panel could act on it. A seven-minute build held the chip for seven
+    // minutes. The card already shows the call and how long it has been open,
+    // which is where a long call belongs; only `stuck:` above, which the
+    // evidence backs, is raised.
     // toolErrors, not errors: the denominator is tool calls, and an errored
     // LLM span or notification never enters it. With the all-events count this
     // read "high failure rate 150%" on a session whose every tool succeeded.
