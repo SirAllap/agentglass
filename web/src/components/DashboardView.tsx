@@ -153,7 +153,7 @@ export function DashboardView({
 
         <div className="shrink-0 min-h-0 tall:flex-1 grid grid-cols-1 xl:grid-cols-12 gap-3">
           <div className="xl:col-span-3 min-w-0 min-h-0 h-[420px] xl:h-[520px] tall:h-auto">
-            <Fleet agents={agents} activeApp={filter.app} onSelect={(a) => onSelectSession({ id: a.session_id, app: a.source_app })} />
+            <Fleet agents={agents} activeApp={filter.app} active={active} onSelect={(a) => onSelectSession({ id: a.session_id, app: a.source_app })} />
           </div>
           <div className="xl:col-span-6 min-w-0 min-h-0 grid grid-rows-[auto_400px] sm:grid-rows-[minmax(0,150px)_minmax(0,1fr)] gap-3 h-auto sm:h-[520px] tall:h-auto">
             <div className="grid grid-cols-1 sm:grid-cols-2 auto-rows-[150px] sm:auto-rows-auto gap-3 min-w-0 min-h-0">

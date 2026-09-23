@@ -1,12 +1,17 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ICON } from "../lib/iconSize.ts";
-import { AgentIcon, BranchIcon, ClockIcon, CrossIcon, DoneIcon } from "../lib/glyphIcons.tsx";
+import { AgentIcon, BranchIcon, ClockIcon, CrossIcon, DoneIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import { riskChip, riskTitle } from "../lib/riskView.ts";
 import { motion, AnimatePresence } from "motion/react";
 import { stuckBecause, type AgentCard, type AgentOutcome } from "../lib/derive.ts";
 import { Panel } from "./Panel.tsx";
 import { fmtUsd, fmtTokens, fmtEq, eqTitle, fmtAgo, modelLabelOf } from "../lib/format.ts";
 import { RunLanes, legDirs } from "./RunLane.tsx";
 import { runsOf, subscribeRuns, watchRuns } from "../lib/runStore.ts";
+import { api } from "../lib/api.ts";
+import { usePoll } from "../lib/usePoll.ts";
+import { collisionChip, collisionTitle, collisionsFor } from "../lib/collisions.ts";
+import type { Collision } from "../../../shared/types.ts";
 import { branchesOf, subscribeBranches } from "../lib/repoBranches.ts";
 import {
   SHARED_TREE_LABEL, SHARED_TREE_TOOLTIP,
@@ -173,12 +178,16 @@ function Spark({ data, color }: { data: number[]; color: string }) {
   );
 }
 
-function SessionCard({ a, selected, onSelect, branch, shared }: {
+function SessionCard({ a, selected, onSelect, collisions, branch, shared }: {
   a: AgentCard; selected: boolean; onSelect?: (a: AgentCard) => void;
-  branch: string | null; shared: boolean;
+  collisions: Collision[]; branch: string | null; shared: boolean;
 }) {
   const st = STATUS[a.status];
   const model = modelLabelOf(a.model_name);
+  // Another checkout sharing a runtime resource; `shared` above is the same
+  // working tree, which is a different thing.
+  const collide = collisionsFor(collisions, a.source_app, a.session_id);
+  const risk = riskChip(a.risks);
   return (
     <motion.div
       onClick={() => onSelect?.(a)}
@@ -255,8 +264,20 @@ function SessionCard({ a, selected, onSelect, branch, shared }: {
         )}
         <span className="chip shrink-0" style={{ color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }}>{model}</span>
       </div>
-      <div className="mt-1 flex items-center justify-between">
-        <span className="text-[11px] t-dim2 truncate" title={evidenceNote(a)}>{a.lastAction || st.hint}</span>
+      <div className="mt-1 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 min-w-0">
+          {/* Another checkout is on the same port, database, .env or compose
+              project. On the row, because the row is where you decide which
+              agent's green to believe; worded as a possibility, because it is
+              read out of commands and not proven. */}
+          {collide.length > 0 && (
+            <span className="chip shrink-0" title={collisionTitle(collide)}
+              style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}>
+              <WarningIcon size={ICON.xs} className="inline-block align-[-2px] mr-1" />{collisionChip(collide)}
+            </span>
+          )}
+          <span className="text-[11px] t-dim2 truncate" title={evidenceNote(a)}>{a.lastAction || st.hint}</span>
+        </div>
         <Spark data={a.spark} color={st.color} />
       </div>
       {/* subagents this session spawned — the real parent→child structure */}
@@ -274,6 +295,16 @@ function SessionCard({ a, selected, onSelect, branch, shared }: {
           </div>
         );
       })()}
+      {/* What its edits touched that deserves reading first. On the card rather
+          than only in the diff, because the card is where you decide which
+          session to open. Nothing flagged draws nothing — see riskView. */}
+      {risk && (
+        <div className="mt-1.5 flex items-center gap-1.5 text-[10px] min-w-0" style={{ color: risk.tone }}
+          title={`Review first:\n${riskTitle(a.risks)}`}>
+          <span aria-hidden className="flex shrink-0"><WarningIcon size={ICON.xs} /></span>
+          <span className="truncate">{risk.text}</span>
+        </div>
+      )}
       <div className="mt-1.5 flex items-center gap-3 text-[10px] t-dim2 tabular-nums">
         <span>{a.tools} tools</span>
         {a.errors > 0 && <span style={{ color: "var(--error)" }}>{a.errors} err</span>}
@@ -285,8 +316,15 @@ function SessionCard({ a, selected, onSelect, branch, shared }: {
   );
 }
 
-export function Fleet({ agents, activeApp, onSelect }: { agents: AgentCard[]; activeApp?: string; onSelect?: (a: AgentCard) => void }) {
+export function Fleet({ agents, activeApp, onSelect, active = true }: { agents: AgentCard[]; activeApp?: string; onSelect?: (a: AgentCard) => void; active?: boolean }) {
   const [overrides, setOverrides] = useState<Record<string, boolean>>({});
+
+  // Sessions in different checkouts on one out-of-tree resource. Fifteen
+  // seconds, like the insights beside it: the server reads `ss` for each ask.
+  const [collisions, setCollisions] = useState<Collision[]>([]);
+  const loadCollisions = () => { api.collisions().then((r) => setCollisions(r.collisions)).catch(() => {}); };
+  useEffect(() => { if (active) loadCollisions(); /* eslint-disable-line react-hooks/exhaustive-deps */ }, [active]);
+  usePoll(active, loadCollisions, 15_000);
 
   /*
    * The runs on this machine, and the sessions they have claimed.
@@ -382,6 +420,7 @@ export function Fleet({ agents, activeApp, onSelect }: { agents: AgentCard[]; ac
               key={a.key} a={a}
               selected={!!activeApp && a.source_app === activeApp}
               onSelect={onSelect}
+              collisions={collisions}
               branch={branchForCwd(workingTreeOf(a), branches)}
               shared={isSharedCwd(workingTreeOf(a), sharedCwds)}
             />
@@ -417,6 +456,7 @@ export function Fleet({ agents, activeApp, onSelect }: { agents: AgentCard[]; ac
                         key={a.key} a={a}
                         selected={!!activeApp && a.source_app === activeApp}
                         onSelect={onSelect}
+                        collisions={collisions}
                         branch={branchForCwd(workingTreeOf(a), branches)}
                         shared={isSharedCwd(workingTreeOf(a), sharedCwds)}
                       />
