@@ -274,10 +274,12 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     asked = []; askedArgs = [];
     answers = { fill: { ok: true, value: { filled: [] } } };
     const r = await cli("fill", "--field", "label=Email=ada@orbit.example", "--field", "input[name=plan]=team",
-      "--field", 'role=textbox[name="Note = long"]=a=b');
+      "--field", 'role=textbox[name="Note = long"]=a=b', "--field", "#plan\\=b=solo");
     expect(r.code).toBe(0);
+    // A CSS escape (`#plan\=b`, the id "plan=b") is part of the selector.
     expect(verbArgs().fields).toEqual({
       "label=Email": "ada@orbit.example", "input[name=plan]": "team", 'role=textbox[name="Note = long"]': "a=b",
+      "#plan\\=b": "solo",
     });
   });
 

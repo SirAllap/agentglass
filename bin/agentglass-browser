@@ -1061,6 +1061,9 @@ def split_field(pair):
                 quote = None
         elif depth and c in "\"'":
             quote = c
+        elif c == "\\":
+            # A CSS escape: `#plan\=b` is the id "plan=b", not a split.
+            i += 1
         elif c == "[":
             depth += 1
         elif c == "]":
