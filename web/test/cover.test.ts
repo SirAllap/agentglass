@@ -487,6 +487,14 @@ describe("one mark lands, and it is the title bar's", () => {
     expect(src("../src/components/TerminalPanel.tsx")).toContain("s.tmuxDue = f.engine === true");
   });
 
+  test("and on the app's own tmux the strip is swept from the first redraw, not the next poll", () => {
+    const server = src("../../server/src/terminal.ts");
+    const at = server.indexOf("const nudgeTmux = () => {");
+    expect(at).toBeGreaterThan(0);
+    const body = server.slice(at, server.indexOf("\n  };\n", at));
+    const code = body.split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+    expect(code).toContain("(!session.tmux && !session.onEngine) || session.closed");
+  });
 });
 
 describe("the window's own ground (electron/main.js)", () => {
