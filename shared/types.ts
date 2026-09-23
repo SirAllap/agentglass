@@ -481,9 +481,10 @@ export type PtyServerFrame =
    * attach: a phone needs it to know it is looking at a slice, because without
    * a fit tmux renders at the desk's width and the columns past the phone's own
    * never arrive. `resize` is false on the backends with no pty behind them,
-   * where there is no TIOCSWINSZ to make.
+   * where there is no TIOCSWINSZ to make. `engine` says the shell is the app's
+   * own tmux, whose `tmux` frame with the window list follows within a sweep.
    */
-  | { t: "ready"; mode: "pty" | "pipe"; shell: string; cwd: string; resize: boolean; pane?: { cols: number; rows: number } }
+  | { t: "ready"; mode: "pty" | "pipe"; shell: string; cwd: string; resize: boolean; engine?: boolean; pane?: { cols: number; rows: number } }
   /**
    * The window changed size under an attach that is already open.
    *

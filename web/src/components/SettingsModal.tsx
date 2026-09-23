@@ -78,6 +78,7 @@ import { chatEnginePref, setChatEnginePref, type ChatEnginePref } from "../lib/c
 import type { TmuxEngineInfo } from "../../../shared/types.ts";
 import type { DepReport, DepStatus } from "../../../shared/deps.ts";
 import { clock24, setClock24 } from "../lib/clockPref.ts";
+import { setSplashOn, splashOn } from "../lib/splashPref.ts";
 import { usageRefreshOn, setUsageRefreshOn } from "../lib/usageRefreshPref.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { bindings, rebind, resetBindings, subscribeBindings, isCustomised, LABELS, DEFAULTS, type ActionId,
@@ -468,7 +469,7 @@ function tabScore(t: { label: string; kw: string }, ql: string): number {
  * be the decorative kind he deletes.
  */
 const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: string; status?: boolean; icon: (p: { size?: number }) => React.ReactElement }[] = [
-  { id: "prefs", label: "Window", group: "Interface", kw: "display size zoom sound clock fullscreen start login preferences", what: "The window itself — size, fullscreen, the clock, and how it starts.", icon: SlidersIcon },
+  { id: "prefs", label: "Window", group: "Interface", kw: "display size zoom sound clock fullscreen start login launch animation splash preferences", what: "The window itself — size, fullscreen, the clock, and how it starts.", icon: SlidersIcon },
   { id: "appearance", label: "Appearance", group: "Interface", kw: "theme accent colour color font dark light mode palette", what: "Theme, accent and how dense the app is drawn.", icon: ThemeIcon },
   { id: "terminal", label: "Terminal", group: "Interface", kw: "terminal font size cursor typography monospace face renderer gpu focus follows mouse hover pane sloppy scrollback copy on select right-click paste line height", what: "Type, renderer, mouse and how much scrollback each shell keeps.", icon: TerminalIcon },
   { id: "diff", label: "Diff", group: "Interface", kw: "diff split side by side inline unified wrap word wrap changes review default view wrap long lines", what: "How a diff opens, everywhere the app shows one.", icon: DiffIcon },
@@ -3181,6 +3182,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
   useEffect(() => { if (open) void isFullscreen().then(setFullscreenState); }, [open]);
 
   const [h24, setH24] = useState<boolean>(() => clock24());
+  const [splash, setSplash] = useState<boolean>(() => splashOn());
   const [usageRefresh, setUsageRefreshState] = useState<boolean>(() => usageRefreshOn());
   const [renderer, setRenderer] = useState<RendererPref>(() => rendererPref());
   const [keys, setKeys] = useState(() => bindings());
@@ -4038,6 +4040,11 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                         label="Start at login"
                         hint="Open agentglass automatically when you log in" />
                     )}
+                    {/* Read before anything is drawn (web/index.html), so the
+                        change shows at the next launch, not this one. */}
+                    <Toggle on={splash} onClick={() => { const v = !splash; setSplashOn(v); setSplash(v); }}
+                      label="Launch animation"
+                      hint="Covers the window while the terminal, sessions and git load, then the mark flies to the top bar. Off shows the plain loading screen. From the next launch" />
                     {/* Off is the default and off means nothing is watching:
                         with no client subscribed the server never starts the
                         D-Bus monitor at all. On a machine that cannot do this

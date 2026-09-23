@@ -13,6 +13,7 @@
  * away and the reason it failed is usually already over.
  */
 import React from "react";
+import { useCoverHold } from "../lib/cover.ts";
 
 type Props = { children: React.ReactNode; label: string };
 type State = { failed: boolean; attempt: number };
@@ -51,7 +52,14 @@ class ChunkBoundary extends React.Component<Props, State> {
 export function LazyPanel({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <ChunkBoundary label={label}>
-      <React.Suspense fallback={<div className="h-full" />}>{children}</React.Suspense>
+      <React.Suspense fallback={<Pending />}>{children}</React.Suspense>
     </ChunkBoundary>
   );
+}
+
+/** The fallback holds the launch cover while the panel's code is on its way:
+ *  a lazy panel is only ever mounted when it is the one on screen. */
+function Pending() {
+  useCoverHold("panel", true);
+  return <div className="h-full" />;
 }

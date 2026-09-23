@@ -130,7 +130,7 @@ async function main() {
       source: `try{localStorage.setItem('agentglass-theme','graphite');localStorage.setItem('agentglass-theme-mode','dark');localStorage.setItem('agentglass.projectChosen','1');}catch(e){}`,
     });
     await cdp.send("Page.reload");
-    await until(cdp, `document.querySelector('#root')?.children.length`, "the graphite terminal", 25_000);
+    await until(cdp, `document.querySelector('#root')?.children.length && !document.documentElement.classList.contains('ag-covering')`, "the graphite terminal", 25_000);
     await Bun.sleep(2500);
     // 16:9, matching the other workspace panels in capture.ts — the terminal
     // fills its height, so the dashboard's taller viewport would only add floor.

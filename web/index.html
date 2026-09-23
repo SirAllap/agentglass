@@ -36,13 +36,22 @@
     -->
     <link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png" />
     <!--
-      What fills the window before React does.
+      What fills the window until the app is ready: the launch cover.
 
       The bundle is ~1.8 MB of JS and CSS that has to arrive, parse and execute
       before a single pixel is drawn, and `<div id="root"></div>` paints as
       nothing — so the app opened onto a black rectangle and looked like it had
       failed to start. This is markup, not an app: no imports, no framework and
       no request of its own, so it is on screen in the first frame.
+
+      It stays up past React's mount, on purpose. A cold start used to show the
+      app assembling itself in pieces — an empty terminal, a tab strip that
+      changed shape, a git pane saying it was reading — for a second or more
+      after the first paint. The app now mounts and loads UNDER the cover, and
+      lib/cover.ts takes it down when the panels on screen say they have drawn
+      their first real data: the mark flies to its place in the title bar and
+      the app is simply there. It never waits for anything else, it has a cap,
+      and a load that fails says so here instead of spinning.
 
       It also tells the truth rather than spinning decoratively. The sidecar is
       started in parallel with the window (see electron/main.js), so at this
@@ -51,74 +60,228 @@
       can measure progress honestly, and a bar that stalls at 90% is worse than
       no bar at all.
 
-      React replaces all of it: createRoot().render() clears #root on mount.
+      Every motion on it is a CSS animation of transform or opacity, which the
+      compositor runs without the main thread — the thread that is busy the
+      whole time the cover is up. That is also why the orbit is not SMIL: see
+      scripts/logo.mjs, which generates the mark and its sheet below.
     -->
     <style>
-      #ag-boot {
-        position: fixed; inset: 0; display: flex; gap: 14px;
-        flex-direction: column; align-items: center; justify-content: center;
-        background: #17181b; color: #b6b7bd;
-        font-family: "SF Mono", SFMono-Regular, ui-monospace, "Cascadia Code", Menlo, Consolas, "Liberation Mono", monospace;
+      /* living:css:start */
+.ag-lm{position:relative;display:block;width:100%;height:100%;color:var(--primary,#58a6ff)}
+.ag-lm>svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.ag-lm-o{position:absolute;inset:0;transform:rotate(-52deg) scaleY(0.27586)}
+.ag-lm-b{opacity:0}
+.ag-lm-arm{position:absolute;inset:0}
+.ag-lm-dot{position:absolute;left:84.6875%;top:39.375%;width:21.25%;height:21.25%;border-radius:50%;background:color-mix(in srgb,var(--success,#3fb950) 18%,transparent);transform:scaleY(3.625) rotate(52deg)}
+.ag-lm-dot::after{content:"";position:absolute;inset:23.529%;border-radius:50%;background:var(--success,#3fb950);opacity:1}
+.ag-lm-o,.ag-lm-arm,.ag-lm-dot{animation-duration:16s;animation-iteration-count:infinite}
+.ag-lm-arm{animation-name:ag-lm-arm;animation-timing-function:steps(2,jump-none)}
+.ag-lm-dot{animation-name:ag-lm-dot;animation-timing-function:steps(2,jump-none)}
+.ag-lm-f{animation-name:ag-lm-f;animation-timing-function:step-end}
+.ag-lm-b{animation-name:ag-lm-b;animation-timing-function:step-end}
+@keyframes ag-lm-f{0%{opacity:1}50%,100%{opacity:0}}
+@keyframes ag-lm-b{0%{opacity:0}50%,100%{opacity:1}}
+@keyframes ag-lm-arm{0%{transform:rotate(0deg)}0.563%{transform:rotate(5deg)}1.175%{transform:rotate(10deg)}1.871%{transform:rotate(15deg)}2.675%{transform:rotate(20deg)}3.6%{transform:rotate(25deg)}4.651%{transform:rotate(30deg)}5.829%{transform:rotate(35deg)}7.13%{transform:rotate(40deg)}8.549%{transform:rotate(45deg)}10.078%{transform:rotate(50deg)}11.709%{transform:rotate(55deg)}13.431%{transform:rotate(60deg)}15.233%{transform:rotate(65deg)}17.103%{transform:rotate(70deg)}19.029%{transform:rotate(75deg)}20.996%{transform:rotate(80deg)}22.991%{transform:rotate(85deg)}25%{transform:rotate(90deg)}27.009%{transform:rotate(95deg)}29.004%{transform:rotate(100deg)}30.971%{transform:rotate(105deg)}32.897%{transform:rotate(110deg)}34.767%{transform:rotate(115deg)}36.569%{transform:rotate(120deg)}38.291%{transform:rotate(125deg)}39.922%{transform:rotate(130deg)}41.451%{transform:rotate(135deg)}42.87%{transform:rotate(140deg)}44.171%{transform:rotate(145deg)}45.349%{transform:rotate(150deg)}46.4%{transform:rotate(155deg)}47.325%{transform:rotate(160deg)}48.129%{transform:rotate(165deg)}48.825%{transform:rotate(170deg)}49.437%{transform:rotate(175deg)}50%{transform:rotate(180deg)}50.563%{transform:rotate(185deg)}51.175%{transform:rotate(190deg)}51.871%{transform:rotate(195deg)}52.675%{transform:rotate(200deg)}53.6%{transform:rotate(205deg)}54.651%{transform:rotate(210deg)}55.829%{transform:rotate(215deg)}57.13%{transform:rotate(220deg)}58.549%{transform:rotate(225deg)}60.078%{transform:rotate(230deg)}61.709%{transform:rotate(235deg)}63.431%{transform:rotate(240deg)}65.233%{transform:rotate(245deg)}67.103%{transform:rotate(250deg)}69.029%{transform:rotate(255deg)}70.996%{transform:rotate(260deg)}72.991%{transform:rotate(265deg)}75%{transform:rotate(270deg)}77.009%{transform:rotate(275deg)}79.004%{transform:rotate(280deg)}80.971%{transform:rotate(285deg)}82.897%{transform:rotate(290deg)}84.767%{transform:rotate(295deg)}86.569%{transform:rotate(300deg)}88.291%{transform:rotate(305deg)}89.922%{transform:rotate(310deg)}91.451%{transform:rotate(315deg)}92.87%{transform:rotate(320deg)}94.171%{transform:rotate(325deg)}95.349%{transform:rotate(330deg)}96.4%{transform:rotate(335deg)}97.325%{transform:rotate(340deg)}98.129%{transform:rotate(345deg)}98.825%{transform:rotate(350deg)}99.437%{transform:rotate(355deg)}100%{transform:rotate(360deg)}}
+@keyframes ag-lm-dot{0%{transform:rotate(0deg) scaleY(3.625) rotate(52deg)}0.563%{transform:rotate(-5deg) scaleY(3.625) rotate(52deg)}1.175%{transform:rotate(-10deg) scaleY(3.625) rotate(52deg)}1.871%{transform:rotate(-15deg) scaleY(3.625) rotate(52deg)}2.675%{transform:rotate(-20deg) scaleY(3.625) rotate(52deg)}3.6%{transform:rotate(-25deg) scaleY(3.625) rotate(52deg)}4.651%{transform:rotate(-30deg) scaleY(3.625) rotate(52deg)}5.829%{transform:rotate(-35deg) scaleY(3.625) rotate(52deg)}7.13%{transform:rotate(-40deg) scaleY(3.625) rotate(52deg)}8.549%{transform:rotate(-45deg) scaleY(3.625) rotate(52deg)}10.078%{transform:rotate(-50deg) scaleY(3.625) rotate(52deg)}11.709%{transform:rotate(-55deg) scaleY(3.625) rotate(52deg)}13.431%{transform:rotate(-60deg) scaleY(3.625) rotate(52deg)}15.233%{transform:rotate(-65deg) scaleY(3.625) rotate(52deg)}17.103%{transform:rotate(-70deg) scaleY(3.625) rotate(52deg)}19.029%{transform:rotate(-75deg) scaleY(3.625) rotate(52deg)}20.996%{transform:rotate(-80deg) scaleY(3.625) rotate(52deg)}22.991%{transform:rotate(-85deg) scaleY(3.625) rotate(52deg)}25%{transform:rotate(-90deg) scaleY(3.625) rotate(52deg)}27.009%{transform:rotate(-95deg) scaleY(3.625) rotate(52deg)}29.004%{transform:rotate(-100deg) scaleY(3.625) rotate(52deg)}30.971%{transform:rotate(-105deg) scaleY(3.625) rotate(52deg)}32.897%{transform:rotate(-110deg) scaleY(3.625) rotate(52deg)}34.767%{transform:rotate(-115deg) scaleY(3.625) rotate(52deg)}36.569%{transform:rotate(-120deg) scaleY(3.625) rotate(52deg)}38.291%{transform:rotate(-125deg) scaleY(3.625) rotate(52deg)}39.922%{transform:rotate(-130deg) scaleY(3.625) rotate(52deg)}41.451%{transform:rotate(-135deg) scaleY(3.625) rotate(52deg)}42.87%{transform:rotate(-140deg) scaleY(3.625) rotate(52deg)}44.171%{transform:rotate(-145deg) scaleY(3.625) rotate(52deg)}45.349%{transform:rotate(-150deg) scaleY(3.625) rotate(52deg)}46.4%{transform:rotate(-155deg) scaleY(3.625) rotate(52deg)}47.325%{transform:rotate(-160deg) scaleY(3.625) rotate(52deg)}48.129%{transform:rotate(-165deg) scaleY(3.625) rotate(52deg)}48.825%{transform:rotate(-170deg) scaleY(3.625) rotate(52deg)}49.437%{transform:rotate(-175deg) scaleY(3.625) rotate(52deg)}50%{transform:rotate(-180deg) scaleY(3.625) rotate(52deg)}50.563%{transform:rotate(-185deg) scaleY(3.625) rotate(52deg)}51.175%{transform:rotate(-190deg) scaleY(3.625) rotate(52deg)}51.871%{transform:rotate(-195deg) scaleY(3.625) rotate(52deg)}52.675%{transform:rotate(-200deg) scaleY(3.625) rotate(52deg)}53.6%{transform:rotate(-205deg) scaleY(3.625) rotate(52deg)}54.651%{transform:rotate(-210deg) scaleY(3.625) rotate(52deg)}55.829%{transform:rotate(-215deg) scaleY(3.625) rotate(52deg)}57.13%{transform:rotate(-220deg) scaleY(3.625) rotate(52deg)}58.549%{transform:rotate(-225deg) scaleY(3.625) rotate(52deg)}60.078%{transform:rotate(-230deg) scaleY(3.625) rotate(52deg)}61.709%{transform:rotate(-235deg) scaleY(3.625) rotate(52deg)}63.431%{transform:rotate(-240deg) scaleY(3.625) rotate(52deg)}65.233%{transform:rotate(-245deg) scaleY(3.625) rotate(52deg)}67.103%{transform:rotate(-250deg) scaleY(3.625) rotate(52deg)}69.029%{transform:rotate(-255deg) scaleY(3.625) rotate(52deg)}70.996%{transform:rotate(-260deg) scaleY(3.625) rotate(52deg)}72.991%{transform:rotate(-265deg) scaleY(3.625) rotate(52deg)}75%{transform:rotate(-270deg) scaleY(3.625) rotate(52deg)}77.009%{transform:rotate(-275deg) scaleY(3.625) rotate(52deg)}79.004%{transform:rotate(-280deg) scaleY(3.625) rotate(52deg)}80.971%{transform:rotate(-285deg) scaleY(3.625) rotate(52deg)}82.897%{transform:rotate(-290deg) scaleY(3.625) rotate(52deg)}84.767%{transform:rotate(-295deg) scaleY(3.625) rotate(52deg)}86.569%{transform:rotate(-300deg) scaleY(3.625) rotate(52deg)}88.291%{transform:rotate(-305deg) scaleY(3.625) rotate(52deg)}89.922%{transform:rotate(-310deg) scaleY(3.625) rotate(52deg)}91.451%{transform:rotate(-315deg) scaleY(3.625) rotate(52deg)}92.87%{transform:rotate(-320deg) scaleY(3.625) rotate(52deg)}94.171%{transform:rotate(-325deg) scaleY(3.625) rotate(52deg)}95.349%{transform:rotate(-330deg) scaleY(3.625) rotate(52deg)}96.4%{transform:rotate(-335deg) scaleY(3.625) rotate(52deg)}97.325%{transform:rotate(-340deg) scaleY(3.625) rotate(52deg)}98.129%{transform:rotate(-345deg) scaleY(3.625) rotate(52deg)}98.825%{transform:rotate(-350deg) scaleY(3.625) rotate(52deg)}99.437%{transform:rotate(-355deg) scaleY(3.625) rotate(52deg)}100%{transform:rotate(-360deg) scaleY(3.625) rotate(52deg)}}
+@media (prefers-reduced-motion:reduce){.ag-lm-o,.ag-lm-arm,.ag-lm-dot{animation:none}}
+.agc-far-o{position:absolute;inset:0;transform:rotate(-18deg) scaleY(0.38889)}
+.agc-far-b{opacity:0}
+.agc-far-arm{position:absolute;inset:0}
+.agc-far-dot{position:absolute;left:102.8125%;top:46.5625%;width:6.875%;height:6.875%;border-radius:50%;background:color-mix(in srgb,var(--warning,#d29922) 16%,transparent);transform:scaleY(2.5714) rotate(18deg)}
+.agc-far-dot::after{content:"";position:absolute;inset:29.545%;border-radius:50%;background:var(--warning,#d29922);opacity:0.8}
+.agc-far-o,.agc-far-arm,.agc-far-dot{animation-duration:48s;animation-iteration-count:infinite}
+.agc-far-arm{animation-name:agc-far-arm;animation-timing-function:linear}
+.agc-far-dot{animation-name:agc-far-dot;animation-timing-function:linear}
+.agc-far-f{animation-name:agc-far-f;animation-timing-function:step-end}
+.agc-far-b{animation-name:agc-far-b;animation-timing-function:step-end}
+@keyframes agc-far-f{0%{opacity:1}50%,100%{opacity:0}}
+@keyframes agc-far-b{0%{opacity:0}50%,100%{opacity:1}}
+@keyframes agc-far-arm{0%{transform:rotate(0deg)}0.747%{transform:rotate(5deg)}1.524%{transform:rotate(10deg)}2.358%{transform:rotate(15deg)}3.269%{transform:rotate(20deg)}4.27%{transform:rotate(25deg)}5.369%{transform:rotate(30deg)}6.569%{transform:rotate(35deg)}7.87%{transform:rotate(40deg)}9.269%{transform:rotate(45deg)}10.761%{transform:rotate(50deg)}12.339%{transform:rotate(55deg)}13.995%{transform:rotate(60deg)}15.72%{transform:rotate(65deg)}17.504%{transform:rotate(70deg)}19.336%{transform:rotate(75deg)}21.203%{transform:rotate(80deg)}23.096%{transform:rotate(85deg)}25%{transform:rotate(90deg)}26.904%{transform:rotate(95deg)}28.797%{transform:rotate(100deg)}30.664%{transform:rotate(105deg)}32.496%{transform:rotate(110deg)}34.28%{transform:rotate(115deg)}36.005%{transform:rotate(120deg)}37.661%{transform:rotate(125deg)}39.239%{transform:rotate(130deg)}40.731%{transform:rotate(135deg)}42.13%{transform:rotate(140deg)}43.431%{transform:rotate(145deg)}44.631%{transform:rotate(150deg)}45.73%{transform:rotate(155deg)}46.731%{transform:rotate(160deg)}47.642%{transform:rotate(165deg)}48.476%{transform:rotate(170deg)}49.253%{transform:rotate(175deg)}50%{transform:rotate(180deg)}50.747%{transform:rotate(185deg)}51.524%{transform:rotate(190deg)}52.358%{transform:rotate(195deg)}53.269%{transform:rotate(200deg)}54.27%{transform:rotate(205deg)}55.369%{transform:rotate(210deg)}56.569%{transform:rotate(215deg)}57.87%{transform:rotate(220deg)}59.269%{transform:rotate(225deg)}60.761%{transform:rotate(230deg)}62.339%{transform:rotate(235deg)}63.995%{transform:rotate(240deg)}65.72%{transform:rotate(245deg)}67.504%{transform:rotate(250deg)}69.336%{transform:rotate(255deg)}71.203%{transform:rotate(260deg)}73.096%{transform:rotate(265deg)}75%{transform:rotate(270deg)}76.904%{transform:rotate(275deg)}78.797%{transform:rotate(280deg)}80.664%{transform:rotate(285deg)}82.496%{transform:rotate(290deg)}84.28%{transform:rotate(295deg)}86.005%{transform:rotate(300deg)}87.661%{transform:rotate(305deg)}89.239%{transform:rotate(310deg)}90.731%{transform:rotate(315deg)}92.13%{transform:rotate(320deg)}93.431%{transform:rotate(325deg)}94.631%{transform:rotate(330deg)}95.73%{transform:rotate(335deg)}96.731%{transform:rotate(340deg)}97.642%{transform:rotate(345deg)}98.476%{transform:rotate(350deg)}99.253%{transform:rotate(355deg)}100%{transform:rotate(360deg)}}
+@keyframes agc-far-dot{0%{transform:rotate(0deg) scaleY(2.5714) rotate(18deg)}0.747%{transform:rotate(-5deg) scaleY(2.5714) rotate(18deg)}1.524%{transform:rotate(-10deg) scaleY(2.5714) rotate(18deg)}2.358%{transform:rotate(-15deg) scaleY(2.5714) rotate(18deg)}3.269%{transform:rotate(-20deg) scaleY(2.5714) rotate(18deg)}4.27%{transform:rotate(-25deg) scaleY(2.5714) rotate(18deg)}5.369%{transform:rotate(-30deg) scaleY(2.5714) rotate(18deg)}6.569%{transform:rotate(-35deg) scaleY(2.5714) rotate(18deg)}7.87%{transform:rotate(-40deg) scaleY(2.5714) rotate(18deg)}9.269%{transform:rotate(-45deg) scaleY(2.5714) rotate(18deg)}10.761%{transform:rotate(-50deg) scaleY(2.5714) rotate(18deg)}12.339%{transform:rotate(-55deg) scaleY(2.5714) rotate(18deg)}13.995%{transform:rotate(-60deg) scaleY(2.5714) rotate(18deg)}15.72%{transform:rotate(-65deg) scaleY(2.5714) rotate(18deg)}17.504%{transform:rotate(-70deg) scaleY(2.5714) rotate(18deg)}19.336%{transform:rotate(-75deg) scaleY(2.5714) rotate(18deg)}21.203%{transform:rotate(-80deg) scaleY(2.5714) rotate(18deg)}23.096%{transform:rotate(-85deg) scaleY(2.5714) rotate(18deg)}25%{transform:rotate(-90deg) scaleY(2.5714) rotate(18deg)}26.904%{transform:rotate(-95deg) scaleY(2.5714) rotate(18deg)}28.797%{transform:rotate(-100deg) scaleY(2.5714) rotate(18deg)}30.664%{transform:rotate(-105deg) scaleY(2.5714) rotate(18deg)}32.496%{transform:rotate(-110deg) scaleY(2.5714) rotate(18deg)}34.28%{transform:rotate(-115deg) scaleY(2.5714) rotate(18deg)}36.005%{transform:rotate(-120deg) scaleY(2.5714) rotate(18deg)}37.661%{transform:rotate(-125deg) scaleY(2.5714) rotate(18deg)}39.239%{transform:rotate(-130deg) scaleY(2.5714) rotate(18deg)}40.731%{transform:rotate(-135deg) scaleY(2.5714) rotate(18deg)}42.13%{transform:rotate(-140deg) scaleY(2.5714) rotate(18deg)}43.431%{transform:rotate(-145deg) scaleY(2.5714) rotate(18deg)}44.631%{transform:rotate(-150deg) scaleY(2.5714) rotate(18deg)}45.73%{transform:rotate(-155deg) scaleY(2.5714) rotate(18deg)}46.731%{transform:rotate(-160deg) scaleY(2.5714) rotate(18deg)}47.642%{transform:rotate(-165deg) scaleY(2.5714) rotate(18deg)}48.476%{transform:rotate(-170deg) scaleY(2.5714) rotate(18deg)}49.253%{transform:rotate(-175deg) scaleY(2.5714) rotate(18deg)}50%{transform:rotate(-180deg) scaleY(2.5714) rotate(18deg)}50.747%{transform:rotate(-185deg) scaleY(2.5714) rotate(18deg)}51.524%{transform:rotate(-190deg) scaleY(2.5714) rotate(18deg)}52.358%{transform:rotate(-195deg) scaleY(2.5714) rotate(18deg)}53.269%{transform:rotate(-200deg) scaleY(2.5714) rotate(18deg)}54.27%{transform:rotate(-205deg) scaleY(2.5714) rotate(18deg)}55.369%{transform:rotate(-210deg) scaleY(2.5714) rotate(18deg)}56.569%{transform:rotate(-215deg) scaleY(2.5714) rotate(18deg)}57.87%{transform:rotate(-220deg) scaleY(2.5714) rotate(18deg)}59.269%{transform:rotate(-225deg) scaleY(2.5714) rotate(18deg)}60.761%{transform:rotate(-230deg) scaleY(2.5714) rotate(18deg)}62.339%{transform:rotate(-235deg) scaleY(2.5714) rotate(18deg)}63.995%{transform:rotate(-240deg) scaleY(2.5714) rotate(18deg)}65.72%{transform:rotate(-245deg) scaleY(2.5714) rotate(18deg)}67.504%{transform:rotate(-250deg) scaleY(2.5714) rotate(18deg)}69.336%{transform:rotate(-255deg) scaleY(2.5714) rotate(18deg)}71.203%{transform:rotate(-260deg) scaleY(2.5714) rotate(18deg)}73.096%{transform:rotate(-265deg) scaleY(2.5714) rotate(18deg)}75%{transform:rotate(-270deg) scaleY(2.5714) rotate(18deg)}76.904%{transform:rotate(-275deg) scaleY(2.5714) rotate(18deg)}78.797%{transform:rotate(-280deg) scaleY(2.5714) rotate(18deg)}80.664%{transform:rotate(-285deg) scaleY(2.5714) rotate(18deg)}82.496%{transform:rotate(-290deg) scaleY(2.5714) rotate(18deg)}84.28%{transform:rotate(-295deg) scaleY(2.5714) rotate(18deg)}86.005%{transform:rotate(-300deg) scaleY(2.5714) rotate(18deg)}87.661%{transform:rotate(-305deg) scaleY(2.5714) rotate(18deg)}89.239%{transform:rotate(-310deg) scaleY(2.5714) rotate(18deg)}90.731%{transform:rotate(-315deg) scaleY(2.5714) rotate(18deg)}92.13%{transform:rotate(-320deg) scaleY(2.5714) rotate(18deg)}93.431%{transform:rotate(-325deg) scaleY(2.5714) rotate(18deg)}94.631%{transform:rotate(-330deg) scaleY(2.5714) rotate(18deg)}95.73%{transform:rotate(-335deg) scaleY(2.5714) rotate(18deg)}96.731%{transform:rotate(-340deg) scaleY(2.5714) rotate(18deg)}97.642%{transform:rotate(-345deg) scaleY(2.5714) rotate(18deg)}98.476%{transform:rotate(-350deg) scaleY(2.5714) rotate(18deg)}99.253%{transform:rotate(-355deg) scaleY(2.5714) rotate(18deg)}100%{transform:rotate(-360deg) scaleY(2.5714) rotate(18deg)}}
+@media (prefers-reduced-motion:reduce){.agc-far-o,.agc-far-arm,.agc-far-dot{animation:none}}
+:root[data-idle="1"]:not(.ag-covering) :is(.ag-lm-o,.ag-lm-arm,.ag-lm-dot){animation-play-state:paused}
+      /* living:css:end */
+
+      #ag-cover {
+        position: fixed; inset: 0; z-index: 2147483000; display: none; overflow: hidden;
+        --agc-m: clamp(150px, 30vmin, 270px);
+        color: var(--primary, #58a6ff);
+        font: 11px/1.45 "SF Mono", SFMono-Regular, ui-monospace, "Cascadia Code", Menlo, Consolas, "Liberation Mono", monospace;
         -webkit-user-select: none; user-select: none;
       }
-      #ag-boot .ag-mark { width: 46px; height: 46px; }
-      #ag-boot .ag-name { font-size: 13px; letter-spacing: .14em; color: #c9ccd1; }
-      #ag-boot .ag-status {
-        font-size: 11px; color: #6e7076; min-height: 14px;
-        display: flex; align-items: center; gap: 7px;
+      html.ag-covering #ag-cover { display: block; }
+      /* Handing over: nothing on the cover takes a click from the app below,
+         and the drag strip stops shadowing the title bar's own controls. */
+      #ag-cover.agc-leaving { pointer-events: none; }
+      #ag-cover.agc-leaving .agc-drag { display: none; }
+      /* The ground is its own layer so it can fade without taking the mark with it. */
+      .agc-bg { position: absolute; inset: 0; background: var(--bg, #0d1117); }
+      /* The window is frameless and its title bar is under the cover, so this
+         strip is the only thing that can still move it during a slow start. */
+      .agc-drag { position: absolute; left: 0; right: 0; top: 0; height: 30px; -webkit-app-region: drag; }
+      .agc-col {
+        position: absolute; inset: 0; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; gap: calc(var(--agc-m) * .34);
+        padding: 16px 16px calc(16px + 6vh);
       }
-      /* Delayed on purpose: a warm start is over in about a second, and a
-         spinner that appears and vanishes in that time reads as a flicker.
-         This one only becomes visible if the wait is long enough to notice. */
-      #ag-boot .ag-spin {
-        width: 9px; height: 9px; border-radius: 50%;
-        border: 1.5px solid rgba(180,181,189,.22); border-top-color: #b6b7bd;
-        opacity: 0; animation: ag-fade .2s linear .45s forwards, ag-spin .7s linear .45s infinite;
+      .agc-stage { position: relative; flex: none; width: var(--agc-m); height: var(--agc-m); }
+      .agc-stage > *, .agc-fx > *, .agc-fy > *, .agc-fs > * { position: absolute; inset: 0; }
+      /* Around the mark, a sky: a breathing glow, stars in three twinkling
+         layers, and a far, shallow orbit with a satellite of its own. The mark
+         is the one bold thing; all of this stays behind it. The big mark's
+         orbit runs every frame here (the sheet above steps it for the title
+         bar, where it is small): at this size a stepped contact would stutter. */
+      #ag-cover :is(.ag-lm-arm, .ag-lm-dot) { animation-timing-function: linear; }
+      .agc-glow {
+        inset: -34%; border-radius: 50%;
+        background: radial-gradient(closest-side,
+          color-mix(in srgb, var(--primary, #58a6ff) var(--agc-glow, 22%), transparent),
+          color-mix(in srgb, var(--primary, #58a6ff) calc(var(--agc-glow, 22%) / 3), transparent) 55%, transparent);
+        animation: agc-glow-in 1.2s cubic-bezier(.16, 1, .3, 1) both, agc-breathe 9s ease-in-out 1.2s infinite;
       }
-      @keyframes ag-spin { to { transform: rotate(360deg); } }
-      @keyframes ag-fade { to { opacity: 1; } }
+      @keyframes agc-glow-in { from { opacity: 0; transform: scale(.9); } to { opacity: .8; transform: scale(.97); } }
+      @keyframes agc-breathe { 0%, 100% { opacity: .8; transform: scale(.97); } 50% { opacity: 1; transform: scale(1.03); } }
+      .agc-skies { inset: -45%; animation: agc-fade 1.4s ease-out .15s both; }
+      .agc-sky { position: absolute; inset: 0; width: 100%; height: 100%; fill: var(--text, #e6edf3); opacity: .45; animation: agc-twinkle 4.6s ease-in-out infinite; }
+      .agc-sky2 { animation-duration: 6.1s; animation-delay: -2s; }
+      .agc-sky3 { animation-duration: 3.7s; animation-delay: -1.1s; }
+      @keyframes agc-twinkle { 0%, 100% { opacity: .18; } 50% { opacity: .7; } }
+      @keyframes agc-fade { from { opacity: 0; } }
+      .agc-far { color: var(--text3, #8b949e); animation: agc-fade .9s ease-out .25s both; }
+      .agc-far > svg, .agc-rings > svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+      /* The landing hero's ring, sized off the mark the way the landing sizes
+         it (1.45x) and centred on the world, not the box. The landing's second,
+         fainter ring is left out: with the far orbit there, it was one line too
+         many around the mark. */
+      .agc-rings { animation: agc-fade 1s ease-out .1s both; }
+      /* Nothing arrives from nothing: from 94% and clear, on a strong ease-out. */
+      .agc-enter { animation: agc-enter .56s cubic-bezier(.16, 1, .3, 1) both; }
+      @keyframes agc-enter { from { opacity: 0; transform: scale(.94); } }
+      /* Held back so a warm start, over in about a second, never flashes it. */
+      .agc-status {
+        margin: 0; min-height: 1.45em; max-width: 100%; color: var(--text3, #8b949e);
+        text-align: center; animation: agc-fade .4s ease-out .7s both;
+      }
+      #ag-cover.agc-failed .agc-status { display: none; }
+      .agc-error {
+        box-sizing: border-box; width: min(440px, 100%); padding: 14px 16px; border-radius: 10px;
+        background: var(--bg2, #161b22); border: 1px solid var(--border, #30363d); color: var(--text, #e6edf3);
+        font: 12px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+        -webkit-user-select: text; user-select: text; -webkit-app-region: no-drag;
+        box-shadow: 0 0 0 1px rgba(0,0,0,.06), 0 1px 1px -.5px rgba(0,0,0,.06), 0 3px 3px -1.5px rgba(0,0,0,.06),
+          0 6px 6px -3px rgba(0,0,0,.06), 0 12px 12px -6px rgba(0,0,0,.06), 0 24px 24px -12px rgba(0,0,0,.06);
+      }
+      .agc-error[hidden], .agc-btn[hidden] { display: none; }
+      .agc-err-title { margin: 0; font-size: 13px; font-weight: 600; }
+      .agc-err-detail {
+        margin: 4px 0 0; max-height: 8.7em; overflow: auto; color: var(--text3, #8b949e);
+        font: 11px/1.45 "SF Mono", SFMono-Regular, ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
+        white-space: pre-wrap; overflow-wrap: anywhere;
+      }
+      .agc-err-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+      .agc-btn {
+        height: 26px; padding: 0 12px; border-radius: 6px; cursor: pointer;
+        border: 1px solid var(--border, #30363d); background: transparent; color: var(--text, #e6edf3);
+        font: 500 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+        transition: transform .16s ease-out;
+      }
+      .agc-btn:active { transform: scale(.97); }
+      .agc-btn:focus-visible { outline: 2px solid var(--primary, #58a6ff); outline-offset: 2px; }
+      .agc-go { background: var(--primary, #58a6ff); border-color: var(--primary, #58a6ff); color: var(--bg, #0d1117); }
+
+      /* On a light theme a glow of the primary reads as a smudge and stars as
+         dust: both step back. */
+      html.agc-light #ag-cover { --agc-glow: 9%; }
+      html.agc-light .agc-sky { fill: var(--text3, #737373); }
+      /* Switched off in Settings: the plain boot screen it used to be — the
+         mark small and still, one line under it — gone the moment React mounts. */
+      html.agc-off #ag-cover { --agc-m: 46px; }
+      html.agc-off .agc-glow, html.agc-off .agc-skies, html.agc-off .agc-far, html.agc-off .agc-rings { display: none; }
+      html.agc-off #ag-cover * { animation: none !important; }
+      html.agc-off .agc-col { gap: 14px; padding-bottom: 16px; }
+      /* Reduced motion: the same picture, still. It leaves by a quick cross-fade
+         (lib/cover.ts), never by flying. */
       @media (prefers-reduced-motion: reduce) {
-        #ag-boot .ag-spin { animation: ag-fade .2s linear .45s forwards; }
+        #ag-cover * { animation: none !important; }
       }
     </style>
-  </head>
-  <body>
-    <div id="root">
-      <div id="ag-boot">
-        <!-- logo:start -->
-        <svg class="ag-mark" viewBox="0 0 64 64" aria-hidden="true">
-          <defs>
-          <radialGradient id="boot" cx=".34" cy=".28" r=".82">
-          <stop offset="0" stop-color="#fff" stop-opacity=".72"/>
-          <stop offset=".5" stop-color="#fff" stop-opacity=".15"/>
-          <stop offset="1" stop-color="#fff" stop-opacity="0"/>
-          </radialGradient>
-          </defs>
-          <path d="M14.1 54.9 A29 8 -52 0 1 49.9 9.1" fill="none" stroke="#a78bfa" stroke-opacity=".4" stroke-width="3.2" stroke-linecap="round"/>
-          <circle cx="30" cy="34" r="12.5" fill="#a78bfa"/>
-          <circle cx="30" cy="34" r="12.5" fill="url(#boot)"/>
-          <g fill="none" stroke="#fff" stroke-opacity=".2" stroke-width="1.1">
-          <ellipse cx="30" cy="34" rx="12.5" ry="4.5"/>
-          <ellipse cx="30" cy="34" rx="6" ry="12.1"/>
-          </g>
-          <path d="M30 21.5 A12.5 12.5 0 0 1 30 46.5 A17.0 17.0 0 0 0 30 21.5 Z" fill="#1b0b38" fill-opacity=".42"/>
-          <path d="M49.9 9.1 A29 8 -52 0 1 14.1 54.9" fill="none" stroke="#a78bfa" stroke-width="3.2" stroke-linecap="round"/>
-          <circle cx="50.8" cy="10.7" r="6.8" fill="#34d399" fill-opacity=".18"/>
-          <circle cx="50.8" cy="10.7" r="3.6" fill="#34d399"/>
-        </svg>
-        <!-- logo:end -->
-        <div class="ag-name">agentglass</div>
-        <div class="ag-status"><span class="ag-spin"></span><span id="ag-boot-msg">starting…</span></div>
-      </div>
-    </div>
     <script>
-      // Report what is actually pending, by asking. The sidecar comes up
-      // alongside the window rather than before it, so "waiting for the server"
-      // and "waiting for the interface" are different waits and only one of
-      // them is usually the answer.
       (function () {
-        var msg = document.getElementById("ag-boot-msg");
-        if (!msg) return;
+        var doc = document, root = doc.documentElement;
+        function read(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+
+        // THE LAST THEME, BEFORE ANYTHING IS DRAWN. This runs in <head>, ahead
+        // of every element in <body>, so the first frame is already in the
+        // palette the app will apply a moment later. lib/bootPaint.ts writes
+        // it on every paint of a theme; a "system" choice carries both answers
+        // and the OS picks between them here, as initialTheme() will.
+        var paint = null;
+        try { paint = JSON.parse(read("agentglass-boot-paint") || "null"); } catch (e) { paint = null; }
+        var pick = paint && paint.v === 1 ? paint : null;
+        if (pick && pick.system) {
+          var osDark = true;
+          try { osDark = matchMedia("(prefers-color-scheme: dark)").matches; } catch (e) { osDark = true; }
+          pick = (osDark ? pick.system.dark : pick.system.light) || pick;
+        }
+        if (pick && pick.vars && typeof pick.vars === "object") {
+          for (var k in pick.vars) {
+            var v = pick.vars[k];
+            if (/^--[a-z0-9-]+$/.test(k) && typeof v === "string" && v.length < 160 && !/[;{}<>]/.test(v)) root.style.setProperty(k, v);
+          }
+          if (typeof pick.id === "string" && pick.id.length < 64) root.setAttribute("data-theme", pick.id);
+          if (pick.dark === false) root.classList.add("agc-light");
+          var bg = pick.vars["--bg"], meta = doc.querySelector('meta[name="theme-color"]');
+          if (meta && typeof bg === "string" && /^#[0-9a-f]{3,8}$/i.test(bg)) meta.setAttribute("content", bg);
+        }
+
+        // Up until lib/cover.ts says the app has drawn. Switched off in
+        // Settings, it is the plain boot screen and goes the moment React mounts.
+        root.classList.add("ag-covering");
+        if (read("agentglass-splash") === "off") root.classList.add("agc-off");
+
+        function mounted() { var r = doc.getElementById("root"); return !!(r && r.firstElementChild); }
+        function cover() { return root.classList.contains("ag-covering") ? doc.getElementById("ag-cover") : null; }
+
+        // A failure is said here rather than left spinning: this script is the
+        // only thing on the page when the bundle is what failed.
+        function fail(title, detail) {
+          var c = cover(), box = c && c.querySelector(".agc-error");
+          if (!box || !box.hidden) return;
+          c.classList.add("agc-failed");
+          // Nothing under the card can take the focus away from it.
+          var app = doc.getElementById("root");
+          if (app) app.setAttribute("inert", "");
+          box.querySelector(".agc-err-title").textContent = title;
+          box.querySelector(".agc-err-detail").textContent = detail;
+          var again = box.querySelector('[data-act="reload"]');
+          again.onclick = function () { location.reload(); };
+          box.hidden = false;
+          try { again.focus(); } catch (e) { /* not focusable yet */ }
+        }
+        addEventListener("error", function (e) {
+          if (mounted()) return;
+          var t = e.target;
+          if (t && t.tagName === "SCRIPT") { fail("The interface did not load", "Its script could not be fetched: " + (t.src || "(inline)")); return; }
+          if (t && t !== window) return; // a stylesheet or a picture: not the end of it
+          var why = String((e.error && e.error.message) || e.message || "an error stopped it before it drew");
+          setTimeout(function () { if (!mounted()) fail("The interface did not load", why); }, 1500);
+        }, true);
+        // The last word, whatever lib/cover.ts does or fails to do: nothing
+        // drew in twenty seconds is a failure, and something that DID draw is
+        // never left behind a cover nobody is taking down.
+        setTimeout(function () {
+          var c = cover();
+          if (!c || c.classList.contains("agc-failed")) return;
+          if (!mounted()) { fail("The interface did not load", "Nothing had drawn after 20 seconds."); return; }
+          root.classList.remove("ag-covering");
+          if (c.parentNode) c.parentNode.removeChild(c);
+        }, 20000);
+
+        // Report what is actually pending, by asking. The sidecar comes up
+        // alongside the window rather than before it, so "waiting for the server"
+        // and "waiting for the interface" are different waits and only one of
+        // them is usually the answer. Once the app has mounted, lib/cover.ts
+        // owns the line and names the panel still loading.
         var origin = (window.agentglass && window.agentglass.apiOrigin) || location.origin;
         var t0 = Date.now();
         // ASK THE SHELL WHEN THERE IS ONE, because asking the network costs an
@@ -134,36 +297,150 @@
         var askShell = window.agentglass && typeof window.agentglass.sidecarUp === "function"
           ? window.agentglass.sidecarUp
           : null;
+        function say(text) {
+          var msg = doc.getElementById("agc-msg");
+          if (msg && !root.classList.contains("agc-app")) msg.textContent = text;
+        }
         function tick() {
-          // Gone means React mounted and this whole subtree was replaced.
-          if (!document.getElementById("ag-boot")) return;
+          // Gone means the cover came down; "agc-app" means the app took over the line.
+          if (!cover() && doc.readyState !== "loading") return;
+          if (root.classList.contains("agc-app")) return;
           if (askShell) {
             var up = false;
             try { up = askShell() === true; } catch (e) { up = false; }
-            msg.textContent = up
+            say(up
               ? "loading the interface…"
-              : (Date.now() - t0 > 4000 ? "still starting the server…" : "starting the server…");
+              : (Date.now() - t0 > 4000 ? "still starting the server…" : "starting the server…"));
             setTimeout(tick, up ? 500 : 300);
             return;
           }
           fetch(origin + "/health", { cache: "no-store" })
             .then(function (r) {
-              if (!document.getElementById("ag-boot")) return;
               // Server is up; whatever is left is the bundle still parsing.
-              msg.textContent = r.ok ? "loading the interface…" : "waiting for the server…";
+              say(r.ok ? "loading the interface…" : "waiting for the server…");
               setTimeout(tick, 500);
             })
             .catch(function () {
-              if (!document.getElementById("ag-boot")) return;
               // Only claim something is slow once it has been slow. Before that
               // the honest word is "starting".
-              msg.textContent = Date.now() - t0 > 4000 ? "still starting the server…" : "starting the server…";
+              say(Date.now() - t0 > 4000 ? "still starting the server…" : "starting the server…");
               setTimeout(tick, 300);
             });
         }
-        tick();
+        setTimeout(tick, 0);
       })();
     </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <!--
+      A sibling of #root, not a child: React's mount replaces whatever is inside
+      #root, and the cover has to outlive the mount by the second or so the
+      panels take to load.
+    -->
+    <div id="ag-cover">
+      <div class="agc-bg"></div>
+      <div class="agc-drag"></div>
+      <div class="agc-col">
+        <div class="agc-stage">
+          <div class="agc-scene agc-glow"></div>
+          <div class="agc-scene agc-skies">
+            <svg class="agc-sky" viewBox="-28.8 -28.8 121.6 121.6" aria-hidden="true">
+              <circle cx="-23.2" cy="-6.4" r=".38"/><circle cx="88" cy="16" r=".26"/><circle cx="-12.8" cy="86.4" r=".26"/>
+              <circle cx="64" cy="44.8" r=".22"/><circle cx="100" cy="40" r=".2"/>
+            </svg>
+            <svg class="agc-sky agc-sky2" viewBox="-28.8 -28.8 121.6 121.6" aria-hidden="true">
+              <circle cx="-6.4" cy="-24" r=".29"/><circle cx="81.6" cy="73.6" r=".41"/><circle cx="16" cy="-16" r=".24"/>
+              <circle cx="-30" cy="20" r=".2"/>
+            </svg>
+            <svg class="agc-sky agc-sky3" viewBox="-28.8 -28.8 121.6 121.6" aria-hidden="true">
+              <circle cx="76.8" cy="-22.4" r=".36"/><circle cx="51.2" cy="88" r=".29"/><circle cx="-24" cy="54.4" r=".34"/>
+              <circle cx="40" cy="-30" r=".18"/><circle cx="70" cy="95" r=".2"/>
+            </svg>
+          </div>
+          <div class="agc-scene agc-far">
+          <!-- far:back:start -->
+          <svg viewBox="0 0 64 64" aria-hidden="true">
+          <path d="M-2.2 43.1 A36 14 -18 0 1 66.2 20.9" fill="none" stroke="currentColor" stroke-opacity=".16" stroke-width="1" stroke-dasharray="2 5" vector-effect="non-scaling-stroke"/>
+          </svg>
+          <span class="agc-far-o agc-far-b">
+          <span class="agc-far-arm">
+          <span class="agc-far-dot">
+          </span>
+          </span>
+          </span>
+          <!-- far:back:end -->
+          </div>
+          <div class="agc-fx"><div class="agc-fy"><div class="agc-fs">
+            <div class="agc-rings">
+              <svg viewBox="0 0 64 64" aria-hidden="true">
+                <circle cx="30" cy="34" r="46.4" fill="none" stroke="currentColor" stroke-opacity=".2" stroke-width="1" vector-effect="non-scaling-stroke"/>
+              </svg>
+            </div>
+            <div class="agc-enter">
+            <!-- living:start -->
+            <span class="ag-lm">
+            <svg viewBox="0 0 64 64" aria-hidden="true">
+            <path d="M14.1 54.9 A29 8 -52 0 1 49.9 9.1" fill="none" stroke="currentColor" stroke-opacity=".4" stroke-width="3.2" stroke-linecap="round"/>
+            </svg>
+            <span class="ag-lm-o ag-lm-b">
+            <span class="ag-lm-arm">
+            <span class="ag-lm-dot">
+            </span>
+            </span>
+            </span>
+            <svg viewBox="0 0 64 64" aria-hidden="true">
+            <defs>
+            <radialGradient id="agc-sheen" cx=".34" cy=".28" r=".82">
+            <stop offset="0" stop-color="#fff" stop-opacity=".72"/>
+            <stop offset=".5" stop-color="#fff" stop-opacity=".15"/>
+            <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+            </radialGradient>
+            </defs>
+            <circle cx="30" cy="34" r="12.5" fill="currentColor"/>
+            <circle cx="30" cy="34" r="12.5" fill="url(#agc-sheen)"/>
+            <g fill="none" stroke="#fff" stroke-opacity=".2" stroke-width="1.1">
+            <ellipse cx="30" cy="34" rx="12.5" ry="4.5"/>
+            <ellipse cx="30" cy="34" rx="6" ry="12.1"/>
+            </g>
+            <path d="M30 21.5 A12.5 12.5 0 0 1 30 46.5 A17.0 17.0 0 0 0 30 21.5 Z" fill="#1b0b38" fill-opacity=".42"/>
+            <path d="M49.9 9.1 A29 8 -52 0 1 14.1 54.9" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/>
+            </svg>
+            <span class="ag-lm-o ag-lm-f">
+            <span class="ag-lm-arm">
+            <span class="ag-lm-dot">
+            </span>
+            </span>
+            </span>
+            </span>
+            <!-- living:end -->
+            </div>
+          </div></div></div>
+          <div class="agc-scene agc-far">
+          <!-- far:front:start -->
+          <svg viewBox="0 0 64 64" aria-hidden="true">
+          <path d="M66.2 20.9 A36 14 -18 0 1 -2.2 43.1" fill="none" stroke="currentColor" stroke-opacity=".22" stroke-width="1" stroke-dasharray="2 5" vector-effect="non-scaling-stroke"/>
+          </svg>
+          <span class="agc-far-o agc-far-f">
+          <span class="agc-far-arm">
+          <span class="agc-far-dot">
+          </span>
+          </span>
+          </span>
+          <!-- far:front:end -->
+          </div>
+        </div>
+        <p class="agc-status" role="status"><span id="agc-msg">starting…</span></p>
+        <div class="agc-error" role="alert" hidden>
+          <p class="agc-err-title"></p>
+          <p class="agc-err-detail"></p>
+          <div class="agc-err-acts">
+            <button type="button" class="agc-btn" data-act="continue" hidden>Open the app anyway</button>
+            <button type="button" class="agc-btn agc-go" data-act="reload">Reload</button>
+          </div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

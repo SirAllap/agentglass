@@ -1016,6 +1016,10 @@ export function ptyOpen(ws: PtyWs) {
   // the desk's width and the columns past the phone's own never arrive.
   ctl(ws, {
     t: "ready", mode, shell: basename(shell), cwd: startIn, resize: !!sizeDir,
+    // Whether this shell is the app's own tmux, which reports its windows
+    // shortly after it draws: the desk's launch cover waits for that strip
+    // rather than guessing whether one is coming.
+    engine: !!engine,
     // The handle for "where is the cursor". Absent unless this pty is an nvim
     // we started with a socket of its own.
     ...(editorSock ? { editor: editorSock.id } : {}),

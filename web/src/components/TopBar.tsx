@@ -30,7 +30,7 @@ import { subscribeSessions, liveSessionCount } from "./TerminalPanel.tsx";
 import { clock24, subscribeClock24 } from "../lib/clockPref.ts";
 import { updateAvailable, subscribeUpdate, updateState } from "../lib/updateStore.ts";
 import { IS_MAC_DESKTOP, WINDOW_CONTROLS } from "../lib/desktop.ts";
-import { Logo } from "./Logo.tsx";
+import { LivingMark } from "./Logo.tsx";
 import { useAmbientNotes, NoteToast, NotifyBell } from "./TopBarNotes.tsx";
 import { NeedsPopover, type NeedsItem } from "./NeedsPopover.tsx";
 import { ICON } from "../lib/iconSize.ts";
@@ -604,8 +604,12 @@ export function TopBar({
       {/* The mark, not the word. At this height the wordmark was eight
           characters of the one thing on screen nobody needs to be told, and the
           logo says it in a sixth of the width — which is width the project name
-          gets instead. */}
-      <Logo size={17} className="shrink-0" title="agentglass" style={{ pointerEvents: "none" }} />
+          gets instead.
+
+          The landing's mark, alive, at the landing's proportion of its bar
+          (22 in 30 here, 45 in 62 there), and where the launch cover's mark
+          lands when the app is ready — see lib/cover.ts. */}
+      <LivingMark size={ICON.xl} coverTarget className="shrink-0" title="agentglass" style={{ pointerEvents: "none" }} />
       <AppMenuButton />
       {/* The project this cockpit is about, and the way to change it.
           It used to be two spans of plain text with a chevron, and it read as
