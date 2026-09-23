@@ -491,7 +491,9 @@ import { deskAttachArgv } from "./tmuxctl.ts";
 import { forgetSession } from "./tmuxrestore.ts";
 import { setLocked, lockedSessions } from "./tmuxlock.ts";
 import { focusPaneAnywhere, switchClientToSession, killSessionByName, resolveClient, readFrameCached, runAction, setStatusLine, releaseStale, clearAsk, prefixKeys, healPrefix, paneCwd, selectPane, attachArgvFor, restoreWindows, endPhoneSession, phoneWindows, fitWindow, reclaimPinnedWindow, windowSize, socketPath, scrollPhonePane, leaveCopyMode, remountPhoneClient, isPhoneSession, redrawClient, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
-import { paneFinished, markSeen } from "./agentdone.ts";
+import { paneStatus, markSeen } from "./agentdone.ts";
+import { worstStatus } from "../../shared/windowStatus.ts";
+import { windowRepo } from "./windowrepo.ts";
 import { prepareReviewPrompt } from "./prs.ts";
 import { claudeCode, supportsSessionName } from "./agents/claudecode.ts";
 import { agentArgv, agentBinFor, claimAgentTicket } from "./agentticket.ts";
@@ -1263,20 +1265,31 @@ export function ptyOpen(ws: PtyWs) {
         reclaimPinnedWindow(frame.target.socket, frame.target.id, w.id, narrow && !held);
       }
 
-      // "The agent in this tab finished its turn." Group the frame's panes by
-      // their window, then: the active window (the one the desk is looking at) is
-      // marked seen so its dot goes out; every other window lights if any pane in
-      // it holds an agent whose most recent event ended a turn and the desk has
-      // not looked since. A pane with no agent (nvim, a plain shell) never lights.
+      // What the agent in each tab is doing. Group the frame's panes by their
+      // window, then: the active window (the one the desk is looking at) is
+      // marked seen FIRST, so a finish there reads as idle rather than done;
+      // every window then takes the most urgent status of its panes. A pane
+      // with no agent (nvim, a plain shell) has none, so a window of them
+      // carries no status at all.
       const panesByWindow = new Map<string, string[]>();
       for (const [paneId, winId] of frame.windowOfPane) {
         const list = panesByWindow.get(winId);
         if (list) list.push(paneId); else panesByWindow.set(winId, [paneId]);
       }
+      const now = Date.now();
       for (const w of windows) {
         const paneIds = panesByWindow.get(w.id) ?? [];
         if (w.active) markSeen(paneIds);
-        else if (paneIds.some(paneFinished)) w.agentDone = true;
+        const status = worstStatus(paneIds.map((p) => paneStatus(p, now)));
+        // Deleted rather than left: the frame is cached for a moment, and a
+        // window object reused from it must not keep the last sweep's answer.
+        if (status) w.status = status; else delete w.status;
+        // The project it is working in, for the strip's groups. Undefined for
+        // one sweep while a new directory is looked up — see windowrepo.ts.
+        if (w.cwd) {
+          const repo = windowRepo(w.cwd);
+          if (repo !== undefined) w.repo = repo;
+        }
       }
     }
     // Only the active window's, and only while tmux is drawing them — see
@@ -2281,7 +2294,7 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
     }
 
     const action = msg.cmd as TmuxAction;
-    if (!["select", "new", "kill", "rename", "move", "takeover", "fit"].includes(action)) return;
+    if (!["select", "new", "kill", "rename", "move", "takeover", "fit", "group", "pin"].includes(action)) return;
     /*
      * A window this client was actually shown, and not merely a well-formed id.
      *

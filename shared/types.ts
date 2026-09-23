@@ -390,16 +390,32 @@ export interface TmuxWindow {
    */
   phone?: boolean;
   /**
-   * The agent running in one of this window's panes finished its turn, and the
-   * desk has not looked at this tab since.
+   * What the agent in this window is doing — the most urgent of its panes'
+   * (see `shared/windowStatus.ts`).
    *
-   * Derived server-side from the transcript's own end-of-turn event (`Stop`),
-   * not from tmux's activity flag: the flag fires on any output — an agent still
-   * working, nvim redrawing, every window at once when the desk re-attaches —
-   * none of which is "done". A pane with no agent never sets this. Cleared the
-   * moment the tab becomes the active one (you looked). Absent when not done.
+   * Derived server-side from the agents' own events, not from tmux's activity
+   * flag: the flag fires on any output — an agent still working, nvim
+   * redrawing, every window at once when the desk re-attaches — none of which
+   * is a state. `done` means a turn ended and the desk has not looked at this
+   * tab since; looking makes it `idle`. Absent when no pane in the window holds
+   * an agent, which is a different answer from `idle`.
    */
-  agentDone?: boolean;
+  status?: import("./windowStatus.ts").WindowStatus;
+  /**
+   * The tab group this window was put in by hand — tmux's `@agx-group` window
+   * option. Absent means "group it by its folder", which is the default.
+   */
+  group?: string;
+  /** Pinned first in its group — the `@agx-pin` window option. */
+  pinned?: boolean;
+  /** The active pane's directory. */
+  cwd?: string;
+  /**
+   * The project that directory belongs to — the main checkout's root, so every
+   * worktree of one repository answers the same. Null when the directory is in
+   * no repository; absent while the server is still finding out (one sweep).
+   */
+  repo?: string | null;
   /**
    * How big tmux is drawing this window right now.
    *
@@ -680,14 +696,16 @@ export type PtyClientFrame =
      elsewhere — which took four windows of somebody's own work off their screen.
      Asked for by a person it is the opposite: they know where they are going,
      and the strip they came from is one choice away. */
-  | { t: "tmux"; cmd: "select" | "new" | "kill" | "rename" | "move" | "takeover" | "fit" | "session" | "endsession" | "locksession"; window?: string; name?: string;
+  /* `group` sets or clears a window's `@agx-group` (no `name` clears it);
+     `pin` sets or clears `@agx-pin`, switched by `after`. */
+  | { t: "tmux"; cmd: "select" | "new" | "kill" | "rename" | "move" | "takeover" | "fit" | "session" | "endsession" | "locksession" | "group" | "pin"; window?: string; name?: string;
       /** `fit` only: the asking panel's own grid. Range-checked on the server —
        *  it ends up in a `resize-window`, so it is a number to validate rather
        *  than to trust. */
       cols?: number; rows?: number;
-      /** `move` only: land AFTER the named window instead of before it. What
-       *  the trailing drop zone at the end of the tab strip sends — it is the
-       *  only way to make a window the last one. */
+      /** `move`: land AFTER the named window instead of before it. What the
+       *  trailing drop zone at the end of the tab strip sends — it is the only
+       *  way to make a window the last one. `pin`: pin (true) or unpin. */
       after?: boolean;
       /** `new` only: the project the panel is showing, so the tab opens in it.
        *  Without it tmux starts the window in the SESSION's directory, which is
@@ -4352,6 +4370,14 @@ export interface AgentPane {
    *  agents may share — null when nothing ever reported one, which is every
    *  agent not started under a hook-wired CLI. */
   agentSession: string | null;
+  /** What the agent in this pane is doing; absent when there is none. The same
+   *  answer the tab strip draws, so the window switcher can sort every window
+   *  on the machine by it, not only the ones in the attached session. */
+  status?: import("./windowStatus.ts").WindowStatus;
+  /** The project the pane's directory belongs to — the main checkout's root,
+   *  so every worktree of a repository answers the same (see TmuxWindow.repo).
+   *  Null in no repository; absent while the server is still finding out. */
+  repo?: string | null;
   /**
    * This pane is on the tmux server agentglass itself works on.
    *

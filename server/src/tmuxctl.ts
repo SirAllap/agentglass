@@ -439,7 +439,7 @@ export function parseWindows(out: string): TmuxWindow[] {
     if (!line.trim()) continue;
     // Tab-separated, because window names routinely contain spaces and a
     // space-separated format would split "npm run dev" into three windows.
-    const [id, index, name, active, flags, ask, width, height] = line.split("\t");
+    const [id, index, name, active, flags, ask, width, height, , group, pin, cwd] = line.split("\t");
     const i = Number(index);
     if (!WINDOW_ID.test(id ?? "") || !Number.isInteger(i)) continue;
     const asked = (ask ?? "").trim();
@@ -454,6 +454,11 @@ export function parseWindows(out: string): TmuxWindow[] {
       // narrower than every client and put a "your phone is holding this
       // narrow" notice on a window nothing has touched.
       ...(Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0 ? { cols, rows } : {}),
+      // Held to the same shape a window name is: it is drawn on a chip and
+      // typed back into a tmux command.
+      ...(sanitizeGroupName(group) ? { group: sanitizeGroupName(group)! } : {}),
+      ...((pin ?? "").trim() === "1" ? { pinned: true } : {}),
+      ...((cwd ?? "").trim() ? { cwd: cwd!.trim() } : {}),
     });
   }
   return windows;
@@ -749,7 +754,12 @@ export const FRAME_ARGV: string[] = [
      different session and never appears on the strip — reported as "that tab
      does not show up in the terminal" — and the fix that moves the client instead took
      four windows of somebody's own work off their screen. */
-  "-F", "w\t#{session_id}\t#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{window_raw_flags}\t#{@agx-ask}\t#{window_width}\t#{window_height}\t#{session_name}",
+  /* The tab-group fields are appended, never inserted: the ones before them
+     are read positionally. `@agx-group` and `@agx-pin` are window options the
+     strip writes (see runAction) so they outlive agentglass and can be set
+     from tmux's own command line; `pane_current_path` is the ACTIVE pane's
+     directory, which is what a window is grouped by. */
+  "-F", "w\t#{session_id}\t#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{window_raw_flags}\t#{@agx-ask}\t#{window_width}\t#{window_height}\t#{session_name}\t#{@agx-group}\t#{@agx-pin}\t#{pane_current_path}",
   ";",
   // Panes ride along for the same reason `@agx-ask` does: this runs twice a
   // second per attached client, and it is already ONE subprocess with three
@@ -1007,7 +1017,7 @@ export function __resetHeal(): void { healedAt.clear(); }
  * terminal is already the widest thing this server hands out, and "the panel
  * can run arbitrary tmux commands" would quietly widen it further.
  */
-export type TmuxAction = "select" | "new" | "kill" | "rename" | "move" | "takeover" | "fit";
+export type TmuxAction = "select" | "new" | "kill" | "rename" | "move" | "takeover" | "fit" | "group" | "pin";
 
 /**
  * Windows the desk has just taken its width back on.
@@ -1067,6 +1077,9 @@ export const sanitizeWindowName = (s: unknown): string | null => {
   const name = s.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 64);
   return name || null;
 };
+
+/** A tab group's name: a window name, shorter — it is a chip's label. */
+export const sanitizeGroupName = (s: unknown): string | null => sanitizeWindowName(s)?.slice(0, 32).trim() || null;
 
 /**
  * Does this window actually exist on THIS server?
@@ -1148,7 +1161,7 @@ export function runAction(
      verbs that change something: `select` landing on nothing is a no-op, while
      `kill` landing on the wrong window is somebody's work. */
   const changes = action === "kill" || action === "rename" || action === "move"
-    || action === "fit" || action === "takeover";
+    || action === "fit" || action === "takeover" || action === "group" || action === "pin";
   const id = shaped !== null && (!changes || windowOnSocket(t.socket, shaped)) ? shaped : null;
   switch (action) {
     case "select":
@@ -1214,6 +1227,25 @@ export function runAction(
       if (id === null || !clean) return false;
       return tmux(t.socket, ["rename-window", "-t", id, clean]) !== null;
     }
+    /*
+     * Which tab group a window is in, overriding its folder — or, with no
+     * name, back to its folder. A window option, so it survives agentglass
+     * restarting and anyone can set it from tmux (`set -w @agx-group ops`).
+     * Nothing about the window itself moves: its index is still tmux's.
+     */
+    case "group": {
+      if (id === null) return false;
+      const clean = sanitizeGroupName(name);
+      return tmux(t.socket, clean
+        ? ["set-option", "-w", "-t", id, "@agx-group", clean]
+        : ["set-option", "-w", "-u", "-t", id, "@agx-group"]) !== null;
+    }
+    /* First in its group, whatever its index. `after` is the switch. */
+    case "pin":
+      if (id === null) return false;
+      return tmux(t.socket, after
+        ? ["set-option", "-w", "-t", id, "@agx-pin", "1"]
+        : ["set-option", "-w", "-u", "-t", id, "@agx-pin"]) !== null;
     case "move": {
       // A destination index, and nothing else. `name` carries it because the
       // wire already has that field, but it is parsed as a number here rather

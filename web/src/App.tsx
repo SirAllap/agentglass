@@ -55,6 +55,7 @@ import GitMissingBanner from "./components/GitMissingBanner.tsx";
 import { chordFromEvent, viewForChord, appActionForChord } from "./lib/keybindings.ts";
 import { openFocusedPaneDoor, type PaneDoor } from "./components/TerminalPanel.tsx";
 import { FilePalette } from "./components/FilePalette.tsx";
+import { WindowSwitcher } from "./components/terminal/WindowSwitcher.tsx";
 import { FloatingBench } from "./components/bench/FloatingBench.tsx";
 import { benchTakesBoard, toggleBench, showFile } from "./lib/benchStore.ts";
 import { PeekFile, isRenderable, type Peek } from "./components/PeekFile.tsx";
@@ -121,6 +122,8 @@ export default function App() {
    * to survive the palette closing.
    */
   const [filesOpen, setFilesOpen] = useState(false);
+  /** The window switcher (its chord, from anywhere). */
+  const [windowsOpen, setWindowsOpen] = useState(false);
   const [peek, setPeek] = useState<Peek | null>(null);
   /* Files opened from a view that is not this one — File changes, Source
      control. They are modals over everything, so the request comes through a
@@ -291,7 +294,7 @@ export default function App() {
   const anyPanelOpen =
     paletteOpen || helpOpen || statsOpen || skillsOpen || searchOpen ||
     projectOpen || sessionView !== null || selected !== null ||
-    filesOpen || peek !== null;
+    filesOpen || windowsOpen || peek !== null;
   const anyPanelOpenRef = useRef(anyPanelOpen);
   anyPanelOpenRef.current = anyPanelOpen;
   // Read by the keydown handler, which subscribes once with an empty dep array
@@ -808,6 +811,14 @@ export default function App() {
           toggleBench();
           return;
         }
+        // Opens only. Pressed again while it is open, the switcher takes the
+        // key itself (and stops it before it gets here) to walk the windows
+        // waiting for you.
+        if (action === "windows.switcher") {
+          e.preventDefault();
+          setWindowsOpen(true);
+          return;
+        }
         if (action === "pane.git" || action === "pane.diff" || action === "pane.pr" || action === "pane.card") {
           /* Only when there is one to open: with no terminal on screen, or a
              pane whose branch has no pull request and no card, the key falls
@@ -1196,6 +1207,10 @@ export default function App() {
           chord, from a diff and from a pull request, and none of those is a
           view it could live inside. */}
       <FloatingBench />
+
+      {/* Go to a tmux window from anywhere — the terminal comes up once one
+          is chosen. */}
+      <WindowSwitcher open={windowsOpen} onClose={() => setWindowsOpen(false)} onGone={() => goView("term")} />
 
       {/* Find a file from anywhere. Mounted at the shell rather than in a view
           so the chord reaches it from the dashboard, a terminal or a diff — and

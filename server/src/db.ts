@@ -2743,14 +2743,24 @@ function duplicateResult(row: any): InsertResult {
  *  re-querying on a hot path. Set once at startup; a missing hook is not called.
  *  A hook rather than a direct import so db.ts stays a leaf — the consumer reads
  *  pane_agent, which reads db, and importing it here would close a cycle. */
-let eventHook: ((sessionId: string, type: string, ts: number) => void) | null = null;
-export function setEventHook(fn: (sessionId: string, type: string, ts: number) => void): void { eventHook = fn; }
+/** What the in-memory derived views get of every event: enough to answer "what
+ *  is this session doing now", nothing that would tempt them to keep a copy. */
+export type EventHook = (sessionId: string, type: string, ts: number, extra?: {
+  isError: boolean; toolUseId: string | null; toolName: string | null;
+  /** A Notification's kind (see notificationKind); null for news and for every other type. */
+  notice: "permission" | "input" | null;
+}) => void;
+let eventHook: EventHook | null = null;
+export function setEventHook(fn: EventHook): void { eventHook = fn; }
 
 export function insertEvent(n: NormalizedEvent): InsertResult {
   const model = n.model_name;
   // Every event, before any dedup/rollup below: the derived view keeps by max
   // timestamp, so replaying a duplicate or an out-of-order backfill is harmless.
-  eventHook?.(n.session_id, n.hook_event_type, n.timestamp);
+  eventHook?.(n.session_id, n.hook_event_type, n.timestamp, {
+    isError: !!n.is_error, toolUseId: n.tool_use_id, toolName: n.tool_name,
+    notice: n.hook_event_type === "Notification" ? notificationKind(String(n.payload?.message ?? "")) : null,
+  });
 
   // --- token delta computation -------------------------------------------
   let dIn = n.usage.input_tokens ?? 0;
@@ -3477,6 +3487,15 @@ export function promptedSince(sessionId: string, sinceMs = 0): boolean {
   try { return promptedSinceQ.get(sessionId, Math.max(0, sinceMs)) !== null; } catch { return false; }
 }
 
+/** Which of the two kinds of stop a Notification's message describes — a
+ *  blockage ("needs your permission"), a turn that ended ("waiting for your
+ *  input") — or null for news. See noteWaitFromHook. */
+export function notificationKind(message: string): "permission" | "input" | null {
+  return /needs your (permission|approval)/i.test(message) ? "permission"
+    : /waiting for your input/i.test(message) ? "input"
+      : null;
+}
+
 export function noteWaitFromHook(e: { session_id?: unknown; hook_event_type?: unknown; payload?: unknown; role?: unknown }, at = Date.now()): void {
   /* The Lantern's own chat never waits on anybody in the board's sense: a
      person asked it something and it answered. Its notifications are dropped
@@ -3489,9 +3508,7 @@ export function noteWaitFromHook(e: { session_id?: unknown; hook_event_type?: un
   if (!session || session === "unknown") return;
   if (e.hook_event_type === "Notification") {
     const msg = String((e.payload as { message?: unknown } | undefined)?.message ?? "");
-    const kind = /needs your (permission|approval)/i.test(msg) ? "permission"
-      : /waiting for your input/i.test(msg) ? "input"
-        : null;
+    const kind = notificationKind(msg);
     if (!kind) return;
     try {
       db.query("INSERT OR REPLACE INTO session_wait (session_id, kind, why, at) VALUES (?, ?, ?, ?)")
