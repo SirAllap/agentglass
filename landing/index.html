@@ -310,22 +310,42 @@ body.scene .one{padding-bottom:clamp(64px,12vh,140px)}
    flipping them from flat violet to the gradient at the half was a visible
    jump once the fade in between was continuous. */
 .oneline.scrub i{transition:none;opacity:calc(.07 + .93*var(--w,0));
- filter:blur(calc((1 - var(--w,0))*10px));
+ filter:none;position:relative;
  transform:translateY(calc((1 - var(--w,0))*.42em)) scale(calc(.9 + .1*var(--w,0)))}
 /* The gradient moves from the phrase onto each word. Clipped to the text of
    <b>, it could not reach into a word that has a filter or a transform —
    those paint on their own layer — so every word still in motion drew as
    nothing but its own glow: a violet smear where the second line should be. */
 .oneline.scrub b{background:none}
-.oneline.scrub b i{background:linear-gradient(104deg,#c4b5fd 4%,#f5f3ff 26%,#a78bfa 48%,#67e8f9 66%,#c4b5fd 92%);
+.oneline.scrub b i>u{background:linear-gradient(104deg,#c4b5fd 4%,#f5f3ff 26%,#a78bfa 48%,#67e8f9 66%,#c4b5fd 92%);
  background-size:260% 100%;-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
  /* The gradient is painted inside the word's own box, and at a line-height
     under 1 that box ends above the descenders: the tail of the g was cut
     off flat. The padding extends the box to hold them and the negative
     margin gives the room back, so the lines sit where they did. */
  padding-bottom:.2em;margin-bottom:-.2em}
+/* The focus-pull, without an animated blur. A word is three copies of itself
+   stacked: two pre-blurred (10px and 5px, static filters, rasterised once)
+   and the sharp one, and the scroll only changes their opacity: 10px into 5px
+   over the first half, 5px into sharp over the second. Animating the blur
+   radius itself re-blurred six words on every scroll frame. `--a10`, `--a5`
+   and `--a0` are written with `--w` in the scroll handler: 10px at full for
+   w=0, 5px at full for w=.5, sharp at full for w=1, a cross-fade between
+   neighbours in between. */
+.oneline.scrub i>u{position:relative;z-index:2;display:inline-block;text-decoration:none;opacity:var(--a0,0)}
+/* The blurred copies are glow, not filter: the glyphs are transparent and what
+   is drawn is their text-shadow, which is baked into the tile when the word is
+   rastered. A `filter: blur()` is applied again on every frame the compositor
+   draws the layer, and did not get cheaper for being static (measured: it was
+   the largest single cost of scrolling the sentence). A shadow of blur 2s is a
+   gaussian of deviation s, the same as `filter: blur(s)`: 20px is blur(10px),
+   10px is blur(5px). `--tc` is the colour the gradient has at that word. */
+.oneline.scrub i::before,.oneline.scrub i::after{content:attr(data-t);position:absolute;left:0;top:0;
+ white-space:nowrap;pointer-events:none;color:transparent;-webkit-text-fill-color:transparent;padding-bottom:.2em}
+.oneline.scrub i::before{text-shadow:0 0 20px var(--tc,#a78bfa);opacity:var(--a10,1);z-index:0}
+.oneline.scrub i::after{text-shadow:0 0 10px var(--tc,#a78bfa);opacity:var(--a5,0);z-index:1}
 .oneline.scrub.shine b{animation:none}
-.oneline.scrub.shine b i{animation:sheen 11s linear infinite}
+.oneline.scrub.shine b i>u{animation:sheen 11s linear infinite}
 .oneline.scrub b i.lit{transition:text-shadow .6s}
 /* On a phone the sentence is the whole of the second half of the scene —
    the buttons wait for the next screen (see park()) — so it is set as a
@@ -588,7 +608,7 @@ body.scene .one{padding-bottom:clamp(64px,12vh,140px)}
  background:radial-gradient(closest-side,rgba(167,139,250,.24),rgba(124,92,245,.08) 55%,transparent 100%);
  animation:breathe 9s ease-in-out infinite}
 @keyframes breathe{0%,100%{opacity:.75;transform:scale(.97)}50%{opacity:1;transform:scale(1.03)}}
-.hd-world.spent .star,.hd-world.spent::before{animation-play-state:paused}
+.hd-world.spent .sg,.hd-world.spent::before{animation-play-state:paused}
 /* Ambient motion that is not on screen does not run: see "Nothing runs that
    nobody can see" in the script. */
 .rest,.rest *,.rest::before,.rest::after{animation-play-state:paused!important}
@@ -596,13 +616,15 @@ body.scene .one{padding-bottom:clamp(64px,12vh,140px)}
    travelling dot, the cursor's blink) rest after a few seconds with no input.
    Only the ones that are not driven by the scroll: the scroll-driven half of a
    pair keeps `running`. */
-html.idle .hd-world::before,html.idle .hd-world .star,html.idle .one *,html.idle .one *::before,html.idle .one *::after{animation-play-state:paused}
+html.idle .hd-world::before,html.idle .hd-world .sg,html.idle .one *,html.idle .one *::before,html.idle .one *::after{animation-play-state:paused}
 html.idle .hd-sweep,html.idle .hd-lock .lk-car{animation-play-state:paused,running}
-.hd-world svg{display:block;width:100%;height:100%;overflow:visible;transform:translate3d(var(--px,0),var(--py,0),0)}
+.hd-world svg{display:block;width:100%;height:100%;overflow:visible;transform:translate(var(--px,0),var(--py,0))}
 .hd-world .far{color:#8b88a4}
-.hd-world .star{fill:#f2f1f8;animation:twinkle 4.6s ease-in-out infinite}
-.hd-world .star:nth-of-type(2n){animation-duration:6.1s;animation-delay:-2s}
-.hd-world .star:nth-of-type(3n){animation-duration:3.7s;animation-delay:-1.1s}
+/* The market twinkles ten stars, each on its own rhythm (4.6s, 6.1s, 3.7s). Ten
+   animated circles were ten composited layers, three groups were three, and
+   the layer budget would not stretch to that: one rhythm, one group. */
+.hd-world .star{fill:#f2f1f8}
+.hd-world .sg{animation:twinkle 4.6s ease-in-out infinite}
 @keyframes twinkle{0%,100%{opacity:.15}50%{opacity:.7}}
 /* The rule draws from where the planet was, not from the edge: that is why
    it reads as the ring laid flat and not as a bar that appears. */
@@ -628,7 +650,9 @@ html.idle .hd-sweep,html.idle .hd-lock .lk-car{animation-play-state:paused,runni
    name in four beats (the prompt, the pill growing from the left, the window
    unfolding out of it, its three dots, the cursor), then the links. Each beat
    is 8 to 30% of the build with the next one starting before the last has
-   finished, the stagger the skill asks for.
+   finished, the stagger the skill asks for. Only clip-path and visibility move
+   the beats of the name: an opacity or transform animation is a composited
+   layer for as long as it holds its end state, and there were ten of them.
 
    Scroll-linked, so it reverses exactly. Where it starts and ends (--w-*) is
    measured in centre(): it depends on the window. */
@@ -647,23 +671,25 @@ html.idle .hd-sweep,html.idle .hd-lock .lk-car{animation-play-state:paused,runni
  @keyframes stars{0%{opacity:1}60%,100%{opacity:0}}
  .hd-world .stars{animation-range:0 46.8vh}
  .hd-lock .mk{animation-name:mkin;animation-range:46.6vh 47.6vh}
- @keyframes mkin{0%{opacity:0}100%{opacity:1}}
+ /* The hand-off is a switch, not a fade: the two drawings coincide, and a
+    visibility that flips is not a composited layer (an opacity animation was). */
+ @keyframes mkin{0%{visibility:hidden}100%{visibility:visible}}
  .hd-bar{animation-name:barin}
  @keyframes barin{0%{opacity:0;transform:translateY(-10px)}30%,100%{opacity:1;transform:none}}
  .hd-rule{animation-name:draw;animation-timing-function:cubic-bezier(.23,1,.32,1)}
  @keyframes draw{0%,4%{transform:scaleX(0)}46%,100%{transform:scaleX(1)}}
  .hd-lock .lk-cue{animation-name:wcue}
- @keyframes wcue{0%,22%{opacity:0;transform:translateX(-8px)}40%,100%{opacity:1;transform:none}}
+ @keyframes wcue{0%,22%{clip-path:inset(0 100% 0 0)}40%,100%{clip-path:inset(0 0 0 0)}}
  .hd-lock .lk-pl{animation-name:wpill}
- @keyframes wpill{0%,30%{opacity:0;clip-path:inset(0 100% 0 0)}34%{opacity:1}58%,100%{opacity:1;clip-path:inset(0 0 0 0)}}
+ @keyframes wpill{0%,30%{clip-path:inset(0 100% 0 0)}58%,100%{clip-path:inset(0 0 0 0)}}
  .hd-lock .lk-wi{animation-name:wwin}
- @keyframes wwin{0%,46%{clip-path:inset(0 100% 0 0);transform:translateX(-10px)}78%,100%{clip-path:inset(0 0 0 0);transform:none}}
+ @keyframes wwin{0%,46%{clip-path:inset(0 100% 0 0)}78%,100%{clip-path:inset(0 0 0 0)}}
  .hd-lock .lk-d1{animation-name:pop1}
  .hd-lock .lk-d2{animation-name:pop2}
  .hd-lock .lk-d3{animation-name:pop3}
- @keyframes pop1{0%,70%{opacity:0;transform:scale(.2)}84%,100%{opacity:1;transform:none}}
- @keyframes pop2{0%,76%{opacity:0;transform:scale(.2)}90%,100%{opacity:1;transform:none}}
- @keyframes pop3{0%,82%{opacity:0;transform:scale(.2)}96%,100%{opacity:1;transform:none}}
+ @keyframes pop1{0%,70%{clip-path:circle(0%)}84%,100%{clip-path:circle(75%)}}
+ @keyframes pop2{0%,76%{clip-path:circle(0%)}90%,100%{clip-path:circle(75%)}}
+ @keyframes pop3{0%,82%{clip-path:circle(0%)}96%,100%{clip-path:circle(75%)}}
  .hd-lock .lk-car{transform-origin:50% 100%;animation:blink 1.15s steps(1) infinite,carin linear both;
   animation-timeline:auto,scroll(root block);animation-range:normal,47.6vh 78vh}
  @keyframes carin{0%,88%{transform:scaleY(0)}100%{transform:scaleY(1)}}
@@ -797,9 +823,9 @@ body.scene .sec.zig .sub,body.scene .sec.zig h2{max-width:min(66ch,52%)}
    card fading and rising is cheap on the GPU and expensive on the main thread,
    and leaving `will-change` on forever is how a page ends up with thirty
    layers it never uses again. */
-.rv{opacity:0;transform:translateY(30px);will-change:opacity,transform;
+.rv{opacity:0;transform:translateY(30px);
  transition:opacity .9s cubic-bezier(.16,1,.3,1),transform .9s cubic-bezier(.16,1,.3,1)}
-.rv.in{opacity:1;transform:none}
+.rv.in{opacity:1;transform:none;will-change:opacity,transform}
 .rv.done{will-change:auto;transition:none}
 /* A heading arrives a LINE at a time, each one rising out of its own clip —
    the one thing that separates a page that fades in from a page that feels
@@ -815,9 +841,10 @@ body.scene .sec.zig .sub,body.scene .sec.zig h2{max-width:min(66ch,52%)}
 /* No `filter: blur()` here on purpose. A radial gradient is already soft, and
    five blurred layers were five full-screen GPU passes on every scroll frame —
    measured as the thing that made the page stutter. */
-.orb{position:absolute;border-radius:50%;pointer-events:none;z-index:0;opacity:.9;will-change:transform}
+.orb{position:absolute;border-radius:50%;pointer-events:none;z-index:0;opacity:.9}
+.orb.live{will-change:transform}
 body.scene .sec>.w{position:relative;z-index:1}
-.par{will-change:transform}
+.par.live{will-change:transform}
 /* Where you are in the page, as a line down the left with a stop per section.
    It is the only chrome on the page that knows how far you have come. */
 .rail-p{position:fixed;left:18px;top:50%;transform:translateY(-50%);z-index:60;
@@ -1645,12 +1672,7 @@ body:not([data-route="home"]) .page{padding-top:calc(118px + var(--safe))}
           <radialGradient id="psheen" cx=".34" cy=".28" r=".82"><stop offset="0" stop-color="#fff" stop-opacity=".72"/><stop offset=".5" stop-color="#fff" stop-opacity=".15"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
           <radialGradient id="patmo"><stop offset=".8" stop-color="#a78bfa" stop-opacity="0"/><stop offset=".88" stop-color="#a78bfa" stop-opacity=".22"/><stop offset="1" stop-color="#a78bfa" stop-opacity="0"/></radialGradient>
         </defs>
-        <g class="stars">
-          <circle class="star" cx="-2" cy="8" r=".32"/><circle class="star" cx="8" cy="-3" r=".24"/><circle class="star" cx="60" cy="-2" r=".3"/>
-          <circle class="star" cx="67" cy="22" r=".22"/><circle class="star" cx="63" cy="58" r=".34"/><circle class="star" cx="44" cy="67" r=".24"/>
-          <circle class="star" cx="-3" cy="46" r=".28"/><circle class="star" cx="4" cy="66" r=".22"/><circle class="star" cx="22" cy="2" r=".2"/>
-          <circle class="star" cx="52" cy="40" r=".18"/>
-        </g>
+        <g class="stars"><g class="sg"><circle class="star" cx="-2" cy="8" r=".32"/><circle class="star" cx="63" cy="58" r=".34"/><circle class="star" cx="-3" cy="46" r=".28"/><circle class="star" cx="8" cy="-3" r=".24"/><circle class="star" cx="67" cy="22" r=".22"/><circle class="star" cx="4" cy="66" r=".22"/><circle class="star" cx="52" cy="40" r=".18"/><circle class="star" cx="60" cy="-2" r=".3"/><circle class="star" cx="44" cy="67" r=".24"/><circle class="star" cx="22" cy="2" r=".2"/></g></g>
         <!-- A far, shallow orbit behind everything, for depth. -->
         <g class="far">
           <path d="M-2.2 43.1 A36 14 -18 0 1 66.2 20.9" fill="none" stroke="currentColor" stroke-opacity=".16" stroke-width="1" stroke-dasharray="2 5" vector-effect="non-scaling-stroke"/>
@@ -2387,6 +2409,13 @@ if(!calm) addEventListener('load',()=>setTimeout(()=>{
  }
  for(const sv of document.querySelectorAll('svg')) if(sv.querySelector('animate,animateMotion,animateTransform,set')) watch(sv);
 },1500));
+/* A mover gets its own layer only while it is within a screen of the window:
+   `will-change` left on turned every orb and parallax block on the page into a
+   permanent layer, twenty-odd of them, most of them a section away. */
+if(!calm) addEventListener('load',()=>{
+ const io=new IntersectionObserver((es)=>{ for(const e of es) e.target.classList.toggle('live',e.isIntersecting); },{rootMargin:'200px 0px'});
+ for(const el of document.querySelectorAll('.orb,.par')) io.observe(el);
+});
 /* Rest when nobody is there. An idle page must cost nothing: measured with a
    4x CPU throttle and software raster, the planet's orbit (SVG animation) and
    the twinkle alone kept the page drawing 60 frames a second and 80-90% of a
@@ -2656,6 +2685,14 @@ if(calm){document.body.classList.add('go');rks.forEach(r=>r.classList.add('shown
   {threshold:0}).observe(line);
  if(calm||!one||!field||!cta){words.forEach(w=>w.classList.add('lit'));if(cta)cta.classList.add('here');return;}
  line.classList.add('scrub');
+ /* Each word: its own text moves into <u> (the sharp copy) and its two blurred
+    copies are ::before and ::after, which read the word from data-t. */
+ /* The gradient is 4% #c4b5fd, 26% #f5f3ff, 48% #a78bfa, 66% #67e8f9, 92% #c4b5fd
+    across the phrase: the colour it has under each of its words. */
+ const TC=['#e6e0ff','#d3cbfb','#9fa4f6','#9fd3f0'];
+ let bi=0;
+ for(const w of words){ const t=w.textContent; w.dataset.t=t; const u=document.createElement('u'); u.textContent=t; w.textContent=''; w.append(u);
+  if(w.closest('b')) w.style.setProperty('--tc',TC[Math.min(bi++,TC.length-1)]); }
 
  /* The track is what the pinned hero scrolls against. It is added here, not
     in the markup, so the page without scripting is the page it always was. */
@@ -2830,7 +2867,11 @@ if(calm){document.body.classList.add('go');rks.forEach(r=>r.classList.add('shown
   const SPAN=1.8, reach=q*(words.length+SPAN-1);
   words.forEach((w,i)=>{
    const f=Math.min(1,Math.max(0,(reach-i)/SPAN)).toFixed(3);
-   if(w._w!==f){ w._w=f; w.style.setProperty('--w',f); }
+   if(w._w!==f){ w._w=f; w.style.setProperty('--w',f);
+    const n=+f, st=w.style;
+    st.setProperty('--a0',Math.max(0,Math.min(1,2*n-1)).toFixed(3));
+    st.setProperty('--a5',(n<0.5?Math.min(1,2*n):Math.max(0,2*(1-n))).toFixed(3));
+    st.setProperty('--a10',Math.max(0,Math.min(1,1-2*n)).toFixed(3)); }
    w.classList.toggle('lit',i<lit);
   });
   /* A beat after the last word, so the sentence is read on its own first. */
