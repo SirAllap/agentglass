@@ -95,7 +95,7 @@ dev loop    checkup (did it break — errors from load on, failed requests, visi
 look        observe · read · text · html · region · shot · frames · console · network
 page        resize · zoom (the one Ctrl+/Ctrl- move) · emulate · throttle
 act         click · type · select · check · fill · hover · dblclick · rightclick
-            focus · blur · press · scroll · drag · upload
+            focus · blur · press · scroll · drag · upload · dialog (answer the next confirm/prompt)
 wait        wait · waitfor (--until network-idle | no-timers) · events
 navigate    open · back · forward · reload
 tabs        tabs · tab · newtab · closetab · profiles
@@ -357,6 +357,11 @@ claude mcp add agentglass-browser -- agentglass-browser-mcp
 
 Every verb above, as a tool with a schema. Same relay, same rules, same
 guardrails. Use whichever fits.
+
+The full list is ~19k tokens of schema, re-read every turn. Set
+`AGENTGLASS_MCP_TOOLS=core` for the 17 everyday verbs plus one generic
+`browser {verb, args}` tool that reaches the rest (verb `help` returns any
+verb's schema), or `generic` for that tool alone.
 
 ## When it cannot reach the browser
 

@@ -1587,6 +1587,23 @@ def main():
     p.add_argument("--no-shot", dest="noShot", action="store_true", help="no screenshot, even on failure")
     p.add_argument("--settle-ms", dest="settleMs", type=int, default=None,
                    help="how long to wait for quiet at most (default 5000, 0..15000)")
+    p = sub.add_parser(
+        "dialog",
+        help="answer the page's next confirm()/prompt(): --accept or --dismiss (the default is accept)",
+        description=(
+            "A page's confirm() and prompt() are answered for it — yes, by default — so it never hangs. "
+            "This arms a different answer for the NEXT one (every one with --always). With neither flag "
+            "it reports what the page asked last and what is armed. The plan lives in the document: a "
+            "navigation drops it, so arm it after the page has loaded and before the click that asks.\n\n"
+            "  dialog --dismiss\n"
+            "  dialog --accept --text 'new name'"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("--accept", action="store_true", help="answer OK / true")
+    p.add_argument("--dismiss", action="store_true", help="answer Cancel / false / null")
+    p.add_argument("--text", help="what a prompt() is answered with when accepted")
+    p.add_argument("--always", action="store_true", help="every dialog, not just the next one")
     p = sub.add_parser("region", help="the tree of ONE subtree — a modal is 15 nodes inside 300")
     p.add_argument("selector", help="an id from an observation, a locator (role=dialog) or CSS")
     p = sub.add_parser("throttle", help="make the machine slow — the bug that never reproduces locally")
@@ -2202,6 +2219,10 @@ def main():
             body["noShot"] = True
         if a.settleMs is not None:
             body["settleMs"] = a.settleMs
+    elif a.cmd == "dialog":
+        body = {k: True for k in ("accept", "dismiss", "always") if getattr(a, k)}
+        if a.text is not None:
+            body["text"] = a.text
     elif a.cmd == "upload":
         body = {"selector": a.selector, "paths": a.paths}
     elif a.cmd == "permission":

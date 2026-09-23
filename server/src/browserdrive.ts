@@ -74,7 +74,7 @@ export type BrowserOp =
   | "cdp" | "listeners" | "coverage" | "profiles" | "emulate" | "events" | "record" | "audit"
   | "debug" | "clock" | "download" | "settings" | "drag" | "upload" | "storage" | "permission"
   | "pdf" | "throttle" | "har" | "region" | "clipboard" | "save" | "headers" | "fake"
-  | "trace" | "intercept" | "checkup"
+  | "trace" | "intercept" | "checkup" | "dialog"
   | "inspect"
   | "whoami"
   | "health";
@@ -92,7 +92,7 @@ export const BROWSER_OPS: readonly BrowserOp[] = [
   "inspect",
   "clock", "download", "settings", "drag", "upload", "storage", "permission", "pdf",
   "throttle", "har", "region", "clipboard", "save", "headers", "fake", "trace", "intercept",
-  "checkup",
+  "checkup", "dialog",
   "whoami",
   "health",
 ];
@@ -230,6 +230,7 @@ const TIMEOUT_MS: Record<BrowserOp, number> = {
      100 s. It was 75 s, and past that the relay answered "timeout" while the
      panel still held the domains on. Below the CLI's own 120 s. */
   checkup: 110_000,
+  dialog: 15_000,
   /* The clipboard is a round trip; a snapshot is Chromium serialising every
      subresource the page pulled in. */
   clipboard: 15_000, save: 60_000, headers: 15_000,
@@ -881,6 +882,12 @@ const VALUE_CARRYING: Record<string, (
   storage(out, args) {
     if (args.set === true && typeof args.value === "string") out.value = REDACTED;
   },
+  /* What a prompt() is answered with is typed into a box the page chose, and
+     no selector says whether that box asked for a passcode. Position rule
+     again: the audit line says an answer was armed, never what it was. */
+  dialog(out, args) {
+    if (typeof args.text === "string") out.text = REDACTED;
+  },
 };
 
 /** The ops the table covers, for a lock that notices when a value-carrying
@@ -1235,6 +1242,10 @@ export function auditAsScript(entries: AuditEntry[]): string {
       case "reload": line = "agentglass-browser reload"; break;
       case "checkup": line = has("url") ? `agentglass-browser checkup ${q(a.url)}` : a.reload === true ? "agentglass-browser checkup --reload" : null; break;
       case "back": case "forward": line = `agentglass-browser ${e.op}`; break;
+      case "dialog":
+        line = a.accept === true || a.dismiss === true
+          ? `agentglass-browser dialog --${a.accept === true ? "accept" : "dismiss"}${a.always === true ? " --always" : ""}` : null;
+        break;
       default: line = null;
     }
     if (line) { lines.push(line); acted++; }
@@ -2164,6 +2175,23 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
         if (typeof b.settleMs !== "number" || !Number.isFinite(n)) return { error: "settleMs must be a number of milliseconds" };
         args.settleMs = Math.min(15_000, Math.max(0, Math.round(n)));
       }
+      break;
+    }
+    case "dialog": {
+      /* Arms the answer to the next confirm/prompt of this page. With neither
+         flag it only reports: what was asked last, and what is armed. */
+      for (const k of ["accept", "dismiss", "always"] as const) {
+        if (b[k] === undefined) continue;
+        if (typeof b[k] !== "boolean") return { error: `${k} is a flag` };
+        args[k] = b[k];
+      }
+      if (args.accept === true && args.dismiss === true) return { error: "dialog takes accept or dismiss, not both" };
+      if (b.text !== undefined) {
+        if (typeof b.text !== "string" || b.text.length > 2000) return { error: "text must be a string of at most 2000 characters" };
+        if (args.dismiss === true) return { error: "text answers a prompt that is accepted; a dismissed one has none" };
+        args.text = b.text;
+      }
+      if (args.always === true && args.accept !== true && args.dismiss !== true) return { error: "always needs accept or dismiss" };
       break;
     }
     case "region": {

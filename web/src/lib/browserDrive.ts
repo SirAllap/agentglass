@@ -1593,6 +1593,17 @@ async function runVerb(
         return r.ok ? { ok: true, value: { url: r.url, title: el.getTitle() } } : r;
       }
 
+      case "dialog": {
+        const a = ask.args as { accept?: boolean; dismiss?: boolean; text?: string; always?: boolean };
+        const arm = a.accept === true || a.dismiss === true;
+        const plan = { accept: a.dismiss !== true, text: a.text ?? null, always: a.always === true };
+        const value = await el.executeJavaScript(`(() => {
+          ${arm ? `window.__agxDialogPlan = ${jsLit(plan)};` : ""}
+          return { armed: window.__agxDialogPlan || null, last: window.__agxDialog || null };
+        })()`);
+        return { ok: true, value };
+      }
+
       case "checkup":
         return await runCheckup(el, ask.args, { cdp, cdpEvents, captureFromShell: () => captureFromShell() });
 

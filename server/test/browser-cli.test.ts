@@ -1481,6 +1481,22 @@ describe.skipIf(!HAVE_PY)("checkup, the dev loop in one call", () => {
     expect(asked).toEqual(["checkup", "checkup"]);
   });
 
+  test("dialog: the flags reach the window as booleans, and both sides are refused there", async () => {
+    await openWindow();
+    answers = { dialog: { ok: true, value: { armed: null, last: null } } };
+    askedArgs = []; asked = [];
+    const cache = mkdtempSync(join(dir, "cache-"));
+    const a = await cliCache(cache, "dialog", "--dismiss", "--always");
+    expect(a.code, a.err).toBe(0);
+    expect(verbArgs(0)).toEqual({ dismiss: true, always: true });
+    const b = await cliCache(cache, "dialog", "--accept", "--text", "ada");
+    expect(b.code, b.err).toBe(0);
+    expect(verbArgs(1)).toEqual({ accept: true, text: "ada" });
+    const both = await cliCache(cache, "dialog", "--accept", "--dismiss");
+    expect(both.code).toBe(1);
+    expect(asked).toEqual(["dialog", "dialog"]);
+  });
+
   test("a failure's picture is written to a private file and the answer carries its path", async () => {
     await openWindow();
     answers = { checkup: { ok: true, value: { verdict: "1 problem", url: "u", title: "t", errors: ["TypeError: x"], png: PNG } } };

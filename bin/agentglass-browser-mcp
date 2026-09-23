@@ -1078,6 +1078,23 @@ TOOLS = [
         },
     },
     {
+        "name": "browser_dialog",
+        "description": (
+            "Answer the page's next confirm()/prompt(). They are answered for the page (yes) so it never "
+            "hangs; arm accept or dismiss BEFORE the click that asks. With neither, reports what was asked "
+            "last and what is armed. A navigation drops the plan."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "accept": {"type": "boolean"},
+                "dismiss": {"type": "boolean"},
+                "text": {"type": "string", "description": "What a prompt() is answered with when accepted."},
+                "always": {"type": "boolean", "description": "Every dialog, not only the next."},
+            },
+        },
+    },
+    {
         "name": "browser_reload",
         "description": "Reload, ignoring the cache by default — with assets versioned by query string there is no other way to force a new bundle.",
         "inputSchema": {

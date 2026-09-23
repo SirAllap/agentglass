@@ -469,6 +469,21 @@ describe("§16 — origins, read-only, audit, redaction", () => {
     expect("error" in parseAsk("cookies", { set: { name: "a", value: "b" } })).toBe(true);
   });
 
+  test("dialog: accept or dismiss, never both; text needs an accept; always needs a side", () => {
+    const ok = parseAsk("dialog", { dismiss: true, always: true });
+    if (!("ask" in ok)) throw new Error(ok.error);
+    expect(ok.ask.args).toEqual({ dismiss: true, always: true });
+    const said = parseAsk("dialog", { accept: true, text: "ada" });
+    if (!("ask" in said)) throw new Error(said.error);
+    expect(said.ask.args).toEqual({ accept: true, text: "ada" });
+    expect("ask" in parseAsk("dialog", {})).toBe(true);
+    expect("error" in parseAsk("dialog", { accept: true, dismiss: true })).toBe(true);
+    expect("error" in parseAsk("dialog", { dismiss: true, text: "x" })).toBe(true);
+    expect("error" in parseAsk("dialog", { always: true })).toBe(true);
+    expect("error" in parseAsk("dialog", { accept: "yes" })).toBe(true);
+    expect("error" in parseAsk("dialog", { accept: true, text: 5 })).toBe(true);
+  });
+
   test("checkup: a url is checked like open's, the flags are flags, settleMs is clamped", () => {
     process.env.AGENTGLASS_BROWSER_ORIGINS = "localhost";
     const ok = parseAsk("checkup", { url: "http://localhost:5173/", noShot: true, settleMs: 99_999 });
@@ -740,7 +755,7 @@ describe("§15 — every verb that carries a value, not just `type`", () => {
      * deliberately absent — the comment on the table says why — and if it is
      * ever added this list must move with it.
      */
-    expect([...valueCarryingOpsForTest].sort()).toEqual(["cookies", "fill", "storage", "type"]);
+    expect([...valueCarryingOpsForTest].sort()).toEqual(["cookies", "dialog", "fill", "storage", "type"]);
   });
 
   test("the replay script emits a real `fill`, with the pairs and the marker", () => {
@@ -1041,6 +1056,10 @@ describe("several verbs in one call", () => {
       if (before === undefined) delete process.env.AGENTGLASS_BROWSER_READONLY;
       else process.env.AGENTGLASS_BROWSER_READONLY = before;
     }
+  });
+
+  test("an armed prompt answer is not written to the audit log", () => {
+    expect(redactAskForTest("dialog", { accept: true, text: "482913" }, false).text).not.toContain("482913");
   });
 
   test("the ask side is span-scoped too — a `type` keeps the words around a token", () => {
