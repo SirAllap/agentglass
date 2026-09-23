@@ -1423,7 +1423,13 @@ def read_firefox_localstorage(path, domain, subdomains=True):
         db = os.path.join(root, name, "ls", "data.sqlite")
         if not os.path.exists(db):
             continue
-        copy, dispose = _snapshot_sqlite(db)
+        # Cookies have already landed by the time this runs, so an origin that
+        # cannot be read is named and skipped rather than ending the import.
+        try:
+            copy, dispose = _snapshot_sqlite(db)
+        except OSError as e:
+            print(f"localStorage for {origin}: could not read ({e.strerror or e})", file=sys.stderr)
+            continue
         try:
             conn = sqlite3.connect(f"file:{copy}?mode=ro", uri=True)
             try:

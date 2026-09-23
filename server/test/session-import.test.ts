@@ -313,3 +313,17 @@ test.skipIf(!HAVE_PY)("a stored key the tab refuses is named, the rest still lan
     expect(r.stdout).toContain("2 localStorage keys, 1 sessionStorage keys restored");
   } finally { s.stop(); rmSync(dir, { recursive: true, force: true }); }
 });
+
+test.skipIf(!HAVE_PY)("an origin whose localStorage cannot be read is named and skipped, not a traceback after the cookies landed", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "agx-ffls-"));
+  fakeProfile(dir);
+  // A directory where the database should be: the copy fails on any machine.
+  mkdirSync(join(dir, "storage", "default", "https+++www.orbit.example", "ls", "data.sqlite"), { recursive: true });
+  try {
+    const r = await runCli(stub.url, ["--page", "tab-1", "session", "import", "--from", "firefox-profile", dir, "--domain", "orbit.example"]);
+    expect(r.stderr).not.toContain("Traceback");
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("orbit.example: 4 cookies imported");
+    expect(r.stderr).toContain("localStorage for https://www.orbit.example: could not read");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
