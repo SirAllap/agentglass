@@ -2299,6 +2299,40 @@ function nestedSessions(socket: string[]): Set<string> {
  */
 export type PaneWireRow = Omit<AgentPane, "agentSession"> & { socket: string[] };
 
+/**
+ * The panes somebody's terminal is showing right now, and which of those are
+ * in a terminal that has focus.
+ *
+ * `list-clients -F '#{pane_id}'` resolves to the pane each client is looking
+ * at — its session's current window's active pane — and `client_flags` carries
+ * `focused` when the terminal reports focus (tmux 3.3+, focus-events on).
+ * Measured on tmux 3.6 with one attached client over a two-window session: one
+ * line, the active pane of the current window, flags `attached,focused,UTF-8`.
+ *
+ * Used by the notification policy to not tell somebody about the pane they
+ * are typing in. Only attached clients count, so a detached server shows
+ * nothing and the policy falls back to saying everything, which is the safe
+ * direction to be wrong in.
+ */
+export function panesOnScreen(): { shown: Set<string>; focused: Set<string> } {
+  const shown = new Set<string>();
+  const focused = new Set<string>();
+  for (const socket of tmuxSockets()) {
+    const out = tmux(socket, ["list-clients", "-F", "#{pane_id}\t#{client_flags}"]);
+    if (out) parseClientPanes(out, shown, focused);
+  }
+  return { shown, focused };
+}
+
+export function parseClientPanes(out: string, shown: Set<string>, focused: Set<string>): void {
+  for (const line of out.split("\n")) {
+    const [pane, flags = ""] = line.split("\t");
+    if (!pane?.startsWith("%")) continue;
+    shown.add(pane);
+    if (flags.split(",").includes("focused")) focused.add(pane);
+  }
+}
+
 export function listPanes(known?: string[]): PaneWireRow[] {
   const rows: PaneWireRow[] = [];
   /* The server we were last on, read once rather than per socket. Null when

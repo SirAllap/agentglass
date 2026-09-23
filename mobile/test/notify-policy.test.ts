@@ -75,6 +75,14 @@ describe("when to buzz", () => {
     expect(shouldNotify(gate({ urgency: 0 }), ctx())).toEqual({ notify: false, because: "low" });
   });
 
+  test("not for a card the desk is only redrawing or removing", () => {
+    // The Lantern's card is keyed and updated in place; a change with nothing
+    // new in it, or the card going away, is a row on the desk and no news.
+    expect(shouldNotify(gate({ urgency: 1, key: "lantern", update: true }), ctx())).toEqual({ notify: false, because: "redraw" });
+    expect(shouldNotify(gate({ urgency: 0, key: "lantern", clear: true }), ctx())).toEqual({ notify: false, because: "redraw" });
+    expect(shouldNotify(gate({ urgency: 2, key: "lantern" }), ctx())).toEqual({ notify: true });
+  });
+
   test("never a buzz with nothing in it", () => {
     // A notification with no title is an interruption with no explanation,
     // which teaches people to ignore the next one.

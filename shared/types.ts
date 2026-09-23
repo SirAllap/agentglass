@@ -1828,6 +1828,23 @@ export interface AlertNote {
   kind?: "reminder" | "understudy";
   /** The reminder's id, so the alarm can acknowledge or snooze the exact one. */
   id?: string;
+  /**
+   * The same situation said again, rather than something new.
+   *
+   * A row with this key REPLACES the previous row with the same key instead of
+   * joining the list — the Lantern's card is one card, updated in place, not a
+   * new one per look.
+   */
+  key?: string;
+  /** Redraw the keyed row without interrupting: no popup, no sound, no badge. */
+  update?: true;
+  /** The keyed situation resolved; remove its row. */
+  clear?: true;
+  /** Every pane the alert is about, when it is about more than one. */
+  panes?: string[];
+  /** What a person mutes this by in the bell — "lantern", "errors", "agents".
+   *  See web/src/lib/notePolicy.ts. */
+  source?: string;
 }
 
 /**

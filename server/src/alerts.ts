@@ -18,7 +18,8 @@
 // for when nobody is looking at agentglass at all.
 import type { WatchEvent, AlertNote } from "../../shared/types.ts";
 import { paneForSession, paneAgentNote } from "./panewt.ts";
-import { listPanes } from "./tmuxctl.ts";
+import { listPanes, panesOnScreen } from "./tmuxctl.ts";
+import { ErrorStreaks, lanternStep, lanternState, NO_SCREEN, type LanternFinding, type Screen } from "./notePolicy.ts";
 import { webhookDestination } from "./egress.ts";
 
 // Resolved once, here, because the boot line below reports it and a boot line
@@ -127,9 +128,13 @@ async function deliver(
   pane?: string,
   /** What kind of thing this is, when it is not ordinary news. Travels on the
    *  frame so the app can raise an alarm rather than another row. */
-  extra?: { kind: "reminder"; id: string } | { kind: "understudy" },
+  extra?: Pick<AlertNote, "kind" | "id" | "key" | "update" | "clear" | "panes" | "source">,
 ) {
-  if (WEBHOOK.configured && !IS_TEST) {
+  // A redraw or a removal of a row the client already has. It is not news, so
+  // it goes only where that row lives: never to a webhook, never to
+  // notify-send, and never to a client that is not attached to see it.
+  const redraw = !!(extra?.key && (extra.update || extra.clear));
+  if (WEBHOOK.configured && !IS_TEST && !redraw) {
     try {
       await fetch(WEBHOOK.url, {
         method: "POST",
@@ -171,8 +176,8 @@ async function deliver(
   // pings keeps `live > 0`, so this returns before `notify-send` exactly as it
   // always did.
   const { attached, live } = sink?.census() ?? { attached: 0, live: 0 };
-  if (sink && attached > 0) sink.broadcast({ title, body, urgency, ...(pane ? { pane } : {}), ...(extra ?? {}) });
-  if (live > 0) return;
+  if (sink && attached > 0) sink.broadcast({ title, body, urgency, ...(pane ? { pane } : {}), ...extra });
+  if (live > 0 || redraw) return;
   if (DESKTOP) {
     // Urgency 0 is a row in a list, not a thing to put on somebody's screen.
     // With no window open there is no list to put it in either, so it waits
@@ -279,6 +284,7 @@ export function pushGate(agent: string, tool: string, summary: string, pane?: st
       // So the one alert that stops an agent dead also says where to go and
       // takes you there. It is the notification with the most reason to.
       pane,
+      { source: "gate" },
     );
 }
 
@@ -328,20 +334,70 @@ export function pushUnderstudyStuck(what: string, question: string, tried: strin
       /* Where to go, so the alert that says a machine is waiting also takes
          you to the screen where you can answer it. */
       "understudy",
-      { kind: "understudy" },
+      { kind: "understudy", source: "understudy" },
     );
   }
 }
 
-/** The Lantern's watch: one loud line per look while something needs a
- *  person. Critical, so the desktop keeps it on screen; the first waiting
- *  pane rides along so a click lands where the answer is typed. */
+/** A scheduled start reporting how it went. Named for the Lantern because it
+ *  used to share its channel; the watch itself goes through
+ *  `pushLanternFindings` below. */
 export function pushLantern(title: string, body: string, pane?: string) {
-  if (shouldSend("lantern:watch")) deliver(title, body, 2, pane);
+  if (shouldSend("lantern:watch")) deliver(title, body, 2, pane, { source: "schedule" });
+}
+
+/**
+ * Which panes are on somebody's screen — a seam, like the notifier above.
+ *
+ * Asked at most every few seconds: it spawns tmux once per server, and a
+ * burst of hook events from one agent would otherwise spawn one per event.
+ * Empty under `bun test` unless a test installs a probe, so the suite never
+ * reads the developer's own tmux to decide what to say.
+ */
+let screenProbe: (() => Screen) | null = null;
+let screenCache: { at: number; screen: Screen } | null = null;
+const SCREEN_CACHE_MS = 3_000;
+export function setScreenProbe(p: (() => Screen) | null) { screenProbe = p; screenCache = null; }
+export function screenNow(): Screen {
+  if (screenProbe) return screenProbe();
+  if (IS_TEST) return NO_SCREEN;
+  const now = Date.now();
+  if (screenCache && now - screenCache.at < SCREEN_CACHE_MS) return screenCache.screen;
+  let screen: Screen = NO_SCREEN;
+  try { screen = panesOnScreen(); } catch { /* no tmux: say everything */ }
+  screenCache = { at: now, screen };
+  return screen;
+}
+
+/**
+ * The Lantern's watch, said once per finding — see notePolicy.ts for the rule.
+ *
+ * One card, keyed `lantern`: an announcement interrupts (critical only when
+ * something new is BLOCKED, normal for a prompt left open, a forgotten claim or
+ * a window gone), a change with nothing new redraws the card without a sound,
+ * and an empty board removes it.
+ */
+let lanternMemory = lanternState();
+export function __resetLanternMemory() { lanternMemory = lanternState(); }
+export function pushLanternFindings<F extends LanternFinding>(
+  all: F[],
+  notice: (f: F[]) => { title: string; body: string; pane?: string } | null,
+  now = Date.now(),
+) {
+  const step = lanternStep(all, lanternMemory, now, screenNow());
+  if (step.act === "none") return;
+  if (step.act === "clear") { deliver("", "", 0, undefined, { key: "lantern", clear: true, source: "lantern" }); return; }
+  const n = notice(step.findings);
+  if (!n) return;
+  if (step.act === "update") {
+    deliver(n.title, n.body, 1, n.pane, { key: "lantern", update: true, panes: step.panes, source: "lantern" });
+    return;
+  }
+  deliver(n.title, n.body, step.urgency, n.pane, { key: "lantern", panes: step.panes, source: "lantern" });
 }
 
 export function pushReminder(id: string, title: string, when: string) {
-  if (shouldSend(`remind:${id}`)) deliver(`⏰ ${title}`, when, 2, undefined, { kind: "reminder", id });
+  if (shouldSend(`remind:${id}`)) deliver(`⏰ ${title}`, when, 2, undefined, { kind: "reminder", id, source: "reminder" });
 }
 
 /**
@@ -431,6 +487,8 @@ let paneCacheAt = 0;
  *  by the time anybody looks. */
 const PANE_CACHE_MS = 5_000;
 
+const errorStreaks = new ErrorStreaks();
+
 /** Inspect an event and fire an alert if it warrants one. */
 export function maybeAlert(e: WatchEvent) {
   const agent = describeAgent(e);
@@ -446,7 +504,7 @@ export function maybeAlert(e: WatchEvent) {
       deliver(
         "⏳ Approval needed",
         `${agent} is waiting on a permission request${e.tool_name ? ` (${e.tool_name})` : ""}.`,
-        2, pane,
+        2, pane, { source: "gate" },
       );
     return;
   }
@@ -467,32 +525,48 @@ export function maybeAlert(e: WatchEvent) {
     // falls through to 1 and still lands in the list with its pane. A stale
     // string here loses a promotion; a stale string there INVENTED an urgent
     // interrupt out of a command that had worked.
-    const urgency = /needs your (permission|approval)/i.test(msg) ? 2
-      : /usage limit reset/i.test(msg) ? 0
+    //
+    // "Waiting for your input" is 0 as well, and it is the bulk of these: the
+    // turn ended and the prompt is open, which the board already shows on the
+    // agent's own row. A prompt left open for an hour is the Lantern's to say,
+    // once. At 1 it was a sound and a badge per turn per agent — the largest
+    // single source of rows on a desk running five of them.
+    const blocking = /needs your (permission|approval)/i.test(msg);
+    let urgency: 0 | 1 | 2 = blocking ? 2
+      : /usage limit reset|waiting for your input/i.test(msg) ? 0
         : 1;
-    if (shouldSend(`notify:${e.session_id}:${msg}`)) deliver(`🔔 ${msg}`, agent, urgency, pane);
+    // The pane somebody is typing in does not need to be announced to them. A
+    // blockage is still recorded when its terminal has focus, silently; a
+    // prompt waiting in a pane that is merely on screen is not recorded at all.
+    if (pane) {
+      const screen = screenNow();
+      if (blocking && screen.focused.has(pane)) urgency = 0;
+      else if (!blocking && screen.shown.has(pane)) return;
+    }
+    if (shouldSend(`notify:${e.session_id}:${msg}`)) deliver(`🔔 ${msg}`, agent, urgency, pane, { source: blocking ? "gate" : "agents" });
     return;
   }
-  if (e.is_error) {
-    // Urgency 0: it goes in the list, with its pane, and interrupts nothing.
-    //
-    // A failed tool call does not earn a human, and the measurement is not
-    // close. Over 8 days, 465 error events: 464 were followed by another event
-    // from the same session within 60 seconds and all 465 within five minutes.
-    // ZERO were the last thing a session ever did. The agent had already
-    // recovered before the popup finished animating — which is his report,
-    // exactly: "when I open the conversation I don't see that anything failed".
-    //
-    // At 2 this was `requireInteraction` on the desk, `max` on the phone and
-    // `-u critical` on notify-send: a popup that stays until dismissed by hand,
-    // 140 times a day, for a grep that matched nothing. The notification he
-    // actually needs — an agent waiting on him — was three lines above at 1,
-    // expiring quietly while he cleared the sixty that were not.
-    //
-    // No list of benign error strings, and that is deliberate. Classification
-    // is the trap the marker scan fell into; demotion needs no vocabulary and
-    // cannot go stale.
-    if (shouldSend(`err:${e.session_id}:${e.tool_name}`))
-      deliver("❌ Tool error", `${agent} — ${e.tool_name ?? "tool"} failed${e.error_text ? `: ${e.error_text.slice(0, 200)}` : ""}.`, 0, pane);
+  // A failed tool call is never news by itself — see the measurement below and
+  // notePolicy.ts. What reaches a person is a streak of them in one session, or
+  // a turn that ENDED on one; everything else is the session's own activity.
+  //
+  // It used to be a row per failure at urgency 0: silent, but still a card in
+  // the list for every grep that matched nothing, and on a busy desk the list
+  // was mostly those. The measurement that demoted them stands, and is why they
+  // are now gone rather than quiet:
+  //
+  // Over 8 days, 465 error events: 464 were followed by another event from the
+  // same session within 60 seconds and all 465 within five minutes. ZERO were
+  // the last thing a session ever did. The agent had already recovered before
+  // the popup finished animating.
+  const failed = errorStreaks.note(e);
+  if (!failed) return;
+  const why = failed.text ? `: ${failed.text}` : "";
+  const failedKey = `errors:${e.session_id}`;
+  if (failed.kind === "streak") {
+    if (shouldSend(`streak:${e.session_id}`))
+      deliver("❌ Keeps failing", `${agent} — ${failed.count} ${failed.tool} calls failed in a row${why}`, 1, pane, { key: failedKey, source: "errors" });
+  } else if (shouldSend(`stopped:${e.session_id}`)) {
+    deliver("⏹ Stopped on an error", `${agent} — the turn ended right after ${failed.tool} failed${why}`, 1, pane, { key: failedKey, source: "errors" });
   }
 }
