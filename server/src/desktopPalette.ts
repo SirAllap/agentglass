@@ -28,9 +28,16 @@ export interface DesktopPalette {
   theme: DesktopTheme;
 }
 
+/* Under HOME, never XDG_STATE_HOME: that is where Omarchy's theme switch
+   writes it (`$HOME/.local/state/omarchy/current`, spelled out in the script),
+   and every terminal config it ships includes it from that same path. Reading
+   XDG_STATE_HOME made an instance started with its own state directory — an
+   isolated second copy of this app — see no desktop at all. Only read, so a
+   copy that is isolated everywhere else still writes nothing outside its own
+   directories. `process.env.HOME` first because Bun's homedir() keeps the
+   value the process started with. */
 function omarchyDir(): string {
-  const state = process.env.XDG_STATE_HOME || join(homedir(), ".local", "state");
-  return join(state, "omarchy", "current");
+  return join(process.env.HOME || homedir(), ".local", "state", "omarchy", "current");
 }
 
 /** `tokyo-night` reads as `Tokyo Night`, the way the desktop's own menu shows it. */
@@ -66,7 +73,7 @@ export function desktopPalette(): DesktopPalette | null {
   return omarchy();
 }
 
-/** For a test that points XDG_STATE_HOME somewhere else between cases. */
+/** For a test that points HOME somewhere else between cases. */
 export function __forgetDesktopPalette(): void { cache = null; }
 
 /**
