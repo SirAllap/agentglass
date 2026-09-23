@@ -59,6 +59,7 @@ import { mouseModeGuard, type MouseModeGuard } from "../lib/mouseModeGuard.ts";
 import { CloseButton, CloseIcon } from "./CloseButton.tsx";
 import { FindArrow } from "./FindBar.tsx";
 import { PluckPalette } from "./terminal/PluckPalette.tsx";
+import { edgeMask, useTabStripScroll } from "../lib/tabStrip.ts";
 
 const ROOT_KEY = "agentglass.terminalRoot";
 /** The repo the terminal view last used — what a docked console should open
@@ -2517,6 +2518,10 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const [pendingWindow, setPendingWindow] = useState<string | null>(null);
   useEffect(() => { setPendingWindow(null); }, [tmuxWindows]);
   const activeWindow = pendingWindow ?? tmuxWindows.find((w) => w.active)?.id ?? null;
+  // The strip scrolls to whichever tab is lit, however it got lit — a click
+  // here or the prefix in the pane. Keyed on the names too: a rename can push
+  // the lit tab off the edge without the active window changing.
+  const tabStrip = useTabStripScroll(activeWindow, tmuxWindows.map((w) => `${w.id}:${w.name}`).join("|"));
   const tmuxClient = sess?.tmuxClient ?? null;
   /*
    * The window is bigger than the pane you can see.
@@ -2977,7 +2982,13 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                   // input is excluded by the handler, so it can still be typed
                   // in; it hands focus back on close (see below).
                   <div className="shrink-0 flex items-stretch border-b" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
-                    <div onMouseDown={keepTermFocus} className="min-w-0 flex-1 flex items-center gap-2 px-3 py-0.5 overflow-x-auto agw-noscrollbar">
+                    {/* The wheel scrolls it sideways and the lit tab is kept
+                        on screen (see lib/tabStrip.ts). The scrollbar stays
+                        hidden — it would take a row of its own — so the side
+                        with tabs past it fades instead: that fade is the only
+                        thing that says there is more. */}
+                    <div ref={tabStrip.ref} onMouseDown={keepTermFocus} className="min-w-0 flex-1 flex items-center gap-2 px-3 py-0.5 overflow-x-auto agw-noscrollbar"
+                      style={{ maskImage: edgeMask(tabStrip.edges), WebkitMaskImage: edgeMask(tabStrip.edges) }}>
                     <span
                       title={prefixLive ? "tmux is waiting for the rest of the sequence" : `tmux prefix: ${(sess?.tmuxPrefix ?? []).join(" or ") || "unknown"}`}
                       className="shrink-0 px-1.5 py-0.5 rounded-md text-[10px] font-semibold tabular-nums transition-colors duration-75"
@@ -3187,6 +3198,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                            the tab you dropped on and pushes the rest along, so
                            the strip stays 1..N. */
                         <div key={w.id}
+                          data-window={w.id}
                           draggable
                           onDragStart={(e) => {
                             setDragging(w.id);
@@ -3226,7 +3238,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                             focusTerm();
                           }}
                           onDoubleClick={() => setRenaming(w.id)}
-                          title={`Window ${w.index}${w.flags ? ` (${w.flags})` : ""} — double-click to rename, drag to reorder`}
+                          title={`${w.name || "shell"} — window ${w.index}${w.flags ? ` (${w.flags})` : ""}. Double-click to rename, drag to reorder`}
                           className={`group flex items-center gap-1.5 px-1 py-px text-[10.5px] cursor-pointer shrink-0 transition-colors${w.id === activeWindow ? " font-semibold" : ""}`}
                           style={{
                             ...(w.id === activeWindow ? { color: "var(--primary-hover)" } : { color: "var(--text2)" }),
@@ -3293,8 +3305,12 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                                   strip whose whole point is that it is only
                                   names. The name itself goes green: same fact,
                                   same colour, nothing added to the row. */}
+                              {/* Cut at 16 characters: one long name used to
+                                  push every tab after it off the row. The whole
+                                  name is in the tab's tooltip. */}
                               <span
-                                title={!bell && w.agentDone ? "Agent finished — not seen yet" : undefined}
+                                className="inline-block max-w-[16ch] truncate align-bottom"
+                                title={!bell && w.agentDone ? `${w.name || "shell"} — agent finished, not seen yet` : undefined}
                                 style={!bell && w.agentDone
                                   ? { color: "var(--success, #98c379)", fontWeight: 600 }
                                   : undefined}>
