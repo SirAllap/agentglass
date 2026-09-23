@@ -20,7 +20,7 @@
 // origin and no port to contend for. Only one instance runs now (see the lock
 // below), but the origin is what makes the store survive a restart.
 
-const { app, BrowserWindow, Menu, WebContentsView, clipboard, dialog, ipcMain, nativeImage, protocol, screen, session, shell } = require("electron");
+const { app, BrowserWindow, Menu, WebContentsView, clipboard, dialog, ipcMain, nativeImage, nativeTheme, protocol, screen, session, shell } = require("electron");
 const { spawn } = require("child_process");
 const http = require("http");
 const fs = require("fs");
@@ -445,11 +445,38 @@ function readWindowState() {
       y: APP_PLACES_ITS_WINDOW && Number.isFinite(s.y) ? s.y : undefined,
       max: s.max === true,
       full: s.full === true,
+      bg: windowBackground(s.bg),
+      bgSystem: s.bgSystem && windowBackground(s.bgSystem.dark) && windowBackground(s.bgSystem.light)
+        ? { dark: /** @type {string} */ (windowBackground(s.bgSystem.dark)), light: /** @type {string} */ (windowBackground(s.bgSystem.light)) }
+        : null,
     };
   } catch {
-    return { width: 1440, height: 900, max: false, full: false };
+    return { width: 1440, height: 900, max: false, full: false, bg: null, bgSystem: null };
   }
 }
+
+/**
+ * The theme's background, as the window paints it before the page does.
+ *
+ * `backgroundColor` is the only thing in the window until the renderer's first
+ * frame, and a fixed one — the violet-black this used to hard-code — was a
+ * flash of the wrong colour on every launch of every theme that was not that
+ * one, white themes worst. The renderer reports its background on every paint
+ * of a theme (web/src/lib/themes.ts); it is kept beside the window's size and
+ * handed to the next window. Only a plain #rrggbb is taken.
+ * @param {unknown} c
+ * @returns {string | null}
+ */
+function windowBackground(c) {
+  return typeof c === "string" && /^#[0-9a-f]{6}$/i.test(c) ? c.toLowerCase() : null;
+}
+/** The last background the renderer reported, saved with the window state.
+ *  @type {string | null} */
+let windowBg = null;
+/** Both grounds, when the theme follows the OS: the next window picks by what
+ *  the OS says then, as the page does.
+ *  @type {{ dark: string, light: string } | null} */
+let windowBgSystem = null;
 
 /*
  * Why the window stopped being maximised — written down, because nobody is
@@ -510,9 +537,10 @@ function saveWindowState(win) {
     // for ever after — the window would come back maximised-sized and then have
     // nowhere to unmaximise to.
     const b = win.getNormalBounds();
+    const ground = { ...(windowBg ? { bg: windowBg } : {}), ...(windowBgSystem ? { bgSystem: windowBgSystem } : {}) };
     const state = APP_PLACES_ITS_WINDOW
-      ? { ...b, max, full }
-      : { width: b.width, height: b.height, max, full };
+      ? { ...b, max, full, ...ground }
+      : { width: b.width, height: b.height, max, full, ...ground };
     fs.mkdirSync(CONFIG_DIR, { recursive: true });
     fs.writeFileSync(WINDOW_CFG, JSON.stringify(state, null, 2) + "\n");
   } catch { /* a window state is not worth failing a close over */ }
@@ -3603,11 +3631,15 @@ function guardWebviews(win) {
 function createWindow() {
   const st = readWindowState();
   const place = onSomeDisplay(st, screen) ? { x: st.x, y: st.y } : {};
+  windowBg = st.bg;
+  windowBgSystem = st.bgSystem;
+  const ground = st.bgSystem ? (nativeTheme.shouldUseDarkColors ? st.bgSystem.dark : st.bgSystem.light) : st.bg;
   const win = new BrowserWindow({
     width: st.width,
     height: st.height,
     ...place,
-    backgroundColor: "#0f0a1a",
+    // Until a theme has been painted once: the default theme's own ground.
+    backgroundColor: ground || "#0d1117",
     title: "agentglass",
     autoHideMenuBar: true,
     /*
@@ -3913,6 +3945,21 @@ app.whenReady().then(async () => {
      before the sidecar would freeze a false forever and go back to asking the
      network — the /health this exists to remove. */
   ipcMain.on("ag:sidecarUp", (e) => { e.returnValue = sidecarUp === true; });
+  // The theme's background, on every paint of a theme — see windowBackground.
+  // Painted on the window now, so a resize edge matches, and saved for the next.
+  ipcMain.on("ag:setWindowBackground", (e, color, both) => {
+    const bg = windowBackground(color);
+    const dark = both && typeof both === "object" ? windowBackground(both.dark) : null;
+    const light = both && typeof both === "object" ? windowBackground(both.light) : null;
+    const sys = dark && light ? { dark, light } : null;
+    if (!bg || (bg === windowBg && JSON.stringify(sys) === JSON.stringify(windowBgSystem))) return;
+    windowBg = bg;
+    windowBgSystem = sys;
+    const win = BrowserWindow.fromWebContents(e.sender);
+    if (!win || win.isDestroyed()) return;
+    try { win.setBackgroundColor(bg); } catch { /* a window on its way out */ }
+    saveWindowState(win);
+  });
   // The browser element-picker's copy/screenshot, done on the main-process
   // clipboard so it works while the <webview> guest holds focus — the preload
   // explains why navigator.clipboard cannot. Each returns whether it stuck, so

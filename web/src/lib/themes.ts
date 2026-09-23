@@ -164,7 +164,8 @@ export function applyTheme(id: string, { sync = false } = {}) {
 
 /**
  * Leave the palette just painted where the launch cover can read it before the
- * bundle loads (see bootPaint.ts).
+ * bundle loads (see bootPaint.ts), and tell the desktop shell its background,
+ * which it paints the window with before the page has drawn anything at all.
  */
 function rememberPaint(id: string, keys: string[]) {
   const style = document.documentElement.style;
@@ -176,7 +177,16 @@ function rememberPaint(id: string, keys: string[]) {
   const system = themeMode() === "system"
     ? { dark: bootEntry(SERIOUS_DARK, paintOf(SERIOUS_DARK)), light: bootEntry(SERIOUS_LIGHT, paintOf(SERIOUS_LIGHT)) }
     : undefined;
-  writeBootPaint({ v: 1, ...bootEntry(id, vars), ...(system ? { system } : {}) });
+  if (!writeBootPaint({ v: 1, ...bootEntry(id, vars), ...(system ? { system } : {}) })) return;
+  if (vars["--bg"]) {
+    // In system mode both grounds go, and the shell picks by the OS at the next
+    // launch — the same choice the boot script makes for the page.
+    const both = system ? { dark: system.dark.vars["--bg"] ?? "", light: system.light.vars["--bg"] ?? "" } : undefined;
+    try {
+      (window as unknown as { agentglass?: { setWindowBackground?: (c: string, both?: { dark: string; light: string }) => void } })
+        .agentglass?.setWindowBackground?.(vars["--bg"], both);
+    } catch { /* an older shell without the call: its window keeps the default */ }
+  }
 }
 
 /** What applyTheme would set for a listed theme, accent included, without

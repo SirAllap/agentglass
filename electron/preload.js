@@ -112,6 +112,12 @@ contextBridge.exposeInMainWorld("agentglass", {
   sidecarUp: () => {
     try { return ipcRenderer.sendSync("ag:sidecarUp") === true; } catch { return false; }
   },
+  /** The theme's background, for the window to paint before the page does at
+   *  the next launch — and in "system" mode both grounds, for the OS to pick
+   *  between. Fire-and-forget: a theme change never waits on the shell. */
+  setWindowBackground: (/** @type {string} */ color, /** @type {{ dark?: string, light?: string } | undefined} */ both) =>
+    ipcRenderer.send("ag:setWindowBackground", String(color ?? ""),
+      both && typeof both === "object" ? { dark: String(both.dark ?? ""), light: String(both.light ?? "") } : null),
   /** @param {(p: unknown) => void} fn */
   onServerFailed: (fn) => {
     /** @type {IpcListener} */

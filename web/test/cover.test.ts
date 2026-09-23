@@ -345,6 +345,7 @@ describe("what applyTheme leaves for it", () => {
   if (!(globalThis as any).location) (globalThis as any).location = { hostname: "localhost", origin: "http://localhost:4000" };
   const store = new Map<string, string>();
   const style = new Map<string, string>();
+  let told: string[] = [];
   const saved: Record<string, unknown> = {};
   const stubs: Record<string, unknown> = {
     localStorage: memoryStorage(store),
@@ -355,13 +356,14 @@ describe("what applyTheme leaves for it", () => {
       },
     },
     getComputedStyle: () => ({ getPropertyValue: (k: string) => style.get(k) ?? "" }),
+    window: { agentglass: { setWindowBackground: (c: string) => { told.push(c); } } },
   };
   beforeAll(() => { for (const [k, v] of Object.entries(stubs)) { saved[k] = (globalThis as any)[k]; (globalThis as any)[k] = v; } });
   afterAll(() => { for (const [k, v] of Object.entries(saved)) (globalThis as any)[k] = v; });
 
   test("a listed theme round-trips: what the boot script puts back is what was painted", async () => {
     const { applyTheme } = await import("../src/lib/themes.ts");
-    store.clear(); style.clear();
+    store.clear(); style.clear(); told = [];
     applyTheme("porcelain");
     const saved = JSON.parse(store.get(BOOT_PAINT_KEY)!) as BootPaint;
     expect(saved.id).toBe("porcelain");
@@ -370,6 +372,8 @@ describe("what applyTheme leaves for it", () => {
     const back = boot(Object.fromEntries(store));
     for (const [k, v] of style) expect(back.props.get(k), k).toBe(v);
     expect(back.attrs.get("data-theme")).toBe("porcelain");
+    // And the desktop shell heard the background it will open the next window on.
+    expect(told).toEqual([style.get("--bg")!]);
   });
 
   test("in system mode both answers are left, each with its own background", async () => {
@@ -485,3 +489,21 @@ describe("one mark lands, and it is the title bar's", () => {
 
 });
 
+describe("the window's own ground (electron/main.js)", () => {
+  const main = src("../../electron/main.js");
+  const body = main.slice(main.indexOf("function windowBackground(c) {"), main.indexOf("\n}\n", main.indexOf("function windowBackground(c) {")) + 2);
+  const windowBackground = new Function(`${body}; return windowBackground;`)() as (c: unknown) => string | null;
+
+  test("takes a plain #rrggbb, lowercased, and nothing else", () => {
+    expect(windowBackground("#0D1117")).toBe("#0d1117");
+    for (const bad of ["#fff", "red", "#12345g", "#0d1117ff", "url(x)", "", null, 42, { toString: () => "#000000" }]) {
+      expect(windowBackground(bad), String(bad)).toBeNull();
+    }
+  });
+
+  test("opens the next window on it, and in system mode on the ground the OS is in", () => {
+    const create = main.slice(main.indexOf("function createWindow() {"), main.indexOf("new BrowserWindow({", main.indexOf("function createWindow() {")));
+    expect(create).toContain("nativeTheme.shouldUseDarkColors ? st.bgSystem.dark : st.bgSystem.light");
+    expect(main).toMatch(/backgroundColor: ground \|\| "#0d1117"/);
+  });
+});
