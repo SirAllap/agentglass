@@ -224,9 +224,12 @@ const TIMEOUT_MS: Record<BrowserOp, number> = {
   /* One subtree read in the page — cheaper than `observe`, same patience. */
   region: 15_000,
   /* The sum, not a guess: a navigation's 40 s cap + the 15 s most a settle
-     may be asked for + the 12 s the shell gets for a picture (SHELL_SHOT_MS)
-     + the CDP round trips that enable and disable four domains. */
-  checkup: 75_000,
+     may be asked for, which its loop can overrun by a 2 s drain and a 1 s
+     poll + the reads (7 s) + the 12 s the shell gets for a picture
+     (SHELL_SHOT_MS) + four enables and four disables at 3 s each: about
+     100 s. It was 75 s, and past that the relay answered "timeout" while the
+     panel still held the domains on. Below the CLI's own 120 s. */
+  checkup: 110_000,
   /* The clipboard is a round trip; a snapshot is Chromium serialising every
      subresource the page pulled in. */
   clipboard: 15_000, save: 60_000, headers: 15_000,

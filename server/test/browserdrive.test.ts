@@ -495,7 +495,12 @@ describe("§16 — origins, read-only, audit, redaction", () => {
     const src = readFileSync(new URL("../src/browserdrive.ts", import.meta.url), "utf8");
     const table = src.slice(src.indexOf("const TIMEOUT_MS: Record<BrowserOp, number> = {"));
     const block = table.slice(0, table.indexOf("\n};"));
-    expect(block).toMatch(/\n  checkup: 75_000,/);
+    /* The worst case, step by step, is about 100 s (four enables and four
+       disables at 3 s, 40 s of navigation, a 15 s cap whose loop can overrun
+       it by a drain and a poll, the reads, a 12 s shot). At 75 s the relay
+       answered "timeout" while the panel still held the domains on. Under the
+       CLI's own 120 s. */
+    expect(block).toMatch(/\n  checkup: 110_000,/);
   });
 
   test("every op OBSERVE_OPS does not name is acting by default", () => {
