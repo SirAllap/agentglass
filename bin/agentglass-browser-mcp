@@ -1070,6 +1070,7 @@ TOOLS = [
                 "url": {"type": "string"},
                 "reload": {"type": "boolean"},
                 "noShot": {"type": "boolean"},
+                "settleMs": {"type": "integer", "description": "how long to wait for quiet at most (default 5000, 0..15000)"},
             },
         },
     },

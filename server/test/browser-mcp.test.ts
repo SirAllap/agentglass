@@ -259,22 +259,22 @@ describe.skipIf(!HAVE_PY)("browser_checkup", () => {
     expect(cli).toContain("CHECKUP_SHOTS_KEPT = 20");
   });
 
-  test("exists, and its url, reload and noShot reach the window", async () => {
+  test("exists, and its url, reload, noShot and settleMs reach the window", async () => {
     await openWindow();
     asked = []; askedArgs = [];
     answers = { checkup: { ok: true, value: { verdict: "ok", url: "http://localhost:5173/", title: "Orbit" } } };
     const said = await talk([
       hello, ready, { jsonrpc: "2.0", id: 2, method: "tools/list" },
       { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "browser_checkup", arguments: { url: "http://localhost:5173/", noShot: true, shared: true } } },
-      { jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "browser_checkup", arguments: { reload: true, shared: true } } },
+      { jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "browser_checkup", arguments: { reload: true, settleMs: 2000, shared: true } } },
     ]);
     const tools = (said[1]!.result as { tools: { name: string; inputSchema: { properties?: Record<string, unknown> } }[] }).tools;
     const tool = tools.find((t) => t.name === "browser_checkup");
     expect(tool).not.toBeUndefined();
-    expect(Object.keys(tool!.inputSchema.properties ?? {})).toEqual(expect.arrayContaining(["url", "reload", "noShot"]));
+    expect(Object.keys(tool!.inputSchema.properties ?? {})).toEqual(expect.arrayContaining(["url", "reload", "noShot", "settleMs"]));
     expect(asked).toEqual(["checkup", "checkup"]);
     expect(askedArgs[0]).toMatchObject({ url: "http://localhost:5173/", noShot: true });
-    expect(askedArgs[1]).toMatchObject({ reload: true });
+    expect(askedArgs[1]).toMatchObject({ reload: true, settleMs: 2000 });
     const text = (said[2]!.result as { content: { text: string }[] }).content[0]!.text;
     expect(JSON.parse(text).verdict).toBe("ok");
   });
