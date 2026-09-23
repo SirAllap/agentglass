@@ -469,6 +469,60 @@ describe("§16 — origins, read-only, audit, redaction", () => {
     expect("error" in parseAsk("cookies", { set: { name: "a", value: "b" } })).toBe(true);
   });
 
+  test("shot: marks is a flag and combines with a crop or a highlight", () => {
+    const ok = parseAsk("shot", { marks: true, selector: "#panel", highlight: "#status" });
+    if (!("ask" in ok)) throw new Error(ok.error);
+    expect(ok.ask.args).toMatchObject({ marks: true, selector: "#panel", highlight: "#status" });
+    expect("error" in parseAsk("shot", { marks: "yes" })).toBe(true);
+  });
+
+  test("html: clean is a flag", () => {
+    const ok = parseAsk("html", { selector: "body", clean: true });
+    if (!("ask" in ok)) throw new Error(ok.error);
+    expect(ok.ask.args).toMatchObject({ selector: "body", clean: true });
+    expect("error" in parseAsk("html", { selector: "body", clean: "yes" })).toBe(true);
+  });
+
+  test("dialog: a text alone arms an accept, and the replayed line says the text was withheld", () => {
+    const r = parseAsk("dialog", { text: "ada" });
+    if (!("ask" in r)) throw new Error(r.error);
+    expect(r.ask.args).toEqual({ text: "ada", accept: true });
+    const script = auditAsScript([{ ts: 1, op: "dialog", args: { accept: true, text: "[redacted]" }, ok: true } as any]);
+    expect(script).toContain("dialog --accept --text '<withheld>'");
+    expect(script).not.toContain("[redacted]");
+  });
+
+  test("handoff: arm, check or cancel — exactly one, with sane bounds", () => {
+    const arm = parseAsk("handoff", { reason: "Enter the code from your phone", until: "#welcome" });
+    if (!("ask" in arm)) throw new Error(arm.error);
+    expect(arm.ask.args).toEqual({ reason: "Enter the code from your phone", until: "#welcome" });
+    const chk = parseAsk("handoff", { check: true, waitMs: 999_999 });
+    if (!("ask" in chk)) throw new Error(chk.error);
+    expect(chk.ask.args).toEqual({ check: true, waitMs: 25_000 });
+    expect("ask" in parseAsk("handoff", { cancel: true })).toBe(true);
+    expect("error" in parseAsk("handoff", {})).toBe(true);
+    expect("error" in parseAsk("handoff", { reason: "x", check: true })).toBe(true);
+    expect("error" in parseAsk("handoff", { reason: "two\nlines" })).toBe(true);
+    expect("error" in parseAsk("handoff", { reason: "x".repeat(201) })).toBe(true);
+    expect("error" in parseAsk("handoff", { check: true, until: "#a" })).toBe(true);
+    expect("error" in parseAsk("handoff", { check: "yes" })).toBe(true);
+  });
+
+  test("dialog: accept or dismiss, never both; text needs an accept; always needs a side", () => {
+    const ok = parseAsk("dialog", { dismiss: true, always: true });
+    if (!("ask" in ok)) throw new Error(ok.error);
+    expect(ok.ask.args).toEqual({ dismiss: true, always: true });
+    const said = parseAsk("dialog", { accept: true, text: "ada" });
+    if (!("ask" in said)) throw new Error(said.error);
+    expect(said.ask.args).toEqual({ accept: true, text: "ada" });
+    expect("ask" in parseAsk("dialog", {})).toBe(true);
+    expect("error" in parseAsk("dialog", { accept: true, dismiss: true })).toBe(true);
+    expect("error" in parseAsk("dialog", { dismiss: true, text: "x" })).toBe(true);
+    expect("error" in parseAsk("dialog", { always: true })).toBe(true);
+    expect("error" in parseAsk("dialog", { accept: "yes" })).toBe(true);
+    expect("error" in parseAsk("dialog", { accept: true, text: 5 })).toBe(true);
+  });
+
   test("checkup: a url is checked like open's, the flags are flags, settleMs is clamped", () => {
     process.env.AGENTGLASS_BROWSER_ORIGINS = "localhost";
     const ok = parseAsk("checkup", { url: "http://localhost:5173/", noShot: true, settleMs: 99_999 });
@@ -740,7 +794,7 @@ describe("§15 — every verb that carries a value, not just `type`", () => {
      * deliberately absent — the comment on the table says why — and if it is
      * ever added this list must move with it.
      */
-    expect([...valueCarryingOpsForTest].sort()).toEqual(["cookies", "fill", "storage", "type"]);
+    expect([...valueCarryingOpsForTest].sort()).toEqual(["cookies", "dialog", "fill", "storage", "type"]);
   });
 
   test("the replay script emits a real `fill`, with the pairs and the marker", () => {
@@ -1041,6 +1095,10 @@ describe("several verbs in one call", () => {
       if (before === undefined) delete process.env.AGENTGLASS_BROWSER_READONLY;
       else process.env.AGENTGLASS_BROWSER_READONLY = before;
     }
+  });
+
+  test("an armed prompt answer is not written to the audit log", () => {
+    expect(redactAskForTest("dialog", { accept: true, text: "482913" }, false).text).not.toContain("482913");
   });
 
   test("the ask side is span-scoped too — a `type` keeps the words around a token", () => {

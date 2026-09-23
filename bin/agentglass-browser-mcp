@@ -33,6 +33,9 @@ is installed, not one where a package tree was.
 Environment:
     AGENTGLASS_SERVER   default http://localhost:4000
     AGENTGLASS_TOKEN    only needed if the server was started with one
+    AGENTGLASS_MCP_TOOLS  full (default, every tool) | core (the everyday verbs plus
+                        one generic `browser` tool for the rest) | generic (only
+                        `browser {verb, args}`; verb "help" describes any verb)
 """
 import base64
 import json
@@ -286,7 +289,8 @@ TOOLS = [
         ),
         "inputSchema": {
             "type": "object",
-            "properties": {"url": {"type": "string", "description": "http(s) address"}},
+            "properties": {"url": {"type": "string", "description": "http(s) address"},
+                           "waitSlot": {"type": "number", "description": "When 12 pages are already awake, queue this many seconds (max 120) for a free slot instead of being refused."}},
             "required": ["url"],
         },
     },
@@ -1075,6 +1079,53 @@ TOOLS = [
         },
     },
     {
+        "name": "browser_dialog",
+        "description": (
+            "Answer the page's next confirm()/prompt(). They are answered for the page (yes) so it never "
+            "hangs; arm accept or dismiss BEFORE the click that asks. With neither, reports what was asked "
+            "last and what is armed. A navigation drops the plan."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "accept": {"type": "boolean"},
+                "dismiss": {"type": "boolean"},
+                "text": {"type": "string", "description": "What a prompt() is answered with when accepted."},
+                "always": {"type": "boolean", "description": "Every dialog, not only the next."},
+            },
+        },
+    },
+    {
+        "name": "browser_handoff",
+        "description": (
+            "Give the page to the person for what you must not do: a CAPTCHA, a 2FA code, a consent. "
+            "Call with `reason` (one line) and optionally `until` (a CSS selector, or a url fragment starting "
+            "with / or http) to put a banner with a Done button on the page; then call with `check: true` "
+            "(it waits up to 25 s per call) until `state` is not `waiting`: done, condition, navigated. "
+            "`cancel: true` takes the banner down."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "reason": {"type": "string"},
+                "until": {"type": "string"},
+                "check": {"type": "boolean"},
+                "waitMs": {"type": "integer", "description": "with check: how long to wait, at most 25000"},
+                "cancel": {"type": "boolean"},
+            },
+        },
+    },
+    {
+        "name": "browser_vitals",
+        "description": "Web vitals of the current page as data: LCP, CLS, INP, TTFB, FCP, each with a rating (good / needs-improvement / poor) by web.dev's thresholds, and a verdict. Cheaper and more exact than a screenshot of DevTools.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "browser_a11y",
+        "description": "An accessibility scan of the current page as data: controls with no accessible name, images without alt, heading levels that jump, missing lang and title — each with ids (eN) you can act on.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "browser_reload",
         "description": "Reload, ignoring the cache by default — with assets versioned by query string there is no other way to force a new bundle.",
         "inputSchema": {
@@ -1127,6 +1178,7 @@ TOOLS = [
             "properties": {
                 "profile": {"type": "string", "description": "An isolated context by name — see browser_profiles."},
                 "shared": {"type": "boolean", "description": "Open it in the person's own container instead of this client's — the old behaviour, on purpose."},
+                "waitSlot": {"type": "number", "description": "When 12 pages are already awake, queue this many seconds (max 120) for a free slot instead of being refused."},
                 "url": {"type": "string"}},
             "required": ["url"],
         },
@@ -1185,7 +1237,8 @@ TOOLS = [
         "description": "The markup of one element, not just its text — for choosing a selector without reading the source that built the page.",
         "inputSchema": {
             "type": "object",
-            "properties": {"selector": {"type": "string"}, "max": {"type": "number"}},
+            "properties": {"selector": {"type": "string"}, "max": {"type": "number"},
+                           "clean": {"type": "boolean", "description": "Markup a model can read: scripts, styles, svg paths and noise attributes out, with observe's eN ids on everything actionable."}},
             "required": ["selector"],
         },
     },
@@ -1308,6 +1361,7 @@ TOOLS = [
                 },
                 "highlight": {"type": "string", "description": "Draw a box around this element, on the image."},
                 "label": {"type": "string", "description": "A caption beside the highlight box."},
+                "marks": {"type": "boolean", "description": "Label every interactive thing in view with its observe id (eN), drawn on the image, and return the ids as `marks`. For canvas-heavy or visually ambiguous pages."},
                 "page": {"type": "string", "description": "A tab id, instead of the active tab."},
             },
         },
@@ -1315,6 +1369,66 @@ TOOLS = [
 ]
 
 VERB = {t["name"]: t["name"][len("browser_"):] for t in TOOLS}
+
+# ── THE TOOL LIST IS PART OF EVERY TURN ────────────────────────────────────
+#
+# Measured: all of TOOLS as `tools/list` sends it is ~70 KB, about 20k tokens
+# of schema a client re-reads on every turn whether or not it drives a page.
+# `core` keeps the verbs a task reaches for in the first minute and puts the
+# rest behind ONE tool, `browser {verb, args}`, so nothing is unreachable —
+# only unlisted. `generic` is that one tool alone. The default stays `full`:
+# a client written against the 68 names must not lose one on upgrade.
+CORE_TOOLS = (
+    "open", "read", "observe", "checkup", "click", "type", "fill", "press",
+    "scroll", "wait", "shot", "eval", "console", "network", "tabs", "newtab", "closetab",
+)
+
+
+def _generic_tool(listed=()):
+    """`listed` are the verbs the client already has as tools of their own."""
+    verbs = sorted(v for v in VERB.values() if v not in listed)
+    return {
+        "name": "browser",
+        "description": (
+            "Any browser verb by name, for the ones that are not listed as tools of their own: "
+            + ", ".join(verbs)
+            + ". `verb` is the name and `args` is that verb's arguments, exactly as the "
+            "browser_<verb> tool takes them. verb \"help\" with args {\"verb\": \"<name>\"} returns that "
+            "verb's description and schema; without it, the list of verbs."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "verb": {"type": "string", "description": "A verb name, or help."},
+                "args": {"type": "object", "description": "The verb's arguments."},
+            },
+            "required": ["verb"],
+        },
+    }
+
+
+def listed_tools(profile=None):
+    profile = (profile if profile is not None else os.environ.get("AGENTGLASS_MCP_TOOLS", "")).strip().lower()
+    if profile == "generic":
+        return [_generic_tool()]
+    if profile == "core":
+        return [t for t in TOOLS if VERB[t["name"]] in CORE_TOOLS] + [_generic_tool(CORE_TOOLS)]
+    return TOOLS
+
+
+def _generic_call(args):
+    verb = str(args.get("verb", "")).removeprefix("browser_")
+    inner = args.get("args") or {}
+    if not isinstance(inner, dict):
+        return {"content": [{"type": "text", "text": "args must be an object"}], "isError": True}
+    if verb == "help":
+        want = str(inner.get("verb", "")).removeprefix("browser_")
+        tool = next((t for t in TOOLS if VERB[t["name"]] == want), None)
+        text = json.dumps(tool) if tool else "verbs: " + ", ".join(sorted(VERB.values()))
+        return {"content": [{"type": "text", "text": text}]}
+    if f"browser_{verb}" not in VERB:
+        return {"content": [{"type": "text", "text": f"no such verb: {verb} — verb \"help\" lists them"}], "isError": True}
+    return run(f"browser_{verb}", inner)
 
 # Verbs about the LIST of tabs, or about the window's session, rather than
 # about a page inside one tab. Copied from bin/agentglass-browser's TAB_OPS,
@@ -1429,6 +1543,8 @@ def _no_tab(name, who):
 
 def run(name, args):
     """A tool call, as MCP content."""
+    if name == "browser":
+        return _generic_call(args)
     verb = VERB.get(name)
     if not verb:
         return {"content": [{"type": "text", "text": f"no such tool: {name}"}], "isError": True}
@@ -1615,6 +1731,13 @@ def run(name, args):
         else "own-container"))
 
     res = call(verb, body)
+    # `waitSlot`: queue for a free tab instead of being refused at 12 awake.
+    wait = args.get("waitSlot")
+    if verb in ("open", "newtab") and isinstance(wait, (int, float)) and wait > 0:
+        end = time.time() + min(float(wait), 120.0)
+        while not res.get("ok") and "pages awake at once" in (res.get("error") or "") and time.time() < end:
+            time.sleep(min(1.0, max(0.0, end - time.time())))
+            res = call(verb, body)
     # One retry, and only for the failure a retry can fix: no pane is mounted,
     # so nothing can answer until one is. "Not on screen" is deliberately NOT
     # retried — the capture works behind another view, and pulling the window
@@ -1707,7 +1830,8 @@ def run(name, args):
             return {"content": [{"type": "text", "text": "the page produced no image"}], "isError": True}
         return {"content": [
             {"type": "image", "data": data, "mimeType": "image/png"},
-            {"type": "text", "text": f"{value.get('title', '')}\n{value.get('url', '')}"},
+            {"type": "text", "text": f"{value.get('title', '')}\n{value.get('url', '')}"
+                + (f"\nmarks: {' '.join(value['marks'])}" if value.get("marks") else "")},
         ]}
     if verb == "checkup" and value.get("png"):
         # A path, not an image: the picture is evidence for later, and an image
@@ -1825,10 +1949,14 @@ def main():
                 ),
             })
         elif method == "tools/list":
-            reply(msg_id, {"tools": TOOLS})
+            reply(msg_id, {"tools": listed_tools()})
         elif method == "tools/call":
             params = msg.get("params") or {}
-            reply(msg_id, run(params.get("name", ""), params.get("arguments") or {}))
+            try:
+                result = run(params.get("name", ""), params.get("arguments") or {})
+            except Exception as e:  # one bad call must not end the session
+                result = {"content": [{"type": "text", "text": f"the tool failed: {type(e).__name__}: {e}"}], "isError": True}
+            reply(msg_id, result)
         elif method == "ping":
             reply(msg_id, {})
         else:

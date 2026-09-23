@@ -104,6 +104,8 @@ start)
     # into this instance's database (431 MB in half an hour, measured, and the
     # /tmp quota full), and the bench reads none of it.
     printf 'export AGENTGLASS_SCAN_DISABLED=1\n'
+    # HOME is the real one (the agents need it), so the skill refresh must not run.
+    printf 'export AGENTGLASS_SKILL_AUTOUPDATE=0\n'
     printf 'export SHELL=/bin/bash\n'
   } > "$DIR/launch.env"
   echo "$PORT" > "$DIR/port"

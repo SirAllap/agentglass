@@ -25,7 +25,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { loadavg, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { runArm, Session, type Exec } from "./bench.ts";
+import { runArm, Session, type Exec, type McpExec } from "./bench.ts";
 import { freshState, startFixtures, type BenchState } from "./fixtures.ts";
 import { buildResults, toMarkdown } from "./report.ts";
 import { TASKS } from "./tasks.ts";
@@ -109,6 +109,22 @@ function processExec(env: Record<string, string>): Exec {
   };
 }
 
+const MCP = join(ROOT, "bin", "agentglass-browser-mcp");
+
+function processMcp(env: Record<string, string>): McpExec {
+  return async (profile, messages) => {
+    const hello = { jsonrpc: "2.0", id: 0, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {} } };
+    const p = Bun.spawn(["python3", MCP], {
+      env: { ...env, AGENTGLASS_MCP_TOOLS: profile, AGENTGLASS_PROFILE: env.AGENTGLASS_PROFILE ?? "agx-bench-mcp" },
+      stdout: "pipe", stderr: "pipe", stdin: "pipe",
+    });
+    for (const m of [hello, ...messages]) p.stdin.write(`${JSON.stringify(m)}\n`);
+    await p.stdin.end();
+    const [stdout, stderr] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+    return { replies: stdout.split("\n").filter(Boolean).map((l) => JSON.parse(l)).slice(1), stdout, stderr };
+  };
+}
+
 function commit(): string {
   const sha = Bun.spawnSync(["git", "-C", ROOT, "rev-parse", "--short", "HEAD"]).stdout.toString().trim();
   const dirty = Bun.spawnSync(["git", "-C", ROOT, "status", "--porcelain", "--untracked-files=no"]).stdout.toString().trim();
@@ -119,6 +135,7 @@ export async function main(argv: string[]) {
   const o = parseOptions(argv);
   const env = cliEnv(o);
   const exec = processExec(env);
+  const mcp = processMcp(env);
   const fx = startFixtures(0);
   const control = {
     state: async (): Promise<BenchState> => structuredClone(fx.state),
@@ -133,11 +150,14 @@ export async function main(argv: string[]) {
     // which no later rep pays for, and would otherwise land on rep 1 alone.
     const warm = await exec([...globals, "open", fx.origin + "/"]);
     if (warm.exit !== 0) throw new Error(`the browser is not answering: ${(warm.stderr || warm.stdout).trim()}`);
+    // The MCP identity's tab, for the same reason: `browser_open` mints it, and
+    // a call that lands before its guest is ready fails on the first use only.
+    await mcp("core", [{ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "browser_open", arguments: { url: fx.origin + "/" } } }]);
     for (let rep = 1; rep <= o.reps; rep++) {
       for (const task of TASKS.filter((t) => o.tasks.includes(t.id))) {
         for (const arm of o.arms.filter((a) => a in task.arms)) {
           Object.assign(fx.state, freshState());
-          const s = new Session(exec, globals, fx.origin, control);
+          const s = new Session(exec, globals, fx.origin, control, undefined, mcp);
           const r = await runArm(task, arm, rep, s);
           runs.push(r);
           console.error(

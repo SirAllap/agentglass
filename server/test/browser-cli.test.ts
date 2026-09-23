@@ -30,7 +30,9 @@ const HAVE_PY = !!Bun.which("python3");
 let dir = "", base = "", proc: ReturnType<typeof Bun.spawn> | null = null;
 let ws: WebSocket | null = null;
 /** What the stand-in window should do with the next ask, by op. */
-let answers: Record<string, { ok: boolean; value?: unknown; error?: string }> = {};
+type Answer = { ok: boolean; value?: unknown; error?: string };
+/** A function answers differently each time it is asked: a slot that frees up. */
+let answers: Record<string, Answer | (() => Answer)> = {};
 /** Every ask the window was sent, so a test can assert on a retry. */
 let asked: string[] = [];
 /** The args of every ask, so a test can assert on what the CLI actually sent
@@ -90,7 +92,9 @@ async function openWindow() {
     if (frame.type !== "browser") return;
     asked.push(frame.data.op);
     askedArgs.push(frame.data.args ?? {});
-    const reply = answers[frame.data.op] ?? { ok: false, error: "the stand-in was not told what to say" };
+    const scripted = answers[frame.data.op];
+    const reply = (typeof scripted === "function" ? scripted() : scripted)
+      ?? { ok: false, error: "the stand-in was not told what to say" };
     await fetch(base + "/browser/result", {
       method: "POST",
       headers: { "content-type": "application/json", Origin: base },
@@ -430,6 +434,50 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     const r = await cli("--show", "shot", join(dir, "shot.png"));
     expect(r.code).toBe(0);
     expect(asked).toEqual(["shot", "shot", "shot"]);
+    expect(controls).toContainEqual({ cmd: "view", to: "browser" });
+  });
+
+  test("--wait-slot queues for a free slot instead of refusing, and only for that refusal", async () => {
+    await openWindow();
+    const full = { ok: false, error: "12 pages awake at once is the limit — each one is a live browser" };
+    let n = 0;
+    answers = { newtab: () => (++n < 3 ? full : { ok: true, value: { id: "t9", url: "u" } }) };
+    asked = [];
+    const waited = await cli("newtab", "http://localhost:5173/", "--wait-slot", "10");
+    expect(waited.code, waited.err).toBe(0);
+    expect(asked).toEqual(["newtab", "newtab", "newtab"]);
+    // Without it, the refusal stands, once.
+    n = -100; asked = [];
+    const plain = await cli("newtab", "http://localhost:5173/");
+    expect(plain.code).toBe(1);
+    expect(asked).toEqual(["newtab"]);
+    // A different refusal is not a full house and is not waited on.
+    answers = { newtab: { ok: false, error: "url must be an http(s) address" } };
+    asked = [];
+    const other = await cli("newtab", "http://localhost:5173/", "--wait-slot", "10");
+    expect(other.code).toBe(1);
+    expect(asked).toEqual(["newtab"]);
+  });
+
+  test("handoff arms once, checks until the person is done, and says so", async () => {
+    await openWindow();
+    let checks = 0;
+    answers = {
+      handoff: () => {
+        const a = askedArgs[askedArgs.length - 1] as Record<string, unknown>;
+        if (a.reason) return { ok: true, value: { state: "armed", url: "u", title: "t" } };
+        if (a.check) return { ok: true, value: { state: ++checks < 3 ? "waiting" : "done", url: "u", title: "t" } };
+        return { ok: true, value: { state: "cancelled" } };
+      },
+    };
+    asked = []; askedArgs = []; controls = [];
+    const r = await cli("handoff", "Enter the code", "--until", "#welcome");
+    expect(r.code, r.err).toBe(0);
+    expect(JSON.parse(r.out).state).toBe("done");
+    expect(asked).toEqual(["handoff", "handoff", "handoff", "handoff"]);
+    expect(verbArgs(0)).toMatchObject({ reason: "Enter the code", until: "#welcome" });
+    expect(verbArgs(1)).toMatchObject({ check: true, waitMs: 20_000 });
+    expect(verbArgs(1).reason).toBeUndefined();
     expect(controls).toContainEqual({ cmd: "view", to: "browser" });
   });
 
@@ -1479,6 +1527,34 @@ describe.skipIf(!HAVE_PY)("checkup, the dev loop in one call", () => {
     const both = await cliCache(cache, "checkup", "http://localhost:5173/", "--reload");
     expect(both.code).toBe(1);
     expect(asked).toEqual(["checkup", "checkup"]);
+  });
+
+  test("shot --marks reaches the window as a flag, and the ids come back in the answer", async () => {
+    await openWindow();
+    answers = { shot: { ok: true, value: { url: "u", title: "t", png: PNG, marks: ["e1", "e2"] } } };
+    askedArgs = []; asked = [];
+    const cache = mkdtempSync(join(dir, "cache-"));
+    const out = join(dir, "marked.png");
+    const r = await cliCache(cache, "shot", out, "--marks");
+    expect(r.code, r.err).toBe(0);
+    expect(verbArgs(0)).toMatchObject({ marks: true });
+    expect(r.out).toContain("e2");
+  });
+
+  test("dialog: the flags reach the window as booleans, and both sides are refused there", async () => {
+    await openWindow();
+    answers = { dialog: { ok: true, value: { armed: null, last: null } } };
+    askedArgs = []; asked = [];
+    const cache = mkdtempSync(join(dir, "cache-"));
+    const a = await cliCache(cache, "dialog", "--dismiss", "--always");
+    expect(a.code, a.err).toBe(0);
+    expect(verbArgs(0)).toEqual({ dismiss: true, always: true });
+    const b = await cliCache(cache, "dialog", "--accept", "--text", "ada");
+    expect(b.code, b.err).toBe(0);
+    expect(verbArgs(1)).toEqual({ accept: true, text: "ada" });
+    const both = await cliCache(cache, "dialog", "--accept", "--dismiss");
+    expect(both.code).toBe(1);
+    expect(asked).toEqual(["dialog", "dialog"]);
   });
 
   test("a failure's picture is written to a private file and the answer carries its path", async () => {

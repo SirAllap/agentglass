@@ -663,6 +663,10 @@ function sidecarEnv(port) {
     PATH: withBundledBin(process.env.PATH, { platform: process.platform, packaged: PACKAGED, resourcesPath: process.resourcesPath }),
     AGENTGLASS_PORT: String(port),
     AGENTGLASS_DIE_WITH_PARENT: "1",
+    // Opt-in for the server's skill refresh: an installed app only (a checkout
+    // run from a worktree must not push its older copy over the installed one),
+    // and an isolated instance says "0".
+    AGENTGLASS_SKILL_AUTOUPDATE: PACKAGED && process.env.AGENTGLASS_SKILL_AUTOUPDATE !== "0" ? "1" : "0",
     AGENTGLASS_WEB_DIR: DIST,
     /**
      * Always — remote access on or off.

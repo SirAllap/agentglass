@@ -74,7 +74,7 @@ export type BrowserOp =
   | "cdp" | "listeners" | "coverage" | "profiles" | "emulate" | "events" | "record" | "audit"
   | "debug" | "clock" | "download" | "settings" | "drag" | "upload" | "storage" | "permission"
   | "pdf" | "throttle" | "har" | "region" | "clipboard" | "save" | "headers" | "fake"
-  | "trace" | "intercept" | "checkup"
+  | "trace" | "intercept" | "checkup" | "dialog" | "handoff" | "vitals" | "a11y"
   | "inspect"
   | "whoami"
   | "health";
@@ -92,7 +92,7 @@ export const BROWSER_OPS: readonly BrowserOp[] = [
   "inspect",
   "clock", "download", "settings", "drag", "upload", "storage", "permission", "pdf",
   "throttle", "har", "region", "clipboard", "save", "headers", "fake", "trace", "intercept",
-  "checkup",
+  "checkup", "dialog", "handoff", "vitals", "a11y",
   "whoami",
   "health",
 ];
@@ -230,6 +230,10 @@ const TIMEOUT_MS: Record<BrowserOp, number> = {
      100 s. It was 75 s, and past that the relay answered "timeout" while the
      panel still held the domains on. Below the CLI's own 120 s. */
   checkup: 110_000,
+  dialog: 15_000,
+  /* One check waits up to 25 s inside the page; the CLI loops over checks. */
+  handoff: 45_000,
+  vitals: 15_000, a11y: 15_000,
   /* The clipboard is a round trip; a snapshot is Chromium serialising every
      subresource the page pulled in. */
   clipboard: 15_000, save: 60_000, headers: 15_000,
@@ -646,7 +650,7 @@ function readonlyMode(): boolean {
  *  quietly falling on the safe-to-run side because nobody classified it. */
 const OBSERVE_OPS: ReadonlySet<BrowserOp> = new Set([
   "read", "shot", "text", "html", "console", "network", "observe",
-  "tabs", "frames", "health", "waitfor", "wait",
+  "tabs", "frames", "health", "waitfor", "wait", "vitals", "a11y",
   /* `listeners` and a coverage READ only look. `cdp` is deliberately NOT
      here: the protocol can navigate, click, set a breakpoint and evaluate, so
      classifying it as observing would be a hole shaped exactly like the one
@@ -880,6 +884,12 @@ const VALUE_CARRYING: Record<string, (
      a comment rather than a command. */
   storage(out, args) {
     if (args.set === true && typeof args.value === "string") out.value = REDACTED;
+  },
+  /* What a prompt() is answered with is typed into a box the page chose, and
+     no selector says whether that box asked for a passcode. Position rule
+     again: the audit line says an answer was armed, never what it was. */
+  dialog(out, args) {
+    if (typeof args.text === "string") out.text = REDACTED;
   },
 };
 
@@ -1235,6 +1245,10 @@ export function auditAsScript(entries: AuditEntry[]): string {
       case "reload": line = "agentglass-browser reload"; break;
       case "checkup": line = has("url") ? `agentglass-browser checkup ${q(a.url)}` : a.reload === true ? "agentglass-browser checkup --reload" : null; break;
       case "back": case "forward": line = `agentglass-browser ${e.op}`; break;
+      case "dialog":
+        line = a.accept === true || a.dismiss === true
+          ? `agentglass-browser dialog --${a.accept === true ? "accept" : "dismiss"}${a.always === true ? " --always" : ""}${typeof a.text === "string" ? " --text '<withheld>'" : ""}` : null;
+        break;
       default: line = null;
     }
     if (line) { lines.push(line); acted++; }
@@ -2166,6 +2180,57 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
       }
       break;
     }
+    case "handoff": {
+      /* Three shapes: arm (reason, optional until), check (waitMs), cancel. */
+      const shapes = ["reason", "check", "cancel"].filter((k) => b[k] !== undefined);
+      if (shapes.length !== 1) return { error: "handoff takes exactly one of reason (arm), check or cancel" };
+      if (b.reason !== undefined) {
+        if (typeof b.reason !== "string" || !b.reason.trim() || b.reason.length > 200 || /[\r\n]/.test(b.reason)) {
+          return { error: "reason must be one short line saying what the person is needed for (at most 200 characters)" };
+        }
+        args.reason = b.reason.trim();
+        if (b.until !== undefined) {
+          if (typeof b.until !== "string" || !b.until.trim() || b.until.length > 300 || /[\r\n]/.test(b.until)) {
+            return { error: "until must be a short CSS selector, or a url fragment starting with / or http" };
+          }
+          args.until = b.until.trim();
+        }
+      } else {
+        if (b.until !== undefined) return { error: "until goes with the reason that arms the handoff" };
+        if (b.check !== undefined) {
+          if (b.check !== true) return { error: "check is a flag" };
+          args.check = true;
+          if (b.waitMs !== undefined) {
+            const n = Number(b.waitMs);
+            if (typeof b.waitMs !== "number" || !Number.isFinite(n)) return { error: "waitMs must be a number of milliseconds" };
+            args.waitMs = Math.min(25_000, Math.max(0, Math.round(n)));
+          }
+        } else {
+          if (b.cancel !== true) return { error: "cancel is a flag" };
+          args.cancel = true;
+        }
+      }
+      break;
+    }
+    case "dialog": {
+      /* Arms the answer to the next confirm/prompt of this page. With neither
+         flag it only reports: what was asked last, and what is armed. */
+      for (const k of ["accept", "dismiss", "always"] as const) {
+        if (b[k] === undefined) continue;
+        if (typeof b[k] !== "boolean") return { error: `${k} is a flag` };
+        args[k] = b[k];
+      }
+      if (args.accept === true && args.dismiss === true) return { error: "dialog takes accept or dismiss, not both" };
+      if (b.text !== undefined) {
+        if (typeof b.text !== "string" || b.text.length > 2000) return { error: "text must be a string of at most 2000 characters" };
+        if (args.dismiss === true) return { error: "text answers a prompt that is accepted; a dismissed one has none" };
+        args.text = b.text;
+        /* A text answers a prompt that is accepted: naming it arms an accept, not nothing. */
+        if (args.accept !== true) args.accept = true;
+      }
+      if (args.always === true && args.accept !== true && args.dismiss !== true) return { error: "always needs accept or dismiss" };
+      break;
+    }
     case "region": {
       if (!okSelector(b.selector)) return { error: "region needs a selector, or an id from an observation" };
       args.selector = b.selector;
@@ -2542,6 +2607,11 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
         if (!Number.isInteger(n) || n < 100 || n > 200_000) return { error: "max must be 100..200000" };
         args.max = n;
       }
+      /* Markup a model can read: scripts, styles, svg paths and noise attributes out. */
+      if (b.clean !== undefined) {
+        if (typeof b.clean !== "boolean") return { error: "clean is a flag" };
+        args.clean = b.clean;
+      }
       break;
     }
     case "waitfor": {
@@ -2747,6 +2817,11 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
         const label = typeof b.label === "string" ? b.label : "";
         if (!label || label.length > 200 || /[\r\n]/.test(label)) return { error: "label must be a short, single-line caption under 200 chars" };
         args.label = label;
+      }
+      /* Numbered `eN` labels on everything interactive in view (set-of-mark). */
+      if (b.marks !== undefined) {
+        if (typeof b.marks !== "boolean") return { error: "marks is a flag" };
+        args.marks = b.marks;
       }
       if (b.omitBackground !== undefined) {
         args.omitBackground = b.omitBackground === true || b.omitBackground === "true";

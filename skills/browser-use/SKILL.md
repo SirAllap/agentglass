@@ -92,13 +92,15 @@ once. "Nothing happened in thirty seconds" is an answer, not a failure.
 
 ```
 dev loop    checkup (did it break — errors from load on, failed requests, visible errors)
-look        observe · read · text · html · region · shot · frames · console · network
+measure     vitals (LCP/CLS/INP/TTFB/FCP, rated) · a11y (unlabelled controls, alt, heading jumps, lang)
+look        observe · read · text · html (--clean: scripts/styles out, eN ids in) · region · shot · frames · console · network
 page        resize · zoom (the one Ctrl+/Ctrl- move) · emulate · throttle
-act         click · type · select · check · fill · hover · dblclick · rightclick
-            focus · blur · press · scroll · drag · upload
+handoff     handoff "why" [--until sel|/path] — the person does the CAPTCHA/2FA/consent, you continue
+act         click · type (also rich editors: contenteditable) · select · check · fill · hover · dblclick · rightclick
+            focus · blur · press · scroll · drag · upload · dialog (answer the next confirm/prompt)
 wait        wait · waitfor (--until network-idle | no-timers) · events
 navigate    open · back · forward · reload
-tabs        tabs · tab · newtab · closetab · profiles
+tabs        tabs · tab · newtab · closetab · profiles (open|newtab --wait-slot S queues at 12 awake)
 containers  whoami · profiles (--make/--drop) · newtab --profile · lanes
 identity    cookies · storage · permission · permissions · clipboard
 run code    eval · eval --file · addInitScript · expose · exposed
@@ -106,11 +108,24 @@ inspect     cdp · debug · listeners · coverage · trace
 devtools    inspect open|close · inspect panel <id> · inspect zoom <n> · inspect shot
 network     fake · intercept · throttle · headers · har
 pretend     emulate · resize · clock · settings
-evidence    shot · shot --with-inspector · record · pdf · save · download · audit --script
+evidence    shot · shot --marks (eN labels on the picture) · shot --with-inspector · record · pdf · save · download · audit --script
 batch       do (and `lanes` for several pages at once)
 ```
 
 ## The things worth knowing before you start
+
+Acts are as close to a person as a page can tell without lying. `click`
+runs with a user activation and the page believing it has focus for the length
+of the act, so a clipboard write or a popup a click is allowed to make works.
+That is a real grant: a hostile page can use it to write the person's clipboard
+or open a window, so click only what the task needs. `hover`, `dblclick`,
+`rightclick` and `check` carry no activation. `hover` also moves a real pointer,
+so `:hover` matches. Events you cause from a script are still `isTrusted:
+false`; nothing here fakes that. `type` reaches rich editors (contenteditable).
+`handoff` ends only on the person's own click on its Done button, on `--until`
+(a selector, or a path judged on the URL's pathname, never its query), or on a
+navigation (`navigated`); a page cannot end it by itself.
+Raw `cdp Input.*` stays refused: it lands in the app's own window.
 
 **Stable ids beat invented selectors.** Every node in an `observe` comes with an
 id like `e17`, stamped on the element so it survives a re-render. Every verb
@@ -357,6 +372,11 @@ claude mcp add agentglass-browser -- agentglass-browser-mcp
 
 Every verb above, as a tool with a schema. Same relay, same rules, same
 guardrails. Use whichever fits.
+
+The full list is ~19k tokens of schema, re-read every turn. Set
+`AGENTGLASS_MCP_TOOLS=core` for the 17 everyday verbs plus one generic
+`browser {verb, args}` tool that reaches the rest (verb `help` returns any
+verb's schema), or `generic` for that tool alone.
 
 ## When it cannot reach the browser
 

@@ -224,6 +224,53 @@ def _token_on_disk():
         return None
 
 
+# What the panel says when it will not wake another guest. The one place a
+# caller can tell "no room right now" from every other refusal.
+SLOT_FULL = "pages awake at once"
+
+
+def wait_for_slot(op, body, res, seconds):
+    """Queue instead of refusing: ask again once a second until a tab frees or
+    `seconds` run out, and only for THAT refusal. A person closing a tab or a
+    page going to sleep is what frees one, and nothing here can hurry it."""
+    end = time.time() + seconds
+    while not res.get("ok") and SLOT_FULL in (res.get("error") or "") and time.time() < end:
+        time.sleep(min(1.0, max(0.0, end - time.time())))
+        res = call(op, body)
+    return res
+
+
+def wait_for_person(a, body, armed):
+    """The banner is up; now wait. Each check waits up to 20 s inside the page,
+    so no request is held open for minutes, and the loop ends on the person's
+    Done, on --until, on a navigation, or on --timeout (which takes the banner
+    down again rather than leave it on a page nobody is answering for)."""
+    open_browser_view()
+    print(f"handoff: waiting for the person — {body['reason']}", file=sys.stderr)
+    end = time.time() + max(1, min(a.timeout, 3600))
+    res = armed
+    # The same addressing as the request that armed it: this tab, this caller.
+    same = {k: v for k, v in body.items() if k not in ("reason", "until")}
+    try:
+        while time.time() < end:
+            res = call("handoff", stamped(a, {**same, "check": True, "waitMs": int(max(200, min(20000, (end - time.time()) * 1000)))}))
+            state = ((res.get("value") or {}).get("state")) if res.get("ok") else "error"
+            if state == "error":
+                # A transient refusal (the view is remounting) is retried; a real one ends it.
+                if "view is not open" in (res.get("error") or "") and time.time() < end:
+                    time.sleep(1)
+                    continue
+                call("handoff", stamped(a, {**same, "cancel": True}))
+                return res
+            if state != "waiting":
+                return res
+    except KeyboardInterrupt:
+        call("handoff", stamped(a, {**same, "cancel": True}))
+        raise
+    call("handoff", stamped(a, {**same, "cancel": True}))
+    return {"ok": False, "error": f"nobody answered the handoff in {a.timeout} s; the banner was taken down"}
+
+
 def call(op, body):
     def send(token):
         req = urllib.request.Request(
@@ -1352,6 +1399,8 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("open", help="go to a page and wait for it to load")
     p.add_argument("url")
+    p.add_argument("--wait-slot", dest="waitSlot", type=float, default=None, metavar="SECONDS",
+                   help="when 12 pages are already awake, queue for a free slot this long instead of refusing")
     p = sub.add_parser("read", help="the page's url, title and visible text")
     p = sub.add_parser("click", help="click one element: an id from observe (e12), a locator (role=button[name=\"Save\"], label=Email, text=Continue) or CSS")
     p.add_argument("selector")
@@ -1377,6 +1426,8 @@ def main():
     p.add_argument("--with-inspector", dest="withInspector", action="store_true",
                    help="the page AND the inspector, joined side by side into one png")
     p.add_argument("--label", help="a caption next to --highlight's box")
+    p.add_argument("--marks", action="store_true",
+                   help="label every interactive thing in view with its observe id (eN) — for a picture a model must point into")
     # DECLARED, because the code below already reads it. It did not, so every
     # `shot --out file.png` died on an AttributeError and exited 1 with nothing
     # written — and `--out` before the verb hit the global one, which skips
@@ -1434,6 +1485,8 @@ def main():
     p.add_argument("which", help="index from `tabs`, or a tab id")
     p = sub.add_parser("newtab", help="open a url in a NEW tab, leaving this one where it is")
     p.add_argument("url")
+    p.add_argument("--wait-slot", dest="waitSlot", type=float, default=None, metavar="SECONDS",
+                   help="when 12 pages are already awake, queue for a free slot this long instead of refusing")
     p = sub.add_parser("closetab", help="close a tab by index or id")
     p.add_argument("which")
 
@@ -1461,6 +1514,8 @@ def main():
     p = sub.add_parser("html", help="the markup of one element, not just its text")
     p.add_argument("selector")
     p.add_argument("--max", type=int, default=None)
+    p.add_argument("--clean", action="store_true",
+                   help="markup a model can read: scripts, styles, svg paths and noise attributes out, observe's eN ids stamped on everything actionable")
     p = sub.add_parser("waitfor", help="wait until a javascript expression is true in the page, or until a named condition")
     p.add_argument("js", nargs="?")
     p.add_argument("--timeout-ms", dest="timeoutMs", type=int, default=None)
@@ -1587,6 +1642,42 @@ def main():
     p.add_argument("--no-shot", dest="noShot", action="store_true", help="no screenshot, even on failure")
     p.add_argument("--settle-ms", dest="settleMs", type=int, default=None,
                    help="how long to wait for quiet at most (default 5000, 0..15000)")
+    p = sub.add_parser(
+        "dialog",
+        help="answer the page's next confirm()/prompt(): --accept or --dismiss (the default is accept)",
+        description=(
+            "A page's confirm() and prompt() are answered for it — yes, by default — so it never hangs. "
+            "This arms a different answer for the NEXT one (every one with --always). With neither flag "
+            "it reports what the page asked last and what is armed. The plan lives in the document: a "
+            "navigation drops it, so arm it after the page has loaded and before the click that asks.\n\n"
+            "  dialog --dismiss\n"
+            "  dialog --accept --text 'new name'"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("--accept", action="store_true", help="answer OK / true")
+    p.add_argument("--dismiss", action="store_true", help="answer Cancel / false / null")
+    p.add_argument("--text", help="what a prompt() is answered with when accepted")
+    p.add_argument("--always", action="store_true", help="every dialog, not just the next one")
+    p = sub.add_parser(
+        "handoff",
+        help="give the tab to the person for a CAPTCHA, a 2FA code or a consent, and wait for them",
+        description=(
+            "Brings the browser forward, puts a banner on the page saying why (with a Done button) and waits "
+            "until the person presses it, or --until is true, or --timeout runs out. Use it for what an agent "
+            "must not do itself: a CAPTCHA, a code from their phone, a consent screen. Then continue from the "
+            "answer. If the page navigates meanwhile, the answer says `navigated`: for a sign-in that is usually "
+            "the person finishing.\n\n"
+            "  handoff 'Sign-in needs your 2FA code' --until 'nav .avatar'\n"
+            "  handoff 'Solve the CAPTCHA' --until /dashboard --timeout 600"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("reason", help="one line: what the person is needed for")
+    p.add_argument("--until", help="also done when this CSS selector exists, or the url contains this (starts with / or http)")
+    p.add_argument("--timeout", type=int, default=300, help="give up after this many seconds (default 300, max 3600)")
+    p = sub.add_parser("vitals", help="LCP, CLS, INP, TTFB, FCP of this page, each rated good / needs-improvement / poor")
+    p = sub.add_parser("a11y", help="what a screen reader would miss: unlabelled controls, images without alt, heading jumps, no lang — with ids to act on")
     p = sub.add_parser("region", help="the tree of ONE subtree — a modal is 15 nodes inside 300")
     p.add_argument("selector", help="an id from an observation, a locator (role=dialog) or CSS")
     p = sub.add_parser("throttle", help="make the machine slow — the bug that never reproduces locally")
@@ -2202,6 +2293,14 @@ def main():
             body["noShot"] = True
         if a.settleMs is not None:
             body["settleMs"] = a.settleMs
+    elif a.cmd == "dialog":
+        body = {k: True for k in ("accept", "dismiss", "always") if getattr(a, k)}
+        if a.text is not None:
+            body["text"] = a.text
+    elif a.cmd == "handoff":
+        body = {"reason": a.reason}
+        if a.until:
+            body["until"] = a.until
     elif a.cmd == "upload":
         body = {"selector": a.selector, "paths": a.paths}
     elif a.cmd == "permission":
@@ -2220,6 +2319,8 @@ def main():
         body = {"selector": a.selector}
         if a.max is not None:
             body["max"] = a.max
+        if a.clean:
+            body["clean"] = True
     elif a.cmd == "waitfor":
         if not a.js and not a.until:
             print("waitfor needs an expression, or --until network-idle|no-timers", file=sys.stderr)
@@ -2251,6 +2352,8 @@ def main():
                 print("--label needs --highlight — it captions the box, not the whole picture", file=sys.stderr)
                 return 1
             body["label"] = a.label
+        if a.marks:
+            body["marks"] = True
         if a.omitBackground:
             body["omitBackground"] = True
     elif a.cmd in ("click", "wait"):
@@ -2488,6 +2591,10 @@ def main():
         print("--show: the browser pane is brought forward for this tab", file=sys.stderr)
 
     res = call(a.cmd, body)
+    if getattr(a, "waitSlot", None):
+        res = wait_for_slot(a.cmd, body, res, a.waitSlot)
+    if a.cmd == "handoff" and res.get("ok"):
+        res = wait_for_person(a, body, res)
     # A tab of ours that is gone stops being ours, so the next call opens a
     # fresh one instead of addressing a ghost forever.
     if body.get("page") and str(res.get("error") or "").startswith("no tab called"):
@@ -2844,6 +2951,10 @@ def main():
             print(dest)
         else:
             print(png)
+        # --marks drew eN labels; the ids are what a caller acts on next, and
+        # the picture alone cannot be read back into a list of them.
+        if value.get("marks"):
+            print("marks: " + " ".join(value["marks"]))
         # ASKED FOR TWO HALVES, GIVEN ONE, AND TOLD NOTHING.
         #
         # `--with-inspector` falls back to the page alone when the inspector

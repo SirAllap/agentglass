@@ -71,14 +71,22 @@ export const COLLECTOR = `(() => {
      an observation say what is actually going on, and answering rather than
      blocking means a page that pops a confirm on load is still drivable.
      The answer is recorded, so nobody has to guess what was clicked.
+     The default answer is yes, and the dialog verb changes it: it arms
+     window.__agxDialogPlan with {accept, text, always}, which answers the NEXT
+     confirm or prompt (every one, with always) and is spent by it. A plan lives
+     in the document, so a navigation drops it, as it drops everything else.
   */
   for (const kind of ["alert", "confirm", "prompt"]) {
     const was = window[kind];
     window[kind] = function (msg, def) {
-      window.__agxDialog = { kind, message: String(msg == null ? "" : msg).slice(0, 500), at: Date.now(), answered: kind === "alert" ? null : true };
+      const plan = kind === "alert" ? null : window.__agxDialogPlan || null;
+      const accept = plan ? plan.accept : true;
+      window.__agxDialog = { kind, message: String(msg == null ? "" : msg).slice(0, 500), at: Date.now(), answered: kind === "alert" ? null : accept };
+      if (plan && !plan.always) window.__agxDialogPlan = null;
       if (kind === "alert") return undefined;
-      if (kind === "confirm") return true;
-      return def == null ? "" : def;
+      if (kind === "confirm") return accept;
+      if (!accept) return null;
+      return plan && plan.text != null ? plan.text : def == null ? "" : def;
     };
     window["__agx_" + kind] = was;
   }

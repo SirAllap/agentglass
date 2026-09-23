@@ -220,7 +220,7 @@ describe("the task set", () => {
   test("every task has a unique id and a baseline arm", () => {
     expect(new Set(TASKS.map((t) => t.id)).size).toBe(TASKS.length);
     for (const t of TASKS) expect(typeof t.arms.baseline).toBe("function");
-    expect(new Set(TASKS.map((t) => t.family))).toEqual(new Set(["navigation", "form", "devloop", "measure"]));
+    expect(new Set(TASKS.map((t) => t.family))).toEqual(new Set(["navigation", "form", "devloop", "measure", "phase2"]));
   });
 
   const byId = (id: string) => TASKS.find((t) => t.id === id)!;
@@ -396,5 +396,93 @@ describe("report and runner options", () => {
     expect(() => parseOptions([...base, "--arm", "phase9"])).toThrow(/no task has an arm phase9/);
     expect(() => parseOptions([...base, "--reps", "0"])).toThrow(/positive integer/);
     expect(() => parseOptions(["--out", join(dir, "out")])).toThrow(/--instance DIR/);
+  });
+});
+
+describe("phase-2 fixtures and graders", () => {
+  test("a page is served in full every time, not only the first (a Response body reads once)", async () => {
+    const h = makeHandler(freshState());
+    for (const p of ["/confirm", "/marks", "/slot/3"]) {
+      const first = await (await get(h, p)).text();
+      expect(first.length).toBeGreaterThan(100);
+      expect(await (await get(h, p)).text()).toBe(first);
+    }
+  });
+
+  test("a beacon is counted by name, and a reset forgets it", async () => {
+    const state = freshState();
+    const h = makeHandler(state);
+    await h(new Request(`${O}/__bench/beacon?name=deleted`, { method: "POST" }));
+    expect(state.beacons).toEqual({ deleted: 1 });
+    await post(h, "/__bench/reset", {});
+    expect(state.beacons).toEqual({});
+  });
+
+  const task = (id: string) => TASKS.find((t) => t.id === id)!;
+
+  test("dialog-cancel: the server's count of deletes decides, not what the arm says", () => {
+    const g = task("p2-dialog-cancel").grade;
+    expect(g({ status: "Report kept" }, { ...freshState(), beacons: {} })).toBeNull();
+    expect(g({ status: "Report kept" }, { ...freshState(), beacons: { deleted: 1 } })).toContain("went through");
+    expect(g({ status: "Report deleted" }, freshState())).toContain("status was");
+  });
+
+  test("shot-marks: the labels must be the tree's ids, exactly, and the fixture's four", () => {
+    const g = task("p2-shot-marks").grade;
+    const ids = ["e2", "e3", "e4", "e5"];
+    expect(g({ ids, marks: ids }, freshState())).toBeNull();
+    expect(g({ ids, marks: [...ids, "e1"] }, freshState())).toContain("the picture says");
+    expect(g({ ids, marks: [] }, freshState())).toContain("nothing labelled");
+    expect(g({ ids: ids.slice(1), marks: ids.slice(1) }, freshState())).toContain("usable controls");
+    expect(g({ ids, marks: ids, pictureMarks: ["e9"] }, freshState())).toContain("real shot");
+  });
+
+  test("wait-slot: a tab that arrived without waiting proves nothing", () => {
+    const g = task("p2-wait-slot").grade;
+    expect(g({ gotTab: true, waitedMs: 2600 }, freshState())).toBeNull();
+    expect(g({ gotTab: true, waitedMs: 300 }, freshState())).toContain("without waiting");
+    expect(g({ gotTab: false, refusedBy: "12 pages awake at once" }, freshState())).toContain("no tab");
+  });
+
+  test("real-input: activation, the clipboard, :hover and the editor's text are all required", () => {
+    const g = task("p2-real-input").grade;
+    const ok = { click: { active: true, clipboard: "ok" }, hover: { hover: true }, text: "bye" };
+    expect(g(ok, freshState())).toBeNull();
+    expect(g({ ...ok, click: { active: false, clipboard: "NotAllowedError" } }, freshState())).toContain("user activation");
+    expect(g({ ...ok, hover: { hover: false } }, freshState())).toContain(":hover");
+    expect(g({ ...ok, text: "" }, freshState())).toContain("editor text");
+  });
+
+  test("handoff: the server must have seen the gate passed, and the handoff end for a reason", () => {
+    const g = task("p2-handoff").grade;
+    const passed = { ...freshState(), beacons: { "gate-passed": 1 } };
+    expect(g({ state: "condition" }, passed)).toBeNull();
+    expect(g({ state: "done" }, passed)).toBeNull();
+    expect(g({ state: "stuck" }, freshState())).toContain("never passed");
+    expect(g({ state: "waiting" }, passed)).toContain("ended as");
+  });
+
+  test("audit: every seeded fault is named, and an unpainted page may not be called good", () => {
+    const g = task("p2-audit").grade;
+    const a11y = { unlabelled: { n: 1 }, imgNoAlt: { n: 1 }, headingSkips: { n: 1 }, noLang: true };
+    expect(g({ a11y, vitals: { verdict: "unmeasured: this page has not painted", vitals: {} } }, freshState())).toBeNull();
+    expect(g({ a11y, vitals: { verdict: "good", vitals: { cls: { value: 0 } } } }, freshState())).toContain("honest verdict");
+    expect(g({ a11y: { imgNoAlt: 1 }, vitals: null }, freshState())).toContain("heading jump");
+  });
+
+  test("clean-html: no scripts or styles, an id on the button, and smaller than the raw markup", () => {
+    const g = task("p2-clean-html").grade;
+    const html = '<body><button data-agx-e="e1">Go</button></body>';
+    expect(g({ html, rawLength: 900 }, freshState())).toBeNull();
+    expect(g({ html: html + "<script>x</script>", rawLength: 900 }, freshState())).toContain("still in the markup");
+    expect(g({ html: "<body><button>Go</button></body>", rawLength: 900 }, freshState())).toContain("no observe id");
+    expect(g({ html, rawLength: html.length }, freshState())).toContain("not smaller");
+  });
+
+  test("mcp-core: a failed call is the answer, and the heading is what grades it", () => {
+    const g = task("p2-mcp-core").grade;
+    expect(g({ heading: "Items", listBytes: 1 }, freshState())).toBeNull();
+    expect(g({ error: "a call failed: x" }, freshState())).toBe("a call failed: x");
+    expect(g({ heading: "Home" }, freshState())).toContain("ended on");
   });
 });

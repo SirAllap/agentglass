@@ -18,6 +18,10 @@ export type CliResult = {
   ms: number;
 };
 
+/** One MCP session: the handshake, then `messages`, answered as JSON-RPC
+ *  replies in order. `profile` is AGENTGLASS_MCP_TOOLS. */
+export type McpExec = (profile: string, messages: unknown[]) => Promise<{ replies: any[]; stdout: string; stderr: string }>;
+
 export class StepFailed extends Error {}
 
 /** What an arm is handed. Every browser call goes through `cli`, so no arm
@@ -37,7 +41,29 @@ export class Session {
       set: (patch: Partial<BenchState>) => Promise<void>;
     },
     private readonly now: () => number = () => performance.now(),
+    private readonly mcpExec?: McpExec,
   ) {}
+
+  /**
+   * One MCP conversation, counted as ONE call whose bytes are everything the
+   * server said — the `tools/list` a client re-reads every turn included,
+   * which is the number the MCP profiles exist to shrink.
+   */
+  async mcp(profile: "full" | "core" | "generic", messages: unknown[]) {
+    if (!this.mcpExec) throw new StepFailed("this run has no MCP executor");
+    const t0 = this.now();
+    const r = await this.mcpExec(profile, messages);
+    const ms = this.now() - t0;
+    this.calls.push({
+      verb: `mcp:${profile}`,
+      argv: [profile, `${messages.length} messages`],
+      ms,
+      exit: 0,
+      stdoutBytes: Buffer.byteLength(r.stdout),
+      stderrBytes: Buffer.byteLength(r.stderr),
+    });
+    return r;
+  }
 
   url(path: string) {
     return this.origin + path;
@@ -89,7 +115,7 @@ export type Arm = (s: Session) => Promise<unknown>;
 
 export type Task = {
   id: string;
-  family: "navigation" | "form" | "devloop" | "measure";
+  family: "navigation" | "form" | "devloop" | "measure" | "phase2";
   title: string;
   /** Keyed by arm name. `baseline` is how an agent drives the CLI today; a new
    *  approach adds its own key here and nothing else changes. */
