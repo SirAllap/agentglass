@@ -105,6 +105,10 @@ export interface SessionRollup {
    * thought to write a title.
    */
   first_prompt?: string | null;
+  /** What this session's edits touched that a reviewer should read first, one
+   *  entry per kind and file (see `shared/riskFlags.ts`). Absent when none of
+   *  its edits raised anything. */
+  risks?: SessionRisk[];
   started_at: number;
   ended_at: number | null;
   last_seen: number;
@@ -1054,6 +1058,28 @@ export interface FileChange {
    *  unscoped instance, where there is no project to be outside of) means never
    *  hidden. */
   outside?: boolean;
+  /** What this edit touched that a reviewer should read first — a secret, a CI
+   *  definition, a lockfile, a migration, auth code, a large deletion — each
+   *  with a one-line reason. Computed by `shared/riskFlags.ts` from the path and
+   *  the added lines; absent on a change nobody ran the rules on (a commit from
+   *  the log), which is "not checked", never "clean". */
+  risks?: RiskFlag[];
+}
+
+export type RiskKind = "secret" | "ci" | "deps" | "migration" | "auth" | "deletion";
+export interface RiskFlag {
+  kind: RiskKind;
+  /** One sentence, checkable against the diff: "an AWS access key was added". */
+  reason: string;
+  /** The line in the new file, when the rule matched a line rather than a path. */
+  line?: number;
+}
+/** A session's flags, one per kind and file. */
+export interface SessionRisk extends RiskFlag {
+  file: string;
+  /** The change it came from, so a diff that lists only the newest changes can
+   *  still fetch the flagged one. */
+  change?: number;
 }
 
 /** A tool call the server sees as still running: a PreToolUse with no matching

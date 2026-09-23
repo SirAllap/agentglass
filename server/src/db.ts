@@ -18,7 +18,8 @@ import type {
 import type { NormalizedEvent } from "./ingest.ts";
 import { costUsd, modelLabel, hasPrice, equivalentTokens } from "./pricing.ts";
 import { providerOf as sharedProviderOf, UNKNOWN as UNKNOWN_MODEL } from "../../shared/models.ts";
-import { workspaceRoot, scopeRoots, isWithin } from "./config.ts";
+import { workspaceRoot, scopeRoots, isWithin, sessionInScope } from "./config.ts";
+import { changeRisks, sessionRisks, SESSION_RISK_CAP } from "../../shared/riskFlags.ts";
 
 /**
  * Where the database lives.
@@ -2428,6 +2429,34 @@ export function pruneOldRows(): { events: number; sessions: number; rolled: numb
   rollupPathCache = null;
   return db.transaction(() => {
     const rolled = foldExpiringEvents(cutoff);
+    // The risk roll-up drops only the flags whose own edit is about to go.
+    // Clearing all of it on every run, deleted or not, made the next poll
+    // re-parse every listed session's whole edit history on the event loop
+    // once an hour; forgetting a whole session did the same every hour to one
+    // that runs longer than the retention window. Dropping a flag is exact
+    // because the memo keeps the newest flag per kind and file: an older one
+    // it shadowed is older still, so it is going too. Not quite for a
+    // backfilled edit, which is newest by row id and oldest by time; the flag
+    // it shadowed stays lost until the session is read again. A session at the
+    // cap may have dropped flags this would let back in, so it is re-read.
+    const expiring = new Map<string, Set<number>>();
+    for (const { session_id, id } of db.query<{ session_id: string; id: number }, [number]>(
+      `SELECT session_id, id FROM events
+       WHERE timestamp < ? AND hook_event_type='PostToolUse' AND tool_name IN ('Edit','Write','MultiEdit')`).all(cutoff)) {
+      if (!riskMemo.has(session_id)) continue;
+      const g = expiring.get(session_id);
+      if (g) g.add(id); else expiring.set(session_id, new Set([id]));
+    }
+    for (const [sid, gone] of expiring) {
+      const m = riskMemo.get(sid)!;
+      const kept = m.flags.filter((f) => f.change == null || !gone.has(f.change));
+      if (kept.length === m.flags.length) continue;
+      if (m.flags.length >= SESSION_RISK_CAP) riskMemo.delete(sid);
+      else {
+        m.flags = kept;
+        for (const id of gone) m.where.delete(id);
+      }
+    }
     db.run(`DELETE FROM events_fts WHERE rowid IN (SELECT id FROM events WHERE timestamp < ?)`, [cutoff]);
     const ev = db.run(`DELETE FROM events WHERE timestamp < ?`, [cutoff]);
     const se = db.run(`DELETE FROM sessions WHERE last_seen < ?`, [cutoff]);
@@ -3517,6 +3546,7 @@ export function getSessions(limit = 100, provider?: string): SessionRollup[] {
       if (p) d.first_prompt = p;
     }
   }
+  attachRisks(data);
   sessionsCache.set(key, { at: Date.now(), data });
   // One entry per (limit, provider, scope); the limit set is tiny and scope
   // rarely changes, so prune stale entries anyway so a long-lived server cannot
@@ -4010,13 +4040,15 @@ function editHunk(oldS: string, newS: unknown) {
   };
 }
 
-function parseChange(r: ChangeRow): import("../../shared/types.ts").FileChange | null {
+function parseChange(r: ChangeRow, withRisks = true): import("../../shared/types.ts").FileChange | null {
   let payload: any;
   try { payload = JSON.parse(r.payload); } catch { return null; }
   const tr = payload.tool_response ?? {};
   const ti = payload.tool_input ?? {};
   const file_path = tr.filePath || ti.file_path || ti.filePath || "(unknown)";
   let hunks = Array.isArray(tr.structuredPatch) ? tr.structuredPatch : [];
+  // A rebuilt Edit hunk starts at line 1 of its own snippet, not of the file.
+  let placed = true;
   if (!hunks.length && r.tool_name === "Write" && typeof ti.content === "string") {
     const lines = ti.content.split("\n");
     hunks = [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: lines.length, lines: lines.map((l: string) => "+" + l) }];
@@ -4027,11 +4059,13 @@ function parseChange(r: ChangeRow): import("../../shared/types.ts").FileChange |
   // that edits more than it writes means no diff at all.
   if (!hunks.length && r.tool_name === "Edit" && typeof ti.old_string === "string") {
     hunks = [editHunk(ti.old_string, ti.new_string)];
+    placed = false;
   }
   if (!hunks.length && r.tool_name === "MultiEdit" && Array.isArray(ti.edits)) {
     hunks = ti.edits
       .filter((e: any) => e && typeof e.old_string === "string")
       .map((e: any) => editHunk(e.old_string, e.new_string));
+    placed = false;
   }
   if (!hunks.length) return null;
   let additions = 0, deletions = 0;
@@ -4039,12 +4073,138 @@ function parseChange(r: ChangeRow): import("../../shared/types.ts").FileChange |
     if (l[0] === "+") additions++;
     else if (l[0] === "-") deletions++;
   }
-  return { id: r.id, timestamp: r.timestamp, source_app: r.source_app, session_id: r.session_id, tool: r.tool_name, file_path, additions, deletions, hunks };
+  const root = payload.cwd || payload.cwd_path || payload.project_path || null;
+  const risks = withRisks ? changeRisks(file_path, hunks, deletions, { root, lines: placed }) : [];
+  return { id: r.id, timestamp: r.timestamp, source_app: r.source_app, session_id: r.session_id, tool: r.tool_name, file_path, additions, deletions, hunks, ...(risks.length ? { risks } : {}) };
+}
+
+/**
+ * Per session: how far into `events` its flags have been read, and the flags.
+ *
+ * The session list is polled every few seconds and re-parsing every edit of
+ * every listed session on each poll would make it the most expensive query on
+ * the dashboard, for a fact that only changes when an edit lands. So each read
+ * parses only the edits past the watermark. The watermark is a row id, not a
+ * timestamp: a backfill inserts old edits late, and those must still count.
+ *
+ * The card counts only edits inside the open project, like the change list its
+ * diff shows, and that is applied when the flags are handed out, not when they
+ * are read: the project's checkouts come from `git worktree list`, cached for
+ * seconds, and an edit in a worktree added a moment ago was passed over while
+ * the list was stale and then never read again, because the watermark had moved
+ * past it. So the memo keeps every flag with where its edit ran.
+ *
+ * Its ceilings: the first poll after the server starts still reads every listed
+ * session from 0 in one go, and spreading that over several polls is the next
+ * step and is not here. The per-session cap applies before the scope, so a
+ * session with more than SESSION_RISK_CAP flagged files outside the project can
+ * crowd out one inside it.
+ */
+type RiskWhere = { project_path: string | null; cwd_path: string | null };
+const riskMemo = new Map<string, { through: number; flags: import("../../shared/types.ts").SessionRisk[]; where: Map<number, RiskWhere> }>();
+const RISK_MEMO_MAX = 2000;
+
+function attachRisks(rows: import("../../shared/types.ts").SessionRollup[]): void {
+  if (!rows.length) return;
+  try {
+    const top = db.query<{ m: number | null }, []>(`SELECT MAX(id) m FROM events`).get()?.m ?? 0;
+    const ids = rows.map((r) => r.session_id);
+    // Grouped by watermark rather than read from the lowest one: a session that
+    // just appeared starts at 0, and that must not make every other listed
+    // session re-read its whole history.
+    const byMark = new Map<number, string[]>();
+    for (const id of ids) {
+      const mark = riskMemo.get(id)?.through ?? 0;
+      if (mark >= top) continue;
+      const g = byMark.get(mark);
+      if (g) g.push(id); else byMark.set(mark, [id]);
+    }
+    if (byMark.size) {
+      const fresh = new Map<string, import("../../shared/types.ts").FileChange[]>();
+      const freshWhere = new Map<number, RiskWhere>();
+      for (const [mark, group] of byMark) {
+        const holes = group.map(() => "?").join(",");
+        // INDEXED BY: left to itself SQLite picks idx_events_type, and a new
+        // session's first read (mark 0) then walks every PostToolUse row in the
+        // table — measured 21 ms on 28k rows, against 1 ms by session.
+        for (const r of db.query<ChangeRow, any[]>(
+          `SELECT id, timestamp, source_app, session_id, tool_name, payload, project_path, cwd_path FROM events INDEXED BY idx_events_session
+           WHERE session_id IN (${holes}) AND id > ? AND id <= ?
+             AND hook_event_type='PostToolUse' AND tool_name IN ('Edit','Write','MultiEdit')
+           ORDER BY id DESC`).all(...group, mark, top) as (ChangeRow & RiskWhere)[]) {
+          const c = parseChange(r);
+          if (!c?.risks) continue;
+          freshWhere.set(r.id, { project_path: r.project_path, cwd_path: r.cwd_path });
+          const list = fresh.get(r.session_id);
+          if (list) list.push(c); else fresh.set(r.session_id, [c]);
+        }
+      }
+      for (const group of byMark.values()) for (const id of group) {
+        const prev = riskMemo.get(id);
+        const old = prev?.flags ?? [];
+        const add = fresh.get(id) ?? [];
+        // Newer first, so the reason kept for a kind and file is the latest one.
+        const flags = add.length
+          ? sessionRisks([...add, ...old.map((f) => ({ id: f.change, file_path: f.file, risks: [f] }))])
+          : old;
+        const where = new Map<number, RiskWhere>();
+        for (const f of flags) {
+          const w = f.change != null ? freshWhere.get(f.change) ?? prev?.where.get(f.change) : undefined;
+          if (w) where.set(f.change!, w);
+        }
+        riskMemo.delete(id);
+        riskMemo.set(id, { through: top, flags, where });
+      }
+      // Insertion order is recency of reading, so the front is the stalest.
+      for (const k of riskMemo.keys()) {
+        if (riskMemo.size <= RISK_MEMO_MAX) break;
+        riskMemo.delete(k);
+      }
+    }
+    const scope = workspaceRoot();
+    const inside = new Map<RiskWhere, boolean>();
+    for (const r of rows) {
+      const m = riskMemo.get(r.session_id);
+      if (!m?.flags.length) continue;
+      const f = !scope ? m.flags : m.flags.filter((x) => {
+        const w = x.change != null ? m.where.get(x.change) : undefined;
+        if (!w) return true;
+        let ok = inside.get(w);
+        if (ok === undefined) inside.set(w, ok = sessionInScope(w, scope));
+        return ok;
+      });
+      if (f.length) r.risks = f;
+    }
+  } catch { /* flags are advisory; a database that cannot answer must not lose the list */ }
+}
+
+/**
+ * The session's newest changes, plus any flagged one older than those.
+ *
+ * The card rolls flags up over the whole session and the detail lists only the
+ * newest `limit` changes, so a key written early in a long session would be a
+ * red chip with no file behind it in the diff the card opens.
+ */
+function changesWithFlagged(sessionId: string, limit: number): import("../../shared/types.ts").FileChange[] {
+  const changes = getChanges(limit, sessionId);
+  const stub = { session_id: sessionId } as import("../../shared/types.ts").SessionRollup;
+  attachRisks([stub]);
+  const have = new Set(changes.map((c) => c.id));
+  const missing = [...new Set((stub.risks ?? []).map((r) => r.change).filter((id): id is number => id != null && !have.has(id)))];
+  if (!missing.length) return changes;
+  const chg = scopeClause();
+  const older = db.query<ChangeRow, any[]>(
+    `SELECT id, timestamp, source_app, session_id, tool_name, payload FROM events
+     WHERE id IN (${missing.map(() => "?").join(",")}) AND session_id = ?${chg.clause}
+     ORDER BY timestamp DESC, id DESC`).all(...missing, sessionId, ...chg.args);
+  return [...changes, ...older.map((r) => parseChange(r)).filter((c): c is import("../../shared/types.ts").FileChange => c !== null)];
 }
 
 /** Recent file changes (Edit/Write/MultiEdit) with their diff hunks, parsed
- *  from the tool_response.structuredPatch Claude Code already provides. */
-export function getChanges(limit = 200, sessionId?: string): import("../../shared/types.ts").FileChange[] {
+ *  from the tool_response.structuredPatch Claude Code already provides.
+ *  `withRisks: false` for a caller that only wants the paths — the rules read
+ *  every added line, and on 500 changes that was half the call. */
+export function getChanges(limit = 200, sessionId?: string, withRisks = true): import("../../shared/types.ts").FileChange[] {
   const chg = scopeClause();
   const rows = sessionId
     ? db.query<ChangeRow, any[]>(
@@ -4055,7 +4215,7 @@ export function getChanges(limit = 200, sessionId?: string): import("../../share
         `SELECT id, timestamp, source_app, session_id, tool_name, payload FROM events
          WHERE hook_event_type='PostToolUse' AND tool_name IN ('Edit','Write','MultiEdit')${chg.clause}
          ORDER BY timestamp DESC, id DESC LIMIT ?`).all(...chg.args, limit);
-  return rows.map(parseChange).filter((c): c is import("../../shared/types.ts").FileChange => c !== null);
+  return rows.map((r) => parseChange(r, withRisks)).filter((c): c is import("../../shared/types.ts").FileChange => c !== null);
 }
 
 /** Everything we know about one session — the deep-dive. */
@@ -4251,7 +4411,7 @@ export function getSession(sessionId: string): import("../../shared/types.ts").S
     subagents: subRows.map((s) => ({ agent_id: s.agent_id, agent_type: s.agent_type || "subagent", events: s.n })),
     conversation: kept,
     timeline,
-    changes: getChanges(40, sessionId),
+    changes: changesWithFlagged(sessionId, 40),
   };
 }
 

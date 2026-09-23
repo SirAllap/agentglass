@@ -109,6 +109,7 @@ const card = (over: Partial<AgentCard> = {}): AgentCard => ({
   ctxTokens: 0,
   ctxTs: 0,
   ctxLimit: 0,
+  risks: [],
   worktree: "run-8f2a1c-claude-code",
   ...over,
 });
