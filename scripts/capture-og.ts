@@ -1,12 +1,15 @@
 #!/usr/bin/env bun
 /**
- * The Open Graph / Twitter social card, from the landing hero itself.
+ * The share card: landing/og.html rendered to landing/og.png.
  *
- * It used to be a bespoke illustration in the old Midnight Purple identity. The
- * hero is the brand image now — the glass over the fleet — and it is Graphite,
- * so the card is a real frame of it rather than a drawing that drifts from the
- * page it sits in front of. 2400×1260 (the 1.91:1 OG ratio at 2×), written
- * straight to landing/og.png.
+ * One picture is the og:image, the twitter:image and the repository's social
+ * preview. It used to be a frame of the landing hero, and a frame of an app
+ * reads as "a screen full of numbers" at the size a chat shows it. The card
+ * names the workspace instead — the tools in orbit around the mark, and a
+ * headline — so it does not go stale when a panel changes.
+ *
+ * 1280×640 at 1×: GitHub's social-preview size, 2:1 so X does not crop it,
+ * and well under the 1 MB GitHub accepts for a social preview.
  *
  *   bun scripts/capture-og.ts
  */
@@ -18,56 +21,41 @@ import { connect, findChrome, until } from "./cdp.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
 const LANDING = join(ROOT, "landing");
-const DIST = join(ROOT, "web", "dist");
-// 1200×630 at 2× — the OG card at retina, exactly the dimensions the landing's
-// <meta og:image:width/height> already declare.
-const W = 1200, H = 630, SCALE = 2;
+// The web app already depends on this font; the card borrows it. Inter comes
+// from Google Fonts (see landing/og.html), so a render needs the network.
+const FONTS = join(ROOT, "web", "node_modules", "@fontsource", "jetbrains-mono", "files");
+const W = 1280, H = 640, SCALE = 1;
 
 async function main() {
-  if (!existsSync(join(DIST, "index.html"))) {
-    console.error("no demo build — run: cd web && bun run build:demo");
+  if (!existsSync(FONTS)) {
+    console.error("no web/node_modules — run: cd web && bun install");
     process.exit(1);
   }
-  // Landing at /agentglass/, demo at /agentglass/demo/ (the glass opens onto it).
   const server = Bun.serve({
     port: 0,
     async fetch(req) {
-      let p = new URL(req.url).pathname;
-      if (p === "/" || p === "/agentglass") p = "/agentglass/";
-      let file;
-      if (p.startsWith("/agentglass/demo/")) {
-        const rel = p.slice("/agentglass/demo/".length) || "index.html";
-        file = Bun.file(join(DIST, rel === "" ? "index.html" : rel));
-        if (!(await file.exists()) && !rel.split("/").pop()!.includes(".")) file = Bun.file(join(DIST, "index.html"));
-      } else if (p.startsWith("/agentglass/")) {
-        const rel = p.slice("/agentglass/".length) || "index.html";
-        file = Bun.file(join(LANDING, rel === "" ? "index.html" : rel));
-      } else return new Response("not found", { status: 404 });
-      return (await file.exists()) ? new Response(file) : new Response("not found", { status: 404 });
+      const p = new URL(req.url).pathname;
+      const file = p.startsWith("/fonts/")
+        ? Bun.file(join(FONTS, p.slice("/fonts/".length)))
+        : p === "/" ? Bun.file(join(LANDING, "og.html")) : null;
+      return file && (await file.exists()) ? new Response(file) : new Response("not found", { status: 404 });
     },
   });
-  const url = `http://127.0.0.1:${server.port}/agentglass/`;
   const profile = mkdtempSync(join(tmpdir(), "agx-og-"));
   const port = 9500 + Math.floor(Math.random() * 200);
   const chrome = spawn({
     cmd: [findChrome(), "--headless=new", `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`,
       `--window-size=${W},${H}`, `--force-device-scale-factor=${SCALE}`, "--hide-scrollbars",
-      "--no-first-run", "--no-sandbox", "--force-color-profile=srgb", "--enable-unsafe-swiftshader",
-      "--force-prefers-reduced-motion", "about:blank"],
+      "--no-first-run", "--no-sandbox", "--force-color-profile=srgb", "about:blank"],
     stdout: "ignore", stderr: "ignore",
   });
   try {
     const cdp = await connect(port);
-    // Graphite, injected before the app reads its theme, then the one load.
-    await cdp.send("Page.addScriptToEvaluateOnNewDocument", {
-      source: `try{localStorage.setItem('agentglass-theme','graphite');localStorage.setItem('agentglass-theme-mode','dark');}catch(e){}`,
-    });
     await cdp.send("Emulation.setDeviceMetricsOverride", { width: W, height: H, deviceScaleFactor: SCALE, mobile: false });
-    await cdp.send("Page.navigate", { url });
-    await until(cdp, `document.getElementById('gl')`, "the hero canvas", 20_000);
-    // Let the intro slew settle onto a contact, and the app come up behind the
-    // glass, so the card is the instrument doing its job rather than mid-sweep.
-    await Bun.sleep(9000);
+    await cdp.send("Page.navigate", { url: `http://127.0.0.1:${server.port}/` });
+    // A fallback face is close enough to pass a glance and wrong enough
+    // to change where the lines break, so wait for the real face.
+    await until(cdp, `document.readyState === "complete" && document.fonts.status === "loaded" && document.fonts.check('500 40px "JBM"') && document.fonts.check('700 60px Inter')`, "the card's font", 15_000);
     writeFileSync(join(LANDING, "og.png"), await cdp.shot());
     console.log("  landing/og.png");
     cdp.close();
