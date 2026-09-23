@@ -61,6 +61,11 @@ export function BenchTerm({ root, slot, view, line, edit, agent, type, active, o
   /** Refit-and-report, held so the tab becoming visible can call it: a tab that
    *  was hidden while the window was resized has a stale grid. */
   const settleRef = useRef<null | (() => void)>(null);
+  /** `active` for the socket's own callbacks, which outlive the render that
+   *  made them: a closed bench keeps its tabs, so a session that comes up just
+   *  after the window closed must not pull the caret into it. */
+  const activeRef = useRef(active);
+  activeRef.current = active;
   const [state, setState] = useState<"opening" | "live" | "gone">("opening");
   const [why, setWhy] = useState<string | null>(null);
 
@@ -134,7 +139,7 @@ export function BenchTerm({ root, slot, view, line, edit, agent, type, active, o
          * looking at handed back a blank capture. Ctrl-L costs one keystroke
          * and answers it for a shell; for tmux it is the refresh that follows.
          */
-        setTimeout(() => { if (!disposed) { term.focus(); } }, 120);
+        setTimeout(() => { if (!disposed && activeRef.current) { term.focus(); } }, 120);
         /* A beat after `ready`, not on it: `ready` means the pty exists, which
            is before the shell has drawn a prompt, and text typed into that gap
            is echoed once raw and then again by readline. */

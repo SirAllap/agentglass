@@ -122,7 +122,8 @@ describe("what a board opens, while it is in the bench", () => {
   });
 
   it("every portal takes the floor its host sets", () => {
-    expect(portal).toContain("const layer = Math.max(z, useContext(PortalFloor));");
+    expect(portal).toContain("const floor = useContext(PortalFloor);");
+    expect(portal).toContain("const layer = z < 0 ? z : Math.max(z, floor);");
     expect(workspace).toContain("<PortalFloor.Provider value={inBench ? LAYER.benchOverlay : 0}>");
   });
 });
