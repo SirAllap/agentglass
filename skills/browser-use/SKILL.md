@@ -94,6 +94,25 @@ batch       do (and `lanes` for several pages at once)
 id like `e17`, stamped on the element so it survives a re-render. Every verb
 that takes a selector takes one of those instead. Do not go inventing CSS.
 
+**Or name it, and skip the look.** When you already know what a thing is
+called — you wrote the page, or just read it — every verb that takes a
+selector takes a locator too (CLI and MCP alike):
+
+```bash
+agentglass-browser click 'role=button[name="Save"]'  # observe's role or ARIA's: link, textbox, checkbox, combobox, heading
+agentglass-browser type label=Email ada@orbit.example
+agentglass-browser select label=Plan team
+agentglass-browser click text=Continue               # the innermost element with that text
+agentglass-browser fill --field 'label=Email=ada@orbit.example' --field 'placeholder=Search=orbit'
+# also testid=submit (exact, hidden ones included)
+```
+
+Case-insensitive substring; quote for exact (`text="Save"`,
+`[name="Save" s]`). When several fit and exactly one is the whole name, that
+one is used. Only what is on screen matches. None or several is refused, and
+the refusal lists ids to use next (`e4 button "Save"`), the hidden matches,
+and what of that kind IS there.
+
 **A failure explains itself.** It comes back with the console errors and failed
 requests from just before it, and a screenshot. `selector matched 3 elements`
 names them with position and text. You do not need a second call to find out
