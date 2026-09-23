@@ -1236,17 +1236,17 @@ function handoffScript(a: { reason?: string; until?: string; check?: boolean; wa
     ${a.cancel ? `clear(); window.__agxHandoff = null; return info("cancelled");` : ""}
     ${a.reason ? `
     clear();
-    const plan = { done: false, reason: ${jsLit(a.reason)}, until: ${a.until ? jsLit(a.until) : "null"} };
-    window.__agxHandoff = plan;
+    const fresh = { done: false, reason: ${jsLit(a.reason)}, until: ${a.until ? jsLit(a.until) : "null"} };
+    window.__agxHandoff = fresh;
     const bar = document.createElement("div");
     bar.id = ID;
     bar.style.cssText = "position:fixed;left:0;right:0;top:0;z-index:2147483647;display:flex;gap:12px;align-items:center;padding:10px 16px;background:#1f3a5f;color:#fff;font:600 14px system-ui,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.4)";
     const msg = document.createElement("span");
-    msg.textContent = "An agent needs you: " + plan.reason;
+    msg.textContent = "An agent needs you: " + fresh.reason;
     const done = document.createElement("button");
     done.textContent = "Done";
     done.style.cssText = "margin-left:auto;padding:4px 14px;font:600 14px system-ui;cursor:pointer";
-    done.addEventListener("click", () => { plan.done = true; clear(); });
+    done.addEventListener("click", () => { fresh.done = true; clear(); });
     bar.append(msg, done);
     document.body.appendChild(bar);
     return info("armed");` : ""}
