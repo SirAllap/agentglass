@@ -69,3 +69,44 @@ export function updateBranchMove(behind: number | null, base: string, local?: Pr
     syncLocal: false,
   };
 }
+
+/** Which files the panel's own merge of the two trees found in conflict, and
+ *  whether the fetch behind it failed. */
+export interface ConflictFilesSeen { files: string[]; stale: boolean }
+
+/** A fresh merge of the pushed refs came back with nothing to settle. See the
+ *  panel for why that outranks GitHub's CONFLICTING. */
+export const gitSaysClean = (seen: ConflictFilesSeen | null): boolean =>
+  !!seen && !seen.stale && seen.files.length === 0;
+
+/**
+ * Whether the panel treats the pull request as conflicted: "Update branch"
+ * and the merge buttons go, "Resolve conflicts" comes.
+ *
+ * GitHub's CONFLICTING, unless git has just merged the same refs and found
+ * nothing — or because we merged the two trees ourselves and found out. GitHub
+ * computes `mergeable` lazily and answers UNKNOWN until somebody asks twice —
+ * measured on this repository's own open pull request #464, which GitHub
+ * called UNKNOWN while git named the one file it conflicts in. A gate that
+ * waits for GitHub to make its mind up is a gate that is open exactly when the
+ * answer matters most.
+ *
+ * A stale answer does not get a vote: if the fetch failed, what is on screen
+ * is from whenever the refs were last pulled down, and taking buttons away on
+ * that basis would be guessing.
+ *
+ * `refused` is the third witness: "Update branch" was pressed and GitHub
+ * refused it over a conflict. That is GitHub attempting the very merge, and it
+ * is the case that needs it: the button was only on screen while neither of
+ * the other two had said "conflict", which left the refusal as an error with
+ * nothing to press next. Unlike CONFLICTING it is not overruled by a clean git
+ * merge — that override exists for a `mergeable` GitHub has not recomputed
+ * since a push, and this is GitHub trying the merge just now, on the revision
+ * the refusal is held against. Should the worktree merge come out clean after
+ * all, Resolve conflicts says so: "nothing to resolve, just push it".
+ */
+export function prConflicted(mergeable: string, seen: ConflictFilesSeen | null, refused: boolean): boolean {
+  return refused
+    || (mergeable === "CONFLICTING" && !gitSaysClean(seen))
+    || (!!seen && !seen.stale && seen.files.length > 0);
+}

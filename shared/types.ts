@@ -3592,7 +3592,12 @@ export interface PrListResponse {
   pageSize?: number;
 }
 
-export interface PrActionResult { ok: boolean; error?: string; detail?: string }
+export interface PrActionResult {
+  ok: boolean; error?: string; detail?: string;
+  /** Update branch only: GitHub refused because base and head conflict — the
+   *  one refusal the panel can offer to resolve. */
+  conflict?: boolean;
+}
 
 /** State of the Claude Code hook wiring (#187), read from ~/.claude/settings.json. */
 export interface HookSetupStatus {

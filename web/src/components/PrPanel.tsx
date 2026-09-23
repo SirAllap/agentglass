@@ -46,7 +46,7 @@ import { api, type BranchSpend, type RepoSpend } from "../lib/api.ts";
 import {
   allowedMethods, pickMergeMethod, MERGE_LABEL, MERGE_OPTION, type MergeMethod,
 } from "../../../shared/mergeMethod.ts";
-import { updateBranchMove } from "../lib/updateBranch.ts";
+import { updateBranchMove, prConflicted, gitSaysClean as cleanMerge } from "../lib/updateBranch.ts";
 import { depSpec } from "../../../shared/deps.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { useMergeDialog } from "./MergeDialog.tsx";
@@ -3357,6 +3357,16 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * nothing on this branch would otherwise say "waiting" forever.
    */
   const [pushed, setPushed] = useState<{ number: number; at: number } | null>(null);
+  /*
+   * "Update branch" refused because base and head conflict.
+   *
+   * The button is only offered while neither GitHub nor the panel's own merge
+   * has said "conflict" — so the refusal is news, and until now it was a red
+   * line with nothing to press after it. Held against the revision it was
+   * refused on: `updatedAt` moves with a push, and a push is exactly what can
+   * make the refusal untrue.
+   */
+  const [refusedUpdate, setRefusedUpdate] = useState<{ number: number; updatedAt: string } | null>(null);
   const AWAIT_CHECKS_MS = 4 * 60_000;
 
   const act = useCallback(async (label: string, fn: () => Promise<{ ok: boolean; error?: string; detail?: string }>) => {
@@ -4724,6 +4734,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                           conversationCount={d.comments.length + d.reviews.length + d.threads.length}
                           behind={behind} behindAsking={behindAsking} localHead={localHead} busyWhat={busyWhat}
                           conflictFiles={conflictFiles}
+                          updateRefused={!!refusedUpdate && refusedUpdate.number === d.number && refusedUpdate.updatedAt === d.updatedAt}
                           onEditRequest={() => setEditingBody(true)}
                           onToggleTask={(newBody) => { void doEditBody(newBody); }}
                           onLocalReview={(recipe) => doLocalReview(undefined, recipe)}
@@ -4740,7 +4751,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                                first, the store simply re-asks GitHub for a
                                count that has not changed yet and caches the old
                                one all over again. */
-                            return act("Update branch", () => api.prUpdateBranch(root, d.number, syncLocal))
+                            return act("Update branch", () => api.prUpdateBranch(root, d.number, syncLocal).then((r) => {
+                              if (r.conflict) setRefusedUpdate({ number: d.number, updatedAt: d.updatedAt });
+                              return r;
+                            }))
                               .finally(() => refreshBehind(root, d.number));
                           }}
                           onRerun={() => act("Re-run checks", () => api.prRerun(root, d.number))}
@@ -5145,7 +5159,7 @@ function ConflictActions({ root, number, branch, base, disabled }: {
   );
 }
 
-function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, openThreads, conversationCount, behind, behindAsking, localHead, conflictFiles, method, onMethod, onLocalReview, onReviewInTerminal, onMerge, onClose, onUpdateBranch, onRerun, onAutoMerge, onCancelAutoMerge, onDraft, onGoThreads, onGoReview, onGoMoved, movedSince, onEditRequest, onToggleTask, awaitingChecks }: {
+function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, openThreads, conversationCount, behind, behindAsking, localHead, conflictFiles, updateRefused, method, onMethod, onLocalReview, onReviewInTerminal, onMerge, onClose, onUpdateBranch, onRerun, onAutoMerge, onCancelAutoMerge, onDraft, onGoThreads, onGoReview, onGoMoved, movedSince, onEditRequest, onToggleTask, awaitingChecks }: {
   d: PrDetail;
   /** The checkout this pull request is being read from — where a conflict would
    *  be prepared. */
@@ -5169,6 +5183,8 @@ function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, open
   /** Which files would conflict, and whether the answer came from a fetch that
    *  worked. Null while the question is out, or when there is no conflict. */
   conflictFiles: { files: string[]; stale: boolean; resolvedLocally?: { branch: string; ahead: number } } | null;
+  /** "Update branch" was just refused over a conflict, on this revision. */
+  updateRefused: boolean;
   /** How this repository merges. Owned by the panel, not by this component, so
    *  it survives the Files tab and is remembered for next time. */
   method: MergeMethod; onMethod: (m: MergeMethod) => void;
@@ -5271,20 +5287,11 @@ function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, open
    * whenever they last came down, and overriding GitHub on the strength of an
    * old copy would be guessing in the direction that unblocks a merge.
    */
-  const gitSaysClean = !!conflictFiles && !conflictFiles.stale && conflictFiles.files.length === 0;
+  const gitSaysClean = cleanMerge(conflictFiles);
 
-  const conflicted = (d.mergeable === "CONFLICTING" && !gitSaysClean)
-    // Or because we merged the two trees ourselves and found out. GitHub
-    // computes `mergeable` lazily and answers UNKNOWN until somebody asks
-    // twice — measured on this repository's own open pull request #464, which
-    // GitHub called UNKNOWN while git named the one file it conflicts in. A
-    // gate that waits for GitHub to make its mind up is a gate that is open
-    // exactly when the answer matters most.
-    //
-    // A stale answer does not get a vote: if the fetch failed, what is on
-    // screen is from whenever the refs were last pulled down, and taking
-    // buttons away on that basis would be guessing.
-    || (!!conflictFiles && !conflictFiles.stale && conflictFiles.files.length > 0);
+  // GitHub's verdict, git's, and an "Update branch" GitHub just refused over a
+  // conflict — weighed in lib/updateBranch.ts, where the order is tested.
+  const conflicted = prConflicted(d.mergeable, conflictFiles, updateRefused);
 
   // Whether "Update branch" is offered at all — asked once, because the button
   // and the line that explains what it will not touch have to appear and
@@ -5482,9 +5489,12 @@ function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, open
               the old base, so this exact combination is untested. Press again to go ahead.
             </Reason>
           )}
-          {checksLine(c, d.mergeable === "MERGEABLE" ? d.baseRefName : undefined) && (
+          {/* "No conflicts with <base>" only while the panel agrees: after a
+              refused update, or with git naming the files, GitHub's MERGEABLE
+              is the stale one, and the line sat right above Resolve conflicts. */}
+          {checksLine(c, d.mergeable === "MERGEABLE" && !conflicted ? d.baseRefName : undefined) && (
             <Reason tint={c.pending > 0 ? "var(--warning)" : "var(--success)"} glyph={c.pending > 0 ? <CircleIcon size={ICON.xs} /> : <DoneIcon size={ICON.xs} />}>
-              {checksLine(c, d.mergeable === "MERGEABLE" ? d.baseRefName : undefined)}
+              {checksLine(c, d.mergeable === "MERGEABLE" && !conflicted ? d.baseRefName : undefined)}
             </Reason>
           )}
           {/* WHICH files, not just that there are some. GitHub says a pull
@@ -5521,7 +5531,10 @@ function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, open
               than left as a red banner nobody can act on: there is nothing to
               do here but wait, and a warning you cannot act on is one you learn
               to scroll past. */}
-          {d.mergeable === "CONFLICTING" && gitSaysClean && (
+          {/* Not after GitHub refused an update over the conflict: that is
+              GitHub trying the merge just now, and "nothing to do" beside the
+              buttons it brings would be the panel contradicting itself. */}
+          {d.mergeable === "CONFLICTING" && gitSaysClean && !updateRefused && (
             <Reason tint="var(--success)" glyph={<DoneIcon size={ICON.xs} />}>
               <b style={{ color: "var(--text)", fontWeight: 500 }}>Already resolved</b> — git merged
               {" "}{d.headRefName} into {d.baseRefName} just now and found nothing to settle.
@@ -5684,7 +5697,9 @@ function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, open
             * a terminal, which is the other half of what people do with a
             * conflict.
             */}
-          {d.mergeable === "CONFLICTING" && (
+          {/* `conflicted` as well: git naming the files, or GitHub refusing the
+              update over them, is a conflict GitHub has not caught up with. */}
+          {(d.mergeable === "CONFLICTING" || conflicted) && (
             <ConflictActions root={root} number={d.number} branch={d.headRefName} base={d.baseRefName} disabled={busy} />
           )}
           {/*
