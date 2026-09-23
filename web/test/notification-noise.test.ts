@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { SystemNote } from "../src/lib/sysNotify.ts";
+import { DEFAULT_NOTIFY_PREFS } from "../../shared/notifyPrefs.ts";
+import { receiveNotifyPrefs } from "../src/lib/notifyPrefsStore.ts";
 
 // The bell's half of the noise policy — see src/lib/notePolicy.ts for the
 // rules and server/test/notification-noise.test.ts for what the server no
@@ -22,6 +24,12 @@ beforeAll(async () => {
   policy = await import("../src/lib/notePolicy.ts");
   sysNotify = await import("../src/lib/sysNotify.ts");
   policy.__resetMuted();
+  // This file is about the bell's OWN policy (levels, mutes, grouping, the
+  // keyed list) — which kind reaches the bell at all is
+  // notify-prefs-emitters.test.ts's job, upstream of this one. Every note
+  // below arrives with no `notifyKind` (the default "idle"), which is off by
+  // default, so it is turned on here for the duration of this file only.
+  receiveNotifyPrefs({ ...DEFAULT_NOTIFY_PREFS, kinds: { ...DEFAULT_NOTIFY_PREFS.kinds, idle: true } });
 });
 
 afterAll(() => {
@@ -29,6 +37,7 @@ afterAll(() => {
   policy.__resetMuted();
   sysNotify.clearNotes();
   sysNotify.setNotifyQuiet(true);
+  receiveNotifyPrefs(DEFAULT_NOTIFY_PREFS);
   (globalThis as any).localStorage = storage0;
 });
 
