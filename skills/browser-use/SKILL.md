@@ -25,6 +25,48 @@ last time, a tree of the interactive page addressed by role and accessible
 name, the current value of every input, and optionally the picture. Polling six
 verbs in turn is where the time goes.
 
+After the first look, ask for **only what changed**:
+
+```bash
+agentglass-browser observe --delta            # {delta:true, added, removed, changed, same, console, network}
+agentglass-browser click e12 --observe        # `after` is a delta too
+```
+
+`added` are whole nodes, `removed` are ids gone from the page, `unlisted` are
+ids still there but past the tree's cap, `changed` is `{e, field: new value}`
+(null = the field went away), `same` is how many did not move. New console and
+network rows only. `form`, `storage` and `viewport` appear only when they
+changed — **absent means unchanged**. Positions (`at`) are not diffed. After a
+navigation, with no earlier look, or after a look you only saw part of
+(`--max-tokens`, `--summary`), you get the full answer with `delta:false` and a
+`reason`. Plain `observe` is always the full page.
+
+The baseline (and `checkup`'s "since your last checkup") is kept per `--as`
+name; callers without one share a single baseline, so pass `--as` to get your own.
+
+`click` and `press` wait for what they caused (the navigation, or a quiet page
+with no request in flight, capped at 1 s) and answer with an `effect`:
+`navigated`, `newDocument`, `newErrors`, `failedRequests`, `dialog`,
+`settledBy`. Often that is all you need to know — no look at all.
+
+## Did it break? One call
+
+The edit → reload → "is it broken?" loop is one verb:
+
+```bash
+agentglass-browser checkup http://localhost:5173/   # load it, wait for quiet, report
+agentglass-browser checkup --reload                 # after your edit
+agentglass-browser checkup                          # no navigation: since your last checkup
+```
+
+The first field is the verdict, `ok` or `N problems`. Problems are uncaught
+exceptions and console errors — **including the ones thrown while the page
+loaded**, which `console` and `observe` cannot see — failed requests (4xx/5xx,
+CORS, blocked) and visible error text (`role=alert`, so an alert toast counts). Chromium's `issues`,
+`perf` (LCP, CLS) and `a11y` (unlabelled controls, with ids) come along as
+advice and do not count. A screenshot path only when something failed
+(`--no-shot` to skip; `shot: "unavailable: …"` when there is no frame to take).
+
 ## Then the whole interaction in ONE call
 
 ```bash
@@ -49,6 +91,7 @@ once. "Nothing happened in thirty seconds" is an answer, not a failure.
 ## The verbs, by what you reach for them for
 
 ```
+dev loop    checkup (did it break — errors from load on, failed requests, visible errors)
 look        observe · read · text · html · region · shot · frames · console · network
 page        resize · zoom (the one Ctrl+/Ctrl- move) · emulate · throttle
 act         click · type · select · check · fill · hover · dblclick · rightclick
@@ -73,6 +116,26 @@ batch       do (and `lanes` for several pages at once)
 id like `e17`, stamped on the element so it survives a re-render. Every verb
 that takes a selector takes one of those instead. Do not go inventing CSS.
 
+**Or name it, and skip the look.** When you already know what a thing is
+called — you wrote the page, or just read it — every verb that takes a
+selector takes a locator too (CLI and MCP alike):
+
+```bash
+agentglass-browser click 'role=button[name="Save"]'  # observe's role or ARIA's: link, textbox, checkbox, combobox, heading
+agentglass-browser type label=Email ada@orbit.example
+agentglass-browser select label=Plan team
+agentglass-browser click text=Continue               # the innermost element with that text
+agentglass-browser fill --field 'label=Email=ada@orbit.example' --field 'placeholder=Search=orbit'
+# also testid=submit (exact, hidden ones included)
+```
+
+Case-insensitive substring. Exact: quote it (`text="Save"`, `label="Email"`);
+a role's name only with `s` (`[name="Save" s]`). A whole name beats a part
+of one, so "Save" is not confused with "Save draft". Only what is on screen
+matches (`upload` also finds a hidden file input). None or several is refused, and
+the refusal lists ids to use next (`e4 button "Save"`), the hidden matches,
+and what of that kind IS there.
+
 **A failure explains itself.** It comes back with the console errors and failed
 requests from just before it, and a screenshot. `selector matched 3 elements`
 names them with position and text. You do not need a second call to find out
@@ -80,8 +143,9 @@ what went wrong.
 
 **JavaScript is yours.** `eval` reads the app's own runtime — a store, a
 component's state, `document.visibilityState`. `eval --file` for anything a
-shell would mangle. `addInitScript` runs BEFORE the page's own scripts, on every
-navigation, which is the one thing `eval` cannot do.
+shell would mangle. `addInitScript` runs in the page now and, in principle,
+before the page's own scripts; this browser drops it after a navigation, so
+register it again after one. For errors thrown during load, use `checkup`.
 
 **DevTools, whole.** `cdp <Domain.method>` relays the entire protocol —
 breakpoints, heap snapshots, the accessibility tree. On top of it: `debug` (a

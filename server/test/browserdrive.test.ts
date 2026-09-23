@@ -469,6 +469,40 @@ describe("§16 — origins, read-only, audit, redaction", () => {
     expect("error" in parseAsk("cookies", { set: { name: "a", value: "b" } })).toBe(true);
   });
 
+  test("checkup: a url is checked like open's, the flags are flags, settleMs is clamped", () => {
+    process.env.AGENTGLASS_BROWSER_ORIGINS = "localhost";
+    const ok = parseAsk("checkup", { url: "http://localhost:5173/", noShot: true, settleMs: 99_999 });
+    if (!("ask" in ok)) throw new Error(ok.error);
+    expect(ok.ask.args).toMatchObject({ url: "http://localhost:5173/", noShot: true, settleMs: 15_000 });
+    const low = parseAsk("checkup", { reload: true, settleMs: -5 });
+    if (!("ask" in low)) throw new Error(low.error);
+    expect(low.ask.args).toMatchObject({ reload: true, settleMs: 0 });
+    expect("error" in parseAsk("checkup", { url: "https://elsewhere.example/" })).toBe(true);
+    expect("error" in parseAsk("checkup", { url: "javascript:alert(1)" })).toBe(true);
+    expect("error" in parseAsk("checkup", { url: "http://localhost:5173/", reload: true })).toBe(true);
+    expect("error" in parseAsk("checkup", { reload: "yes" })).toBe(true);
+    expect("error" in parseAsk("checkup", { settleMs: "soon" })).toBe(true);
+  });
+
+  test("checkup acts only when it navigates: read-only mode lets the look through", () => {
+    process.env.AGENTGLASS_BROWSER_READONLY = "1";
+    expect("ask" in parseAsk("checkup", {})).toBe(true);
+    expect("error" in parseAsk("checkup", { reload: true })).toBe(true);
+    expect("error" in parseAsk("checkup", { url: "https://example.com/" })).toBe(true);
+  });
+
+  test("checkup has its own patience: a navigation, the settle cap and a bounded shot", () => {
+    const src = readFileSync(new URL("../src/browserdrive.ts", import.meta.url), "utf8");
+    const table = src.slice(src.indexOf("const TIMEOUT_MS: Record<BrowserOp, number> = {"));
+    const block = table.slice(0, table.indexOf("\n};"));
+    /* The worst case, step by step, is about 100 s (four enables and four
+       disables at 3 s, 40 s of navigation, a 15 s cap whose loop can overrun
+       it by a drain and a poll, the reads, a 12 s shot). At 75 s the relay
+       answered "timeout" while the panel still held the domains on. Under the
+       CLI's own 120 s. */
+    expect(block).toMatch(/\n  checkup: 110_000,/);
+  });
+
   test("every op OBSERVE_OPS does not name is acting by default", () => {
     // Every verb in the real op set is either explicitly observing or refused
     // under read-only — none of them slip through unclassified.
@@ -744,6 +778,28 @@ describe("§15 — every verb that carries a value, not just `type`", () => {
     const logged = exportAudit()[0]!;
     expect(JSON.stringify(logged), "the password reached the exportable log").not.toContain("hunter2");
     expect((logged.args.fields as Record<string, string>)["#user"]).toBe("alice");
+  });
+
+  test("a refused fill does not carry the password into the log through its error", async () => {
+    /* The args were masked and the error was stored as the panel wrote it —
+       and a refusal that listed the candidates quoted a field's value. The
+       panel no longer does; the relay must not rely on that. */
+    setBrowserSink({
+      send: (a) => queueMicrotask(() => settleBrowser(a.id, {
+        ok: false,
+        error: 'could not fill label=Pass — selector matched 2 elements — e1 input#j1 "Verano2026!", e2 input#j2 ghp_' + "b".repeat(30),
+        value: { secretFields: ["#j1"] },
+      })),
+      listeners: () => 1,
+    });
+    noteBrowserReady("w1", true);
+    const p = parseAsk("fill", { fields: { "#j1": "Verano2026!", "label=Pass": "x" } });
+    if (!("ask" in p)) throw new Error("unreachable");
+    await askBrowser(p.ask);
+    const logged = JSON.stringify(exportAudit()[0]!);
+    expect(logged, "the typed secret reached the log through the error").not.toContain("Verano2026!");
+    expect(logged, "a token reached the log through the error").not.toContain("ghp_");
+    expect(logged).toContain("matched 2 elements");
   });
 });
 

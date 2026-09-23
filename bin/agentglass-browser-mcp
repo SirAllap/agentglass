@@ -34,6 +34,7 @@ Environment:
     AGENTGLASS_SERVER   default http://localhost:4000
     AGENTGLASS_TOKEN    only needed if the server was started with one
 """
+import base64
 import json
 import os
 import re
@@ -315,6 +316,7 @@ TOOLS = [
                 "sinceLast": {"type": "boolean", "description": "Only what is new since YOUR last sinceLast call on this verb. The SERVER keeps the cursor, so there is no timestamp to carry — and a caller that has to carry one forgets, and re-reads the whole log every turn."},
                 "since": {"type": "number", "description": "Only console and network newer than this epoch ms — pass the `now` from your last observe."},
                 "shot": {"type": "boolean", "description": "Include a screenshot in the same answer."},
+                "delta": {"type": "boolean", "description": "Only what changed since your last observe of this document: {delta:true, added:[nodes], removed:[ids], changed:[{e, fields}], same:n}, new console/network, and form/storage/viewport only when they changed. After a navigation or with no earlier observe it answers in full with delta:false and a reason. Positions (`at`) are not diffed."},
             },
         },
     },
@@ -370,19 +372,19 @@ TOOLS = [
             "menu's trigger often does nothing at all, which reads as a broken selector."
         ),
         "inputSchema": {"type": "object", "properties": {
-                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},"selector": {"type": "string"}}, "required": ["selector"]},
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. A delta against your last observe of the same document (full, delta:false, after a navigation), so ask for it on the step whose result you actually need."},"selector": {"type": "string"}}, "required": ["selector"]},
     },
     {
         "name": "browser_dblclick",
         "description": "Double-click an element. Two clicks are not a double click; a page listening for dblclick ignores them.",
         "inputSchema": {"type": "object", "properties": {
-                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},"selector": {"type": "string"}}, "required": ["selector"]},
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. A delta against your last observe of the same document (full, delta:false, after a navigation), so ask for it on the step whose result you actually need."},"selector": {"type": "string"}}, "required": ["selector"]},
     },
     {
         "name": "browser_rightclick",
         "description": "Right-click, which opens the PAGE's own context menu — not the browser's.",
         "inputSchema": {"type": "object", "properties": {
-                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},"selector": {"type": "string"}}, "required": ["selector"]},
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. A delta against your last observe of the same document (full, delta:false, after a navigation), so ask for it on the step whose result you actually need."},"selector": {"type": "string"}}, "required": ["selector"]},
     },
     {
         "name": "browser_focus",
@@ -403,7 +405,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},"selector": {"type": "string"}, "checked": {"type": "boolean", "description": "Default true."}},
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. A delta against your last observe of the same document (full, delta:false, after a navigation), so ask for it on the step whose result you actually need."},"selector": {"type": "string"}, "checked": {"type": "boolean", "description": "Default true."}},
             "required": ["selector"],
         },
     },
@@ -417,7 +419,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. A delta against your last observe of the same document (full, delta:false, after a navigation), so ask for it on the step whose result you actually need."},
                 "fields": {"type": "object", "description": '{"#name": "Ada", "#email": "ada@example.com"}'},
                 "submit": {"type": "boolean"},
             },
@@ -732,7 +734,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},"selector": {"type": "string"}, "to": {"type": "string", "description": "Where to drop it."}},
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. A delta against your last observe of the same document (full, delta:false, after a navigation), so ask for it on the step whose result you actually need."},"selector": {"type": "string"}, "to": {"type": "string", "description": "Where to drop it."}},
             "required": ["selector", "to"],
         },
     },
@@ -1051,8 +1053,25 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},"selector": {"type": "string"}, "value": {"type": "string"}},
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. A delta against your last observe of the same document (full, delta:false, after a navigation), so ask for it on the step whose result you actually need."},"selector": {"type": "string"}, "value": {"type": "string"}},
             "required": ["selector", "value"],
+        },
+    },
+    {
+        "name": "browser_checkup",
+        "description": (
+            "Did it break? Loads (url) or reloads, waits for quiet, returns a verdict with console errors "
+            "and exceptions (including during load), failed requests and visible error text (a role=alert "
+            "toast counts as a problem); issues/perf/a11y as advice; a screenshot path only on failure."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string"},
+                "reload": {"type": "boolean"},
+                "noShot": {"type": "boolean"},
+                "settleMs": {"type": "integer", "description": "how long to wait for quiet at most (default 5000, 0..15000)"},
+            },
         },
     },
     {
@@ -1194,17 +1213,17 @@ TOOLS = [
         "description": "The text of one element, instead of the whole page.",
         "inputSchema": {
             "type": "object",
-            "properties": {"selector": {"type": "string", "description": "CSS selector"}},
+            "properties": {"selector": {"type": "string"}},
             "required": ["selector"],
         },
     },
     {
         "name": "browser_click",
-        "description": "Click the first element matching a CSS selector. Reports whether anything matched, and where the page ended up.",
+        "description": "Click one element (an id from observe, a locator like role=button[name=\"Save\"], or CSS). Reports whether anything matched, and where the page ended up.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},"selector": {"type": "string"}},
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. A delta against your last observe of the same document (full, delta:false, after a navigation), so ask for it on the step whose result you actually need."},"selector": {"type": "string"}},
             "required": ["selector"],
         },
     },
@@ -1214,7 +1233,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. A delta against your last observe of the same document (full, delta:false, after a navigation), so ask for it on the step whose result you actually need."},
                 "selector": {"type": "string"},
                 "text": {"type": "string"},
                 "submit": {"type": "boolean", "description": "press Enter afterwards"},
@@ -1249,7 +1268,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},"key": {"type": "string"}},
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. A delta against your last observe of the same document (full, delta:false, after a navigation), so ask for it on the step whose result you actually need."},"key": {"type": "string"}},
             "required": ["key"],
         },
     },
@@ -1690,6 +1709,10 @@ def run(name, args):
             {"type": "image", "data": data, "mimeType": "image/png"},
             {"type": "text", "text": f"{value.get('title', '')}\n{value.get('url', '')}"},
         ]}
+    if verb == "checkup" and value.get("png"):
+        # A path, not an image: the picture is evidence for later, and an image
+        # block is paid for on every turn after this one.
+        value["shot"] = _checkup_shot(value.pop("png")) or "unavailable: the picture could not be written to disk"
     if verb in ("read", "text"):
         # Plain text, because the caller is a language model reading a page:
         # JSON around one string is punctuation it pays for.
@@ -1697,6 +1720,61 @@ def run(name, args):
             return {"content": [{"type": "text", "text": value.get("text", "")}]}
         return {"content": [{"type": "text", "text": f"{value.get('title', '')}\n{value.get('url', '')}\n\n{value.get('text', '')}"}]}
     return {"content": [{"type": "text", "text": json.dumps(value)}]}
+
+
+def _write_private(path, data, binary=False):
+    """A file that may hold session material — cookies, storage, a HAR with
+    its request headers, a snapshot of a signed-in page — written 0600. The
+    plain `open(path, "w")` these used took the umask, 0644 on most machines:
+    every account on the box could read the cookies `session save` had just
+    pulled out of the browser. Created with the mode rather than chmod-ed
+    after (the gap between the two is the same gap), and re-tightened when the
+    file already existed, since O_CREAT's mode only applies to a new file."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+    except OSError:
+        pass
+    with os.fdopen(fd, "wb" if binary else "w") as f:
+        f.write(data)
+
+
+CHECKUP_SHOTS_KEPT = 20
+
+
+def _checkup_shot(png):
+    """Where a checkup's failure screenshot lands: private (0600, through
+    `_write_private`), under $XDG_CACHE_HOME/agentglass, one file per checkup,
+    the newest CHECKUP_SHOTS_KEPT kept. `shot` prints a data url when it is
+    given no path, so there is no default of its to share.
+
+    The CLI and the MCP server each carry this function, byte for byte the
+    same — they are two stdlib-only scripts with no module between them, and
+    browser-mcp.test.ts holds the two copies equal."""
+    try:
+        raw = base64.b64decode(png.split(",", 1)[1] if "," in png else png)
+    except ValueError:
+        return None
+    if not raw:
+        return None
+    d = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "agentglass")
+    try:
+        os.makedirs(d, mode=0o700, exist_ok=True)
+        # The pid too: two callers in the same millisecond are two pictures.
+        at = os.path.join(d, f"checkup-{int(time.time() * 1000)}-{os.getpid()}.png")
+        _write_private(at, raw, binary=True)
+    except OSError:
+        return None
+    # A failing page checked in a loop writes one picture a minute for as long
+    # as it fails; nobody reads the fortieth.
+    try:
+        named = (re.fullmatch(r"checkup-(\d+)(?:-\d+)?\.png", f) for f in os.listdir(d))
+        shots = [m.group(0) for m in sorted((m for m in named if m), key=lambda m: int(m.group(1)))]
+        for old in shots[:-CHECKUP_SHOTS_KEPT]:
+            os.remove(os.path.join(d, old))
+    except OSError:
+        pass
+    return at
 
 
 def reply(msg_id, result=None, error=None):
@@ -1739,7 +1817,11 @@ def main():
                     "mints a tab in a container of your own, and every tool after it goes to that "
                     "tab, so nothing you do lands on somebody else's page and nothing they do "
                     "moves yours. Until you have one, any tool that acts on a page is refused "
-                    "rather than sent to whichever tab is in front."
+                    "rather than sent to whichever tab is in front.\n\n"
+                    "Every `selector` takes an id from browser_observe (e12), a locator — "
+                    "role=button[name=\"Save\"], label=Email, text=Continue, placeholder=Search, "
+                    "testid=submit — or CSS. A locator needs no observe first when you know what "
+                    "the thing is called; none or several matching is refused with ids to use."
                 ),
             })
         elif method == "tools/list":

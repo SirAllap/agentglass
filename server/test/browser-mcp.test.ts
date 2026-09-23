@@ -12,7 +12,7 @@
  * the JSON-RPC over stdio.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { freePort } from "./freePort.ts";
@@ -26,6 +26,8 @@ let dir = "", base = "", proc: ReturnType<typeof Bun.spawn> | null = null;
 let ws: WebSocket | null = null;
 let answers: Record<string, { ok: boolean; value?: unknown; error?: string }> = {};
 let asked: string[] = [];
+/** The args of every ask, for the tests that are about what the tool sent. */
+let askedArgs: Record<string, unknown>[] = [];
 const CLIENT = "test-window-mcp";
 
 beforeAll(async () => {
@@ -65,10 +67,11 @@ async function openWindow() {
   ws = new WebSocket(base.replace("http", "ws") + "/stream");
   await new Promise((r) => ws!.addEventListener("open", r));
   ws.addEventListener("message", async (ev) => {
-    let frame: { type?: string; data?: { op?: string; id?: string } };
+    let frame: { type?: string; data?: { op?: string; id?: string; args?: Record<string, unknown> } };
     try { frame = JSON.parse(String((ev as MessageEvent).data)); } catch { return; }
     if (frame.type !== "browser" || !frame.data) return;
     asked.push(frame.data.op ?? "");
+    askedArgs.push(frame.data.args ?? {});
     const reply = answers[frame.data.op ?? ""] ?? { ok: false, error: "the stand-in was not told what to say" };
     await fetch(base + "/browser/result", {
       method: "POST",
@@ -182,6 +185,36 @@ describe.skipIf(!HAVE_PY)("the MCP server", () => {
     expect(content[0]!.text).toContain("a page");
   });
 
+  test("browser_observe takes delta, and it reaches the window", async () => {
+    await openWindow();
+    asked = []; askedArgs = [];
+    answers = { observe: { ok: true, value: { delta: true, url: "u", title: "t", added: [], removed: [], changed: [], same: 3 } } };
+    const said = await talk([
+      hello, ready, { jsonrpc: "2.0", id: 2, method: "tools/list" },
+      { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "browser_observe", arguments: { delta: true, shared: true } } },
+    ]);
+    const tools = (said[1]!.result as { tools: { name: string; inputSchema: { properties?: Record<string, unknown> } }[] }).tools;
+    expect(Object.keys(tools.find((t) => t.name === "browser_observe")!.inputSchema.properties ?? {})).toContain("delta");
+    expect(asked).toEqual(["observe"]);
+    expect(askedArgs[0]!.delta).toBe(true);
+  });
+
+  test("a locator reaches the window exactly as written, and the instructions say what one is", async () => {
+    await openWindow();
+    asked = []; askedArgs = [];
+    answers = { click: { ok: true, value: { clicked: "x", url: "u", title: "t" } } };
+    const loc = 'role=button[name="Save changes"]';
+    const said = await talk([
+      hello, ready,
+      { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_click", arguments: { selector: loc, shared: true } } },
+    ]);
+    expect(asked).toEqual(["click"]);
+    expect(askedArgs[0]!.selector).toBe(loc);
+    const init = said[0]!.result as { instructions?: string };
+    expect(init.instructions).toContain("role=button[name=");
+    expect(init.instructions).toContain("label=");
+  });
+
   test("a refusal from the page is an error result, not a crash", async () => {
     await openWindow();
     answers = { click: { ok: false, error: "nothing on the page matches #gone" } };
@@ -206,6 +239,68 @@ describe.skipIf(!HAVE_PY)("the MCP server", () => {
   test("an unknown method is answered as one rather than ignored", async () => {
     const said = await talk([hello, { jsonrpc: "2.0", id: 9, method: "resources/list" }]);
     expect((said[1]!.error as { code: number }).code).toBe(-32601);
+  });
+});
+
+describe.skipIf(!HAVE_PY)("browser_checkup", () => {
+  /* Two stdlib-only scripts with no module between them, so the picture's
+     writer is carried twice — and held equal here, so the MCP copy cannot
+     drift back to a file the umask decides the mode of. */
+  test("the CLI and the MCP write the picture with the same code", () => {
+    const cli = readFileSync(new URL("../../bin/agentglass-browser", import.meta.url), "utf8");
+    const mcp = readFileSync(new URL("../../bin/agentglass-browser-mcp", import.meta.url), "utf8");
+    const fn = (src: string, name: string) => {
+      const a = src.indexOf(`def ${name}(`);
+      expect(a, `${name} is missing`).toBeGreaterThan(-1);
+      return src.slice(a, src.indexOf("\n\n\n", a));
+    };
+    for (const name of ["_checkup_shot", "_write_private"]) expect(fn(mcp, name)).toBe(fn(cli, name));
+    expect(mcp).toContain("CHECKUP_SHOTS_KEPT = 20");
+    expect(cli).toContain("CHECKUP_SHOTS_KEPT = 20");
+  });
+
+  test("exists, and its url, reload, noShot and settleMs reach the window", async () => {
+    await openWindow();
+    asked = []; askedArgs = [];
+    answers = { checkup: { ok: true, value: { verdict: "ok", url: "http://localhost:5173/", title: "Orbit" } } };
+    const said = await talk([
+      hello, ready, { jsonrpc: "2.0", id: 2, method: "tools/list" },
+      { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "browser_checkup", arguments: { url: "http://localhost:5173/", noShot: true, shared: true } } },
+      { jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "browser_checkup", arguments: { reload: true, settleMs: 2000, shared: true } } },
+    ]);
+    const tools = (said[1]!.result as { tools: { name: string; inputSchema: { properties?: Record<string, unknown> } }[] }).tools;
+    const tool = tools.find((t) => t.name === "browser_checkup");
+    expect(tool).not.toBeUndefined();
+    expect(Object.keys(tool!.inputSchema.properties ?? {})).toEqual(expect.arrayContaining(["url", "reload", "noShot", "settleMs"]));
+    expect(asked).toEqual(["checkup", "checkup"]);
+    expect(askedArgs[0]).toMatchObject({ url: "http://localhost:5173/", noShot: true });
+    expect(askedArgs[1]).toMatchObject({ reload: true, settleMs: 2000 });
+    const text = (said[2]!.result as { content: { text: string }[] }).content[0]!.text;
+    expect(JSON.parse(text).verdict).toBe("ok");
+  });
+
+  test("a failure's picture comes back as a path to a private file, not an image", async () => {
+    await openWindow();
+    answers = { checkup: { ok: true, value: { verdict: "1 problem", url: "u", title: "t", errors: ["TypeError: x"], png: "data:image/png;base64,iVBORw0KGgo=" } } };
+    const cache = mkdtempSync(join(dir, "mcp-cache-"));
+    const p = Bun.spawn(["python3", MCP], {
+      env: { PATH: process.env.PATH ?? "", AGENTGLASS_SERVER: base, XDG_CACHE_HOME: cache },
+      stdin: "pipe", stdout: "pipe", stderr: "pipe",
+    });
+    const w = p.stdin as { write: (s: string) => void; end: () => void };
+    for (const m of [hello, ready, { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_checkup", arguments: { shared: true } } }]) {
+      w.write(`${JSON.stringify(m)}\n`);
+    }
+    w.end();
+    const out = await new Response(p.stdout).text();
+    await p.exited;
+    const said = out.split("\n").filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>);
+    const content = (said[1]!.result as { content: { type: string; text: string }[] }).content;
+    expect(content[0]!.type).toBe("text");
+    const v = JSON.parse(content[0]!.text);
+    expect(v.png).toBeUndefined();
+    expect(v.shot.startsWith(join(cache, "agentglass", "checkup-"))).toBe(true);
+    expect(statSync(v.shot).mode & 0o777).toBe(0o600);
   });
 });
 

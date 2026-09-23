@@ -130,6 +130,23 @@ export function Tool({ on, label, onClick, disabled, tint, children }: {
   );
 }
 
+/**
+ * The URL a guest was born with, for as long as that element lives.
+ *
+ * A webview navigates whenever its `src` attribute is written, and the tab's
+ * URL changes on every same-document navigation (`did-navigate-in-page`). So
+ * `src={t.url}` turned each pushState route change into a full load: the page
+ * lost its state and every id `observe` had stamped on it — measured with a
+ * marker on `window` that did not survive a click on a client-side link. After
+ * mount nothing needs React to move a guest (the address bar sets `w.src`, the
+ * shelf and the driver call `loadURL`), so the prop is read once. A tab that
+ * sleeps and wakes is a new element and is born at its current URL.
+ */
+function BornAt({ url, children }: { url: string; children: (src: string) => React.ReactNode }) {
+  const [src] = useState(url);
+  return <>{children(src)}</>;
+}
+
 /** The site's own icon, or a mark in its place. Falls back on error rather than
  *  leaving a broken-image glyph in the strip. */
 function Favicon({ src }: { src: string | null }) {
@@ -2829,9 +2846,10 @@ export function BrowserView({ active: viewOn, scope }: {
               {IS_DEMO ? (
                 <DemoPage url={t.url || BLANK} />
               ) : (
+                <BornAt url={t.url || BLANK}>{(src) => (
                 <webview
                   ref={bind(t.id) as unknown as React.Ref<HTMLElement>}
-                  src={t.url || BLANK}
+                  src={src}
                   partition={partitionFor(BROWSER_PARTITION, t.profile)}
                   /* A page may ask for a window. What happens to the request is
                      decided in the shell — a sign-in popup gets a real window, a
@@ -2849,6 +2867,7 @@ export function BrowserView({ active: viewOn, scope }: {
                   {...({ allowpopups: "" } as unknown as { allowpopups?: boolean })}
                   style={{ width: "100%", height: "100%", background: "var(--bg)" }}
                 />
+                )}</BornAt>
               )}
             </div>
           </div>

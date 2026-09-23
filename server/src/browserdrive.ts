@@ -74,7 +74,7 @@ export type BrowserOp =
   | "cdp" | "listeners" | "coverage" | "profiles" | "emulate" | "events" | "record" | "audit"
   | "debug" | "clock" | "download" | "settings" | "drag" | "upload" | "storage" | "permission"
   | "pdf" | "throttle" | "har" | "region" | "clipboard" | "save" | "headers" | "fake"
-  | "trace" | "intercept"
+  | "trace" | "intercept" | "checkup"
   | "inspect"
   | "whoami"
   | "health";
@@ -92,6 +92,7 @@ export const BROWSER_OPS: readonly BrowserOp[] = [
   "inspect",
   "clock", "download", "settings", "drag", "upload", "storage", "permission", "pdf",
   "throttle", "har", "region", "clipboard", "save", "headers", "fake", "trace", "intercept",
+  "checkup",
   "whoami",
   "health",
 ];
@@ -222,6 +223,13 @@ const TIMEOUT_MS: Record<BrowserOp, number> = {
   throttle: 15_000, har: 15_000,
   /* One subtree read in the page — cheaper than `observe`, same patience. */
   region: 15_000,
+  /* The sum, not a guess: a navigation's 40 s cap + the 15 s most a settle
+     may be asked for, which its loop can overrun by a 2 s drain and a 1 s
+     poll + the reads (7 s) + the 12 s the shell gets for a picture
+     (SHELL_SHOT_MS) + four enables and four disables at 3 s each: about
+     100 s. It was 75 s, and past that the relay answered "timeout" while the
+     panel still held the domains on. Below the CLI's own 120 s. */
+  checkup: 110_000,
   /* The clipboard is a round trip; a snapshot is Chromium serialising every
      subresource the page pulled in. */
   clipboard: 15_000, save: 60_000, headers: 15_000,
@@ -673,6 +681,9 @@ function isActing(op: BrowserOp, args: Record<string, unknown>): boolean {
      file builds an ownership guard around, and it sat in the observing set
      whole, so read-only mode let it through. */
   if (op === "profiles") return args.make !== undefined || args.drop !== undefined;
+  /* `checkup` with a url or `--reload` navigates; without either it only
+     reads what the page already did. */
+  if (op === "checkup") return args.url !== undefined || args.reload === true;
   return !OBSERVE_OPS.has(op);
 }
 
@@ -1031,6 +1042,29 @@ function readAuditFile(): AuditEntry[] | null {
   return out;
 }
 
+/**
+ * An error is text the panel wrote, and a refusal that quotes the page can
+ * quote a field's value: one listed the candidates of an ambiguous `fill` by
+ * their values, a password that had just been filled among them, while the
+ * args beside it were masked. So every value the ask's own redaction masked
+ * is cut out of the error as well, and token shapes go as they do anywhere.
+ * Values shorter than three characters are left: cutting "x" out of a
+ * sentence destroys the sentence and hides nothing.
+ */
+function scrubError(error: string, args: unknown, masked: unknown): string {
+  const hidden: string[] = [];
+  const walk = (a: unknown, m: unknown): void => {
+    if (typeof a === "string") { if (m === REDACTED && a !== REDACTED && a.length >= 3) hidden.push(a); return; }
+    if (a && typeof a === "object" && m && typeof m === "object") {
+      for (const [k, v] of Object.entries(a as Record<string, unknown>)) walk(v, (m as Record<string, unknown>)[k]);
+    }
+  };
+  walk(args, masked);
+  let out = redactValue(error) as string;
+  for (const h of hidden.sort((x, y) => y.length - x.length)) out = out.split(h).join(REDACTED);
+  return out;
+}
+
 /** What the caller said about itself, lifted off the body once so every
  *  refusal inside `parseAsk` carries it too — a refused call is exactly the
  *  one somebody will want attributed. */
@@ -1075,11 +1109,13 @@ function recordAudit(op: BrowserOp, args: Record<string, unknown>, ok: boolean, 
   const how: AuditHow = declaredHow ?? (page ? "explicit-page" : profile ? "own-container" : "shared");
   const tab = resolved?.tab ?? page;
   const owner = resolved?.owner ?? profile;
+  const masked = redactAsk(op, clean, secrets);
   const entry: AuditEntry = {
     /* The redaction lane's richer signal, kept: `secrets` is a list of
        selectors for the verbs that touch several fields (`fill`), where a
        single boolean could only ever say "one of them". */
-    id: nextAuditId(), ts: Date.now(), op, args: redactAsk(op, clean, secrets), ok, error,
+    id: nextAuditId(), ts: Date.now(), op, args: masked, ok,
+    ...(error === undefined ? {} : { error: scrubError(error, clean, masked) }),
     ...(declaredAs ? { as: declaredAs } : {}),
     ...(tab ? { tab } : {}),
     ...(owner ? { owner } : {}),
@@ -1197,6 +1233,7 @@ export function auditAsScript(entries: AuditEntry[]): string {
         break;
       case "press": line = has("key") ? `agentglass-browser press ${q(a.key)}` : null; break;
       case "reload": line = "agentglass-browser reload"; break;
+      case "checkup": line = has("url") ? `agentglass-browser checkup ${q(a.url)}` : a.reload === true ? "agentglass-browser checkup --reload" : null; break;
       case "back": case "forward": line = `agentglass-browser ${e.op}`; break;
       default: line = null;
     }
@@ -2101,6 +2138,34 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
       }
       break;
     }
+    case "checkup": {
+      /* The url goes through exactly what `open` checks — the scheme and the
+         origin allow-list — because it is an `open`. */
+      if (b.url !== undefined) {
+        const url = safeUrl(b.url);
+        if (!url) return { error: "url must be an http(s) address" };
+        const list = allowedOrigins();
+        const host = new URL(url).host;
+        if (!originAllowed(host, list)) {
+          const msg = `origin refused: ${host} is not in the allow-list (${list.join(", ")})`;
+          recordAudit(op as BrowserOp, { url }, false, msg, false, undefined, caller);
+          return { error: msg };
+        }
+        args.url = url;
+      }
+      for (const k of ["reload", "noShot"] as const) {
+        if (b[k] === undefined) continue;
+        if (typeof b[k] !== "boolean") return { error: `${k} is a flag` };
+        args[k] = b[k];
+      }
+      if (args.url !== undefined && args.reload === true) return { error: "checkup takes a url or reload, not both" };
+      if (b.settleMs !== undefined) {
+        const n = Number(b.settleMs);
+        if (typeof b.settleMs !== "number" || !Number.isFinite(n)) return { error: "settleMs must be a number of milliseconds" };
+        args.settleMs = Math.min(15_000, Math.max(0, Math.round(n)));
+      }
+      break;
+    }
     case "region": {
       if (!okSelector(b.selector)) return { error: "region needs a selector, or an id from an observation" };
       args.selector = b.selector;
@@ -2419,6 +2484,12 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
       /* `observe` can bring the picture back in the same answer, which is the
          difference between one call and two for "show me what happened". */
       if (b.shot !== undefined) args.shot = b.shot === true || b.shot === "true";
+      /* Only what changed since this caller's last observe of the same
+         document. The baseline it is measured against is NOT read from the
+         body: it is the relay's record of what it last handed this caller
+         (`observeTracked`), because a caller asserting its own baseline can
+         only be wrong in ways nothing here could see. */
+      if (op === "observe" && (b.delta === true || b.delta === "true")) args.delta = true;
       break;
     }
     case "resize": {
@@ -2784,6 +2855,9 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
    * exemption it can honour, because every acting verb arrives carrying a page.
    */
   if (b.pageExplicit === true && typeof args.page === "string") args.pageExplicit = true;
+  /* The caller will not see this observation whole (the CLI trims it, or
+     prints one line of it): it must not become the baseline of a delta. */
+  if (b.partial === true) args.partial = true;
   /* Or the caller named that exact tab with `tab <id>` earlier, which is the
      same statement made one call sooner. */
   if (typeof args.page === "string" && typeof args.as === "string"
@@ -3254,8 +3328,14 @@ export async function withObservation(
   /* The caller rides on the observation too: an unattributed sub-ask is one
      the panel's ownership check cannot see, and therefore allows. */
   const inherited: Record<string, unknown> = {};
-  for (const k of ["page", "as", "how", "pageExplicit"]) if (ask.args[k] !== undefined) inherited[k] = ask.args[k];
-  const parsed = parseAsk("observe", inherited);
+  for (const k of ["page", "as", "how", "pageExplicit", "partial"]) if (ask.args[k] !== undefined) inherited[k] = ask.args[k];
+  /* A DELTA, when there is something to diff against. The caller that asks
+     for the page after an action has, nearly always, just looked at it — and
+     re-sending the whole tree to report that one heading changed is where an
+     act-then-look loop spent its tokens. With no earlier look, or after a
+     navigation, the page answers in full and says why (`delta: false`), so
+     nothing is ever left out; a plain `observe` stays the full answer. */
+  const parsed = parseAsk("observe", { ...inherited, delta: true });
   if ("error" in parsed) return reply;
   const seen = await askBrowser(parsed.ask);
   return seen.ok
@@ -3312,7 +3392,7 @@ export async function runSteps(
        a two-lane `do --observe` came back with the same active-tab observation
        twice, and at least one lane's evidence was wrong deterministically,
        with a single agent and entirely correct usage. */
-    const parsed = parseAsk("observe", { ...(opts.caller ?? {}), ...(opts.page ? { page: opts.page } : {}) });
+    const parsed = parseAsk("observe", { ...(opts.caller ?? {}), ...(opts.page ? { page: opts.page } : {}), delta: true });
     if (!("error" in parsed)) {
       const reply = await askBrowser(parsed.ask);
       out.push({ op: "observe", ok: reply.ok, value: reply.value, error: reply.error });
@@ -3390,7 +3470,40 @@ function activeBlock(rows: readonly TabRow[]): TabRow | null {
   return a ? { id: a.id, profile: a.profile ?? "default", url: a.url, title: a.title } : null;
 }
 
+/**
+ * What each caller last saw: the document and the observation number the page
+ * stamped on the last answer this relay delivered to it. Keyed by who asked
+ * and which tab they named, so a delta is always against the caller's OWN
+ * last look — including the look it took at another page in between, which is
+ * how a page restored from the back/forward cache is told apart from the one
+ * the caller saw last. Bounded: callers are few, and a map nobody prunes
+ * grows for the life of the server.
+ */
+const LAST_OBSERVED = new Map<string, { doc: string; seq: number }>();
+const LAST_OBSERVED_MAX = 256;
+const observedKey = (args: Record<string, unknown>) =>
+  `${typeof args.as === "string" ? args.as : ""}\u0000${typeof args.page === "string" ? args.page : ""}`;
+
+async function observeTracked(ask: BrowserAsk, send: (a: BrowserAsk) => Promise<BrowserReply>): Promise<BrowserReply> {
+  const key = observedKey(ask.args);
+  const sent = ask.args.delta === true
+    ? { ...ask, args: { ...ask.args, base: LAST_OBSERVED.get(key) ?? null } }
+    : ask;
+  const reply = await send(sent);
+  /* A look the caller will only see part of: forget the baseline, so the next
+     delta answers in full rather than against nodes it never read. */
+  if (ask.args.partial === true) { LAST_OBSERVED.delete(key); return reply; }
+  const v = reply.value as { doc?: unknown; seq?: unknown } | undefined;
+  if (reply.ok && v && typeof v.doc === "string" && Number.isInteger(v.seq)) {
+    LAST_OBSERVED.delete(key);
+    LAST_OBSERVED.set(key, { doc: v.doc, seq: v.seq as number });
+    if (LAST_OBSERVED.size > LAST_OBSERVED_MAX) LAST_OBSERVED.delete(LAST_OBSERVED.keys().next().value!);
+  }
+  return reply;
+}
+
 export async function askBrowser(ask: BrowserAsk): Promise<BrowserReply> {
+  if (ask.op === "observe") return observeTracked(ask, (a) => (asker ? asker(a) : askWithRetry(a)));
   if (asker) return asker(ask);
   /*
    * §11: two verbs the window cannot answer on its own.
@@ -3606,11 +3719,10 @@ function askOnce(ask: BrowserAsk): Promise<BrowserReply> {
          for being told the field it just typed into was a password. */
       const v = r.value as { secretField?: boolean; secretFields?: unknown } | undefined;
       const wasSecret = v?.secretField === true;
-      /* The multi-field form of the same verdict. `fill` does not send it yet
-         — the page-side test lives in the panel's `type` handler and has never
-         been wired to its `fill` handler — so today the selector heuristic is
-         what catches a `fill` password. This reads the list the moment the
-         panel starts sending one, rather than needing a second change here. */
+      /* The multi-field form of the same verdict: `fill` names the fields the
+         panel saw were secret, on a refusal too — the fields before the one
+         that failed were filled. The selector heuristic still covers a field
+         the panel could not judge. */
       const namedSecret = Array.isArray(v?.secretFields)
         ? (v!.secretFields as unknown[]).filter((x): x is string => typeof x === "string")
         : undefined;
@@ -3664,6 +3776,7 @@ export function settleBrowser(id: unknown, reply: BrowserReply): boolean {
 /** For tests, and for a shutdown that should not leave timers behind. */
 export function resetBrowserDrive(): void {
   NAMED_TABS.clear();
+  LAST_OBSERVED.clear();
   ready.clear();
   for (const [, p] of pending) { clearTimeout(p.timer); p.resolve({ ok: false, error: "cancelled" }); }
   pending.clear();
