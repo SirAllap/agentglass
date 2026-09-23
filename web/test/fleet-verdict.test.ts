@@ -13,7 +13,7 @@
 import { test, expect } from "bun:test";
 import { fleetVerdict } from "../src/lib/fleetVerdict.ts";
 import { attention } from "../../shared/fieldRules.ts";
-import { __setLanternRows, lanternNeed, refreshLantern, lanternRows, lanternFailed, lanternKnown } from "../src/lib/lanternStore.ts";
+import { __setLanternRows, lanternNeed, refreshLantern, lanternRows, lanternFailed, lanternKnown, groupLantern } from "../src/lib/lanternStore.ts";
 import { api } from "../src/lib/api.ts";
 import type { LanternRow } from "../src/components/LanternView.tsx";
 
@@ -299,10 +299,13 @@ test("the store: a failure before any good read is no answer, after one it is th
 });
 
 test("the Lantern view's \"needs you\" group is the same rule the strip counts by", () => {
-  // A clause that opens the view has to find there the rows it counted.
+  // A clause that opens the view has to find there the rows it counted. The
+  // view groups through groupLantern, so the rule is asserted there, on rows.
   const view = code(viewSrc);
-  const line = view.slice(view.indexOf("const need = rows"));
-  expect(line.slice(0, line.indexOf("\n"))).toContain('attention(r) === "blocked"');
+  expect(view).toContain("= groupLantern(rows ?? []);");
+  const rows = [blocked("a-web"), blocked("b-docs", "gate"), waitedFor("c-api", 3 * 60 * min), blocked("d-seat", "permission", { role: "orchestrator" }), blocked("e-lantern", "permission", { role: "lantern" })];
+  expect(groupLantern(rows).need.map((r) => r.name)).toEqual(rows.filter((r) => attention(r, now) === "blocked").map((r) => r.name));
+  expect(groupLantern(rows).need.length).toBe(fleetVerdict(rows, now)!.counts.need);
 });
 
 const viewSrc = await src("../src/components/LanternView.tsx");
