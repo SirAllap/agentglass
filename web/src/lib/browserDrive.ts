@@ -1,9 +1,10 @@
 import type { BrowserAskFrame } from "../../../shared/types.ts";
-import { ACC_NAME, COLLECTOR, PICK, STAMP, observeScript } from "./browserObserve.ts";
-import { MARKS_ID, MARKS_SCRIPT } from "./browserMarks.ts";
+import { ACC_NAME, COLLECTOR, ID_ORIGIN, PICK, STAMP, observeScript } from "./browserObserve.ts";
+import { MARKS_ID, MARKS_MAX, MARKS_SCRIPT } from "./browserMarks.ts";
 import { cleanHtmlBody } from "./browserCleanHtml.ts";
 import { A11Y_SCRIPT, VITALS_SCRIPT, VITAL_LIMITS, rate, type VitalName } from "./browserVitals.ts";
 import { jsLit } from "../../../shared/jsLit.ts";
+import { cookieSetParams } from "./cookieSet.ts";
 import { FIND, locatorLit, parseLocator } from "./browserLocator.ts";
 import { CHECKUP_PAGE, classifyCollector, classifyEvents, collectorSince, trackInflight, type CdpEvent } from "./browserCheckup.ts";
 
@@ -181,6 +182,19 @@ export interface DrivableWebview {
  *  page, not a novel: past this the useful signal is long gone and the tokens
  *  are not. */
 const MAX_TEXT = 20_000;
+
+/* The structured verbs' own ceilings. Each is a wall against a page that
+   answers the question an agent actually asked by answering it a thousand
+   times: metric tons of nav links, a field that matched half the page. */
+const MAX_LINKS = 250;
+/** The interactive inventory's caps: elements listed per call, forms
+ *  described per call, and what one form or the loose set may hold. */
+const MAX_INTERACTIVE = 300;
+const MAX_FORMS = 20;
+const MAX_FIELDS = 60;
+const MAX_MATCHES = 25;
+const MAX_EXTRACT_FIELD = 2_000;
+const EXTRACT_FIELD_LIMIT = 30;
 
 interface TabSettings {
   cache: "normal" | "bypass";
@@ -562,7 +576,7 @@ interface ShotClip { x: number; y: number; width: number; height: number }
  */
 function resolveOne(selLit: string, body: string, lenient = false): string {
   return `(() => {
-    const __got = ${ONE}(${selLit}, ${lenient});
+    const __got = ${ONE}(${selLit}, ${lenient}, ${readIdSeq()});
     if (__got.kind !== "ok") return __got;
     const e = __got.e;
     ${body}
@@ -582,7 +596,7 @@ function resolveOne(selLit: string, body: string, lenient = false): string {
  * anything matches at all: several matches there mean the first, as they
  * always have. A verb that acts refuses several.
  */
-const ONE = `((__spec, __lenient) => {
+const ONE = `((__spec, __lenient, __floor) => {
     /*
        What the selector names is decided by FIND (browserLocator.ts): an id
        from an observation, a CSS selector, or a locator like
@@ -594,7 +608,47 @@ const ONE = `((__spec, __lenient) => {
     const __r = ${FIND}(__spec);
     if (__r.kind === "invalid") return __r;
     const __all = __r.all;
-    const __stamp = ${STAMP};
+    /*
+       An id is asked WHERE IT CAME FROM before it is acted on. Ids used to be
+       looked up like any selector, and "nothing matches e17" was the best a
+       stale one could hope for — the worst was a page that had navigated and
+       minted its own e17, which then got the click. Now ids never repeat
+       across documents (see the stamp in browserObserve.ts), so an id not
+       minted by an observe of THIS document is refused whether or not some
+       node carries it, and an id minted here but not found is one the page has
+       dropped since. Each is its own sentence, and all of them end in
+       "observe again", which is the only move that fixes any of them.
+       The ceiling: the record of which ids were minted lives in the page's
+       own main world (__agxSeq, __agxRanges, data-agx-e), so this
+       catches a page that navigated and minted its own ids by accident, not
+       a hostile page that forges the record on purpose. Holding the ranges
+       on the driver's side, per document, is what that would take.
+    */
+    const __idm = typeof __spec.css === "string" ? /^\\[data-agx-e="(e[0-9]+)"\\]$/.exec(__spec.css) : null;
+    if (__idm) {
+      const __from = (${ID_ORIGIN})(__idm[1]);
+      if (__from !== "minted") return { kind: __from, url: location.href };
+      if (__all.length === 0) return { kind: "gone", url: location.href };
+    }
+    /* The ids a refusal hands back are minted the way observe mints them:
+       from the driver's counter (__floor) and into this document's ranges,
+       or ID_ORIGIN would refuse the very id the refusal told the caller to
+       use as foreign. Only a refusal stamps, so the ordinary click leaves the
+       counter alone. The ceiling: the floor is read, not reserved, so an
+       observe of another tab in the same instant can mint the same number. */
+    const __stamp0 = ${STAMP};
+    let __first = 0;
+    const __stamp = (__n) => {
+      if (!__first) {
+        window.__agxSeq = Math.max(window.__agxSeq || 0, Number(__floor) || 0);
+        __first = window.__agxSeq + 1;
+      }
+      return __stamp0(__n);
+    };
+    const __keep = (__x) => {
+      if (__first && window.__agxSeq >= __first) (window.__agxRanges = window.__agxRanges || []).push([__first, window.__agxSeq]);
+      return __x;
+    };
     /* Something that TELLS THEM APART. It described a node by tag, id and
        testid, which on a page whose elements have none of the last two says
        "p, p" — true, and no help at all to somebody being asked to narrow
@@ -624,16 +678,16 @@ const ONE = `((__spec, __lenient) => {
         + (__text ? ' "' + __text + '"' : "");
     };
     if (__all.length === 0) {
-      return { kind: "none", by: __spec.by,
+      return __keep({ kind: "none", by: __spec.by,
         hidden: __r.hidden.slice(0, 5).map(__describe), hiddenCount: __r.hidden.length,
-        near: __r.near.map((__x) => __stamp(__x.n) + ' "' + __x.t + '"') };
+        near: __r.near.map((__x) => __stamp(__x.n) + ' "' + __x.t + '"') });
     }
     /* Several matches are the first one only for a CSS selector on a verb
        that reads: a locator names ONE thing by what it is, and "the first
        Save button" is never what somebody who wrote role=button[name=Save]
        meant. */
     if (__all.length > 1 && !(__lenient && __spec.css !== undefined)) {
-      return { kind: "many", count: __all.length, samples: __all.slice(0, 5).map(__describe) };
+      return __keep({ kind: "many", count: __all.length, samples: __all.slice(0, 5).map(__describe) });
     }
     return { kind: "ok", e: __all[0] };
   })`;
@@ -665,14 +719,28 @@ async function nodeFor(
   return { objectId: res.objectId };
 }
 
-/** The sentence for whichever way `resolveOne` failed. */
+/** The sentence for whichever way `resolveOne` failed. The three id
+ *  sentences each say what happened AND what to do, because an agent that is
+ *  only told "nothing matches" invents a CSS selector next, and §17 lists that
+ *  as the anti-feature the ids exist to prevent. */
 function selectorError(sel: string, r: {
   kind?: string; message?: string; count?: number; samples?: string[];
-  hidden?: string[]; hiddenCount?: number; near?: string[]; by?: string;
+  hidden?: string[]; hiddenCount?: number; near?: string[]; by?: string; url?: string;
 } | null | undefined): string {
   if (r?.kind === "invalid") return `invalid selector "${sel}": ${r.message}`;
   if (r?.kind === "many") {
     return `selector matched ${r.count} elements${r.samples?.length ? " — " + r.samples.join(", ") : ""}: narrow ${sel} to one, or use one of the ids`;
+  }
+  if (r?.kind === "unobserved") {
+    return `${sel} names nothing here: this page (${r.url ?? "the current page"}) has not been observed since it loaded, `
+      + "so the ids you hold came from an earlier page or another tab — observe again and use the ids it hands back";
+  }
+  if (r?.kind === "foreign") {
+    return `${sel} was not handed out by an observe of this page — it came from another tab, or from a page this tab has left. `
+      + "Observe this tab again and use its ids";
+  }
+  if (r?.kind === "gone") {
+    return `${sel} is no longer in the page — the node the observe saw was removed or re-rendered since. Observe again for the current ids`;
   }
   /* Not only "no": what IS there, so the next call can be the right one
      rather than an observe to find out. A hidden match is the commonest
@@ -684,6 +752,84 @@ function selectorError(sel: string, r: {
     why += ` — ${what} on this page: ${r.near.join(", ")}`;
   }
   return why;
+}
+
+/** The stable ids an observation hands back — `e17`. */
+const STABLE_ID = /^e[0-9]+$/;
+
+/**
+ * Where the next observation's ids start.
+ *
+ * One counter for the whole window, so no two documents — two tabs, or one
+ * tab before and after a navigation — ever hand out the same id; that is
+ * what lets a page refuse an id it did not mint instead of acting on whatever
+ * node happens to wear it. Kept in localStorage so an app restart does not
+ * start over at e1 while an agent still holds last session's e1, and in
+ * memory when there is no storage (the tests), where uniqueness within the
+ * session is the part that matters.
+ *
+ * RESERVED, not read-then-written: two observations in flight at once — two
+ * agents on two tabs, or `do` lanes — would otherwise both start from the
+ * same base and mint the same ids on different pages. Each takes the most a
+ * tree can stamp (`TREE_MAX`) up front, and gives back what it did not use
+ * when nobody reserved after it, so the ordinary one-agent case stays dense
+ * (e1, e2, e3) and only the concurrent one skips ahead.
+ *
+ * The ceiling: two WINDOWS each keep a counter of their own, and can mint the
+ * same id at the same moment; a base handed out by the server is the next
+ * step after this and is not here.
+ */
+const TREE_MAX = 200;
+const REGION_MAX = 120;
+const ID_SEQ_KEY = "agentglass.browser.stableIds";
+let idSeq = -1;
+function readIdSeq(): number {
+  if (idSeq >= 0) return idSeq;
+  try { idSeq = Math.max(0, Number(localStorage.getItem(ID_SEQ_KEY)) || 0); } catch { idSeq = 0; }
+  return idSeq;
+}
+function persistIdSeq(): void {
+  try { localStorage.setItem(ID_SEQ_KEY, String(idSeq)); } catch { /* no storage here: unique for this session, which is the part that matters */ }
+}
+function reserveIds(n: number): number {
+  const base = readIdSeq();
+  idSeq = base + n;
+  persistIdSeq();
+  return base;
+}
+function releaseIds(base: number, n: number, used: number): void {
+  if (!Number.isFinite(used)) return;
+  if (used > idSeq) idSeq = used; // the page was ahead of this counter (another window, a reset): catch up
+  else if (idSeq === base + n && used >= base) idSeq = used; // nobody reserved after us: hand the rest back
+  persistIdSeq();
+}
+/**
+ * Page code that stamps ids OUTSIDE observe — `shot --marks` labels and
+ * `html --clean` markup both hand out observe's eN ids — has to leave the
+ * same record observe leaves: the counter raised to a reserved base, and the
+ * range it minted pushed onto `__agxRanges`. Without it ID_ORIGIN calls every
+ * id they printed "foreign", and the very next `click e12` read off the
+ * picture is refused. `expr` is evaluated in the page; the answer is
+ * `{ value, idSeq }`, and idSeq goes to releaseIds, never to a caller.
+ */
+export function mintingIds(base: number, expr: string): string {
+  return `(() => {
+    window.__agxSeq = Math.max(window.__agxSeq || 0, ${base});
+    const __first = window.__agxSeq + 1;
+    const __value = ${expr};
+    if (window.__agxSeq >= __first) (window.__agxRanges = window.__agxRanges || []).push([__first, window.__agxSeq]);
+    return { value: __value, idSeq: window.__agxSeq };
+  })()`;
+}
+/** What `html --clean` reserves. It stamps every actionable node under the
+ *  element and has no cap of its own; past this many, ids are minted beyond
+ *  the reservation, where another tab's observe in the same instant could
+ *  mint the same numbers — the ceiling ONE's refusals already have. */
+const CLEAN_HTML_IDS = 1000;
+/** For tests — the counter a fresh window starts with. */
+export function resetStableIds(): void {
+  idSeq = 0;
+  persistIdSeq();
 }
 
 /**
@@ -949,6 +1095,29 @@ function settled(el: DrivableWebview, timeoutMs = 40_000): Promise<string | null
   });
 }
 
+/**
+ * A navigation the shell's egress guard refused arrives as a bare Chromium
+ * code — ERR_TUNNEL_CONNECTION_FAILED for https, ERR_BLOCKED_BY_CLIENT for a
+ * link-local literal — which names nothing an agent can act on, and an agent
+ * that cannot act retries. The guard kept the reason (a name that resolves
+ * to the metadata address, a name that flipped private mid-session); this
+ * asks the shell for it and puts it in the sentence. Any other failure, or a
+ * shell without a guard, passes through untouched.
+ */
+async function withEgressReason(
+  err: string,
+  url: string,
+  ask: (req: Record<string, unknown>) => Promise<{ ok: boolean; value?: unknown }>,
+): Promise<string> {
+  if (!/ERR_TUNNEL_CONNECTION_FAILED|ERR_PROXY_CONNECTION_FAILED|ERR_BLOCKED_BY_CLIENT/.test(err)) return err;
+  let host = "";
+  try { host = new URL(url).hostname.replace(/^\[|\]$/g, "").toLowerCase(); } catch { return err; }
+  const r = await ask({ egress: { host } }).catch(() => null);
+  const rows = (r?.ok && r.value && typeof r.value === "object" ? (r.value as { refusals?: { reason?: string }[] }).refusals : undefined) ?? [];
+  const last = rows[rows.length - 1]?.reason;
+  return last ? `${err} — the browser's egress guard refused ${host}: ${last}` : err;
+}
+
 /*
  * AFTER AN ACTION, WAIT FOR WHAT IT CAUSED — AND SAY WHAT THAT WAS.
  *
@@ -1150,8 +1319,12 @@ async function settleAfterAct(
 }
 
 /** `open`'s navigation, shared with `checkup`: load, wait for it to finish,
- *  and refuse to call it a success when the browser never moved. */
-async function navigateTo(el: DrivableWebview, url: string): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
+ *  and refuse to call it a success when the browser never moved. `explain`
+ *  turns a failed load's bare Chromium code into a reason when the caller
+ *  can ask for one (`open` asks the egress guard, see withEgressReason). */
+async function navigateTo(
+  el: DrivableWebview, url: string, explain?: (err: string) => Promise<string>,
+): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
   /* Where it was, so "it never moved" can be told from "it arrived
      somewhere slightly different", which a redirect makes common. */
   const before = el.getURL();
@@ -1172,7 +1345,7 @@ async function navigateTo(el: DrivableWebview, url: string): Promise<{ ok: true;
     if (!msg.includes("(-3)") && !msg.includes("ERR_ABORTED")) return { ok: false, error: msg };
   }
   const err = await nav;
-  if (err) return { ok: false, error: err };
+  if (err) return { ok: false, error: explain ? await explain(err) : err };
   /*
    * DID IT ACTUALLY GO THERE.
    *
@@ -1667,87 +1840,6 @@ const PENDING_TIMERS_SCRIPT = `(() => {
   window.clearInterval = (id) => { active.delete(id); note(); return real.ci.call(window, id); };
 })()`;
 
-export type CookieSetArgs = {
-  name: string; value: string; path?: string; domain?: string;
-  secure?: boolean; httpOnly?: boolean; sameSite?: string;
-};
-
-/**
- * Chromium treats `localhost` (and its subdomains) and the IPv4/IPv6
- * loopback literals as a secure context even over plain http — its own
- * "potentially trustworthy origin" rule, not a special case this file
- * invented. Every local dev target is one of these, and refusing
- * `__Host-`/`__Secure-` there (or defaulting `secure` to false) would sever
- * local testing for the exact verb this fix exists to keep honest.
- */
-function isSecureContextHost(hostname: string): boolean {
-  return hostname === "localhost" || hostname.endsWith(".localhost")
-    || hostname === "127.0.0.1" || hostname.startsWith("127.")
-    || hostname === "[::1]";
-}
-
-/**
- * Turn a `cookies --set` ask into the params `Network.setCookie` takes, or an
- * error — pure, so the prefix rules are tested without a page or a debugger
- * session behind them.
- *
- * `secure` defaults to the page being a secure context (https, or the
- * loopback/`localhost` exception above); an explicit `secure:false` is only
- * honoured for a name without a `__Host-`/`__Secure-` prefix, because
- * Chromium enforces those regardless of what is asked for — same rule this
- * fix exists to route around on the way in, so it is enforced here rather
- * than left to fail silently at the CDP call.
- */
-export function cookieSetParams(
-  pageUrl: string,
-  set: CookieSetArgs,
-): { ok: true; params: Record<string, unknown> } | { ok: false; error: string } {
-  let page: URL;
-  try {
-    page = new URL(pageUrl);
-  } catch {
-    return { ok: false, error: "open a page on the cookie's site first" };
-  }
-  if (page.protocol !== "http:" && page.protocol !== "https:") {
-    return { ok: false, error: "open a page on the cookie's site first" };
-  }
-  const isSecureContext = page.protocol === "https:" || isSecureContextHost(page.hostname);
-  const isHost = set.name.startsWith("__Host-");
-  const isSecurePrefix = set.name.startsWith("__Secure-");
-  let secure = set.secure ?? isSecureContext;
-
-  if (isHost) {
-    if (!isSecureContext) return { ok: false, error: `"__Host-" cookies require a secure page (https, or http://localhost)` };
-    if (set.domain) return { ok: false, error: `"__Host-" cookies cannot carry a domain` };
-    if (set.path && set.path !== "/") return { ok: false, error: `"__Host-" cookies must use path "/"` };
-    secure = true;
-  } else if (isSecurePrefix) {
-    if (!isSecureContext) return { ok: false, error: `"__Secure-" cookies require a secure page (https, or http://localhost)` };
-    secure = true;
-  }
-
-  let sameSite: string | undefined;
-  if (set.sameSite !== undefined) {
-    const cased: Record<string, string> = { strict: "Strict", lax: "Lax", none: "None" };
-    sameSite = cased[String(set.sameSite).toLowerCase()];
-    if (!sameSite) return { ok: false, error: `sameSite must be "Strict", "Lax", or "None"` };
-    if (sameSite === "None" && !secure) return { ok: false, error: `sameSite "None" requires a secure cookie` };
-  }
-
-  const path = isHost ? "/" : (set.path || "/");
-  const params: Record<string, unknown> = {
-    name: set.name,
-    value: set.value,
-    url: `${page.origin}${path}`,
-    path,
-    secure,
-    httpOnly: !!set.httpOnly,
-  };
-  if (sameSite) params.sameSite = sameSite;
-  if (set.domain && !isHost) params.domain = set.domain;
-  return { ok: true, params };
-}
-
 /**
  * Poll the GUEST's `Date.now()` from the HOST's real clock, not the guest's.
  *
@@ -1827,7 +1919,7 @@ async function runVerb(
   cdpEvents: () => Promise<Array<{ at: number; method: string; params: unknown }>> = async () => [],
   /** §13: apply session-level settings (proxy, extensions, cookies, DNS) through
    *  the Electron main process. */
-  applySessionSettings: (req: Record<string, unknown>) => Promise<{ ok: boolean; applied?: string[]; error?: string }> =
+  applySessionSettings: (req: Record<string, unknown>) => Promise<{ ok: boolean; applied?: string[]; error?: string; value?: unknown }> =
     async () => ({ ok: false, error: "this shell does not support session settings" }),
   /** The inspector panel, which is a view of the SHELL and not part of the page
    *  — so none of the tools above can reach it and none of them should try.
@@ -1837,11 +1929,16 @@ async function runVerb(
     Promise<{ ok: boolean; png?: string; panel?: string; level?: number; via?: string; error?: string }> =
     async () => ({ ok: false, error: "this shell has no inspector" }),
 ): Promise<{ ok: boolean; value?: unknown; error?: string }> {
-  const sel = locatorLit(String(ask.args.selector ?? ""));
+  /* Two spellings of one argument. `sel` is the parsed locator ONE looks up
+     (an id, a locator or CSS); `css` is the CSS an id stands for, for the few
+     places that still hand a selector straight to the page. */
+  const rawSel = String(ask.args.selector ?? "");
+  const sel = locatorLit(rawSel);
   try {
     switch (ask.op) {
       case "open": {
-        const r = await navigateTo(el, String(ask.args.url ?? ""));
+        const url = String(ask.args.url ?? "");
+        const r = await navigateTo(el, url, (err) => withEgressReason(err, url, applySessionSettings));
         return r.ok ? { ok: true, value: { url: r.url, title: el.getTitle() } } : r;
       }
 
@@ -1879,6 +1976,338 @@ async function runVerb(
         const value = await el.executeJavaScript(
           `({ url: location.href, title: document.title,
               text: (document.body ? document.body.innerText : "").slice(0, ${MAX_TEXT}) })`,
+        );
+        return { ok: true, value };
+      }
+
+      case "markdown": {
+        /* `read`'s RAG-ready half: the same page, walked as markdown rather
+           than a wall of innerText — headings, lists and links that an
+           embedding can actually tell apart. No dependency: the walker is a
+           few branches over the same tree `observe` already reads, bounded by
+           the same slice a plain `read` gets. */
+        const value = await el.executeJavaScript(
+          `(() => {
+             const NL = String.fromCharCode(10);
+             const TIC = String.fromCharCode(96);
+             const fence = TIC.repeat(3);
+             const MAX = ${MAX_TEXT};
+             const parts = [];
+             let used = 0, truncated = false;
+             const dead = { SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEMPLATE: 1, SVG: 1, HEAD: 1, LINK: 1, META: 1, TITLE: 1 };
+             const visible = (n) => {
+               if (n.nodeType !== 1) return true;
+               if (n.hidden || dead[n.tagName]) return false;
+               if (n.getAttribute && n.getAttribute("aria-hidden") === "true") return false;
+               const cs = (typeof window !== "undefined" && window.getComputedStyle)
+                 ? window.getComputedStyle(n)
+                 : (typeof getComputedStyle !== "undefined" ? getComputedStyle(n) : null);
+               return !cs || (cs.display !== "none" && cs.visibility !== "hidden");
+             };
+             const budget = (s) => {
+               if (!s || used >= MAX) return;
+               if (used + s.length > MAX) { s = s.slice(0, MAX - used); truncated = true; }
+               parts.push(s); used += s.length;
+             };
+             const inline = (c) => {
+               let s = "";
+               for (const k of c.childNodes || []) {
+                 if (used >= MAX) { truncated = true; break; }
+                 if (!k) continue;
+                 if (k.nodeType === 3) s += (k.textContent || "").replace(/\\s+/g, " ");
+                 else if (k.nodeType === 1) {
+                   if (!visible(k)) continue;
+                   const t = k.tagName.toLowerCase();
+                   if (t === "br") s += " ";
+                   else if (t === "img") s += "![" + (k.getAttribute("alt") || "") + "](" + (k.getAttribute("src") || "") + ")";
+                   else if (t === "a") {
+                     const x = inline(k); const href = k.getAttribute("href") || "";
+                     s += x ? "[" + x + "](" + href + ")" : href ? "[" + (k.innerText || "") + "](" + href + ")" : "";
+                   }
+                   else if (t === "code") s += TIC + (k.innerText || "") + TIC;
+                   else if (t === "b" || t === "strong") s += "**" + inline(k) + "**";
+                   else if (t === "i" || t === "em") s += "*" + inline(k) + "*";
+                   else s += inline(k);
+                 }
+               }
+               return s.replace(/\\s+/g, " ").trim();
+             };
+             const emit = (n) => {
+               if (used >= MAX) { truncated = true; return; }
+               for (const c of n.childNodes || []) {
+                 if (used >= MAX) { truncated = true; break; }
+                 if (!c) continue;
+                 if (c.nodeType === 3) { const t = (c.textContent || "").replace(/\\s+/g, " ").trim(); if (t) budget(t + " "); }
+                 else if (c.nodeType === 1) {
+                   if (!visible(c)) continue;
+                   const t = c.tagName.toLowerCase();
+                   if (t === "h1" || t === "h2" || t === "h3" || t === "h4" || t === "h5" || t === "h6") {
+                     const x = inline(c); if (x) budget(NL + "#".repeat(+t[1]) + " " + x + NL);
+                   }
+                   else if (t === "p") { const x = inline(c); if (x) budget(NL + x + NL); }
+                   else if (t === "li") { const x = inline(c); if (x) budget(NL + "- " + x); }
+                   else if (t === "pre") { const x = (c.innerText || "").replace(/\\s+$/, ""); budget(NL + fence + NL + x + NL + fence + NL); }
+                   else if (t === "blockquote") { const x = inline(c); if (x) budget(NL + "> " + x + NL); }
+                   else if (t === "hr") budget(NL + "---" + NL);
+                   else if (t === "img") budget(NL + "![" + (c.getAttribute("alt") || "") + "](" + (c.getAttribute("src") || "") + ")" + NL);
+                   else emit(c);
+                 }
+               }
+             };
+             emit(document.body || document.documentElement);
+             return { url: location.href, title: document.title,
+                      markdown: parts.join("").slice(0, ${MAX_TEXT}), truncated };
+           })()`,
+        );
+        return { ok: true, value };
+      }
+
+      case "extract": {
+        /* A field→selector map answered in one round trip, where the plan used
+           to be observe→html→parse. Each value is the FIRST match's text — the
+           same "choose the first" rule every other single-selector verb uses —
+           and a selector that matched nothing is called out rather than
+           guessed at, because a null next to the other fields is what stops an
+           agent hallucinating a value into a field that was never there. */
+        const value = await el.executeJavaScript(
+          `(() => {
+             const fields = ${jsLit(ask.args.fields)};
+             const out = {};
+             const notFound = [];
+             let i = 0;
+             for (const name in fields) {
+               if (i++ >= ${EXTRACT_FIELD_LIMIT}) break;
+               const e = fields[name] ? document.querySelector(fields[name]) : null;
+               if (!e) { notFound.push(name); out[name] = null; continue; }
+               out[name] = (e.innerText || e.textContent || "").replace(/\\s+/g, " ").trim().slice(0, ${MAX_EXTRACT_FIELD});
+             }
+             return { url: location.href, title: document.title, fields: out, notFound };
+           })()`,
+        );
+        return { ok: true, value };
+      }
+
+      case "links": {
+        /* Everything a page links to, resolved ONCE, so an agent does not read
+           the html to answer "what pages does this reach". Deduplicated by
+           text+href and capped, with the real total kept — the cap is the
+           caller's token budget speaking, not licence to lie about how many
+           there were. */
+        const value = await el.executeJavaScript(
+          `(() => {
+             const MAX = ${MAX_LINKS};
+             const out = [];
+             const seen = {};
+             let total = 0;
+             const as = document.querySelectorAll ? document.querySelectorAll("a[href]") : [];
+             for (let i = 0; i < as.length; i++) {
+               const href = as[i].getAttribute("href") || "";
+               if (!href || href.charAt(0) === "#" || /^(javascript|mailto|tel|data):/i.test(href)) continue;
+               total++;
+               const text = (as[i].innerText || as[i].textContent || "").replace(/\\s+/g, " ").trim().slice(0, 200);
+               const key = href + "|" + text;
+               if (seen[key]) continue;
+               if (out.length >= MAX) break;
+               seen[key] = true;
+               out.push({ text, href });
+             }
+             return { url: location.href, title: document.title, total, links: out, dropped: total - out.length };
+           })()`,
+        );
+        return { ok: true, value };
+      }
+
+      case "count": {
+        /* How many things match, in one number. Without a selector it counts
+           the interactive inventory (the same shape `observe`'s tree is built
+           from), which is the honest answer to "how much is there to do here"
+           when the caller does not know what to point at yet. */
+        const value = await el.executeJavaScript(
+          `(() => {
+             const q = ${jsLit(String(ask.args.selector ?? ""))};
+             const interactive = "a,button,input,select,textarea,summary,h1,h2,h3,h4,h5,h6,[role],[data-testid]";
+             const all = q ? document.querySelectorAll(q) : document.querySelectorAll(interactive);
+             return { selector: q || null, scope: q ? "selector" : "interactive", count: all.length };
+           })()`,
+        );
+        return { ok: true, value };
+      }
+
+      case "interactive": {
+        /*
+         * Every element that can be acted on, with what acting on it needs:
+         * the id a verb takes, the role, the name, and the href, value,
+         * checked state or options that `observe`'s tree leaves out because
+         * it describes the whole page. Ids are minted from the window's
+         * counter like `observe`'s, so the next click accepts them; a hidden
+         * element is counted and not listed, because an agent does not click
+         * what it cannot see, and a hidden input is not listed at all — it
+         * is data, not a control.
+         */
+        const base = reserveIds(MAX_INTERACTIVE);
+        const value = await el.executeJavaScript(
+          `(() => {
+             window.__agxSeq = Math.max(window.__agxSeq || 0, ${base});
+             const firstId = window.__agxSeq + 1;
+             /* STAMP, so a cloned node gets an id of its own here too. */
+             const stamp = ${STAMP};
+             const clean = (s) => String(s == null ? "" : s).replace(/\\s+/g, " ").trim().slice(0, 80);
+             const name = (n, tag, type) => clean(
+               n.getAttribute("aria-label") || (n.labels && n.labels[0] && n.labels[0].innerText)
+               || n.getAttribute("placeholder") || n.getAttribute("title")
+               || (tag === "input" && /^(submit|button|reset)$/.test(type) ? n.value : n.innerText) || "",
+             );
+             const PICK = "a[href],button,input,select,textarea,summary,[role=button],[role=link],[role=checkbox],[role=radio],[role=switch],[role=tab],[role=menuitem],[role=menuitemcheckbox],[role=option],[role=combobox],[role=textbox],[role=slider],[contenteditable],[tabindex]";
+             const out = [];
+             let total = 0, hidden = 0;
+             const seen = new Set();
+             for (const n of document.querySelectorAll(PICK)) {
+               if (seen.has(n)) continue;
+               seen.add(n);
+               const tag = n.tagName.toLowerCase();
+               const type = tag === "input" ? String(n.type || "text").toLowerCase() : "";
+               if (type === "hidden") continue;
+               if (n.getAttribute("tabindex") === "-1" && !/^(a|button|input|select|textarea|summary)$/.test(tag) && !n.getAttribute("role")) continue;
+               total++;
+               const r = n.getBoundingClientRect();
+               const cs = getComputedStyle(n);
+               if (!r.width || !r.height || cs.display === "none" || cs.visibility === "hidden") { hidden++; continue; }
+               if (out.length >= ${MAX_INTERACTIVE}) continue;
+               const role = n.getAttribute("role") || (tag === "a" ? "link" : tag === "input" ? type : tag);
+               const row = { e: stamp(n), role, name: name(n, tag, type), at: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)] };
+               if (n.id) row.id = n.id;
+               const testid = n.getAttribute("data-testid");
+               if (testid) row.testid = testid;
+               if (tag === "a") row.href = String(n.href || n.getAttribute("href") || "").slice(0, 500);
+               if (tag === "input" || tag === "textarea") {
+                 if (!/^(checkbox|radio|submit|button|reset|file|image)$/.test(type)) {
+                   row.value = type === "password" ? "(hidden)" : String(n.value == null ? "" : n.value).slice(0, 200);
+                 }
+                 if (n.placeholder) row.placeholder = String(n.placeholder).slice(0, 80);
+               }
+               if (type === "checkbox" || type === "radio") row.checked = !!n.checked;
+               if (tag === "select") {
+                 row.value = String(n.value == null ? "" : n.value).slice(0, 200);
+                 row.options = Array.from(n.options || []).slice(0, 40).map((o) => o.value);
+               }
+               if (n.disabled || n.getAttribute("aria-disabled") === "true") row.disabled = true;
+               out.push(row);
+             }
+             if (window.__agxSeq >= firstId) (window.__agxRanges = window.__agxRanges || []).push([firstId, window.__agxSeq]);
+             return { url: location.href, title: document.title, total, hidden, elements: out,
+                      dropped: Math.max(0, total - hidden - out.length), idSeq: window.__agxSeq };
+           })()`,
+        ) as Record<string, unknown>;
+        releaseIds(base, MAX_INTERACTIVE, Number(value?.idSeq));
+        if (value && typeof value === "object") delete value.idSeq;
+        return { ok: true, value };
+      }
+
+      case "forms": {
+        /*
+         * The page as forms: each with its fields (label, type, value with a
+         * password masked, options), the button that submits it, and where
+         * it goes — plus the fields that belong to no form, which on a
+         * single-page app is most of them. Hidden inputs are counted, not
+         * listed: a CSRF token is not a field anybody fills.
+         */
+        const base = reserveIds(MAX_FORMS * (MAX_FIELDS + 6) + MAX_FIELDS);
+        const value = await el.executeJavaScript(
+          `(() => {
+             window.__agxSeq = Math.max(window.__agxSeq || 0, ${base});
+             const firstId = window.__agxSeq + 1;
+             /* STAMP, so a cloned node gets an id of its own here too. */
+             const stamp = ${STAMP};
+             const clean = (s) => String(s == null ? "" : s).replace(/\\s+/g, " ").trim().slice(0, 80);
+             const label = (n) => clean((n.labels && n.labels[0] && n.labels[0].innerText) || n.getAttribute("aria-label") || n.getAttribute("placeholder") || "");
+             const isHidden = (n) => n.tagName === "INPUT" && String(n.type || "").toLowerCase() === "hidden";
+             const field = (n) => {
+               const tag = n.tagName.toLowerCase();
+               const type = tag === "select" ? "select" : tag === "textarea" ? "textarea" : String(n.type || "text").toLowerCase();
+               const row = { e: stamp(n), name: String(n.name || ""), type, label: label(n) };
+               if (type === "checkbox" || type === "radio") row.checked = !!n.checked;
+               else row.value = type === "password" ? "(hidden)" : String(n.value == null ? "" : n.value).slice(0, 200);
+               if (tag === "select") row.options = Array.from(n.options || []).slice(0, 40).map((o) => o.value);
+               if (n.required) row.required = true;
+               if (n.disabled) row.disabled = true;
+               if (n.placeholder) row.placeholder = String(n.placeholder).slice(0, 80);
+               return row;
+             };
+             const forms = Array.from(document.querySelectorAll("form")).slice(0, ${MAX_FORMS}).map((f) => {
+               const all = Array.from(f.querySelectorAll("input,select,textarea"));
+               const shown = all.filter((n) => !isHidden(n));
+               const submit = Array.from(f.querySelectorAll("button,input[type=submit],input[type=image]"))
+                 .filter((b) => b.tagName !== "BUTTON" || !/^(button|reset)$/i.test(b.getAttribute("type") || ""))
+                 .slice(0, 5)
+                 .map((b) => ({ e: stamp(b), text: clean(b.innerText || b.value || b.getAttribute("aria-label") || "") }));
+               const row = {
+                 e: stamp(f),
+                 action: String(f.action || f.getAttribute("action") || "").slice(0, 500),
+                 method: String(f.method || f.getAttribute("method") || "get").toLowerCase(),
+                 fields: shown.slice(0, ${MAX_FIELDS}).map(field),
+                 hiddenFields: all.length - shown.length,
+                 submit,
+               };
+               if (f.id) row.id = f.id;
+               const nm = f.getAttribute("name");
+               if (nm) row.name = nm;
+               return row;
+             });
+             const loose = Array.from(document.querySelectorAll("input,select,textarea")).filter((n) => !n.form && !isHidden(n)).slice(0, ${MAX_FIELDS}).map(field);
+             if (window.__agxSeq >= firstId) (window.__agxRanges = window.__agxRanges || []).push([firstId, window.__agxSeq]);
+             return { url: location.href, title: document.title, forms, loose, idSeq: window.__agxSeq };
+           })()`,
+        ) as Record<string, unknown>;
+        releaseIds(base, MAX_FORMS * (MAX_FIELDS + 6) + MAX_FIELDS, Number(value?.idSeq));
+        if (value && typeof value === "object") delete value.idSeq;
+        return { ok: true, value };
+      }
+
+      case "attr": {
+        /* The attributes of ONE element — the ones named, or all of them
+           when none is — resolved the way a click resolves, so an id from
+           any inventory works and two matches are refused with the count.
+           A password's value attribute is masked like its value. */
+        const names = Array.isArray(ask.args.names) ? (ask.args.names as unknown[]).filter((n): n is string => typeof n === "string") : [];
+        const r = await el.executeJavaScript(resolveOne(sel, `
+          const names = ${JSON.stringify(names)};
+          const secret = e.tagName === "INPUT" && /^password$/i.test(e.type || "");
+          const list = names.length ? names : (e.getAttributeNames ? e.getAttributeNames() : []).slice(0, 50);
+          const attributes = {};
+          for (const n of list) {
+            const v = e.getAttribute(n);
+            attributes[n] = v === null ? null : (secret && n.toLowerCase() === "value") ? "(hidden)" : String(v).slice(0, 500);
+          }
+          return { kind: "ok", tag: e.tagName.toLowerCase(), e: e.dataset.agxE || undefined, attributes };
+        `)) as { kind: string; tag?: string; e?: string; attributes?: Record<string, string | null> } | null;
+        if (!r || r.kind !== "ok") return { ok: false, error: selectorError(rawSel, r as never) };
+        return { ok: true, value: { selector: rawSel, tag: r.tag, e: r.e, attributes: r.attributes } };
+      }
+
+      case "search": {
+        /* A text search across the page's own content — the thing an agent
+           means by "find the price" before it has a selector to point at.
+           Capped matches, real count, and the href when the match lives in a
+           link, so a hit is actionable instead of a line of text. */
+        const value = await el.executeJavaScript(
+          `(() => {
+             const query = ${jsLit(String(ask.args.query ?? ""))};
+             const needle = query.toLowerCase();
+             const MAX = ${MAX_MATCHES};
+             const nodes = document.querySelectorAll
+               ? document.querySelectorAll("a,button,h1,h2,h3,h4,h5,h6,p,li,td,th,strong,em,[role],[data-testid]") : [];
+             const matches = [];
+             let count = 0;
+             for (let i = 0; i < nodes.length; i++) {
+               const t = (nodes[i].innerText || nodes[i].textContent || "").replace(/\\s+/g, " ").trim();
+               if (!t || t.toLowerCase().indexOf(needle) === -1) continue;
+               count++;
+               if (matches.length >= MAX) continue;
+               const href = nodes[i].tagName === "A" ? (nodes[i].getAttribute("href") || "") : "";
+               matches.push({ text: t.slice(0, 300), href });
+             }
+             return { query, count, matches, truncated: count > matches.length };
+           })()`,
         );
         return { ok: true, value };
       }
@@ -1991,7 +2420,7 @@ async function runVerb(
              const filled = [], secret = [];
              const one = ${ONE};
              for (const [fsel, spec, text] of pairs) {
-               const got = one(spec, false);
+               const got = one(spec, false, ${readIdSeq()});
                if (got.kind !== "ok") return { ...got, selector: fsel, secret };
                const fe = got.e;
                fe.focus();
@@ -2090,6 +2519,16 @@ async function runVerb(
       }
 
       case "wait": {
+        /* An id cannot APPEAR. It names the node an observe saw, and a node
+           that is not in the document now is gone, or from another page:
+           polling for it spends the whole 30 s to say "never appeared", which
+           is true and no help. Resolved once instead, and the refusal says
+           which of the two it was. */
+        if (STABLE_ID.test(rawSel)) {
+          const hit = await el.executeJavaScript(resolveOne(sel, `return { kind: "ok" };`)) as { kind?: string } | null;
+          if (hit?.kind === "ok" || hit?.kind === "many") return { ok: true, value: { appeared: ask.args.selector } };
+          return { ok: false, error: selectorError(rawSel, hit as never) };
+        }
         // Polled inside the page rather than from here: one round trip instead
         // of one every 100ms, and it sees the DOM as it changes.
         const found = await el.executeJavaScript(
@@ -2097,7 +2536,7 @@ async function runVerb(
              const deadline = Date.now() + 30000;
              const one = ${ONE};
              const tick = () => {
-               const got = one(${sel}, true);
+               const got = one(${sel}, true, ${readIdSeq()});
                if (got.kind === "ok" || got.kind === "many") return resolve(true);
                if (got.kind === "invalid") return resolve(got);
                if (Date.now() > deadline) return resolve(false);
@@ -2170,10 +2609,14 @@ async function runVerb(
            the page rather than by curling the server and opening the .vue
            file it was built from — which is what somebody did today. */
         const max = Number(ask.args.max ?? 20_000);
+        const clean = ask.args.clean === true;
+        const idBase = clean ? reserveIds(CLEAN_HTML_IDS) : 0;
         const got = await el.executeJavaScript(resolveOne(sel,
-          ask.args.clean === true ? cleanHtmlBody(max)
+          clean ? `const __m = ${mintingIds(idBase, `(() => { ${cleanHtmlBody(max)} })()`)};
+                   return Object.assign(__m.value, { idSeq: __m.idSeq });`
             : `return { kind: "ok", html: e.outerHTML.slice(0, ${max}), truncated: e.outerHTML.length > ${max} };`, true,
-        )) as { kind: string; html?: string; truncated?: boolean };
+        )) as { kind: string; html?: string; truncated?: boolean; idSeq?: number };
+        if (clean) releaseIds(idBase, CLEAN_HTML_IDS, Number(got?.idSeq));
         return got?.kind === "ok"
           ? { ok: true, value: { html: got.html, truncated: got.truncated } }
           : { ok: false, error: selectorError(String(ask.args.selector ?? ""), got as never) };
@@ -2732,7 +3175,7 @@ async function runVerb(
         const to = locatorLit(String((ask.args as Record<string, unknown>).to ?? ""));
         const r = await el.executeJavaScript(`(async () => {
           const one = ${ONE};
-          const ga = one(${sel}, false), gb = one(${to}, false);
+          const ga = one(${sel}, false, ${readIdSeq()}), gb = one(${to}, false, ${readIdSeq()});
           if (ga.kind !== "ok") return { ...ga, which: "source" };
           if (gb.kind !== "ok") return { ...gb, which: "target" };
           const a = ga.e, b = gb.e;
@@ -3059,15 +3502,20 @@ async function runVerb(
          * §2's last flag: the tree of ONE subtree instead of the page. A
          * modal on a busy page is fifteen nodes inside three hundred, and the
          * other two hundred and eighty-five are paid for on every turn after
-         * (§14). Same shape as `observe`, scoped.
+         * (§14). Same shape as `observe`, scoped — and minted the same way,
+         * from the window's counter and into this document's ranges, or the
+         * ids it hands back would be refused as foreign by the next click.
          */
+        const base = reserveIds(REGION_MAX + 1);
         const r = await el.executeJavaScript(resolveOne(sel, `
           const root = e;
+          window.__agxSeq = Math.max(window.__agxSeq || 0, ${base});
+          const firstId = window.__agxSeq + 1;
           const name = ${ACC_NAME};
           const stamp = ${STAMP};
           const tree = [];
           for (const el2 of root.querySelectorAll(${jsLit(PICK)})) {
-            if (tree.length >= 120) break;
+            if (tree.length >= ${REGION_MAX}) break;
             const rect = el2.getBoundingClientRect();
             tree.push({
               e: stamp(el2),
@@ -3078,8 +3526,11 @@ async function runVerb(
               at: [Math.round(rect.x), Math.round(rect.y), Math.round(rect.width), Math.round(rect.height)],
             });
           }
-          return { kind: "ok", e: stamp(root), text: (root.innerText || "").trim().slice(0, 4000), tree };
-        `, true)) as { kind: string; e?: string; text?: string; tree?: unknown[] };
+          const rootId = stamp(root);
+          if (window.__agxSeq >= firstId) (window.__agxRanges = window.__agxRanges || []).push([firstId, window.__agxSeq]);
+          return { kind: "ok", e: rootId, text: (root.innerText || "").trim().slice(0, 4000), tree, idSeq: window.__agxSeq };
+        `, true)) as { kind: string; e?: string; text?: string; tree?: unknown[]; idSeq?: number };
+        releaseIds(base, REGION_MAX + 1, Number(r?.idSeq));
         return r?.kind === "ok"
           ? { ok: true, value: { region: ask.args.selector, e: r.e, text: r.text, tree: r.tree } }
           : { ok: false, error: selectorError(String(ask.args.selector ?? ""), r as never) };
@@ -3288,6 +3739,51 @@ async function runVerb(
           : { ok: false, error: got.error || "could not read the listeners" };
       }
 
+      case "screencast": {
+        /*
+         * The page as it moves, from Chromium's own compositor: `record` is
+         * N screenshots at an interval, and the thing it cannot see is the
+         * frame between two of them. `Page.startScreencast` pushes a frame
+         * whenever the page repaints; the shell acks each one the moment it
+         * lands (a frame nobody acks is the last frame Chromium sends) and
+         * keeps the newest thirty in a ring, and `frames` drains the ring —
+         * so the caller polls at its own pace and never holds a connection.
+         * Bounded on purpose: jpeg, a size cap, every Nth frame, so a busy
+         * page cannot fill the shell with pictures.
+         */
+        const which = String(ask.args.action ?? "start");
+        if (which === "start") {
+          const a = await cdp("Page.startScreencast", {
+            format: "jpeg",
+            quality: Number(ask.args.quality ?? 60),
+            maxWidth: Number(ask.args.maxWidth ?? 1024),
+            maxHeight: Number(ask.args.maxHeight ?? 768),
+            everyNthFrame: Number(ask.args.everyNth ?? 1),
+          });
+          if (!a.ok) return { ok: false, error: a.error || "could not start the screencast" };
+          return { ok: true, value: { screencast: "recording", url: el.getURL() } };
+        }
+        if (which === "stop") {
+          const drained = await cdp("Page.agxScreencastFrames", {}) as { ok: boolean; result?: { frames?: unknown[]; dropped?: number } };
+          const a = await cdp("Page.stopScreencast", {});
+          if (!a.ok) return { ok: false, error: a.error || "could not stop the screencast" };
+          return { ok: true, value: { screencast: "stopped", left: drained.ok ? (drained.result?.frames?.length ?? 0) : 0 } };
+        }
+        const r = await cdp("Page.agxScreencastFrames", {}) as {
+          ok: boolean; error?: string;
+          result?: { frames?: Array<{ at: number; data: string; metadata?: { deviceWidth?: number; deviceHeight?: number; timestamp?: number } }>; dropped?: number };
+        };
+        if (!r.ok) return { ok: false, error: r.error || "could not read the screencast" };
+        const frames = (r.result?.frames ?? []).map((f) => ({
+          at: f.at,
+          jpeg: `data:image/jpeg;base64,${f.data}`,
+          width: f.metadata?.deviceWidth ?? 0,
+          height: f.metadata?.deviceHeight ?? 0,
+          timestamp: f.metadata?.timestamp ?? 0,
+        }));
+        return { ok: true, value: { count: frames.length, dropped: r.result?.dropped ?? 0, frames } };
+      }
+
       case "coverage": {
         /*
          * "Did my change even load" — §5, and the row in §18 that says this
@@ -3444,12 +3940,9 @@ async function runVerb(
            page itself sees, and HttpOnly is invisible here honestly, because
            it is invisible to the page too. */
         if (ask.args.set) {
-          const set = ask.args.set as {
-            name: string; value: string; path?: string; domain?: string;
-            secure?: boolean; httpOnly?: boolean; sameSite?: string;
-          };
-          const parsed = cookieSetParams(el.getURL(), set);
-          if (!parsed.ok) return { ok: false, error: parsed.error };
+          const set = ask.args.set as { name: string } & Record<string, unknown>;
+          const parsed = cookieSetParams(set, el.getURL());
+          if ("error" in parsed) return { ok: false, error: parsed.error };
           const wrote = await cdp("Network.setCookie", parsed.params);
           if (!wrote.ok) {
             /* The relay itself refused — most often because DevTools is
@@ -3484,8 +3977,10 @@ async function runVerb(
           }
           const got = await cdp("Network.getCookies", { urls: [parsed.params.url] });
           const jar = (got.result as { cookies?: Array<Record<string, unknown>> } | undefined)?.cookies ?? [];
-          const match = jar.find((c) => c.name === set.name && c.value === set.value);
-          if (!match) {
+          const match = jar.find((c) => c.name === set.name && c.value === parsed.params.value);
+          // A partitioned cookie is only visible from inside its partition,
+          // which a plain getCookies is not; its `success` is the whole answer.
+          if (!match && !parsed.params.partitionKey) {
             return { ok: false, error: `cookie "${set.name}" was not set — it is not in the page's jar after the write` };
           }
           const value = await el.executeJavaScript(
@@ -3495,10 +3990,11 @@ async function runVerb(
             ok: true,
             value: {
               ...value,
-              set: {
-                name: match.name, domain: match.domain, path: match.path,
-                secure: match.secure, httpOnly: match.httpOnly, sameSite: match.sameSite,
-              },
+              // Never the value: what landed, not an echo of the secret.
+              set: match
+                ? { name: match.name, domain: match.domain, path: match.path,
+                    secure: match.secure, httpOnly: match.httpOnly, sameSite: match.sameSite }
+                : { name: parsed.params.name, path: parsed.params.path, partitioned: true },
             },
           };
         }
@@ -3534,14 +4030,20 @@ async function runVerb(
            relay's record of what this caller last saw. Keyed by the caller
            so two agents on one tab do not diff against each other's look —
            by a hash of the name, because the store lives on the page's own
-           window, and the page has no business learning who is driving it. */
+           window, and the page has no business learning who is driving it.
+           `idBase` is the other base: where this window's id counter stands,
+           reserved so two observes in flight mint disjoint ids. */
         const base = ask.args.base as { doc?: unknown; seq?: unknown } | undefined;
-        const value = await el.executeJavaScript(observeScript(since, 200, {
+        const idBase = reserveIds(TREE_MAX);
+        const value = await el.executeJavaScript(observeScript(since, TREE_MAX, {
           delta: ask.args.delta === true,
           key: typeof ask.args.as === "string" ? callerKey(ask.args.as) : "",
           base: base && typeof base.doc === "string" && Number.isInteger(base.seq)
             ? { doc: base.doc, seq: base.seq as number } : null,
+          idBase,
         })) as Record<string, unknown>;
+        releaseIds(idBase, TREE_MAX, Number(value?.idSeq));
+        if (value && typeof value === "object") delete value.idSeq;
         if (ask.args.shot === true) {
           /* In the SAME answer. Asking for the picture separately is the
              second call this verb exists to remove. The shell's capture
@@ -3930,9 +4432,14 @@ async function runVerb(
         }
         /* Set-of-mark labels, drawn after the highlight and taken down by the
            same cleanup. A page that refuses the script still gets its picture. */
-        const marked = ask.args.marks === true
-          ? await el.executeJavaScript(MARKS_SCRIPT).catch(() => null) as string[] | null
-          : null;
+        let marked: string[] | null = null;
+        if (ask.args.marks === true) {
+          const markBase = reserveIds(MARKS_MAX);
+          const m = await el.executeJavaScript(mintingIds(markBase, MARKS_SCRIPT)).catch(() => null) as
+            { value: string[]; idSeq: number } | null;
+          releaseIds(markBase, MARKS_MAX, Number(m?.idSeq));
+          marked = m ? m.value : null;
+        }
         try {
           // The shell first: its capture can ask for a frame of a pane the window
           // is not showing, and the element's cannot — it hangs or comes back

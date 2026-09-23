@@ -1139,7 +1139,11 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "set": {"type": "object", "description": "{ name, value, path?, domain?, secure?, httpOnly?, sameSite? }"},
+                "set": {"type": "object", "description": "{ name, value, path?, domain?, secure?, httpOnly?, "
+                        "sameSite? (Strict|Lax|None), expires? (epoch seconds), partitionKey? (top-level site) }. "
+                        "Every set is written through the browser's jar (so "
+                        "HttpOnly and Secure work), secure defaults to on for https and loopback pages, "
+                        "and the answer omits the value."},
             },
         },
     },

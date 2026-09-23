@@ -1276,6 +1276,30 @@ def session_save(path, page="", a=None):
     return 0
 
 
+def _write_storage(a, page, where, entries):
+    """Write ENTRIES into the tab's local or session storage, one `storage
+    --set` per key. Returns (written, failures), each failure a "key: why"
+    line; a key the tab refuses does not stop the ones after it.
+
+    Never as one `eval` script with the values inside it: the audit log keeps
+    every ask, and an `eval` script has no position it can blank — an opaque
+    token that is not token-shaped went into the log verbatim. `storage --set`
+    carries the value in a field the audit redacts by position."""
+    written, failures = 0, []
+    for k, v in entries.items():
+        if not k:
+            failures.append('"": an empty key cannot be written through `storage --set`')
+            continue
+        if not isinstance(v, str):
+            v = json.dumps(v)  # what setItem would have stored for it: 42 -> "42", null -> "null"
+        r = call("storage", stamped(a, _at(page, {"where": where, "set": True, "key": k, "value": v})))
+        if r.get("ok"):
+            written += 1
+        else:
+            failures.append(f"{k}: {r.get('error') or 'could not write storage'}")
+    return written, failures
+
+
 def session_load(path, page="", a=None):
     """The reverse of `session save`. Cookies go back through CDP so they
     keep httpOnly and Secure; storage is written by the page itself, which
@@ -1304,20 +1328,448 @@ def session_load(path, page="", a=None):
         if not r.get("ok"):
             print(f"cookie {c.get('name')}: {r.get('error')}", file=sys.stderr)
     ls_count = ss_count = 0
+    failures = []
     for o in state.get("origins") or []:
         ls = {e["name"]: e["value"] for e in o.get("localStorage") or []}
         ss = {e["name"]: e["value"] for e in o.get("sessionStorage") or []}
-        ls_count += len(ls)
-        ss_count += len(ss)
-        js = (
-            f"(() => {{ const ls = {json.dumps(ls)}; for (const k in ls) localStorage.setItem(k, ls[k]); "
-            f"const ss = {json.dumps(ss)}; for (const k in ss) sessionStorage.setItem(k, ss[k]); return true; }})()"
-        )
-        r = call("eval", stamped(a, _at(page, {"js": js, "await": False})))
-        if not r.get("ok"):
-            print(r.get("error") or "could not write storage", file=sys.stderr)
-            return 1
+        n, f = _write_storage(a, page, "local", ls)
+        ls_count, failures = ls_count + n, failures + f
+        n, f = _write_storage(a, page, "session", ss)
+        ss_count, failures = ss_count + n, failures + f
+    for f in failures:
+        print(f"storage {f}", file=sys.stderr)
     print(f"{path}: {len(cookies)} cookies, {ls_count} localStorage keys, {ss_count} sessionStorage keys restored")
+    return 1 if failures else 0
+
+
+# --- Importing a signed-in session straight from a Firefox-family profile ----
+#
+# `session load` reuses a file this tool wrote. `session import` reads the
+# browser you already log in with — Firefox, Zen, LibreWolf — so the first
+# import needs no prior save. The reading is LOCAL: this process opens the
+# profile the operator named, the same way it would open any file they pointed
+# it at, and the values go straight into `cookies --set`. There is no server
+# route that reads a jar, so this adds no way for an agent to ask the app for
+# somebody's logins that it did not already have on disk.
+#
+# Why not the picker's importer (server/src/cookieimport.ts)? That one is built
+# to bring MANY sites over safely and drops anything it cannot carry cleanly —
+# and two of those drops are exactly what a *sensitive action* needs. Measured
+# against a local strict server:
+#   * it skips SESSION cookies (no expiry). A site's "you re-authenticated
+#     recently" cookie is often one, and without it the POST bounces to a
+#     confirm-access page.
+#   * it turns every host-only cookie into whatever the row's dot said, which
+#     is right, but it also refuses partitioned ones.
+# A single-domain session import keeps the session cookies, because the whole
+# point is that one login, not a tidy jar.
+
+
+def _ff_expiry_seconds(expiry, user_version):
+    """Firefox stores expiry in milliseconds from schema 16 on (mirrors
+    server/src/cookieimport.ts, which measured it against schema 17). 0 is a
+    session cookie and stays 0."""
+    try:
+        e = float(expiry)
+    except (TypeError, ValueError):
+        return 0
+    if e <= 0:
+        return 0
+    return int(e / 1000) if user_version >= 16 else int(e)
+
+
+def _ff_same_site(raw):
+    """Firefox's constant to the name setCookie takes, or None to leave it
+    unset. 256 (SAMESITE_UNSET) is not corruption; 0 is None."""
+    return {0: "None", 1: "Lax", 2: "Strict"}.get(int(raw) if str(raw).lstrip("-").isdigit() else 256)
+
+
+# Names under which anybody registers a site: `co.uk` is nobody's domain,
+# `acme.co.uk` is. The two-label ones mirror TWO_LABEL_SUFFIXES in
+# server/src/cookieimport.ts (a test keeps this a superset of it); the rest are
+# hosts that hand every customer a subdomain. Not the Public Suffix List — the
+# standard library has none — so a suffix missing here is still accepted.
+_PUBLIC_SUFFIXES = frozenset({
+    "co.uk", "org.uk", "ac.uk", "gov.uk", "co.jp", "or.jp", "ne.jp", "co.kr",
+    "com.au", "net.au", "org.au", "com.br", "com.mx", "com.ar", "co.nz",
+    "co.za", "com.tr", "com.cn", "com.sg", "com.hk", "co.in", "com.es",
+    "github.io", "gitlab.io", "pages.dev", "workers.dev", "vercel.app", "netlify.app",
+    "web.app", "firebaseapp.com", "herokuapp.com", "appspot.com", "blogspot.com",
+    "cloudfront.net", "azurewebsites.net", "fly.dev", "onrender.com", "glitch.me",
+})
+
+
+def _canonical_domain(domain, subdomains=True):
+    """(domain, None) with DOMAIN as the profile stores hosts — lower case, no
+    stray dots or spaces, punycode — or (None, why) when it cannot be
+    imported. The matcher takes subdomains by default, so a top-level domain
+    or a public suffix would copy every site under it rather than one login,
+    and a URL or a pattern would silently match nothing."""
+    d = (domain or "").strip().lower().strip(".")
+    if not d or any(c in d for c in "/:@*?#") or any(c.isspace() for c in d):
+        return None, f"--domain takes a bare site name like orbit.example, not {domain!r}"
+    try:
+        d = d.encode("idna").decode("ascii")
+    except UnicodeError:
+        return None, f"--domain takes a bare site name like orbit.example, not {domain!r}"
+    if "." not in d and d != "localhost" and subdomains:
+        return None, (f"--domain {d} is a top-level domain: it would copy every {d} login in the "
+                      f"profile. Name the site, e.g. orbit.{d}, or pass --no-subdomains for one "
+                      f"host called {d}")
+    if d in _PUBLIC_SUFFIXES:
+        return None, (f"--domain {d} is a public suffix: every site under it is a different one. "
+                      f"Name the site, e.g. acme.{d}")
+    return d, None
+
+
+def _domain_matches(host, domain, subdomains=True):
+    bare = host.lstrip(".").lower()
+    domain = domain.lstrip(".").lower()
+    return bare == domain or (subdomains and bare.endswith("." + domain))
+
+
+def _snapshot_sqlite(db):
+    """A private copy with its -wal, so a live Firefox is never opened. Returns
+    (path, dispose). The caller always disposes — cookie values live in it."""
+    import shutil
+    import tempfile
+    d = tempfile.mkdtemp(prefix="agx-import-")
+
+    def dispose():
+        try:
+            shutil.rmtree(d, ignore_errors=True)
+        except OSError:
+            pass
+    # The caller can only dispose of a copy it was handed: one that raises
+    # halfway (a full disk, a directory where the file should be, Ctrl-C)
+    # cleans up here, or a partial jar stays in the temp dir.
+    try:
+        os.chmod(d, 0o700)
+        copy = os.path.join(d, os.path.basename(db))
+        shutil.copyfile(db, copy)
+        if os.path.exists(db + "-wal"):
+            try:
+                shutil.copyfile(db + "-wal", copy + "-wal")
+            except OSError:
+                pass
+    except BaseException:
+        dispose()
+        raise
+    return copy, dispose
+
+
+def _profile_cookie_db(path):
+    """The cookies.sqlite for a profile PATH, or the path itself when it is
+    already the database."""
+    if os.path.isfile(path):
+        return path
+    db = os.path.join(path, "cookies.sqlite")
+    return db if os.path.exists(db) else None
+
+
+def read_firefox_cookies(path, domain, subdomains=True, now=None):
+    """Every live cookie for DOMAIN (and its subdomains) in a Firefox-family
+    profile, as `cookies --set` payloads — session cookies KEPT. Never prints a
+    value; the caller sends them and reports counts only.
+
+    Returns (payloads, skipped) where skipped counts expired / partitioned /
+    container cookies so the summary can say what did not come."""
+    import sqlite3
+    now = int(time.time()) if now is None else now
+    db = _profile_cookie_db(path)
+    if not db:
+        raise FileNotFoundError(f"no cookies.sqlite in {path}")
+    copy, dispose = _snapshot_sqlite(db)
+    payloads, skipped = [], {"expired": 0, "partitioned": 0, "not-domain": 0}
+    try:
+        conn = sqlite3.connect(f"file:{copy}?mode=ro", uri=True)
+        try:
+            ver = conn.execute("PRAGMA user_version").fetchone()[0] or 0
+            rows = conn.execute(
+                "SELECT host, name, value, path, expiry, isSecure, isHttpOnly, sameSite, originAttributes FROM moz_cookies"
+            ).fetchall()
+        finally:
+            conn.close()
+    finally:
+        dispose()
+    for host, name, value, cpath, expiry, secure, http_only, same_site, attrs in rows:
+        host = host or ""
+        if not host or not name:
+            continue
+        if not _domain_matches(host, domain, subdomains):
+            skipped["not-domain"] += 1
+            continue
+        # Containers and partitioned cookies carry originAttributes; setCookie
+        # has no place to put one, so importing it unpartitioned would change
+        # what it means.
+        if attrs:
+            skipped["partitioned"] += 1
+            continue
+        exp = _ff_expiry_seconds(expiry, ver)
+        if exp and exp <= now:
+            skipped["expired"] += 1
+            continue
+        p = {
+            "name": name,
+            "value": value or "",
+            "path": cpath if (cpath or "").startswith("/") else "/",
+            "host": host.lstrip("."),
+        }
+        if host.startswith("."):
+            p["domain"] = host
+        if int(secure or 0) == 1:
+            p["secure"] = True
+        if int(http_only or 0) == 1:
+            p["httpOnly"] = True
+        ss = _ff_same_site(same_site)
+        # SameSite=None is dropped by Chromium without Secure; leave it unset
+        # rather than lose the whole cookie to a refusal.
+        if ss and not (ss == "None" and not p.get("secure")):
+            p["sameSite"] = ss
+        if exp:
+            p["expires"] = exp
+        payloads.append(p)
+    return payloads, skipped
+
+
+def _origin_from_dir(name):
+    """Firefox names an origin's storage directory by its sanitised origin:
+    `https+++www.example.com` for https://www.example.com, a port appended as
+    `+8443`. Turn one back into an origin, or None when it is not a web one."""
+    if "+++" not in name:
+        return None
+    scheme, rest = name.split("+++", 1)
+    if scheme not in ("https", "http"):
+        return None
+    parts = rest.split("+")
+    host = parts[0]
+    port = parts[1] if len(parts) > 1 and parts[1].isdigit() else None
+    return f"{scheme}://{host}" + (f":{port}" if port else "")
+
+
+def _decode_ls_value(value, compression_type, conversion_type):
+    """A localStorage value out of Firefox's `data` table. Uncompressed only:
+    a snappy-compressed one needs a decompressor this stdlib script does not
+    have, and is skipped by the caller. UTF-16 is decoded when the bytes say
+    so; otherwise UTF-8."""
+    if compression_type not in (0, None):
+        return None
+    if isinstance(value, str):
+        return value
+    b = bytes(value or b"")
+    # conversion_type 0 keeps the original UTF-16; a value with interleaved NUL
+    # bytes is that, not UTF-8.
+    if conversion_type == 0 and b"\x00" in b:
+        try:
+            return b.decode("utf-16-le")
+        except UnicodeDecodeError:
+            pass
+    try:
+        return b.decode("utf-8")
+    except UnicodeDecodeError:
+        return b.decode("latin-1")
+
+
+def read_firefox_localstorage(path, domain, subdomains=True):
+    """localStorage for DOMAIN's origins in a Firefox-family profile, as
+    {origin: {key: value}}. Returns (by_origin, skipped_compressed). Reads the
+    per-origin `storage/default/<origin>/ls/data.sqlite` NextGen stores; an
+    older single `webappsstore.sqlite` is not read (not on any profile this was
+    built against). Never prints a value."""
+    import sqlite3
+    if os.path.isfile(path):
+        path = os.path.dirname(os.path.dirname(path))  # cookies.sqlite -> profile
+    root = os.path.join(path, "storage", "default")
+    by_origin, skipped = {}, 0
+    if not os.path.isdir(root):
+        return by_origin, skipped
+    for name in os.listdir(root):
+        origin = _origin_from_dir(name)
+        if not origin:
+            continue
+        host = origin.split("://", 1)[1].split(":", 1)[0]
+        if not _domain_matches(host, domain, subdomains):
+            continue
+        db = os.path.join(root, name, "ls", "data.sqlite")
+        if not os.path.exists(db):
+            continue
+        # Cookies have already landed by the time this runs, so an origin that
+        # cannot be read is named and skipped rather than ending the import.
+        try:
+            copy, dispose = _snapshot_sqlite(db)
+        except OSError as e:
+            print(f"localStorage for {origin}: could not read ({e.strerror or e})", file=sys.stderr)
+            continue
+        try:
+            conn = sqlite3.connect(f"file:{copy}?mode=ro", uri=True)
+            try:
+                cols = {r[1] for r in conn.execute("PRAGMA table_info(data)")}
+                has = "compression_type" in cols and "conversion_type" in cols
+                sel = ("SELECT key, value, compression_type, conversion_type FROM data"
+                       if has else "SELECT key, value, 0, 0 FROM data")
+                entries = {}
+                for key, value, comp, conv in conn.execute(sel):
+                    decoded = _decode_ls_value(value, comp, conv)
+                    if decoded is None:
+                        skipped += 1
+                        continue
+                    entries[key] = decoded
+                if entries:
+                    by_origin[origin] = entries
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            pass
+        finally:
+            dispose()
+    return by_origin, skipped
+
+
+# A Firefox-family user agent to align to when the operator asks. The session
+# was signed in from one of these, and a strict site that compares the request's
+# UA family to the session's rejects a Chromium one. Overridable with
+# --user-agent for a version that matches the source browser exactly.
+DEFAULT_FIREFOX_UA = "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0"
+
+
+AUTH_WALL_PATH = re.compile(r"/(log[-_]?in|sign[-_]?in|signin|auth(?:orize|enticate)?|sso|sessions?/(?:new|confirm)|confirm[-_]?access|two[-_]?factor|mfa|challenge)(?:/|\?|$)", re.I)
+AUTH_WALL_QUERY = re.compile(r"[?&](reason|return[_-]?to|redirect(?:_uri)?|continue|next|ReturnUrl)=", re.I)
+# The exact words a strict site shows when it will not act on a copied session
+# — a message a person reads and an agent silently steps past.
+BOUNCE_TEXT = re.compile(r"signed in with another tab or window|your session (?:has )?expired|please (?:log|sign) ?in|confirm access", re.I)
+
+VERIFY_JS = (
+    "JSON.stringify({ url: location.href, title: document.title, "
+    "pw: !!document.querySelector('input[type=password]'), "
+    "text: (document.body ? document.body.innerText : '').slice(0, 4000) })"
+)
+
+
+def classify_auth_wall(url, title, has_password, text):
+    """Whether the page in front is a login / confirm wall — the shape a
+    copied session that reads but cannot act lands on. Returns (is_wall,
+    reason) where reason is the site's own `reason=` when it gave one, else a
+    short word for what tripped it."""
+    hit = BOUNCE_TEXT.search(text or "")
+    if hit:
+        return True, hit.group(0).lower()
+    if AUTH_WALL_PATH.search(url or ""):
+        m = re.search(r"[?&]reason=([^&]+)", url or "")
+        return True, (m.group(1) if m else "a login or confirm page")
+    if has_password and AUTH_WALL_QUERY.search(url or ""):
+        return True, "a login form with a return address"
+    if has_password and re.search(r"\b(sign|log)\s*in\b|confirm", (title or ""), re.I):
+        return True, "a login form"
+    return False, ""
+
+
+def session_verify(a, page):
+    if getattr(a, "url", None):
+        r = call("open", stamped(a, _at(page, {"url": a.url})))
+        if not r.get("ok"):
+            print(r.get("error") or f"could not open {a.url}", file=sys.stderr)
+            return 1
+    res = call("eval", stamped(a, _at(page, {"js": VERIFY_JS, "await": False})))
+    if not res.get("ok"):
+        print(res.get("error") or "could not read the page to verify it", file=sys.stderr)
+        return 1
+    raw = (res.get("value") or {}).get("value") or "{}"
+    try:
+        d = json.loads(raw)
+    except (TypeError, ValueError):
+        d = {}
+    is_wall, reason = classify_auth_wall(d.get("url", ""), d.get("title", ""), bool(d.get("pw")), d.get("text", ""))
+    if is_wall:
+        print(f"the session was rejected: this is {reason}, not the page the action should reach. "
+              f"A copied session can read pages and still be refused a sensitive action — align the "
+              f"user agent (session import --align-ua) and bring localStorage over on the site's origin.")
+        return 1
+    print(f"no login or confirm wall on {d.get('url', 'this page')} — the session looks accepted here")
+    return 0
+
+
+def session_import(a, page):
+    kind, src = a.frm[0], a.frm[1]
+    if kind != "firefox-profile":
+        print(f"unknown source {kind!r} — the only source is firefox-profile <path> "
+              "(Firefox, Zen and LibreWolf share the format)", file=sys.stderr)
+        return 2
+    a.domain, refusal = _canonical_domain(a.domain, subdomains=not a.no_subdomains)
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 2
+    try:
+        payloads, skipped = read_firefox_cookies(src, a.domain, subdomains=not a.no_subdomains)
+    except (FileNotFoundError, OSError) as e:
+        print(f"could not read {src}: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:  # noqa: BLE001 — sqlite errors vary by build
+        print(f"could not read cookies from {src}: {e}", file=sys.stderr)
+        return 1
+    if not payloads:
+        note = f" ({skipped['expired']} expired, {skipped['partitioned']} partitioned/container)" \
+            if (skipped["expired"] or skipped["partitioned"]) else ""
+        print(f"no live cookies for {a.domain} in that profile{note}", file=sys.stderr)
+        return 1
+    set_n, failed = 0, []
+    for p in payloads:
+        r = call("cookies", stamped(a, _at(page, {"set": p})))
+        if r.get("ok"):
+            set_n += 1
+        else:
+            failed.append((p["name"], r.get("error") or "refused"))
+    if a.align_ua:
+        ua = a.user_agent or DEFAULT_FIREFOX_UA
+        r = call("emulate", stamped(a, _at(page, {"userAgent": ua})))
+        if not r.get("ok"):
+            print(f"user agent not aligned: {r.get('error')}", file=sys.stderr)
+
+    # localStorage. A script can only write the origin the tab is ON — that is a
+    # browser rule, not a limitation here — so the entries for the current
+    # origin go in now, and any other origin is named for a second pass with the
+    # tab opened there.
+    ls_written, pending, comp_skipped = 0, [], 0
+    if not a.no_localstorage:
+        by_origin, comp_skipped = read_firefox_localstorage(src, a.domain, subdomains=not a.no_subdomains)
+        if by_origin:
+            here = call("eval", stamped(a, _at(page, {"js": "location.origin", "await": False})))
+            current = ((here.get("value") or {}).get("value") or "") if here.get("ok") else ""
+            for origin, entries in by_origin.items():
+                if origin == current:
+                    n, failures = _write_storage(a, page, "local", entries)
+                    ls_written += n
+                    for f in failures:
+                        print(f"localStorage for {origin}: {f}", file=sys.stderr)
+                else:
+                    pending.append(origin)
+    # Names and counts only — never a value.
+    extra = []
+    if skipped["partitioned"]:
+        extra.append(f"{skipped['partitioned']} partitioned/container skipped")
+    if skipped["expired"]:
+        extra.append(f"{skipped['expired']} expired skipped")
+    if ls_written:
+        extra.append(f"{ls_written} localStorage keys")
+    if comp_skipped:
+        extra.append(f"{comp_skipped} compressed localStorage skipped")
+    print(f"{a.domain}: {set_n} cookies imported"
+          + (f" ({', '.join(extra)})" if extra else "")
+          + (f"; UA aligned to {'Firefox' if not a.user_agent else 'the given agent'}" if a.align_ua else ""))
+    for name, err in failed:
+        print(f"  cookie {name}: {err}", file=sys.stderr)
+    if failed:
+        return 1
+    if pending:
+        print("localStorage for these origins was not written — a script can only "
+              "write the origin its tab is on. Open each and re-run to bring it over:",
+              file=sys.stderr)
+        for origin in pending:
+            print(f"  {_open_as(acting_as(a))} open {origin}   then re-run this import",
+                  file=sys.stderr)
+    print("Open the site and try the action. If it bounces you to a login or a "
+          "confirm-access page, the session is bound to something a cookie copy "
+          "cannot carry (a client-hint the source browser sent) — align the user "
+          "agent with --align-ua.", file=sys.stderr)
     return 0
 
 
@@ -1475,14 +1927,26 @@ def main():
     p.add_argument("value")
     p = sub.add_parser("reload", help="reload, ignoring the cache by default")
     p.add_argument("--keep-cache", dest="keepCache", action="store_true")
-    p = sub.add_parser("cookies", help="read the page's cookies, or set one")
+    p = sub.add_parser(
+        "cookies", help="read the page's cookies, or set one",
+        description="A plain --set NAME VALUE is written by the page itself, as document.cookie. "
+                    "Any attribute below, or a __Host-/__Secure- name, goes through the browser's "
+                    "own jar instead — the only way to set an HttpOnly cookie — and the answer "
+                    "names what landed without printing the value. A __Host- name is Secure, "
+                    "host-only and at / without being told.")
     p.add_argument("--set", nargs=2, metavar=("NAME", "VALUE"), default=None)
     p.add_argument("--path", default="/")
-    p.add_argument("--domain", default=None)
-    p.add_argument("--http-only", dest="httpOnly", action="store_true")
-    p.add_argument("--same-site", dest="sameSite", choices=["Strict", "Lax", "None"], default=None)
+    p.add_argument("--domain", default=None,
+                   help="make it a domain cookie (sent to every subdomain); omitted = host-only")
+    p.add_argument("--secure", action="store_true", default=None)
     p.add_argument("--insecure", dest="insecure", action="store_true",
-                    help="write without Secure — refused for __Host-/__Secure- names")
+                   help="write without Secure (the default on https and loopback pages) — refused for __Host-/__Secure- names")
+    p.add_argument("--http-only", dest="httpOnly", action="store_true", default=None)
+    p.add_argument("--same-site", dest="sameSite", choices=["Strict", "Lax", "None"], default=None)
+    p.add_argument("--expires", type=float, default=None,
+                   help="seconds since the epoch; omitted = a session cookie")
+    p.add_argument("--partition-key", dest="partitionKey", default=None, metavar="TOP_LEVEL_SITE",
+                   help="a partitioned (CHIPS) cookie, e.g. https://example.com")
     sub.add_parser("frames", help="iframes, service workers and shadow roots on this page")
 
     sub.add_parser("tabs", help="what tabs are open, with the active one marked")
@@ -1788,6 +2252,37 @@ def main():
     sp1.add_argument("file")
     sp2 = sp.add_parser("load", help="restore state from FILE onto the current page")
     sp2.add_argument("file")
+    sp3 = sp.add_parser(
+        "import",
+        help="bring a signed-in session straight from your Firefox/Zen/LibreWolf profile",
+        description="Reads the profile you already log in with — no prior `save` needed — and "
+                    "copies every live cookie for a domain (and its subdomains) with all its "
+                    "attributes, session cookies included, so a sensitive action survives and "
+                    "not just page reads. The profile is read locally by this process; values "
+                    "go straight into the browser and are never printed. Firefox, Zen and "
+                    "LibreWolf share the format.")
+    sp3.add_argument("--from", dest="frm", nargs=2, metavar=("KIND", "PATH"), required=True,
+                     help="firefox-profile <path to the profile dir or its cookies.sqlite>")
+    sp3.add_argument("--domain", required=True, help="the site to bring over, e.g. orbit.example")
+    sp3.add_argument("--no-subdomains", action="store_true",
+                     help="only the exact domain, not its subdomains (subdomains come by default)")
+    sp3.add_argument("--no-localstorage", action="store_true",
+                     help="cookies only; skip localStorage (imported by default for the origin "
+                          "the tab is on, since a login is as often a token there as a cookie)")
+    sp3.add_argument("--align-ua", dest="align_ua", action="store_true",
+                     help="also set the user agent to Firefox's, since a strict site compares it "
+                          "to the one the session signed in with")
+    sp3.add_argument("--user-agent", dest="user_agent", default=None,
+                     help="the exact user agent to align to (default: a recent Firefox)")
+    sp4 = sp.add_parser(
+        "verify",
+        help="say whether the page in front is a login/confirm wall — a rejected session, named",
+        description="A copied session can read pages and still be refused a sensitive action, "
+                    "which most sites do by redirecting to a login or confirm page rather than "
+                    "erroring — so an agent steps past it in silence. Run this on the page after "
+                    "the action (or with --url to open one first): it reports whether the browser "
+                    "landed on such a wall, with the site's own reason when it gave one.")
+    sp4.add_argument("--url", default=None, help="open this first, then verify (default: verify the page already in front)")
     p = sub.add_parser(
         "permissions",
         help="grant camera/mic/clipboard/geolocation for an origin, by API — instead "
@@ -1940,6 +2435,10 @@ def main():
         if refusal:
             print(refusal, file=sys.stderr)
             return 1
+        if a.sessionCmd == "import":
+            return session_import(a, page)
+        if a.sessionCmd == "verify":
+            return session_verify(a, page)
         return session_save(a.file, page, a) if a.sessionCmd == "save" else session_load(a.file, page, a)
 
     if a.cmd == "permissions":
@@ -2314,16 +2813,15 @@ def main():
         body = {"bypassCache": not a.keepCache}
     elif a.cmd == "cookies":
         if a.set:
-            c = {"name": a.set[0], "value": a.set[1], "path": a.path}
-            if a.domain:
-                c["domain"] = a.domain
-            if a.httpOnly:
-                c["httpOnly"] = True
-            if a.sameSite:
-                c["sameSite"] = a.sameSite
+            set_ = {"name": a.set[0], "value": a.set[1], "path": a.path}
+            for k in ("domain", "secure", "httpOnly", "sameSite", "expires", "partitionKey"):
+                if getattr(a, k) is not None:
+                    set_[k] = getattr(a, k)
             if a.insecure:
-                c["secure"] = False
-            body = {"set": c}
+                if a.secure:
+                    sys.exit("--secure and --insecure contradict each other")
+                set_["secure"] = False
+            body = {"set": set_}
         else:
             body = {}
     elif a.cmd == "frames":

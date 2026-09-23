@@ -28,7 +28,6 @@
  *     socket, a pending map entry and an agent's turn open forever.
  */
 
-import { isIP } from "node:net";
 /* Static rather than the `await import("node:fs")` the async helpers below
    use: `recordAudit` is synchronous and on the path of every verb, and a
    dynamic import there would make the log's write order depend on the
@@ -37,6 +36,8 @@ import { appendFileSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSy
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { configPath, inScope, workspaceRoot } from "./config.ts";
+import { robotsOn, robotsRefusal } from "./robots.ts";
+import { blockedTarget } from "./net.ts";
 import { diskAllows, diskEnabled } from "./disk.ts";
 
 /** What the panel can be asked to do. Each one is implemented there; nothing
@@ -64,7 +65,9 @@ import { diskAllows, diskEnabled } from "./disk.ts";
  * than not having tabs at all.
  */
 export type BrowserOp =
-  | "open" | "read" | "click" | "type" | "wait" | "shot"
+  | "open" | "read" | "markdown" | "extract" | "links" | "count" | "search"
+  | "interactive" | "forms" | "attr" | "screencast"
+  | "click" | "type" | "wait" | "shot"
   | "back" | "forward" | "scroll" | "press" | "text"
   | "tabs" | "tab" | "newtab" | "closetab"
   | "console" | "network" | "resize" | "zoom" | "html" | "waitfor" | "observe"
@@ -81,7 +84,9 @@ export type BrowserOp =
 /** Every verb, exported so a test can hold the CLI and the MCP to it — see
  *  `browser-cli.test.ts`. Seven §3 verbs once shipped reachable by neither. */
 export const BROWSER_OPS: readonly BrowserOp[] = [
-  "open", "read", "click", "type", "wait", "shot",
+  "open", "read", "markdown", "extract", "links", "count", "search",
+  "interactive", "forms", "attr", "screencast",
+  "click", "type", "wait", "shot",
   "back", "forward", "scroll", "press", "text",
   "tabs", "tab", "newtab", "closetab",
   "console", "network", "resize", "zoom", "html", "waitfor", "observe",
@@ -154,7 +159,7 @@ export interface BrowserReply {
  *  and an agent learns nothing from a minute of silence that it would not
  *  learn in fifteen seconds. */
 const TIMEOUT_MS: Record<BrowserOp, number> = {
-  open: 45_000, read: 15_000, click: 15_000, type: 15_000, wait: 45_000, shot: 20_000,
+  open: 45_000, read: 15_000, markdown: 20_000, extract: 15_000, links: 15_000, count: 15_000, search: 15_000, interactive: 15_000, forms: 15_000, attr: 15_000, click: 15_000, type: 15_000, wait: 45_000, shot: 20_000,
   // Going back is a navigation and gets a navigation's patience; the rest are a
   // round trip to the page and nothing more.
   back: 45_000, forward: 45_000, scroll: 15_000, press: 15_000, text: 15_000,
@@ -184,7 +189,7 @@ const TIMEOUT_MS: Record<BrowserOp, number> = {
   /* A CDP command is usually instant, but `HeapProfiler.takeHeapSnapshot` and
      a profiler stop on a real page are not — this is the one verb whose upper
      bound is set by the slowest thing in the protocol, not the typical one. */
-  cdp: 60_000, listeners: 15_000, coverage: 30_000,
+  cdp: 60_000, listeners: 15_000, coverage: 30_000, screencast: 20_000,
   /* A question the panel answers from memory. `whoami` is the same question
      with the caller's own identity folded in, and one extra `tabs` behind it. */
   profiles: 5_000, whoami: 5_000,
@@ -311,75 +316,6 @@ export function browserReadyCount(): number {
 
 let seq = 0;
 const nextId = () => `b${++seq}`;
-
-/** Addresses the browser relay refuses even over http(s): link-local — which is
- *  where the cloud metadata endpoint 169.254.169.254 lives — and the unspecified
- *  address. `open` drives a real, logged-in browser and `read` hands back the
- *  page, so without this the relay is an SSRF probe with a credentialed response
- *  channel. Loopback and RFC1918 are deliberately NOT blocked: pointing the
- *  browser at a local dev server or a box on your own LAN is ordinary use here.
- *  A bare hostname passes — re-resolving to pin the IP is a TOCTOU we don't win,
- *  and a redirect can still land somewhere internal; the guest's own network
- *  stack is the backstop for those. */
-function blockedV4(h: string): boolean {
-  return h.startsWith("169.254.") || h === "0.0.0.0";
-}
-
-/** The eight 16-bit groups of a valid IPv6 address (isIP has already said v6),
- *  with `::` expanded and any trailing dotted-quad (`::ffff:1.2.3.4`) folded
- *  into its two hex groups. Given a valid address this always yields eight. */
-function ipv6Groups(h: string): number[] {
-  let s = h;
-  const lastColon = s.lastIndexOf(":");
-  const tail = s.slice(lastColon + 1);
-  if (tail.includes(".")) { // embedded IPv4 dotted-quad → two hex groups
-    const q = tail.split(".").map((n) => parseInt(n, 10) & 0xff);
-    s = s.slice(0, lastColon + 1) +
-      ((q[0]! << 8) | q[1]!).toString(16) + ":" + ((q[2]! << 8) | q[3]!).toString(16);
-  }
-  const [left, right] = s.split("::");
-  const head = left ? left.split(":") : [];
-  const rear = right !== undefined ? (right ? right.split(":") : []) : [];
-  const gap = right !== undefined ? 8 - head.length - rear.length : 0;
-  return [...head, ...Array(Math.max(gap, 0)).fill("0"), ...rear].map((g) => parseInt(g, 16));
-}
-
-function blockedTarget(host: string): boolean {
-  const h = host.replace(/^\[|\]$/g, "").toLowerCase(); // URL keeps IPv6 brackets
-  const v = isIP(h);
-  if (v === 4) return blockedV4(h);
-  if (v === 6) {
-    if (/^fe[89ab]/.test(h) || h === "::") return true; // fe80::/10 link-local, unspecified
-    // IPv4-mapped (::ffff:0:0/96) and the deprecated IPv4-compatible (::/96) forms
-    // carry a v4 address in the low 32 bits — so `[::ffff:169.254.169.254]` (which
-    // the URL parser folds to `::ffff:a9fe:a9fe`) is the metadata endpoint wearing
-    // a v6 hat. Re-run the v4 rules on the embedded address; loopback/LAN mapped
-    // in this way (e.g. `::ffff:127.0.0.1`) stays allowed, same as its v4 self.
-    const g = ipv6Groups(h);
-    const embedded =
-      g[0] === 0 && g[1] === 0 && g[2] === 0 && g[3] === 0 && g[4] === 0 &&
-      (g[5] === 0xffff || g[5] === 0);
-    if (embedded) {
-      const v4 = `${g[6]! >> 8}.${g[6]! & 0xff}.${g[7]! >> 8}.${g[7]! & 0xff}`;
-      return blockedV4(v4);
-    }
-    // NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`) embed a v4 address the same
-    // way, just under a non-zero prefix — `[64:ff9b::a9fe:a9fe]` and
-    // `[2002:a9fe:a9fe::]` are 169.254.169.254 wearing a routable-looking hat.
-    // Fold each ONLY when its prefix actually matches, so a global v6 whose low
-    // bits merely resemble 169.254.x.x is not over-blocked.
-    if (g[0] === 0x0064 && g[1] === 0xff9b && g[2] === 0 && g[3] === 0 && g[4] === 0 && g[5] === 0) {
-      const v4 = `${g[6]! >> 8}.${g[6]! & 0xff}.${g[7]! >> 8}.${g[7]! & 0xff}`;
-      return blockedV4(v4);
-    }
-    if (g[0] === 0x2002) {
-      const v4 = `${g[1]! >> 8}.${g[1]! & 0xff}.${g[2]! >> 8}.${g[2]! & 0xff}`;
-      return blockedV4(v4);
-    }
-    return false;
-  }
-  return false;
-}
 
 /** The URLs the browser may be sent to. Same rule as the address bar: a page,
  *  not a `file://` read of somebody's keys and not a `javascript:` that would
@@ -649,7 +585,9 @@ function readonlyMode(): boolean {
  *  verb that is not in it is acting by default — see `isActing` — rather than
  *  quietly falling on the safe-to-run side because nobody classified it. */
 const OBSERVE_OPS: ReadonlySet<BrowserOp> = new Set([
-  "read", "shot", "text", "html", "console", "network", "observe",
+  "read", "markdown", "extract", "links", "count", "search",
+  "interactive", "forms", "attr", "screencast",
+  "shot", "text", "html", "console", "network", "observe",
   "tabs", "frames", "health", "waitfor", "wait", "vitals", "a11y",
   /* `listeners` and a coverage READ only look. `cdp` is deliberately NOT
      here: the protocol can navigate, click, set a breakpoint and evaluate, so
@@ -836,11 +774,13 @@ export interface PageSecrets {
  *   agent put on the clipboard, and nothing measured says a password went
  *   through it. The shareable script export withholds it instead.
  * - `select --value`: an option's value is markup, not a secret.
+ * - `extract --fields`: names and selectors, the shape of a dataset, not
+ *   credentials — the same reason `select --value` is exempt.
  * - `fake --body` and `intercept --body`: a response the agent wrote itself,
  *   to a page it is testing.
  * - `settings set`: a preference, and `settings get` prints it back anyway.
  */
-export const valueCarryingExemptForTest: readonly string[] = ["clipboard", "select", "fake", "intercept", "settings"];
+export const valueCarryingExemptForTest: readonly string[] = ["clipboard", "select", "extract", "fake", "intercept", "settings"];
 const VALUE_CARRYING: Record<string, (
   out: Record<string, unknown>,
   args: Record<string, unknown>,
@@ -884,6 +824,29 @@ const VALUE_CARRYING: Record<string, (
      a comment rather than a command. */
   storage(out, args) {
     if (args.set === true && typeof args.value === "string") out.value = REDACTED;
+  },
+  /* The same two positions, reached through the raw protocol: an agent can
+     write a whole session with `cdp`, and the rows above never see a single
+     value of it. Only the methods that WRITE a cookie or a stored item — a
+     `value` anywhere else in the protocol is not a credential by position.
+     `session load` and the MCP's `browser_set_storage_state` restore cookies
+     through `Network.setCookie` here; `session import` uses `cookies --set`,
+     and all three write storage with `storage --set`, one key at a time.
+     `eval` is the one door no row can cover — a script has no value position
+     — which is why none of them writes storage with one. */
+  cdp(out, args) {
+    const params = args.params;
+    if (!params || typeof params !== "object" || Array.isArray(params)) return;
+    const p = params as Record<string, unknown>;
+    const blank = (o: unknown) =>
+      o && typeof o === "object" && typeof (o as Record<string, unknown>).value === "string"
+        ? { ...(o as Record<string, unknown>), value: REDACTED } : o;
+    if (args.method === "Network.setCookie" || args.method === "DOMStorage.setDOMStorageItem"
+      || args.method === "Storage.setSharedStorageEntry") {
+      out.params = blank({ ...(out.params as Record<string, unknown>), value: p.value });
+    } else if ((args.method === "Network.setCookies" || args.method === "Storage.setCookies") && Array.isArray(p.cookies)) {
+      out.params = { ...(out.params as Record<string, unknown>), cookies: p.cookies.map(blank) };
+    }
   },
   /* What a prompt() is answered with is typed into a box the page chose, and
      no selector says whether that box asked for a passcode. Position rule
@@ -2251,6 +2214,28 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
       args.action = action;
       break;
     }
+    case "screencast": {
+      const action = b.action === undefined ? "start" : b.action;
+      if (action !== "start" && action !== "frames" && action !== "stop") {
+        return { error: 'screencast takes action: "start", "frames" or "stop"' };
+      }
+      args.action = action;
+      /* The caps are the point: a screencast is the one verb that can fill
+         the shell with pictures on its own, and each frame is a picture an
+         agent pays for. Small by default, bounded always. */
+      const num = (key: string, lo: number, hi: number, dflt: number): number | { error: string } => {
+        if (b[key] === undefined) return dflt;
+        const n = Number(b[key]);
+        if (!Number.isInteger(n) || n < lo || n > hi) return { error: `${key} must be a whole number from ${lo} to ${hi}` };
+        return n;
+      };
+      for (const [key, lo, hi, dflt] of [["quality", 1, 100, 60], ["maxWidth", 100, 4096, 1024], ["maxHeight", 100, 4096, 768], ["everyNth", 1, 60, 1]] as const) {
+        const v = num(key, lo, hi, dflt);
+        if (typeof v !== "number") return v;
+        args[key] = v;
+      }
+      break;
+    }
     case "inspect": {
       /*
        * THE INSPECTOR, which until now only a person could reach.
@@ -2521,7 +2506,7 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
       if (b.set !== undefined) {
         const c = b.set as Record<string, unknown>;
         if (!c || typeof c !== "object" || typeof c.name !== "string" || typeof c.value !== "string") {
-          return { error: "set must be { name, value, domain?, path?, secure?, httpOnly?, sameSite? }" };
+          return { error: "set must be { name, value, domain?, path?, secure?, httpOnly?, sameSite?, expires?, partitionKey? }" };
         }
         if (c.secure !== undefined && typeof c.secure !== "boolean") {
           return { error: "secure must be a boolean" };
@@ -2838,9 +2823,68 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
       break;
     }
     case "read":
+    case "markdown":
+    case "links":
+    case "interactive":
+    case "forms":
     case "back":
     case "forward":
       break;
+    case "attr": {
+      /* One element, some of its attributes. The names become page JS, so
+         they are held to what an attribute name can be; the count is capped
+         for the same reason `extract` caps its fields. */
+      if (!okSelector(b.selector)) return { error: "attr needs a selector, or an id from an observation" };
+      args.selector = b.selector;
+      if (b.names !== undefined) {
+        if (!Array.isArray(b.names) || b.names.length > 20) return { error: "names must be a list of up to 20 attribute names" };
+        for (const n of b.names) {
+          if (typeof n !== "string" || !/^[A-Za-z_:][\w:.-]{0,63}$/.test(n)) return { error: `${String(n)} is not an attribute name` };
+        }
+        args.names = b.names;
+      }
+      break;
+    }
+    case "extract": {
+      /* A field→selector map, validated here on purpose: the values become
+         page JS (via `jsLit` on the other side of the wire), so a value that
+         is not a selector or a name that is not a clean key is refused rather
+         than pasted. The count is capped so one ask cannot mine a whole page
+         into an agent's context field by field. */
+      if (typeof b.fields !== "object" || b.fields === null || Array.isArray(b.fields)) {
+        return { error: "extract needs a fields object: { name: selector, ... }" };
+      }
+      const entries = Object.entries(b.fields as Record<string, unknown>);
+      if (entries.length === 0) return { error: "extract needs at least one field: { name: selector }" };
+      if (entries.length > 30) return { error: "extract caps at 30 fields in one call" };
+      const fields: Record<string, string> = {};
+      for (const [name, sel] of entries) {
+        if (!/^[A-Za-z0-9_.-]{1,64}$/.test(name)) {
+          return { error: `field ${name}: name must be letters, digits, . _ - up to 64 chars` };
+        }
+        if (!okSelector(sel)) return { error: `field ${name}: selector must be a short, single-line CSS selector` };
+        fields[name] = sel;
+      }
+      args.fields = fields;
+      break;
+    }
+    case "count": {
+      if (b.selector !== undefined) {
+        if (!okSelector(b.selector)) return { error: "selector must be a short, single-line CSS selector" };
+        args.selector = b.selector;
+      }
+      break;
+    }
+    case "search": {
+      /* A bare text search, not a selector: the longest thing a caller should
+         mean by "search" is a short phrase. A paste is a search engine's job. */
+      const q = typeof b.query === "string" ? b.query.trim() : "";
+      if (!q || q.length > 200 || /[\r\n]/.test(q)) {
+        return { error: "query must be a phrase up to 200 chars, on one line" };
+      }
+      args.query = q;
+      break;
+    }
   }
   /* §9: `--page` addresses a specific tab instead of the active one. Tab
      operations work on the tab list itself rather than a page inside a tab, so
@@ -3430,6 +3474,113 @@ export async function withObservation(
     : { ...reply, value: { ...(reply.value as object ?? {}), afterFailed: seen.error } };
 }
 
+/** What `scrape` may read from each page: the verbs that answer with the
+ *  whole page in a shape, and take no selector. `text` is not here because it
+ *  needs one, and `read` is the fallback for a caller that wants plain text. */
+export const SCRAPE_READS: ReadonlySet<string> = new Set(["read", "markdown", "links", "extract", "interactive", "forms"]);
+const SCRAPE_MAX_URLS = 40;
+const SCRAPE_MAX_CONCURRENCY = 4;
+
+export interface ScrapeSpec {
+  urls: string[];
+  read: string;
+  fields?: Record<string, string>;
+  concurrency: number;
+  profile: string;
+}
+
+/**
+ * The body of a `scrape`, validated the way a single `open` and a single read
+ * would be — every URL through `safeUrl` and the origin allow-list, the read
+ * through its own `parseAsk` — so a list of forty pages cannot reach further
+ * than one page could. The concurrency cap is small on purpose: these are
+ * tabs in a person's window, not workers in a pool.
+ */
+export function parseScrape(b: Record<string, unknown>, caller?: Record<string, unknown>): { error: string } | ScrapeSpec {
+  if (!Array.isArray(b.urls) || b.urls.length === 0) return { error: "scrape needs urls: [\"https://...\", ...]" };
+  if (b.urls.length > SCRAPE_MAX_URLS) return { error: `scrape takes at most ${SCRAPE_MAX_URLS} urls, got ${b.urls.length}` };
+  const urls: string[] = [];
+  const list = allowedOrigins();
+  for (const raw of b.urls) {
+    const url = safeUrl(raw);
+    if (!url) return { error: `${String(raw).slice(0, 200)}: url must be an http(s) address` };
+    const host = new URL(url).host;
+    if (!originAllowed(host, list)) {
+      const msg = `origin refused: ${host} is not in the allow-list (${list.join(", ")})`;
+      recordAudit("newtab", { url }, false, msg, false, undefined, caller);
+      return { error: msg };
+    }
+    urls.push(url);
+  }
+  const read = typeof b.read === "string" && b.read ? b.read : "markdown";
+  if (!SCRAPE_READS.has(read)) return { error: `read must be one of ${[...SCRAPE_READS].join(", ")}` };
+  let fields: Record<string, string> | undefined;
+  if (read === "extract") {
+    const parsed = parseAsk("extract", { fields: b.fields });
+    if ("error" in parsed) return { error: parsed.error };
+    fields = parsed.ask.args.fields as Record<string, string>;
+  }
+  let concurrency = 2;
+  if (b.concurrency !== undefined) {
+    if (typeof b.concurrency !== "number" || !Number.isInteger(b.concurrency) || b.concurrency < 1 || b.concurrency > SCRAPE_MAX_CONCURRENCY) {
+      return { error: `concurrency must be a whole number from 1 to ${SCRAPE_MAX_CONCURRENCY}` };
+    }
+    concurrency = b.concurrency;
+  }
+  const profile = typeof b.profile === "string" ? b.profile : "";
+  return { urls, read, fields, concurrency, profile };
+}
+
+export interface ScrapedPage { url: string; ok: boolean; tab?: string; value?: unknown; error?: string; ms: number }
+
+/**
+ * Several pages, read in parallel, each in a tab of its own that is closed
+ * again whatever happened in it.
+ *
+ * Not `lanes`: a lane is several verbs on a page that already exists, and
+ * this is the same read on pages that do not exist yet. Each URL is a
+ * `newtab` in the caller's container, the read addressed to that tab, and a
+ * `closetab` in a `finally` — a failed read is a row with an error, not a tab
+ * left open in somebody's window. At most `concurrency` tabs are open at once;
+ * rows come back in the order the URLs were given, whatever order they
+ * finished in. Every ask goes through `askBrowser`, so each is audited and
+ * each is held to the owner check like a hand-typed one.
+ */
+export async function runScrape(spec: ScrapeSpec, caller: Record<string, unknown> = {}): Promise<{ ok: boolean; value: { pages: ScrapedPage[]; failed: number } }> {
+  const rows: ScrapedPage[] = new Array(spec.urls.length);
+  let next = 0;
+  const one = async (url: string): Promise<ScrapedPage> => {
+    const started = Date.now();
+    const minted = parseAsk("newtab", { ...caller, url, profile: spec.profile });
+    if ("error" in minted) return { url, ok: false, error: minted.error, ms: Date.now() - started };
+    const tab = await askBrowser(minted.ask);
+    const id = tab.ok && tab.value && typeof tab.value === "object" ? (tab.value as { id?: unknown }).id : undefined;
+    if (!tab.ok || typeof id !== "string" || !id) {
+      return { url, ok: false, error: tab.error || "the window did not say which tab it opened", ms: Date.now() - started };
+    }
+    try {
+      const read = parseAsk(spec.read as BrowserOp, { ...caller, page: id, ...(spec.fields ? { fields: spec.fields } : {}) });
+      if ("error" in read) return { url, ok: false, tab: id, error: read.error, ms: Date.now() - started };
+      const reply = await askBrowser(read.ask);
+      return reply.ok
+        ? { url, ok: true, tab: id, value: reply.value, ms: Date.now() - started }
+        : { url, ok: false, tab: id, error: reply.error || "the read failed", ms: Date.now() - started };
+    } finally {
+      const close = parseAsk("closetab", { ...caller, id });
+      if (!("error" in close)) await askBrowser(close.ask).catch(() => undefined);
+    }
+  };
+  const worker = async () => {
+    while (next < spec.urls.length) {
+      const i = next++;
+      rows[i] = await one(spec.urls[i]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(spec.concurrency, spec.urls.length) }, worker));
+  const failed = rows.filter((r) => !r.ok).length;
+  return { ok: true, value: { pages: rows, failed } };
+}
+
 export async function runSteps(
   steps: Array<{ op: unknown; args: unknown }>,
   /** `page` is the tab the trailing observation must describe. A lane passes
@@ -3589,6 +3740,17 @@ async function observeTracked(ask: BrowserAsk, send: (a: BrowserAsk) => Promise<
 export async function askBrowser(ask: BrowserAsk): Promise<BrowserReply> {
   if (ask.op === "observe") return observeTracked(ask, (a) => (asker ? asker(a) : askWithRetry(a)));
   if (asker) return asker(ask);
+  /* robots.txt, when the operator asked for it — see robots.ts for why it is
+     off by default. Here rather than in `parseAsk` because it is a fetch, and
+     here rather than in the route because `do` steps arrive through this door
+     too. The refusal is audited like any other. */
+  if ((ask.op === "open" || ask.op === "newtab") && typeof ask.args.url === "string" && robotsOn()) {
+    const why = await robotsRefusal(ask.args.url);
+    if (why) {
+      recordAudit(ask.op, ask.args, false, why);
+      return { ok: false, error: why };
+    }
+  }
   /*
    * §11: two verbs the window cannot answer on its own.
    *

@@ -1594,3 +1594,78 @@ describe("cookieSetParams", () => {
     if (r.ok) expect(r.params.secure).toBe(false);
   });
 });
+
+describe("cookies --set with attributes goes through the protocol, not document.cookie", () => {
+  /*
+   * `document.cookie` cannot write an HttpOnly cookie at all, and a `__Host-`
+   * one only with `Secure` in the string, which the verb never put there —
+   * measured in Chromium, `__Host-x=1; path=/` is dropped without a word. So a
+   * copied session could never be finished by hand with this verb. Any
+   * attribute, or a prefixed name, takes Network.setCookie instead, and the
+   * answer names what landed without echoing the value.
+   */
+  const jar: Array<Record<string, unknown>> = [];
+  const cdp = async (method: string, params?: unknown) => {
+    const p = (params ?? {}) as Record<string, unknown>;
+    if (method === "Network.setCookie") { jar.push(p); return { ok: true, result: { success: true } }; }
+    if (method === "Network.getCookies") return { ok: true, result: { cookies: jar.map((c) => ({ name: c.name, value: c.value })) } };
+    return { ok: true, result: {} };
+  };
+  const run = (set: Record<string, unknown>) => {
+    jar.length = 0;
+    return runBrowserAsk(fakeGuest(), ask("cookies", { set }), undefined, undefined, undefined, cdp);
+  };
+
+  test("a __Host- cookie is secure, host-only and at / without being told", async () => {
+    const r = await run({ name: "__Host-orbit_sid", value: "s3cr3t-v4lue", httpOnly: true, sameSite: "Lax" });
+    expect(r.ok).toBe(true);
+    expect(jar[0]).toMatchObject({ name: "__Host-orbit_sid", url: "https://example.com/", path: "/", secure: true, httpOnly: true, sameSite: "Lax" });
+    expect(jar[0]).not.toHaveProperty("domain");
+    expect(JSON.stringify(r), "the answer echoed the cookie's value").not.toContain("s3cr3t-v4lue");
+  });
+
+  test("a __Host- cookie with a domain is refused before it is sent", async () => {
+    const r = await run({ name: "__Host-a", value: "b", domain: "example.com" });
+    expect(r.ok).toBe(false);
+    expect((r as { error: string }).error).toContain("__Host-");
+    expect(jar).toHaveLength(0);
+  });
+
+  test("every attribute is carried: domain, expiry, SameSite=None, a partition", async () => {
+    const r = await run({
+      name: "theme", value: "dark", domain: ".example.com", secure: true, sameSite: "None",
+      expires: 1_900_000_000, partitionKey: "https://orbit.example",
+    });
+    expect(r.ok).toBe(true);
+    expect(jar[0]).toMatchObject({
+      domain: ".example.com", url: "https://example.com/", secure: true, sameSite: "None", expires: 1_900_000_000,
+      partitionKey: { topLevelSite: "https://orbit.example", hasCrossSiteAncestor: false },
+    });
+  });
+
+  test("SameSite=None without Secure is refused, since Chromium would drop it", async () => {
+    const r = await run({ name: "x", value: "y", sameSite: "None" });
+    expect(r.ok).toBe(false);
+    expect((r as { error: string }).error).toContain("Secure");
+  });
+
+  test("an imported cookie names its own host, so a host-only one is set while the page is elsewhere", async () => {
+    // session import sets cookies before the tab is on the site; a host-only
+    // cookie must bind to ITS host, not to about:blank's.
+    const el = fakeGuest();
+    (el as { getURL: () => string }).getURL = () => "about:blank";
+    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "s", value: "v", host: "www.orbit.example", secure: true, httpOnly: true } }),
+      undefined, undefined, undefined, cdp);
+    expect(r.ok).toBe(true);
+    expect(jar[0]).toMatchObject({ url: "https://www.orbit.example/", secure: true });
+    expect(jar[0]).not.toHaveProperty("domain");
+  });
+
+  test("a write the protocol accepts but the jar does not hold is still a failure", async () => {
+    const liar = async (method: string) => method === "Network.getCookies"
+      ? { ok: true, result: { cookies: [] } } : { ok: true, result: { success: true } };
+    const r = await runBrowserAsk(fakeGuest(), ask("cookies", { set: { name: "a", value: "b", httpOnly: true } }),
+      undefined, undefined, undefined, liar);
+    expect(r.ok).toBe(false);
+  });
+});
