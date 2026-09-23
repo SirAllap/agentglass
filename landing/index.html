@@ -589,6 +589,15 @@ body.scene .one{padding-bottom:clamp(64px,12vh,140px)}
  animation:breathe 9s ease-in-out infinite}
 @keyframes breathe{0%,100%{opacity:.75;transform:scale(.97)}50%{opacity:1;transform:scale(1.03)}}
 .hd-world.spent .star,.hd-world.spent::before{animation-play-state:paused}
+/* Ambient motion that is not on screen does not run: see "Nothing runs that
+   nobody can see" in the script. */
+.rest,.rest *,.rest::before,.rest::after{animation-play-state:paused!important}
+/* The page's own ambient clocks (the planet's glow and twinkle, the line's
+   travelling dot, the cursor's blink) rest after a few seconds with no input.
+   Only the ones that are not driven by the scroll: the scroll-driven half of a
+   pair keeps `running`. */
+html.idle .hd-world::before,html.idle .hd-world .star,html.idle .one *,html.idle .one *::before,html.idle .one *::after{animation-play-state:paused}
+html.idle .hd-sweep,html.idle .hd-lock .lk-car{animation-play-state:paused,running}
 .hd-world svg{display:block;width:100%;height:100%;overflow:visible;transform:translate3d(var(--px,0),var(--py,0),0)}
 .hd-world .far{color:#8b88a4}
 .hd-world .star{fill:#f2f1f8;animation:twinkle 4.6s ease-in-out infinite}
@@ -2356,6 +2365,53 @@ if(!calm){
   rest();
  }
 }
+/* Ambient motion nobody can see does not run. Measured at 4x CPU with software
+   raster, the page idled at ~90% of a core drawing 60 frames a second, and
+   switching off its CSS animations and its SVG (SMIL) animations together took
+   that to 16% (desktop) and 0% (phone, no frames at all): every orb, glow and
+   orbit on the page ran all the time, whether or not it was in the window. Each
+   one that repeats for ever is watched, and paused (`.rest`, and
+   `pauseAnimations()` for a drawing) while it is more than a screenful away.
+   The header's own clocks are fixed to the window and are never paused. */
+if(!calm) addEventListener('load',()=>setTimeout(()=>{
+ const io=new IntersectionObserver((es)=>{ for(const e of es){
+  const el=e.target, on=e.isIntersecting;
+  el.classList.toggle('rest',!on);
+  if(el.pauseAnimations){ if(on) el.unpauseAnimations(); else el.pauseAnimations(); }
+ }},{rootMargin:'120px 0px'});
+ const seen=new Set();
+ const watch=(el)=>{ if(!el||seen.has(el)||el.closest('.hd,.hd-world,.sat')) return; seen.add(el); io.observe(el); };
+ for(const a of document.getAnimations()){
+  if(a.timeline!==document.timeline||a.effect.getTiming().iterations!==Infinity) continue;
+  const t=a.effect.target; if(t&&t.nodeType===1) watch(t);
+ }
+ for(const sv of document.querySelectorAll('svg')) if(sv.querySelector('animate,animateMotion,animateTransform,set')) watch(sv);
+},1500));
+/* Rest when nobody is there. An idle page must cost nothing: measured with a
+   4x CPU throttle and software raster, the planet's orbit (SVG animation) and
+   the twinkle alone kept the page drawing 60 frames a second and 80-90% of a
+   core busy while nothing at all was happening. After REST_MS without a
+   pointer, key, wheel, touch or scroll they pause, and the first input starts
+   them again where they were. No timer runs while resting. Reduced motion never
+   starts them. */
+if(!calm){
+ const REST_MS=6000;
+ const hero=document.querySelector('.hd-world svg'), mark=document.querySelector('.hd-lock .mk');
+ const svgs=[hero,mark].filter(Boolean);
+ let last=performance.now(), timer=0, resting=false;
+ const rest=()=>{ timer=0;
+  const left=REST_MS-(performance.now()-last);
+  if(left>50){ timer=setTimeout(rest,left); return; }
+  resting=true; document.documentElement.classList.add('idle');
+  for(const v of svgs) v.pauseAnimations();
+ };
+ const wake=()=>{ last=performance.now();
+  if(resting){ resting=false; document.documentElement.classList.remove('idle'); for(const v of svgs) v.unpauseAnimations(); }
+  if(!timer) timer=setTimeout(rest,REST_MS);
+ };
+ for(const t of ['pointermove','pointerdown','keydown','wheel','touchstart','scroll']) addEventListener(t,wake,{passive:true,capture:true});
+ timer=setTimeout(rest,REST_MS);
+}
 /* The chips start on a ring 408px wide and 208px tall around the middle. That
    is a fine ring on a 1500px viewport and off the screen at 140% zoom, where
    the viewport is 1160 CSS px — measured: half of them landed outside it and
@@ -2561,7 +2617,7 @@ if(calm){document.body.classList.add('go');rks.forEach(r=>r.classList.add('shown
     plays it. On a clock, a phone that scrolled faster than the clock left
     a full rail over an empty window. */
  startTour=()=>{ if(touring) return; touring=true; show(order[0]);
-  setInterval(()=>{if(auto){n=(n+1)%order.length;show(order[n]);}},2000); };
+  setInterval(()=>{if(auto&&!document.documentElement.classList.contains('idle')){n=(n+1)%order.length;show(order[n]);}},2000); };
  if(innerWidth>=760) setTimeout(startTour,done+700);
  rks.forEach(r=>r.onclick=()=>{auto=false;show(r.dataset.k);
   n=Math.max(0,order.indexOf(r.dataset.k));setTimeout(()=>auto=true,9000);});
@@ -2977,7 +3033,7 @@ if(!calm) requestAnimationFrame(()=>{
 const g=document.querySelector('.gate');
 new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){g.classList.add('in');
  let s=0;const el=document.getElementById('clock');
- const t=setInterval(()=>{s++;el.textContent=Math.floor(s/60)+'m '+String(s%60).padStart(2,'0')+'s';},1000);
+ const t=setInterval(()=>{ if(document.documentElement.classList.contains('idle')) return; s++;el.textContent=Math.floor(s/60)+'m '+String(s%60).padStart(2,'0')+'s';},1000);
  document.getElementById('allow').onclick=()=>{clearInterval(t);
   document.querySelector('.msg').textContent='allowed — it is moving again';};
  document.getElementById('deny').onclick=()=>{clearInterval(t);
