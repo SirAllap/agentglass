@@ -271,3 +271,30 @@ test.skipIf(!HAVE_PY)("the private copy of the profile is gone afterwards, when 
     expect(left()).toEqual([]);
   } finally { rmSync(tmp, { recursive: true, force: true }); rmSync(broken, { recursive: true, force: true }); }
 });
+
+test.skipIf(!HAVE_PY)("a stored key the tab refuses is named, the rest still land, and the counts say what did", async () => {
+  /* Storage goes one key per call now, so a refusal is per key: it must not
+     silently drop every key after it, and the summary must not count a key
+     that never landed. A non-string value is written as the browser's own
+     setItem would have made it a string, not refused. */
+  const dir = mkdtempSync(join(tmpdir(), "agx-sessload-"));
+  const file = join(dir, "state.json");
+  writeFileSync(file, JSON.stringify({
+    cookies: [],
+    origins: [{
+      origin: "https://www.orbit.example",
+      localStorage: [{ name: "refused", value: "a" }, { name: "count", value: 42 }, { name: "after", value: "b" }],
+      sessionStorage: [{ name: "tab", value: "c" }],
+    }],
+  }));
+  const s = startBrowserStub((op, body) =>
+    op === "storage" && body.key === "refused" ? { ok: false, error: "the page refused that write" } : { ok: true, value: {} });
+  try {
+    const r = await runCli(s.url, ["--page", "tab-1", "session", "load", file]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("refused: the page refused that write");
+    const sets = s.calls.filter((c) => c.op === "storage").map((c) => [c.body.key, c.body.value]);
+    expect(sets).toEqual([["refused", "a"], ["count", "42"], ["after", "b"], ["tab", "c"]]);
+    expect(r.stdout).toContain("2 localStorage keys, 1 sessionStorage keys restored");
+  } finally { s.stop(); rmSync(dir, { recursive: true, force: true }); }
+});

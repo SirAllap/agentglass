@@ -1108,17 +1108,26 @@ def session_save(path, page="", a=None):
 
 def _write_storage(a, page, where, entries):
     """Write ENTRIES into the tab's local or session storage, one `storage
-    --set` per key. Returns the first error, or None.
+    --set` per key. Returns (written, failures), each failure a "key: why"
+    line; a key the tab refuses does not stop the ones after it.
 
     Never as one `eval` script with the values inside it: the audit log keeps
     every ask, and an `eval` script has no position it can blank — an opaque
     token that is not token-shaped went into the log verbatim. `storage --set`
     carries the value in a field the audit redacts by position."""
+    written, failures = 0, []
     for k, v in entries.items():
+        if not k:
+            failures.append('"": an empty key cannot be written through `storage --set`')
+            continue
+        if not isinstance(v, str):
+            v = json.dumps(v)  # what setItem would have stored for it: 42 -> "42", null -> "null"
         r = call("storage", stamped(a, _at(page, {"where": where, "set": True, "key": k, "value": v})))
-        if not r.get("ok"):
-            return f"{k}: {r.get('error') or 'could not write storage'}"
-    return None
+        if r.get("ok"):
+            written += 1
+        else:
+            failures.append(f"{k}: {r.get('error') or 'could not write storage'}")
+    return written, failures
 
 
 def session_load(path, page="", a=None):
@@ -1149,17 +1158,18 @@ def session_load(path, page="", a=None):
         if not r.get("ok"):
             print(f"cookie {c.get('name')}: {r.get('error')}", file=sys.stderr)
     ls_count = ss_count = 0
+    failures = []
     for o in state.get("origins") or []:
         ls = {e["name"]: e["value"] for e in o.get("localStorage") or []}
         ss = {e["name"]: e["value"] for e in o.get("sessionStorage") or []}
-        ls_count += len(ls)
-        ss_count += len(ss)
-        err = _write_storage(a, page, "local", ls) or _write_storage(a, page, "session", ss)
-        if err:
-            print(err, file=sys.stderr)
-            return 1
+        n, f = _write_storage(a, page, "local", ls)
+        ls_count, failures = ls_count + n, failures + f
+        n, f = _write_storage(a, page, "session", ss)
+        ss_count, failures = ss_count + n, failures + f
+    for f in failures:
+        print(f"storage {f}", file=sys.stderr)
     print(f"{path}: {len(cookies)} cookies, {ls_count} localStorage keys, {ss_count} sessionStorage keys restored")
-    return 0
+    return 1 if failures else 0
 
 
 # --- Importing a signed-in session straight from a Firefox-family profile ----
@@ -1543,11 +1553,10 @@ def session_import(a, page):
             current = ((here.get("value") or {}).get("value") or "") if here.get("ok") else ""
             for origin, entries in by_origin.items():
                 if origin == current:
-                    err = _write_storage(a, page, "local", entries)
-                    if err:
-                        print(f"localStorage for {origin}: {err}", file=sys.stderr)
-                    else:
-                        ls_written += len(entries)
+                    n, failures = _write_storage(a, page, "local", entries)
+                    ls_written += n
+                    for f in failures:
+                        print(f"localStorage for {origin}: {f}", file=sys.stderr)
                 else:
                     pending.append(origin)
     # Names and counts only — never a value.
