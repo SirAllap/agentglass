@@ -46,6 +46,15 @@ describe("rows from panes", () => {
     expect(rows[0]!.sessionId).toBe("$0");
   });
 
+  test("named by project: a worktree or a subfolder answers its repository", () => {
+    const rows = windowsFromPanes([
+      pane({ windowId: "@1", path: "/home/dev/code/orbit-fix-login", repo: "/home/dev/code/orbit" }),
+      pane({ windowId: "@2", path: "/home/dev/code/orbit/src", repo: "/home/dev/code/orbit" }),
+      pane({ windowId: "@3", path: "/home/dev/scratch", repo: null }),
+    ]);
+    expect(rows.map((r) => r.repo)).toEqual(["orbit", "orbit", "scratch"]);
+  });
+
   test("popups are not places to go", () => {
     expect(windowsFromPanes([pane({ popup: true })])).toEqual([]);
   });
@@ -79,9 +88,18 @@ describe("order", () => {
     expect(rankWindows(two, "").map((r) => r.windowId)).toEqual(["@9", "@8", "@7"]);
   });
 
-  test("a query ranks by match — name beats folder — and urgency breaks ties", () => {
+  test("a query ranks by how it matched, and urgency inside that — not by name length", () => {
+    // Both names start with it. The shorter one scores higher, and the one
+    // waiting for you still comes first.
     const hits = rankWindows(rows, "acme").map((r) => r.windowId);
-    expect(hits).toEqual(["@5", "@4"]); // both names start with it; the shorter scores higher
+    expect(hits).toEqual(["@4", "@5"]);
+    // A name that starts with it beats one that only has it in its folder,
+    // however urgent that one is.
+    const two = [
+      row({ windowId: "@a", name: "AI01", repo: "acme", status: "waiting" }),
+      row({ windowId: "@b", name: "acme-docs", repo: "orbit" }),
+    ];
+    expect(rankWindows(two, "acme").map((r) => r.windowId)).toEqual(["@b", "@a"]);
     expect(rankWindows(rows, "orbw").map((r) => r.windowId)[0]).toBe("@2"); // letters in order
     expect(rankWindows(rows, "zzz")).toEqual([]);
   });

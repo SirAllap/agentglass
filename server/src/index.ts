@@ -148,6 +148,7 @@ import { repairLast, snapshot } from "./tmuxsnapshot.ts";
 import { withAgentSessions } from "./paneloc.ts";
 import { notePaneFromHook, paneDirs, paneAgentNote } from "./panewt.ts";
 import { paneStatus } from "./agentdone.ts";
+import { windowRepo } from "./windowrepo.ts";
 import { chatSend, activeTurns, CHAT_ENABLED, CHAT_BYPASS_ALLOWED, CHAT_ENGINE_DEFAULT } from "./chat.ts";
 import { paneEngineCapability, attachCommand, validPaneName } from "./chatpane.ts";
 import { tmuxBinStatus, tmuxSocket } from "./tmuxbin.ts";
@@ -6769,7 +6770,10 @@ const server = Bun.serve<WsData>({
         // is answered here as well as in the strip's frame — one function, one
         // answer. A pane with no agent stays without one.
         const status = paneStatus(p.paneId, now);
-        return status ? { ...p, status } : p;
+        // And its project, from the same cache the strip's groups read, so the
+        // switcher names a worktree by the repository it belongs to.
+        const repo = windowRepo(p.path);
+        return { ...p, ...(status ? { status } : {}), ...(repo !== undefined ? { repo } : {}) };
       });
       /*
        * `canAttach` says this server understands `?pane=` on the terminal

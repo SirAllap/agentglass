@@ -4198,6 +4198,10 @@ export interface AgentPane {
    *  answer the tab strip draws, so the window switcher can sort every window
    *  on the machine by it, not only the ones in the attached session. */
   status?: import("./windowStatus.ts").WindowStatus;
+  /** The project the pane's directory belongs to — the main checkout's root,
+   *  so every worktree of a repository answers the same (see TmuxWindow.repo).
+   *  Null in no repository; absent while the server is still finding out. */
+  repo?: string | null;
   /**
    * This pane is on the tmux server agentglass itself works on.
    *

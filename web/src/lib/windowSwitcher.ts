@@ -20,7 +20,9 @@ export interface SwitcherRow {
   session: string;
   index: number;
   name: string;
-  /** The folder the window is working in, by its last segment. */
+  /** The project the window is working in, by its folder name — the main
+   *  checkout's, for a worktree; the directory's own name outside a repository
+   *  or while the server is still resolving it. */
   repo: string;
   /** The pane to land in: the one whose agent is most urgent, else the first. */
   paneId: string;
@@ -58,7 +60,7 @@ export function windowsFromPanes(panes: readonly AgentPane[]): SwitcherRow[] {
       session: home.session,
       index: Number(home.windowIndex) || 0,
       name: home.windowName,
-      repo: lastSegment(lead.path),
+      repo: lastSegment(lead.repo || lead.path),
       paneId: lead.paneId,
       status,
       attached: home.attached !== false,
@@ -71,9 +73,12 @@ export function windowsFromPanes(panes: readonly AgentPane[]): SwitcherRow[] {
  * Filtered by the query and put in order.
  *
  * With nothing typed the order is urgency, then the session somebody is
- * looking at, then tmux's own order. With a query it is how well it matched —
- * the name before the folder before the session, because `scoreMatch` weighs
- * the last path segment highest — and urgency only breaks ties.
+ * looking at, then tmux's own order. With a query it is first HOW it matched —
+ * the name starting with it, then containing it, then the folder or session,
+ * then letters in order, which are `scoreMatch`'s tiers — and inside a tier,
+ * urgency. Not the raw score: inside a tier it is mostly the name's length,
+ * and "acme" put `acme-ci` above the `acme-1042` that was waiting for you
+ * only because its name is shorter.
  *
  * Not ordered by recency inside a status: the pane list carries no activity
  * time. Adding `window_activity` to the server's pane format is what that
@@ -92,7 +97,10 @@ export function rankWindows(rows: readonly SwitcherRow[], query: string): Switch
     const s = scoreMatch(`${r.session}/${r.repo}/${r.name}`, q, false);
     if (s >= 0) scored.push({ r, s });
   }
-  return scored.sort((a, b) => b.s - a.s || byUrgency(a.r, b.r)).map((x) => x.r);
+  // scoreMatch's own bands: name starts with it (800+), name contains it
+  // (600–800), the folder or session contains it (~600), letters in order (≤400).
+  const tier = (s: number) => (s >= 800 ? 3 : s > 600 ? 2 : s > 400 ? 1 : 0);
+  return scored.sort((a, b) => tier(b.s) - tier(a.s) || byUrgency(a.r, b.r) || b.s - a.s).map((x) => x.r);
 }
 
 /**
