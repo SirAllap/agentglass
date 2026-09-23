@@ -20,6 +20,8 @@ import type { WatchEvent, AlertNote } from "../../shared/types.ts";
 import { paneForSession, paneAgentNote } from "./panewt.ts";
 import { listPanes } from "./tmuxctl.ts";
 import { webhookDestination } from "./egress.ts";
+import { kindOfNotification, type NotifyKind } from "../../shared/notifyPrefs.ts";
+import { readNotifyPrefs } from "./notifyPrefs.ts";
 
 // Resolved once, here, because the boot line below reports it and a boot line
 // that describes a destination the process is no longer using would be worse
@@ -128,7 +130,17 @@ async function deliver(
   /** What kind of thing this is, when it is not ordinary news. Travels on the
    *  frame so the app can raise an alarm rather than another row. */
   extra?: { kind: "reminder"; id: string } | { kind: "understudy" },
+  /** Which of the seven notification kinds this is (shared/notifyPrefs.ts) —
+   *  the gate below and the client both key off this, not off the text. */
+  kind: NotifyKind = "idle",
 ) {
+  // The diet, checked once, here, rather than in every push* function: every
+  // alert in this file funnels through deliver, so this is the one place a
+  // kind turned off actually has to stop something. `none` short-circuits
+  // everything, `blocked` by default is the only kind that reaches here at
+  // all — the rest are off until a person turns them on in Settings.
+  const prefs = readNotifyPrefs();
+  if (prefs.none || !prefs.kinds[kind]) return;
   if (WEBHOOK.configured && !IS_TEST) {
     try {
       await fetch(WEBHOOK.url, {
@@ -171,8 +183,12 @@ async function deliver(
   // pings keeps `live > 0`, so this returns before `notify-send` exactly as it
   // always did.
   const { attached, live } = sink?.census() ?? { attached: 0, live: 0 };
-  if (sink && attached > 0) sink.broadcast({ title, body, urgency, ...(pane ? { pane } : {}), ...(extra ?? {}) });
+  if (sink && attached > 0) sink.broadcast({ title, body, urgency, notifyKind: kind, ...(pane ? { pane } : {}), ...(extra ?? {}) });
   if (live > 0) return;
+  // `notify-send` paints the desktop, which is what the "desktop" channel
+  // means — gated on top of the kind check above, not instead of it, so
+  // turning the channel off never turns "desktop" into "everywhere else too".
+  if (DESKTOP && !prefs.channels.desktop) return;
   if (DESKTOP) {
     // Urgency 0 is a row in a list, not a thing to put on somebody's screen.
     // With no window open there is no list to put it in either, so it waits
@@ -279,6 +295,8 @@ export function pushGate(agent: string, tool: string, summary: string, pane?: st
       // So the one alert that stops an agent dead also says where to go and
       // takes you there. It is the notification with the most reason to.
       pane,
+      undefined,
+      "blocked",
     );
 }
 
@@ -329,6 +347,7 @@ export function pushUnderstudyStuck(what: string, question: string, tried: strin
          you to the screen where you can answer it. */
       "understudy",
       { kind: "understudy" },
+      "autopilot",
     );
   }
 }
@@ -337,11 +356,11 @@ export function pushUnderstudyStuck(what: string, question: string, tried: strin
  *  person. Critical, so the desktop keeps it on screen; the first waiting
  *  pane rides along so a click lands where the answer is typed. */
 export function pushLantern(title: string, body: string, pane?: string) {
-  if (shouldSend("lantern:watch")) deliver(title, body, 2, pane);
+  if (shouldSend("lantern:watch")) deliver(title, body, 2, pane, undefined, "autopilot");
 }
 
 export function pushReminder(id: string, title: string, when: string) {
-  if (shouldSend(`remind:${id}`)) deliver(`⏰ ${title}`, when, 2, undefined, { kind: "reminder", id });
+  if (shouldSend(`remind:${id}`)) deliver(`⏰ ${title}`, when, 2, undefined, { kind: "reminder", id }, "reminders");
 }
 
 /**
@@ -446,7 +465,7 @@ export function maybeAlert(e: WatchEvent) {
       deliver(
         "⏳ Approval needed",
         `${agent} is waiting on a permission request${e.tool_name ? ` (${e.tool_name})` : ""}.`,
-        2, pane,
+        2, pane, undefined, "blocked",
       );
     return;
   }
@@ -470,7 +489,7 @@ export function maybeAlert(e: WatchEvent) {
     const urgency = /needs your (permission|approval)/i.test(msg) ? 2
       : /usage limit reset/i.test(msg) ? 0
         : 1;
-    if (shouldSend(`notify:${e.session_id}:${msg}`)) deliver(`🔔 ${msg}`, agent, urgency, pane);
+    if (shouldSend(`notify:${e.session_id}:${msg}`)) deliver(`🔔 ${msg}`, agent, urgency, pane, undefined, kindOfNotification(msg));
     return;
   }
   if (e.is_error) {
@@ -493,6 +512,6 @@ export function maybeAlert(e: WatchEvent) {
     // is the trap the marker scan fell into; demotion needs no vocabulary and
     // cannot go stale.
     if (shouldSend(`err:${e.session_id}:${e.tool_name}`))
-      deliver("❌ Tool error", `${agent} — ${e.tool_name ?? "tool"} failed${e.error_text ? `: ${e.error_text.slice(0, 200)}` : ""}.`, 0, pane);
+      deliver("❌ Tool error", `${agent} — ${e.tool_name ?? "tool"} failed${e.error_text ? `: ${e.error_text.slice(0, 200)}` : ""}.`, 0, pane, undefined, "failures");
   }
 }

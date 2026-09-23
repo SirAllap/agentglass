@@ -182,6 +182,7 @@ import {
   setPluginUiHook, setPanel, panelState, setOptions, pushEvent, takeEvents, upsertRun, upsertNotes, notesFor, setNoteStatus, flushPluginNotes,
 } from "./plugin-ui.ts";
 import { validPrRef } from "../../shared/pluginUi.ts";
+import { readNotifyPrefs, writeNotifyPrefs } from "./notifyPrefs.ts";
 import { fetchCatalogue } from "./plugin-catalogue.ts";
 import {
   openStub, settleLedger, recordDecision, recordFence, scorecard,
@@ -4825,6 +4826,17 @@ const server = Bun.serve<WsData>({
         action: { id: a.id, payload: a.payload }, values, at: Date.now(),
       });
       return json({ ok: true });
+    }
+    if (pathname === "/notify/prefs" && req.method === "GET") {
+      return json({ ok: true, prefs: readNotifyPrefs() });
+    }
+    if (pathname === "/notify/prefs" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: unknown;
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const prefs = writeNotifyPrefs(b);
+      broadcast({ type: "notify-prefs", data: prefs });
+      return json({ ok: true, prefs });
     }
     if (pathname === "/plugins/settings" && req.method === "GET") {
       const s = pluginSettings(url.searchParams.get("name") ?? "");

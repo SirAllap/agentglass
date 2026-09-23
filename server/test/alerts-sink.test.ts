@@ -6,14 +6,28 @@
 // isn't, and the right urgency per alert kind.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { AlertNote } from "../../shared/types.ts";
+import { writeNotifyPrefs, __resetNotifyPrefsCache } from "../src/notifyPrefs.ts";
 
 const NOTIFY0 = process.env.AGENTGLASS_NOTIFY;
 const HOOK0 = process.env.AGENTGLASS_WEBHOOK;
 process.env.AGENTGLASS_NOTIFY = "1"; // read at import → the desktop branch is live
 delete process.env.AGENTGLASS_WEBHOOK; // no outbound fetch during the test
+// These pin routing mechanics (who gets the frame, in what order, at what
+// urgency), not the notification diet — so every kind is switched on for the
+// whole file rather than each fixture tripping over `idle`/`failures` being
+// off by default (see notify-prefs-gate.test.ts for that behaviour). The
+// cache this writes is module-level and shared with every other file in the
+// process (bun runs one process for the whole suite), so it is put back to
+// nothing afterwards rather than left for the next file to inherit.
+writeNotifyPrefs({
+  none: false,
+  kinds: { blocked: true, idle: true, stalled: true, failures: true, autopilot: true, reminders: true, usage: true },
+  channels: { desktop: true, sound: true, chip: true, bell: true },
+});
 afterAll(() => {
   if (NOTIFY0 === undefined) delete process.env.AGENTGLASS_NOTIFY; else process.env.AGENTGLASS_NOTIFY = NOTIFY0;
   if (HOOK0 === undefined) delete process.env.AGENTGLASS_WEBHOOK; else process.env.AGENTGLASS_WEBHOOK = HOOK0;
+  __resetNotifyPrefsCache();
 });
 
 let alerts: typeof import("../src/alerts.ts");

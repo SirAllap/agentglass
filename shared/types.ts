@@ -1,5 +1,6 @@
 // Shared event + analytics contract between server and web.
 // Keep this file dependency-free so both sides can import it.
+import type { NotifyKind, NotifyPrefs } from "./notifyPrefs.ts";
 
 export type HookEventType =
   | "SessionStart"
@@ -1795,7 +1796,11 @@ export type WsFrame =
   | { type: "understudy"; data: UnderstudyFrame }
   /** A plugin redrew a panel or wrote notes on a pull request. Only where to
    *  look again — the contents are fetched over the token. See plugin-ui.ts. */
-  | { type: "plugin"; data: { kind: "panels"; plugin?: string; panel?: string } | { kind: "pr"; repo: string; number: number } };
+  | { type: "plugin"; data: { kind: "panels"; plugin?: string; panel?: string } | { kind: "pr"; repo: string; number: number } }
+  /** Notification prefs changed — on this device, or from another one open on
+   *  the same server. Whole object, not a diff: it is small, and a diff would
+   *  need its own merge rule the day two tabs edit at once. */
+  | { type: "notify-prefs"; data: NotifyPrefs };
 
 export interface AlertNote {
   title: string;
@@ -1828,6 +1833,10 @@ export interface AlertNote {
   kind?: "reminder" | "understudy";
   /** The reminder's id, so the alarm can acknowledge or snooze the exact one. */
   id?: string;
+  /** Which of the seven notification kinds this is — see shared/notifyPrefs.ts.
+   *  Carried on the frame so a client can gate per channel without having to
+   *  re-derive it from the title/body text it was already handed. */
+  notifyKind?: NotifyKind;
 }
 
 /**
