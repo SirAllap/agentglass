@@ -163,15 +163,16 @@ def _checkup_shot(png):
     d = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "agentglass")
     try:
         os.makedirs(d, mode=0o700, exist_ok=True)
-        at = os.path.join(d, f"checkup-{int(time.time() * 1000)}.png")
+        # The pid too: two callers in the same millisecond are two pictures.
+        at = os.path.join(d, f"checkup-{int(time.time() * 1000)}-{os.getpid()}.png")
         _write_private(at, raw, binary=True)
     except OSError:
         return None
     # A failing page checked in a loop writes one picture a minute for as long
     # as it fails; nobody reads the fortieth.
     try:
-        shots = sorted((f for f in os.listdir(d) if re.fullmatch(r"checkup-\d+\.png", f)),
-                       key=lambda f: int(f[len("checkup-"):-len(".png")]))
+        named = (re.fullmatch(r"checkup-(\d+)(?:-\d+)?\.png", f) for f in os.listdir(d))
+        shots = [m.group(0) for m in sorted((m for m in named if m), key=lambda m: int(m.group(1)))]
         for old in shots[:-CHECKUP_SHOTS_KEPT]:
             os.remove(os.path.join(d, old))
     except OSError:

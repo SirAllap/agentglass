@@ -1490,6 +1490,8 @@ describe.skipIf(!HAVE_PY)("checkup, the dev loop in one call", () => {
     const v = JSON.parse(r.out);
     expect(v.png).toBeUndefined();
     expect(v.shot.startsWith(join(cache, "agentglass", "checkup-"))).toBe(true);
+    // The pid beside the time: two checkups in one millisecond are two files.
+    expect(v.shot).toMatch(/\/checkup-\d+-\d+\.png$/);
     expect(statSync(v.shot).mode & 0o777).toBe(0o600);
     expect(readFileSync(v.shot).subarray(0, 4).toString("hex")).toBe("89504e47");
     expect(Object.keys(v)[0]).toBe("verdict");
