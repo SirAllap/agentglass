@@ -41,6 +41,9 @@ navigation, with no earlier look, or after a look you only saw part of
 (`--max-tokens`, `--summary`), you get the full answer with `delta:false` and a
 `reason`. Plain `observe` is always the full page.
 
+The baseline (and `checkup`'s "since your last checkup") is kept per `--as`
+name; callers without one share a single baseline, so pass `--as` to get your own.
+
 `click` and `press` wait for what they caused (the navigation, or a quiet page
 with no request in flight, capped at 1 s) and answer with an `effect`:
 `navigated`, `newDocument`, `newErrors`, `failedRequests`, `dialog`,

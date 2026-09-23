@@ -471,6 +471,21 @@ describe("with no navigation, the collector answers and the protocol is never to
     expect((await checkup(g, { settleMs: 0, noShot: true })).value.verdict).toBe("ok");
   });
 
+  test("two callers on one tab each get their own 'since last checkup'", async () => {
+    /* Kept per tab, the second caller's window started at the first one's
+       last look: an error the first had already read was an "ok" for the
+       second, who had never seen it. */
+    const g = guest();
+    expect((await checkup(g, { settleMs: 0, noShot: true, as: "orbit-a" })).value.verdict).toBe("ok");
+    expect((await checkup(g, { settleMs: 0, noShot: true, as: "orbit-b" })).value.verdict).toBe("ok");
+    await Bun.sleep(2);
+    g.pageSays({ level: "error", text: "thrown between looks" });
+    expect((await checkup(g, { settleMs: 0, noShot: true, as: "orbit-a" })).value.errors).toEqual(["thrown between looks"]);
+    const b = await checkup(g, { settleMs: 0, noShot: true, as: "orbit-b" });
+    expect(b.value.since).toBe("last checkup");
+    expect(b.value.errors).toEqual(["thrown between looks"]);
+  });
+
   test("the window is kept in the PAGE's clock: an advanced clock does not replay old errors", async () => {
     // The clock verb moved the page an hour ahead; every row is stamped in that time.
     const g = guest({ pageNow: () => Date.now() + 3_600_000 });

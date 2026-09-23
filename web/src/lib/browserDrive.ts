@@ -1243,10 +1243,13 @@ const CDP_DOMAINS = ["Runtime", "Log", "Network", "Audits"] as const;
 /** main.js's CDP_EVENT_CAP: a drain this long is a buffer that overflowed. */
 const CDP_BUFFER_CAP = 500;
 
-/** Per tab, by its element: where this module's last checkup of which
- *  document stopped reading, in that page's own clock. A tab that is gone
- *  takes its entry with it. */
-const checkupMemory = new WeakMap<object, { lastAt: number; docAt: number }>();
+/** Per tab, by its element, and per caller inside it: where that caller's
+ *  last checkup of which document stopped reading, in that page's own clock.
+ *  Per tab alone, a second agent on a shared tab started its window at the
+ *  first one's last look and was told "ok" about an error it never saw.
+ *  Callers without `--as` share one bucket, the same as observe's delta
+ *  baseline. A tab that is gone takes its entries with it. */
+const checkupMemory = new WeakMap<object, Map<string, { lastAt: number; docAt: number }>>();
 
 type CheckupDeps = {
   cdp: (method: string, params?: unknown) => Promise<{ ok: boolean; result?: unknown; error?: string }>;
@@ -1259,8 +1262,11 @@ type CollectorRead = { now?: number; console?: string[]; network?: Array<{ metho
 async function runCheckup(
   el: DrivableWebview, args: Record<string, unknown>, deps: CheckupDeps,
 ): Promise<{ ok: boolean; value?: unknown; error?: string }> {
-  const mem = checkupMemory.get(el) ?? { lastAt: 0, docAt: 0 };
-  checkupMemory.set(el, mem);
+  const byCaller = checkupMemory.get(el) ?? new Map<string, { lastAt: number; docAt: number }>();
+  checkupMemory.set(el, byCaller);
+  const who = typeof args.as === "string" ? callerKey(args.as) : "";
+  const mem = byCaller.get(who) ?? { lastAt: 0, docAt: 0 };
+  byCaller.set(who, mem);
   const url = typeof args.url === "string" && args.url ? args.url : "";
   const navigating = !!url || args.reload === true;
   const cap = Math.min(15_000, Math.max(0, Number.isFinite(Number(args.settleMs)) ? Number(args.settleMs) : CHECKUP_SETTLE_MS));
