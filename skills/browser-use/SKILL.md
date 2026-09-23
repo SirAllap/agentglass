@@ -25,6 +25,22 @@ last time, a tree of the interactive page addressed by role and accessible
 name, the current value of every input, and optionally the picture. Polling six
 verbs in turn is where the time goes.
 
+After the first look, ask for **only what changed**:
+
+```bash
+agentglass-browser observe --delta            # {delta:true, added, removed, changed, same, console, network}
+agentglass-browser click e12 --observe        # `after` is a delta too
+```
+
+`added` are whole nodes, `removed` are ids gone from the page, `unlisted` are
+ids still there but past the tree's cap, `changed` is `{e, field: new value}`
+(null = the field went away), `same` is how many did not move. New console and
+network rows only. `form`, `storage` and `viewport` appear only when they
+changed — **absent means unchanged**. Positions (`at`) are not diffed. After a
+navigation, with no earlier look, or after a look you only saw part of
+(`--max-tokens`, `--summary`), you get the full answer with `delta:false` and a
+`reason`. Plain `observe` is always the full page.
+
 ## Then the whole interaction in ONE call
 
 ```bash

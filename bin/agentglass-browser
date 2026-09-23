@@ -611,8 +611,13 @@ def budget_value(value, max_tokens):
         return value
     notes = []
 
-    tree = value.get("tree")
-    if isinstance(tree, list) and tree:
+    # `added` is a delta observe's share of the tree, and trimmed the same way.
+    # A delta carries no viewport unless it changed; every node counts as on
+    # screen then, and the order is the page's.
+    for tkey in ("tree", "added"):
+        tree = value.get(tkey)
+        if not (isinstance(tree, list) and tree) or _size(value) <= budget_chars:
+            continue
         vp = value.get("viewport") or {}
         vw, vh = vp.get("width"), vp.get("height")
 
@@ -624,12 +629,12 @@ def budget_value(value, max_tokens):
             return x < vw and y < vh and x + w > 0 and y + h > 0
 
         ordered = sorted(range(len(tree)), key=lambda i: (0 if onscreen(tree[i]) else 1, i))
-        value["tree"] = [tree[i] for i in ordered]
-        while _size(value) > budget_chars and len(value["tree"]) > 1:
-            value["tree"].pop()
-        dropped = len(tree) - len(value["tree"])
+        value[tkey] = [tree[i] for i in ordered]
+        while _size(value) > budget_chars and len(value[tkey]) > 1:
+            value[tkey].pop()
+        dropped = len(tree) - len(value[tkey])
         if dropped:
-            notes.append(f"tree: kept {len(value['tree'])} of {len(tree)} (viewport first), dropped {dropped}")
+            notes.append(f"{tkey}: kept {len(value[tkey])} of {len(tree)} (viewport first), dropped {dropped}")
 
     for key in ("console", "network"):
         arr = value.get(key)
@@ -697,6 +702,13 @@ def summarize(cmd, value):
     to a file instead of your context."""
     if not isinstance(value, dict):
         return str(value)[:200]
+    if cmd == "observe" and value.get("delta") is True:
+        return " ".join([f"{value.get('title', '')!r}", value.get("url", ""),
+                         f"delta: +{len(value.get('added') or [])} -{len(value.get('removed') or [])} "
+                         f"~{len(value.get('changed') or [])} ={value.get('same', 0)}",
+                         f"console:{len(value.get('console') or [])}",
+                         f"network:{len(value.get('network') or [])}"]
+                        + (["NOT VISIBLE"] if value.get("visible") is False else []))
     if cmd == "observe":
         bits = [f"{value.get('title', '')!r}", value.get("url", ""),
                 f"tree:{len(value.get('tree') or [])}",
@@ -1222,7 +1234,8 @@ def main():
     ap.add_argument("--out", dest="outFile", default=None, help="write the full answer here instead of stdout")
     ap.add_argument("--observe", action="store_true",
                     help="on a verb that ACTS, hand back the page it left behind under `after` — "
-                         "one call instead of act-then-look. Costs an observation, so it is opt-in")
+                         "one call instead of act-then-look. A delta against your last observe of the same "
+                         "document (full, with delta:false, after a navigation); plain `observe` is always full")
     ap.add_argument("--summary", action="store_true",
                     help="print one line describing the answer (with --out, alongside the path)")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1276,6 +1289,9 @@ def main():
     p.add_argument("--since-last", dest="sinceLast", action="store_true",
                    help="only what changed since YOUR last observe — remembered locally, no timestamp to pass")
     p.add_argument("--shot", action="store_true", help="include a screenshot in the same answer")
+    p.add_argument("--delta", action="store_true",
+                   help="only what changed since your last observe of this document: added nodes, removed and "
+                        "changed ids, new console/network. Full answer (delta:false + reason) after a navigation")
 
     p = sub.add_parser("eval", help="run javascript in the page and get the result back")
     p.add_argument("js", nargs="?")
@@ -1600,7 +1616,8 @@ def main():
     p.add_argument("--steps-file", help="JSON list of {op, args} — for anything the short form cannot say")
     p.add_argument("--observe", action="store_true",
                    help="append the observation after the last step, so the batch answers "
-                        "'what does the page look like now' without another call")
+                        "'what does the page look like now' without another call (a delta when "
+                        "you observed this document before)")
     # ── THE SAME FLAGS AFTER THE VERB, TOO ──────────────────────────────────
     #
     # argparse only sees a global flag BEFORE the subcommand, and nobody writes
@@ -1649,7 +1666,7 @@ def main():
         add_global(sp, "--max-tokens", dest="maxTokens", type=int,
                    help="truncate the answer to roughly this many tokens, keeping what matters first")
         add_global(sp, "--observe", action="store_true",
-                   help="hand back the page this left behind, under `after`")
+                   help="hand back the page this left behind, under `after` (a delta when you observed this document before)")
         add_global(sp, "--summary", action="store_true",
                    help="print one line describing the answer")
         add_global(sp, "--show", action="store_true",
@@ -1883,6 +1900,8 @@ def main():
             body["since"] = load_since(cursor, "observe")
         if a.shot:
             body["shot"] = True
+        if a.delta:
+            body["delta"] = True
     elif a.cmd in ("tab", "closetab"):
         # An index if it looks like one, an id otherwise. `tabs` prints both,
         # so either is a thing the caller has in front of it.
@@ -2207,6 +2226,13 @@ def main():
 
     if getattr(a, "observe", False):
         body["observe"] = True
+    # An observation this caller will not see whole — trimmed by --max-tokens,
+    # or reduced to one line by --summary — must not become the baseline its
+    # next delta is measured against: nodes it never read would count as
+    # "same" and never be reported.
+    if (a.cmd == "observe" or getattr(a, "observe", False)) and (
+            getattr(a, "maxTokens", None) or (getattr(a, "summary", False) and not getattr(a, "outFile", None))):
+        body["partial"] = True
     # `--page <tab id>` — six verbs declare it and exactly one was sending it,
     # so `shot --page t2-abc` quietly photographed the ACTIVE tab instead. The
     # server has accepted `page` on every acting verb all along; nothing was

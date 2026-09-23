@@ -438,6 +438,59 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
       expect(askedArgs[1]?.since).toBe(1000);
     });
 
+    test("observe --delta asks for one, and --summary says what moved rather than counting a tree", async () => {
+      await openWindow();
+      asked = []; askedArgs = [];
+      answers = { observe: { ok: true, value: {
+        delta: true, base: 3, seq: 4, doc: "k3x9", url: "http://127.0.0.1:4000/app", title: "Orbit", now: 5,
+        added: [{ e: "e9", role: "h1", name: "Items" }], removed: ["e3"], changed: [], same: 7, console: [], network: [],
+      } } };
+      const r = await cli("observe", "--delta", "--summary");
+      expect(r.code).toBe(0);
+      expect(askedArgs[0]?.delta).toBe(true);
+      expect(r.out).toContain("delta: +1 -1 ~0 =7");
+      const plain = await cli("observe");
+      expect(plain.code).toBe(0);
+      expect(askedArgs[1]?.delta, "a plain observe asked for a delta").toBeUndefined();
+    });
+
+    test("a look the caller only sees part of says so, so it never becomes a delta's baseline", async () => {
+      await openWindow();
+      asked = []; askedArgs = [];
+      answers = { observe: { ok: true, value: { url: "u", title: "t", tree: [], console: [], network: [] } } };
+      expect((await cli("observe", "--summary")).code).toBe(0);
+      expect((await cli("--max-tokens", "300", "observe")).code).toBe(0);
+      expect((await cli("observe")).code).toBe(0);
+      expect((await cli("--out", join(dir, "look.json"), "--summary", "observe")).code).toBe(0);
+      expect(askedArgs.map((x) => x.partial === true)).toEqual([true, true, false, false]);
+    });
+
+    test("--max-tokens trims a delta's added nodes the way it trims a tree", async () => {
+      await openWindow();
+      const added = Array.from({ length: 150 }, (_, i) => ({ e: `e${i + 10}`, role: "button", name: `Edit order ORBIT-${1000 + i}` }));
+      answers = { observe: { ok: true, value: { delta: true, url: "u", title: "t", added, removed: [], changed: [], same: 3, console: [], network: [] } } };
+      const r = await cli("--max-tokens", "300", "observe", "--delta");
+      expect(r.code).toBe(0);
+      const v = JSON.parse(r.out);
+      expect(v.truncated).toBe(true);
+      expect(v.added.length).toBeLessThan(150);
+      expect(v.budgetNote).toContain("added:");
+    });
+
+    test("an act verb's --observe looks with a delta", async () => {
+      await openWindow();
+      asked = []; askedArgs = [];
+      answers = {
+        click: { ok: true, value: { clicked: "e4" } },
+        observe: { ok: true, value: { delta: false, reason: "new document", url: "u", title: "t", tree: [] } },
+      };
+      const r = await cli("click", "e4", "--observe");
+      expect(r.code).toBe(0);
+      expect(asked).toEqual(["click", "observe"]);
+      expect(askedArgs[1]?.delta).toBe(true);
+      expect(JSON.parse(r.out).after.reason).toBe("new document");
+    });
+
     test("--max-tokens shrinks a large observe by real, measured bytes — viewport first, oldest console dropped first", async () => {
       await openWindow();
       const tree = Array.from({ length: 200 }, (_, i) => ({

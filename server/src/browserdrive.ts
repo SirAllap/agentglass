@@ -2419,6 +2419,12 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
       /* `observe` can bring the picture back in the same answer, which is the
          difference between one call and two for "show me what happened". */
       if (b.shot !== undefined) args.shot = b.shot === true || b.shot === "true";
+      /* Only what changed since this caller's last observe of the same
+         document. The baseline it is measured against is NOT read from the
+         body: it is the relay's record of what it last handed this caller
+         (`observeTracked`), because a caller asserting its own baseline can
+         only be wrong in ways nothing here could see. */
+      if (op === "observe" && (b.delta === true || b.delta === "true")) args.delta = true;
       break;
     }
     case "resize": {
@@ -2784,6 +2790,9 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
    * exemption it can honour, because every acting verb arrives carrying a page.
    */
   if (b.pageExplicit === true && typeof args.page === "string") args.pageExplicit = true;
+  /* The caller will not see this observation whole (the CLI trims it, or
+     prints one line of it): it must not become the baseline of a delta. */
+  if (b.partial === true) args.partial = true;
   /* Or the caller named that exact tab with `tab <id>` earlier, which is the
      same statement made one call sooner. */
   if (typeof args.page === "string" && typeof args.as === "string"
@@ -3254,8 +3263,14 @@ export async function withObservation(
   /* The caller rides on the observation too: an unattributed sub-ask is one
      the panel's ownership check cannot see, and therefore allows. */
   const inherited: Record<string, unknown> = {};
-  for (const k of ["page", "as", "how", "pageExplicit"]) if (ask.args[k] !== undefined) inherited[k] = ask.args[k];
-  const parsed = parseAsk("observe", inherited);
+  for (const k of ["page", "as", "how", "pageExplicit", "partial"]) if (ask.args[k] !== undefined) inherited[k] = ask.args[k];
+  /* A DELTA, when there is something to diff against. The caller that asks
+     for the page after an action has, nearly always, just looked at it — and
+     re-sending the whole tree to report that one heading changed is where an
+     act-then-look loop spent its tokens. With no earlier look, or after a
+     navigation, the page answers in full and says why (`delta: false`), so
+     nothing is ever left out; a plain `observe` stays the full answer. */
+  const parsed = parseAsk("observe", { ...inherited, delta: true });
   if ("error" in parsed) return reply;
   const seen = await askBrowser(parsed.ask);
   return seen.ok
@@ -3312,7 +3327,7 @@ export async function runSteps(
        a two-lane `do --observe` came back with the same active-tab observation
        twice, and at least one lane's evidence was wrong deterministically,
        with a single agent and entirely correct usage. */
-    const parsed = parseAsk("observe", { ...(opts.caller ?? {}), ...(opts.page ? { page: opts.page } : {}) });
+    const parsed = parseAsk("observe", { ...(opts.caller ?? {}), ...(opts.page ? { page: opts.page } : {}), delta: true });
     if (!("error" in parsed)) {
       const reply = await askBrowser(parsed.ask);
       out.push({ op: "observe", ok: reply.ok, value: reply.value, error: reply.error });
@@ -3390,7 +3405,40 @@ function activeBlock(rows: readonly TabRow[]): TabRow | null {
   return a ? { id: a.id, profile: a.profile ?? "default", url: a.url, title: a.title } : null;
 }
 
+/**
+ * What each caller last saw: the document and the observation number the page
+ * stamped on the last answer this relay delivered to it. Keyed by who asked
+ * and which tab they named, so a delta is always against the caller's OWN
+ * last look — including the look it took at another page in between, which is
+ * how a page restored from the back/forward cache is told apart from the one
+ * the caller saw last. Bounded: callers are few, and a map nobody prunes
+ * grows for the life of the server.
+ */
+const LAST_OBSERVED = new Map<string, { doc: string; seq: number }>();
+const LAST_OBSERVED_MAX = 256;
+const observedKey = (args: Record<string, unknown>) =>
+  `${typeof args.as === "string" ? args.as : ""}\u0000${typeof args.page === "string" ? args.page : ""}`;
+
+async function observeTracked(ask: BrowserAsk, send: (a: BrowserAsk) => Promise<BrowserReply>): Promise<BrowserReply> {
+  const key = observedKey(ask.args);
+  const sent = ask.args.delta === true
+    ? { ...ask, args: { ...ask.args, base: LAST_OBSERVED.get(key) ?? null } }
+    : ask;
+  const reply = await send(sent);
+  /* A look the caller will only see part of: forget the baseline, so the next
+     delta answers in full rather than against nodes it never read. */
+  if (ask.args.partial === true) { LAST_OBSERVED.delete(key); return reply; }
+  const v = reply.value as { doc?: unknown; seq?: unknown } | undefined;
+  if (reply.ok && v && typeof v.doc === "string" && Number.isInteger(v.seq)) {
+    LAST_OBSERVED.delete(key);
+    LAST_OBSERVED.set(key, { doc: v.doc, seq: v.seq as number });
+    if (LAST_OBSERVED.size > LAST_OBSERVED_MAX) LAST_OBSERVED.delete(LAST_OBSERVED.keys().next().value!);
+  }
+  return reply;
+}
+
 export async function askBrowser(ask: BrowserAsk): Promise<BrowserReply> {
+  if (ask.op === "observe") return observeTracked(ask, (a) => (asker ? asker(a) : askWithRetry(a)));
   if (asker) return asker(ask);
   /*
    * §11: two verbs the window cannot answer on its own.
@@ -3664,6 +3712,7 @@ export function settleBrowser(id: unknown, reply: BrowserReply): boolean {
 /** For tests, and for a shutdown that should not leave timers behind. */
 export function resetBrowserDrive(): void {
   NAMED_TABS.clear();
+  LAST_OBSERVED.clear();
   ready.clear();
   for (const [, p] of pending) { clearTimeout(p.timer); p.resolve({ ok: false, error: "cancelled" }); }
   pending.clear();

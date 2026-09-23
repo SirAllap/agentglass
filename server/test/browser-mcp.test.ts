@@ -26,6 +26,8 @@ let dir = "", base = "", proc: ReturnType<typeof Bun.spawn> | null = null;
 let ws: WebSocket | null = null;
 let answers: Record<string, { ok: boolean; value?: unknown; error?: string }> = {};
 let asked: string[] = [];
+/** The args of every ask, for the tests that are about what the tool sent. */
+let askedArgs: Record<string, unknown>[] = [];
 const CLIENT = "test-window-mcp";
 
 beforeAll(async () => {
@@ -65,10 +67,11 @@ async function openWindow() {
   ws = new WebSocket(base.replace("http", "ws") + "/stream");
   await new Promise((r) => ws!.addEventListener("open", r));
   ws.addEventListener("message", async (ev) => {
-    let frame: { type?: string; data?: { op?: string; id?: string } };
+    let frame: { type?: string; data?: { op?: string; id?: string; args?: Record<string, unknown> } };
     try { frame = JSON.parse(String((ev as MessageEvent).data)); } catch { return; }
     if (frame.type !== "browser" || !frame.data) return;
     asked.push(frame.data.op ?? "");
+    askedArgs.push(frame.data.args ?? {});
     const reply = answers[frame.data.op ?? ""] ?? { ok: false, error: "the stand-in was not told what to say" };
     await fetch(base + "/browser/result", {
       method: "POST",
@@ -180,6 +183,20 @@ describe.skipIf(!HAVE_PY)("the MCP server", () => {
     expect(content[0]!.type).toBe("text");
     expect(content[0]!.text).toContain("Orbit");
     expect(content[0]!.text).toContain("a page");
+  });
+
+  test("browser_observe takes delta, and it reaches the window", async () => {
+    await openWindow();
+    asked = []; askedArgs = [];
+    answers = { observe: { ok: true, value: { delta: true, url: "u", title: "t", added: [], removed: [], changed: [], same: 3 } } };
+    const said = await talk([
+      hello, ready, { jsonrpc: "2.0", id: 2, method: "tools/list" },
+      { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "browser_observe", arguments: { delta: true, shared: true } } },
+    ]);
+    const tools = (said[1]!.result as { tools: { name: string; inputSchema: { properties?: Record<string, unknown> } }[] }).tools;
+    expect(Object.keys(tools.find((t) => t.name === "browser_observe")!.inputSchema.properties ?? {})).toContain("delta");
+    expect(asked).toEqual(["observe"]);
+    expect(askedArgs[0]!.delta).toBe(true);
   });
 
   test("a refusal from the page is an error result, not a crash", async () => {

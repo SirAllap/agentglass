@@ -824,6 +824,13 @@ const REMOVE_HIGHLIGHT_SCRIPT = `(() => {
   if (cap) cap.remove();
 })()`;
 
+/** FNV-1a of a caller's name: stable, short, and not the name. */
+export function callerKey(name: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < name.length; i++) { h ^= name.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return "k" + h.toString(36);
+}
+
 /** Wait for the guest to finish a navigation it has just been given. Resolves
  *  either way — "it loaded" and "it failed" are both answers, and the failure
  *  text is more useful to an agent than a timeout would be. */
@@ -2593,7 +2600,18 @@ async function runVerb(
            — it returns immediately when it is already there. */
         const since = Number(ask.args.since ?? 0);
         await el.executeJavaScript(COLLECTOR).catch(() => 0);
-        const value = await el.executeJavaScript(observeScript(since, 200)) as Record<string, unknown>;
+        /* `base` is filled in by the relay, never by the caller: it is the
+           relay's record of what this caller last saw. Keyed by the caller
+           so two agents on one tab do not diff against each other's look —
+           by a hash of the name, because the store lives on the page's own
+           window, and the page has no business learning who is driving it. */
+        const base = ask.args.base as { doc?: unknown; seq?: unknown } | undefined;
+        const value = await el.executeJavaScript(observeScript(since, 200, {
+          delta: ask.args.delta === true,
+          key: typeof ask.args.as === "string" ? callerKey(ask.args.as) : "",
+          base: base && typeof base.doc === "string" && Number.isInteger(base.seq)
+            ? { doc: base.doc, seq: base.seq as number } : null,
+        })) as Record<string, unknown>;
         if (ask.args.shot === true) {
           /* In the SAME answer. Asking for the picture separately is the
              second call this verb exists to remove. The shell's capture

@@ -315,6 +315,7 @@ TOOLS = [
                 "sinceLast": {"type": "boolean", "description": "Only what is new since YOUR last sinceLast call on this verb. The SERVER keeps the cursor, so there is no timestamp to carry — and a caller that has to carry one forgets, and re-reads the whole log every turn."},
                 "since": {"type": "number", "description": "Only console and network newer than this epoch ms — pass the `now` from your last observe."},
                 "shot": {"type": "boolean", "description": "Include a screenshot in the same answer."},
+                "delta": {"type": "boolean", "description": "Only what changed since your last observe of this document: {delta:true, added:[nodes], removed:[ids], changed:[{e, fields}], same:n}, new console/network, and form/storage/viewport only when they changed. After a navigation or with no earlier observe it answers in full with delta:false and a reason. Positions (`at`) are not diffed."},
             },
         },
     },
@@ -370,19 +371,19 @@ TOOLS = [
             "menu's trigger often does nothing at all, which reads as a broken selector."
         ),
         "inputSchema": {"type": "object", "properties": {
-                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},"selector": {"type": "string"}}, "required": ["selector"]},
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. A delta against your last observe of the same document (full, delta:false, after a navigation), so ask for it on the step whose result you actually need."},"selector": {"type": "string"}}, "required": ["selector"]},
     },
     {
         "name": "browser_dblclick",
         "description": "Double-click an element. Two clicks are not a double click; a page listening for dblclick ignores them.",
         "inputSchema": {"type": "object", "properties": {
-                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},"selector": {"type": "string"}}, "required": ["selector"]},
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. A delta against your last observe of the same document (full, delta:false, after a navigation), so ask for it on the step whose result you actually need."},"selector": {"type": "string"}}, "required": ["selector"]},
     },
     {
         "name": "browser_rightclick",
         "description": "Right-click, which opens the PAGE's own context menu — not the browser's.",
         "inputSchema": {"type": "object", "properties": {
-                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},"selector": {"type": "string"}}, "required": ["selector"]},
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. A delta against your last observe of the same document (full, delta:false, after a navigation), so ask for it on the step whose result you actually need."},"selector": {"type": "string"}}, "required": ["selector"]},
     },
     {
         "name": "browser_focus",
@@ -403,7 +404,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},"selector": {"type": "string"}, "checked": {"type": "boolean", "description": "Default true."}},
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. A delta against your last observe of the same document (full, delta:false, after a navigation), so ask for it on the step whose result you actually need."},"selector": {"type": "string"}, "checked": {"type": "boolean", "description": "Default true."}},
             "required": ["selector"],
         },
     },
@@ -417,7 +418,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. A delta against your last observe of the same document (full, delta:false, after a navigation), so ask for it on the step whose result you actually need."},
                 "fields": {"type": "object", "description": '{"#name": "Ada", "#email": "ada@example.com"}'},
                 "submit": {"type": "boolean"},
             },
@@ -732,7 +733,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},"selector": {"type": "string"}, "to": {"type": "string", "description": "Where to drop it."}},
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. A delta against your last observe of the same document (full, delta:false, after a navigation), so ask for it on the step whose result you actually need."},"selector": {"type": "string"}, "to": {"type": "string", "description": "Where to drop it."}},
             "required": ["selector", "to"],
         },
     },
@@ -1051,7 +1052,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},"selector": {"type": "string"}, "value": {"type": "string"}},
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. A delta against your last observe of the same document (full, delta:false, after a navigation), so ask for it on the step whose result you actually need."},"selector": {"type": "string"}, "value": {"type": "string"}},
             "required": ["selector", "value"],
         },
     },
@@ -1204,7 +1205,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},"selector": {"type": "string"}},
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. A delta against your last observe of the same document (full, delta:false, after a navigation), so ask for it on the step whose result you actually need."},"selector": {"type": "string"}},
             "required": ["selector"],
         },
     },
@@ -1214,7 +1215,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. A delta against your last observe of the same document (full, delta:false, after a navigation), so ask for it on the step whose result you actually need."},
                 "selector": {"type": "string"},
                 "text": {"type": "string"},
                 "submit": {"type": "boolean", "description": "press Enter afterwards"},
@@ -1249,7 +1250,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. It costs a full observation, so ask for it on the step whose result you actually need."},"key": {"type": "string"}},
+                "observe": {"type": "boolean", "description": "Hand back the page this left behind, under `after` — one call instead of act-then-look. A delta against your last observe of the same document (full, delta:false, after a navigation), so ask for it on the step whose result you actually need."},"key": {"type": "string"}},
             "required": ["key"],
         },
     },

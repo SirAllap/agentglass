@@ -252,8 +252,67 @@ export const diagnosisScript = (): string => `(() => {
   };
 })()`;
 
+/*
+ * WHAT CHANGED SINCE THE LAST LOOK, computed in the page.
+ *
+ * Measured on the agx-bench suite: observe was 85 of 220 calls and three
+ * quarters of every byte an agent read, because each step re-sent the whole
+ * tree to report that one heading changed. The ids are stamped on the nodes
+ * (see `stamp` below), so a node that survived a re-render has the same id in
+ * both snapshots and the diff can be keyed on it.
+ *
+ * A string rather than a function for the same reason as the rest of this
+ * file: it is pasted into executeJavaScript, and a bundled function's source
+ * is whatever the minifier made of it. Tests evaluate it on its own.
+ *
+ * `at` is NOT compared: a banner inserted at the top moves every box below it,
+ * and a diff that reports the whole page as changed because it shifted 40px
+ * is the full tree again with worse labels. A node that only moved is `same`;
+ * a caller that needs fresh boxes asks for a plain observe. A field that went
+ * away is reported as null, so "no longer disabled" survives JSON.
+ */
+export const OBSERVE_DIFF = `(prev, cur) => {
+  const FIELDS = ["role", "name", "testid", "id", "disabled", "hidden", "covered"];
+  const FORM_FIELDS = ["name", "type", "value", "checked", "options"];
+  const eq = (a, b) => JSON.stringify(a === undefined ? null : a) === JSON.stringify(b === undefined ? null : b);
+  const byE = (arr) => { const m = Object.create(null); for (const n of arr || []) if (n && n.e) m[n.e] = n; return m; };
+  const before = byE(prev.tree);
+  const now = Object.create(null);
+  const added = [], changed = [];
+  let same = 0;
+  for (const n of cur.tree) {
+    now[n.e] = true;
+    const p = before[n.e];
+    if (!p) { added.push(n); continue; }
+    const c = { e: n.e };
+    let moved = false;
+    for (const f of FIELDS) if (!eq(p[f], n[f])) { c[f] = n[f] === undefined ? null : n[f]; moved = true; }
+    if (moved) changed.push(c); else same++;
+  }
+  const removed = (prev.tree || []).filter((n) => !now[n.e]).map((n) => n.e);
+  const formBefore = byE(prev.form);
+  const formNow = Object.create(null);
+  const form = [];
+  for (const f of cur.form) {
+    formNow[f.e] = true;
+    const p = formBefore[f.e];
+    if (!p || FORM_FIELDS.some((k) => !eq(p[k], f[k]))) form.push(f);
+  }
+  const formRemoved = (prev.form || []).filter((f) => !formNow[f.e]).map((f) => f.e);
+  return { added, removed, changed, same, form, formRemoved };
+}`;
+
+export type ObserveOpts = {
+  /** Answer with what changed since `base`, when `base` is this document's. */
+  delta?: boolean;
+  /** Whose snapshot this is: two callers looking at one tab each keep their own. */
+  key?: string;
+  /** The caller's last observation, as the relay recorded it — null for none. */
+  base?: { doc: string; seq: number } | null;
+};
+
 /** Everything at once. `since` filters the two logs; 0 means "from the top". */
-export const observeScript = (since: number, treeMax: number): string => `(() => {
+export const observeScript = (since: number, treeMax: number, opts: ObserveOpts = {}): string => `(() => {
   const log = window.__agxLog || { console: [], network: [] };
   const seen = (arr) => arr.filter((r) => !${since} || r.at > ${since});
   const name = (el) => (
@@ -334,6 +393,9 @@ export const observeScript = (since: number, treeMax: number): string => `(() =>
     const r = el.getBoundingClientRect();
     if (!r.width || !r.height) continue;
     form.push({
+      /* The same id the tree gives the node, so a delta can say WHICH field
+         changed, and the field can be acted on straight from this list. */
+      e: stamp(el),
       name: el.name || name(el) || el.id || "",
       type: el.type || el.tagName.toLowerCase(),
       value: el.type === "password" ? "(hidden)" : String(el.value ?? "").slice(0, 200),
@@ -341,7 +403,7 @@ export const observeScript = (since: number, treeMax: number): string => `(() =>
       options: el.tagName === "SELECT" ? [...el.options].map((o) => o.value).slice(0, 40) : undefined,
     });
   }
-  return {
+  const full = {
     url: location.href,
     title: document.title,
     /* The one that turns a capture into a false negative when nobody checks
@@ -379,4 +441,79 @@ export const observeScript = (since: number, treeMax: number): string => `(() =>
        invisible to every other verb. */
     dialog: window.__agxDialog || undefined,
   };
+  /*
+     THE BASELINE, per document and per caller. The window object IS the
+     document's lifetime: a navigation brings a new one, and with it an empty
+     store, which is what makes "the last observe of the same document" free
+     to ask. The document gets a random name so the relay can tell whether the
+     caller's last look was at THIS document — a page restored from the
+     back/forward cache still holds the store from before the caller left it,
+     and a diff against that would describe a page the caller has not seen
+     since. Every observe records a snapshot, full or not, so a plain observe
+     followed by a delta one works.
+  */
+  if (!window.__agxDoc) {
+    const b = new Uint32Array(2);
+    try { crypto.getRandomValues(b); } catch { b[0] = Math.random() * 4294967296; b[1] = Date.now(); }
+    window.__agxDoc = b[0].toString(36) + b[1].toString(36);
+  }
+  window.__agxObs = (window.__agxObs || 0) + 1;
+  full.doc = window.__agxDoc;
+  full.seq = window.__agxObs;
+  const key = ${JSON.stringify(opts.key ?? "")};
+  const store = window.__agxLast || (window.__agxLast = Object.create(null));
+  const prev = store[key];
+  store[key] = {
+    seq: full.seq, now: full.now, tree: full.tree, form: full.form,
+    storage: JSON.stringify(full.storage), viewport: JSON.stringify(full.viewport),
+  };
+  if (!${opts.delta === true}) return full;
+  const base = ${JSON.stringify(opts.base ?? null)};
+  const reason = !base ? "no earlier observe to compare with"
+    : base.doc !== full.doc ? "new document"
+    : !prev || prev.seq !== base.seq ? "the last observe of this page was not yours"
+    : null;
+  if (reason) return Object.assign(full, { delta: false, reason });
+  const d = (${OBSERVE_DIFF})(prev, full);
+  /* The tree is capped (and so are the hidden nodes in it), so a node missing
+     from this list may still be on the page — pushed past the cap by the ones
+     before it. Only a node gone from the document is "removed"; the rest are
+     "unlisted": there, not described this time. */
+  const unlisted = [];
+  if (document.querySelector) {
+    d.removed = d.removed.filter((e) => {
+      const still = document.querySelector('[data-agx-e="' + e + '"]');
+      if (still) unlisted.push(e);
+      return !still;
+    });
+  }
+  /* A diff that is not smaller than what it diffs is the full answer with
+     worse labels — a route that re-renders the whole app, say. */
+  const touched = d.added.length + d.removed.length + d.changed.length + d.form.length + d.formRemoved.length;
+  if (touched && JSON.stringify(d).length >= JSON.stringify({ tree: full.tree, form: full.form }).length) {
+    return Object.assign(full, { delta: false, reason: "most of the page changed" });
+  }
+  /* Console and network since THAT look, unless the caller named a time. A
+     request row is stamped with when it STARTED and written when it ends, so
+     one in flight during the last look is new by its end, not its start. */
+  const cut = ${since} || prev.now;
+  const out = {
+    delta: true, base: prev.seq, seq: full.seq, doc: full.doc,
+    url: full.url, title: full.title, visible: full.visible, focused: full.focused,
+    readyState: full.readyState, now: full.now,
+    added: d.added, removed: d.removed, changed: d.changed, same: d.same,
+    console: full.console.filter((r) => r.at > cut),
+    network: full.network.filter((r) => r.at + (r.ms || 0) > cut),
+    fakes: full.fakes,
+    dialog: full.dialog,
+  };
+  /* The rest only when it moved: in a delta, an absent section is an
+     unchanged one — the skill says so, because it is the one rule a reader
+     has to know. */
+  if (unlisted.length) out.unlisted = unlisted;
+  if (d.form.length) out.form = d.form;
+  if (d.formRemoved.length) out.formRemoved = d.formRemoved;
+  if (store[key].storage !== prev.storage) out.storage = full.storage;
+  if (store[key].viewport !== prev.viewport) out.viewport = full.viewport;
+  return out;
 })()`;
