@@ -2,6 +2,7 @@ import type { BrowserAskFrame } from "../../../shared/types.ts";
 import { ACC_NAME, COLLECTOR, PICK, STAMP, observeScript } from "./browserObserve.ts";
 import { jsLit } from "../../../shared/jsLit.ts";
 import { FIND, locatorLit, parseLocator } from "./browserLocator.ts";
+import { CHECKUP_PAGE, classifyCollector, classifyEvents, collectorSince, trackInflight, type CdpEvent } from "./browserCheckup.ts";
 
 /**
  * The window's half of "let an agent drive the browser".
@@ -947,6 +948,10 @@ function settled(el: DrivableWebview, timeoutMs = 40_000): Promise<string | null
  * — a style attribute animating every frame would never be quiet) and read
  * from here; the observer is removed when the answer is read.
  */
+/** How long one ask of the shell's capture may take before it counts as no
+ *  answer. `shot` and `checkup`'s failure picture share it. */
+const SHELL_SHOT_MS = 12_000;
+
 const QUIET_MS = 100;
 const SETTLE_CAP_MS = 1_000;
 const NAV_CAP_MS = 5_000;
@@ -969,12 +974,29 @@ const SETTLE_POLL = `(() => {
   return [m ? m.n : -1, l ? l.inflight : 0];
 })()`;
 
-/** What the act caused, read off the buffers the collector fills, from the
- *  page clock `t0` taken as it acted. Also removes the mutation observer. */
-const effectScript = (t0: number) => `(() => {
+/** Takes the observer back out. */
+const MUTATIONS_OFF = `(() => {
   const m = window.__agxMut;
   if (m && m.mo) m.mo.disconnect();
   window.__agxMut = undefined;
+  return 1;
+})()`;
+
+/** The quiet rule, in one place: the page is quiet while its mutation count
+ *  has not moved and nothing is in flight. Fed one SETTLE_POLL answer (plus any
+ *  requests the caller tracks itself) and answers for how long it has been
+ *  quiet; the act settle wants QUIET_MS of that, `checkup` wants more. */
+type Quiet = { last: unknown; since: number };
+function quietFor(q: Quiet, poll: unknown, extraInflight: number, now: number): number {
+  const [n, inflight] = Array.isArray(poll) ? poll as [number, number] : [-1, 0];
+  if (n !== q.last || inflight > 0 || extraInflight > 0) { q.last = n; q.since = now; }
+  return now - q.since;
+}
+
+/** What the act caused, read off the buffers the collector fills, from the
+ *  page clock `t0` taken as it acted. Also removes the mutation observer. */
+const effectScript = (t0: number) => `(() => {
+  ${MUTATIONS_OFF};
   const log = window.__agxLog || { console: [], network: [] };
   const d = window.__agxDialog;
   return {
@@ -1073,16 +1095,12 @@ async function settleAfterAct(
   const started = Date.now();
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   let settledBy: ActEffect["settledBy"] = "cap";
-  let last: unknown = undefined;
-  let quietSince = Date.now();
+  const q: Quiet = { last: undefined, since: Date.now() };
   try {
     while (Date.now() - started < SETTLE_CAP_MS) {
       if (w.started) break;
       const poll = await within(el.executeJavaScript(SETTLE_POLL), SETTLE_CAP_MS - (Date.now() - started));
-      const [n, inflight] = Array.isArray(poll) ? poll as [number, number] : [-1, 0];
-      const now = Date.now();
-      if (n !== last || inflight > 0) { last = n; quietSince = now; }
-      else if (now - quietSince >= QUIET_MS) { settledBy = "quiet"; break; }
+      if (quietFor(q, poll, 0, Date.now()) >= QUIET_MS) { settledBy = "quiet"; break; }
       await sleep(25);
     }
     if (w.started) {
@@ -1111,6 +1129,285 @@ async function settleAfterAct(
     if (Array.isArray(seen.failedRequests) && seen.failedRequests.length) effect.failedRequests = seen.failedRequests;
   }
   return effect;
+}
+
+/** `open`'s navigation, shared with `checkup`: load, wait for it to finish,
+ *  and refuse to call it a success when the browser never moved. */
+async function navigateTo(el: DrivableWebview, url: string): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
+  /* Where it was, so "it never moved" can be told from "it arrived
+     somewhere slightly different", which a redirect makes common. */
+  const before = el.getURL();
+  const nav = settled(el);
+  try {
+    await el.loadURL(url);
+  } catch (e) {
+    // ERR_ABORTED (-3) is what Chromium calls the navigation this one just
+    // replaced, and Electron rejects loadURL with it — so interrupting a
+    // page that was still loading reported failure for a navigation that
+    // then succeeded. Measured: `open example.com` over a half-loaded
+    // GitHub answered "(-3) loading https://github.com/..." while the new
+    // page loaded fine and every later verb saw it.
+    //
+    // `settled` is the authority either way: a genuinely bad address still
+    // arrives as did-fail-load with its own reason.
+    const msg = e instanceof Error ? e.message : String(e);
+    if (!msg.includes("(-3)") && !msg.includes("ERR_ABORTED")) return { ok: false, error: msg };
+  }
+  const err = await nav;
+  if (err) return { ok: false, error: err };
+  /*
+   * DID IT ACTUALLY GO THERE.
+   *
+   * The guest guard refuses some schemes — `data:` among them, and
+   * rightly, since it is a way to run markup nobody vetted. But
+   * `loadURL` does not reject when the guard does: the navigation simply
+   * never happens, and this answered ok with the URL it was ALREADY on.
+   * Ask for A, get B, and be told yes. Measured today: three `open`s to
+   * data: URLs in a row, each reporting success, with the page never
+   * leaving the site it had been on since the first one.
+   *
+   * Equality is the wrong test — a redirect to https, or to /index, or a
+   * trailing slash are all legitimate arrivals. What is NOT legitimate is
+   * ending up exactly where it started when somewhere else was asked
+   * for.
+   */
+  const landed = el.getURL();
+  if (landed === before && landed !== url) {
+    return {
+      ok: false,
+      error: `it did not navigate — still on ${landed}. The browser refused ${url.slice(0, 80)}: some schemes (data:, file:, blob:) are not allowed in this view.`,
+    };
+  }
+  return { ok: true, url: landed };
+}
+
+/** `reload`'s: hard by default, and wait for it. */
+async function reloadAndSettle(el: DrivableWebview, hard: boolean): Promise<string | null> {
+  const nav = settled(el);
+  if (hard) el.reloadIgnoringCache(); else el.reload();
+  return await nav;
+}
+
+/*
+ * CHECKUP — "did it break?", in one call.
+ *
+ * The in-page collector (COLLECTOR) cannot answer it for a load: it is
+ * injected after the document's own scripts ran, so an error thrown or a
+ * request failing DURING LOAD is never seen, and `console`/`network` answer
+ * `rows: []` for a page that died on its first line. An init script is no fix
+ * — main.js measured that `Page.addScriptToEvaluateOnNewDocument` on a
+ * <webview> guest is gone after one navigation.
+ *
+ * Measured on an isolated instance: with Runtime, Log, Network and Audits
+ * enabled through the guest's debugger BEFORE a reload or a loadURL, the CDP
+ * event buffer (main.js `guestCdpEvents`, drained by `cdpEvents`) holds
+ * `Runtime.exceptionThrown` for a TypeError at load, `Network.responseReceived`
+ * with status 500 and `Log.entryAdded` level error source network — for a
+ * reload and for a navigation alike. So a checkup that navigates enables them
+ * first, then navigates, and reads the buffer.
+ *
+ * AND TURNS THEM OFF AGAIN. Left on, Runtime is something an anti-bot script
+ * can detect and it keeps every logged object alive; a busy page fills the
+ * 500-event buffer between checkups and pushes out the `Debugger.paused` that
+ * `debug` is waiting for; and every other drain steals events from the next
+ * window. Ceiling: a caller that had enabled any of the four itself through
+ * `cdp` has to enable it again after a checkup.
+ *
+ * Which is why a checkup that does NOT navigate never touches the protocol:
+ * it reads the collector, which the panel injects on every navigation, so
+ * everything after load is there. Its window is in the PAGE's clock.
+ *
+ * Only errors, failed requests and visible error text count as problems.
+ * Chromium's issues, perf and a11y are advice: a page with a missing alt is
+ * not broken, and a verdict that says so teaches the caller to ignore it.
+ *
+ * Ceilings, chosen: draining takes EVERY buffered event of the tab, so a
+ * `Debugger.paused` (or anything another verb was waiting for) that arrives
+ * during a checkup is consumed by it. A load noisier than the buffer loses its
+ * oldest events, and the answer says so. A request that never ends (an
+ * EventSource, a long poll) keeps the page from ever being quiet, and the
+ * checkup then stops at its cap and says `settledBy: "cap"`.
+ */
+const CHECKUP_SETTLE_MS = 5_000;
+const CHECKUP_QUIET_MS = 300;
+const CHECKUP_POLL_MS = 100;
+const CDP_DOMAINS = ["Runtime", "Log", "Network", "Audits"] as const;
+/** main.js's CDP_EVENT_CAP: a drain this long is a buffer that overflowed. */
+const CDP_BUFFER_CAP = 500;
+
+/** Per tab, by its element: where this module's last checkup of which
+ *  document stopped reading, in that page's own clock. A tab that is gone
+ *  takes its entry with it. */
+const checkupMemory = new WeakMap<object, { lastAt: number; docAt: number }>();
+
+type CheckupDeps = {
+  cdp: (method: string, params?: unknown) => Promise<{ ok: boolean; result?: unknown; error?: string }>;
+  cdpEvents: () => Promise<CdpEvent[]>;
+  captureFromShell: () => Promise<{ png: string | null; why: string }>;
+};
+
+type CollectorRead = { now?: number; console?: string[]; network?: Array<{ method?: string; url?: string; status?: number; error?: string }> } | null;
+
+async function runCheckup(
+  el: DrivableWebview, args: Record<string, unknown>, deps: CheckupDeps,
+): Promise<{ ok: boolean; value?: unknown; error?: string }> {
+  const mem = checkupMemory.get(el) ?? { lastAt: 0, docAt: 0 };
+  checkupMemory.set(el, mem);
+  const url = typeof args.url === "string" && args.url ? args.url : "";
+  const navigating = !!url || args.reload === true;
+  const cap = Math.min(15_000, Math.max(0, Number.isFinite(Number(args.settleMs)) ? Number(args.settleMs) : CHECKUP_SETTLE_MS));
+  const notes: string[] = [];
+
+  /* 1. The domains, and only for a navigation. Audits alone may be refused
+     without losing the verdict — it only feeds the advice. */
+  let cdpOk = false;
+  let enabled = false;
+  if (navigating) {
+    cdpOk = true;
+    for (const d of CDP_DOMAINS) {
+      const r = await within(deps.cdp(`${d}.enable`), 3_000) ?? { ok: false, error: "no answer" };
+      if (r.ok) { enabled = true; continue; }
+      if (d === "Audits") { notes.push(`issues unavailable: ${String(r.error ?? "Audits.enable refused").slice(0, 120)}`); continue; }
+      cdpOk = false;
+      notes.push(`the DevTools protocol refused ${d}.enable (${String(r.error ?? "").slice(0, 120)}), so this read the page's own collector: `
+        + "errors thrown during load are not visible while the inspector is attached — close it for a full checkup");
+      break;
+    }
+  }
+  try {
+    return await checkupWith(el, args, deps, { mem, url, navigating, cap, notes, cdpOk });
+  } finally {
+    if (enabled) {
+      for (const d of CDP_DOMAINS) await within(deps.cdp(`${d}.disable`), 3_000);
+    }
+  }
+}
+
+async function checkupWith(
+  el: DrivableWebview, args: Record<string, unknown>, deps: CheckupDeps,
+  o: { mem: { lastAt: number; docAt: number }; url: string; navigating: boolean; cap: number; notes: string[]; cdpOk: boolean },
+): Promise<{ ok: boolean; value?: unknown; error?: string }> {
+  const { mem, url, navigating, cap, notes, cdpOk } = o;
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const events: CdpEvent[] = [];
+  let overflowed = false;
+  const drain = async () => {
+    if (!cdpOk) return [];
+    const got = await within(deps.cdpEvents(), 2_000) ?? [];
+    if (got.length >= CDP_BUFFER_CAP) overflowed = true;
+    events.push(...got);
+    return got;
+  };
+
+  /* 2. The window. Navigating: from just before the navigation, on the
+     panel's clock (what CDP events are stamped with) — and what enabling
+     replayed is thrown away first: Log.enable re-sends the entries it had,
+     stamped with the moment they reached the main process, which is now.
+     Not navigating: in the page's clock, since this caller's last checkup of
+     this document, else since the collector started. */
+  let windowStart = 0;
+  let since: string;
+  let listenedBefore = true;
+  if (navigating) {
+    await drain();
+    events.length = 0;
+    overflowed = false;
+    windowStart = Date.now();
+    since = "load";
+    const r = url
+      ? await navigateTo(el, url)
+      : await reloadAndSettle(el, true).then((err) => (err ? { ok: false as const, error: err } : { ok: true as const }));
+    if (!r.ok) return r;
+  } else {
+    const docAt = Number(await within(el.executeJavaScript("Math.round(performance.timeOrigin || 0)"), 2_000)) || 0;
+    listenedBefore = await within(el.executeJavaScript("!!window.__agxLog"), 2_000) === true;
+    const sameDoc = mem.lastAt > 0 && mem.docAt === docAt;
+    windowStart = sameDoc ? mem.lastAt : 0;
+    since = sameDoc ? "last checkup" : listenedBefore ? "page load" : "this call";
+    if (!listenedBefore) notes.push("nothing was listening before this call: use checkup --reload to see errors from load");
+  }
+
+  /* 3. Wait for quiet, on the panel's clock: nothing in flight as the protocol
+     sees it, and the page quiet by the act settle's own rule for 300 ms. */
+  await within(el.executeJavaScript(`(${COLLECTOR}, ${MUTATIONS_ON})`), 2_000);
+  const inflight = new Set<string>();
+  const started = Date.now();
+  const q: Quiet = { last: undefined, since: started };
+  let settledBy: "quiet" | "cap" = "cap";
+  for (;;) {
+    for (const e of await drain()) if (e.at >= windowStart - 50) trackInflight(inflight, e);
+    const left = cap - (Date.now() - started);
+    const poll = await within(el.executeJavaScript(SETTLE_POLL), Math.max(0, Math.min(left, 1_000)));
+    if (quietFor(q, poll, inflight.size, Date.now()) >= CHECKUP_QUIET_MS) { settledBy = "quiet"; break; }
+    if (Date.now() - started >= cap) break;
+    await sleep(Math.min(CHECKUP_POLL_MS, Math.max(0, cap - (Date.now() - started))));
+  }
+  const settleMs = Date.now() - started;
+  await within(el.executeJavaScript(MUTATIONS_OFF), 1_000);
+
+  /* 4. The last drain, and the reading of it. After a navigation without the
+     protocol, the collector belongs to the new document: all of it is the
+     window. */
+  await drain();
+  if (overflowed) notes.push("the event buffer overflowed: the oldest events of this load are missing");
+  let readUpTo: number | undefined;
+  let found;
+  if (cdpOk) {
+    found = classifyEvents(events, windowStart);
+  } else {
+    const rows = await within(el.executeJavaScript(collectorSince(navigating ? 0 : windowStart)), 2_000) as CollectorRead;
+    readUpTo = typeof rows?.now === "number" ? rows.now : undefined;
+    found = classifyCollector(rows);
+  }
+
+  /* 5. The page itself. */
+  const page = (await within(el.executeJavaScript(CHECKUP_PAGE), 3_000) ?? {}) as {
+    url?: string; title?: string; docAt?: number; now?: number; visible?: string[]; perf?: unknown; a11y?: unknown;
+  };
+  mem.lastAt = readUpTo ?? (Number(page.now) || mem.lastAt);
+  mem.docAt = Number(page.docAt) || mem.docAt;
+
+  /* 6. The verdict: breakage only. */
+  const visible = page.visible ?? [];
+  const problems = found.errors.length + found.failed.length + visible.length;
+  const verdict = problems === 0 ? "ok" : `${problems} problem${problems === 1 ? "" : "s"}`;
+
+  /* 7. A picture only when something is wrong, bounded by the same budget
+     `shot` gives the shell — a surface with no frames can leave a capture
+     unanswered for good, and a checkup must still answer. */
+  let png: string | undefined;
+  let shot: string | undefined;
+  if (problems > 0 && args.noShot !== true) {
+    const s = await within(deps.captureFromShell(), SHELL_SHOT_MS);
+    if (s?.png) png = s.png;
+    else shot = `unavailable: ${(s?.why || `the capture did not answer in ${SHELL_SHOT_MS / 1000} s`).slice(0, 120)}`;
+  }
+
+  /* 8. Verdict first, empty keys left out. */
+  const value: Record<string, unknown> = {
+    verdict,
+    url: page.url ?? el.getURL(),
+    title: page.title ?? el.getTitle(),
+    since,
+    loaded: { settledBy, settleMs },
+  };
+  const put = (k: string, v: unknown) => {
+    if (v === undefined || v === null) return;
+    if (Array.isArray(v) && v.length === 0) return;
+    if (typeof v === "object" && !Array.isArray(v) && Object.keys(v as object).length === 0) return;
+    value[k] = v;
+  };
+  put("errors", found.errors);
+  put("failed", found.failed);
+  put("visible", visible);
+  put("issues", found.issues);
+  put("perf", page.perf);
+  put("a11y", page.a11y);
+  put("shot", shot);
+  put("png", png);
+  put("note", notes.join("; ") || undefined);
+  put("dropped", found.dropped);
+  return { ok: true, value };
 }
 
 /** §8's `freezeAnimations`: a stylesheet the page cannot out-rank, plus
@@ -1277,53 +1574,12 @@ async function runVerb(
   try {
     switch (ask.op) {
       case "open": {
-        const url = String(ask.args.url ?? "");
-        /* Where it was, so "it never moved" can be told from "it arrived
-           somewhere slightly different", which a redirect makes common. */
-        const before = el.getURL();
-        const nav = settled(el);
-        try {
-          await el.loadURL(url);
-        } catch (e) {
-          // ERR_ABORTED (-3) is what Chromium calls the navigation this one just
-          // replaced, and Electron rejects loadURL with it — so interrupting a
-          // page that was still loading reported failure for a navigation that
-          // then succeeded. Measured: `open example.com` over a half-loaded
-          // GitHub answered "(-3) loading https://github.com/..." while the new
-          // page loaded fine and every later verb saw it.
-          //
-          // `settled` is the authority either way: a genuinely bad address still
-          // arrives as did-fail-load with its own reason.
-          const msg = e instanceof Error ? e.message : String(e);
-          if (!msg.includes("(-3)") && !msg.includes("ERR_ABORTED")) return { ok: false, error: msg };
-        }
-        const err = await nav;
-        if (err) return { ok: false, error: err };
-        /*
-         * DID IT ACTUALLY GO THERE.
-         *
-         * The guest guard refuses some schemes — `data:` among them, and
-         * rightly, since it is a way to run markup nobody vetted. But
-         * `loadURL` does not reject when the guard does: the navigation simply
-         * never happens, and this answered ok with the URL it was ALREADY on.
-         * Ask for A, get B, and be told yes. Measured today: three `open`s to
-         * data: URLs in a row, each reporting success, with the page never
-         * leaving the site it had been on since the first one.
-         *
-         * Equality is the wrong test — a redirect to https, or to /index, or a
-         * trailing slash are all legitimate arrivals. What is NOT legitimate is
-         * ending up exactly where it started when somewhere else was asked
-         * for.
-         */
-        const landed = el.getURL();
-        if (landed === before && landed !== url) {
-          return {
-            ok: false,
-            error: `it did not navigate — still on ${landed}. The browser refused ${url.slice(0, 80)}: some schemes (data:, file:, blob:) are not allowed in this view.`,
-          };
-        }
-        return { ok: true, value: { url: landed, title: el.getTitle() } };
+        const r = await navigateTo(el, String(ask.args.url ?? ""));
+        return r.ok ? { ok: true, value: { url: r.url, title: el.getTitle() } } : r;
       }
+
+      case "checkup":
+        return await runCheckup(el, ask.args, { cdp, cdpEvents, captureFromShell: () => captureFromShell() });
 
       case "read": {
         const value = await el.executeJavaScript(
@@ -2836,9 +3092,7 @@ async function runVerb(
       }
       case "reload": {
         const hard = ask.args.bypassCache !== false;
-        const nav = settled(el);
-        if (hard) el.reloadIgnoringCache(); else el.reload();
-        await nav;
+        await reloadAndSettle(el, hard);
         return { ok: true, value: { url: el.getURL(), bypassedCache: hard } };
       }
       case "cookies": {
@@ -3488,7 +3742,7 @@ async function runVerb(
             /* No clip: the rectangle is taken out of the pixels here, once,
                whichever route produced them. */
             captureFromShell({ fullPage }),
-            new Promise<{ png: string | null; why: string; via?: string; cut?: boolean }>((r) => setTimeout(() => r({ png: null, why: "the shell did not answer in time" }), 12_000)),
+            new Promise<{ png: string | null; why: string; via?: string; cut?: boolean }>((r) => setTimeout(() => r({ png: null, why: "the shell did not answer in time" }), SHELL_SHOT_MS)),
           ]);
           let fromShell = await askShell();
           /* A guest whose frame sink is gone answers the same way forever, so it

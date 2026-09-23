@@ -21,6 +21,9 @@ Then the whole interaction in ONE call, which is the cheap way to work:
 
 THE VERBS, by what you reach for them for:
 
+  dev loop    checkup                     # did it break? errors from the load on
+              checkup http://localhost:5173/      # load, wait for quiet, report
+              checkup --reload                    # after your edit
   look        observe · read · text · html · shot · frames · console · network
               shot --selector "#status" evidence.png       # just that element
               shot --highlight "#status" --label "still Online" evidence.png
@@ -137,6 +140,43 @@ def _write_private(path, data, binary=False):
         pass
     with os.fdopen(fd, "wb" if binary else "w") as f:
         f.write(data)
+
+
+CHECKUP_SHOTS_KEPT = 20
+
+
+def _checkup_shot(png):
+    """Where a checkup's failure screenshot lands: private (0600, through
+    `_write_private`), under $XDG_CACHE_HOME/agentglass, one file per checkup,
+    the newest CHECKUP_SHOTS_KEPT kept. `shot` prints a data url when it is
+    given no path, so there is no default of its to share.
+
+    The CLI and the MCP server each carry this function, byte for byte the
+    same — they are two stdlib-only scripts with no module between them, and
+    browser-mcp.test.ts holds the two copies equal."""
+    try:
+        raw = base64.b64decode(png.split(",", 1)[1] if "," in png else png)
+    except ValueError:
+        return None
+    if not raw:
+        return None
+    d = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "agentglass")
+    try:
+        os.makedirs(d, mode=0o700, exist_ok=True)
+        at = os.path.join(d, f"checkup-{int(time.time() * 1000)}.png")
+        _write_private(at, raw, binary=True)
+    except OSError:
+        return None
+    # A failing page checked in a loop writes one picture a minute for as long
+    # as it fails; nobody reads the fortieth.
+    try:
+        shots = sorted((f for f in os.listdir(d) if re.fullmatch(r"checkup-\d+\.png", f)),
+                       key=lambda f: int(f[len("checkup-"):-len(".png")]))
+        for old in shots[:-CHECKUP_SHOTS_KEPT]:
+            os.remove(os.path.join(d, old))
+    except OSError:
+        pass
+    return at
 
 
 def _said_redacted(res):
@@ -614,6 +654,27 @@ def budget_value(value, max_tokens):
         return value
     notes = []
 
+    # A checkup keeps its verdict whatever happens, and gives up advice before
+    # evidence: the issues first, then the a11y samples, then the OLDEST
+    # errors and failed requests — the newest is what the last edit caused.
+    if "verdict" in value:
+        if isinstance(value.get("issues"), list) and value["issues"]:
+            notes.append(f"issues: dropped {len(value['issues'])}")
+            del value["issues"]
+        a11y = value.get("a11y")
+        if _size(value) > budget_chars and isinstance(a11y, dict) and a11y.get("samples"):
+            notes.append(f"a11y.samples: dropped {len(a11y['samples'])}")
+            del a11y["samples"]
+        for key in ("errors", "failed"):
+            arr = value.get(key)
+            if _size(value) <= budget_chars or not (isinstance(arr, list) and arr):
+                continue
+            before = len(arr)
+            while _size(value) > budget_chars and len(value[key]) > 1:
+                value[key] = value[key][1:]
+            if before - len(value[key]):
+                notes.append(f"{key}: dropped {before - len(value[key])} oldest of {before}")
+
     # `added` is a delta observe's share of the tree, and trimmed the same way.
     # A delta carries no viewport unless it changed; every node counts as on
     # screen then, and the order is the page's.
@@ -725,6 +786,10 @@ def summarize(cmd, value):
         return f"{len(rows)} rows" + (f", {value['dropped']} dropped" if value.get("dropped") else "")
     if cmd == "read":
         return f"{value.get('title', '')!r} {value.get('url', '')} — {len(value.get('text', ''))} chars"
+    if cmd == "checkup":
+        return (f"{value.get('verdict', '?')} errors:{len(value.get('errors') or [])} "
+                f"failed:{len(value.get('failed') or [])} visible:{len(value.get('visible') or [])} "
+                f"issues:{len(value.get('issues') or [])}")
     if cmd in ("whoami", "profiles"):
         # The one line that matters here is not a size, it is the three facts
         # §11 exists for: who am I, do I still hold a tab, and whose container
@@ -1498,6 +1563,26 @@ def main():
     p.add_argument("--write", help="put this in it")
     p = sub.add_parser("save", help="the whole page as one file that still renders offline (MHTML)")
     p.add_argument("out", help="where to write it")
+    p = sub.add_parser(
+        "checkup",
+        help="did it break? load or reload, wait for quiet, report errors, failed requests, visible errors; issues/perf/a11y as advice",
+        description=(
+            "Load a url (or --reload, or neither: since your last checkup of this page), wait until the page "
+            "is quiet, and answer with a verdict first: ok, or N problems. Problems are exceptions and console "
+            "errors — including the ones thrown DURING load, which console/observe cannot see — failed "
+            "requests, and visible error text: a role=alert toast on screen counts as a problem. Chromium's issues, perf (LCP, CLS) and a11y "
+            "(unlabelled controls, with ids to act on) are advice and never counted. A screenshot is taken "
+            "only when something is wrong, and written to a file.\n\n"
+            "  checkup http://localhost:5173/\n"
+            "  checkup --reload"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("url", nargs="?", help="load this first")
+    p.add_argument("--reload", action="store_true", help="hard-reload the page first")
+    p.add_argument("--no-shot", dest="noShot", action="store_true", help="no screenshot, even on failure")
+    p.add_argument("--settle-ms", dest="settleMs", type=int, default=None,
+                   help="how long to wait for quiet at most (default 5000, 0..15000)")
     p = sub.add_parser("region", help="the tree of ONE subtree — a modal is 15 nodes inside 300")
     p.add_argument("selector", help="an id from an observation, a locator (role=dialog) or CSS")
     p = sub.add_parser("throttle", help="make the machine slow — the bug that never reproduces locally")
@@ -2103,6 +2188,16 @@ def main():
             body["force"] = True
     elif a.cmd == "region":
         body = {"selector": a.selector}
+    elif a.cmd == "checkup":
+        body = {}
+        if a.url:
+            body["url"] = a.url
+        if a.reload:
+            body["reload"] = True
+        if a.noShot:
+            body["noShot"] = True
+        if a.settleMs is not None:
+            body["settleMs"] = a.settleMs
     elif a.cmd == "upload":
         body = {"selector": a.selector, "paths": a.paths}
     elif a.cmd == "permission":
@@ -2635,6 +2730,12 @@ def main():
     # would have done anyway on a fresh state dir.
     if a.cmd in ("observe", "console", "network", "exposed") and getattr(a, "sinceLast", False):
         save_since(cursor, a.cmd, value.get("now"))
+
+    # A checkup's picture goes to a file and the answer carries the path: a
+    # base64 PNG in an agent's context is paid for on every turn after.
+    if a.cmd == "checkup" and value.get("png"):
+        at = _checkup_shot(value.pop("png"))
+        value["shot"] = at or "unavailable: the picture could not be written to disk"
 
     # --max-tokens / --out / --summary apply to every verb except `shot`,
     # which already has its own --out-shaped positional (where to write the

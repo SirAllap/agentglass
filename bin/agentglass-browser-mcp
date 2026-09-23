@@ -34,6 +34,7 @@ Environment:
     AGENTGLASS_SERVER   default http://localhost:4000
     AGENTGLASS_TOKEN    only needed if the server was started with one
 """
+import base64
 import json
 import os
 import re
@@ -1057,6 +1058,22 @@ TOOLS = [
         },
     },
     {
+        "name": "browser_checkup",
+        "description": (
+            "Did it break? Loads (url) or reloads, waits for quiet, returns a verdict with console errors "
+            "and exceptions (including during load), failed requests and visible error text (a role=alert "
+            "toast counts as a problem); issues/perf/a11y as advice; a screenshot path only on failure."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string"},
+                "reload": {"type": "boolean"},
+                "noShot": {"type": "boolean"},
+            },
+        },
+    },
+    {
         "name": "browser_reload",
         "description": "Reload, ignoring the cache by default — with assets versioned by query string there is no other way to force a new bundle.",
         "inputSchema": {
@@ -1691,6 +1708,10 @@ def run(name, args):
             {"type": "image", "data": data, "mimeType": "image/png"},
             {"type": "text", "text": f"{value.get('title', '')}\n{value.get('url', '')}"},
         ]}
+    if verb == "checkup" and value.get("png"):
+        # A path, not an image: the picture is evidence for later, and an image
+        # block is paid for on every turn after this one.
+        value["shot"] = _checkup_shot(value.pop("png")) or "unavailable: the picture could not be written to disk"
     if verb in ("read", "text"):
         # Plain text, because the caller is a language model reading a page:
         # JSON around one string is punctuation it pays for.
@@ -1698,6 +1719,60 @@ def run(name, args):
             return {"content": [{"type": "text", "text": value.get("text", "")}]}
         return {"content": [{"type": "text", "text": f"{value.get('title', '')}\n{value.get('url', '')}\n\n{value.get('text', '')}"}]}
     return {"content": [{"type": "text", "text": json.dumps(value)}]}
+
+
+def _write_private(path, data, binary=False):
+    """A file that may hold session material — cookies, storage, a HAR with
+    its request headers, a snapshot of a signed-in page — written 0600. The
+    plain `open(path, "w")` these used took the umask, 0644 on most machines:
+    every account on the box could read the cookies `session save` had just
+    pulled out of the browser. Created with the mode rather than chmod-ed
+    after (the gap between the two is the same gap), and re-tightened when the
+    file already existed, since O_CREAT's mode only applies to a new file."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+    except OSError:
+        pass
+    with os.fdopen(fd, "wb" if binary else "w") as f:
+        f.write(data)
+
+
+CHECKUP_SHOTS_KEPT = 20
+
+
+def _checkup_shot(png):
+    """Where a checkup's failure screenshot lands: private (0600, through
+    `_write_private`), under $XDG_CACHE_HOME/agentglass, one file per checkup,
+    the newest CHECKUP_SHOTS_KEPT kept. `shot` prints a data url when it is
+    given no path, so there is no default of its to share.
+
+    The CLI and the MCP server each carry this function, byte for byte the
+    same — they are two stdlib-only scripts with no module between them, and
+    browser-mcp.test.ts holds the two copies equal."""
+    try:
+        raw = base64.b64decode(png.split(",", 1)[1] if "," in png else png)
+    except ValueError:
+        return None
+    if not raw:
+        return None
+    d = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "agentglass")
+    try:
+        os.makedirs(d, mode=0o700, exist_ok=True)
+        at = os.path.join(d, f"checkup-{int(time.time() * 1000)}.png")
+        _write_private(at, raw, binary=True)
+    except OSError:
+        return None
+    # A failing page checked in a loop writes one picture a minute for as long
+    # as it fails; nobody reads the fortieth.
+    try:
+        shots = sorted((f for f in os.listdir(d) if re.fullmatch(r"checkup-\d+\.png", f)),
+                       key=lambda f: int(f[len("checkup-"):-len(".png")]))
+        for old in shots[:-CHECKUP_SHOTS_KEPT]:
+            os.remove(os.path.join(d, old))
+    except OSError:
+        pass
+    return at
 
 
 def reply(msg_id, result=None, error=None):

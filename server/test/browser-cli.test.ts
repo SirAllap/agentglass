@@ -17,7 +17,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { BROWSER_OPS } from "../src/browserdrive.ts";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { freePort } from "./freePort.ts";
@@ -1445,3 +1445,95 @@ describe.skipIf(!HAVE_PY)("tab-map hygiene", () => {
   }, 60_000);
 });
 
+
+describe.skipIf(!HAVE_PY)("checkup, the dev loop in one call", () => {
+  /** The CLI with its own cache dir: a checkup that failed writes its picture
+   *  there, and never into the machine's ~/.cache. */
+  function cliCache(cache: string, ...args: string[]) {
+    const p = Bun.spawn(["python3", CLI, ...withActive(args)], {
+      env: {
+        PATH: process.env.PATH ?? "", AGENTGLASS_SERVER: base,
+        AGENTGLASS_BROWSER_STATE_DIR: join(dir, "state"), XDG_CACHE_HOME: cache,
+      },
+      stdout: "pipe", stderr: "pipe",
+    });
+    return Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited])
+      .then(([out, err, code]) => ({ out: out.trim(), err: err.trim(), code }));
+  }
+  const PNG = "data:image/png;base64,iVBORw0KGgo=";
+
+  test("the url, --reload, --no-shot and --settle-ms reach the window, clamped", async () => {
+    await openWindow();
+    answers = { checkup: { ok: true, value: { verdict: "ok", url: "u", title: "t" } } };
+    askedArgs = []; asked = [];
+    const cache = mkdtempSync(join(dir, "cache-"));
+    const a = await cliCache(cache, "checkup", "http://localhost:5173/", "--no-shot", "--settle-ms", "99999");
+    expect(a.code, a.err).toBe(0);
+    expect(verbArgs(0)).toMatchObject({ url: "http://localhost:5173/", noShot: true, settleMs: 15_000 });
+    const b = await cliCache(cache, "checkup", "--reload");
+    expect(b.code, b.err).toBe(0);
+    expect(verbArgs(1)).toMatchObject({ reload: true });
+    expect(verbArgs(1).url).toBeUndefined();
+    const both = await cliCache(cache, "checkup", "http://localhost:5173/", "--reload");
+    expect(both.code).toBe(1);
+    expect(asked).toEqual(["checkup", "checkup"]);
+  });
+
+  test("a failure's picture is written to a private file and the answer carries its path", async () => {
+    await openWindow();
+    answers = { checkup: { ok: true, value: { verdict: "1 problem", url: "u", title: "t", errors: ["TypeError: x"], png: PNG } } };
+    const cache = mkdtempSync(join(dir, "cache-"));
+    const r = await cliCache(cache, "checkup", "--no-shot");
+    expect(r.code, r.err).toBe(0);
+    const v = JSON.parse(r.out);
+    expect(v.png).toBeUndefined();
+    expect(v.shot.startsWith(join(cache, "agentglass", "checkup-"))).toBe(true);
+    expect(statSync(v.shot).mode & 0o777).toBe(0o600);
+    expect(readFileSync(v.shot).subarray(0, 4).toString("hex")).toBe("89504e47");
+    expect(Object.keys(v)[0]).toBe("verdict");
+  });
+
+  test("only the newest 20 pictures are kept", async () => {
+    await openWindow();
+    answers = { checkup: { ok: true, value: { verdict: "1 problem", url: "u", title: "t", errors: ["TypeError: x"], png: PNG } } };
+    const cache = mkdtempSync(join(dir, "cache-"));
+    const shots = join(cache, "agentglass");
+    mkdirSync(shots, { recursive: true });
+    for (let i = 1; i <= 25; i++) writeFileSync(join(shots, `checkup-${1_000 + i}.png`), "old");
+    writeFileSync(join(shots, "notes.txt"), "not a checkup");
+    const r = await cliCache(cache, "checkup");
+    expect(r.code, r.err).toBe(0);
+    const left = readdirSync(shots).filter((f) => f.startsWith("checkup-")).sort();
+    expect(left).toHaveLength(20);
+    expect(left).not.toContain("checkup-1006.png");
+    expect(left).toContain("checkup-1007.png");
+    expect(left).toContain(JSON.parse(r.out).shot.split("/").pop());
+    expect(readdirSync(shots)).toContain("notes.txt");
+  });
+
+  test("--max-tokens gives up the issues first, then the oldest errors, and keeps the verdict", async () => {
+    await openWindow();
+    const issues = Array.from({ length: 5 }, (_, i) => ({ code: `Issue${i}`, n: 3, about: "https://cdn.orbit.example/" + "x".repeat(150) }));
+    const errors = Array.from({ length: 10 }, (_, i) => `TypeError: e${i} ` + "y".repeat(120));
+    answers = { checkup: { ok: true, value: { verdict: "10 problems", url: "u", title: "t", errors, issues, a11y: { unlabelled: 1, samples: ["e4 button"] } } } };
+    const cache = mkdtempSync(join(dir, "cache-"));
+    const r = await cliCache(cache, "checkup", "--max-tokens", "200");
+    expect(r.code, r.err).toBe(0);
+    const v = JSON.parse(r.out);
+    expect(v.verdict).toBe("10 problems");
+    expect(v.issues).toBeUndefined();
+    expect(v.a11y.samples).toBeUndefined();
+    expect(v.errors.length).toBeLessThan(10);
+    expect(v.errors[v.errors.length - 1]).toContain("e9");
+    expect(v.budgetNote).toContain("issues: dropped 5");
+  });
+
+  test("--summary is one line: the verdict and the counts", async () => {
+    await openWindow();
+    answers = { checkup: { ok: true, value: { verdict: "2 problems", url: "u", title: "t", errors: ["a"], failed: ["500 GET /x"], issues: [{ code: "C", n: 1 }] } } };
+    const cache = mkdtempSync(join(dir, "cache-"));
+    const r = await cliCache(cache, "checkup", "--summary", "--no-shot");
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toBe("2 problems errors:1 failed:1 visible:0 issues:1");
+  });
+});

@@ -115,6 +115,17 @@ export function parseLocator(raw: string): Locator {
 /** The parsed selector as a JavaScript literal, ready for a page script. */
 export const locatorLit = (raw: string): string => jsLit(parseLocator(raw));
 
+/** Whether a node is on screen, in the sense every verb that looks for one
+ *  means it: a box with an area, not display:none, not visibility:hidden. One
+ *  copy, pasted into each page script that needs it (FIND here, the checkup's
+ *  page read), so "visible" means the same thing to all of them. */
+export const ON_SCREEN = `(n) => {
+    const r = n.getBoundingClientRect();
+    if (!r.width || !r.height) return false;
+    const cs = getComputedStyle(n);
+    return cs.display !== "none" && cs.visibility !== "hidden";
+  }`;
+
 /**
  * The page half: a parsed locator in, `{kind: "found", all, hidden, near}` or
  * `{kind: "invalid", message}` out. `all` is what matched and is on screen,
@@ -135,12 +146,7 @@ export const FIND = `((spec) => {
   }
   const norm = (s) => String(s == null ? "" : s).replace(/\\s+/g, " ").trim();
   const name = ${ACC_NAME};
-  const onScreen = (n) => {
-    const r = n.getBoundingClientRect();
-    if (!r.width || !r.height) return false;
-    const cs = getComputedStyle(n);
-    return cs.display !== "none" && cs.visibility !== "hidden";
-  };
+  const onScreen = ${ON_SCREEN};
   /* For text=: a one-pixel box is a screen-reader-only label, there to be
      read and not clicked, so it counts as hidden and the visible element
      around it is the match. Measured: text= on an icon button landed on its

@@ -469,6 +469,35 @@ describe("§16 — origins, read-only, audit, redaction", () => {
     expect("error" in parseAsk("cookies", { set: { name: "a", value: "b" } })).toBe(true);
   });
 
+  test("checkup: a url is checked like open's, the flags are flags, settleMs is clamped", () => {
+    process.env.AGENTGLASS_BROWSER_ORIGINS = "localhost";
+    const ok = parseAsk("checkup", { url: "http://localhost:5173/", noShot: true, settleMs: 99_999 });
+    if (!("ask" in ok)) throw new Error(ok.error);
+    expect(ok.ask.args).toMatchObject({ url: "http://localhost:5173/", noShot: true, settleMs: 15_000 });
+    const low = parseAsk("checkup", { reload: true, settleMs: -5 });
+    if (!("ask" in low)) throw new Error(low.error);
+    expect(low.ask.args).toMatchObject({ reload: true, settleMs: 0 });
+    expect("error" in parseAsk("checkup", { url: "https://elsewhere.example/" })).toBe(true);
+    expect("error" in parseAsk("checkup", { url: "javascript:alert(1)" })).toBe(true);
+    expect("error" in parseAsk("checkup", { url: "http://localhost:5173/", reload: true })).toBe(true);
+    expect("error" in parseAsk("checkup", { reload: "yes" })).toBe(true);
+    expect("error" in parseAsk("checkup", { settleMs: "soon" })).toBe(true);
+  });
+
+  test("checkup acts only when it navigates: read-only mode lets the look through", () => {
+    process.env.AGENTGLASS_BROWSER_READONLY = "1";
+    expect("ask" in parseAsk("checkup", {})).toBe(true);
+    expect("error" in parseAsk("checkup", { reload: true })).toBe(true);
+    expect("error" in parseAsk("checkup", { url: "https://example.com/" })).toBe(true);
+  });
+
+  test("checkup has its own patience: a navigation, the settle cap and a bounded shot", () => {
+    const src = readFileSync(new URL("../src/browserdrive.ts", import.meta.url), "utf8");
+    const table = src.slice(src.indexOf("const TIMEOUT_MS: Record<BrowserOp, number> = {"));
+    const block = table.slice(0, table.indexOf("\n};"));
+    expect(block).toMatch(/\n  checkup: 75_000,/);
+  });
+
   test("every op OBSERVE_OPS does not name is acting by default", () => {
     // Every verb in the real op set is either explicitly observing or refused
     // under read-only — none of them slip through unclassified.

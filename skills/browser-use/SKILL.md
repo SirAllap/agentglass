@@ -46,6 +46,24 @@ with no request in flight, capped at 1 s) and answer with an `effect`:
 `navigated`, `newDocument`, `newErrors`, `failedRequests`, `dialog`,
 `settledBy`. Often that is all you need to know — no look at all.
 
+## Did it break? One call
+
+The edit → reload → "is it broken?" loop is one verb:
+
+```bash
+agentglass-browser checkup http://localhost:5173/   # load it, wait for quiet, report
+agentglass-browser checkup --reload                 # after your edit
+agentglass-browser checkup                          # no navigation: since your last checkup
+```
+
+The first field is the verdict, `ok` or `N problems`. Problems are uncaught
+exceptions and console errors — **including the ones thrown while the page
+loaded**, which `console` and `observe` cannot see — failed requests (4xx/5xx,
+CORS, blocked) and visible error text (`role=alert`, so an alert toast counts). Chromium's `issues`,
+`perf` (LCP, CLS) and `a11y` (unlabelled controls, with ids) come along as
+advice and do not count. A screenshot path only when something failed
+(`--no-shot` to skip; `shot: "unavailable: …"` when there is no frame to take).
+
 ## Then the whole interaction in ONE call
 
 ```bash
@@ -70,6 +88,7 @@ once. "Nothing happened in thirty seconds" is an answer, not a failure.
 ## The verbs, by what you reach for them for
 
 ```
+dev loop    checkup (did it break — errors from load on, failed requests, visible errors)
 look        observe · read · text · html · region · shot · frames · console · network
 page        resize · zoom (the one Ctrl+/Ctrl- move) · emulate · throttle
 act         click · type · select · check · fill · hover · dblclick · rightclick

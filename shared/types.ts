@@ -1167,6 +1167,9 @@ export interface BrowserAskFrame {
     /* §2: the tree of one subtree instead of the page — a modal is fifteen
        nodes inside three hundred, and the rest is paid for every turn. */
     | "region"
+    /* The dev loop in one call: load or reload, wait for quiet, and say
+       whether it broke — errors from the start of the load included. */
+    | "checkup"
     /* §11: the clipboard through the route that works, and the page as one
        file that still renders offline. */
     | "clipboard" | "save"

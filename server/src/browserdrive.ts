@@ -74,7 +74,7 @@ export type BrowserOp =
   | "cdp" | "listeners" | "coverage" | "profiles" | "emulate" | "events" | "record" | "audit"
   | "debug" | "clock" | "download" | "settings" | "drag" | "upload" | "storage" | "permission"
   | "pdf" | "throttle" | "har" | "region" | "clipboard" | "save" | "headers" | "fake"
-  | "trace" | "intercept"
+  | "trace" | "intercept" | "checkup"
   | "inspect"
   | "whoami"
   | "health";
@@ -92,6 +92,7 @@ export const BROWSER_OPS: readonly BrowserOp[] = [
   "inspect",
   "clock", "download", "settings", "drag", "upload", "storage", "permission", "pdf",
   "throttle", "har", "region", "clipboard", "save", "headers", "fake", "trace", "intercept",
+  "checkup",
   "whoami",
   "health",
 ];
@@ -222,6 +223,10 @@ const TIMEOUT_MS: Record<BrowserOp, number> = {
   throttle: 15_000, har: 15_000,
   /* One subtree read in the page — cheaper than `observe`, same patience. */
   region: 15_000,
+  /* The sum, not a guess: a navigation's 40 s cap + the 15 s most a settle
+     may be asked for + the 12 s the shell gets for a picture (SHELL_SHOT_MS)
+     + the CDP round trips that enable and disable four domains. */
+  checkup: 75_000,
   /* The clipboard is a round trip; a snapshot is Chromium serialising every
      subresource the page pulled in. */
   clipboard: 15_000, save: 60_000, headers: 15_000,
@@ -673,6 +678,9 @@ function isActing(op: BrowserOp, args: Record<string, unknown>): boolean {
      file builds an ownership guard around, and it sat in the observing set
      whole, so read-only mode let it through. */
   if (op === "profiles") return args.make !== undefined || args.drop !== undefined;
+  /* `checkup` with a url or `--reload` navigates; without either it only
+     reads what the page already did. */
+  if (op === "checkup") return args.url !== undefined || args.reload === true;
   return !OBSERVE_OPS.has(op);
 }
 
@@ -1197,6 +1205,7 @@ export function auditAsScript(entries: AuditEntry[]): string {
         break;
       case "press": line = has("key") ? `agentglass-browser press ${q(a.key)}` : null; break;
       case "reload": line = "agentglass-browser reload"; break;
+      case "checkup": line = has("url") ? `agentglass-browser checkup ${q(a.url)}` : a.reload === true ? "agentglass-browser checkup --reload" : null; break;
       case "back": case "forward": line = `agentglass-browser ${e.op}`; break;
       default: line = null;
     }
@@ -2098,6 +2107,34 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
           if (typeof b.reason !== "string" || !b.reason.trim()) return { error: "reason must be a non-empty string" };
           args.reason = b.reason;
         }
+      }
+      break;
+    }
+    case "checkup": {
+      /* The url goes through exactly what `open` checks — the scheme and the
+         origin allow-list — because it is an `open`. */
+      if (b.url !== undefined) {
+        const url = safeUrl(b.url);
+        if (!url) return { error: "url must be an http(s) address" };
+        const list = allowedOrigins();
+        const host = new URL(url).host;
+        if (!originAllowed(host, list)) {
+          const msg = `origin refused: ${host} is not in the allow-list (${list.join(", ")})`;
+          recordAudit(op as BrowserOp, { url }, false, msg, false, undefined, caller);
+          return { error: msg };
+        }
+        args.url = url;
+      }
+      for (const k of ["reload", "noShot"] as const) {
+        if (b[k] === undefined) continue;
+        if (typeof b[k] !== "boolean") return { error: `${k} is a flag` };
+        args[k] = b[k];
+      }
+      if (args.url !== undefined && args.reload === true) return { error: "checkup takes a url or reload, not both" };
+      if (b.settleMs !== undefined) {
+        const n = Number(b.settleMs);
+        if (typeof b.settleMs !== "number" || !Number.isFinite(n)) return { error: "settleMs must be a number of milliseconds" };
+        args.settleMs = Math.min(15_000, Math.max(0, Math.round(n)));
       }
       break;
     }

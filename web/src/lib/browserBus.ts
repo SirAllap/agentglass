@@ -206,7 +206,7 @@ async function serveHealth(el: DrivableWebview | null): Promise<{ ok: true; valu
  * the diagnosis — asking `console` a second time because `console` failed
  * teaches nothing — and for anything answered before a page was ever reached.
  */
-const SELF_DIAGNOSING = new Set(["observe", "console", "network", "shot", "health", ...TAB_OPS]);
+const SELF_DIAGNOSING = new Set(["observe", "console", "network", "shot", "health", "checkup", ...TAB_OPS]);
 async function attachDiagnosis(
   el: DrivableWebview | null, op: string, reply: { ok: boolean; value?: unknown; error?: string },
 ): Promise<{ ok: boolean; value?: unknown; error?: string; diagnosis?: unknown }> {
