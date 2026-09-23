@@ -33,7 +33,7 @@
  * byte-identical to the source), so one hash is right for the dev page, the
  * build, and the copy electron-builder stages into the app.
  */
-export const BOOT_SCRIPT_SHA256 = "'sha256-3XHgT5hgBhYm1mhNlayYvSclDEsbXVLqSNlQAGfnZ6o='";
+export const BOOT_SCRIPT_SHA256 = "'sha256-LTSYKIPWk5E2YWobubSHeR9emFHS7dbREE6rvHplVZM='";
 
 /**
  * The sha256 of the single-port marker the sidecar plants into index.html on

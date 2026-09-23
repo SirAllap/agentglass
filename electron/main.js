@@ -744,7 +744,7 @@ const CSP = [
      together by the test named above — edit the splash without rehashing it and
      the window comes up blank, which is precisely the failure the test spends
      its time preventing. */
-  "script-src 'self' 'sha256-3XHgT5hgBhYm1mhNlayYvSclDEsbXVLqSNlQAGfnZ6o=' 'sha256-WoyIdsXRXsB6KXPWR0pkumt+r5WqeyVOTWuslDXPNb8='",
+  "script-src 'self' 'sha256-LTSYKIPWk5E2YWobubSHeR9emFHS7dbREE6rvHplVZM=' 'sha256-WoyIdsXRXsB6KXPWR0pkumt+r5WqeyVOTWuslDXPNb8='",
   "style-src 'self' 'unsafe-inline'",
   /* The two hosts this app really draws pictures from, named rather than left to
      the enforcing header below — which would otherwise blank every avatar in the
