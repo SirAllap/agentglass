@@ -23,19 +23,22 @@ const raw = (args: string[]) =>
   Bun.spawnSync(["tmux", "-f", "/dev/null", "-L", SOCK, ...args], { stdout: "pipe", stderr: "pipe", timeout: 4000, env: process.env });
 const out = (args: string[]) => raw(args).stdout.toString().trim();
 
-function clientOn(target: string): ReturnType<typeof Bun.spawn> {
+function clientOn(target: string, cols = 0, rows = 0): ReturnType<typeof Bun.spawn> {
   return Bun.spawn(
     ["python3", "-c",
-      "import os,pty,sys,time\n" +
+      "import os,pty,sys,time,fcntl,termios,struct\n" +
       "pid,fd=pty.fork()\n" +
-      "if pid==0: os.execvp('tmux',['tmux','-f','/dev/null','-L',sys.argv[1],'attach','-t',sys.argv[2]])\n" +
+      "if pid==0:\n" +
+      "  if int(sys.argv[3]): fcntl.ioctl(0,termios.TIOCSWINSZ,struct.pack('HHHH',int(sys.argv[4]),int(sys.argv[3]),0,0))\n" +
+      "  os.execvp('tmux',['tmux','-f','/dev/null','-L',sys.argv[1],'attach','-t',sys.argv[2]])\n" +
       "time.sleep(600)\n",
-      SOCK, target],
+      SOCK, target, String(cols), String(rows)],
     { stdout: "ignore", stderr: "ignore", env: { ...process.env, TERM: TEST_TERM } },
   );
 }
 
 let pty: ReturnType<typeof Bun.spawn> | null = null;
+let wide: ReturnType<typeof Bun.spawn> | null = null;
 let tty = "";
 
 beforeAll(async () => {
@@ -51,6 +54,7 @@ beforeAll(async () => {
 
 afterAll(() => {
   pty?.kill();
+  wide?.kill();
   raw(["kill-server"]);
   if (REAL_TMPDIR === undefined) delete process.env.TMUX_TMPDIR;
   else process.env.TMUX_TMPDIR = REAL_TMPDIR;
@@ -93,4 +97,43 @@ describe("readFrameCached shares one spawn across a socket's clients", () => {
     expect(frame1.windows).toBe(frame2.windows);
     expect(frame1.panes).toBe(frame2.panes);
   });
+});
+
+/*
+ * The parse is shared per session, and some of what it holds is not the
+ * session's. `client` is the size of ONE terminal — the one whose tty the call
+ * named — and the desk compares it against the window to decide whether
+ * somebody else is holding the window narrow. Two desks on one session at two
+ * widths is ordinary (two app windows, a browser tab beside the desktop app),
+ * and with the size cached per session the narrow one was handed the wide
+ * one's width: "152 columns to your terminal's 174" on the terminal that was
+ * itself 152 and driving the window. It alternated with whichever client
+ * parsed first in each tick, which is why it flashed.
+ */
+describe("readFrameCached keeps each client's own fields", () => {
+  if (!has) return;
+
+  test("two clients on one session, inside one TTL, each get their own size", async () => {
+    wide = clientOn("cache", 174, 47);
+    let wideTty = "";
+    for (let i = 0; i < 40 && !wideTty; i++) {
+      await Bun.sleep(100);
+      wideTty = out(["list-clients", "-F", "#{client_tty} #{client_width}"]).split("\n")
+        .find((l) => l.endsWith(" 174"))?.split(" ")[0] ?? "";
+    }
+    expect(wideTty).not.toBe("");
+    const narrowCols = Number(out(["list-clients", "-F", "#{client_tty} #{client_width}"]).split("\n")
+      .find((l) => l.startsWith(`${tty} `))?.split(" ")[1]);
+    expect(narrowCols).toBeGreaterThan(0);
+    expect(narrowCols).not.toBe(174);
+
+    // A TTL of 0 fetches a raw answer that has both clients in it; the two
+    // calls after it share that answer and the parse the first one makes.
+    const wideClient: TmuxClient = { pid: 0, socket: ["-L", SOCK], tty: wideTty };
+    readFrameCached(wideClient, 0);
+    const first = readFrameCached(wideClient, 5000)!;
+    const second = readFrameCached(client(), 5000)!;
+    expect(first.client?.cols).toBe(174);
+    expect(second.client?.cols).toBe(narrowCols);
+  }, 10_000);
 });
