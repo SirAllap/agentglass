@@ -13,7 +13,7 @@
 import type { PendingGate } from "../../shared/types.ts";
 import { pushGate, describeSession } from "./alerts.ts";
 import { paneForSession, paneAgentNote } from "./panewt.ts";
-import { recordGate, resolveGateRow, undecidedGates, getGate } from "./db.ts";
+import { recordGate, recordRuleGate, resolveGateRow, undecidedGates, getGate } from "./db.ts";
 // Only to ask what an actor string means. actions.ts owns that vocabulary and
 // db.ts is already an edge of this module, so this adds no load-time weight —
 // the thing submitGate's comment below is careful about.
@@ -280,8 +280,7 @@ function recordByRule(
   // throws here must not turn the decision into a 500 — a fail-open hook reads
   // that as "allow", and a call the rule stopped would run.
   try {
-    recordGate({ id, source_app, session_id, tool_name, summary, created: now, expires: now });
-    resolveGateRow(id, out.decision, out.reason, "rule", now);
+    recordRuleGate({ id, source_app, session_id, tool_name, summary, created: now }, out.decision, out.reason);
     onChange();
   } catch (e) {
     console.warn(`[gate] a rule's ${out.decision} was not recorded:`, e instanceof Error ? e.message : e);

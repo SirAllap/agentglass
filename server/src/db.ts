@@ -1793,6 +1793,23 @@ export function recordGate(g: {
   } as any);
 }
 
+/**
+ * A gate a rule decided on arrival: written and resolved in one transaction.
+ * Two separate writes could leave the row pending with no waiter when the
+ * second failed, and the next boot resolves a pending row by the timeout
+ * policy — history then read "allowed, restart" for a call the rule denied.
+ */
+export function recordRuleGate(
+  g: { id: string; source_app: string; session_id: string; tool_name: string; summary: string; created: number },
+  decision: "allow" | "deny",
+  reason: string,
+): void {
+  db.transaction(() => {
+    recordGate({ ...g, expires: g.created });
+    resolveGateRow(g.id, decision, reason, "rule", g.created);
+  })();
+}
+
 export function resolveGateRow(
   id: string,
   decision: "allow" | "deny",
