@@ -21,7 +21,7 @@ function agent(over: Partial<AgentCard> = {}): AgentCard {
     lastSeen: 0, lastErrorTs: 0, spark: new Array(20).fill(0),
     subagents: 0, subagentTypes: [], needBecause: "", cwd: null, project: null,
     runningTool: null, runningSince: 0, evidenceAt: null, evidenceKind: "none",
-    liveness: "unknown", ctxTokens: 0, ctxTs: 0, ctxLimit: 0, worktree: null,
+    liveness: "unknown", ctxTokens: 0, ctxTs: 0, ctxLimit: 0, worktree: null, risks: [],
     ...over,
   };
 }
