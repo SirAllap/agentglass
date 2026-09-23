@@ -23,6 +23,12 @@ export type SystemNote = {
   at: number;
   /** Present when the notification's own text carried a link. */
   url?: string;
+  /** What a person mutes this by — see notePolicy.ts. Absent means the app. */
+  source?: string;
+  /** The same situation said again replaces the row with this key. */
+  key?: string;
+  /** How many identical notes this row stands for, when more than one. */
+  count?: number;
   /**
    * Somewhere in THIS app the note is about.
    *
@@ -100,6 +106,7 @@ export type NotifyCapability = {
 };
 
 import { gitDestination } from "./gitNote.ts";
+import { DESKTOP, deliveryFor, mutedSources, type Delivery } from "./notePolicy.ts";
 import { NOTIFY_VOICES, findVoice, playVoice } from "./sounds.ts";
 
 /* ---------------------------------------------------------------------------
@@ -252,7 +259,7 @@ export function subscribeAppNotify(fn: (on: boolean) => void): () => void {
  * else — a turn that finished, commits to pull, checks that went green — waits
  * for you in the bell.
  */
-export const shouldInterrupt = (urgent: boolean): boolean => urgent || appNotify();
+export const shouldInterrupt = (urgent: boolean): boolean => urgent || (appNotify() && !notifyQuiet());
 
 // ---------------------------------------------------------------------------
 // Quiet.
@@ -270,19 +277,26 @@ export const shouldInterrupt = (urgent: boolean): boolean => urgent || appNotify
 // six per-daemon adapters to infer something you can simply say directly is a
 // bad trade.
 //
-// Quiet stops mirrored notes from *interrupting*. It does not stop them being
+// Quiet stops notes from *interrupting*. It does not stop them being
 // collected: they keep landing in the history behind the notch, so nothing is
 // lost and you can look when you choose to. And it deliberately cannot reach
-// agentglass's own alerts -- a gate hold does not travel this path at all (see
-// gateStore.ts), so "quiet" can never mean "an agent blocked and nobody said".
-// That separation is the whole point of having the switch here rather than one
-// level up.
+// an urgent note -- a gate hold does not travel this path at all (see
+// gateStore.ts), and anything else at urgency 2 is by definition stopped, so
+// "quiet" can never mean "an agent blocked and nobody said".
 // ---------------------------------------------------------------------------
 
 const QUIET_KEY = "agentglass.sysNotify.quiet";
 
+/*
+ * On unless turned off, and it reaches every lane now — see notePolicy.ts.
+ *
+ * It used to cover only the mirrored notes, and so "Quiet on" went on showing
+ * every Lantern card and every failed tool call, which were most of the list.
+ * What it cannot reach is unchanged: an urgent note is something stopped, and
+ * the gate still does not travel this path at all.
+ */
 export function notifyQuiet(): boolean {
-  return localStorage.getItem(QUIET_KEY) === "1";
+  return localStorage.getItem(QUIET_KEY) !== "0";
 }
 
 export function setNotifyQuiet(q: boolean) {
@@ -518,7 +532,15 @@ export function setAlertGoto(fn: typeof goto) { goto = fn; }
 export const POPUP_MS = 8_000;
 export const BLOCKING_POPUP_MS = 60_000;
 
-export function fireDesktopAlert(a: { title: string; body: string; urgency?: 0 | 1 | 2; pane?: string }) {
+export function fireDesktopAlert(a: {
+  title: string; body: string; urgency?: 0 | 1 | 2; pane?: string;
+  source?: string; key?: string; update?: true; clear?: true;
+}) {
+  // A keyed situation that resolved, or changed with nothing new in it. Both
+  // are about a row that is already here, and neither is news: no popup, no
+  // sound, no badge.
+  if (a.key && a.clear) { dropKeyed(a.key); return; }
+  if (a.key && a.update) { redrawKeyed(a.key, a.title, a.body, a.pane); return; }
   /*
    * The bell FIRST, above both guards.
    *
@@ -547,11 +569,13 @@ export function fireDesktopAlert(a: { title: string; body: string; urgency?: 0 |
    * only place that still has the pane as a fact rather than as a phrase. The
    * mirror drops our own app to keep this from arriving twice.
    */
-  recordNote({ app: OUR_APP, summary: a.title, body: a.body, urgency: a.urgency,
+  const said = recordNote({ app: OUR_APP, summary: a.title, body: a.body, urgency: a.urgency,
+    ...(a.source ? { source: a.source } : {}), ...(a.key ? { key: a.key } : {}),
     ...(a.pane ? { goto: { kind: "pane" as const, pane: a.pane } } : {}) });
-  // Recorded above, drawn nowhere. The note is the whole delivery for this
-  // tier — no OS popup, no sound, no badge. See recordNote.
-  if (a.urgency === 0) return;
+  // Recorded above, drawn nowhere, unless the policy lets it interrupt — which
+  // a quiet row never does and a normal one does only with Quiet off. See
+  // notePolicy.ts.
+  if (!said.interrupt) return;
   try {
     if (typeof Notification === "undefined") return;
     if (Notification.permission !== "granted") return;
@@ -621,7 +645,10 @@ export async function askNotifyPermission(): Promise<NotificationPermission | nu
   }
 }
 
-export function recordNote(n: { app: string; summary: string; body: string; urgency?: 0 | 1 | 2; goto?: SystemNote["goto"] }) {
+export function recordNote(n: {
+  app: string; summary: string; body: string; urgency?: 0 | 1 | 2; goto?: SystemNote["goto"];
+  source?: string; key?: string;
+}): Delivery {
   const note: SystemNote = {
     id: `app-${++localSeq}`,
     app: n.app,
@@ -630,7 +657,13 @@ export function recordNote(n: { app: string; summary: string; body: string; urge
     urgency: n.urgency ?? 1,
     at: Date.now(),
     ...(n.goto ? { goto: n.goto } : {}),
+    ...(n.source ? { source: n.source } : {}),
+    ...(n.key ? { key: n.key } : {}),
   };
+  const said = deliveryFor(note, { muted: mutedSources(), quiet: notifyQuiet() });
+  // Muted: not kept at all. That is what muting a source means, and the one
+  // way to say it that nobody has to clear afterwards.
+  if (!said.keep) return said;
   const kept = supersede(history, note);
   // The badge counted rows the list had already thrown away, so it climbed past
   // what it was counting — sixty unread over a list that had never held sixty.
@@ -646,13 +679,32 @@ export function recordNote(n: { app: string; summary: string; body: string; urge
   // its pane, and silent. This is the line that makes the demotion in
   // alerts.ts mean anything; without it that change moves a number and nothing
   // else.
-  if (note.urgency > 0) {
-    unread++;
-    ding();
-  }
+  if (said.badge) unread++;
+  if (said.interrupt) ding();
   historyChanged();
+  return said;
 }
 let localSeq = 0;
+
+/** A keyed situation resolved: its row goes. */
+function dropKeyed(key: string): void {
+  const kept = history.filter((n) => n.key !== key);
+  if (kept.length === history.length) return;
+  history = kept;
+  historyChanged();
+}
+
+/** A keyed situation changed with nothing new in it: the row is redrawn where
+ *  it stands, and only if it is still there — a row somebody dismissed stays
+ *  dismissed until there is news. */
+function redrawKeyed(key: string, summary: string, body: string, pane?: string): void {
+  const i = history.findIndex((n) => n.key === key);
+  if (i < 0) return;
+  history = [...history];
+  const was = history[i]!;
+  history[i] = { ...was, summary, body, ...(pane ? { goto: { kind: "pane" as const, pane } } : {}) };
+  historyChanged();
+}
 
 /**
  * The same news, said again, replaces itself.
@@ -669,6 +721,8 @@ let localSeq = 0;
  * they name the same thing, and collapsing those would lose news.
  */
 function supersede(list: SystemNote[], next: SystemNote): SystemNote[] {
+  // Keyed: the same situation said again is one row, whatever its words.
+  if (next.key) return list.filter((n) => n.key !== next.key);
   const g = next.goto;
   if (!g) return list;
   if (g.kind === "git") {
@@ -871,38 +925,57 @@ async function attachCard(n: SystemNote): Promise<void> {
   historyChanged();
 }
 
+/** One mirrored desktop notification arriving — the socket's whole job,
+ *  outside it so the suite can hand one in. */
+export function receiveMirrored(n: SystemNote): void {
+  // Applied here rather than on the server so the choice is the viewer's and
+  // takes effect the instant it is changed, without a reconnect.
+  if (sysNotifyMode() === "titles") n = { ...n, body: "" };
+  /*
+   * Our own alerts arrive here too, mirrored off D-Bus, and must not be kept.
+   *
+   * `fireDesktopAlert` already recorded them a moment ago WITH the pane they
+   * are about. The mirrored copy has the same words and none of the facts, so
+   * keeping it would put two identical rows behind the notch of which only
+   * one goes anywhere — and the useless one arrives second, so it wins.
+   */
+  if (n.app && n.app.toLowerCase().startsWith(OUR_APP)) return;
+  n = { ...n, source: `${DESKTOP}${(n.app || "desktop").trim().toLowerCase()}` };
+  const said = deliveryFor(n, { muted: mutedSources(), quiet: notifyQuiet() });
+  if (!said.keep) return;
+  // A mirrored note cannot say where it points. Read it and see.
+  if (!n.goto) { const g = gitDestination(n); if (g) n = { ...n, goto: g }; }
+  /*
+   * The same words from the same app again are one row with a count.
+   *
+   * "Screenshot saved to clipboard and file" four times is four rows of one
+   * sentence; the count says everything the three older ones did.
+   */
+  const src = n.source;
+  const twin = history.find((h) => h.source === src && h.summary === n.summary && h.body === n.body);
+  if (twin) n = { ...n, count: (twin.count ?? 1) + 1 };
+  const rest = supersede(history, n).filter((h) => h !== twin);
+  history = [n, ...rest].slice(0, HISTORY_MAX);
+  if (said.badge) unread++;
+  historyChanged();
+  // …and the one that has to be asked rather than read. Fires after the row
+  // is already on screen, because a card that resolves in 20ms is not worth
+  // holding the notification for, and one that never resolves must not hold
+  // it forever.
+  if (!n.goto) void attachCard(n);
+  // Collected either way; only the interruption is optional. Quiet means the
+  // notch does not open for someone else's message, not that agentglass
+  // stopped listening -- the list behind the notch is still complete.
+  if (said.interrupt) { ding(); for (const fn of noteListeners) fn(n); }
+}
+
 function attach() {
   const sock = new WebSocket(withToken(SERVER.replace(/^http/, "ws") + "/notifications"));
   ws = sock;
   sock.onmessage = (ev) => {
     let n: SystemNote;
     try { n = JSON.parse(String(ev.data)) as SystemNote; } catch { return; }
-    // Applied here rather than on the server so the choice is the viewer's and
-    // takes effect the instant it is changed, without a reconnect.
-    if (sysNotifyMode() === "titles") n = { ...n, body: "" };
-    /*
-     * Our own alerts arrive here too, mirrored off D-Bus, and must not be kept.
-     *
-     * `fireDesktopAlert` already recorded them a moment ago WITH the pane they
-     * are about. The mirrored copy has the same words and none of the facts, so
-     * keeping it would put two identical rows behind the notch of which only
-     * one goes anywhere — and the useless one arrives second, so it wins.
-     */
-    if (n.app && n.app.toLowerCase().startsWith(OUR_APP)) return;
-    // A mirrored note cannot say where it points. Read it and see.
-    if (!n.goto) { const g = gitDestination(n); if (g) n = { ...n, goto: g }; }
-    history = [n, ...supersede(history, n)].slice(0, HISTORY_MAX);
-    unread++;
-    historyChanged();
-    // …and the one that has to be asked rather than read. Fires after the row
-    // is already on screen, because a card that resolves in 20ms is not worth
-    // holding the notification for, and one that never resolves must not hold
-    // it forever.
-    if (!n.goto) void attachCard(n);
-    // Collected either way; only the interruption is optional. Quiet means the
-    // notch does not morph open for someone else's message, not that agentglass
-    // stopped listening -- the list behind the notch is still complete.
-    if (!notifyQuiet()) { ding(); for (const fn of noteListeners) fn(n); }
+    receiveMirrored(n);
   };
   sock.onopen = () => { retry = 0; };
   sock.onclose = () => {

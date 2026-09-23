@@ -82,7 +82,7 @@ describe("resolving a mirrored ClickUp notification", () => {
     // Asked for every mirrored note, this would be an HTTP call per Slack
     // message — and could overwrite a destination the note already carried.
     const s = await src;
-    const at = s.indexOf("historyChanged();\n    // …and the one that has to be asked");
+    const at = s.indexOf("historyChanged();\n  // …and the one that has to be asked");
     expect(at).toBeGreaterThan(0);
     expect(s.slice(at, at + 400)).toContain("if (!n.goto) void attachCard(n)");
   });
