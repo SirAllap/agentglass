@@ -80,6 +80,16 @@ soak: ## Run the server hard for a few minutes and fail if its memory keeps clim
 loadtest: ## Hammer the server (many clients × every panel) against a copy of the REAL DB and fail if the PTY stutters (AGX_LOAD_CLIENTS=10 for heavier)
 	trap 'kill 0' INT TERM; bun scripts/loadtest.ts
 
+# The browser benchmark needs the whole desktop app, so it boots an isolated
+# instance of it first (scripts/agx-bench/instance.sh: its own port, data and
+# tmux, the window parked on an off-screen output under Hyprland) and stops it
+# again however the run ends. AGX_BENCH_DIR moves the instance, AGX_BENCH_ARGS
+# goes to the runner — `--reps 5`, `--arm baseline,phase1`, `--task nav-spa`.
+agx-bench: build ## Scripted agent tasks through the browser CLI on an isolated app — success, steps, bytes, latency per arm
+	@scripts/agx-bench/instance.sh start || exit 1; \
+	trap 'scripts/agx-bench/instance.sh stop' EXIT; \
+	bun scripts/agx-bench/run.ts --instance "$${AGX_BENCH_DIR:-/tmp/agx-bench}" $(AGX_BENCH_ARGS)
+
 # ONE command for the question `bun test` cannot answer.
 #
 # Two type errors reached this branch in a day and were found hours later, by
@@ -233,5 +243,5 @@ desktop-open: ## Open the desktop app scoped to a project — make desktop-open 
 	@test -n "$(DIR)" || { echo "usage: make desktop-open DIR=/path/to/repo" >&2; exit 1; }
 	AGENTGLASS_PROJECT="$(DIR)" ~/.local/share/agentglass-desktop/agentglass
 
-.PHONY: help install dev server web build test ci mobile-test smoke perf soak loadtest lint typecheck headcheck start setup setup-undo connect connect-undo connect-opencode connect-opencode-undo demo-feed assets \
+.PHONY: help install dev server web build test ci mobile-test smoke perf soak loadtest agx-bench lint typecheck headcheck start setup setup-undo connect connect-undo connect-opencode connect-opencode-undo demo-feed assets \
         desktop desktop-dev desktop-dist desktop-dist-linux desktop-install desktop-update desktop-open
