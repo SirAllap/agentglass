@@ -9,6 +9,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { runBrowserAsk, type DrivableWebview } from "../src/lib/browserDrive.ts";
+import { parseLocator } from "../src/lib/browserLocator.ts";
 
 type Style = { display?: string; visibility?: string };
 
@@ -19,7 +20,7 @@ class N {
   parentElement: N | null = null;
   text = "";
   style: Style = {};
-  size = { width: 100, height: 20 };
+  box = { width: 100, height: 20 };
   events: string[] = [];
   value = "";
   type = "";
@@ -49,7 +50,12 @@ class N {
   }
   get id() { return this.attrs.id ?? ""; }
   get textContent(): string { return this.text + this.children.map((c) => c.textContent).join(""); }
-  get innerText(): string { return this.shown() ? this.text + this.children.map((c) => c.innerText).join("") : ""; }
+  /* Chromium's rule: a node that is not rendered answers with its
+     textContent; one that is leaves out its children that are not. */
+  get innerText(): string {
+    if (!this.shown()) return this.textContent;
+    return this.text + this.children.map((c) => (c.shown() ? c.innerText : "")).join("");
+  }
   get className() { return this.attrs.class ?? ""; }
   get form() { return null; }
   get autocomplete() { return this.attrs.autocomplete ?? ""; }
@@ -64,7 +70,7 @@ class N {
     return false;
   }
   getBoundingClientRect() {
-    const w = this.shown() ? this.size.width : 0, h = this.shown() ? this.size.height : 0;
+    const w = this.shown() ? this.box.width : 0, h = this.shown() ? this.box.height : 0;
     return { x: 10, y: 10, left: 10, top: 10, width: w, height: h, right: 10 + w, bottom: 10 + h };
   }
   getClientRects() { return this.shown() ? [this.getBoundingClientRect()] : []; }
@@ -305,4 +311,275 @@ describe("every verb that takes an element finds it the way click does", () => {
     expect(r.ok).toBe(false);
     expect(r.error).toBe("nothing on the page matches #nowhere");
   });
+});
+
+describe("parseLocator: what a locator string means", () => {
+  const cases: Array<[string, unknown]> = [
+    ["e17", { css: '[data-agx-e="e17"]' }],
+    ["#save", { css: "#save" }],
+    ["button.primary", { css: "button.primary" }],
+    // Only the lower-case prefixes, as Playwright spells them.
+    ["ROLE=button", { css: "ROLE=button" }],
+    ['role=button[name="Save"]', { by: "role", role: "button", name: "Save", exact: false }],
+    ['role=button[name="Save" s]', { by: "role", role: "button", name: "Save", exact: true }],
+    ['role=button[name="Save" i]', { by: "role", role: "button", name: "Save", exact: false }],
+    ["role=button[name='It\\'s done']", { by: "role", role: "button", name: "It's done", exact: false }],
+    ["role=button[name=Save draft]", { by: "role", role: "button", name: "Save draft", exact: false }],
+    ["role=Dialog", { by: "role", role: "dialog", exact: false }],
+    ["text=Continue", { by: "text", value: "Continue", exact: false }],
+    ['text="Continue"', { by: "text", value: "Continue", exact: true }],
+    ["label=Email", { by: "label", value: "Email", exact: false }],
+    ["label=a=b", { by: "label", value: "a=b", exact: false }],
+    ["placeholder=Search", { by: "placeholder", value: "Search", exact: false }],
+    // A test id is a hook put there on purpose: always exact.
+    ["testid=submit", { by: "testid", value: "submit", exact: true }],
+  ];
+  for (const [raw, want] of cases) {
+    test(raw, () => expect(parseLocator(raw)).toEqual(want as never));
+  }
+
+  const refused: Array<[string, string]> = [
+    ["role=", "needs a role"],
+    ["role=button[level=2]", "nothing else"],
+    ['role=button[name="Save"', "expects ]"],
+    ['role=button[name="Save"] extra', "expects ]"],
+    ["role=button[name=]", "empty name"],
+    ["text=", "needs something to look for"],
+    ['text="unclosed', "never closed"],
+    ['text="Save" now', "after its closing quote"],
+  ];
+  for (const [raw, why] of refused) {
+    test(`${raw} is refused, and says why`, () => {
+      const r = parseLocator(raw) as { invalid?: string };
+      expect(r.invalid).toBeDefined();
+      expect(r.invalid!).toContain(why);
+    });
+  }
+});
+
+/** A page with the things locators are for: buttons that share a word, a
+ *  labelled form, a hidden twin, a link, a heading, an ARIA widget. */
+function app() {
+  const emailLabel = h("label", { for: "email" }, "Email address");
+  const email = h("input", { id: "email", type: "email" });
+  email.labels = [emailLabel];
+  const planLabel = h("label", { for: "plan" }, "Plan");
+  const plan = h("select", { id: "plan" });
+  plan.labels = [planLabel];
+  plan.options = [{ value: "", text: "Choose…" }, { value: "team", text: "Team" }];
+  const termsLabel = h("label", { for: "terms" }, "I accept the terms");
+  const terms = h("input", { id: "terms", type: "checkbox" });
+  terms.labels = [termsLabel];
+  const hiddenDelete = h("button", {}, "Delete");
+  hiddenDelete.style.display = "none";
+  const body = h("body", {},
+    h("h1", {}, "Orbit settings"),
+    h("nav", {}, h("a", { href: "/docs" }, "Docs"), h("a", {}, "Not a link")),
+    h("span", { id: "cardno" }, "Card number"),
+    h("input", { id: "card", "aria-labelledby": "cardno" }),
+    h("input", { id: "q", type: "search", placeholder: "Search projects" }),
+    emailLabel, email, planLabel, plan, terms, termsLabel,
+    h("button", { "data-testid": "save" }, "Save"),
+    h("button", {}, "Save draft"),
+    h("button", {}, h("span", {}, "Continue")),
+    h("input", { type: "submit", value: "Send invite" }),
+    h("div", { role: "button", "aria-label": "Close panel" }),
+    hiddenDelete,
+    h("p", {}, "Saved 2 minutes ago"),
+  );
+  return { body, email, plan, terms, hiddenDelete, ...page(body) };
+}
+
+const byText = (body: N, text: string) => body.all().find((n) => n.text === text)!;
+
+describe("a locator finds what a person would point at", () => {
+  test("role + name: the button called Save, not Save draft next to it", async () => {
+    const { guest, body } = app();
+    const r = await runBrowserAsk(guest, ask("click", { selector: 'role=button[name="Save"]' }));
+    expect(r.error).toBeUndefined();
+    expect(byText(body, "Save").events).toContain("click");
+    expect(byText(body, "Save draft").events).not.toContain("click");
+  });
+
+  test("a name is a case-insensitive substring, so part of one is fine when it is only one", async () => {
+    const { guest, body } = app();
+    const r = await runBrowserAsk(guest, ask("click", { selector: 'role=button[name="draft"]' }));
+    expect(r.error).toBeUndefined();
+    expect(byText(body, "Save draft").events).toContain("click");
+  });
+
+  test("and two that fit with neither being the whole name are refused, with ids to use instead", async () => {
+    const { guest } = app();
+    const r = await runBrowserAsk(guest, ask("click", { selector: 'role=button[name="Sav"]' }));
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("matched 2 elements");
+    expect(r.error).toMatch(/e[0-9]+ button[^,]*"Save"/);
+    expect(r.error).toMatch(/e[0-9]+ button[^,]*"Save draft"/);
+    expect(r.error).toContain("use one of the ids");
+  });
+
+  test("the s flag is exact and case-sensitive", async () => {
+    const { guest } = app();
+    const r = await runBrowserAsk(guest, ask("focus", { selector: 'role=button[name="save" s]' }));
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("nothing on the page matches");
+  });
+
+  test("ARIA's role names and the ones observe prints both work", async () => {
+    const { guest } = app();
+    for (const selector of ['role=link[name="Docs"]', 'role=a[name="Not a link"]', 'role=heading[name="Orbit settings"]',
+      'role=textbox[name="Email"]', 'role=combobox[name="Plan"]', 'role=checkbox[name="terms"]',
+      'role=searchbox', 'role=button[name="Close panel"]']) {
+      const r = await runBrowserAsk(guest, ask("focus", { selector }));
+      expect(r.error, selector).toBeUndefined();
+    }
+    // An <a> with no href is not a link, which is ARIA's rule too.
+    const r = await runBrowserAsk(guest, ask("focus", { selector: 'role=link[name="Not a link"]' }));
+    expect(r.ok).toBe(false);
+  });
+
+  test("label= types into the field its <label> names, and select takes one too", async () => {
+    const { guest, email, plan } = app();
+    const t = await runBrowserAsk(guest, ask("type", { selector: "label=Email", text: "ada@orbit.example" }));
+    expect(t.error).toBeUndefined();
+    expect(email.events).toContain("input");
+    const s = await runBrowserAsk(guest, ask("select", { selector: "label=Plan", value: "team" }));
+    expect(s.error).toBeUndefined();
+    expect(plan.value).toBe("team");
+  });
+
+  test("label= reads aria-labelledby", async () => {
+    const { guest, body } = app();
+    const r = await runBrowserAsk(guest, ask("focus", { selector: "label=Card number" }));
+    expect(r.error).toBeUndefined();
+    expect(body.querySelector("#card")!.events).toContain("focus");
+  });
+
+  test("check by label", async () => {
+    const { guest, terms } = app();
+    const r = await runBrowserAsk(guest, ask("check", { selector: 'label="I accept the terms"' }));
+    expect(r.error).toBeUndefined();
+    expect(terms.events).toContain("change");
+  });
+
+  test("placeholder= and testid=", async () => {
+    const { guest, body } = app();
+    expect((await runBrowserAsk(guest, ask("focus", { selector: "placeholder=search" }))).error).toBeUndefined();
+    expect(body.querySelector("#q")!.events).toContain("focus");
+    expect((await runBrowserAsk(guest, ask("focus", { selector: "testid=save" }))).error).toBeUndefined();
+    // Exact: part of a test id is not the test id.
+    expect((await runBrowserAsk(guest, ask("focus", { selector: "testid=sav" }))).ok).toBe(false);
+  });
+
+  test("text= lands on the innermost element with that text", async () => {
+    const { guest, body } = app();
+    const r = await runBrowserAsk(guest, ask("click", { selector: "text=Continue" }));
+    expect(r.error).toBeUndefined();
+    const span = byText(body, "Continue");
+    expect(span.tagName).toBe("SPAN");
+    expect(span.events).toContain("click");
+  });
+
+  test("text= reads a submit button's value, and a quoted text is the whole text", async () => {
+    const { guest } = app();
+    expect((await runBrowserAsk(guest, ask("focus", { selector: "text=send invite" }))).error).toBeUndefined();
+    // "Save" alone is on the page twice as a substring (Save, Save draft,
+    // Saved 2 minutes ago) but once as a whole text.
+    expect((await runBrowserAsk(guest, ask("focus", { selector: 'text="Save"' }))).error).toBeUndefined();
+    const sub = await runBrowserAsk(guest, ask("focus", { selector: "text=ave" }));
+    expect(sub.ok).toBe(false);
+    expect(sub.error).toContain("matched 3 elements");
+  });
+
+  test("a match that is hidden is named, not silently dropped", async () => {
+    const { guest } = app();
+    const r = await runBrowserAsk(guest, ask("click", { selector: 'role=button[name="Delete"]' }));
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("on screen — 1 hidden");
+    expect(r.error).toMatch(/e[0-9]+ button[^,]*"Delete"/);
+  });
+
+  test("nothing matching says what of that kind IS there", async () => {
+    const { guest } = app();
+    const r = await runBrowserAsk(guest, ask("click", { selector: 'role=button[name="Publish"]' }));
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("role=button on this page:");
+    expect(r.error).toContain('"Save draft"');
+    const l = await runBrowserAsk(guest, ask("focus", { selector: "label=Phone" }));
+    expect(l.error).toContain("labels on this page:");
+    expect(l.error).toContain('"Email address"');
+  });
+
+  test("a locator that does not parse is refused with the parser's reason", async () => {
+    const { guest } = app();
+    const r = await runBrowserAsk(guest, ask("click", { selector: "role=button[level=1]" }));
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('invalid selector "role=button[level=1]"');
+    expect(r.error).toContain("nothing else");
+  });
+
+  test("a read verb refuses an ambiguous locator, though it takes the first of an ambiguous CSS selector", async () => {
+    const { guest } = app();
+    const loc = await runBrowserAsk(guest, ask("text", { selector: "role=button" }));
+    expect(loc.ok).toBe(false);
+    expect(loc.error).toContain("matched");
+    const css = await runBrowserAsk(guest, ask("text", { selector: "button" }));
+    expect(css.ok).toBe(true);
+  });
+
+  test("wait counts several as appeared", async () => {
+    const { guest } = app();
+    const r = await runBrowserAsk(guest, ask("wait", { selector: "role=button" }));
+    expect(r.ok).toBe(true);
+  });
+
+  test("fill takes locators, drag takes them at both ends", async () => {
+    const { guest, email } = app();
+    const f = await runBrowserAsk(guest, ask("fill", { fields: { "label=Email": "ada@orbit.example", "placeholder=Search": "orbit" } }));
+    expect(f.error).toBeUndefined();
+    expect((f.value as { filled: string[] }).filled).toEqual(["label=Email", "placeholder=Search"]);
+    expect(email.events).toContain("input");
+    const d = await runBrowserAsk(guest, ask("drag", { selector: "text=Continue", to: 'role=button[name="Nowhere"]' }));
+    expect(d.ok).toBe(false);
+    expect(d.error).toContain('the target of the drag: nothing on the page matches role=button[name="Nowhere"]');
+  });
+
+  test("upload finds its input by label through the protocol", async () => {
+    const fileLabel = h("label", {}, "Attachment");
+    const input = h("input", { type: "file" });
+    input.labels = [fileLabel];
+    const { guest } = page(h("body", {}, fileLabel, input));
+    const { cdp, calls } = cdpOver((code) => guest.executeJavaScript(code));
+    const r = await runBrowserAsk(guest, ask("upload", { selector: "label=Attachment", paths: ["/tmp/a.txt"] }),
+      undefined, undefined, undefined, cdp);
+    expect(calls[0]).toBe("Runtime.evaluate");
+    expect(calls).toContain("DOM.requestNode");
+    expect(r.error ?? "").not.toContain("matches");
+  });
+});
+
+describe("a hostile locator stays data", () => {
+  const PAYLOADS = [
+    'text=x"); globalThis.__canary.hit = 1; ("',
+    'role=button[name="a\\"]"); globalThis.__canary.hit = 1; //"]',
+    "label=</script><img src=x onerror=\"globalThis.__canary.hit = 1\">",
+    "placeholder=a\u2028globalThis.__canary.hit = 1;//",
+    "testid=a`${globalThis.__canary.hit = 1}`",
+  ];
+  for (const payload of PAYLOADS) {
+    test(JSON.stringify(payload), async () => {
+      const g = globalThis as unknown as { __canary: { hit: number } };
+      g.__canary = { hit: 0 };
+      const { guest } = app();
+      // Not wait: a locator that parses and matches nothing polls for 30 s.
+      for (const op of ["click", "type", "text", "scroll", "select"]) {
+        await runBrowserAsk(guest, ask(op, { selector: payload, text: "x", value: "x" }));
+      }
+      expect(g.__canary.hit).toBe(0);
+      for (const code of guest.ran) {
+        expect(code).not.toContain("<");
+        expect(code).not.toContain("\u2028");
+      }
+    });
+  }
 });

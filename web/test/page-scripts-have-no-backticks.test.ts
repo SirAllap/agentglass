@@ -28,7 +28,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
-const FILES = ["browserObserve.ts", "browserDrive.ts"];
+const FILES = ["browserObserve.ts", "browserDrive.ts", "browserLocator.ts"];
 
 describe("the scripts that get built as strings", () => {
   for (const name of FILES) {
@@ -65,7 +65,7 @@ describe("escapes that survive the template literal", () => {
      quietly (matching the wrong thing); these two fail loudly, and much later. */
   const RISKY = ["\\s", "\\d", "\\w", "\\b", "\\S", "\\D", "\\W", "\\n", "\\t"];
 
-  for (const name of ["browserObserve.ts", "browserDrive.ts"]) {
+  for (const name of ["browserObserve.ts", "browserDrive.ts", "browserLocator.ts"]) {
     test(`${name} doubles its regex escapes inside page scripts`, () => {
       const src = readFileSync(new URL(`../src/lib/${name}`, import.meta.url), "utf8");
       const bad: string[] = [];

@@ -1,6 +1,7 @@
 import type { BrowserAskFrame } from "../../../shared/types.ts";
 import { ACC_NAME, COLLECTOR, PICK, STAMP, observeScript } from "./browserObserve.ts";
 import { jsLit } from "../../../shared/jsLit.ts";
+import { FIND, locatorLit } from "./browserLocator.ts";
 
 /**
  * The window's half of "let an agent drive the browser".
@@ -573,39 +574,49 @@ function resolveOne(selLit: string, body: string, lenient = false): string {
  * anything matches at all: several matches there mean the first, as they
  * always have. A verb that acts refuses several.
  */
-const ONE = `((__raw, __lenient) => {
-    let __all;
+const ONE = `((__spec, __lenient) => {
     /*
-       An id from an observation is accepted wherever a selector is, because
-       section 17 lists inventing CSS selectors as an anti-feature and handing
-       back e17 only to refuse it on the next call would be the anti-feature
-       with extra steps. It is a data attribute on the node, so it needs no
-       special path — just the selector it stands for.
+       What the selector names is decided by FIND (browserLocator.ts): an id
+       from an observation, a CSS selector, or a locator like
+       role=button[name="Save"]. An id is accepted wherever a selector is,
+       because section 17 lists inventing CSS selectors as an anti-feature and
+       handing back e17 only to refuse it on the next call would be the
+       anti-feature with extra steps.
     */
-    const __sel = /^e[0-9]+$/.test(__raw) ? '[data-agx-e="' + __raw + '"]' : __raw;
-    try { __all = document.querySelectorAll(__sel); }
-    catch (__e) { return { kind: "invalid", message: String((__e && __e.message) || __e) }; }
-    if (__all.length === 0) return { kind: "none" };
-    if (__all.length > 1 && !__lenient) {
-      /* Something that TELLS THEM APART. It described a node by tag, id and
-         testid, which on a page whose elements have none of the last two says
-         "p, p" — true, and no help at all to somebody being asked to narrow
-         the selector. Found by running it against a real page. Position always
-         distinguishes, so it always appears; the trimmed text is what a person
-         actually recognises. */
-      const __describe = (__n, __i) => {
-        const __same = __n.parentElement
-          ? [...__n.parentElement.children].filter((__c) => __c.tagName === __n.tagName)
-          : [__n];
-        const __nth = __same.indexOf(__n) + 1;
-        const __text = (__n.innerText || __n.value || "").trim().replace(/\\s+/g, " ").slice(0, 40);
-        return __n.tagName.toLowerCase()
-          + (__n.id ? "#" + __n.id : "")
-          + (__n.getAttribute && __n.getAttribute("data-testid") ? "[data-testid=" + __n.getAttribute("data-testid") + "]" : "")
-          + (__same.length > 1 ? ":nth-of-type(" + __nth + ")" : "")
-          + (__text ? ' "' + __text + '"' : "");
-      };
-      return { kind: "many", count: __all.length, samples: [...__all].slice(0, 5).map(__describe) };
+    const __r = ${FIND}(__spec);
+    if (__r.kind === "invalid") return __r;
+    const __all = __r.all;
+    const __stamp = ${STAMP};
+    /* Something that TELLS THEM APART. It described a node by tag, id and
+       testid, which on a page whose elements have none of the last two says
+       "p, p" — true, and no help at all to somebody being asked to narrow
+       the selector. Found by running it against a real page. Position always
+       distinguishes, so it always appears; the trimmed text is what a person
+       actually recognises; and the id in front is one the caller can act on
+       straight away instead of narrowing anything. */
+    const __describe = (__n) => {
+      const __same = __n.parentElement
+        ? [...__n.parentElement.children].filter((__c) => __c.tagName === __n.tagName)
+        : [__n];
+      const __nth = __same.indexOf(__n) + 1;
+      const __text = (__n.innerText || __n.textContent || __n.value || "").trim().replace(/\\s+/g, " ").slice(0, 40);
+      return __stamp(__n) + " " + __n.tagName.toLowerCase()
+        + (__n.id ? "#" + __n.id : "")
+        + (__n.getAttribute && __n.getAttribute("data-testid") ? "[data-testid=" + __n.getAttribute("data-testid") + "]" : "")
+        + (__same.length > 1 ? ":nth-of-type(" + __nth + ")" : "")
+        + (__text ? ' "' + __text + '"' : "");
+    };
+    if (__all.length === 0) {
+      return { kind: "none", by: __spec.by,
+        hidden: __r.hidden.slice(0, 5).map(__describe), hiddenCount: __r.hidden.length,
+        near: __r.near.map((__x) => __stamp(__x.n) + ' "' + __x.t + '"') };
+    }
+    /* Several matches are the first one only for a CSS selector on a verb
+       that reads: a locator names ONE thing by what it is, and "the first
+       Save button" is never what somebody who wrote role=button[name=Save]
+       meant. */
+    if (__all.length > 1 && !(__lenient && __spec.css !== undefined)) {
+      return { kind: "many", count: __all.length, samples: __all.slice(0, 5).map(__describe) };
     }
     return { kind: "ok", e: __all[0] };
   })`;
@@ -638,12 +649,24 @@ async function nodeFor(
 }
 
 /** The sentence for whichever way `resolveOne` failed. */
-function selectorError(sel: string, r: { kind?: string; message?: string; count?: number; samples?: string[] } | null | undefined): string {
+function selectorError(sel: string, r: {
+  kind?: string; message?: string; count?: number; samples?: string[];
+  hidden?: string[]; hiddenCount?: number; near?: string[]; by?: string;
+} | null | undefined): string {
   if (r?.kind === "invalid") return `invalid selector "${sel}": ${r.message}`;
   if (r?.kind === "many") {
-    return `selector matched ${r.count} elements${r.samples?.length ? " — " + r.samples.join(", ") : ""}: narrow ${sel} to one`;
+    return `selector matched ${r.count} elements${r.samples?.length ? " — " + r.samples.join(", ") : ""}: narrow ${sel} to one, or use one of the ids`;
   }
-  return `nothing on the page matches ${sel}`;
+  /* Not only "no": what IS there, so the next call can be the right one
+     rather than an observe to find out. A hidden match is the commonest
+     reason a locator a person wrote finds nothing. */
+  let why = `nothing on the page matches ${sel}`;
+  if (r?.hiddenCount) why += ` on screen — ${r.hiddenCount} hidden: ${(r.hidden ?? []).join(", ")}`;
+  else if (r?.near?.length) {
+    const what = r.by === "role" ? sel.replace(/\[.*$/s, "") : r.by === "testid" ? "test ids" : `${r.by}s`;
+    why += ` — ${what} on this page: ${r.near.join(", ")}`;
+  }
+  return why;
 }
 
 /**
@@ -1250,7 +1273,7 @@ async function runVerb(
     Promise<{ ok: boolean; png?: string; panel?: string; level?: number; via?: string; error?: string }> =
     async () => ({ ok: false, error: "this shell has no inspector" }),
 ): Promise<{ ok: boolean; value?: unknown; error?: string }> {
-  const sel = jsLit(String(ask.args.selector ?? ""));
+  const sel = locatorLit(String(ask.args.selector ?? ""));
   try {
     switch (ask.op) {
       case "open": {
@@ -1397,14 +1420,14 @@ async function runVerb(
         // field — and a failure says WHICH field, since "some of the form
         // filled" is not an answer an agent can act on.
         const fields = (ask.args.fields ?? {}) as Record<string, string>;
-        const pairs = Object.entries(fields).map(([s, v]) => `[${jsLit(s)}, ${jsLit(v)}]`).join(", ");
+        const pairs = Object.entries(fields).map(([s, v]) => `[${jsLit(s)}, ${locatorLit(s)}, ${jsLit(v)}]`).join(", ");
         const result = await el.executeJavaScript(
           `(() => {
              const pairs = [${pairs}];
              const filled = [];
              const one = ${ONE};
-             for (const [fsel, text] of pairs) {
-               const got = one(fsel, false);
+             for (const [fsel, spec, text] of pairs) {
+               const got = one(spec, false);
                if (got.kind !== "ok") return { ...got, selector: fsel };
                const fe = got.e;
                fe.focus();
@@ -1478,7 +1501,7 @@ async function runVerb(
              const one = ${ONE};
              const tick = () => {
                const got = one(${sel}, true);
-               if (got.kind === "ok") return resolve(true);
+               if (got.kind === "ok" || got.kind === "many") return resolve(true);
                if (got.kind === "invalid") return resolve(got);
                if (Date.now() > deadline) return resolve(false);
                setTimeout(tick, 120);
@@ -2102,7 +2125,7 @@ async function runVerb(
          * survives the whole gesture — a fresh one per event is the mistake
          * that makes a drop silently do nothing.
          */
-        const to = jsLit(String((ask.args as Record<string, unknown>).to ?? ""));
+        const to = locatorLit(String((ask.args as Record<string, unknown>).to ?? ""));
         const r = await el.executeJavaScript(`(async () => {
           const one = ${ONE};
           const ga = one(${sel}, false), gb = one(${to}, false);
@@ -2776,7 +2799,7 @@ async function runVerb(
            had just called e3 answered "nothing matched". */
         const value = jsLit(String(ask.args.value ?? ""));
         const done = await el.executeJavaScript(resolveOne(sel,
-          `if (e.tagName !== "SELECT") return { kind: "refused", why: "not a <select>" };
+          `if (e.tagName !== "SELECT") return { kind: "refused", why: "not a select" };
              const opts = [...e.options];
              const hit = opts.find((o) => o.value === ${value}) || opts.find((o) => (o.text || "").trim() === ${value});
              if (!hit) return { kind: "refused", why: "no such option", options: opts.map((o) => o.value).slice(0, 40) };
@@ -2787,7 +2810,11 @@ async function runVerb(
         )) as { kind: string; value?: string; text?: string; why?: string; options?: string[] };
         if (done?.kind === "ok") return { ok: true, value: { ok: true, value: done.value, text: done.text } };
         if (done?.kind === "refused") {
-          return { ok: false, error: `${done.why}${done.options ? ` — options: ${done.options.join(", ")}` : ""}` };
+          /* "not a select" travels as plain words and becomes "<select>"
+             here, so the page script carries no less-than sign (see the
+             hostile-selector suite). */
+          const why = done.why === "not a select" ? "not a <select>" : done.why;
+          return { ok: false, error: `${why}${done.options ? ` — options: ${done.options.join(", ")}` : ""}` };
         }
         return { ok: false, error: selectorError(String(ask.args.selector ?? ""), done as never) };
       }
@@ -3246,7 +3273,7 @@ async function runVerb(
         const highlightSel = typeof ask.args.highlight === "string" ? ask.args.highlight : null;
         if (highlightSel) {
           const label = typeof ask.args.label === "string" ? ask.args.label : undefined;
-          const hi = await el.executeJavaScript(highlightScript(jsLit(highlightSel), label)) as
+          const hi = await el.executeJavaScript(highlightScript(locatorLit(highlightSel), label)) as
             { kind: string; count?: number; samples?: string[]; message?: string };
           if (hi.kind !== "ok") return { ok: false, error: selectorError(highlightSel, hi) };
         }
