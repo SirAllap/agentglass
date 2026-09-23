@@ -20,8 +20,9 @@ type Scenario = {
   url?: () => string;
   /** The page is mid-load before anything happens. */
   loading?: boolean;
-  /** How the page answers `history.back()`: it runs (default) or cannot. */
-  pageHistory?: "runs" | "throws";
+  /** How the page answers `history.back()`: it runs (default), cannot, or
+   *  never answers (paused at a breakpoint). */
+  pageHistory?: "runs" | "throws" | "hangs";
 };
 
 function guest(sc: Scenario = {}) {
@@ -58,6 +59,7 @@ function guest(sc: Scenario = {}) {
       if (code.includes("newErrors:")) return sc.effect ?? { newErrors: [], failedRequests: [] };
       if (code.includes("history.back()") || code.includes("history.forward()")) {
         if (sc.pageHistory === "throws") throw new Error("Script failed to execute");
+        if (sc.pageHistory === "hangs") return await new Promise(() => {});
         setTimeout(() => sc.onAct?.(emit), 5);
         return true;
       }
@@ -262,6 +264,19 @@ describe("back and forward go through the page's own history", () => {
     expect(r.ok).toBe(false);
     expect(r.error).toContain("went nowhere");
     expect(el.ran).not.toContain("goBack");
+  }, 8_000);
+
+  test("a page that never answers is 'cannot tell' within seconds — no browser back on top", async () => {
+    /* Paused at a breakpoint, the script waited for the relay's 45 s, and
+       the queued history.back() ran on resume: a retry went back twice. */
+    const el = guest({ pageHistory: "hangs" });
+    const t = Date.now();
+    const r = await back(el);
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("did not answer");
+    expect(el.ran).not.toContain("goBack");
+    expect(Date.now() - t).toBeLessThan(3_000);
+    expect(el.listening()).toBe(0);
   }, 8_000);
 
   test("a page that cannot run it falls back to the browser's back", async () => {

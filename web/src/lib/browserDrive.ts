@@ -1823,7 +1823,13 @@ async function runVerb(
         let ran: unknown = false;
         try {
           if (!el.isLoading?.()) {
-            ran = await el.executeJavaScript(`(() => { history.${ask.op}(); return true; })()`).catch(() => false);
+            /* Bounded: a page paused at a breakpoint holds the script until
+               it resumes, and then runs it — so a timeout is "cannot tell",
+               never licence to send the browser's back as well. */
+            ran = await within(el.executeJavaScript(`(() => { history.${ask.op}(); return true; })()`).catch(() => false), 1_000);
+            if (ran === null) {
+              return { ok: false, error: `the page did not answer history.${ask.op}() within 1 s (paused in the debugger?) — it may still run when the page resumes; observe before trying again` };
+            }
           }
           if (ran === true) {
             const t = Date.now();
