@@ -3,6 +3,9 @@
  * source: starting it for real needs a desktop, which the suite does not have.
  */
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const SH = await Bun.file(new URL("../../scripts/agx-bench/instance.sh", import.meta.url)).text();
 /* Comment lines out, so a sentence ABOUT a command is not the command. */
@@ -36,5 +39,41 @@ describe("the window never lands on a screen", () => {
     expect(CODE).toContain("no_initial_focus = true");
     expect(CODE).toContain("activeWorkspace']['id']==$WS");
     expect(CODE).toContain(`if [ "\${AT:-}" != "$WS" ]; then`);
+  });
+});
+
+describe("a relative DIR is the same instance as its absolute path", () => {
+  /* The instance recognises its own processes by a file they hold open under
+     DIR, and /proc prints those links absolute. Given `bench`, nothing ever
+     matched: status said stopped, and stop left Electron and the sidecar
+     running on the port. The script is run for real here, with a `sleep`
+     holding a file under DIR standing in for Electron. */
+  const script = new URL("../../scripts/agx-bench/instance.sh", import.meta.url).pathname;
+
+  test("status finds the process through a relative DIR", async () => {
+    const base = mkdtempSync(join(tmpdir(), "agx-inst-"));
+    const dir = join(base, "bench");
+    mkdirSync(dir);
+    const holder = Bun.spawn(["bash", "-c", `exec 3>>"${dir}/hold"; exec sleep 30`]);
+    try {
+      writeFileSync(join(dir, "electron.pid"), String(holder.pid));
+      writeFileSync(join(dir, "port"), "4999");
+      await Bun.sleep(100);
+      const p = Bun.spawnSync(["bash", script, "status", "bench"], { cwd: base, env: { PATH: process.env.PATH ?? "/usr/bin:/bin" } });
+      expect(p.stdout.toString()).toContain(`running: pid ${holder.pid}`);
+      expect(p.stdout.toString()).toContain(`dir ${dir}`);
+    } finally {
+      holder.kill();
+      await holder.exited;
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test("a DIR that cannot be pasted into the compositor's command is refused", () => {
+    for (const bad of ["/tmp/agx bench", '/tmp/agx"bench', "/tmp/agx\\bench"]) {
+      const p = Bun.spawnSync(["bash", script, "status", bad], { env: { PATH: process.env.PATH ?? "/usr/bin:/bin" } });
+      expect(p.exitCode, bad).toBe(2);
+      expect(p.stderr.toString(), bad).toContain("DIR");
+    }
   });
 });

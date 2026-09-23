@@ -36,6 +36,13 @@ set -euo pipefail
 CMD=${1:-status}
 DIR=${2:-${AGX_BENCH_DIR:-/tmp/agx-bench}}
 PORT=${3:-${AGX_BENCH_PORT:-4831}}
+# Absolute from here on. Processes are recognised by a file they hold open
+# under DIR, and /proc prints those links absolute: a relative DIR matched
+# nothing, so `stop` left Electron and the sidecar running on the port. DIR is
+# also pasted into the compositor's command line inside a quoted string, so a
+# character that would end or escape that string is refused.
+case "$DIR" in *[[:space:]\"\\]*) echo "DIR must not contain whitespace, quotes or backslashes: '$DIR'" >&2; exit 2;; esac
+DIR=$(realpath -m -- "$DIR")
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
 WS=${AGX_BENCH_WORKSPACE:-5}
