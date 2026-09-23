@@ -88,6 +88,10 @@ start)
       "$DIR/cfg" "$DIR/data" "$DIR/cache" "$DIR/xdg-state"
     printf 'export AGENTGLASS_STATE_DIR=%q AGENTGLASS_DB=%q TMUX_TMPDIR=%q AGENTGLASS_PORT=%q\n' \
       "$DIR/state" "$DIR/agentglass.db" "$DIR/tmux" "$PORT"
+    # No transcript scan: it imports every agent session under the real HOME
+    # into this instance's database (431 MB in half an hour, measured, and the
+    # /tmp quota full), and the bench reads none of it.
+    printf 'export AGENTGLASS_SCAN_DISABLED=1\n'
     printf 'export SHELL=/bin/bash\n'
   } > "$DIR/launch.env"
   echo "$PORT" > "$DIR/port"
