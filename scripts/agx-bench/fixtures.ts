@@ -13,6 +13,8 @@
  * browser call. `POST /__bench/reset` puts everything back between runs.
  */
 
+import { phase2Routes } from "./fixtures2.ts";
+
 export type BenchState = {
   /** The dev-loop page's bugs: seeded (`broken`) or fixed. */
   devloop: "broken" | "fixed";
@@ -20,6 +22,8 @@ export type BenchState = {
   signups: Array<{ name: string; email: string; plan: string; terms: boolean }>;
   /** Rejected signup attempts, to tell "never submitted" from "never fixed". */
   rejected: number;
+  /** What phase-2 pages reported doing, by name: `deleted`, `popup`, … */
+  beacons: Record<string, number>;
 };
 
 /** The delays the measurement page's requests are served with. The slowest
@@ -49,7 +53,7 @@ export const SIGNUP_VALID = { name: "Ada Example", email: "ada@example.test", pl
 export const SIGNUP_INVALID_EMAIL = "ada.example.test";
 
 export function freshState(): BenchState {
-  return { devloop: "broken", signups: [], rejected: 0 };
+  return { devloop: "broken", signups: [], rejected: 0, beacons: {} };
 }
 
 const page = (title: string, body: string, script = "") =>
@@ -218,6 +222,8 @@ export function makeHandler(state: BenchState, sleep: (ms: number) => Promise<un
       Object.assign(state, freshState());
       return json(state);
     }
+    const more = await phase2Routes(p, req, state);
+    if (more) return more;
     return new Response("not found", { status: 404 });
   };
 }

@@ -26,6 +26,7 @@
  * to the same answer.
  */
 import { afterOf, pick, View, type Node, type Session, type Task } from "./bench.ts";
+import { PHASE2_TASKS } from "./tasks2.ts";
 import {
   DEVLOOP_BUGS,
   MEASURE_DELAYS,
@@ -91,7 +92,7 @@ function gradeProblems(before: Problems | undefined, after: Problems | undefined
   return left ? `after the fix still saw ${left} problem(s): ${JSON.stringify(after)}` : null;
 }
 
-export const TASKS: Task[] = [
+const CORE_TASKS: Task[] = [
   {
     id: "nav-spa",
     family: "navigation",
@@ -307,3 +308,6 @@ export const TASKS: Task[] = [
     },
   },
 ];
+
+/** The phase-1 set, then one task per phase-2 item (tasks2.ts). */
+export const TASKS: Task[] = [...CORE_TASKS, ...PHASE2_TASKS];
