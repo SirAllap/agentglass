@@ -874,10 +874,11 @@ const VALUE_CARRYING: Record<string, (
      write a whole session with `cdp`, and the rows above never see a single
      value of it. Only the methods that WRITE a cookie or a stored item — a
      `value` anywhere else in the protocol is not a credential by position.
-     `session load` and `session import` do not come this way: they write
-     cookies with `cookies --set` and storage with `storage --set`, one key at
-     a time. `eval` is the one door no row can cover — a script has no value
-     position — which is why neither of them writes storage with one. */
+     `session load` restores cookies through `Network.setCookie` here;
+     `session import` uses `cookies --set`, and both write storage with
+     `storage --set`, one key at a time. `eval` is the one door no row can
+     cover — a script has no value position — which is why neither of them
+     writes storage with one. */
   cdp(out, args) {
     const params = args.params;
     if (!params || typeof params !== "object" || Array.isArray(params)) return;
@@ -885,12 +886,11 @@ const VALUE_CARRYING: Record<string, (
     const blank = (o: unknown) =>
       o && typeof o === "object" && typeof (o as Record<string, unknown>).value === "string"
         ? { ...(o as Record<string, unknown>), value: REDACTED } : o;
-    if (args.method === "Network.setCookie" || args.method === "DOMStorage.setDOMStorageItem") {
+    if (args.method === "Network.setCookie" || args.method === "DOMStorage.setDOMStorageItem"
+      || args.method === "Storage.setSharedStorageEntry") {
       out.params = blank({ ...(out.params as Record<string, unknown>), value: p.value });
     } else if ((args.method === "Network.setCookies" || args.method === "Storage.setCookies") && Array.isArray(p.cookies)) {
       out.params = { ...(out.params as Record<string, unknown>), cookies: p.cookies.map(blank) };
-    } else if (args.method === "Storage.setStorageItems" && Array.isArray(p.items)) {
-      out.params = { ...(out.params as Record<string, unknown>), items: p.items.map(blank) };
     }
   },
 };
