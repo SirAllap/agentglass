@@ -85,8 +85,9 @@ the port before believing an empty dashboard.
 worktree you want to poke at — needs `AGENTGLASS_DB`, and a run from source now
 refuses to start without it (or `AGENTGLASS_STATE_DIR`). Isolating
 `XDG_CONFIG_HOME` is not enough: the *database* is found via `XDG_DATA_HOME`,
-and a checkout with no `agentglass.db` of its own would otherwise resolve to
-the installed app's real history. A second server there would run a second
+so any checkout would resolve to the installed app's real history (an
+`agentglass.db` in the working directory is never opened: it is copied into an
+empty data dir once, and otherwise named in the app and on stderr). A second server there would run a second
 transcript scanner over it, and two scanners over one file inflate events,
 tokens and cost — the scanner's rows carry no `event_id`, so the idempotency
 index cannot dedupe them, nothing errors, and the totals simply grow. The claim

@@ -121,3 +121,24 @@ describe("a pinned install says how it updates", () => {
     expect(pane).toContain("with an Update button when it lists a newer version");
   });
 });
+
+describe("removing a plugin keeps what was typed into its settings", () => {
+  test("the remove confirmation offers to drop the settings, and does not by default", () => {
+    // Uninstalling to reinstall a fresh copy used to reset a settings page a
+    // person had filled in. The server now keeps them unless told otherwise;
+    // this is the one place a person tells it otherwise.
+    const remove = pane.slice(pane.indexOf("const remove = async () => {"));
+    expect(remove.slice(0, remove.indexOf("};"))).toContain("api.pluginRemove(plugin.name, dropSettings)");
+    expect(pane).toContain("const [dropSettings, setDropSettings] = useState(false);");
+    expect(pane).toMatch(/\{confirmRemove && hasSettings && \(/);
+    expect(pane).toContain("Also remove its settings");
+  });
+
+  test("the confirmation says the settings stay behind when the box is left clear", () => {
+    // After a Remove there is no card left, so nothing on screen shows that
+    // plugins.json still holds what was typed — possibly a token. The default
+    // is only not a surprise if the dialog says so before the click.
+    const label = pane.slice(pane.indexOf("{confirmRemove && hasSettings && ("));
+    expect(label.slice(0, label.indexOf("</label>"))).toContain("kept on this machine for a reinstall");
+  });
+});

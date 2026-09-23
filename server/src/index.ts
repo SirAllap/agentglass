@@ -24,6 +24,7 @@ import {
   reclaimFreePages,
   RETENTION_DAYS,
   dbPath,
+  dbNotice,
   getChanges,
   sessionNames,
   getSession,
@@ -4860,10 +4861,10 @@ const server = Bun.serve<WsData>({
 
     if (pathname === "/plugins/remove" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
-      let b: { name?: unknown };
-      try { b = (await req.json()) as { name?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      let b: { name?: unknown; dropSettings?: unknown };
+      try { b = (await req.json()) as { name?: unknown; dropSettings?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       if (typeof b.name !== "string" || !b.name) return json({ ok: false, error: "name is required" }, 400);
-      const ok = await removePlugin(b.name);
+      const ok = await removePlugin(b.name, { dropSettings: b.dropSettings === true });
       return json({ ok }, ok ? 200 : 404);
     }
 
@@ -5141,6 +5142,9 @@ const server = Bun.serve<WsData>({
     // Is git even installed? A plain read like the rest of /git/*, so the
     // surface-wide origin/rebinding gate is the whole authorisation story.
     if (pathname === "/git/capability") return json(gitCapability());
+    // A second agentglass.db found at startup, copied or ignored — decided
+    // once in db.ts. Paths only, like /privacy.
+    if (pathname === "/db/notice") return json(dbNotice());
     // Every outside tool at once, for the Requirements pane. The per-panel
     // capability routes above stay: each panel needs its own answer to render,
     // and this one exists for the question none of them can answer alone.

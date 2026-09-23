@@ -8,7 +8,8 @@
     agentglass-plugin enable my-plugin --approve
     agentglass-plugin disable my-plugin
     agentglass-plugin update my-plugin
-    agentglass-plugin remove my-plugin
+    agentglass-plugin remove my-plugin              # keeps its settings for a reinstall
+    agentglass-plugin remove my-plugin --drop-settings
     agentglass-plugin settings my-plugin            # what it holds
     agentglass-plugin settings my-plugin style=security
 
@@ -537,9 +538,13 @@ def main():
     en.add_argument("--approve", action="store_true", help="you have read what it declares")
     en.set_defaults(fn=lambda args: enable_with_approval(args.name, args.approve))
 
+    rm = sub.add_parser("remove", help="uninstall it and drop what it wrote; its settings are kept for a reinstall")
+    rm.add_argument("name")
+    rm.add_argument("--drop-settings", action="store_true", help="also remove what was chosen on its settings page")
+    rm.set_defaults(fn=lambda args: emit(call("/plugins/remove", {"name": args.name, "dropSettings": args.drop_settings})))
+
     for name, path, help_text in (
         ("disable", "/plugins/disable", "switch one off; its notes stay readable"),
-        ("remove", "/plugins/remove", "uninstall it and drop what it wrote"),
         ("update", "/plugins/update", "re-clone a git-backed install at its recorded ref"),
     ):
         s = sub.add_parser(name, help=help_text)

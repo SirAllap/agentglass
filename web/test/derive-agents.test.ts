@@ -102,6 +102,21 @@ test("roll-ups sum across a session; subagents are tallied by type", () => {
   expect(c.subagentTypes).toEqual([["explorer", 2], ["planner", 1]]);
 });
 
+test("last turn cost is the newest MAIN-thread turn, never a subagent's and never the lifetime sum", () => {
+  // Same measured problem as the context guard above: a subagent is billed to
+  // its own context, not the session's, so a subagent turn arriving after the
+  // main thread's must not win "last turn" — otherwise an expensive subagent
+  // call would flash as the price of the next main-thread keystroke, and the
+  // number next to the context meter would describe a different turn than the
+  // meter itself.
+  const olderMain = ev({ agent_id: null, input_tokens: 30, cost_usd: 1.25, timestamp: now - 9000 });
+  const cheapMain = ev({ agent_id: null, input_tokens: 40, cost_usd: 0.02, timestamp: now - 5000 });
+  const pricierSub = ev({ agent_id: "acme-explorer-1", agent_type: "orbit-explorer", input_tokens: 9000, cost_usd: 4.5, timestamp: now - 1000 });
+  const c = only([olderMain, cheapMain, pricierSub]);
+  expect(c.ctxTokens).toBe(40);
+  expect(c.turnCost).toBeCloseTo(0.02, 6);
+});
+
 test("distinct sessions become distinct cards, newest first", () => {
   const cards = deriveAgents([
     ev({ session_id: "old", timestamp: now - 10_000 }),

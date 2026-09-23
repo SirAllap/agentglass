@@ -335,7 +335,23 @@ function offLimits(p: string): boolean {
  * plugins.json already answers "what is installed, from where, at what
  * commit" — a second file would just be this one, copied.
  */
-interface Store { master: boolean; plugins: PluginRecord[] }
+interface Store {
+  master: boolean;
+  plugins: PluginRecord[];
+  /** Settings of plugins that were uninstalled, by name and then by where
+   *  the plugin came from, waiting for a reinstall to pick them up. What a person typed into a settings page is
+   *  theirs, not the plugin's: removing a plugin to reinstall a fresh copy
+   *  must not reset a prompt they spent an afternoon on. Dropped only when
+   *  the removal asks for it.
+   *
+   *  The inner key is `sourceKey`. A name is not an identity — a different
+   *  plugin from another repository can be installed under the same one, and
+   *  it would read back whatever was typed for the first (a token field is a
+   *  plausible key in both). Only a reinstall from the same place inherits
+   *  them, and each source keeps its own: one entry per name let the second
+   *  plugin's uninstall write its settings over the first's. */
+  keptSettings?: Record<string, Record<string, Record<string, unknown>>>;
+}
 const DEFAULT_STORE: Store = { master: true, plugins: [] };
 
 function read(): Store {
@@ -343,9 +359,11 @@ function read(): Store {
   if (offLimits(p) || !existsSync(p)) return { ...DEFAULT_STORE, plugins: [] };
   try {
     const parsed = JSON.parse(readFileSync(p, "utf8")) as Partial<Store>;
+    const kept = parsed.keptSettings;
     return {
       master: typeof parsed.master === "boolean" ? parsed.master : true,
       plugins: Array.isArray(parsed.plugins) ? parsed.plugins : [],
+      ...(kept && typeof kept === "object" && !Array.isArray(kept) ? { keptSettings: kept } : {}),
     };
   } catch {
     // A corrupt file must not take the server down on boot — same rule
@@ -688,6 +706,19 @@ async function finishInstall(
   const hash = manifestHash(manifest);
   const store = read();
   const existing = store.plugins.find((p) => p.name === manifest.name);
+  // An update carries the record's settings; a reinstall after an uninstall
+  // picks up the ones the uninstall kept. Installing the same name from
+  // another source is not an update: the record's settings belong to the
+  // plugin being replaced, and they are kept for it as a remove would.
+  const from = sourceKey(source);
+  const same = existing !== undefined && sourceKey(existing.source) === from;
+  const displaced = existing && !same && existing.settings && Object.keys(existing.settings).length > 0
+    ? { ...(store.keptSettings ?? {}), [manifest.name]: { ...(store.keptSettings?.[manifest.name] ?? {}), [sourceKey(existing.source)]: existing.settings } }
+    : store.keptSettings;
+  const carried = same ? existing!.settings : undefined;
+  const kept = displaced?.[manifest.name]?.[from];
+  const restored = !carried && kept !== undefined;
+  const settings = carried ?? (restored ? kept : undefined);
   // The reviewer approved a specific declared scope over a specific tree of
   // bytes, not a name — see consentFingerprint. Unchanged keeps its
   // approval; changed loses it, and if it was running, running on the old
@@ -723,9 +754,15 @@ async function finishInstall(
     enabled: existing?.enabled === true && stillApproved,
     installedAt: existing?.installedAt ?? Date.now(),
     hadApproval: existing?.hadApproval === true,
-    ...(existing?.settings ? { settings: existing.settings } : {}),
+    ...(settings ? { settings } : {}),
   };
-  write({ ...store, plugins: [...store.plugins.filter((p) => p.name !== manifest.name), record] });
+  write({
+    ...store,
+    plugins: [...store.plugins.filter((p) => p.name !== manifest.name), record],
+    // Consumed only by the reinstall they belong to: a plugin from elsewhere
+    // under the same name neither reads them nor throws them away.
+    keptSettings: restored ? withoutKept(displaced, manifest.name, from) : displaced,
+  });
   return { ok: true, plugin: { ...record, running: running.has(record.name), pid: running.get(record.name)?.pid ?? null } };
 }
 
@@ -914,23 +951,62 @@ export async function disablePlugin(name: string): Promise<boolean> {
 /** Disable and remove: stop the process, revoke its token, delete the
  *  copied folder, drop the record. A plugin left running after it was
  *  removed is the same failure a plugin left running after it was
- *  disabled is. */
-export async function removePlugin(name: string): Promise<boolean> {
+ *  disabled is. Its settings stay in the store for a reinstall unless
+ *  `dropSettings` asks for them to go too. */
+export async function removePlugin(name: string, opts: { dropSettings?: boolean } = {}): Promise<boolean> {
   const store = read();
   const rec = store.plugins.find((p) => p.name === name);
-  if (!rec) return false;
+  if (!rec) {
+    // Already uninstalled, its settings kept: this is the only way left to
+    // clear them, since there is no card to press Remove on. Every source's
+    // under that name goes — the command names a plugin, not where it came
+    // from.
+    if (!opts.dropSettings || !store.keptSettings?.[name]) return false;
+    write({ ...store, keptSettings: withoutKey(store.keptSettings, name) });
+    return true;
+  }
   await stopRunning(name);
   // A record is read back from disk, so its `installDir` is trusted no more
   // than a manifest is: the folder goes only when it is a child of the
   // plugins root. Otherwise the record is dropped and the disk left alone —
   // a stale entry is a nuisance, a deleted config directory is not.
   if (insidePluginsRoot(rec.installDir)) rmSync(rec.installDir, { recursive: true, force: true });
-  write({ ...store, plugins: store.plugins.filter((p) => p.name !== name) });
+  const keep = !opts.dropSettings && rec.settings && Object.keys(rec.settings).length > 0;
+  const from = sourceKey(rec.source);
+  write({
+    ...store,
+    plugins: store.plugins.filter((p) => p.name !== name),
+    // Only this plugin's own entry: settings another source left under the
+    // same name belong to that plugin, and neither a keep nor a drop here
+    // touches them.
+    keptSettings: keep
+      ? { ...(store.keptSettings ?? {}), [name]: { ...(store.keptSettings?.[name] ?? {}), [from]: rec.settings! } }
+      : opts.dropSettings ? withoutKept(store.keptSettings, name, from) : store.keptSettings,
+  });
   dropNotesOf(name);
   // Also when it was not running: a plugin installed later under the same
   // name must not inherit a queue of this one's events.
   forgetPlugin(name);
   return true;
+}
+
+/** Where a plugin came from, without the ref: a reinstall at another tag of
+ *  the same repository is the same plugin. */
+function sourceKey(s: InstallSource): string {
+  if (s.kind === "local-path") return `local-path:${s.path}`;
+  if (s.kind === "git") return `git:${s.url}`;
+  return `marketplace:${s.marketplace.url}|${s.plugin.url}`;
+}
+
+function withoutKey<T>(m: Record<string, T> | undefined, key: string): Record<string, T> | undefined {
+  if (!m || !(key in m)) return m;
+  const { [key]: _gone, ...rest } = m;
+  return Object.keys(rest).length ? rest : undefined;
+}
+
+function withoutKept(m: Store["keptSettings"], name: string, from: string): Store["keptSettings"] {
+  const bySource = withoutKey(m?.[name], from);
+  return bySource ? { ...m, [name]: bySource } : withoutKey(m, name);
 }
 
 /** Test seam: wipe the store, the on-disk folder, and any running process. */
