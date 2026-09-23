@@ -340,11 +340,48 @@ function emit(n: SystemNote) {
   }
 }
 
+/*
+ * The monitor must not outlive this process, and on its own it would.
+ *
+ * A dbus-monitor only finds out its reader is gone when it next writes to the
+ * pipe, and a quiet desktop can go hours without a notification — so every
+ * server that exited left one reparented to init, measured at one per close of
+ * the app. Two halves, because neither covers the other:
+ *
+ *   - `exit` kills it on every way out that still runs JavaScript: the signal
+ *     handlers and the parent-death watchdog in index.ts both end in
+ *     `process.exit`, and so does an uncaught exception.
+ *   - `setpriv --pdeathsig` has the kernel send it SIGTERM when the server dies
+ *     WITHOUT running anything: a SIGKILL, an OOM kill, a crash. `setpriv`
+ *     execs dbus-monitor in place, so the pid we hold is still the monitor's.
+ *
+ * setpriv is util-linux, but `--pdeathsig` only arrived in 2.33 and busybox's
+ * applet has no such option: there it exits 1 at once, and a monitor that dies
+ * the instant it spawns is respawned under backoff for the life of the server
+ * with nothing logged. So the option is proved once, on a `true`, before it is
+ * trusted. Where it is missing or refused the monitor is spawned bare, and a
+ * server that dies without running its exit hook leaves the monitor until its
+ * next write fails. A server that dies between the spawn and setpriv's own
+ * prctl, microseconds, arms nothing either. Those are the limits, named rather
+ * than papered over.
+ */
+let pdeathsig: string[] | null = null;
+function deathTie(): string[] {
+  if (pdeathsig) return pdeathsig;
+  const setpriv = Bun.which("setpriv");
+  const tie = setpriv ? [setpriv, "--pdeathsig", "TERM", "--"] : [];
+  let ok = false;
+  try { ok = !!setpriv && Bun.spawnSync([...tie, "true"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0; } catch { /* not runnable */ }
+  pdeathsig = ok ? tie : [];
+  return pdeathsig;
+}
+process.on("exit", () => { try { proc?.kill(); } catch { /* already gone */ } });
+
 function start() {
   if (proc || !notifyCapability().supported) return;
   try {
     proc = spawn({
-      cmd: ["dbus-monitor", "--session", ...MATCHES],
+      cmd: [...deathTie(), "dbus-monitor", "--session", ...MATCHES],
       stdout: "pipe",
       stderr: "pipe",
       stdin: "ignore",
