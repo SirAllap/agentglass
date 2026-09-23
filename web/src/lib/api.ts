@@ -977,7 +977,11 @@ const realApi = {
    *  `force` is the Recheck button: it re-probes inside the server's cache
    *  window, which is the only case where a stale answer is the wrong one. */
   dependencies: (force = false) => get<DepsResponse>(`/dependencies${force ? "?force=1" : ""}`),
-  gitRepos: () => get<{ repos: GitRepoRef[] }>("/git/repos"),
+  // `roots` rides along even on this plain (non-`all=1`) call — the server
+  // always answers it (index.ts's /git/repos) — so the bell can tell "this
+  // window's folders" from a whole-machine sweep. See gitNote.ts's
+  // notesWorthyRepos.
+  gitRepos: () => get<{ repos: GitRepoRef[]; roots?: string[] }>("/git/repos"),
   /** Put a PNG somewhere an agent can read it, and say where. A tmux window
    *  takes text; a megabyte of base64 in a prompt is not text. */
   /** Everywhere another browser has been, for the address bar. */

@@ -31,6 +31,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { api } from "../lib/api.ts";
 import { subscribe as subscribeChats, listChats } from "../lib/chatStore.ts";
 import { subscribeGitChanged } from "../lib/gitBus.ts";
+import { notesWorthyRepos } from "../lib/gitNote.ts";
 import { answerGate, gateForNote, listGates, subscribeGates, subscribeNewGates } from "../lib/gateStore.ts";
 import { enqueue, dequeue } from "../lib/toastQueue.ts";
 import {
@@ -211,11 +212,18 @@ export function useAmbientNotes(): { note: Note | null; behind: number; ahead: n
     let dead = false;
     const poll = async () => {
       try {
-        const { repos } = await api.gitRepos();
+        const { repos, roots } = await api.gitRepos();
         if (dead) return;
+        // With no project open, `/git/repos` is a whole-machine sweep — every
+        // repo this install has ever seen an agent touch, not the folders
+        // this window was pointed at. A note about a checkout nobody here
+        // added is a wrong number, not news — see gitNote.ts's
+        // notesWorthyRepos. Applied to the chip too: a "to pull" count that
+        // disagreed with the filtered rows would be the next bug report.
+        const worthy = notesWorthyRepos(repos, roots ?? []);
         let total = 0;
         let mine = 0;
-        for (const r of repos) {
+        for (const r of worthy) {
           total += r.behind;
           mine += r.ahead;
           const prev = seen.get(r.root) ?? 0;
