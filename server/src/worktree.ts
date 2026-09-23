@@ -106,7 +106,7 @@ export function gitDir(dir: string): string | null {
 // of those should pay for a subprocess. Same TTL as the repo sweep's cache, so
 // adding a worktree shows up everywhere at the same time.
 const FAMILY_CACHE_MS = 5_000;
-const familyCache = new Map<string, { at: number; roots: string[] }>();
+const familyCache = new Map<string, { at: number; roots: string[]; main: string | null }>();
 
 /**
  * Every checkout of the repository that owns `root` — the main worktree and all
@@ -125,11 +125,28 @@ export function worktreeFamily(root: string): string[] {
   const hit = familyCache.get(root);
   if (hit && Date.now() - hit.at < FAMILY_CACHE_MS) return hit.roots;
   if (familyCache.size > 64) familyCache.clear();
-  const roots = [root, ...listWorktrees(root)].filter(
+  const listed = listWorktrees(root);
+  const roots = [root, ...listed.roots].filter(
     (r, i, all) => r && all.indexOf(r) === i
   );
-  familyCache.set(root, { at: Date.now(), roots });
+  familyCache.set(root, { at: Date.now(), roots, main: listed.main });
   return roots;
+}
+
+/**
+ * The main checkout of the repository that owns `root` — the one `git worktree
+ * add` was run from — or null when there is none to name: not a repo, or a
+ * bare one whose checkouts are all linked.
+ *
+ * The family is symmetric, and for reading that is right; for the gate it is
+ * not. A rule on the main checkout speaking for its linked worktrees is a
+ * project's rule reaching its own branches. A rule on one linked worktree
+ * speaking for the main checkout or a sibling is one branch's say reaching
+ * sideways, and the gate has to tell the two apart.
+ */
+export function mainWorktree(root: string): string | null {
+  worktreeFamily(root);
+  return familyCache.get(root)?.main ?? null;
 }
 
 /**
@@ -144,13 +161,14 @@ export function worktreeFamily(root: string): string[] {
  * it, quietly widening a scope the user chose to keep small. A subdirectory
  * never appears in `worktree list`; a real checkout always does.
  */
-function listWorktrees(root: string): string[] {
+function listWorktrees(root: string): { roots: string[]; main: string | null } {
+  const none = { roots: [], main: null };
   try {
     const p = Bun.spawnSync(["git", "-C", root, "worktree", "list", "--porcelain"], {
       stdout: "pipe",
       stderr: "pipe",
     });
-    if (p.exitCode !== 0) return [];
+    if (p.exitCode !== 0) return none;
     // Records are blank-line separated: a `worktree <path>` line, then optional
     // `HEAD`/`branch`/`bare`/`locked` lines describing it. The `bare` flag has to
     // be read before the record is committed, which is why this can't just
@@ -158,7 +176,10 @@ function listWorktrees(root: string): string[] {
     const out: string[] = [];
     let path = "";
     let bare = false;
+    // git lists the main worktree first; a bare one is not a checkout.
+    let first = true, main: string | null = null;
     const flush = () => {
+      if (path && first) { main = bare ? null : resolve(path); first = false; }
       // A bare repo is listed as a worktree but has no working tree — keeping it
       // would put a directory of refs in the scope, and inScope() decides where
       // a shell, a chat and a git write are allowed to run.
@@ -171,9 +192,9 @@ function listWorktrees(root: string): string[] {
       else if (line.trim() === "bare") bare = true;
     }
     flush();
-    return out.includes(resolve(root)) ? out : [];
+    return out.includes(resolve(root)) ? { roots: out, main } : none;
   } catch {
-    return [];
+    return none;
   }
 }
 

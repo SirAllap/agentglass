@@ -399,9 +399,13 @@ A hold only helps while somebody is watching. `gateRules` in
   Only budgets on every model count; the gate does not know which model a call
   comes from.
 - Tool names are exact and case-sensitive; a trailing `*` matches a prefix. The
-  deepest `root` that covers the call decides `allow`, `otherwise` and
-  `overBudget`; a rule without one covers everything. A project's linked
-  worktrees count.
+  deepest `root` that contains the call's directory decides `allow`,
+  `otherwise` and `overBudget`; a rule without one covers everything.
+- A project's linked worktrees count: a rule on the main checkout reaches
+  them. A rule on one linked worktree never allows anything in the main
+  checkout or a sibling (it can still hold or deny there), and when several
+  checkouts' rules reach a directory only through the repository, the strictest
+  answer wins.
 - Deny lists add up: a tool denied by any rule that covers the call is denied,
   so a project's own allow list cannot lift a deny the machine-wide rule or a
   parent directory's rule put there.

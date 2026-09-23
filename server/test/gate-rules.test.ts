@@ -12,7 +12,7 @@
  * what a rule does once a budget covering the call is already over.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BudgetStatus, GateRule } from "../../shared/types.ts";
@@ -340,5 +340,57 @@ describe("reading the rules from config.json", () => {
     expect(readGateRules()).toEqual([]);
     withConfig({ allow: ["Read"] });
     expect(readGateRules()).toEqual([]);
+  });
+});
+
+/*
+ * Rules on two checkouts of one repository. A rule covers its repository's
+ * linked worktrees through `git worktree list`, and depth used to be the length
+ * of the root string over all of them, so the longer sibling path decided for
+ * the main checkout: `orbit-web-1042`'s `otherwise: "allow"` let everything
+ * run in `orbit`, whose own rule said deny.
+ */
+describe.skipIf(!Bun.which("git"))("rules on checkouts of one repository", () => {
+  const base = mkdtempSync(join(tmpdir(), "agx-gaterules-wt-"));
+  const main = join(base, "orbit"), web = join(base, "orbit-web-1042"), api = join(base, "orbit-api-1043");
+  const git = (...args: string[]) => {
+    const p = Bun.spawnSync(["git", "-c", "user.name=t", "-c", "user.email=t@example.test", "-c", "init.defaultBranch=main", ...args],
+      { stdout: "pipe", stderr: "pipe", env: { PATH: process.env.PATH ?? "", HOME: base } });
+    if (p.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${p.stderr.toString()}`);
+  };
+  mkdirSync(main);
+  git("-C", main, "init", "-q");
+  git("-C", main, "commit", "-q", "--allow-empty", "-m", "init");
+  git("-C", main, "worktree", "add", "-q", "-b", "web-1042", web);
+  git("-C", main, "worktree", "add", "-q", "-b", "api-1043", api);
+  afterAll(() => { try { rmSync(base, { recursive: true, force: true }); } catch { /* fine */ } });
+
+  test("a sibling checkout's allow never decides for the main checkout", () => {
+    const rules = [rule({ root: main, otherwise: "deny" }), rule({ root: web, otherwise: "allow" })];
+    expect(gateRuleVerdict("Bash", join(main, "src"), rules, null).kind).toBe("deny");
+    // Its own checkout it still decides for.
+    expect(gateRuleVerdict("Bash", join(web, "src"), rules, null).kind).toBe("allow");
+  });
+
+  test("nor for another sibling, even with no rule of the main checkout's to stop it", () => {
+    const rules = [rule({ root: web, otherwise: "allow", allow: ["Read"] })];
+    expect(gateRuleVerdict("Bash", join(api, "src"), rules, null).kind).toBe("hold");
+    expect(gateRuleVerdict("Read", join(main, "src"), rules, null).kind).toBe("hold");
+  });
+
+  test("the main checkout's rule still reaches its linked worktrees, allow included", () => {
+    const rules = [rule({ root: main, allow: ["Read"], otherwise: "deny" })];
+    expect(gateRuleVerdict("Read", join(web, "src"), rules, null).kind).toBe("allow");
+    expect(gateRuleVerdict("Bash", join(web, "src"), rules, null).kind).toBe("deny");
+  });
+
+  test("among rules that reach a checkout only through the repository, the strictest answers", () => {
+    const rules = [rule({ root: main, allow: ["Bash"] }), rule({ root: web, otherwise: "deny" })];
+    expect(gateRuleVerdict("Bash", join(api, "src"), rules, null).kind).toBe("deny");
+  });
+
+  test("a checkout's own rule beats one that reaches it through the repository", () => {
+    const rules = [rule({ root: main, otherwise: "deny" }), rule({ root: web, allow: ["Bash"] })];
+    expect(gateRuleVerdict("Bash", join(web, "src"), rules, null).kind).toBe("allow");
   });
 });

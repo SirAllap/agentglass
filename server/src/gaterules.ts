@@ -1,5 +1,6 @@
 import type { BudgetStatus, GateRule } from "../../shared/types.ts";
-import { inScope, readBudgets, readGateRules } from "./config.ts";
+import { inScope, isWithin, readBudgets, readGateRules } from "./config.ts";
+import { mainWorktree } from "./worktree.ts";
 import { budgetStatus, overBudgetFor, overBudgetLine, sessionCwd } from "./budget.ts";
 
 /**
@@ -57,26 +58,41 @@ const scopeLabel = (r: GateRule): string =>
   r.root ? r.root.split("/").filter(Boolean).pop() || r.root : "every project";
 
 /**
- * The rule that speaks for a call made in `cwd`: the deepest root that covers
- * it, and the machine-wide rule when no project's does.
+ * The rules that speak for a call made in `cwd`, other than through a deny
+ * list (every covering rule's deny list binds; see gateRuleVerdict).
  *
- * One rule, not a merge — for everything but the deny list, which is read from
- * every rule that covers the call (see gateRuleVerdict). A project is where
- * somebody said something specific, and a merge would let the machine's allow
- * list quietly widen a project that was meant to be strict. A tie keeps the
- * first in the file.
+ * One rule, not a merge, in this order:
+ *  1. the deepest root that physically contains the directory;
+ *  2. otherwise the rules that cover it only as a checkout of the same
+ *     repository (a linked worktree beside it on disk), every one of them —
+ *     gateRuleVerdict takes the strictest answer among them;
+ *  3. otherwise the machine-wide rule.
+ * A project is where somebody said something specific, and a merge would let
+ * the machine's allow list quietly widen a project that was meant to be
+ * strict. A tie keeps the first in the file.
  *
- * `inScope` decides coverage, as it does for budgets, so a rule on a checkout
- * also covers its linked worktrees, and a rule with a root does not cover a
- * directory nobody could place.
+ * Depth used to be the length of the root string over every covering rule,
+ * worktree family included, so `~/code/orbit-web-1042` out-measured
+ * `~/code/orbit` and a sibling checkout's `otherwise: "allow"` decided for the
+ * main checkout. A family match is never compared by length against a
+ * physical one.
+ *
+ * `inScope` decides coverage, as it does for budgets, and a rule with a root
+ * does not cover a directory nobody could place.
  */
-function ruleFor(cwd: string, rules: GateRule[]): GateRule | null {
-  let best: GateRule | null = null;
+function rulesFor(cwd: string, rules: GateRule[]): { rules: GateRule[]; family: boolean } | null {
+  let physical: GateRule | null = null, machine: GateRule | null = null;
+  const family: GateRule[] = [];
   for (const r of rules) {
     if (r.denyOnly || !inScope(cwd, r.root)) continue;
-    if (!best || r.root.length > best.root.length) best = r;
+    if (!r.root) { machine ??= r; continue; }
+    if (cwd.startsWith("/") && isWithin(cwd, r.root)) {
+      if (!physical || r.root.length > physical.root.length) physical = r;
+    } else family.push(r);
   }
-  return best;
+  if (physical) return { rules: [physical], family: false };
+  if (family.length) return { rules: family, family: true };
+  return machine ? { rules: [machine], family: false } : null;
 }
 
 /**
@@ -107,7 +123,7 @@ function ruleFor(cwd: string, rules: GateRule[]): GateRule | null {
 const HARNESS_META_TOOLS = new Set(["ToolSearch"]);
 
 export function gateRuleVerdict(tool: string, cwd: string, rules: GateRule[], over: BudgetStatus | null): RuleVerdict {
-  const r = ruleFor(cwd, rules);
+  const speaking = rulesFor(cwd, rules);
   const retry = "Do not retry it — it will be denied again. Take a different approach, or ask a person to change the rule.";
   // A written deny always wins, and every rule that covers the call can write
   // one: a deeper project's allow list must not lift a deny the machine's or a
@@ -123,15 +139,32 @@ export function gateRuleVerdict(tool: string, cwd: string, rules: GateRule[], ov
     return { kind: "deny", reason: `This call was denied by a rule in agentglass, not by a person: ${tool} is on the deny list for ${where}. ${retry}` };
   }
   if (HARNESS_META_TOOLS.has(tool)) return { kind: "allow", exact: true, meta: true };
-  if (!r) return { kind: "none" };
+  if (!speaking) return { kind: "none" };
+  if (!speaking.family) return speak(tool, cwd, speaking.rules[0]!, over, retry);
+  // Several checkouts' rules reach this one only through the repository they
+  // share: the strictest answer wins, and an allow counts only from the main
+  // checkout's rule — a project reaching its own branches. One linked
+  // worktree's allow never opens the main checkout or a sibling.
+  const rank = { deny: 3, hold: 2, none: 1, allow: 0 } as const;
+  let worst: RuleVerdict | null = null;
+  for (const r of speaking.rules) {
+    let v = speak(tool, cwd, r, over, retry);
+    if (v.kind === "allow" && mainWorktree(r.root) !== r.root) v = { kind: "hold" };
+    if (!worst || rank[v.kind] > rank[worst.kind]) worst = v;
+  }
+  return worst!;
+}
+
+/** One rule's answer for a call its deny list did not stop. */
+function speak(tool: string, cwd: string, r: GateRule, over: BudgetStatus | null, retry: string): RuleVerdict {
+  const where = scopeLabel(r);
   // A call nobody could place is only ever stopped, never waved through: the
   // machine-wide rule covers it, but letting its allow list through would be
   // guessing that the agent is not in a project somebody made stricter.
-  // What would have been allowed is held for a person instead.
-  // Only an absolute path is a place: the pane note behind gateCwd's fallback
-  // is written from whatever a payload said.
+  // What would have been allowed is held for a person instead. Only an
+  // absolute path is a place: the pane note behind gateCwd's fallback is
+  // written from whatever a payload said.
   const allow = (v: RuleVerdict): RuleVerdict => (cwd.startsWith("/") ? v : { kind: "hold" });
-  const where = scopeLabel(r);
   if (over) {
     return r.overBudget === "deny"
       ? { kind: "deny", reason: `This call was denied by a rule in agentglass, not by a person: ${overBudgetLine(over)}, and the rule for ${where} denies calls once a budget is over. Every further call will be denied too until the period rolls over or the limit is raised — stop and tell a person rather than trying another tool.` }
@@ -181,7 +214,7 @@ export function gateRuleFor(tool: string, cwd: string): RuleVerdict {
     // Only budgets on every model. The gate payload carries no model, so a
     // limit on one model that is over would otherwise stop the agents on all
     // the others in the project.
-    const over = ruleFor(cwd, rules) ? overBudgetFor(cwd, budgetStatus(readBudgets().filter((b) => !b.model))) : null;
+    const over = rulesFor(cwd, rules) ? overBudgetFor(cwd, budgetStatus(readBudgets().filter((b) => !b.model))) : null;
     return gateRuleVerdict(tool, cwd, rules, over);
   } catch (e) {
     console.warn("[gate] rules skipped:", e instanceof Error ? e.message : e);
