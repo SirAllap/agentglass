@@ -769,7 +769,7 @@ def budget_value(value, max_tokens):
         if dropped:
             notes.append(f"rows: dropped {dropped} oldest of {before}")
 
-    for key in ("text", "html"):
+    for key in ("text", "html", "markdown"):
         s = value.get(key)
         if _size(value) <= budget_chars:
             break
@@ -779,6 +779,35 @@ def budget_value(value, max_tokens):
             value[key] = s[:keep]
             if keep < len(s):
                 notes.append(f"{key}: cut to {keep} of {len(s)} chars")
+
+    # The structured readers. `links` and `matches` are the page in a list, so
+    # the tail goes (nothing is more or less relevant in a link list), and
+    # `extract`'s fields shrink each value instead of dropping whole fields —
+    # a field a caller asked for by name is what it came to find.
+    for key in ("links", "matches", "elements", "pages"):
+        arr = value.get(key)
+        if _size(value) <= budget_chars:
+            break
+        if isinstance(arr, list) and arr:
+            before = len(arr)
+            while _size(value) > budget_chars and len(value[key]) > 0:
+                value[key] = value[key][:-1]
+            dropped = before - len(value[key])
+            if dropped:
+                notes.append(f"{key}: dropped {dropped} of {before}")
+
+    fields = value.get("fields")
+    if _size(value) > budget_chars and isinstance(fields, dict) and fields:
+        for name in list(fields.keys()):
+            if _size(value) <= budget_chars:
+                break
+            v = fields[name]
+            if isinstance(v, str) and v:
+                over = _size(value) - budget_chars
+                keep = max(0, len(v) - over)
+                if keep < len(v):
+                    fields[name] = v[:keep]
+                    notes.append(f"field {name}: cut to {keep} of {len(v)} chars")
 
     if notes:
         value["truncated"] = True
@@ -834,6 +863,33 @@ def summarize(cmd, value):
         return f"{len(rows)} rows" + (f", {value['dropped']} dropped" if value.get("dropped") else "")
     if cmd == "read":
         return f"{value.get('title', '')!r} {value.get('url', '')} — {len(value.get('text', ''))} chars"
+    if cmd == "markdown":
+        return f"{value.get('title', '')!r} {value.get('url', '')} — {len(value.get('markdown', ''))} chars of markdown"
+    if cmd == "links":
+        links = value.get("links") or []
+        return f"{len(links)} links of {value.get('total', len(links))}" + (f", {value['dropped']} dropped" if value.get("dropped") else "")
+    if cmd == "count":
+        return f"{value.get('count')} × {value.get('selector') or value.get('scope', 'page')}"
+    if cmd == "extract":
+        fields = value.get("fields") or {}
+        found = sum(1 for v in fields.values() if v is not None)
+        return f"{found}/{len(fields)} fields" + (f", no match: {', '.join(value['notFound'])}" if value.get("notFound") else "")
+    if cmd == "screencast":
+        if "frames" in value:
+            return f"{value.get('count', 0)} frames" + (f", {value['dropped']} dropped" if value.get("dropped") else "")
+        return value.get("screencast", "")
+    if cmd == "scrape":
+        pages = value.get("pages") or []
+        return f"{len(pages) - int(value.get('failed') or 0)}/{len(pages)} pages read" + (f", {value['failed']} failed" if value.get("failed") else "")
+    if cmd == "interactive":
+        els = value.get("elements") or []
+        return f"{len(els)} of {value.get('total', len(els))} interactive" + (f", {value['hidden']} hidden" if value.get("hidden") else "")
+    if cmd == "forms":
+        return f"{len(value.get('forms') or [])} forms, {len(value.get('loose') or [])} loose fields"
+    if cmd == "attr":
+        return f"{len(value.get('attributes') or {})} attributes of <{value.get('tag', '?')}>"
+    if cmd == "search":
+        return f"{value.get('count', 0)} match(es) for {value.get('query', '')!r} ({len(value.get('matches') or [])} shown)"
     if cmd == "checkup":
         return (f"{value.get('verdict', '?')} errors:{len(value.get('errors') or [])} "
                 f"failed:{len(value.get('failed') or [])} visible:{len(value.get('visible') or [])} "
@@ -1228,6 +1284,55 @@ STORAGE_READ_JS = (
     "const ss = {}; for (const k of Object.keys(sessionStorage)) ss[k] = sessionStorage.getItem(k); "
     "return { origin: location.origin, localStorage: ls, sessionStorage: ss }; })()"
 )
+
+
+def _write_frames(out_dir, frames, start_index):
+    """Frames to files, numbered on from `start_index`, and the paths back."""
+    import base64
+    os.makedirs(out_dir, exist_ok=True)
+    paths = []
+    for i, fr in enumerate(frames):
+        data = str(fr.get("jpeg") or "")
+        raw = base64.b64decode(data.split(",", 1)[1]) if "," in data else b""
+        path = os.path.join(out_dir, f"frame-{start_index + i:04d}.jpg")
+        with open(path, "wb") as f:
+            f.write(raw)
+        paths.append(path)
+    return paths
+
+
+def screencast_watch(a, page=""):
+    """start, poll, stop: `--seconds` of the page as it moves, to `--out` as
+    jpeg files (or a count to stdout without --out — the frames themselves are
+    pictures, and pictures on stdout are not something a caller can use).
+    `page` is the caller's resolved tab, from `addressed`."""
+    started = call("screencast", stamped(a, _at(page, {"action": "start", "quality": a.quality, "maxWidth": a.maxWidth,
+                                                        "maxHeight": a.maxHeight, "everyNth": a.everyNth})))
+    if not started.get("ok"):
+        print(started.get("error") or "could not start the screencast", file=sys.stderr)
+        return 1
+    deadline = time.time() + max(0.2, float(a.seconds))
+    total = dropped = 0
+    paths = []
+    try:
+        while True:
+            time.sleep(0.25)
+            r = call("screencast", stamped(a, _at(page, {"action": "frames"})))
+            v = r.get("value") or {}
+            frames = v.get("frames") or []
+            dropped += int(v.get("dropped") or 0)
+            if a.out and frames:
+                paths.extend(_write_frames(a.out, frames, total))
+            total += len(frames)
+            if time.time() >= deadline:
+                break
+    finally:
+        call("screencast", stamped(a, _at(page, {"action": "stop"})))
+    if a.out:
+        print(json.dumps({"frames": total, "dropped": dropped, "dir": a.out, "paths": paths}))
+    else:
+        print(json.dumps({"frames": total, "dropped": dropped, "note": "pass --out DIR to keep them"}))
+    return 0
 
 
 def session_save(path, page="", a=None):
@@ -1854,6 +1959,28 @@ def main():
     p.add_argument("--wait-slot", dest="waitSlot", type=float, default=None, metavar="SECONDS",
                    help="when 12 pages are already awake, queue for a free slot this long instead of refusing")
     p = sub.add_parser("read", help="the page's url, title and visible text")
+    # The structured readers — the page as an agent needs it, not as the DOM
+    # markets it. Each is MAX_TEXT-capped on the page side, then "--max-tokens"
+    # trims it again by relevance, and the redaction seam is the same one every
+    # other verb passes through.
+    p = sub.add_parser("markdown", help="the page rendered as markdown — headings, lists and links intact")
+    p = sub.add_parser("links", help="every link on the page, deduplicated, in one answer")
+    p = sub.add_parser("count", help="how many elements match a selector — or how interactive the page is, with no selector")
+    p.add_argument("selector", nargs="?")
+    p = sub.add_parser("search", help="find text on the page and get the matches back")
+    p.add_argument("query")
+    # The interactive inventory: what can be acted on, the forms as forms,
+    # and one element's attributes — each with ids a verb takes.
+    p = sub.add_parser("interactive", help="every element that can be acted on, with id, role, name and href/value/options")
+    p = sub.add_parser("forms", help="the forms on the page: fields with labels, the submit, where it goes, and loose fields")
+    p = sub.add_parser("attr", help="attributes of one element — the ones named, or all of them")
+    p.add_argument("selector")
+    p.add_argument("names", nargs="*", help="attribute names; none means all of them")
+    p = sub.add_parser("extract", help="pull named fields by selector in one round trip")
+    p.add_argument("--field", action="append", default=[], metavar="NAME=SELECTOR",
+                   help="one field to pull (name selector). Repeat for more.")
+    p.add_argument("--fields-file", dest="fieldsFile",
+                   help="a JSON file of { name: selector } — for more fields than is sane to type")
     p = sub.add_parser("click", help="click one element: an id from observe (e12), a locator (role=button[name=\"Save\"], label=Email, text=Continue) or CSS")
     p.add_argument("selector")
     p = sub.add_parser("type", help="type into a field, optionally submitting it")
@@ -2325,6 +2452,31 @@ def main():
     p.add_argument("action", nargs="?", choices=["start", "stop"], default="start")
     p.add_argument("path", nargs="?", help="path to save the trace to (required for stop)")
     p = sub.add_parser(
+        "screencast",
+        help="the page as it MOVES, from Chromium's compositor — frames whenever it repaints, not on a timer",
+        description="start, then poll `frames` (the shell keeps the newest 30, acked as they land), then stop. "
+                    "Or `watch --seconds N --out DIR` for all three in one go, frames written as jpeg files.",
+    )
+    p.add_argument("action", nargs="?", choices=["start", "frames", "stop", "watch"], default="start")
+    p.add_argument("--quality", type=int, default=60, help="jpeg quality 1-100 (default 60)")
+    p.add_argument("--max-width", dest="maxWidth", type=int, default=1024)
+    p.add_argument("--max-height", dest="maxHeight", type=int, default=768)
+    p.add_argument("--every-nth", dest="everyNth", type=int, default=1, help="keep one frame in N (default 1)")
+    p.add_argument("--seconds", type=float, default=5.0, help="for watch: how long (default 5)")
+    p.add_argument("--out", help="a directory: frames are written there as frame-NNNN.jpg instead of printed")
+    p = sub.add_parser(
+        "scrape",
+        help="several pages, one read each, in parallel — each in a tab of its own, closed again after",
+        description="Every URL is opened in a new tab in your container, read with --read, and the tab is "
+                    "closed whatever happened. At most --concurrency tabs at once (1 to 4). Rows come back "
+                    "in the order the URLs were given, each ok or with its own error.",
+    )
+    p.add_argument("urls", nargs="+", metavar="URL")
+    p.add_argument("--read", default="markdown", choices=["markdown", "read", "links", "extract", "interactive", "forms"],
+                   help="what to read from each page (default markdown)")
+    p.add_argument("--field", action="append", default=[], metavar="NAME=SELECTOR", help="for --read extract: one field, repeatable")
+    p.add_argument("--concurrency", type=int, default=2, help="tabs open at once, 1 to 4 (default 2)")
+    p = sub.add_parser(
         "do",
         help="several verbs in ONE call — starting this process costs ~104ms, so six "
              "verbs is most of a second spent before touching the page",
@@ -2591,6 +2743,18 @@ def main():
         body = {"selector": a.selector}
     elif a.cmd == "coverage":
         body = {"action": a.action}
+    elif a.cmd == "screencast":
+        if a.action == "watch":
+            # Addressed like everything else, before a byte goes out: a watch
+            # is three verbs on one tab, and that tab is the caller's.
+            page, refusal = addressed(a, "screencast")
+            if refusal:
+                print(refusal, file=sys.stderr)
+                return 1
+            return screencast_watch(a, page)
+        body = {"action": a.action}
+        if a.action == "start":
+            body.update({"quality": a.quality, "maxWidth": a.maxWidth, "maxHeight": a.maxHeight, "everyNth": a.everyNth})
     elif a.cmd == "inspect":
         body = {"action": a.action}
         if a.action == "panel":
@@ -2877,6 +3041,65 @@ def main():
         body = {"selector": a.selector, "text": a.text, "submit": a.submit}
     elif a.cmd == "text":
         body = {"selector": a.selector}
+    elif a.cmd == "extract":
+        fields = {}
+        for pair in a.field:
+            name, _, sel = pair.partition("=")
+            name, sel = name.strip(), sel.strip()
+            if not name or not sel:
+                print(f"--field wants NAME=SELECTOR, got {pair!r}", file=sys.stderr)
+                return 2
+            if name in fields:
+                print(f"--field {name} given twice", file=sys.stderr)
+                return 2
+            fields[name] = sel
+        if a.fieldsFile:
+            try:
+                with open(a.fieldsFile) as _f:
+                    from_file = json.load(_f)
+            except Exception as _e:
+                print(f"--fields-file: {_e}", file=sys.stderr)
+                return 2
+            if not isinstance(from_file, dict) or not all(isinstance(v, str) for v in from_file.values()):
+                print("--fields-file wants { name: selector }", file=sys.stderr)
+                return 2
+            for k, v in from_file.items():
+                if k in fields:
+                    print(f"field {k} given twice (CLI and --fields-file)", file=sys.stderr)
+                    return 2
+                fields[k] = v
+        if not fields:
+            print("extract needs at least one --field NAME=SELECTOR", file=sys.stderr)
+            return 2
+        body = {"fields": fields}
+    elif a.cmd == "count":
+        body = {"selector": a.selector} if a.selector else {}
+    elif a.cmd == "search":
+        body = {"query": a.query}
+    elif a.cmd in ("interactive", "forms"):
+        body = {}
+    elif a.cmd == "scrape":
+        body = {"urls": a.urls, "read": a.read, "concurrency": a.concurrency}
+        if a.read == "extract":
+            fields = {}
+            for pair in a.field:
+                name, _, sel = pair.partition("=")
+                if not name.strip() or not sel.strip():
+                    print(f"--field wants NAME=SELECTOR, got {pair!r}", file=sys.stderr)
+                    return 2
+                fields[name.strip()] = sel.strip()
+            if not fields:
+                print("--read extract needs at least one --field NAME=SELECTOR", file=sys.stderr)
+                return 2
+            body["fields"] = fields
+    elif a.cmd == "attr":
+        body = {"selector": a.selector}
+        if a.names:
+            body["names"] = a.names
+    elif a.cmd == "markdown":
+        body = {}
+    elif a.cmd == "links":
+        body = {}
     elif a.cmd == "scroll":
         if a.selector:
             body = {"selector": a.selector}
@@ -2936,8 +3159,12 @@ def main():
     # Lost once, at the merge of two lanes that both rewrote this spot, and
     # caught by `whoami` answering `identity: null` — which is a pre-flight
     # that cannot answer the question it exists for.
-    if who and a.cmd in ("whoami", "profiles", "open", "newtab"):
+    if who and a.cmd in ("whoami", "profiles", "open", "newtab", "scrape"):
         body["identity"] = who
+    if a.cmd == "scrape":
+        # Its tabs are minted in the caller's container, the way `open` mints
+        # one: the empty profile is the person's own container, `--shared`.
+        body["profile"] = who or ""
     if who and a.cmd in ("whoami", "profiles"):
         held = my_tab(who)
         if held:
@@ -3030,7 +3257,7 @@ def main():
     # the screen — never about a page inside a tab. They are in here so they are
     # not auto-addressed at this identity's tab, and `page` is stripped from
     # them below so a stray global `--page` cannot address them either.
-    TAB_OPS = {"tabs", "tab", "newtab", "closetab", "profiles", "whoami", "health", "settings"}
+    TAB_OPS = {"tabs", "tab", "newtab", "closetab", "profiles", "whoami", "health", "settings", "scrape"}
     # `open` under `--shared` carries neither a page nor a profile ON PURPOSE:
     # the person's own container IS the empty profile field, so "make me a tab
     # there" is a request with nothing on it. That is the one shape that looks
@@ -3391,6 +3618,13 @@ def main():
         # wrapping it in JSON would spend tokens on punctuation.
         print(f"{value.get('title', '')}\n{value.get('url', '')}\n")
         print(value.get("text", ""))
+    elif a.cmd == "markdown":
+        # Same reason as `read`: it is the same caller, and the markdown is the
+        # thing worth its context — JSON around it is punctuation it pays for.
+        print(f"{value.get('title', '')}\n{value.get('url', '')}\n")
+        print(value.get("markdown", ""))
+        if value.get("truncated"):
+            print("\n[truncated by the page]", file=sys.stderr)
     elif a.cmd == "inspect" and a.action == "shot":
         # Down the same path as `shot`, deliberately: that branch is where the
         # rule "an empty capture is a FAILURE, not a zero-byte file" lives, and

@@ -226,6 +226,53 @@ describe.skipIf(!HAVE_PY)("the MCP server", () => {
 
   /* A screenshot is an image, not a wall of base64 in a text block: a model
      that has to be told "this is a PNG" cannot look at it. */
+  /*
+   * THE ONE SCHEMA BUG THAT SHIPPED, AND THE CLASS AROUND IT.
+   *
+   * `browser_profiles` once carried TWO `description` keys — Python keeps the
+   * last, so the tool an agent saw described the CDP protocol, and its schema
+   * merged CDP's `method`/`params`/`events` into the profiles surface. That is
+   * the MCP playing a different game from the relay it forwards to. This check
+   * parses the TOOLS literal itself, so the class — a repeated literal key
+   * (last wins), a schema field that names another tool's verb — is held
+   * mechanically rather than by remembering to look at one dict.
+   */
+  test("every tool dict is exactly one tool's schema", async () => {
+    const dump = `
+import ast, json
+tree = ast.parse(open(${JSON.stringify(MCP)}).read())
+tools = None
+for node in ast.walk(tree):
+    if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "TOOLS" for t in node.targets):
+        tools = node.value
+out = []
+for el in tools.elts:
+    keys = [k.value for k in el.keys]
+    props = {}
+    for k, v in zip(el.keys, el.values):
+        if k.value == "name": name = v.value
+        if k.value == "inputSchema":
+            for a, b in zip(v.keys or [], v.values or []):
+                if a.value == "properties":
+                    props = sorted(p.value for p in b.keys)
+    dup = sorted(k for k in set(keys) if keys.count(k) > 1)
+    out.append({"name": name, "props": props, "dup": dup})
+print(json.dumps(out))
+`;
+    const p = Bun.spawn(["python3", "-c", dump], {
+      env: { PATH: process.env.PATH ?? "" }, stdout: "pipe", stderr: "pipe",
+    });
+    const out = await new Response(p.stdout).text();
+    await p.exited;
+    const tools = JSON.parse(out.trim()) as { name: string; props: string[]; dup: string[] }[];
+    expect(tools.length).toBeGreaterThan(60);
+    for (const t of tools) expect(t.dup, `${t.name}: repeated literal key — last wins`).toEqual([]);
+    const profiles = tools.find((t) => t.name === "browser_profiles")!;
+    /* CDP's `method`/`params`/`events` beside profile CRUD is the exact leak
+       this test exists for. */
+    expect(profiles.props).toEqual(["drop", "force", "identity", "make"]);
+  });
+
   test("a screenshot comes back as an image", async () => {
     await openWindow();
     answers = { shot: { ok: true, value: { url: "u", title: "t", png: "data:image/png;base64,iVBORw0KGgo=" } } };
@@ -421,6 +468,10 @@ describe.skipIf(!HAVE_PY)("the MCP surface addresses its own tab", () => {
 
     sent = [];
     says = {};
+    /* The composed tools never put their own name on the wire: they are made
+       of other verbs, and the page has to reach THOSE. Each is checked on the
+       first verb it sends. */
+    const COMPOSED: Record<string, string> = { browser_storage_state: "cdp", browser_set_storage_state: "cdp" };
     await client("orbit-wire", freshState(), targetable.map((t) => ({
       name: t.name,
       /* `do` is the one that cannot take a bare page: the server's `do` route
@@ -428,12 +479,14 @@ describe.skipIf(!HAVE_PY)("the MCP surface addresses its own tab", () => {
          ride each step. Give it a step to ride. */
       arguments: t.name === "browser_do"
         ? { page: "t-lock", steps: [{ op: "click", args: { selector: "#x" } }] }
-        : { page: "t-lock" },
+        : t.name === "browser_set_storage_state"
+          ? { page: "t-lock", state: { cookies: [{ name: "sid", value: "1", domain: "orbit.example", path: "/" }], origins: [] } }
+          : { page: "t-lock" },
     })));
 
     const missed: string[] = [];
     for (const t of targetable) {
-      const verb = t.name.slice("browser_".length);
+      const verb = COMPOSED[t.name] ?? t.name.slice("browser_".length);
       const req = sent.find((s) => s.op === verb);
       if (!req) { missed.push(`${t.name}: no request left the process`); continue; }
       if (verb === "do") {
@@ -487,6 +540,79 @@ describe.skipIf(!HAVE_PY)("the MCP surface addresses its own tab", () => {
     expect(res!.isError).toBe(true);
     expect(res!.content[0]!.text).toContain("orbit-c");
     expect(res!.content[0]!.text).toContain("no tab open");
+    expect(sent).toEqual([]);
+  });
+
+  /*
+   * The session as one object: `browser_storage_state` is `session save`
+   * without the file — cookies through CDP so httpOnly ones are in it, the
+   * page's storage under its origin, in Playwright's shape — and
+   * `browser_set_storage_state` puts one back. Both are made of `cdp` and
+   * `eval`, and both parts carry the caller's page, so a state can never be
+   * read from, or written onto, a tab the caller did not name.
+   */
+  test("storage_state reads cookies and storage into Playwright's shape, and set_storage_state writes them back", async () => {
+    sent = [];
+    says = {
+      cdp: { ok: true, value: { result: { cookies: [{ name: "sid", value: "s3cret", domain: ".orbit.example", path: "/", httpOnly: true, secure: true }] } } },
+      eval: { ok: true, value: { value: { origin: "https://orbit.example", localStorage: { token: "t1" }, sessionStorage: { step: "2" } } } },
+    };
+    const [got] = await client("orbit-s", freshState(), [{ name: "browser_storage_state", arguments: { page: "t-s" } }]);
+    expect(got!.isError, JSON.stringify(got)).toBeFalsy();
+    const state = JSON.parse(got!.content[0]!.text!) as { cookies: unknown[]; origins: unknown[] };
+    expect(state.cookies).toEqual([{ name: "sid", value: "s3cret", domain: ".orbit.example", path: "/", httpOnly: true, secure: true }]);
+    expect(state.origins).toEqual([{ origin: "https://orbit.example", localStorage: [{ name: "token", value: "t1" }], sessionStorage: [{ name: "step", value: "2" }] }]);
+    expect(sent.map((s) => s.op)).toEqual(["cdp", "eval"]);
+    expect(sent.every((s) => s.body.page === "t-s"), "both parts went to the named tab").toBe(true);
+    expect((sent[0]!.body as { method: string }).method).toBe("Network.getCookies");
+
+    sent = [];
+    says = { cdp: { ok: true, value: { result: {} } }, eval: { ok: true, value: { value: { written: true, at: "https://orbit.example" } } } };
+    const [put] = await client("orbit-s", freshState(), [{ name: "browser_set_storage_state", arguments: { page: "t-s", state } }]);
+    expect(put!.isError, JSON.stringify(put)).toBeFalsy();
+    expect(put!.content[0]!.text).toContain("1 of 1 cookies");
+    expect(put!.content[0]!.text).toContain("1 localStorage");
+    const setCookie = sent.find((s) => s.op === "cdp")!.body as { method: string; params: { url?: string; httpOnly?: boolean } };
+    expect(setCookie.method).toBe("Network.setCookie");
+    // getCookies answers with a domain and never a url; setCookie wants one.
+    expect(setCookie.params.url).toBe("https://orbit.example/");
+    expect(setCookie.params.httpOnly).toBe(true);
+    const write = sent.find((s) => s.op === "eval")!.body as { js: string; page: string };
+    expect(write.js).toContain('"token": "t1"');
+    expect(write.js).toContain("sessionStorage.setItem");
+    expect(write.page).toBe("t-s");
+
+    // Storage is written only into the origin it came from: the page checks
+    // its own location.origin against the state's, and says no otherwise.
+    // The first version ran every origin's writes in whatever page was open,
+    // so one site's tokens landed in another site's storage, where that
+    // site's scripts read them.
+    expect(write.js).toContain('"https://orbit.example"');
+    expect(write.js).toMatch(/location\.origin/);
+    sent = [];
+    says = {
+      cdp: { ok: true, value: { result: {} } },
+      eval: { ok: true, value: { value: { written: false, at: "https://other.example" } } },
+    };
+    const two = {
+      cookies: [],
+      origins: [
+        { origin: "https://orbit.example", localStorage: [{ name: "token", value: "t1" }], sessionStorage: [] },
+        { origin: "https://acme.example", localStorage: [{ name: "token", value: "t2" }], sessionStorage: [] },
+      ],
+    };
+    const [elsewhere] = await client("orbit-s", freshState(), [{ name: "browser_set_storage_state", arguments: { page: "t-s", state: two } }]);
+    expect(elsewhere!.isError, JSON.stringify(elsewhere)).toBeFalsy();
+    expect(elsewhere!.content[0]!.text).toContain("0 localStorage");
+    expect(elsewhere!.content[0]!.text).toContain("https://orbit.example");
+    expect(elsewhere!.content[0]!.text).toContain("https://acme.example");
+    expect(elsewhere!.content[0]!.text).toContain("https://other.example");
+    expect(sent.filter((s) => s.op === "eval").length, "each origin was asked, none was written").toBe(2);
+
+    // A state that is not one is refused before anything goes out.
+    sent = [];
+    const [bad] = await client("orbit-s", freshState(), [{ name: "browser_set_storage_state", arguments: { page: "t-s", state: "nope" } }]);
+    expect(bad!.isError).toBe(true);
     expect(sent).toEqual([]);
   });
 
@@ -705,5 +831,515 @@ print(json.dumps(out))
     expect(sent.map((s) => s.body.as)).toEqual(["orbit-named", "orbit-named", "orbit-named", "orbit-named"]);
     expect(sent.map((s) => s.body.how)).toEqual(["own-container", "own-tab", "explicit-page", "own-tab"]);
     expect(sent.map((s) => s.body.pageExplicit)).toEqual([undefined, undefined, true, undefined]);
+  });
+});
+
+describe.skipIf(!HAVE_PY)("the MCP server over Streamable HTTP", () => {
+  /* The same binary, one `--http` flag later, driven over the wire with fetch.
+     The stand-in window is the same one the stdio tests use, so a tool call
+     here proves the transport didn't fork the dispatch, not that the relay
+     changed. The fences are the point: a transport that lets the browser be
+     driven from another device gets the token/host/origin triad, or it gets
+     nobody's browser to drive. */
+  const TOKEN = "agx-http-test-token-0123456789abcdef-0123456789abcdef"; // ≥ 32 chars
+  /* The app's own token, which the MCP server carries OUT to the app and
+     which must not open the MCP endpoint: whoever sniffs the endpoint's
+     bearer off a LAN gets the browser, not the whole app. */
+  const APP_TOKEN = "agx-app-token-that-is-not-the-mcp-one-0123456789";
+  const mcpUrl = () => `http://127.0.0.1:${httpPort}`;
+  let httpPort = 0;
+  let mcp: ReturnType<typeof Bun.spawn> | null = null;
+
+  beforeAll(async () => {
+    httpPort = await freePort();
+    mcp = Bun.spawn(["python3", MCP], {
+      env: {
+        PATH: process.env.PATH ?? "",
+        AGENTGLASS_SERVER: base,
+        AGENTGLASS_TOKEN: APP_TOKEN,
+        AGENTGLASS_MCP_TOKEN: TOKEN,
+        AGENTGLASS_MCP_HTTP: `127.0.0.1:${httpPort}`,
+      },
+      stdout: "ignore", stderr: "pipe",
+    });
+    for (let i = 0; i < 100; i++) {
+      try {
+        const probe = await fetch(mcpUrl() + "/", {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 0, method: "ping" }),
+        });
+        if (probe.ok) break;
+      } catch { /* not up yet */ }
+      await Bun.sleep(100);
+    }
+    await openWindow();
+  }, SERVER_BOOT_MS);
+
+  afterAll(() => {
+    try { mcp?.kill(); } catch { /* already gone */ }
+  });
+
+  test("initialize over JSON: names itself and issues a session id", async () => {
+    const r = await fetch(mcpUrl() + "/", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 1, method: "initialize",
+        params: { protocolVersion: "2025-06-18", capabilities: {} },
+      }),
+    });
+    expect(r.status).toBe(200);
+    expect(r.headers.get("mcp-session-id")).toMatch(/^agx-/);
+    const j = await r.json() as { result: { serverInfo: { name: string }; capabilities: { tools: unknown } } };
+    expect(j.result.serverInfo.name).toBe("agentglass-browser");
+    expect(j.result.capabilities.tools).toBeDefined();
+  });
+
+  test("a missing or wrong bearer token is refused, and the app's own token is a wrong one", async () => {
+    const body = JSON.stringify({ jsonrpc: "2.0", id: 2, method: "ping" });
+    const none = await fetch(mcpUrl() + "/", { method: "POST", headers: { "content-type": "application/json" }, body });
+    expect(none.status).toBe(401);
+    const wrong = await fetch(mcpUrl() + "/", {
+      method: "POST", headers: { "content-type": "application/json", authorization: "Bearer nope" }, body,
+    });
+    expect(wrong.status).toBe(401);
+    const app = await fetch(mcpUrl() + "/", {
+      method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${APP_TOKEN}` }, body,
+    });
+    expect(app.status, "the app token opens the app, not this endpoint").toBe(401);
+  });
+
+  test("a bearer with bytes outside ASCII is a 401, not a dropped connection", async () => {
+    // hmac.compare_digest raises on a str that is not ASCII, and the header
+    // arrives decoded as latin-1, so one such byte used to kill the handler.
+    const { request } = await import("node:http");
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = request({
+        hostname: "127.0.0.1", port: httpPort, path: "/", method: "POST",
+        headers: { authorization: Buffer.from("Bearer caf\xe9", "latin1").toString("latin1"), "content-type": "application/json" },
+      }, (res) => { res.resume(); res.on("end", () => resolve(res.statusCode ?? 0)); }).on("error", reject);
+      req.end(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }));
+    });
+    expect(status).toBe(401);
+  });
+
+  test("with no AGENTGLASS_MCP_TOKEN the endpoint mints one, says it on stderr, and answers to nothing else", async () => {
+    /* Loopback used to be auth-free "the way the server is". It is not any
+       more: a page on any site can reach 127.0.0.1 with a request the browser
+       will send, and the token is the one thing it cannot forge. So there is
+       always a token — the operator's, or one minted for this process. */
+    const port = await freePort();
+    const minted = Bun.spawn(["python3", MCP], {
+      env: { PATH: process.env.PATH ?? "", AGENTGLASS_SERVER: base, AGENTGLASS_MCP_HTTP: `127.0.0.1:${port}` },
+      stdin: "ignore", stdout: "ignore", stderr: "pipe",
+    });
+    try {
+      const reader = minted.stderr.getReader();
+      let err = "";
+      for (let i = 0; i < 50 && !/AGENTGLASS_MCP_TOKEN=\S+/.test(err); i++) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        err += new TextDecoder().decode(value);
+      }
+      const token = /AGENTGLASS_MCP_TOKEN=(\S+)/.exec(err)?.[1];
+      expect(token, `stderr must carry the minted token: ${err}`).toBeDefined();
+      expect(token!.length).toBeGreaterThanOrEqual(32);
+      const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" });
+      let ok = 0, bare = 0;
+      for (let i = 0; i < 50; i++) {
+        try {
+          ok = (await fetch(`http://127.0.0.1:${port}/`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body })).status;
+          bare = (await fetch(`http://127.0.0.1:${port}/`, { method: "POST", headers: { "content-type": "application/json" }, body })).status;
+          break;
+        } catch { await Bun.sleep(100); }
+      }
+      expect(ok).toBe(200);
+      expect(bare).toBe(401);
+    } finally {
+      minted.kill();
+    }
+  });
+
+  test("a notification is answered with the empty 202 the spec wants", async () => {
+    const r = await fetch(mcpUrl() + "/", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+      body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+    });
+    expect(r.status).toBe(202);
+    expect(await r.text()).toBe("");
+  });
+
+  test("honours text/event-stream and lists the same TOOLS the stdio server does", async () => {
+    const r = await fetch(mcpUrl() + "/", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json", authorization: `Bearer ${TOKEN}`,
+        accept: "text/event-stream",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/list" }),
+    });
+    // 200, not 202: a request that carries a JSON-RPC request is answered
+    // with its response, whatever the framing. The reference SDK client reads
+    // a 202 as "nothing to read", drops the body and never resolves — the
+    // first version answered every SSE request with 202, and `initialize`
+    // hung in every SDK-based runtime.
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toContain("text/event-stream");
+    const raw = await r.text();
+    expect(raw.startsWith("event: message\ndata: ")).toBe(true);
+    const payload = JSON.parse(raw.slice(raw.indexOf("\ndata: ") + 7)) as { result: { tools: { name: string }[] } };
+    const names = payload.result.tools.map((t) => t.name);
+    for (const expectName of ["browser_open", "browser_read", "browser_markdown", "browser_links", "browser_count", "browser_search", "browser_extract"]) {
+      expect(names, `tools/list over HTTP must still carry ${expectName}`).toContain(expectName);
+    }
+  });
+
+  test("the reference client's flow: initialize, initialized, tools/list — with its own Accept header", async () => {
+    /* The Streamable-HTTP client in the reference SDK sends
+       `Accept: application/json, text/event-stream` on every POST, reads the
+       session id off `initialize`, sends `notifications/initialized` and
+       expects an empty 202 for it, and then treats any 202 as "no body". So
+       the flow is driven with exactly those headers and exactly that reading
+       of the status: a server that answers a request with 202 fails here the
+       way it fails in the SDK. */
+    const ACCEPT = "application/json, text/event-stream";
+    const post = (body: unknown, session?: string) => fetch(mcpUrl() + "/", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json", accept: ACCEPT, authorization: `Bearer ${TOKEN}`,
+        "mcp-protocol-version": "2025-06-18",
+        ...(session ? { "mcp-session-id": session } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+    /** What the SDK does with a response: 202 is no body; otherwise the body
+     *  is JSON or an SSE stream of JSON-RPC messages, by content-type. */
+    const readLikeSdk = async (r: Response): Promise<unknown[]> => {
+      if (r.status === 202) return [];
+      expect(r.status).toBe(200);
+      const ct = r.headers.get("content-type") ?? "";
+      const text = await r.text();
+      if (ct.includes("text/event-stream")) {
+        return text.split("\n\n").filter((f) => f.includes("data: ")).map((f) => JSON.parse(f.slice(f.indexOf("data: ") + 6)));
+      }
+      expect(ct).toContain("application/json");
+      const j = JSON.parse(text);
+      return Array.isArray(j) ? j : [j];
+    };
+    const init = await post({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "sdk-shaped", version: "0" } } });
+    const session = init.headers.get("mcp-session-id");
+    expect(session).toMatch(/^agx-/);
+    const [initMsg] = await readLikeSdk(init) as { id: number; result: { protocolVersion: string } }[];
+    expect(initMsg, "initialize must be answered, not acknowledged").toBeDefined();
+    expect(initMsg!.id).toBe(1);
+    expect(initMsg!.result.protocolVersion).toBe("2025-06-18");
+    const ack = await post({ jsonrpc: "2.0", method: "notifications/initialized" }, session!);
+    expect(ack.status).toBe(202);
+    expect(await readLikeSdk(ack)).toEqual([]);
+    const list = await post({ jsonrpc: "2.0", id: 2, method: "tools/list" }, session!);
+    const [listMsg] = await readLikeSdk(list) as { id: number; result: { tools: { name: string }[] } }[];
+    expect(listMsg!.id).toBe(2);
+    expect(listMsg!.result.tools.map((t) => t.name)).toContain("browser_open");
+  });
+
+  test("a tool call reaches the same relay the stdio server uses", async () => {
+    // open first: read without a tab is refused by the ownership layer before
+    // the relay — the refusal itself is the dispatch working, and the happy
+    // path needs a tab to exist.
+    answers["open"] = { ok: true, value: { id: "t-http", url: base + "/", title: "Dashboard" } };
+    const opened = await fetch(mcpUrl() + "/", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 10, method: "tools/call",
+        params: { name: "browser_open", arguments: { url: base + "/" } },
+      }),
+    });
+    expect(opened.status).toBe(200);
+
+    answers["read"] = { ok: true, value: { url: base + "/", title: "Dashboard", text: "hello from the stand-in" } };
+    const r = await fetch(mcpUrl() + "/", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 4, method: "tools/call",
+        params: { name: "browser_read", arguments: {} },
+      }),
+    });
+    expect(r.status).toBe(200);
+    const j = await r.json() as { result: { content: { type: string; text: string }[] } };
+    expect(j.result.content[0]!.text).toContain("hello from the stand-in");
+  });
+
+  test("a request with a web page's Origin is refused — https, loopback, the app's own server, null — token or no token", async () => {
+    /* The first version admitted any https Origin and the app's own, and
+       echoed it back in Access-Control-Allow-Origin; with a text/plain body
+       (no preflight) a page on any https site could call browser_storage_state
+       and read every cookie back. No MCP client is a web page, so the rule is
+       the strict one: an Origin header, whatever it says, is a browser, and a
+       browser is not a caller here. Nothing is echoed, and OPTIONS gets no
+       allowance to hand out. */
+    const body = JSON.stringify({ jsonrpc: "2.0", id: 6, method: "tools/list" });
+    for (const origin of ["https://evil.example", "http://evil.example", "http://localhost:5173", "http://127.0.0.1:4000", base, "null"]) {
+      for (const contentType of ["application/json", "text/plain"]) {
+        const r = await fetch(mcpUrl() + "/", {
+          method: "POST",
+          headers: { authorization: `Bearer ${TOKEN}`, origin, "content-type": contentType },
+          body,
+        });
+        expect(r.status, `${origin} with ${contentType}`).toBe(403);
+        expect(r.headers.get("access-control-allow-origin"), `${origin} must not be echoed`).toBeNull();
+      }
+    }
+    const preflight = await fetch(mcpUrl() + "/", {
+      method: "OPTIONS",
+      headers: { origin: "https://evil.example", "access-control-request-method": "POST", "access-control-request-headers": "authorization,content-type" },
+    });
+    expect(preflight.status).toBe(403);
+    expect(preflight.headers.get("access-control-allow-origin")).toBeNull();
+    expect(preflight.headers.get("access-control-allow-headers")).toBeNull();
+  });
+
+  test("bound to loopback, the endpoint answers to every loopback name — localhost, ::1 — and 421 only to a foreign one", async () => {
+    /* The bind is 127.0.0.1, which is what getsockname says even when the
+       operator typed `localhost`; the first version compared the Host header
+       to that literally, so `http://localhost:PORT` — the first URL anybody
+       types — got 421 Misdirected Request. A rebinding page cannot make a
+       browser send a loopback name for a hostname of its own, so any loopback
+       name is the bound address. A request with no Host at all is not HTTP/1.1
+       and is a 400. */
+    const { request } = await import("node:http");
+    const body = JSON.stringify({ jsonrpc: "2.0", id: 9, method: "ping" });
+    const withHost = (host: string) => new Promise<number>((resolve, reject) => {
+      const headers: Record<string, string> = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json", host };
+      const req = request({ hostname: "127.0.0.1", port: httpPort, path: "/", method: "POST", headers }, (res) => {
+        res.resume();
+        res.on("end", () => resolve(res.statusCode ?? 0));
+      }).on("error", reject);
+      req.end(body);
+    });
+    expect(await withHost(`localhost:${httpPort}`)).toBe(200);
+    expect(await withHost(`127.0.0.1:${httpPort}`)).toBe(200);
+    expect(await withHost(`[::1]:${httpPort}`)).toBe(200);
+    expect(await withHost(`127.1.2.3:${httpPort}`)).toBe(200);
+    expect(await withHost(`attacker.example:${httpPort}`)).toBe(421);
+    expect(await withHost("localhost.attacker.example")).toBe(421);
+    // No Host at all: node's http client adds one whatever it is told, so
+    // this one goes over a bare socket.
+    const { connect } = await import("node:net");
+    const bare = await new Promise<string>((resolve, reject) => {
+      const sock = connect({ host: "127.0.0.1", port: httpPort });
+      let got = "";
+      sock.on("connect", () => sock.write(`POST / HTTP/1.1\r\nAuthorization: Bearer ${TOKEN}\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\nConnection: close\r\n\r\n${body}`));
+      sock.on("data", (d) => { got += d.toString(); });
+      sock.on("close", () => resolve(got));
+      sock.on("error", reject);
+    });
+    expect(bare.split("\r\n")[0], "no Host at all").toContain("400");
+  });
+
+  test("an IPv6 bind serves, and --allow-host admits the name a tunnel in front forwards", async () => {
+    /* Parsing `[::1]:PORT` was half of it: the server class is IPv4-only,
+       and the bind itself died with gaierror. And a tunnel that terminates
+       TLS in front of a loopback bind (the thing the off-loopback warning
+       recommends) forwards the tailnet name as Host, which is not a loopback
+       name — so it gets 421 unless the operator names it. */
+    const port = await freePort();
+    const p = Bun.spawn(["python3", MCP, "--http", `[::1]:${port}`, "--allow-host", "box.tailnet-orbit.ts.net"], {
+      env: { PATH: process.env.PATH ?? "", AGENTGLASS_SERVER: base, AGENTGLASS_MCP_TOKEN: TOKEN },
+      stdin: "ignore", stdout: "ignore", stderr: "pipe",
+    });
+    try {
+      const { request } = await import("node:http");
+      const ask = (host: string) => new Promise<number>((resolve, reject) => {
+        const req = request({ hostname: "::1", family: 6, port, path: "/", method: "POST", headers: { host, authorization: `Bearer ${TOKEN}`, "content-type": "application/json" } }, (res) => {
+          res.resume(); res.on("end", () => resolve(res.statusCode ?? 0));
+        }).on("error", reject);
+        req.end(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }));
+      });
+      let first = 0;
+      for (let i = 0; i < 50 && !first; i++) { try { first = await ask(`[::1]:${port}`); } catch { await Bun.sleep(100); } }
+      expect(first, "the v6 bind came up and answered").toBe(200);
+      expect(await ask(`localhost:${port}`)).toBe(200);
+      expect(await ask("box.tailnet-orbit.ts.net")).toBe(200);
+      expect(await ask("BOX.tailnet-orbit.ts.net:443"), "case and port do not make another name").toBe(200);
+      expect(await ask("other.tailnet-orbit.ts.net")).toBe(421);
+    } finally {
+      p.kill();
+    }
+  });
+
+  test("the bind is parsed as [HOST:]PORT, bracketed IPv6 included", async () => {
+    const probe = Bun.spawn(["python3", "-c", `
+import importlib.machinery, importlib.util, json, sys
+spec = importlib.util.spec_from_loader("agx_mcp", importlib.machinery.SourceFileLoader("agx_mcp", ${JSON.stringify(MCP)}))
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+print(json.dumps({b: m._parse_bind(b) for b in ["8765", "127.0.0.1:8765", "[::1]:8765", "::1:8765", "localhost:8765", "0.0.0.0:0", "8765:", ":8765", "nope", "127.0.0.1:99999", ""]}))
+`], { env: { PATH: process.env.PATH ?? "", AGENTGLASS_SERVER: base }, stdout: "pipe", stderr: "pipe" });
+    const [out, err] = await Promise.all([new Response(probe.stdout).text(), new Response(probe.stderr).text()]);
+    expect(await probe.exited, err).toBe(0);
+    expect(JSON.parse(out)).toEqual({
+      "8765": ["127.0.0.1", 8765],
+      "127.0.0.1:8765": ["127.0.0.1", 8765],
+      "[::1]:8765": ["::1", 8765],
+      "::1:8765": ["::1", 8765],
+      "localhost:8765": ["localhost", 8765],
+      "0.0.0.0:0": null,
+      "8765:": null,
+      ":8765": null,
+      "nope": null,
+      "127.0.0.1:99999": null,
+      "": null,
+    });
+  });
+
+  test("a batch item that is not an object is a JSON-RPC error, not a dropped connection", async () => {
+    // `[1]` used to raise inside the handler and close the socket with no
+    // reply; a parse-level mistake is answered as one.
+    const r = await fetch(mcpUrl() + "/", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify([1, { jsonrpc: "2.0", id: 11, method: "ping" }]),
+    });
+    expect(r.status).toBe(200);
+    const j = await r.json() as { id: number | null; error?: { code: number }; result?: unknown }[];
+    expect(j.find((m) => m.error)?.error?.code).toBe(-32600);
+    expect(j.find((m) => m.id === 11)?.result).toEqual({});
+  });
+
+  test("the session table is a ring, not a quota: the 65th initialize still gets an id", async () => {
+    const init = () => fetch(mcpUrl() + "/", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {} } }),
+    });
+    for (let i = 0; i < 70; i++) await init();
+    const last = await init();
+    expect(last.status).toBe(200);
+    expect(last.headers.get("mcp-session-id")).toMatch(/^agx-/);
+  });
+
+  test("a body that is not application/json is refused before it is parsed", async () => {
+    // A text/plain POST is one a browser sends without a preflight; JSON is
+    // the only content type a JSON-RPC client has a reason to send.
+    for (const contentType of ["text/plain", "application/x-www-form-urlencoded", ""]) {
+      const r = await fetch(mcpUrl() + "/", {
+        method: "POST",
+        headers: { authorization: `Bearer ${TOKEN}`, ...(contentType ? { "content-type": contentType } : {}) },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 7, method: "ping" }),
+      });
+      expect(r.status, contentType || "(none)").toBe(415);
+    }
+    const charset = await fetch(mcpUrl() + "/", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json; charset=utf-8" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 8, method: "ping" }),
+    });
+    expect(charset.status, "a charset parameter is still JSON").toBe(200);
+  });
+
+  test("the caps hold: oversized body, oversized batch, wrong host, foreign origin", async () => {
+    const big = await fetch(mcpUrl() + "/", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: "x".repeat(1024 * 1024 + 1),
+    });
+    expect(big.status).toBe(431);
+    const many = Array.from({ length: 9 }, (_, i) => ({ jsonrpc: "2.0", id: i, method: "ping" }));
+    const batched = await fetch(mcpUrl() + "/", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+      body: JSON.stringify(many),
+    });
+    expect(batched.status).toBe(400);
+    // Host naming a different authority → 421: the DNS-rebinding shape. The
+    // catch is the Host header, so it is sent raw — bun's fetch pins the URL's
+    // own host and gives no way to lie.
+    const body = JSON.stringify({ jsonrpc: "2.0", id: 5, method: "ping" });
+    const rebindStatus = await new Promise<number>((resolve, reject) => {
+      import("node:http").then(({ request }) => {
+        const req = request({
+          hostname: "127.0.0.1",
+          port: httpPort,
+          path: "/",
+          method: "POST",
+          headers: { host: "attacker.example", authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+        }, (res) => {
+          res.resume();
+          res.on("end", () => resolve(res.statusCode ?? 0));
+        }).on("error", reject);
+        req.end(body);
+      });
+    });
+    expect(rebindStatus).toBe(421);
+    // A foreign browser origin → 403 even with the right token in hand (CSWSH).
+    const foreign = await fetch(mcpUrl() + "/", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, origin: "http://evil.example", "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 6, method: "ping" }),
+    });
+    expect(foreign.status).toBe(403);
+    // GET is not a transport here.
+    const get = await fetch(mcpUrl() + "/");
+    expect(get.status).toBe(405);
+  });
+
+  /** Start the binary with these extra env vars and return its exit code and stderr. */
+  const startsWith = async (env: Record<string, string>) => {
+    const p = Bun.spawn(["python3", MCP], {
+      env: { PATH: process.env.PATH ?? "", AGENTGLASS_SERVER: base, ...env },
+      stdin: "ignore", stdout: "ignore", stderr: "pipe",
+    });
+    return { code: await p.exited, err: await new Response(p.stderr).text() };
+  };
+
+  test("a non-loopback bind is an opt-in: it needs --expose (or AGENTGLASS_MCP_EXPOSE=1) as well as a token", async () => {
+    const off = `0.0.0.0:${await freePort()}`;
+    const noToken = await startsWith({ AGENTGLASS_MCP_HTTP: off, AGENTGLASS_MCP_EXPOSE: "1" });
+    expect(noToken.code).toBe(2);
+    expect(noToken.err).toContain("refusing to bind");
+    expect(noToken.err).toContain("AGENTGLASS_MCP_TOKEN");
+    const noOptIn = await startsWith({ AGENTGLASS_MCP_HTTP: off, AGENTGLASS_MCP_TOKEN: TOKEN });
+    expect(noOptIn.code).toBe(2);
+    expect(noOptIn.err).toContain("refusing to bind");
+    expect(noOptIn.err).toContain("--expose");
+  });
+
+  test("an exposed bind starts at once and warns that the token crosses the network in the clear", async () => {
+    /* HTTPServer.server_bind asks for the fully-qualified name of the bound
+       address, a reverse lookup that took five seconds for 0.0.0.0 on a
+       machine with no answer for it — the warning arrived after the port
+       was already serving. */
+    const p = Bun.spawn(["python3", MCP, "--http", `0.0.0.0:${await freePort()}`, "--expose"], {
+      env: { PATH: process.env.PATH ?? "", AGENTGLASS_SERVER: base, AGENTGLASS_MCP_TOKEN: TOKEN },
+      stdin: "ignore", stdout: "ignore", stderr: "pipe",
+    });
+    try {
+      const reader = p.stderr.getReader();
+      let err = "";
+      const started = Date.now();
+      while (!/WARNING[^\n]*\n/.test(err) && Date.now() - started < 4000) {
+        const next = await Promise.race([reader.read(), Bun.sleep(4000).then(() => ({ value: undefined, done: true }))]);
+        if (next.done) break;
+        err += new TextDecoder().decode(next.value);
+      }
+      expect(Date.now() - started, "start-up did not wait on a reverse lookup").toBeLessThan(2000);
+      expect(err).toContain("WARNING");
+      expect(err).toContain("in the clear");
+      expect(err).not.toContain(TOKEN);
+    } finally {
+      p.kill();
+    }
+  });
+
+  test("a token shorter than 32 chars, or equal to the app's, refuses to start", async () => {
+    const short = await startsWith({ AGENTGLASS_MCP_HTTP: `127.0.0.1:${await freePort()}`, AGENTGLASS_MCP_TOKEN: "short" });
+    expect(short.code).toBe(2);
+    expect(short.err).toContain("32");
+    const same = await startsWith({ AGENTGLASS_MCP_HTTP: `127.0.0.1:${await freePort()}`, AGENTGLASS_MCP_TOKEN: APP_TOKEN, AGENTGLASS_TOKEN: APP_TOKEN });
+    expect(same.code).toBe(2);
+    expect(same.err).toContain("AGENTGLASS_TOKEN");
   });
 });

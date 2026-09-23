@@ -135,7 +135,7 @@ describe("what gets packed into app.asar", () => {
     // Every file main.js `require`s has to be named here — left out of the
     // asar the app does not start, and the lock is what turns that from a
     // discovery at launch into a red test.
-    expect(new Set(pkg.build.files)).toEqual(new Set(["main.js", "guest-guard.js", "browser-menu.js", "power.js", "preload.js", "icons/**"]));
+    expect(new Set(pkg.build.files)).toEqual(new Set(["main.js", "guest-guard.js", "egress-guard.js", "browser-menu.js", "power.js", "preload.js", "icons/**"]));
   });
 });
 

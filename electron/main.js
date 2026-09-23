@@ -31,6 +31,41 @@ const os = require("os");
 const {
   BROWSER_PARTITION, isBrowserPartition, safeGuestUrl, applyGuestGuard,
 } = require("./guest-guard.js");
+const { startEgressProxy, literalRefusal, EGRESS_ENV } = require("./egress-guard.js");
+
+/**
+ * The browser's egress guard, once it is listening — see egress-guard.js for
+ * what it is and why a proxy is the only place the URL policy can be held at
+ * connect time. Null while it is starting, and for good when it is switched
+ * off (AGENTGLASS_BROWSER_EGRESS=off) or could not bind, in which case the
+ * browser reaches the network directly as it did before it existed.
+ * @type {{ port: number, proxyRules: string, refusals: () => Array<{ at: number, host: string, reason: string }>, refuse: (host: string, reason: string) => void } | null} */
+let egress = null;
+/** Sessions already pointed at the guard. One per partition, like `coopFreed`:
+ *  `setProxy` twice is harmless but `onBeforeRequest` twice is the second
+ *  listener replacing the first. @type {WeakSet<Electron.Session>} */
+const egressArmed = new WeakSet();
+
+/**
+ * Point a browsing session at the guard: its traffic goes through the proxy,
+ * and the requests the proxy can never see — Chromium sends link-local
+ * LITERALS straight to the network — are cancelled on the request hook.
+ * Called from `will-attach-webview` with the guest's partition, so the session
+ * is armed before the guest exists rather than after its first request.
+ * @param {string | undefined} partition */
+function armEgress(partition) {
+  if (!egress) return;
+  const ses = session.fromPartition(partition || BROWSER_PARTITION);
+  if (egressArmed.has(ses)) return;
+  egressArmed.add(ses);
+  ses.setProxy({ proxyRules: egress.proxyRules, proxyBypassRules: "" })
+    .catch((e) => console.error("[egress] could not set the session proxy:", e));
+  ses.webRequest.onBeforeRequest((details, callback) => {
+    const why = literalRefusal(details.url);
+    if (why && egress) egress.refuse(new URL(details.url).hostname, why);
+    callback({ cancel: !!why });
+  });
+}
 const { browserMenuTemplate } = require("./browser-menu.js");
 const power = require("./power.js");
 
@@ -1838,6 +1873,16 @@ function registerIpc(win) {
   /** @type {Map<Electron.WebContents, Array<{at: number, method: string, params: unknown}>>} */
   const guestCdpEvents = new Map();
   const CDP_EVENT_CAP = 500;
+  /**
+   * Screencast frames, kept apart from the events above and for two reasons:
+   * a frame is a picture — thirty of them would push every debugger pause
+   * out of a 500-slot buffer — and a frame has to be ACKED the moment it
+   * lands, or Chromium sends no more. So the listener answers each one with
+   * `Page.screencastFrameAck` itself and keeps the newest thirty here, and
+   * `Page.agxScreencastFrames` hands the ring over and empties it.
+   * @type {Map<Electron.WebContents, { frames: Array<{at: number, sessionId: number, data: string, metadata: unknown}>, dropped: number }>} */
+  const guestScreencast = new Map();
+  const SCREENCAST_CAP = 30;
 
   /*
    * WHERE A DOWNLOAD IS MEANT TO LAND, per guest.
@@ -2039,6 +2084,11 @@ function registerIpc(win) {
      * turns the domain on when there is something to match and off when there
      * is not.
      */
+    if (method === "Page.agxScreencastFrames") {
+      const ring = guestScreencast.get(guest) || { frames: [], dropped: 0 };
+      guestScreencast.set(guest, { frames: [], dropped: 0 });
+      return { ok: true, result: { frames: ring.frames, dropped: ring.dropped } };
+    }
     if (method === "Fetch.agxSetRules") {
       const rules = Array.isArray(req?.params?.rules) ? req.params.rules : [];
       if (!rules.length) {
@@ -2125,6 +2175,15 @@ function registerIpc(win) {
              before the buffer, because a rule that matches nothing still has
              to let the request through. */
           if (m === "Fetch.requestPaused") answerPaused(guest, params);
+          if (m === "Page.screencastFrame") {
+            const p = /** @type {{ sessionId?: number, data?: string, metadata?: unknown }} */ (params || {});
+            guest.debugger.sendCommand("Page.screencastFrameAck", { sessionId: p.sessionId }).catch(() => { /* the cast just stopped */ });
+            const ring = guestScreencast.get(guest) || { frames: [], dropped: 0 };
+            ring.frames.push({ at: Date.now(), sessionId: Number(p.sessionId), data: String(p.data || ""), metadata: p.metadata });
+            if (ring.frames.length > SCREENCAST_CAP) { ring.dropped += ring.frames.length - SCREENCAST_CAP; ring.frames.splice(0, ring.frames.length - SCREENCAST_CAP); }
+            guestScreencast.set(guest, ring);
+            return;
+          }
           const buf = guestCdpEvents.get(guest);
           if (!buf) return;
           buf.push({ at: Date.now(), method: m, params });
@@ -2135,6 +2194,7 @@ function registerIpc(win) {
         guest.debugger.on("detach", () => {
           guestOwnsDebugger.delete(guest);
           guestCdpEvents.delete(guest);
+          guestScreencast.delete(guest);
         });
       }
       /*
@@ -2182,8 +2242,20 @@ function registerIpc(win) {
         const px = req.proxy;
         const rules = String(px.rules ?? "");
         const bypass = String(px.bypass ?? "");
-        await ses.setProxy({ proxyRules: rules, proxyBypassRules: bypass });
-        applied.push("proxy");
+        /*
+         * A proxy of the operator's replaces the egress guard's, and with an
+         * upstream proxy the name is resolved THERE — the connect-time policy
+         * cannot be held from here while one is set. Said in the reply rather
+         * than left to be discovered. Clearing the rules puts the guard back.
+         */
+        if (!rules.trim() && egress) {
+          await ses.setProxy({ proxyRules: egress.proxyRules, proxyBypassRules: "" });
+          applied.push("proxy:cleared (egress guard restored)");
+        } else {
+          await ses.setProxy({ proxyRules: rules, proxyBypassRules: bypass });
+          applied.push("proxy");
+          if (egress) applied.push("egress guard: its connect-time check is off while this proxy is set");
+        }
       }
       if (req?.cookies && typeof req.cookies === "object") {
         /*
@@ -2245,6 +2317,15 @@ function registerIpc(win) {
             return { ok: false, error: `could not list extensions: ${String(e instanceof Error ? e.message : e)}` };
           }
         }
+      }
+      if (req?.egress && typeof req.egress === "object") {
+        /* Why a navigation failed, when the guard is why. A refused CONNECT
+           reaches the page as a bare ERR_TUNNEL_CONNECTION_FAILED, which names
+           nothing an agent can act on; the guard kept the reason, and the
+           driver asks for it here to put it in the sentence. */
+        const host = String(req.egress.host ?? "").toLowerCase();
+        const rows = egress ? egress.refusals().filter((r) => !host || r.host === host) : [];
+        return { ok: true, applied: ["egress:refusals"], value: { armed: !!egress, refusals: rows.slice(-5) } };
       }
       if (req?.dns && typeof req.dns === "object") {
         /* Electron does not expose a method to change DNS at runtime — it must
@@ -3199,6 +3280,7 @@ function guardWebviews(win) {
   // means the guest never exists.
   win.webContents.on("will-attach-webview", (e, webPreferences, params) => {
     if (!applyGuestGuard(webPreferences, params)) e.preventDefault();
+    else armEgress(webPreferences.partition);
   });
 
   win.webContents.on("did-attach-webview", (_e, guest) => {
@@ -3927,6 +4009,23 @@ app.whenReady().then(async () => {
   }
   // A link that started the app cold: taken before any window exists and
   // handed over when the renderer asks for it.
+  /*
+   * The egress guard, before any window can attach a guest. Off by the
+   * environment only, and said out loud either way: a browser that reaches
+   * the network directly is the state this app was in for its first year,
+   * not a failure — but it should never be a surprise.
+   */
+  if (String(process.env[EGRESS_ENV] || "on").toLowerCase() === "off") {
+    console.log(`[egress] ${EGRESS_ENV}=off: the browser resolves names itself, and a name is free to answer a private address`);
+  } else {
+    try {
+      const started = await startEgressProxy({ log: (/** @type {string} */ line) => console.log(line) });
+      egress = started;
+      console.log(`[egress] guard listening on ${started.proxyRules}`);
+    } catch (e) {
+      console.error("[egress] the guard could not start; the browser reaches the network directly:", e);
+    }
+  }
   const coldLink = deepLinkFrom(process.argv.slice(1));
   if (coldLink) pendingDeepLink = parseDeepLink(coldLink);
   // The renderer asks once it has mounted, because a message sent to a window

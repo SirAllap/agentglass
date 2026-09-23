@@ -1,0 +1,29 @@
+# agentglass
+
+> Every AI coding agent on your machine, on one screen. agentglass attaches to the tmux sessions and repositories already open on a developer's machine — Claude Code, Codex, Gemini CLI, OpenCode — and shows every tool call, what each costs, who is waiting on a human, and holds anything dangerous until somebody says go. Local by default: a Bun + SQLite server on loopback, a desktop app (Linux, macOS, Windows) and an Android companion. Open source, MIT.
+
+It does not launch or replace agents. It observes them through their own hook and transcript streams, gates the tool calls a person chose to gate, and gives the agents a browser of their own — one already signed in to what the person is signed in to — driven from a CLI and an MCP server.
+
+## Docs
+
+- [README](https://raw.githubusercontent.com/SirAllap/agentglass/main/README.md): what it does, screen by screen, platforms, install, FAQ, roadmap
+- [Install](https://raw.githubusercontent.com/SirAllap/agentglass/main/docs/INSTALL.md): installing, updating, requirements, the desktop app, the control plane, running against any provider
+- [Workspace](https://raw.githubusercontent.com/SirAllap/agentglass/main/docs/WORKSPACE.md): every view and what it is for — the rail, the Clone, the Lantern, the terminal, shortcuts, themes
+- [Configuration and API](https://raw.githubusercontent.com/SirAllap/agentglass/main/docs/CONFIG.md): every environment variable the code reads, the whole HTTP API, the architecture
+- [Security](https://raw.githubusercontent.com/SirAllap/agentglass/main/SECURITY.md): the trust model, what each surface can reach, retention, how to report a vulnerability
+- [Extending](https://raw.githubusercontent.com/SirAllap/agentglass/main/docs/EXTENDING.md): driving agentglass from your own harness, and writing a plugin
+- [Plugins](https://raw.githubusercontent.com/SirAllap/agentglass/main/docs/PLUGINS.md): what a plugin is, what it may ask for, how to publish one
+- [Changelog](https://raw.githubusercontent.com/SirAllap/agentglass/main/CHANGELOG.md): what each release changed
+
+## For agents
+
+- [AGENTS.md](https://raw.githubusercontent.com/SirAllap/agentglass/main/AGENTS.md): the short version for an agent — using the built-in browser from a session, and working in this repository
+- [Browser skill](https://raw.githubusercontent.com/SirAllap/agentglass/main/skills/browser-use/SKILL.md): the built-in browser's CLI and MCP server, verb by verb — observe, read, click, fill, the DevTools protocol, fake network responses, isolated profiles
+- [Contributing](https://raw.githubusercontent.com/SirAllap/agentglass/main/CONTRIBUTING.md): dev setup, ground rules, how to report a bug
+
+## Optional
+
+- [Live demo](https://sirallap.github.io/agentglass/demo/): the dashboard in a browser, with recorded data
+- [Releases](https://github.com/SirAllap/agentglass/releases/latest): the desktop and Android builds
+- [Blast radius](https://raw.githubusercontent.com/SirAllap/agentglass/main/docs/BLAST-RADIUS.md): what a compromised agent could reach through agentglass, and what it could not
+- [Source](https://github.com/SirAllap/agentglass): the repository

@@ -93,24 +93,51 @@ once. "Nothing happened in thirty seconds" is an answer, not a failure.
 ```
 dev loop    checkup (did it break — errors from load on, failed requests, visible errors)
 measure     vitals (LCP/CLS/INP/TTFB/FCP, rated) · a11y (unlabelled controls, alt, heading jumps, lang)
-look        observe · read · text · html (--clean: scripts/styles out, eN ids in) · region · shot · frames · console · network
+look        observe · read · markdown · text · html (--clean: scripts/styles out, eN ids in) ·
+            region · shot · frames · console · network · extract · links · count · search
+            interactive · forms · attr
 page        resize · zoom (the one Ctrl+/Ctrl- move) · emulate · throttle
 handoff     handoff "why" [--until sel|/path] — the person does the CAPTCHA/2FA/consent, you continue
 act         click · type (also rich editors: contenteditable) · select · check · fill · hover · dblclick · rightclick
             focus · blur · press · scroll · drag · upload · dialog (answer the next confirm/prompt)
 wait        wait · waitfor (--until network-idle | no-timers) · events
+many pages  scrape URL... (--read markdown|links|extract… --concurrency 1-4): a tab each, closed after
 navigate    open · back · forward · reload
 tabs        tabs · tab · newtab · closetab · profiles (open|newtab --wait-slot S queues at 12 awake)
 containers  whoami · profiles (--make/--drop) · newtab --profile · lanes
-identity    cookies · storage · permission · permissions · clipboard
+identity    cookies · storage · session save/load (MCP: storage_state) · permission · permissions · clipboard
 run code    eval · eval --file · addInitScript · expose · exposed
-inspect     cdp · debug · listeners · coverage · trace
+inspect     cdp · debug · listeners · coverage · trace · screencast (start · frames · stop · watch --out DIR)
 devtools    inspect open|close · inspect panel <id> · inspect zoom <n> · inspect shot
 network     fake · intercept · throttle · headers · har
 pretend     emulate · resize · clock · settings
 evidence    shot · shot --marks (eN labels on the picture) · shot --with-inspector · record · pdf · save · download · audit --script
 batch       do (and `lanes` for several pages at once)
 ```
+
+## The structured readers — what an agent actually wants from a page
+
+`read` gives you the page, but as one wall of text. When the question is a
+question, not "give me the page", reach for the verb that answers it:
+
+```bash
+agentglass-browser markdown                    # the page as markdown — headings, lists, code, links
+agentglass-browser extract --field price=.price --field title=h1   # named fields, one round trip
+agentglass-browser links                       # what this page reaches, deduplicated
+agentglass-browser count "[data-testid=row]"   # how many match (omit the selector: interactive count)
+agentglass-browser search "shipping"           # find text, get the matches with their hrefs
+agentglass-browser interactive                 # what can be acted on: id, role, name, href/value/options
+agentglass-browser forms                       # the forms as forms: fields with labels, the submit, loose fields
+agentglass-browser attr e17 href data-testid   # one element's attributes (no names: all of them)
+```
+
+All eight are reads, all eight are clamped by `--max-tokens` and the same
+redaction seam as everything else, and only `extract`, `search` and `attr`
+take arguments — the others answer with the whole page in the right shape.
+`extract`'s answer names the fields that matched nothing, so you never invent
+a value for a field that was not there. `interactive` and `forms` hand out
+the same ids `observe` does, so what they list is what the next `click` or
+`fill` takes; a password's value never travels in any of them.
 
 ## The things worth knowing before you start
 
@@ -130,6 +157,10 @@ Raw `cdp Input.*` stays refused: it lands in the app's own window.
 **Stable ids beat invented selectors.** Every node in an `observe` comes with an
 id like `e17`, stamped on the element so it survives a re-render. Every verb
 that takes a selector takes one of those instead. Do not go inventing CSS.
+An id is good for the page that handed it out: no two pages in a window ever
+share one, so an id used after a navigation, on another tab, or after the node
+was removed is refused with a sentence that says which — and the fix is always
+the same, `observe` again and use the new ids.
 
 **Or name it, and skip the look.** When you already know what a thing is
 called — you wrote the page, or just read it — every verb that takes a

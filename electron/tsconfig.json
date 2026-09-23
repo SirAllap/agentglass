@@ -32,5 +32,5 @@
     "strict": true,
     "skipLibCheck": true
   },
-  "include": ["main.js", "preload.js", "guest-guard.js", "browser-menu.js"]
+  "include": ["main.js", "preload.js", "guest-guard.js", "egress-guard.js", "browser-menu.js"]
 }

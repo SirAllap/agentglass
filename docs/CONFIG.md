@@ -127,6 +127,10 @@ are:
 | `AGENTGLASS_TASK_WRITE_DISABLED` | — | `1` → make the **Tasks** view's local list read-only: no add, done, edit, delete or tag change reaches your Taskwarrior store. Reminders, which are the app's own, are unaffected. |
 | `AGENTGLASS_CLICKUP_WRITE` | — | `1` → allow **writes to a ClickUp board** (status, assignee, comments, checklists). Off by default, the opposite of the local list — a status change on a shared board fires automations and notifies people. Also a runtime toggle (`POST /clickup/writes`). See SECURITY.md. |
 | `AGENTGLASS_BROWSER_READONLY` | — | `1` → when an agent drives the built-in browser (`agentglass-browser`, the MCP server), every **acting** verb — clicks, typing, `eval`, `cdp`, init scripts, uploads — is refused; reading, screenshots, the console and network logs keep working. |
+| `AGENTGLASS_MCP_HTTP` | — | `[HOST:]PORT` → serve the MCP server (`agentglass-browser-mcp`) over **Streamable HTTP** instead of stdio, e.g. `8765` (loopback) or `127.0.0.1:8765`. The same flag exists as `--http`. Serves the same tools; every request needs `AGENTGLASS_MCP_TOKEN` as a Bearer token; only answers to the bound address — DNS rebinding, any browser `Origin` and any body over 1 MiB are refused. A bind off loopback needs `--expose` (or `AGENTGLASS_MCP_EXPOSE=1`) as well as a token, and warns that the token crosses the network in the clear until TLS terminates in front of it. |
+| `AGENTGLASS_MCP_TOKEN` | minted | The Bearer token the Streamable-HTTP MCP endpoint requires on every request, 32+ chars. It is the endpoint's own, never `AGENTGLASS_TOKEN` (refused if equal): whoever holds it can drive the browser, not the app. Unset, one is minted for the process and printed on stderr at start. |
+| `AGENTGLASS_MCP_EXPOSE` | — | `1` → the same opt-in as `--expose`: allow `AGENTGLASS_MCP_HTTP` to bind an address that is not loopback. |
+| `AGENTGLASS_MCP_ALLOW_HOSTS` | — | Comma-separated `Host` names the Streamable-HTTP MCP endpoint answers besides the bound address; the same as repeating `--allow-host NAME`. For a TLS tunnel or reverse proxy in front of a loopback bind, which forwards its own public name as `Host`. |
 | `AGENTGLASS_UNDERSTUDY` | — | `0` → force the **Clone** off whatever its settings file says. It can force off, never on: recording must not start because of a variable inherited from a shell. |
 | `AGENTGLASS_PRIVATE_TERMS` | `~/.config/agentglass/private-terms.txt` | The Clone's private-terms list — one pattern per line of names that must never leave a private repository. With the app's own file absent, `~/.config/git/private-terms.txt` is honoured. Without any list the Clone refuses to learn. |
 | `AGENTGLASS_STATE_DIR` | `~/.local/state/agentglass` | Where a server keeps its mutable state — the tmux socket and config, pane records, the judge's private room, and (unless `AGENTGLASS_DB` names a file) its database. A second server pointed here runs beside the real one without touching its history. |
@@ -209,6 +213,8 @@ that nothing the code reads goes unnamed. None is required.
 |---|---|---|
 | `AGENTGLASS_BROWSER_ORIGINS` | `*` | Allow-list of `host` or `host:port` entries the browser may be pointed at (`localhost:8001,localhost:8002`). Unset reaches anywhere — a deliberate default, written down in `browserdrive.ts`. Read on every call. |
 | `AGENTGLASS_BROWSER_PROFILES` | `*` | Allow-list of profile names an agent may use (`support,agent`). Same shape as the origins list. |
+| `AGENTGLASS_BROWSER_ROBOTS` | off | `1` → every `open` and `newtab` the CLIs and the MCP ask for is checked against the origin's `robots.txt` first (one fetch per origin per hour) and refused, by name, when the path is disallowed for `agentglass` — or for `*` when no group names it. Off by default because this browser is a person's own, signed in as they are; the switch is for the run where an agent is sent to read a site it has no relationship with. A `robots.txt` that cannot be fetched allows everything. |
+| `AGENTGLASS_BROWSER_EGRESS` | `on` | The browser's egress guard: a loopback proxy every browsing session is pointed at, which resolves each name once per connection, refuses any answer that is link-local (169.254/16, where cloud metadata lives) or unspecified, and refuses a name that answered a public address when first met and answers a private or loopback one later — DNS rebinding. Loopback and LAN addresses stay reachable, and a name that was private from its first answer (a hosts-file entry, a LAN box) stays allowed. `off` restores direct connections; read at launch by the desktop app, so it goes in the app's environment, not the server's. A proxy set through the `session` verb replaces the guard's while it is set. |
 | `AGENTGLASS_BROWSER_AUDIT_LOG` | `$AGENTGLASS_STATE_DIR/browser-audit.log` | Where every browser act is appended (rotates once at 4 MiB). |
 | `AGENTGLASS_PROFILE` | derived from the session | The CLI's default profile name when `--profile` is not given. |
 | `AGENTGLASS_BROWSER_SHOW` | off | `1` makes every CLI verb bring the browser view to the front, the way `--show` does for one call. |
@@ -354,6 +360,18 @@ over plain `http://` to any host that is not this machine.
   `browser_cdp` sends raw DevTools Protocol commands to the page's session — and
   every acting tool is refused under `AGENTGLASS_BROWSER_READONLY=1`. It does not
   offer `ignoreCertErrors`.
+
+- **The same server over HTTP** — `agentglass-browser-mcp --http 8765`
+  (or `AGENTGLASS_MCP_HTTP=8765`) makes it a Streamable-HTTP MCP endpoint on
+  loopback: point a client at `http://127.0.0.1:8765/` with
+  `Authorization: Bearer $AGENTGLASS_MCP_TOKEN` and it lands on the identical
+  tools/list and tools/call. The token is the endpoint's own (minted and
+  printed at start when unset), required on every request, loopback included;
+  a browser `Origin` is refused outright; a connection limit and the byte cap
+  above bound what a request can cost. Binding anywhere else is
+  `--http 0.0.0.0:8765 --expose`, which says on stderr that the token travels
+  in the clear until TLS terminates in front of it. A tunnel in front of a
+  loopback bind forwards its own name as `Host`; name it with `--allow-host`.
 
 ---
 
