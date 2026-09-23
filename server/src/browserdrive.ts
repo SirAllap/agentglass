@@ -3654,11 +3654,10 @@ function askOnce(ask: BrowserAsk): Promise<BrowserReply> {
          for being told the field it just typed into was a password. */
       const v = r.value as { secretField?: boolean; secretFields?: unknown } | undefined;
       const wasSecret = v?.secretField === true;
-      /* The multi-field form of the same verdict. `fill` does not send it yet
-         — the page-side test lives in the panel's `type` handler and has never
-         been wired to its `fill` handler — so today the selector heuristic is
-         what catches a `fill` password. This reads the list the moment the
-         panel starts sending one, rather than needing a second change here. */
+      /* The multi-field form of the same verdict: `fill` names the fields the
+         panel saw were secret, on a refusal too — the fields before the one
+         that failed were filled. The selector heuristic still covers a field
+         the panel could not judge. */
       const namedSecret = Array.isArray(v?.secretFields)
         ? (v!.secretFields as unknown[]).filter((x): x is string => typeof x === "string")
         : undefined;

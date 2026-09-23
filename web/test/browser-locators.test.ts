@@ -602,4 +602,14 @@ describe("fill says which fields were secret, as type does", () => {
     expect(r.error).toBeUndefined();
     expect((r.value as { secretFields?: string[] }).secretFields).toEqual(["label=Access code", "#otp"]);
   });
+
+  test("fill that fails on a later field still names the secret it already filled", async () => {
+    const pinLabel = h("label", {}, "Access code");
+    const pin = h("input", { type: "password" });
+    pin.labels = [pinLabel];
+    const { guest } = page(h("body", {}, pinLabel, pin));
+    const r = await runBrowserAsk(guest, ask("fill", { fields: { "label=Access code": "4242", "#nowhere": "x" } }));
+    expect(r.ok).toBe(false);
+    expect((r.value as { secretFields?: string[] }).secretFields).toEqual(["label=Access code"]);
+  });
 });

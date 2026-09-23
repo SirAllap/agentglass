@@ -1428,7 +1428,7 @@ async function runVerb(
              const one = ${ONE};
              for (const [fsel, spec, text] of pairs) {
                const got = one(spec, false);
-               if (got.kind !== "ok") return { ...got, selector: fsel };
+               if (got.kind !== "ok") return { ...got, selector: fsel, secret };
                const fe = got.e;
                fe.focus();
                const proto = fe instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -1447,7 +1447,13 @@ async function runVerb(
         ) as { kind: string; selector?: string; message?: string; count?: number; samples?: string[]; filled?: string[]; secret?: string[] };
         if (result?.kind !== "ok") {
           const badSel = result?.selector ?? "";
-          return { ok: false, error: `could not fill ${badSel} — ${selectorError(badSel, result as never)}` };
+          /* The fields before the one that failed WERE filled, so a secret
+             among them is still named: the relay redacts by it on a refusal
+             as well. */
+          return {
+            ok: false, error: `could not fill ${badSel} — ${selectorError(badSel, result as never)}`,
+            ...(result?.secret?.length ? { value: { secretFields: result.secret } } : {}),
+          };
         }
         return {
           ok: true,
