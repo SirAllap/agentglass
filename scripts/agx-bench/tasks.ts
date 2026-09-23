@@ -8,12 +8,20 @@
  * nothing is clicked by a selector the arm could only have known by reading
  * the fixture's source, which would make the baseline cheaper than any agent.
  *
+ * `phase1` is the same tasks driven the way the phase-1 browser work teaches:
+ * an act verb with `--observe` hands back the page it left behind as a DELTA
+ * against the last look (full after a navigation), so there is no separate
+ * look after each step and no re-sent tree; `click` waits for what it caused
+ * and says so in `effect`, so a wait after it is needed only when it says the
+ * cap cut it short. It is one arm that later phase-1
+ * items extend — a new verb replaces the step it makes cheaper, in place.
+ *
  * TO ADD AN ARM: give a task another key in `arms` (say `phase1`) that solves
  * it with the new verbs, and run `--arm baseline,phase1`. Tasks without that
  * arm are skipped for it, and the grader does not change: both arms are held
  * to the same answer.
  */
-import { pick, type Node, type Session, type Task } from "./bench.ts";
+import { afterOf, pick, View, type Node, type Session, type Task } from "./bench.ts";
 import {
   DEVLOOP_BUGS,
   MEASURE_DELAYS,
@@ -37,11 +45,12 @@ async function observe(s: Session): Promise<Observed> {
   return o as Observed;
 }
 
-const heading = (o: Observed) => o.tree.find((n) => n.role === "h1")?.name;
+type Looked = Pick<Observed, "tree" | "console" | "network">;
+const heading = (o: Pick<Observed, "tree">) => o.tree.find((n) => n.role === "h1")?.name;
 const pathOf = (url: string) => new URL(url, "http://x").pathname;
 
 /** What an agent reports as broken from one `observe`. */
-function problems(o: Observed) {
+function problems(o: Looked) {
   return {
     consoleErrors: o.console.filter((c) => c.level === "error").map((c) => c.text),
     failedRequests: o.network.filter((n) => n.status >= 400).map((n) => ({ path: pathOf(n.url), status: n.status })),
@@ -80,6 +89,17 @@ export const TASKS: Task[] = [
         o = await observe(s);
         return { path: pathOf(o.url), heading: heading(o) };
       },
+      async phase1(s) {
+        const v = new View().apply(afterOf(await s.cli("open", [s.url("/spa/"), "--observe"])));
+        // Taken from the FIRST look and clicked after the route changed: the
+        // nav survives a client-side route, and so must its id.
+        const about = pick(v.tree, "a", "About").e;
+        v.apply(afterOf(await s.cli("click", [pick(v.tree, "a", "Items").e, "--observe"])));
+        if (heading(v) !== "Items") throw new Error(`the route did not change: h1 ${heading(v)}`);
+        await s.cli("click", [about]);
+        v.apply(afterOf(await s.cli("back", ["--observe"])));
+        return { path: pathOf(v.url), heading: heading(v) };
+      },
     },
     grade: (a) => (a?.path === "/spa/items" && a?.heading === "Items" ? null : `ended at ${JSON.stringify(a)}`),
   },
@@ -99,6 +119,16 @@ export const TASKS: Task[] = [
         await s.cli("back");
         o = await observe(s);
         return { path: pathOf(o.url), heading: heading(o) };
+      },
+      async phase1(s) {
+        // Every step is a new document, so every `after` is full (delta:false,
+        // "new document"): the saving here is the looks folded into the acts.
+        const v = new View().apply(afterOf(await s.cli("open", [s.url("/docs/1"), "--observe"])));
+        v.apply(afterOf(await s.cli("click", [pick(v.tree, "a", /^Next/).e, "--observe"])));
+        v.apply(afterOf(await s.cli("click", [pick(v.tree, "a", /^Next/).e, "--observe"])));
+        if (heading(v) !== "Guide page 3") throw new Error(`expected page 3, saw ${heading(v)}`);
+        v.apply(afterOf(await s.cli("back", ["--observe"])));
+        return { path: pathOf(v.url), heading: heading(v) };
       },
     },
     grade: (a) => (a?.path === "/docs/2" && a?.heading === "Guide page 2" ? null : `ended at ${JSON.stringify(a)}`),
@@ -126,6 +156,20 @@ export const TASKS: Task[] = [
         await s.cli("click", [submit]);
         const good = await observe(s);
         return { error, welcome: good.tree.find((n) => n.role === "status")?.name };
+      },
+      async phase1(s) {
+        const v = new View().apply(afterOf(await s.cli("open", [s.url("/form"), "--observe"])));
+        const email = pick(v.tree, "input", "Email").e;
+        await s.cli("type", [pick(v.tree, "input", "Full name").e, SIGNUP_VALID.name]);
+        await s.cli("type", [email, SIGNUP_INVALID_EMAIL]);
+        await s.cli("select", [`#${pick(v.tree, "select", "Plan").id}`, SIGNUP_VALID.plan]);
+        await s.cli("check", [pick(v.tree, "input", "I accept the terms").e]);
+        const submit = pick(v.tree, "button", "Create account").e;
+        v.apply(afterOf(await s.cli("click", [submit, "--observe"])));
+        const error = v.tree.find((n) => n.role === "alert")?.name;
+        await s.cli("type", [email, SIGNUP_VALID.email]);
+        v.apply(afterOf(await s.cli("click", [submit, "--observe"])));
+        return { error, welcome: v.tree.find((n) => n.role === "status")?.name };
       },
     },
     grade(a, state) {
@@ -169,6 +213,17 @@ export const TASKS: Task[] = [
         const after = problems(await observe(s));
         return { before, after };
       },
+      async phase1(s) {
+        // A delta's console and network are what happened since the look
+        // before it — here, exactly what the click caused.
+        const v = new View().apply(afterOf(await s.cli("open", [s.url("/devloop"), "--observe"])));
+        v.apply(afterOf(await s.cli("click", [pick(v.tree, "button", "Refresh").e, "--observe"])));
+        const before = problems(v);
+        await s.edit({ devloop: "fixed" });
+        v.apply(afterOf(await s.cli("reload", ["--observe"])));
+        v.apply(afterOf(await s.cli("click", [pick(v.tree, "button", "Refresh").e, "--observe"])));
+        return { before, after: problems(v) };
+      },
     },
     grade: (a, state) => gradeProblems(a?.before, a?.after, state.devloop === "fixed"),
   },
@@ -185,6 +240,22 @@ export const TASKS: Task[] = [
         const rows = ((await s.cli("network")).json?.rows ?? []) as Observed["network"];
         const slowest = rows.reduce<Observed["network"][number] | undefined>((m, r) => (!m || r.ms > m.ms ? r : m), undefined);
         // `read` answers in plain text, not JSON: the page's visible text.
+        const text = (await s.cli("read")).stdout;
+        return {
+          slowest: slowest ? pathOf(slowest.url).split("/").pop() : undefined,
+          requests: rows.length,
+          outOfStock: text.split("out of stock").length - 1,
+        };
+      },
+      async phase1(s) {
+        const v = new View().apply(afterOf(await s.cli("open", [s.url("/measure"), "--observe"])));
+        // The click waits for the requests it started (quiet page, nothing in
+        // flight, capped): a separate waitfor only when its effect says the
+        // cap cut the wait short.
+        const r = await s.cli("click", [pick(v.tree, "button", "Run report").e]);
+        if (r.json?.effect?.settledBy !== "quiet") await s.cli("waitfor", ["--until", "network-idle"]);
+        const rows = ((await s.cli("network")).json?.rows ?? []) as Observed["network"];
+        const slowest = rows.reduce<Observed["network"][number] | undefined>((m, x) => (!m || x.ms > m.ms ? x : m), undefined);
         const text = (await s.cli("read")).stdout;
         return {
           slowest: slowest ? pathOf(slowest.url).split("/").pop() : undefined,

@@ -114,6 +114,63 @@ export function pick(tree: Node[] | undefined, role: string, name: string | RegE
   return hits[0];
 }
 
+/**
+ * What an agent holds after a run of looks: the tree of the last full answer
+ * with every delta since applied to it — how a caller reads `observe --delta`
+ * and the `after` of an act verb's `--observe`. `console` and `network` are
+ * what the LAST look reported (a delta's are only the rows new since the look
+ * before it). `unlisted` ids are still on the page, past the tree's cap, so
+ * their nodes are kept. An arm that uses deltas keeps one of these per page.
+ */
+export class View {
+  tree: Node[] = [];
+  url = "";
+  title = "";
+  console: any[] = [];
+  network: any[] = [];
+  /** How many answers were full and how many were deltas — so a run can show
+   *  the fallback (a navigation answers in full) actually happened. */
+  fulls = 0;
+  deltas = 0;
+
+  apply(o: any): this {
+    if (!o || typeof o !== "object") throw new StepFailed("no observation to apply");
+    if (o.delta === true) {
+      const gone = new Set<string>(o.removed ?? []);
+      const changed = new Map<string, Record<string, unknown>>((o.changed ?? []).map((c: Node) => [c.e, c]));
+      this.tree = this.tree
+        .filter((n) => !gone.has(n.e))
+        .map((n) => {
+          const c = changed.get(n.e);
+          if (!c) return n;
+          const m: Record<string, unknown> = { ...n };
+          for (const [k, v] of Object.entries(c)) if (v === null) delete m[k]; else m[k] = v;
+          return m as Node;
+        })
+        .concat(o.added ?? []);
+      this.deltas++;
+    } else {
+      if (!Array.isArray(o.tree)) throw new StepFailed("observe did not return a tree");
+      this.tree = o.tree;
+      this.fulls++;
+    }
+    this.url = o.url ?? this.url;
+    this.title = o.title ?? this.title;
+    this.console = o.console ?? [];
+    this.network = o.network ?? [];
+    return this;
+  }
+}
+
+/** The `after` block of an act verb run with `--observe`. A look that failed
+ *  after an action that worked is a failed step for a scripted arm. */
+export function afterOf(r: CliResult): any {
+  const v = r.json;
+  if (v?.afterFailed) throw new StepFailed(`the look after ${r.stdout.slice(0, 40)} failed: ${v.afterFailed}`);
+  if (!v?.after) throw new StepFailed("--observe returned no `after`");
+  return v.after;
+}
+
 export async function runArm(
   task: Task,
   armName: string,

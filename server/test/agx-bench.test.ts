@@ -27,7 +27,7 @@ import {
   tokensOf,
   type Run,
 } from "../../scripts/agx-bench/metrics.ts";
-import { pick, runArm, Session, StepFailed, type Exec, type Task } from "../../scripts/agx-bench/bench.ts";
+import { afterOf, pick, runArm, Session, StepFailed, View, type Exec, type Task } from "../../scripts/agx-bench/bench.ts";
 import { buildResults, toMarkdown } from "../../scripts/agx-bench/report.ts";
 import { TASKS } from "../../scripts/agx-bench/tasks.ts";
 import { cliEnv, parseOptions } from "../../scripts/agx-bench/run.ts";
@@ -257,6 +257,64 @@ describe("the task set", () => {
     expect(g({ slowest: MEASURE_SLOWEST, requests: n, outOfStock: MEASURE_OUT_OF_STOCK }, freshState())).toBeNull();
     expect(g({ slowest: "orders", requests: n, outOfStock: MEASURE_OUT_OF_STOCK }, freshState())).toMatch(/slowest/);
     expect(g({ slowest: MEASURE_SLOWEST, requests: 0, outOfStock: MEASURE_OUT_OF_STOCK }, freshState())).toMatch(/saw 0/);
+  });
+});
+
+describe("reading deltas (the phase1 arm)", () => {
+  test("a View applies a full answer, then a delta: removed, changed (null deletes), added", () => {
+    const v = new View().apply({
+      url: "http://x/a", title: "A", console: [{ level: "log" }],
+      tree: [{ e: "e1", role: "h1", name: "Home" }, { e: "e2", role: "button", name: "Save", disabled: true }],
+    });
+    v.apply({
+      delta: true, url: "http://x/b", title: "B", console: [], network: [],
+      removed: ["e1"], changed: [{ e: "e2", disabled: null, name: "Saved" }], added: [{ e: "e7", role: "h1", name: "Items" }], same: 0,
+    });
+    expect(v.tree).toEqual([{ e: "e2", role: "button", name: "Saved" }, { e: "e7", role: "h1", name: "Items" }]);
+    expect([v.url, v.title, v.console.length, v.fulls, v.deltas]).toEqual(["http://x/b", "B", 0, 1, 1]);
+    // A full answer after a navigation replaces the tree, it is not merged.
+    v.apply({ delta: false, reason: "new document", url: "http://x/c", tree: [{ e: "e1", role: "h1", name: "C" }] });
+    expect(v.tree).toEqual([{ e: "e1", role: "h1", name: "C" }]);
+    expect(() => new View().apply({ url: "u" })).toThrow(StepFailed);
+  });
+
+  test("afterOf takes `after`, and a failed look after a good action fails the step", () => {
+    const r = (json: unknown) => ({ exit: 0, stdout: JSON.stringify(json), stderr: "", json, ms: 1 });
+    expect(afterOf(r({ clicked: "e1", after: { delta: true } }))).toEqual({ delta: true });
+    expect(() => afterOf(r({ clicked: "e1", afterFailed: "timed out" }))).toThrow(StepFailed);
+    expect(() => afterOf(r({ clicked: "e1" }))).toThrow(StepFailed);
+  });
+
+  test("the form's phase1 arm reads the error and the welcome out of deltas", async () => {
+    /* A stand-in CLI answering the way the real one does on this fixture:
+       full after open, then deltas — the alert appears, then the same node
+       turns into a status. */
+    const tree = [
+      { e: "e1", role: "h1", name: "Sign up" }, { e: "e2", role: "input", name: "Full name" },
+      { e: "e3", role: "input", name: "Email" }, { e: "e4", role: "select", name: "Plan", id: "plan" },
+      { e: "e5", role: "input", name: "I accept the terms" }, { e: "e6", role: "button", name: "Create account" },
+    ];
+    let clicks = 0;
+    const exec: Exec = async (argv) => {
+      const verb = argv[0];
+      const out = verb === "open" ? { url: "u", after: { delta: false, reason: "new document", url: "u", title: "Sign up", tree } }
+        : verb === "click" && clicks++ === 0 ? { clicked: "e6", after: { delta: true, added: [{ e: "e9", role: "alert", name: "Enter a valid email address" }], removed: [], changed: [], same: 6 } }
+        : verb === "click" ? { clicked: "e6", after: { delta: true, added: [], removed: [], changed: [{ e: "e9", role: "status", name: `Welcome, ${SIGNUP_VALID.name}!` }], same: 6 } }
+        : {};
+      return { exit: 0, stdout: JSON.stringify(out), stderr: "" };
+    };
+    const s = new Session(exec, [], "http://127.0.0.1:1", { state: async () => freshState(), set: async () => {} });
+    const a = (await TASKS.find((t) => t.id === "form-signup")!.arms.phase1!(s)) as { error: string; welcome: string };
+    expect(a.error).toContain("valid email");
+    expect(a.welcome).toContain(SIGNUP_VALID.name);
+    // No separate look: every observation came back on an act verb.
+    expect(s.calls.map((c) => c.verb)).not.toContain("observe");
+  });
+
+  test("phase1 covers at least the tasks a delta or a folded look applies to", () => {
+    // At least: later phase-1 items add their tasks to the same arm.
+    const withPhase1 = TASKS.filter((t) => t.arms.phase1).map((t) => t.id);
+    expect(withPhase1).toEqual(expect.arrayContaining(["devloop-click", "form-signup", "measure-report", "nav-links", "nav-spa"]));
   });
 });
 
