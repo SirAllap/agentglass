@@ -83,6 +83,7 @@ import { Avatar } from "./Avatar.tsx";
 import { StatusPill } from "./StatusPill.tsx";
 import { PeekFile, type Peek } from "./PeekFile.tsx";
 import { MERGE_WHY, mergeBlockedWhy, checksLine, checksStanding, standingLine, checksShort, mergeVerdict, githubWillMerge } from "../../../shared/mergeReason.ts";
+import { mergeBlockers, mergeRefusal, autoMergeRefusal, staleApproval, type MergeBlocker } from "../../../shared/mergeBlockers.ts";
 import { parseQuery, applyFilters, peopleMatched, buildFacets, activeCount, readPrField, builderFields, queryToRules, type RepoFacets } from "../lib/prFilter.ts";
 import { CodeBlock as MdCodeBlock } from "../lib/mdCode.tsx";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
@@ -390,7 +391,7 @@ function PrCardChip({ pr, card }: {
  * existed, so an old cached pull request still says something rather than
  * nothing.
  */
-function p2Verdict(hv: PrSummary["humanReview"], rows: ReviewerRow[]): {
+function p2Verdict(hv: PrSummary["humanReview"], rows: ReviewerRow[], decision?: string | null, gate?: PrDetail["gate"]): {
   tint: string; glyph: React.ReactNode; head: string; who?: string; note?: string; url?: string;
 } | null {
   const named = (list: string[]) =>
@@ -415,12 +416,17 @@ function p2Verdict(hv: PrSummary["humanReview"], rows: ReviewerRow[]): {
        * now" reads as a move still left for the author, when the ball has
        * already gone back to the reviewer.
        */
-      return { tint: "var(--warning)", glyph: <RefreshIcon size={ICON.xs} />, url: v.url,
-        head: v.mine ? "You approved, but it has moved since" : "Approved, but it has moved since",
-        who: v.mine ? undefined : who,
+      /* Whether it still COUNTS is GitHub's answer — see staleApproval. Where
+         GitHub still counts it, amber would say "gone" about an approval the
+         merge box on github.com lists as valid. */
+      const s = staleApproval(decision, v.mine ? "You approved" : who ? `Approved by ${who}` : "Approved", gate);
+      return { tint: s.counts ? "var(--success)" : "var(--warning)", glyph: <RefreshIcon size={ICON.xs} />, url: v.url,
+        // The reviewer is inside the sentence: "… — still counts by ada" was
+        // the one order the trailing " by" could not read in.
+        head: s.head, who: undefined,
         note: v.askedAgain
           ? (v.mine ? "You were asked to look again — it is with you now." : `You asked ${who} to look again — it is with them now.`)
-          : "Commits landed after that review — it does not cover what is here now." };
+          : s.note };
     }
     return { tint: "var(--success)", glyph: <DoneIcon size={ICON.xs} />, url: v.url,
       head: v.mine ? "You approved" : "Approved", who: v.mine ? undefined : who,
@@ -5291,6 +5297,21 @@ function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, open
   // disappear together.
   const canUpdate = !conflicted && ((behind ?? 0) > 0 || d.mergeState === "BEHIND") && d.viewerCanUpdate !== false;
 
+  /*
+   * Every reason it will not merge, ranked — see mergeBlockers.ts. The header
+   * names the first; the rows below name the rest, each with what to do.
+   *
+   * `refusal` is the one that takes the merge button away, and it can exist
+   * where GitHub's own state reads CLEAN: a merge queue, or a role without
+   * merge rights, never shows up in `mergeStateStatus`.
+   */
+  const blockers = useMemo(() => mergeBlockers({ ...d, openThreads, conflicted, awaitingChecks }),
+    [d, openThreads, conflicted, awaitingChecks]);
+  const refusal = mergeRefusal(blockers, d.mergeState);
+  const autoRefusal = autoMergeRefusal(blockers);
+  const headBlocker = blockers.find((b) => b.weight === "blocks") ?? null;
+  const shownBlocked = verdict.blocked || !!refusal;
+
 
   return (
     <div className="flex flex-col gap-3">
@@ -5351,12 +5372,13 @@ function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, open
         <div className="flex gap-2.5 items-start p-3">
           <span className="shrink-0 rounded-full flex items-center justify-center text-[13px]"
             style={{ width: 26, height: 26,
-              background: allClear ? "var(--success)"
+              background: refusal ? "var(--error)"
+                : allClear ? "var(--success)"
                 : canMerge && standing === "awaiting" ? "var(--warning)"
                 : canMerge ? "var(--text3)"
                 : isBehind ? "var(--warning)" : "var(--error)",
               color: "var(--bg)" }}>
-            {allClear ? <DoneIcon size={ICON.xs} /> : canMerge && standing === "awaiting" ? <CircleIcon size={ICON.xs} /> : canMerge ? "·" : "!"}
+            {refusal ? "!" : allClear ? <DoneIcon size={ICON.xs} /> : canMerge && standing === "awaiting" ? <CircleIcon size={ICON.xs} /> : canMerge ? "·" : "!"}
           </span>
           <span className="min-w-0">
             <span className="block text-[13px] font-semibold leading-tight" style={{ color: "var(--text)" }}>
@@ -5365,15 +5387,16 @@ function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, open
                   did, on two of three cases. The blocked arms keep Overview's
                   own short headlines: there is room for a reason underneath
                   here and there is not in a 320px column. */}
-              {verdict.blocked
-                ? (isBehind ? "Behind the base branch" : "Merging is blocked")
+              {shownBlocked
+                ? (isBehind && !refusal ? "Behind the base branch" : "Merging is blocked")
                 : verdict.line}
             </span>
             <span className="block text-[11px] mt-1.5" style={{ color: "var(--text3)" }}>
-              {allClear ? "Nothing is standing in the way"
+              {refusal ? refusal.title
+                : allClear ? "Nothing is standing in the way"
                 : canMerge ? standingLine(standing, undefined)
                 : isBehind ? `You can merge anyway — ${mergeBlockedWhy(d.mergeState, c).replace(/^The base branch has moved — /, "")}`
-                : mergeBlockedWhy(d.mergeState, c)}
+                : headBlocker?.title ?? mergeBlockedWhy(d.mergeState, c)}
             </span>
           </span>
         </div>
@@ -5420,7 +5443,7 @@ function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, open
              * kind of fact, which is what was asked for and what makes the two
              * screens finally read alike.
              */
-            const v = p2Verdict(d.humanReview, reviewerRoster(d));
+const v = p2Verdict(d.humanReview, reviewerRoster(d), d.reviewDecision, d.gate);
             if (!v) return null;
             return (
               <div className="flex gap-2.5 items-center px-3 py-2 text-[12px]"
@@ -5460,13 +5483,24 @@ function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, open
             );
           })()}
           {openThreads > 0 && (
-            <Reason tint="var(--warning)" glyph={<CircleIcon size={ICON.xs} />} action={<button onClick={onGoThreads} style={{ color: "var(--primary)" }}>Go to thread</button>}>
-              {openThreads} review thread{openThreads === 1 ? "" : "s"} still open — <span style={{ color: "var(--text3)" }}>a reply is not a resolve</span>
+            <Reason tint={blockers.some((b) => b.kind === "threads") ? "var(--error)" : "var(--warning)"} glyph={<CircleIcon size={ICON.xs} />} action={<button onClick={onGoThreads} style={{ color: "var(--primary)" }}>Go to thread</button>}>
+              {openThreads} review thread{openThreads === 1 ? "" : "s"} still open — <span style={{ color: "var(--text3)" }}>
+                {blockers.some((b) => b.kind === "threads") ? "this branch requires them resolved before merging" : "a reply is not a resolve"}
+              </span>
             </Reason>
           )}
-          {c.failure > 0 && (
-            <Reason tint="var(--error)" glyph={<CrossIcon size={ICON.xs} />}>{c.failing.slice(0, 2).map((f) => f.name).join(", ")}{c.failing.length > 2 ? ` +${c.failing.length - 2} more` : ""} failing</Reason>
-          )}
+          {/*
+            * The rest of the reasons, one row each, in the order they would
+            * stop you. This used to be one red line of the first two failing
+            * names, which on the pull request that prompted this list hid the
+            * one REQUIRED check behind "+1 more" and said nothing about the
+            * base branch being locked.
+            *
+            * The kinds left out already have a row of their own in this box:
+            * conflicts (with the files), threads (above), behind (the header
+            * and its button) and running checks (the checks line).
+            */}
+          {blockers.filter((b) => BLOCKER_ROW.has(b.kind)).map((b) => <BlockerRow key={b.kind} b={b} />)}
           {/* Not "N checks passed" while some are still going. That line sat
               directly under a header saying merging was blocked, and the two
               disagreed inside one box — see mergeReason.ts. */}
@@ -5569,11 +5603,12 @@ function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, open
                  move runs AFTER the merge action has settled, so for those
                  seconds `busy` is false again and the button was live while the
                  second half of its own operation was still in flight. */
-              disabled={busy || !!mergeWork || (!canMerge && !isBehind)}
+              disabled={busy || !!mergeWork || !!refusal || (!canMerge && !isBehind)}
               title={mergeWork
                 ? (mergeWork === MOVING_CARD
                   ? "The pull request is merged. Moving its ClickUp card to the merged status — if this part fails, the merge still stands."
                   : "Merging…")
+                : refusal ? `${refusal.title} — ${refusal.detail}`
                 : canMerge
                 ? `${MERGE_LABEL[method]}${d.mergePolicy?.deletesBranch ? " — GitHub deletes the branch" : " and delete the branch"}`
                 : isBehind
@@ -5641,8 +5676,13 @@ function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, open
               /* The right button in the waiting window, so it says so there.
                  Somebody who has just restarted CI and wants to stop thinking
                  about this pull request is asking for exactly this. */
-              <Btn onClick={onAutoMerge} disabled={busy || autoOff} pending={busyWhat === "Auto-merge"}
-                title={autoOff
+              <Btn onClick={onAutoMerge} disabled={busy || autoOff || !!autoRefusal} pending={busyWhat === "Auto-merge"}
+                title={autoRefusal
+                  /* Arming it here would promise a merge that is not coming:
+                     auto-merge waits for checks and reviews, not for a lock to
+                     lift or a queue to take it. */
+                  ? autoRefusal
+                  : autoOff
                   ? "Auto-merge is off for this repository — Settings › General › Pull requests › Allow auto-merge"
                   : awaitingChecks
                     ? `Arm it now and walk away — ${MERGE_LABEL[method].toLowerCase()} the moment the checks that are starting come back green`
@@ -7945,6 +7985,29 @@ function Masthead({ d, busy, local, onShowLocal, onEditTitle, onDraft, onClose, 
       </div>
       )}
     </div>
+  );
+}
+
+/** The reasons the merge box draws as rows of their own — see the note where
+ *  they are drawn for the kinds that already have one. */
+const BLOCKER_ROW = new Set<MergeBlocker["kind"]>([
+  "draft", "locked", "no-permission", "restricted", "merge-queue", "required-failing", "required-missing",
+  "review-required", "unexplained", "computing", "awaiting", "required-pending", "optional-failing", "hooks", "unseen",
+]);
+
+/** One reason it will not merge: what it is, in the weight it carries, and
+ *  underneath it what to do. */
+function BlockerRow({ b }: { b: MergeBlocker }) {
+  const tint = b.weight === "blocks" ? "var(--error)" : b.weight === "waits" ? "var(--warning)" : "var(--text3)";
+  const glyph = b.kind === "locked" || b.kind === "no-permission" || b.kind === "restricted" ? <BlockedIcon size={ICON.xs} />
+    : b.checks && b.weight !== "waits" ? <CrossIcon size={ICON.xs} />
+    : b.weight === "waits" ? <CircleIcon size={ICON.xs} />
+    : b.weight === "blocks" ? "!" : "·";
+  return (
+    <Reason tint={tint} glyph={glyph}>
+      <b style={{ color: "var(--text)", fontWeight: 500 }}>{b.title}</b>
+      <span className="block mt-0.5" style={{ color: "var(--text3)" }}>{b.detail}</span>
+    </Reason>
   );
 }
 
@@ -11650,6 +11713,10 @@ function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyWhat }: 
                     <span className="truncate" style={{ color: k.state === "skipped" || k.state === "neutral" ? "var(--text3)" : "var(--text2)" }}>
                       {k.name.startsWith(name) ? k.name.slice(name.length).replace(/^\s*\/\s*/, "") || k.name : k.name}
                     </span>
+                    {/* GitHub's own merge box tags these, and it is the only
+                        way to tell the one red check that blocks from the
+                        three that do not. */}
+                    {k.required && <Chip text="Required" tint="var(--text2)" title="GitHub will not merge until this one passes" />}
                     <span className="ml-auto shrink-0 text-[9.5px] uppercase tracking-wide" style={{ color: CHECK_TINT[k.state] }}>{k.state}</span>
                     {bad && <span className="shrink-0" style={{ color: "var(--text3)" }}>{expanded ? "▾" : "▸"}</span>}
                   </button>
