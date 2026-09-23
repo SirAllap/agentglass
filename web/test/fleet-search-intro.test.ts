@@ -17,7 +17,7 @@
  * only what the index holds.
  */
 import { describe, expect, test } from "bun:test";
-import { fleetSearchIntro } from "../src/components/SearchModal.tsx";
+import { fleetSearchIntro, readRetentionDays, __forgetRetentionDays } from "../src/components/SearchModal.tsx";
 
 const src = await Bun.file(new URL("../src/components/SearchModal.tsx", import.meta.url)).text();
 
@@ -56,6 +56,36 @@ describe("the screen uses it", () => {
     expect(code).not.toMatch(/\d+k\+/);
     expect(code).not.toContain("ever captured");
     expect(code).not.toMatch(/prompts, commands, outputs/);
-    expect(code).toContain("fleetSearchIntro(retentionDays)");
+    expect(code).toContain("fleetSearchIntro(days)");
+  });
+});
+
+/*
+ * The window came only from the Dashboard's /stats poll, which runs while the
+ * Dashboard is showing. Opened from any other view, the search named no
+ * window until the Dashboard had been visited once. The server's retention is
+ * a constant, so the search reads it once for itself when it was not handed
+ * one.
+ */
+describe("the window does not wait for the Dashboard", () => {
+  test("read once from the server when the search was not handed one", async () => {
+    __forgetRetentionDays();
+    let asked = 0;
+    const read = async () => { asked++; return { retentionDays: 8 }; };
+    expect(await readRetentionDays(read)).toBe(8);
+    expect(await readRetentionDays(read)).toBe(8);
+    expect(asked, "a constant is read once").toBe(1);
+  });
+
+  test("a failed read claims no window, and the next open asks again", async () => {
+    __forgetRetentionDays();
+    expect(await readRetentionDays(async () => { throw new Error("offline"); })).toBeUndefined();
+    expect(await readRetentionDays(async () => ({ retentionDays: 3 }))).toBe(3);
+  });
+
+  test("the screen asks for it whenever it was opened without one", () => {
+    const code = src.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+    expect(code).toMatch(/retentionDays === undefined\) void readRetentionDays\(\)/);
+    expect(code).toContain("const days = retentionDays ?? readDays;");
   });
 });
