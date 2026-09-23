@@ -146,7 +146,7 @@ import { AGENT_KINDS, agentKind } from "../../shared/agentKinds.ts";
 import { claudeCode } from "./agents/claudecode.ts";
 /* Both sides' imports: main added five, this branch still uses `panesWithPids`
    and `reapMirrorSessions`. Neither list is a superset of the other. */
-import { listPanes, focusPaneAnywhere, activePane, panesWithPids, sweepPinnedWindows, pinnedSockets, reapMirrorSessions, startMirrorSweeper, stopMirrorSweeper } from "./tmuxctl.ts";
+import { listPanes, withTmuxServer, focusPaneAnywhere, activePane, panesWithPids, sweepPinnedWindows, pinnedSockets, reapMirrorSessions, startMirrorSweeper, stopMirrorSweeper } from "./tmuxctl.ts";
 import { repairLast, snapshot } from "./tmuxsnapshot.ts";
 import { withAgentSessions } from "./paneloc.ts";
 import { notePaneFromHook, paneDirs, paneAgentNote, paneHeldSessions } from "./panewt.ts";
@@ -1849,7 +1849,7 @@ function authorsNow(repos: GitRepoRef[], rows: ChangeRow[]): TreeAuthorsInfo[] {
   try {
     if (!panesHeld || Date.now() - panesHeld.at > PANES_HELD_TTL_MS) {
       let ids = new Set<string>();
-      try { ids = paneHeldSessions(listPanes(lastTmuxTarget()?.socket)); } catch { /* no tmux: last-seen alone decides */ }
+      try { ids = paneHeldSessions(withTmuxServer(listPanes(lastTmuxTarget()?.socket))); } catch { /* no tmux: last-seen alone decides */ }
       panesHeld = { at: Date.now(), ids };
     }
     const live = liveSessions(recentSessions(), panesHeld.ids);

@@ -2339,6 +2339,33 @@ function nestedSessions(socket: string[]): Set<string> {
  */
 export type PaneWireRow = Omit<AgentPane, "agentSession"> & { socket: string[] };
 
+/**
+ * The server a socket reaches, spelt as the hook spells it: `$TMUX` without
+ * its session field, `<socket_path>,<pid>` (`notePaneFromHook`). "" when the
+ * server cannot be read.
+ *
+ * Pane ids are per server — two servers both answering `%0` is the normal
+ * case — so a pane's note has to be read with this, or the newest note for
+ * the id on any server answers for it.
+ */
+export function tmuxServerName(socket: string[]): string {
+  const out = tmux(socket, ["list-sessions", "-F", "#{socket_path},#{pid}"])?.split("\n")[0]?.trim() ?? "";
+  return /^\/.+,\d+$/.test(out) ? out : "";
+}
+
+/** Rows with their server's name added, one ask per socket. Kept off
+ *  `PaneWireRow` because the name is a filesystem path, and the rows that
+ *  carry that type are spread onto the wire. */
+export function withTmuxServer<T extends { socket: string[] }>(rows: T[]): (T & { server: string })[] {
+  const named = new Map<string, string>();
+  return rows.map((r) => {
+    const key = r.socket.join("\0");
+    let server = named.get(key);
+    if (server === undefined) named.set(key, server = tmuxServerName(r.socket));
+    return { ...r, server };
+  });
+}
+
 export function listPanes(known?: string[]): PaneWireRow[] {
   const rows: PaneWireRow[] = [];
   /* The server we were last on, read once rather than per socket. Null when

@@ -353,4 +353,19 @@ describe("paneHeldSessions", () => {
     expect(paneHeldSessions([{ paneId: "%9922", agentCwds: [WT] }]).has("yesterday")).toBe(false);
     expect(paneHeldSessions([{ paneId: "%9922" }]).size).toBe(0);
   });
+
+  test("the same pane id on another tmux server is not this pane's session", () => {
+    /*
+     * Pane ids start at %0 on every server, so two servers both answering %3
+     * is the normal case. An agent idle in %3 on one server fires no hooks,
+     * and a newer %3 note from another server — same checkout, which is
+     * common — was counted as holding it.
+     */
+    const s1 = "/tmp/tmux-1000/default,4101", s2 = "/tmp/tmux-1000/agx-orbit,4202";
+    notePaneAgent({ pane: "%9941", sessionId: "idle-on-s1", transcriptPath: "/t.jsonl", cwd: REPO, server: s1, at: 1_000 });
+    notePaneAgent({ pane: "%9941", sessionId: "busy-on-s2", transcriptPath: "/t.jsonl", cwd: REPO, server: s2, at: 2_000 });
+    const held = paneHeldSessions([{ paneId: "%9941", agentCwds: [REPO], server: s1 }]);
+    expect([...held]).toEqual(["idle-on-s1"]);
+    expect([...paneHeldSessions([{ paneId: "%9941", agentCwds: [REPO], server: s2 }])]).toEqual(["busy-on-s2"]);
+  });
 });

@@ -130,9 +130,10 @@ export interface SessionSeen {
    * stayed "live" for LIVE_MS — so the agent that replaced it, touching the same
    * files, was drawn as a second author sharing the tree with itself.
    *
-   * The pane cannot say it instead: `pane_agent` keeps one row per pane, so the
-   * new session's note overwrites the old one's and the cleared session is left
-   * with no pane at all rather than a pane that names somebody else.
+   * The pane cannot say it instead: `pane_note` keeps one row per pane of a
+   * server, so the new session's note overwrites the old one's and the cleared
+   * session is left with no pane at all rather than a pane that names somebody
+   * else.
    */
   gone: boolean;
 }
