@@ -12,9 +12,11 @@
 #
 # The window. Electron has no working headless mode here (`--ozone-platform=
 # headless` crashes Electron 43), and the browser guest only paints inside a
-# real window. On Hyprland the window goes to a headless output created for the
-# run and parked far outside every real monitor: it renders at 60 Hz and never
-# appears on screen or takes focus. Hyprland's exec rules match the window by
+# real window. On Hyprland the window goes, silently and without focus, to a
+# workspace of the real monitor that nobody works on (5, or
+# AGX_BENCH_WORKSPACE), and `start` refuses while that workspace is on screen.
+# No virtual output: a headless one shows up to the person as a second screen
+# and breaks their screenshots, so none is ever created. Hyprland's exec rules match the window by
 # PID, so the command it runs is this script's `_exec`, which `exec`s the real
 # Electron binary — the node wrapper in node_modules/.bin would start the
 # window from a child PID and the rules would be ignored without a word.
@@ -36,7 +38,8 @@ DIR=${2:-${AGX_BENCH_DIR:-/tmp/agx-bench}}
 PORT=${3:-${AGX_BENCH_PORT:-4831}}
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
-OUTPUT=AGXBENCH
+WS=${AGX_BENCH_WORKSPACE:-5}
+[[ "$WS" =~ ^[0-9]+$ ]] || { echo "AGX_BENCH_WORKSPACE must be a workspace number, got '$WS'" >&2; exit 2; }
 
 port_pid() { ss -ltnpH "sport = :$1" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1 || true; }
 alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
@@ -99,12 +102,11 @@ start)
   rm -f "$DIR/electron.pid"
 
   if hypr; then
-    hyprctl monitors -j | grep -q "\"$OUTPUT\"" || {
-      hyprctl output create headless "$OUTPUT" >/dev/null
-      echo 1 > "$DIR/output.created"
-    }
-    hyprctl eval "hl.monitor({ output = \"$OUTPUT\", mode = \"1440x900@60\", position = \"20000x20000\", scale = 1 })" >/dev/null
-    WS=$(hyprctl monitors -j | python3 -c "import json,sys; print(next(m['activeWorkspace']['id'] for m in json.load(sys.stdin) if m['name']=='$OUTPUT'))")
+    # Never onto a workspace somebody is looking at.
+    if hyprctl monitors -j | python3 -c "import json,sys; sys.exit(0 if any(m['activeWorkspace']['id']==$WS for m in json.load(sys.stdin)) else 1)"; then
+      echo "workspace $WS is on screen right now; not starting a window there" >&2
+      exit 1
+    fi
     hyprctl eval "hl.exec_cmd(\"$HERE/instance.sh _exec $DIR\", { workspace = \"$WS silent\", float = true, size = \"1440 900\", no_initial_focus = true })" >/dev/null
   else
     setsid "$HERE/instance.sh" _exec "$DIR" </dev/null >/dev/null 2>&1 &
@@ -115,15 +117,14 @@ start)
   alive "$PID" || { echo "electron did not start; see $DIR/electron.log" >&2; exit 1; }
 
   if hypr; then
-    # Where did the window land? Anywhere but the headless output is a window
-    # on somebody's screen: stop at once rather than run the benchmark there.
+    # Where did the window land? Anywhere but its workspace is a window on
+    # somebody's screen: stop at once rather than run the benchmark there.
     for _ in $(seq 1 100); do
-      MON=$(hyprctl clients -j | python3 -c "import json,sys; print(next((str(c['monitor']) for c in json.load(sys.stdin) if c['pid']==$PID), ''))")
-      [ -n "$MON" ] && break; sleep 0.2
+      AT=$(hyprctl clients -j | python3 -c "import json,sys; print(next((str(c['workspace']['id']) for c in json.load(sys.stdin) if c['pid']==$PID), ''))")
+      [ -n "$AT" ] && break; sleep 0.2
     done
-    WANT=$(hyprctl monitors -j | python3 -c "import json,sys; print(next(m['id'] for m in json.load(sys.stdin) if m['name']=='$OUTPUT'))")
-    if [ "${MON:-}" != "$WANT" ]; then
-      echo "the window landed on monitor '${MON:-none}', not $OUTPUT — stopping it" >&2
+    if [ "${AT:-}" != "$WS" ]; then
+      echo "the window landed on workspace '${AT:-none}', not $WS — stopping it" >&2
       "$HERE/instance.sh" stop "$DIR" >&2 || true
       exit 1
     fi
@@ -172,21 +173,6 @@ stop)
     [ -S "$sock" ] || continue
     env -u TMUX tmux -S "$sock" kill-server 2>/dev/null || true
   done
-  # The output goes last, and only when no window is left on it: removing it
-  # under a live window moves that window onto a real screen.
-  if [ -f "$DIR/output.created" ] && hypr; then
-    LEFT=$(hyprctl monitors -j | python3 -c "
-import json,subprocess,sys
-mon=[m['id'] for m in json.load(sys.stdin) if m['name']=='$OUTPUT']
-cl=json.loads(subprocess.run(['hyprctl','clients','-j'],capture_output=True,text=True).stdout)
-print(sum(1 for c in cl if mon and c['monitor']==mon[0]))")
-    if [ "$LEFT" = 0 ]; then
-      hyprctl output remove "$OUTPUT" >/dev/null || true
-      rm -f "$DIR/output.created"
-    else
-      echo "$LEFT window(s) still on $OUTPUT; not removing it" >&2
-    fi
-  fi
   rm -f "$DIR/electron.pid"
   echo "stopped: $DIR"
   ;;

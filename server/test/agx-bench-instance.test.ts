@@ -19,3 +19,22 @@ describe("the isolated instance", () => {
     expect(env).toContain("export AGENTGLASS_SCAN_DISABLED=1");
   });
 });
+
+describe("the window never lands on a screen", () => {
+  /* A headless output shows up to the person as a second monitor and breaks
+     their screenshots, so the launcher never creates one: the window goes,
+     silent and unfocused, to a workspace of the real monitor nobody uses, and
+     `start` refuses while that workspace is the one on screen. */
+  test("no virtual output is created, or removed", () => {
+    expect(CODE).not.toMatch(/hyprctl output (create|remove)/);
+    expect(CODE).not.toContain("hl.monitor(");
+  });
+
+  test("the window goes to its workspace silently, without focus, and start checks it landed there", () => {
+    expect(CODE).toMatch(/WS=\$\{AGX_BENCH_WORKSPACE:-5\}/);
+    expect(CODE).toContain('workspace = \\"$WS silent\\"');
+    expect(CODE).toContain("no_initial_focus = true");
+    expect(CODE).toContain("activeWorkspace']['id']==$WS");
+    expect(CODE).toContain(`if [ "\${AT:-}" != "$WS" ]; then`);
+  });
+});
