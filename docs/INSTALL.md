@@ -64,9 +64,15 @@ checked for you in Settings ▸ Requirements.
 
 ```bash
 bun install
+export AGENTGLASS_STATE_DIR=~/.local/state/agentglass-dev   # its own database
 bun run dev          # server :4000  +  UI :6180  (vite dev server)
 make desktop         # or: build the UI and launch the real shell
 ```
+
+A run from source never opens the installed app's database on its own: without
+`AGENTGLASS_STATE_DIR` or `AGENTGLASS_DB` it stops at start and says so. Set
+`AGENTGLASS_DB=~/.local/share/agentglass/agentglass.db` when opening that one is
+what you mean.
 
 `bun run dev` gives you the same UI in a browser tab at
 **http://localhost:6180**, minus what only the shell can do (fullscreen, zoom,
@@ -76,9 +82,10 @@ your machine already owns `:4000`, the tab will talk to *that* server, so check
 the port before believing an empty dashboard.
 
 **Running a second server alongside the installed app** — a test instance, a
-worktree you want to poke at — needs `AGENTGLASS_DB`, and this is the one that
-bites. Isolating `XDG_CONFIG_HOME` is not enough: the *database* is found via
-`XDG_DATA_HOME`, and a checkout with no `agentglass.db` of its own resolves to
+worktree you want to poke at — needs `AGENTGLASS_DB`, and a run from source now
+refuses to start without it (or `AGENTGLASS_STATE_DIR`). Isolating
+`XDG_CONFIG_HOME` is not enough: the *database* is found via `XDG_DATA_HOME`,
+and a checkout with no `agentglass.db` of its own would otherwise resolve to
 the installed app's real history. A second server there would run a second
 transcript scanner over it, and two scanners over one file inflate events,
 tokens and cost — the scanner's rows carry no `event_id`, so the idempotency
@@ -103,7 +110,8 @@ same origin:
 
 ```bash
 bun run build                         # web/dist
-cd server && bun run src/index.ts     # dashboard AND API on :4000
+cd server && AGENTGLASS_DB=/var/lib/agentglass/agentglass.db \
+  bun run src/index.ts                # dashboard AND API on :4000
 ```
 
 When `web/dist` doesn't exist (plain `bun run dev`, or the packaged app's
