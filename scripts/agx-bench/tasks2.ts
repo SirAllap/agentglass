@@ -102,6 +102,36 @@ export const PHASE2_TASKS: Task[] = [
     },
   },
   {
+    id: "p2-real-input",
+    family: "phase2",
+    title: "Item 7, input a page can tell from nothing: a click with user activation (clipboard), a real :hover, a rich editor",
+    arms: {
+      // Before: what an agent could do was script the page — a synthetic click
+      // (no activation), a synthetic mouseover (no :hover), a value assignment.
+      async baseline(s) {
+        await s.cli("open", [s.url("/gesture")]);
+        await s.cli("eval", [`(() => { document.getElementById("act").click(); document.getElementById("hov").dispatchEvent(new MouseEvent("mouseover", { bubbles: true })); return 1; })()`]);
+        return seen(s);
+      },
+      async phase2(s) {
+        await s.cli("open", [s.url("/gesture")]);
+        await s.cli("click", ['role=button[name="Act"]']);
+        await s.cli("hover", ["#hov"]);
+        await s.cli("type", ['role=textbox[name="Editor"]', "hello"]);
+        await s.cli("type", ['role=textbox[name="Editor"]', "bye"]);
+        return seen(s);
+      },
+    },
+    grade: (a) => {
+      const missing: string[] = [];
+      if (!a?.click?.active) missing.push("user activation on the click");
+      if (a?.click?.clipboard !== "ok") missing.push(`clipboard write (${a?.click?.clipboard})`);
+      if (a?.hover?.hover !== true) missing.push(":hover");
+      if (a?.text !== "bye") missing.push(`editor text (${JSON.stringify(a?.text)})`);
+      return missing.length ? `missing ${missing.join(", ")}` : null;
+    },
+  },
+  {
     id: "p2-wait-slot",
     family: "phase2",
     title: "Item 6, --wait-slot: with every slot taken, a new tab queues for the one that frees up",
@@ -162,6 +192,12 @@ export const PHASE2_TASKS: Task[] = [
     grade: (a) => (a?.error ? a.error : a?.heading === "Items" ? null : `ended on ${JSON.stringify(a?.heading)}`),
   },
 ];
+
+async function seen(s: Session) {
+  await Bun.sleep(400);
+  const v = (await s.cli("eval", ["JSON.stringify(window.__seen)"])).json?.value;
+  return typeof v === "string" ? JSON.parse(v) : {};
+}
 
 function summarize(replies: any[]) {
   const bad = replies.slice(1).find((r) => r?.result?.isError || r?.error);

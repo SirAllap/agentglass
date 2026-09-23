@@ -43,12 +43,44 @@ const MARKS = doc(
    <button aria-label="Far below" style="position:absolute;top:4000px">F</button>`,
 );
 
+/**
+ * What a real user's click, hover and typing do that a synthetic one may not:
+ * every handler records whether the event was trusted, whether the frame had a
+ * user activation, and whether the things a gesture gates (a popup, a clipboard
+ * write, :hover, a rich editor's beforeinput) actually happened. Read back with
+ * `eval "window.__seen"`.
+ */
+const GESTURE = doc(
+  "Gesture",
+  `<h1>Gesture</h1><button id="act">Act</button>
+   <style>#hov{padding:20px;border:1px solid #999}#hov:hover{background:#ffd}</style>
+   <div id="hov">hover me</div>
+   <div id="ed" contenteditable="true" role="textbox" aria-label="Editor" style="border:1px solid #999;min-height:32px"></div>`,
+  `window.__seen = { click: null, hover: null, keys: [], input: [], text: "" };
+   const act = document.getElementById("act");
+   act.addEventListener("click", async (e) => {
+     const r = { trusted: e.isTrusted, active: navigator.userActivation.isActive, been: navigator.userActivation.hasBeenActive };
+     window.__seen.click = r;
+     fetch("/__bench/beacon?name=" + (r.trusted ? "trusted-click" : "synthetic-click"), { method: "POST" });
+     try { r.popup = !!window.open("/slot/popup", "_blank"); } catch { r.popup = false; }
+     try { await navigator.clipboard.writeText("agx"); r.clipboard = "ok"; } catch (err) { r.clipboard = String(err.name); }
+   });
+   act.addEventListener("mousedown", (e) => { window.__seen.down = { trusted: e.isTrusted }; });
+   const hov = document.getElementById("hov");
+   hov.addEventListener("mouseover", (e) => { window.__seen.hover = { trusted: e.isTrusted, hover: hov.matches(":hover") }; });
+   const ed = document.getElementById("ed");
+   ed.addEventListener("keydown", (e) => window.__seen.keys.push({ key: e.key, trusted: e.isTrusted }));
+   ed.addEventListener("beforeinput", (e) => window.__seen.input.push({ type: e.inputType, data: e.data, trusted: e.isTrusted }));
+   ed.addEventListener("input", () => { window.__seen.text = ed.textContent; });`,
+);
+
 /** A trivial page a lot of tabs can hold. */
 const BLANK = (n: string) => doc(`Slot ${n}`, `<h1>Slot ${n}</h1>`)();
 
 export async function phase2Routes(p: string, req: Request, state: BenchState): Promise<Response | null> {
   if (p === "/confirm") return CONFIRM();
   if (p === "/marks") return MARKS();
+  if (p === "/gesture") return GESTURE();
   const slot = /^\/slot\/(\d+)$/.exec(p);
   if (slot) return BLANK(slot[1]!);
   if (p === "/__bench/beacon" && req.method === "POST") {

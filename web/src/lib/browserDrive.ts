@@ -156,7 +156,11 @@ export interface DrivableWebview {
      press case for the measurement. Nothing in this file may use it again. */
   getURL(): string;
   getTitle(): string;
-  executeJavaScript(code: string): Promise<unknown>;
+  /** `userGesture` runs the script "as if by a user": the frame gets a
+   *  transient user activation, which is what lets a click open a popup or
+   *  write the clipboard. `isTrusted` stays false — nothing here lies about it.
+   *  Passed for act verbs only, never for a read. */
+  executeJavaScript(code: string, userGesture?: boolean): Promise<unknown>;
   /** Cropped at the source when `rect` is given — Electron's own
    *  `capturePage(rect)`, not a full frame trimmed afterwards. */
   capturePage(rect?: ShotClip): Promise<{ toDataURL(): string }>;
@@ -1193,6 +1197,26 @@ async function navigateTo(el: DrivableWebview, url: string): Promise<{ ok: true;
   return { ok: true, url: landed };
 }
 
+/**
+ * FOCUS FOR THE LENGTH OF AN ACT.
+ *
+ * An embedded page that nobody is looking at is not focused, and a page that is
+ * not focused is refused the things a person can always do: the clipboard write
+ * fails with NotAllowedError, `document.hasFocus()` says false. Emulating focus
+ * makes the page believe it has the keyboard for one act and then gives it
+ * back. It changes nothing about what an event says it is — `isTrusted` is
+ * whatever the route produces — and it is switched off in `finally`, so a page
+ * does not go on believing it has focus after the agent has left.
+ */
+async function withFocus<T>(cdp: (m: string, p?: unknown) => Promise<{ ok: boolean; error?: string }>, act: () => Promise<T>): Promise<T> {
+  const on = await cdp("Emulation.setFocusEmulationEnabled", { enabled: true }).catch(() => ({ ok: false }));
+  try {
+    return await act();
+  } finally {
+    if (on.ok) await cdp("Emulation.setFocusEmulationEnabled", { enabled: false }).catch(() => {});
+  }
+}
+
 /** `reload`'s: hard by default, and wait for it. */
 async function reloadAndSettle(el: DrivableWebview, hard: boolean): Promise<string | null> {
   const nav = settled(el);
@@ -1628,14 +1652,14 @@ async function runVerb(
         // WHAT is wrong rather than landing on the wrong thing in silence.
         const before = el.getURL();
         const watch = watchNavigation(el);
-        const hit = await el.executeJavaScript(resolveOne(sel,
+        const hit = await withFocus(cdp, () => el.executeJavaScript(resolveOne(sel,
           `return (${actionable()}).then((r) => {
              if (!r.ok) return { kind: "blocked", reason: r.reason };
              const t0 = ${MUTATIONS_ON};
              e.click();
              return { kind: "ok", t0 };
            });`,
-        )).catch((err: unknown) => { watch.dispose(); throw err; }) as { kind: string; reason?: string; t0?: number } | boolean;
+        ), true)).catch((err: unknown) => { watch.dispose(); throw err; }) as { kind: string; reason?: string; t0?: number } | boolean;
         if (!hit || (hit as { kind: string }).kind !== "ok") {
           watch.dispose();
           return { ok: false, error: actionError(String(ask.args.selector ?? ""), hit as never) };
@@ -1675,15 +1699,26 @@ async function runVerb(
                  if (set && set.set) set.set.call(e, wantOn); else e.checked = wantOn;
                  e.dispatchEvent(new Event("input", { bubbles: true }));
                  e.dispatchEvent(new Event("change", { bubbles: true }));`;
-        const hit = await el.executeJavaScript(resolveOne(sel,
+        const hit = await withFocus(cdp, () => el.executeJavaScript(resolveOne(sel,
           `return (${actionable()}).then((r) => {
              if (!r.ok) return { kind: "blocked", reason: r.reason };
              ${dispatch}
-             return { kind: "ok" };
+             const b = e.getBoundingClientRect();
+             return { kind: "ok", x: b.x + b.width / 2, y: b.y + b.height / 2 };
            });`,
-        )) as { kind: string; reason?: string } | boolean;
+        ), true)) as { kind: string; reason?: string; x?: number; y?: number } | boolean;
         if (!hit || (hit as { kind: string }).kind !== "ok") {
           return { ok: false, error: actionError(String(ask.args.selector ?? ""), hit as never) };
+        }
+        /* A hover is also a REAL pointer move, through the debugger: it is the
+           only route that makes :hover match and gives the page a trusted
+           mousemove, which a menu that opens on hover listens for. Measured on
+           a page nobody was looking at: the synthetic mouseover leaves :hover
+           false, this makes it true. Best effort — the synthetic events above
+           already ran, so a refusal here costs the :hover and nothing else. */
+        if (ask.op === "hover" && typeof (hit as { x?: number }).x === "number") {
+          const h = hit as { x: number; y: number };
+          await cdp("Input.dispatchMouseEvent", { type: "mouseMoved", x: h.x, y: h.y }).catch(() => {});
         }
         return { ok: true, value: { [ask.op]: ask.args.selector } };
       }
@@ -1747,47 +1782,66 @@ async function runVerb(
       }
 
       case "type": {
-        const text = jsLit(String(ask.args.text ?? ""));
-        const submit = ask.args.submit === true;
-        const hit = await el.executeJavaScript(resolveOne(sel,
-          `e.focus();
+        /* Focus is emulated for the WHOLE act: focusing an editor while the
+           page believes it is unfocused leaves it without a caret, and the
+           debugger's insertText then lands nowhere. Measured. */
+        return await withFocus(cdp, async () => {
+          const text = jsLit(String(ask.args.text ?? ""));
+          const submit = ask.args.submit === true;
+          const hit = await el.executeJavaScript(resolveOne(sel,
+            `e.focus();
+               /* A rich-text editor (contenteditable, no value property) has no
+                setter to call. execCommand insertText runs the browser's own
+                editing path, so the page sees the beforeinput and input events
+                an editor built on them listens to, with isTrusted true. The
+                content is selected first, so the text REPLACES what is there
+                the way it does in an input. Measured against the debugger's
+                insertText, which never reached a page nobody was looking at. */
+             if (e.isContentEditable && !("value" in e)) {
+               const sel = window.getSelection();
+               if (sel && e.textContent) sel.selectAllChildren(e);
+               const did = document.execCommand("insertText", false, ${text});
+               if (!did) return { kind: "blocked", reason: "the editor refused the text" };
+               return { kind: "ok", secret: false };
+             }
              // The native setter, then an input event: React and every other
-             // framework listens for the event and ignores a value assigned
-             // behind its back, so a plain e.value = x types into a field that
-             // snaps back on the next render.
-             const proto = e instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-             const set = Object.getOwnPropertyDescriptor(proto, "value");
-             if (set && set.set) set.set.call(e, ${text}); else e.value = ${text};
-             e.dispatchEvent(new Event("input", { bubbles: true }));
-             e.dispatchEvent(new Event("change", { bubbles: true }));
-             ${submit ? `if (e.form) e.form.requestSubmit ? e.form.requestSubmit() : e.form.submit();
-                          else e.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));` : ""}
-             /* Whether what was just typed is a secret, decided HERE because
-                this is the only side that can see the node. The relay only
-                ever sees the selector, so typing a real password into a field
-                whose id a framework generated reaches its audit log intact:
-                the id names nothing and the value has no token shape. That is
-                the exact incident that got another browser MCP banned from
-                this machine, and no selector heuristic can close it.
-                (No backticks in here: this comment lives inside the template
-                literal that builds the page script, and one would end it.) */
-             const secret = e.type === "password"
-               || /(^|\\s)(current|new)-password|one-time-code/.test(e.autocomplete || "");
-             return { kind: "ok", secret };`,
-        )) as { kind: string; secret?: boolean } | boolean;
-        if (!hit || (hit as { kind: string }).kind !== "ok") {
-          return { ok: false, error: selectorError(String(ask.args.selector ?? ""), hit as never) };
-        }
-        if (submit) await settled(el, 20_000);
-        return {
-          ok: true,
-          value: {
-            typed: ask.args.selector, submitted: submit,
-            /* Carried back so the relay redacts the argument it logged. The
-               value itself never crosses back — only the fact about it. */
-            secretField: (hit as { secret?: boolean }).secret === true,
-          },
-        };
+               // framework listens for the event and ignores a value assigned
+               // behind its back, so a plain e.value = x types into a field that
+               // snaps back on the next render.
+               const proto = e instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+               const set = Object.getOwnPropertyDescriptor(proto, "value");
+               if (set && set.set) set.set.call(e, ${text}); else e.value = ${text};
+               e.dispatchEvent(new Event("input", { bubbles: true }));
+               e.dispatchEvent(new Event("change", { bubbles: true }));
+               ${submit ? `if (e.form) e.form.requestSubmit ? e.form.requestSubmit() : e.form.submit();
+                            else e.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));` : ""}
+               /* Whether what was just typed is a secret, decided HERE because
+                  this is the only side that can see the node. The relay only
+                  ever sees the selector, so typing a real password into a field
+                  whose id a framework generated reaches its audit log intact:
+                  the id names nothing and the value has no token shape. That is
+                  the exact incident that got another browser MCP banned from
+                  this machine, and no selector heuristic can close it.
+                  (No backticks in here: this comment lives inside the template
+                  literal that builds the page script, and one would end it.) */
+               const secret = e.type === "password"
+                 || /(^|\\s)(current|new)-password|one-time-code/.test(e.autocomplete || "");
+               return { kind: "ok", secret };`,
+          )) as { kind: string; secret?: boolean } | boolean;
+          if (!hit || (hit as { kind: string }).kind !== "ok") {
+            return { ok: false, error: selectorError(String(ask.args.selector ?? ""), hit as never) };
+          }
+          if (submit) await settled(el, 20_000);
+          return {
+            ok: true,
+            value: {
+              typed: ask.args.selector, submitted: submit,
+              /* Carried back so the relay redacts the argument it logged. The
+                 value itself never crosses back — only the fact about it. */
+              secretField: (hit as { secret?: boolean }).secret === true,
+            },
+          };
+        });
       }
 
       case "wait": {

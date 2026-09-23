@@ -94,7 +94,7 @@ once. "Nothing happened in thirty seconds" is an answer, not a failure.
 dev loop    checkup (did it break — errors from load on, failed requests, visible errors)
 look        observe · read · text · html · region · shot · frames · console · network
 page        resize · zoom (the one Ctrl+/Ctrl- move) · emulate · throttle
-act         click · type · select · check · fill · hover · dblclick · rightclick
+act         click · type (also rich editors: contenteditable) · select · check · fill · hover · dblclick · rightclick
             focus · blur · press · scroll · drag · upload · dialog (answer the next confirm/prompt)
 wait        wait · waitfor (--until network-idle | no-timers) · events
 navigate    open · back · forward · reload
@@ -111,6 +111,13 @@ batch       do (and `lanes` for several pages at once)
 ```
 
 ## The things worth knowing before you start
+
+Acts are as close to a person as a page can tell without lying. `click` and
+the point acts run with a user activation and the page believing it has focus
+for the length of the act, so a clipboard write or a popup a click is allowed
+to make works; `hover` also moves a real pointer, so `:hover` matches. Events
+you cause from a script are still `isTrusted: false`; nothing here fakes that.
+Raw `cdp Input.*` stays refused: it lands in the app's own window.
 
 **Stable ids beat invented selectors.** Every node in an `observe` comes with an
 id like `e17`, stamped on the element so it survives a re-render. Every verb
