@@ -136,6 +136,40 @@ export function browserUseStatus(readyWindows: number, desktop: boolean): Browse
   };
 }
 
+/** Beside the skill: the digest of the bytes THIS app last wrote there. A copy
+ *  that still matches it has not been touched since, so it is ours to replace;
+ *  one that does not was edited by a person and is theirs. */
+const installedMark = (): string => join(dirname(skillDest()), ".agentglass-installed");
+
+const readMark = (): string | null => {
+  try { return readFileSync(installedMark(), "utf8").trim() || null; } catch { return null; }
+};
+
+/**
+ * Bring an installed skill up to date when the app ships a newer one — but only
+ * a copy this app wrote and nobody has touched. That is what an update is: the
+ * installed skill went stale the day a verb was added, and the agents reading it
+ * never learned the verb existed, which is the failure this whole file is about.
+ *
+ * A hand-edited copy is left alone, and so is one with no mark at all — an
+ * install from before there was a mark cannot be told from an edit. The pane's
+ * Install button remains the way in for both, and it writes the mark.
+ */
+export function refreshSkill(): "updated" | "current" | "kept" | "unshipped" | "missing" {
+  const src = shippedSkill();
+  if (!src) return "unshipped";
+  let shipped: Buffer, current: Buffer;
+  try { shipped = readFileSync(src); } catch { return "unshipped"; }
+  try { current = readFileSync(skillDest()); } catch { return "missing"; }
+  if (digest(current) === digest(shipped)) return "current";
+  if (readMark() !== digest(current)) return "kept";
+  try {
+    writeFileSync(skillDest(), shipped);
+    writeFileSync(installedMark(), digest(shipped));
+  } catch { return "kept"; }
+  return "updated";
+}
+
 export interface InstallResult { ok: boolean; path?: string; backup?: string; error?: string }
 
 /**
@@ -157,7 +191,12 @@ export function installSkill(): InstallResult {
   try { current = readFileSync(dest); } catch { /* not there yet */ }
   let shipped: Buffer;
   try { shipped = readFileSync(src); } catch (e) { return { ok: false, error: `could not read ${src}: ${e instanceof Error ? e.message : e}` }; }
-  if (current && digest(current) === digest(shipped)) return { ok: true, path: dest };
+  if (current && digest(current) === digest(shipped)) {
+    // Already the shipped bytes: say so in the mark, so the NEXT release may
+    // replace them — a copy from before the mark existed would never update.
+    try { writeFileSync(installedMark(), digest(shipped)); } catch { /* the skill itself is fine */ }
+    return { ok: true, path: dest };
+  }
 
   let backup: string | undefined;
   try {
@@ -167,6 +206,7 @@ export function installSkill(): InstallResult {
       copyFileSync(dest, backup);
     }
     writeFileSync(dest, shipped);
+    writeFileSync(installedMark(), digest(shipped));
   } catch (e) {
     return { ok: false, error: `could not write ${dest}: ${e instanceof Error ? e.message : e}` };
   }

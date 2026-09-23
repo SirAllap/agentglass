@@ -49,7 +49,7 @@ import { budgetHoldFor } from "./budget.ts";
 import { parseControlCmd } from "./control.ts";
 import { outwardAction, outwardLine } from "./outward.ts";
 import { askBrowser, browserReadyCount, exportAudit, noteBrowserReady, parseAsk, setBrowserSink, settleBrowser, type BrowserOp, runSteps, waitForEvents, recordFrames, traceRecording, auditAsScript, downloadFile, runLanes, withObservation} from "./browserdrive.ts";
-import { browserUseStatus, installSkill } from "./browseruse.ts";
+import { browserUseStatus, installSkill, refreshSkill } from "./browseruse.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
 import { decodeOtlpTraces, decodeOtlpLogs } from "./otlp_pb.ts";
 import { statusForPaths, commit as gitCommit, amend as gitAmend, COMMIT_ENABLED, gitAsync, gitCapability, repoRootOf, projectRootOf, safeAbs as gitSafeAbs } from "./git.ts";
@@ -8753,6 +8753,13 @@ startCardWatch((n) => broadcast({ type: "card", data: n }));
 /* The Lantern's watch: the field re-read every N minutes, a loud word when
    something on it needs a person. See lanternwatch.ts. */
 startLanternWatch();
+/* A skill this app installed and nobody edited follows the app's own copy on
+   every start. Opt-in, and the installed desktop app is what opts in: a server
+   started by a test or an isolated instance shares the real HOME, and must not
+   write a person's skills directory. */
+if (process.env.AGENTGLASS_SKILL_AUTOUPDATE === "1") {
+  try { refreshSkill(); } catch { /* the pane's Install button is still there */ }
+}
 // Watch our own event loop. Cheap (one timer, one subtraction) and the only
 // thing that turns "the terminal feels laggy" into a name and a number.
 watchLoop();

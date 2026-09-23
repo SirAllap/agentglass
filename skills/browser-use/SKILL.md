@@ -98,7 +98,7 @@ act         click · type · select · check · fill · hover · dblclick · rig
             focus · blur · press · scroll · drag · upload · dialog (answer the next confirm/prompt)
 wait        wait · waitfor (--until network-idle | no-timers) · events
 navigate    open · back · forward · reload
-tabs        tabs · tab · newtab · closetab · profiles
+tabs        tabs · tab · newtab · closetab · profiles (open|newtab --wait-slot S queues at 12 awake)
 containers  whoami · profiles (--make/--drop) · newtab --profile · lanes
 identity    cookies · storage · permission · permissions · clipboard
 run code    eval · eval --file · addInitScript · expose · exposed
