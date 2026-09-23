@@ -12,6 +12,7 @@ import { ciShouldNotify } from "./ciNotifyPref.ts";
 import { talkBody, talkShouldNotify, talkSummary, talkUrgency } from "./talkNotify.ts";
 import { raiseAlarm } from "./alarm.ts";
 import { nudgeReminders } from "./reminderStore.ts";
+import { receiveNotifyPrefs } from "./notifyPrefsStore.ts";
 
 const MAX_EVENTS = 2000;
 const FLUSH_MS = 220; // coalesce bursts into ~5 renders/sec
@@ -209,6 +210,14 @@ export function useLive(paused = false): LiveData {
         // not data — hand it to App, which runs it through the same setters the
         // keyboard does.
         emitControl(frame.data);
+        return;
+      }
+      if (frame.type === "notify-prefs") {
+        // Saved from this tab (the round trip), another tab, or another
+        // device open on the same server — all three arrive the same way, so
+        // the store adopts whatever the server now says is current rather
+        // than trusting only its own save.
+        receiveNotifyPrefs(frame.data);
         return;
       }
       if (frame.type === "plugin") {

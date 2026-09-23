@@ -6,7 +6,9 @@ import type { SystemNote } from "./lib/sysNotify.ts";
 import { setAlertGoto } from "./lib/sysNotify.ts";
 import { setPaneJump } from "./lib/paneJump.ts";
 import { useStats } from "./lib/useStats.ts";
-import { deriveAgents, deriveAlerts, buildTitles, buildRollups, providersSeen } from "./lib/derive.ts";
+import { deriveAgents, deriveAlerts, alertKind, buildTitles, buildRollups, providersSeen } from "./lib/derive.ts";
+import { notifies } from "../../shared/notifyPrefs.ts";
+import { getNotifyPrefs, subscribeNotifyPrefs } from "./lib/notifyPrefsStore.ts";
 import { publishFleet } from "./lib/demoBridge.ts";
 import { providerOf } from "./lib/format.ts";
 import { api, IS_DEMO } from "./lib/api.ts";
@@ -496,6 +498,24 @@ export default function App() {
     [filter.provider, visibleEvents, agentsAll, openTools, sessionProvider, titles]
   );
   const alerts = useMemo(() => deriveAlerts(agents), [agents]);
+  const notifyPrefs = useSyncExternalStore(subscribeNotifyPrefs, getNotifyPrefs, getNotifyPrefs);
+  /**
+   * The chip, its popover and the chime are a PUSH surface — the same diet
+   * that gates the server's desktop notification and the bell's badge gates
+   * these too, or turning off "idle" in Settings would still hold the strip
+   * amber and ring for it. The dashboard's own fleet card keeps reading raw
+   * `alerts`: it is somewhere the person already chose to look, which is
+   * exactly the "shown quietly where it lives" half of the diet, not the
+   * "reaches for you" half these two are.
+   */
+  const notifyingAlerts = useMemo(
+    () => alerts.filter((al) => notifies(notifyPrefs, alertKind(al, agents.find((a) => a.key === al.agent)), "chip")),
+    [alerts, agents, notifyPrefs]
+  );
+  const soundAlerts = useMemo(
+    () => alerts.filter((al) => notifies(notifyPrefs, alertKind(al, agents.find((a) => a.key === al.agent)), "sound")),
+    [alerts, agents, notifyPrefs]
+  );
   /** Held tool calls. Read here as well as on the dashboard so the bar can tell
    *  "an agent asked a question" from "an agent is stopped at a gate you can
    *  let through" — only the second has a button anywhere in this app. */
@@ -509,14 +529,14 @@ export default function App() {
    * from any view — and says nothing at all when there is nothing to say.
    */
   const needs = useMemo(() => {
-    if (!alerts.length) return null;
-    const first = alerts[0]!;
+    if (!notifyingAlerts.length) return null;
+    const first = notifyingAlerts[0]!;
     // `agent` is the card key the alert was raised from, so the name shown is
     // the session's own rather than a uuid the reader has never seen.
     const who = agents.find((a) => a.key === first.agent);
     const label = who?.title || who?.source_app || first.agent;
     return {
-      count: alerts.length,
+      count: notifyingAlerts.length,
       // The name alone. It used to carry "needs you" as well, which spends the
       // width the reason needs to say something you can already see from the
       // amber strip it is sitting in.
@@ -529,7 +549,7 @@ export default function App() {
       // chip is only the headline now, and the panel it opens is the thing that
       // has to know how to act.
     };
-  }, [alerts, agents]);
+  }, [notifyingAlerts, agents]);
 
   /**
    * Everything that is waiting on you, with what can honestly be done about it.
@@ -548,7 +568,7 @@ export default function App() {
    * directory, which is the useful half of what a destination would have done.
    */
   const needsList = useMemo((): NeedsItem[] => {
-    const homeless = alerts.slice(0, 8);
+    const homeless = notifyingAlerts.slice(0, 8);
     return homeless.map((al) => {
       const who = agents.find((a) => a.key === al.agent);
       const sessionId = who?.session_id ?? "";
@@ -569,7 +589,7 @@ export default function App() {
         gated: !!sessionId && gates.some((g) => g.session_id === sessionId),
       };
     });
-  }, [alerts, agents, workspace, gates]);
+  }, [notifyingAlerts, agents, workspace, gates]);
 
   const openChatFor = useCallback((chatId: string) => {
     setChatFocus(chatId);
@@ -581,7 +601,7 @@ export default function App() {
   const switchProject = useCallback((root: string) => {
     void api.setWorkspace(root).then((r) => { if (r.ok) setWorkspace(r.workspace); }).catch(() => {});
   }, []);
-  useAlertSound(alerts.length, sound);
+  useAlertSound(soundAlerts.length, sound);
 
   // Demo builds only: hand the fleet to whoever is showing this build inside a
   // frame. Today that is the landing page's head-up display, which draws the

@@ -2,6 +2,7 @@ import type { UiAction, Field, NoteStatus, PluginPanel, PluginPrNotes } from "./
 import type { ImportedPlace } from "./desktop.ts";
 import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue } from "../../../shared/types.ts";
 import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember } from "../../../shared/providers.ts";
+import { DEFAULT_NOTIFY_PREFS, type NotifyPrefs } from "../../../shared/notifyPrefs.ts";
 
 /** What every ClickUp write answers with: the card as it now stands, or why not. */
 /* `conflict` and `unauthorised` are the two failures with a remedy the app can
@@ -1722,6 +1723,10 @@ const realApi = {
   /** A click or a submitted form, sent back to the plugin that drew it. */
   pluginAction: (plugin: string, panel: string | undefined, action: UiAction, values?: Record<string, unknown>) =>
     post<{ ok: boolean; error?: string }>("/plugins/action", { plugin, panel, action, values }),
+  /** The notification diet — which kinds may notify, and on which channels.
+   *  See shared/notifyPrefs.ts. */
+  notifyPrefs: () => get<{ ok: boolean; prefs: NotifyPrefs }>("/notify/prefs"),
+  setNotifyPrefs: (prefs: NotifyPrefs) => post<{ ok: boolean; prefs: NotifyPrefs }>("/notify/prefs", prefs),
   pluginSettings: (name: string) =>
     get<{ ok: boolean; fields: Field[]; values: Record<string, unknown>; error?: string }>(`/plugins/settings?name=${encodeURIComponent(name)}`),
   pluginSettingsSave: (name: string, values: Record<string, unknown>) =>
@@ -2264,6 +2269,8 @@ const demoApi: typeof realApi = {
   pluginRemove: (_name: string) => D({ ok: false }),
   pluginPanels: (_plugin?: string, _panel?: string) => D({ ok: true, panels: [] as PluginPanel[] }),
   pluginAction: (_p: string, _panel: string | undefined, _a: UiAction, _v?: Record<string, unknown>) => D({ ok: false, error: "not available in the demo" }),
+  notifyPrefs: () => D({ ok: true, prefs: DEFAULT_NOTIFY_PREFS }),
+  setNotifyPrefs: (_p: NotifyPrefs) => D({ ok: false, prefs: DEFAULT_NOTIFY_PREFS }),
   pluginSettings: (_name: string) => D({ ok: false, fields: [] as Field[], values: {}, error: "not available in the demo" }),
   pluginSettingsSave: (_name: string, _v: Record<string, unknown>) => D({ ok: false, error: "not available in the demo" }),
   pluginPrNotes: (_repo: string, _n: number) => D({ ok: true, runs: [], notes: [], publishers: {} } as PluginPrNotes),

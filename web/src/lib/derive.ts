@@ -4,6 +4,7 @@ import { providerOf, UNKNOWN } from "../../../shared/models.ts";
 import { sessionWorktree } from "./worktree.ts";
 import { ctxLimitOf } from "./contextWindow.ts";
 import type { AgentKind } from "./agents.ts";
+import { kindOfNotification, type NotifyKind } from "../../../shared/notifyPrefs.ts";
 
 /**
  * What is happening to this session *right now* — the axis the fleet's dot, the
@@ -657,6 +658,32 @@ export function deriveAlerts(agents: AgentCard[]): Alert[] {
       out.push({ id: "rate:" + a.key, level: "error", agent: a.key, text: `high failure rate ${(rate * 100).toFixed(0)}%`, ts: a.lastSeen });
   }
   return out.sort((x, y) => y.ts - x.ts);
+}
+
+/**
+ * Which of the seven notification kinds a fleet alert is — see
+ * shared/notifyPrefs.ts for the vocabulary. Pure, and separate from
+ * `deriveAlerts`, so a wiring bug (the chip filtering one alert type and the
+ * bell another) shows up as a test on this function rather than a screenshot
+ * only a person would have noticed disagreed.
+ *
+ * `wait:` is the one alert `deriveAlerts` raises for more than one reason, so
+ * it is the only id this has to look inside. `agent.needBecause` carries the
+ * same text the server's own `Notification` branch matched, EXCEPT for a
+ * `PermissionRequest` event: `becauseOf` renders that as "wants to run X" /
+ * "wants your approval", which `kindOfNotification`'s regex was never meant
+ * to catch — it is already the real thing, not a message to classify. See
+ * `asked` in `deriveAgents`, a few hundred lines up, for the same branch on
+ * the server side.
+ */
+export function alertKind(alert: Alert, agent: AgentCard | undefined): NotifyKind {
+  if (alert.id.startsWith("wait:")) {
+    if (agent?.lastType === "PermissionRequest") return "blocked";
+    return kindOfNotification(agent?.needBecause ?? alert.text);
+  }
+  if (alert.id.startsWith("stuck:")) return "stalled";
+  if (alert.id.startsWith("rate:")) return "failures";
+  return "idle";
 }
 
 /** How long a session may stay silent before we treat it as finished.

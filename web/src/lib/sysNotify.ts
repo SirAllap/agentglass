@@ -1,4 +1,6 @@
 import { SERVER, withToken, authHeaders, api, whenServerUp } from "./api.ts";
+import { notifies, type NotifyKind } from "../../../shared/notifyPrefs.ts";
+import { getNotifyPrefs } from "./notifyPrefsStore.ts";
 
 /**
  * Desktop notifications, mirrored onto the notch.
@@ -518,7 +520,14 @@ export function setAlertGoto(fn: typeof goto) { goto = fn; }
 export const POPUP_MS = 8_000;
 export const BLOCKING_POPUP_MS = 60_000;
 
-export function fireDesktopAlert(a: { title: string; body: string; urgency?: 0 | 1 | 2; pane?: string }) {
+export function fireDesktopAlert(a: { title: string; body: string; urgency?: 0 | 1 | 2; pane?: string; notifyKind?: NotifyKind }) {
+  const prefs = getNotifyPrefs();
+  // `idle` when a caller sends an alert this file has always shown with no
+  // kind at all (a stale cached frame, the alarm/deputy calls in useLive.ts
+  // that hand this their own `AlertNote` verbatim) — `idle` because that is
+  // what an alert with no promotion has meant since kindOfNotification's
+  // default branch, not because it is a guess this file is making twice.
+  const kind = a.notifyKind ?? "idle";
   /*
    * The bell FIRST, above both guards.
    *
@@ -547,11 +556,14 @@ export function fireDesktopAlert(a: { title: string; body: string; urgency?: 0 |
    * only place that still has the pane as a fact rather than as a phrase. The
    * mirror drops our own app to keep this from arriving twice.
    */
-  recordNote({ app: OUR_APP, summary: a.title, body: a.body, urgency: a.urgency,
-    ...(a.pane ? { goto: { kind: "pane" as const, pane: a.pane } } : {}) });
+  if (notifies(prefs, kind, "bell")) {
+    recordNote({ app: OUR_APP, summary: a.title, body: a.body, urgency: a.urgency,
+      ...(a.pane ? { goto: { kind: "pane" as const, pane: a.pane } } : {}) });
+  }
   // Recorded above, drawn nowhere. The note is the whole delivery for this
   // tier — no OS popup, no sound, no badge. See recordNote.
   if (a.urgency === 0) return;
+  if (!notifies(prefs, kind, "desktop")) return;
   try {
     if (typeof Notification === "undefined") return;
     if (Notification.permission !== "granted") return;
