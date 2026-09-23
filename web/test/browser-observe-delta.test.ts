@@ -66,6 +66,8 @@ function page(nodes: FakeEl[], url = "http://127.0.0.1:4000/app") {
     hasFocus: () => true,
     elementFromPoint: () => null,
     querySelector(sel: string) {
+      // A real page throws on a selector it cannot parse.
+      if (!/^\[data-agx-e="[^"\]]*"\]$/.test(sel)) throw new SyntaxError(`'${sel}' is not a valid selector`);
       const e = /data-agx-e="(e[0-9]+)"/.exec(sel)?.[1];
       return nodes.find((n) => n.dataset.agxE === e) ?? null;
     },
@@ -182,6 +184,20 @@ describe("observe --delta", () => {
     look(p, false);
     const gone = p.nodes.splice(0, 1)[0]!.dataset.agxE;
     expect(look(p).removed).toEqual([gone]);
+  });
+
+  test("a baseline the page rewrote cannot break the delta", () => {
+    /* The baseline lives on the page's window, so the page can write to it.
+       An id holding a quote made the removed-node lookup throw, and every
+       delta observe on that page failed. */
+    const p = signupPage();
+    const look = caller();
+    look(p, false);
+    const store = p.win.__agxLast as Record<string, { tree: Array<Record<string, unknown>> }>;
+    store["orbit-agent"]!.tree.push({ e: 'x"] , *', role: "button", name: "planted" });
+    const v = look(p);
+    expect(v.delta).toBe(true);
+    expect(v.removed).toEqual([]);
   });
 
   test("a field that went away is reported as null, not dropped by JSON", () => {

@@ -506,8 +506,12 @@ export const observeScript = (since: number, treeMax: number, opts: ObserveOpts 
      "unlisted": there, not described this time. */
   const unlisted = [];
   if (document.querySelector) {
+    /* The baseline sits on the page's window, where the page can write:
+       an id that is not one of ours is dropped, never put in a selector. */
     d.removed = d.removed.filter((e) => {
-      const still = document.querySelector('[data-agx-e="' + e + '"]');
+      if (typeof e !== "string" || !/^e[0-9]+$/.test(e)) return false;
+      let still = null;
+      try { still = document.querySelector('[data-agx-e="' + e + '"]'); } catch { still = null; }
       if (still) unlisted.push(e);
       return !still;
     });
