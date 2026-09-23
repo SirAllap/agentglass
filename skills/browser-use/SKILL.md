@@ -140,8 +140,9 @@ what went wrong.
 
 **JavaScript is yours.** `eval` reads the app's own runtime — a store, a
 component's state, `document.visibilityState`. `eval --file` for anything a
-shell would mangle. `addInitScript` runs BEFORE the page's own scripts, on every
-navigation, which is the one thing `eval` cannot do.
+shell would mangle. `addInitScript` runs in the page now and, in principle,
+before the page's own scripts; this browser drops it after a navigation, so
+register it again after one. For errors thrown during load, use `checkup`.
 
 **DevTools, whole.** `cdp <Domain.method>` relays the entire protocol —
 breakpoints, heap snapshots, the accessibility tree. On top of it: `debug` (a
