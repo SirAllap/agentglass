@@ -802,7 +802,7 @@ export function actionLog(limit = 200, before?: number): ActionRow[] {
 //
 // `decision` NULL means still pending. `resolution` records *who* decided:
 // human, timeout, restart (expired while the server was down), or rule
-// (a tool allow/deny policy that answered without waiting).
+// (a gate rule in config.json that answered on arrival).
 /**
  * What survives the prune.
  *

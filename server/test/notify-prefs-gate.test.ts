@@ -81,12 +81,17 @@ describe("deliver() gated by the notification diet", () => {
 
   test("turning idle on makes the same message broadcast", () => {
     notifyPrefs.writeNotifyPrefs({ ...DEFAULT_NOTIFY_PREFS, kinds: { ...DEFAULT_NOTIFY_PREFS.kinds, idle: true } });
+    // Not "waiting for your input" — that phrasing is demoted to urgency 0
+    // (a silent row, never a desktop popup) whatever the kind switches say;
+    // see the measurement above `kindOfNotification`'s call site in
+    // maybeAlert. An idle message that is not that specific phrase still
+    // gets the ordinary urgency 1, which is what this test means to gate.
     alerts.maybeAlert({
       hook_event_type: "Notification", session_id: "s-idle-2", source_app: "app",
-      payload: { message: "Claude is waiting for your input" },
+      payload: { message: "Claude finished the task" },
     } as any);
     expect(fallbacks.length).toBe(1);
-    expect(fallbacks[0]?.title).toContain("waiting for your input");
+    expect(fallbacks[0]?.title).toContain("finished the task");
   });
 
   test("none blocks blocked too — the one kind that is otherwise always on", () => {
