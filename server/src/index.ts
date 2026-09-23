@@ -147,6 +147,7 @@ import { listPanes, focusPaneAnywhere, activePane, panesWithPids, sweepPinnedWin
 import { repairLast, snapshot } from "./tmuxsnapshot.ts";
 import { withAgentSessions } from "./paneloc.ts";
 import { notePaneFromHook, paneDirs, paneAgentNote } from "./panewt.ts";
+import { paneStatus } from "./agentdone.ts";
 import { chatSend, activeTurns, CHAT_ENABLED, CHAT_BYPASS_ALLOWED, CHAT_ENGINE_DEFAULT } from "./chat.ts";
 import { paneEngineCapability, attachCommand, validPaneName } from "./chatpane.ts";
 import { tmuxBinStatus, tmuxSocket } from "./tmuxbin.ts";
@@ -6759,9 +6760,16 @@ const server = Bun.serve<WsData>({
       // Which session is in which pane, where a hook said so. The list is the
       // live one, so a note pointing at a pane that has since closed drops out
       // here rather than becoming a button that goes nowhere.
+      const now = Date.now();
       const panes = withAgentSessions(live, (id) => {
         const n = paneAgentNote(id);
         return n ? { sessionId: n.session_id, at: n.at } : null;
+      }).map((p) => {
+        // The window switcher sorts every window on the machine by this, so it
+        // is answered here as well as in the strip's frame — one function, one
+        // answer. A pane with no agent stays without one.
+        const status = paneStatus(p.paneId, now);
+        return status ? { ...p, status } : p;
       });
       /*
        * `canAttach` says this server understands `?pane=` on the terminal

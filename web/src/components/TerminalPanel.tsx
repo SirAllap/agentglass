@@ -60,6 +60,8 @@ import { CloseButton, CloseIcon } from "./CloseButton.tsx";
 import { FindArrow } from "./FindBar.tsx";
 import { PluckPalette } from "./terminal/PluckPalette.tsx";
 import { edgeMask, useTabStripScroll } from "../lib/tabStrip.ts";
+import { StatusMark } from "./terminal/StatusMark.tsx";
+import { STATUS_WORDS } from "../../../shared/windowStatus.ts";
 
 const ROOT_KEY = "agentglass.terminalRoot";
 /** The repo the terminal view last used — what a docked console should open
@@ -3182,9 +3184,9 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       // (activity) is deliberately NOT drawn: it fires on any
                       // output — an agent still working, nvim redrawing, every
                       // window at once when the desk re-attaches — which is noise,
-                      // not "done". The honest "the agent here finished its turn"
-                      // is w.agentDone, derived server-side from the transcript's
-                      // own end-of-turn (Stop) event, not from tmux's flag.
+                      // not "done". What the agent here is doing is w.status,
+                      // derived server-side from its own events (see
+                      // server/src/agentdone.ts), not from tmux's flag.
                       const bell = w.flags.includes("!");
                       // Zoom is the flag that changes what the keyboard does:
                       // one pane is filling the window and the others are still
@@ -3238,7 +3240,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                             focusTerm();
                           }}
                           onDoubleClick={() => setRenaming(w.id)}
-                          title={`${w.name || "shell"} — window ${w.index}${w.flags ? ` (${w.flags})` : ""}. Double-click to rename, drag to reorder`}
+                          title={`${w.name || "shell"} — window ${w.index}${w.flags ? ` (${w.flags})` : ""}${w.status ? `, agent ${STATUS_WORDS[w.status]}` : ""}. Double-click to rename, drag to reorder`}
                           className={`group flex items-center gap-1.5 px-1 py-px text-[10.5px] cursor-pointer shrink-0 transition-colors${w.id === activeWindow ? " font-semibold" : ""}`}
                           style={{
                             ...(w.id === activeWindow ? { color: "var(--primary-hover)" } : { color: "var(--text2)" }),
@@ -3298,22 +3300,18 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                             />
                           ) : (
                             <>
-                              {/* THE NAME CARRIES THE STATE, rather than a dot
-                                  beside it. The mark for "the agent in this tab
-                                  finished and you have not looked" was a 6px
-                                  circle after the name — one more thing in a
-                                  strip whose whole point is that it is only
-                                  names. The name itself goes green: same fact,
-                                  same colour, nothing added to the row. */}
+                              {/* THE STATE IS A MARK BEFORE THE NAME. It used
+                                  to be the name itself turning green, which
+                                  could say one thing — "finished". Five states
+                                  need five marks, and a mark ahead of the name
+                                  keeps every name in the same place whatever
+                                  the agent is doing. Idle draws nothing: a
+                                  quiet tab should look quiet. */}
+                              {w.status && w.status !== "idle" && <StatusMark status={w.status} />}
                               {/* Cut at 16 characters: one long name used to
                                   push every tab after it off the row. The whole
                                   name is in the tab's tooltip. */}
-                              <span
-                                className="inline-block max-w-[16ch] truncate align-bottom"
-                                title={!bell && w.agentDone ? `${w.name || "shell"} — agent finished, not seen yet` : undefined}
-                                style={!bell && w.agentDone
-                                  ? { color: "var(--success, #98c379)", fontWeight: 600 }
-                                  : undefined}>
+                              <span className="inline-block max-w-[16ch] truncate align-bottom">
                                 {w.name || "shell"}
                               </span>
                             </>

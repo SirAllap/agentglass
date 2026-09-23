@@ -385,16 +385,17 @@ export interface TmuxWindow {
    */
   phone?: boolean;
   /**
-   * The agent running in one of this window's panes finished its turn, and the
-   * desk has not looked at this tab since.
+   * What the agent in this window is doing — the most urgent of its panes'
+   * (see `shared/windowStatus.ts`).
    *
-   * Derived server-side from the transcript's own end-of-turn event (`Stop`),
-   * not from tmux's activity flag: the flag fires on any output — an agent still
-   * working, nvim redrawing, every window at once when the desk re-attaches —
-   * none of which is "done". A pane with no agent never sets this. Cleared the
-   * moment the tab becomes the active one (you looked). Absent when not done.
+   * Derived server-side from the agents' own events, not from tmux's activity
+   * flag: the flag fires on any output — an agent still working, nvim
+   * redrawing, every window at once when the desk re-attaches — none of which
+   * is a state. `done` means a turn ended and the desk has not looked at this
+   * tab since; looking makes it `idle`. Absent when no pane in the window holds
+   * an agent, which is a different answer from `idle`.
    */
-  agentDone?: boolean;
+  status?: import("./windowStatus.ts").WindowStatus;
   /**
    * How big tmux is drawing this window right now.
    *
@@ -4176,6 +4177,10 @@ export interface AgentPane {
    *  agents may share — null when nothing ever reported one, which is every
    *  agent not started under a hook-wired CLI. */
   agentSession: string | null;
+  /** What the agent in this pane is doing; absent when there is none. The same
+   *  answer the tab strip draws, so the window switcher can sort every window
+   *  on the machine by it, not only the ones in the attached session. */
+  status?: import("./windowStatus.ts").WindowStatus;
   /**
    * This pane is on the tmux server agentglass itself works on.
    *
