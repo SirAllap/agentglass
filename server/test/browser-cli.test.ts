@@ -253,6 +253,34 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     expect(r.err).toMatch(/not allowed|argument/i);
   });
 
+  /* Locators are parsed in the panel, so the CLI and the relay must hand the
+     string over exactly as written — a quote, a bracket or an `=` inside it
+     mangled on the way is a different element. */
+  test("a locator reaches the window exactly as written, on its own and inside do", async () => {
+    await openWindow();
+    asked = []; askedArgs = [];
+    answers = { click: { ok: true, value: { clicked: "x", url: "u", title: "t" } } };
+    const loc = 'role=button[name="Save changes"]';
+    expect((await cli("click", loc)).code).toBe(0);
+    expect(verbArgs()).toEqual({ selector: loc });
+    asked = []; askedArgs = [];
+    const d = await cli("do", "click text=Save changes");
+    expect(d.code, d.err).toBe(0);
+    expect(verbArgs().selector).toBe("text=Save changes");
+  });
+
+  test("fill splits each field at the = that ends the selector, not the first one", async () => {
+    await openWindow();
+    asked = []; askedArgs = [];
+    answers = { fill: { ok: true, value: { filled: [] } } };
+    const r = await cli("fill", "--field", "label=Email=ada@orbit.example", "--field", "input[name=plan]=team",
+      "--field", 'role=textbox[name="Note = long"]=a=b');
+    expect(r.code).toBe(0);
+    expect(verbArgs().fields).toEqual({
+      "label=Email": "ada@orbit.example", "input[name=plan]": "team", 'role=textbox[name="Note = long"]': "a=b",
+    });
+  });
+
   test("shot --selector reaches the window as the selector the server validates", async () => {
     await openWindow();
     asked = []; askedArgs = [];

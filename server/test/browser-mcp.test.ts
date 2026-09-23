@@ -199,6 +199,22 @@ describe.skipIf(!HAVE_PY)("the MCP server", () => {
     expect(askedArgs[0]!.delta).toBe(true);
   });
 
+  test("a locator reaches the window exactly as written, and the instructions say what one is", async () => {
+    await openWindow();
+    asked = []; askedArgs = [];
+    answers = { click: { ok: true, value: { clicked: "x", url: "u", title: "t" } } };
+    const loc = 'role=button[name="Save changes"]';
+    const said = await talk([
+      hello, ready,
+      { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "browser_click", arguments: { selector: loc, shared: true } } },
+    ]);
+    expect(asked).toEqual(["click"]);
+    expect(askedArgs[0]!.selector).toBe(loc);
+    const init = said[0]!.result as { instructions?: string };
+    expect(init.instructions).toContain("role=button[name=");
+    expect(init.instructions).toContain("label=");
+  });
+
   test("a refusal from the page is an error result, not a crash", async () => {
     await openWindow();
     answers = { click: { ok: false, error: "nothing on the page matches #gone" } };

@@ -26,6 +26,9 @@ THE VERBS, by what you reach for them for:
               shot --highlight "#status" --label "still Online" evidence.png
   act         click · type · select · check · fill · hover · dblclick ·
               rightclick · focus · blur · press · scroll
+              click e12                           # an id from observe, or
+              click 'role=button[name="Save"]'    # what it is called — also
+                                                  # label= text= placeholder= testid=
   wait        wait · waitfor
   navigate    open · back · forward · reload
   tabs        tabs · tab · newtab · closetab · profiles
@@ -964,6 +967,45 @@ def _open_as(who):
     return "--shared" if who == SHARED_KEY else f"--as {who}"
 
 
+LOCATOR_PREFIX = re.compile(r"^(role|text|label|placeholder|testid)=")
+
+
+def split_field(pair):
+    """`--field SELECTOR=VALUE`, split at the `=` that ends the selector.
+
+    Not the first `=`: `input[name=email]=Ada` and `label=Email=Ada` both have
+    one inside the selector, and splitting there sent the selector `input[name`
+    and the value `email]=Ada`. The split skips a locator's own `label=`, and
+    any `=` inside brackets or quotes; a label that itself contains `=` is
+    written quoted (`label="a = b"=value`). Returns (None, None) when there is
+    no `=` left to split at.
+    """
+    m = LOCATOR_PREFIX.match(pair)
+    i = m.end() if m else 0
+    # A quote opens a string only where one can: right after `label=` and
+    # inside brackets. Anywhere else it is a letter (`text=Don't=x`).
+    depth, quote = 0, (pair[i] if m and pair[i:i + 1] in ("'", '"') else None)
+    if quote:
+        i += 1
+    while i < len(pair):
+        c = pair[i]
+        if quote:
+            if c == "\\":
+                i += 1
+            elif c == quote:
+                quote = None
+        elif depth and c in "\"'":
+            quote = c
+        elif c == "[":
+            depth += 1
+        elif c == "]":
+            depth = max(0, depth - 1)
+        elif c == "=" and depth == 0 and i > 0:
+            return pair[:i], pair[i + 1:]
+        i += 1
+    return None, None
+
+
 def do_steps(a):
     """The steps for `do`, from a file or from the short form."""
     if a.steps_file:
@@ -1242,7 +1284,7 @@ def main():
     p = sub.add_parser("open", help="go to a page and wait for it to load")
     p.add_argument("url")
     p = sub.add_parser("read", help="the page's url, title and visible text")
-    p = sub.add_parser("click", help="click the first element matching a CSS selector")
+    p = sub.add_parser("click", help="click one element: an id from observe (e12), a locator (role=button[name=\"Save\"], label=Email, text=Continue) or CSS")
     p.add_argument("selector")
     p = sub.add_parser("type", help="type into a field, optionally submitting it")
     p.add_argument("selector")
@@ -1393,7 +1435,7 @@ def main():
             q.add_argument("--off", action="store_true", help="uncheck it instead")
     p = sub.add_parser("fill", help="a whole form in ONE call — every field, then submit if asked")
     p.add_argument("--field", action="append", default=[], metavar="SELECTOR=VALUE",
-                   help="repeatable: --field '#name=Ada' --field '#email=ada@example.com'")
+                   help="repeatable: --field '#name=Ada' --field 'label=Email=ada@example.com'")
     p.add_argument("--submit", action="store_true")
     p = sub.add_parser(
         "debug",
@@ -1457,7 +1499,7 @@ def main():
     p = sub.add_parser("save", help="the whole page as one file that still renders offline (MHTML)")
     p.add_argument("out", help="where to write it")
     p = sub.add_parser("region", help="the tree of ONE subtree — a modal is 15 nodes inside 300")
-    p.add_argument("selector", help="a CSS selector, or an id from an observation")
+    p.add_argument("selector", help="an id from an observation, a locator (role=dialog) or CSS")
     p = sub.add_parser("throttle", help="make the machine slow — the bug that never reproduces locally")
     p.add_argument("--network", choices=["slow-3g", "fast-3g", "4g"])
     p.add_argument("--cpu", type=float, metavar="RATE", help="slowdown rate, e.g. 4 for four times slower")
@@ -1790,10 +1832,10 @@ def main():
     elif a.cmd == "fill":
         fields = {}
         for pair in a.field:
-            if "=" not in pair:
+            k, v = split_field(pair)
+            if k is None:
                 print(f"--field takes SELECTOR=VALUE, got {pair!r}", file=sys.stderr)
                 return 2
-            k, v = pair.split("=", 1)
             fields[k] = v
         if not fields:
             print("fill needs at least one --field SELECTOR=VALUE", file=sys.stderr)

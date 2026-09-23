@@ -1195,13 +1195,13 @@ TOOLS = [
         "description": "The text of one element, instead of the whole page.",
         "inputSchema": {
             "type": "object",
-            "properties": {"selector": {"type": "string", "description": "CSS selector"}},
+            "properties": {"selector": {"type": "string"}},
             "required": ["selector"],
         },
     },
     {
         "name": "browser_click",
-        "description": "Click the first element matching a CSS selector. Reports whether anything matched, and where the page ended up.",
+        "description": "Click one element (an id from observe, a locator like role=button[name=\"Save\"], or CSS). Reports whether anything matched, and where the page ended up.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1740,7 +1740,11 @@ def main():
                     "mints a tab in a container of your own, and every tool after it goes to that "
                     "tab, so nothing you do lands on somebody else's page and nothing they do "
                     "moves yours. Until you have one, any tool that acts on a page is refused "
-                    "rather than sent to whichever tab is in front."
+                    "rather than sent to whichever tab is in front.\n\n"
+                    "Every `selector` takes an id from browser_observe (e12), a locator — "
+                    "role=button[name=\"Save\"], label=Email, text=Continue, placeholder=Search, "
+                    "testid=submit — or CSS. A locator needs no observe first when you know what "
+                    "the thing is called; none or several matching is refused with ids to use."
                 ),
             })
         elif method == "tools/list":
