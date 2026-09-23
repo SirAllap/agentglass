@@ -29,7 +29,7 @@ import {
 } from "../../scripts/agx-bench/metrics.ts";
 import { afterOf, pick, runArm, Session, StepFailed, View, type Exec, type Task } from "../../scripts/agx-bench/bench.ts";
 import { buildResults, toMarkdown } from "../../scripts/agx-bench/report.ts";
-import { TASKS } from "../../scripts/agx-bench/tasks.ts";
+import { TASKS, checkupProblems } from "../../scripts/agx-bench/tasks.ts";
 import { cliEnv, parseOptions } from "../../scripts/agx-bench/run.ts";
 
 const O = "http://127.0.0.1:1";
@@ -316,10 +316,44 @@ describe("reading deltas (the phase1 arm)", () => {
     expect(targets.every((t) => /^(label|role)=/.test(t!))).toBe(true);
   });
 
+  test("a checkup answer reads back as the grader's three lists", () => {
+    const p = checkupProblems({
+      verdict: "3 problems",
+      errors: ["TypeError: Cannot read properties of undefined (reading 'price') @ /devloop:11"],
+      failed: ["500 GET http://127.0.0.1:1/api/widgets?x=1", "failed GET http://127.0.0.1:1/a.js: net::ERR_BLOCKED_BY_CLIENT"],
+      visible: ["Could not load widgets (HTTP 500)"],
+    });
+    expect(p.failedRequests[0]).toEqual({ path: "/api/widgets", status: 500 });
+    expect(p.failedRequests[1]!.status).toBe(0);
+    expect(p.consoleErrors).toHaveLength(1);
+    expect(checkupProblems({ verdict: "ok" })).toEqual({ consoleErrors: [], failedRequests: [], visibleErrors: [] });
+    expect(checkupProblems(undefined).consoleErrors).toEqual([]);
+  });
+
+  test("devloop-load's phase1 arm is two checkups, and the grader passes on their answers", async () => {
+    const state = freshState();
+    const broken = {
+      verdict: "3 problems", url: "u", title: "Widgets",
+      errors: [`${DEVLOOP_BUGS.consoleError} @ /devloop:11`],
+      failed: [`${DEVLOOP_BUGS.failedRequest.status} GET http://127.0.0.1:1${DEVLOOP_BUGS.failedRequest.path}`],
+      visible: [`${DEVLOOP_BUGS.visibleError} (HTTP 500)`],
+    };
+    const exec: Exec = async (argv) => ({
+      exit: 0, stderr: "",
+      stdout: JSON.stringify(argv[0] === "checkup" && state.devloop !== "fixed" ? broken : { verdict: "ok", url: "u", title: "Widgets" }),
+    });
+    const s = new Session(exec, [], "http://127.0.0.1:1", { state: async () => state, set: async (p) => void Object.assign(state, p) });
+    const task = TASKS.find((t) => t.id === "devloop-load")!;
+    const a = await task.arms.phase1!(s);
+    expect(task.grade(a, state)).toBeNull();
+    expect(s.calls.map((c) => c.verb)).toEqual(["checkup", "checkup"]);
+    expect(s.calls[1]!.argv).toContain("--reload");
+  });
+
   test("phase1 covers at least the tasks a delta or a folded look applies to", () => {
     // At least: later phase-1 items add their tasks to the same arm.
     const withPhase1 = TASKS.filter((t) => t.arms.phase1).map((t) => t.id);
-    expect(withPhase1).toEqual(expect.arrayContaining(["devloop-click", "form-signup", "measure-report", "nav-links", "nav-spa"]));
+    expect(withPhase1).toEqual(expect.arrayContaining(["devloop-click", "devloop-load", "form-signup", "measure-report", "nav-links", "nav-spa"]));
   });
 });
 

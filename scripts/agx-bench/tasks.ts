@@ -63,6 +63,21 @@ function problems(o: Looked) {
 }
 type Problems = ReturnType<typeof problems>;
 
+/** The same three lists out of a `checkup` answer. Its failed requests are
+ *  compact strings ("500 GET http://…/api/widgets", or "failed GET …: why"),
+ *  so the status and path are read back out of them. */
+export function checkupProblems(v: unknown): Problems {
+  const c = (v ?? {}) as { errors?: string[]; failed?: string[]; visible?: string[] };
+  return {
+    consoleErrors: c.errors ?? [],
+    failedRequests: (c.failed ?? []).map((f) => {
+      const m = /^(\d{3}) \S+ (\S+)/.exec(f);
+      return m ? { path: pathOf(m[2]), status: Number(m[1]) } : { path: f, status: 0 };
+    }),
+    visibleErrors: c.visible ?? [],
+  };
+}
+
 function gradeProblems(before: Problems | undefined, after: Problems | undefined, fixed: boolean): string | null {
   if (!before || !after) return "no answer";
   const missed: string[] = [];
@@ -199,6 +214,15 @@ export const TASKS: Task[] = [
         const after = problems(await observe(s));
         return { before, after };
       },
+      async phase1(s) {
+        // One call before the edit and one after: checkup captures from
+        // navigation start, so the error thrown while the page loaded and the
+        // request that failed then are in it.
+        const before = checkupProblems((await s.cli("checkup", [s.url("/devloop"), "--no-shot"])).json);
+        await s.edit({ devloop: "fixed" });
+        const after = checkupProblems((await s.cli("checkup", ["--reload", "--no-shot"])).json);
+        return { before, after };
+      },
     },
     grade: (a, state) => gradeProblems(a?.before, a?.after, state.devloop === "fixed"),
   },
@@ -220,20 +244,19 @@ export const TASKS: Task[] = [
         return { before, after };
       },
       async phase1(s) {
-        // A delta's console and network are what happened since the look
-        // before it — here, exactly what the click caused.
-        // The button is the one in the code being edited, so it is named,
-        // not looked up. After the reload the click's look is the full page
-        // (a new document has no earlier look to diff against), which is the
-        // look the reload would have paid for.
+        // checkup loads the page, the click is named rather than looked up,
+        // and a checkup with no navigation answers what happened since the
+        // last one: exactly what the click caused, plus what is on screen.
+        // --no-shot: the answer is the lists, a picture is not graded.
         const refresh = 'role=button[name="Refresh"]';
-        const v = new View().apply(afterOf(await s.cli("open", [s.url("/devloop"), "--observe"])));
-        v.apply(afterOf(await s.cli("click", [refresh, "--observe"])));
-        const before = problems(v);
+        await s.cli("checkup", [s.url("/devloop"), "--no-shot"]);
+        await s.cli("click", [refresh]);
+        const before = checkupProblems((await s.cli("checkup", ["--no-shot"])).json);
         await s.edit({ devloop: "fixed" });
-        await s.cli("reload");
-        v.apply(afterOf(await s.cli("click", [refresh, "--observe"])));
-        return { before, after: problems(v) };
+        await s.cli("checkup", ["--reload", "--no-shot"]);
+        await s.cli("click", [refresh]);
+        const after = checkupProblems((await s.cli("checkup", ["--no-shot"])).json);
+        return { before, after };
       },
     },
     grade: (a, state) => gradeProblems(a?.before, a?.after, state.devloop === "fixed"),
