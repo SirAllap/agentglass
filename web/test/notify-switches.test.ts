@@ -99,7 +99,12 @@ test("with our own alerts off, only what is held waiting still interrupts", () =
   expect(sysNotify.shouldInterrupt(true)).toBe(true);   // something is stopped until you answer
 
   sysNotify.setAppNotify(true);
+  // With Quiet on — the default — news waits in the bell as well.
+  sysNotify.setNotifyQuiet(true);
+  expect(sysNotify.shouldInterrupt(false)).toBe(false);
+  sysNotify.setNotifyQuiet(false);
   expect(sysNotify.shouldInterrupt(false)).toBe(true);
+  sysNotify.setNotifyQuiet(true);
 });
 
 test("neither switch can stop the bell collecting", () => {

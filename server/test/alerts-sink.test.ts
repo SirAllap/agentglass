@@ -122,11 +122,11 @@ describe("desktop alert routing", () => {
    * So the order is inverted now, and that is the point of the test: the thing
    * he must act on outranks the thing he cannot.
    */
-  test("a blocked agent outranks a failed tool call", () => {
+  test("a blocked agent outranks a failed tool call, which says nothing at all", () => {
     broadcasts = []; fallbacks = []; census = { attached: 1, live: 1 };
     alerts.maybeAlert({ hook_event_type: "Notification", session_id: "s-notif", source_app: "app", payload: { message: "heads up" } } as any);
     alerts.maybeAlert({ hook_event_type: "PostToolUse", is_error: 1, session_id: "s-err", source_app: "app", tool_name: "Bash", error_text: "boom", payload: {} } as any);
-    expect(broadcasts.map((b) => b.urgency)).toEqual([1, 0]);
+    expect(broadcasts.map((b) => b.urgency)).toEqual([1]);
   });
 
   test("the two messages that mean an agent is stopped are promoted", () => {
@@ -150,10 +150,10 @@ describe("desktop alert routing", () => {
 
   test("urgency 0 never reaches the desktop fallback", () => {
     // The frame still goes: it is a row in the list, with its pane. What it
-    // must not do is spawn notify-send, which draws over whatever he is doing
-    // and, before this, was hardcoded `-u critical` for every urgency.
+    // must not do is spawn notify-send, which draws over whatever is on the
+    // desk and, before this, was hardcoded `-u critical` for every urgency.
     broadcasts = []; fallbacks = []; census = { attached: 1, live: 0 };
-    alerts.maybeAlert({ hook_event_type: "PostToolUse", is_error: 1, session_id: "s-quiet", source_app: "app", tool_name: "Bash", error_text: "boom", payload: {} } as any);
+    alerts.maybeAlert({ hook_event_type: "Notification", session_id: "s-quiet", source_app: "app", payload: { message: "Claude is waiting for your input" } } as any);
     expect(broadcasts.length, "still recorded").toBe(1);
     expect(fallbacks.length, "nothing drawn on his desktop").toBe(0);
   });

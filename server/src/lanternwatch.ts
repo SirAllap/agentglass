@@ -38,7 +38,7 @@ import * as AgentBoard from "./agentboard.ts";
 import { isGone, boardNow } from "./lantern.ts";
 import { reconcile as namedAlive, type NamedAgent } from "./agentops.ts";
 import { lanternWatch, lanternWatchMinutes } from "./config.ts";
-import { pushLantern } from "./alerts.ts";
+import { pushLanternFindings } from "./alerts.ts";
 import { wakeSeats } from "./seatwake.ts";
 
 export interface Finding {
@@ -52,6 +52,11 @@ export interface Finding {
   worktree?: string;
   /** Sort key: the oldest wait first, then the longest silence. */
   since: number;
+  /** A "waiting" that is a turn nobody came back to for an hour, not a
+   *  permission or a gate. Still a wait, and still wakes a seat as one; only
+   *  the title counts it apart, because "needs you" everywhere else in the
+   *  app — the strip, the rail's pip, the dashboard's tile — means blocked. */
+  left?: true;
 }
 
 /** How long a said-but-not-done agent may be quiet before it is "forgotten".
@@ -102,6 +107,7 @@ export function findings(p: {
       if (r.needsYou.kind === "input" && now - r.needsYou.since < FORGOTTEN_AFTER_MS) continue;
       out.push({
         kind: "waiting", name: r.name, pane: r.paneId, worktree: r.worktree, since: r.needsYou.since,
+        ...(r.needsYou.kind === "input" ? { left: true as const } : null),
         line: `${r.name} ${waitWord(r.needsYou)} — ${ago(r.needsYou.since, now)}${r.needsYou.why ? `: ${r.needsYou.why}` : ""}`.slice(0, 200),
       });
       continue;
@@ -183,8 +189,7 @@ export async function tick(now = Date.now()): Promise<Finding[]> {
     const f = findings({ rows, namedNow, namedBefore, now });
     namedBefore = namedNow;
     last = { at: now, findings: f };
-    const n = notice(f);
-    if (n) pushLantern(n.title, n.body, n.pane);
+    pushLanternFindings(f, notice, now);
     /* The seat rides this look rather than keeping a clock of its own: the
        board has just been read, and whether anything a person cares about
        changed is already known here for free. See seatwake.ts. */

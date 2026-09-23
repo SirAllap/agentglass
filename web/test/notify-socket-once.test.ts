@@ -71,6 +71,9 @@ test("one desktop notification is one card and one row", async () => {
   opened = []; socks = [];
   const seen: string[] = [];
   sysNotify.setSysNotifyMode("full");
+  // Quiet off: the card is what is being counted, and Quiet holds every
+  // mirrored card back.
+  sysNotify.setNotifyQuiet(false);
   const off = sysNotify.subscribeSystemNotes((n) => seen.push(n.summary));
   await new Promise((r) => setTimeout(r, 60));
 
@@ -78,12 +81,13 @@ test("one desktop notification is one card and one row", async () => {
   // how one Slack message became two cards. Delivering to all of them is what
   // makes this measure the duplication rather than the last socket's behaviour.
   const before = sysNotify.notifyHistory().length;
-  const frame = { data: JSON.stringify({ id: "sys-1", app: "slack", summary: "Alejandro", body: "avisa", urgency: 1, at: 1 }) };
+  const frame = { data: JSON.stringify({ id: "sys-1", app: "slack", summary: "#orbit-deploys", body: "build is green", urgency: 1, at: 1 }) };
   for (const s of socks) s.onmessage?.(frame);
 
-  expect(seen).toEqual(["Alejandro"]);
+  expect(seen).toEqual(["#orbit-deploys"]);
   expect(sysNotify.notifyHistory().length).toBe(before + 1);
 
   off();
+  sysNotify.setNotifyQuiet(true);
   sysNotify.setSysNotifyMode("off");
 });

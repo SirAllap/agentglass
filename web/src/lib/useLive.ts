@@ -335,6 +335,7 @@ export function useLive(paused = false): LiveData {
           summary: talkSummary(t),
           body: talkBody(t),
           urgency: talkUrgency(t),
+          source: "pr",
           goto: { kind: "pr", repo: t.repo, number: t.number },
         });
         return;
@@ -359,6 +360,7 @@ export function useLive(paused = false): LiveData {
             ? `${v.failing.slice(0, 3).join(", ")}${v.failing.length > 3 ? ` +${v.failing.length - 3} more` : ""}\n${v.title}`
             : v.title,
           urgency: v.verdict === "red" ? 2 : 1,
+          source: "ci",
           // Clickable. The verdict has always known which pull request it is
           // about; the note simply had nowhere to put it, so a list of PR
           // results was a list of dead ends.
