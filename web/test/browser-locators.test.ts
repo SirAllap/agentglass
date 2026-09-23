@@ -583,3 +583,23 @@ describe("a hostile locator stays data", () => {
     });
   }
 });
+
+describe("fill says which fields were secret, as type does", () => {
+  /*
+   * The relay redacts a logged value when the selector looks like a secret
+   * (`#password`) or the panel says the node was one. `type` has always said;
+   * `fill` never did, so `fill --field 'e7=…'` or `label=Passphrase…` into a
+   * password field reached the audit log intact whenever the selector's words
+   * did not give it away. The relay already reads `secretFields`.
+   */
+  test("a password field is named by the selector the caller used", async () => {
+    const pinLabel = h("label", {}, "Access code");
+    const pin = h("input", { type: "password" });
+    pin.labels = [pinLabel];
+    const otp = h("input", { id: "otp", autocomplete: "one-time-code" });
+    const { guest } = page(h("body", {}, h("input", { id: "name" }), pinLabel, pin, otp));
+    const r = await runBrowserAsk(guest, ask("fill", { fields: { "#name": "Ada", "label=Access code": "4242", "#otp": "123456" } }));
+    expect(r.error).toBeUndefined();
+    expect((r.value as { secretFields?: string[] }).secretFields).toEqual(["label=Access code", "#otp"]);
+  });
+});

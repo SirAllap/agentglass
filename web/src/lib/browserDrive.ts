@@ -1424,7 +1424,7 @@ async function runVerb(
         const result = await el.executeJavaScript(
           `(() => {
              const pairs = [${pairs}];
-             const filled = [];
+             const filled = [], secret = [];
              const one = ${ONE};
              for (const [fsel, spec, text] of pairs) {
                const got = one(spec, false);
@@ -1437,15 +1437,22 @@ async function runVerb(
                fe.dispatchEvent(new Event("input", { bubbles: true }));
                fe.dispatchEvent(new Event("change", { bubbles: true }));
                filled.push(fsel);
+               /* The same verdict type reaches, for the same reason: only this
+                  side can see that the node is a password field, and the
+                  relay redacts by what it is told here. */
+               if (fe.type === "password" || /(^|\\s)(current|new)-password|one-time-code/.test(fe.autocomplete || "")) secret.push(fsel);
              }
-             return { kind: "ok", filled };
+             return { kind: "ok", filled, secret };
            })()`,
-        ) as { kind: string; selector?: string; message?: string; count?: number; samples?: string[]; filled?: string[] };
+        ) as { kind: string; selector?: string; message?: string; count?: number; samples?: string[]; filled?: string[]; secret?: string[] };
         if (result?.kind !== "ok") {
           const badSel = result?.selector ?? "";
           return { ok: false, error: `could not fill ${badSel} — ${selectorError(badSel, result as never)}` };
         }
-        return { ok: true, value: { filled: result.filled } };
+        return {
+          ok: true,
+          value: { filled: result.filled, ...(result.secret?.length ? { secretFields: result.secret } : {}) },
+        };
       }
 
       case "type": {
