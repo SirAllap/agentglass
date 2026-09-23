@@ -38,6 +38,21 @@ let snapshot: PendingGate[] = [];
 
 export const listGates = (): PendingGate[] => snapshot;
 
+/**
+ * Which live gate a bell row's `key` is about, if any.
+ *
+ * The bell renders a `SystemNote`, which carries no gate id of its own — only
+ * the `gate:<id>` key announce() wrote it under. This is the one place that
+ * knows the shape of that key, so a row can offer Allow/Deny without the bell
+ * component reaching into gateStore's internals, and the buttons vanish on
+ * their own the instant the gate they are for leaves `gates` (decided, timed
+ * out, or answered from another device).
+ */
+export function gateForNote(note: { key?: string }, gates: PendingGate[]): PendingGate | null {
+  if (!note.key) return null;
+  return gates.find((g) => keyFor(g.id) === note.key) ?? null;
+}
+
 export function subscribeGates(fn: () => void): () => void {
   startPolling();
   subs.add(fn);

@@ -31,7 +31,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { api } from "../lib/api.ts";
 import { subscribe as subscribeChats, listChats } from "../lib/chatStore.ts";
 import { subscribeGitChanged } from "../lib/gitBus.ts";
-import { subscribeNewGates } from "../lib/gateStore.ts";
+import { answerGate, gateForNote, listGates, subscribeGates, subscribeNewGates } from "../lib/gateStore.ts";
 import { enqueue, dequeue } from "../lib/toastQueue.ts";
 import {
   subscribeNotifyHistory, notifyHistory, notifyUnread,
@@ -404,6 +404,12 @@ function HistoryRow({ n, onGone, onGoto, onMute }: {
    * which is the one thing this does not do. It stays here, in agentglass.
    */
   const card = n.goto?.kind === "card" ? n.goto : null;
+  /** The hold this row is for, while it is still live. `key` is `gate:<id>`
+   *  and only gateStore's own row carries one, so a card is never mistaken
+   *  for a hold — and it disappears on its own once the hold resolves,
+   *  because `gates` no longer has it. See gateStore.ts's gateForNote. */
+  const gates = useSyncExternalStore(subscribeGates, listGates, listGates);
+  const gate = gateForNote(n, gates);
   /** The destinations that are neither git nor a card: a pane, a chat, a
    *  settings page, a pull request. Each gets the same named button the other
    *  two have, because "click the row" is no longer a way to reach anything. */
@@ -491,6 +497,23 @@ function HistoryRow({ n, onGone, onGoto, onMute }: {
               closed, unclamped open — so expanding grows downward. */}
           {n.body && (
             <span ref={bodyEl} className={open ? "agx-note-body" : "agx-note-body agx-note-body-clamp"}>{n.body}</span>
+          )}
+          {/* The decision itself, on the row that is already asking for it —
+              the dashboard's "What needs you" panel is the only other place
+              this exists, and it is one more view away from where the
+              question actually surfaced. Both call the same answerGate; there
+              is only the one decide path. */}
+          {gate && (
+            <span className="flex items-center gap-1 self-start">
+              <button className="agx-note-link self-start"
+                onClick={(e) => { e.stopPropagation(); void answerGate(gate, "allow"); }}>
+                Allow
+              </button>
+              <button className="agx-note-link self-start"
+                onClick={(e) => { e.stopPropagation(); void answerGate(gate, "deny"); }}>
+                Deny
+              </button>
+            </span>
           )}
           {/* Named, not a bare arrow. An unlabelled ↗ next to a Slack
               notification reads as "go to Slack", which is the one thing it
