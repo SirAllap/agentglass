@@ -13,6 +13,9 @@ const MARKED = PICK.replace(",h1,h2,h3", "");
 
 export const MARKS_ID = "__agx_shot_marks__";
 
+/** The most labels one picture carries — and so the most ids one mints. */
+export const MARKS_MAX = 100;
+
 /**
  * `shot --marks`: set-of-mark. A numbered label on every interactive thing in
  * view, carrying the SAME `eN` id observe gives it, so a model that looks at
@@ -31,7 +34,7 @@ export const MARKS_SCRIPT = `(() => {
   let n = 0;
   const ids = [];
   for (const el of document.querySelectorAll(${jsLit(MARKED)})) {
-    if (n >= 100) break;
+    if (n >= ${MARKS_MAX}) break;
     const r = el.getBoundingClientRect();
     if (!r.width || !r.height || r.bottom < 0 || r.right < 0 || r.top > innerHeight || r.left > innerWidth) continue;
     const cs = getComputedStyle(el);

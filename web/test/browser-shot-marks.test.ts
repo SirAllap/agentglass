@@ -7,6 +7,10 @@
 import { describe, expect, test } from "bun:test";
 import vm from "node:vm";
 import { MARKS_ID, MARKS_SCRIPT } from "../src/lib/browserMarks.ts";
+import { ID_ORIGIN } from "../src/lib/browserObserve.ts";
+import { mintingIds } from "../src/lib/browserDrive.ts";
+
+const driveSrc = await Bun.file(new URL("../src/lib/browserDrive.ts", import.meta.url)).text();
 
 type Box = { x: number; y: number; width: number; height: number };
 function node(name: string, box: Box, style: Partial<{ display: string; visibility: string; opacity: string }> = {}) {
@@ -21,7 +25,7 @@ function node(name: string, box: Box, style: Partial<{ display: string; visibili
   return el;
 }
 
-function run(items: any[], covering: (x: number, y: number) => any = () => null) {
+function run(items: any[], covering: (x: number, y: number) => any = () => null, script = MARKS_SCRIPT) {
   const body = node("body", { x: 0, y: 0, width: 800, height: 600 });
   const ctx: any = {
     innerWidth: 800, innerHeight: 600, scrollX: 0, scrollY: 0, WeakSet, Math, Number,
@@ -38,7 +42,7 @@ function run(items: any[], covering: (x: number, y: number) => any = () => null)
   };
   ctx.window = ctx;
   vm.createContext(ctx);
-  const ids = vm.runInContext(MARKS_SCRIPT, ctx) as string[];
+  const ids = vm.runInContext(script, ctx) as string[];
   return { ids, body, ctx };
 }
 
@@ -87,5 +91,28 @@ describe("shot --marks", () => {
   test("at most a hundred labels", () => {
     const many = Array.from({ length: 150 }, (_, i) => node(`n${i}`, { x: (i % 40) * 20, y: Math.floor(i / 40) * 20, width: 18, height: 18 }));
     expect(run(many).ids).toHaveLength(100);
+  });
+
+  /* An id printed on the picture is one the next call must accept. The
+     driver refuses an id no observe of this document handed out ("foreign"),
+     and the labels are stamped outside observe, so the script runs inside
+     the same range bookkeeping observe does. */
+  test("a label's id is one the next click accepts, not a foreign one", () => {
+    const save = node("save", { x: 10, y: 10, width: 80, height: 30 });
+    const bare = run([save]);
+    bare.ctx.__agxRanges = [[1, 0]]; // an observe that listed nothing: the counter exists, no range covers e1
+    expect(vm.runInContext(`(${ID_ORIGIN})(${JSON.stringify(save.dataset.agxE)})`, bare.ctx)).toBe("foreign");
+
+    const again = node("save", { x: 10, y: 10, width: 80, height: 30 });
+    const { ids, ctx } = run([again], undefined, mintingIds(40, MARKS_SCRIPT));
+    const got = ids as unknown as { value: string[]; idSeq: number };
+    expect(got.value).toEqual(["e41"]);
+    expect(got.idSeq).toBe(41);
+    expect(vm.runInContext(`(${ID_ORIGIN})("e41")`, ctx)).toBe("minted");
+  });
+
+  test("the driver mints shot --marks and html --clean ids through that bookkeeping", () => {
+    expect(driveSrc).toContain("mintingIds(markBase, MARKS_SCRIPT)");
+    expect(driveSrc).toMatch(/mintingIds\(idBase, `\(\(\) => \{ \$\{cleanHtmlBody\(max\)\}/);
   });
 });

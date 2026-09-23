@@ -124,6 +124,13 @@ function page(body: N) {
     elementFromPoint: (): N | null => null,
   };
   const win: Record<string, unknown> = { scrollY: 0, innerHeight: 800, scrollTo() {}, scrollBy() {} };
+  /* Ids stamped in a fixture stand for an observe of THIS page, so the page
+     carries the record an observe leaves (the counter and the range it
+     minted): an id is asked where it came from before it is acted on, and
+     one no observe of this document minted is refused as foreign. */
+  const stamped = html.all().map((n) => Number(/^e([0-9]+)$/.exec(n.attrs["data-agx-e"] ?? "")?.[1] ?? 0));
+  const top = Math.max(0, ...stamped);
+  if (top) { win.__agxSeq = top; win.__agxRanges = [[1, top]]; }
   const globals: Record<string, unknown> = {
     document: doc, window: win,
     getComputedStyle: (n: N) => ({
@@ -279,6 +286,18 @@ describe("every verb that takes an element finds it the way click does", () => {
     expect(r.ok).toBe(false);
     expect(r.error).toContain("matched 2 elements");
     expect(r.error).toContain('"Save draft"');
+  });
+
+  test("an id a refusal names is one the next call accepts", async () => {
+    /* The refusal stamps the nodes it names; unless those ids go into the
+       document's minted ranges, the id check refuses the very id the
+       refusal said to use, as one from another page. */
+    const { guest } = twoButtons();
+    const many = await runBrowserAsk(guest, ask("scroll", { selector: "button" }));
+    const id = /(e[0-9]+) button/.exec(String(many.error))?.[1];
+    expect(id).not.toBeUndefined();
+    const again = await runBrowserAsk(guest, ask("text", { selector: id! }));
+    expect(again.error).toBeUndefined();
   });
 
   test("drag says which end it could not find, and why", async () => {

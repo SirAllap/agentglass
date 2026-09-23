@@ -7,6 +7,7 @@
  * names must not lose one on upgrade.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { freePort } from "./freePort.ts";
 
 const MCP = new URL("../../bin/agentglass-browser-mcp", import.meta.url).pathname;
 const HAVE_PY = !!Bun.which("python3");
@@ -41,7 +42,14 @@ beforeAll(() => {
   stub = Bun.serve({
     port: 0,
     fetch(req) {
-      seen.push(new URL(req.url).pathname);
+      const path = new URL(req.url).pathname;
+      seen.push(path);
+      /* The two reads browser_storage_state is composed of, answered in the
+         shapes the relay gives them; every other verb gets a plain ok. */
+      if (path === "/browser/cdp") return Response.json({ ok: true, value: { result: { cookies: [{ name: "sid", value: "x" }] } } });
+      if (path === "/browser/eval") {
+        return Response.json({ ok: true, value: { value: { origin: "https://orbit.example", localStorage: { k: "v" }, sessionStorage: {} } } });
+      }
       return Response.json({ ok: true, value: "stub" });
     },
   });
@@ -116,5 +124,45 @@ describe.skipIf(!HAVE_PY)("MCP tool profiles", () => {
     expect(r!.result!.isError).toBe(true);
     expect(r!.result!.content![0]!.text).toContain("teleport");
     expect(seen).toEqual([]);
+  });
+
+  /* A composed tool is made of other tools' calls, made through the same
+     `run` the generic tool dispatches to; neither path may lose the other. */
+  test("a composed tool is reachable through `browser`, and its parts reach the relay", async () => {
+    seen.length = 0;
+    const [r] = await talk(
+      { AGENTGLASS_MCP_TOOLS: "core", AGENTGLASS_SERVER: `http://127.0.0.1:${stub!.port}` },
+      [call(2, "browser", { verb: "storage_state", args: { shared: true } })],
+    );
+    expect(r!.result!.isError, JSON.stringify(r)).toBeFalsy();
+    const state = JSON.parse(r!.result!.content![0]!.text) as { cookies: { name: string }[]; origins: { origin: string }[] };
+    expect(state.cookies.map((c) => c.name)).toEqual(["sid"]);
+    expect(state.origins[0]!.origin).toBe("https://orbit.example");
+    expect(seen).toEqual(["/browser/cdp", "/browser/eval"]);
+  });
+
+  test("the profile holds on the Streamable-HTTP transport too", async () => {
+    const port = await freePort();
+    const token = "mcp-profile-test-token-0123456789abcdef";
+    const p = Bun.spawn(["python3", MCP], {
+      env: { PATH: process.env.PATH ?? "", AGENTGLASS_MCP_TOOLS: "generic", AGENTGLASS_MCP_TOKEN: token, AGENTGLASS_MCP_HTTP: `127.0.0.1:${port}` },
+      stdout: "ignore", stderr: "ignore",
+    });
+    try {
+      const post = (body: unknown) => fetch(`http://127.0.0.1:${port}/`, {
+        method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body: JSON.stringify(body),
+      });
+      let up = false;
+      for (let i = 0; i < 100 && !up; i++) {
+        try { up = (await post({ jsonrpc: "2.0", id: 0, method: "ping" })).ok; } catch { /* not up yet */ }
+        if (!up) await Bun.sleep(50);
+      }
+      expect(up).toBe(true);
+      const j = await (await post(list)).json() as Reply;
+      expect(j.result!.tools!.map((t) => t.name)).toEqual(["browser"]);
+    } finally {
+      p.kill();
+      await p.exited;
+    }
   });
 });
