@@ -118,6 +118,13 @@ function AddPluginCard({ onInstalled, open, setOpen, prefill }: {
   );
 }
 
+/** The commit a market install is pinned to, or null for anything else.
+ *  Such an install updates only by installing the version the market lists;
+ *  re-fetching its own source fetches the same commit again. */
+export function pinnedByMarket(source: InstallSource): string | null {
+  return source.kind === "marketplace" && source.plugin.ref && /^[0-9a-f]{40}$/.test(source.plugin.ref) ? source.plugin.ref : null;
+}
+
 /** The installed plugin that came from this git URL, if any. A trailing slash
  *  or a `.git` is the same repository to git and a different string here, so
  *  they are taken off both sides before comparing — a card that offers to
@@ -318,7 +325,7 @@ export function PluginsPane({ open, focus }: {
       {/* The same 24px every settings card keeps from the next one. The grid
           sat directly on the card below it, with nothing between them. */}
       <div className="h-6" aria-hidden />
-      <Market installed={(url) => !!installedFrom(url, plugins)} onInstalled={load} />
+      <Market installed={(url) => installedFrom(url, plugins)?.source ?? null} onInstalled={load} />
     </div>
   );
 }
@@ -348,8 +355,11 @@ function PluginCard({ plugin, masterOn, onChanged, onSettings }: {
   // `enabled` can be true with `running` false for one tick after a crash.
   const running = plugin.running;
   // Only a git-backed source has an upstream to re-fetch — see
-  // server/src/plugins.ts, updatePlugin.
-  const updatable = plugin.source.kind !== "local-path";
+  // server/src/plugins.ts, updatePlugin. A market install pinned to a commit
+  // has one, and re-fetching it gets the same commit: its update is the
+  // market's, offered there when the listing moves on.
+  const pinned = pinnedByMarket(plugin.source);
+  const updatable = plugin.source.kind !== "local-path" && !pinned;
 
   const { ask, dialog } = useDialogs();
   const setEnabled = async (next: boolean) => {
@@ -451,6 +461,12 @@ function PluginCard({ plugin, masterOn, onChanged, onSettings }: {
       <div className="text-[11px] t-dim mt-1.5 truncate" title={formatSource(plugin.source)}>
         From <span className="t-mono">{formatSource(plugin.source)}</span>
       </div>
+      {pinned && (
+        <div className="text-[11px] t-dim mt-1">
+          Pinned to <span className="t-mono" title={pinned}>{pinned.slice(0, 7)}</span> by the market. It updates by
+          installing the version the market lists: the plugin shows up there with an Update button when it lists a newer version.
+        </div>
+      )}
 
       {/* The re-consent case, drawn so it cannot be mistaken for an ordinary
           disabled card: its own colour, its own sentence, above the fold that

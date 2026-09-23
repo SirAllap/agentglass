@@ -90,4 +90,37 @@ describe("validateCatalogue", () => {
     if (typeof c === "string") throw new Error("catalogue itself should be valid");
     expect(c.plugins).toHaveLength(0);
   });
+
+  test("a pinned entry keeps its commit and its content hash", () => {
+    const pinned = { ...okPlugin, source: { kind: "git", url: okPlugin.source.url, ref: "0123456789abcdef0123456789abcdef01234567" }, sha256: "a".repeat(64) };
+    const c = validateCatalogue({ ...okCatalogue, plugins: [pinned] });
+    if (typeof c === "string") throw new Error(c);
+    expect(c.plugins[0]!.source.ref).toBe(pinned.source.ref);
+    expect(c.plugins[0]!.sha256).toBe("a".repeat(64));
+  });
+
+  test("a hash that is not a sha256 drops the entry rather than installing it unchecked", () => {
+    /* Dropping it quietly would install the entry with no hash to compare,
+       which is the unpinned install the hash exists to prevent. */
+    for (const sha256 of ["a".repeat(63), "A".repeat(64), "z".repeat(64), 7, ""]) {
+      const c = validateCatalogue({ ...okCatalogue, plugins: [{ ...okPlugin, sha256 }] });
+      if (typeof c === "string") throw new Error(c);
+      expect(c.plugins, String(sha256)).toHaveLength(0);
+    }
+  });
+
+  /*
+   * An id is compared with the ids already listed exactly as written, so
+   * "local-review" with a newline on the end passed as a new one, and the
+   * trim here then showed a second local-review card under somebody else's
+   * byline. An id that is not already what it would be trimmed to is not
+   * trimmed into one.
+   */
+  test("an id with space or a newline around it drops the entry instead of passing for another", () => {
+    for (const id of ["local-review\n", " local-review", "local-review\t"]) {
+      const c = validateCatalogue({ ...okCatalogue, plugins: [{ ...okPlugin, id }, { ...okPlugin, id: "local-review" }] });
+      if (typeof c === "string") throw new Error(c);
+      expect(c.plugins.map((p) => p.id), JSON.stringify(id)).toEqual(["local-review"]);
+    }
+  });
 });

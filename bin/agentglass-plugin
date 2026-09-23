@@ -2,6 +2,7 @@
 """Install, switch on and check agentglass plugins, without the window.
 
     agentglass-plugin validate ~/code/my-plugin     # offline; 0 clean, 1 not
+    agentglass-plugin hash ~/code/my-plugin         # offline; the content hash a catalogue pins
     agentglass-plugin add https://github.com/you/my-plugin --approve
     agentglass-plugin list --json
     agentglass-plugin enable my-plugin --approve
@@ -33,6 +34,11 @@ It cannot check what a plugin DOES — see `enable`, which is where a person
 approves that. The rules it mirrors live in server/src/plugins.ts and
 shared/pluginUi.ts, and server/test/plugin-cli-validate.test.ts runs both over
 the same cases so the two cannot drift apart quietly.
+
+`hash` IS THE OTHER OFFLINE ONE. It prints the sha256 the app computes over a
+plugin folder at install — the same walk, the same exclusions — which is what
+a catalogue entry pins next to its commit. The app refuses an install whose
+tree hashes to anything else, so the listing describes bytes and not a branch.
 
 Everything else talks to the app over its HTTP API, with the same token the
 other CLIs here use.
@@ -125,6 +131,9 @@ def emit(res):
 # Kept in step with the originals by a test that runs both over the same cases.
 
 MAX_TEXT = 500
+# Every one of these is used with `fullmatch`: in Python `$` also matches
+# before a newline at the very end, so `match` let "name\n" through a rule the
+# app holds exactly, and a listing compares ids exactly as they are written.
 NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,60}$")
 CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 ICON_RE = re.compile(r"^[A-Za-z0-9._-][A-Za-z0-9._/-]{0,99}\.(svg|png|webp)$")
@@ -153,7 +162,7 @@ def check_fields(fields):
         key = f.get("key")
         if not isinstance(key, str) or len(key) > 60 or not key.strip():
             return "field.key must be 1-60 characters"
-        if not KEY_RE.match(key):
+        if not KEY_RE.fullmatch(key):
             return f'field key "{key}" must start with a letter and hold only letters, digits, . _ -'
         if f.get("type") not in FIELD_TYPES:
             return f'field "{key}" has an unknown type'
@@ -187,7 +196,7 @@ def check_contributes(c):
             if not isinstance(p, dict):
                 return "a panel must be an object"
             pid = p.get("id")
-            if not isinstance(pid, str) or not ID_RE.match(pid):
+            if not isinstance(pid, str) or not ID_RE.fullmatch(pid):
                 return "panel id must be 1-40 of a-z, 0-9, - and start with a letter"
             if pid in seen:
                 return f'panel id "{pid}" appears twice'
@@ -210,7 +219,7 @@ def check_contributes(c):
             if not isinstance(a, dict):
                 return "a pull request action must be an object"
             aid = a.get("id")
-            if not isinstance(aid, str) or not ID_RE.match(aid):
+            if not isinstance(aid, str) or not ID_RE.fullmatch(aid):
                 return "action id must be 1-40 of a-z, 0-9, - and start with a letter"
             if aid in seen:
                 return f'action id "{aid}" appears twice'
@@ -227,7 +236,7 @@ def check_manifest(m):
     if not isinstance(m, dict):
         return "manifest must be a JSON object"
     name = m.get("name")
-    if not isinstance(name, str) or not NAME_RE.match(name) or name in (".", "..") or name.startswith("."):
+    if not isinstance(name, str) or not NAME_RE.fullmatch(name) or name in (".", "..") or name.startswith("."):
         return ("name must be 1-60 characters: letters, numbers, dots, dashes or underscores, "
                 "and may not start with a dot")
     if not _text(m.get("publisher"), 200):
@@ -243,13 +252,13 @@ def check_manifest(m):
     if why:
         return why
     icon = m.get("icon")
-    if icon is not None and (not isinstance(icon, str) or not ICON_RE.match(icon) or ".." in icon.split("/")):
+    if icon is not None and (not isinstance(icon, str) or not ICON_RE.fullmatch(icon) or ".." in icon.split("/")):
         return "icon must be a relative path to an .svg, .png or .webp file in the plugin folder"
     color = m.get("color")
-    if color is not None and (not isinstance(color, str) or not COLOR_RE.match(color)):
+    if color is not None and (not isinstance(color, str) or not COLOR_RE.fullmatch(color)):
         return "color must be a hex colour like #7c5cf5"
     min_app = m.get("minApp")
-    if min_app is not None and (not isinstance(min_app, str) or not VERSION_RE.match(min_app)):
+    if min_app is not None and (not isinstance(min_app, str) or not VERSION_RE.fullmatch(min_app)):
         return "minApp must be a version like 0.18.0"
     return None
 
@@ -283,6 +292,155 @@ def cmd_validate(args):
                  "scope": manifest["scope"], "draws": draws,
                  **({"minApp": manifest["minApp"]} if manifest.get("minApp") else {}),
                  "warnings": warnings})
+
+
+# --------------------------------------------------------------------- hash
+#
+# `walkPluginDir` and `contentHash` from server/src/plugin-sources.ts, in
+# Python. The walk decides what "the plugin" is — `.git` is not part of it, a
+# link that leaves the folder refuses the whole thing, a link that stays is an
+# entry of its own rather than followed — and the hash is one framed line per
+# entry: path, NUL, `f`, `x` or `l`, the sha256 of the bytes or of the link's
+# text, newline, in UTF-8 byte order. `x` is a file that may be run, read from
+# git's index when the folder is a checkout, as the app reads it. Every one of those details is a way for the
+# two to disagree, and the test runs both over one tree.
+
+MAX_FILES = 2000
+MAX_TOTAL_BYTES = 50 * 1024 * 1024
+MAX_ARTIFACT_BYTES = 10 * 1024 * 1024
+
+
+def walk_plugin_dir(folder):
+    """The relative paths the app would hash, or (None, why)."""
+    root = os.path.realpath(folder)
+    files, total = [], 0
+
+    def walk(abs_dir):
+        nonlocal total
+        try:
+            entries = list(os.scandir(abs_dir))
+        except OSError as e:
+            return e.strerror or str(e)
+        for ent in entries:
+            # The app refuses these two names, and must: see walkPluginDir.
+            try:
+                ent.name.encode("utf-8")
+            except UnicodeEncodeError:
+                return f"{os.path.relpath(abs_dir, root)} holds a name that is not UTF-8"
+            if "\\" in ent.name:
+                return f"{ent.name!r} has a backslash in its name"
+            if ent.name == ".git":
+                continue
+            child = os.path.join(abs_dir, ent.name)
+            # With `/` on every platform, as the app spells it: the hash is
+            # the same wherever it is taken.
+            rel = os.path.relpath(child, root).replace(os.sep, "/")
+            try:
+                real = os.path.realpath(child, strict=True)
+            except OSError:
+                return f"could not resolve {rel}"
+            if real != root and not real.startswith(root + os.sep):
+                return f"{rel} resolves outside the plugin directory"
+            # The entry's own type, never the target's: a link is hashed by
+            # what it says, and judged by it too — relative, and never above
+            # the folder even on its way back in, because the folder is
+            # installed somewhere other than where it was walked.
+            if ent.is_symlink():
+                target = os.readlink(child)
+                if os.path.isabs(target):
+                    return f"{rel} is a link to an absolute path; a plugin's links are relative"
+                read = os.path.normpath(os.path.join(os.path.dirname(rel), target))
+                if read == os.pardir or read.startswith(os.pardir + os.sep):
+                    return f"{rel} is a link that climbs outside the plugin directory"
+                files.append(rel)
+                if len(files) > MAX_FILES:
+                    return f"more than {MAX_FILES} files"
+                continue
+            if ent.is_dir(follow_symlinks=False):
+                why = walk(child)
+                if why:
+                    return why
+                continue
+            if not ent.is_file(follow_symlinks=False):
+                continue
+            files.append(rel)
+            if len(files) > MAX_FILES:
+                return f"more than {MAX_FILES} files"
+            size = os.stat(real).st_size
+            if size > MAX_ARTIFACT_BYTES:
+                return f"{rel} is larger than {MAX_ARTIFACT_BYTES // (1024 * 1024)}MB"
+            total += size
+            if total > MAX_TOTAL_BYTES:
+                return f"plugin is larger than {MAX_TOTAL_BYTES // (1024 * 1024)}MB in total"
+        return None
+
+    why = walk(root)
+    return (None, why) if why else (files, None)
+
+
+def index_executables(root):
+    """The files git's index records as 100755, when `root` is itself a
+    checkout; see `indexExecutables` in the app. Windows keeps no bit on disk
+    and Git for Windows keeps it in the index, so this is how a pinned install
+    there hashes what the catalogue hashed on Linux."""
+    import subprocess
+    found = set()
+    if not os.path.lexists(os.path.join(root, ".git")):
+        return found
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env.update(GIT_TERMINAL_PROMPT="0", GIT_LFS_SKIP_SMUDGE="1")
+    try:
+        r = subprocess.run(
+            ["git", "-C", root, "-c", "core.fsmonitor=false", "--git-dir", os.path.join(root, ".git"), "--work-tree", root,
+             "ls-files", "--stage", "-z"],
+            env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except OSError:
+        return found
+    if r.returncode != 0:
+        return found
+    for entry in r.stdout.split(b"\0"):
+        meta, tab, path = entry.partition(b"\t")
+        if tab and meta.startswith(b"100755 "):
+            found.add(path.decode("utf-8", "surrogateescape"))
+    return found
+
+
+def content_hash(folder, files):
+    import hashlib
+    import stat
+    root = os.path.realpath(folder)
+    indexed = index_executables(root)
+    h = hashlib.sha256()
+    # By UTF-8 bytes, which is what the app sorts by. `surrogateescape` hands
+    # back the bytes of a name that is not UTF-8 instead of stopping here; the
+    # app cannot read such a name the same way, so it fails the comparison
+    # rather than this command.
+    for rel in sorted(files, key=lambda r: r.encode("utf-8", "surrogateescape")):
+        path = os.path.join(root, rel)
+        if os.path.islink(path):
+            kind, payload = b"l", os.fsencode(os.readlink(path))
+            if os.name == "nt":
+                payload = payload.replace(b"\\", b"/")
+        else:
+            with open(path, "rb") as f:
+                payload = f.read()
+            # The disk too, except on Windows, which has no bit to read (and
+            # where Python makes one up from the extension).
+            runs = rel in indexed or (os.name != "nt" and os.lstat(path).st_mode & stat.S_IXUSR)
+            kind = b"x" if runs else b"f"
+        h.update(rel.encode("utf-8", "surrogateescape"))
+        h.update(b"\0" + kind + hashlib.sha256(payload).hexdigest().encode("ascii") + b"\n")
+    return h.hexdigest()
+
+
+def cmd_hash(args):
+    folder = os.path.abspath(os.path.expanduser(args.folder))
+    if not os.path.isdir(folder):
+        return emit({"ok": False, "error": f"{folder} is not a folder"})
+    files, why = walk_plugin_dir(folder)
+    if why:
+        return emit({"ok": False, "error": why})
+    return emit({"ok": True, "sha256": content_hash(folder, files), "files": len(files)})
 
 
 # -------------------------------------------------------------- the app's API
@@ -359,6 +517,10 @@ def main():
     v = sub.add_parser("validate", help="check a plugin folder's manifest; needs no running agentglass")
     v.add_argument("folder")
     v.set_defaults(fn=cmd_validate)
+
+    h = sub.add_parser("hash", help="the content hash the app computes at install; needs no running agentglass")
+    h.add_argument("folder")
+    h.set_defaults(fn=cmd_hash)
 
     a = sub.add_parser("add", help="install from a git URL or a local folder")
     a.add_argument("source")

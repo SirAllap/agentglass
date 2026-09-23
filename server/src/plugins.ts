@@ -15,7 +15,7 @@
 // somewhere new asks again.
 import { createHash } from "node:crypto";
 import {
-  existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync,
+  cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { homedir, tmpdir } from "node:os";
@@ -23,9 +23,10 @@ import { mintPluginToken, revokePluginToken } from "./auth.ts";
 import type { Scope } from "./devices.ts";
 import { cloneUrlError } from "./projectadd.ts";
 import {
-  type InstallSource, contentHash, pluginGitUrlError, pluginRefError, walkPluginDir,
+  type InstallSource, FULL_COMMIT, contentHash, pluginGitUrlError, pluginRefError, walkPluginDir,
 } from "./plugin-sources.ts";
 import { fetchCatalogue } from "./plugin-catalogue.ts";
+import type { GuardedFetchOptions } from "./net.ts";
 import { blockedEntry, type BlockEntry } from "./plugin-blocklist.ts";
 import { type Contributes, validateContributes } from "../../shared/pluginUi.ts";
 import { coerceSettings, dropNotesOf, fieldsWithOptions, forgetPlugin, pushEvent, resolveSettings, setLivenessCheck } from "./plugin-ui.ts";
@@ -454,9 +455,28 @@ async function startProcess(rec: PluginRecord): Promise<void> {
   }
 }
 
+/**
+ * The environment of every git a plugin install runs. It asks nobody for a
+ * password: the server is not somebody at a terminal, and a repository that
+ * answered 401 left an install waiting on a prompt in whatever terminal the
+ * server was started from. And it fetches nothing through Git LFS, where the
+ * user has it: a plugin's own .lfsconfig names the LFS host, so installing a
+ * plugin made this machine talk to a server the plugin chose. A plugin that
+ * keeps files in LFS installs with the pointers, which is also what the
+ * catalogue's runner hashes.
+ */
+const pluginGitEnv = (): Record<string, string | undefined> => ({ ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_LFS_SKIP_SMUDGE: "1" });
+
+/**
+ * Every git a plugin install runs. The line endings are pinned because a
+ * catalogue's hash is taken over the bytes a checkout writes: Git for Windows
+ * installs with core.autocrlf on, and a checkout that turned every text file
+ * to CRLF hashed to something no catalogue had listed. A plugin's own
+ * `.gitattributes` still decides, the same way on every machine.
+ */
 async function git(args: string[], cwd: string, timeoutMs: number): Promise<{ ok: boolean; err: string }> {
   try {
-    const p = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+    const p = Bun.spawn(["git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", ...args], { cwd, env: pluginGitEnv(), stdout: "pipe", stderr: "pipe", stdin: "ignore" });
     const timer = setTimeout(() => { try { p.kill(); } catch { /* already gone */ } }, timeoutMs);
     const [code, err] = await Promise.all([p.exited, new Response(p.stderr).text()]);
     clearTimeout(timer);
@@ -565,11 +585,63 @@ export type InstallInput =
 
 async function resolveHead(dir: string): Promise<string | null> {
   try {
-    const p = Bun.spawn(["git", "rev-parse", "HEAD"], { cwd: dir, stdout: "pipe", stderr: "ignore", stdin: "ignore" });
+    const p = Bun.spawn(["git", "rev-parse", "HEAD"], { cwd: dir, env: pluginGitEnv(), stdout: "pipe", stderr: "ignore", stdin: "ignore" });
     const [code, out] = await Promise.all([p.exited, new Response(p.stdout).text()]);
     return code === 0 ? out.trim() : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Put `url` at `ref` into `staging`, an empty directory.
+ *
+ * A branch, a tag or nothing is a shallow clone, as it always was. A full
+ * commit id is fetched by id — `git clone --branch` refuses one, so before
+ * this no entry could be pinned to a commit at all — and the result is
+ * checked to be that commit, because a fetch that quietly landed somewhere
+ * else would install something nobody named.
+ *
+ * `sha256`, when a catalogue gave one, is then compared with the tree's
+ * content hash by the same walk `finishInstall` does, and a mismatch is
+ * refused before anything is copied or recorded.
+ */
+async function fetchInto(staging: string, url: string, ref: string | null, sha256?: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const TEN_MINUTES = 10 * 60 * 1000;
+  if (ref && FULL_COMMIT.test(ref)) {
+    for (const args of [["init", "-q"], ["fetch", "-q", "--depth", "1", "--", url, ref], ["checkout", "-q", "--detach", "FETCH_HEAD"]]) {
+      const r = await git(args, staging, TEN_MINUTES);
+      if (!r.ok) return { ok: false, error: r.err || `git ${args[0]} failed` };
+    }
+    const head = await resolveHead(staging);
+    if (head !== ref) return { ok: false, error: `asked for ${ref} and the fetch resolved to ${head ?? "nothing"}` };
+  } else {
+    const args = ["clone", "--depth", "1"];
+    if (ref) args.push("--branch", ref);
+    args.push("--", url, staging);
+    const r = await git(args, tmpdir(), TEN_MINUTES);
+    if (!r.ok) return { ok: false, error: r.err || "git clone failed" };
+  }
+  if (sha256) {
+    const walked = walkPluginDir(staging);
+    if (!walked.ok) return { ok: false, error: walked.error ?? "plugin folder rejected" };
+    const got = contentHash(staging, walked.files);
+    if (got !== sha256) {
+      return { ok: false, error: `not what the catalogue listed: the files at ${ref ?? "the default branch"} hash to ${got.slice(0, 12)}…, the catalogue says ${sha256.slice(0, 12)}…` };
+    }
+  }
+  return { ok: true };
+}
+
+/** What the copy into place carries: files, folders and links, the entries
+ *  the walk reads. A socket or a pipe in a folder in use is left behind, as
+ *  the walk leaves it, rather than failing the copy the way `cpSync` does. */
+function copied(src: string): boolean {
+  try {
+    const st = lstatSync(src);
+    return st.isFile() || st.isDirectory() || st.isSymbolicLink();
+  } catch {
+    return false;
   }
 }
 
@@ -582,6 +654,11 @@ async function resolveHead(dir: string): Promise<string | null> {
 async function finishInstall(
   staging: string,
   source: InstallSource,
+  /** The name somebody chose — a catalogue entry's id — which the manifest
+   *  that arrived must carry, and which names the folder. Without it the
+   *  folder was named by the manifest alone, so a listed entry whose
+   *  repository said another plugin's name installed over that plugin. */
+  expectName?: string,
 ): Promise<{ ok: true; plugin: PublicPlugin } | { ok: false; error: string }> {
   const manifestPath = join(staging, MANIFEST_NAME);
   if (!existsSync(manifestPath)) return { ok: false, error: `No ${MANIFEST_NAME} at the root of that plugin` };
@@ -589,6 +666,9 @@ async function finishInstall(
   try { raw = JSON.parse(readFileSync(manifestPath, "utf8")); } catch { return { ok: false, error: `${MANIFEST_NAME} is not valid JSON` }; }
   const manifest = validateManifest(raw);
   if (typeof manifest === "string") return { ok: false, error: manifest };
+  if (expectName !== undefined && manifest.name !== expectName) {
+    return { ok: false, error: `the catalogue lists "${expectName}" and the plugin it fetched is named "${manifest.name}"; nothing was installed` };
+  }
   /*
    * A plugin that needs a newer app is refused here rather than installed and
    * left off. Half of what a plugin declares is where it draws, and a surface
@@ -604,7 +684,7 @@ async function finishInstall(
   const content = contentHash(staging, walked.files);
   const fingerprint = consentFingerprint(manifest, content);
 
-  const installDir = pluginInstallDir(manifest.name);
+  const installDir = pluginInstallDir(expectName ?? manifest.name);
   const hash = manifestHash(manifest);
   const store = read();
   const existing = store.plugins.find((p) => p.name === manifest.name);
@@ -623,7 +703,12 @@ async function finishInstall(
   if (!insidePluginsRoot(installDir)) return { ok: false, error: "plugin name would install outside the plugins folder" };
   rmSync(installDir, { recursive: true, force: true });
   mkdirSync(dirname(installDir), { recursive: true });
-  Bun.spawnSync(["cp", "-R", "--", staging, installDir]);
+  // The app's own copy, not `cp`, which Windows does not have; a link is
+  // copied as the link it is, not rewritten to where it pointed in staging.
+  try { cpSync(staging, installDir, { recursive: true, verbatimSymlinks: true, filter: copied }); } catch (e) {
+    rmSync(installDir, { recursive: true, force: true });
+    return { ok: false, error: `could not copy the plugin into place: ${e instanceof Error ? e.message : String(e)}` };
+  }
 
   const record: PluginRecord = {
     ...manifest,
@@ -683,13 +768,14 @@ export async function installPlugin(input: InstallInput): Promise<{ ok: true; pl
       let st;
       try { st = statSync(source.path); } catch { return { ok: false, error: "That path does not exist" }; }
       if (!st.isDirectory()) return { ok: false, error: "That path is not a folder" };
-      Bun.spawnSync(["cp", "-R", "--", source.path.endsWith("/") ? source.path : source.path + "/.", staging]);
+      // The folder's contents, through a link if the path is one, as
+      // `cp -R path/.` did before the copy stopped needing `cp`.
+      try { cpSync(realpathSync(source.path), staging, { recursive: true, verbatimSymlinks: true, filter: copied }); } catch (e) {
+        return { ok: false, error: `could not copy that folder: ${e instanceof Error ? e.message : String(e)}` };
+      }
     } else {
-      const args = ["clone", "--depth", "1"];
-      if (source.ref) args.push("--branch", source.ref);
-      args.push("--", source.url, staging);
-      const r = await git(args, tmpdir(), 10 * 60 * 1000);
-      if (!r.ok) return { ok: false, error: r.err || "git clone failed" };
+      const r = await fetchInto(staging, source.url, source.ref);
+      if (!r.ok) return r;
     }
     return await finishInstall(staging, source);
   } finally {
@@ -709,26 +795,28 @@ export async function installPlugin(input: InstallInput): Promise<{ ok: true; pl
 export async function installFromCatalogue(
   catalogueUrl: string,
   pluginId: string,
+  /** For the test, which serves the catalogue itself — see fetchCatalogue. */
+  guard: GuardedFetchOptions = {},
 ): Promise<{ ok: true; plugin: PublicPlugin } | { ok: false; error: string }> {
-  const fetched = await fetchCatalogue(catalogueUrl);
+  const fetched = await fetchCatalogue(catalogueUrl, guard);
   if (!fetched.ok) return { ok: false, error: fetched.error };
   const entry = fetched.catalogue.plugins.find((p) => p.id === pluginId);
   if (!entry) return { ok: false, error: `No plugin "${pluginId}" in that catalogue` };
+  // The id names the folder, so it is held to a plugin name's rule before a
+  // byte is fetched: a catalogue id may be 120 characters of anything.
+  if (!validPluginName(entry.id)) return { ok: false, error: `"${pluginId.slice(0, 60)}" is not a name a plugin can be installed under` };
 
   const staging = mkdtempSync(join(tmpdir(), "agx-plugin-"));
   try {
-    const args = ["clone", "--depth", "1"];
-    if (entry.source.ref) args.push("--branch", entry.source.ref);
-    args.push("--", entry.source.url, staging);
-    const r = await git(args, tmpdir(), 10 * 60 * 1000);
-    if (!r.ok) return { ok: false, error: r.err || "git clone failed" };
+    const r = await fetchInto(staging, entry.source.url, entry.source.ref, entry.sha256);
+    if (!r.ok) return r;
     const resolvedCommit = await resolveHead(staging);
     const source: InstallSource = {
       kind: "marketplace",
       marketplace: { url: catalogueUrl, ref: null, resolvedCommit },
-      plugin: { url: entry.source.url, ref: entry.source.ref },
+      plugin: { url: entry.source.url, ref: entry.source.ref, ...(entry.sha256 ? { sha256: entry.sha256 } : {}) },
     };
-    return await finishInstall(staging, source);
+    return await finishInstall(staging, source, entry.id);
   } finally {
     rmSync(staging, { recursive: true, force: true });
   }
@@ -748,18 +836,17 @@ export async function updatePlugin(name: string): Promise<{ ok: true; plugin: Pu
   const existing = store.plugins.find((p) => p.name === name);
   if (!existing) return { ok: false, error: "no such plugin" };
   if (existing.source.kind === "local-path") return { ok: false, error: "A local install has no upstream to re-fetch" };
-  const { url, ref } = existing.source.kind === "git"
-    ? { url: existing.source.url, ref: existing.source.ref }
-    : { url: existing.source.plugin.url, ref: existing.source.plugin.ref };
+  const { url, ref, sha256 } = existing.source.kind === "git"
+    ? { url: existing.source.url, ref: existing.source.ref, sha256: undefined }
+    : { url: existing.source.plugin.url, ref: existing.source.plugin.ref, sha256: existing.source.plugin.sha256 };
 
   const staging = mkdtempSync(join(tmpdir(), "agx-plugin-"));
   try {
-    const args = ["clone", "--depth", "1"];
-    if (ref) args.push("--branch", ref);
-    args.push("--", url, staging);
-    const r = await git(args, tmpdir(), 10 * 60 * 1000);
-    if (!r.ok) return { ok: false, error: r.err || "git clone failed" };
-    return await finishInstall(staging, existing.source);
+    const r = await fetchInto(staging, url, ref, sha256);
+    if (!r.ok) return r;
+    // Updated in place: whatever arrives must still be the plugin that is
+    // installed here, or it would land in another plugin's folder.
+    return await finishInstall(staging, existing.source, existing.name);
   } finally {
     rmSync(staging, { recursive: true, force: true });
   }

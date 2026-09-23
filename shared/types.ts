@@ -4733,7 +4733,7 @@ export type InstallSource =
   | {
       kind: "marketplace";
       marketplace: { url: string; ref: string | null; resolvedCommit: string | null };
-      plugin: { url: string; ref: string | null };
+      plugin: { url: string; ref: string | null; sha256?: string };
     };
 
 export interface PublicPlugin {
@@ -4784,6 +4784,7 @@ export interface PluginsStatus {
 export interface CataloguePlugin {
   id: string;
   source: { kind: "git"; url: string; ref: string | null };
+  sha256?: string;
   description: string;
   categories: string[];
   title?: string;
