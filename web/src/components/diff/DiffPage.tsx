@@ -25,7 +25,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { ChangeRow } from "../../../../shared/types.ts";
 import {
-  filterRows, groupRows, reviewKeyOf, rowByKey, statusWord, totalsOf, useChangeRows, useFileDiff,
+  diffStateKey, filterRows, groupRows, reviewKeyOf, rowByKey, statusWord, totalsOf, useChangeRows, useFileDiff,
   visibleRows, whenLabel, type DiffMode, type DiffState, type GroupBy, type RowGroup,
 } from "../../lib/changeRows.ts";
 import { useIncremental } from "../../lib/useIncremental.ts";
@@ -38,19 +38,19 @@ import { ICON } from "../../lib/iconSize.ts";
 import { CHIP_ICON, Chip, FilterField, IconChip, Segmented } from "../workspace/Chrome.tsx";
 import { viewHeaderClass, viewHeaderStyle } from "../workspace/ViewHeader.tsx";
 import { diffSplit, diffWrap, setDiffSplit, setDiffWrap, diffNoWhitespace, setDiffNoWhitespace } from "../../lib/diffPrefs.ts";
-import { subscribeWorktreeJump, worktreeJump } from "../../lib/worktreeJump.ts";
+import { subscribeWorktreeJump, worktreeJump, requestWorktreeJump } from "../../lib/worktreeJump.ts";
 import { hunkChanges, hunkWithoutWhitespace } from "../../lib/diffNoWhitespace.ts";
 import { useDiffHighlight, HiliteCtx } from "../../lib/diffHighlight.ts";
+import { api } from "../../lib/api.ts";
 import { SplitDiff, UnifiedDiff, SCROLLBAR_CSS, SPLIT_SEL_CSS, LINEBTN_CSS, type LinePick, type LineSel } from "./DiffLines.tsx";
-import { FileIcon, IconLabel } from "../../lib/glyphIcons.tsx";
-import { agentsOf, subscribeAgents } from "../../lib/fleetAgents.ts";
-import { SHARED_TREE_HINT, SHARED_TREE_TOOLTIP, isSharedCwd, liveSharedCwds } from "../../lib/sharedTree.ts";
+import { CommentBox, CommentCard, ReviewTray } from "./DiffReview.tsx";
 import {
-  addLocalComment, buildPrompt, captureSnippet, clearLocalReview, getLocalReview,
-  lineTextAt, markStale, removeLocalComment, replaceLocalComments, reviewChatTitle,
-  setLocalIntro, setLocalOutro, subscribeLocalReview,
-  type LocalDiffComment,
-} from "../../lib/localDiffReview.ts";
+  addComment, anchorLabel, captureSnippet, checkAtSend, clearReview, composeReview, editComment, isStale,
+  removeComment, reviewFor, setFrame, subscribeReviews, type Review, type ReviewComment, type StaleFile,
+} from "../../lib/diffReview.ts";
+import { requestTermIssue, subscribeTermIssue, termIssue } from "../../lib/termIssue.ts";
+import { AgentIcon, FileIcon, IconLabel } from "../../lib/glyphIcons.tsx";
+import { authorsIndex, headingAuthors, rowAuthorsTitle, sectionAuthors } from "../../lib/treeAuthors.ts";
 
 /* Storage keys are v3 on purpose: the two before them stored a group-by that no
    longer exists and ticks keyed by an id that no longer exists either. */
@@ -70,11 +70,8 @@ const read = <T,>(key: string, fallback: T, parse: (raw: string) => T): T => {
 };
 const write = (key: string, value: string) => { try { localStorage.setItem(key, value); } catch { /* private mode */ } };
 
-export function DiffPage({ active, onClose, onOpenChatWith }: {
-  active: boolean;
-  onClose?: () => void;
-  /** Seed a chat with cwd = the change's repoRoot and switch to the Chat view. */
-  onOpenChatWith?: (cwd: string, prompt: string, title: string) => void;
+export function DiffPage({ active, onClose }: {
+  active: boolean; onClose?: () => void;
 }) {
   const [mode, setMode] = useState<DiffMode>(() => read(K_MODE, "working", (r) => (r === "committed" ? "committed" : "working")));
   const [groupBy, setGroupBy] = useState<GroupBy>(() =>
@@ -137,7 +134,8 @@ export function DiffPage({ active, onClose, onOpenChatWith }: {
   useEffect(() => write(K_IGNORED, showIgnored ? "1" : "0"), [showIgnored]);
   useEffect(() => write(K_OUTSIDE, showOutside ? "1" : "0"), [showOutside]);
 
-  const { rows, truncated, failed, loading, error } = useChangeRows(mode, active);
+  const { rows, truncated, failed, authors, loading, error } = useChangeRows(mode, active);
+  const who = useMemo(() => authorsIndex(authors), [authors]);
 
   /* The counts the chips offer back. Each counts only what IT is hiding, or
      "+2 ignored" shows nothing when the same rows are also outside the project
@@ -152,19 +150,128 @@ export function DiffPage({ active, onClose, onOpenChatWith }: {
   const groups = useMemo(() => groupRows(shown, groupBy), [shown, groupBy]);
   const totals = useMemo(() => totalsOf(shown, reviewed), [shown, reviewed]);
 
-  // Live fleet → which checkouts are shared. Exact repoRoot === cwd for v1.
-  // The tick, not the setter: a setter never changes, so a memo keyed on it
-  // computes once and the shared-tree warning never follows the fleet.
-  const [agentsTick, bumpAgents] = useState(0);
-  useEffect(() => subscribeAgents(() => bumpAgents((n) => n + 1)), []);
-  const sharedCwds = useMemo(() => liveSharedCwds(agentsOf()), [agentsTick]);
-
   // The selection heals to something that is on screen — but only when what it
   // pointed at has actually gone, so a poll cannot move the reader.
   const selected = useMemo(() => rowByKey(shown, selKey) ?? shown[0] ?? null, [shown, selKey]);
   useEffect(() => { if (selected && selected.key !== selKey) setSelKey(selected.key); }, [selected, selKey]);
 
   const body = useFileDiff(selected, mode);
+
+  /*
+   * The pending review, for the checkout the selected file is in.
+   *
+   * Per checkout because that is who receives it: one agent works in one tree,
+   * and a review that mixed two would go to one of them with the other's
+   * comments in it. Staleness is shown live only for the file on screen — the
+   * others are not loaded; Send review fetches every commented file and checks
+   * them all before anything goes (see sendReview).
+   */
+  const root = selected?.repoRoot ?? "";
+  const review = useSyncExternalStore(subscribeReviews, () => reviewFor(root));
+  const staleIds = useMemo(() => {
+    /* Only against THIS file's diff, in this half: for the render between
+       selecting a file and its fetch starting, `body` still holds the previous
+       one's, and every comment here would flash stale against code it was never
+       about. */
+    const hunks = selected && body.for === diffStateKey(selected, mode) ? body.diff?.hunks ?? null : null;
+    return new Set(review.comments
+      .filter((c) => c.path === selected?.path && c.mode === mode && isStale(c, hunks))
+      .map((c) => c.id));
+  }, [review, body, selected, mode]);
+
+  /*
+   * A jump from the tray: select the file, in the half it was written in, and
+   * scroll to its line once THAT file's diff is drawn — Body serves it, see there.
+   * Selected in an effect rather than here because the other half's list is not
+   * loaded yet when the half changes; the effect retries as rows arrive. A jump
+   * that cannot land (the file was committed, or reverted, since) expires rather
+   * than waiting to fire at whatever file with that path is opened next.
+   */
+  const [jumpTo, setJumpTo] = useState<{ c: ReviewComment; root: string } | null>(null);
+  const jump = useCallback((c: ReviewComment) => {
+    if (c.mode !== mode) setMode(c.mode);
+    setJumpTo({ c, root });
+  }, [root, mode]);
+  useEffect(() => {
+    if (!jumpTo || jumpTo.c.mode !== mode) return;
+    const row = rows.find((r) => r.repoRoot === jumpTo.root && r.path === jumpTo.c.path);
+    if (!row) return;
+    if (!shown.some((r) => r.key === row.key)) setQ("");
+    setSelKey(row.key);
+  }, [jumpTo, rows, shown, mode]);
+  useEffect(() => {
+    if (!jumpTo) return;
+    const t = setTimeout(() => setJumpTo(null), 5000);
+    return () => clearTimeout(t);
+  }, [jumpTo]);
+  const jumped = useCallback(() => setJumpTo(null), []);
+
+  /*
+   * Send review checks every commented file first, not just the one on screen:
+   * an agent edits the file you are NOT looking at as readily as the one you
+   * are. Anything stale or uncheckable stops the send and is listed per file in
+   * the tray; the next press sends it anyway, with each stale comment marked in
+   * the prompt. The check belongs to the review it was run on — any edit to the
+   * review drops it, and the next press checks again.
+   */
+  const [check, setCheck] = useState<{ review: Review; stale: Set<string>; files: StaleFile[] } | null>(null);
+  const [checking, setChecking] = useState(false);
+  const checked = check && check.review === review ? check : null;
+
+  /** The review's own request, still sitting in the termIssue slot — the
+   *  send has been asked for but not yet confirmed. Cleared, and the review
+   *  with it, only once TerminalPanel's effect actually consumes it: see the
+   *  confirmation effect below. */
+  const [sendingTo, setSendingTo] = useState<{ root: string; n: number; label: string } | null>(null);
+  const liveIssue = useSyncExternalStore(subscribeTermIssue, termIssue, termIssue);
+  useEffect(() => {
+    if (!sendingTo) return;
+    // Sent the moment the slot no longer holds this request: TerminalPanel's
+    // effect clears it (clearTermIssue) right after tmuxCmd({ cmd: "issue" })
+    // runs — which only happens once a terminal pane exists and its socket is
+    // live. Until then the review stays: clearing it the instant
+    // requestTermIssue was called dropped it silently with no pane open, and
+    // a reload before one opened lost it for good.
+    if (liveIssue?.n === sendingTo.n) return;
+    clearReview(sendingTo.root);
+    setSendingTo(null);
+  }, [liveIssue, sendingTo]);
+
+  const deliver = useCallback((stale: ReadonlySet<string>) => {
+    const prompt = composeReview(root, review, stale);
+    const label = `review-${(selected?.branch || root.split("/").pop() || "checkout").replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+    /* A NEW tmux window with an agent already working on it, in the worktree
+       the review is about — the same move conflict resolution already makes
+       (PrPanel.tsx's "Hand to Claude in a terminal"). Never into whatever
+       chat happens to be open in this tree: a chat is its own conversation,
+       and a review is a fresh ask, not a reply slipped into one already in
+       progress. */
+    requestTermIssue(root, label, prompt, true);
+    // It opens somewhere you are not looking, and this used to do its whole
+    // job in silence — the review vanished and nothing on screen said where
+    // it went. Bring the terminal view forward, the same handoff
+    // GitPanel/PrPanel already make for conflicts.
+    requestWorktreeJump({ view: "term" });
+    setCheck(null);
+    setSendingTo({ root, n: termIssue()?.n ?? 0, label });
+  }, [root, review, selected?.branch]);
+
+  const sendReview = useCallback(async () => {
+    if (!root || !review.comments.length || checking) return;
+    if (checked) { deliver(checked.stale); return; }
+    setChecking(true);
+    const got = await checkAtSend(review.comments, (path, mode) => api.gitFileDiff(root, path, mode).then((d) => d.hunks))
+      .finally(() => setChecking(false));
+    /* Edited, sent from another window or switched away from while the diffs
+       were in flight: this press no longer means this review. */
+    if (reviewFor(root) !== review) return;
+    if (got.files.length) setCheck({ review, ...got });
+    else deliver(got.stale);
+  }, [root, review, checking, checked, deliver]);
+  /* What the tray marks stale: the file on screen, live, plus whatever the last
+     send check found in the others. */
+  const trayStale = useMemo(
+    () => (checked ? new Set([...staleIds, ...checked.stale]) : staleIds), [staleIds, checked]);
 
   const toggleReviewed = useCallback((r: ChangeRow) => {
     setReviewed((prev) => {
@@ -281,7 +388,7 @@ export function DiffPage({ active, onClose, onOpenChatWith }: {
             groups={groups} collapsed={collapsed} onToggleSection={toggleSection}
             selKey={selected?.key ?? null} onSelect={setSelKey}
             reviewed={reviewed} onToggleReviewed={toggleReviewed}
-            groupBy={groupBy} sharedCwds={sharedCwds}
+            groupBy={groupBy} who={who}
             empty={loading && !rows.length ? "Reading git…"
               : error ? error
               /*
@@ -322,8 +429,22 @@ export function DiffPage({ active, onClose, onOpenChatWith }: {
 
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
           {selected
-            ? <Body row={selected} state={body} split={split} wrap={wrap} noWs={noWs} onOpenChatWith={onOpenChatWith} />
+            ? <Body row={selected} state={body} split={split} wrap={wrap} noWs={noWs} mode={mode}
+                comments={review.comments} staleIds={staleIds} jumpTo={jumpTo} onJumped={jumped} />
             : <Blank>Nothing selected</Blank>}
+          {sendingTo && sendingTo.root === root && (
+            <div className="px-4 py-1 text-[11px]" style={{ color: "var(--text3)" }}>
+              Claude is on it in a tmux window — "{sendingTo.label}", in {root.split("/").pop()}
+            </div>
+          )}
+          {root && review.comments.length > 0 && (
+            <ReviewTray key={root} where={selected?.branch || root} review={review} staleIds={trayStale}
+              staleFiles={checked?.files ?? null} checking={checking}
+              target="a terminal in this checkout"
+              onFrame={(f) => setFrame(root, f)} onJump={jump}
+              onRemove={(id) => removeComment(root, id)}
+              onSend={() => void sendReview()} onDiscard={() => clearReview(root)} />
+          )}
         </div>
       </div>
     </div>
@@ -433,18 +554,10 @@ function Tick({ on }: { on: boolean }) {
   );
 }
 
-
-/** A section is shared when its checkout key matches a live shared cwd (worktree
- *  group), or when any row in it does (time / folder groups). */
-function sectionShared(g: RowGroup, groupBy: GroupBy, shared: ReadonlySet<string>): boolean {
-  if (groupBy === "worktree") return isSharedCwd(g.key, shared);
-  return g.rows.some((r) => isSharedCwd(r.repoRoot, shared));
-}
-
 /* ── the list ─────────────────────────────────────────────────────────────── */
 
 function List({
-  ref, groups, collapsed, onToggleSection, selKey, onSelect, reviewed, onToggleReviewed, groupBy, sharedCwds, empty, notice,
+  ref, groups, collapsed, onToggleSection, selKey, onSelect, reviewed, onToggleReviewed, groupBy, who, empty, notice,
 }: {
   ref: React.Ref<HTMLDivElement>;
   groups: RowGroup[];
@@ -455,7 +568,8 @@ function List({
   reviewed: ReadonlySet<string>;
   onToggleReviewed: (r: ChangeRow) => void;
   groupBy: GroupBy;
-  sharedCwds: ReadonlySet<string>;
+  /** Who is writing into each checkout, and the rows more than one of them edited. */
+  who: ReturnType<typeof authorsIndex>;
   /** A node, not a string: when a filter comes from a jump the empty case has
    *  something to OFFER — the other mode, with the filter kept. See `emptyLine`. */
   empty: React.ReactNode;
@@ -469,45 +583,56 @@ function List({
   return (
     <div ref={ref} onScroll={inc.onScroll} className="agx-scroll flex-1 min-h-0 overflow-y-auto px-2 pb-3">
       {!groups.length && <p className="text-center py-10 text-[12px]" style={{ color: "var(--text4)" }}>{empty}</p>}
-      {inc.rows.map((g) => (
-        <section key={g.key} className="mb-1">
-          <button
-            onClick={() => onToggleSection(g.key)}
-            aria-expanded={!collapsed.has(g.key)}
-            className="w-full flex items-center gap-1.5 px-1.5 py-1.5 rounded-md hover:bg-white/5 text-left"
-          >
-            <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none" aria-hidden className="shrink-0"
-              style={{ color: "var(--text4)", transform: collapsed.has(g.key) ? "rotate(-90deg)" : "none", transition: "transform .12s" }}>
-              <path d="M2.5 4.5L6 8l3.5-3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-            <span className="text-[11.5px] font-medium truncate" style={{ color: "var(--text)" }}>{g.label}</span>
-            {g.sub && <span className="text-[10px] truncate shrink" style={{ color: "var(--text4)" }}>{g.sub}</span>}
-            <span className="ml-auto shrink-0 text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>
-              {g.rows.length}
-              {"  "}<span style={{ color: "var(--success)" }}>+{g.add}</span>
-              {" "}<span style={{ color: "var(--error)" }}>−{g.del}</span>
-            </span>
-          </button>
-          {sectionShared(g, groupBy, sharedCwds) && (
-            <p className="px-3 pb-1 text-[10.5px]" style={{ color: "var(--warning)" }} title={SHARED_TREE_TOOLTIP}>
-              {SHARED_TREE_HINT}
-            </p>
-          )}
-          {!collapsed.has(g.key) && (
-            <div className="pl-3">
-              {g.rows.map((r) => (
-                <Row
-                  key={r.key} r={r}
-                  selected={r.key === selKey}
-                  reviewed={reviewed.has(reviewKeyOf(r))}
-                  onSelect={() => onSelect(r.key)}
-                  onToggleReviewed={() => onToggleReviewed(r)}
-                />
-              ))}
-            </div>
-          )}
-        </section>
-      ))}
+      {inc.rows.map((g) => {
+        const by = sectionAuthors(who, groupBy, g.key);
+        const h = by ? headingAuthors(by, g.rows.filter((r) => who.byRow.has(r.key)).length) : null;
+        return (
+          <section key={g.key} className="mb-1">
+            <button
+              onClick={() => onToggleSection(g.key)}
+              aria-expanded={!collapsed.has(g.key)}
+              className="w-full flex items-center gap-1.5 px-1.5 py-1.5 rounded-md hover:bg-white/5 text-left"
+            >
+              <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none" aria-hidden className="shrink-0"
+                style={{ color: "var(--text4)", transform: collapsed.has(g.key) ? "rotate(-90deg)" : "none", transition: "transform .12s" }}>
+                <path d="M2.5 4.5L6 8l3.5-3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <span className="text-[11.5px] font-medium truncate" style={{ color: "var(--text)" }}>{g.label}</span>
+              {g.sub && <span className="text-[10px] truncate shrink" style={{ color: "var(--text4)" }}>{g.sub}</span>}
+              {h && (
+                /* Takes only the room that is left (a zero basis), so it never
+                   squeezes the branch: that is what the section is called, and
+                   "feat/…" beside a whole sentence was the first render of this. */
+                <span className={h.shared ? "text-[9.5px] px-1 rounded shrink-0" : "text-[10px] truncate min-w-0"} title={h.title}
+                  style={h.shared
+                    ? { color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 15%, transparent)" }
+                    : { color: "var(--text3)", flex: "1 1 0" }}>
+                  {h.text}
+                </span>
+              )}
+              <span className="ml-auto shrink-0 text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>
+                {g.rows.length}
+                {"  "}<span style={{ color: "var(--success)" }}>+{g.add}</span>
+                {" "}<span style={{ color: "var(--error)" }}>−{g.del}</span>
+              </span>
+            </button>
+            {!collapsed.has(g.key) && (
+              <div className="pl-3">
+                {g.rows.map((r) => (
+                  <Row
+                    key={r.key} r={r}
+                    selected={r.key === selKey}
+                    reviewed={reviewed.has(reviewKeyOf(r))}
+                    onSelect={() => onSelect(r.key)}
+                    onToggleReviewed={() => onToggleReviewed(r)}
+                    authors={who.byRow.get(r.key)}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+        );
+      })}
       {inc.more && (
         <button onClick={inc.showAll} className="w-full py-2 text-[11px] rounded-md hover:bg-white/5" style={{ color: "var(--text3)" }}>
           Show the rest
@@ -531,8 +656,10 @@ const STATUS_STYLE: Record<ChangeRow["status"], { c: string; ch: string }> = {
   typechange: { c: "var(--warning)", ch: "T" },
 };
 
-function Row({ r, selected, reviewed, onSelect, onToggleReviewed }: {
+function Row({ r, selected, reviewed, onSelect, onToggleReviewed, authors }: {
   r: ChangeRow; selected: boolean; reviewed: boolean; onSelect: () => void; onToggleReviewed: () => void;
+  /** Set when more than one live session edited this file. */
+  authors?: string[];
 }) {
   const name = r.path.slice(r.path.lastIndexOf("/") + 1);
   const dir = r.path.slice(0, r.path.length - name.length).replace(/\/$/, "");
@@ -561,6 +688,17 @@ function Row({ r, selected, reviewed, onSelect, onToggleReviewed }: {
           <span className="text-[9.5px] px-1 rounded shrink-0" title={r.staged === "partial" ? "Partly staged" : "Staged"}
             style={{ color: "var(--text3)", background: "color-mix(in srgb, var(--text) 10%, transparent)" }}>
             {r.staged === "partial" ? "part staged" : "staged"}
+          </span>
+        )}
+        {/* An agent glyph and a count, not a word: the row is narrow and the
+            file name is what it is for. The tooltip names them — in every
+            grouping, since a day or a folder has no "shared" heading above to
+            explain the colour. */}
+        {authors && (
+          <span className="text-[9.5px] px-1 rounded shrink-0 inline-flex items-center gap-0.5" title={rowAuthorsTitle(authors)}
+            aria-label={`${authors.length} authors`}
+            style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 15%, transparent)" }}>
+            <AgentIcon size={ICON.xs} />{authors.length}
           </span>
         )}
       </span>
@@ -596,13 +734,19 @@ function Row({ r, selected, reviewed, onSelect, onToggleReviewed }: {
 
 /* ── the diff ─────────────────────────────────────────────────────────────── */
 
-function Body({ row, state, split, wrap, noWs, onOpenChatWith }: {
+function Body({ row, state, split, wrap, noWs, mode, comments, staleIds, jumpTo, onJumped }: {
   row: ChangeRow;
   state: DiffState;
   split: boolean; wrap: boolean;
   /** Fold whitespace-only changes into context — see diffNoWhitespace.ts. */
   noWs: boolean;
-  onOpenChatWith?: (cwd: string, prompt: string, title: string) => void;
+  mode: DiffMode;
+  /** The pending review for this file's checkout — every file's, filtered here. */
+  comments: ReviewComment[];
+  staleIds: ReadonlySet<string>;
+  /** A comment the tray asked to be shown; scrolled to once its line is drawn. */
+  jumpTo: { c: ReviewComment; root: string } | null;
+  onJumped: () => void;
 }) {
   const { hilite } = useDiffHighlight(row.path);
   const [copied, setCopied] = useState(false);
@@ -612,84 +756,108 @@ function Body({ row, state, split, wrap, noWs, onOpenChatWith }: {
   const hunks = useMemo(() => (noWs ? raw.map(hunkWithoutWhitespace).filter(hunkChanges) : raw), [noWs, raw]);
   const allWs = noWs && raw.length > 0 && hunks.length === 0;
 
-  /* Pending review for this checkout — intro / outro + line comments with
-     captured snippets. Shared across files in the same repoRoot. */
-  const review = useSyncExternalStore(
-    subscribeLocalReview,
-    () => getLocalReview(row.repoRoot),
-    () => getLocalReview(row.repoRoot),
-  );
-  const [selRange, setSelRange] = useState<LineSel>(null);
-  const [composing, setComposing] = useState<{
-    line: number; startLine?: number; side: "LEFT" | "RIGHT";
-  } | null>(null);
-  const [draftBody, setDraftBody] = useState("");
-  const composeRef = useRef<HTMLTextAreaElement>(null);
-
-  useEffect(() => {
-    if (composing) {
-      setDraftBody("");
-      const t = requestAnimationFrame(() => composeRef.current?.focus());
-      return () => cancelAnimationFrame(t);
-    }
-  }, [composing?.line, composing?.side, composing?.startLine]);
-
-  /* When the file body refreshes (agent edited), re-check anchors for this path. */
-  const sig = state.diff?.sig;
-  useEffect(() => {
-    if (!state.diff) return;
-    const next = markStale(review.comments, row.path, state.diff);
-    const changed = next.some((c, i) => c.stale !== review.comments[i]?.stale);
-    if (changed) replaceLocalComments(row.repoRoot, next);
-  }, [sig, row.path, row.repoRoot, state.diff, review.comments]);
-
-  const pickLine = useCallback((pk: LinePick) => {
-    if (pk.shift && selRange && selRange.side === pk.side) {
-      const sel = { start: selRange.start, end: pk.line, side: pk.side };
-      const line = Math.max(sel.start, sel.end);
-      const startLine = Math.min(sel.start, sel.end);
-      setSelRange(sel);
-      setComposing({ line, startLine: startLine !== line ? startLine : undefined, side: pk.side });
-      return;
-    }
-    setSelRange({ start: pk.line, end: pk.line, side: pk.side });
-    setComposing({ line: pk.line, side: pk.side });
-  }, [selRange]);
-
-  const cancelCompose = () => { setComposing(null); setSelRange(null); setDraftBody(""); };
-
-  const addComment = () => {
-    if (!composing || !draftBody.trim()) return;
-    /* Always capture against the raw file body — the same hunks markStale
-       re-reads — so Ignore-space does not invent a false stale. */
-    const source = state.diff?.hunks ?? raw;
-    const snippet = captureSnippet(source, composing.line, composing.side, composing.startLine);
-    const primary = lineTextAt(source, composing.line, composing.side);
-    addLocalComment(row.repoRoot, {
-      path: row.path,
-      line: composing.line,
-      startLine: composing.startLine,
-      side: composing.side,
-      body: draftBody.trim(),
-      snippet,
-      sig: state.diff?.sig,
-      lineText: primary,
-    });
-    cancelCompose();
+  /*
+   * Commenting. A "+" on a line opens the box under it; shift-click stretches it
+   * to a range, as the pull request's does. The snippet is cut from the RAW
+   * hunks, not the whitespace-folded ones on screen: folding changes a line's
+   * prefix, and a comment written with Ignore space on would otherwise read as
+   * stale the moment it was turned off. The line numbers are the same in both.
+   */
+  /* The snippet is taken when the line is PICKED, not when the comment is saved:
+     the diff re-reads every time an agent writes the file, and a box open for a
+     minute would otherwise quote whatever the agent put on that line meanwhile —
+     code you never clicked, and never shown stale because it IS the current code.
+     The text being typed lives here too, not in the box: an edit above the line
+     can remount the box, and a remount must not eat the comment.
+     Ranges are one side's: in unified view a removed line is the old side and
+     everything else the new, so shift-click from one to the other starts over. */
+  type Draft = { side: "LEFT" | "RIGHT"; start: number; end: number; snippet: string[] };
+  const [composing, setComposing] = useState<Draft | null>(null);
+  const typed = useRef("");
+  const ready = state.for === diffStateKey(row, mode) && !state.loading;
+  useEffect(() => { setComposing(null); }, [row.key, mode]);
+  const startDraft = (side: Draft["side"], start: number, end: number, fresh: boolean) => {
+    if (fresh) typed.current = "";
+    setComposing({ side, start, end, snippet: captureSnippet(raw, side, start, end) });
+  };
+  const onPick = (p: LinePick) => {
+    if (!ready) return;
+    if (p.shift && composing && composing.side === p.side) startDraft(p.side, composing.start, p.line, false);
+    else startDraft(p.side, p.line, p.line, true);
+  };
+  const sel: LineSel = composing ? { start: composing.start, end: composing.end, side: composing.side } : null;
+  const save = (body: string) => {
+    if (!composing) return;
+    const lo = Math.min(composing.start, composing.end), hi = Math.max(composing.start, composing.end);
+    addComment(row.repoRoot, { path: row.path, side: composing.side, start: lo, end: hi, body, mode, snippet: composing.snippet });
+    typed.current = "";
+    setComposing(null);
   };
 
-  const sendToChat = () => {
-    if (!review.comments.length || !onOpenChatWith) return;
-    /* Re-stamp stale against the current body so the prompt notice is honest. */
-    const comments = state.diff
-      ? markStale(review.comments, row.path, state.diff)
-      : review.comments;
-    const prompt = buildPrompt({ ...review, comments });
-    if (!prompt.trim()) return;
-    onOpenChatWith(row.repoRoot, prompt, reviewChatTitle({ ...review, comments }));
-    clearLocalReview(row.repoRoot);
-    cancelCompose();
+  /* Under the LAST line a comment covers, keyed by side: a new-side number and
+     an old-side number are each unique within a file, so one lookup per row. */
+  const here = useMemo(() => {
+    const m = new Map<string, ReviewComment[]>();
+    for (const c of comments) {
+      if (c.path !== row.path || c.mode !== mode) continue;
+      const k = `${c.side === "RIGHT" ? "R" : "L"}${c.end}`;
+      m.set(k, [...(m.get(k) ?? []), c]);
+    }
+    return m;
+  }, [comments, row.path, mode]);
+  const rowAfter = (here.size || composing) ? (newN: number | null | undefined, oldN: number | null | undefined) => {
+    const keys = [newN != null ? `R${newN}` : null, oldN != null ? `L${oldN}` : null];
+    const cards = keys.flatMap((k) => (k ? here.get(k) ?? [] : []));
+    const box = composing && keys.includes(`${composing.side === "RIGHT" ? "R" : "L"}${Math.max(composing.start, composing.end)}`);
+    if (!cards.length && !box) return null;
+    return (
+      <>
+        {cards.map((c) => (
+          <CommentCard key={c.id} c={c} stale={staleIds.has(c.id)}
+            onEdit={(b) => editComment(row.repoRoot, c.id, b)} onRemove={() => removeComment(row.repoRoot, c.id)} />
+        ))}
+        {box && composing && (
+          <CommentBox label={anchorLabel({ path: row.path, mode, ...composing })} initial={typed.current}
+            onText={(t) => { typed.current = t; }} onSave={save} onCancel={() => setComposing(null)} />
+        )}
+      </>
+    );
+  } : undefined;
+
+  /* A remark about a whole hunk, not one line of it: the hunk's range on the new
+     side, or on the old side when it only removed. Unified view only, and that is
+     a limit, not a reason: SplitDiff takes no `hunkAction`, and with Split AND
+     Wrap on its grid draws no "+" either (the pull request's split has the same
+     gap) — there, a comment means turning one of the two off. Both are the shared
+     renderer's to grow, which the pull request panel draws too. */
+  const hunkAction = (hi: number) => {
+    const h = hunks[hi];
+    if (!h) return null;
+    const side = h.newLines > 0 ? "RIGHT" : "LEFT";
+    const start = side === "RIGHT" ? h.newStart : h.oldStart;
+    const end = start + (side === "RIGHT" ? h.newLines : h.oldLines) - 1;
+    return (
+      <button onClick={() => { if (ready) startDraft(side, start, end, true); }} className="agx-btn rounded px-1.5 text-[10.5px]"
+        title="Comment on this whole hunk" style={{ color: "var(--text3)", fontFamily: "var(--font-sans, inherit)" }}>
+        Comment
+      </button>
+    );
   };
+
+  const scroller = useRef<HTMLDivElement>(null);
+  /* Served only once the diff on screen is the target's own — same checkout,
+     file and half, finished loading. Split view draws an invisible twin of each
+     card in the left column to keep the rows aligned; the visible one is the one
+     to scroll to. */
+  useEffect(() => {
+    if (!jumpTo || !ready || jumpTo.root !== row.repoRoot || jumpTo.c.path !== row.path || jumpTo.c.mode !== mode) return;
+    const c = jumpTo.c;
+    const visible = (sel: string) => [...(scroller.current?.querySelectorAll<HTMLElement>(sel) ?? [])]
+      .find((e) => !e.closest('[aria-hidden="true"]'));
+    (visible(`[data-review-comment="${c.id}"]`) ?? visible(`[data-ln="${c.side === "RIGHT" ? "R" : "L"}${c.start}"]`))
+      ?.scrollIntoView({ block: "center" });
+    onJumped();
+  }, [jumpTo, ready, row.repoRoot, row.path, mode, onJumped]);
 
   /**
    * Open it in the viewer, the way the pull request does.
@@ -722,67 +890,6 @@ function Body({ row, state, split, wrap, noWs, onOpenChatWith }: {
     } catch { /* a clipboard that refuses is not worth an error state here */ }
   };
 
-  const pendingHere = useMemo(
-    () => review.comments.filter((c) => c.path === row.path),
-    [review.comments, row.path],
-  );
-
-  const rowAfter = (newN: number | null | undefined, oldN: number | null | undefined) => {
-    const composeHere = composing && (
-      (composing.side === "RIGHT" && composing.line === newN) ||
-      (composing.side === "LEFT" && composing.line === oldN)
-    );
-    const onLine = pendingHere.filter((c) =>
-      (c.side === "RIGHT" && c.line === newN) || (c.side === "LEFT" && c.line === oldN));
-    if (!composeHere && !onLine.length) return null;
-    const pfx = composing?.side === "LEFT" ? "L" : "R";
-    return (
-      <div className="px-3 py-2 border-b" style={{ background: "color-mix(in srgb, var(--bg2) 80%, transparent)", borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
-        {onLine.map((c) => (
-          <CommentChip key={c.id} c={c} onDrop={() => removeLocalComment(row.repoRoot, c.id)} />
-        ))}
-        {composeHere && composing && (
-          <div className="mt-1">
-            <p className="text-[10.5px] mb-1" style={{ color: "var(--text3)" }}>
-              {composing.startLine
-                ? `Comment on lines ${pfx}${composing.startLine}–${composing.line}`
-                : `Add a comment on line ${pfx}${composing.line}`}
-            </p>
-            <textarea
-              ref={composeRef}
-              value={draftBody}
-              onChange={(e) => setDraftBody(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") { e.preventDefault(); cancelCompose(); }
-                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); addComment(); }
-              }}
-              rows={3}
-              placeholder="What should the agent do with this line?"
-              className="w-full rounded-md px-2 py-1.5 text-[12px] resize-y outline-none"
-              style={{
-                background: "var(--bg)", color: "var(--text)",
-                border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)",
-                fontFamily: "inherit",
-              }}
-            />
-            <div className="flex items-center gap-2 mt-1.5">
-              <button type="button" onClick={addComment} disabled={!draftBody.trim()}
-                className="px-2.5 py-1 rounded-md text-[11px] font-medium disabled:opacity-40"
-                style={{ background: "var(--primary)", color: "#fff" }}>
-                Add to review
-              </button>
-              <button type="button" onClick={cancelCompose}
-                className="px-2 py-1 rounded-md text-[11px]" style={{ color: "var(--text3)" }}>
-                Cancel
-              </button>
-              <span className="text-[10px] ml-auto" style={{ color: "var(--text4)" }}>⌘↵ to add</span>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  };
-
   return (
     <>
       <div className="flex items-center gap-2 px-4 py-2 shrink-0 border-b" style={{ borderColor: "color-mix(in srgb, var(--border) 35%, transparent)" }}>
@@ -813,16 +920,8 @@ function Body({ row, state, split, wrap, noWs, onOpenChatWith }: {
         </button>
       </div>
 
-      {review.comments.length > 0 && (
-        <PendingBar
-          review={review}
-          repoRoot={row.repoRoot}
-          canSend={!!onOpenChatWith}
-          onSend={sendToChat}
-        />
-      )}
 
-      <div className="agx-scroll flex-1 min-h-0 overflow-auto">
+      <div ref={scroller} className="agx-scroll flex-1 min-h-0 overflow-auto">
         {state.loading && !state.diff && <Blank>Reading the diff…</Blank>}
         {/* Every one of these was a blank pane reading "0 hunks" before. A file
             the view cannot show is a thing to SAY, not an empty box. */}
@@ -842,8 +941,8 @@ function Body({ row, state, split, wrap, noWs, onOpenChatWith }: {
         {hunks.length > 0 && (
           <HiliteCtx.Provider value={hilite}>
             {split
-              ? <SplitDiff hunks={hunks} wrap={wrap} onPick={pickLine} sel={selRange} rowAfter={rowAfter} />
-              : <UnifiedDiff hunks={hunks} wrap={wrap} onPick={pickLine} sel={selRange} rowAfter={rowAfter} />}
+              ? <SplitDiff hunks={hunks} wrap={wrap} onPick={onPick} sel={sel} rowAfter={rowAfter} />
+              : <UnifiedDiff hunks={hunks} wrap={wrap} onPick={onPick} sel={sel} rowAfter={rowAfter} hunkAction={hunkAction} />}
           </HiliteCtx.Provider>
         )}
         {state.diff?.truncated && (
@@ -853,103 +952,6 @@ function Body({ row, state, split, wrap, noWs, onOpenChatWith }: {
         )}
       </div>
     </>
-  );
-}
-
-function CommentChip({ c, onDrop }: { c: LocalDiffComment; onDrop: () => void }) {
-  const where = c.startLine && c.startLine !== c.line
-    ? `L${Math.min(c.startLine, c.line)}–${Math.max(c.startLine, c.line)}`
-    : `L${c.line}`;
-  return (
-    <div className="flex items-start gap-2 mb-1.5 last:mb-0 rounded-md px-2 py-1.5"
-      style={{ background: "color-mix(in srgb, var(--primary) 8%, transparent)" }}>
-      <div className="min-w-0 flex-1">
-        <p className="text-[10px] tabular-nums" style={{ color: c.stale ? "var(--warning)" : "var(--text4)" }}>
-          {where} · {c.side}{c.stale ? " · stale" : ""}
-        </p>
-        <p className="text-[11.5px] whitespace-pre-wrap" style={{ color: "var(--text2)" }}>{c.body}</p>
-      </div>
-      <button type="button" onClick={onDrop} title="Remove from pending review"
-        className="shrink-0 text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text4)" }}>
-        Remove
-      </button>
-    </div>
-  );
-}
-
-function PendingBar({ review, repoRoot, canSend, onSend }: {
-  review: ReturnType<typeof getLocalReview>;
-  repoRoot: string;
-  canSend: boolean;
-  onSend: () => void;
-}) {
-  const staleN = review.comments.filter((c) => c.stale).length;
-  return (
-    <div className="shrink-0 border-b px-3 py-2 flex flex-col gap-2"
-      style={{ borderColor: "color-mix(in srgb, var(--border) 35%, transparent)", background: "color-mix(in srgb, var(--bg2) 70%, transparent)" }}>
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-[11px] font-medium" style={{ color: "var(--text)" }}>
-          Pending review · {review.comments.length} comment{review.comments.length === 1 ? "" : "s"}
-          {staleN > 0 && <span style={{ color: "var(--warning)" }}> · {staleN} stale</span>}
-        </span>
-        <div className="ml-auto flex items-center gap-2">
-          <button type="button" onClick={() => clearLocalReview(repoRoot)}
-            className="px-2 py-1 rounded-md text-[10.5px]" style={{ color: "var(--text3)" }}>
-            Discard
-          </button>
-          <button type="button" onClick={onSend} disabled={!canSend}
-            title={canSend ? "Build one prompt and open it in Chat (cwd = this checkout)" : "Chat handoff is unavailable"}
-            className="px-2.5 py-1 rounded-md text-[11px] font-medium disabled:opacity-40"
-            style={{ background: "var(--primary)", color: "#fff" }}>
-            Send to chat
-          </button>
-        </div>
-      </div>
-      <div className="grid gap-2" style={{ gridTemplateColumns: "1fr 1fr" }}>
-        <label className="flex flex-col gap-0.5 min-w-0">
-          <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>Intro</span>
-          <textarea
-            value={review.intro}
-            onChange={(e) => setLocalIntro(repoRoot, e.target.value)}
-            rows={2}
-            placeholder="Optional lead-in for the agent…"
-            className="w-full rounded-md px-2 py-1 text-[11.5px] resize-y outline-none"
-            style={{ background: "var(--bg)", color: "var(--text)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}
-          />
-        </label>
-        <label className="flex flex-col gap-0.5 min-w-0">
-          <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>Outro</span>
-          <textarea
-            value={review.outro}
-            onChange={(e) => setLocalOutro(repoRoot, e.target.value)}
-            rows={2}
-            placeholder="Optional closing notes…"
-            className="w-full rounded-md px-2 py-1 text-[11.5px] resize-y outline-none"
-            style={{ background: "var(--bg)", color: "var(--text)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}
-          />
-        </label>
-      </div>
-      <div className="flex flex-wrap gap-1.5">
-        {review.comments.map((c) => {
-          const name = c.path.slice(c.path.lastIndexOf("/") + 1) || c.path;
-          const where = c.startLine && c.startLine !== c.line
-            ? `L${Math.min(c.startLine, c.line)}–${Math.max(c.startLine, c.line)}`
-            : `L${c.line}`;
-          return (
-            <button key={c.id} type="button" onClick={() => removeLocalComment(repoRoot, c.id)}
-              title={`${c.path}:${where}\n${c.body}${c.stale ? "\n(stale)" : ""}\nClick to remove`}
-              className="text-[10.5px] px-1.5 py-0.5 rounded-md truncate max-w-[220px]"
-              style={{
-                color: c.stale ? "var(--warning)" : "var(--text2)",
-                background: "color-mix(in srgb, var(--text) 8%, transparent)",
-                border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)",
-              }}>
-              {name}:{where}{c.stale ? " · stale" : ""}
-            </button>
-          );
-        })}
-      </div>
-    </div>
   );
 }
 
