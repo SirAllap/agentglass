@@ -13,7 +13,11 @@
  * against the last look (full after a navigation), so there is no separate
  * look after each step and no re-sent tree; `click` waits for what it caused
  * and says so in `effect`, so a wait after it is needed only when it says the
- * cap cut it short. It is one arm that later phase-1
+ * cap cut it short. A target the agent already knows by name — a button in
+ * the code it is editing, a field on the form it is filling — is addressed by
+ * a locator (`role=button[name="Refresh"]`, `label=Email`), so no look is
+ * paid for only to turn a name into an id. Navigation still looks: which
+ * link to follow is read off the page. It is one arm that later phase-1
  * items extend — a new verb replaces the step it makes cheaper, in place.
  *
  * TO ADD AN ARM: give a task another key in `arms` (say `phase1`) that solves
@@ -144,8 +148,9 @@ export const TASKS: Task[] = [
         const email = pick(o.tree, "input", "Email").e;
         await s.cli("type", [pick(o.tree, "input", "Full name").e, SIGNUP_VALID.name]);
         await s.cli("type", [email, SIGNUP_INVALID_EMAIL]);
-        // `select` does not resolve an element id today ("nothing matched"),
-        // so an agent falls back to the CSS id the tree also carries.
+        // Written when `select` refused an element id ("nothing matched"), so
+        // an agent fell back to the CSS id the tree also carries. Kept: the
+        // baseline measures the verbs as they were.
         await s.cli("select", [`#${pick(o.tree, "select", "Plan").id}`, SIGNUP_VALID.plan]);
         await s.cli("check", [pick(o.tree, "input", "I accept the terms").e]);
         const submit = pick(o.tree, "button", "Create account").e;
@@ -158,16 +163,17 @@ export const TASKS: Task[] = [
         return { error, welcome: good.tree.find((n) => n.role === "status")?.name };
       },
       async phase1(s) {
-        const v = new View().apply(afterOf(await s.cli("open", [s.url("/form"), "--observe"])));
-        const email = pick(v.tree, "input", "Email").e;
-        await s.cli("type", [pick(v.tree, "input", "Full name").e, SIGNUP_VALID.name]);
-        await s.cli("type", [email, SIGNUP_INVALID_EMAIL]);
-        await s.cli("select", [`#${pick(v.tree, "select", "Plan").id}`, SIGNUP_VALID.plan]);
-        await s.cli("check", [pick(v.tree, "input", "I accept the terms").e]);
-        const submit = pick(v.tree, "button", "Create account").e;
-        v.apply(afterOf(await s.cli("click", [submit, "--observe"])));
+        // Every field by its label and the button by its name: the form is
+        // filled blind, and the first look is the one after the submit.
+        await s.cli("open", [s.url("/form")]);
+        await s.cli("type", ["label=Full name", SIGNUP_VALID.name]);
+        await s.cli("type", ["label=Email", SIGNUP_INVALID_EMAIL]);
+        await s.cli("select", ["label=Plan", SIGNUP_VALID.plan]);
+        await s.cli("check", ["label=I accept the terms"]);
+        const submit = 'role=button[name="Create account"]';
+        const v = new View().apply(afterOf(await s.cli("click", [submit, "--observe"])));
         const error = v.tree.find((n) => n.role === "alert")?.name;
-        await s.cli("type", [email, SIGNUP_VALID.email]);
+        await s.cli("type", ["label=Email", SIGNUP_VALID.email]);
         v.apply(afterOf(await s.cli("click", [submit, "--observe"])));
         return { error, welcome: v.tree.find((n) => n.role === "status")?.name };
       },
@@ -216,12 +222,17 @@ export const TASKS: Task[] = [
       async phase1(s) {
         // A delta's console and network are what happened since the look
         // before it — here, exactly what the click caused.
+        // The button is the one in the code being edited, so it is named,
+        // not looked up. After the reload the click's look is the full page
+        // (a new document has no earlier look to diff against), which is the
+        // look the reload would have paid for.
+        const refresh = 'role=button[name="Refresh"]';
         const v = new View().apply(afterOf(await s.cli("open", [s.url("/devloop"), "--observe"])));
-        v.apply(afterOf(await s.cli("click", [pick(v.tree, "button", "Refresh").e, "--observe"])));
+        v.apply(afterOf(await s.cli("click", [refresh, "--observe"])));
         const before = problems(v);
         await s.edit({ devloop: "fixed" });
-        v.apply(afterOf(await s.cli("reload", ["--observe"])));
-        v.apply(afterOf(await s.cli("click", [pick(v.tree, "button", "Refresh").e, "--observe"])));
+        await s.cli("reload");
+        v.apply(afterOf(await s.cli("click", [refresh, "--observe"])));
         return { before, after: problems(v) };
       },
     },
@@ -248,11 +259,13 @@ export const TASKS: Task[] = [
         };
       },
       async phase1(s) {
-        const v = new View().apply(afterOf(await s.cli("open", [s.url("/measure"), "--observe"])));
+        // The answer is in the network log and the text, not the tree, so
+        // there is no look at all: the button is named.
+        await s.cli("open", [s.url("/measure")]);
         // The click waits for the requests it started (quiet page, nothing in
         // flight, capped): a separate waitfor only when its effect says the
         // cap cut the wait short.
-        const r = await s.cli("click", [pick(v.tree, "button", "Run report").e]);
+        const r = await s.cli("click", ['role=button[name="Run report"]']);
         if (r.json?.effect?.settledBy !== "quiet") await s.cli("waitfor", ["--until", "network-idle"]);
         const rows = ((await s.cli("network")).json?.rows ?? []) as Observed["network"];
         const slowest = rows.reduce<Observed["network"][number] | undefined>((m, x) => (!m || x.ms > m.ms ? x : m), undefined);

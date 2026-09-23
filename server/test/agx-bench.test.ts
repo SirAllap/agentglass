@@ -285,10 +285,10 @@ describe("reading deltas (the phase1 arm)", () => {
     expect(() => afterOf(r({ clicked: "e1" }))).toThrow(StepFailed);
   });
 
-  test("the form's phase1 arm reads the error and the welcome out of deltas", async () => {
+  test("the form's phase1 arm fills by locator and reads the error and the welcome from its two looks", async () => {
     /* A stand-in CLI answering the way the real one does on this fixture:
-       full after open, then deltas — the alert appears, then the same node
-       turns into a status. */
+       the first look is the submit's (full: nothing to diff against), then a
+       delta — the alert turns into a status. */
     const tree = [
       { e: "e1", role: "h1", name: "Sign up" }, { e: "e2", role: "input", name: "Full name" },
       { e: "e3", role: "input", name: "Email" }, { e: "e4", role: "select", name: "Plan", id: "plan" },
@@ -297,8 +297,8 @@ describe("reading deltas (the phase1 arm)", () => {
     let clicks = 0;
     const exec: Exec = async (argv) => {
       const verb = argv[0];
-      const out = verb === "open" ? { url: "u", after: { delta: false, reason: "new document", url: "u", title: "Sign up", tree } }
-        : verb === "click" && clicks++ === 0 ? { clicked: "e6", after: { delta: true, added: [{ e: "e9", role: "alert", name: "Enter a valid email address" }], removed: [], changed: [], same: 6 } }
+      const out = verb === "open" ? { url: "u" }
+        : verb === "click" && clicks++ === 0 ? { clicked: "e6", after: { delta: false, reason: "no earlier observe to compare with", url: "u", title: "Sign up", tree: [...tree, { e: "e9", role: "alert", name: "Enter a valid email address" }] } }
         : verb === "click" ? { clicked: "e6", after: { delta: true, added: [], removed: [], changed: [{ e: "e9", role: "status", name: `Welcome, ${SIGNUP_VALID.name}!` }], same: 6 } }
         : {};
       return { exit: 0, stdout: JSON.stringify(out), stderr: "" };
@@ -309,6 +309,11 @@ describe("reading deltas (the phase1 arm)", () => {
     expect(a.welcome).toContain(SIGNUP_VALID.name);
     // No separate look: every observation came back on an act verb.
     expect(s.calls.map((c) => c.verb)).not.toContain("observe");
+    // And no look before the first act: every target is named, not an id
+    // or a CSS selector read off a tree.
+    expect(s.calls.find((c) => c.verb === "open")!.argv).not.toContain("--observe");
+    const targets = s.calls.filter((c) => c.verb !== "open").map((c) => c.argv[c.argv.indexOf(c.verb) + 1]);
+    expect(targets.every((t) => /^(label|role)=/.test(t!))).toBe(true);
   });
 
   test("phase1 covers at least the tasks a delta or a folded look applies to", () => {
