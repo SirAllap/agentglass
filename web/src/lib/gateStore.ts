@@ -1,5 +1,7 @@
 import { api } from "./api.ts";
 import { recordNote } from "./sysNotify.ts";
+import { getNotifyPrefs } from "./notifyPrefsStore.ts";
+import { notifies } from "../../../shared/notifyPrefs.ts";
 import type { PendingGate } from "../../../shared/types.ts";
 
 /**
@@ -102,6 +104,9 @@ const forgotten = new Set<string>();
  * only when you were already looking at the surface that shows it.
  */
 function announce(g: PendingGate) {
+  // The hold stays in the list whatever the settings say; only the push is
+  // gated — the bell row, and the toast TopBarNotes raises on arrival.
+  if (!notifies(getNotifyPrefs(), "blocked", "bell")) return;
   // The server's name for it, not a third home-made one. This composed
   // `${source_app}:${session_id.slice(0, 8)}` — the same string the server
   // alert and the gate push both used until they stopped, and the same one that

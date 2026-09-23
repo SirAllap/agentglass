@@ -2115,11 +2115,11 @@ function NotificationsSection() {
   const setKind = (k: NotifyKind, on: boolean) => save({ ...prefs, kinds: { ...prefs.kinds, [k]: on } });
   const setChannel = (c: NotifyChannel, on: boolean) => save({ ...prefs, channels: { ...prefs.channels, [c]: on } });
   return (
-    <Section title="Notification diet" desc="What the fleet may push at you, beyond what already shows on the fleet card and the bell.">
+    <Section title="Notifications" desc="What agentglass may interrupt you for. Whatever is off still shows quietly on the fleet card.">
       {err && <div className="text-[11px] px-1" style={{ color: "var(--error)" }}>{err}</div>}
       <Toggle on={prefs.none} onClick={() => save({ ...prefs, none: !prefs.none })}
         label="None — silence everything"
-        hint="Nothing pushes, whatever is chosen below. Everything still shows quietly on the fleet card and in the bell." />
+        hint="Nothing interrupts, whatever is chosen below." />
       <Group>What</Group>
       {NOTIFY_KINDS.map((k) => (
         <Toggle key={k} on={prefs.kinds[k]} disabled={prefs.none}
