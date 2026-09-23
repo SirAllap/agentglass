@@ -569,7 +569,9 @@ const frameRawCache = new Map<string, { at: number; out: string | null }>();
 
 interface CachedParsedFrame {
   at: number;
-  parsed: { session: string; id: string; client: { cols: number; rows: number } | null; status: string; owned: boolean; popup: boolean; windows: TmuxWindow[]; panes: TmuxPane[]; windowOfPane: Map<string, string>; attached: Set<string>; sessions: { id: string; name: string; windows: number }[] };
+  /** Only what is the session's: `client` and `popup` are per client and are
+   *  taken from each call's own parse, never from here. */
+  parsed: { session: string; id: string; status: string; owned: boolean; windows: TmuxWindow[]; panes: TmuxPane[]; windowOfPane: Map<string, string>; attached: Set<string>; sessions: { id: string; name: string; windows: number }[] };
   prefix: string[];
 }
 
@@ -624,19 +626,27 @@ export function readFrameCached(c: TmuxClient, ttlMs: number): TmuxFrame | null 
   const cachedParsed = frameParsedCache.get(cacheKey);
 
   if (cachedParsed && now - cachedParsed.at < ttlMs) {
-    // Reuse cached parse, but build a new frame with this client's target
+    // Reuse cached parse, but build a new frame with this client's target.
+    //
+    // And this client's own fields. `client` is the size of THIS tty and
+    // `popup` is judged against it, so neither is the session's to share: two
+    // desks on one session at two widths each got whichever one parsed first,
+    // and the narrower was told a window at its own width was "152 columns to
+    // your terminal's 174" — a reflow card on the client that was driving the
+    // window, flipping tick by tick. `status` and `owned` are the session's
+    // (see FRAME_ARGV) and stay shared.
     return {
       target: { pid: c.pid, socket: c.socket, session: parsed.session, id: parsed.id },
       windows: cachedParsed.parsed.windows,
       sessions: cachedParsed.parsed.sessions,
       panes: cachedParsed.parsed.panes,
-      client: cachedParsed.parsed.client,
+      client: parsed.client,
       status: cachedParsed.parsed.status,
       owned: cachedParsed.parsed.owned,
       windowOfPane: cachedParsed.parsed.windowOfPane,
       prefix: cachedParsed.prefix,
       attached: cachedParsed.parsed.attached,
-      popup: cachedParsed.parsed.popup,
+      popup: parsed.popup,
     };
   }
 
@@ -647,10 +657,8 @@ export function readFrameCached(c: TmuxClient, ttlMs: number): TmuxFrame | null 
     parsed: {
       session: parsed.session,
       id: parsed.id,
-      client: parsed.client,
       status: parsed.status,
       owned: parsed.owned,
-      popup: parsed.popup,
       windows: parsed.windows,
       panes: parsed.panes,
       sessions: parsed.sessions,
