@@ -82,11 +82,14 @@ loadtest: ## Hammer the server (many clients × every panel) against a copy of t
 
 # The browser benchmark needs the whole desktop app, so it boots an isolated
 # instance of it first (scripts/agx-bench/instance.sh: its own port, data and
-# tmux, the window parked on an off-screen output under Hyprland) and stops it
-# again however the run ends. AGX_BENCH_DIR moves the instance, AGX_BENCH_ARGS
-# goes to the runner — `--reps 5`, `--arm baseline,phase1`, `--task nav-spa`.
+# tmux, the window sent silently to a workspace nobody is looking at under
+# Hyprland) and stops it again however the run ends. An instance that is
+# already running is refused rather than borrowed: the trap would stop it.
+# AGX_BENCH_DIR moves the instance, AGX_BENCH_ARGS goes to the runner —
+# `--reps 5`, `--arm baseline,phase1`, `--task nav-spa`.
 agx-bench: build ## Scripted agent tasks through the browser CLI on an isolated app — success, steps, bytes, latency per arm
-	@scripts/agx-bench/instance.sh start || exit 1; \
+	@if scripts/agx-bench/instance.sh status >/dev/null 2>&1; then echo "an agx-bench instance is already running; stop it first (scripts/agx-bench/instance.sh stop)" >&2; exit 1; fi; \
+	scripts/agx-bench/instance.sh start || exit 1; \
 	trap 'scripts/agx-bench/instance.sh stop' EXIT; \
 	bun scripts/agx-bench/run.ts --instance "$${AGX_BENCH_DIR:-/tmp/agx-bench}" $(AGX_BENCH_ARGS)
 
