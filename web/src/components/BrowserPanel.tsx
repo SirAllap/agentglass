@@ -571,7 +571,16 @@ export function BrowserView({ active: viewOn, scope }: {
      callbacks and kept fresh during render, which is exactly what these ops
      need: installed once, they must read the CURRENT tabs rather than the
      ones that existed when they were registered. */
-  useEffect(() => onBrowserTabs({
+  useEffect(() => {
+    // The bench mounts a second BrowserView (scope="bench") over the same
+    // module-level slot in browserBus.ts. Left unguarded, whichever view
+    // mounted or changed profile LAST owns the slot — measured live: with
+    // both open, `agentglass-browser --shared tabs` answered from the bench,
+    // not the workspace pane on screen, and it stayed that way (bench-null)
+    // once the bench closed, because these deps never re-ran for the
+    // workspace view. Only the unscoped (workspace) copy answers agent verbs.
+    if (scope) return;
+    return onBrowserTabs({
     list: () => tabsRef.current.map((t) => ({
       id: t.id, title: tabLabel(t), url: t.url, active: t.id === activeIdRef.current,
       /* §9: which isolated context this tab is in. Two tabs in different
@@ -696,7 +705,8 @@ export function BrowserView({ active: viewOn, scope }: {
       setActiveId(next.activeId);
       return true;
     },
-  }), [profile]);
+  });
+  }, [profile, scope]);
 
   /**
    * A second page beside the first.
@@ -1382,7 +1392,11 @@ export function BrowserView({ active: viewOn, scope }: {
     const w = el();
     if (!next || !w || !active) return;
     setTyped(null);
-    patch(active.id, { failed: null });
+    // `url` too, not only `failed`: the real url/title only reach state via
+    // the did-navigate listeners bind() attaches below, and those are async —
+    // a verb that reads `tabs` right after a typed navigation saw the OLD url
+    // until the guest caught up. Patched here so it never lags.
+    patch(active.id, { failed: null, url: next });
     w.src = next;
   }, [active, patch, el]);
 
