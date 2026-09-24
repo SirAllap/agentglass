@@ -54,6 +54,12 @@ test("a tab whose program failed is kept, dead, rather than closed without a wor
      when the shell exits, whatever its status: `false` then Ctrl-D is not a
      program that failed. */
   expect(conf.confContent()).toContain(`set-hook -g pane-died 'if-shell -F "#{==:#{pane_start_command},}" "kill-pane"'`);
+  /* Not by that hook alone: a tmux built with libutempter can lose the exit
+     status, and then `pane-died` never fires. A shell pane is born with the
+     option off, whichever way it was made. */
+  for (const h of ["after-new-session", "after-new-window", "after-split-window"]) {
+    expect(conf.confContent()).toContain(`set-hook -g ${h} 'if-shell -F "#{==:#{pane_start_command},}" "set -p remain-on-exit off"'`);
+  }
 });
 
 test("append mode runs the override after the base and re-asserts status off last", () => {
