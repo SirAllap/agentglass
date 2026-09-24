@@ -381,6 +381,9 @@ function startPolling() {
   if (started || typeof window === "undefined") return;
   started = true;
   void tick();
+  // A test that stubs `window` alone has no `document`; bun runs every test
+  // file in one process, so that stub reaches this module from another file.
+  if (typeof document === "undefined") return;
   // Coming back to a hidden tab should not wait out the remaining interval:
   // a gate raised while you were away is exactly what you returned to answer.
   document.addEventListener("visibilitychange", () => {
