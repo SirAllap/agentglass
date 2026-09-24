@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.ts";
 import { subscribeGitChanged } from "./gitBus.ts";
-import type { ChangeRow, ChangeRowsResult, FileDiff } from "../../../shared/types.ts";
+import type { ChangeRow, ChangeRowsResult, FileDiff, TreeAuthorsInfo } from "../../../shared/types.ts";
 
 export type DiffMode = "working" | "committed";
 
@@ -63,6 +63,8 @@ export type RowsState = {
   rows: ChangeRow[];
   truncated: number;
   failed: string[];
+  /** Who is writing into each checkout — see treeAuthors.ts. */
+  authors: TreeAuthorsInfo[];
   /** Only before the first answer. A refresh keeps showing what is there —
    *  blanking a list you are reading to say "loading" is worse than a second of
    *  staleness. */
@@ -71,7 +73,7 @@ export type RowsState = {
 };
 
 export function useChangeRows(mode: DiffMode, active: boolean): RowsState & { refresh: () => void } {
-  const [state, setState] = useState<RowsState>({ rows: [], truncated: 0, failed: [], loading: true, error: null });
+  const [state, setState] = useState<RowsState>({ rows: [], truncated: 0, failed: [], authors: [], loading: true, error: null });
   const inFlight = useRef(false);
   const alive = useRef(true);
   useEffect(() => () => { alive.current = false; }, []);
@@ -86,6 +88,7 @@ export function useChangeRows(mode: DiffMode, active: boolean): RowsState & { re
         rows: rowsDiffer(prev.rows, r.rows) ? r.rows : prev.rows,
         truncated: r.truncated,
         failed: r.failed ?? [],
+        authors: r.authors ?? [],
         loading: false,
         error: null,
       }));
@@ -123,31 +126,41 @@ export function useChangeRows(mode: DiffMode, active: boolean): RowsState & { re
 const bodies = new Map<string, FileDiff>();
 const CACHE_MAX = 60;
 
-export type DiffState = { diff: FileDiff | null; loading: boolean; error: string | null };
+export type DiffState = {
+  diff: FileDiff | null; loading: boolean; error: string | null;
+  /** Which file AND half this state belongs to (`mode\0row key`, or ""). The
+   *  state is swapped in an effect, so for one render after a new selection it
+   *  still holds the previous file's diff — and `FileDiff.key` carries no mode,
+   *  so it cannot tell the two halves of the same file apart. Anything that acts
+   *  on the diff rather than just drawing it checks this first. */
+  for: string;
+};
+/** What `DiffState.for` reads when the state is this row's, in this half. */
+export const diffStateKey = (row: Pick<ChangeRow, "key">, mode: DiffMode) => `${mode}\0${row.key}`;
 
 export function useFileDiff(row: ChangeRow | null, mode: DiffMode): DiffState {
-  const cacheKey = row ? `${mode}\0${row.key}` : "";
-  const [state, setState] = useState<DiffState>({ diff: null, loading: false, error: null });
+  const cacheKey = row ? diffStateKey(row, mode) : "";
+  const [state, setState] = useState<DiffState>({ diff: null, loading: false, error: null, for: "" });
 
   useEffect(() => {
-    if (!row) { setState({ diff: null, loading: false, error: null }); return; }
+    if (!row) { setState({ diff: null, loading: false, error: null, for: "" }); return; }
     let gone = false;
     /* Paint what we already have, then check. The alternative — a spinner on
        every selection — makes walking a list of forty files feel like forty page
        loads, when the answer is usually already in hand. */
     const cached = bodies.get(cacheKey) ?? null;
-    setState({ diff: cached, loading: !cached, error: null });
+    setState({ diff: cached, loading: !cached, error: null, for: cacheKey });
 
     api.gitFileDiff(row.repoRoot, row.path, mode)
       .then((d) => {
         if (gone) return;
         if (bodies.size > CACHE_MAX) bodies.clear();
         bodies.set(cacheKey, d);
-        setState({ diff: d, loading: false, error: d.error ?? null });
+        setState({ diff: d, loading: false, error: d.error ?? null, for: cacheKey });
       })
       .catch((e) => {
         if (gone) return;
-        setState((s) => ({ diff: s.diff, loading: false, error: e instanceof Error ? e.message : "could not read the diff" }));
+        setState((s) => ({ diff: s.diff, for: cacheKey, loading: false, error: e instanceof Error ? e.message : "could not read the diff" }));
       });
     return () => { gone = true; };
     // `changedAt` is in the deps on purpose: the same file, changed again, is a

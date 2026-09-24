@@ -1,0 +1,11 @@
+# Test code is not shipped, and it logs paths, environment and spawned commands
+# on purpose: a failing isolation guard has to say which real directory a test
+# reached. Scanning it produced "clear-text logging" alerts on exactly those
+# diagnostics, and redacting them would leave the failure unexplained. Shipped
+# code is still scanned in full.
+paths-ignore:
+  - server/test
+  - web/test
+  - mobile/test
+  - "**/*.test.ts"
+  - "**/*.test.tsx"

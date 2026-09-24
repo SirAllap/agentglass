@@ -70,12 +70,48 @@ const MODES = [
 ] as const;
 type Mode = (typeof MODES)[number]["key"];
 
+/**
+ * The fleet search's empty state, computed rather than written down.
+ *
+ * It used to promise "every event ever captured — 12k+ prompts, commands and
+ * outputs": a count that was a literal, a lifetime the retention sweep takes
+ * away (the full-text rows are pruned with the events), and tool outputs that
+ * were never indexed — ftsText() in server/src/db.ts holds the command, path,
+ * prompt, message, the agent's closing reply and the error. `retentionDays`
+ * is the server's AGENTGLASS_RETENTION_DAYS; undefined means the server has
+ * not said yet, and then no window is claimed at all.
+ */
+export function fleetSearchIntro(retentionDays: number | undefined, windowMs?: number): string {
+  // The search is clipped to the cockpit's window as well: whichever of the
+  // two is shorter is the span it covers.
+  const kept = retentionDays !== undefined && retentionDays > 0 ? retentionDays * 86_400_000 : Infinity;
+  if (windowMs != null && windowMs > 0 && windowMs < kept) return "Search prompts, commands, replies and errors in the current window.";
+  if (retentionDays === undefined) return "Search prompts, commands, replies and errors.";
+  if (retentionDays <= 0) return "Search every prompt, command, reply and error on record.";
+  const span = retentionDays === 1 ? "day" : `${retentionDays} days`;
+  return `Search prompts, commands, replies and errors from the last ${span} — older events are pruned.`;
+}
+
+/* The server's retention, read once per page. The window came only from the
+   Dashboard's /stats poll, which runs while the Dashboard is showing, so a
+   search opened from any other view named no window until the Dashboard had
+   been visited. /privacy answers the same constant without the stats work. */
+let retentionRead: Promise<number | undefined> | null = null;
+export function readRetentionDays(read: () => Promise<{ retentionDays: number }> = () => api.privacy()): Promise<number | undefined> {
+  retentionRead ??= read()
+    .then((p) => (typeof p.retentionDays === "number" ? p.retentionDays : undefined))
+    .catch(() => { retentionRead = null; return undefined; }); // a failed read is asked again next time
+  return retentionRead;
+}
+export function __forgetRetentionDays(): void { retentionRead = null; }
+
 export function SearchModal({
-  open, onClose, onSelectApp, windowMs, provider,
+  open, onClose, onSelectApp, retentionDays, windowMs, provider,
 }: {
   open: boolean;
   onClose: () => void;
   onSelectApp?: (app: string) => void;
+  retentionDays?: number;
   /** Cockpit time window (ms). Fleet search clips to Date.now() - windowMs. */
   windowMs?: number;
   /** Selected provider chip; empty/undefined = all providers. */
@@ -92,6 +128,12 @@ export function SearchModal({
   const [repo, setRepo] = useState("");
   const [diff, setDiff] = useState<{ changes: FileChange[]; title: string } | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [readDays, setReadDays] = useState<number | undefined>(undefined);
+  const days = retentionDays ?? readDays;
+
+  useEffect(() => {
+    if (open && retentionDays === undefined) void readRetentionDays().then(setReadDays);
+  }, [open, retentionDays]);
 
   useEffect(() => {
     if (!open) { setQ(""); setHits(null); setCommits(null); setGreps(null); setDiff(null); setGErr(""); }
@@ -160,7 +202,7 @@ export function SearchModal({
                   <span className="t-dim2 flex"><SearchIcon size={ICON.sm} /></span>
                   <input
                     autoFocus value={q} onChange={(e) => setQ(e.target.value)}
-                    placeholder={mode === "fleet" ? "Search everything — prompts, commands, outputs, errors…" : mode === "commits" ? "Commit messages… (or a sha prefix)" : mode === "working tree" ? "Grep the working tree…" : "Which commits introduced or removed this string…"}
+                    placeholder={mode === "fleet" ? "Search prompts, commands, replies, errors…" : mode === "commits" ? "Commit messages… (or a sha prefix)" : mode === "working tree" ? "Grep the working tree…" : "Which commits introduced or removed this string…"}
                     className="flex-1 bg-transparent outline-none text-[13px]" style={{ color: "var(--text)" }}
                   />
                   {mode !== "fleet" && (
@@ -187,7 +229,7 @@ export function SearchModal({
                   {gErr && <div className="t-dim2 text-center py-10 text-[12px]" style={{ color: "var(--error)" }}>{gErr}</div>}
                   {mode === "fleet" && (
                     <>
-                      {hits === null && <div className="t-dim2 text-center py-14 text-[12px]">Search the fleet in the current window — prompts, commands, outputs, errors…</div>}
+                      {hits === null && <div className="t-dim2 text-center py-14 text-[12px]">{fleetSearchIntro(days, windowMs)}</div>}
                       {hits && hits.length === 0 && !loading && <div className="t-dim2 text-center py-14 text-[12px]">Nothing matches “{q}”</div>}
                       {hits && hits.map((h) => {
                         const f = friendly({ hook_event_type: h.hook_event_type } as any);

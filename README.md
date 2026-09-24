@@ -186,7 +186,6 @@ label is where to start.
 **Now**
 - Signing and notarization for the macOS build, so Gatekeeper stops calling it damaged
 - Warn when parallel agents collide on shared runtime the diff cannot see — [#118](https://github.com/SirAllap/agentglass/issues/118)
-- Say when two live sessions share one working tree, instead of attributing the changes to whichever asked last — [#117](https://github.com/SirAllap/agentglass/issues/117)
 
 **Next**
 - A gate that can hold by rule — a tool allowlist beside the spend threshold that already works — [#109](https://github.com/SirAllap/agentglass/issues/109)

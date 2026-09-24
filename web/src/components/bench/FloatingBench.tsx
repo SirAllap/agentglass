@@ -28,8 +28,8 @@
  *   proportion of the window, never as pixels — this machine has two monitors
  *   at different scales.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType } from "react";
-import { AnimatePresence, motion } from "motion/react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType } from "react";
+import { motion } from "motion/react";
 import { Portal } from "../Portal.tsx";
 import { LAYER } from "../../lib/layers.ts";
 import { api } from "../../lib/api.ts";
@@ -139,6 +139,93 @@ export function FloatingBench() {
   const root = st.root;
   const tabs = tabsFor(root);
   const active = activeTab(root);
+
+  /*
+   * Built the first time it opens, and only hidden after that.
+   *
+   * Unmounting on close made every open a cold one, and on a board with a card
+   * open that was measured at about a second of main thread per Ctrl+Alt+A: the
+   * window and every tab in it were built again, each terminal reattached and
+   * repainted, and the board — rendered once by the workspace, see boardHost.ts
+   * — was carried back to its view on close and into the window again on open,
+   * which re-styles and re-lays-out its whole tree both ways. Kept, the board
+   * stays in the window and an open is a repaint. The one case that still
+   * moves it is standing on that board's own view: closed, the window gives it
+   * back to the view on screen, which is the point of the view.
+   *
+   * The ceiling this buys: a closed bench keeps what its visited tabs run —
+   * each terminal's socket and client, a board's element — for as long as the
+   * app is open, exactly as a hidden tab of an open bench always has. And a
+   * menu a tab had open when the chord closed the window is not closed with
+   * it: only the window's own two are.
+   *
+   * Hidden is opacity for the paint, the window put under the app once the
+   * fade is over so clicks reach the view (UNDER_THE_APP), `aria-hidden` for
+   * a screen reader, and the focus kept out (below). What is inside stays laid
+   * out, the same as a view behind the rail that is not on screen.
+   *
+   * Nothing inherited is flipped on the root, and that is the whole reason for
+   * the shape. `inert`, `visibility` and `pointer-events` are each the obvious
+   * word and each is inherited — Chromium carries `inert` as a style too — so
+   * flipping any of them on the root re-styles every node in the window:
+   * measured at 100 to 160 ms of style recalculation per open on an idle
+   * machine, on seven thousand elements, with a card's activity showing. A
+   * z-index is not inherited. NOT `content-visibility: hidden` or a clip to
+   * nothing either: the lists here skip off-screen rows with
+   * `content-visibility: auto`, and a window hidden either way has none on
+   * screen — they came back a frame after the window did, an empty list in the
+   * first frames of the fade, and waiting those frames out cost more than the
+   * fade itself.
+   */
+  const [built, setBuilt] = useState(st.open);
+  if (st.open && !built) setBuilt(true);
+  /* On a timer rather than on the animation's end: a window that never heard
+     its fade finish would stay an invisible pane over the view, taking every
+     click, and a timer cannot fail to fire. */
+  const [away, setAway] = useState(false);
+  if (st.open && away) setAway(false);
+  useEffect(() => {
+    if (st.open) return;
+    const t = setTimeout(() => setAway(true), FADE_MS);
+    return () => clearTimeout(t);
+  }, [st.open]);
+  useLayoutEffect(() => {
+    const el = winRef.current;
+    if (st.open || !el) return;
+    /* The focus was usually in a terminal in here. Left there, the next keys
+       would go to a window nobody can see — and so would a Tab from the view,
+       or a terminal focusing itself when its session comes up, which is why it
+       is refused for as long as the window is away, not only taken once. And
+       the chip's picker and the + menu are Portals of their own, which the
+       window's opacity does not reach: left open, they would stay on screen
+       over the view. */
+    if (el.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
+    /* Sent to the top of the app rather than only blurred: a Tab past the
+       view's last control lands in here, and blurred, the next Tab would start
+       from where it was and land in here again, for as many controls as the
+       window holds. On to the top is where it went when there was no window. */
+    const refuse = (e: FocusEvent) => {
+      const first = document.getElementById("root")?.querySelector<HTMLElement>(FOCUSABLE);
+      if (first) first.focus(); else (e.target as HTMLElement).blur();
+    };
+    el.addEventListener("focusin", refuse);
+    setPickOpen(false);
+    setMenuOpen(false);
+    return () => el.removeEventListener("focusin", refuse);
+  }, [st.open, built]);
+
+  /*
+   * A tab is built the first time it is the one on screen, and kept after that
+   * (see "Every tab stays MOUNTED" below). Building all of them on the first
+   * open put an xterm per terminal tab on that frame — measuring its cell and
+   * laying out its rows — for tabs nobody had looked at yet: measured, two
+   * hidden shells were most of the first open's script time. A tab that is
+   * never visited is never built; its session is on the engine either way.
+   */
+  const [seen, setSeen] = useState<ReadonlySet<string>>(() => new Set());
+  const reader = `reader:${root}`;
+  const onScreen = st.open && active ? (active.kind === "file" ? reader : active.id) : null;
+  if (onScreen && !seen.has(onScreen)) setSeen(new Set(seen).add(onScreen));
 
   /* Which checkouts there are, asked when the window opens rather than once at
      mount: a worktree cut since the app started has to be reachable without a
@@ -480,15 +567,13 @@ export function FloatingBench() {
 
   return (
     <>
-      <AnimatePresence>
-        {st.open && (
-          <Portal z={LAYER.bench}>
+        {built && (
+          <Portal z={away ? UNDER_THE_APP : LAYER.bench}>
             <motion.div
               ref={winRef}
-              initial={{ opacity: 0, y: -6, scale: 0.99 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -6, scale: 0.99 }}
-              transition={{ duration: 0.13, ease: [0.16, 1, 0.3, 1] }}
+              initial={HIDDEN}
+              animate={st.open ? SHOWN : HIDDEN}
+              transition={{ duration: FADE_MS / 1000, ease: [0.16, 1, 0.3, 1] }}
               className="fixed flex flex-col overflow-hidden rounded-xl"
               /* No scrim, and that is the point: the view underneath stays
                  usable and visible. A bench that dimmed the diff you opened it
@@ -504,7 +589,7 @@ export function FloatingBench() {
                 boxShadow: "0 30px 70px -18px #000",
               }}
               onKeyDown={onKey}
-              role="dialog" aria-label="The bench">
+              role="dialog" aria-label="The bench" aria-hidden={!st.open || undefined}>
 
               {/*
                 * Everything inside is drawn at the bench's own scale.
@@ -629,15 +714,20 @@ export function FloatingBench() {
                  * Switching tabs would otherwise tear down a socket and
                  * reattach on the way back — which works, tmux being what it
                  * is, but repaints the whole screen and loses the scroll
-                 * position each time. Hidden keeps the connection and costs
-                 * nothing while it is not on screen.
+                 * position each time. Hidden keeps the connection, and a tab
+                 * is built only once it has been on screen — see `seen`.
                  */}
-                {root && tabs.filter((t) => t.kind !== "file").map((t) => (
-                  <div key={t.id} className="absolute inset-0" style={{ visibility: t.id === active?.id ? "visible" : "hidden" }}>
+                {/* A web tab is the one exception to "nothing inherited flips":
+                    a page under opacity 0 still thinks it is on screen and
+                    keeps its timers and its video running at full rate, and
+                    `visibility` is what tells the guest it is hidden. One
+                    element, not the window, so it costs nothing to restyle. */}
+                {root && tabs.filter((t) => t.kind !== "file" && seen.has(t.id)).map((t) => (
+                  <div key={t.id} className="absolute inset-0" style={{ visibility: t.id === active?.id && !(away && t.kind === "web") ? "visible" : "hidden" }}>
                     <TabBody root={root} tab={t} active={st.open && t.id === active?.id} />
                   </div>
                 ))}
-                {root && seed && (
+                {root && seed && seen.has(reader) && (
                   <div className="absolute inset-0" style={{ visibility: active?.kind === "file" ? "visible" : "hidden" }}>
                     <BenchTerm
                       root={root}
@@ -681,12 +771,27 @@ export function FloatingBench() {
             </motion.div>
           </Portal>
         )}
-      </AnimatePresence>
 
       <BenchFab />
     </>
   );
 }
+
+/* How the window comes and goes: the same fade and lift it always had, now
+   between shown and hidden rather than mounted and gone. */
+const FADE_MS = 130;
+const SHOWN = { opacity: 1, y: 0, scale: 1 };
+const HIDDEN = { opacity: 0, y: -6, scale: 0.99 };
+
+/**
+ * Where the closed bench sits: under #root, which fills the page, so nothing
+ * can reach it. Not in LAYER, whose every entry is above the portals it has to
+ * cover — this is the one place that wants to be below all of them.
+ */
+const UNDER_THE_APP = -1;
+
+/** What a Tab can land on, for sending it back to the top of the app. */
+const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /* ------------------------------------------------------------------ the button */
 

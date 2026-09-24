@@ -1,5 +1,8 @@
-import React from "react";
+import React, { useEffect } from "react";
 import ReactDOM from "react-dom/client";
+// First among the app's own modules: it reads whether the launch cover is up
+// (web/index.html) before anything else can change the page.
+import { coverMounted } from "./lib/cover.ts";
 import App from "./App.tsx";
 import { PairScreen } from "./PairScreen.tsx";
 import { adoptServer } from "./lib/api.ts";
@@ -52,7 +55,14 @@ followServerChanges();
 
 const root = ReactDOM.createRoot(document.getElementById("root")!);
 
-const mount = (tree: React.ReactNode) => root.render(<React.StrictMode>{tree}</React.StrictMode>);
+/** Tells the launch cover React has committed. An effect here runs after every
+ *  effect below it, so each panel has taken its hold on the cover by then. */
+function Mounted({ children }: { children: React.ReactNode }) {
+  useEffect(() => { coverMounted(); }, []);
+  return <>{children}</>;
+}
+
+const mount = (tree: React.ReactNode) => root.render(<React.StrictMode><Mounted>{tree}</Mounted></React.StrictMode>);
 
 /**
  * A page opened from the QR has a handshake to finish before it has an

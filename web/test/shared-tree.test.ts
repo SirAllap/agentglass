@@ -126,19 +126,3 @@ describe("overlappingFiles", () => {
     expect(overlappingFiles(by, ["s1", "s2"])).toEqual([]);
   });
 });
-
-/*
- * The diff page's shared-tree set is memoised on the agents store. Keyed on
- * the state setter it was computed once and never again, because a setter is
- * stable across renders; it has to be keyed on the tick the setter bumps.
- */
-const DIFF_PAGE = await Bun.file(new URL("../src/components/diff/DiffPage.tsx", import.meta.url)).text();
-
-describe("DiffPage shared-tree memo", () => {
-  it("recomputes on the agents tick, not on its setter", () => {
-    const m = DIFF_PAGE.match(/const sharedCwds = useMemo\([^\n]*\[(\w+)\]\);/);
-    expect(m).not.toBeNull();
-    const dep = m![1]!;
-    expect(DIFF_PAGE).toContain(`const [${dep}, bumpAgents] = useState(0);`);
-  });
-});

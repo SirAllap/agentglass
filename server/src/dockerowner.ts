@@ -55,10 +55,11 @@ function within(parent: string, child: string): boolean {
  * `~/code/orbit` and `~/code/orbit/packages/api` can both be legitimate roots
  * and the narrower one is the truer answer.
  */
-export function ownerOf(workingDir: string | null | undefined, family: string[], openRoot: string | null): DockerOwner | null {
+export function ownerOf(workingDir: string | null | undefined, family: string[], openRoot: string | readonly string[] | null): DockerOwner | null {
   if (!workingDir || !isAbsolute(workingDir)) return null;
   const dir = resolve(workingDir);
 
+  const open = openRoot === null ? [] : typeof openRoot === "string" ? [openRoot] : openRoot;
   let best: string | null = null;
   for (const root of family) {
     if (!root) continue;
@@ -75,7 +76,8 @@ export function ownerOf(workingDir: string | null | undefined, family: string[],
   return {
     worktree: basename(best) || best,
     branch: branchOfCheckout(best),
-    foreign: openRoot === null ? false : resolve(openRoot) !== best,
+    // Several projects open: a checkout of any of them is at home here.
+    foreign: open.length === 0 ? false : !open.some((r) => resolve(r) === best),
     path: best,
   };
 }

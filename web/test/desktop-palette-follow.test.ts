@@ -43,7 +43,7 @@ test("system is the OS again, and the desktop has its own mode", () => {
 });
 
 test("whoever picked System while it meant the desktop is moved across once", () => {
-  expect(code).toMatch(/if \(untouched \|\| \(wasSystem && !moved\)\) persistThemeMode\("desktop"\)/);
+  expect(code).toMatch(/if \(wasSystem && !moved\) \{\s*persistThemeMode\("desktop"\);/);
   expect(code).toMatch(/localStorage\.setItem\(MOVED_KEY, "1"\)/);
 });
 

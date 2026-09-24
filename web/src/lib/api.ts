@@ -1,6 +1,6 @@
 import type { UiAction, Field, NoteStatus, PluginPanel, PluginPrNotes } from "./pluginTypes.ts";
 import type { ImportedPlace } from "./desktop.ts";
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue } from "../../../shared/types.ts";
 import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember } from "../../../shared/providers.ts";
 import { DEFAULT_NOTIFY_PREFS, type NotifyPrefs } from "../../../shared/notifyPrefs.ts";
 
@@ -859,7 +859,8 @@ const realApi = {
     post<{ ok: boolean; stdout?: string; stderr?: string; error?: string }>("/terminal/tmux/windows", { op, ...body }),
   /** Scope + discovered projects. `workspace` is set when this instance was
    *  opened for a single project. */
-  projects: () => get<{ projects: { source_app: string; path: string }[]; scanning: boolean; workspace: string | null }>("/projects"),
+  /** `workspace` is the first open project; `workspaces` is all of them. */
+  projects: () => get<{ projects: { source_app: string; path: string }[]; scanning: boolean; workspace: string | null; workspaces?: string[] }>("/projects"),
   // tz: the heatmap is a weekday × hour grid, and only this end knows which
   // clock those mean. Sent on every call rather than negotiated once, because
   // a laptop can cross a timezone between two polls and the server caches per
@@ -899,6 +900,7 @@ const realApi = {
    *  send to this without interrupting it" — see server/src/chat.ts. */
   chatActive: () => get<{ ids: string[] }>(`/chat/active`),
   insights: () => get<{ insights: Insight[] }>(`/insights`),
+  collisions: () => get<{ collisions: Collision[] }>(`/collisions`),
   search: (q: string, opts?: { since?: number; provider?: string }) => {
     const p = new URLSearchParams({ q });
     if (opts?.since != null && Number.isFinite(opts.since)) p.set("since", String(opts.since));
@@ -947,6 +949,10 @@ const realApi = {
     }).then((r) => r.json() as Promise<WalkthroughResult>),
   /** Scope this instance to one project dir (null → whole machine). */
   setWorkspace: (root: string | null) => post<{ ok: boolean; workspace: string | null; persisted: boolean; error?: string; note?: string }>("/workspace", { root }),
+  /** Open several projects together. All or nothing on the server. */
+  setWorkspaces: (roots: string[]) => post<{ ok: boolean; workspaces: string[]; persisted: boolean; error?: string; note?: string }>("/workspace", { roots }),
+  /** Add a folder the picker lists projects from, or forget one. */
+  setProjectRoot: (path: string, added: boolean) => post<{ ok: boolean; roots: string[]; persisted: boolean; error?: string; note?: string }>("/projects/roots", { path, added }),
   /** Subdirectories matching a half-typed path — the picker's completion. */
   fsComplete: (prefix: string) => get<FsCompletion>(`/fs/complete?prefix=${encodeURIComponent(prefix)}`),
   /** Whether an agent could drive the built-in browser at all: the CLI on PATH,
@@ -999,7 +1005,9 @@ const realApi = {
   /** Every repo on the machine — for the project picker, even when scoped. */
   /** Every repo on the machine, plus the paths the picker has been told to
    *  stop offering — sent together so the picker can also show them again. */
-  gitReposAll: () => get<{ repos: GitRepoRef[]; hidden?: string[] }>("/git/repos?all=1"),
+  /** The picker's list: what is under the added folders (`roots`). `scan` is
+   *  its explicit "look for projects" — everywhere agents have run. */
+  gitReposAll: (scan = false) => get<{ repos: GitRepoRef[]; hidden?: string[]; roots?: string[] }>(`/git/repos?all=1${scan ? "&scan=1" : ""}`),
   gitTree: (root: string) => get<WorkingTree>(`/git/tree?root=${encodeURIComponent(root)}`),
   /** What every in-scope worktree changed at once, behind File changes.
    *  "working" = the working tree (uncommitted); "committed" = each checkout's
@@ -2106,7 +2114,7 @@ function demoLanternField(): import("../components/LanternView.tsx").LanternRow[
 const demoApi: typeof realApi = {
   recent: () => D(demo.recent()),
   // The demo is a showcase of the whole fleet, so it is never scoped.
-  projects: () => D({ projects: [], scanning: false, workspace: null }),
+  projects: () => D({ projects: [], scanning: false, workspace: null, workspaces: [] as string[] }),
   // No tmux behind a demo build, so there is never a pane to point at — which
   // lands the panel on the sentence it already has for that case.
   agentPanes: () => D({ ok: false, reason: "not in the demo", panes: [] as AgentPane[] }),
@@ -2129,6 +2137,8 @@ const demoApi: typeof realApi = {
   // Nothing spawns anything in the demo, so nothing is ever mid-turn.
   chatActive: () => D({ ids: [] as string[] }),
   insights: () => D(demo.insights()),
+  // The demo has no processes and no checkouts to share anything between.
+  collisions: () => D({ collisions: [] as Collision[] }),
   search: (q: string, opts?: { since?: number; provider?: string }) => D(demo.search(q, opts)),
   gatePending: () => D(demo.gatePending()),
   gateHistory: () => D({ gates: [] as GateRecord[] }),
@@ -2139,6 +2149,8 @@ const demoApi: typeof realApi = {
   gitAmend: (_payload: { root: string; files: string[]; title: string; body: string }) => D(demo.gitCommit()),
   walkthrough: (files: WalkthroughInputFile[]) => D(demo.walkthrough(files)),
   setWorkspace: (_root: string | null) => D({ ok: false, workspace: null, persisted: false, error: "unavailable in the demo" }),
+  setWorkspaces: (_roots: string[]) => D({ ok: false, workspaces: [] as string[], persisted: false, error: "unavailable in the demo" }),
+  setProjectRoot: (_path: string, _added: boolean) => D({ ok: false, roots: [] as string[], persisted: false, error: "unavailable in the demo" }),
   // The demo has no filesystem to browse, so completion is simply always empty.
   fsComplete: (_prefix: string) => D({ base: "", entries: [], truncated: false }),
   cloneProject: (_url: string, _parent: string) => D({ ok: false, error: "unavailable in the demo" }),
@@ -2157,7 +2169,12 @@ const demoApi: typeof realApi = {
   forgetBrowserPlaces: () => D({ ok: true, total: 0 }),
   recordVisit: (_url: string, _title: string) => D({ ok: true }),
   saveScratchImage: (_d: string, _n: string) => D({ ok: false, error: "not available in the demo" }),
-  gitReposAll: () => D(demo.gitRepos()),
+  // The demo's repos come with the folders they sit in, so its picker shows a
+  // list rather than the first-run "add a folder".
+  gitReposAll: (_scan = false) => {
+    const r = demo.gitRepos();
+    return D({ ...r, roots: [...new Set(r.repos.map((x) => x.root.replace(/\/[^/]+$/, "")))] });
+  },
   browserUseStatus: () => D({
     cli: { state: "missing" as const, path: "", target: null },
     skill: { state: "unshipped" as const, path: "", shipped: null },

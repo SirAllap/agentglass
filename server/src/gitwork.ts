@@ -9,7 +9,7 @@ import { seedWorktree, type SeedReport } from "./worktreeseed.ts";
 import { statSync, readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, rmSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { git, gitAsync, safeAbs, repoRootOfAsync, currentBranch } from "./git.ts";
-import { configuredRepoDirs, workspaceRoot, inScope, hiddenProjects } from "./config.ts";
+import { configuredRepoDirs, panelRepoDirs, workspaceRoots, inScope, hiddenProjects } from "./config.ts";
 import { worktreeParent, gitDir } from "./worktree.ts";
 import { observe, noteResolved, noteReopened, stopFor, forget } from "./mergesession.ts";
 import { entered, backoff } from "./loopwatch.ts";
@@ -522,7 +522,42 @@ export function invalidateRepos(root?: string): void {
   else untrackedResultCache.clear();
 }
 
-export async function discoverRepos(paths: string[], knownRoots: string[] = [], opts: { ignoreScope?: boolean } = {}): Promise<GitRepoRef[]> {
+/**
+ * The projects the app knew before the picker listed folders: every place the
+ * recent changes were made in and every project the scanner has seen, each as
+ * the project it belongs to — a worktree folds into its main checkout. What an
+ * upgrade seeds the folders with; see seedRepoDirs. A project removed from the
+ * list is kept: the list goes on hiding it, and one outside every folder could
+ * never be shown again once put back.
+ *
+ * The same sources as the explicit "look for projects" sweep below, minus the
+ * server's own checkout and AGENTGLASS_REPOS: those were listed because of how
+ * this process was started, not because anybody worked there, and a fresh
+ * install run from a checkout would otherwise never see its first run.
+ */
+export async function knownProjectRoots(paths: string[], knownRoots: string[]): Promise<string[]> {
+  const dirs = new Set<string>();
+  for (const p of paths) { const a = safeAbs(p); if (a) dirs.add(dirname(a)); }
+  for (const r of knownRoots) { const a = safeAbs(r); if (a) dirs.add(a); }
+  const tops = await Promise.all([...dirs].map((d) => repoRootOfAsync(d)));
+  const out = new Set<string>();
+  for (const t of tops) {
+    if (!t) continue;
+    out.add(worktreeParent(t) ?? t);
+  }
+  return [...out];
+}
+
+export async function discoverRepos(
+  paths: string[],
+  knownRoots: string[] = [],
+  /** `ignoreScope`: the project picker asking, which has to see past the open
+   *  project. `rootsOnly`: and only under the folders the person added — the
+   *  picker's list. Without it the picker's answer is the old sweep of every
+   *  place the app has seen an agent run, which is now its explicit "look for
+   *  projects" and never its default. */
+  opts: { ignoreScope?: boolean; rootsOnly?: boolean } = {},
+): Promise<GitRepoRef[]> {
   /*
    * A project removed from the list is removed from every list but the picker's.
    *
@@ -545,7 +580,14 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
   // set — removing a project has to show up before the cache expires.
   // `\\1` between the two lists, so a removed project and a known root cannot
   // add up to the key of a different pair.
-  const key = [opts.ignoreScope ? "*" : workspaceRoot() ?? "", ...hide, "\\1", ...knownRoots].join("\\0");
+  // So are the added folders, and which list is being asked for: adding a
+  // folder in the picker has to list its projects on the very next read. The
+  // picker's list keys on the scope too, because it always carries the open
+  // projects' rows. The scope is joined with its own separator, so two open
+  // projects cannot read as one open project and one hidden one.
+  const only = configuredRepoDirs();
+  const scope = workspaceRoots().join("\\3");
+  const key = [opts.ignoreScope ? (opts.rootsOnly ? "roots\\3" + scope : "*") : scope, ...hide, "\\1", ...knownRoots, "\\2", ...only].join("\\0");
   const hit = repoCache.get(key);
   // Held longer while a shell is in use or the loop is stalling: this sweep is
   // eighteen `git status` calls on a worktree-heavy repo, and none of them is
@@ -560,23 +602,29 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
   // come along because they *are* the project, on other branches.
   // (`ignoreScope` is the project *picker* asking — choosing a different
   // project requires seeing more than the current one.)
-  const only1 = opts.ignoreScope ? null : workspaceRoot();
-  if (only1) {
-    const self = repoRoot(only1);
-    // The scope may be a repo ("this project") or a plain folder ("my projects
-    // live in here" — e.g. ~/code picked in the app). A repo brings its linked
-    // worktrees, because they ARE the project on other branches; a container
-    // folder brings every repo found from that folder inward, and nothing else.
-    const found = self
-      // `worktreeListAsync`, not `worktrees`: this needs the paths and nothing
-      // else, and the richer call computes a base branch and a `rev-list --count`
-      // per checkout — which on a repo with 17 worktrees is 34 subprocesses, on
-      // the most frequently requested endpoint in the app. Async, so even the one
-      // `worktree list` it does need is off the thread the terminal rides rather
-      // than a synchronous spawn between keystrokes.
-      ? [self, ...(await worktreeListAsync(self)).map((w) => w.path).filter((p) => p && p !== self)]
-      : reposUnder(only1);
-    const refs = await Promise.all(found.map((r) => repoRef(r)));
+  const open = opts.ignoreScope ? [] : workspaceRoots();
+  if (open.length) {
+    // Each open project, in the order they were chosen — usually one.
+    const selves = open.map((root) => repoRoot(root));
+    const found = new Set<string>();
+    await Promise.all(open.map(async (root, i) => {
+      const self = selves[i];
+      // The scope may be a repo ("this project") or a plain folder ("my projects
+      // live in here" — e.g. ~/code picked in the app). A repo brings its linked
+      // worktrees, because they ARE the project on other branches; a container
+      // folder brings every repo found from that folder inward, and nothing else.
+      const here = self
+        // `worktreeListAsync`, not `worktrees`: this needs the paths and nothing
+        // else, and the richer call computes a base branch and a `rev-list --count`
+        // per checkout — which on a repo with 17 worktrees is 34 subprocesses, on
+        // the most frequently requested endpoint in the app. Async, so even the one
+        // `worktree list` it does need is off the thread the terminal rides rather
+        // than a synchronous spawn between keystrokes.
+        ? [self, ...(await worktreeListAsync(self)).map((w) => w.path).filter((p) => p && p !== self)]
+        : reposUnder(root);
+      for (const r of here) found.add(r);
+    }));
+    const refs = await Promise.all([...found].map((r) => repoRef(r)));
     const scoped = refs.filter((r): r is GitRepoRef => !!r);
     // The project itself first, then its worktrees. Dirtiest-first is the right
     // order among peers, but it shouldn't bury the main checkout behind a
@@ -590,7 +638,7 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
     // and is subsumed by it — staging a file touches the index.
     scoped.sort((a, b) =>
       Number(!!a.worktreeOf) - Number(!!b.worktreeOf) || b.touchedAt - a.touchedAt || a.name.localeCompare(b.name));
-    const kept = notHidden(scoped, hide, self ?? only1);
+    const kept = notHidden(scoped, hide, selves.map((s, i) => s ?? open[i]!));
     repoCache.set(key, { at: Date.now(), repos: kept });
     return kept;
   }
@@ -619,38 +667,51 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
   //
   // A project with none of those — no history, never configured — no longer
   // appears on its own. That is the deliberate trade: the user names it once with
-  // `repoDirs` and it is back for good, and in exchange the picker reflects the
-  // fleet's activity rather than the filesystem's contents. The empty state names
-  // `repoDirs` precisely so this is discoverable.
-  const only = configuredRepoDirs();
+  // `repoDirs` and it is back for good, and in exchange the panels reflect the
+  // fleet's activity rather than the filesystem's contents.
+  //
+  // The picker went one step further (`rootsOnly`): it lists the added folders
+  // and nothing else, because "where agents have run" on a real machine is also
+  // a dotfiles checkout and an editor's config repo, which nobody chose as a
+  // project. The sweep above is its explicit "look for projects" button.
   // The one place a directory *walk* is still invited — and only because the user
   // named the directory. `~/code` in repoDirs is an explicit "my repos live
   // here", which is bounded and predictable in a way that crawling $HOME never
   // was; a configured directory is about scope, not about disabling discovery
   // within it, so the result is still filtered to `only` at the end.
   for (const base of only) for (const r of reposUnder(base)) roots.add(r);
-  // Every git rev-parse below is awaited through the spawn pool, not spawnSync:
-  // on this path they blocked the loop one subprocess at a time — the server's
-  // own repo, each env repo, and each telemetry directory — on the endpoint the
-  // terminal shares a thread with. Resolve them together, off the loop.
-  //
-  //   * agentglass's own repo, and only it — not its neighbours, which was
-  //     another speculative reposUnder(dirname(selfRoot)) sweep;
-  //   * env-configured repos that live elsewhere (AGENTGLASS_REPOS);
-  //   * telemetry directories, deduped by parent dir first so this is one
-  //     rev-parse per directory rather than one per file path.
-  const dirs = new Set<string>();
-  for (const p of paths) { const a = safeAbs(p); if (a) dirs.add(dirname(a)); }
-  const resolved = await Promise.all([
-    repoRootOfAsync(process.cwd()),
-    ...(process.env.AGENTGLASS_REPOS || "").split(delimiter).filter(Boolean).map((p) => repoRootOfAsync(p)),
-    ...[...dirs].map((d) => repoRootOfAsync(d)),
-  ]);
-  for (const r of resolved) if (r) roots.add(r);
-  // Transcript-scanned roots are already resolved project tops; add them straight
-  // in and let repoRef below drop any that is no longer a repo. The old per-root
-  // repoRoot() re-validation here was one more synchronous spawn apiece.
-  for (const r of knownRoots) { const a = safeAbs(r); if (a) roots.add(a); }
+  if (opts.rootsOnly) {
+    // The picker's list: the added folders, and the projects open right now
+    // wherever they are — a list that could not show what is open would leave
+    // no row to un-tick. Nothing the app merely saw an agent run in.
+    for (const open of workspaceRoots()) {
+      const self = await repoRootOfAsync(open);
+      for (const r of self ? [self] : reposUnder(open)) roots.add(r);
+    }
+  } else {
+    // Every git rev-parse below is awaited through the spawn pool, not spawnSync:
+    // on this path they blocked the loop one subprocess at a time — the server's
+    // own repo, each env repo, and each telemetry directory — on the endpoint the
+    // terminal shares a thread with. Resolve them together, off the loop.
+    //
+    //   * agentglass's own repo, and only it — not its neighbours, which was
+    //     another speculative reposUnder(dirname(selfRoot)) sweep;
+    //   * env-configured repos that live elsewhere (AGENTGLASS_REPOS);
+    //   * telemetry directories, deduped by parent dir first so this is one
+    //     rev-parse per directory rather than one per file path.
+    const dirs = new Set<string>();
+    for (const p of paths) { const a = safeAbs(p); if (a) dirs.add(dirname(a)); }
+    const resolved = await Promise.all([
+      repoRootOfAsync(process.cwd()),
+      ...(process.env.AGENTGLASS_REPOS || "").split(delimiter).filter(Boolean).map((p) => repoRootOfAsync(p)),
+      ...[...dirs].map((d) => repoRootOfAsync(d)),
+    ]);
+    for (const r of resolved) if (r) roots.add(r);
+    // Transcript-scanned roots are already resolved project tops; add them straight
+    // in and let repoRef below drop any that is no longer a repo. The old per-root
+    // repoRoot() re-validation here was one more synchronous spawn apiece.
+    for (const r of knownRoots) { const a = safeAbs(r); if (a) roots.add(a); }
+  }
   // Fold linked worktrees into the project they belong to — for the PICKER only.
   //
   // A user working the way worktrees are meant to be used has a dozen sibling
@@ -684,7 +745,12 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
   // selected repo via workingTree().
   const out = (await Promise.all([...roots].map((r) => repoRef(r)))).filter((r): r is GitRepoRef => !!r);
   for (const r of out) { const n = folded.get(r.root); if (n) r.worktrees = n; }
-  const scoped = notHidden(only.length ? within(out, only) : out, hide);
+  // The panels are held to the added folders when there are any — the ones a
+  // person named, not a list an upgrade seeded (see panelRepoDirs). The picker
+  // is not: its default list is already only those folders, and its explicit
+  // "look for projects" is asking precisely for what lies outside them.
+  const held = opts.ignoreScope ? [] : panelRepoDirs();
+  const scoped = notHidden(held.length ? within(out, held) : out, hide);
   // Families stay together, most recently worked-in family first, the project
   // ahead of its own worktrees. Sorting the flat list alone scatters a repo's
   // checkouts through the dropdown, so `orbit` and `orbit-WEB-1042` end up
@@ -719,11 +785,11 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
 
 /** Drop the projects the picker was told to forget, and their worktrees with
  *  them — a checkout of a removed project is the removed project. `keep` is the
- *  open project, which is never dropped however it is listed. */
-function notHidden(repos: GitRepoRef[], hide: string[], keep?: string | null): GitRepoRef[] {
+ *  open projects, which are never dropped however they are listed. */
+function notHidden(repos: GitRepoRef[], hide: string[], keep: readonly string[] = []): GitRepoRef[] {
   if (!hide.length) return repos;
   const gone = new Set(hide);
-  return repos.filter((r) => r.root === keep || (!gone.has(r.root) && !(r.worktreeOf && gone.has(r.worktreeOf))));
+  return repos.filter((r) => keep.includes(r.root) || (!gone.has(r.root) && !(r.worktreeOf && gone.has(r.worktreeOf))));
 }
 
 /** Keep only repos inside one of `dirs`. */
@@ -959,11 +1025,21 @@ let fetching = false;
 async function autoFetchOnce(): Promise<void> {
   // Overlapping fetches would pile up on a slow remote; one in flight is enough.
   if (fetching) return;
-  const root = workspaceRoot();
   // Unscoped means "the whole machine", and fetching every repo on the machine
-  // once a minute is exactly the cost this feature must not have.
-  if (!root || !repoRoot(root)) return;
+  // once a minute is exactly the cost this feature must not have. Several open
+  // projects are fetched one after another, never at once: the ceiling below
+  // is per fetch, and a slow remote should not have company.
+  const roots = workspaceRoots().filter((r) => repoRoot(r));
+  if (!roots.length) return;
   fetching = true;
+  try {
+    for (const root of roots) await fetchOne(root);
+  } finally {
+    fetching = false;
+  }
+}
+
+async function fetchOne(root: string): Promise<void> {
   try {
     // What the remote refs point at, before and after. Invalidating on every
     // tick regardless is what broke squash detection outright: the sweep that
@@ -1014,8 +1090,6 @@ async function autoFetchOnce(): Promise<void> {
   } catch {
     // Offline, no remote, no credentials — all ordinary. The counts simply stay
     // where they were, which is the same as the old behaviour.
-  } finally {
-    fetching = false;
   }
 }
 

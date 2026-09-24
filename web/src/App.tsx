@@ -13,6 +13,7 @@ import { publishFleet } from "./lib/demoBridge.ts";
 import { publishAgents } from "./lib/fleetAgents.ts";
 import { providerOf } from "./lib/format.ts";
 import { api, IS_DEMO } from "./lib/api.ts";
+import { refusalFinal, useCoverHold } from "./lib/cover.ts";
 import { initialTheme, applyTheme, THEMES } from "./lib/themes.ts";
 import { subscribeControl } from "./lib/controlBus.ts";
 import { latchChatIntent } from "./lib/chatIntent.ts";
@@ -54,6 +55,7 @@ import GitMissingBanner from "./components/GitMissingBanner.tsx";
 import { chordFromEvent, viewForChord, appActionForChord } from "./lib/keybindings.ts";
 import { openFocusedPaneDoor, type PaneDoor } from "./components/TerminalPanel.tsx";
 import { FilePalette } from "./components/FilePalette.tsx";
+import { WindowSwitcher } from "./components/terminal/WindowSwitcher.tsx";
 import { FloatingBench } from "./components/bench/FloatingBench.tsx";
 import { benchTakesBoard, toggleBench, showFile } from "./lib/benchStore.ts";
 import { PeekFile, isRenderable, type Peek } from "./components/PeekFile.tsx";
@@ -101,6 +103,11 @@ const keepIfSame = <T,>(set: (v: T) => void) => {
   };
 };
 
+/** How long a first run's views wait for the server to say whether a project
+ *  is open before they come in anyway. Answered in well under a second when
+ *  the server is up; a desktop window can open before its server is. */
+const PICK_WAIT_MS = 3000;
+
 export default function App() {
   const [windowMs, setWindowMs] = useState(3_600_000);
   const [filter, setFilter] = useState({ app: "", type: "", provider: "" });
@@ -115,6 +122,8 @@ export default function App() {
    * to survive the palette closing.
    */
   const [filesOpen, setFilesOpen] = useState(false);
+  /** The window switcher (its chord, from anywhere). */
+  const [windowsOpen, setWindowsOpen] = useState(false);
   const [peek, setPeek] = useState<Peek | null>(null);
   /* Files opened from a view that is not this one — File changes, Source
      control. They are modals over everything, so the request comes through a
@@ -244,8 +253,34 @@ export default function App() {
   // to start as null, which is a real answer ("no scope"), so a cockpit that
   // never got an answer displayed one anyway.
   const [workspace, setWorkspace] = useState<string | null | undefined>(undefined);
+  /** Every open project; `workspace` is the first. Empty until answered, and
+   *  when nothing is open. */
+  const [workspaces, setWorkspaces] = useState<string[]>([]);
+  // Until the scope is known the title bar says "…" and the terminal, git and
+  // command list have no directory to open: the launch cover waits for the
+  // first answer. The first answer, not the first success: an HTTP error is an
+  // answer (a 401 would otherwise keep the cover up to its cap over the app
+  // that explains it), and so is a refusal once the server's fate is known.
+  // A refusal while the server is still starting is not — see refusalFinal.
+  const [projectsAnswered, setProjectsAnswered] = useState(false);
+  useCoverHold("project", !IS_DEMO && !projectsAnswered);
 
   const [projectOpen, setProjectOpen] = useState(false);
+  /**
+   * The first run's question is still open: nothing is scoped, and nobody has
+   * answered the picker yet. The views wait behind it rather than fill
+   * themselves from a scope nobody chose — the whole machine, which is the very
+   * sweep the picker's first run exists not to do. Answering either way (opening
+   * projects reloads; closing it keeps the machine-wide view) lets them in.
+   *
+   * From the first render, because waiting for /projects to say so let the
+   * views mount, fetch, and unmount again. A browser that has answered before
+   * never waits; one whose server does not answer stops waiting (see the
+   * effect), since views with an error in them beat no views at all.
+   */
+  const [awaitingPick, setAwaitingPick] = useState(() => {
+    try { return localStorage.getItem(PICKER_ANSWERED_KEY) !== "1"; } catch { return false; }
+  });
   const mountedAt = useRef(Date.now());
 
   // A live snapshot of "is any panel/overlay open", read by the global key
@@ -259,7 +294,7 @@ export default function App() {
   const anyPanelOpen =
     paletteOpen || helpOpen || statsOpen || skillsOpen || searchOpen ||
     projectOpen || sessionView !== null || selected !== null ||
-    filesOpen || peek !== null;
+    filesOpen || windowsOpen || peek !== null;
   const anyPanelOpenRef = useRef(anyPanelOpen);
   anyPanelOpenRef.current = anyPanelOpen;
   // Read by the keydown handler, which subscribes once with an empty dep array
@@ -304,6 +339,9 @@ export default function App() {
   // fleet spine reads them in every view, and holding them would freeze a
   // streaming answer mid-word.
   const { events, conn, lastEvent, openTools } = useLive(anyPanelOpen);
+  // The dashboard draws from the live feed; on screen at launch, the cover waits
+  // for the feed's first answer rather than showing an empty board fill in.
+  useCoverHold("dashboard", !IS_DEMO && dashActive && conn === "connecting");
   /*
    * The saved commands marked "run when the app starts" fire exactly once per
    * app load, when the live socket first opens — the moment the server is
@@ -351,6 +389,15 @@ export default function App() {
     let timer: ReturnType<typeof setTimeout> | null = null;
     let wait = 300;
     /*
+     * The views wait for this answer on a first run (see awaitingPick), and
+     * only a rejected request used to release them: one that hung left the
+     * app blank, a scoped instance included, whose answer would have been "go
+     * ahead". After PICK_WAIT_MS they come in anyway, and a late "nothing is
+     * open" still opens the picker without taking them away again.
+     */
+    let gaveUp = false;
+    const release = setTimeout(() => { if (!live) return; gaveUp = true; setAwaitingPick(false); }, PICK_WAIT_MS);
+    /*
      * Keep asking until the server answers.
      *
      * One attempt was not enough and the failure was silent: the desktop shell
@@ -369,7 +416,10 @@ export default function App() {
     const ask = () => {
       api.projects().then((p) => {
         if (!live) return;
+        clearTimeout(release);
+        setProjectsAnswered(true);
         setWorkspace(p.workspace);
+        setWorkspaces(p.workspaces ?? (p.workspace ? [p.workspace] : []));
         // The app filter is hidden while a project is open (the scope already
         // says whose data this is). Clear it on the way in, or a filter set in
         // the whole-machine view would keep narrowing the panels from behind a
@@ -377,15 +427,21 @@ export default function App() {
         if (p.workspace) setFilter((f) => (f.app ? { ...f, app: "" } : f));
         let answered = false;
         try { answered = localStorage.getItem(PICKER_ANSWERED_KEY) === "1"; } catch { /* ignore */ }
-        if (!p.workspace && !answered) setProjectOpen(true);
-      }).catch(() => {
+        if (!p.workspace && !answered) { setProjectOpen(true); if (!gaveUp) setAwaitingPick(true); }
+        else setAwaitingPick(false);
+      }).catch((e) => {
         if (!live) return;
+        setAwaitingPick(false);
+        const starting = e instanceof TypeError && !refusalFinal();
+        if (!starting) setProjectsAnswered(true);
         timer = setTimeout(ask, wait);
-        wait = Math.min(wait * 2, 5000);
+        // No backing off while the server is still starting: the answer is due
+        // the moment it is up, and every ask already waits in get().
+        wait = starting ? 300 : Math.min(wait * 2, 5000);
       });
     };
     ask();
-    return () => { live = false; if (timer) clearTimeout(timer); };
+    return () => { live = false; clearTimeout(release); if (timer) clearTimeout(timer); };
   }, []);
 
   // Poll on an interval — NOT on every event. Passing lastEvent.id as `bump`
@@ -576,7 +632,7 @@ export default function App() {
       const project = who?.project ?? null;
       // A cockpit watches every project at once, so an alert from another one is
       // legitimate — but it must say which, or you go looking in the wrong tree.
-      const other = project && workspace && project !== workspace ? leafOf(project) : null;
+      const other = project && workspaces.length && !workspaces.includes(project) ? leafOf(project) : null;
       return {
         key: al.id,
         sessionId,
@@ -590,7 +646,7 @@ export default function App() {
         gated: !!sessionId && gates.some((g) => g.session_id === sessionId),
       };
     });
-  }, [notifyingAlerts, agents, workspace, gates]);
+  }, [notifyingAlerts, agents, workspaces, gates]);
 
   const openChatFor = useCallback((chatId: string) => {
     setChatFocus(chatId);
@@ -600,7 +656,7 @@ export default function App() {
    *  place in the app that can actually let a held tool call through. */
   const approveOnDash = useCallback(() => { goView("dash"); }, [goView]);
   const switchProject = useCallback((root: string) => {
-    void api.setWorkspace(root).then((r) => { if (r.ok) setWorkspace(r.workspace); }).catch(() => {});
+    void api.setWorkspace(root).then((r) => { if (r.ok) { setWorkspace(r.workspace); setWorkspaces(r.workspace ? [r.workspace] : []); } }).catch(() => {});
   }, []);
   useAlertSound(soundAlerts.length, sound);
 
@@ -753,6 +809,14 @@ export default function App() {
         if (action === "bench.toggle") {
           e.preventDefault();
           toggleBench();
+          return;
+        }
+        // Opens only. Pressed again while it is open, the switcher takes the
+        // key itself (and stops it before it gets here) to walk the windows
+        // waiting for you.
+        if (action === "windows.switcher") {
+          e.preventDefault();
+          setWindowsOpen(true);
           return;
         }
         if (action === "pane.git" || action === "pane.diff" || action === "pane.pr" || action === "pane.card") {
@@ -1052,6 +1116,7 @@ export default function App() {
 
       <TopBar
         workspace={workspace}
+        workspaces={workspaces}
         onOpenProject={() => setProjectOpen(true)}
         onOpenPalette={() => setPaletteOpen(true)}
         // On the dashboard the readings step back: the screen below is already
@@ -1074,7 +1139,7 @@ export default function App() {
         onNoteGoto={goFromNote}
       />
 
-      <Workspace
+      {!awaitingPick && <Workspace
         prJump={prJump}
         cardJump={cardJump}
         issueJump={issueJump}
@@ -1104,10 +1169,11 @@ export default function App() {
             startedAt={startedAt} epm={epm}
             onSelectEvent={setSelected}
             onSelectSession={setSessionView}
+            onOpenLantern={() => goView("lantern")}
           />
           </LazyPanel>
         )}
-      />
+      />}
 
       <EventModal event={selected} onClose={() => setSelected(null)} />
       <StatsModal open={statsOpen} onClose={() => setStatsOpen(false)} stats={stats} windowMs={windowMs} />
@@ -1118,7 +1184,7 @@ export default function App() {
         <MachinePanel tab={machine} onTab={setMachine} onClose={() => setMachine(null)}
           onOpenBrowser={() => { setMachine(null); goView("browser"); }} />
       )}
-      <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} onSelectApp={(app) => setFilter((f) => ({ ...f, app }))} windowMs={windowMs} provider={filter.provider} />
+      <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} onSelectApp={(app) => setFilter((f) => ({ ...f, app }))} retentionDays={stats?.retention_days} windowMs={windowMs} provider={filter.provider} />
 
       {/* Find, mounted at the shell for the same reason the palette is: the
           chord has to work from a board, a pull request or a settings page,
@@ -1141,6 +1207,10 @@ export default function App() {
           chord, from a diff and from a pull request, and none of those is a
           view it could live inside. */}
       <FloatingBench />
+
+      {/* Go to a tmux window from anywhere — the terminal comes up once one
+          is chosen. */}
+      <WindowSwitcher open={windowsOpen} onClose={() => setWindowsOpen(false)} onGone={() => goView("term")} />
 
       {/* Find a file from anywhere. Mounted at the shell rather than in a view
           so the chord reaches it from the dashboard, a terminal or a diff — and
@@ -1281,7 +1351,7 @@ export default function App() {
         onZoom={zoom}
       />
       <HelpLegend open={helpOpen} onClose={() => setHelpOpen(false)} />
-      <ProjectPicker open={projectOpen} workspace={workspace} onClose={() => setProjectOpen(false)} />
+      <ProjectPicker open={projectOpen} workspaces={workspaces} known={workspace !== undefined} onClose={() => { setProjectOpen(false); setAwaitingPick(false); }} />
     </div>
   );
 }

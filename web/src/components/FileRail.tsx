@@ -21,6 +21,7 @@ import type { PrDetail } from "../../../shared/types.ts";
 import { railScan, checksAbout, threadsAbout, queuedOn, heldOn, railAge,  railPreview, type RailDraft, type RailHeld, type RailMention } from "../lib/fileRail.ts";
 import { openExternal } from "../lib/externalUrl.ts";
 import { mergeBlockedWhy, checksLine, checksStanding, standingLine, mergeVerdict, githubWillMerge } from "../../../shared/mergeReason.ts";
+import { mergeBlockers, mergeRefusal } from "../../../shared/mergeBlockers.ts";
 import { ICON } from "../lib/iconSize.ts";
 import { CircleIcon, CommentIcon, CrossIcon, DoneIcon, IconLabel } from "../lib/glyphIcons.tsx";
 
@@ -209,7 +210,13 @@ export function FileRail({
   const queued = useMemo(() => queuedOn(drafts, path), [drafts, path]);
   const heldHere = useMemo(() => heldOn(held, path), [held, path]);
   const standing = checksStanding(d.checks, awaitingChecks);
-  const allClear = githubWillMerge(d.mergeState) && standing === "green";
+  /* The ranked reasons Overview lists, so the short version names the same
+     first one — a locked base included — instead of the first two failing
+     checks it happened to meet. And green is not green under a refusal. */
+  const blockers = useMemo(() => mergeBlockers({ ...d, openThreads: d.threads.filter((t) => !t.isResolved).length, awaitingChecks }),
+    [d, awaitingChecks]);
+  const refusal = mergeRefusal(blockers, d.mergeState);
+  const allClear = githubWillMerge(d.mergeState) && standing === "green" && !refusal;
   /*
    * Whether GitHub will take it, which is a different question from whether the
    * checks are green — and asking only the second one is how this box said
@@ -232,7 +239,9 @@ export function FileRail({
   const willTake = githubWillMerge(d.mergeState);
   /* Not `verdict` — that name is already the review's, three lines up in the
      props, and this is the merge's. */
-  const { line: mergeLine } = mergeVerdict(d.mergeState, d.checks, awaitingChecks);
+  const { line: verdictLine, blocked } = mergeVerdict(d.mergeState, d.checks, awaitingChecks);
+  const first = blockers.find((b) => b.weight === "blocks" && b.kind !== "behind");
+  const mergeLine = refusal?.title ?? (blocked && first ? first.title : verdictLine);
   const under = standingLine(standing) ?? (allClear ? checksLine(d.checks) : null);
   /* What GitHub cut off. Every "nothing" below is a claim about the page that
      came back, not about the pull request: `truncated.comments` is the number
@@ -632,7 +641,8 @@ export function FileRail({
             `mergeBlockedWhy`, and "1 check still running" twice in two lines is
             how a box starts reading like a form letter. */}
         {under && <p className="m-0 mt-1 text-[10px]" style={{ color: "var(--text4)" }}>{under}</p>}
-        <button onClick={onMerge} disabled={!canMerge || busyWhat === "Merge"}
+        <button onClick={onMerge} disabled={!canMerge || !!refusal || busyWhat === "Merge"}
+          title={refusal ? `${refusal.title} — ${refusal.detail}` : undefined}
           className="agx-btn w-full mt-2 rounded-md py-1 text-[10.5px] inline-flex items-center justify-center gap-1.5 disabled:opacity-40"
           style={{ background: allClear ? "var(--primary)" : "transparent", color: allClear ? "var(--bg)" : "var(--text2)", border: edge(20) }}>
           {/* "anyway" is a word about overriding something. With nothing to

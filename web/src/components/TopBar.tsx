@@ -30,13 +30,14 @@ import { subscribeSessions, liveSessionCount } from "./TerminalPanel.tsx";
 import { clock24, subscribeClock24 } from "../lib/clockPref.ts";
 import { updateAvailable, subscribeUpdate, updateState } from "../lib/updateStore.ts";
 import { IS_MAC_DESKTOP, WINDOW_CONTROLS } from "../lib/desktop.ts";
-import { Logo } from "./Logo.tsx";
+import { LivingMark } from "./Logo.tsx";
 import { useAmbientNotes, NoteToast, NotifyBell } from "./TopBarNotes.tsx";
 import { NeedsPopover, type NeedsItem } from "./NeedsPopover.tsx";
 import { needsStaysOpen } from "../lib/needsPanel.ts";
 import { ICON } from "../lib/iconSize.ts";
 import { appChordFor, chordLabel } from "../lib/keybindings.ts";
 import { FolderIcon, SearchIcon } from "../lib/glyphIcons.tsx";
+import { scopeLabel, scopeTitle } from "../lib/projectPick.ts";
 
 export const TOP_BAR_H = 30;
 
@@ -419,7 +420,7 @@ function PlanMeter({ tag, pct, age, dim, hideUnder }: {
 }
 
 export function TopBar({
-  workspace, onOpenProject, onOpenPalette, onOpenFiles, quiet, needs,
+  workspace, workspaces, onOpenProject, onOpenPalette, onOpenFiles, quiet, needs,
   needsList, onNeedChat, onNeedApprove, onNeedProject, onNeedTerminal, onNoteGoto,
   filterProvider = "",
 }: {
@@ -427,6 +428,9 @@ export function TopBar({
    *  answer ("the whole machine"). The chip must not claim either while the
    *  server is still coming up underneath it. */
   workspace: string | null | undefined;
+  /** Every open project, when several were opened together. `workspace` is
+   *  the first of them. */
+  workspaces?: readonly string[];
   onOpenProject: () => void;
   onOpenPalette: () => void;
   /** Open the file finder. It had a chord and nothing else, which makes it a
@@ -460,6 +464,8 @@ export function TopBar({
 }) {
   const time = useMinuteClock();
   const win = useWindowState();
+  // An older server answers with `workspace` alone; that one project is the list.
+  const open = workspaces?.length ? workspaces : workspace ? [workspace] : [];
   const shells = useSyncExternalStore(subscribeSessions, liveSessionCount, liveSessionCount);
   const waiting = useSyncExternalStore(subscribeChats, () => listChats().reduce((n, c) => n + (c.attention !== "none" ? 1 : 0), 0), () => 0);
   const upd = useSyncExternalStore(subscribeUpdate, updateState, updateState);
@@ -612,8 +618,12 @@ export function TopBar({
       {/* The mark, not the word. At this height the wordmark was eight
           characters of the one thing on screen nobody needs to be told, and the
           logo says it in a sixth of the width — which is width the project name
-          gets instead. */}
-      <Logo size={17} className="shrink-0" title="agentglass" style={{ pointerEvents: "none" }} />
+          gets instead.
+
+          The landing's mark, alive, at the landing's proportion of its bar
+          (22 in 30 here, 45 in 62 there), and where the launch cover's mark
+          lands when the app is ready — see lib/cover.ts. */}
+      <LivingMark size={ICON.xl} coverTarget className="shrink-0" title="agentglass" style={{ pointerEvents: "none" }} />
       <AppMenuButton />
       {/* The project this cockpit is about, and the way to change it.
           It used to be two spans of plain text with a chevron, and it read as
@@ -623,7 +633,7 @@ export function TopBar({
           carries the weight, since "which project am I in" is the one thing
           this corner exists to answer. */}
       <button onClick={onOpenProject} className="agx-btn flex items-center gap-1.5 shrink-0 min-w-0 rounded-md pl-1.5 pr-1 py-1"
-        title={workspace ? `${workspace}\nClick to switch project` : workspace === null ? "Every repo on this machine — click to open a single project" : "Reading the open project…"}
+        title={workspace ? `${scopeTitle(open)}\nClick to switch project` : workspace === null ? "Every repo on this machine — click to open projects" : "Reading the open project…"}
         style={{
           ...NO_DRAG,
           border: `1px solid color-mix(in srgb, var(--border) ${workspace ? 55 : 40}%, transparent)`,
@@ -635,7 +645,7 @@ export function TopBar({
               deliberate whole-machine view, and "not known yet" — which used
               to be indistinguishable from the second and had the bar quietly
               claiming "all repos" over a cockpit scoped to one project. */}
-          {workspace ? workspace.split("/").filter(Boolean).pop() : workspace === null ? "all repos" : "…"}
+          {workspace ? scopeLabel(open) : workspace === null ? "all repos" : "…"}
         </span>
         <span className="text-[10px] shrink-0" style={{ color: "var(--text4)" }}>▾</span>
       </button>

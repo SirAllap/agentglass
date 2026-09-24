@@ -16,8 +16,15 @@
 // file paths against.
 
 export type WorktreeJump = {
-  /** Which workspace view to open. */
-  view: "git" | "diff";
+  /**
+   * Which workspace view to open.
+   *
+   * "term" carries no `root`/`filter` — a terminal issue (termIssue.ts)
+   * already named the worktree it opens a window in; this only has to bring
+   * the view holding that window forward, the same way a git-issue handoff
+   * brings "git" forward.
+   */
+  view: "git" | "diff" | "term";
   /** Source-control scope — the worktree's absolute path. Set for `view: "git"`. */
   root?: string;
   /** File-changes text filter — the worktree's folder name. Set for `view: "diff"`. */
@@ -39,7 +46,7 @@ export function subscribeWorktreeJump(fn: () => void): () => void {
 
 export function worktreeJump(): WorktreeJump | null { return pending; }
 
-export function requestWorktreeJump(req: { view: "git" | "diff"; root?: string; filter?: string }): void {
+export function requestWorktreeJump(req: { view: "git" | "diff" | "term"; root?: string; filter?: string }): void {
   pending = { ...req, n: (pending?.n ?? 0) + 1 };
   subs.forEach((f) => f());
 }

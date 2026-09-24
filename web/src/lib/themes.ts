@@ -11,7 +11,8 @@ import { floorTiers } from "./contrast.ts";
 
 import { SERVER, authHeaders, whenServerUp } from "./api.ts";
 import type { AnsiPalette } from "./termPalette.ts";
-import { applyAccent } from "./accent.ts";
+import { ACCENTS, applyAccent, currentAccent } from "./accent.ts";
+import { bootEntry, writeBootPaint } from "./bootPaint.ts";
 import { BASE, cssVars } from "../../../shared/palettes.ts";
 import type { DesktopTheme } from "../../../shared/desktopPalette.ts";
 
@@ -86,8 +87,6 @@ export const THEMES: Theme[] = [
   { id: "colorblind-friendly", name: "Colorblind Light", preview: {"primary":"#f8fafc","secondary":"#e2e8f0","accent":"#0072b2"}, vars: {"--bg":"#f8fafc","--bg2":"#eef2f7","--bg3":"#e2e8f0","--bg4":"#cbd5e1","--text":"#0f172a","--text2":"#1e293b","--text3":"#334155","--text4":"#64748b","--border":"#cbd5e1","--border2":"#94a3b8","--primary":"#0072b2","--primary-hover":"#005a8e","--success":"#009e73","--warning":"#e69f00","--error":"#d55e00","--info":"#56b4e9","--shadow":"rgba(15, 23, 42, 0.25)"} },
 ];
 
-export const DEFAULT_THEME = "github-dark";
-
 /**
  * The decorative and second-flavour palettes, demoted behind a "more themes"
  * disclosure in the picker — kept for tinkering, never removed. Anything NOT in
@@ -133,9 +132,11 @@ export function applyTheme(id: string, { sync = false } = {}) {
      road. */
   if (id === DESKTOP_ID && desktop) {
     const root = document.documentElement;
-    for (const [k, v] of Object.entries(floorTiers(desktop.vars))) root.style.setProperty(k, v);
+    const floored = floorTiers(desktop.vars);
+    for (const [k, v] of Object.entries(floored)) root.style.setProperty(k, v);
     root.setAttribute("data-theme", DESKTOP_ID);
     applyAccent();
+    rememberPaint(DESKTOP_ID, Object.keys(floored));
     if (sync) syncTheme(desktop as unknown as Theme);
     return;
   }
@@ -151,11 +152,50 @@ export function applyTheme(id: string, { sync = false } = {}) {
   root.setAttribute("data-theme", t.id);
   // Lay the chosen accent over the theme's primary, so it survives a switch.
   applyAccent();
+  rememberPaint(t.id, Object.keys(vars));
   // Only ever persist a theme that exists. An id we don't recognise still gets
   // painted in the fallback, but writing that fallback back to storage would
   // turn one bad read into the permanent loss of a real choice.
   if (known) { try { localStorage.setItem("agentglass-theme", t.id); } catch {} }
   if (sync) syncTheme(t);
+}
+
+/**
+ * Leave the palette just painted where the launch cover can read it before the
+ * bundle loads (see bootPaint.ts), and tell the desktop shell its background,
+ * which it paints the window with before the page has drawn anything at all.
+ */
+function rememberPaint(id: string, keys: string[]) {
+  const style = document.documentElement.style;
+  const vars: Record<string, string> = {};
+  for (const k of new Set([...keys, "--primary", "--primary-hover", "--theme-primary"])) {
+    const v = style.getPropertyValue(k).trim();
+    if (v) vars[k] = v;
+  }
+  const system = themeMode() === "system"
+    ? { dark: bootEntry(SERIOUS_DARK, paintOf(SERIOUS_DARK)), light: bootEntry(SERIOUS_LIGHT, paintOf(SERIOUS_LIGHT)) }
+    : undefined;
+  if (!writeBootPaint({ v: 1, ...bootEntry(id, vars), ...(system ? { system } : {}) })) return;
+  if (vars["--bg"]) {
+    // In system mode both grounds go, and the shell picks by the OS at the next
+    // launch — the same choice the boot script makes for the page.
+    const both = system ? { dark: system.dark.vars["--bg"] ?? "", light: system.light.vars["--bg"] ?? "" } : undefined;
+    try {
+      (window as unknown as { agentglass?: { setWindowBackground?: (c: string, both?: { dark: string; light: string }) => void } })
+        .agentglass?.setWindowBackground?.(vars["--bg"], both);
+    } catch { /* an older shell without the call: its window keeps the default */ }
+  }
+}
+
+/** What applyTheme would set for a listed theme, accent included, without
+ *  painting it — the half of a "system" choice that is not on screen. */
+function paintOf(id: string): Record<string, string> {
+  const t = THEMES.find((x) => x.id === id) ?? THEMES[0];
+  const vars: Record<string, string> = { ...floorTiers(t.vars as Record<string, string>) };
+  if (vars["--primary"]) vars["--theme-primary"] = vars["--primary"];
+  const a = ACCENTS.find((x) => x.id === currentAccent());
+  if (a && a.primary) { vars["--primary"] = a.primary; vars["--primary-hover"] = a.hover; }
+  return vars;
 }
 
 /**
@@ -168,6 +208,18 @@ export function applyTheme(id: string, { sync = false } = {}) {
  */
 export function pickTheme(id: string) {
   applyTheme(id, { sync: true });
+}
+
+/**
+ * A palette chosen by name — from the grid or the command palette. It leaves
+ * whatever mode was on, or System would put its own pair back at the next
+ * launch; the neutral pair reads as the Dark or Light it is.
+ */
+export function chooseTheme(id: string): ThemeMode {
+  pickTheme(id);
+  const m: ThemeMode = id === SERIOUS_DARK ? "dark" : id === SERIOUS_LIGHT ? "light" : "custom";
+  persistThemeMode(m);
+  return m;
 }
 
 function syncTheme(t: Theme) {
@@ -203,6 +255,27 @@ export type ThemeMode = "desktop" | "system" | "dark" | "light" | "custom";
 export const SERIOUS_DARK = "graphite";
 export const SERIOUS_LIGHT = "porcelain";
 const MODE_KEY = "agentglass-theme-mode";
+
+/*
+ * A FIRST RUN FOLLOWS THE MACHINE.
+ *
+ * Nothing chosen yet, under either key, is a first run — read when this module
+ * loads, because the boot paint writes the theme key a moment later. A first
+ * run starts in System (Graphite or Porcelain by the OS) and, on a desktop
+ * that publishes its palette, moves on to that desktop's mode at the first
+ * answer from the server, as anybody in System does; see watchDesktopPalette. Before this it fell through
+ * to a fixed GitHub Dark and wrote it back as though somebody had picked it,
+ * which also made every later launch look like a deliberate choice, so the
+ * desktop's mode was never adopted either.
+ */
+/* Once, here, not in initialTheme(): App calls that on every render, and a
+   grid pick in the first session (which clears the mode key) was put back
+   into System by the next render and lost at the next launch. */
+(() => {
+  try {
+    if (localStorage.getItem(MODE_KEY) === null && localStorage.getItem("agentglass-theme") === null) localStorage.setItem(MODE_KEY, "system");
+  } catch { /* storage that cannot be read: initialTheme() falls to System */ }
+})();
 
 export function themeMode(): ThemeMode {
   try { const m = localStorage.getItem(MODE_KEY); if (m === "desktop" || m === "system" || m === "dark" || m === "light") return m; } catch {}
@@ -255,9 +328,10 @@ export function watchSystemTheme(): void {
 export function initialTheme(): string {
   // System mode resolves live off the OS; pinned modes and custom picks are
   // whatever was last written to the theme key (applyThemeMode/pickTheme wrote it).
-  if (themeMode() === "system") return resolveThemeMode("system") ?? DEFAULT_THEME;
-  if (themeMode() === "desktop") return resolveThemeMode("desktop") ?? DEFAULT_THEME;
-  try { return localStorage.getItem("agentglass-theme") || DEFAULT_THEME; } catch { return DEFAULT_THEME; }
+  const mode = themeMode();
+  if (mode !== "custom") return resolveThemeMode(mode)!;
+  /* Storage that cannot be read gets what a first run gets. */
+  try { return localStorage.getItem("agentglass-theme") || resolveThemeMode("system")!; } catch { return resolveThemeMode("system")!; }
 }
 
 /**
@@ -336,33 +410,41 @@ export function watchDesktopPalette(): void {
   type Answer = { stamp: string; source: string; name: string; theme: DesktopTheme };
   const tick = async () => {
     let next: Answer | null = null;
+    let answered = false;
     try {
       const r = await fetch(`${SERVER}/desktop/palette`, { headers: authHeaders() });
-      if (r.ok) next = ((await r.json()) as { palette: Answer | null }).palette;
+      if (r.ok) { next = ((await r.json()) as { palette: Answer | null }).palette; answered = true; }
     } catch { /* no server yet, or none at all (the static demo) */ }
     const changed = (next?.stamp ?? "") !== stamp;
     stamp = next?.stamp ?? "";
     desktop = next?.theme ?? null;
     try { if (desktop) localStorage.setItem(LAST_KEY, JSON.stringify(desktop)); else localStorage.removeItem(LAST_KEY); } catch {}
     desktopSource = next ? { source: next.source, name: next.name } : null;
-    if (first) {
+    /* The first ANSWER, not the first try: a server still starting is not a
+       desktop without a palette, and would spend the move below for nothing. */
+    if (first && answered) {
       first = false;
-      /* A first run on such a desktop, with nothing ever picked, starts in
-         System — the point of a desktop that themes everything is that a new
-         app joins in. Anybody who has picked a theme keeps it. */
+      /* In System on such a desktop, and never moved: a first run (which
+         starts in System), or whoever picked System in the one release when
+         it WAS the desktop's palette, before it had a segment of its own. The
+         point of a desktop that themes everything is that a new app joins in.
+         Once, and never again, so choosing System later sticks; anybody who
+         has picked a theme keeps it. */
       if (desktop) {
-        let untouched = false;
         let wasSystem = false;
         let moved = true;
         try {
-          untouched = localStorage.getItem(MODE_KEY) === null && localStorage.getItem("agentglass-theme") === null;
           wasSystem = localStorage.getItem(MODE_KEY) === "system";
           moved = localStorage.getItem(MOVED_KEY) === "1";
         } catch {}
-        /* For one release "System" WAS the desktop's palette, before it had a
-           segment of its own. Whoever picked System then picked this; move them
-           across once, and never again, so choosing System later sticks. */
-        if (untouched || (wasSystem && !moved)) persistThemeMode("desktop");
+        if (wasSystem && !moved) {
+          persistThemeMode("desktop");
+          /* Painted here, not sent out: machine-wide output needs a gesture
+             (main.tsx), and this move is nobody's. Counted as sent, so the
+             next launch does not send it either; the desktop's next switch
+             does, as it does for anybody in this mode. */
+          try { localStorage.setItem(SYNCED_KEY, stamp); } catch {}
+        }
         try { localStorage.setItem(MOVED_KEY, "1"); } catch {}
       }
     }
@@ -376,7 +458,7 @@ export function watchDesktopPalette(): void {
      */
     if (changed) {
       if (themeMode() === "desktop") {
-        const id = resolveThemeMode("desktop") ?? DEFAULT_THEME;
+        const id = resolveThemeMode("desktop")!;
         /* Out to tmux once per palette, not once per document: a reload with
            the desktop unchanged must not repaint running panes for nothing. */
         let sent = "";

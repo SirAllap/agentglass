@@ -51,7 +51,10 @@ export function Portal({ children, z = 9999, find }: {
    * rather than a concession: there is no body to escape to.
    */
   const [el] = useState<HTMLElement | null>(() => (typeof document === "undefined" ? null : document.createElement("div")));
-  const layer = Math.max(z, useContext(PortalFloor));
+  const floor = useContext(PortalFloor);
+  /* Below zero is under the app on purpose — the closed bench, see
+     FloatingBench — and lifting it to a floor would put it back over the view. */
+  const layer = z < 0 ? z : Math.max(z, floor);
   useEffect(() => {
     if (!el) return;
     el.style.position = "relative";

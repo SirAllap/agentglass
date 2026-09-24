@@ -18,7 +18,8 @@ import type {
 import type { NormalizedEvent } from "./ingest.ts";
 import { costUsd, modelLabel, hasPrice, equivalentTokens } from "./pricing.ts";
 import { providerOf as sharedProviderOf, UNKNOWN as UNKNOWN_MODEL } from "../../shared/models.ts";
-import { workspaceRoot, scopeRoots, isWithin } from "./config.ts";
+import { workspaceRoots, scopeKey, scopeRoots, isWithin, sessionInScope, type Scope } from "./config.ts";
+import { changeRisks, sessionRisks, SESSION_RISK_CAP } from "../../shared/riskFlags.ts";
 
 /**
  * Where the database lives.
@@ -1947,14 +1948,14 @@ function notePath(p: unknown): void {
  *  `_` as a wildcard, so a path containing an underscore matched more than it
  *  should have. `startsWith` does not.
  */
-export function scopeClause(scope: string | null = workspaceRoot()): { clause: string; args: string[] } {
-  if (!scope) return { clause: "", args: [] };
-  // Every checkout of the project, not the scope path alone: linked worktrees
-  // usually live in sibling directories, so a prefix test against the scope
-  // matches none of them — a project opened at ~/code/orbit would show an empty
-  // dashboard for a day spent working in ~/code/orbit-WEB-1042, which is where
-  // the work actually happens.
+export function scopeClause(scope: Scope = workspaceRoots()): { clause: string; args: string[] } {
+  // Every checkout of every open project, not the scope paths alone: linked
+  // worktrees usually live in sibling directories, so a prefix test against the
+  // scope matches none of them — a project opened at ~/code/orbit would show an
+  // empty dashboard for a day spent working in ~/code/orbit-WEB-1042, which is
+  // where the work actually happens. Empty when unscoped.
   const roots = scopeRoots(scope);
+  if (!roots.length) return { clause: "", args: [] };
   // isWithin rather than a hardcoded `r + "/"`: these are resolve()-derived
   // host paths, so on Windows they are backslash-joined and the literal slash
   // matched a checkout root itself but nothing inside it — the same bug fixed
@@ -1974,7 +1975,7 @@ export function scopeClause(scope: string | null = workspaceRoot()): { clause: s
 }
 
 /** Same restriction for the `sessions` table, which carries its own columns. */
-function sessionScopeClause(scope: string | null = workspaceRoot()): { clause: string; args: string[] } {
+function sessionScopeClause(scope: Scope = workspaceRoots()): { clause: string; args: string[] } {
   // Delegate to scopeClause rather than keep a second copy: this used its own
   // `LIKE 'root/%'` pattern — the very thing scopeClause was rewritten to drop,
   // because an underscore in a scope root is a single-char wildcard in LIKE and
@@ -2428,6 +2429,34 @@ export function pruneOldRows(): { events: number; sessions: number; rolled: numb
   rollupPathCache = null;
   return db.transaction(() => {
     const rolled = foldExpiringEvents(cutoff);
+    // The risk roll-up drops only the flags whose own edit is about to go.
+    // Clearing all of it on every run, deleted or not, made the next poll
+    // re-parse every listed session's whole edit history on the event loop
+    // once an hour; forgetting a whole session did the same every hour to one
+    // that runs longer than the retention window. Dropping a flag is exact
+    // because the memo keeps the newest flag per kind and file: an older one
+    // it shadowed is older still, so it is going too. Not quite for a
+    // backfilled edit, which is newest by row id and oldest by time; the flag
+    // it shadowed stays lost until the session is read again. A session at the
+    // cap may have dropped flags this would let back in, so it is re-read.
+    const expiring = new Map<string, Set<number>>();
+    for (const { session_id, id } of db.query<{ session_id: string; id: number }, [number]>(
+      `SELECT session_id, id FROM events
+       WHERE timestamp < ? AND hook_event_type='PostToolUse' AND tool_name IN ('Edit','Write','MultiEdit')`).all(cutoff)) {
+      if (!riskMemo.has(session_id)) continue;
+      const g = expiring.get(session_id);
+      if (g) g.add(id); else expiring.set(session_id, new Set([id]));
+    }
+    for (const [sid, gone] of expiring) {
+      const m = riskMemo.get(sid)!;
+      const kept = m.flags.filter((f) => f.change == null || !gone.has(f.change));
+      if (kept.length === m.flags.length) continue;
+      if (m.flags.length >= SESSION_RISK_CAP) riskMemo.delete(sid);
+      else {
+        m.flags = kept;
+        for (const id of gone) m.where.delete(id);
+      }
+    }
     db.run(`DELETE FROM events_fts WHERE rowid IN (SELECT id FROM events WHERE timestamp < ?)`, [cutoff]);
     const ev = db.run(`DELETE FROM events WHERE timestamp < ?`, [cutoff]);
     const se = db.run(`DELETE FROM sessions WHERE last_seen < ?`, [cutoff]);
@@ -2494,9 +2523,9 @@ function rollupPaths(): string[] {
  * And there is no `cwd_path` to fall back on: the fold does not carry one, so
  * a row whose only in-scope path was the cwd cannot be recovered here.
  */
-function rollupScopeClause(scope: string | null = workspaceRoot()): { clause: string; args: string[] } {
-  if (!scope) return { clause: "", args: [] };
+function rollupScopeClause(scope: Scope = workspaceRoots()): { clause: string; args: string[] } {
   const roots = scopeRoots(scope);
+  if (!roots.length) return { clause: "", args: [] };
   const inScope = rollupPaths().filter((p) => roots.some((r) => isWithin(p, r)));
   // Same honest answer as scopeClause: nothing folded for this project yet.
   if (!inScope.length) return { clause: " AND 0", args: [] };
@@ -2714,14 +2743,24 @@ function duplicateResult(row: any): InsertResult {
  *  re-querying on a hot path. Set once at startup; a missing hook is not called.
  *  A hook rather than a direct import so db.ts stays a leaf — the consumer reads
  *  pane_agent, which reads db, and importing it here would close a cycle. */
-let eventHook: ((sessionId: string, type: string, ts: number) => void) | null = null;
-export function setEventHook(fn: (sessionId: string, type: string, ts: number) => void): void { eventHook = fn; }
+/** What the in-memory derived views get of every event: enough to answer "what
+ *  is this session doing now", nothing that would tempt them to keep a copy. */
+export type EventHook = (sessionId: string, type: string, ts: number, extra?: {
+  isError: boolean; toolUseId: string | null; toolName: string | null;
+  /** A Notification's kind (see notificationKind); null for news and for every other type. */
+  notice: "permission" | "input" | null;
+}) => void;
+let eventHook: EventHook | null = null;
+export function setEventHook(fn: EventHook): void { eventHook = fn; }
 
 export function insertEvent(n: NormalizedEvent): InsertResult {
   const model = n.model_name;
   // Every event, before any dedup/rollup below: the derived view keeps by max
   // timestamp, so replaying a duplicate or an out-of-order backfill is harmless.
-  eventHook?.(n.session_id, n.hook_event_type, n.timestamp);
+  eventHook?.(n.session_id, n.hook_event_type, n.timestamp, {
+    isError: !!n.is_error, toolUseId: n.tool_use_id, toolName: n.tool_name,
+    notice: n.hook_event_type === "Notification" ? notificationKind(String(n.payload?.message ?? "")) : null,
+  });
 
   // --- token delta computation -------------------------------------------
   let dIn = n.usage.input_tokens ?? 0;
@@ -3073,7 +3112,7 @@ const openToolSql = (scoped: string) =>
  * Keyed on scope so switching project can never serve another project's list.
  */
 const OPEN_TOOL_TTL_MS = 2000;
-let openToolCache: { at: number; scope: string | null; data: OpenToolCall[] } | null = null;
+let openToolCache: { at: number; scope: string; data: OpenToolCall[] } | null = null;
 
 /** Drop the open-tool memo. insertEvent() calls this on a Pre/PostToolUse write
  *  so a tool that just opened or closed shows on the very next read. */
@@ -3084,7 +3123,7 @@ export function invalidateOpenTools(): void {
 /** Currently-running tool calls across the fleet (open Pre, unpaired, session
  *  still alive) — the seed for the client's per-agent "running" state. */
 export function openToolCalls(): OpenToolCall[] {
-  const scope = workspaceRoot();
+  const scope = scopeKey();
   if (openToolCache && openToolCache.scope === scope) {
     // Empty is valid until a write invalidates it; non-empty honours the TTL so
     // an age-out cannot hide behind a quiet period.
@@ -3094,7 +3133,7 @@ export function openToolCalls(): OpenToolCall[] {
   }
   // Aliased to `p`, so the shared clause needs qualifying to stay unambiguous
   // against the correlated subqueries above.
-  const s = scopeClause(scope);
+  const s = scopeClause();
   const scoped = s.clause.replace(/\b(project_path|cwd_path)\b/g, "p.$1");
   const data = db
     .query<OpenToolCall, any[]>(openToolSql(scoped))
@@ -3139,7 +3178,7 @@ export function openToolCalls(): OpenToolCall[] {
  * have just aged out is a filter that finds nothing, not a wrong answer.
  */
 const FILTER_TTL_MS = 10 * 60_000;
-let filterCache: { at: number; scope: string | null; data: ReturnType<typeof computeFilterOptions> } | null = null;
+let filterCache: { at: number; scope: string; data: ReturnType<typeof computeFilterOptions> } | null = null;
 /** The values the memo was built from, so an event can be tested against them
  *  without a query. Rebuilt with the memo; null while there is none. */
 let filterSeen: { apps: Set<string>; types: Set<string>; models: Set<string> } | null = null;
@@ -3156,7 +3195,7 @@ function noteFilterValues(app: unknown, type: unknown, model: unknown): void {
 }
 
 export function getFilterOptions() {
-  const scope = workspaceRoot();
+  const scope = scopeKey();
   if (filterCache && filterCache.scope === scope && Date.now() - filterCache.at < FILTER_TTL_MS) return filterCache.data;
   const data = computeFilterOptions();
   filterCache = { at: Date.now(), scope, data };
@@ -3448,6 +3487,15 @@ export function promptedSince(sessionId: string, sinceMs = 0): boolean {
   try { return promptedSinceQ.get(sessionId, Math.max(0, sinceMs)) !== null; } catch { return false; }
 }
 
+/** Which of the two kinds of stop a Notification's message describes — a
+ *  blockage ("needs your permission"), a turn that ended ("waiting for your
+ *  input") — or null for news. See noteWaitFromHook. */
+export function notificationKind(message: string): "permission" | "input" | null {
+  return /needs your (permission|approval)/i.test(message) ? "permission"
+    : /waiting for your input/i.test(message) ? "input"
+      : null;
+}
+
 export function noteWaitFromHook(e: { session_id?: unknown; hook_event_type?: unknown; payload?: unknown; role?: unknown }, at = Date.now()): void {
   /* The Lantern's own chat never waits on anybody in the board's sense: a
      person asked it something and it answered. Its notifications are dropped
@@ -3460,9 +3508,7 @@ export function noteWaitFromHook(e: { session_id?: unknown; hook_event_type?: un
   if (!session || session === "unknown") return;
   if (e.hook_event_type === "Notification") {
     const msg = String((e.payload as { message?: unknown } | undefined)?.message ?? "");
-    const kind = /needs your (permission|approval)/i.test(msg) ? "permission"
-      : /waiting for your input/i.test(msg) ? "input"
-        : null;
+    const kind = notificationKind(msg);
     if (!kind) return;
     try {
       db.query("INSERT OR REPLACE INTO session_wait (session_id, kind, why, at) VALUES (?, ?, ?, ?)")
@@ -3489,7 +3535,7 @@ export function latestWaits(ids: string[]): Map<string, SessionWait> {
 }
 
 export function getSessions(limit = 100, provider?: string): SessionRollup[] {
-  const key = `${limit}|${provider ?? ""}|${workspaceRoot() ?? ""}`;
+  const key = `${limit}|${provider ?? ""}|${scopeKey()}`;
   const hit = sessionsCache.get(key);
   if (hit && Date.now() - hit.at < SESSIONS_TTL_MS) return hit.data;
   const s = sessionScopeClause();
@@ -3517,6 +3563,7 @@ export function getSessions(limit = 100, provider?: string): SessionRollup[] {
       if (p) d.first_prompt = p;
     }
   }
+  attachRisks(data);
   sessionsCache.set(key, { at: Date.now(), data });
   // One entry per (limit, provider, scope); the limit set is tiny and scope
   // rarely changes, so prune stale entries anyway so a long-lived server cannot
@@ -3562,7 +3609,7 @@ export function statsSummary(windowMs = 24 * 3600 * 1000, provider?: string, tz?
   // viewer is often not on the server (remote access, the phone companion).
   // Without it here, one viewer's grid is served to another in a different
   // zone for the whole TTL.
-  const key = `${windowMs}|${provider ?? ""}|${workspaceRoot() ?? ""}|${tz ?? ""}`;
+  const key = `${windowMs}|${provider ?? ""}|${scopeKey()}|${tz ?? ""}`;
   const hit = statsCache.get(key);
   if (hit && Date.now() - hit.at < STATS_TTL_MS) return hit.data;
   const data = computeStatsSummary(windowMs, provider, tz);
@@ -4010,13 +4057,15 @@ function editHunk(oldS: string, newS: unknown) {
   };
 }
 
-function parseChange(r: ChangeRow): import("../../shared/types.ts").FileChange | null {
+function parseChange(r: ChangeRow, withRisks = true): import("../../shared/types.ts").FileChange | null {
   let payload: any;
   try { payload = JSON.parse(r.payload); } catch { return null; }
   const tr = payload.tool_response ?? {};
   const ti = payload.tool_input ?? {};
   const file_path = tr.filePath || ti.file_path || ti.filePath || "(unknown)";
   let hunks = Array.isArray(tr.structuredPatch) ? tr.structuredPatch : [];
+  // A rebuilt Edit hunk starts at line 1 of its own snippet, not of the file.
+  let placed = true;
   if (!hunks.length && r.tool_name === "Write" && typeof ti.content === "string") {
     const lines = ti.content.split("\n");
     hunks = [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: lines.length, lines: lines.map((l: string) => "+" + l) }];
@@ -4027,11 +4076,13 @@ function parseChange(r: ChangeRow): import("../../shared/types.ts").FileChange |
   // that edits more than it writes means no diff at all.
   if (!hunks.length && r.tool_name === "Edit" && typeof ti.old_string === "string") {
     hunks = [editHunk(ti.old_string, ti.new_string)];
+    placed = false;
   }
   if (!hunks.length && r.tool_name === "MultiEdit" && Array.isArray(ti.edits)) {
     hunks = ti.edits
       .filter((e: any) => e && typeof e.old_string === "string")
       .map((e: any) => editHunk(e.old_string, e.new_string));
+    placed = false;
   }
   if (!hunks.length) return null;
   let additions = 0, deletions = 0;
@@ -4039,12 +4090,138 @@ function parseChange(r: ChangeRow): import("../../shared/types.ts").FileChange |
     if (l[0] === "+") additions++;
     else if (l[0] === "-") deletions++;
   }
-  return { id: r.id, timestamp: r.timestamp, source_app: r.source_app, session_id: r.session_id, tool: r.tool_name, file_path, additions, deletions, hunks };
+  const root = payload.cwd || payload.cwd_path || payload.project_path || null;
+  const risks = withRisks ? changeRisks(file_path, hunks, deletions, { root, lines: placed }) : [];
+  return { id: r.id, timestamp: r.timestamp, source_app: r.source_app, session_id: r.session_id, tool: r.tool_name, file_path, additions, deletions, hunks, ...(risks.length ? { risks } : {}) };
+}
+
+/**
+ * Per session: how far into `events` its flags have been read, and the flags.
+ *
+ * The session list is polled every few seconds and re-parsing every edit of
+ * every listed session on each poll would make it the most expensive query on
+ * the dashboard, for a fact that only changes when an edit lands. So each read
+ * parses only the edits past the watermark. The watermark is a row id, not a
+ * timestamp: a backfill inserts old edits late, and those must still count.
+ *
+ * The card counts only edits inside the open project, like the change list its
+ * diff shows, and that is applied when the flags are handed out, not when they
+ * are read: the project's checkouts come from `git worktree list`, cached for
+ * seconds, and an edit in a worktree added a moment ago was passed over while
+ * the list was stale and then never read again, because the watermark had moved
+ * past it. So the memo keeps every flag with where its edit ran.
+ *
+ * Its ceilings: the first poll after the server starts still reads every listed
+ * session from 0 in one go, and spreading that over several polls is the next
+ * step and is not here. The per-session cap applies before the scope, so a
+ * session with more than SESSION_RISK_CAP flagged files outside the project can
+ * crowd out one inside it.
+ */
+type RiskWhere = { project_path: string | null; cwd_path: string | null };
+const riskMemo = new Map<string, { through: number; flags: import("../../shared/types.ts").SessionRisk[]; where: Map<number, RiskWhere> }>();
+const RISK_MEMO_MAX = 2000;
+
+function attachRisks(rows: import("../../shared/types.ts").SessionRollup[]): void {
+  if (!rows.length) return;
+  try {
+    const top = db.query<{ m: number | null }, []>(`SELECT MAX(id) m FROM events`).get()?.m ?? 0;
+    const ids = rows.map((r) => r.session_id);
+    // Grouped by watermark rather than read from the lowest one: a session that
+    // just appeared starts at 0, and that must not make every other listed
+    // session re-read its whole history.
+    const byMark = new Map<number, string[]>();
+    for (const id of ids) {
+      const mark = riskMemo.get(id)?.through ?? 0;
+      if (mark >= top) continue;
+      const g = byMark.get(mark);
+      if (g) g.push(id); else byMark.set(mark, [id]);
+    }
+    if (byMark.size) {
+      const fresh = new Map<string, import("../../shared/types.ts").FileChange[]>();
+      const freshWhere = new Map<number, RiskWhere>();
+      for (const [mark, group] of byMark) {
+        const holes = group.map(() => "?").join(",");
+        // INDEXED BY: left to itself SQLite picks idx_events_type, and a new
+        // session's first read (mark 0) then walks every PostToolUse row in the
+        // table — measured 21 ms on 28k rows, against 1 ms by session.
+        for (const r of db.query<ChangeRow, any[]>(
+          `SELECT id, timestamp, source_app, session_id, tool_name, payload, project_path, cwd_path FROM events INDEXED BY idx_events_session
+           WHERE session_id IN (${holes}) AND id > ? AND id <= ?
+             AND hook_event_type='PostToolUse' AND tool_name IN ('Edit','Write','MultiEdit')
+           ORDER BY id DESC`).all(...group, mark, top) as (ChangeRow & RiskWhere)[]) {
+          const c = parseChange(r);
+          if (!c?.risks) continue;
+          freshWhere.set(r.id, { project_path: r.project_path, cwd_path: r.cwd_path });
+          const list = fresh.get(r.session_id);
+          if (list) list.push(c); else fresh.set(r.session_id, [c]);
+        }
+      }
+      for (const group of byMark.values()) for (const id of group) {
+        const prev = riskMemo.get(id);
+        const old = prev?.flags ?? [];
+        const add = fresh.get(id) ?? [];
+        // Newer first, so the reason kept for a kind and file is the latest one.
+        const flags = add.length
+          ? sessionRisks([...add, ...old.map((f) => ({ id: f.change, file_path: f.file, risks: [f] }))])
+          : old;
+        const where = new Map<number, RiskWhere>();
+        for (const f of flags) {
+          const w = f.change != null ? freshWhere.get(f.change) ?? prev?.where.get(f.change) : undefined;
+          if (w) where.set(f.change!, w);
+        }
+        riskMemo.delete(id);
+        riskMemo.set(id, { through: top, flags, where });
+      }
+      // Insertion order is recency of reading, so the front is the stalest.
+      for (const k of riskMemo.keys()) {
+        if (riskMemo.size <= RISK_MEMO_MAX) break;
+        riskMemo.delete(k);
+      }
+    }
+    const scope = workspaceRoots();
+    const inside = new Map<RiskWhere, boolean>();
+    for (const r of rows) {
+      const m = riskMemo.get(r.session_id);
+      if (!m?.flags.length) continue;
+      const f = !scope.length ? m.flags : m.flags.filter((x) => {
+        const w = x.change != null ? m.where.get(x.change) : undefined;
+        if (!w) return true;
+        let ok = inside.get(w);
+        if (ok === undefined) inside.set(w, ok = sessionInScope(w, scope));
+        return ok;
+      });
+      if (f.length) r.risks = f;
+    }
+  } catch { /* flags are advisory; a database that cannot answer must not lose the list */ }
+}
+
+/**
+ * The session's newest changes, plus any flagged one older than those.
+ *
+ * The card rolls flags up over the whole session and the detail lists only the
+ * newest `limit` changes, so a key written early in a long session would be a
+ * red chip with no file behind it in the diff the card opens.
+ */
+function changesWithFlagged(sessionId: string, limit: number): import("../../shared/types.ts").FileChange[] {
+  const changes = getChanges(limit, sessionId);
+  const stub = { session_id: sessionId } as import("../../shared/types.ts").SessionRollup;
+  attachRisks([stub]);
+  const have = new Set(changes.map((c) => c.id));
+  const missing = [...new Set((stub.risks ?? []).map((r) => r.change).filter((id): id is number => id != null && !have.has(id)))];
+  if (!missing.length) return changes;
+  const chg = scopeClause();
+  const older = db.query<ChangeRow, any[]>(
+    `SELECT id, timestamp, source_app, session_id, tool_name, payload FROM events
+     WHERE id IN (${missing.map(() => "?").join(",")}) AND session_id = ?${chg.clause}
+     ORDER BY timestamp DESC, id DESC`).all(...missing, sessionId, ...chg.args);
+  return [...changes, ...older.map((r) => parseChange(r)).filter((c): c is import("../../shared/types.ts").FileChange => c !== null)];
 }
 
 /** Recent file changes (Edit/Write/MultiEdit) with their diff hunks, parsed
- *  from the tool_response.structuredPatch Claude Code already provides. */
-export function getChanges(limit = 200, sessionId?: string): import("../../shared/types.ts").FileChange[] {
+ *  from the tool_response.structuredPatch Claude Code already provides.
+ *  `withRisks: false` for a caller that only wants the paths — the rules read
+ *  every added line, and on 500 changes that was half the call. */
+export function getChanges(limit = 200, sessionId?: string, withRisks = true): import("../../shared/types.ts").FileChange[] {
   const chg = scopeClause();
   const rows = sessionId
     ? db.query<ChangeRow, any[]>(
@@ -4055,7 +4232,7 @@ export function getChanges(limit = 200, sessionId?: string): import("../../share
         `SELECT id, timestamp, source_app, session_id, tool_name, payload FROM events
          WHERE hook_event_type='PostToolUse' AND tool_name IN ('Edit','Write','MultiEdit')${chg.clause}
          ORDER BY timestamp DESC, id DESC LIMIT ?`).all(...chg.args, limit);
-  return rows.map(parseChange).filter((c): c is import("../../shared/types.ts").FileChange => c !== null);
+  return rows.map((r) => parseChange(r, withRisks)).filter((c): c is import("../../shared/types.ts").FileChange => c !== null);
 }
 
 /** Everything we know about one session — the deep-dive. */
@@ -4251,7 +4428,7 @@ export function getSession(sessionId: string): import("../../shared/types.ts").S
     subagents: subRows.map((s) => ({ agent_id: s.agent_id, agent_type: s.agent_type || "subagent", events: s.n })),
     conversation: kept,
     timeline,
-    changes: getChanges(40, sessionId),
+    changes: changesWithFlagged(sessionId, 40),
   };
 }
 

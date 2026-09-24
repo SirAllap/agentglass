@@ -115,9 +115,10 @@ describe("workspace chords", () => {
   it("takes a chord with modifiers and dispatches on it", async () => {
     const k = await load();
     rail(["git", "diff", "docker", "term", "chat"]);
-    expect(k.rebindChord("chat", "mod+alt+j")).toEqual({ ok: true });
-    expect(k.viewForChord("mod+alt+j")).toBe("chat");
-    expect(k.chordFor("chat")).toBe("mod+alt+j");
+    // Any chord nothing ships on: Ctrl+Alt+J is the window switcher's.
+    expect(k.rebindChord("chat", "mod+alt+y")).toEqual({ ok: true });
+    expect(k.viewForChord("mod+alt+y")).toBe("chat");
+    expect(k.chordFor("chat")).toBe("mod+alt+y");
     expect(k.hasCustomChord("chat")).toBe(true);
   });
 
@@ -198,9 +199,9 @@ describe("workspace chords", () => {
   it("survives a reload and can be cleared back to positional", async () => {
     const k = await load();
     rail(["git", "diff", "docker", "term", "chat"]);
-    k.rebindChord("term", "mod+alt+j");
+    k.rebindChord("term", "mod+alt+y");
     const k2 = await load();
-    expect(k2.chordFor("term")).toBe("mod+alt+j");
+    expect(k2.chordFor("term")).toBe("mod+alt+y");
     expect(k2.chordsCustomised()).toBe(true);
     k2.clearChord("term");
     expect(k2.chordFor("term")).toBe("mod+4");

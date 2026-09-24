@@ -27,7 +27,7 @@ import { join } from "node:path";
 import { tmuxStateDir } from "./tmuxbin.ts";
 import { tmux, validSessionName, tmuxSocket, setCaptureHook, KEPT_MARK } from "./tmuxpane.ts";
 import { confPath } from "./tmuxconf.ts";
-import { resolveTmuxBin } from "./tmuxbin.ts";
+import { resolveTmuxBin, engineSocketArgs } from "./tmuxbin.ts";
 import { paneAgentNote } from "./panewt.ts";
 import { wasPromptOf, wasPromptAnywhere, newestPromptId, promptedSince, firstPromptSince } from "./db.ts";
 import { agentNamed } from "./paneloc.ts";
@@ -1027,7 +1027,7 @@ export function captureLayoutSync(now = Date.now()): void {
     /* The server too, as `liveSessions` spells it: a photograph that does not
        say which server it was taken on leaves the next sweep without a
        previous one to read a dead pane from. */
-    const r = Bun.spawnSync([bin, "-L", tmuxSocket(), "-f", confPath(), "list-sessions", "-F", "#{session_name}\t#{pid}\t#{start_time}"],
+    const r = Bun.spawnSync([bin, ...engineSocketArgs(), "-f", confPath(), "list-sessions", "-F", "#{session_name}\t#{pid}\t#{start_time}"],
       { stdout: "pipe", stderr: "pipe", env: process.env });
     const rows = new TextDecoder().decode(r.stdout).split("\n").map((l) => l.split("\t"));
     const names = rows.map(([n = ""]) => n.trim()).filter((n) => n && validSessionName(n));

@@ -53,6 +53,7 @@ import { AgentsPane } from "./AgentsPane.tsx";
 import { rendererPref, setRendererPref, type RendererPref } from "../lib/termRenderer.ts";
 import { TERM_FONTS, CURSORS, fontAvailable, currentTermFont, currentTermSize, currentTermCursor, currentTermLineHeight, setTermFont, setTermSize, setTermCursor, setTermLineHeight, SIZE_MIN, SIZE_MAX, LINE_HEIGHT_MIN, LINE_HEIGHT_MAX, type CursorStyle } from "../lib/termPrefs.ts";
 import { focusFollowsMouse, setFocusFollowsMouse } from "../lib/termFocusPref.ts";
+import { parseRules, setTabGroupRulesText, setTabGroupsOn, tabGroupRulesText, tabGroupsOn } from "../lib/tabGroups.ts";
 import { paneActionsMode, setPaneActionsMode, type PaneActionsMode } from "../lib/paneActionsPref.ts";
 import { diffSplit, diffWrap, setDiffSplit, setDiffWrap } from "../lib/diffPrefs.ts";
 import {
@@ -80,6 +81,7 @@ import { chatEnginePref, setChatEnginePref, type ChatEnginePref } from "../lib/c
 import type { TmuxEngineInfo } from "../../../shared/types.ts";
 import type { DepReport, DepStatus } from "../../../shared/deps.ts";
 import { clock24, setClock24 } from "../lib/clockPref.ts";
+import { setSplashOn, splashOn } from "../lib/splashPref.ts";
 import { usageRefreshOn, setUsageRefreshOn } from "../lib/usageRefreshPref.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { bindings, rebind, resetBindings, subscribeBindings, isCustomised, LABELS, DEFAULTS, type ActionId,
@@ -472,9 +474,9 @@ function tabScore(t: { label: string; kw: string }, ql: string): number {
  * be the decorative kind he deletes.
  */
 const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: string; status?: boolean; icon: (p: { size?: number }) => React.ReactElement }[] = [
-  { id: "prefs", label: "Window", group: "Interface", kw: "display size zoom sound clock fullscreen start login preferences", what: "The window itself — size, fullscreen, the clock, and how it starts.", icon: SlidersIcon },
+  { id: "prefs", label: "Window", group: "Interface", kw: "display size zoom sound clock fullscreen start login launch animation splash preferences", what: "The window itself — size, fullscreen, the clock, and how it starts.", icon: SlidersIcon },
   { id: "appearance", label: "Appearance", group: "Interface", kw: "theme accent colour color font dark light mode palette", what: "Theme, accent and how dense the app is drawn.", icon: ThemeIcon },
-  { id: "terminal", label: "Terminal", group: "Interface", kw: "terminal font size cursor typography monospace face renderer gpu focus follows mouse hover pane sloppy scrollback copy on select right-click paste line height", what: "Type, renderer, mouse and how much scrollback each shell keeps.", icon: TerminalIcon },
+  { id: "terminal", label: "Terminal", group: "Interface", kw: "terminal font size cursor typography monospace face renderer gpu focus follows mouse hover pane sloppy scrollback copy on select right-click paste line height tab tabs group groups grouping project name rules prefix", what: "Type, renderer, mouse, tab groups and how much scrollback each shell keeps.", icon: TerminalIcon },
   { id: "diff", label: "Diff", group: "Interface", kw: "diff split side by side inline unified wrap word wrap changes review default view wrap long lines", what: "How a diff opens, everywhere the app shows one.", icon: DiffIcon },
   { id: "tasks", label: "Tasks", group: "Agents & work", kw: "tasks sources github issues local taskwarrior clickup hide show providers view opens on", what: "Which sources the Tasks view offers you.", icon: ChecklistIcon },
   // Only where there is a browser to configure. A settings tab for something
@@ -3240,6 +3242,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
   useEffect(() => { if (open) void isFullscreen().then(setFullscreenState); }, [open]);
 
   const [h24, setH24] = useState<boolean>(() => clock24());
+  const [splash, setSplash] = useState<boolean>(() => splashOn());
   const [usageRefresh, setUsageRefreshState] = useState<boolean>(() => usageRefreshOn());
   const [renderer, setRenderer] = useState<RendererPref>(() => rendererPref());
   const [keys, setKeys] = useState(() => bindings());
@@ -3373,6 +3376,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
   const [termLine, setTermLineState] = useState(() => currentTermLineHeight());
   const [termCursor, setTermCursorState] = useState<CursorStyle>(() => currentTermCursor());
   const [ffm, setFfm] = useState(() => focusFollowsMouse());
+  const [groupsOn, setGroupsOn] = useState(() => tabGroupsOn());
+  const [groupRules, setGroupRules] = useState(() => tabGroupRulesText());
   const [paneActs, setPaneActs] = useState<PaneActionsMode>(() => paneActionsMode());
   const [scrollback, setScrollbackState] = useState(() => currentScrollback());
   const [wordSep, setWordSepState] = useState(() => currentWordSeparators());
@@ -3977,6 +3982,30 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                       hint="Right-click pastes the clipboard into the shell instead of opening the menu. Ctrl+right-click still opens it." />
                   </Section>
 
+                  <Section title="Tab groups"
+                    desc="With tmux, the tabs are grouped by the project each window is working in. The group you are in is open; the others fold into a chip that still shows what their agents are doing.">
+                    <Toggle on={groupsOn} onClick={() => { const v = !groupsOn; setTabGroupsOn(v); setGroupsOn(v); }}
+                      label="Group tabs by project"
+                      hint="Off draws every tab in one row, in tmux's order. Right-click a tab to pin it first in its group or move it to another; drag it onto a group to do the same." />
+                    {/* The tie-break for a window whose folder is not its
+                        project. None ship: a rule is a guess about how
+                        somebody names things, and the folder is right for
+                        everyone else. */}
+                    <SettingRow
+                      label="Group by name"
+                      hint={<>A window whose name starts with a prefix goes to that group, whatever folder it runs in. Pairs like <span className="t-mono text-[11px]">agx=agentglass, ops=infra</span>. {parseRules(groupRules).length
+                        ? `${parseRules(groupRules).length} ${parseRules(groupRules).length === 1 ? "rule" : "rules"} in use.`
+                        : "None yet — windows are grouped by their folder."}</>}
+                      control={
+                        <input value={groupRules} onChange={(e) => setGroupRules(e.target.value)}
+                          onBlur={() => setTabGroupRulesText(groupRules)}
+                          onKeyDown={(e) => { if (e.key === "Enter") setTabGroupRulesText(groupRules); }}
+                          placeholder="agx=agentglass" spellCheck={false} aria-label="Group-by-name rules"
+                          className="text-[12px] t-mono px-2 py-1 rounded-lg bg-transparent w-[200px] justify-self-end"
+                          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }} />
+                      } />
+                  </Section>
+
                   <Section title="History and selection"
                     desc="How far back a shell remembers, and what a double-click takes.">
                     {/* Sizes rather than a number box: the cost is memory PER
@@ -4099,6 +4128,11 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                         label="Start at login"
                         hint="Open agentglass automatically when you log in" />
                     )}
+                    {/* Read before anything is drawn (web/index.html), so the
+                        change shows at the next launch, not this one. */}
+                    <Toggle on={splash} onClick={() => { const v = !splash; setSplashOn(v); setSplash(v); }}
+                      label="Launch animation"
+                      hint="Covers the window while the terminal, sessions and git load, then the mark flies to the top bar. Off shows the plain loading screen. From the next launch" />
                     {/* Off is the default and off means nothing is watching:
                         with no client subscribed the server never starts the
                         D-Bus monitor at all. On a machine that cannot do this

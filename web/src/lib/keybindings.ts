@@ -315,7 +315,7 @@ function persistChords() {
  * else's. If it collides with something in your shell you must be able to move
  * it, and that is a preference, not a fault.
  */
-export type AppChordId = "files.palette" | "bench.toggle" | "pane.git" | "pane.diff" | "pane.pr" | "pane.card";
+export type AppChordId = "files.palette" | "bench.toggle" | "pane.git" | "pane.diff" | "pane.pr" | "pane.card" | "windows.switcher";
 
 /**
  * Ctrl+Shift+P, not Ctrl+P — the same reasoning as isFindChord in termKeys.ts.
@@ -364,6 +364,20 @@ export const APP_CHORD_DEFAULTS: Record<AppChordId, string> = {
   "pane.diff": "mod+alt+2",
   "pane.pr": "mod+alt+3",
   "pane.card": "mod+alt+4",
+  /*
+   * Ctrl+Alt+J, not Ctrl+J, and the plain one was the first choice.
+   *
+   * Ctrl+J is a line feed: readline takes it as Enter, and agent CLIs take it
+   * as "new line in the prompt" — the one key for a multi-line message in
+   * several of them. An app chord never reaches the pane, so binding it would
+   * take that away in every terminal in the app.
+   *
+   * Ctrl+Alt+J is not free either, only far less used: readline's emacs mode
+   * binds M-C-j to "switch to vi editing", and in a plain Chrome tab on a Mac
+   * ⌘⌥J is the JavaScript console. Losing those is the trade taken for a key
+   * that is pressed all day; it is rebindable for whoever uses either.
+   */
+  "windows.switcher": "mod+alt+j",
 };
 
 export const APP_CHORD_LABELS: Record<AppChordId, { label: string; hint: string }> = {
@@ -390,6 +404,10 @@ export const APP_CHORD_LABELS: Record<AppChordId, { label: string; hint: string 
   "pane.card": {
     label: "This pane's card",
     hint: "opens the card the pane's branch came from, in Tasks or in your tracker",
+  },
+  "windows.switcher": {
+    label: "Go to a window",
+    hint: "every tmux window with what its agent is doing, the ones waiting for you first — press it again for the next one waiting",
   },
 };
 

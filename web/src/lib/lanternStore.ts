@@ -18,12 +18,16 @@
  */
 import { api } from "./api.ts";
 import type { LanternRow, LanternWatch } from "../components/LanternView.tsx";
+import { attention } from "../../../shared/fieldRules.ts";
 
 let rows: LanternRow[] | null = null;
 let watch: LanternWatch | null = null;
 let cacheTtlMin = 5;
 let readAt = 0;
 let error = false;
+/** Whether any read has ever succeeded: a failure after one is a stale
+ *  answer, a failure before one is no answer at all. */
+let known = false;
 const listeners = new Set<() => void>();
 /** How many subscribers want the fast clock — the view, when it is on screen. */
 let watching = 0;
@@ -46,6 +50,7 @@ export async function refreshLantern(): Promise<void> {
       if (r.ok && r.watch) watch = r.watch;
       if (r.ok && typeof r.cacheTtlMinutes === "number") cacheTtlMin = r.cacheTtlMinutes;
       error = !r.ok;
+      if (r.ok) known = true;
     } catch {
       // Keep the last answer on screen: a server that is restarting is not the
       // same as nobody being around, and blanking the list would say it was.
@@ -99,14 +104,17 @@ export function subscribeLantern(l: () => void, fast = false): () => void {
 
 export const lanternRows = (): LanternRow[] | null => rows;
 export const lanternFailed = (): boolean => error;
+export const lanternKnown = (): boolean => known;
 /** What the watch last found, from the same answer. */
 export const lanternWatch = (): LanternWatch | null => watch;
 /** The provider's prompt-cache window, from Settings — what the cards count down. */
 export const lanternCacheTtlMs = (): number => cacheTtlMin * 60_000;
 /** How many agents CANNOT go on without a person right now — a permission
  *  or a held gate — the rail's number. A turn that merely ended is waiting,
- *  not blocked, and is not a number that follows you around the app. */
-export const lanternNeed = (): number => rows?.filter((r) => r.needsYou && r.needsYou.kind !== "input" && r.role !== "lantern").length ?? 0;
+ *  not blocked, and is not a number that follows you around the app. Sorted
+ *  by `attention`, the rule the dashboard's strip counts "needs you" by, so
+ *  the pip and the strip are one number. */
+export const lanternNeed = (): number => rows?.filter((r) => attention(r) === "blocked").length ?? 0;
 
 /**
  * The field in the view's order, and what each row is set aside as.
@@ -124,8 +132,10 @@ export function groupLantern(rows: LanternRow[]): { need: LanternRow[]; finished
      or a held gate is an agent that CANNOT go on without you. A turn that
      ended is an agent that finished and is waiting for whatever you say next
      — its own group, not a number on the rail. Either outranks everything
-     below, gone included: a wait is never collapsed. */
-  const need = rows.filter((r) => r.needsYou && r.needsYou.kind !== "input");
+     below, gone included: a wait is never collapsed. "Blocked" is
+     `attention`'s, the rule the dashboard's strip and the rail's pip count
+     by, so the three are one number. */
+  const need = rows.filter((r) => attention(r) === "blocked");
   const finished = rows.filter((r) => r.needsYou?.kind === "input");
   const gone = rows.filter((r) => !r.needsYou && r.gone);
   const working = rows.filter((r) => !r.needsYou && !r.gone && r.state === "working");
@@ -133,5 +143,8 @@ export function groupLantern(rows: LanternRow[]): { need: LanternRow[]; finished
   return { need, finished, working, idle, gone };
 }
 
-/** For tests that render the view with a known board. */
-export function __setLanternRows(next: LanternRow[] | null): void { rows = next; readAt = Date.now(); emit(); }
+/** For tests that render the view with a known board — or, with null, put the
+ *  store back to never having read one. */
+export function __setLanternRows(next: LanternRow[] | null): void {
+  rows = next; known = next !== null; error = false; readAt = Date.now(); emit();
+}

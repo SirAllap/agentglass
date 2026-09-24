@@ -35,7 +35,8 @@
  * than a pile.
  */
 import * as AgentBoard from "./agentboard.ts";
-import { isGone, boardNow } from "./lantern.ts";
+import { boardNow } from "./lantern.ts";
+import { FORGOTTEN_AFTER_MS, attention, howLong } from "../../shared/fieldRules.ts";
 import { reconcile as namedAlive, type NamedAgent } from "./agentops.ts";
 import { lanternWatch, lanternWatchMinutes } from "./config.ts";
 import { pushLanternFindings } from "./alerts.ts";
@@ -59,15 +60,10 @@ export interface Finding {
   left?: true;
 }
 
-/** How long a said-but-not-done agent may be quiet before it is "forgotten".
- *  An hour: shorter than that is a long tool call or a lunch, and the point
- *  of this kind is work that has sat since before you last looked. */
-export const FORGOTTEN_AFTER_MS = 60 * 60_000;
+/* Who needs a person is decided in shared/fieldRules.ts (`attention`), so the
+   dashboard's verdict strip counts by the same rule this watch notifies by. */
+export { FORGOTTEN_AFTER_MS };
 
-const ago = (t: number, now: number) => {
-  const m = Math.max(0, Math.round((now - t) / 60_000));
-  return m < 1 ? "just now" : m < 60 ? `${m}m` : m < 60 * 24 ? `${Math.round(m / 60)}h` : `${Math.round(m / (60 * 24))}d`;
-};
 const waitWord = (w: NonNullable<AgentBoard.BoardRow["needsYou"]>) =>
   w.kind === "permission" ? "needs your permission" : w.kind === "gate" ? "is held at the gate" : "is waiting for your next prompt";
 
@@ -88,8 +84,9 @@ export function findings(p: {
      * NEITHER READER OF THIS BOARD IS WORK ON IT.
      *
      * The Lantern's chat and the project's seat are marked with a `role` by
-     * `boardNow`, and every other reader sets them aside — the field readout
-     * does, the view does. This one did not, so the seat was reported as
+     * `boardNow`, and the other readers set them aside as work — the field
+     * readout does; the view and the strip count only a seat's waits, which a
+     * person answers. This one did not, so the seat was reported as
      * FORGOTTEN WORK about itself: "orchestrator said it was on … and has been
      * quiet for 1d — done, or stuck?", which is a description of a chair
      * waiting for its owner, delivered by waking the chair.
@@ -99,44 +96,20 @@ export function findings(p: {
      * one line, by the mark the board already carries.
      */
     if ((r as { role?: string }).role) continue;
-    if (r.needsYou) {
-      /* A turn that ended is not urgent: the agent finished and is waiting
-         for whatever you say next, which is most sessions most of the time.
-         It becomes a finding the way forgotten work does — after an hour of
-         nobody coming back to it. A permission or a gate is urgent at once. */
-      if (r.needsYou.kind === "input" && now - r.needsYou.since < FORGOTTEN_AFTER_MS) continue;
+    /* Who needs a person is `attention`, the rule the dashboard's strip reads
+       as well: a permission or a gate at once, a turn that ended only after
+       an hour of nobody coming back to it, claimed work quiet for an hour. */
+    const a = attention(r, now);
+    if (a === "blocked" || a === "left") {
       out.push({
-        kind: "waiting", name: r.name, pane: r.paneId, worktree: r.worktree, since: r.needsYou.since,
-        ...(r.needsYou.kind === "input" ? { left: true as const } : null),
-        line: `${r.name} ${waitWord(r.needsYou)} — ${ago(r.needsYou.since, now)}${r.needsYou.why ? `: ${r.needsYou.why}` : ""}`.slice(0, 200),
+        kind: "waiting", name: r.name, pane: r.paneId, worktree: r.worktree, since: r.needsYou!.since,
+        ...(a === "left" ? { left: true as const } : null),
+        line: `${r.name} ${waitWord(r.needsYou!)} — ${howLong(r.needsYou!.since, now)}${r.needsYou!.why ? `: ${r.needsYou!.why}` : ""}`.slice(0, 200),
       });
-      continue;
-    }
-    /* "Said what it was on, never said done, quiet for an hour." A row the
-       hooks made without a status post has no `doing`, and an idle pane that
-       never claimed a task is not forgotten work — it is a shell. */
-    /*
-     * A DEAD SESSION IS NOT FORGOTTEN WORK.
-     *
-     * The shape of a session that ended two days ago is exactly the shape this
-     * looks for: idle, with a `doing` from when it was alive, and quiet ever
-     * since. So it was reported as forgotten work every single look, for ever
-     * — and every one of those woke the seat. Measured from the other side, in
-     * the seat's own words: six wakes in a night, five of them about sessions
-     * dead for days, on the most expensive context on the machine.
-     *
-     * `isGone` is the rule the field and the view already share: no pane this
-     * machine can see, AND quiet long enough that "it is between panes" has
-     * stopped being the likely story. An agent quiet for an hour with no pane
-     * here is still worth asking about — it may be alive on another tmux
-     * server — which is why the two thresholds differ and why this is not just
-     * a longer silence.
-     */
-    if (isGone(r, now)) continue;
-    if (r.state === "idle" && r.doing && r.saidAt && now - r.saidAt >= FORGOTTEN_AFTER_MS) {
+    } else if (a === "forgotten") {
       out.push({
-        kind: "forgotten", name: r.name, pane: r.paneId, worktree: r.worktree, since: r.saidAt,
-        line: `${r.name} said it was on "${r.doing}" and has been quiet for ${ago(r.saidAt, now)} — done, or stuck?`.slice(0, 200),
+        kind: "forgotten", name: r.name, pane: r.paneId, worktree: r.worktree, since: r.saidAt!,
+        line: `${r.name} said it was on "${r.doing}" and has been quiet for ${howLong(r.saidAt!, now)} — done, or stuck?`.slice(0, 200),
       });
     }
   }
@@ -144,7 +117,7 @@ export function findings(p: {
     const alive = new Set(p.namedNow.map((a) => a.name));
     for (const a of p.namedBefore) {
       if (!alive.has(a.name)) {
-        out.push({ kind: "gone", name: a.name, worktree: a.cwd, since: a.startedAt, line: `${a.name}'s window is gone (started ${ago(a.startedAt, now)} ago in ${a.cwd.split("/").pop()})` });
+        out.push({ kind: "gone", name: a.name, worktree: a.cwd, since: a.startedAt, line: `${a.name}'s window is gone (started ${howLong(a.startedAt, now)} ago in ${a.cwd.split("/").pop()})` });
       }
     }
   }
@@ -156,8 +129,11 @@ export function findings(p: {
 export function notice(f: Finding[]): { title: string; body: string; pane?: string } | null {
   if (!f.length) return null;
   const n = (k: Finding["kind"]) => f.filter((x) => x.kind === k).length;
+  const left = f.filter((x) => x.left).length;
+  const need = n("waiting") - left;
   const parts = [
-    n("waiting") ? `${n("waiting")} need${n("waiting") === 1 ? "s" : ""} you` : "",
+    need ? `${need} need${need === 1 ? "s" : ""} you` : "",
+    left ? `${left} waiting for a prompt` : "",
     n("gone") ? `${n("gone")} gone` : "",
     n("forgotten") ? `${n("forgotten")} look${n("forgotten") === 1 ? "s" : ""} forgotten` : "",
   ].filter(Boolean);

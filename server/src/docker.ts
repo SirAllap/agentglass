@@ -11,7 +11,7 @@ import type {
   DockerOverview, DockerScope, DockerActionResult, DockerCapability,
   DockerDisk, DockerVolumeDetail,
 } from "../../shared/types.ts";
-import { workspaceRoot, scopeRoots } from "./config.ts";
+import { scopeKey, scopeRoots, workspaceRoots } from "./config.ts";
 import { parseFacts, factsFor, healthOf, uptimeOf, type ContainerFacts } from "./dockerfacts.ts";
 import { ownerOf } from "./dockerowner.ts";
 import { parsePorts } from "./dockerports.ts";
@@ -21,7 +21,6 @@ import { startVolumeWatch } from "./dockerwatch.ts";
 import { envDiff, type EnvDiffRow } from "./dockerenv.ts";
 import { backoff, currentLabel, resumedAs } from "./loopwatch.ts";
 import { withSpawnSlot } from "./spawnpool.ts";
-import { worktreeFamily } from "./worktree.ts";
 
 export const DOCKER_WRITE_ENABLED = process.env.AGENTGLASS_DOCKER_WRITE_DISABLED !== "1";
 // Container id (hex) or name (compose names: letters/digits . _ -).
@@ -447,10 +446,12 @@ const OVERVIEW_CACHE_MS = 2_000;
 // The scope is part of the cache identity: the project picker can switch
 // workspaces mid-poll, and serving the previous project's containers for the
 // next two seconds looks like the switch didn't take.
-let overviewCache: { at: number; root: string | null; data: DockerOverview } | null = null;
+let overviewCache: { at: number; root: string; data: DockerOverview } | null = null;
 
 export async function overview(): Promise<DockerOverview> {
-  const root = workspaceRoot();
+  // The whole scope, not its first project: opening a second one beside it
+  // has to change which containers are this cockpit's.
+  const root = scopeKey();
   // Served from cache, and it says so. The data is identical; what changes is
   // that the panel can now tell the difference between "just gathered" and
   // "this is what we had two seconds ago", which is the whole of decision 20.
@@ -495,10 +496,10 @@ export async function overview(): Promise<DockerOverview> {
   // the user can legitimately act on without telling them anything true.
   // Every checkout of the project, so a stack started in a worktree is still
   // this project's stack.
-  const { containers: scoped, scope } = applyScope(c, scopeRoots(root).map(dockerScopeKey).filter((k): k is DockerScopeKey => !!k));
+  const { containers: scoped, scope } = applyScope(c, scopeRoots().map(dockerScopeKey).filter((k): k is DockerScopeKey => !!k));
   // Only the containers that are going to be served get enriched: the work is
   // proportional to what is on screen, not to what is on the host.
-  const enriched = await enrich(scoped, root);
+  const enriched = await enrich(scoped);
   const data: DockerOverview = {
     available: true, writeEnabled: DOCKER_WRITE_ENABLED, version,
     containers: enriched, images: i, volumes: v, networks: n,
@@ -556,16 +557,16 @@ async function containerFacts(ids: string[]): Promise<Map<string, ContainerFacts
  * dockerowner.ts — `.git/HEAD`, not a `git` spawn). The rest comes from the
  * medium lane above.
  */
-async function enrich(list: DockerContainer[], root: string | null): Promise<DockerContainer[]> {
+async function enrich(list: DockerContainer[]): Promise<DockerContainer[]> {
   if (!list.length) return list;
   const facts = await containerFacts(list.map((c) => c.id));
   // Resolved once for the whole batch: worktreeFamily is cached, but asking it
   // per container would still be twelve map lookups and twelve array builds.
-  const family = root ? worktreeFamily(root) : [];
+  const family = scopeRoots();
   return list.map((c) => {
     const f = factsFor(facts, c.id);
     const ports = parsePorts(c.ports);
-    const owner = ownerOf(c.workingDir, family, root);
+    const owner = ownerOf(c.workingDir, family, workspaceRoots());
     return {
       ...c,
       ...(ports.length ? { portList: ports } : {}),
@@ -743,7 +744,6 @@ export async function disk(force = false): Promise<DockerDisk | null> {
   const usage = await diskUsage();
   if (!usage) return null;
 
-  const root = workspaceRoot();
   /*
    * Comparing an image tag to a worktree name is not string equality, and
    * getting that wrong is expensive in the worst direction. Measured here: 40
@@ -756,7 +756,7 @@ export async function disk(force = false): Promise<DockerDisk | null> {
    * BUILD_ID-deriving script does anyway, and what docker requires of a tag.
    */
   const norm = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-  const family = root ? worktreeFamily(root).map((p) => norm(p.split("/").filter(Boolean).pop() ?? p)) : [];
+  const family = scopeRoots().map((p) => norm(p.split("/").filter(Boolean).pop() ?? p));
   const orphans = usage.perImage
     .filter((i) => i.repository && i.repository !== "<none>" && i.tag && i.tag !== "<none>" && i.tag !== "dev" && i.tag !== "latest")
     .filter((i) => !i.containers)

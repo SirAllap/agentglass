@@ -48,6 +48,7 @@ import { useSidebarWidth } from "../lib/sidebarWidth.ts";
 import { SidebarGrip } from "./SidebarGrip.tsx";
 import { CloseButton } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { inOpenProjects } from "../lib/projectPick.ts";
 import { BoltIcon, CopyIcon, IconLabel, PinIcon, RefreshIcon, StarIcon } from "../lib/glyphIcons.tsx";
 
 // Claude's list arrives from the server, like the other two agents'. It is data
@@ -680,7 +681,9 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
   const allChats = useSyncExternalStore(subscribe, listChats, listChats);
   // `null` until we know, which is not the same as "unscoped". See the filter
   // below, which must not run on a guess.
-  const [workspace, setWorkspace] = useState<string | null>(null);
+  const [workspaces, setWorkspaces] = useState<string[]>([]);
+  /** The first open project: where a new chat goes when nothing else says. */
+  const workspace = workspaces[0] ?? null;
   const [scopeKnown, setScopeKnown] = useState(false);
   /** Whether the repo list has come back yet. Distinguishes "still finding your
    *  projects" from "there are none" — the panel used to render both as the
@@ -696,10 +699,9 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
   //
   // An unscoped instance, the desktop app watching every project at once, has
   // no scope to filter by, so it shows everything.
-  const chats = useMemo(() => {
-    if (!workspace) return allChats;
-    return allChats.filter((c) => c.cwd === workspace || c.cwd.startsWith(workspace.replace(/\/$/, "") + "/"));
-  }, [allChats, workspace]);
+  const chats = useMemo(
+    () => (workspaces.length ? allChats.filter((c) => inOpenProjects(c.cwd, workspaces)) : allChats),
+    [allChats, workspaces]);
   // Starts on whichever tab was open when the window last went away, so a crash
   // or a project switch puts you back where you were instead of at the end of
   // the tab strip.
@@ -845,7 +847,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
     // Which project this instance is scoped to, if any. A failure here means we
     // never learn of a scope, so nothing is hidden, which is the safe direction.
     api.projects()
-      .then((r) => setWorkspace(r.workspace))
+      .then((r) => setWorkspaces(r.workspaces ?? (r.workspace ? [r.workspace] : [])))
       .catch(() => {})
       .finally(() => setScopeKnown(true));
     // Which panes are pinned lives on the server and deliberately does not

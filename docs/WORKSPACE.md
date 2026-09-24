@@ -21,32 +21,45 @@ reads `~/.claude/projects` directly, so history from every project is there the
 moment you open the dashboard, and new sessions tail in live (deduped against
 the hooks, so nothing is double-counted).
 
-Want to focus? **Scope the whole cockpit to a single project** — only that repo
-(and its worktrees) show up, and its git / terminal / chat panels, diffs, and
-spend are all you see. The natural way is the **in-app project picker**: on
-first open (a desktop app has no "current folder", so it asks) you choose what
-this cockpit is about, and the **⌂ name in the header** switches it any time:
+Want to focus? **Scope the whole cockpit to the projects you are working on** —
+only those repos (and their worktrees) show up, and their git / terminal / chat
+panels, diffs, and spend are all you see. The natural way is the **in-app
+project picker**, and the **⌂ name in the header** switches it any time.
 
-- pick a **project** → that repo and its worktrees, nothing else;
-- pick a **folder your projects live in** (e.g. `~/code`) → every repo from
-  that folder inward;
-- pick **All repos/projects** → no scope at all.
+The picker lists the git repos inside **the folders you add** — `~/code`, or a
+single project — and nothing else on the machine. A first run starts empty and
+asks for one: the folder chooser on the desktop, or a typed path in a browser
+tab. From the list:
+
+- click a **project** → that repo and its worktrees, nothing else;
+- **tick several** and open them together → all of them, and nothing beside
+  them (the header reads `orbit +2`);
+- pick **All projects** → everything under the folders you added;
+- pick **Every project on this machine** → no scope at all.
+
+Nothing outside your folders is looked at unless you ask: **Look for projects
+agents have worked in** lists the repos agents have already run in, and opening
+one adds it to your list.
 
 The choice is applied live and **persisted** (`root` in
-`~/.config/agentglass/config.json`), so the next launch opens straight into it.
-It can also be set from outside:
+`~/.config/agentglass/config.json` — one path, or a list of them), so the next
+launch opens straight into it. The folders are `repoDirs` in the same file.
+A config from before there were folders gets them the first time the picker
+opens: the folder or projects it had open, and every project the old list
+showed. Nothing is dropped on the way; take off the list what you do not want.
+The scope can also be set from outside:
 
 ```bash
 AGENTGLASS_ROOT=~/code/my-project bun run dev
 # desktop:  AGENTGLASS_ROOT=~/code/my-project agentglass
 ```
 
-Leave everything unset and it covers the whole machine. You can also pin the
-repo sweep to specific directories via `AGENTGLASS_REPO_DIRS`, or the same
-config file:
+Leave the scope unset and the panels cover every project agents have run in.
+The folders can be set from outside too, via `AGENTGLASS_REPO_DIRS` (which then
+wins over the file), or by hand:
 
 ```jsonc
-{ "root": "~/code/my-project", "repoDirs": ["~/code", "/mnt/hdd/code"] }
+{ "root": ["~/code/orbit", "~/code/lander"], "repoDirs": ["~/code", "/mnt/hdd/code"] }
 ```
 
 ---
@@ -81,6 +94,8 @@ Two switches in **Settings ▸ Notifications**, because there are two sources. *
 Every Edit/Write the fleet makes, gathered into one reviewable, chaptered list. **Shiki** syntax highlighting composed with a **word-level** intra-line diff, split or unified, ligatures and a per-diff theme, "reviewed" check-offs — plus one-click **✨ Explain** (a local-Claude walkthrough of the whole change set) and **⎇ Commit…** to turn a review straight into a commit.
 
 ![diff viewer](../.github/assets/diff.png)
+
+**Each checkout says who is writing into it.** Grouped by worktree, a section heading names the live session whose edits land there — so the list reads per agent as well as per branch. When more than one live session is writing into the same checkout the heading is marked **shared** and names them, and a file more than one of them edited carries the mark too: its diff on disk is their work together, and nothing can say whose hunk is whose. A worktree per agent is what keeps each section one agent's work. Only edits the agent's hooks report by file (Edit, Write, MultiEdit) count toward this; a file changed through the shell is not attributed to anyone. An edit counts only while its file is still uncommitted in that checkout and for a day after it was made, so an agent that committed its work there and moved on is no longer one of its authors. A session is live while it has been heard from in the last half hour or, on Linux, while its agent is still running in its tmux pane; one that ended (`/clear` included) stops counting at once.
 
 ### 🌿 Source control — lazygit, in the workspace &nbsp;`g`
 

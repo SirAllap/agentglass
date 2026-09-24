@@ -19,7 +19,7 @@
 // eight, and the dashboard — fourteen panels and a poll every four seconds — is
 // not among them until you ask for it.
 import { PluginsView } from "../plugins/PluginsView.tsx";
-import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { hiddenOnly } from "./hiddenOnly.ts";
 import { ViewRail, type RailPip } from "./ViewRail.tsx";
@@ -214,7 +214,7 @@ export function Workspace({
               <ViewBoundary label={v.label}>
                 {v.id === "dash"
                   ? dashboard(active)
-                  : <Body id={v.id} active={active} openChat={openChat} openChatWith={openChatWith}
+                  : <Body id={v.id} active={active} openChat={openChat}
                       openBrowser={openBrowser} openLantern={openLantern} chatFocusId={chatFocusId} />}
               </ViewBoundary>
             </ViewBox>
@@ -272,10 +272,9 @@ function ViewBox({ active, children }: { active: boolean; children: React.ReactN
 
 /** The non-dashboard views, and the props each one wants. Split out so the map
  *  above stays about mounting rather than about plumbing. */
-function BodyImpl({ id, active, openChat, openChatWith, openBrowser, openLantern, chatFocusId }: {
+function BodyImpl({ id, active, openChat, openBrowser, openLantern, chatFocusId }: {
   id: ViewId; active: boolean;
   openChat: () => void;
-  openChatWith: (cwd: string, prompt: string, title: string) => void;
   openLantern: () => void;
   /** Bring the browser view forward — the Docker panel asks for it when you
    *  open a container's port, so a dev server lands in a tab of this app
@@ -289,7 +288,7 @@ function BodyImpl({ id, active, openChat, openChatWith, openBrowser, openLantern
        can be shown, and the board itself is rendered once, below. */
     case "tasks": return <BoardSlot kind="tasks" place="rail" visible={active} />;
     case "git": return <GitView active={active} onOpenChat={openChat} />;
-    case "diff": return <DiffPage active={active} onOpenChatWith={openChatWith} />;
+    case "diff": return <DiffPage active={active} />;
     case "pr": return <BoardSlot kind="pr" place="rail" visible={active} />;
     case "docker": return <DockerView active={active} onOpenBrowser={openBrowser} />;
     case "term": return <TermView active={active} />;
@@ -321,7 +320,11 @@ const BOARDS: BoardKind[] = ["pr", "tasks"];
  * Portal is lifted above the bench — see PortalFloor.
  */
 function BoardInstance({ kind, ...props }: Omit<BoardBodyProps, "active">) {
-  const active = useSyncExternalStore(subscribeBoards, () => boardActive(kind), () => false);
+  /* Deferred, because the place that shows the board is already on screen with
+     the board in it: re-rendering the whole board for its new `active` inside
+     the same frame only held that frame back — measured at a third of the
+     first frame when the bench opened on a card with its activity showing. */
+  const active = useDeferredValue(useSyncExternalStore(subscribeBoards, () => boardActive(kind), () => false));
   const inBench = useSyncExternalStore(subscribeBoards, () => boardPlace(kind) === "bench", () => false);
   const node = boardNode(kind);
   if (!node) return null;

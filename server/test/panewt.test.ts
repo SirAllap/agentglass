@@ -20,7 +20,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  dirsFromTranscript, ensurePaneNoteTable, noteForSession, notePaneAgent, notePaneFromHook, paneAgentNote, paneDirs, readTail, resetTailCache,
+  dirsFromTranscript, ensurePaneNoteTable, noteForSession, notePaneAgent, notePaneFromHook, paneAgentNote, paneDirs, paneHeldSessions, readTail, resetTailCache,
 } from "../src/panewt.ts";
 import { Database } from "bun:sqlite";
 
@@ -335,5 +335,37 @@ describe("paneDirs", () => {
 
   test("no agent, no note, no answer — and no throw", () => {
     expect(paneDirs("%9913", 1, () => []).dirs).toEqual([]);
+  });
+});
+
+describe("paneHeldSessions", () => {
+  // The Diff view's "shared tree" flag counts live authors, and a session
+  // waiting on a person for an hour is still one: it is sitting in its pane with
+  // its edits on disk. The pane is the evidence — but only while the agent the
+  // note was written for is still the one running in it.
+  test("the session in a pane whose agent still runs where the note says", () => {
+    notePaneAgent({ pane: "%9921", sessionId: "held", transcriptPath: "/t.jsonl", cwd: REPO });
+    expect(paneHeldSessions([{ paneId: "%9921", agentCwds: [REPO] }]).has("held")).toBe(true);
+  });
+
+  test("a reused pane id with an agent somewhere else holds nobody", () => {
+    notePaneAgent({ pane: "%9922", sessionId: "yesterday", transcriptPath: "/t.jsonl", cwd: REPO });
+    expect(paneHeldSessions([{ paneId: "%9922", agentCwds: [WT] }]).has("yesterday")).toBe(false);
+    expect(paneHeldSessions([{ paneId: "%9922" }]).size).toBe(0);
+  });
+
+  test("the same pane id on another tmux server is not this pane's session", () => {
+    /*
+     * Pane ids start at %0 on every server, so two servers both answering %3
+     * is the normal case. An agent idle in %3 on one server fires no hooks,
+     * and a newer %3 note from another server — same checkout, which is
+     * common — was counted as holding it.
+     */
+    const s1 = "/tmp/tmux-1000/default,4101", s2 = "/tmp/tmux-1000/agx-orbit,4202";
+    notePaneAgent({ pane: "%9941", sessionId: "idle-on-s1", transcriptPath: "/t.jsonl", cwd: REPO, server: s1, at: 1_000 });
+    notePaneAgent({ pane: "%9941", sessionId: "busy-on-s2", transcriptPath: "/t.jsonl", cwd: REPO, server: s2, at: 2_000 });
+    const held = paneHeldSessions([{ paneId: "%9941", agentCwds: [REPO], server: s1 }]);
+    expect([...held]).toEqual(["idle-on-s1"]);
+    expect([...paneHeldSessions([{ paneId: "%9941", agentCwds: [REPO], server: s2 }])]).toEqual(["busy-on-s2"]);
   });
 });

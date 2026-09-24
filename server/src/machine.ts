@@ -191,6 +191,26 @@ export function listPorts(): PortsReport {
 }
 
 /**
+ * `listPorts`, awaited: the same `ss`, spawned without holding the event loop.
+ *
+ * For callers on a poll — the dashboard asks every 15 s from every open window,
+ * and a synchronous spawn stops the whole server for as long as `ss` takes, up
+ * to its timeout when it hangs.
+ */
+export async function listPortsAsync(): Promise<PortsReport> {
+  let out: string;
+  try {
+    const p = Bun.spawn(["ss", "-ltnpH"], { stdout: "pipe", stderr: "pipe", timeout: 5_000 });
+    const [stdout, stderr, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+    if (code !== 0 && !stdout.length) return { ports: [], mine: 0, external: 0, error: stderr.trim() || "ss failed" };
+    out = stdout;
+  } catch {
+    return { ports: [], mine: 0, external: 0, error: "ss is not installed — it ships with iproute2" };
+  }
+  return parsePorts(out);
+}
+
+/**
  * `ss`'s output, turned into rows.
  *
  * Split out from the spawn so it can be tested against real output — every bug

@@ -119,12 +119,12 @@ describe("the shape of the command", () => {
   it("attaches or creates, on our socket, with our config", async () => {
     /*
      * `-A` so the second tab of a checkout lands in the session the first one
-     * made rather than beside it; `-L`/`-f` because every command on this
+     * made rather than beside it; `-S`/`-f` because every command on this
      * server carries both — that pair is what keeps the user's ~/.tmux.conf,
      * and their tpm/continuum with it, out of our server.
      */
     const text = await src.text();
-    expect(text).toContain('"-L", tmuxSocket(), "-f", confPath(), "new-session", "-A", "-s", engineSessionName(root), "-c", root');
+    expect(text).toContain('...engineSocketArgs(true), "-f", confPath(), "new-session", "-A", "-s", engineSessionName(root), "-c", root');
   });
 
   it("answers null rather than a command that cannot run", async () => {

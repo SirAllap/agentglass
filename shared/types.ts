@@ -105,6 +105,10 @@ export interface SessionRollup {
    * thought to write a title.
    */
   first_prompt?: string | null;
+  /** What this session's edits touched that a reviewer should read first, one
+   *  entry per kind and file (see `shared/riskFlags.ts`). Absent when none of
+   *  its edits raised anything. */
+  risks?: SessionRisk[];
   started_at: number;
   ended_at: number | null;
   last_seen: number;
@@ -386,16 +390,32 @@ export interface TmuxWindow {
    */
   phone?: boolean;
   /**
-   * The agent running in one of this window's panes finished its turn, and the
-   * desk has not looked at this tab since.
+   * What the agent in this window is doing — the most urgent of its panes'
+   * (see `shared/windowStatus.ts`).
    *
-   * Derived server-side from the transcript's own end-of-turn event (`Stop`),
-   * not from tmux's activity flag: the flag fires on any output — an agent still
-   * working, nvim redrawing, every window at once when the desk re-attaches —
-   * none of which is "done". A pane with no agent never sets this. Cleared the
-   * moment the tab becomes the active one (you looked). Absent when not done.
+   * Derived server-side from the agents' own events, not from tmux's activity
+   * flag: the flag fires on any output — an agent still working, nvim
+   * redrawing, every window at once when the desk re-attaches — none of which
+   * is a state. `done` means a turn ended and the desk has not looked at this
+   * tab since; looking makes it `idle`. Absent when no pane in the window holds
+   * an agent, which is a different answer from `idle`.
    */
-  agentDone?: boolean;
+  status?: import("./windowStatus.ts").WindowStatus;
+  /**
+   * The tab group this window was put in by hand — tmux's `@agx-group` window
+   * option. Absent means "group it by its folder", which is the default.
+   */
+  group?: string;
+  /** Pinned first in its group — the `@agx-pin` window option. */
+  pinned?: boolean;
+  /** The active pane's directory. */
+  cwd?: string;
+  /**
+   * The project that directory belongs to — the main checkout's root, so every
+   * worktree of one repository answers the same. Null when the directory is in
+   * no repository; absent while the server is still finding out (one sweep).
+   */
+  repo?: string | null;
   /**
    * How big tmux is drawing this window right now.
    *
@@ -482,9 +502,10 @@ export type PtyServerFrame =
    * attach: a phone needs it to know it is looking at a slice, because without
    * a fit tmux renders at the desk's width and the columns past the phone's own
    * never arrive. `resize` is false on the backends with no pty behind them,
-   * where there is no TIOCSWINSZ to make.
+   * where there is no TIOCSWINSZ to make. `engine` says the shell is the app's
+   * own tmux, whose `tmux` frame with the window list follows within a sweep.
    */
-  | { t: "ready"; mode: "pty" | "pipe"; shell: string; cwd: string; resize: boolean; pane?: { cols: number; rows: number } }
+  | { t: "ready"; mode: "pty" | "pipe"; shell: string; cwd: string; resize: boolean; engine?: boolean; pane?: { cols: number; rows: number } }
   /**
    * The window changed size under an attach that is already open.
    *
@@ -675,14 +696,16 @@ export type PtyClientFrame =
      elsewhere — which took four windows of somebody's own work off their screen.
      Asked for by a person it is the opposite: they know where they are going,
      and the strip they came from is one choice away. */
-  | { t: "tmux"; cmd: "select" | "new" | "kill" | "rename" | "move" | "takeover" | "fit" | "session" | "endsession" | "locksession"; window?: string; name?: string;
+  /* `group` sets or clears a window's `@agx-group` (no `name` clears it);
+     `pin` sets or clears `@agx-pin`, switched by `after`. */
+  | { t: "tmux"; cmd: "select" | "new" | "kill" | "rename" | "move" | "takeover" | "fit" | "session" | "endsession" | "locksession" | "group" | "pin"; window?: string; name?: string;
       /** `fit` only: the asking panel's own grid. Range-checked on the server —
        *  it ends up in a `resize-window`, so it is a number to validate rather
        *  than to trust. */
       cols?: number; rows?: number;
-      /** `move` only: land AFTER the named window instead of before it. What
-       *  the trailing drop zone at the end of the tab strip sends — it is the
-       *  only way to make a window the last one. */
+      /** `move`: land AFTER the named window instead of before it. What the
+       *  trailing drop zone at the end of the tab strip sends — it is the only
+       *  way to make a window the last one. `pin`: pin (true) or unpin. */
       after?: boolean;
       /** `new` only: the project the panel is showing, so the tab opens in it.
        *  Without it tmux starts the window in the SESSION's directory, which is
@@ -814,6 +837,32 @@ export interface Insight {
   ts: number;
 }
 
+/** A runtime resource that lives outside every working tree. */
+export type CollisionKind = "port" | "postgres" | "redis" | "sqlite" | "socket" | "datadir" | "env" | "compose";
+
+/** One live session's side of a collision: where it runs and what it did. */
+export interface CollisionParty {
+  source_app: string;
+  session_id: string;
+  /** The checkout it runs in — the thing that is supposed to keep it apart. */
+  checkout: string;
+  /** How it touched the resource: a command it ran, a file tool it pointed at
+   *  the path, or a process in its checkout that is listening on the port. */
+  via: "command" | "file" | "listening";
+  /** The command, path or listener, credentials masked. */
+  evidence: string;
+  ts: number;
+}
+
+/** Two or more live sessions, in different checkouts, on one resource. A
+ *  possibility read out of what they ran, never a verdict. */
+export interface Collision {
+  kind: CollisionKind;
+  /** The resource as a person names it: "port 3000", "postgres localhost:5432/acme_dev". */
+  resource: string;
+  parties: CollisionParty[];
+}
+
 export interface DiffHunk {
   oldStart: number;
   oldLines: number;
@@ -897,6 +946,22 @@ export interface ChangeRowsResult {
   /** Repos that failed to read, by root — one broken checkout must not empty
    *  the list for the other eighteen. */
   failed?: string[];
+  /** Who is writing into each listed checkout: the live sessions whose edits
+   *  landed there. More than one is a section that is several authors' work
+   *  and cannot say which hunk is whose. Working mode only; absent from an
+   *  older server, which is not the same as nobody. */
+  authors?: TreeAuthorsInfo[];
+}
+
+/** One working tree and its live authors. See server/src/sharedtree.ts. */
+export interface TreeAuthorsInfo {
+  root: string;
+  /** Newest writer first, each with the name the rest of the app gives it. */
+  sessions: { id: string; name: string }[];
+  /** Paths relative to `root` that more than one of them edited — the files
+   *  whose diff is genuinely approximate as attribution — each with the names
+   *  of exactly the sessions that edited it. */
+  overlap: { path: string; sessions: string[] }[];
 }
 
 /** One thing that happened in a session, in order — a message or a tool run.
@@ -1011,6 +1076,28 @@ export interface FileChange {
    *  unscoped instance, where there is no project to be outside of) means never
    *  hidden. */
   outside?: boolean;
+  /** What this edit touched that a reviewer should read first — a secret, a CI
+   *  definition, a lockfile, a migration, auth code, a large deletion — each
+   *  with a one-line reason. Computed by `shared/riskFlags.ts` from the path and
+   *  the added lines; absent on a change nobody ran the rules on (a commit from
+   *  the log), which is "not checked", never "clean". */
+  risks?: RiskFlag[];
+}
+
+export type RiskKind = "secret" | "ci" | "deps" | "migration" | "auth" | "deletion";
+export interface RiskFlag {
+  kind: RiskKind;
+  /** One sentence, checkable against the diff: "an AWS access key was added". */
+  reason: string;
+  /** The line in the new file, when the rule matched a line rather than a path. */
+  line?: number;
+}
+/** A session's flags, one per kind and file. */
+export interface SessionRisk extends RiskFlag {
+  file: string;
+  /** The change it came from, so a diff that lists only the newest changes can
+   *  still fetch the flagged one. */
+  change?: number;
 }
 
 /** A tool call the server sees as still running: a PreToolUse with no matching
@@ -2922,6 +3009,9 @@ export interface PrCheck {
   /** Terminal means it will not change without a new push or a re-run. */
   done: boolean;
   url?: string;
+  /** GitHub will not merge until this one passes. Absent when GitHub was not
+   *  asked, which is not the same as "not required". */
+  required?: boolean;
 }
 
 export interface PrCheckRollup {
@@ -3439,6 +3529,49 @@ export interface PrMergePolicy {
   deletesBranch: boolean;
 }
 
+/**
+ * The rules a merge into the base branch has to satisfy.
+ *
+ * Two sources and they are not equally visible. Rulesets are readable by anyone
+ * who can read the repository; classic branch protection only by an admin, so
+ * for everybody else the fields that live only there — the lock above all —
+ * are `null`, meaning "GitHub did not say", never `false`.
+ */
+export interface PrMergeGate {
+  /** The viewer's role: ADMIN, MAINTAIN, WRITE, TRIAGE or READ. */
+  permission?: string;
+  /** GitHub offers this viewer a merge past the rules ("merge without waiting"). */
+  canBypass: boolean;
+  /** Classic branch protection was readable (or the viewer is an admin, for
+   *  whom a null rule means there is none), so its null fields are real. */
+  protectionVisible: boolean;
+  /** The base is read-only — "Lock branch", or a ruleset that restricts
+   *  updates. `null` when only an admin could have told. */
+  locked: boolean | null;
+  /** Where the lock comes from: a ruleset's name, or "branch protection". */
+  lockedBy?: string;
+  /** False when branch protection refuses this viewer's pushes to the base,
+   *  which refuses their merges too. */
+  viewerCanPush?: boolean;
+  /** Approving reviews required, the largest any rule asks for. */
+  approvals: number;
+  codeOwners: boolean;
+  /** The most recent push needs approving by somebody other than who made it. */
+  lastPushApproval: boolean;
+  /** A new push dismisses approvals. `null` when that is not visible. */
+  dismissStale: boolean | null;
+  conversationResolution: boolean;
+  /** The branch must be up to date with the base before merging. */
+  upToDate: boolean | null;
+  signatures: boolean;
+  deployments: string[];
+  /** The status contexts required on the base, by name. A required one that
+   *  never shows up in the rollup is a reason of its own. */
+  requiredContexts: string[];
+  mergeQueue: boolean;
+  inQueue: boolean;
+}
+
 export interface PrDetail extends PrSummary {
   body: string;
   mergeState: PrMergeState;
@@ -3490,6 +3623,9 @@ export interface PrDetail extends PrSummary {
    *  before this existed, and the demo fixture, have no opinion — the UI falls
    *  back to offering all three rather than to an empty menu. */
   mergePolicy?: PrMergePolicy;
+  /** What the base branch demands, as far as GitHub lets the viewer see it.
+   *  Absent when it could not be asked — see mergeGateOf. */
+  gate?: PrMergeGate;
   /** Who owns the head branch. GitHub's own merge commit names it
    *  ("Merge pull request #7 from owner/branch"), and a merge made from here
    *  should read like every other merge on the base branch. */
@@ -3523,7 +3659,12 @@ export interface PrListResponse {
   pageSize?: number;
 }
 
-export interface PrActionResult { ok: boolean; error?: string; detail?: string }
+export interface PrActionResult {
+  ok: boolean; error?: string; detail?: string;
+  /** Update branch only: GitHub refused because base and head conflict — the
+   *  one refusal the panel can offer to resolve. */
+  conflict?: boolean;
+}
 
 /** State of the Claude Code hook wiring (#187), read from ~/.claude/settings.json. */
 export interface HookSetupStatus {
@@ -4229,6 +4370,14 @@ export interface AgentPane {
    *  agents may share — null when nothing ever reported one, which is every
    *  agent not started under a hook-wired CLI. */
   agentSession: string | null;
+  /** What the agent in this pane is doing; absent when there is none. The same
+   *  answer the tab strip draws, so the window switcher can sort every window
+   *  on the machine by it, not only the ones in the attached session. */
+  status?: import("./windowStatus.ts").WindowStatus;
+  /** The project the pane's directory belongs to — the main checkout's root,
+   *  so every worktree of a repository answers the same (see TmuxWindow.repo).
+   *  Null in no repository; absent while the server is still finding out. */
+  repo?: string | null;
   /**
    * This pane is on the tmux server agentglass itself works on.
    *

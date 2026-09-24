@@ -286,8 +286,9 @@ reach, so an install never exposes a dashboard on a port.
   `AGENTGLASS_RETENTION_DAYS=0` if you want them kept for ever.
 
 A desktop app launched from its icon has no "current folder" — so on first
-open the cockpit **asks which folder it's about**: pick a project, a folder of
-projects, or the whole machine, and switch any time from the **⌂ header**. The
+open the cockpit **asks where your projects live**: add a folder, then open one
+project from it, tick several, or all of them, and switch any time from the
+**⌂ header**. Nothing outside the folders you add is listed unless you ask. The
 choice persists across launches. Prefer to decide at launch time? Pass the
 directory instead:
 

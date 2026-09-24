@@ -25,7 +25,8 @@ import { BasePicker } from "./BasePicker.tsx";
 import { ShellConsole } from "./ShellConsole.tsx";
 import { RescueModal } from "./RescueModal.tsx";
 import { useDialogs } from "./ConfirmDialog.tsx";
-import { api } from "../lib/api.ts";
+import { api, IS_DEMO } from "../lib/api.ts";
+import { refusalFinal, useCoverHold } from "../lib/cover.ts";
 import { subscribeGitChanged } from "../lib/gitBus.ts";
 import { seedChat } from "../lib/chatStore.ts";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
@@ -829,6 +830,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     }
   }, [wtJump]);
   const [tree, setTree] = useState<WorkingTree | null>(null);
+  /** The first read of the tree has come back, one way or the other. */
+  const [treeRead, setTreeRead] = useState(false);
   // Which root the tree on screen belongs to. When it isn't the current root,
   // the header (branch, sync-behind count, push/pull state) is still showing the
   // worktree you just switched away from — so the group can say it is recomputing
@@ -1229,7 +1232,12 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     const seq = ++treeSeq.current;
     try { const t = await api.gitTree(r); if (seq !== treeSeq.current) return; setTree(t); setTreeFor(r); if (t.error) flash(false, t.error); }
     catch (e) { if (seq === treeSeq.current) flash(false, String(e)); }
+    finally { if (seq === treeSeq.current) setTreeRead(true); }
   }, []);
+  /* On screen at launch, Git holds the launch cover until the working tree has
+     been read once — answered or failed — so it arrives with its files listed
+     instead of "Reading the working tree…". */
+  useCoverHold("git", open && !IS_DEMO && !treeRead);
   const rel = (c: GitFileChange) => (c.file_path.startsWith(root + "/") ? c.file_path.slice(root.length + 1) : c.file_path);
 
   useEffect(() => {
@@ -1245,12 +1253,26 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
       setToast(null); setTitle(""); setBody(""); setView("changes"); setNewBranch("");
     }
     api.editorCapability().then(setEditor).catch(() => setEditor({ hasNvim: false, editor: null }));
-    api.gitRepos().then(({ repos }) => {
+    // Refused while the server is still starting: asked again rather than left
+    // empty. The list was read once per open, so a slow cold start opened on
+    // an empty Git that stayed empty until the view was opened again.
+    let live = true;
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    const readRepos = () => api.gitRepos().then(({ repos }) => {
+      if (!live) return;
       setRepos(repos);
       const first = repos[0]?.root ?? "";
       setRoot((cur) => cur || first); // the [root, open] effect owns tree loading
-    }).catch((e) => flash(false, String(e)));
+      if (!first) setTreeRead(true); // no checkout: there is no tree to wait for
+    }).catch((e) => {
+      if (!live) return;
+      if (e instanceof TypeError && !refusalFinal()) { retry = setTimeout(readRepos, 500); return; }
+      flash(false, String(e));
+      setTreeRead(true);
+    });
+    void readRepos();
     requestAnimationFrame(() => frameRef.current?.focus());
+    return () => { live = false; if (retry) clearTimeout(retry); };
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { if (open && root) loadTree(root); }, [root, open, loadTree]);

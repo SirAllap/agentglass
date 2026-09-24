@@ -6,13 +6,13 @@
 // running job — reopening reattaches to the live session, scrollback intact.
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { usePoll } from "../lib/usePoll.ts";
-import { ContextMenu } from "./ContextMenu.tsx";
+import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
 import { subscribeTermReview, termReview, clearTermReview } from "../lib/termReview.ts";
 import { subscribeTermIssue, termIssue, clearTermIssue, type TermIssue } from "../lib/termIssue.ts";
 import { dirName } from "../lib/worktree.ts";
 import { requestWorktreeJump } from "../lib/worktreeJump.ts";
-import { ICON } from "../lib/iconSize.ts";
-import { ExpandIcon, GridIcon, IconLabel, LockIcon, SearchIcon } from "../lib/glyphIcons.tsx";
+import { ICON, MIN_BOX } from "../lib/iconSize.ts";
+import { CaretIcon, ExpandIcon, GridIcon, IconLabel, LockIcon, PinIcon, SearchIcon } from "../lib/glyphIcons.tsx";
 import { nextSeen, unlistedWorktree, type PaneSeen, readPaneSeen, writePaneSeen } from "../lib/paneWorktree.ts";
 import { readBranchPrs, writeBranchPrs, readCardPrios, writeCardPrios, type RememberedPr, type RememberedPrio } from "../lib/paneFacts.ts";
 import { lanternRows } from "../lib/lanternStore.ts";
@@ -22,6 +22,7 @@ import { checkoutConfirm, needsCheckoutConfirm } from "../lib/checkoutWarning.ts
 import { keepTermFocus } from "../lib/keepFocus.ts";
 import { focusFollowsMouse, subscribeFocusFollowsMouse, shouldFocusOnHover } from "../lib/termFocusPref.ts";
 import { cellAt, paneAt } from "../lib/tmuxHover.ts";
+import { heldWindow } from "../lib/heldWindow.ts";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -42,6 +43,8 @@ import { paneFoot } from "../lib/paneBox.ts";
 import { paneActionsMode, subscribePaneActions } from "../lib/paneActionsPref.ts";
 import { useClickupSetup } from "../lib/clickupSetup.ts";
 import { api, IS_DEMO, ptyWsUrl, hasToken, probeAuth, reauthPrompt, whenServerUp } from "../lib/api.ts";
+import { coverIsUp, refusalFinal, useCoverHold } from "../lib/cover.ts";
+import { shellSettled } from "../lib/coverStep.ts";
 import { playDemoSession } from "../lib/demoTerm.ts";
 import { CommandBar, loadCommands } from "./CommandBar.tsx";
 import { ResumeSessions } from "./ResumeSessions.tsx";
@@ -59,6 +62,10 @@ import { mouseModeGuard, type MouseModeGuard } from "../lib/mouseModeGuard.ts";
 import { CloseButton, CloseIcon } from "./CloseButton.tsx";
 import { FindArrow } from "./FindBar.tsx";
 import { PluckPalette } from "./terminal/PluckPalette.tsx";
+import { edgeMask, useTabStripScroll } from "../lib/tabStrip.ts";
+import { StatusMark, STATUS_COLOR } from "./terminal/StatusMark.tsx";
+import { STATUS_WORDS } from "../../../shared/windowStatus.ts";
+import { buildGroups, openGroups, parseRules, setOpenGroups, subscribeTabGroups, tabGroupRulesText, tabGroupsOn, tabGroupsVersion, worthGrouping, type TabGroup } from "../lib/tabGroups.ts";
 
 const ROOT_KEY = "agentglass.terminalRoot";
 /** The repo the terminal view last used — what a docked console should open
@@ -224,6 +231,12 @@ type Sess = {
    *  so the strip says it instead. */
   tmuxPrefixAt: number;
   pending: string[]; // input queued while (re)connecting — flushed on ready
+  /** First paint, for the launch cover (lib/cover.ts): the shell has drawn
+   *  something, and — on the app's own tmux, which says so in `ready` — the
+   *  window strip has arrived too. Set once; a reconnect does not unset it. */
+  drawn?: boolean;
+  tmuxDue?: boolean;
+  settled?: boolean;
   createdAt: number;
   lastUsed: number;
   retries: number;        // consecutive failed reconnects
@@ -572,6 +585,25 @@ function applyThemeLive(s: Sess): () => void {
  */
 const ptyFrame = (frame: PtyClientFrame): string => JSON.stringify(frame);
 
+/**
+ * Mark a shell settled once it has drawn and, on the app's own tmux, its window
+ * strip has come in. The strip rides the server's sweep, a beat after the
+ * first bytes; if it never comes, the shell counts as settled anyway after
+ * STRIP_WAIT_MS rather than holding the launch cover to its cap.
+ */
+const STRIP_WAIT_MS = 1200;
+function settle(s: Sess) {
+  if (s.settled || !s.drawn) return;
+  // Only the launch waits on this; every shell opened after it is left alone.
+  if (!coverIsUp()) { s.settled = true; return; }
+  if (s.tmuxDue) {
+    setTimeout(() => { if (!s.settled) { s.tmuxDue = false; settle(s); } }, STRIP_WAIT_MS);
+    return;
+  }
+  s.settled = true;
+  notify(s);
+}
+
 function connect(s: Sess) {
   if (s.ws || IS_DEMO) return;
   s.status = "connecting";
@@ -590,6 +622,7 @@ function connect(s: Sess) {
       // Only while the user is dragging inside a terminal — see mouseModeGuard.
       // Every other chunk of every other second goes through untouched.
       s.term.write(fitHold.active() ? guardFor(s).filter(bytes) : bytes);
+      if (!s.drawn) { s.drawn = true; settle(s); }
       return;
     }
     /*
@@ -607,6 +640,7 @@ function connect(s: Sess) {
     if (f.t === "ready") {
       reconnected(s);
       s.status = "live"; s.mode = f.mode ?? null; s.shell = f.shell || "shell"; s.canResize = f.resize !== false;
+      if (!s.settled) s.tmuxDue = f.engine === true;
       // Names the cure, not only the symptom: this mode is what a host with no
       // python3 gets, and "TUI apps won't render" alone left people believing
       // the terminal itself was broken.
@@ -637,6 +671,8 @@ function connect(s: Sess) {
       s.tmuxSession = typeof f.session === "string" ? f.session : null;
       s.tmuxClient = f.client ?? null;
       s.tmuxPrefix = Array.isArray(f.prefix) ? f.prefix : [];
+      s.tmuxDue = false;
+      settle(s);
       notify(s);
     } else if (f.t === "openfail") {
       // Not fatal to the shell — the socket is fine and this pane keeps
@@ -1809,11 +1845,12 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
    * `open` stays in the deps so the list is also re-read when you come back to
    * this view, which is where a worktree made elsewhere shows up.
    */
+  const [reposKnown, setReposKnown] = useState(false);
   useEffect(() => {
     api.gitRepos().then(({ repos }) => {
       setRepos(repos);
       setRoot((cur) => (cur && repos.some((r) => r.root === cur) ? cur : repos[0]?.root || ""));
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => setReposKnown(true));
   }, [open]);
   /*
    * Still written, even though nobody picks it.
@@ -2119,6 +2156,15 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   }, [open, prRoot, prBranch]);
 
   const tabs = root ? termSessionsFor(root) : [];
+
+  /* On screen at launch, the terminal holds the launch cover until every shell
+     in view has drawn (see `settle`) — the checkout first, then the shells it
+     opens. Re-read on every render, which each of those shells triggers. */
+  const shellsSettled = paneIds.length > 0 && paneIds.every((id) => {
+    const s = sessions.get(id);
+    return !!s && shellSettled(s, refusalFinal());
+  });
+  useCoverHold("terminal", open && !IS_DEMO && (!reposKnown || (root !== "" && !shellsSettled)));
 
   // Every repo opens with a shell, and the panes always name shells that still
   // exist — closing one must not leave an empty frame behind.
@@ -2528,6 +2574,64 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const [pendingWindow, setPendingWindow] = useState<string | null>(null);
   useEffect(() => { setPendingWindow(null); }, [tmuxWindows]);
   const activeWindow = pendingWindow ?? tmuxWindows.find((w) => w.active)?.id ?? null;
+  /*
+   * The strip's groups (lib/tabGroups.ts): by project, the one you are in open,
+   * the rest folded into chips. Null draws the strip flat — grouping switched
+   * off in Settings, or everything in one group, where a header says nothing.
+   *
+   * `rememberedGroup` holds each window's last group for the one sweep after
+   * a new directory appears, before the server has resolved its project, so a
+   * tab does not drop into "other" and straight back out.
+   */
+  const tgVersion = useSyncExternalStore(subscribeTabGroups, tabGroupsVersion);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const groupsOn = useMemo(() => tabGroupsOn(), [tgVersion]);
+  const rememberedGroup = useRef(new Map<string, string>());
+  const tabGroups = useMemo<TabGroup[] | null>(() => {
+    if (!groupsOn) return null;
+    // Window ids are per tmux server, so the memory is per session name and
+    // holds only the windows on screen now.
+    const remembered = new Map<string, string>();
+    for (const w of tmuxWindows) {
+      const had = rememberedGroup.current.get(`${sess?.tmuxSession ?? ""}\t${w.id}`);
+      if (had) remembered.set(w.id, had);
+    }
+    const gs = buildGroups(tmuxWindows, parseRules(tabGroupRulesText()), remembered);
+    rememberedGroup.current = new Map(gs.flatMap((g) => g.windows.map((w) => [`${sess?.tmuxSession ?? ""}\t${w.id}`, g.label] as const)));
+    return worthGrouping(gs) ? gs : null;
+    // tgVersion stands for the rules, which are read fresh inside.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tmuxWindows, tgVersion, groupsOn]);
+  const tmuxSessionName = sess?.tmuxSession ?? "";
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const keptOpen = useMemo(() => openGroups(tmuxSessionName), [tmuxSessionName, tgVersion]);
+  const groupOfWindow = useMemo(() => {
+    const m = new Map<string, TabGroup>();
+    for (const g of tabGroups ?? []) for (const w of g.windows) m.set(w.id, g);
+    return m;
+  }, [tabGroups]);
+  const activeGroup = activeWindow ? groupOfWindow.get(activeWindow)?.key ?? null : null;
+  const toggleKeptOpen = (key: string) => {
+    const next = new Set(keptOpen);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    setOpenGroups(tmuxSessionName, next);
+  };
+  /** A folded group's list, hanging off its chip. */
+  const [groupMenu, setGroupMenu] = useState<{ key: string; x: number; y: number } | null>(null);
+  /** A tab's own menu: pin it, or move it to another group. */
+  const [tabMenu, setTabMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  // A menu whose group or window has gone closes, rather than staying in state
+  // with nothing drawn and popping back up when a group of that name returns.
+  useEffect(() => {
+    if (groupMenu && !(tabGroups ?? []).some((g) => g.key === groupMenu.key && g.key !== activeGroup)) setGroupMenu(null);
+    if (tabMenu && !tmuxWindows.some((w) => w.id === tabMenu.id)) setTabMenu(null);
+  }, [tabGroups, tmuxWindows, groupMenu, tabMenu, activeGroup]);
+  // The strip scrolls to whichever tab is lit, however it got lit — a click
+  // here or the prefix in the pane. Keyed on the names and the groups too: a
+  // rename, a mark appearing, or a group folding, can push the lit tab off the
+  // edge without the active window changing.
+  const tabStrip = useTabStripScroll(activeWindow,
+    tmuxWindows.map((w) => `${w.id}:${w.name}:${w.status ?? ""}:${w.pinned ? 1 : 0}`).join("|") + `#${(tabGroups ?? []).map((g) => g.key).join(",")}:${[...keptOpen].join(",")}`);
   const tmuxClient = sess?.tmuxClient ?? null;
   /*
    * The window is bigger than the pane you can see.
@@ -2550,62 +2654,8 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     const deepest = (sess?.tmuxPanes ?? []).reduce((n, p) => Math.max(n, p.bottom + 1), 0);
     return deepest > rows ? deepest - rows : 0;
   })();
-  /*
-   * The window on screen is narrower than the terminal drawing it.
-   *
-   * tmux sizes a shared window to fit every client, so a phone attaching with a
-   * fit reflows this desk to 80 columns and the desk is given no explanation
-   * whatsoever — the panes just get small and stay small.
-   *
-   * The condition is the size comparison, never `w.phone` and never a
-   * server-side list of who is attached. A phone with no fit costs the desk
-   * nothing and is the common case, so a notice keyed on presence would cry
-   * wolf on it; and a registry disagrees with tmux the moment a fit fails, a
-   * phone changes window, or a phone's socket dies without cleanup running.
-   * This asks tmux what the window is, which cannot be wrong about it.
-   *
-   * Columns ONLY. Measured: a 200×50 client gives a 200×49 window, because tmux
-   * spends a row on the status line — so a rows comparison fires on every desk
-   * that has a bar, forever.
-   *
-   * A window with no `cols` is one tmux did not answer a size for, which is not
-   * the same claim as "narrow" — it takes the notice off, not on.
-   */
-  const activeWin = tmuxWindows.find((w) => w.id === activeWindow) ?? null;
-  /*
-   * And the second way a phone takes this window: it zooms it.
-   *
-   * A phone attaches to a WINDOW, so a four-pane window gave it four tabs
-   * drawing the same 2x2 grid — the server now zooms the pane that was tapped
-   * so one tab means one pane. That flag is on the shared window, so the desk
-   * gets a window with one pane where it had four. It is not narrow, so the
-   * comparison above cannot see it, and it is just as much of a "what happened
-   * to my layout" as the width is.
-   *
-   * `phone` IS the condition here, and that is the opposite of the rule above
-   * on purpose. Zoom is a key people press for themselves several times a day
-   * (`prefix z`); a notice on every zoomed window would be an explanation for
-   * something that needs none, forever. So it fires only while a phone is on
-   * the window. The cost is the mirror image of what the width notice avoids: a
-   * desk that zoomed a window ITSELF while a phone happened to be on it is told
-   * the phone did it. Wrong attribution on a rare case beats a permanent false
-   * alarm on a common one — and the button gives the panes back either way.
-   *
-   * The other end of it — a phone that dies without its teardown running leaves
-   * the window zoomed and this notice gone — is left alone deliberately. That
-   * state is one `prefix z` from fixed, which is a key the person already has,
-   * unlike a window pinned at 80 columns.
-   */
-  const zoomedByPhone = tmuxActive && !!activeWin?.phone && !!activeWin?.flags.includes("Z");
-  const narrow = tmuxActive && activeWin?.cols && tmuxClient && activeWin.cols < tmuxClient.cols
-    ? { winCols: activeWin.cols, deskCols: tmuxClient.cols }
-    : null;
-  // One card for both reasons rather than two that can stack: they have the
-  // same cause, the same button, and the same fix — and a desk that has lost
-  // both its width and its panes has one problem, not two.
-  const held = activeWin && (narrow || zoomedByPhone)
-    ? { win: activeWin, narrow, zoomed: zoomedByPhone }
-    : null;
+  // Narrowed or zoomed by somebody else — see heldWindow for what counts.
+  const held = heldWindow(tmuxActive, tmuxWindows, activeWindow, tmuxClient);
   /**
    * The state the card is describing, as one string.
    *
@@ -2655,6 +2705,65 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   /** The same box, for `move-window`: a number rather than a name, so it is a
    *  separate mode rather than a flag on the one above. */
   const [moving, setMoving] = useState<string | null>(null);
+  /*
+   * Dropping a tab on a group — its chip, or the name heading its open tabs —
+   * puts the window in that group (`@agx-group`). It moves nothing in tmux.
+   */
+  const dropOnGroup = (g: TabGroup) => ({
+    onDragOver: (e: React.DragEvent) => {
+      if (!dragging || groupOfWindow.get(dragging)?.key === g.key) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      setDropOn(`group:${g.key}`);
+    },
+    onDragLeave: () => setDropOn((cur) => (cur === `group:${g.key}` ? null : cur)),
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault();
+      const from = dragging;
+      setDragging(null); setDropOn(null);
+      if (from && groupOfWindow.get(from)?.key !== g.key) tmuxCmd({ cmd: "group", window: from, name: g.label });
+    },
+  });
+  const dropLit = (g: TabGroup) => dropOn === `group:${g.key}` && !!dragging;
+  /*
+   * A folded group: its most urgent marks, its name, how many windows. The
+   * chips sit OUTSIDE the scrolling row, at its right end, so an open group
+   * with more tabs than fit can never push them off screen — measured with
+   * twenty-three windows, the chips of the folded groups were past the edge,
+   * which is the one place a group that is waiting for you must not be.
+   */
+  const renderChip = (g: TabGroup) => {
+    const urgent = g.status === "waiting" || g.status === "error" || g.status === "working" ? g.status : null;
+    const says = g.marks.map((m) => `${g.windows.filter((w) => w.status === m).length} ${STATUS_WORDS[m]}`).join(", ");
+    return (
+        <button key={g.key}
+          {...dropOnGroup(g)}
+          onClick={(e) => {
+            if (e.shiftKey) { toggleKeptOpen(g.key); return; }
+            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            setGroupMenu({ key: g.key, x: r.left, y: r.bottom + 4 });
+          }}
+          aria-haspopup="menu"
+          aria-expanded={groupMenu?.key === g.key}
+          aria-label={`${g.label}, ${g.windows.length} ${g.windows.length === 1 ? "window" : "windows"}${says ? `: ${says}` : ""}`}
+          title={`${g.label}: ${g.windows.length} ${g.windows.length === 1 ? "window" : "windows"}${says ? ` — ${says}` : ""}. Click to list them, Shift+click to keep the group open, drop a tab here to move it in.`}
+          className="shrink-0 flex items-center gap-1 px-1.5 py-px rounded-md text-[10.5px] transition-colors"
+          style={{
+            color: "var(--text3)", minHeight: MIN_BOX,
+            // The most urgent state inside tints the edge, so
+            // a folded group still says a question is waiting.
+            border: `1px solid ${urgent
+              ? `color-mix(in srgb, ${STATUS_COLOR[urgent]} 55%, transparent)`
+              : "color-mix(in srgb, var(--border) 45%, transparent)"}`,
+            background: dropLit(g) || groupMenu?.key === g.key
+              ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent",
+          }}>
+          {g.marks.slice(0, 3).map((m) => <StatusMark key={m} status={m} />)}
+          <span className="max-w-[14ch] truncate">{g.label}</span>
+          <span className="tabular-nums" style={{ color: "var(--text4)" }}>{g.windows.length}</span>
+        </button>
+    );
+  };
 
   /**
    * `prefix ,` and `prefix .`, arriving from tmux.
@@ -2988,7 +3097,13 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                   // input is excluded by the handler, so it can still be typed
                   // in; it hands focus back on close (see below).
                   <div className="shrink-0 flex items-stretch border-b" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
-                    <div onMouseDown={keepTermFocus} className="min-w-0 flex-1 flex items-center gap-2 px-3 py-0.5 overflow-x-auto agw-noscrollbar">
+                    {/* The wheel scrolls it sideways and the lit tab is kept
+                        on screen (see lib/tabStrip.ts). The scrollbar stays
+                        hidden — it would take a row of its own — so the side
+                        with tabs past it fades instead: that fade is the only
+                        thing that says there is more. */}
+                    <div ref={tabStrip.ref} onMouseDown={keepTermFocus} className="min-w-0 flex-1 flex items-center gap-2 px-3 py-0.5 overflow-x-auto agw-noscrollbar"
+                      style={{ maskImage: edgeMask(tabStrip.edges), WebkitMaskImage: edgeMask(tabStrip.edges) }}>
                     <span
                       title={prefixLive ? "tmux is waiting for the rest of the sequence" : `tmux prefix: ${(sess?.tmuxPrefix ?? []).join(" or ") || "unknown"}`}
                       className="shrink-0 px-1.5 py-0.5 rounded-md text-[10px] font-semibold tabular-nums transition-colors duration-75"
@@ -3177,14 +3292,15 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         })}
                       </ContextMenu>
                     )}
-                    {tmuxWindows.map((w) => {
+                    {(() => {
+                      const renderTab = (w: TmuxWindow) => {
                       // `!` is a bell — a window that rang on purpose, kept. `#`
                       // (activity) is deliberately NOT drawn: it fires on any
                       // output — an agent still working, nvim redrawing, every
                       // window at once when the desk re-attaches — which is noise,
-                      // not "done". The honest "the agent here finished its turn"
-                      // is w.agentDone, derived server-side from the transcript's
-                      // own end-of-turn (Stop) event, not from tmux's flag.
+                      // not "done". What the agent here is doing is w.status,
+                      // derived server-side from its own events (see
+                      // server/src/agentdone.ts), not from tmux's flag.
                       const bell = w.flags.includes("!");
                       // Zoom is the flag that changes what the keyboard does:
                       // one pane is filling the window and the others are still
@@ -3198,6 +3314,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                            the tab you dropped on and pushes the rest along, so
                            the strip stays 1..N. */
                         <div key={w.id}
+                          data-window={w.id}
                           draggable
                           onDragStart={(e) => {
                             setDragging(w.id);
@@ -3215,7 +3332,11 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                             // element says otherwise.
                             e.preventDefault();
                             e.dataTransfer.dropEffect = "move";
-                            setDropOn(w.id);
+                            // Over another group's tab the drop regroups rather
+                            // than reorders, so it lights the group, not the
+                            // insert line.
+                            const to = groupOfWindow.get(w.id);
+                            setDropOn(to && groupOfWindow.get(dragging)?.key !== to.key ? `group:${to.key}` : w.id);
                           }}
                           onDragLeave={() => setDropOn((cur) => (cur === w.id ? null : cur))}
                           onDrop={(e) => {
@@ -3223,7 +3344,20 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                             const from = dragging;
                             setDragging(null); setDropOn(null);
                             if (!from || from === w.id) return;
+                            // Onto a tab of ANOTHER group it joins that group
+                            // and keeps its index: moving it in tmux as well
+                            // would reorder groups the person did not touch.
+                            const to = groupOfWindow.get(w.id);
+                            if (to && groupOfWindow.get(from)?.key !== to.key) {
+                              tmuxCmd({ cmd: "group", window: from, name: to.label });
+                              return;
+                            }
                             tmuxCmd({ cmd: "move", window: from, name: String(w.index) });
+                          }}
+                          onContextMenu={(e) => {
+                            if (!groupsOn) return;
+                            e.preventDefault();
+                            setTabMenu({ id: w.id, x: e.clientX, y: e.clientY });
                           }}
                           /* The focus is handed back here rather than kept by
                              the strip's `keepTermFocus`: that works by calling
@@ -3237,7 +3371,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                             focusTerm();
                           }}
                           onDoubleClick={() => setRenaming(w.id)}
-                          title={`Window ${w.index}${w.flags ? ` (${w.flags})` : ""} — double-click to rename, drag to reorder`}
+                          title={`${w.name || "shell"} — window ${w.index}${w.flags ? ` (${w.flags})` : ""}${w.status ? `, agent ${STATUS_WORDS[w.status]}` : ""}${w.pinned && tabGroups ? ", pinned first in its group" : ""}. Double-click to rename, drag to reorder${groupsOn ? ", right-click to pin or regroup" : ""}`}
                           className={`group flex items-center gap-1.5 px-1 py-px text-[10.5px] cursor-pointer shrink-0 transition-colors${w.id === activeWindow ? " font-semibold" : ""}`}
                           style={{
                             ...(w.id === activeWindow ? { color: "var(--primary-hover)" } : { color: "var(--text2)" }),
@@ -3297,18 +3431,21 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                             />
                           ) : (
                             <>
-                              {/* THE NAME CARRIES THE STATE, rather than a dot
-                                  beside it. The mark for "the agent in this tab
-                                  finished and you have not looked" was a 6px
-                                  circle after the name — one more thing in a
-                                  strip whose whole point is that it is only
-                                  names. The name itself goes green: same fact,
-                                  same colour, nothing added to the row. */}
-                              <span
-                                title={!bell && w.agentDone ? "Agent finished — not seen yet" : undefined}
-                                style={!bell && w.agentDone
-                                  ? { color: "var(--success, #98c379)", fontWeight: 600 }
-                                  : undefined}>
+                              {/* THE STATE IS A MARK BEFORE THE NAME. It used
+                                  to be the name itself turning green, which
+                                  could say one thing — "finished". Five states
+                                  need five marks, and a mark ahead of the name
+                                  keeps every name in the same place whatever
+                                  the agent is doing. Idle draws nothing: a
+                                  quiet tab should look quiet. */}
+                              {w.status && w.status !== "idle" && <StatusMark status={w.status} />}
+                              {w.pinned && tabGroups && (
+                                <span className="flex" style={{ color: "var(--text4)" }} role="img" aria-label="pinned"><PinIcon size={ICON.xs} /></span>
+                              )}
+                              {/* Cut at 16 characters: one long name used to
+                                  push every tab after it off the row. The whole
+                                  name is in the tab's tooltip. */}
+                              <span className="inline-block max-w-[16ch] truncate align-bottom">
                                 {w.name || "shell"}
                               </span>
                             </>
@@ -3357,7 +3494,138 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                           )}
                         </div>
                       );
-                    })}
+                      };
+                      if (!tabGroups) return tmuxWindows.map(renderTab);
+                      /*
+                       * Grouped: in strip order, each group either open — its
+                       * name, then its tabs — or folded into one chip. The
+                       * group you are in is always open; others open by
+                       * Shift+click and stay open (per tmux session).
+                       *
+                       * No animation on fold and unfold. It happens as a side
+                       * effect of switching windows, often from the keyboard,
+                       * and a strip that slides every time you change tab is a
+                       * strip that is late.
+                       */
+                      return tabGroups.map((g) => {
+                        const here = g.key === activeGroup;
+                        if (here || keptOpen.has(g.key)) return (
+                          <Fragment key={g.key}>
+                            {/* The group's name heads its tabs. A kept-open
+                                group folds back from here; the one you are in
+                                cannot fold, and says so. */}
+                            {here ? (
+                              // The group you are in cannot fold, so its name
+                              // is a label and a drop target, not a button.
+                              <span
+                                {...dropOnGroup(g)}
+                                className="shrink-0 flex items-center gap-0.5 ml-1 pl-2 pr-0.5 text-[10px] rounded-sm"
+                                style={{
+                                  color: "var(--text3)", minHeight: MIN_BOX,
+                                  borderLeft: "1px solid color-mix(in srgb, var(--border) 45%, transparent)",
+                                  background: dropLit(g) ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent",
+                                }}
+                                title={`${g.label} — the group you are in stays open. Drop a tab here to move it into ${g.label}.`}>
+                                <CaretIcon size={ICON.xs} />
+                                <span className="max-w-[14ch] truncate">{g.label}</span>
+                              </span>
+                            ) : (
+                              <button
+                                {...dropOnGroup(g)}
+                                onClick={() => toggleKeptOpen(g.key)}
+                                className="shrink-0 flex items-center gap-0.5 ml-1 pl-2 pr-0.5 text-[10px] rounded-sm"
+                                style={{
+                                  color: "var(--text4)", cursor: "pointer", minHeight: MIN_BOX,
+                                  borderLeft: "1px solid color-mix(in srgb, var(--border) 45%, transparent)",
+                                  background: dropLit(g) ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent",
+                                }}
+                                aria-expanded={true}
+                                title={`${g.label} — click to fold it into a chip. Drop a tab here to move it into ${g.label}.`}>
+                                <CaretIcon size={ICON.xs} />
+                                <span className="max-w-[14ch] truncate">{g.label}</span>
+                              </button>
+                            )}
+                            {g.windows.map(renderTab)}
+                          </Fragment>
+                        );
+                        return null;
+                      });
+                    })()}
+                    {groupMenu && (() => {
+                      const g = tabGroups?.find((x) => x.key === groupMenu.key);
+                      if (!g) return null;
+                      return (
+                        <ContextMenu x={groupMenu.x} y={groupMenu.y} onClose={() => setGroupMenu(null)}>
+                          {g.windows.map((w) => (
+                            <MenuItem key={w.id} onClick={() => {
+                              setGroupMenu(null);
+                              setPendingWindow(w.id);
+                              tmuxCmd({ cmd: "select", window: w.id });
+                              focusTerm();
+                            }}>
+                              <span className="flex items-center gap-2 min-w-0">
+                                <span className="shrink-0 w-3 flex justify-center">
+                                  {w.status && w.status !== "idle" && <StatusMark status={w.status} />}
+                                </span>
+                                <span className="shrink-0 w-5 text-right tabular-nums" style={{ color: "var(--text4)" }}>{w.index}</span>
+                                <span className="min-w-0 truncate text-[12px]">{w.name || "shell"}</span>
+                                {w.status && w.status !== "idle" && (
+                                  <span className="ml-auto pl-3 shrink-0 text-[10.5px]" style={{ color: STATUS_COLOR[w.status] }}>{STATUS_WORDS[w.status]}</span>
+                                )}
+                              </span>
+                            </MenuItem>
+                          ))}
+                          <div className="my-0.5" style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 10%, transparent)" }} />
+                          <MenuItem onClick={() => { setGroupMenu(null); toggleKeptOpen(g.key); }}>
+                            Keep {g.label} open in the strip
+                          </MenuItem>
+                        </ContextMenu>
+                      );
+                    })()}
+                    {tabMenu && (() => {
+                      const w = tmuxWindows.find((x) => x.id === tabMenu.id);
+                      if (!w) return null;
+                      const mine = groupOfWindow.get(w.id);
+                      const close = () => setTabMenu(null);
+                      return (
+                        <ContextMenu x={tabMenu.x} y={tabMenu.y} onClose={close}>
+                          {/* Only where it shows: a flat strip is tmux's
+                              order, and a pin there would change nothing. */}
+                          {(tabGroups || w.pinned) && (
+                            <MenuItem onClick={() => { close(); tmuxCmd({ cmd: "pin", window: w.id, after: !w.pinned }); }}>
+                              {w.pinned ? "Unpin" : "Pin first in its group"}
+                            </MenuItem>
+                          )}
+                          {w.group && (
+                            <MenuItem onClick={() => { close(); tmuxCmd({ cmd: "group", window: w.id }); }}>
+                              Back to its folder's group
+                            </MenuItem>
+                          )}
+                          {(tabGroups ?? []).filter((g) => g.key !== mine?.key).map((g) => (
+                            <MenuItem key={g.key} onClick={() => { close(); tmuxCmd({ cmd: "group", window: w.id, name: g.label }); }}>
+                              Move to {g.label}
+                            </MenuItem>
+                          ))}
+                          {/* A group of its own, named here. Enter sets it;
+                              Escape closes the menu as it does everywhere. */}
+                          <div className="px-2 py-1">
+                            <input
+                              placeholder="New group…"
+                              spellCheck={false}
+                              aria-label="Move to a new group named"
+                              onKeyDown={(e) => {
+                                if (e.key !== "Enter") return;
+                                const name = (e.target as HTMLInputElement).value.trim();
+                                if (!name) return;
+                                close();
+                                tmuxCmd({ cmd: "group", window: w.id, name });
+                              }}
+                              className="w-full bg-transparent outline-none text-[11px] px-1 py-0.5 rounded"
+                              style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }} />
+                          </div>
+                        </ContextMenu>
+                      );
+                    })()}
                     {/* The end of the strip is a drop target of its own.
                         Dropping ON a tab inserts BEFORE it — which is what the
                         line on its leading edge promises — so without this
@@ -3400,6 +3668,15 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       </button>
                     )}
                     </div>
+                    {tabGroups && tabGroups.some((g) => g.key !== activeGroup && !keptOpen.has(g.key)) && (
+                      /* Capped: a narrow panel with many projects would
+                          otherwise give the chips the whole width and squeeze
+                          the open tabs, and the bar's own controls, to
+                          nothing. Past the cap the chips scroll sideways. */
+                      <div onMouseDown={keepTermFocus} className="min-w-0 max-w-[45%] flex items-center gap-1 pl-2 overflow-x-auto agw-noscrollbar">
+                        {tabGroups.filter((g) => g.key !== activeGroup && !keptOpen.has(g.key)).map(renderChip)}
+                      </div>
+                    )}
                     <div onMouseDown={keepTermFocus} className="shrink-0 flex items-center gap-1.5 pl-2 pr-3">{barRight}</div>
                   </div>
                 )}
@@ -3598,7 +3875,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                             button still works on either.
                             The zoom sentence has one state, because it is only
                             ever shown while a phone is here (see
-                            `zoomedByPhone`), and it says the panes are still
+                            `heldWindow`), and it says the panes are still
                             RUNNING: that is the actual question — a window that
                             went from four panes to one reads like three
                             programs died. */}

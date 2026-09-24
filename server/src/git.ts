@@ -291,6 +291,27 @@ export function projectRootOf(anchor: string): string | null {
   return wt === -1 ? null : base;
 }
 
+/**
+ * Awaited twin of {@link projectRootOf}, for the tab strip's sweep, which runs
+ * twice a second on the thread the terminal shares. Same answer, the rev-parse
+ * through the pool.
+ */
+export async function projectRootOfAsync(anchor: string): Promise<string | null> {
+  const abs = safeAbs(anchor);
+  if (!abs) return null;
+  const wt = abs.indexOf("/.worktrees/");
+  const base = wt === -1 ? abs : abs.slice(0, wt);
+  let dir = base;
+  try { if (!statSync(base).isDirectory()) dir = dirname(base); } catch { dir = dirname(base); }
+  const r = await gitAsync(dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+  if (r.code === 0) {
+    const common = r.stdout.trim();
+    if (common.endsWith("/.git")) return dirname(common);
+    if (common) return common;
+  }
+  return wt === -1 ? null : base;
+}
+
 // Awaited: this reads on the /git/status and /git/tree hot paths (via
 // statusForPaths and branchInfo), both on a poll the PTY shares the loop with —
 // so the rev-parse goes through the pool rather than blocking between keystrokes.

@@ -22,7 +22,7 @@ import { db, insertEvent, setSessionTitles, RETENTION_DAYS, dbClaimedElsewhere, 
 // safeAbs: translates Windows drive paths, so a WSL-side transcript groups
 // under its own folder rather than collapsing onto the server's cwd.
 import { projectRootOf, safeAbs } from "./git.ts";
-import { workspaceRoot, inScope } from "./config.ts";
+import { scopeKey, inScope } from "./config.ts";
 
 // One root by default; a path.delimiter-separated list (":" on POSIX, ";" on
 // Windows) sweeps several at once — e.g. a WSL home next to a Windows one.
@@ -233,6 +233,14 @@ for (const r of db
   )
   .all()) {
   projectPaths.set(r.source_app, r.project_path);
+}
+/** The projects the database already knew when this process started — from an
+ *  earlier run, so from before any upgrade. Not the live list: on a fresh
+ *  install that grows as the scanner ingests, and an upgrade's seed taken from
+ *  it would be whatever the scan had reached by the first picker read. */
+const atStart = [...projectPaths.values()];
+export function projectsKnownAtStart(): string[] {
+  return atStart;
 }
 export function knownProjects(): { source_app: string; path: string }[] {
   return [...projectPaths].map(([source_app, path]) => ({ source_app, path })).sort(
@@ -559,6 +567,10 @@ const tails = new Map<string, Tail>();
  */
 const refused = new Map<string, { scope: string; size: number; mtime: number; at: number }>();
 
+/** The open projects, out of the one-string scope this file passes around. A
+ *  path cannot hold a NUL, so the split cannot cut one in two. */
+const rootsOf = (scope: string): string[] => scope.split("\0");
+
 /** The scope refused this file, at this size and this mtime. Kept in memory
  *  only — see `refused`. Size and mtime are what let a REWRITE be noticed: a
  *  file that got shorter, or that changed without growing, is not the file that
@@ -642,7 +654,7 @@ async function judgeByHead(path: string, scope: string): Promise<boolean | null>
     if (!cwd) continue;
     // The same pair of tests the full path makes, and for the same reasons —
     // see the block in `ingestFile` that first refused this file.
-    return !inScope(cwd, scope) && !inScope(resolvedRoot(cwd), scope);
+    return !inScope(cwd, rootsOf(scope)) && !inScope(resolvedRoot(cwd), rootsOf(scope));
   }
   return null;
 }
@@ -853,7 +865,7 @@ async function ingestFile(
   // *above* the scope) keeps working; inScope() also accepts the scope's own
   // linked worktrees directly, which covers a cockpit opened *on* a worktree.
   if (scope && cwd) {
-    if (!inScope(cwd, scope) && !inScope(resolvedRoot(cwd), scope)) {
+    if (!inScope(cwd, rootsOf(scope)) && !inScope(resolvedRoot(cwd), rootsOf(scope))) {
       /* Remembered, so the next sweep does not read the whole thing again to
          reach this same answer — see `refused`. The verdict is a fact about
          this file's cwd and this scope, and both are in the key. */
@@ -1077,7 +1089,9 @@ function walkTranscripts(dir: string, out: string[] = []): string[] {
  *  waiting on the 3s timer. */
 export async function scanOnce(onLive: ((r: InsertResult) => void) | null): Promise<number> {
   // Read the workspace once per sweep so every file in it sees the same scope.
-  const scope = workspaceRoot();
+  // As one string — every open project, NUL-separated — because it is also the
+  // key the refused-file memo compares; see rootsOf().
+  const scope = scopeKey() || null;
   // Transcripts older than the retention window would be pruned on the next
   // sweep anyway, so never spend time parsing them.
   const cutoff = RETENTION_DAYS ? Date.now() - RETENTION_DAYS * 86_400_000 : 0;

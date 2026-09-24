@@ -27,7 +27,7 @@ import type {
   PrRepoId, PrSummary, PrBranchSummary, PrDetail, PrListResponse, PrActionResult, PrCheck, PrCheckRollup,
   PrCheckState, PrThread, PrReview, PrComment, PrCommit, PrFile, PrChecklistItem, PrMergeState, CiVerdict,
   PrTalk, PrTalkNote,
-  PrAuthored, PrReaction, PrEvent, PrCheckJob, PrReviewer, PrMergePolicy, PrMergeMethod, PrLocalHead,
+  PrAuthored, PrReaction, PrEvent, PrCheckJob, PrReviewer, PrMergePolicy, PrMergeGate, PrMergeMethod, PrLocalHead,
 } from "../../shared/types.ts";
 
 /** Same escape hatch the git writes use, so one variable disables both. */
@@ -2584,6 +2584,138 @@ export function mergePolicyOf(r: any): PrMergePolicy {
   };
 }
 
+/**
+ * The rules on the base branch, asked for in a query of their own.
+ *
+ * Separate from DETAIL_QUERY on purpose. These fields are the newest in the
+ * schema (`isRequired`, `rules`) and the ones an older GitHub Enterprise does
+ * not have; one unknown field fails a whole GraphQL document, and the pull
+ * request is worth more than the explanation of why it will not merge. So this
+ * runs beside the detail, and when it fails the gate is simply absent — the
+ * panel then says what it said before, rather than nothing.
+ */
+export const GATE_QUERY = `query($owner:String!,$name:String!,$number:Int!){
+  repository(owner:$owner,name:$name){
+    viewerPermission
+    pullRequest(number:$number){
+      viewerCanMergeAsAdmin isMergeQueueEnabled isInMergeQueue
+      baseRef{
+        branchProtectionRule{
+          lockBranch requiresApprovingReviews requiredApprovingReviewCount dismissesStaleReviews
+          requireLastPushApproval requiresCodeOwnerReviews requiresStrictStatusChecks requiredStatusCheckContexts
+          requiresConversationResolution requiresCommitSignatures requiresDeployments requiredDeploymentEnvironments
+        }
+        refUpdateRule{
+          requiredApprovingReviewCount requiresCodeOwnerReviews requiresConversationResolution
+          requiresSignatures viewerCanPush requiredStatusCheckContexts
+        }
+        rules(first:50){nodes{
+          type
+          repositoryRuleset{name enforcement}
+          parameters{
+            ... on PullRequestParameters{requiredApprovingReviewCount dismissStaleReviewsOnPush requireCodeOwnerReview requireLastPushApproval requiredReviewThreadResolution}
+            ... on RequiredStatusChecksParameters{strictRequiredStatusChecksPolicy requiredStatusChecks{context}}
+            ... on RequiredDeploymentsParameters{requiredDeploymentEnvironments}
+          }
+        }}
+      }
+      commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{
+        ... on CheckRun{name isRequired(pullRequestNumber:$number) checkSuite{workflowRun{workflow{name}}}}
+        ... on StatusContext{context isRequired(pullRequestNumber:$number)}
+      }}}}}}
+    }
+  }
+}`;
+
+/**
+ * What the base branch demands, out of GATE_QUERY's answer.
+ *
+ * Classic protection and rulesets are merged into one answer, because GitHub
+ * enforces both and a pull request has to satisfy the stricter of the two.
+ * What differs is visibility: `branchProtectionRule` comes back null for
+ * anybody who is not an admin — including on a branch that has one — so its
+ * fields become `null` ("not said") rather than `false`. Measured on a
+ * repository whose base was locked for a deploy: to a writer the rule was
+ * null, `rules` was empty and `refUpdateRule.viewerCanPush` was true, while
+ * GitHub's own page said "Cannot change this locked branch". Nothing a writer
+ * can ask the API for names that lock, which is why `locked` can be `null`.
+ *
+ * Rulesets only count when `enforcement` is ACTIVE; EVALUATE is GitHub's dry
+ * run and blocks nothing.
+ */
+export function mergeGateOf(repo: any): PrMergeGate | null {
+  const pr = repo?.pullRequest;
+  if (!pr) return null;
+  const base = pr.baseRef || {};
+  const bpr = base.branchProtectionRule || null;
+  /* To an admin a null rule is an answer — there is no classic protection —
+     where to anybody else it is a refusal to say. Measured on a repository
+     protected only by a ruleset: the admin's rule came back null too. */
+  const visible = !!bpr || repo.viewerPermission === "ADMIN";
+  const ru = base.refUpdateRule || null;
+  const rules: any[] = (base.rules?.nodes || [])
+    .filter((r: any) => r && (r.repositoryRuleset?.enforcement ?? "ACTIVE") === "ACTIVE");
+  const ofType = (t: string) => rules.filter((r) => r.type === t);
+  const prRules = ofType("PULL_REQUEST").map((r) => r.parameters || {});
+
+  const lockRule = [...ofType("LOCK_BRANCH"), ...ofType("UPDATE")][0];
+  const locked = bpr?.lockBranch === true || !!lockRule ? true
+    : visible ? false
+    : null;
+
+  const approvals = Math.max(0,
+    bpr?.requiresApprovingReviews ? Number(bpr.requiredApprovingReviewCount ?? 0) : 0,
+    Number(ru?.requiredApprovingReviewCount ?? 0),
+    ...prRules.map((p) => Number(p.requiredApprovingReviewCount ?? 0)));
+
+  const anyTrue = (...xs: unknown[]) => xs.some((x) => x === true);
+  const stale = anyTrue(bpr?.dismissesStaleReviews, ...prRules.map((p) => p.dismissStaleReviewsOnPush));
+  const strict = anyTrue(bpr?.requiresStrictStatusChecks,
+    ...ofType("REQUIRED_STATUS_CHECKS").map((r) => r.parameters?.strictRequiredStatusChecksPolicy));
+
+  return {
+    permission: repo.viewerPermission || undefined,
+    canBypass: pr.viewerCanMergeAsAdmin === true,
+    protectionVisible: visible,
+    locked,
+    lockedBy: bpr?.lockBranch ? "branch protection" : lockRule?.repositoryRuleset?.name || undefined,
+    viewerCanPush: typeof ru?.viewerCanPush === "boolean" ? ru.viewerCanPush : undefined,
+    approvals,
+    codeOwners: anyTrue(bpr?.requiresCodeOwnerReviews, ru?.requiresCodeOwnerReviews, ...prRules.map((p) => p.requireCodeOwnerReview)),
+    lastPushApproval: anyTrue(bpr?.requireLastPushApproval, ...prRules.map((p) => p.requireLastPushApproval)),
+    // A ruleset that says so is an answer whoever you are; silence from the
+    // rulesets is only an answer when the classic rule was readable too.
+    dismissStale: stale ? true : visible ? false : null,
+    conversationResolution: anyTrue(bpr?.requiresConversationResolution, ru?.requiresConversationResolution,
+      ...prRules.map((p) => p.requiredReviewThreadResolution), ofType("REQUIRED_REVIEW_THREAD_RESOLUTION").length > 0),
+    upToDate: strict ? true : visible ? false : null,
+    signatures: anyTrue(bpr?.requiresCommitSignatures, ru?.requiresSignatures, ofType("REQUIRED_SIGNATURES").length > 0),
+    deployments: [...new Set([
+      ...(bpr?.requiresDeployments ? bpr.requiredDeploymentEnvironments || [] : []),
+      ...ofType("REQUIRED_DEPLOYMENTS").flatMap((r) => r.parameters?.requiredDeploymentEnvironments || []),
+    ] as string[])],
+    requiredContexts: [...new Set([
+      ...(bpr?.requiredStatusCheckContexts || []),
+      ...(ru?.requiredStatusCheckContexts || []),
+      ...ofType("REQUIRED_STATUS_CHECKS").flatMap((r) => (r.parameters?.requiredStatusChecks || []).map((c: any) => c?.context)),
+    ].filter(Boolean) as string[])],
+    mergeQueue: pr.isMergeQueueEnabled === true || ofType("MERGE_QUEUE").length > 0,
+    inQueue: pr.isInMergeQueue === true,
+  };
+}
+
+/**
+ * The checks GitHub says it will not merge without, keyed the way
+ * latestPerName keys them — workflow and name — so that a required `build` in
+ * one workflow does not mark an optional `build` in another.
+ */
+export const checkKey = (workflow: string | undefined, name: string) => `${workflow || ""}\u0001${name}`;
+export function requiredCheckKeys(repo: any): Set<string> {
+  const nodes = repo?.pullRequest?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes || [];
+  return new Set((nodes as any[]).filter((n) => n?.isRequired === true)
+    .map((n) => checkKey(n.checkSuite?.workflowRun?.workflow?.name, String(n.name || n.context || ""))));
+}
+
 function mergeStateOf(s: string | undefined, isDraft: boolean): PrMergeState {
   if (isDraft) return "DRAFT";
   const v = (s || "").toUpperCase();
@@ -2671,12 +2803,11 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
   if (!cap.available || !cap.authed) return { ok: false, error: cap.reason };
 
   const viewerLogin = cap.login || "";
-  const data = await ghJson<any>([
-    "api", "graphql",
-    "-f", `query=${DETAIL_QUERY}`,
-    "-F", `owner=${repo.owner}`,
-    "-F", `name=${repo.name}`,
-    "-F", `number=${number}`,
+  const vars = ["-F", `owner=${repo.owner}`, "-F", `name=${repo.name}`, "-F", `number=${number}`];
+  // In parallel: the gate costs a round trip, not a second wait. See GATE_QUERY.
+  const [data, gateData] = await Promise.all([
+    ghJson<any>(["api", "graphql", "-f", `query=${DETAIL_QUERY}`, ...vars]),
+    ghJson<any>(["api", "graphql", "-f", `query=${GATE_QUERY}`, ...vars]),
   ]);
   const p = data?.data?.repository?.pullRequest;
   if (!p) return { ok: false, error: "pull request not found, or gh could not reach the host" };
@@ -2691,6 +2822,14 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
     workflowName: c.checkSuite?.workflowRun?.workflow?.name || "",
   }));
   const { rollup, all } = rollupChecks(normalised);
+  const gate = mergeGateOf(gateData?.data?.repository) ?? undefined;
+  if (gate) {
+    // Marked only when GitHub was asked. An unmarked check on a detail without
+    // a gate means "unknown", and the panel reads it that way.
+    const required = requiredCheckKeys(gateData?.data?.repository);
+    // `rollup.failing` holds these same objects, so it is marked too.
+    for (const c of all) c.required = required.has(checkKey(c.workflow, c.name));
+  }
 
   const reviews: PrReview[] = (p.reviews?.nodes || []).map((r: any) => ({
     author: r.author?.login || "",
@@ -2845,6 +2984,7 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
     body: p.body || "",
     mergeable: p.mergeable || "UNKNOWN",
     mergeState: mergeStateOf(p.mergeStateStatus, !!p.isDraft),
+    gate,
     checklist: parseChecklist(p.body || ""),
     reviewers: mapReviewers(p.reviewRequests?.nodes),
     assignees: (p.assignees?.nodes || []).map((n: any) => n.login),
@@ -3698,28 +3838,43 @@ export async function setDraft(rootIn: unknown, number: unknown, draft: unknown)
   return runPr(rootIn, Number(number), args);
 }
 
+/**
+ * The refusals from `gh pr update-branch` that deserve a better sentence than
+ * gh's, or null for the ones that do not.
+ *
+ * The merge runs on GitHub's side, so there is never a half-merged local tree
+ * to clean up — but when base and head conflict the API refuses, and gh's raw
+ * error ("failed to update branch: …") is a dead end. A conflict is the one
+ * refusal with somewhere to go: the panel can make the merge in a worktree of
+ * its own and open it. So it comes back marked with `conflict`, and the panel
+ * keys its resolve actions on the mark rather than on this wording — which is
+ * also why the wording names no button: API callers read it too.
+ *
+ * A locked or protected branch, or no write access: gh returns "not
+ * authorized"/"locked"/403, and the raw text is another dead end. The button is
+ * gated on BEHIND + viewerCanUpdate so this should rarely surface, but the two
+ * can race — the branch locks between the read and the click — and a bare
+ * "failed to update branch" is exactly the confusing error to avoid.
+ */
+export function updateBranchRefusal(raw: string): PrActionResult | null {
+  const conflicts = "can't update automatically — this branch conflicts with its base. merge the base into it locally, resolve the conflict, then push.";
+  // Only the word "conflict" earns the mark: the mark takes the update and
+  // merge buttons away, and "not mergeable" is not sure enough of the reason
+  // to do that — it keeps the better sentence and nothing else.
+  if (/conflict/i.test(raw)) return { ok: false, conflict: true, error: conflicts };
+  if (/mergeable/i.test(raw)) return { ok: false, error: conflicts };
+  if (/lock|protect|not authoriz|forbidden|permission|\b403\b/i.test(raw)) {
+    return { ok: false, error: "can't update this branch — it is locked or protected, or you do not have write access. update it on GitHub, or ask someone who can." };
+  }
+  return null;
+}
+
 /** Merge the base into the PR branch — the button whose absence is why half a
  *  branch list carries hand-made "Merge origin/master into …" commits. */
 export async function updateBranch(rootIn: unknown, number: unknown, syncLocal?: unknown): Promise<PrActionResult> {
   const r = await runPr(rootIn, Number(number), ["pr", "update-branch", String(Number(number))]);
-  // The merge runs on GitHub's side, so there is never a half-merged local tree
-  // to clean up — but when base and head conflict the API refuses, and gh's raw
-  // error ("failed to update branch: …") is a dead end. Turn it into an
-  // actionable one. (A future "resolve in terminal" flow can drop the user into
-  // the merge in a worktree; for now, tell them what to do.)
-  if (!r.ok && /conflict|mergeable/i.test(r.error || "")) {
-    return { ok: false, error: "can't update automatically — this branch conflicts with its base. pull the base branch and resolve the merge locally, then push." };
-  }
-  // A locked or protected branch, or no write access: gh returns "not
-  // authorized"/"locked"/403, and the raw text is another dead end. The button
-  // is gated on BEHIND + viewerCanUpdate so this should rarely surface, but the
-  // two can race — the branch locks between the read and the click — and a bare
-  // "failed to update branch" is exactly the confusing error we are trying to
-  // avoid here.
-  if (!r.ok && /lock|protect|not authoriz|forbidden|permission|\b403\b/i.test(r.error || "")) {
-    return { ok: false, error: "can't update this branch — it is locked or protected, or you do not have write access. update it on GitHub, or ask someone who can." };
-  }
-  if (!r.ok || !(syncLocal === true || syncLocal === "true")) return r;
+  if (!r.ok) return updateBranchRefusal(r.error || "") ?? r;
+  if (!(syncLocal === true || syncLocal === "true")) return r;
   const abs = safeAbs(rootIn);
   const root = abs ? repoRootOf(abs) : null;
   if (!root) return r;

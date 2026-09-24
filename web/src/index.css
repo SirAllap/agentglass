@@ -13,7 +13,8 @@
    * read in this one instead. Named once so they cannot drift apart.
    */
   --font-prose: ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  /* fallback (github-dark, the default) until applyTheme() runs */
+  /* GitHub Dark's, until applyTheme() runs — main.tsx paints before React
+     mounts. Not the default any more: a first run opens in System. */
   --bg: #0d1117;
   --bg2: #161b22;
   --bg3: #21262d;

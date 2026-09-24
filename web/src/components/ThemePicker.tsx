@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { SettingRow, Switch } from "./SettingRow.tsx";
 import {
-  THEMES, pickTheme, applyTheme, isDarkTheme, EXPERIMENTAL_THEME_IDS,
-  themeMode, applyThemeMode, persistThemeMode, SERIOUS_DARK, SERIOUS_LIGHT, desktopPaletteName, onDesktopPalette,
+  THEMES, chooseTheme, applyTheme, isDarkTheme, EXPERIMENTAL_THEME_IDS,
+  themeMode, applyThemeMode, desktopPaletteName, onDesktopPalette,
   type Theme, type ThemeMode,
 } from "../lib/themes.ts";
 import { ACCENTS, currentAccent, setAccentPref, lastAccent } from "../lib/accent.ts";
@@ -184,11 +184,8 @@ export function AppearancePane({ current, onChange }: { current: string; onChang
     setMode(m);
     if (id) onChange(id);
   };
-  const chooseTheme = (id: string) => {
-    pickTheme(id);
-    const m: ThemeMode = id === SERIOUS_DARK ? "dark" : id === SERIOUS_LIGHT ? "light" : "custom";
-    persistThemeMode(m);
-    setMode(m);
+  const choose = (id: string) => {
+    setMode(chooseTheme(id));
     onChange(id);
   };
 
@@ -282,7 +279,7 @@ export function AppearancePane({ current, onChange }: { current: string; onChang
       />
 
       <div className="panel-eyebrow pt-3 pb-1.5">Or pick a palette</div>
-      <ThemePicker current={current} onChange={chooseTheme} />
+      <ThemePicker current={current} onChange={choose} />
     </>
   );
 }

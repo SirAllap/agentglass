@@ -34,13 +34,23 @@ export function BenchNote({ root, active }: {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const box = useRef<HTMLTextAreaElement>(null);
 
+  /* Read each time it comes on screen, not once per mount: the bench is kept
+     while it is closed, and the same note can be edited from another client in
+     between — a note read an hour ago and typed into would save over the newer
+     one. Not while an edit of ours is waiting to be saved: that is newer. */
+  const pending = useRef(false);
+  const edits = useRef(0);
   useEffect(() => {
+    if (!active || pending.current) return;
     let live = true;
+    /* And not if anything was typed while it was asked for: a slow answer that
+       arrives after that edit has saved is older than what is on screen. */
+    const at = edits.current;
     api.benchNote(root)
-      .then((r) => { if (live) { setText(r.ok ? r.text : ""); setError(r.ok ? null : (r.error ?? null)); } })
+      .then((r) => { if (live && !pending.current && edits.current === at) { setText(r.ok ? r.text : ""); setError(r.ok ? null : (r.error ?? null)); } })
       .catch((e) => { if (live) setError(String(e)); });
     return () => { live = false; };
-  }, [root]);
+  }, [root, active]);
 
   /* Saved on a pause rather than on every keystroke, and on unmount rather than
      never: a note that only saves when you remember to press something is a
@@ -48,12 +58,16 @@ export function BenchNote({ root, active }: {
   const save = (next: string) => {
     if (timer.current) clearTimeout(timer.current);
     setState("typing");
+    pending.current = true;
+    const mine = ++edits.current;
     timer.current = setTimeout(async () => {
       setState("saving");
       try {
         const r = await api.benchNoteSave(root, next);
         setState(r.ok ? "saved" : "failed");
         setError(r.ok ? null : (r.error ?? "could not save this note"));
+        /* Still pending if it failed, or if more was typed while it saved. */
+        pending.current = !r.ok || edits.current !== mine;
       } catch (e) { setState("failed"); setError(String(e)); }
     }, 600);
   };
