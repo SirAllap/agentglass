@@ -6,7 +6,7 @@
 // find. Environment variables still win, so a one-off `AGENTGLASS_…=x bun run`
 // overrides the file without editing it.
 
-import type { Budget, GateToolsPolicy } from "../../shared/types.ts";
+import type { Budget, GateRule } from "../../shared/types.ts";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve, dirname, sep, delimiter } from "node:path";
@@ -81,8 +81,13 @@ interface Config {
   /** Spending limits somebody set. See budget.ts. Hand-edited freely like the
    *  rest of this file, so every field is checked on read. */
   budgets?: Budget[];
-  /** Tool allow/deny rules for the gate. See gateTools.ts and #109. */
-  gateTools?: GateToolsPolicy[];
+  /** What the gate decides without a person. See gaterules.ts. Hand-edited
+   *  only — there is no route that writes it — so every field is checked on
+   *  read, like budgets. */
+  gateRules?: GateRule[];
+  /** The older name for gateRules, `{ root, allow, deny }` rows. Read as
+   *  gateRules with the defaults filled in; see readGateRules(). */
+  gateTools?: unknown;
   /** Projects the picker should stop offering. Absolute paths. See
    *  hiddenProjects(). */
   hiddenProjects?: string[];
@@ -226,6 +231,113 @@ export function readBudgets(): Budget[] {
 }
 
 /**
+ * The gate rules on disk, checked field by field.
+ *
+ * A rule that cannot be read is not repaired, for the reason readBudgets gives:
+ * `"otherwise": "denny"` meaning deny is a guess. It is not dropped either. A
+ * dropped project rule hands its project to whatever the machine-wide rule
+ * says, and a strict project with one typo under a lax machine rule would then
+ * let through exactly what it was written to stop. So an unreadable rule keeps
+ * its root and holds everything there for a person — the one outcome that was
+ * already the gate's behaviour before rules existed. A typo costs an
+ * interruption, never a call that ran unseen.
+ *
+ * A root that is not absolute once `~` is expanded covers nothing a person
+ * could mean, so it is said about and skipped. Parsed once per read of the
+ * file: /gate calls this on every gated call, and a bad rule must be logged
+ * once, not once a call.
+ */
+const parsedGateRules = new WeakMap<Config, GateRule[]>();
+export function readGateRules(): GateRule[] {
+  const cfg = config();
+  const known = parsedGateRules.get(cfg);
+  if (known) return known;
+  const out = [...parseGateRules(cfg.gateRules), ...legacyGateTools(cfg.gateTools, cfg.gateRules !== undefined)];
+  parsedGateRules.set(cfg, out);
+  return out;
+}
+
+/**
+ * `gateTools`, the name an earlier build gave the same rules, read rather than
+ * ignored: a deny list somebody wrote under the old key and that silently
+ * stopped applying is a brake that is no longer there.
+ *
+ * Its rows are `{ root, allow, deny }` and map one to one: a tool on no list
+ * was held for a person, which is gateRules' default `otherwise: "hold"`. Each
+ * row goes through the same reader, so one that cannot be read holds every call
+ * at its root instead of being dropped. Said once per load, with the fix.
+ *
+ * Two things it may not do:
+ *  - with `gateRules` in the file as well, its rows only add denials. A
+ *    leftover row with a deeper root would otherwise become the rule that
+ *    speaks there, and its allow list would open what `gateRules` kept shut.
+ *  - the old key matched names exactly, and here a trailing `*` is a prefix.
+ *    On a deny list that only stops more; on an allow list `*` would let every
+ *    tool through, so a starred allow entry is dropped and said.
+ */
+function legacyGateTools(raw: unknown, alongside: boolean): GateRule[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    console.error(`[config] "gateTools" in ${configPath()} is not a list, so no rule from it applies — move its rows to "gateRules"`);
+    return [];
+  }
+  console.warn(`[config] "gateTools" in ${configPath()} is an old name: its ${raw.length} row(s) are read as "gateRules"`
+    + (alongside ? ", denials only, because \"gateRules\" is there too" : "") + " — move them to \"gateRules\"");
+  const rows = raw.map((r) => {
+    if (!r || typeof r !== "object" || Array.isArray(r)) return r;
+    const { root } = r as { root?: unknown };
+    // That key trimmed its names; a padded " Bash " on a deny list denied Bash.
+    const trim = (v: unknown) => (Array.isArray(v) ? v.map((n) => (typeof n === "string" ? n.trim() : n)) : v);
+    const allow = trim((r as { allow?: unknown }).allow), deny = trim((r as { deny?: unknown }).deny);
+    if (!Array.isArray(allow)) return { root, allow, deny };
+    const plain = allow.filter((n) => !(typeof n === "string" && n.includes("*")));
+    if (plain.length !== allow.length) console.error(`[config] a "gateTools" allow entry with a * is dropped: that key matched names exactly`);
+    return { root, allow: plain, deny };
+  });
+  const out = parseGateRules(rows);
+  return alongside ? out.map((r) => ({ ...r, denyOnly: true })) : out;
+}
+
+function parseGateRules(raw: unknown): GateRule[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    console.error(`[config] ignoring "gateRules" in ${configPath()}: expected an array`);
+    return [];
+  }
+  const names = (v: unknown): string[] | null =>
+    v === undefined ? [] : Array.isArray(v) && v.every((n) => typeof n === "string" && n.length > 0) ? v : null;
+  const out: GateRule[] = [];
+  for (const g of raw) {
+    if (!g || typeof g !== "object" || Array.isArray(g)) continue;
+    const r = g as Partial<Record<keyof GateRule, unknown>>;
+    const given = typeof r.root === "string" ? expand(r.root.trim()) : "";
+    if (given && !given.startsWith("/")) {
+      console.error(`[config] ignoring a gate rule whose root is not an absolute path: ${given}`);
+      continue;
+    }
+    // resolve() drops a trailing slash, which would otherwise stop a root from
+    // covering itself and count as one character "deeper" than its twin.
+    const root = given ? resolve(given) : "";
+    const allow = names(r.allow), deny = names(r.deny);
+    const otherwise = r.otherwise ?? "hold", overBudget = r.overBudget ?? "hold";
+    // A root that is there but is not a path is not "every project": reading it
+    // as one turned a rule meant for one checkout into the machine's.
+    const problem = r.root !== undefined && typeof r.root !== "string" ? "a root that is not a path"
+      : !allow || !deny ? "its allow or deny is not a list of tool names"
+      : otherwise !== "allow" && otherwise !== "hold" && otherwise !== "deny" ? `an unknown "otherwise": ${String(otherwise)}`
+      : overBudget !== "hold" && overBudget !== "deny" ? `an unknown "overBudget": ${String(overBudget)}`
+      : "";
+    if (problem) {
+      console.error(`[config] a gate rule for ${root || "every project"} has ${problem} — holding every call there for a person instead`);
+      out.push({ root, allow: [], deny: [], otherwise: "hold", overBudget: "hold" });
+      continue;
+    }
+    out.push({ root, allow: allow!, deny: deny!, otherwise: otherwise as GateRule["otherwise"], overBudget: overBudget as GateRule["overBudget"] });
+  }
+  return out;
+}
+
+/**
  * Projects the picker has been told not to offer again.
  *
  * A found repo is not the same thing as a project somebody wants: the sweep
@@ -251,56 +363,6 @@ export function hiddenProjects(): string[] {
   for (const p of raw) {
     if (typeof p !== "string" || !p.trim()) continue;
     out.push(resolve(expand(p.trim())));
-  }
-  return out;
-}
-
-/**
- * Tool allow/deny rules on disk, with anything unusable dropped.
- *
- * Same discipline as budgets: this file is hand-edited, and a rule is a *brake*.
- * A non-array, a row that is not an object, or tool names that are not strings
- * are skipped and said about — never coerced into something plausible. An empty
- * allow and an empty deny together is a no-op row and is dropped, so a half-
- * filled stub cannot change what the gate does.
- *
- * `root` expands `~` the same way budgets do. Matching against a session's cwd
- * is gateTools.ts's job (via inScope), not this reader's.
- */
-export function readGateTools(): GateToolsPolicy[] {
-  const raw = config().gateTools;
-  if (raw === undefined) return [];
-  if (!Array.isArray(raw)) {
-    console.error(`[config] ignoring "gateTools" in ${configPath()}: expected an array`);
-    return [];
-  }
-  const out: GateToolsPolicy[] = [];
-  for (const row of raw) {
-    if (!row || typeof row !== "object" || Array.isArray(row)) continue;
-    const r = row as Partial<GateToolsPolicy>;
-    if (r.allow !== undefined && !Array.isArray(r.allow)) {
-      console.error(`[config] ignoring a gateTools row whose allow is not an array`);
-      continue;
-    }
-    if (r.deny !== undefined && !Array.isArray(r.deny)) {
-      console.error(`[config] ignoring a gateTools row whose deny is not an array`);
-      continue;
-    }
-    const allow = (Array.isArray(r.allow) ? r.allow : [])
-      .filter((t): t is string => typeof t === "string" && !!t.trim())
-      .map((t) => t.trim());
-    const deny = (Array.isArray(r.deny) ? r.deny : [])
-      .filter((t): t is string => typeof t === "string" && !!t.trim())
-      .map((t) => t.trim());
-    if (!allow.length && !deny.length) {
-      console.error(`[config] ignoring a gateTools row with neither allow nor deny`);
-      continue;
-    }
-    out.push({
-      root: typeof r.root === "string" ? expand(r.root) : "",
-      allow,
-      deny,
-    });
   }
   return out;
 }

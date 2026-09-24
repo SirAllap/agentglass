@@ -24,6 +24,8 @@ import { api } from "../lib/api.ts";
 import type { AgentPane } from "../../../shared/types.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { paneChoices } from "../lib/panePick.ts";
+import { LAYER } from "../lib/layers.ts";
+import { NEEDS_PANEL_W, needsPanelLeft } from "../lib/needsPanel.ts";
 
 export type NeedsItem = {
   /** The agent card key this was raised from. Stable enough for a list key. */
@@ -156,8 +158,11 @@ function Row({ it, exact, hits, onChat, onApprove, onProject, onPane }: {
  * clips its own overflow — it has to, or a long project name pushes the clock
  * off the end — and a panel drawn inside it would be sliced off at 30px.
  */
-export function NeedsPopover({ anchorRef, open, items, onClose, onChat, onApprove, onProject, onTerminal }: {
+export function NeedsPopover({ anchorRef, avoidRef, open, items, onClose, onChat, onApprove, onProject, onTerminal }: {
   anchorRef: React.RefObject<HTMLElement | null>;
+  /** The bar's right-hand group — the plan usage lives there, and the panel
+   *  ends before it. */
+  avoidRef?: React.RefObject<HTMLElement | null>;
   open: boolean;
   items: NeedsItem[];
   onClose: () => void;
@@ -195,12 +200,9 @@ export function NeedsPopover({ anchorRef, open, items, onClose, onChat, onApprov
   const place = useCallback(() => {
     const r = anchorRef.current?.getBoundingClientRect();
     if (!r) return;
-    const width = 380;
-    // Centred under the chip, then pulled back inside the window rather than
-    // allowed to hang off the edge on a narrow one.
-    const left = Math.min(Math.max(8, r.left + r.width / 2 - width / 2), Math.max(8, window.innerWidth - width - 8));
-    setAt({ top: r.bottom + 6, left });
-  }, [anchorRef]);
+    const limit = avoidRef?.current?.getBoundingClientRect().left ?? null;
+    setAt({ top: r.bottom + 6, left: needsPanelLeft(r, window.innerWidth, limit) });
+  }, [anchorRef, avoidRef]);
 
   useEffect(() => {
     if (!open) return;
@@ -214,25 +216,31 @@ export function NeedsPopover({ anchorRef, open, items, onClose, onChat, onApprov
       if (panel.current?.contains(t as Node)) return;
       onClose();
     };
+    // A click inside a <webview> or an iframe never reaches this window as a
+    // mousedown, so the outside-click above cannot see it and the panel stayed
+    // over the browser pane for good. What the window does get is a blur.
+    const onBlur = () => onClose();
     window.addEventListener("keydown", onKey, true);
     window.addEventListener("mousedown", onDown, true);
+    window.addEventListener("blur", onBlur);
     window.addEventListener("resize", place);
     return () => {
       window.removeEventListener("keydown", onKey, true);
       window.removeEventListener("mousedown", onDown, true);
+      window.removeEventListener("blur", onBlur);
       window.removeEventListener("resize", place);
     };
   }, [open, place, onClose, anchorRef]);
 
   if (!open || !at || !items.length) return null;
   return (
-    <Portal z={10055}>
+    <Portal z={LAYER.needs}>
       <div
         ref={panel}
         data-needs-panel=""
         className="fixed flex flex-col rounded-xl overflow-hidden"
         style={{
-          top: at.top, left: at.left, width: 380,
+          top: at.top, left: at.left, width: NEEDS_PANEL_W,
           background: "var(--bg2)",
           border: "1px solid var(--border)",
           boxShadow: "0 22px 48px -20px var(--shadow)",

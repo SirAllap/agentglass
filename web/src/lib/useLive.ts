@@ -7,11 +7,13 @@ import { emitControl } from "./controlBus.ts";
 import { emitBrowserAsk } from "./browserBus.ts";
 import { emitUnderstudy } from "./understudyBus.ts";
 import { emitPlugin } from "./pluginBus.ts";
-import { recordNote, fireDesktopAlert } from "./sysNotify.ts";
+import { recordNote, fireDesktopAlert, firePopupOnly } from "./sysNotify.ts";
+import { pollGatesNow } from "./gateStore.ts";
 import { ciShouldNotify } from "./ciNotifyPref.ts";
 import { talkBody, talkShouldNotify, talkSummary, talkUrgency } from "./talkNotify.ts";
 import { raiseAlarm } from "./alarm.ts";
 import { nudgeReminders } from "./reminderStore.ts";
+import { receiveNotifyPrefs } from "./notifyPrefsStore.ts";
 
 const MAX_EVENTS = 2000;
 const FLUSH_MS = 220; // coalesce bursts into ~5 renders/sec
@@ -211,6 +213,14 @@ export function useLive(paused = false): LiveData {
         emitControl(frame.data);
         return;
       }
+      if (frame.type === "notify-prefs") {
+        // Saved from this tab (the round trip), another tab, or another
+        // device open on the same server — all three arrive the same way, so
+        // the store adopts whatever the server now says is current rather
+        // than trusting only its own save.
+        receiveNotifyPrefs(frame.data);
+        return;
+      }
       if (frame.type === "plugin") {
         // A plugin redrew a panel or wrote notes on a pull request. Only a
         // pointer; the listener fetches what it needs.
@@ -273,9 +283,20 @@ export function useLive(paused = false): LiveData {
       if (frame.type === "alert") {
         // agentglass's own push alert (gate hold, permission wait, tool error),
         // opted into on the server. Raise it as a native OS notification — the
-        // cross-platform replacement for notify-send. The notch already has the
-        // in-app copy through its own paths (gateStore et al.), so this does not
-        // also recordNote, which would double it there.
+        // cross-platform replacement for notify-send.
+        //
+        // A gate hold is the one case where the notch already HAS the in-app
+        // copy, through gateStore's own poll — announce() there recordNotes it
+        // under `gate:<id>` the moment it arrives. fireDesktopAlert would
+        // recordNote a second, unkeyed row for the same hold: measured, two
+        // rows for one Approve, neither one ever clearing on its own (urgency
+        // 2 never folds). So only the transient popup runs here; the durable
+        // row is gateStore's alone — but gateStore's poll is PAUSED while
+        // `document.hidden`, so a hold that starts and resolves entirely while
+        // the tab is hidden (timeout, fail-open deny, another device) would
+        // otherwise leave no bell record at all. Force the one read the poll
+        // would have done, hidden or not, so the row exists either way.
+        if (frame.data.source === "gate") { firePopupOnly(frame.data); void pollGatesNow(); return; }
         fireDesktopAlert(frame.data);
         return;
       }
@@ -326,6 +347,7 @@ export function useLive(paused = false): LiveData {
           summary: talkSummary(t),
           body: talkBody(t),
           urgency: talkUrgency(t),
+          source: "pr",
           goto: { kind: "pr", repo: t.repo, number: t.number },
         });
         return;
@@ -350,6 +372,7 @@ export function useLive(paused = false): LiveData {
             ? `${v.failing.slice(0, 3).join(", ")}${v.failing.length > 3 ? ` +${v.failing.length - 3} more` : ""}\n${v.title}`
             : v.title,
           urgency: v.verdict === "red" ? 2 : 1,
+          source: "ci",
           // Clickable. The verdict has always known which pull request it is
           // about; the note simply had nowhere to put it, so a list of PR
           // results was a list of dead ends.

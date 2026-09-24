@@ -38,6 +38,8 @@ import { alarmVoiceId, setAlarmVoice } from "../lib/alarm.ts";
 import { SEARCH_ENGINE_LABELS, type SearchEngine } from "../lib/browserUrl.ts";
 import { homePageRaw, setHomePage, searchEngine, setSearchEngine, importHistory, setImportHistory, importBookmarks, setImportBookmarks, pickImportRows } from "../lib/browserPrefs.ts";
 import { RemoteAccessPane } from "./RemoteAccessPane.tsx";
+import { NOTIFY_KINDS, NOTIFY_CHANNELS, NOTIFY_KIND_LABEL, NOTIFY_CHANNEL_LABEL, type NotifyKind, type NotifyChannel } from "../../../shared/notifyPrefs.ts";
+import { getNotifyPrefs, subscribeNotifyPrefs, saveNotifyPrefs } from "../lib/notifyPrefsStore.ts";
 import { PluginsPane } from "./PluginsPane.tsx";
 import { TerminalIcon, DiffIcon, BrowserIcon, UnderstudyIcon } from "./workspace/icons.tsx";
 import {
@@ -102,6 +104,8 @@ import { Persona } from "./understudy/persona/Persona.tsx";
 import { setCosmetic, useCosmetic } from "./understudy/persona/cosmeticStore.ts";
 import { emitControl } from "../lib/controlBus.ts";
 import { refreshUnderstudy } from "../lib/understudyStore.ts";
+import { mutedSources, setMuted, sourceLabel, subscribeMuted } from "../lib/notePolicy.ts";
+import { MuteGlyph } from "./TopBarNotes.tsx";
 
 /** A heading inside a Section, for a pane that answers the same question about
  *  two different sources. Without it "Quiet" and "Alert sounds" sit in one flat
@@ -483,7 +487,7 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
   // people to the wrong one of the two because I picked the obvious name. A
   // setting is filed under the thing it configures.
   ...(HAS_BROWSER ? [{ id: "browser" as const, label: "Browser", group: "Interface" as const, kw: "browser web page zoom agent cli skill automation drive login cookies import chrome firefox zen profile", what: "The built-in browser: how it opens, your logins, and whether an agent can drive it.", icon: BrowserIcon }] : []),
-  { id: "notifications", label: "Notifications", group: "Interface", kw: "notifications sound alert desktop notify quiet chime ping alert sounds message mirror this machine approved reminder alarm codex usage current somebody says collect without interrupting only when pull request something much them agentglass keep", what: "What is allowed to interrupt you, and how.", icon: BellIcon },
+  { id: "notifications", label: "Notifications", group: "Interface", kw: "notifications sound alert desktop notify quiet chime ping alert sounds message mirror this machine approved reminder alarm codex usage current somebody says collect without interrupting only when pull request something much them agentglass keep what stopped interrupts muted mute unmute lantern", what: "What is allowed to interrupt you, and how.", icon: BellIcon },
   // Next to Shortcuts on purpose: which drawer a view sits in is what decides
   // whether it has a number, so the two pages answer one question between them.
   { id: "rail", label: "Sidebar", group: "Interface", kw: "rail sidebar views order icons hide show reorder tabs drawer group arrange", what: "Which views are on the sidebar, in which drawer, and in what order.", icon: SidebarIcon },
@@ -929,8 +933,16 @@ function ActivityPane({ open }: { open: boolean }) {
     // happened without anybody asking. See lib/activity.ts.
     Promise.all([
       api.actions(200).then((r) => r.actions).catch(() => [] as ActionRecord[]),
-      api.gateHistory(200).then((r) => r.gates).catch(() => [] as GateRecord[]),
-    ]).then(([a, g]) => { if (alive) setRows(mergeActivity(a, g)); });
+      // A rule writes a row for every call its allow list waves through, so
+      // those are read on their own: in one list of 200 they pushed out the
+      // gates nobody decided, which are what this pane exists to show.
+      api.gateHistory(200, { ruleAllows: false }).then((r) => r.gates).catch(() => [] as GateRecord[]),
+      api.gateHistory(50).then((r) => r.gates).catch(() => [] as GateRecord[]),
+    ]).then(([a, g, recent]) => {
+      if (!alive) return;
+      const seen = new Set(g.map((x) => x.id));
+      setRows(mergeActivity(a, [...g, ...recent.filter((x) => !seen.has(x.id))]));
+    });
     return () => { alive = false; };
   }, [open]);
 
@@ -1050,14 +1062,13 @@ function ActionLine({ a, times = 1 }: { a: ActionRecord; times?: number }) {
  */
 function GateLine({ g }: { g: GateRecord }) {
   const { verb: did, note } = gateLine(g);
-  // Timeout/restart are the ones nobody chose. A rule is a decision on purpose.
-  const nobody = g.resolution === "timeout" || g.resolution === "restart";
+  const nobody = g.resolution !== "human";
   return (
     <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] gap-x-3 items-baseline py-1.5 rounded-lg agx-hover">
       <span
         className="text-[9.5px] font-semibold tabular-nums shrink-0"
         style={{ color: nobody ? "var(--warning)" : g.decision === "deny" ? "var(--error)" : "var(--text4)" }}
-        title={nobody ? "nobody decided this" : g.resolution === "rule" ? "decided by a tool rule" : "decided by a person"}
+        title={g.resolution === "rule" ? "a gate rule decided this" : nobody ? "nobody decided this" : "decided by a person"}
       >
         {nobody ? <ClockIcon size={ICON.xs} /> : "·"}
       </span>
@@ -1065,9 +1076,9 @@ function GateLine({ g }: { g: GateRecord }) {
         <span className="text-[11.5px]" style={{ color: "var(--text)" }}>{did}</span>
         <span className="text-[11.5px] t-dim"> {g.tool_name}{g.summary ? ` · ${g.summary}` : ""}</span>
         {note && <span className="block text-[10px] mt-1.5" style={{ color: "var(--warning)" }}>{note}</span>}
-        {/* The reason a person typed — or a rule wrote — which lives nowhere
-            else: the agent was given it and the action log never carried it. */}
-        {(g.resolution === "human" || g.resolution === "rule") && g.reason && (
+        {/* The reason a person typed, which lives nowhere else: the agent was
+            given it and the action log never carried it. */}
+        {g.resolution === "human" && g.reason && (
           <span className="block text-[10px] mt-1.5 t-dim2">“{g.reason}”</span>
         )}
       </span>
@@ -2084,6 +2095,53 @@ function LanternSection({ open }: { open: boolean }) {
         options={[{ v: "5", label: "5 min" }, { v: "60", label: "1 hour" }]}
         onPick={(m) => save({ cacheTtlMinutes: Number(m) })} />
       {note && <div className="text-[11px] px-1" style={{ color: "var(--text3)" }}>{note}</div>}
+    </Section>
+  );
+}
+
+/**
+ * The notification diet — what the fleet is ALLOWED to push at you, and on
+ * which channel. See shared/notifyPrefs.ts.
+ *
+ * Everything here defaults quiet on purpose: only `blocked` (an agent truly
+ * stopped on a gate or a permission prompt) and `reminders` (an alarm the
+ * person set themselves) reach for them out of the box. The rest — an agent
+ * merely idle, a stall, a tool error, the understudy needing a look, a usage
+ * limit — still show wherever they already live (the fleet card, the bell's
+ * history list); a switch here is what lets one of them additionally push.
+ *
+ * `None` sits above both groups rather than inside either: it silences every
+ * kind on every channel at once, and the "What" and "Where" rows go disabled
+ * under it so the state they represent is not lost, only overridden — turning
+ * `None` back off returns to whatever was chosen before.
+ */
+function NotificationsSection() {
+  const prefs = useSyncExternalStore(subscribeNotifyPrefs, getNotifyPrefs, getNotifyPrefs);
+  const [err, setErr] = useState<string | null>(null);
+  const save = (next: typeof prefs) => {
+    setErr(null);
+    saveNotifyPrefs(next).catch(() => setErr("Could not save."));
+  };
+  const setKind = (k: NotifyKind, on: boolean) => save({ ...prefs, kinds: { ...prefs.kinds, [k]: on } });
+  const setChannel = (c: NotifyChannel, on: boolean) => save({ ...prefs, channels: { ...prefs.channels, [c]: on } });
+  return (
+    <Section title="Notifications" desc="What agentglass may interrupt you for. Whatever is off still shows quietly on the fleet card.">
+      {err && <div className="text-[11px] px-1" style={{ color: "var(--error)" }}>{err}</div>}
+      <Toggle on={prefs.none} onClick={() => save({ ...prefs, none: !prefs.none })}
+        label="None — silence everything"
+        hint="Nothing interrupts, whatever is chosen below." />
+      <Group>What</Group>
+      {NOTIFY_KINDS.map((k) => (
+        <Toggle key={k} on={prefs.kinds[k]} disabled={prefs.none}
+          onClick={() => setKind(k, !prefs.kinds[k])}
+          label={NOTIFY_KIND_LABEL[k].label} hint={NOTIFY_KIND_LABEL[k].desc} />
+      ))}
+      <Group>Where</Group>
+      {NOTIFY_CHANNELS.map((c) => (
+        <Toggle key={c} on={prefs.channels[c]} disabled={prefs.none}
+          onClick={() => setChannel(c, !prefs.channels[c])}
+          label={NOTIFY_CHANNEL_LABEL[c].label} hint={NOTIFY_CHANNEL_LABEL[c].desc} />
+      ))}
     </Section>
   );
 }
@@ -3426,7 +3484,9 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
   // off, with a toggle whose first click did nothing visible. Measured, not
   // reasoned: the probe clicked the bell's button and this row still read false.
   const sysNotify = useSyncExternalStore(subscribeSysNotifyMode, sysNotifyMode, () => "off" as SysNotifyMode);
-  const quiet = useSyncExternalStore(subscribeNotifyQuiet, notifyQuiet, () => false);
+  const quiet = useSyncExternalStore(subscribeNotifyQuiet, notifyQuiet, () => true);
+  const muted = useSyncExternalStore(subscribeMuted, mutedSources, mutedSources);
+  const mutedList = [...muted].sort();
   const own = useSyncExternalStore(subscribeAppNotify, appNotify, () => true);
   const [notifyCap, setNotifyCap] = useState<NotifyCapability | null>(null);
   // Asked while the modal is open, and asked AGAIN while the answer is "we could
@@ -4078,12 +4138,34 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                   )}
 
                   {pane === "notifications" && (
+                  <>
+                  <NotificationsSection />
                   <Section title="What reaches you"
                     desc="Which events are worth an interruption.">
                     {/* Two sources, two switches. They share one surface — the
                         bell lists both — so "stop interrupting me" has to be
                         answerable about each separately, or turning off the
                         chatter means turning off the fleet you are watching. */}
+                    {/* First, because it is about every source at once: the
+                        one switch that decides what may take the screen. */}
+                    <Group>Interruptions</Group>
+                    <Toggle on={quiet} onClick={() => setNotifyQuiet(!quiet)}
+                      label="Quiet — only what is stopped interrupts"
+                      hint="An approval, an agent blocked on a question, a red check on a pull request about to merge: those still pop and ring. Everything else collects in the bell without a sound." />
+                    {mutedList.length > 0 && (
+                      <SettingRow label="Muted" align="start"
+                        hint="Not collected. Mute a source from its row in the bell or from a desktop card; unmute it here or from the bell's footer."
+                        control={
+                          <span className="flex flex-wrap gap-1 justify-end">
+                            {mutedList.map((src) => (
+                              <button key={src} className="chip text-[11px] gap-1" onClick={() => setMuted(src, false)}
+                                title={`Unmute ${sourceLabel(src)}`} aria-label={`Unmute ${sourceLabel(src)}`}>
+                                <MuteGlyph />{sourceLabel(src)}
+                              </button>
+                            ))}
+                          </span>
+                        } />
+                    )}
                     {/* Its own group above the two sources, because it is not
                         about a source at all — it narrows one KIND of thing
                         agentglass raises itself. */}
@@ -4137,7 +4219,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                     <Group>Sound</Group>
                     <SoundRow
                       label="Notifications"
-                      hint="What a card behind the bell sounds like. Quiet, below, silences the mirrored ones."
+                      hint="What a card behind the bell sounds like. Quiet, above, keeps it for what is stopped."
                       voices={NOTIFY_VOICES}
                       value={notifyVoice}
                       onPick={(v) => { setNotifyVoice(v); setNotifyVoiceState(v); }} />
@@ -4178,22 +4260,13 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                             { v: "titles", label: "Who" },
                             { v: "full", label: "Full" },
                           ]} />
-                        {/* agentglass reads the bus rather than being the daemon,
-                            so the desktop's own Do Not Disturb cannot reach what
-                            lands here. This is the switch that can. It silences
-                            other people's messages only: a gate hold never travels
-                            this path, so quiet can't mean an agent blocked and
-                            nobody said. */}
-                        <Toggle on={quiet} onClick={() => setNotifyQuiet(!quiet)}
-                          label="Quiet — collect them without interrupting"
-                          hint="No cards; they still land in the bell, so nothing is lost" />
                       </>
                     )}
 
                     <Group>From agentglass</Group>
                     <Toggle on={own} onClick={() => setAppNotify(!own)}
                       label="agentglass's own notifications"
-                      hint="Chats finishing, branches falling behind, checks going red. Anything held waiting on you still speaks — that one cannot be caught up on later — and everything keeps landing in the bell either way." />
+                      hint="Chats finishing, branches falling behind, checks going red. With Quiet on, above, only what is stopped interrupts either way; this switch decides the rest once Quiet is off. Everything keeps landing in the bell." />
                     <Toggle on={sound} onClick={onSound}
                       label="Alert sounds"
                       hint="A chime when a session errors or needs you" />
@@ -4204,6 +4277,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                       label="Keep Codex usage current"
                       hint="Runs a minimal Codex turn hourly so the quota reading is not stale — uses a small amount of the quota it measures" />
                   </Section>
+                  </>
                   )}
 
                   {pane === "browser" && <><BrowserPane /><AgentBrowserPane open={open} /></>}

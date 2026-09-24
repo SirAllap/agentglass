@@ -1208,6 +1208,36 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 .agx-note-row:last-child {
   margin-bottom: 0;
 }
+/* One source's rows: the newest, and the older ones folded under it. The
+   group carries the gap between sources, so a row inside one sits flush. */
+.agx-note-group {
+  margin-bottom: 6px;
+}
+.agx-note-group:last-child {
+  margin-bottom: 0;
+}
+.agx-note-group > .agx-note-row {
+  margin-bottom: 2px;
+}
+/* The digest line under a group's newest row. Quieter than a row and than a
+   link — it is a count of what is folded, not somewhere to go. */
+.agx-note-fold {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 26px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 10.5px;
+  color: var(--text3);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.agx-note-fold:hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  color: var(--text);
+}
 .agx-note-body {
   font-size: 11px;
   line-height: 1.5;

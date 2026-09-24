@@ -194,6 +194,9 @@ def main():
         "session_id": payload.get("session_id") or "unknown",
         "tool_name": payload.get("tool_name") or "?",
         "tool_input": payload.get("tool_input") or {},
+        # Where the call runs. Gate rules and budgets are per project, and
+        # without this the server can only place sessions it has a pane for.
+        "cwd": payload.get("cwd") or "",
         "timeout_ms": timeout * 1000,
     }).encode("utf-8")
 

@@ -177,16 +177,11 @@ Prefer a file over env vars? Drop a `~/.config/agentglass/config.json` (or
 `$XDG_CONFIG_HOME/agentglass/config.json`) with `root`, `repoDirs`,
 `terminalDisabled` and/or `chatBypass`; env vars override it. The last two
 matter for a desktop-launched app, which inherits no shell environment and so
-cannot be configured by `export` at all.
-
-`gateTools` is file-only (no env var): an array of `{ root, allow, deny }`
-rules the PreToolUse gate evaluates before asking a human — denylist hard-
-denies (union across matching roots), allowlist auto-allows from the longest
-matching root only (Claude Code's own permissions still apply), anything else
-on a non-empty allowlist soft-holds. `config.json` is cached in-process, so
-editing `gateTools` needs an agentglass restart. See
-[INSTALL.md](INSTALL.md#tool-allowlist--denylist-rule-based-gate).
-`budgets` is the spend side of the same idea (annotates a hold when over).
+cannot be configured by `export` at all. Gate rules (`gateRules`) live there
+too — see the control-plane section of INSTALL.md. The older key `gateTools`
+(`{ root, allow, deny }` rows) is read as `gateRules`, with a warning at startup
+asking for the move; beside `gateRules` its rows only add denials. One that is
+not a list is an error line and applies nothing.
 
 > **Pricing is a user-editable default.** Numbers in `pricing.ts` are per 1M
 > tokens and matched against `model_name` by substring. Set

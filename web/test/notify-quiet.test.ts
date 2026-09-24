@@ -42,8 +42,11 @@ const gate = (id: string): PendingGate => ({
   created: 1_700_000_000_000,
 });
 
-test("quiet is off unless asked for", () => {
-  expect(sysNotify.notifyQuiet()).toBe(false);
+// On unless turned off. Quiet used to reach only the mirrored notes and start
+// off; now it decides what any source may interrupt with, and the calm reading
+// — only what is stopped takes the screen — is the one nobody has to find.
+test("quiet is on unless turned off", () => {
+  expect(sysNotify.notifyQuiet()).toBe(true);
 });
 
 test("quiet round-trips and notifies its listeners", () => {

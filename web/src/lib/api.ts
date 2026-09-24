@@ -2,6 +2,7 @@ import type { UiAction, Field, NoteStatus, PluginPanel, PluginPrNotes } from "./
 import type { ImportedPlace } from "./desktop.ts";
 import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue } from "../../../shared/types.ts";
 import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember } from "../../../shared/providers.ts";
+import { DEFAULT_NOTIFY_PREFS, type NotifyPrefs } from "../../../shared/notifyPrefs.ts";
 
 /** What every ClickUp write answers with: the card as it now stands, or why not. */
 /* `conflict` and `unauthorised` are the two failures with a remedy the app can
@@ -905,7 +906,8 @@ const realApi = {
     return get<{ hits: SearchHit[] }>(`/search?${p}`);
   },
   gatePending: () => get<{ gates: PendingGate[] }>(`/gate/pending`),
-  gateHistory: (limit = 25) => get<{ gates: GateRecord[] }>(`/gate/history?limit=${limit}`),
+  gateHistory: (limit = 25, opts?: { ruleAllows?: boolean }) =>
+    get<{ gates: GateRecord[] }>(`/gate/history?limit=${limit}${opts?.ruleAllows === false ? "&rule_allows=0" : ""}`),
   // Unscoped, unlike every other metric call: "who merged that" is at its most
   // useful when the answer is somewhere you were not looking.
   actions: (limit = 200, before?: number) =>
@@ -976,7 +978,11 @@ const realApi = {
    *  `force` is the Recheck button: it re-probes inside the server's cache
    *  window, which is the only case where a stale answer is the wrong one. */
   dependencies: (force = false) => get<DepsResponse>(`/dependencies${force ? "?force=1" : ""}`),
-  gitRepos: () => get<{ repos: GitRepoRef[] }>("/git/repos"),
+  // `roots` rides along even on this plain (non-`all=1`) call — the server
+  // always answers it (index.ts's /git/repos) — so the bell can tell "this
+  // window's folders" from a whole-machine sweep. See gitNote.ts's
+  // notesWorthyRepos.
+  gitRepos: () => get<{ repos: GitRepoRef[]; roots?: string[] }>("/git/repos"),
   /** Put a PNG somewhere an agent can read it, and say where. A tmux window
    *  takes text; a megabyte of base64 in a prompt is not text. */
   /** Everywhere another browser has been, for the address bar. */
@@ -1751,6 +1757,10 @@ const realApi = {
   /** A click or a submitted form, sent back to the plugin that drew it. */
   pluginAction: (plugin: string, panel: string | undefined, action: UiAction, values?: Record<string, unknown>) =>
     post<{ ok: boolean; error?: string }>("/plugins/action", { plugin, panel, action, values }),
+  /** The notification diet — which kinds may notify, and on which channels.
+   *  See shared/notifyPrefs.ts. */
+  notifyPrefs: () => get<{ ok: boolean; prefs: NotifyPrefs }>("/notify/prefs"),
+  setNotifyPrefs: (prefs: NotifyPrefs) => post<{ ok: boolean; prefs: NotifyPrefs }>("/notify/prefs", prefs),
   pluginSettings: (name: string) =>
     get<{ ok: boolean; fields: Field[]; values: Record<string, unknown>; error?: string }>(`/plugins/settings?name=${encodeURIComponent(name)}`),
   pluginSettingsSave: (name: string, values: Record<string, unknown>) =>
@@ -2293,6 +2303,8 @@ const demoApi: typeof realApi = {
   pluginRemove: (_name: string) => D({ ok: false }),
   pluginPanels: (_plugin?: string, _panel?: string) => D({ ok: true, panels: [] as PluginPanel[] }),
   pluginAction: (_p: string, _panel: string | undefined, _a: UiAction, _v?: Record<string, unknown>) => D({ ok: false, error: "not available in the demo" }),
+  notifyPrefs: () => D({ ok: true, prefs: DEFAULT_NOTIFY_PREFS }),
+  setNotifyPrefs: (_p: NotifyPrefs) => D({ ok: false, prefs: DEFAULT_NOTIFY_PREFS }),
   pluginSettings: (_name: string) => D({ ok: false, fields: [] as Field[], values: {}, error: "not available in the demo" }),
   pluginSettingsSave: (_name: string, _v: Record<string, unknown>) => D({ ok: false, error: "not available in the demo" }),
   pluginPrNotes: (_repo: string, _n: number) => D({ ok: true, runs: [], notes: [], publishers: {} } as PluginPrNotes),

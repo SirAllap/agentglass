@@ -171,3 +171,15 @@ describe("restart", () => {
     expect(db.gateHistory(50).map((g) => g.id)).toContain(stale);
   });
 });
+
+describe("a rule's decision is one write", () => {
+  test("when resolving it fails, no pending row is left for a restart to decide by the clock", () => {
+    // A reason SQLite cannot bind makes the second write throw after the first
+    // succeeded. A pending row with no waiter is resolved at the next boot by
+    // the timeout policy, so history would say a denied call was allowed.
+    const id = newId();
+    const out = gate.denyByRule(req({ id }), Symbol("unbindable") as unknown as string);
+    expect(out.decision).toBe("deny");
+    expect(db.getGate(id)).toBeNull();
+  });
+});

@@ -801,7 +801,7 @@ export function actionLog(limit = 200, before?: number): ActionRow[] {
 //
 // `decision` NULL means still pending. `resolution` records *who* decided:
 // human, timeout, restart (expired while the server was down), or rule
-// (a tool allow/deny policy that answered without waiting).
+// (a gate rule in config.json that answered on arrival).
 /**
  * What survives the prune.
  *
@@ -867,6 +867,9 @@ CREATE TABLE IF NOT EXISTS gates (
 );
 CREATE INDEX IF NOT EXISTS idx_gates_pending ON gates(decision, expires);
 CREATE INDEX IF NOT EXISTS idx_gates_created ON gates(created);
+-- History reads newest-decided first, polled every 15 s, and a rule's allows
+-- make the table one row per allowed call.
+CREATE INDEX IF NOT EXISTS idx_gates_decided ON gates(decided_at);
 
 /*
  * When to tell somebody about something.
@@ -926,6 +929,19 @@ CREATE INDEX IF NOT EXISTS idx_reminders_live ON reminders(fired_at, due);
  * would invent one — the same reason `actorOf` refuses to invent a name.
  */
 try { db.exec("ALTER TABLE gates ADD COLUMN decided_by TEXT"); } catch { /* already present */ }
+/*
+ * Whether this one request is denied when nobody answers, whatever the
+ * machine's policy — an outward action is. It lived only on the timer, so a
+ * restart re-armed a held push under the fail-open default and let it through.
+ * 0 on every row written before the column existed, which is what they were.
+ */
+try { db.exec("ALTER TABLE gates ADD COLUMN fail_closed INTEGER NOT NULL DEFAULT 0"); } catch { /* already present */ }
+/* The line a person decides from — what an outward action does and the text
+ * it would send, or why a budget made this worth an interruption. It lived in
+ * memory beside the timer, so a request restored after a restart came back as
+ * a bare summary while still being denied if nobody answered. NULL when there
+ * was none, which is most rows. */
+try { db.exec("ALTER TABLE gates ADD COLUMN note TEXT"); } catch { /* already present */ }
 
 // ---------------------------------------------------------------------------
 /*
@@ -1743,11 +1759,15 @@ export interface GateRow {
   /** Who, when a person decided. NULL for a timeout, a restart, a rule, and for
    *  every row written before this column existed — an absent actor is not `local`. */
   decided_by: string | null;
+  /** 1 when this request is denied on timeout whatever the machine's policy. */
+  fail_closed: number;
+  /** The hold's own line, shown beside the summary. */
+  note: string | null;
 }
 
 const gateInsert = db.query(`
-  INSERT OR REPLACE INTO gates (id, source_app, session_id, tool_name, summary, created, expires)
-  VALUES ($id, $source_app, $session_id, $tool_name, $summary, $created, $expires)`);
+  INSERT OR REPLACE INTO gates (id, source_app, session_id, tool_name, summary, created, expires, fail_closed, note)
+  VALUES ($id, $source_app, $session_id, $tool_name, $summary, $created, $expires, $fail_closed, $note)`);
 // Only ever resolves a still-pending row: a decision already recorded wins over
 // a late timeout, so a human's approve can't be overwritten by the clock.
 const gateResolve = db.query(`
@@ -1758,15 +1778,36 @@ const gateById = db.query<GateRow, [string]>(`SELECT * FROM gates WHERE id = ?`)
 const gatesPending = db.query<GateRow, []>(`SELECT * FROM gates WHERE decision IS NULL ORDER BY created ASC`);
 const gatesRecent = db.query<GateRow, [number]>(
   `SELECT * FROM gates WHERE decision IS NOT NULL ORDER BY decided_at DESC LIMIT ?`);
+const gatesRecentUnlisted = db.query<GateRow, [number]>(
+  `SELECT * FROM gates WHERE decision IS NOT NULL AND NOT (resolution = 'rule' AND decision = 'allow')
+   ORDER BY decided_at DESC LIMIT ?`);
 
 export function recordGate(g: {
   id: string; source_app: string; session_id: string; tool_name: string;
-  summary: string; created: number; expires: number;
+  summary: string; created: number; expires: number; fail_closed?: boolean; note?: string;
 }): void {
   gateInsert.run({
     $id: g.id, $source_app: g.source_app, $session_id: g.session_id, $tool_name: g.tool_name,
-    $summary: g.summary, $created: g.created, $expires: g.expires,
+    $summary: g.summary, $created: g.created, $expires: g.expires, $fail_closed: g.fail_closed ? 1 : 0,
+    $note: g.note ?? null,
   } as any);
+}
+
+/**
+ * A gate a rule decided on arrival: written and resolved in one transaction.
+ * Two separate writes could leave the row pending with no waiter when the
+ * second failed, and the next boot resolves a pending row by the timeout
+ * policy — history then read "allowed, restart" for a call the rule denied.
+ */
+export function recordRuleGate(
+  g: { id: string; source_app: string; session_id: string; tool_name: string; summary: string; created: number },
+  decision: "allow" | "deny",
+  reason: string,
+): void {
+  db.transaction(() => {
+    recordGate({ ...g, expires: g.created });
+    resolveGateRow(g.id, decision, reason, "rule", g.created);
+  })();
 }
 
 export function resolveGateRow(
@@ -1798,8 +1839,12 @@ export function undecidedGates(): GateRow[] {
 
 /** Recently resolved gates, newest first — the "what happened while you were
  *  away" record, including the ones a timeout or a restart decided for you. */
-export function gateHistory(limit = 50): GateRow[] {
-  return gatesRecent.all(Math.max(1, Math.min(500, limit)));
+export function gateHistory(limit = 50, opts: { ruleAllows?: boolean } = {}): GateRow[] {
+  const n = Math.max(1, Math.min(500, limit));
+  // A rule's allows are one row per waved-through call; a reader looking for
+  // what nobody chose asks without them, or twenty-five allowed Reads push the
+  // one denial it is looking for out of its window.
+  return opts.ruleAllows === false ? gatesRecentUnlisted.all(n) : gatesRecent.all(n);
 }
 
 /** Coarse vendor for a model name — the provider dimension. Returns null for an

@@ -102,7 +102,10 @@ test("answering a gate does not let an in-flight poll re-announce it", () => {
 
   store.ingestGates([gate("a"), gate("b"), gate("c")]); // the stale reply
   expect(arrivals.map((g) => g.id)).toEqual(["c"]);
-  expect(gateNotes()).toHaveLength(1);
+  // forgetGate cleared c's row the moment the decision was sent — see
+  // gate-bell-single-row.test.ts. It does not come back because the stale
+  // reply above did not re-announce it either.
+  expect(gateNotes()).toHaveLength(0);
   // And the card stays gone. Republishing the stale list verbatim would flick
   // the gate you just answered back onto the screen, reading as a click that
   // did not register — until the server confirms the removal, it is suppressed.
@@ -114,8 +117,41 @@ test("a gate that resolves and is later reissued is announced again", () => {
   store.ingestGates([gate("a"), gate("b")]); // b comes back as a new hold
 
   expect(arrivals.map((g) => g.id)).toEqual(["c", "b"]);
-  expect(gateNotes()).toHaveLength(2);
+  // c's own row is long gone (see above); only the reissued b's is on screen.
+  expect(gateNotes()).toHaveLength(1);
+  expect(gateNotes()[0]!.key).toBe("gate:b");
   unsub?.();
+});
+
+/*
+ * A gate that starts and resolves while the tab is hidden.
+ *
+ * The regular poll (tick(), at the bottom of gateStore.ts) is paused while
+ * `document.hidden` — nobody can approve anything they cannot see. But the
+ * server's push for the same hold (useLive.ts's "gate" alert frame) still
+ * arrives while hidden, and used to only pop a toast (firePopupOnly) without
+ * touching the durable row: a hold that both starts and resolves before the
+ * tab is looked at left no bell record at all. pollGatesNow is the seam that
+ * frame reaches for — an immediate ingest that does not check `document.hidden`.
+ */
+test("pollGatesNow ingests even while the tab is hidden", async () => {
+  const realDocument = (globalThis as any).document;
+  (globalThis as any).document = { hidden: true, addEventListener() {} };
+  const realFetch = globalThis.fetch;
+  (globalThis as any).fetch = (...args: unknown[]) => {
+    if (String(args[0]).includes("/gate/pending")) {
+      return Promise.resolve(new Response(JSON.stringify({ gates: [gate("hidden-hold")] }), { headers: { "content-type": "application/json" } }));
+    }
+    return Promise.resolve(new Response("{}", { headers: { "content-type": "application/json" } }));
+  };
+  try {
+    await store.pollGatesNow();
+    expect(store.listGates().map((g) => g.id)).toContain("hidden-hold");
+    expect(gateNotes().some((n) => n.key === "gate:hidden-hold")).toBe(true);
+  } finally {
+    globalThis.fetch = realFetch;
+    (globalThis as any).document = realDocument;
+  }
 });
 
 /**

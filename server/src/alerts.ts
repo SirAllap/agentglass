@@ -19,7 +19,10 @@
 import type { WatchEvent, AlertNote } from "../../shared/types.ts";
 import { paneForSession, noteForSession } from "./panewt.ts";
 import { listPanes } from "./tmuxctl.ts";
+import { ErrorStreaks, STOP_QUIET_MS, lanternStep, lanternState, type ErrorAlert, type LanternFinding } from "./notePolicy.ts";
 import { webhookDestination } from "./egress.ts";
+import { kindOfNotification, type NotifyKind } from "../../shared/notifyPrefs.ts";
+import { readNotifyPrefs } from "./notifyPrefs.ts";
 
 // Resolved once, here, because the boot line below reports it and a boot line
 // that describes a destination the process is no longer using would be worse
@@ -127,18 +130,31 @@ async function deliver(
   pane?: string,
   /** What kind of thing this is, when it is not ordinary news. Travels on the
    *  frame so the app can raise an alarm rather than another row. */
-  extra?: { kind: "reminder"; id: string } | { kind: "understudy" },
+  extra?: Pick<AlertNote, "kind" | "id" | "key" | "update" | "clear" | "panes" | "source">,
+  /** Which of the seven notification kinds this is (shared/notifyPrefs.ts) —
+   *  the gate below and the client both key off this, not off the text. */
+  kind: NotifyKind = "idle",
 ) {
-  if (WEBHOOK.configured && !IS_TEST) {
-    try {
-      await fetch(WEBHOOK.url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text: `*${title}*\n${body}` }),
-      });
-    } catch (e) {
-      console.warn("[alerts] webhook failed:", e);
-    }
+  // A redraw or a removal of a row the client already has. It is not news, so
+  // it goes only where that row lives: never to a webhook, never to
+  // notify-send, and never to a client that is not attached to see it.
+  const redraw = !!(extra?.key && (extra.update || extra.clear));
+  // The diet, checked once, here, rather than in every push* function: every
+  // alert in this file funnels through deliver, so this is the one place a
+  // kind turned off actually has to stop something. `none` short-circuits
+  // everything, `blocked` by default is the only kind that reaches here at
+  // all — the rest are off until a person turns them on in Settings.
+  const prefs = readNotifyPrefs();
+  if (prefs.none || !prefs.kinds[kind]) return;
+  // Not awaited. The clients' frames go out in the order things happened, and
+  // a slow or hung webhook ahead of them would deliver an announcement after
+  // the clear that followed it — bringing back a card for work that finished.
+  if (WEBHOOK.configured && !IS_TEST && !redraw) {
+    fetch(WEBHOOK.url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: `*${title}*\n${body}` }),
+    }).catch((e) => console.warn("[alerts] webhook failed:", e));
   }
   // An attached client is not an operating-system side effect.
   //
@@ -171,8 +187,12 @@ async function deliver(
   // pings keeps `live > 0`, so this returns before `notify-send` exactly as it
   // always did.
   const { attached, live } = sink?.census() ?? { attached: 0, live: 0 };
-  if (sink && attached > 0) sink.broadcast({ title, body, urgency, ...(pane ? { pane } : {}), ...(extra ?? {}) });
-  if (live > 0) return;
+  if (sink && attached > 0) sink.broadcast({ title, body, urgency, notifyKind: kind, ...(pane ? { pane } : {}), ...(extra ?? {}) });
+  if (live > 0 || redraw) return;
+  // `notify-send` paints the desktop, which is what the "desktop" channel
+  // means — gated on top of the kind check above, not instead of it, so
+  // turning the channel off never turns "desktop" into "everywhere else too".
+  if (DESKTOP && !prefs.channels.desktop) return;
   if (DESKTOP) {
     // Urgency 0 is a row in a list, not a thing to put on somebody's screen.
     // With no window open there is no list to put it in either, so it waits
@@ -279,6 +299,8 @@ export function pushGate(agent: string, tool: string, summary: string, pane?: st
       // So the one alert that stops an agent dead also says where to go and
       // takes you there. It is the notification with the most reason to.
       pane,
+      { source: "gate" },
+      "blocked",
     );
 }
 
@@ -328,20 +350,80 @@ export function pushUnderstudyStuck(what: string, question: string, tried: strin
       /* Where to go, so the alert that says a machine is waiting also takes
          you to the screen where you can answer it. */
       "understudy",
-      { kind: "understudy" },
+      { kind: "understudy", source: "understudy" },
+      "autopilot",
     );
   }
 }
 
-/** The Lantern's watch: one loud line per look while something needs a
- *  person. Critical, so the desktop keeps it on screen; the first waiting
- *  pane rides along so a click lands where the answer is typed. */
+/** A scheduled start reporting how it went. Named for the Lantern because it
+ *  used to share its channel; the watch itself goes through
+ *  `pushLanternFindings` below. */
 export function pushLantern(title: string, body: string, pane?: string) {
-  if (shouldSend("lantern:watch")) deliver(title, body, 2, pane);
+  if (shouldSend("lantern:watch")) deliver(title, body, 2, pane, { source: "schedule" }, "autopilot");
+}
+
+/**
+ * The Lantern's watch, said once per finding — see notePolicy.ts for the rule.
+ *
+ * One card, keyed `lantern`: an announcement interrupts (critical only when
+ * something new is BLOCKED, normal for a prompt left open, a forgotten claim or
+ * a window gone), a change with nothing new redraws the card without a sound,
+ * and an empty board removes it.
+ */
+let lanternMemory = lanternState();
+/** The card as the clients should have it now, for one that attaches later. */
+let lanternCard: AlertNote | null = null;
+export function __resetLanternMemory() { lanternMemory = lanternState(); lanternCard = null; }
+export function pushLanternFindings<F extends LanternFinding>(
+  all: F[],
+  notice: (f: F[]) => { title: string; body: string; pane?: string } | null,
+  now = Date.now(),
+) {
+  const step = lanternStep(all, lanternMemory, now);
+  if (step.act === "none") return;
+  if (step.act === "clear") {
+    lanternCard = null;
+    deliver("", "", 0, undefined, { key: "lantern", clear: true, source: "lantern" }, "autopilot");
+    return;
+  }
+  const n = notice(step.findings);
+  if (!n) return;
+  const extra = { key: "lantern", panes: step.panes, source: "lantern" };
+  lanternCard = { title: n.title, body: n.body, urgency: step.urgency, ...(n.pane ? { pane: n.pane } : {}), ...extra, update: true };
+  if (step.act === "update") { deliver(n.title, n.body, step.urgency, n.pane, { ...extra, update: true }, "autopilot"); return; }
+  deliver(n.title, n.body, step.urgency, n.pane, extra, "autopilot");
+}
+
+/**
+ * The Lantern card for a client that has just attached.
+ *
+ * A keyed card is only ever redrawn or cleared after it is announced, and both
+ * of those reach only the clients attached at that moment. A window that was
+ * closed or reloading when the announcement went out would otherwise show
+ * nothing until the next new finding, and one that missed the clear would keep
+ * a persisted "needs you" row for work that finished. So every attach is told
+ * the card as it stands: a silent upsert, or a clear when there is none.
+ */
+export function lanternSnapshot(): AlertNote {
+  return lanternCard ?? { title: "", body: "", urgency: 0, key: "lantern", clear: true, source: "lantern" };
+}
+
+/** The paired-devices file changed behind the server's back (devices.ts). Critical:
+ *  somebody may have tried to give themselves a device, and the person should know. */
+export function pushDeviceStoreChanged(path: string) {
+  if (shouldSend("devices:tampered")) {
+    deliver("⚠ Paired devices changed outside agentglass",
+      `${path} was edited by something other than pairing. The change is ignored; check Settings › Remote.`, 2,
+      // "blocked", the one kind on by default: this is a security warning, and
+      // filing it under "failures" (off by default) silenced it for everybody
+      // who never opened Settings › Notifications. "None" still silences it.
+      undefined, { source: "devices" }, "blocked");
+  }
 }
 
 export function pushReminder(id: string, title: string, when: string) {
-  if (shouldSend(`remind:${id}`)) deliver(`⏰ ${title}`, when, 2, undefined, { kind: "reminder", id });
+  if (shouldSend(`remind:${id}`)) deliver(`⏰ ${title}`, when, 2, undefined, { kind: "reminder", id, source: "reminder" }, "reminders");
 }
 
 /**
@@ -431,6 +513,8 @@ let paneCacheAt = 0;
  *  by the time anybody looks. */
 const PANE_CACHE_MS = 5_000;
 
+const errorStreaks = new ErrorStreaks();
+
 /** Inspect an event and fire an alert if it warrants one. */
 export function maybeAlert(e: WatchEvent) {
   const agent = describeAgent(e);
@@ -446,7 +530,7 @@ export function maybeAlert(e: WatchEvent) {
       deliver(
         "⏳ Approval needed",
         `${agent} is waiting on a permission request${e.tool_name ? ` (${e.tool_name})` : ""}.`,
-        2, pane,
+        2, pane, { source: "gate" }, "blocked",
       );
     return;
   }
@@ -467,32 +551,54 @@ export function maybeAlert(e: WatchEvent) {
     // falls through to 1 and still lands in the list with its pane. A stale
     // string here loses a promotion; a stale string there INVENTED an urgent
     // interrupt out of a command that had worked.
-    const urgency = /needs your (permission|approval)/i.test(msg) ? 2
-      : /usage limit reset/i.test(msg) ? 0
+    //
+    // "Waiting for your input" is 0 as well, and it is the bulk of these: the
+    // turn ended and the prompt is open, which the board already shows on the
+    // agent's own row. A prompt left open for an hour is the Lantern's to say,
+    // once. At 1 it was a sound and a badge per turn per agent — the largest
+    // single source of rows on a desk running five of them.
+    const blocking = /needs your (permission|approval)/i.test(msg);
+    const urgency: 0 | 1 | 2 = blocking ? 2
+      : /usage limit reset|waiting for your input/i.test(msg) ? 0
         : 1;
-    if (shouldSend(`notify:${e.session_id}:${msg}`)) deliver(`🔔 ${msg}`, agent, urgency, pane);
+    if (shouldSend(`notify:${e.session_id}:${msg}`))
+      deliver(`🔔 ${msg}`, agent, urgency, pane, { source: blocking ? "gate" : "agents" }, kindOfNotification(msg));
     return;
   }
-  if (e.is_error) {
-    // Urgency 0: it goes in the list, with its pane, and interrupts nothing.
-    //
-    // A failed tool call does not earn a human, and the measurement is not
-    // close. Over 8 days, 465 error events: 464 were followed by another event
-    // from the same session within 60 seconds and all 465 within five minutes.
-    // ZERO were the last thing a session ever did. The agent had already
-    // recovered before the popup finished animating — which is his report,
-    // exactly: "when I open the conversation I don't see that anything failed".
-    //
-    // At 2 this was `requireInteraction` on the desk, `max` on the phone and
-    // `-u critical` on notify-send: a popup that stays until dismissed by hand,
-    // 140 times a day, for a grep that matched nothing. The notification he
-    // actually needs — an agent waiting on him — was three lines above at 1,
-    // expiring quietly while he cleared the sixty that were not.
-    //
-    // No list of benign error strings, and that is deliberate. Classification
-    // is the trap the marker scan fell into; demotion needs no vocabulary and
-    // cannot go stale.
-    if (shouldSend(`err:${e.session_id}:${e.tool_name}`))
-      deliver("❌ Tool error", `${agent} — ${e.tool_name ?? "tool"} failed${e.error_text ? `: ${e.error_text.slice(0, 200)}` : ""}.`, 0, pane);
+  // A failed tool call is never news by itself — see the measurement below and
+  // notePolicy.ts. What reaches a person is a streak of them in one session, or
+  // a turn that ENDED on one; everything else is the session's own activity.
+  //
+  // It used to be a row per failure at urgency 0: silent, but still a card in
+  // the list for every grep that matched nothing, and on a busy desk the list
+  // was mostly those. The measurement that demoted them stands, and is why they
+  // are now gone rather than quiet:
+  //
+  // Over 8 days, 465 error events: 464 were followed by another event from the
+  // same session within 60 seconds and all 465 within five minutes. ZERO were
+  // the last thing a session ever did. The agent had already recovered before
+  // the popup finished animating.
+  const failed = errorStreaks.note(e);
+  if (failed && shouldSend(`streak:${e.session_id}`)) sayFailed(failed, agent, pane);
+  // A Stop after a failure is only the end of the turn if nothing follows it.
+  // Asked again once the quiet period is over; see notePolicy.ts for why a
+  // Stop alone is not enough.
+  if (e.hook_event_type === "Stop") {
+    const session = e.session_id;
+    const t = setTimeout(() => {
+      const ended = errorStreaks.settle(session);
+      if (ended && shouldSend(`stopped:${session}`)) sayFailed(ended, agent, pane);
+    }, STOP_QUIET_MS + 50);
+    (t as { unref?: () => void }).unref?.();
+  }
+}
+
+function sayFailed(failed: ErrorAlert, agent: string, pane?: string) {
+  const why = failed.text ? `: ${failed.text}` : "";
+  const extra = { key: `errors:${failed.session}`, source: "errors" };
+  if (failed.kind === "streak") {
+    deliver("❌ Keeps failing", `${agent} — ${failed.count} ${failed.tool} calls failed in a row${why}`, 1, pane, extra, "failures");
+  } else {
+    deliver("⏹ Stopped on an error", `${agent} — the turn ended right after ${failed.tool} failed${why}`, 1, pane, extra, "failures");
   }
 }

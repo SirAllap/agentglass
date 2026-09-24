@@ -14,7 +14,7 @@
  * allowed.
  */
 import { describe, expect, test } from "bun:test";
-import { mergeActivity, gateLine, actorLabel } from "../src/lib/activity.ts";
+import { mergeActivity, gateLine, actorLabel, nobodyDecidedWhy } from "../src/lib/activity.ts";
 import type { ActionRecord, GateRecord } from "../../shared/types.ts";
 
 const action = (o: Partial<ActionRecord>): ActionRecord => ({
@@ -96,16 +96,28 @@ describe("what a resolved gate is called", () => {
     expect(gateLine(gate({ resolution: "human" })).note).toBe("");
   });
 
-  test("a tool rule is a decision, not an unanswered timeout", () => {
-    expect(gateLine(gate({ resolution: "rule" })).verb).toBe("approved");
-    expect(gateLine(gate({ decision: "deny", resolution: "rule" })).verb).toBe("denied");
-    expect(gateLine(gate({ resolution: "rule" })).note).toMatch(/allow\/deny rule/);
-  });
-
   test("a denial reads as a denial either way", () => {
     expect(gateLine(gate({ decision: "deny", resolution: "human" })).verb).toBe("denied");
     // Fail-closed: the timeout blocked it, and nobody chose that either.
     expect(gateLine(gate({ decision: "deny", resolution: "timeout", decided_by: null })).verb).toBe("denied");
+  });
+
+  test("a call a rule denied names the rule, not the clock", () => {
+    // Denied on arrival by gateRules in config.json. Nobody answered it, but
+    // "nobody answered before the timeout" would send a person looking for a
+    // hold they missed when there never was one.
+    const g = gate({ decision: "deny", resolution: "rule", decided_by: null });
+    expect(gateLine(g).verb).toBe("denied");
+    expect(gateLine(g).note).toMatch(/rule/);
+    expect(gateLine(g).note).not.toMatch(/timeout/);
+  });
+});
+
+describe("the card for a gate nobody decided", () => {
+  test("says which thing decided it", () => {
+    expect(nobodyDecidedWhy(gate({ resolution: "timeout", decided_by: null }))).toMatch(/timeout/);
+    expect(nobodyDecidedWhy(gate({ resolution: "restart", decided_by: null }))).toMatch(/server was down/);
+    expect(nobodyDecidedWhy(gate({ decision: "deny", resolution: "rule", decided_by: null }))).toMatch(/rule/);
   });
 });
 

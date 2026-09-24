@@ -32,3 +32,25 @@ export function gitDestination(n: { app?: string; summary?: string; body?: strin
   const branch = ON_BRANCH.exec(n.body ?? "")?.[1]?.replace(/[.,;:]$/, "");
   return { kind: "git", repo, ...(branch ? { branch } : {}) };
 }
+
+/**
+ * Which repos are worth a "branches behind" bell row here.
+ *
+ * `/git/repos` with no project open is a whole-machine sweep — every repo this
+ * INSTALL has ever seen an agent touch, not the folders this particular window
+ * was pointed at. A note about a checkout on the other side of the machine is
+ * not a bell row, it is a wrong number: the same fact rendered from a place
+ * that has no reason to know it. `roots` is what the person actually added
+ * (`configuredRepoDirs()` on the server); a repo is worth a row here only when
+ * its own root sits under one of them.
+ *
+ * Empty `roots` is a machine with no folders configured yet — the picker's own
+ * seed has not run, or nobody has added one — and filtering everything out in
+ * that state would just make the feature look broken. So it is the one case
+ * that keeps today's behaviour: nothing to narrow by, nothing narrowed.
+ */
+export function notesWorthyRepos<T extends { root: string }>(repos: T[], roots: string[]): T[] {
+  if (!roots.length) return repos;
+  const under = (repo: string, root: string) => repo === root || repo.startsWith(root.endsWith("/") ? root : `${root}/`);
+  return repos.filter((r) => roots.some((root) => under(r.root, root)));
+}

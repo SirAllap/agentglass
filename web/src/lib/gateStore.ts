@@ -1,5 +1,7 @@
 import { api } from "./api.ts";
-import { recordNote } from "./sysNotify.ts";
+import { clearNote, recordNote } from "./sysNotify.ts";
+import { getNotifyPrefs } from "./notifyPrefsStore.ts";
+import { notifies } from "../../../shared/notifyPrefs.ts";
 import type { PendingGate } from "../../../shared/types.ts";
 
 /**
@@ -24,12 +26,32 @@ const POLL_MS = 2000;
 
 const subs = new Set<() => void>();
 
+/** The bell row a hold's own note is kept under, so exactly one exists per
+ *  hold and it can be cleared without guessing at the sentence announce()
+ *  wrote for it. */
+const keyFor = (id: string): string => `gate:${id}`;
+
 // Compared by identity by useSyncExternalStore, so it is replaced only when
 // the contents actually change. Polling every two seconds and handing back a
 // fresh array each time would re-render every consumer on every tick.
 let snapshot: PendingGate[] = [];
 
 export const listGates = (): PendingGate[] => snapshot;
+
+/**
+ * Which live gate a bell row's `key` is about, if any.
+ *
+ * The bell renders a `SystemNote`, which carries no gate id of its own — only
+ * the `gate:<id>` key announce() wrote it under. This is the one place that
+ * knows the shape of that key, so a row can offer Allow/Deny without the bell
+ * component reaching into gateStore's internals, and the buttons vanish on
+ * their own the instant the gate they are for leaves `gates` (decided, timed
+ * out, or answered from another device).
+ */
+export function gateForNote(note: { key?: string }, gates: PendingGate[]): PendingGate | null {
+  if (!note.key) return null;
+  return gates.find((g) => keyFor(g.id) === note.key) ?? null;
+}
 
 export function subscribeGates(fn: () => void): () => void {
   startPolling();
@@ -102,6 +124,9 @@ const forgotten = new Set<string>();
  * only when you were already looking at the surface that shows it.
  */
 function announce(g: PendingGate) {
+  // The hold stays in the list whatever the settings say; only the push is
+  // gated — the bell row, and the toast TopBarNotes raises on arrival.
+  if (!notifies(getNotifyPrefs(), "blocked", "bell")) return;
   // The server's name for it, not a third home-made one. This composed
   // `${source_app}:${session_id.slice(0, 8)}` — the same string the server
   // alert and the gate push both used until they stopped, and the same one that
@@ -113,6 +138,11 @@ function announce(g: PendingGate) {
     summary: `Approve ${g.tool_name}?`,
     body: g.summary ? `${agent} · ${g.summary}` : `${agent} is held until you decide`,
     urgency: 2,
+    // One row per hold, cleared by keyFor(g.id) below rather than left to pile
+    // up: urgency 2 never folds (notePolicy.ts), and the server's own push for
+    // this same hold (alerts.ts pushGate → the "alert" frame) used to write a
+    // second, unkeyed row for it — see useLive.ts's handling of source "gate".
+    key: keyFor(g.id),
     // Somewhere to go while you decide: the pane it is held in, so you can read
     // what it was doing before you answer. The approve buttons live in the notch
     // itself; this is the other half of the question.
@@ -145,7 +175,11 @@ export function ingestGates(gates: PendingGate[]) {
   }
 
   const live = new Set(gates.map((g) => g.id));
-  for (const id of announced) if (!live.has(id)) announced.delete(id);
+  // A hold that left the pending list resolved somehow — decided, timed out,
+  // or answered from another device — and its row goes with it. Dropped
+  // rather than downgraded: /gate/history already carries the record of what
+  // happened, and a quiet row nobody asked to keep is one more thing to read.
+  for (const id of announced) if (!live.has(id)) { announced.delete(id); clearNote(keyFor(id)); }
 
   // Reconcile the optimistic forgets: an id the server has finally stopped
   // listing is confirmed gone and stops being suppressed; one it still lists
@@ -174,6 +208,10 @@ export function forgetGate(id: string) {
   // overlaps the decision still lists it, and ingestGates would otherwise
   // republish it. Cleared once the server confirms it gone — see `forgotten`.
   forgotten.add(id);
+  // The bell row goes the moment the decision is sent — waiting for the next
+  // poll to prune `announced` would leave it on screen for up to two seconds
+  // after the click that answered it.
+  clearNote(keyFor(id));
   const next = snapshot.filter((g) => g.id !== id);
   if (next.length === snapshot.length) return;
   snapshot = next;
@@ -293,6 +331,26 @@ async function tick() {
     } catch { /* offline or starting up: keep the last known list */ }
   }
   timer = setTimeout(tick, POLL_MS);
+}
+
+/**
+ * Ingest the pending list right now, whether or not the tab is hidden.
+ *
+ * The regular poll (tick, below) skips itself while `document.hidden` — right
+ * for the interval poll, since nobody can approve what they cannot see. But
+ * the server's own push for a new hold (the "gate" alert frame in useLive.ts)
+ * still reaches a hidden tab, and a hold that both starts and resolves before
+ * the tab is ever looked at left no bell record at all: tick() never ran, so
+ * ingestGates() never did either. This is the seam that push reaches for
+ * instead of duplicating announce()'s note-recording logic — it forces the
+ * one read tick() would have done, so the durable row exists exactly as it
+ * would have for a tab that was visible.
+ */
+export async function pollGatesNow(): Promise<void> {
+  try {
+    const { gates } = await api.gatePending();
+    ingestGates(gates);
+  } catch { /* offline or starting up: keep the last known list */ }
 }
 
 let started = false;
