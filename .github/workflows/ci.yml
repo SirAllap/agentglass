@@ -210,7 +210,11 @@ jobs:
   # It always runs and always reports, so it can be a required check: a pull
   # request that does not touch the catalogue passes it with nothing to do,
   # and one that touches the catalogue AND anything else fails it, because a
-  # listing is one entry and nothing more.
+  # listing is one entry and nothing more. The one exception is a pull request
+  # the repository owner wrote: a release carries its own catalogue edits (pins,
+  # hashes) next to everything else, and the owner reviews it by hand. The
+  # approval workflow's listings are authored by its app, never by the owner,
+  # so they still travel alone and are still re-derived.
   #
   # The tools it runs are the BASE branch's, never the pull request's: a pull
   # request that edited the check could otherwise pass it. It clones a
@@ -233,8 +237,11 @@ jobs:
       - name: Nothing to check
         if: needs.changes.result == 'success' && (github.event_name != 'pull_request' || needs.changes.outputs.catalogue != 'true')
         run: echo "this change does not touch landing/plugins.json"
+      - name: The owner's own pull request
+        if: github.event_name == 'pull_request' && needs.changes.outputs.catalogue == 'true' && needs.changes.outputs.catalogue_only != 'true' && github.event.pull_request.author_association == 'OWNER'
+        run: echo "::notice::landing/plugins.json changed with other files in a pull request the owner wrote; reviewed by hand, not as a listing"
       - name: A listing travels alone
-        if: github.event_name == 'pull_request' && needs.changes.outputs.catalogue == 'true' && needs.changes.outputs.catalogue_only != 'true'
+        if: github.event_name == 'pull_request' && needs.changes.outputs.catalogue == 'true' && needs.changes.outputs.catalogue_only != 'true' && github.event.pull_request.author_association != 'OWNER'
         run: |
           echo "::error::landing/plugins.json changed together with other files; a listing is one entry in its own pull request"
           exit 1

@@ -1,0 +1,9 @@
+# The redaction tests feed invented credentials (s3cr3t, abc.def) through the
+# scrubber to prove it removes them. They are fixtures, not secrets, and a
+# scanner that flags them fails every pull request that touches those tests.
+version: 2
+secret:
+  ignored_paths:
+    - server/test/**
+    - web/test/**
+    - mobile/test/**
