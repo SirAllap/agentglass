@@ -89,6 +89,18 @@ set -g focus-events on
  * on the spot. The windows this app opens and watches for their exit set the
  * option back to off on themselves (panelease.ts, agentops.ts).
  *
+ * `pane-died` alone is not enough, so a shell pane is also born with the option
+ * off. Under `failed`, tmux keeps a pane until it has the exit status, and a
+ * tmux built with libutempter — Debian's and Ubuntu's are — can lose that
+ * SIGCHLD: the library resets the handler to SIG_DFL around its own helper, a
+ * child that exits in that window is never reaped, and the pane stays dead
+ * with no status and no `pane-died`. Measured on Ubuntu 24.04's tmux 3.4 with
+ * `exit 0`: a corpse 8 times in 10; the same source built without utempter,
+ * 0 in 10. Off from birth, a shell's pane closes on the pty's end and never
+ * waits for the status. A pane with a command still waits, and on such a
+ * build can still be kept when it ended cleanly; that is the next thing and
+ * it is not here.
+ *
  * `failed` is a tmux 3.2 value; an older tmux would refuse the whole line and
  * report it on the first attach, so it is left out there.
  */
@@ -100,7 +112,9 @@ export function keepFailedPanesLines(): string {
   return "# A tab whose program failed stays with the status on it; a shell that exits\n"
     + "# closes as always (see keepFailedPanesLines in tmuxconf.ts).\n"
     + "set -g remain-on-exit failed\n"
-    + "set-hook -g pane-died 'if-shell -F \"#{==:#{pane_start_command},}\" \"kill-pane\"'\n";
+    + "set-hook -g pane-died 'if-shell -F \"#{==:#{pane_start_command},}\" \"kill-pane\"'\n"
+    + ["after-new-session", "after-new-window", "after-split-window"].map((h) =>
+      `set-hook -g ${h} 'if-shell -F "#{==:#{pane_start_command},}" "set -p remain-on-exit off"'\n`).join("");
 }
 
 /**
