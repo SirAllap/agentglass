@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src=".github/assets/banner.svg" alt="agentglass" width="100%" />
+<img src="landing/og.png" alt="agentglass — nothing to alt-tab to: terminal, agents, pull requests, diffs, browser, approvals and phone around one window" width="100%" />
 
-**agentglass doesn't replace your agents. It attaches to the tmux sessions and repos already open on your machine, and puts every tool call, dollar and dangerous command on one screen — at your desk or in your pocket.**
+**The workspace for your coding agents: their terminals, pull requests, diffs, a browser they can drive and every approval they wait on, in one window on your own machine.**
 
 [![Live demo](https://img.shields.io/badge/▶%20Live%20demo-try%20it%20in%20your%20browser-6366f1?style=for-the-badge)](https://sirallap.github.io/agentglass/demo/)
 [![Download](https://img.shields.io/badge/⬇%20Download-Linux%20·%20macOS%20·%20Windows%20·%20Android-238636?style=for-the-badge)](https://github.com/SirAllap/agentglass/releases/latest)
@@ -10,59 +10,53 @@
 [![release](https://img.shields.io/github/v/release/SirAllap/agentglass?style=flat-square&color=6366f1)](https://github.com/SirAllap/agentglass/releases/latest)
 [![stars](https://img.shields.io/github/stars/SirAllap/agentglass?style=flat-square&color=eab308)](https://github.com/SirAllap/agentglass/stargazers)
 [![license](https://img.shields.io/github/license/SirAllap/agentglass?style=flat-square&color=10b981)](LICENSE)
-![themes](https://img.shields.io/badge/themes-22-a78bfa?style=flat-square)
-
-![server](https://img.shields.io/badge/server-Bun%20%2B%20SQLite-black?style=flat-square) ![ui](https://img.shields.io/badge/ui-React%20%2B%20Vite-61dafb?style=flat-square) ![desktop](https://img.shields.io/badge/desktop-Electron-47848f?style=flat-square) ![phone](https://img.shields.io/badge/phone-Android%20APK-3ddc84?style=flat-square)
 
 <a href="https://trendshift.io/repositories/86777" target="_blank"><img src="https://trendshift.io/api/badge/trendshift/repositories/86777/daily?language=TypeScript" alt="agentglass | Trendshift" width="250" height="55"/></a>
 
 </div>
 
-## 🛰 What it does
+Running several agents means living in several apps: a terminal per agent, a
+browser tab per pull request, an editor for the diff, a chat window for the
+permission prompt, and the phone for the one that got stuck while you were
+away. agentglass is one desktop window that holds all of it. Claude Code, Codex,
+Gemini CLI and OpenCode keep running where they already run — in tmux, in your
+repositories — and everything they touch comes to you there. Nothing to
+alt-tab to.
 
-**Every agent on one screen.** Claude Code, Codex, Gemini CLI and OpenCode, in
-the tmux sessions and repositories already open on your machine. Every tool
-call as it happens, what each is costing, where the time goes, which session is
-stuck in a loop, what files it touched. agentglass does not launch them and
-does not replace them — it attaches to what is already running.
+**See it:** [the site](https://sirallap.github.io/agentglass/) walks through it,
+and the [live demo](https://sirallap.github.io/agentglass/demo/) is the real
+interface running in your browser on sample data.
 
-**It tells you who needs you.** The **Lantern** leads with one question and
-answers it: red for an agent stopped on a permission gate, amber for one that
-finished a turn and is waiting for you to type. Every agent is a card — model,
-branch, what it is doing this second, cost, turns, errors, and how long before
-its prompt cache goes cold. A watch re-reads it every few minutes and sends one
-notification when somebody has been left hanging.
+## 🧰 Without leaving the window
 
-**Nothing dangerous runs unwatched.** A tool call you decided to gate is held
-until you allow it, from the desk or from your phone. The queue is on disk, so
-a crash cannot silently auto-allow.
+- **Run your agents.** It attaches to the sessions already open in tmux, and it
+  can start them: a task or a GitHub issue becomes a worktree, a branch and an
+  agent working in it, several at once without colliding. Chat with Claude,
+  Codex or Antigravity from a panel, or hand a conversation from one to another.
+- **Work in real terminals.** Real tmux panes, your tmux windows as tabs, the
+  project's `make` targets and `package.json` scripts one click away.
+- **Answer what is waiting on you.** The **Lantern** leads with who needs you:
+  red for an agent stopped on a permission gate, amber for one that finished and
+  is waiting for you to type. A tool call you chose to gate is held until you
+  allow it, from the desk or the phone, and the queue is on disk, so a crash
+  cannot silently allow it.
+- **Read what the agent wrote.** A diff viewer with word-level changes grouped
+  by agent and worktree, and a source-control panel to stage hunks, commit,
+  branch, stash and resolve conflicts.
+- **Review pull requests to a verdict.** Checks, conversation, files and an
+  inline review composer, without opening a browser tab.
+- **Give your agents a browser.** A browser panel your agents drive from a CLI
+  and an MCP server, already signed in to what you are signed in to.
+- **Keep the rest in view.** Docker containers and logs, listening ports and
+  the checkout that owns each one, a file browser, CPU and memory, and what
+  every session costs and where its time goes.
+- **Take it with you.** An Android app paired by a code you scan: the machine's
+  terminal panes, the approvals waiting on you, pull requests and a checkout's
+  changes, at a scope you grant.
+- **Add what is missing.** Plugins are separate processes with a scoped,
+  revocable token, installed from an in-app catalogue.
 
-**It is a place to work, not a dashboard.** Read the diff the agent just wrote,
-review a pull request through to a verdict, run git and docker, drop into a real
-terminal with real tmux panes, drive a browser your agents can use.
-
-## 📸 Screen by screen
-
-<table>
-<tr>
-<td width="50%"><img src=".github/assets/dashboard.png" alt="the cockpit" /><br/><b>The cockpit</b><br/><sub>Every session, what it costs, where the time goes, and which one needs you</sub></td>
-<td width="50%"><img src=".github/assets/pr.png" alt="pull requests" /><br/><b>Pull requests</b><br/><sub>Review one to a verdict without opening a browser</sub></td>
-</tr>
-<tr>
-<td width="50%"><img src=".github/assets/diff.png" alt="diff review" /><br/><b>Diff review</b><br/><sub>Read what the agent just wrote, hunk by hunk</sub></td>
-<td width="50%"><img src=".github/assets/terminal.png" alt="terminal" /><br/><b>Terminal</b><br/><sub>Real tmux panes, and the keys a phone does not have</sub></td>
-</tr>
-<tr>
-<td width="50%"><img src=".github/assets/tasks.png" alt="tasks" /><br/><b>Tasks</b><br/><sub>A GitHub issue to a cut worktree in one press</sub></td>
-<td width="50%"><img src=".github/assets/android.png" alt="the phone app" /><br/><b>In your pocket</b><br/><sub>The machine's panes, a checkout's changes, and what this device was granted</sub></td>
-</tr>
-</table>
-
-**And all of it moving:**
-
-![agentglass in action — the live cockpit, then the workspace: source control, diff review, pull requests, tasks, Docker, chat and a file browser, one keystroke away](.github/assets/hero.gif)
-
-<sub>Every view, and what each is for: [**docs/WORKSPACE.md**](docs/WORKSPACE.md).</sub>
+Every view, and what each one is for: [**docs/WORKSPACE.md**](docs/WORKSPACE.md).
 
 ## 💻 Platforms
 
@@ -112,9 +106,10 @@ capability off.
 <details>
 <summary><b>Does it replace Claude Code, or my agent?</b></summary>
 
-No. It attaches to the tmux sessions and repositories already open on your
-machine. It does not launch your agents and it does not proxy them — close
-agentglass and every agent keeps running.
+No. Your agents are the same CLIs you already run. agentglass attaches to the
+tmux sessions and repositories already open on your machine, and when it starts
+an agent it runs that same CLI, on your machine, with your login. It does not
+proxy them — close agentglass and every agent in tmux keeps running.
 </details>
 
 <details>
