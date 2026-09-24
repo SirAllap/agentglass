@@ -311,15 +311,40 @@ async function main() {
         evaluate(`document.querySelector('${railSel} [aria-selected="true"]')?.getAttribute("data-view") ?? null`);
 
       // The workspace is the window now — no modal to open with ⌘\ or close with
-      // Escape, and the rail is always drawn. Check that it draws a set of view
-      // tabs; the exact count is the user's rail to arrange.
-      // "Mounted" is the root's first paint, not the rail's: on a slow runner the
-      // rail lands a beat later, so wait for it (10 s) before counting.
-      const railTabs = await evaluate(`new Promise((r) => {
+      // Escape. Check that the rail draws a set of view tabs; the exact count is
+      // the user's rail to arrange.
+      //
+      // Except on a first run, and a fresh browser against a fresh server IS a
+      // first run: /projects says nothing is scoped, nobody has answered the
+      // project picker, so the picker opens and the views wait behind it
+      // (awaitingPick in App.tsx) — on purpose. Whether this run sees that
+      // depends on a race: the views come in anyway after PICK_WAIT_MS (3 s) if
+      // /projects has not answered by then. Measured with the CI step's own
+      // server in a private network namespace, it answers well inside 3 s and
+      // the rail count was 0, on main as on this branch; the runner is green
+      // only when its server happens to be slower than that. A run that reaches
+      // a developer's own server on :4000 never sees it at all — that server wants
+      // a token the bundle does not have, and a 401 releases the views.
+      //
+      // So answer the picker the way a person does, by closing it, and hold the
+      // app to what closing promises: the views come in. A picker that closes
+      // onto no rail is a first run stuck on an empty window, and still fails.
+      const pickerSel = '[role="dialog"][aria-label="Choose a project"]';
+      const waitFor = (expr: string, ms: number) => evaluate(`new Promise((r) => {
         const t0 = Date.now();
-        const count = () => document.querySelectorAll('${railSel} [role="tab"]').length;
-        (function poll() { const n = count(); if (n >= 6 || Date.now() - t0 > 10000) r(n); else setTimeout(poll, 100); })();
+        (function poll() { const v = ${expr}; if (v || Date.now() - t0 > ${ms}) r(v); else setTimeout(poll, 100); })();
       })`);
+      const countTabs = `document.querySelectorAll('${railSel} [role="tab"]').length`;
+      // "Mounted" is the root's first paint, not the rail's: on a slow runner the
+      // rail lands a beat later, so wait for it (10 s) — or for the picker.
+      await waitFor(`${countTabs} >= 6 || !!document.querySelector('${pickerSel}')`, 10000);
+      if (await evaluate(`!!document.querySelector('${pickerSel}')`)) {
+        await evaluate(`document.querySelector('${pickerSel} button[aria-label="Close"]')?.click()`);
+        if (!(await waitFor(`!document.querySelector('${pickerSel}')`, 5000)))
+          failures.push("[workspace] the first-run project picker did not close");
+        else console.log("• smoke: first run, closed the project picker to let the views in");
+      }
+      const railTabs = await waitFor(`${countTabs} >= 6 && ${countTabs}`, 10000) || await evaluate(countTabs);
       if (railTabs < 6) failures.push(`[workspace] expected a rail of view tabs, found ${railTabs}`);
 
       // ⌘1 and ⌘2 reach two DIFFERENT views: the numbers switch, and to
