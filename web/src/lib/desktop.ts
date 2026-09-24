@@ -27,7 +27,7 @@ type DesktopBridge = {
   remoteEnabled?: () => Promise<boolean>;
   setRemote?: (on: boolean) => Promise<boolean>;
   revokeRemote?: () => Promise<boolean>;
-  onServerChanged?: (fn: (p: { origin?: string | null; token?: string | null }) => void) => () => void;
+  onServerChanged?: (fn: (p: { origin?: string | null; token?: string | null; deskKey?: string | null }) => void) => () => void;
   /** A link somebody clicked on a web page: today only "install this plugin".
    *  Absent on a shell built before the app claimed its own scheme, and in a
    *  browser tab, where there is no scheme to claim. */
@@ -80,9 +80,9 @@ type DesktopBridge = {
   /** The PERSON's zoom — `webContents.setZoomFactor` in the shell, which scales
    *  the page inside the box it has. Omit the factor to read. */
   zoom?: (factor?: number, guestId?: number) => Promise<{ ok: boolean; factor?: number; percent?: number; error?: string }>;
-  cdpEvents?: () => Promise<{ ok: boolean; events?: Array<{ at: number; method: string; params: unknown }>; error?: string }>;
+  cdpEvents?: (guestId?: number) => Promise<{ ok: boolean; events?: Array<{ at: number; method: string; params: unknown }>; error?: string }>;
   /** All absent on shells built before session-level settings existed. */
-  sessionSettings?: (req: Record<string, unknown>) => Promise<{ ok: boolean; applied?: string[]; error?: string }>;
+  sessionSettings?: (req: Record<string, unknown>) => Promise<{ ok: boolean; applied?: string[]; error?: string; value?: unknown }>;
   /** All absent on shells built before cookie import existed. */
   cookieSources?: () => Promise<CookieSourcesReply>;
   importCookies?: (req: { source: string; sites: string[] }) => Promise<CookieImportReply>;
@@ -487,11 +487,11 @@ export async function browserZoom(
 /** Whatever CDP sent while nobody was asking — a debugger pause, a DOM
  *  breakpoint firing, a console call. Draining empties the buffer, so two
  *  callers do not both get the same pause and both act on it. */
-export async function browserCdpEvents(): Promise<Array<{ at: number; method: string; params: unknown }>> {
+export async function browserCdpEvents(guestId?: number): Promise<Array<{ at: number; method: string; params: unknown }>> {
   const b = bridge();
   if (!b?.cdpEvents) return [];
   try {
-    const r = await b.cdpEvents();
+    const r = await b.cdpEvents(guestId);
     return r.ok && Array.isArray(r.events) ? r.events : [];
   } catch { return []; }
 }
@@ -499,7 +499,7 @@ export async function browserCdpEvents(): Promise<Array<{ at: number; method: st
 /** Apply session-level settings: proxy, extensions, cookies, DNS.
  *  Session-level settings are applied through the Electron main process,
  *  not through the page's DevTools protocol. */
-export async function applySessionSettings(req: Record<string, unknown>): Promise<{ ok: boolean; applied?: string[]; error?: string }> {
+export async function applySessionSettings(req: Record<string, unknown>): Promise<{ ok: boolean; applied?: string[]; error?: string; value?: unknown }> {
   const b = bridge();
   if (!b?.sessionSettings) return { ok: false, error: "this shell does not support session settings" };
   try {

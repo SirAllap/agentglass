@@ -21,11 +21,17 @@ Then the whole interaction in ONE call, which is the cheap way to work:
 
 THE VERBS, by what you reach for them for:
 
+  dev loop    checkup                     # did it break? errors from the load on
+              checkup http://localhost:5173/      # load, wait for quiet, report
+              checkup --reload                    # after your edit
   look        observe · read · text · html · shot · frames · console · network
               shot --selector "#status" evidence.png       # just that element
               shot --highlight "#status" --label "still Online" evidence.png
   act         click · type · select · check · fill · hover · dblclick ·
               rightclick · focus · blur · press · scroll
+              click e12                           # an id from observe, or
+              click 'role=button[name="Save"]'    # what it is called — also
+                                                  # label= text= placeholder= testid=
   wait        wait · waitfor
   navigate    open · back · forward · reload
   tabs        tabs · tab · newtab · closetab · profiles
@@ -136,6 +142,44 @@ def _write_private(path, data, binary=False):
         f.write(data)
 
 
+CHECKUP_SHOTS_KEPT = 20
+
+
+def _checkup_shot(png):
+    """Where a checkup's failure screenshot lands: private (0600, through
+    `_write_private`), under $XDG_CACHE_HOME/agentglass, one file per checkup,
+    the newest CHECKUP_SHOTS_KEPT kept. `shot` prints a data url when it is
+    given no path, so there is no default of its to share.
+
+    The CLI and the MCP server each carry this function, byte for byte the
+    same — they are two stdlib-only scripts with no module between them, and
+    browser-mcp.test.ts holds the two copies equal."""
+    try:
+        raw = base64.b64decode(png.split(",", 1)[1] if "," in png else png)
+    except ValueError:
+        return None
+    if not raw:
+        return None
+    d = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "agentglass")
+    try:
+        os.makedirs(d, mode=0o700, exist_ok=True)
+        # The pid too: two callers in the same millisecond are two pictures.
+        at = os.path.join(d, f"checkup-{int(time.time() * 1000)}-{os.getpid()}.png")
+        _write_private(at, raw, binary=True)
+    except OSError:
+        return None
+    # A failing page checked in a loop writes one picture a minute for as long
+    # as it fails; nobody reads the fortieth.
+    try:
+        named = (re.fullmatch(r"checkup-(\d+)(?:-\d+)?\.png", f) for f in os.listdir(d))
+        shots = [m.group(0) for m in sorted((m for m in named if m), key=lambda m: int(m.group(1)))]
+        for old in shots[:-CHECKUP_SHOTS_KEPT]:
+            os.remove(os.path.join(d, old))
+    except OSError:
+        pass
+    return at
+
+
 def _said_redacted(res):
     """The server counts what it masked (`redacted: {spans, fields}`) and every
     printer here dropped the field: `read` printed title, url and text, and a
@@ -178,6 +222,53 @@ def _token_on_disk():
             return f.read().strip() or None
     except OSError:
         return None
+
+
+# What the panel says when it will not wake another guest. The one place a
+# caller can tell "no room right now" from every other refusal.
+SLOT_FULL = "pages awake at once"
+
+
+def wait_for_slot(op, body, res, seconds):
+    """Queue instead of refusing: ask again once a second until a tab frees or
+    `seconds` run out, and only for THAT refusal. A person closing a tab or a
+    page going to sleep is what frees one, and nothing here can hurry it."""
+    end = time.time() + seconds
+    while not res.get("ok") and SLOT_FULL in (res.get("error") or "") and time.time() < end:
+        time.sleep(min(1.0, max(0.0, end - time.time())))
+        res = call(op, body)
+    return res
+
+
+def wait_for_person(a, body, armed):
+    """The banner is up; now wait. Each check waits up to 20 s inside the page,
+    so no request is held open for minutes, and the loop ends on the person's
+    Done, on --until, on a navigation, or on --timeout (which takes the banner
+    down again rather than leave it on a page nobody is answering for)."""
+    open_browser_view()
+    print(f"handoff: waiting for the person — {body['reason']}", file=sys.stderr)
+    end = time.time() + max(1, min(a.timeout, 3600))
+    res = armed
+    # The same addressing as the request that armed it: this tab, this caller.
+    same = {k: v for k, v in body.items() if k not in ("reason", "until")}
+    try:
+        while time.time() < end:
+            res = call("handoff", stamped(a, {**same, "check": True, "waitMs": int(max(200, min(20000, (end - time.time()) * 1000)))}))
+            state = ((res.get("value") or {}).get("state")) if res.get("ok") else "error"
+            if state == "error":
+                # A transient refusal (the view is remounting) is retried; a real one ends it.
+                if "view is not open" in (res.get("error") or "") and time.time() < end:
+                    time.sleep(1)
+                    continue
+                call("handoff", stamped(a, {**same, "cancel": True}))
+                return res
+            if state != "waiting":
+                return res
+    except KeyboardInterrupt:
+        call("handoff", stamped(a, {**same, "cancel": True}))
+        raise
+    call("handoff", stamped(a, {**same, "cancel": True}))
+    return {"ok": False, "error": f"nobody answered the handoff in {a.timeout} s; the banner was taken down"}
 
 
 def call(op, body):
@@ -611,8 +702,34 @@ def budget_value(value, max_tokens):
         return value
     notes = []
 
-    tree = value.get("tree")
-    if isinstance(tree, list) and tree:
+    # A checkup keeps its verdict whatever happens, and gives up advice before
+    # evidence: the issues first, then the a11y samples, then the OLDEST
+    # errors and failed requests — the newest is what the last edit caused.
+    if "verdict" in value:
+        if isinstance(value.get("issues"), list) and value["issues"]:
+            notes.append(f"issues: dropped {len(value['issues'])}")
+            del value["issues"]
+        a11y = value.get("a11y")
+        if _size(value) > budget_chars and isinstance(a11y, dict) and a11y.get("samples"):
+            notes.append(f"a11y.samples: dropped {len(a11y['samples'])}")
+            del a11y["samples"]
+        for key in ("errors", "failed"):
+            arr = value.get(key)
+            if _size(value) <= budget_chars or not (isinstance(arr, list) and arr):
+                continue
+            before = len(arr)
+            while _size(value) > budget_chars and len(value[key]) > 1:
+                value[key] = value[key][1:]
+            if before - len(value[key]):
+                notes.append(f"{key}: dropped {before - len(value[key])} oldest of {before}")
+
+    # `added` is a delta observe's share of the tree, and trimmed the same way.
+    # A delta carries no viewport unless it changed; every node counts as on
+    # screen then, and the order is the page's.
+    for tkey in ("tree", "added"):
+        tree = value.get(tkey)
+        if not (isinstance(tree, list) and tree) or _size(value) <= budget_chars:
+            continue
         vp = value.get("viewport") or {}
         vw, vh = vp.get("width"), vp.get("height")
 
@@ -624,12 +741,12 @@ def budget_value(value, max_tokens):
             return x < vw and y < vh and x + w > 0 and y + h > 0
 
         ordered = sorted(range(len(tree)), key=lambda i: (0 if onscreen(tree[i]) else 1, i))
-        value["tree"] = [tree[i] for i in ordered]
-        while _size(value) > budget_chars and len(value["tree"]) > 1:
-            value["tree"].pop()
-        dropped = len(tree) - len(value["tree"])
+        value[tkey] = [tree[i] for i in ordered]
+        while _size(value) > budget_chars and len(value[tkey]) > 1:
+            value[tkey].pop()
+        dropped = len(tree) - len(value[tkey])
         if dropped:
-            notes.append(f"tree: kept {len(value['tree'])} of {len(tree)} (viewport first), dropped {dropped}")
+            notes.append(f"{tkey}: kept {len(value[tkey])} of {len(tree)} (viewport first), dropped {dropped}")
 
     for key in ("console", "network"):
         arr = value.get(key)
@@ -652,7 +769,7 @@ def budget_value(value, max_tokens):
         if dropped:
             notes.append(f"rows: dropped {dropped} oldest of {before}")
 
-    for key in ("text", "html"):
+    for key in ("text", "html", "markdown"):
         s = value.get(key)
         if _size(value) <= budget_chars:
             break
@@ -662,6 +779,35 @@ def budget_value(value, max_tokens):
             value[key] = s[:keep]
             if keep < len(s):
                 notes.append(f"{key}: cut to {keep} of {len(s)} chars")
+
+    # The structured readers. `links` and `matches` are the page in a list, so
+    # the tail goes (nothing is more or less relevant in a link list), and
+    # `extract`'s fields shrink each value instead of dropping whole fields —
+    # a field a caller asked for by name is what it came to find.
+    for key in ("links", "matches", "elements", "pages"):
+        arr = value.get(key)
+        if _size(value) <= budget_chars:
+            break
+        if isinstance(arr, list) and arr:
+            before = len(arr)
+            while _size(value) > budget_chars and len(value[key]) > 0:
+                value[key] = value[key][:-1]
+            dropped = before - len(value[key])
+            if dropped:
+                notes.append(f"{key}: dropped {dropped} of {before}")
+
+    fields = value.get("fields")
+    if _size(value) > budget_chars and isinstance(fields, dict) and fields:
+        for name in list(fields.keys()):
+            if _size(value) <= budget_chars:
+                break
+            v = fields[name]
+            if isinstance(v, str) and v:
+                over = _size(value) - budget_chars
+                keep = max(0, len(v) - over)
+                if keep < len(v):
+                    fields[name] = v[:keep]
+                    notes.append(f"field {name}: cut to {keep} of {len(v)} chars")
 
     if notes:
         value["truncated"] = True
@@ -697,6 +843,13 @@ def summarize(cmd, value):
     to a file instead of your context."""
     if not isinstance(value, dict):
         return str(value)[:200]
+    if cmd == "observe" and value.get("delta") is True:
+        return " ".join([f"{value.get('title', '')!r}", value.get("url", ""),
+                         f"delta: +{len(value.get('added') or [])} -{len(value.get('removed') or [])} "
+                         f"~{len(value.get('changed') or [])} ={value.get('same', 0)}",
+                         f"console:{len(value.get('console') or [])}",
+                         f"network:{len(value.get('network') or [])}"]
+                        + (["NOT VISIBLE"] if value.get("visible") is False else []))
     if cmd == "observe":
         bits = [f"{value.get('title', '')!r}", value.get("url", ""),
                 f"tree:{len(value.get('tree') or [])}",
@@ -710,6 +863,37 @@ def summarize(cmd, value):
         return f"{len(rows)} rows" + (f", {value['dropped']} dropped" if value.get("dropped") else "")
     if cmd == "read":
         return f"{value.get('title', '')!r} {value.get('url', '')} — {len(value.get('text', ''))} chars"
+    if cmd == "markdown":
+        return f"{value.get('title', '')!r} {value.get('url', '')} — {len(value.get('markdown', ''))} chars of markdown"
+    if cmd == "links":
+        links = value.get("links") or []
+        return f"{len(links)} links of {value.get('total', len(links))}" + (f", {value['dropped']} dropped" if value.get("dropped") else "")
+    if cmd == "count":
+        return f"{value.get('count')} × {value.get('selector') or value.get('scope', 'page')}"
+    if cmd == "extract":
+        fields = value.get("fields") or {}
+        found = sum(1 for v in fields.values() if v is not None)
+        return f"{found}/{len(fields)} fields" + (f", no match: {', '.join(value['notFound'])}" if value.get("notFound") else "")
+    if cmd == "screencast":
+        if "frames" in value:
+            return f"{value.get('count', 0)} frames" + (f", {value['dropped']} dropped" if value.get("dropped") else "")
+        return value.get("screencast", "")
+    if cmd == "scrape":
+        pages = value.get("pages") or []
+        return f"{len(pages) - int(value.get('failed') or 0)}/{len(pages)} pages read" + (f", {value['failed']} failed" if value.get("failed") else "")
+    if cmd == "interactive":
+        els = value.get("elements") or []
+        return f"{len(els)} of {value.get('total', len(els))} interactive" + (f", {value['hidden']} hidden" if value.get("hidden") else "")
+    if cmd == "forms":
+        return f"{len(value.get('forms') or [])} forms, {len(value.get('loose') or [])} loose fields"
+    if cmd == "attr":
+        return f"{len(value.get('attributes') or {})} attributes of <{value.get('tag', '?')}>"
+    if cmd == "search":
+        return f"{value.get('count', 0)} match(es) for {value.get('query', '')!r} ({len(value.get('matches') or [])} shown)"
+    if cmd == "checkup":
+        return (f"{value.get('verdict', '?')} errors:{len(value.get('errors') or [])} "
+                f"failed:{len(value.get('failed') or [])} visible:{len(value.get('visible') or [])} "
+                f"issues:{len(value.get('issues') or [])}")
     if cmd in ("whoami", "profiles"):
         # The one line that matters here is not a size, it is the three facts
         # §11 exists for: who am I, do I still hold a tab, and whose container
@@ -952,6 +1136,48 @@ def _open_as(who):
     return "--shared" if who == SHARED_KEY else f"--as {who}"
 
 
+LOCATOR_PREFIX = re.compile(r"^(role|text|label|placeholder|testid)=")
+
+
+def split_field(pair):
+    """`--field SELECTOR=VALUE`, split at the `=` that ends the selector.
+
+    Not the first `=`: `input[name=email]=Ada` and `label=Email=Ada` both have
+    one inside the selector, and splitting there sent the selector `input[name`
+    and the value `email]=Ada`. The split skips a locator's own `label=`, and
+    any `=` inside brackets or quotes; a label that itself contains `=` is
+    written quoted (`label="a = b"=value`). Returns (None, None) when there is
+    no `=` left to split at.
+    """
+    m = LOCATOR_PREFIX.match(pair)
+    i = m.end() if m else 0
+    # A quote opens a string only where one can: right after `label=` and
+    # inside brackets. Anywhere else it is a letter (`text=Don't=x`).
+    depth, quote = 0, (pair[i] if m and pair[i:i + 1] in ("'", '"') else None)
+    if quote:
+        i += 1
+    while i < len(pair):
+        c = pair[i]
+        if quote:
+            if c == "\\":
+                i += 1
+            elif c == quote:
+                quote = None
+        elif depth and c in "\"'":
+            quote = c
+        elif c == "\\":
+            # A CSS escape: `#plan\=b` is the id "plan=b", not a split.
+            i += 1
+        elif c == "[":
+            depth += 1
+        elif c == "]":
+            depth = max(0, depth - 1)
+        elif c == "=" and depth == 0 and i > 0:
+            return pair[:i], pair[i + 1:]
+        i += 1
+    return None, None
+
+
 def do_steps(a):
     """The steps for `do`, from a file or from the short form."""
     if a.steps_file:
@@ -1060,6 +1286,55 @@ STORAGE_READ_JS = (
 )
 
 
+def _write_frames(out_dir, frames, start_index):
+    """Frames to files, numbered on from `start_index`, and the paths back."""
+    import base64
+    os.makedirs(out_dir, exist_ok=True)
+    paths = []
+    for i, fr in enumerate(frames):
+        data = str(fr.get("jpeg") or "")
+        raw = base64.b64decode(data.split(",", 1)[1]) if "," in data else b""
+        path = os.path.join(out_dir, f"frame-{start_index + i:04d}.jpg")
+        with open(path, "wb") as f:
+            f.write(raw)
+        paths.append(path)
+    return paths
+
+
+def screencast_watch(a, page=""):
+    """start, poll, stop: `--seconds` of the page as it moves, to `--out` as
+    jpeg files (or a count to stdout without --out — the frames themselves are
+    pictures, and pictures on stdout are not something a caller can use).
+    `page` is the caller's resolved tab, from `addressed`."""
+    started = call("screencast", stamped(a, _at(page, {"action": "start", "quality": a.quality, "maxWidth": a.maxWidth,
+                                                        "maxHeight": a.maxHeight, "everyNth": a.everyNth})))
+    if not started.get("ok"):
+        print(started.get("error") or "could not start the screencast", file=sys.stderr)
+        return 1
+    deadline = time.time() + max(0.2, float(a.seconds))
+    total = dropped = 0
+    paths = []
+    try:
+        while True:
+            time.sleep(0.25)
+            r = call("screencast", stamped(a, _at(page, {"action": "frames"})))
+            v = r.get("value") or {}
+            frames = v.get("frames") or []
+            dropped += int(v.get("dropped") or 0)
+            if a.out and frames:
+                paths.extend(_write_frames(a.out, frames, total))
+            total += len(frames)
+            if time.time() >= deadline:
+                break
+    finally:
+        call("screencast", stamped(a, _at(page, {"action": "stop"})))
+    if a.out:
+        print(json.dumps({"frames": total, "dropped": dropped, "dir": a.out, "paths": paths}))
+    else:
+        print(json.dumps({"frames": total, "dropped": dropped, "note": "pass --out DIR to keep them"}))
+    return 0
+
+
 def session_save(path, page="", a=None):
     """The 40-minute magic-link dance, replaced by one file. Cookies come
     through CDP (`Network.getCookies`), not `document.cookie` — the session
@@ -1106,6 +1381,30 @@ def session_save(path, page="", a=None):
     return 0
 
 
+def _write_storage(a, page, where, entries):
+    """Write ENTRIES into the tab's local or session storage, one `storage
+    --set` per key. Returns (written, failures), each failure a "key: why"
+    line; a key the tab refuses does not stop the ones after it.
+
+    Never as one `eval` script with the values inside it: the audit log keeps
+    every ask, and an `eval` script has no position it can blank — an opaque
+    token that is not token-shaped went into the log verbatim. `storage --set`
+    carries the value in a field the audit redacts by position."""
+    written, failures = 0, []
+    for k, v in entries.items():
+        if not k:
+            failures.append('"": an empty key cannot be written through `storage --set`')
+            continue
+        if not isinstance(v, str):
+            v = json.dumps(v)  # what setItem would have stored for it: 42 -> "42", null -> "null"
+        r = call("storage", stamped(a, _at(page, {"where": where, "set": True, "key": k, "value": v})))
+        if r.get("ok"):
+            written += 1
+        else:
+            failures.append(f"{k}: {r.get('error') or 'could not write storage'}")
+    return written, failures
+
+
 def session_load(path, page="", a=None):
     """The reverse of `session save`. Cookies go back through CDP so they
     keep httpOnly and Secure; storage is written by the page itself, which
@@ -1134,20 +1433,448 @@ def session_load(path, page="", a=None):
         if not r.get("ok"):
             print(f"cookie {c.get('name')}: {r.get('error')}", file=sys.stderr)
     ls_count = ss_count = 0
+    failures = []
     for o in state.get("origins") or []:
         ls = {e["name"]: e["value"] for e in o.get("localStorage") or []}
         ss = {e["name"]: e["value"] for e in o.get("sessionStorage") or []}
-        ls_count += len(ls)
-        ss_count += len(ss)
-        js = (
-            f"(() => {{ const ls = {json.dumps(ls)}; for (const k in ls) localStorage.setItem(k, ls[k]); "
-            f"const ss = {json.dumps(ss)}; for (const k in ss) sessionStorage.setItem(k, ss[k]); return true; }})()"
-        )
-        r = call("eval", stamped(a, _at(page, {"js": js, "await": False})))
-        if not r.get("ok"):
-            print(r.get("error") or "could not write storage", file=sys.stderr)
-            return 1
+        n, f = _write_storage(a, page, "local", ls)
+        ls_count, failures = ls_count + n, failures + f
+        n, f = _write_storage(a, page, "session", ss)
+        ss_count, failures = ss_count + n, failures + f
+    for f in failures:
+        print(f"storage {f}", file=sys.stderr)
     print(f"{path}: {len(cookies)} cookies, {ls_count} localStorage keys, {ss_count} sessionStorage keys restored")
+    return 1 if failures else 0
+
+
+# --- Importing a signed-in session straight from a Firefox-family profile ----
+#
+# `session load` reuses a file this tool wrote. `session import` reads the
+# browser you already log in with — Firefox, Zen, LibreWolf — so the first
+# import needs no prior save. The reading is LOCAL: this process opens the
+# profile the operator named, the same way it would open any file they pointed
+# it at, and the values go straight into `cookies --set`. There is no server
+# route that reads a jar, so this adds no way for an agent to ask the app for
+# somebody's logins that it did not already have on disk.
+#
+# Why not the picker's importer (server/src/cookieimport.ts)? That one is built
+# to bring MANY sites over safely and drops anything it cannot carry cleanly —
+# and two of those drops are exactly what a *sensitive action* needs. Measured
+# against a local strict server:
+#   * it skips SESSION cookies (no expiry). A site's "you re-authenticated
+#     recently" cookie is often one, and without it the POST bounces to a
+#     confirm-access page.
+#   * it turns every host-only cookie into whatever the row's dot said, which
+#     is right, but it also refuses partitioned ones.
+# A single-domain session import keeps the session cookies, because the whole
+# point is that one login, not a tidy jar.
+
+
+def _ff_expiry_seconds(expiry, user_version):
+    """Firefox stores expiry in milliseconds from schema 16 on (mirrors
+    server/src/cookieimport.ts, which measured it against schema 17). 0 is a
+    session cookie and stays 0."""
+    try:
+        e = float(expiry)
+    except (TypeError, ValueError):
+        return 0
+    if e <= 0:
+        return 0
+    return int(e / 1000) if user_version >= 16 else int(e)
+
+
+def _ff_same_site(raw):
+    """Firefox's constant to the name setCookie takes, or None to leave it
+    unset. 256 (SAMESITE_UNSET) is not corruption; 0 is None."""
+    return {0: "None", 1: "Lax", 2: "Strict"}.get(int(raw) if str(raw).lstrip("-").isdigit() else 256)
+
+
+# Names under which anybody registers a site: `co.uk` is nobody's domain,
+# `acme.co.uk` is. The two-label ones mirror TWO_LABEL_SUFFIXES in
+# server/src/cookieimport.ts (a test keeps this a superset of it); the rest are
+# hosts that hand every customer a subdomain. Not the Public Suffix List — the
+# standard library has none — so a suffix missing here is still accepted.
+_PUBLIC_SUFFIXES = frozenset({
+    "co.uk", "org.uk", "ac.uk", "gov.uk", "co.jp", "or.jp", "ne.jp", "co.kr",
+    "com.au", "net.au", "org.au", "com.br", "com.mx", "com.ar", "co.nz",
+    "co.za", "com.tr", "com.cn", "com.sg", "com.hk", "co.in", "com.es",
+    "github.io", "gitlab.io", "pages.dev", "workers.dev", "vercel.app", "netlify.app",
+    "web.app", "firebaseapp.com", "herokuapp.com", "appspot.com", "blogspot.com",
+    "cloudfront.net", "azurewebsites.net", "fly.dev", "onrender.com", "glitch.me",
+})
+
+
+def _canonical_domain(domain, subdomains=True):
+    """(domain, None) with DOMAIN as the profile stores hosts — lower case, no
+    stray dots or spaces, punycode — or (None, why) when it cannot be
+    imported. The matcher takes subdomains by default, so a top-level domain
+    or a public suffix would copy every site under it rather than one login,
+    and a URL or a pattern would silently match nothing."""
+    d = (domain or "").strip().lower().strip(".")
+    if not d or any(c in d for c in "/:@*?#") or any(c.isspace() for c in d):
+        return None, f"--domain takes a bare site name like orbit.example, not {domain!r}"
+    try:
+        d = d.encode("idna").decode("ascii")
+    except UnicodeError:
+        return None, f"--domain takes a bare site name like orbit.example, not {domain!r}"
+    if "." not in d and d != "localhost" and subdomains:
+        return None, (f"--domain {d} is a top-level domain: it would copy every {d} login in the "
+                      f"profile. Name the site, e.g. orbit.{d}, or pass --no-subdomains for one "
+                      f"host called {d}")
+    if d in _PUBLIC_SUFFIXES:
+        return None, (f"--domain {d} is a public suffix: every site under it is a different one. "
+                      f"Name the site, e.g. acme.{d}")
+    return d, None
+
+
+def _domain_matches(host, domain, subdomains=True):
+    bare = host.lstrip(".").lower()
+    domain = domain.lstrip(".").lower()
+    return bare == domain or (subdomains and bare.endswith("." + domain))
+
+
+def _snapshot_sqlite(db):
+    """A private copy with its -wal, so a live Firefox is never opened. Returns
+    (path, dispose). The caller always disposes — cookie values live in it."""
+    import shutil
+    import tempfile
+    d = tempfile.mkdtemp(prefix="agx-import-")
+
+    def dispose():
+        try:
+            shutil.rmtree(d, ignore_errors=True)
+        except OSError:
+            pass
+    # The caller can only dispose of a copy it was handed: one that raises
+    # halfway (a full disk, a directory where the file should be, Ctrl-C)
+    # cleans up here, or a partial jar stays in the temp dir.
+    try:
+        os.chmod(d, 0o700)
+        copy = os.path.join(d, os.path.basename(db))
+        shutil.copyfile(db, copy)
+        if os.path.exists(db + "-wal"):
+            try:
+                shutil.copyfile(db + "-wal", copy + "-wal")
+            except OSError:
+                pass
+    except BaseException:
+        dispose()
+        raise
+    return copy, dispose
+
+
+def _profile_cookie_db(path):
+    """The cookies.sqlite for a profile PATH, or the path itself when it is
+    already the database."""
+    if os.path.isfile(path):
+        return path
+    db = os.path.join(path, "cookies.sqlite")
+    return db if os.path.exists(db) else None
+
+
+def read_firefox_cookies(path, domain, subdomains=True, now=None):
+    """Every live cookie for DOMAIN (and its subdomains) in a Firefox-family
+    profile, as `cookies --set` payloads — session cookies KEPT. Never prints a
+    value; the caller sends them and reports counts only.
+
+    Returns (payloads, skipped) where skipped counts expired / partitioned /
+    container cookies so the summary can say what did not come."""
+    import sqlite3
+    now = int(time.time()) if now is None else now
+    db = _profile_cookie_db(path)
+    if not db:
+        raise FileNotFoundError(f"no cookies.sqlite in {path}")
+    copy, dispose = _snapshot_sqlite(db)
+    payloads, skipped = [], {"expired": 0, "partitioned": 0, "not-domain": 0}
+    try:
+        conn = sqlite3.connect(f"file:{copy}?mode=ro", uri=True)
+        try:
+            ver = conn.execute("PRAGMA user_version").fetchone()[0] or 0
+            rows = conn.execute(
+                "SELECT host, name, value, path, expiry, isSecure, isHttpOnly, sameSite, originAttributes FROM moz_cookies"
+            ).fetchall()
+        finally:
+            conn.close()
+    finally:
+        dispose()
+    for host, name, value, cpath, expiry, secure, http_only, same_site, attrs in rows:
+        host = host or ""
+        if not host or not name:
+            continue
+        if not _domain_matches(host, domain, subdomains):
+            skipped["not-domain"] += 1
+            continue
+        # Containers and partitioned cookies carry originAttributes; setCookie
+        # has no place to put one, so importing it unpartitioned would change
+        # what it means.
+        if attrs:
+            skipped["partitioned"] += 1
+            continue
+        exp = _ff_expiry_seconds(expiry, ver)
+        if exp and exp <= now:
+            skipped["expired"] += 1
+            continue
+        p = {
+            "name": name,
+            "value": value or "",
+            "path": cpath if (cpath or "").startswith("/") else "/",
+            "host": host.lstrip("."),
+        }
+        if host.startswith("."):
+            p["domain"] = host
+        if int(secure or 0) == 1:
+            p["secure"] = True
+        if int(http_only or 0) == 1:
+            p["httpOnly"] = True
+        ss = _ff_same_site(same_site)
+        # SameSite=None is dropped by Chromium without Secure; leave it unset
+        # rather than lose the whole cookie to a refusal.
+        if ss and not (ss == "None" and not p.get("secure")):
+            p["sameSite"] = ss
+        if exp:
+            p["expires"] = exp
+        payloads.append(p)
+    return payloads, skipped
+
+
+def _origin_from_dir(name):
+    """Firefox names an origin's storage directory by its sanitised origin:
+    `https+++www.example.com` for https://www.example.com, a port appended as
+    `+8443`. Turn one back into an origin, or None when it is not a web one."""
+    if "+++" not in name:
+        return None
+    scheme, rest = name.split("+++", 1)
+    if scheme not in ("https", "http"):
+        return None
+    parts = rest.split("+")
+    host = parts[0]
+    port = parts[1] if len(parts) > 1 and parts[1].isdigit() else None
+    return f"{scheme}://{host}" + (f":{port}" if port else "")
+
+
+def _decode_ls_value(value, compression_type, conversion_type):
+    """A localStorage value out of Firefox's `data` table. Uncompressed only:
+    a snappy-compressed one needs a decompressor this stdlib script does not
+    have, and is skipped by the caller. UTF-16 is decoded when the bytes say
+    so; otherwise UTF-8."""
+    if compression_type not in (0, None):
+        return None
+    if isinstance(value, str):
+        return value
+    b = bytes(value or b"")
+    # conversion_type 0 keeps the original UTF-16; a value with interleaved NUL
+    # bytes is that, not UTF-8.
+    if conversion_type == 0 and b"\x00" in b:
+        try:
+            return b.decode("utf-16-le")
+        except UnicodeDecodeError:
+            pass
+    try:
+        return b.decode("utf-8")
+    except UnicodeDecodeError:
+        return b.decode("latin-1")
+
+
+def read_firefox_localstorage(path, domain, subdomains=True):
+    """localStorage for DOMAIN's origins in a Firefox-family profile, as
+    {origin: {key: value}}. Returns (by_origin, skipped_compressed). Reads the
+    per-origin `storage/default/<origin>/ls/data.sqlite` NextGen stores; an
+    older single `webappsstore.sqlite` is not read (not on any profile this was
+    built against). Never prints a value."""
+    import sqlite3
+    if os.path.isfile(path):
+        path = os.path.dirname(os.path.dirname(path))  # cookies.sqlite -> profile
+    root = os.path.join(path, "storage", "default")
+    by_origin, skipped = {}, 0
+    if not os.path.isdir(root):
+        return by_origin, skipped
+    for name in os.listdir(root):
+        origin = _origin_from_dir(name)
+        if not origin:
+            continue
+        host = origin.split("://", 1)[1].split(":", 1)[0]
+        if not _domain_matches(host, domain, subdomains):
+            continue
+        db = os.path.join(root, name, "ls", "data.sqlite")
+        if not os.path.exists(db):
+            continue
+        # Cookies have already landed by the time this runs, so an origin that
+        # cannot be read is named and skipped rather than ending the import.
+        try:
+            copy, dispose = _snapshot_sqlite(db)
+        except OSError as e:
+            print(f"localStorage for {origin}: could not read ({e.strerror or e})", file=sys.stderr)
+            continue
+        try:
+            conn = sqlite3.connect(f"file:{copy}?mode=ro", uri=True)
+            try:
+                cols = {r[1] for r in conn.execute("PRAGMA table_info(data)")}
+                has = "compression_type" in cols and "conversion_type" in cols
+                sel = ("SELECT key, value, compression_type, conversion_type FROM data"
+                       if has else "SELECT key, value, 0, 0 FROM data")
+                entries = {}
+                for key, value, comp, conv in conn.execute(sel):
+                    decoded = _decode_ls_value(value, comp, conv)
+                    if decoded is None:
+                        skipped += 1
+                        continue
+                    entries[key] = decoded
+                if entries:
+                    by_origin[origin] = entries
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            pass
+        finally:
+            dispose()
+    return by_origin, skipped
+
+
+# A Firefox-family user agent to align to when the operator asks. The session
+# was signed in from one of these, and a strict site that compares the request's
+# UA family to the session's rejects a Chromium one. Overridable with
+# --user-agent for a version that matches the source browser exactly.
+DEFAULT_FIREFOX_UA = "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0"
+
+
+AUTH_WALL_PATH = re.compile(r"/(log[-_]?in|sign[-_]?in|signin|auth(?:orize|enticate)?|sso|sessions?/(?:new|confirm)|confirm[-_]?access|two[-_]?factor|mfa|challenge)(?:/|\?|$)", re.I)
+AUTH_WALL_QUERY = re.compile(r"[?&](reason|return[_-]?to|redirect(?:_uri)?|continue|next|ReturnUrl)=", re.I)
+# The exact words a strict site shows when it will not act on a copied session
+# — a message a person reads and an agent silently steps past.
+BOUNCE_TEXT = re.compile(r"signed in with another tab or window|your session (?:has )?expired|please (?:log|sign) ?in|confirm access", re.I)
+
+VERIFY_JS = (
+    "JSON.stringify({ url: location.href, title: document.title, "
+    "pw: !!document.querySelector('input[type=password]'), "
+    "text: (document.body ? document.body.innerText : '').slice(0, 4000) })"
+)
+
+
+def classify_auth_wall(url, title, has_password, text):
+    """Whether the page in front is a login / confirm wall — the shape a
+    copied session that reads but cannot act lands on. Returns (is_wall,
+    reason) where reason is the site's own `reason=` when it gave one, else a
+    short word for what tripped it."""
+    hit = BOUNCE_TEXT.search(text or "")
+    if hit:
+        return True, hit.group(0).lower()
+    if AUTH_WALL_PATH.search(url or ""):
+        m = re.search(r"[?&]reason=([^&]+)", url or "")
+        return True, (m.group(1) if m else "a login or confirm page")
+    if has_password and AUTH_WALL_QUERY.search(url or ""):
+        return True, "a login form with a return address"
+    if has_password and re.search(r"\b(sign|log)\s*in\b|confirm", (title or ""), re.I):
+        return True, "a login form"
+    return False, ""
+
+
+def session_verify(a, page):
+    if getattr(a, "url", None):
+        r = call("open", stamped(a, _at(page, {"url": a.url})))
+        if not r.get("ok"):
+            print(r.get("error") or f"could not open {a.url}", file=sys.stderr)
+            return 1
+    res = call("eval", stamped(a, _at(page, {"js": VERIFY_JS, "await": False})))
+    if not res.get("ok"):
+        print(res.get("error") or "could not read the page to verify it", file=sys.stderr)
+        return 1
+    raw = (res.get("value") or {}).get("value") or "{}"
+    try:
+        d = json.loads(raw)
+    except (TypeError, ValueError):
+        d = {}
+    is_wall, reason = classify_auth_wall(d.get("url", ""), d.get("title", ""), bool(d.get("pw")), d.get("text", ""))
+    if is_wall:
+        print(f"the session was rejected: this is {reason}, not the page the action should reach. "
+              f"A copied session can read pages and still be refused a sensitive action — align the "
+              f"user agent (session import --align-ua) and bring localStorage over on the site's origin.")
+        return 1
+    print(f"no login or confirm wall on {d.get('url', 'this page')} — the session looks accepted here")
+    return 0
+
+
+def session_import(a, page):
+    kind, src = a.frm[0], a.frm[1]
+    if kind != "firefox-profile":
+        print(f"unknown source {kind!r} — the only source is firefox-profile <path> "
+              "(Firefox, Zen and LibreWolf share the format)", file=sys.stderr)
+        return 2
+    a.domain, refusal = _canonical_domain(a.domain, subdomains=not a.no_subdomains)
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 2
+    try:
+        payloads, skipped = read_firefox_cookies(src, a.domain, subdomains=not a.no_subdomains)
+    except (FileNotFoundError, OSError) as e:
+        print(f"could not read {src}: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:  # noqa: BLE001 — sqlite errors vary by build
+        print(f"could not read cookies from {src}: {e}", file=sys.stderr)
+        return 1
+    if not payloads:
+        note = f" ({skipped['expired']} expired, {skipped['partitioned']} partitioned/container)" \
+            if (skipped["expired"] or skipped["partitioned"]) else ""
+        print(f"no live cookies for {a.domain} in that profile{note}", file=sys.stderr)
+        return 1
+    set_n, failed = 0, []
+    for p in payloads:
+        r = call("cookies", stamped(a, _at(page, {"set": p})))
+        if r.get("ok"):
+            set_n += 1
+        else:
+            failed.append((p["name"], r.get("error") or "refused"))
+    if a.align_ua:
+        ua = a.user_agent or DEFAULT_FIREFOX_UA
+        r = call("emulate", stamped(a, _at(page, {"userAgent": ua})))
+        if not r.get("ok"):
+            print(f"user agent not aligned: {r.get('error')}", file=sys.stderr)
+
+    # localStorage. A script can only write the origin the tab is ON — that is a
+    # browser rule, not a limitation here — so the entries for the current
+    # origin go in now, and any other origin is named for a second pass with the
+    # tab opened there.
+    ls_written, pending, comp_skipped = 0, [], 0
+    if not a.no_localstorage:
+        by_origin, comp_skipped = read_firefox_localstorage(src, a.domain, subdomains=not a.no_subdomains)
+        if by_origin:
+            here = call("eval", stamped(a, _at(page, {"js": "location.origin", "await": False})))
+            current = ((here.get("value") or {}).get("value") or "") if here.get("ok") else ""
+            for origin, entries in by_origin.items():
+                if origin == current:
+                    n, failures = _write_storage(a, page, "local", entries)
+                    ls_written += n
+                    for f in failures:
+                        print(f"localStorage for {origin}: {f}", file=sys.stderr)
+                else:
+                    pending.append(origin)
+    # Names and counts only — never a value.
+    extra = []
+    if skipped["partitioned"]:
+        extra.append(f"{skipped['partitioned']} partitioned/container skipped")
+    if skipped["expired"]:
+        extra.append(f"{skipped['expired']} expired skipped")
+    if ls_written:
+        extra.append(f"{ls_written} localStorage keys")
+    if comp_skipped:
+        extra.append(f"{comp_skipped} compressed localStorage skipped")
+    print(f"{a.domain}: {set_n} cookies imported"
+          + (f" ({', '.join(extra)})" if extra else "")
+          + (f"; UA aligned to {'Firefox' if not a.user_agent else 'the given agent'}" if a.align_ua else ""))
+    for name, err in failed:
+        print(f"  cookie {name}: {err}", file=sys.stderr)
+    if failed:
+        return 1
+    if pending:
+        print("localStorage for these origins was not written — a script can only "
+              "write the origin its tab is on. Open each and re-run to bring it over:",
+              file=sys.stderr)
+        for origin in pending:
+            print(f"  {_open_as(acting_as(a))} open {origin}   then re-run this import",
+                  file=sys.stderr)
+    print("Open the site and try the action. If it bounces you to a login or a "
+          "confirm-access page, the session is bound to something a cookie copy "
+          "cannot carry (a client-hint the source browser sent) — align the user "
+          "agent with --align-ua.", file=sys.stderr)
     return 0
 
 
@@ -1222,14 +1949,39 @@ def main():
     ap.add_argument("--out", dest="outFile", default=None, help="write the full answer here instead of stdout")
     ap.add_argument("--observe", action="store_true",
                     help="on a verb that ACTS, hand back the page it left behind under `after` — "
-                         "one call instead of act-then-look. Costs an observation, so it is opt-in")
+                         "one call instead of act-then-look. A delta against your last observe of the same "
+                         "document (full, with delta:false, after a navigation); plain `observe` is always full")
     ap.add_argument("--summary", action="store_true",
                     help="print one line describing the answer (with --out, alongside the path)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("open", help="go to a page and wait for it to load")
     p.add_argument("url")
+    p.add_argument("--wait-slot", dest="waitSlot", type=float, default=None, metavar="SECONDS",
+                   help="when 12 pages are already awake, queue for a free slot this long instead of refusing")
     p = sub.add_parser("read", help="the page's url, title and visible text")
-    p = sub.add_parser("click", help="click the first element matching a CSS selector")
+    # The structured readers — the page as an agent needs it, not as the DOM
+    # markets it. Each is MAX_TEXT-capped on the page side, then "--max-tokens"
+    # trims it again by relevance, and the redaction seam is the same one every
+    # other verb passes through.
+    p = sub.add_parser("markdown", help="the page rendered as markdown — headings, lists and links intact")
+    p = sub.add_parser("links", help="every link on the page, deduplicated, in one answer")
+    p = sub.add_parser("count", help="how many elements match a selector — or how interactive the page is, with no selector")
+    p.add_argument("selector", nargs="?")
+    p = sub.add_parser("search", help="find text on the page and get the matches back")
+    p.add_argument("query")
+    # The interactive inventory: what can be acted on, the forms as forms,
+    # and one element's attributes — each with ids a verb takes.
+    p = sub.add_parser("interactive", help="every element that can be acted on, with id, role, name and href/value/options")
+    p = sub.add_parser("forms", help="the forms on the page: fields with labels, the submit, where it goes, and loose fields")
+    p = sub.add_parser("attr", help="attributes of one element — the ones named, or all of them")
+    p.add_argument("selector")
+    p.add_argument("names", nargs="*", help="attribute names; none means all of them")
+    p = sub.add_parser("extract", help="pull named fields by selector in one round trip")
+    p.add_argument("--field", action="append", default=[], metavar="NAME=SELECTOR",
+                   help="one field to pull (name selector). Repeat for more.")
+    p.add_argument("--fields-file", dest="fieldsFile",
+                   help="a JSON file of { name: selector } — for more fields than is sane to type")
+    p = sub.add_parser("click", help="click one element: an id from observe (e12), a locator (role=button[name=\"Save\"], label=Email, text=Continue) or CSS")
     p.add_argument("selector")
     p = sub.add_parser("type", help="type into a field, optionally submitting it")
     p.add_argument("selector")
@@ -1253,6 +2005,8 @@ def main():
     p.add_argument("--with-inspector", dest="withInspector", action="store_true",
                    help="the page AND the inspector, joined side by side into one png")
     p.add_argument("--label", help="a caption next to --highlight's box")
+    p.add_argument("--marks", action="store_true",
+                   help="label every interactive thing in view with its observe id (eN) — for a picture a model must point into")
     # DECLARED, because the code below already reads it. It did not, so every
     # `shot --out file.png` died on an AttributeError and exited 1 with nothing
     # written — and `--out` before the verb hit the global one, which skips
@@ -1276,6 +2030,9 @@ def main():
     p.add_argument("--since-last", dest="sinceLast", action="store_true",
                    help="only what changed since YOUR last observe — remembered locally, no timestamp to pass")
     p.add_argument("--shot", action="store_true", help="include a screenshot in the same answer")
+    p.add_argument("--delta", action="store_true",
+                   help="only what changed since your last observe of this document: added nodes, removed and "
+                        "changed ids, new console/network. Full answer (delta:false + reason) after a navigation")
 
     p = sub.add_parser("eval", help="run javascript in the page and get the result back")
     p.add_argument("js", nargs="?")
@@ -1297,9 +2054,26 @@ def main():
     p.add_argument("value")
     p = sub.add_parser("reload", help="reload, ignoring the cache by default")
     p.add_argument("--keep-cache", dest="keepCache", action="store_true")
-    p = sub.add_parser("cookies", help="read the page's cookies, or set one")
+    p = sub.add_parser(
+        "cookies", help="read the page's cookies, or set one",
+        description="A plain --set NAME VALUE is written by the page itself, as document.cookie. "
+                    "Any attribute below, or a __Host-/__Secure- name, goes through the browser's "
+                    "own jar instead — the only way to set an HttpOnly cookie — and the answer "
+                    "names what landed without printing the value. A __Host- name is Secure, "
+                    "host-only and at / without being told.")
     p.add_argument("--set", nargs=2, metavar=("NAME", "VALUE"), default=None)
     p.add_argument("--path", default="/")
+    p.add_argument("--domain", default=None,
+                   help="make it a domain cookie (sent to every subdomain); omitted = host-only")
+    p.add_argument("--secure", action="store_true", default=None)
+    p.add_argument("--insecure", dest="insecure", action="store_true",
+                   help="write without Secure (the default on https and loopback pages) — refused for __Host-/__Secure- names")
+    p.add_argument("--http-only", dest="httpOnly", action="store_true", default=None)
+    p.add_argument("--same-site", dest="sameSite", choices=["Strict", "Lax", "None"], default=None)
+    p.add_argument("--expires", type=float, default=None,
+                   help="seconds since the epoch; omitted = a session cookie")
+    p.add_argument("--partition-key", dest="partitionKey", default=None, metavar="TOP_LEVEL_SITE",
+                   help="a partitioned (CHIPS) cookie, e.g. https://example.com")
     sub.add_parser("frames", help="iframes, service workers and shadow roots on this page")
 
     sub.add_parser("tabs", help="what tabs are open, with the active one marked")
@@ -1307,6 +2081,8 @@ def main():
     p.add_argument("which", help="index from `tabs`, or a tab id")
     p = sub.add_parser("newtab", help="open a url in a NEW tab, leaving this one where it is")
     p.add_argument("url")
+    p.add_argument("--wait-slot", dest="waitSlot", type=float, default=None, metavar="SECONDS",
+                   help="when 12 pages are already awake, queue for a free slot this long instead of refusing")
     p = sub.add_parser("closetab", help="close a tab by index or id")
     p.add_argument("which")
 
@@ -1334,6 +2110,8 @@ def main():
     p = sub.add_parser("html", help="the markup of one element, not just its text")
     p.add_argument("selector")
     p.add_argument("--max", type=int, default=None)
+    p.add_argument("--clean", action="store_true",
+                   help="markup a model can read: scripts, styles, svg paths and noise attributes out, observe's eN ids stamped on everything actionable")
     p = sub.add_parser("waitfor", help="wait until a javascript expression is true in the page, or until a named condition")
     p.add_argument("js", nargs="?")
     p.add_argument("--timeout-ms", dest="timeoutMs", type=int, default=None)
@@ -1377,7 +2155,7 @@ def main():
             q.add_argument("--off", action="store_true", help="uncheck it instead")
     p = sub.add_parser("fill", help="a whole form in ONE call — every field, then submit if asked")
     p.add_argument("--field", action="append", default=[], metavar="SELECTOR=VALUE",
-                   help="repeatable: --field '#name=Ada' --field '#email=ada@example.com'")
+                   help="repeatable: --field '#name=Ada' --field 'label=Email=ada@example.com'")
     p.add_argument("--submit", action="store_true")
     p = sub.add_parser(
         "debug",
@@ -1440,8 +2218,64 @@ def main():
     p.add_argument("--write", help="put this in it")
     p = sub.add_parser("save", help="the whole page as one file that still renders offline (MHTML)")
     p.add_argument("out", help="where to write it")
+    p = sub.add_parser(
+        "checkup",
+        help="did it break? load or reload, wait for quiet, report errors, failed requests, visible errors; issues/perf/a11y as advice",
+        description=(
+            "Load a url (or --reload, or neither: since your last checkup of this page), wait until the page "
+            "is quiet, and answer with a verdict first: ok, or N problems. Problems are exceptions and console "
+            "errors — including the ones thrown DURING load, which console/observe cannot see — failed "
+            "requests, and visible error text: a role=alert toast on screen counts as a problem. Chromium's issues, perf (LCP, CLS) and a11y "
+            "(unlabelled controls, with ids to act on) are advice and never counted. A screenshot is taken "
+            "only when something is wrong, and written to a file.\n\n"
+            "  checkup http://localhost:5173/\n"
+            "  checkup --reload"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("url", nargs="?", help="load this first")
+    p.add_argument("--reload", action="store_true", help="hard-reload the page first")
+    p.add_argument("--no-shot", dest="noShot", action="store_true", help="no screenshot, even on failure")
+    p.add_argument("--settle-ms", dest="settleMs", type=int, default=None,
+                   help="how long to wait for quiet at most (default 5000, 0..15000)")
+    p = sub.add_parser(
+        "dialog",
+        help="answer the page's next confirm()/prompt(): --accept or --dismiss (the default is accept)",
+        description=(
+            "A page's confirm() and prompt() are answered for it — yes, by default — so it never hangs. "
+            "This arms a different answer for the NEXT one (every one with --always). With neither flag "
+            "it reports what the page asked last and what is armed. The plan lives in the document: a "
+            "navigation drops it, so arm it after the page has loaded and before the click that asks.\n\n"
+            "  dialog --dismiss\n"
+            "  dialog --accept --text 'new name'"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("--accept", action="store_true", help="answer OK / true")
+    p.add_argument("--dismiss", action="store_true", help="answer Cancel / false / null")
+    p.add_argument("--text", help="what a prompt() is answered with when accepted")
+    p.add_argument("--always", action="store_true", help="every dialog, not just the next one")
+    p = sub.add_parser(
+        "handoff",
+        help="give the tab to the person for a CAPTCHA, a 2FA code or a consent, and wait for them",
+        description=(
+            "Brings the browser forward, puts a banner on the page saying why (with a Done button) and waits "
+            "until the person presses it, or --until is true, or --timeout runs out. Use it for what an agent "
+            "must not do itself: a CAPTCHA, a code from their phone, a consent screen. Then continue from the "
+            "answer. If the page navigates meanwhile, the answer says `navigated`: for a sign-in that is usually "
+            "the person finishing.\n\n"
+            "  handoff 'Sign-in needs your 2FA code' --until 'nav .avatar'\n"
+            "  handoff 'Solve the CAPTCHA' --until /dashboard --timeout 600"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("reason", help="one line: what the person is needed for")
+    p.add_argument("--until", help="also done when this CSS selector exists, or the url contains this (starts with / or http)")
+    p.add_argument("--timeout", type=int, default=300, help="give up after this many seconds (default 300, max 3600)")
+    p = sub.add_parser("vitals", help="LCP, CLS, INP, TTFB, FCP of this page, each rated good / needs-improvement / poor")
+    p = sub.add_parser("a11y", help="what a screen reader would miss: unlabelled controls, images without alt, heading jumps, no lang — with ids to act on")
     p = sub.add_parser("region", help="the tree of ONE subtree — a modal is 15 nodes inside 300")
-    p.add_argument("selector", help="a CSS selector, or an id from an observation")
+    p.add_argument("selector", help="an id from an observation, a locator (role=dialog) or CSS")
     p = sub.add_parser("throttle", help="make the machine slow — the bug that never reproduces locally")
     p.add_argument("--network", choices=["slow-3g", "fast-3g", "4g"])
     p.add_argument("--cpu", type=float, metavar="RATE", help="slowdown rate, e.g. 4 for four times slower")
@@ -1545,6 +2379,37 @@ def main():
     sp1.add_argument("file")
     sp2 = sp.add_parser("load", help="restore state from FILE onto the current page")
     sp2.add_argument("file")
+    sp3 = sp.add_parser(
+        "import",
+        help="bring a signed-in session straight from your Firefox/Zen/LibreWolf profile",
+        description="Reads the profile you already log in with — no prior `save` needed — and "
+                    "copies every live cookie for a domain (and its subdomains) with all its "
+                    "attributes, session cookies included, so a sensitive action survives and "
+                    "not just page reads. The profile is read locally by this process; values "
+                    "go straight into the browser and are never printed. Firefox, Zen and "
+                    "LibreWolf share the format.")
+    sp3.add_argument("--from", dest="frm", nargs=2, metavar=("KIND", "PATH"), required=True,
+                     help="firefox-profile <path to the profile dir or its cookies.sqlite>")
+    sp3.add_argument("--domain", required=True, help="the site to bring over, e.g. orbit.example")
+    sp3.add_argument("--no-subdomains", action="store_true",
+                     help="only the exact domain, not its subdomains (subdomains come by default)")
+    sp3.add_argument("--no-localstorage", action="store_true",
+                     help="cookies only; skip localStorage (imported by default for the origin "
+                          "the tab is on, since a login is as often a token there as a cookie)")
+    sp3.add_argument("--align-ua", dest="align_ua", action="store_true",
+                     help="also set the user agent to Firefox's, since a strict site compares it "
+                          "to the one the session signed in with")
+    sp3.add_argument("--user-agent", dest="user_agent", default=None,
+                     help="the exact user agent to align to (default: a recent Firefox)")
+    sp4 = sp.add_parser(
+        "verify",
+        help="say whether the page in front is a login/confirm wall — a rejected session, named",
+        description="A copied session can read pages and still be refused a sensitive action, "
+                    "which most sites do by redirecting to a login or confirm page rather than "
+                    "erroring — so an agent steps past it in silence. Run this on the page after "
+                    "the action (or with --url to open one first): it reports whether the browser "
+                    "landed on such a wall, with the site's own reason when it gave one.")
+    sp4.add_argument("--url", default=None, help="open this first, then verify (default: verify the page already in front)")
     p = sub.add_parser(
         "permissions",
         help="grant camera/mic/clipboard/geolocation for an origin, by API — instead "
@@ -1587,6 +2452,31 @@ def main():
     p.add_argument("action", nargs="?", choices=["start", "stop"], default="start")
     p.add_argument("path", nargs="?", help="path to save the trace to (required for stop)")
     p = sub.add_parser(
+        "screencast",
+        help="the page as it MOVES, from Chromium's compositor — frames whenever it repaints, not on a timer",
+        description="start, then poll `frames` (the shell keeps the newest 30, acked as they land), then stop. "
+                    "Or `watch --seconds N --out DIR` for all three in one go, frames written as jpeg files.",
+    )
+    p.add_argument("action", nargs="?", choices=["start", "frames", "stop", "watch"], default="start")
+    p.add_argument("--quality", type=int, default=60, help="jpeg quality 1-100 (default 60)")
+    p.add_argument("--max-width", dest="maxWidth", type=int, default=1024)
+    p.add_argument("--max-height", dest="maxHeight", type=int, default=768)
+    p.add_argument("--every-nth", dest="everyNth", type=int, default=1, help="keep one frame in N (default 1)")
+    p.add_argument("--seconds", type=float, default=5.0, help="for watch: how long (default 5)")
+    p.add_argument("--out", help="a directory: frames are written there as frame-NNNN.jpg instead of printed")
+    p = sub.add_parser(
+        "scrape",
+        help="several pages, one read each, in parallel — each in a tab of its own, closed again after",
+        description="Every URL is opened in a new tab in your container, read with --read, and the tab is "
+                    "closed whatever happened. At most --concurrency tabs at once (1 to 4). Rows come back "
+                    "in the order the URLs were given, each ok or with its own error.",
+    )
+    p.add_argument("urls", nargs="+", metavar="URL")
+    p.add_argument("--read", default="markdown", choices=["markdown", "read", "links", "extract", "interactive", "forms"],
+                   help="what to read from each page (default markdown)")
+    p.add_argument("--field", action="append", default=[], metavar="NAME=SELECTOR", help="for --read extract: one field, repeatable")
+    p.add_argument("--concurrency", type=int, default=2, help="tabs open at once, 1 to 4 (default 2)")
+    p = sub.add_parser(
         "do",
         help="several verbs in ONE call — starting this process costs ~104ms, so six "
              "verbs is most of a second spent before touching the page",
@@ -1600,7 +2490,8 @@ def main():
     p.add_argument("--steps-file", help="JSON list of {op, args} — for anything the short form cannot say")
     p.add_argument("--observe", action="store_true",
                    help="append the observation after the last step, so the batch answers "
-                        "'what does the page look like now' without another call")
+                        "'what does the page look like now' without another call (a delta when "
+                        "you observed this document before)")
     # ── THE SAME FLAGS AFTER THE VERB, TOO ──────────────────────────────────
     #
     # argparse only sees a global flag BEFORE the subcommand, and nobody writes
@@ -1649,7 +2540,7 @@ def main():
         add_global(sp, "--max-tokens", dest="maxTokens", type=int,
                    help="truncate the answer to roughly this many tokens, keeping what matters first")
         add_global(sp, "--observe", action="store_true",
-                   help="hand back the page this left behind, under `after`")
+                   help="hand back the page this left behind, under `after` (a delta when you observed this document before)")
         add_global(sp, "--summary", action="store_true",
                    help="print one line describing the answer")
         add_global(sp, "--show", action="store_true",
@@ -1696,6 +2587,10 @@ def main():
         if refusal:
             print(refusal, file=sys.stderr)
             return 1
+        if a.sessionCmd == "import":
+            return session_import(a, page)
+        if a.sessionCmd == "verify":
+            return session_verify(a, page)
         return session_save(a.file, page, a) if a.sessionCmd == "save" else session_load(a.file, page, a)
 
     if a.cmd == "permissions":
@@ -1773,10 +2668,11 @@ def main():
     elif a.cmd == "fill":
         fields = {}
         for pair in a.field:
-            if "=" not in pair:
-                print(f"--field takes SELECTOR=VALUE, got {pair!r}", file=sys.stderr)
+            k, v = split_field(pair)
+            if k is None:
+                why = " (a [ in it is never closed)" if pair.count("[") > pair.count("]") else ""
+                print(f"--field takes SELECTOR=VALUE, got {pair!r}{why}", file=sys.stderr)
                 return 2
-            k, v = pair.split("=", 1)
             fields[k] = v
         if not fields:
             print("fill needs at least one --field SELECTOR=VALUE", file=sys.stderr)
@@ -1847,6 +2743,18 @@ def main():
         body = {"selector": a.selector}
     elif a.cmd == "coverage":
         body = {"action": a.action}
+    elif a.cmd == "screencast":
+        if a.action == "watch":
+            # Addressed like everything else, before a byte goes out: a watch
+            # is three verbs on one tab, and that tab is the caller's.
+            page, refusal = addressed(a, "screencast")
+            if refusal:
+                print(refusal, file=sys.stderr)
+                return 1
+            return screencast_watch(a, page)
+        body = {"action": a.action}
+        if a.action == "start":
+            body.update({"quality": a.quality, "maxWidth": a.maxWidth, "maxHeight": a.maxHeight, "everyNth": a.everyNth})
     elif a.cmd == "inspect":
         body = {"action": a.action}
         if a.action == "panel":
@@ -1883,6 +2791,8 @@ def main():
             body["since"] = load_since(cursor, "observe")
         if a.shot:
             body["shot"] = True
+        if a.delta:
+            body["delta"] = True
     elif a.cmd in ("tab", "closetab"):
         # An index if it looks like one, an id otherwise. `tabs` prints both,
         # so either is a thing the caller has in front of it.
@@ -2041,6 +2951,24 @@ def main():
             body["force"] = True
     elif a.cmd == "region":
         body = {"selector": a.selector}
+    elif a.cmd == "checkup":
+        body = {}
+        if a.url:
+            body["url"] = a.url
+        if a.reload:
+            body["reload"] = True
+        if a.noShot:
+            body["noShot"] = True
+        if a.settleMs is not None:
+            body["settleMs"] = a.settleMs
+    elif a.cmd == "dialog":
+        body = {k: True for k in ("accept", "dismiss", "always") if getattr(a, k)}
+        if a.text is not None:
+            body["text"] = a.text
+    elif a.cmd == "handoff":
+        body = {"reason": a.reason}
+        if a.until:
+            body["until"] = a.until
     elif a.cmd == "upload":
         body = {"selector": a.selector, "paths": a.paths}
     elif a.cmd == "permission":
@@ -2048,7 +2976,18 @@ def main():
     elif a.cmd == "reload":
         body = {"bypassCache": not a.keepCache}
     elif a.cmd == "cookies":
-        body = {"set": {"name": a.set[0], "value": a.set[1], "path": a.path}} if a.set else {}
+        if a.set:
+            set_ = {"name": a.set[0], "value": a.set[1], "path": a.path}
+            for k in ("domain", "secure", "httpOnly", "sameSite", "expires", "partitionKey"):
+                if getattr(a, k) is not None:
+                    set_[k] = getattr(a, k)
+            if a.insecure:
+                if a.secure:
+                    sys.exit("--secure and --insecure contradict each other")
+                set_["secure"] = False
+            body = {"set": set_}
+        else:
+            body = {}
     elif a.cmd == "frames":
         body = {}
     elif a.cmd == "resize":
@@ -2059,6 +2998,8 @@ def main():
         body = {"selector": a.selector}
         if a.max is not None:
             body["max"] = a.max
+        if a.clean:
+            body["clean"] = True
     elif a.cmd == "waitfor":
         if not a.js and not a.until:
             print("waitfor needs an expression, or --until network-idle|no-timers", file=sys.stderr)
@@ -2090,6 +3031,8 @@ def main():
                 print("--label needs --highlight — it captions the box, not the whole picture", file=sys.stderr)
                 return 1
             body["label"] = a.label
+        if a.marks:
+            body["marks"] = True
         if a.omitBackground:
             body["omitBackground"] = True
     elif a.cmd in ("click", "wait"):
@@ -2098,6 +3041,65 @@ def main():
         body = {"selector": a.selector, "text": a.text, "submit": a.submit}
     elif a.cmd == "text":
         body = {"selector": a.selector}
+    elif a.cmd == "extract":
+        fields = {}
+        for pair in a.field:
+            name, _, sel = pair.partition("=")
+            name, sel = name.strip(), sel.strip()
+            if not name or not sel:
+                print(f"--field wants NAME=SELECTOR, got {pair!r}", file=sys.stderr)
+                return 2
+            if name in fields:
+                print(f"--field {name} given twice", file=sys.stderr)
+                return 2
+            fields[name] = sel
+        if a.fieldsFile:
+            try:
+                with open(a.fieldsFile) as _f:
+                    from_file = json.load(_f)
+            except Exception as _e:
+                print(f"--fields-file: {_e}", file=sys.stderr)
+                return 2
+            if not isinstance(from_file, dict) or not all(isinstance(v, str) for v in from_file.values()):
+                print("--fields-file wants { name: selector }", file=sys.stderr)
+                return 2
+            for k, v in from_file.items():
+                if k in fields:
+                    print(f"field {k} given twice (CLI and --fields-file)", file=sys.stderr)
+                    return 2
+                fields[k] = v
+        if not fields:
+            print("extract needs at least one --field NAME=SELECTOR", file=sys.stderr)
+            return 2
+        body = {"fields": fields}
+    elif a.cmd == "count":
+        body = {"selector": a.selector} if a.selector else {}
+    elif a.cmd == "search":
+        body = {"query": a.query}
+    elif a.cmd in ("interactive", "forms"):
+        body = {}
+    elif a.cmd == "scrape":
+        body = {"urls": a.urls, "read": a.read, "concurrency": a.concurrency}
+        if a.read == "extract":
+            fields = {}
+            for pair in a.field:
+                name, _, sel = pair.partition("=")
+                if not name.strip() or not sel.strip():
+                    print(f"--field wants NAME=SELECTOR, got {pair!r}", file=sys.stderr)
+                    return 2
+                fields[name.strip()] = sel.strip()
+            if not fields:
+                print("--read extract needs at least one --field NAME=SELECTOR", file=sys.stderr)
+                return 2
+            body["fields"] = fields
+    elif a.cmd == "attr":
+        body = {"selector": a.selector}
+        if a.names:
+            body["names"] = a.names
+    elif a.cmd == "markdown":
+        body = {}
+    elif a.cmd == "links":
+        body = {}
     elif a.cmd == "scroll":
         if a.selector:
             body = {"selector": a.selector}
@@ -2157,8 +3159,12 @@ def main():
     # Lost once, at the merge of two lanes that both rewrote this spot, and
     # caught by `whoami` answering `identity: null` — which is a pre-flight
     # that cannot answer the question it exists for.
-    if who and a.cmd in ("whoami", "profiles", "open", "newtab"):
+    if who and a.cmd in ("whoami", "profiles", "open", "newtab", "scrape"):
         body["identity"] = who
+    if a.cmd == "scrape":
+        # Its tabs are minted in the caller's container, the way `open` mints
+        # one: the empty profile is the person's own container, `--shared`.
+        body["profile"] = who or ""
     if who and a.cmd in ("whoami", "profiles"):
         held = my_tab(who)
         if held:
@@ -2207,6 +3213,13 @@ def main():
 
     if getattr(a, "observe", False):
         body["observe"] = True
+    # An observation this caller will not see whole — trimmed by --max-tokens,
+    # or reduced to one line by --summary — must not become the baseline its
+    # next delta is measured against: nodes it never read would count as
+    # "same" and never be reported.
+    if (a.cmd == "observe" or getattr(a, "observe", False)) and (
+            getattr(a, "maxTokens", None) or (getattr(a, "summary", False) and not getattr(a, "outFile", None))):
+        body["partial"] = True
     # `--page <tab id>` — six verbs declare it and exactly one was sending it,
     # so `shot --page t2-abc` quietly photographed the ACTIVE tab instead. The
     # server has accepted `page` on every acting verb all along; nothing was
@@ -2244,7 +3257,7 @@ def main():
     # the screen — never about a page inside a tab. They are in here so they are
     # not auto-addressed at this identity's tab, and `page` is stripped from
     # them below so a stray global `--page` cannot address them either.
-    TAB_OPS = {"tabs", "tab", "newtab", "closetab", "profiles", "whoami", "health", "settings"}
+    TAB_OPS = {"tabs", "tab", "newtab", "closetab", "profiles", "whoami", "health", "settings", "scrape"}
     # `open` under `--shared` carries neither a page nor a profile ON PURPOSE:
     # the person's own container IS the empty profile field, so "make me a tab
     # there" is a request with nothing on it. That is the one shape that looks
@@ -2320,6 +3333,10 @@ def main():
         print("--show: the browser pane is brought forward for this tab", file=sys.stderr)
 
     res = call(a.cmd, body)
+    if getattr(a, "waitSlot", None):
+        res = wait_for_slot(a.cmd, body, res, a.waitSlot)
+    if a.cmd == "handoff" and res.get("ok"):
+        res = wait_for_person(a, body, res)
     # A tab of ours that is gone stops being ours, so the next call opens a
     # fresh one instead of addressing a ghost forever.
     if body.get("page") and str(res.get("error") or "").startswith("no tab called"):
@@ -2567,6 +3584,12 @@ def main():
     if a.cmd in ("observe", "console", "network", "exposed") and getattr(a, "sinceLast", False):
         save_since(cursor, a.cmd, value.get("now"))
 
+    # A checkup's picture goes to a file and the answer carries the path: a
+    # base64 PNG in an agent's context is paid for on every turn after.
+    if a.cmd == "checkup" and value.get("png"):
+        at = _checkup_shot(value.pop("png"))
+        value["shot"] = at or "unavailable: the picture could not be written to disk"
+
     # --max-tokens / --out / --summary apply to every verb except `shot`,
     # which already has its own --out-shaped positional (where to write the
     # png) and a binary payload there is nothing left to trim.
@@ -2595,6 +3618,13 @@ def main():
         # wrapping it in JSON would spend tokens on punctuation.
         print(f"{value.get('title', '')}\n{value.get('url', '')}\n")
         print(value.get("text", ""))
+    elif a.cmd == "markdown":
+        # Same reason as `read`: it is the same caller, and the markdown is the
+        # thing worth its context — JSON around it is punctuation it pays for.
+        print(f"{value.get('title', '')}\n{value.get('url', '')}\n")
+        print(value.get("markdown", ""))
+        if value.get("truncated"):
+            print("\n[truncated by the page]", file=sys.stderr)
     elif a.cmd == "inspect" and a.action == "shot":
         # Down the same path as `shot`, deliberately: that branch is where the
         # rule "an empty capture is a FAILURE, not a zero-byte file" lives, and
@@ -2670,6 +3700,10 @@ def main():
             print(dest)
         else:
             print(png)
+        # --marks drew eN labels; the ids are what a caller acts on next, and
+        # the picture alone cannot be read back into a list of them.
+        if value.get("marks"):
+            print("marks: " + " ".join(value["marks"]))
         # ASKED FOR TWO HALVES, GIVEN ONE, AND TOLD NOTHING.
         #
         # `--with-inspector` falls back to the page alone when the inspector

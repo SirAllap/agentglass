@@ -1182,7 +1182,9 @@ export interface BrowserAskFrame {
   /** Kept in step with BrowserOp in server/src/browserdrive.ts by hand, and the
    *  compiler notices when it drifts: the server assigns one to the other. */
   op:
-    | "open" | "read" | "click" | "type" | "wait" | "shot"
+    | "open" | "read" | "markdown" | "extract" | "links" | "count" | "search"
+    | "interactive" | "forms" | "attr" | "screencast"
+    | "click" | "type" | "wait" | "shot"
     | "back" | "forward" | "scroll" | "press" | "text"
     /* The tab verbs. The panel has had tabs since it had a panel; these are
        what let an agent reach them — see BrowserOp for why `open` still
@@ -1261,6 +1263,15 @@ export interface BrowserAskFrame {
     /* §2: the tree of one subtree instead of the page — a modal is fifteen
        nodes inside three hundred, and the rest is paid for every turn. */
     | "region"
+    /* The dev loop in one call: load or reload, wait for quiet, and say
+       whether it broke — errors from the start of the load included. */
+    | "checkup"
+    /* Arm the answer to the page's next confirm/prompt (the default is yes). */
+    | "dialog"
+    /* Give the tab to the person for a CAPTCHA, a 2FA code or a consent. */
+    | "handoff"
+    /* Measurement as data: web vitals with ratings, and an accessibility scan. */
+    | "vitals" | "a11y"
     /* §11: the clipboard through the route that works, and the page as one
        file that still renders offline. */
     | "clipboard" | "save"

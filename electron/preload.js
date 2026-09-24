@@ -54,6 +54,12 @@ contextBridge.exposeInMainWorld("agentglass", {
   apiToken: (() => {
     try { return ipcRenderer.sendSync("ag:apiToken") || null; } catch { return null; }
   })(),
+  // The desk's key, which lets a held call go (electron/main.js deskKey). Sync
+  // for the same reason as the two above; a restart hands over the next one
+  // through onServerChanged.
+  deskKey: (() => {
+    try { return ipcRenderer.sendSync("ag:deskKey") || null; } catch { return null; }
+  })(),
   remoteEnabled: () => ipcRenderer.invoke("ag:remoteEnabled"),
   /** @param {boolean} on */
   setRemote: (on) => ipcRenderer.invoke("ag:setRemote", on),
@@ -87,7 +93,7 @@ contextBridge.exposeInMainWorld("agentglass", {
     ipcRenderer.on("ag:deep-link", h);
     return () => ipcRenderer.removeListener("ag:deep-link", h);
   },
-  /** @param {(p: { origin?: string | null, token?: string | null }) => void} fn */
+  /** @param {(p: { origin?: string | null, token?: string | null, deskKey?: string | null }) => void} fn */
   onServerChanged: (fn) => {
     /** @type {IpcListener} */
     const h = (_e, payload) => { try { fn(payload); } catch { /* renderer's problem */ } };
@@ -300,7 +306,10 @@ contextBridge.exposeInMainWorld("agentglass", {
    *  violations a launch and starts showing icons again.
    *  @param {string} url @param {number} [guestId] */
   browserFavicon: (url, guestId) => ipcRenderer.invoke("ag:browserFavicon", { url, guestId }),
-  cdpEvents: () => ipcRenderer.invoke("ag:browserCdp", { drain: true }),
+  /** Drains the buffer of the tab the caller names, like `cdp` above: without
+   *  the id main.js drained whichever tab was in front.
+   *  @param {number} [guestId] */
+  cdpEvents: (guestId) => ipcRenderer.invoke("ag:browserCdp", { drain: true, guestId }),
   /** §13: apply session-level settings (proxy, extensions, cookies, DNS)
    *  through the Electron main process. */
   /** @param {Record<string, unknown>} req */

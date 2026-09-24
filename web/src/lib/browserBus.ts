@@ -206,7 +206,7 @@ async function serveHealth(el: DrivableWebview | null): Promise<{ ok: true; valu
  * the diagnosis — asking `console` a second time because `console` failed
  * teaches nothing — and for anything answered before a page was ever reached.
  */
-const SELF_DIAGNOSING = new Set(["observe", "console", "network", "shot", "health", ...TAB_OPS]);
+const SELF_DIAGNOSING = new Set(["observe", "console", "network", "shot", "health", "checkup", ...TAB_OPS]);
 async function attachDiagnosis(
   el: DrivableWebview | null, op: string, reply: { ok: boolean; value?: unknown; error?: string },
 ): Promise<{ ok: boolean; value?: unknown; error?: string; diagnosis?: unknown }> {
@@ -361,7 +361,14 @@ export async function serveBrowserAsk(el: DrivableWebview | null, ask: BrowserAs
           }
           return browserCdp(method, params, guest ?? undefined);
         },
-        browserCdpEvents, applySessionSettings,
+        /* The same tab for the events: this drained whichever tab was in
+           front, so an agent on a background tab read an empty buffer after
+           every enable and never saw one event its page sent. */
+        async () => {
+          const guest = guestIdOf(el);
+          return guest === null ? [] : browserCdpEvents(guest ?? undefined);
+        },
+        applySessionSettings,
         /*
          * The inspector, keyed on the same guest the rest of the verbs act on.
          *

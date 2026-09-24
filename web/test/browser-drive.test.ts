@@ -7,7 +7,8 @@
  * nothing, and a typed value that a framework throws away on its next render.
  */
 import { describe, expect, test } from "bun:test";
-import { claimAgentZoom, forgetAgentZoom, reapplyZoom, resetBrowserSettings, runBrowserAsk, type DrivableWebview } from "../src/lib/browserDrive.ts";
+import { claimAgentZoom, forgetAgentZoom, reapplyZoom, resetBrowserSettings, resetStableIds, runBrowserAsk, type DrivableWebview } from "../src/lib/browserDrive.ts";
+import { cookieSetParams as buildCookie } from "../src/lib/cookieSet.ts";
 
 /** Records the code it is asked to run and answers with whatever was queued. */
 /*
@@ -17,7 +18,7 @@ import { claimAgentZoom, forgetAgentZoom, reapplyZoom, resetBrowserSettings, run
  * and "that is not a selector", and a stand-in that answers `true` to all four
  * would let a verb pass while reporting the wrong one.
  */
-function fakeGuest(answer: (code: string) => unknown = () => ({ kind: "ok" })) {
+function fakeGuest(answer: (code: string) => unknown = () => ({ kind: "ok" }), url = "https://example.com/app") {
   const ran: string[] = [];
   const keys: string[] = [];
   /* `sendInputEvent` is NOT part of `DrivableWebview` any more — it was taken
@@ -43,7 +44,7 @@ function fakeGuest(answer: (code: string) => unknown = () => ({ kind: "ok" })) {
     reload: () => { ran.push("reload"); },
     reloadIgnoringCache: () => { ran.push("reloadIgnoringCache"); },
     sendInputEvent: (e) => { keys.push(`${e.type}:${e.keyCode}`); },
-    getURL: () => "https://example.com/app",
+    getURL: () => url,
     getTitle: () => "The app",
     executeJavaScript: async (code: string) => { ran.push(code); return answer(code); },
     capturePage: async () => ({ toDataURL: () => "data:image/png;base64,AAAA" }),
@@ -89,6 +90,32 @@ function fakeGuestWithCookies(host = "example.com") {
 }
 
 describe("driving a page", () => {
+  test("a navigation the egress guard refused says why, not just ERR_TUNNEL_CONNECTION_FAILED", async () => {
+    /* The guest reports the bare Chromium code; the shell kept the reason. */
+    const el = fakeGuest();
+    el.addEventListener = (type: string, fn: (e: Event) => void) => {
+      if (type === "did-fail-load") queueMicrotask(() => fn(Object.assign(new Event(type), { errorDescription: "ERR_TUNNEL_CONNECTION_FAILED", isMainFrame: true, errorCode: -111 })));
+    };
+    const asked: Record<string, unknown>[] = [];
+    const shell = async (req: Record<string, unknown>) => {
+      asked.push(req);
+      return { ok: true, value: { armed: true, refusals: [{ at: 1, host: "meta.example", reason: "meta.example resolves to 169.254.169.254, which is link-local (where cloud metadata lives)" }] } };
+    };
+    const r = await runBrowserAsk(el, ask("open", { url: "https://meta.example/latest/" }), undefined, undefined, undefined, undefined, undefined, shell);
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("ERR_TUNNEL_CONNECTION_FAILED");
+    expect(r.error).toContain("169.254.169.254");
+    expect(asked).toEqual([{ egress: { host: "meta.example" } }]);
+    // Any other failure is left alone, and the shell is not asked.
+    asked.length = 0;
+    el.addEventListener = (type: string, fn: (e: Event) => void) => {
+      if (type === "did-fail-load") queueMicrotask(() => fn(Object.assign(new Event(type), { errorDescription: "ERR_NAME_NOT_RESOLVED", isMainFrame: true, errorCode: -105 })));
+    };
+    const plain = await runBrowserAsk(el, ask("open", { url: "https://nx.example/" }), undefined, undefined, undefined, undefined, undefined, shell);
+    expect(plain.error).toBe("ERR_NAME_NOT_RESOLVED");
+    expect(asked).toEqual([]);
+  });
+
   test("open answers with where it ended up", async () => {
     const r = await runBrowserAsk(fakeGuest(), ask("open", { url: "https://example.com/app" }));
     expect(r).toEqual({ ok: true, value: { url: "https://example.com/app", title: "The app" } });
@@ -354,20 +381,20 @@ describe("driving a page", () => {
   });
 
   test("text reads one element, and says so when there is none", async () => {
-    const found = await runBrowserAsk(fakeGuest(() => ({ text: "Total: 41" })), ask("text", { selector: ".total" }));
+    const found = await runBrowserAsk(fakeGuest(() => ({ kind: "ok", text: "Total: 41" })), ask("text", { selector: ".total" }));
     expect((found.value as any).text).toBe("Total: 41");
-    const missing = await runBrowserAsk(fakeGuest(() => null), ask("text", { selector: ".total" }));
+    const missing = await runBrowserAsk(fakeGuest(() => ({ kind: "none" })), ask("text", { selector: ".total" }));
     expect(missing.ok).toBe(false);
     expect(missing.error).toContain(".total");
   });
 
   test("scroll answers with where it ended up, not just 'done'", async () => {
-    const el = fakeGuest(() => ({ y: 900, atBottom: true }));
+    const el = fakeGuest(() => ({ kind: "ok", y: 900, atBottom: true }));
     const r = await runBrowserAsk(el, ask("scroll", { to: "bottom" }));
     expect(r.value).toEqual({ y: 900, atBottom: true });
     expect(el.ran[0]).toContain("document.body.scrollHeight");
     // Scrolling by pixels goes through scrollBy, and the number is a number.
-    const by = fakeGuest(() => ({ y: 400, atBottom: false }));
+    const by = fakeGuest(() => ({ kind: "ok", y: 400, atBottom: false }));
     await runBrowserAsk(by, ask("scroll", { by: -250 }));
     expect(by.ran[0]).toContain("scrollBy({ top: -250 })");
   });
@@ -888,6 +915,44 @@ describe("the DevTools verbs built on the protocol", () => {
     expect(v.css).toEqual({ rules: 2, used: 1 });
   });
 
+  /*
+   * The live screencast: Chromium's compositor pushes frames through
+   * `Page.screencastFrame` at its own rate, the shell acks each one and keeps
+   * a bounded ring, and the verb drains it. Three actions, and the drain is a
+   * pseudo-method the shell answers from the ring rather than a CDP call —
+   * the same shape `Fetch.agxSetRules` already uses.
+   */
+  test("screencast starts with bounded frames, drains the shell's ring, and stops", async () => {
+    const f = fakeCdp({
+      "Page.agxScreencastFrames": { frames: [
+        { at: 1, sessionId: 7, data: "/9j/AAA=", metadata: { deviceWidth: 800, deviceHeight: 600, timestamp: 1.5 } },
+        { at: 2, sessionId: 7, data: "/9j/BBB=", metadata: { deviceWidth: 800, deviceHeight: 600, timestamp: 1.6 } },
+      ], dropped: 3 },
+    });
+    const start = await runBrowserAsk(fakeGuest(), ask("screencast", { action: "start", quality: 40, maxWidth: 640, maxHeight: 480, everyNth: 2 }),
+      undefined, undefined, undefined, f.cdp);
+    expect(start.ok, JSON.stringify(start)).toBe(true);
+    const began = f.sent.find((s) => s.method === "Page.startScreencast")!;
+    expect(began.params).toEqual({ format: "jpeg", quality: 40, maxWidth: 640, maxHeight: 480, everyNthFrame: 2 });
+
+    const frames = await runBrowserAsk(fakeGuest(), ask("screencast", { action: "frames" }), undefined, undefined, undefined, f.cdp);
+    expect(frames.ok).toBe(true);
+    const v = frames.value as { frames: { at: number; jpeg: string; width: number; height: number; timestamp: number }[]; dropped: number; count: number };
+    expect(v.count).toBe(2);
+    expect(v.dropped).toBe(3);
+    expect(v.frames[1]).toEqual({ at: 2, jpeg: "data:image/jpeg;base64,/9j/BBB=", width: 800, height: 600, timestamp: 1.6 });
+
+    const stop = await runBrowserAsk(fakeGuest(), ask("screencast", { action: "stop" }), undefined, undefined, undefined, f.cdp);
+    expect(stop.ok).toBe(true);
+    expect(f.sent.map((s) => s.method)).toContain("Page.stopScreencast");
+  });
+
+  test("a screencast with no shell behind it says so instead of answering frames", async () => {
+    const r = await runBrowserAsk(fakeGuest(), ask("screencast", { action: "frames" }));
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("DevTools protocol");
+  });
+
   test("starting coverage records both languages, or it answers half the question", async () => {
     const f = fakeCdp();
     await runBrowserAsk(fakeGuest(), ask("coverage", { action: "start" }),
@@ -1315,26 +1380,850 @@ describe("eval's wrapper stays synchronous unless asked", () => {
   });
 });
 
+/**
+ * A stand-in DevTools cookie jar, with Chromium's own prefix rules:
+ * `__Host-` needs `secure`, path `"/"`, no `domain`; `__Secure-` needs
+ * `secure`; a `domain` that does not match the page's own host is
+ * refused. `Network.setCookie` answers `{ success: false }` rather than
+ * throwing on any of these — the same shape a real DevTools session
+ * returns — and `Network.getCookies` reads back whatever actually landed.
+ *
+ * Also stands in for the READ half: `document.cookie` genuinely does carry a
+ * cookie's value once `Network.setCookie` has landed it, for anything that
+ * isn't `httpOnly` — the two do not read from separate worlds — so `el`'s
+ * `executeJavaScript` reflects this SAME jar instead of a canned "".
+ */
+function fakeCookieJar(url: string) {
+  const jar: Array<Record<string, unknown>> = [];
+  const cdp = async (method: string, params?: unknown) => {
+    if (method === "Network.setCookie") {
+      const p = { ...(params as Record<string, unknown>) };
+      const name = String(p.name);
+      const cookieUrl = new URL(String(p.url));
+      const rejected =
+        (name.startsWith("__Host-") && (p.secure !== true || p.domain || p.path !== "/")) ||
+        (name.startsWith("__Secure-") && p.secure !== true) ||
+        (typeof p.domain === "string" && p.domain !== "" &&
+          cookieUrl.hostname !== p.domain && !cookieUrl.hostname.endsWith(`.${p.domain}`));
+      if (rejected) return { ok: true, result: { success: false } };
+      jar.push(p);
+      return { ok: true, result: { success: true } };
+    }
+    if (method === "Network.getCookies") {
+      return { ok: true, result: { cookies: jar.slice() } };
+    }
+    return { ok: false, error: `unhandled CDP method in test: ${method}` };
+  };
+  const el = fakeGuest(() => ({
+    cookies: jar.filter((c) => !c.httpOnly).map((c) => `${c.name}=${c.value}`).join("; "),
+    note: "httpOnly cookies are not visible to the page and so not here",
+  }), url);
+  return { el, cdp };
+}
+
+/** `cookies` reads through `document.cookie`, unaffected by a set that now
+ *  goes through the network stack — this stands in for that read step only,
+ *  for the error-path tests that never get as far as a landed cookie. */
+function fakeGuestForCookies(url: string) {
+  return fakeGuest(() => ({ cookies: "", note: "httpOnly cookies are not visible to the page and so not here" }), url);
+}
+
 describe("cookies --set is backed by the jar it claims", () => {
   /*
    * A REGRESSION THIS FILE DID NOT CATCH, which is the reason it is here.
    *
-   * `cookies --set` answered `ok` on the strength of the write script not
-   * throwing, never on the jar actually holding the cookie afterwards — and
-   * `fakeGuest`'s canned answers can't tell the difference, since they never
-   * run the code at all. `fakeGuestWithCookies` does: it is the same path a
-   * real page's `document.cookie` is, so a write that does not stick fails
-   * this test instead of reporting success.
+   * `cookies --set` answered `ok` on the strength of a `document.cookie`
+   * write not throwing, never on the jar it actually lands in — and Chromium
+   * drops any `__Host-`/`__Secure-` cookie written that way regardless,
+   * silently, flags and all. The write now goes through
+   * `Network.setCookie`/`Network.getCookies`, and `fakeCookieJar` is the
+   * same path a real DevTools session is: a write that does not stick, or a
+   * prefix rule that is broken, fails these tests instead of reporting
+   * success.
    */
-  test("set, then read back through the same path", async () => {
-    const el = fakeGuestWithCookies();
-    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "session", value: "abc123" } }));
-    expect(r).toEqual({ ok: true, value: { cookies: "session=abc123", note: expect.any(String) } });
+  test("a __Host- cookie lands with secure, path \"/\", no domain — FAILS on a document.cookie write", async () => {
+    const { el, cdp } = fakeCookieJar("https://orbit.example/");
+    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "__Host-orbit_session", value: "abc123" } }),
+      undefined, undefined, undefined, cdp);
+    expect(r.ok).toBe(true);
+    expect((r as { value: { set: Record<string, unknown> } }).value.set).toEqual({
+      name: "__Host-orbit_session", domain: undefined, path: "/", secure: true, httpOnly: false, sameSite: undefined,
+    });
   });
 
-  test("a cookie for a domain the page isn't on does not land, and the verb says so", async () => {
-    const el = fakeGuestWithCookies("example.com");
-    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "a", value: "b", domain: "other.com" } }));
+  test("a plain cookie on an https page lands secure", async () => {
+    const { el, cdp } = fakeCookieJar("https://orbit.example/");
+    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "pref", value: "dark" } }),
+      undefined, undefined, undefined, cdp);
+    expect(r.ok).toBe(true);
+    expect((r as { value: { set: Record<string, unknown> } }).value.set.secure).toBe(true);
+  });
+
+  test("--http-only lands httpOnly:true, and stays out of the document.cookie echo", async () => {
+    const { el, cdp } = fakeCookieJar("https://orbit.example/");
+    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "sid", value: "s3cr3t", httpOnly: true } }),
+      undefined, undefined, undefined, cdp);
+    expect(r.ok).toBe(true);
+    const value = (r as { value: { set: Record<string, unknown>; cookies: string } }).value;
+    expect(value.set.httpOnly).toBe(true);
+    // httpOnly is invisible to the page — this is the fake proving it, not just claiming it.
+    expect(value.cookies).not.toContain("s3cr3t");
+  });
+
+  test("sameSite is passed through, case-insensitive", async () => {
+    const { el, cdp } = fakeCookieJar("https://orbit.example/");
+    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "pref", value: "dark", sameSite: "lax" } }),
+      undefined, undefined, undefined, cdp);
+    expect(r.ok).toBe(true);
+    expect((r as { value: { set: Record<string, unknown> } }).value.set.sameSite).toBe("Lax");
+  });
+
+  test("a __Host- cookie with a domain is refused before it ever reaches CDP", async () => {
+    const { el, cdp } = fakeCookieJar("https://orbit.example/");
+    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "__Host-x", value: "b", domain: "orbit.example" } }),
+      undefined, undefined, undefined, cdp);
     expect(r.ok).toBe(false);
-    expect((r as { error: string }).error).toContain("a");  });
+    expect((r as { error: string }).error).toContain("__Host-");
+  });
+
+  test("a __Host- cookie on an http page is refused", async () => {
+    const { el, cdp } = fakeCookieJar("http://orbit.example/");
+    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "__Host-x", value: "b" } }),
+      undefined, undefined, undefined, cdp);
+    expect(r.ok).toBe(false);
+    expect((r as { error: string }).error).toContain("https");
+  });
+
+  test("a page that is not on http(s) (about:blank) is refused", async () => {
+    const { el, cdp } = fakeCookieJar("about:blank");
+    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "pref", value: "dark" } }),
+      undefined, undefined, undefined, cdp);
+    expect(r.ok).toBe(false);
+    expect((r as { error: string }).error).toContain("open a page");
+  });
+
+  test("the value is never repeated back in the `set` metadata", async () => {
+    // document.cookie legitimately carries the value for a non-httpOnly
+    // cookie (see the httpOnly test above) — this test is scoped to the
+    // metadata object, which is the one place a value must never reappear.
+    const { el, cdp } = fakeCookieJar("https://orbit.example/");
+    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "pref", value: "top-secret" } }),
+      undefined, undefined, undefined, cdp);
+    expect(r.ok).toBe(true);
+    const value = (r as { value: { set: Record<string, unknown> } }).value;
+    expect(JSON.stringify(value.set)).not.toContain("top-secret");
+  });
+
+  test("a domain other than the page's is refused by Chromium (success:false), worded as its own kind of failure", async () => {
+    const { el, cdp } = fakeCookieJar("https://example.com/");
+    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "a", value: "b", domain: "other.com" } }),
+      undefined, undefined, undefined, cdp);
+    expect(r.ok).toBe(false);
+    // Not "needs the DevTools relay" — the relay answered fine, Chromium refused the cookie.
+    expect((r as { error: string }).error).toBe(`Chromium refused cookie "a" — check the prefix rules (__Host-/__Secure-) and the domain`);
+  });
+
+  test("not in the jar after the write is still ok:false", async () => {
+    // A relay that claims success but the cookie never actually lands
+    // (a third-party cookie policy, say) — the getCookies check catches it.
+    const el = fakeGuestForCookies("https://orbit.example/");
+    const cdp = async (method: string) => {
+      if (method === "Network.setCookie") return { ok: true, result: { success: true } };
+      if (method === "Network.getCookies") return { ok: true, result: { cookies: [] } };
+      return { ok: false, error: "unhandled" };
+    };
+    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "session", value: "abc123" } }),
+      undefined, undefined, undefined, cdp);
+    expect(r.ok).toBe(false);
+    expect((r as { error: string }).error).toContain("not in the page's jar");
+  });
+
+  test("no DevTools relay is an honest error, not a silent no-op", async () => {
+    const el = fakeGuestForCookies("https://orbit.example/");
+    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "session", value: "abc123" } }));
+    expect(r.ok).toBe(false);
+    expect((r as { error: string }).error).toContain("DevTools relay");
+    expect((r as { error: string }).error).not.toContain("close the inspector");
+  });
+
+  test("a relay refused because DevTools is already attached says so, and to retry after closing it — no document.cookie fallback", async () => {
+    // M2: the old document.cookie write is the very thing this fix routes
+    // around (it drops flags silently), so it is not a fallback here either.
+    // The failure is new where the inspector is open on the tab, and the
+    // error has to say what changed rather than repeat the generic relay line.
+    const el = fakeGuestForCookies("https://orbit.example/");
+    const cdp = async () => ({ ok: false, error: "the inspector is attached to this page" });
+    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "session", value: "abc123" } }),
+      undefined, undefined, undefined, cdp);
+    expect(r.ok).toBe(false);
+    expect((r as { error: string }).error).toContain("the inspector is attached to this page");
+    expect((r as { error: string }).error).toContain("close the inspector and retry");
+    // Never wrote through document.cookie as a fallback.
+    expect(el.ran.join(" ")).not.toContain("document.cookie =");
+  });
+
+  test("the read path is unchanged: a --set through CDP does not touch the document.cookie jar this read uses", async () => {
+    const el = fakeGuestWithCookies();
+    const setResult = await runBrowserAsk(el, ask("cookies", { set: { name: "session", value: "abc123" } }),
+      undefined, undefined, undefined, fakeCookieJar("https://example.com/app").cdp);
+    // The SET call's own read-back used el's real document.cookie jar too —
+    // untouched by the separate cdp jar it wrote to — so it is still empty.
+    expect(setResult).toEqual({ ok: true, value: { cookies: "", note: expect.any(String), set: expect.any(Object) } });
+    const r = await runBrowserAsk(el, ask("cookies"));
+    expect(r).toEqual({ ok: true, value: { cookies: "", note: expect.any(String) } });
+  });
+});
+
+describe("cookieSetParams", () => {
+  // The old shape of this suite, kept: flags are normalised to booleans so the
+  // cases read as "secure or not" rather than "present or absent".
+  const cookieSetParams = (url: string, set: Record<string, unknown>) => {
+    const r = buildCookie(set, url);
+    if ("error" in r) return { ok: false as const, error: r.error };
+    return { ok: true as const, params: { ...r.params, secure: !!r.params.secure, httpOnly: !!r.params.httpOnly } };
+  };
+  test("a plain cookie on https defaults to secure", () => {
+    const r = cookieSetParams("https://orbit.example/app", { name: "pref", value: "dark" });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.params).toMatchObject({ name: "pref", value: "dark", url: "https://orbit.example/", path: "/", secure: true, httpOnly: false });
+    }
+  });
+
+  test("a plain cookie on http defaults to not secure", () => {
+    const r = cookieSetParams("http://orbit.example/app", { name: "pref", value: "dark" });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.params.secure).toBe(false);
+  });
+
+  test("explicit secure:false is honoured for a non-prefixed name", () => {
+    const r = cookieSetParams("https://orbit.example/app", { name: "pref", value: "dark", secure: false });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.params.secure).toBe(false);
+  });
+
+  test("__Host- forces secure, path \"/\", and refuses a domain", () => {
+    const ok = cookieSetParams("https://orbit.example/", { name: "__Host-s", value: "v" });
+    expect(ok.ok).toBe(true);
+    if (ok.ok) expect(ok.params).toMatchObject({ secure: true, path: "/" });
+
+    const withPath = cookieSetParams("https://orbit.example/", { name: "__Host-s", value: "v", path: "/app" });
+    expect(withPath.ok).toBe(false);
+
+    const withDomain = cookieSetParams("https://orbit.example/", { name: "__Host-s", value: "v", domain: "orbit.example" });
+    expect(withDomain.ok).toBe(false);
+
+    const onHttp = cookieSetParams("http://orbit.example/", { name: "__Host-s", value: "v" });
+    expect(onHttp.ok).toBe(false);
+  });
+
+  test("__Secure- forces secure and requires https", () => {
+    const ok = cookieSetParams("https://orbit.example/", { name: "__Secure-s", value: "v" });
+    expect(ok.ok).toBe(true);
+    if (ok.ok) expect(ok.params.secure).toBe(true);
+
+    const onHttp = cookieSetParams("http://orbit.example/", { name: "__Secure-s", value: "v" });
+    expect(onHttp.ok).toBe(false);
+  });
+
+  test("sameSite normalises case and requires secure for None", () => {
+    const lax = cookieSetParams("https://orbit.example/", { name: "pref", value: "v", sameSite: "STRICT" });
+    expect(lax.ok).toBe(true);
+    if (lax.ok) expect(lax.params.sameSite).toBe("Strict");
+
+    const badNone = cookieSetParams("https://orbit.example/", { name: "pref", value: "v", sameSite: "none", secure: false });
+    expect(badNone.ok).toBe(false);
+
+    const goodNone = cookieSetParams("https://orbit.example/", { name: "pref", value: "v", sameSite: "none" });
+    expect(goodNone.ok).toBe(true);
+
+    const bad = cookieSetParams("https://orbit.example/", { name: "pref", value: "v", sameSite: "whenever" });
+    expect(bad.ok).toBe(false);
+  });
+
+  test("a non-http(s) page is refused", () => {
+    const r = cookieSetParams("about:blank", { name: "pref", value: "v" });
+    expect(r.ok).toBe(false);
+  });
+
+  test("localhost, 127.0.0.1 and [::1] are secure contexts over plain http, same as Chromium treats them", () => {
+    for (const origin of ["http://localhost:5173", "http://sub.localhost:5173", "http://127.0.0.1:5173", "http://[::1]:5173"]) {
+      const plain = cookieSetParams(`${origin}/app`, { name: "pref", value: "v" });
+      expect(plain.ok, `${origin} should be ok`).toBe(true);
+      if (plain.ok) expect(plain.params.secure, `${origin} should default secure`).toBe(true);
+
+      const host = cookieSetParams(`${origin}/`, { name: "__Host-s", value: "v" });
+      expect(host.ok, `${origin} should allow __Host-`).toBe(true);
+
+      const secure = cookieSetParams(`${origin}/`, { name: "__Secure-s", value: "v" });
+      expect(secure.ok, `${origin} should allow __Secure-`).toBe(true);
+    }
+  });
+
+  test("a non-loopback http host is still not a secure context", () => {
+    const r = cookieSetParams("http://orbit.example/", { name: "pref", value: "v" });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.params.secure).toBe(false);
+  });
+});
+
+/*
+ * The structured readers: markdown, extract, links, count, search.
+ *
+ * A tiny DOM, not a real page — the point is that the snippet this builds is
+ * run for real, through `new Function`, against something that behaves like a
+ * page (querySelector, innerText, childNodes), so the code is tested where it
+ * runs, not as a string. A stand-in that never evaluates the snippet was
+ * already the failure mode these five verbs are here to close.
+ */
+describe("structured readers", () => {
+  type TN = { nodeType: number; tagName?: string; childNodes: TN[]; textContent: string; innerText: string; hidden?: boolean; getAttribute(n: string): string | null; attributes?: Record<string, string> };
+
+  function text(s: string): TN {
+    return { nodeType: 3, textContent: s, innerText: s, childNodes: [], getAttribute: () => null, attributes: {} };
+  }
+
+  function el(tag: string, children: TN[] = [], attrs: Record<string, string> = {}): TN {
+    const n: TN = {
+      nodeType: 1, tagName: tag.toUpperCase(), childNodes: children,
+      textContent: "", innerText: "", hidden: false, attributes: attrs,
+      getAttribute: (name: string) => (attrs[name] ?? null),
+    };
+    n.innerText = children.map((c) => (c.nodeType === 3 ? c.textContent : c.innerText)).join(" ");
+    n.textContent = n.innerText;
+    return n;
+  }
+
+  function buildDoc() {
+    const pricingLink = el("a", [text("price list")], { href: "/pricing" });
+    const dupLink = el("a", [text("price list")], { href: "/pricing" });
+    const jsLink = el("a", [text("careful")], { href: "javascript:alert(1)" });
+    const hashLink = el("a", [text("top")], { href: "#top" });
+    const priceEl = el("div", [text("$12")], { class: "price" });
+    const body = el("body", [
+      el("h1", [text("Prices")]),
+      el("p", [text("See the "), pricingLink, text(" for details")]),
+      el("ul", [el("li", [text("Alpha")]), el("li", [text("Beta")])]),
+      dupLink, jsLink, hashLink,
+      el("button", [text("Buy now")]),
+      el("input", [], { type: "text" }),
+      priceEl,
+    ]);
+    const parts = (s: string) => s.split(",").map((p) => p.trim());
+    const doc = {
+      body, title: "Demo", documentElement: body,
+      querySelector: (s: string) => doc.querySelectorAll(s)[0] ?? null,
+      querySelectorAll(s: string): TN[] {
+        const ps = parts(s);
+        const match = (n: TN) => ps.some((p) => {
+          if (!p) return false;
+          if (p.startsWith("[")) return !!(n.attributes || {})[p.slice(1, -1)];
+          if (p.startsWith("#")) return (n.attributes || {}).id === p.slice(1);
+          if (p.startsWith(".")) return ((n.attributes || {}).class || "").split(/\s+/).includes(p.slice(1));
+          const parsed = /^([a-z0-9]*)(\[([a-zA-Z0-9_-]+)\])?$/.exec(p)!;
+          const tag = parsed[1]!, attr = parsed[3];
+          if (attr && !(n.attributes || {})[attr]) return false;
+          return tag ? (n.tagName || "").toLowerCase() === tag : true;
+        });
+        const out: TN[] = [];
+        const walk = (n: TN) => { if (match(n)) out.push(n); n.childNodes.forEach(walk); };
+        walk(body);
+        return out;
+      },
+    } as const;
+    return { doc };
+  }
+
+  function run(code: string, page: { doc: { body: TN; querySelector: (s: string) => TN | null; querySelectorAll: (s: string) => TN[] } }) {
+    const win = { getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }) };
+    return new Function("document", "window", "location", "getComputedStyle", `return ${code}`)(
+      page.doc, win, { href: "https://example.com/app" }, win.getComputedStyle,
+    );
+  }
+
+  test("markdown turns headings, links and lists into readable markdown", async () => {
+    const page = buildDoc();
+    const el0 = fakeGuest((code) => run(code, page));
+    const r = await runBrowserAsk(el0, ask("markdown"));
+    expect(r.ok).toBe(true);
+    const md = (r as { value: { markdown: string } }).value.markdown;
+    expect(md).toContain("# Prices");
+    expect(md).toContain("[price list](/pricing)");
+    expect(md).toContain("- Alpha");
+    expect(md).toContain("- Beta");
+    expect(el0.ran[0]).toContain(".slice(0, 20000)");
+  });
+
+  test("extract pulls named fields by selector and names the nulls", async () => {
+    const page = buildDoc();
+    const el0 = fakeGuest((code) => run(code, page));
+    const r = await runBrowserAsk(el0, ask("extract", { fields: { title: "h1", price: ".price", nope: ".nope" } }));
+    expect(r.ok).toBe(true);
+    const v = (r as { value: { fields: Record<string, string | null>; notFound: string[] } }).value;
+    expect(v.fields.title).toBe("Prices");
+    expect(v.fields.price).toBe("$12");
+    expect(v.fields.nope).toBeNull();
+    expect(v.notFound).toEqual(["nope"]);
+  });
+
+  test("links returns every link, deduplicates, and keeps the real total", async () => {
+    const page = buildDoc();
+    const el0 = fakeGuest((code) => run(code, page));
+    const r = await runBrowserAsk(el0, ask("links"));
+    expect(r.ok).toBe(true);
+    const v = (r as { value: { total: number; links: { text: string; href: string }[]; dropped: number } }).value;
+    expect(v.total).toBe(2);
+    expect(v.links).toEqual([{ text: "price list", href: "/pricing" }]);
+    expect(v.dropped).toBe(1);
+  });
+
+  test("count with a selector gives the match count, without it counts interactive elements", async () => {
+    const page = buildDoc();
+    const el0 = fakeGuest((code) => run(code, page));
+    const r1 = await runBrowserAsk(el0, ask("count", { selector: ".price" }));
+    expect((r1 as { value: { count: number } }).value.count).toBe(1);
+    const r2 = await runBrowserAsk(el0, ask("count", {}));
+    expect((r2 as { value: { count: number; scope: string } }).value.scope).toBe("interactive");
+    expect((r2 as { value: { count: number } }).value.count).toBeGreaterThanOrEqual(3);
+  });
+
+  test("search finds the right elements and brings back their hrefs", async () => {
+    const page = buildDoc();
+    const el0 = fakeGuest((code) => run(code, page));
+    const r = await runBrowserAsk(el0, ask("search", { query: "price" }));
+    expect(r.ok).toBe(true);
+    const v = (r as { value: { count: number; matches: { text: string; href: string }[] } }).value;
+    expect(v.count).toBeGreaterThanOrEqual(2);
+    expect(v.matches.some((m) => m.href === "/pricing")).toBe(true);
+  });
+});
+
+/*
+ * The snapshot → element-ref loop, under the three things that go wrong with
+ * it: the page navigated and the id names a document that is gone; the id was
+ * handed out by an observe of another tab; the node was removed or re-rendered
+ * since the observe. Each used to answer "nothing on the page matches e17" —
+ * or worse, act on whatever the new page happened to stamp as e17 — and none
+ * of them told the agent the one thing it needed to hear, which is "observe
+ * again". Run for real through `new Function` against a page-shaped stand-in,
+ * because the fate of an id is decided inside the page.
+ */
+describe("stale ids say why, and say to observe again", () => {
+  type Node = {
+    tagName: string; dataset: Record<string, string>; innerText: string; id: string; className: string;
+    disabled: boolean; parentElement: null; outerHTML: string; textContent: string;
+    getAttribute(n: string): string | null; getBoundingClientRect(): { x: number; y: number; width: number; height: number; top: number; left: number };
+    contains(o: unknown): boolean; scrollIntoView(): void; click(): void; querySelectorAll(sel: string): Node[];
+  };
+
+  /** A document with one button per label, a window of its own (so `__agxSeq`
+   *  lives where a real page keeps it), and the guest that runs scripts
+   *  against them. */
+  function fakePage(buttons: string[], href = "https://example.com/a") {
+    const clicked: string[] = [];
+    const nodes: Node[] = buttons.map((label, i) => ({
+      tagName: "BUTTON", dataset: {}, innerText: label, id: "", className: "", disabled: false, parentElement: null,
+      outerHTML: `<button>${label}</button>`, textContent: label,
+      getAttribute: () => null,
+      getBoundingClientRect: () => ({ x: 10, y: 10 + 40 * i, width: 80, height: 20, top: 10 + 40 * i, left: 10 }),
+      contains: () => false,
+      scrollIntoView() {},
+      click() { clicked.push(label); },
+      querySelectorAll: () => [],
+    }));
+    /* The form the buttons sit in — what `region` is pointed at. */
+    const form: Node = {
+      ...nodes[0]!, tagName: "FORM", innerText: buttons.join(" "), textContent: buttons.join(" "), dataset: {},
+      outerHTML: "<form>…</form>", click() {},
+      querySelectorAll: (sel: string) => (sel.startsWith("a,button") ? nodes : []),
+    };
+    const win: Record<string, unknown> = {};
+    const document = {
+      title: "A page", visibilityState: "visible", readyState: "complete", cookie: "",
+      hasFocus: () => true,
+      elementFromPoint: (_x: number, y: number) => nodes.find((n) => { const r = n.getBoundingClientRect(); return y >= r.top && y <= r.top + r.height; }) ?? null,
+      querySelectorAll(sel: string): Node[] {
+        const m = /^\[data-agx-e="(e\d+)"\]$/.exec(sel);
+        if (m) return [form, ...nodes].filter((n) => n.dataset.agxE === m[1]);
+        if (sel.startsWith("a,button")) return nodes;
+        if (sel === "form") return [form];
+        return [];
+      },
+      querySelector(sel: string): Node | null { return document.querySelectorAll(sel)[0] ?? null; },
+    };
+    const run = (code: string) => new Function(
+      "window", "document", "location", "getComputedStyle", "innerWidth", "innerHeight", "localStorage", "sessionStorage",
+      `return ${code}`,
+    )(win, document, { href }, () => ({ display: "block", visibility: "visible", opacity: "1" }), 1200, 800, {}, {});
+    /* The collector patches fetch and friends on a real window; here it has
+       nothing to patch and nothing this checks depends on it. */
+    const el = fakeGuest((code) => (code.includes("__agxLog = log") ? 1 : run(code)));
+    return { el, win, nodes, clicked };
+  }
+
+  const ids = (r: { value?: unknown }) => ((r.value as { tree: { e: string }[] }).tree.map((t) => t.e));
+
+  test("an id used on a page that has not been observed since it loaded is refused", async () => {
+    resetStableIds();
+    const page = fakePage(["Save"]);
+    const r = await runBrowserAsk(page.el, ask("click", { selector: "e17" }));
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("e17");
+    expect(r.error, "the fix is to observe again, and it must say so").toMatch(/observe/i);
+    expect(r.error, "and where the tab is now, since the id came from somewhere else").toContain("https://example.com/a");
+    expect(page.clicked).toEqual([]);
+  });
+
+  test("two documents never share an id, so an id from the other tab is refused rather than acted on", async () => {
+    resetStableIds();
+    const a = fakePage(["Delete account", "Cancel"], "https://example.com/a");
+    const b = fakePage(["Confirm purchase", "Back"], "https://example.com/b");
+    const seenA = ids(await runBrowserAsk(a.el, ask("observe", {})));
+    const seenB = ids(await runBrowserAsk(b.el, ask("observe", {})));
+    expect(seenA).toEqual(["e1", "e2"]);
+    // The second page carries on where the first stopped: e1 means one thing.
+    expect(seenB.some((e) => seenA.includes(e))).toBe(false);
+    // The id of "Delete account", sent to the tab holding "Confirm purchase".
+    const r = await runBrowserAsk(b.el, ask("click", { selector: "e1" }));
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("e1 ");
+    expect(r.error).toMatch(/another tab|a page this tab has left/);
+    expect(r.error).toMatch(/observe/i);
+    expect(b.clicked, "nothing on the other page was touched").toEqual([]);
+    // And on its own page it still works.
+    const ok = await runBrowserAsk(a.el, ask("click", { selector: "e1" }));
+    expect(ok.ok).toBe(true);
+    expect(a.clicked).toEqual(["Delete account"]);
+  });
+
+  test("an id whose node was removed since the observe says so, not \"nothing matches\"", async () => {
+    resetStableIds();
+    const page = fakePage(["Save", "Discard"]);
+    const seen = ids(await runBrowserAsk(page.el, ask("observe", {})));
+    expect(seen).toEqual(["e1", "e2"]);
+    page.nodes.splice(1, 1); // a re-render drops "Discard"
+    const r = await runBrowserAsk(page.el, ask("click", { selector: "e2" }));
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/removed or re-rendered/);
+    expect(r.error).toMatch(/observe again/i);
+    expect(r.error).not.toContain("nothing on the page matches");
+  });
+
+  test("the same page observed twice keeps its ids and numbers new nodes after them", async () => {
+    resetStableIds();
+    const page = fakePage(["Save"]);
+    expect(ids(await runBrowserAsk(page.el, ask("observe", {})))).toEqual(["e1"]);
+    page.nodes.push({ ...page.nodes[0]!, dataset: {}, innerText: "Undo" });
+    // Dense: a second observe does not skip ahead when nobody else took ids in between.
+    expect(ids(await runBrowserAsk(page.el, ask("observe", {})))).toEqual(["e1", "e2"]);
+  });
+
+  test("two observations in flight at once take disjoint ids", async () => {
+    resetStableIds();
+    const a = fakePage(["One", "Two"]);
+    const b = fakePage(["Three"]);
+    /* Both scripts are built before either answers — the shape of two agents
+       on two tabs, and of `do` lanes. The reservation is what keeps the
+       second from starting where the first started. */
+    let releaseA: () => void = () => {};
+    const gate = new Promise<void>((r) => { releaseA = r; });
+    const runA = a.el.executeJavaScript;
+    a.el.executeJavaScript = async (code: string) => { await gate; return runA(code); };
+    const pa = runBrowserAsk(a.el, ask("observe", {}));
+    const pb = runBrowserAsk(b.el, ask("observe", {}));
+    releaseA();
+    const [ra, rb] = await Promise.all([pa, pb]);
+    const seenA = ids(ra), seenB = ids(rb);
+    expect(seenA.length).toBe(2);
+    expect(seenB.length).toBe(1);
+    expect(seenA.some((e) => seenB.includes(e))).toBe(false);
+  });
+
+  test("wait on an id the page never handed out fails at once instead of polling for 30 s", async () => {
+    resetStableIds();
+    const page = fakePage(["Save"]);
+    const started = Date.now();
+    const r = await runBrowserAsk(page.el, ask("wait", { selector: "e9" }));
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/observe/i);
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(page.el.ran.some((c) => c.includes("setTimeout(tick, 120)")), "no polling loop was started for an id").toBe(false);
+  });
+
+  test("every verb that takes a selector takes an id — html and text included", async () => {
+    resetStableIds();
+    const page = fakePage(["Save"]);
+    await runBrowserAsk(page.el, ask("observe", {}));
+    const h = await runBrowserAsk(page.el, ask("html", { selector: "e1" }));
+    expect(h.ok, JSON.stringify(h)).toBe(true);
+    expect((h.value as { html: string }).html).toContain("Save");
+    const t = await runBrowserAsk(page.el, ask("text", { selector: "e1" }));
+    expect(t.ok, JSON.stringify(t)).toBe(true);
+    // And a miss on one of these explains itself the same way click does.
+    const miss = await runBrowserAsk(page.el, ask("html", { selector: "e40" }));
+    expect(miss.ok).toBe(false);
+    expect(miss.error).toMatch(/observe/i);
+  });
+
+  test("region mints its ids from the same counter, so the next click accepts them", async () => {
+    resetStableIds();
+    const other = fakePage(["Elsewhere"]);
+    await runBrowserAsk(other.el, ask("observe", {}));
+    const page = fakePage(["Save", "Discard"]);
+    const r = await runBrowserAsk(page.el, ask("region", { selector: "form" }));
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+    const v = r.value as { e: string; tree: { e: string }[]; idSeq?: number };
+    expect(v.idSeq, "the counter stays off the wire here too").toBeUndefined();
+    // Counted on from the other page, never from one.
+    expect(v.tree.map((t) => t.e)).not.toContain("e1");
+    const click = await runBrowserAsk(page.el, ask("click", { selector: v.tree[1]!.e }));
+    expect(click.ok, JSON.stringify(click)).toBe(true);
+    expect(page.clicked).toEqual(["Discard"]);
+  });
+
+  test("an observation does not leak its counter into the answer", async () => {
+    resetStableIds();
+    const page = fakePage(["Save"]);
+    const r = await runBrowserAsk(page.el, ask("observe", {}));
+    expect(r.ok).toBe(true);
+    /* The id counter, not `seq`: that one numbers observations for observe --delta and is meant for the caller. */
+    expect((r.value as Record<string, unknown>).idSeq).toBeUndefined();
+  });
+});
+
+/*
+ * The interactive inventory: `interactive`, `forms` and `attr`. Run for real
+ * through `new Function` against a page-shaped stand-in with a form in it, so
+ * the shape an agent gets is the shape the code produces, not the shape a
+ * stub was told to return. Ids come from the same counter as `observe`, so
+ * the next click accepts them — that is what makes an inventory usable.
+ */
+describe("the interactive inventory", () => {
+  type N = {
+    tagName: string; attributes: Record<string, string>; children: N[]; dataset: Record<string, string>;
+    innerText: string; textContent: string; id: string; name: string; type: string; value: string;
+    checked: boolean; disabled: boolean; required: boolean; placeholder: string; href: string; action: string; method: string;
+    form: N | null; labels: { innerText: string }[]; options: { value: string; text: string }[]; parentElement: N | null;
+    getAttribute(n: string): string | null; getAttributeNames(): string[]; getBoundingClientRect(): { x: number; y: number; width: number; height: number; top: number; left: number };
+    querySelectorAll(sel: string): N[]; contains(o: unknown): boolean; scrollIntoView(): void; click(): void;
+  };
+  function node(tag: string, attrs: Record<string, string> = {}, children: N[] = [], text = ""): N {
+    const n: N = {
+      tagName: tag.toUpperCase(), attributes: attrs, children, dataset: {},
+      innerText: text || children.map((c) => c.innerText).join(" "), textContent: text, id: attrs.id ?? "", name: attrs.name ?? "",
+      type: attrs.type ?? (tag === "input" ? "text" : tag === "button" ? "submit" : ""), value: attrs.value ?? "",
+      checked: "checked" in attrs, disabled: "disabled" in attrs, required: "required" in attrs, placeholder: attrs.placeholder ?? "",
+      href: attrs.href ? `https://example.com${attrs.href}` : "", action: attrs.action ? `https://example.com${attrs.action}` : "", method: attrs.method ?? "get",
+      form: null, labels: attrs["aria-labelledby"] ? [{ innerText: attrs["aria-labelledby"] }] : [], options: [], parentElement: null,
+      // HTML attribute names are case-insensitive, and getAttribute folds them.
+      getAttribute: (k) => (k.toLowerCase() in attrs ? attrs[k.toLowerCase()]! : null), getAttributeNames: () => Object.keys(attrs),
+      getBoundingClientRect: () => (attrs.hidden !== undefined ? { x: 0, y: 0, width: 0, height: 0, top: 0, left: 0 } : { x: 10, y: 10, width: 100, height: 20, top: 10, left: 10 }),
+      querySelectorAll: (sel) => query(n, sel, false),
+      contains: () => false, scrollIntoView() {}, click() {},
+    };
+    for (const c of children) c.parentElement = n;
+    return n;
+  }
+  /** Comma-separated simple selectors: tag, [attr], [attr=val], #id, chained. */
+  function matches(n: N, simple: string): boolean {
+    const m = /^([a-z0-9]*)((?:#[\w-]+|\[[^\]]+\])*)$/.exec(simple.trim());
+    if (!m) return false;
+    if (m[1] && n.tagName.toLowerCase() !== m[1]) return false;
+    for (const part of m[2]!.match(/#[\w-]+|\[[^\]]+\]/g) ?? []) {
+      if (part.startsWith("#")) { if (n.id !== part.slice(1)) return false; continue; }
+      const [k, v] = part.slice(1, -1).split("=");
+      const val = v?.replace(/^['"]|['"]$/g, "");
+      if (k === "data-agx-e") { if (n.dataset.agxE !== val) return false; continue; }
+      if (!(k! in n.attributes)) return false;
+      if (v !== undefined && n.attributes[k!] !== val) return false;
+    }
+    return true;
+  }
+  function query(root: N, sel: string, self: boolean): N[] {
+    const parts = sel.split(",").map((s) => s.trim()).filter(Boolean);
+    const out: N[] = [];
+    const walk = (n: N, top: boolean) => { if ((!top || self) && parts.some((p) => matches(n, p))) out.push(n); n.children.forEach((c) => walk(c, false)); };
+    walk(root, true);
+    return out;
+  }
+  function buildPage() {
+    const user = node("input", { name: "user", type: "text", placeholder: "you@example.com", required: "", "aria-labelledby": "Email" });
+    const pw = node("input", { name: "pw", type: "password", value: "hunter2" });
+    const remember = node("input", { name: "remember", type: "checkbox", checked: "" });
+    const plan = node("select", { name: "plan" });
+    plan.options = [{ value: "free", text: "Free" }, { value: "pro", text: "Pro" }];
+    plan.value = "pro";
+    const token = node("input", { name: "csrf", type: "hidden", value: "abc" });
+    const go = node("button", { type: "submit" }, [], "Sign in");
+    const form = node("form", { id: "login", action: "/session", method: "post" }, [user, pw, remember, plan, token, go]);
+    for (const f of [user, pw, remember, plan, token, go]) f.form = form;
+    const search = node("input", { name: "q", type: "search", placeholder: "Search" });
+    /* Whitespace inside a name, and an `s` in it: the collapse is `\s+` on
+       the page, and a `\s` typed once in a template literal reaches the page
+       as a bare `s` — which would eat the letter and keep the newline. */
+    const link = node("a", { href: "/pricing", "data-testid": "pricing" }, [], "See  prices\n  now");
+    const dead = node("button", { disabled: "" }, [], "Nope");
+    const ghost = node("button", { hidden: "" }, [], "Ghost");
+    const body = node("body", {}, [node("h1", {}, [], "Sign in"), form, search, link, dead, ghost]);
+    const win: Record<string, unknown> = {};
+    const document = {
+      title: "Sign in", body, querySelectorAll: (sel: string) => query(body, sel, true), querySelector: (sel: string) => query(body, sel, true)[0] ?? null,
+      elementFromPoint: () => null,
+    };
+    const run = (code: string) => new Function("window", "document", "location", "getComputedStyle", "innerWidth", "innerHeight", `return ${code}`)(
+      win, document, { href: "https://example.com/login" }, (n: N) => ({ display: n.attributes.hidden !== undefined ? "none" : "block", visibility: "visible", opacity: "1" }), 1200, 800);
+    const el = fakeGuest((code) => (code.includes("__agxLog = log") ? 1 : run(code)));
+    return { el, win, nodes: { user, pw, remember, plan, token, go, form, search, link, dead, ghost } };
+  }
+
+  test("interactive lists what can be acted on, with what an agent needs to act: href, value, checked, options", async () => {
+    resetStableIds();
+    const page = buildPage();
+    const r = await runBrowserAsk(page.el, ask("interactive", {}));
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+    const v = r.value as { total: number; hidden: number; elements: Record<string, unknown>[]; idSeq?: number };
+    expect(v.idSeq).toBeUndefined();
+    const by = (name: string) => v.elements.find((e) => e.name === name);
+    expect(by("See prices now")).toMatchObject({ role: "link", href: "https://example.com/pricing", testid: "pricing" });
+    expect(by("Email")).toMatchObject({ role: "text", placeholder: "you@example.com" });
+    expect(by("pw")?.value ?? v.elements.find((e) => e.role === "password")?.value, "a password never travels").toBe("(hidden)");
+    expect(v.elements.find((e) => e.role === "checkbox")).toMatchObject({ checked: true });
+    expect(v.elements.find((e) => e.role === "select")).toMatchObject({ value: "pro", options: ["free", "pro"] });
+    expect(by("Nope")).toMatchObject({ disabled: true });
+    expect(v.elements.some((e) => e.role === "hidden"), "a hidden input is not something to act on").toBe(false);
+    expect(by("Ghost"), "an invisible button is counted, not listed").toBeUndefined();
+    expect(v.hidden).toBe(1);
+    expect(v.elements.every((e) => /^e\d+$/.test(String(e.e)))).toBe(true);
+  });
+
+  test("its ids are minted from the same counter as observe, so a click accepts them", async () => {
+    resetStableIds();
+    const other = buildPage();
+    await runBrowserAsk(other.el, ask("observe", {}));
+    const page = buildPage();
+    const r = await runBrowserAsk(page.el, ask("interactive", {}));
+    const link = (r.value as { elements: { name: string; e: string }[] }).elements.find((e) => e.name === "See prices now")!;
+    expect(link.e).not.toBe("e1");
+    const clicked = await runBrowserAsk(page.el, ask("text", { selector: link.e }));
+    expect(clicked.ok, JSON.stringify(clicked)).toBe(true);
+  });
+
+  test("forms come back as forms: fields with labels, the submit, and the fields that belong to none", async () => {
+    resetStableIds();
+    const page = buildPage();
+    const r = await runBrowserAsk(page.el, ask("forms", {}));
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+    const v = r.value as { forms: Record<string, unknown>[]; loose: Record<string, unknown>[]; idSeq?: number };
+    expect(v.idSeq).toBeUndefined();
+    expect(v.forms).toHaveLength(1);
+    const f = v.forms[0] as { id: string; action: string; method: string; fields: Record<string, unknown>[]; hiddenFields: number; submit: Record<string, unknown>[] };
+    expect(f).toMatchObject({ id: "login", action: "https://example.com/session", method: "post", hiddenFields: 1 });
+    expect(f.fields.map((x) => x.name)).toEqual(["user", "pw", "remember", "plan"]);
+    expect(f.fields[0]).toMatchObject({ label: "Email", required: true, type: "text" });
+    expect(f.fields[1]).toMatchObject({ type: "password", value: "(hidden)" });
+    expect(f.fields[3]).toMatchObject({ type: "select", value: "pro", options: ["free", "pro"] });
+    expect(f.submit).toHaveLength(1);
+    expect(f.submit[0]).toMatchObject({ text: "Sign in" });
+    expect(v.loose.map((x) => x.name)).toEqual(["q"]);
+    // Every id is an id a verb will take.
+    expect(/^e\d+$/.test(String(f.submit[0]!.e))).toBe(true);
+    expect(/^e\d+$/.test(String(f.fields[0]!.e))).toBe(true);
+  });
+
+  test("attr answers the attributes asked for, null for one that is not there, and all of them when none is named", async () => {
+    resetStableIds();
+    const page = buildPage();
+    const some = await runBrowserAsk(page.el, ask("attr", { selector: "a", names: ["href", "data-testid", "rel"] }));
+    expect(some.ok, JSON.stringify(some)).toBe(true);
+    expect(some.value).toMatchObject({ tag: "a", attributes: { href: "/pricing", "data-testid": "pricing", rel: null } });
+    const all = await runBrowserAsk(page.el, ask("attr", { selector: "#login" }));
+    expect(all.ok).toBe(true);
+    expect((all.value as { attributes: Record<string, string> }).attributes).toEqual({ id: "login", action: "/session", method: "post" });
+    // A password's value attribute is as secret as its value.
+    const pw = await runBrowserAsk(page.el, ask("attr", { selector: "input[type=password]", names: ["value", "name"] }));
+    expect((pw.value as { attributes: Record<string, unknown> }).attributes).toEqual({ value: "(hidden)", name: "pw" });
+    // getAttribute ignores case, so the mask does too: `VALUE` was the way
+    // round it.
+    const shout = await runBrowserAsk(page.el, ask("attr", { selector: "input[type=password]", names: ["VALUE", "Value"] }));
+    expect((shout.value as { attributes: Record<string, unknown> }).attributes).toEqual({ VALUE: "(hidden)", Value: "(hidden)" });
+    // Two matches is a refusal with the count, same as click.
+    const many = await runBrowserAsk(page.el, ask("attr", { selector: "button", names: ["type"] }));
+    expect(many.ok).toBe(false);
+    expect(many.error).toContain("matched");
+  });
+});
+
+describe("cookies --set with attributes goes through the protocol, not document.cookie", () => {
+  /*
+   * `document.cookie` cannot write an HttpOnly cookie at all, and a `__Host-`
+   * one only with `Secure` in the string, which the verb never put there —
+   * measured in Chromium, `__Host-x=1; path=/` is dropped without a word. So a
+   * copied session could never be finished by hand with this verb. Any
+   * attribute, or a prefixed name, takes Network.setCookie instead, and the
+   * answer names what landed without echoing the value.
+   */
+  const jar: Array<Record<string, unknown>> = [];
+  const cdp = async (method: string, params?: unknown) => {
+    const p = (params ?? {}) as Record<string, unknown>;
+    if (method === "Network.setCookie") { jar.push(p); return { ok: true, result: { success: true } }; }
+    if (method === "Network.getCookies") return { ok: true, result: { cookies: jar.map((c) => ({ name: c.name, value: c.value })) } };
+    return { ok: true, result: {} };
+  };
+  const run = (set: Record<string, unknown>) => {
+    jar.length = 0;
+    return runBrowserAsk(fakeGuest(), ask("cookies", { set }), undefined, undefined, undefined, cdp);
+  };
+
+  test("a __Host- cookie is secure, host-only and at / without being told", async () => {
+    const r = await run({ name: "__Host-orbit_sid", value: "s3cr3t-v4lue", httpOnly: true, sameSite: "Lax" });
+    expect(r.ok).toBe(true);
+    expect(jar[0]).toMatchObject({ name: "__Host-orbit_sid", url: "https://example.com/", path: "/", secure: true, httpOnly: true, sameSite: "Lax" });
+    expect(jar[0]).not.toHaveProperty("domain");
+    expect(JSON.stringify(r), "the answer echoed the cookie's value").not.toContain("s3cr3t-v4lue");
+  });
+
+  test("a __Host- cookie with a domain is refused before it is sent", async () => {
+    const r = await run({ name: "__Host-a", value: "b", domain: "example.com" });
+    expect(r.ok).toBe(false);
+    expect((r as { error: string }).error).toContain("__Host-");
+    expect(jar).toHaveLength(0);
+  });
+
+  test("every attribute is carried: domain, expiry, SameSite=None, a partition", async () => {
+    const r = await run({
+      name: "theme", value: "dark", domain: ".example.com", secure: true, sameSite: "None",
+      expires: 1_900_000_000, partitionKey: "https://orbit.example",
+    });
+    expect(r.ok).toBe(true);
+    expect(jar[0]).toMatchObject({
+      domain: ".example.com", url: "https://example.com/", secure: true, sameSite: "None", expires: 1_900_000_000,
+      partitionKey: { topLevelSite: "https://orbit.example", hasCrossSiteAncestor: false },
+    });
+  });
+
+  test("SameSite=None without Secure is refused, since Chromium would drop it", async () => {
+    const r = await run({ name: "x", value: "y", sameSite: "None", secure: false });
+    expect(r.ok).toBe(false);
+    expect((r as { error: string }).error).toContain("Secure");
+  });
+
+  test("an imported cookie names its own host, so a host-only one is set while the page is elsewhere", async () => {
+    // session import sets cookies before the tab is on the site; a host-only
+    // cookie must bind to ITS host, not to about:blank's.
+    const el = fakeGuest();
+    (el as { getURL: () => string }).getURL = () => "about:blank";
+    const r = await runBrowserAsk(el, ask("cookies", { set: { name: "s", value: "v", host: "www.orbit.example", secure: true, httpOnly: true } }),
+      undefined, undefined, undefined, cdp);
+    expect(r.ok).toBe(true);
+    expect(jar[0]).toMatchObject({ url: "https://www.orbit.example/", secure: true });
+    expect(jar[0]).not.toHaveProperty("domain");
+  });
+
+  test("a write the protocol accepts but the jar does not hold is still a failure", async () => {
+    const liar = async (method: string) => method === "Network.getCookies"
+      ? { ok: true, result: { cookies: [] } } : { ok: true, result: { success: true } };
+    const r = await runBrowserAsk(fakeGuest(), ask("cookies", { set: { name: "a", value: "b", httpOnly: true } }),
+      undefined, undefined, undefined, liar);
+    expect(r.ok).toBe(false);
+  });
 });

@@ -61,7 +61,7 @@ export interface SourceDef {
  */
 export const LINUX_SOURCES: SourceDef[] = [
   { id: "firefox", label: "Firefox", kind: "firefox", dirs: [".mozilla/firefox", "snap/firefox/common/.mozilla/firefox", ".var/app/org.mozilla.firefox/.mozilla/firefox"] },
-  { id: "zen", label: "Zen", kind: "firefox", dirs: [".zen", ".var/app/app.zen_browser.zen/.zen"] },
+  { id: "zen", label: "Zen", kind: "firefox", dirs: [".zen", ".config/zen", ".var/app/app.zen_browser.zen/.zen"] },
   { id: "librewolf", label: "LibreWolf", kind: "firefox", dirs: [".librewolf", ".var/app/io.gitlab.librewolf-community/.librewolf"] },
   { id: "chrome", label: "Google Chrome", kind: "chromium", keyring: "chrome", dirs: [".config/google-chrome"] },
   { id: "chromium", label: "Chromium", kind: "chromium", keyring: "chromium", dirs: [".config/chromium", "snap/chromium/common/chromium"] },

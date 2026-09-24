@@ -7,8 +7,11 @@
  * a directory name with a space and brackets in it, and profiles that have no
  * cookie store at all. All four are on the machine this was written against.
  */
-import { describe, expect, test } from "bun:test";
-import { LINUX_SOURCES, parseProfilesIni } from "../src/cookiesources.ts";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { findProfiles, LINUX_SOURCES, parseProfilesIni } from "../src/cookiesources.ts";
 
 describe("profiles.ini", () => {
   test("relative paths hang off the profile directory", () => {
@@ -60,5 +63,22 @@ describe("where it looks", () => {
     // Chromium-family stores are found and probed, never decrypted.
     expect(LINUX_SOURCES.filter((s) => s.kind === "chromium").map((s) => s.id).sort())
       .toEqual(["brave", "chrome", "chromium"]);
+  });
+
+  const HOME = join(tmpdir(), `agx-zen-home-${process.pid}`);
+  afterAll(() => { try { rmSync(HOME, { recursive: true, force: true }); } catch { /* fine */ } });
+
+  test("finds Zen's Arch native profile under ~/.config/zen", () => {
+    // The Arch native package keeps profiles.ini under ~/.config/zen, a
+    // layout `.zen` and the flatpak path both miss.
+    const dir = join(HOME, ".config", "zen");
+    mkdirSync(join(dir, "abcd1234.default"), { recursive: true });
+    writeFileSync(join(dir, "profiles.ini"), [
+      "[Profile0]", "Name=default", "IsRelative=1", "Path=abcd1234.default", "",
+    ].join("\n"));
+    writeFileSync(join(dir, "abcd1234.default", "cookies.sqlite"), "not a real database");
+
+    const found = findProfiles("linux", HOME);
+    expect(found.map((f) => f.id)).toContain("zen:abcd1234.default");
   });
 });

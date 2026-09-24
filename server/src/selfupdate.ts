@@ -76,7 +76,7 @@ const TAG_RE = /^v\d+\.\d+\.\d+$/;
  * cannot find. AGENTGLASS_DIE_WITH_PARENT=1 rides in too, into an app that has
  * no parent to die with.
  *
- * electron/appctl.sh strips the same seven on its way out, and that is not
+ * electron/appctl.sh strips the same list on its way out, and that is not
  * redundancy: it covers `make desktop-update` run from a terminal that happens
  * to be inside agentglass, which never comes through here at all. This one
  * covers everything the script itself launches. install-stop.test.ts fails if
@@ -85,9 +85,12 @@ const TAG_RE = /^v\d+\.\d+\.\d+$/;
 export const DERIVED_ENV = [
   "AGENTGLASS_TOKEN", "AGENTGLASS_PORT", "AGENTGLASS_BIND", "AGENTGLASS_TRUST_LAN",
   "AGENTGLASS_WEB_DIR", "AGENTGLASS_DIE_WITH_PARENT", "AGENTGLASS_PTY_SIZE_FILE",
+  // Harmless in a relaunch (desk.ts reads it only under the parent it names),
+  // and still derived: an app it reaches has no pipe behind it.
+  "AGENTGLASS_DESK_FD",
 ] as const;
 
-/** This process's environment with those seven removed. */
+/** This process's environment with those removed. */
 function scriptEnv(): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = {};
   const drop = new Set<string>(DERIVED_ENV);

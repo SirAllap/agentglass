@@ -171,7 +171,7 @@ export function addTab(tabs: BrowserTab[], url: string, afterId?: string, profil
      it needs a guest's worth of room; the ones asleep cost nothing and are not
      in this count. */
   if (tabs.filter((t) => !t.asleep).length >= MAX_TABS) {
-    return { error: `${MAX_TABS} pages awake at once is the limit — each one is a live browser, and this app is also running your agents. Close one, or let one go to sleep.` };
+    return { error: `${MAX_TABS} pages awake at once is the limit — each one is a live browser, and this app is also running your agents. Close one, let one go to sleep, or pass --wait-slot <seconds> to queue for a free one.` };
   }
   // A link opened from a page stays in the profile that page is signed into.
   // Anything else would sign you out mid-flow, which is the one thing profiles

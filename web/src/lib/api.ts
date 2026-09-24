@@ -322,6 +322,18 @@ let TOKEN: string = (() => {
   }
 })();
 
+/** The desktop app's own key, carried on the two requests only a person may
+ *  make — letting a held call go, and accepting a device — where the app started
+ *  the server. Empty anywhere but the desktop app. See server/src/desk.ts. */
+let DESK_KEY: string = (() => {
+  try {
+    return (window as unknown as { agentglass?: { deskKey?: string | null } }).agentglass?.deskKey || "";
+  } catch {
+    return "";
+  }
+})();
+const deskHeader = (): Record<string, string> => (DESK_KEY ? { "x-agentglass-desk": DESK_KEY } : {});
+
 /** Attach the bearer token to fetch headers when one is configured. */
 export const authHeaders = (h: Record<string, string> = {}): Record<string, string> =>
   TOKEN ? { ...h, authorization: `Bearer ${TOKEN}` } : h;
@@ -479,8 +491,10 @@ export let WS_URL = withToken(SERVER.replace(/^http/, "ws") + "/stream");
  * every consumer reads them at call time, so the next fetch and the next socket
  * connect go to the right place with the right credential.
  */
-export function adoptServer(next: { origin?: string | null; token?: string | null }): void {
+export function adoptServer(next: { origin?: string | null; token?: string | null; deskKey?: string | null }): void {
   if (next.origin) SERVER = next.origin.replace(/\/$/, "");
+  // A new sidecar has a new desk key, and one the app adopted has none.
+  if (next.deskKey !== undefined) DESK_KEY = next.deskKey ?? "";
   if (next.token !== undefined) {
     TOKEN = next.token ?? "";
     // Keep storage in step, so a genuine reload later does not fall back to a
@@ -679,14 +693,14 @@ async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
   throw last;
 }
 
-async function post<T>(path: string, body: unknown): Promise<T> {
+async function post<T>(path: string, body: unknown, headers: Record<string, string> = {}): Promise<T> {
   // Gated like GET, and only gated: waiting for a listener changes nothing
   // about what a POST means, where asking twice would. Measured in the real
   // app, the two that still shouted after GET was gated were both POSTs —
   // `/theme/sync` on boot and `/browser/ready`, which is the panel the maintainer
   // reported as not starting.
   await whenServerUp();
-  const r = await fetch(SERVER + path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body) });
+  const r = await fetch(SERVER + path, { method: "POST", headers: authHeaders({ "content-type": "application/json", ...headers }), body: JSON.stringify(body) });
   return r.json() as Promise<T>;
 }
 
@@ -920,7 +934,7 @@ const realApi = {
   gateDecide: (id: string, decision: "allow" | "deny", reason = "") =>
     fetch(SERVER + "/gate/decide", {
       method: "POST",
-      headers: authHeaders({ "content-type": "application/json" }),
+      headers: authHeaders({ "content-type": "application/json", ...deskHeader() }),
       body: JSON.stringify({ id, decision, reason }),
     }).then((r) => r.json() as Promise<{ ok: boolean; error?: string }>),
   gitStatus: (paths: string[]) =>
@@ -1811,7 +1825,7 @@ const realApi = {
    *  already paired — one poll, because the pane shows all three at once. */
   pairState: (ticket: string) => get<PairState>(`/pair/state?ticket=${encodeURIComponent(ticket)}`),
   pairAccept: (ticket: string, scope: DeviceScope) =>
-    post<{ ok: boolean; device?: PairedDevice; error?: string }>("/pair/accept", { ticket, scope }),
+    post<{ ok: boolean; device?: PairedDevice; error?: string }>("/pair/accept", { ticket, scope }, deskHeader()),
   pairReject: (ticket: string) => post<{ ok: boolean }>("/pair/reject", { ticket }),
   /** Revoke one device's credential and close what it is holding. */
   pairForget: (id: string) => post<{ ok: boolean; closed?: number; error?: string }>("/pair/forget", { id }),

@@ -1,6 +1,12 @@
 import type { BrowserAskFrame } from "../../../shared/types.ts";
-import { COLLECTOR, observeScript } from "./browserObserve.ts";
+import { ACC_NAME, COLLECTOR, ID_ORIGIN, PICK, STAMP, observeScript } from "./browserObserve.ts";
+import { MARKS_ID, MARKS_MAX, MARKS_SCRIPT } from "./browserMarks.ts";
+import { cleanHtmlBody } from "./browserCleanHtml.ts";
+import { A11Y_SCRIPT, VITALS_SCRIPT, VITAL_LIMITS, rate, type VitalName } from "./browserVitals.ts";
 import { jsLit } from "../../../shared/jsLit.ts";
+import { cookieSetParams } from "./cookieSet.ts";
+import { FIND, locatorLit, parseLocator } from "./browserLocator.ts";
+import { CHECKUP_PAGE, classifyCollector, classifyEvents, collectorSince, trackInflight, type CdpEvent } from "./browserCheckup.ts";
 
 /**
  * The window's half of "let an agent drive the browser".
@@ -153,7 +159,11 @@ export interface DrivableWebview {
      press case for the measurement. Nothing in this file may use it again. */
   getURL(): string;
   getTitle(): string;
-  executeJavaScript(code: string): Promise<unknown>;
+  /** `userGesture` runs the script "as if by a user": the frame gets a
+   *  transient user activation, which is what lets a click open a popup or
+   *  write the clipboard. `isTrusted` stays false — nothing here lies about it.
+   *  Passed for act verbs only, never for a read. */
+  executeJavaScript(code: string, userGesture?: boolean): Promise<unknown>;
   /** Cropped at the source when `rect` is given — Electron's own
    *  `capturePage(rect)`, not a full frame trimmed afterwards. */
   capturePage(rect?: ShotClip): Promise<{ toDataURL(): string }>;
@@ -163,12 +173,28 @@ export interface DrivableWebview {
   reloadIgnoringCache(): void;
   addEventListener(type: string, fn: (e: Event) => void): void;
   removeEventListener(type: string, fn: (e: Event) => void): void;
+  /** Whether the main frame is loading. Optional: a stand-in may not have it,
+   *  and a guest that cannot say is treated as not loading. */
+  isLoading?(): boolean;
 }
 
 /** How much page text is worth sending back. An agent reading a page needs the
  *  page, not a novel: past this the useful signal is long gone and the tokens
  *  are not. */
 const MAX_TEXT = 20_000;
+
+/* The structured verbs' own ceilings. Each is a wall against a page that
+   answers the question an agent actually asked by answering it a thousand
+   times: metric tons of nav links, a field that matched half the page. */
+const MAX_LINKS = 250;
+/** The interactive inventory's caps: elements listed per call, forms
+ *  described per call, and what one form or the loose set may hold. */
+const MAX_INTERACTIVE = 300;
+const MAX_FORMS = 20;
+const MAX_FIELDS = 60;
+const MAX_MATCHES = 25;
+const MAX_EXTRACT_FIELD = 2_000;
+const EXTRACT_FIELD_LIMIT = 30;
 
 interface TabSettings {
   cache: "normal" | "bypass";
@@ -548,54 +574,262 @@ interface ShotClip { x: number; y: number; width: number; height: number }
  * `querySelectorAll` catches both in one pass — a throw is the syntax error,
  * a length is the count — before `body` ever runs against a real element.
  */
-function resolveOne(selLit: string, body: string): string {
+function resolveOne(selLit: string, body: string, lenient = false): string {
   return `(() => {
-    let __all;
-    /*
-       An id from an observation is accepted wherever a selector is, because
-       section 17 lists inventing CSS selectors as an anti-feature and handing
-       back e17 only to refuse it on the next call would be the anti-feature
-       with extra steps. It is a data attribute on the node, so it needs no
-       special path — just the selector it stands for.
-    */
-    const __raw = ${selLit};
-    const __sel = /^e[0-9]+$/.test(__raw) ? '[data-agx-e="' + __raw + '"]' : __raw;
-    try { __all = document.querySelectorAll(__sel); }
-    catch (__e) { return { kind: "invalid", message: String((__e && __e.message) || __e) }; }
-    if (__all.length === 0) return { kind: "none" };
-    if (__all.length > 1) {
-      /* Something that TELLS THEM APART. It described a node by tag, id and
-         testid, which on a page whose elements have none of the last two says
-         "p, p" — true, and no help at all to somebody being asked to narrow
-         the selector. Found by running it against a real page. Position always
-         distinguishes, so it always appears; the trimmed text is what a person
-         actually recognises. */
-      const __describe = (__n, __i) => {
-        const __same = __n.parentElement
-          ? [...__n.parentElement.children].filter((__c) => __c.tagName === __n.tagName)
-          : [__n];
-        const __nth = __same.indexOf(__n) + 1;
-        const __text = (__n.innerText || __n.value || "").trim().replace(/\\s+/g, " ").slice(0, 40);
-        return __n.tagName.toLowerCase()
-          + (__n.id ? "#" + __n.id : "")
-          + (__n.getAttribute && __n.getAttribute("data-testid") ? "[data-testid=" + __n.getAttribute("data-testid") + "]" : "")
-          + (__same.length > 1 ? ":nth-of-type(" + __nth + ")" : "")
-          + (__text ? ' "' + __text + '"' : "");
-      };
-      return { kind: "many", count: __all.length, samples: [...__all].slice(0, 5).map(__describe) };
-    }
-    const e = __all[0];
+    const __got = ${ONE}(${selLit}, ${lenient}, ${readIdSeq()});
+    if (__got.kind !== "ok") return __got;
+    const e = __got.e;
     ${body}
   })()`;
 }
 
-/** The sentence for whichever way `resolveOne` failed. */
-function selectorError(sel: string, r: { kind?: string; message?: string; count?: number; samples?: string[] } | null | undefined): string {
+/**
+ * The page half of `resolveOne`, on its own so a verb that needs two elements
+ * (`drag`), a list of them (`fill`), a poll (`wait`) or a DevTools handle
+ * (`upload`, `listeners`, `debug dom`) finds them the same way `click` does —
+ * those used to build their own querySelector, and each one that did missed
+ * something: the id rewrite (`select`, `fill`, `wait`), the ambiguity check
+ * (`drag`, `upload`, `scroll`), or both.
+ *
+ * `lenient` is for the verbs that only READ an element (`text`, `html`,
+ * `region`, `listeners`, `debug dom`) and for `wait`, which asks whether
+ * anything matches at all: several matches there mean the first, as they
+ * always have. A verb that acts refuses several.
+ */
+const ONE = `((__spec, __lenient, __floor) => {
+    /*
+       What the selector names is decided by FIND (browserLocator.ts): an id
+       from an observation, a CSS selector, or a locator like
+       role=button[name="Save"]. An id is accepted wherever a selector is,
+       because section 17 lists inventing CSS selectors as an anti-feature and
+       handing back e17 only to refuse it on the next call would be the
+       anti-feature with extra steps.
+    */
+    const __r = ${FIND}(__spec);
+    if (__r.kind === "invalid") return __r;
+    const __all = __r.all;
+    /*
+       An id is asked WHERE IT CAME FROM before it is acted on. Ids used to be
+       looked up like any selector, and "nothing matches e17" was the best a
+       stale one could hope for — the worst was a page that had navigated and
+       minted its own e17, which then got the click. Now ids never repeat
+       across documents (see the stamp in browserObserve.ts), so an id not
+       minted by an observe of THIS document is refused whether or not some
+       node carries it, and an id minted here but not found is one the page has
+       dropped since. Each is its own sentence, and all of them end in
+       "observe again", which is the only move that fixes any of them.
+       The ceiling: the record of which ids were minted lives in the page's
+       own main world (__agxSeq, __agxRanges, data-agx-e), so this
+       catches a page that navigated and minted its own ids by accident, not
+       a hostile page that forges the record on purpose. Holding the ranges
+       on the driver's side, per document, is what that would take.
+    */
+    const __idm = typeof __spec.css === "string" ? /^\\[data-agx-e="(e[0-9]+)"\\]$/.exec(__spec.css) : null;
+    if (__idm) {
+      const __from = (${ID_ORIGIN})(__idm[1]);
+      if (__from !== "minted") return { kind: __from, url: location.href };
+      if (__all.length === 0) return { kind: "gone", url: location.href };
+    }
+    /* The ids a refusal hands back are minted the way observe mints them:
+       from the driver's counter (__floor) and into this document's ranges,
+       or ID_ORIGIN would refuse the very id the refusal told the caller to
+       use as foreign. Only a refusal stamps, so the ordinary click leaves the
+       counter alone. The ceiling: the floor is read, not reserved, so an
+       observe of another tab in the same instant can mint the same number. */
+    const __stamp0 = ${STAMP};
+    let __first = 0;
+    const __stamp = (__n) => {
+      if (!__first) {
+        window.__agxSeq = Math.max(window.__agxSeq || 0, Number(__floor) || 0);
+        __first = window.__agxSeq + 1;
+      }
+      return __stamp0(__n);
+    };
+    const __keep = (__x) => {
+      if (__first && window.__agxSeq >= __first) (window.__agxRanges = window.__agxRanges || []).push([__first, window.__agxSeq]);
+      return __x;
+    };
+    /* Something that TELLS THEM APART. It described a node by tag, id and
+       testid, which on a page whose elements have none of the last two says
+       "p, p" — true, and no help at all to somebody being asked to narrow
+       the selector. Found by running it against a real page. Position always
+       distinguishes, so it always appears; the trimmed text is what a person
+       actually recognises; and the id in front is one the caller can act on
+       straight away instead of narrowing anything. */
+    const __describe = (__n) => {
+      const __same = __n.parentElement
+        ? [...__n.parentElement.children].filter((__c) => __c.tagName === __n.tagName)
+        : [__n];
+      const __nth = __same.indexOf(__n) + 1;
+      /* A field is described by what it IS, never by its value: the value
+         of a password field that a fill had just written ended up in this
+         refusal, and a refusal goes to the audit log. */
+      const __field = /^(INPUT|TEXTAREA|SELECT)$/.test(__n.tagName)
+        && !/^(submit|button|reset)$/.test(__n.type || "");
+      const __attr = (__k) => (__n.getAttribute && __n.getAttribute(__k)) || "";
+      const __text = (__field
+        ? [__n.type ? "type=" + __n.type : "", __attr("name") ? "name=" + __attr("name") : "",
+           __attr("aria-label") || __attr("placeholder")].filter(Boolean).join(" ")
+        : (__n.innerText || __n.textContent || (__n.tagName === "INPUT" ? __n.value : "") || "")).trim().replace(/\\s+/g, " ").slice(0, 40);
+      return __stamp(__n) + " " + __n.tagName.toLowerCase()
+        + (__n.id ? "#" + __n.id : "")
+        + (__n.getAttribute && __n.getAttribute("data-testid") ? "[data-testid=" + __n.getAttribute("data-testid") + "]" : "")
+        + (__same.length > 1 ? ":nth-of-type(" + __nth + ")" : "")
+        + (__text ? ' "' + __text + '"' : "");
+    };
+    if (__all.length === 0) {
+      return __keep({ kind: "none", by: __spec.by,
+        hidden: __r.hidden.slice(0, 5).map(__describe), hiddenCount: __r.hidden.length,
+        near: __r.near.map((__x) => __stamp(__x.n) + ' "' + __x.t + '"') });
+    }
+    /* Several matches are the first one only for a CSS selector on a verb
+       that reads: a locator names ONE thing by what it is, and "the first
+       Save button" is never what somebody who wrote role=button[name=Save]
+       meant. */
+    if (__all.length > 1 && !(__lenient && __spec.css !== undefined)) {
+      return __keep({ kind: "many", count: __all.length, samples: __all.slice(0, 5).map(__describe) });
+    }
+    return { kind: "ok", e: __all[0] };
+  })`;
+
+/**
+ * A DevTools handle on the element a selector names, for the verbs that go
+ * through the protocol rather than a page script. The page answers with the
+ * node itself, or — when there is not exactly one — with the refusal as a
+ * JSON string, so it is still one round trip and the sentence is the same
+ * one `click` would have said.
+ */
+async function nodeFor(
+  cdp: (method: string, params?: unknown) => Promise<{ ok: boolean; result?: unknown; error?: string }>,
+  selLit: string, raw: string, lenient: boolean,
+): Promise<{ objectId: string } | { error: string }> {
+  const ev = await cdp("Runtime.evaluate", {
+    expression: `(() => { const __r = ${resolveOne(selLit, "return e;", lenient)};
+      return (__r && __r.nodeType === 1) ? __r : JSON.stringify(__r || { kind: "none" }); })()`,
+    includeCommandLineAPI: true,
+  }) as { ok: boolean; result?: { result?: { objectId?: string; subtype?: string; type?: string; value?: unknown } }; error?: string };
+  if (!ev.ok) return { error: ev.error || "the DevTools protocol refused that" };
+  const res = ev.result?.result;
+  if (res?.type === "string") {
+    let why: { kind?: string } | null = null;
+    try { why = JSON.parse(String(res.value)); } catch { /* not ours: say it matched nothing */ }
+    return { error: selectorError(raw, why as never) };
+  }
+  if (!res?.objectId || res.subtype === "null") return { error: `nothing on the page matches ${raw}` };
+  return { objectId: res.objectId };
+}
+
+/** The sentence for whichever way `resolveOne` failed. The three id
+ *  sentences each say what happened AND what to do, because an agent that is
+ *  only told "nothing matches" invents a CSS selector next, and §17 lists that
+ *  as the anti-feature the ids exist to prevent. */
+function selectorError(sel: string, r: {
+  kind?: string; message?: string; count?: number; samples?: string[];
+  hidden?: string[]; hiddenCount?: number; near?: string[]; by?: string; url?: string;
+} | null | undefined): string {
   if (r?.kind === "invalid") return `invalid selector "${sel}": ${r.message}`;
   if (r?.kind === "many") {
-    return `selector matched ${r.count} elements${r.samples?.length ? " — " + r.samples.join(", ") : ""}: narrow ${sel} to one`;
+    return `selector matched ${r.count} elements${r.samples?.length ? " — " + r.samples.join(", ") : ""}: narrow ${sel} to one, or use one of the ids`;
   }
-  return `nothing on the page matches ${sel}`;
+  if (r?.kind === "unobserved") {
+    return `${sel} names nothing here: this page (${r.url ?? "the current page"}) has not been observed since it loaded, `
+      + "so the ids you hold came from an earlier page or another tab — observe again and use the ids it hands back";
+  }
+  if (r?.kind === "foreign") {
+    return `${sel} was not handed out by an observe of this page — it came from another tab, or from a page this tab has left. `
+      + "Observe this tab again and use its ids";
+  }
+  if (r?.kind === "gone") {
+    return `${sel} is no longer in the page — the node the observe saw was removed or re-rendered since. Observe again for the current ids`;
+  }
+  /* Not only "no": what IS there, so the next call can be the right one
+     rather than an observe to find out. A hidden match is the commonest
+     reason a locator a person wrote finds nothing. */
+  let why = `nothing on the page matches ${sel}`;
+  if (r?.hiddenCount) why += ` on screen — ${r.hiddenCount} hidden: ${(r.hidden ?? []).join(", ")}`;
+  else if (r?.near?.length) {
+    const what = r.by === "role" ? sel.replace(/\[.*$/s, "") : r.by === "testid" ? "test ids" : `${r.by}s`;
+    why += ` — ${what} on this page: ${r.near.join(", ")}`;
+  }
+  return why;
+}
+
+/** The stable ids an observation hands back — `e17`. */
+const STABLE_ID = /^e[0-9]+$/;
+
+/**
+ * Where the next observation's ids start.
+ *
+ * One counter for the whole window, so no two documents — two tabs, or one
+ * tab before and after a navigation — ever hand out the same id; that is
+ * what lets a page refuse an id it did not mint instead of acting on whatever
+ * node happens to wear it. Kept in localStorage so an app restart does not
+ * start over at e1 while an agent still holds last session's e1, and in
+ * memory when there is no storage (the tests), where uniqueness within the
+ * session is the part that matters.
+ *
+ * RESERVED, not read-then-written: two observations in flight at once — two
+ * agents on two tabs, or `do` lanes — would otherwise both start from the
+ * same base and mint the same ids on different pages. Each takes the most a
+ * tree can stamp (`TREE_MAX`) up front, and gives back what it did not use
+ * when nobody reserved after it, so the ordinary one-agent case stays dense
+ * (e1, e2, e3) and only the concurrent one skips ahead.
+ *
+ * The ceiling: two WINDOWS each keep a counter of their own, and can mint the
+ * same id at the same moment; a base handed out by the server is the next
+ * step after this and is not here.
+ */
+const TREE_MAX = 200;
+const REGION_MAX = 120;
+const ID_SEQ_KEY = "agentglass.browser.stableIds";
+let idSeq = -1;
+function readIdSeq(): number {
+  if (idSeq >= 0) return idSeq;
+  try { idSeq = Math.max(0, Number(localStorage.getItem(ID_SEQ_KEY)) || 0); } catch { idSeq = 0; }
+  return idSeq;
+}
+function persistIdSeq(): void {
+  try { localStorage.setItem(ID_SEQ_KEY, String(idSeq)); } catch { /* no storage here: unique for this session, which is the part that matters */ }
+}
+function reserveIds(n: number): number {
+  const base = readIdSeq();
+  idSeq = base + n;
+  persistIdSeq();
+  return base;
+}
+function releaseIds(base: number, n: number, used: number): void {
+  if (!Number.isFinite(used)) return;
+  if (used > idSeq) idSeq = used; // the page was ahead of this counter (another window, a reset): catch up
+  else if (idSeq === base + n && used >= base) idSeq = used; // nobody reserved after us: hand the rest back
+  persistIdSeq();
+}
+/**
+ * Page code that stamps ids OUTSIDE observe — `shot --marks` labels and
+ * `html --clean` markup both hand out observe's eN ids — has to leave the
+ * same record observe leaves: the counter raised to a reserved base, and the
+ * range it minted pushed onto `__agxRanges`. Without it ID_ORIGIN calls every
+ * id they printed "foreign", and the very next `click e12` read off the
+ * picture is refused. `expr` is evaluated in the page; the answer is
+ * `{ value, idSeq }`, and idSeq goes to releaseIds, never to a caller.
+ */
+export function mintingIds(base: number, expr: string): string {
+  return `(() => {
+    window.__agxSeq = Math.max(window.__agxSeq || 0, ${base});
+    const __first = window.__agxSeq + 1;
+    const __value = ${expr};
+    if (window.__agxSeq >= __first) (window.__agxRanges = window.__agxRanges || []).push([__first, window.__agxSeq]);
+    return { value: __value, idSeq: window.__agxSeq };
+  })()`;
+}
+/** What `html --clean` reserves. It stamps every actionable node under the
+ *  element and has no cap of its own; past this many, ids are minted beyond
+ *  the reservation, where another tab's observe in the same instant could
+ *  mint the same numbers — the ceiling ONE's refusals already have. */
+const CLEAN_HTML_IDS = 1000;
+/** For tests — the counter a fresh window starts with. */
+export function resetStableIds(): void {
+  idSeq = 0;
+  persistIdSeq();
 }
 
 /**
@@ -818,11 +1052,20 @@ function highlightScript(selLit: string, label: string | undefined): string {
  *  a page that navigated or re-rendered under a slow capture may no longer
  *  match it, and the marker elements are still there to remove either way. */
 const REMOVE_HIGHLIGHT_SCRIPT = `(() => {
+  const marks = document.getElementById(${jsLit(MARKS_ID)});
+  if (marks) marks.remove();
   const box = document.getElementById(${jsLit(HIGHLIGHT_BOX_ID)});
   if (box) box.remove();
   const cap = document.getElementById(${jsLit(HIGHLIGHT_LABEL_ID)});
   if (cap) cap.remove();
 })()`;
+
+/** FNV-1a of a caller's name: stable, short, and not the name. */
+export function callerKey(name: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < name.length; i++) { h ^= name.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return "k" + h.toString(36);
+}
 
 /** Wait for the guest to finish a navigation it has just been given. Resolves
  *  either way — "it loaded" and "it failed" are both answers, and the failure
@@ -850,6 +1093,680 @@ function settled(el: DrivableWebview, timeoutMs = 40_000): Promise<string | null
     el.addEventListener("did-stop-loading", onStop);
     el.addEventListener("did-fail-load", onFail);
   });
+}
+
+/**
+ * A navigation the shell's egress guard refused arrives as a bare Chromium
+ * code — ERR_TUNNEL_CONNECTION_FAILED for https, ERR_BLOCKED_BY_CLIENT for a
+ * link-local literal — which names nothing an agent can act on, and an agent
+ * that cannot act retries. The guard kept the reason (a name that resolves
+ * to the metadata address, a name that flipped private mid-session); this
+ * asks the shell for it and puts it in the sentence. Any other failure, or a
+ * shell without a guard, passes through untouched.
+ */
+async function withEgressReason(
+  err: string,
+  url: string,
+  ask: (req: Record<string, unknown>) => Promise<{ ok: boolean; value?: unknown }>,
+): Promise<string> {
+  if (!/ERR_TUNNEL_CONNECTION_FAILED|ERR_PROXY_CONNECTION_FAILED|ERR_BLOCKED_BY_CLIENT/.test(err)) return err;
+  let host = "";
+  try { host = new URL(url).hostname.replace(/^\[|\]$/g, "").toLowerCase(); } catch { return err; }
+  const r = await ask({ egress: { host } }).catch(() => null);
+  const rows = (r?.ok && r.value && typeof r.value === "object" ? (r.value as { refusals?: { reason?: string }[] }).refusals : undefined) ?? [];
+  const last = rows[rows.length - 1]?.reason;
+  return last ? `${err} — the browser's egress guard refused ${host}: ${last}` : err;
+}
+
+/*
+ * AFTER AN ACTION, WAIT FOR WHAT IT CAUSED — AND SAY WHAT THAT WAS.
+ *
+ * `click` and `press` used to sleep a flat 250 ms and report the URL. Too long
+ * for a click that changes nothing (measured on agx-bench: click p50 550 ms
+ * against type's 210), too short for one whose request takes longer, and
+ * silent about what happened — so every step was followed by an observe.
+ *
+ * Now: if the click starts a navigation, until it finishes (capped); else
+ * until the DOM has been still for QUIET_MS with no request in flight, capped
+ * at SETTLE_CAP_MS. The clock is the panel's, not the page's: a page that is
+ * not in front has its timers throttled to a second or worse, and a page
+ * under the `clock` verb has a clock of its own. Mutations are counted in the
+ * page by an observer installed just before the act (childList and text only
+ * — a style attribute animating every frame would never be quiet) and read
+ * from here; the observer is removed when the answer is read.
+ */
+/** How long one ask of the shell's capture may take before it counts as no
+ *  answer. `shot` and `checkup`'s failure picture share it. */
+const SHELL_SHOT_MS = 12_000;
+
+const QUIET_MS = 100;
+const SETTLE_CAP_MS = 1_000;
+const NAV_CAP_MS = 5_000;
+
+/** Installed inside the act's own script, right before the act, so its first
+ *  mutation is counted. Evaluates to the page's clock at that moment. */
+const MUTATIONS_ON = `(() => {
+  const m = { n: 0, mo: null };
+  try {
+    m.mo = new MutationObserver((recs) => { m.n += recs.length; });
+    m.mo.observe(document, { subtree: true, childList: true, characterData: true });
+  } catch {}
+  if (window.__agxMut && window.__agxMut.mo) window.__agxMut.mo.disconnect();
+  window.__agxMut = m;
+  return Date.now();
+})()`;
+
+const SETTLE_POLL = `(() => {
+  const m = window.__agxMut, l = window.__agxLog;
+  return [m ? m.n : -1, l ? l.inflight : 0];
+})()`;
+
+/** Takes the observer back out. */
+const MUTATIONS_OFF = `(() => {
+  const m = window.__agxMut;
+  if (m && m.mo) m.mo.disconnect();
+  window.__agxMut = undefined;
+  return 1;
+})()`;
+
+/** The quiet rule, in one place: the page is quiet while its mutation count
+ *  has not moved and nothing is in flight. Fed one SETTLE_POLL answer (plus any
+ *  requests the caller tracks itself) and answers for how long it has been
+ *  quiet; the act settle wants QUIET_MS of that, `checkup` wants more. */
+type Quiet = { last: unknown; since: number };
+function quietFor(q: Quiet, poll: unknown, extraInflight: number, now: number): number {
+  const [n, inflight] = Array.isArray(poll) ? poll as [number, number] : [-1, 0];
+  if (n !== q.last || inflight > 0 || extraInflight > 0) { q.last = n; q.since = now; }
+  return now - q.since;
+}
+
+/** What the act caused, read off the buffers the collector fills, from the
+ *  page clock `t0` taken as it acted. Also removes the mutation observer. */
+const effectScript = (t0: number) => `(() => {
+  ${MUTATIONS_OFF};
+  const log = window.__agxLog || { console: [], network: [] };
+  const d = window.__agxDialog;
+  return {
+    newErrors: log.console.filter((r) => r.level === "error" && r.at >= ${t0}).slice(-5).map((r) => String(r.text).slice(0, 300)),
+    failedRequests: log.network.filter((r) => (r.status === 0 || r.status >= 400) && r.at + (r.ms || 0) >= ${t0})
+      .slice(-5).map((r) => ({ method: r.method, url: String(r.url).slice(0, 300), status: r.status })),
+    dialog: d && d.at >= ${t0} ? d : undefined,
+  };
+})()`;
+
+/** `p`, or null once `ms` have passed. Electron holds an executeJavaScript
+ *  until the main frame stops loading, so every call made while a navigation
+ *  may be under way is bounded, or a cap would not be a cap. */
+function within<T>(p: Promise<T>, ms: number): Promise<T | null> {
+  return new Promise((resolve) => {
+    const t = setTimeout(() => resolve(null), Math.max(0, ms));
+    p.then((v) => { clearTimeout(t); resolve(v); }, () => { clearTimeout(t); resolve(null); });
+  });
+}
+
+type ActWatch = {
+  /** A main-frame navigation to another document started. */
+  started: boolean;
+  /** The URL changed within the same document (pushState, a fragment). */
+  inPage: boolean;
+  /** A subframe navigated — not the page, but it is where a history step went. */
+  subframe: boolean;
+  stopped: boolean;
+  failed: string | null;
+  untilStopped(ms: number): Promise<void>;
+  dispose(): void;
+};
+
+/** Listen BEFORE acting: a local page can start and finish loading before a
+ *  listener attached after the act would hear either. */
+function watchNavigation(el: DrivableWebview): ActWatch {
+  let wake: (() => void) | null = null;
+  const w: ActWatch = {
+    started: false, inPage: false, subframe: false, stopped: false, failed: null,
+    untilStopped: (ms) => new Promise<void>((resolve) => {
+      if (w.stopped) return resolve();
+      const t = setTimeout(() => { wake = null; resolve(); }, ms);
+      wake = () => { clearTimeout(t); wake = null; resolve(); };
+    }),
+    dispose: () => {
+      el.removeEventListener("did-start-navigation", onStart);
+      el.removeEventListener("did-navigate-in-page", onInPage);
+      el.removeEventListener("did-stop-loading", onStop);
+      el.removeEventListener("did-fail-load", onFail);
+    },
+  };
+  type NavEvent = Event & { isMainFrame?: boolean; isInPlace?: boolean; errorCode?: number; errorDescription?: string };
+  const onStart = (e: Event) => {
+    const d = e as NavEvent;
+    if (d.isMainFrame === false) { w.subframe = true; return; }
+    if (d.isInPlace) { w.inPage = true; return; }
+    w.started = true;
+  };
+  const onInPage = (e: Event) => {
+    if ((e as NavEvent).isMainFrame === false) w.subframe = true; else w.inPage = true;
+  };
+  const onStop = () => { if (w.started) { w.stopped = true; wake?.(); } };
+  const onFail = (e: Event) => {
+    const d = e as NavEvent;
+    if (d.isMainFrame === false || d.errorCode === -3) return;
+    w.failed = d.errorDescription || "the page could not be loaded";
+    w.stopped = true;
+    wake?.();
+  };
+  el.addEventListener("did-start-navigation", onStart);
+  el.addEventListener("did-navigate-in-page", onInPage);
+  el.addEventListener("did-stop-loading", onStop);
+  el.addEventListener("did-fail-load", onFail);
+  return w;
+}
+
+export type ActEffect = {
+  /** The URL is not what it was, or a new document loaded. */
+  navigated: boolean;
+  newDocument?: true;
+  /** A navigation that failed to load, in the browser's words. */
+  loadFailed?: string;
+  dialog?: unknown;
+  newErrors?: string[];
+  failedRequests?: Array<{ method: string; url: string; status: number }>;
+  /** What ended the wait: the navigation finishing, a quiet page, or the cap. */
+  settledBy: "navigation" | "quiet" | "cap";
+  settleMs: number;
+};
+
+/** The wait, and then the effect. Never throws: a failure to read the effect
+ *  is not a failed act — the act already happened. */
+async function settleAfterAct(
+  el: DrivableWebview, w: ActWatch, before: string, t0: number,
+): Promise<ActEffect> {
+  const started = Date.now();
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  let settledBy: ActEffect["settledBy"] = "cap";
+  const q: Quiet = { last: undefined, since: Date.now() };
+  try {
+    while (Date.now() - started < SETTLE_CAP_MS) {
+      if (w.started) break;
+      const poll = await within(el.executeJavaScript(SETTLE_POLL), SETTLE_CAP_MS - (Date.now() - started));
+      if (quietFor(q, poll, 0, Date.now()) >= QUIET_MS) { settledBy = "quiet"; break; }
+      await sleep(25);
+    }
+    if (w.started) {
+      await w.untilStopped(NAV_CAP_MS - (Date.now() - started));
+      settledBy = w.stopped ? "navigation" : "cap";
+    }
+  } finally {
+    w.dispose();
+  }
+  /* Not while the new document is still loading: the call would wait for it,
+     past every cap. The act is reported without those three fields then —
+     `settledBy: "cap"` says why. */
+  const seen = (w.started && !w.stopped) ? null
+    : await within(el.executeJavaScript(effectScript(t0)), 1_000) as
+      { newErrors?: string[]; failedRequests?: ActEffect["failedRequests"]; dialog?: unknown } | null;
+  const effect: ActEffect = {
+    navigated: w.started || w.inPage || el.getURL() !== before,
+    settledBy,
+    settleMs: Date.now() - started,
+  };
+  if (w.started) effect.newDocument = true;
+  if (w.failed) effect.loadFailed = w.failed;
+  if (seen && typeof seen === "object") {
+    if (seen.dialog) effect.dialog = seen.dialog;
+    if (Array.isArray(seen.newErrors) && seen.newErrors.length) effect.newErrors = seen.newErrors;
+    if (Array.isArray(seen.failedRequests) && seen.failedRequests.length) effect.failedRequests = seen.failedRequests;
+  }
+  return effect;
+}
+
+/** `open`'s navigation, shared with `checkup`: load, wait for it to finish,
+ *  and refuse to call it a success when the browser never moved. `explain`
+ *  turns a failed load's bare Chromium code into a reason when the caller
+ *  can ask for one (`open` asks the egress guard, see withEgressReason). */
+async function navigateTo(
+  el: DrivableWebview, url: string, explain?: (err: string) => Promise<string>,
+): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
+  /* Where it was, so "it never moved" can be told from "it arrived
+     somewhere slightly different", which a redirect makes common. */
+  const before = el.getURL();
+  const nav = settled(el);
+  try {
+    await el.loadURL(url);
+  } catch (e) {
+    // ERR_ABORTED (-3) is what Chromium calls the navigation this one just
+    // replaced, and Electron rejects loadURL with it — so interrupting a
+    // page that was still loading reported failure for a navigation that
+    // then succeeded. Measured: `open example.com` over a half-loaded
+    // GitHub answered "(-3) loading https://github.com/..." while the new
+    // page loaded fine and every later verb saw it.
+    //
+    // `settled` is the authority either way: a genuinely bad address still
+    // arrives as did-fail-load with its own reason.
+    const msg = e instanceof Error ? e.message : String(e);
+    if (!msg.includes("(-3)") && !msg.includes("ERR_ABORTED")) return { ok: false, error: msg };
+  }
+  const err = await nav;
+  if (err) return { ok: false, error: explain ? await explain(err) : err };
+  /*
+   * DID IT ACTUALLY GO THERE.
+   *
+   * The guest guard refuses some schemes — `data:` among them, and
+   * rightly, since it is a way to run markup nobody vetted. But
+   * `loadURL` does not reject when the guard does: the navigation simply
+   * never happens, and this answered ok with the URL it was ALREADY on.
+   * Ask for A, get B, and be told yes. Measured today: three `open`s to
+   * data: URLs in a row, each reporting success, with the page never
+   * leaving the site it had been on since the first one.
+   *
+   * Equality is the wrong test — a redirect to https, or to /index, or a
+   * trailing slash are all legitimate arrivals. What is NOT legitimate is
+   * ending up exactly where it started when somewhere else was asked
+   * for.
+   */
+  const landed = el.getURL();
+  if (landed === before && landed !== url) {
+    return {
+      ok: false,
+      error: `it did not navigate — still on ${landed}. The browser refused ${url.slice(0, 80)}: some schemes (data:, file:, blob:) are not allowed in this view.`,
+    };
+  }
+  return { ok: true, url: landed };
+}
+
+/**
+ * FOCUS FOR THE LENGTH OF AN ACT.
+ *
+ * An embedded page that nobody is looking at is not focused, and a page that is
+ * not focused is refused the things a person can always do: the clipboard write
+ * fails with NotAllowedError, `document.hasFocus()` says false. Emulating focus
+ * makes the page believe it has the keyboard for one act and then gives it
+ * back. It changes nothing about what an event says it is — `isTrusted` is
+ * whatever the route produces — and it is switched off in `finally`, so a page
+ * does not go on believing it has focus after the agent has left.
+ */
+const focusUsers = new WeakMap<object, number>();
+export async function withFocus<T>(
+  el: object,
+  cdp: (m: string, p?: unknown) => Promise<{ ok: boolean; error?: string }>,
+  act: () => Promise<T>,
+  boundMs = 40_000,
+): Promise<T> {
+  /* One switch per guest, shared by every act on it: the first turns it on and
+     the last turns it off, so an act that ends cannot take the focus out from
+     under another that is still typing. And the act is bounded, so a page that
+     froze or navigated away cannot leave the flag on for ever. */
+  const n = focusUsers.get(el) ?? 0;
+  focusUsers.set(el, n + 1);
+  if (n === 0) await cdp("Emulation.setFocusEmulationEnabled", { enabled: true }).catch(() => ({ ok: false }));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      act(),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("the act did not finish in time")), boundMs); }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+    const left = (focusUsers.get(el) ?? 1) - 1;
+    if (left <= 0) {
+      focusUsers.delete(el);
+      await cdp("Emulation.setFocusEmulationEnabled", { enabled: false }).catch(() => {});
+    } else focusUsers.set(el, left);
+  }
+}
+
+/**
+ * `handoff`: the page, given to the person for what an agent must not do — a
+ * CAPTCHA, a 2FA code, a consent.
+ *
+ * WHO SAYS "DONE" IS NOT THE PAGE. The plan lives here, in the shell, keyed by
+ * the guest; nothing about it is in the page's reach. The banner is drawn in a
+ * closed shadow root, and its Done button counts only for a TRUSTED click (a
+ * script's `click()` or `dispatchEvent` is not one), which reports through a
+ * pristine console taken from a throwaway frame with a nonce the page never
+ * sees. The wait runs here too, so a navigation cannot destroy it: it ends the
+ * handoff as `navigated`. The ceiling: a page that hooks the DOM before the
+ * handoff is armed can watch it being set up; it still cannot press Done.
+ * `until` is judged from the URL the shell reads (path, never the query), or
+ * for a selector from the page, which is the agent's own condition to trust.
+ */
+type HandoffState = { nonce: string; until: string | null; done: boolean; navigated: boolean; off: () => void };
+const handoffs = new WeakMap<object, HandoffState>();
+
+/** Whether `until` (a path from `/`, or an http url) holds for `url`: the
+ *  PATHNAME equal to it or under it at a `/` boundary. A query never matches, so
+ *  a login page carrying `?next=/dashboard` is not the dashboard. */
+export function handoffUrlMet(until: string, url: string): boolean {
+  let u: URL;
+  try { u = new URL(url); } catch { return false; }
+  let want = "";
+  if (until.startsWith("/")) want = until.split(/[?#]/)[0]!;
+  else if (/^https?:\/\//i.test(until)) {
+    try {
+      const w = new URL(until);
+      if (w.origin !== u.origin) return false;
+      want = w.pathname;
+    } catch { return false; }
+  } else return false;
+  const base = want.endsWith("/") ? want.slice(0, -1) : want;
+  return u.pathname === want || u.pathname === base || u.pathname.startsWith(base + "/");
+}
+
+const isUrlUntil = (u: string) => u.startsWith("/") || /^https?:\/\//i.test(u);
+
+function bannerScript(reason: string, nonce: string): string {
+  return `(() => {
+    const ID = "__agx_handoff__";
+    const old = document.getElementById(ID);
+    if (old) old.remove();
+    /* A console the page has not touched: from a frame made for the purpose. */
+    const f = document.createElement("iframe");
+    f.style.display = "none";
+    document.documentElement.appendChild(f);
+    const say = f.contentWindow.console.log.bind(f.contentWindow.console);
+    const host = document.createElement("div");
+    host.id = ID;
+    host.style.cssText = "position:fixed;left:0;right:0;top:0;z-index:2147483647";
+    const root = host.attachShadow({ mode: "closed" });
+    const bar = document.createElement("div");
+    bar.style.cssText = "display:flex;gap:12px;align-items:center;padding:10px 16px;background:#1f3a5f;color:#fff;font:600 14px system-ui,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.4)";
+    const msg = document.createElement("span");
+    msg.textContent = "An agent needs you: " + ${jsLit(reason)};
+    const done = document.createElement("button");
+    done.textContent = "Done";
+    done.style.cssText = "margin-left:auto;padding:4px 14px;font:600 14px system-ui;cursor:pointer";
+    done.addEventListener("click", (e) => {
+      if (!e.isTrusted) return;
+      say("agx-handoff-done:" + ${jsLit(nonce)});
+      host.remove();
+    });
+    bar.append(msg, done);
+    root.append(bar);
+    document.body.appendChild(host);
+    return true;
+  })()`;
+}
+
+async function runHandoff(
+  el: DrivableWebview,
+  a: { reason?: string; until?: string; check?: boolean; waitMs?: number; cancel?: boolean },
+): Promise<{ ok: true; value: Record<string, unknown> } | { ok: false; error: string }> {
+  const info = (state: string) => ({ state, url: el.getURL(), title: el.getTitle() });
+  const end = async () => {
+    const st = handoffs.get(el);
+    if (!st) return;
+    handoffs.delete(el);
+    st.off();
+    await within(el.executeJavaScript(`(() => { const b = document.getElementById("__agx_handoff__"); if (b) b.remove(); })()`), 1500);
+  };
+  if (a.cancel) { await end(); return { ok: true, value: info("cancelled") }; }
+  if (a.reason) {
+    await end();
+    const until = a.until ?? null;
+    if (until && isUrlUntil(until) && handoffUrlMet(until, el.getURL())) {
+      return { ok: false, error: `until ${until} is already true for this page — the handoff would end before the person had done anything` };
+    }
+    const nonce = crypto.randomUUID();
+    const st: HandoffState = { nonce, until, done: false, navigated: false, off: () => {} };
+    const onMsg = (e: Event) => { if ((e as unknown as { message?: string }).message === "agx-handoff-done:" + nonce) st.done = true; };
+    const onNav = () => { st.navigated = true; };
+    el.addEventListener("console-message", onMsg);
+    el.addEventListener("did-navigate", onNav);
+    st.off = () => { el.removeEventListener("console-message", onMsg); el.removeEventListener("did-navigate", onNav); };
+    handoffs.set(el, st);
+    const drew = await within(el.executeJavaScript(bannerScript(a.reason, nonce)), 5000);
+    if (drew !== true) { await end(); return { ok: false, error: "could not put the banner on this page" }; }
+    return { ok: true, value: info("armed") };
+  }
+  const st = handoffs.get(el);
+  if (!st) return { ok: true, value: info("none") };
+  const stop = Date.now() + Math.max(0, Math.min(25_000, Number(a.waitMs ?? 0)));
+  for (;;) {
+    let state: string | null = null;
+    if (st.done) state = "done";
+    else if (st.until && isUrlUntil(st.until) && handoffUrlMet(st.until, el.getURL())) state = "condition";
+    else if (st.until && !isUrlUntil(st.until)) {
+      const hit = await within(el.executeJavaScript(`(() => { try { return !!document.querySelector(${jsLit(st.until)}); } catch (e) { return false; } })()`), 1500);
+      if (hit === true) state = "condition";
+    }
+    if (!state && st.navigated) state = "navigated";
+    if (state) { await end(); return { ok: true, value: info(state) }; }
+    if (Date.now() >= stop) return { ok: true, value: info("waiting") };
+    await new Promise((r) => setTimeout(r, 200));
+  }
+}
+
+/** `reload`'s: hard by default, and wait for it. */
+async function reloadAndSettle(el: DrivableWebview, hard: boolean): Promise<string | null> {
+  const nav = settled(el);
+  if (hard) el.reloadIgnoringCache(); else el.reload();
+  return await nav;
+}
+
+/*
+ * CHECKUP — "did it break?", in one call.
+ *
+ * The in-page collector (COLLECTOR) cannot answer it for a load: it is
+ * injected after the document's own scripts ran, so an error thrown or a
+ * request failing DURING LOAD is never seen, and `console`/`network` answer
+ * `rows: []` for a page that died on its first line. An init script is no fix
+ * — main.js measured that `Page.addScriptToEvaluateOnNewDocument` on a
+ * <webview> guest is gone after one navigation.
+ *
+ * Measured on an isolated instance: with Runtime, Log, Network and Audits
+ * enabled through the guest's debugger BEFORE a reload or a loadURL, the CDP
+ * event buffer (main.js `guestCdpEvents`, drained by `cdpEvents`) holds
+ * `Runtime.exceptionThrown` for a TypeError at load, `Network.responseReceived`
+ * with status 500 and `Log.entryAdded` level error source network — for a
+ * reload and for a navigation alike. So a checkup that navigates enables them
+ * first, then navigates, and reads the buffer.
+ *
+ * AND TURNS THEM OFF AGAIN. Left on, Runtime is something an anti-bot script
+ * can detect and it keeps every logged object alive; a busy page fills the
+ * 500-event buffer between checkups and pushes out the `Debugger.paused` that
+ * `debug` is waiting for; and every other drain steals events from the next
+ * window. Ceiling: a caller that had enabled any of the four itself through
+ * `cdp` has to enable it again after a checkup.
+ *
+ * Which is why a checkup that does NOT navigate never touches the protocol:
+ * it reads the collector, which the panel injects on every navigation, so
+ * everything after load is there. Its window is in the PAGE's clock.
+ *
+ * Only errors, failed requests and visible error text count as problems.
+ * Chromium's issues, perf and a11y are advice: a page with a missing alt is
+ * not broken, and a verdict that says so teaches the caller to ignore it.
+ *
+ * Ceilings, chosen: draining takes EVERY buffered event of the tab, so a
+ * `Debugger.paused` (or anything another verb was waiting for) that arrives
+ * during a checkup is consumed by it. A load noisier than the buffer loses its
+ * oldest events, and the answer says so. A request that never ends (an
+ * EventSource, a long poll) keeps the page from ever being quiet, and the
+ * checkup then stops at its cap and says `settledBy: "cap"`.
+ */
+const CHECKUP_SETTLE_MS = 5_000;
+const CHECKUP_QUIET_MS = 300;
+const CHECKUP_POLL_MS = 100;
+const CDP_DOMAINS = ["Runtime", "Log", "Network", "Audits"] as const;
+/** main.js's CDP_EVENT_CAP: a drain this long is a buffer that overflowed. */
+const CDP_BUFFER_CAP = 500;
+
+/** Per tab, by its element, and per caller inside it: where that caller's
+ *  last checkup of which document stopped reading, in that page's own clock.
+ *  Per tab alone, a second agent on a shared tab started its window at the
+ *  first one's last look and was told "ok" about an error it never saw.
+ *  Callers without `--as` share one bucket, the same as observe's delta
+ *  baseline. A tab that is gone takes its entries with it. */
+const checkupMemory = new WeakMap<object, Map<string, { lastAt: number; docAt: number }>>();
+
+type CheckupDeps = {
+  cdp: (method: string, params?: unknown) => Promise<{ ok: boolean; result?: unknown; error?: string }>;
+  cdpEvents: () => Promise<CdpEvent[]>;
+  captureFromShell: () => Promise<{ png: string | null; why: string }>;
+};
+
+type CollectorRead = { now?: number; console?: string[]; network?: Array<{ method?: string; url?: string; status?: number; error?: string }> } | null;
+
+async function runCheckup(
+  el: DrivableWebview, args: Record<string, unknown>, deps: CheckupDeps,
+): Promise<{ ok: boolean; value?: unknown; error?: string }> {
+  const byCaller = checkupMemory.get(el) ?? new Map<string, { lastAt: number; docAt: number }>();
+  checkupMemory.set(el, byCaller);
+  const who = typeof args.as === "string" ? callerKey(args.as) : "";
+  const mem = byCaller.get(who) ?? { lastAt: 0, docAt: 0 };
+  byCaller.set(who, mem);
+  const url = typeof args.url === "string" && args.url ? args.url : "";
+  const navigating = !!url || args.reload === true;
+  const cap = Math.min(15_000, Math.max(0, Number.isFinite(Number(args.settleMs)) ? Number(args.settleMs) : CHECKUP_SETTLE_MS));
+  const notes: string[] = [];
+
+  /* 1. The domains, and only for a navigation. Audits alone may be refused
+     without losing the verdict — it only feeds the advice. */
+  let cdpOk = false;
+  let enabled = false;
+  if (navigating) {
+    cdpOk = true;
+    for (const d of CDP_DOMAINS) {
+      const r = await within(deps.cdp(`${d}.enable`), 3_000) ?? { ok: false, error: "no answer" };
+      if (r.ok) { enabled = true; continue; }
+      if (d === "Audits") { notes.push(`issues unavailable: ${String(r.error ?? "Audits.enable refused").slice(0, 120)}`); continue; }
+      cdpOk = false;
+      notes.push(`the DevTools protocol refused ${d}.enable (${String(r.error ?? "").slice(0, 120)}), so this read the page's own collector: `
+        + "errors thrown during load are not visible while the inspector is attached — close it for a full checkup");
+      break;
+    }
+  }
+  try {
+    return await checkupWith(el, args, deps, { mem, url, navigating, cap, notes, cdpOk });
+  } finally {
+    if (enabled) {
+      for (const d of CDP_DOMAINS) await within(deps.cdp(`${d}.disable`), 3_000);
+    }
+  }
+}
+
+async function checkupWith(
+  el: DrivableWebview, args: Record<string, unknown>, deps: CheckupDeps,
+  o: { mem: { lastAt: number; docAt: number }; url: string; navigating: boolean; cap: number; notes: string[]; cdpOk: boolean },
+): Promise<{ ok: boolean; value?: unknown; error?: string }> {
+  const { mem, url, navigating, cap, notes, cdpOk } = o;
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const events: CdpEvent[] = [];
+  let overflowed = false;
+  const drain = async () => {
+    if (!cdpOk) return [];
+    const got = await within(deps.cdpEvents(), 2_000) ?? [];
+    if (got.length >= CDP_BUFFER_CAP) overflowed = true;
+    events.push(...got);
+    return got;
+  };
+
+  /* 2. The window. Navigating: from just before the navigation, on the
+     panel's clock (what CDP events are stamped with) — and what enabling
+     replayed is thrown away first: Log.enable re-sends the entries it had,
+     stamped with the moment they reached the main process, which is now.
+     Not navigating: in the page's clock, since this caller's last checkup of
+     this document, else since the collector started. */
+  let windowStart = 0;
+  let since: string;
+  let listenedBefore = true;
+  if (navigating) {
+    await drain();
+    events.length = 0;
+    overflowed = false;
+    windowStart = Date.now();
+    since = "load";
+    const r = url
+      ? await navigateTo(el, url)
+      : await reloadAndSettle(el, true).then((err) => (err ? { ok: false as const, error: err } : { ok: true as const }));
+    if (!r.ok) return r;
+  } else {
+    const docAt = Number(await within(el.executeJavaScript("Math.round(performance.timeOrigin || 0)"), 2_000)) || 0;
+    listenedBefore = await within(el.executeJavaScript("!!window.__agxLog"), 2_000) === true;
+    const sameDoc = mem.lastAt > 0 && mem.docAt === docAt;
+    windowStart = sameDoc ? mem.lastAt : 0;
+    since = sameDoc ? "last checkup" : listenedBefore ? "page load" : "this call";
+    if (!listenedBefore) notes.push("nothing was listening before this call: use checkup --reload to see errors from load");
+  }
+
+  /* 3. Wait for quiet, on the panel's clock: nothing in flight as the protocol
+     sees it, and the page quiet by the act settle's own rule for 300 ms. */
+  await within(el.executeJavaScript(`(${COLLECTOR}, ${MUTATIONS_ON})`), 2_000);
+  const inflight = new Set<string>();
+  const started = Date.now();
+  const q: Quiet = { last: undefined, since: started };
+  let settledBy: "quiet" | "cap" = "cap";
+  for (;;) {
+    for (const e of await drain()) if (e.at >= windowStart - 50) trackInflight(inflight, e);
+    const left = cap - (Date.now() - started);
+    const poll = await within(el.executeJavaScript(SETTLE_POLL), Math.max(0, Math.min(left, 1_000)));
+    if (quietFor(q, poll, inflight.size, Date.now()) >= CHECKUP_QUIET_MS) { settledBy = "quiet"; break; }
+    if (Date.now() - started >= cap) break;
+    await sleep(Math.min(CHECKUP_POLL_MS, Math.max(0, cap - (Date.now() - started))));
+  }
+  const settleMs = Date.now() - started;
+  await within(el.executeJavaScript(MUTATIONS_OFF), 1_000);
+
+  /* 4. The last drain, and the reading of it. After a navigation without the
+     protocol, the collector belongs to the new document: all of it is the
+     window. */
+  await drain();
+  if (overflowed) notes.push("the event buffer overflowed: the oldest events of this load are missing");
+  let readUpTo: number | undefined;
+  let found;
+  if (cdpOk) {
+    found = classifyEvents(events, windowStart);
+  } else {
+    const rows = await within(el.executeJavaScript(collectorSince(navigating ? 0 : windowStart)), 2_000) as CollectorRead;
+    readUpTo = typeof rows?.now === "number" ? rows.now : undefined;
+    found = classifyCollector(rows);
+  }
+
+  /* 5. The page itself. */
+  const page = (await within(el.executeJavaScript(CHECKUP_PAGE), 3_000) ?? {}) as {
+    url?: string; title?: string; docAt?: number; now?: number; visible?: string[]; perf?: unknown; a11y?: unknown;
+  };
+  mem.lastAt = readUpTo ?? (Number(page.now) || mem.lastAt);
+  mem.docAt = Number(page.docAt) || mem.docAt;
+
+  /* 6. The verdict: breakage only. */
+  const visible = page.visible ?? [];
+  const problems = found.errors.length + found.failed.length + visible.length;
+  const verdict = problems === 0 ? "ok" : `${problems} problem${problems === 1 ? "" : "s"}`;
+
+  /* 7. A picture only when something is wrong, bounded by the same budget
+     `shot` gives the shell — a surface with no frames can leave a capture
+     unanswered for good, and a checkup must still answer. */
+  let png: string | undefined;
+  let shot: string | undefined;
+  if (problems > 0 && args.noShot !== true) {
+    const s = await within(deps.captureFromShell(), SHELL_SHOT_MS);
+    if (s?.png) png = s.png;
+    else shot = `unavailable: ${(s?.why || `the capture did not answer in ${SHELL_SHOT_MS / 1000} s`).slice(0, 120)}`;
+  }
+
+  /* 8. Verdict first, empty keys left out. */
+  const value: Record<string, unknown> = {
+    verdict,
+    url: page.url ?? el.getURL(),
+    title: page.title ?? el.getTitle(),
+    since,
+    loaded: { settledBy, settleMs },
+  };
+  const put = (k: string, v: unknown) => {
+    if (v === undefined || v === null) return;
+    if (Array.isArray(v) && v.length === 0) return;
+    if (typeof v === "object" && !Array.isArray(v) && Object.keys(v as object).length === 0) return;
+    value[k] = v;
+  };
+  put("errors", found.errors);
+  put("failed", found.failed);
+  put("visible", visible);
+  put("issues", found.issues);
+  put("perf", page.perf);
+  put("a11y", page.a11y);
+  put("shot", shot);
+  put("png", png);
+  put("note", notes.join("; ") || undefined);
+  put("dropped", found.dropped);
+  return { ok: true, value };
 }
 
 /** §8's `freezeAnimations`: a stylesheet the page cannot out-rank, plus
@@ -1002,7 +1919,7 @@ async function runVerb(
   cdpEvents: () => Promise<Array<{ at: number; method: string; params: unknown }>> = async () => [],
   /** §13: apply session-level settings (proxy, extensions, cookies, DNS) through
    *  the Electron main process. */
-  applySessionSettings: (req: Record<string, unknown>) => Promise<{ ok: boolean; applied?: string[]; error?: string }> =
+  applySessionSettings: (req: Record<string, unknown>) => Promise<{ ok: boolean; applied?: string[]; error?: string; value?: unknown }> =
     async () => ({ ok: false, error: "this shell does not support session settings" }),
   /** The inspector panel, which is a view of the SHELL and not part of the page
    *  — so none of the tools above can reach it and none of them should try.
@@ -1012,62 +1929,385 @@ async function runVerb(
     Promise<{ ok: boolean; png?: string; panel?: string; level?: number; via?: string; error?: string }> =
     async () => ({ ok: false, error: "this shell has no inspector" }),
 ): Promise<{ ok: boolean; value?: unknown; error?: string }> {
-  const sel = jsLit(String(ask.args.selector ?? ""));
+  /* Two spellings of one argument. `sel` is the parsed locator ONE looks up
+     (an id, a locator or CSS); `css` is the CSS an id stands for, for the few
+     places that still hand a selector straight to the page. */
+  const rawSel = String(ask.args.selector ?? "");
+  const sel = locatorLit(rawSel);
   try {
     switch (ask.op) {
       case "open": {
         const url = String(ask.args.url ?? "");
-        /* Where it was, so "it never moved" can be told from "it arrived
-           somewhere slightly different", which a redirect makes common. */
-        const before = el.getURL();
-        const nav = settled(el);
-        try {
-          await el.loadURL(url);
-        } catch (e) {
-          // ERR_ABORTED (-3) is what Chromium calls the navigation this one just
-          // replaced, and Electron rejects loadURL with it — so interrupting a
-          // page that was still loading reported failure for a navigation that
-          // then succeeded. Measured: `open example.com` over a half-loaded
-          // GitHub answered "(-3) loading https://github.com/..." while the new
-          // page loaded fine and every later verb saw it.
-          //
-          // `settled` is the authority either way: a genuinely bad address still
-          // arrives as did-fail-load with its own reason.
-          const msg = e instanceof Error ? e.message : String(e);
-          if (!msg.includes("(-3)") && !msg.includes("ERR_ABORTED")) return { ok: false, error: msg };
-        }
-        const err = await nav;
-        if (err) return { ok: false, error: err };
-        /*
-         * DID IT ACTUALLY GO THERE.
-         *
-         * The guest guard refuses some schemes — `data:` among them, and
-         * rightly, since it is a way to run markup nobody vetted. But
-         * `loadURL` does not reject when the guard does: the navigation simply
-         * never happens, and this answered ok with the URL it was ALREADY on.
-         * Ask for A, get B, and be told yes. Measured today: three `open`s to
-         * data: URLs in a row, each reporting success, with the page never
-         * leaving the site it had been on since the first one.
-         *
-         * Equality is the wrong test — a redirect to https, or to /index, or a
-         * trailing slash are all legitimate arrivals. What is NOT legitimate is
-         * ending up exactly where it started when somewhere else was asked
-         * for.
-         */
-        const landed = el.getURL();
-        if (landed === before && landed !== url) {
-          return {
-            ok: false,
-            error: `it did not navigate — still on ${landed}. The browser refused ${url.slice(0, 80)}: some schemes (data:, file:, blob:) are not allowed in this view.`,
-          };
-        }
-        return { ok: true, value: { url: landed, title: el.getTitle() } };
+        const r = await navigateTo(el, url, (err) => withEgressReason(err, url, applySessionSettings));
+        return r.ok ? { ok: true, value: { url: r.url, title: el.getTitle() } } : r;
       }
+
+      case "vitals": {
+        const r = await el.executeJavaScript(VITALS_SCRIPT) as { url: string; title: string; vitals: Record<string, number> };
+        const rated: Record<string, { value: number; rating: string }> = {};
+        for (const k of Object.keys(r.vitals) as VitalName[]) if (k in VITAL_LIMITS) rated[k] = { value: r.vitals[k]!, rating: rate(k, r.vitals[k]!) };
+        const worst = Object.values(rated).some((x) => x.rating === "poor") ? "poor" : Object.values(rated).some((x) => x.rating !== "good") ? "needs-improvement" : "good";
+        return { ok: true, value: { url: r.url, title: r.title, /* A page that never painted has no LCP, and its CLS of 0 is not
+             "good", it is nothing measured. Said, rather than rated. */
+          verdict: !("lcpMs" in rated) && !("fcpMs" in rated) ? "unmeasured: this page has not painted (a pane nobody is looking at paints nothing)" : worst, vitals: rated, note: "Measured on the load of this document; INP needs a real interaction, and a page nobody has looked at may never paint an LCP." } };
+      }
+
+      case "a11y":
+        return { ok: true, value: await el.executeJavaScript(A11Y_SCRIPT) };
+
+      case "handoff":
+        return await runHandoff(el, ask.args as { reason?: string; until?: string; check?: boolean; waitMs?: number; cancel?: boolean });
+
+      case "dialog": {
+        const a = ask.args as { accept?: boolean; dismiss?: boolean; text?: string; always?: boolean };
+        const arm = a.accept === true || a.dismiss === true;
+        const plan = { accept: a.dismiss !== true, text: a.text ?? null, always: a.always === true };
+        const value = await el.executeJavaScript(`(() => {
+          ${arm ? `window.__agxDialogPlan = ${jsLit(plan)};` : ""}
+          return { armed: window.__agxDialogPlan || null, last: window.__agxDialog || null };
+        })()`);
+        return { ok: true, value };
+      }
+
+      case "checkup":
+        return await runCheckup(el, ask.args, { cdp, cdpEvents, captureFromShell: () => captureFromShell() });
 
       case "read": {
         const value = await el.executeJavaScript(
           `({ url: location.href, title: document.title,
               text: (document.body ? document.body.innerText : "").slice(0, ${MAX_TEXT}) })`,
+        );
+        return { ok: true, value };
+      }
+
+      case "markdown": {
+        /* `read`'s RAG-ready half: the same page, walked as markdown rather
+           than a wall of innerText — headings, lists and links that an
+           embedding can actually tell apart. No dependency: the walker is a
+           few branches over the same tree `observe` already reads, bounded by
+           the same slice a plain `read` gets. */
+        const value = await el.executeJavaScript(
+          `(() => {
+             const NL = String.fromCharCode(10);
+             const TIC = String.fromCharCode(96);
+             const fence = TIC.repeat(3);
+             const MAX = ${MAX_TEXT};
+             const parts = [];
+             let used = 0, truncated = false;
+             const dead = { SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEMPLATE: 1, SVG: 1, HEAD: 1, LINK: 1, META: 1, TITLE: 1 };
+             const visible = (n) => {
+               if (n.nodeType !== 1) return true;
+               if (n.hidden || dead[n.tagName]) return false;
+               if (n.getAttribute && n.getAttribute("aria-hidden") === "true") return false;
+               const cs = (typeof window !== "undefined" && window.getComputedStyle)
+                 ? window.getComputedStyle(n)
+                 : (typeof getComputedStyle !== "undefined" ? getComputedStyle(n) : null);
+               return !cs || (cs.display !== "none" && cs.visibility !== "hidden");
+             };
+             const budget = (s) => {
+               if (!s || used >= MAX) return;
+               if (used + s.length > MAX) { s = s.slice(0, MAX - used); truncated = true; }
+               parts.push(s); used += s.length;
+             };
+             const inline = (c) => {
+               let s = "";
+               for (const k of c.childNodes || []) {
+                 if (used >= MAX) { truncated = true; break; }
+                 if (!k) continue;
+                 if (k.nodeType === 3) s += (k.textContent || "").replace(/\\s+/g, " ");
+                 else if (k.nodeType === 1) {
+                   if (!visible(k)) continue;
+                   const t = k.tagName.toLowerCase();
+                   if (t === "br") s += " ";
+                   else if (t === "img") s += "![" + (k.getAttribute("alt") || "") + "](" + (k.getAttribute("src") || "") + ")";
+                   else if (t === "a") {
+                     const x = inline(k); const href = k.getAttribute("href") || "";
+                     s += x ? "[" + x + "](" + href + ")" : href ? "[" + (k.innerText || "") + "](" + href + ")" : "";
+                   }
+                   else if (t === "code") s += TIC + (k.innerText || "") + TIC;
+                   else if (t === "b" || t === "strong") s += "**" + inline(k) + "**";
+                   else if (t === "i" || t === "em") s += "*" + inline(k) + "*";
+                   else s += inline(k);
+                 }
+               }
+               return s.replace(/\\s+/g, " ").trim();
+             };
+             const emit = (n) => {
+               if (used >= MAX) { truncated = true; return; }
+               for (const c of n.childNodes || []) {
+                 if (used >= MAX) { truncated = true; break; }
+                 if (!c) continue;
+                 if (c.nodeType === 3) { const t = (c.textContent || "").replace(/\\s+/g, " ").trim(); if (t) budget(t + " "); }
+                 else if (c.nodeType === 1) {
+                   if (!visible(c)) continue;
+                   const t = c.tagName.toLowerCase();
+                   if (t === "h1" || t === "h2" || t === "h3" || t === "h4" || t === "h5" || t === "h6") {
+                     const x = inline(c); if (x) budget(NL + "#".repeat(+t[1]) + " " + x + NL);
+                   }
+                   else if (t === "p") { const x = inline(c); if (x) budget(NL + x + NL); }
+                   else if (t === "li") { const x = inline(c); if (x) budget(NL + "- " + x); }
+                   else if (t === "pre") { const x = (c.innerText || "").replace(/\\s+$/, ""); budget(NL + fence + NL + x + NL + fence + NL); }
+                   else if (t === "blockquote") { const x = inline(c); if (x) budget(NL + "> " + x + NL); }
+                   else if (t === "hr") budget(NL + "---" + NL);
+                   else if (t === "img") budget(NL + "![" + (c.getAttribute("alt") || "") + "](" + (c.getAttribute("src") || "") + ")" + NL);
+                   else emit(c);
+                 }
+               }
+             };
+             emit(document.body || document.documentElement);
+             return { url: location.href, title: document.title,
+                      markdown: parts.join("").slice(0, ${MAX_TEXT}), truncated };
+           })()`,
+        );
+        return { ok: true, value };
+      }
+
+      case "extract": {
+        /* A field→selector map answered in one round trip, where the plan used
+           to be observe→html→parse. Each value is the FIRST match's text — the
+           same "choose the first" rule every other single-selector verb uses —
+           and a selector that matched nothing is called out rather than
+           guessed at, because a null next to the other fields is what stops an
+           agent hallucinating a value into a field that was never there. */
+        const value = await el.executeJavaScript(
+          `(() => {
+             const fields = ${jsLit(ask.args.fields)};
+             const out = {};
+             const notFound = [];
+             let i = 0;
+             for (const name in fields) {
+               if (i++ >= ${EXTRACT_FIELD_LIMIT}) break;
+               const e = fields[name] ? document.querySelector(fields[name]) : null;
+               if (!e) { notFound.push(name); out[name] = null; continue; }
+               out[name] = (e.innerText || e.textContent || "").replace(/\\s+/g, " ").trim().slice(0, ${MAX_EXTRACT_FIELD});
+             }
+             return { url: location.href, title: document.title, fields: out, notFound };
+           })()`,
+        );
+        return { ok: true, value };
+      }
+
+      case "links": {
+        /* Everything a page links to, resolved ONCE, so an agent does not read
+           the html to answer "what pages does this reach". Deduplicated by
+           text+href and capped, with the real total kept — the cap is the
+           caller's token budget speaking, not licence to lie about how many
+           there were. */
+        const value = await el.executeJavaScript(
+          `(() => {
+             const MAX = ${MAX_LINKS};
+             const out = [];
+             const seen = {};
+             let total = 0;
+             const as = document.querySelectorAll ? document.querySelectorAll("a[href]") : [];
+             for (let i = 0; i < as.length; i++) {
+               const href = as[i].getAttribute("href") || "";
+               if (!href || href.charAt(0) === "#" || /^(javascript|mailto|tel|data):/i.test(href)) continue;
+               total++;
+               const text = (as[i].innerText || as[i].textContent || "").replace(/\\s+/g, " ").trim().slice(0, 200);
+               const key = href + "|" + text;
+               if (seen[key]) continue;
+               if (out.length >= MAX) break;
+               seen[key] = true;
+               out.push({ text, href });
+             }
+             return { url: location.href, title: document.title, total, links: out, dropped: total - out.length };
+           })()`,
+        );
+        return { ok: true, value };
+      }
+
+      case "count": {
+        /* How many things match, in one number. Without a selector it counts
+           the interactive inventory (the same shape `observe`'s tree is built
+           from), which is the honest answer to "how much is there to do here"
+           when the caller does not know what to point at yet. */
+        const value = await el.executeJavaScript(
+          `(() => {
+             const q = ${jsLit(String(ask.args.selector ?? ""))};
+             const interactive = "a,button,input,select,textarea,summary,h1,h2,h3,h4,h5,h6,[role],[data-testid]";
+             const all = q ? document.querySelectorAll(q) : document.querySelectorAll(interactive);
+             return { selector: q || null, scope: q ? "selector" : "interactive", count: all.length };
+           })()`,
+        );
+        return { ok: true, value };
+      }
+
+      case "interactive": {
+        /*
+         * Every element that can be acted on, with what acting on it needs:
+         * the id a verb takes, the role, the name, and the href, value,
+         * checked state or options that `observe`'s tree leaves out because
+         * it describes the whole page. Ids are minted from the window's
+         * counter like `observe`'s, so the next click accepts them; a hidden
+         * element is counted and not listed, because an agent does not click
+         * what it cannot see, and a hidden input is not listed at all — it
+         * is data, not a control.
+         */
+        const base = reserveIds(MAX_INTERACTIVE);
+        const value = await el.executeJavaScript(
+          `(() => {
+             window.__agxSeq = Math.max(window.__agxSeq || 0, ${base});
+             const firstId = window.__agxSeq + 1;
+             /* STAMP, so a cloned node gets an id of its own here too. */
+             const stamp = ${STAMP};
+             const clean = (s) => String(s == null ? "" : s).replace(/\\s+/g, " ").trim().slice(0, 80);
+             const name = (n, tag, type) => clean(
+               n.getAttribute("aria-label") || (n.labels && n.labels[0] && n.labels[0].innerText)
+               || n.getAttribute("placeholder") || n.getAttribute("title")
+               || (tag === "input" && /^(submit|button|reset)$/.test(type) ? n.value : n.innerText) || "",
+             );
+             const PICK = "a[href],button,input,select,textarea,summary,[role=button],[role=link],[role=checkbox],[role=radio],[role=switch],[role=tab],[role=menuitem],[role=menuitemcheckbox],[role=option],[role=combobox],[role=textbox],[role=slider],[contenteditable],[tabindex]";
+             const out = [];
+             let total = 0, hidden = 0;
+             const seen = new Set();
+             for (const n of document.querySelectorAll(PICK)) {
+               if (seen.has(n)) continue;
+               seen.add(n);
+               const tag = n.tagName.toLowerCase();
+               const type = tag === "input" ? String(n.type || "text").toLowerCase() : "";
+               if (type === "hidden") continue;
+               if (n.getAttribute("tabindex") === "-1" && !/^(a|button|input|select|textarea|summary)$/.test(tag) && !n.getAttribute("role")) continue;
+               total++;
+               const r = n.getBoundingClientRect();
+               const cs = getComputedStyle(n);
+               if (!r.width || !r.height || cs.display === "none" || cs.visibility === "hidden") { hidden++; continue; }
+               if (out.length >= ${MAX_INTERACTIVE}) continue;
+               const role = n.getAttribute("role") || (tag === "a" ? "link" : tag === "input" ? type : tag);
+               const row = { e: stamp(n), role, name: name(n, tag, type), at: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)] };
+               if (n.id) row.id = n.id;
+               const testid = n.getAttribute("data-testid");
+               if (testid) row.testid = testid;
+               if (tag === "a") row.href = String(n.href || n.getAttribute("href") || "").slice(0, 500);
+               if (tag === "input" || tag === "textarea") {
+                 if (!/^(checkbox|radio|submit|button|reset|file|image)$/.test(type)) {
+                   row.value = type === "password" ? "(hidden)" : String(n.value == null ? "" : n.value).slice(0, 200);
+                 }
+                 if (n.placeholder) row.placeholder = String(n.placeholder).slice(0, 80);
+               }
+               if (type === "checkbox" || type === "radio") row.checked = !!n.checked;
+               if (tag === "select") {
+                 row.value = String(n.value == null ? "" : n.value).slice(0, 200);
+                 row.options = Array.from(n.options || []).slice(0, 40).map((o) => o.value);
+               }
+               if (n.disabled || n.getAttribute("aria-disabled") === "true") row.disabled = true;
+               out.push(row);
+             }
+             if (window.__agxSeq >= firstId) (window.__agxRanges = window.__agxRanges || []).push([firstId, window.__agxSeq]);
+             return { url: location.href, title: document.title, total, hidden, elements: out,
+                      dropped: Math.max(0, total - hidden - out.length), idSeq: window.__agxSeq };
+           })()`,
+        ) as Record<string, unknown>;
+        releaseIds(base, MAX_INTERACTIVE, Number(value?.idSeq));
+        if (value && typeof value === "object") delete value.idSeq;
+        return { ok: true, value };
+      }
+
+      case "forms": {
+        /*
+         * The page as forms: each with its fields (label, type, value with a
+         * password masked, options), the button that submits it, and where
+         * it goes — plus the fields that belong to no form, which on a
+         * single-page app is most of them. Hidden inputs are counted, not
+         * listed: a CSRF token is not a field anybody fills.
+         */
+        const base = reserveIds(MAX_FORMS * (MAX_FIELDS + 6) + MAX_FIELDS);
+        const value = await el.executeJavaScript(
+          `(() => {
+             window.__agxSeq = Math.max(window.__agxSeq || 0, ${base});
+             const firstId = window.__agxSeq + 1;
+             /* STAMP, so a cloned node gets an id of its own here too. */
+             const stamp = ${STAMP};
+             const clean = (s) => String(s == null ? "" : s).replace(/\\s+/g, " ").trim().slice(0, 80);
+             const label = (n) => clean((n.labels && n.labels[0] && n.labels[0].innerText) || n.getAttribute("aria-label") || n.getAttribute("placeholder") || "");
+             const isHidden = (n) => n.tagName === "INPUT" && String(n.type || "").toLowerCase() === "hidden";
+             const field = (n) => {
+               const tag = n.tagName.toLowerCase();
+               const type = tag === "select" ? "select" : tag === "textarea" ? "textarea" : String(n.type || "text").toLowerCase();
+               const row = { e: stamp(n), name: String(n.name || ""), type, label: label(n) };
+               if (type === "checkbox" || type === "radio") row.checked = !!n.checked;
+               else row.value = type === "password" ? "(hidden)" : String(n.value == null ? "" : n.value).slice(0, 200);
+               if (tag === "select") row.options = Array.from(n.options || []).slice(0, 40).map((o) => o.value);
+               if (n.required) row.required = true;
+               if (n.disabled) row.disabled = true;
+               if (n.placeholder) row.placeholder = String(n.placeholder).slice(0, 80);
+               return row;
+             };
+             const forms = Array.from(document.querySelectorAll("form")).slice(0, ${MAX_FORMS}).map((f) => {
+               const all = Array.from(f.querySelectorAll("input,select,textarea"));
+               const shown = all.filter((n) => !isHidden(n));
+               const submit = Array.from(f.querySelectorAll("button,input[type=submit],input[type=image]"))
+                 .filter((b) => b.tagName !== "BUTTON" || !/^(button|reset)$/i.test(b.getAttribute("type") || ""))
+                 .slice(0, 5)
+                 .map((b) => ({ e: stamp(b), text: clean(b.innerText || b.value || b.getAttribute("aria-label") || "") }));
+               const row = {
+                 e: stamp(f),
+                 action: String(f.action || f.getAttribute("action") || "").slice(0, 500),
+                 method: String(f.method || f.getAttribute("method") || "get").toLowerCase(),
+                 fields: shown.slice(0, ${MAX_FIELDS}).map(field),
+                 hiddenFields: all.length - shown.length,
+                 submit,
+               };
+               if (f.id) row.id = f.id;
+               const nm = f.getAttribute("name");
+               if (nm) row.name = nm;
+               return row;
+             });
+             const loose = Array.from(document.querySelectorAll("input,select,textarea")).filter((n) => !n.form && !isHidden(n)).slice(0, ${MAX_FIELDS}).map(field);
+             if (window.__agxSeq >= firstId) (window.__agxRanges = window.__agxRanges || []).push([firstId, window.__agxSeq]);
+             return { url: location.href, title: document.title, forms, loose, idSeq: window.__agxSeq };
+           })()`,
+        ) as Record<string, unknown>;
+        releaseIds(base, MAX_FORMS * (MAX_FIELDS + 6) + MAX_FIELDS, Number(value?.idSeq));
+        if (value && typeof value === "object") delete value.idSeq;
+        return { ok: true, value };
+      }
+
+      case "attr": {
+        /* The attributes of ONE element — the ones named, or all of them
+           when none is — resolved the way a click resolves, so an id from
+           any inventory works and two matches are refused with the count.
+           A password's value attribute is masked like its value. */
+        const names = Array.isArray(ask.args.names) ? (ask.args.names as unknown[]).filter((n): n is string => typeof n === "string") : [];
+        const r = await el.executeJavaScript(resolveOne(sel, `
+          const names = ${JSON.stringify(names)};
+          const secret = e.tagName === "INPUT" && /^password$/i.test(e.type || "");
+          const list = names.length ? names : (e.getAttributeNames ? e.getAttributeNames() : []).slice(0, 50);
+          const attributes = {};
+          for (const n of list) {
+            const v = e.getAttribute(n);
+            attributes[n] = v === null ? null : (secret && n.toLowerCase() === "value") ? "(hidden)" : String(v).slice(0, 500);
+          }
+          return { kind: "ok", tag: e.tagName.toLowerCase(), e: e.dataset.agxE || undefined, attributes };
+        `)) as { kind: string; tag?: string; e?: string; attributes?: Record<string, string | null> } | null;
+        if (!r || r.kind !== "ok") return { ok: false, error: selectorError(rawSel, r as never) };
+        return { ok: true, value: { selector: rawSel, tag: r.tag, e: r.e, attributes: r.attributes } };
+      }
+
+      case "search": {
+        /* A text search across the page's own content — the thing an agent
+           means by "find the price" before it has a selector to point at.
+           Capped matches, real count, and the href when the match lives in a
+           link, so a hit is actionable instead of a line of text. */
+        const value = await el.executeJavaScript(
+          `(() => {
+             const query = ${jsLit(String(ask.args.query ?? ""))};
+             const needle = query.toLowerCase();
+             const MAX = ${MAX_MATCHES};
+             const nodes = document.querySelectorAll
+               ? document.querySelectorAll("a,button,h1,h2,h3,h4,h5,h6,p,li,td,th,strong,em,[role],[data-testid]") : [];
+             const matches = [];
+             let count = 0;
+             for (let i = 0; i < nodes.length; i++) {
+               const t = (nodes[i].innerText || nodes[i].textContent || "").replace(/\\s+/g, " ").trim();
+               if (!t || t.toLowerCase().indexOf(needle) === -1) continue;
+               count++;
+               if (matches.length >= MAX) continue;
+               const href = nodes[i].tagName === "A" ? (nodes[i].getAttribute("href") || "") : "";
+               matches.push({ text: t.slice(0, 300), href });
+             }
+             return { query, count, matches, truncated: count > matches.length };
+           })()`,
         );
         return { ok: true, value };
       }
@@ -1080,24 +2320,29 @@ async function runVerb(
         // click itself: §3's gate — visible, enabled, stable, unobstructed —
         // so a click against a covered or still-animating element fails with
         // WHAT is wrong rather than landing on the wrong thing in silence.
-        const hit = await el.executeJavaScript(resolveOne(sel,
+        const before = el.getURL();
+        const watch = watchNavigation(el);
+        const hit = await withFocus(el, cdp, () => el.executeJavaScript(resolveOne(sel,
           `return (${actionable()}).then((r) => {
              if (!r.ok) return { kind: "blocked", reason: r.reason };
+             const t0 = ${MUTATIONS_ON};
              e.click();
-             return { kind: "ok" };
+             return { kind: "ok", t0 };
            });`,
-        )) as { kind: string; reason?: string } | boolean;
+        ), true)).catch((err: unknown) => { watch.dispose(); throw err; }) as { kind: string; reason?: string; t0?: number } | boolean;
         if (!hit || (hit as { kind: string }).kind !== "ok") {
+          watch.dispose();
           return { ok: false, error: actionError(String(ask.args.selector ?? ""), hit as never) };
         }
-        // Then a beat, and where we are now. A click is the commonest way a page
-        // moves, and answering the instant the element was hit tells an agent
-        // nothing about whether it did — measured: a click that navigated was
-        // followed by a `back` that acted on the history from before it, because
-        // the navigation had not started yet. Not a wait for a navigation that
-        // may never come: 250ms and an honest url.
-        await new Promise((r) => setTimeout(r, 250));
-        return { ok: true, value: { clicked: ask.args.selector, url: el.getURL(), title: el.getTitle() } };
+        // Then what it caused, and where we are now. A click is the commonest
+        // way a page moves, and answering the instant the element was hit
+        // tells an agent nothing about whether it did — measured: a click
+        // that navigated was followed by a `back` that acted on the history
+        // from before it, because the navigation had not started yet. See
+        // `settleAfterAct` for how long "after" is.
+        const t0 = Number((hit as { t0?: number }).t0) || Date.now();
+        const effect = await settleAfterAct(el, watch, before, t0);
+        return { ok: true, value: { clicked: ask.args.selector, url: el.getURL(), title: el.getTitle(), effect } };
       }
 
       case "dblclick":
@@ -1124,15 +2369,29 @@ async function runVerb(
                  if (set && set.set) set.set.call(e, wantOn); else e.checked = wantOn;
                  e.dispatchEvent(new Event("input", { bubbles: true }));
                  e.dispatchEvent(new Event("change", { bubbles: true }));`;
+        /* No user activation and no emulated focus here: a hover, a right-click or a
+           checkbox must not be able to open a window or write the clipboard, which
+           a real one never grants a page. `click` alone carries a gesture. */
         const hit = await el.executeJavaScript(resolveOne(sel,
           `return (${actionable()}).then((r) => {
              if (!r.ok) return { kind: "blocked", reason: r.reason };
              ${dispatch}
-             return { kind: "ok" };
+             const b = e.getBoundingClientRect();
+             return { kind: "ok", x: b.x + b.width / 2, y: b.y + b.height / 2 };
            });`,
-        )) as { kind: string; reason?: string } | boolean;
+        ))  as { kind: string; reason?: string; x?: number; y?: number } | boolean;
         if (!hit || (hit as { kind: string }).kind !== "ok") {
           return { ok: false, error: actionError(String(ask.args.selector ?? ""), hit as never) };
+        }
+        /* A hover is also a REAL pointer move, through the debugger: it is the
+           only route that makes :hover match and gives the page a trusted
+           mousemove, which a menu that opens on hover listens for. Measured on
+           a page nobody was looking at: the synthetic mouseover leaves :hover
+           false, this makes it true. Best effort — the synthetic events above
+           already ran, so a refusal here costs the :hover and nothing else. */
+        if (ask.op === "hover" && typeof (hit as { x?: number }).x === "number") {
+          const h = hit as { x: number; y: number };
+          await cdp("Input.dispatchMouseEvent", { type: "mouseMoved", x: h.x, y: h.y }).catch(() => {});
         }
         return { ok: true, value: { [ask.op]: ask.args.selector } };
       }
@@ -1154,18 +2413,16 @@ async function runVerb(
         // field — and a failure says WHICH field, since "some of the form
         // filled" is not an answer an agent can act on.
         const fields = (ask.args.fields ?? {}) as Record<string, string>;
-        const pairs = Object.entries(fields).map(([s, v]) => `[${jsLit(s)}, ${jsLit(v)}]`).join(", ");
+        const pairs = Object.entries(fields).map(([s, v]) => `[${jsLit(s)}, ${locatorLit(s)}, ${jsLit(v)}]`).join(", ");
         const result = await el.executeJavaScript(
           `(() => {
              const pairs = [${pairs}];
-             const filled = [];
-             for (const [fsel, text] of pairs) {
-               let all;
-               try { all = document.querySelectorAll(fsel); }
-               catch (err) { return { kind: "invalid", selector: fsel, message: String((err && err.message) || err) }; }
-               if (all.length === 0) return { kind: "none", selector: fsel };
-               if (all.length > 1) return { kind: "many", selector: fsel, count: all.length };
-               const fe = all[0];
+             const filled = [], secret = [];
+             const one = ${ONE};
+             for (const [fsel, spec, text] of pairs) {
+               const got = one(spec, false, ${readIdSeq()});
+               if (got.kind !== "ok") return { ...got, selector: fsel, secret };
+               const fe = got.e;
                fe.focus();
                const proto = fe instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
                const set = Object.getOwnPropertyDescriptor(proto, "value");
@@ -1173,77 +2430,124 @@ async function runVerb(
                fe.dispatchEvent(new Event("input", { bubbles: true }));
                fe.dispatchEvent(new Event("change", { bubbles: true }));
                filled.push(fsel);
+               /* The same verdict type reaches, for the same reason: only this
+                  side can see that the node is a password field, and the
+                  relay redacts by what it is told here. */
+               if (fe.type === "password" || /(^|\\s)(current|new)-password|one-time-code/.test(fe.autocomplete || "")) secret.push(fsel);
              }
-             return { kind: "ok", filled };
+             return { kind: "ok", filled, secret };
            })()`,
-        ) as { kind: string; selector?: string; message?: string; count?: number; filled?: string[] };
+        ) as { kind: string; selector?: string; message?: string; count?: number; samples?: string[]; filled?: string[]; secret?: string[] };
         if (result?.kind !== "ok") {
           const badSel = result?.selector ?? "";
-          return { ok: false, error: `could not fill ${badSel} — ${selectorError(badSel, result as never)}` };
+          /* The fields before the one that failed WERE filled, so a secret
+             among them is still named: the relay redacts by it on a refusal
+             as well. */
+          return {
+            ok: false, error: `could not fill ${badSel} — ${selectorError(badSel, result as never)}`,
+            ...(result?.secret?.length ? { value: { secretFields: result.secret } } : {}),
+          };
         }
-        return { ok: true, value: { filled: result.filled } };
-      }
-
-      case "type": {
-        const text = jsLit(String(ask.args.text ?? ""));
-        const submit = ask.args.submit === true;
-        const hit = await el.executeJavaScript(resolveOne(sel,
-          `e.focus();
-             // The native setter, then an input event: React and every other
-             // framework listens for the event and ignores a value assigned
-             // behind its back, so a plain e.value = x types into a field that
-             // snaps back on the next render.
-             const proto = e instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-             const set = Object.getOwnPropertyDescriptor(proto, "value");
-             if (set && set.set) set.set.call(e, ${text}); else e.value = ${text};
-             e.dispatchEvent(new Event("input", { bubbles: true }));
-             e.dispatchEvent(new Event("change", { bubbles: true }));
-             ${submit ? `if (e.form) e.form.requestSubmit ? e.form.requestSubmit() : e.form.submit();
-                          else e.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));` : ""}
-             /* Whether what was just typed is a secret, decided HERE because
-                this is the only side that can see the node. The relay only
-                ever sees the selector, so typing a real password into a field
-                whose id a framework generated reaches its audit log intact:
-                the id names nothing and the value has no token shape. That is
-                the exact incident that got another browser MCP banned from
-                this machine, and no selector heuristic can close it.
-                (No backticks in here: this comment lives inside the template
-                literal that builds the page script, and one would end it.) */
-             const secret = e.type === "password"
-               || /(^|\\s)(current|new)-password|one-time-code/.test(e.autocomplete || "");
-             return { kind: "ok", secret };`,
-        )) as { kind: string; secret?: boolean } | boolean;
-        if (!hit || (hit as { kind: string }).kind !== "ok") {
-          return { ok: false, error: selectorError(String(ask.args.selector ?? ""), hit as never) };
-        }
-        if (submit) await settled(el, 20_000);
         return {
           ok: true,
-          value: {
-            typed: ask.args.selector, submitted: submit,
-            /* Carried back so the relay redacts the argument it logged. The
-               value itself never crosses back — only the fact about it. */
-            secretField: (hit as { secret?: boolean }).secret === true,
-          },
+          value: { filled: result.filled, ...(result.secret?.length ? { secretFields: result.secret } : {}) },
         };
       }
 
+      case "type": {
+        /* Focus is emulated for the WHOLE act: focusing an editor while the
+           page believes it is unfocused leaves it without a caret, and the
+           debugger's insertText then lands nowhere. Measured. */
+        return await withFocus(el, cdp, async () => {
+          const text = jsLit(String(ask.args.text ?? ""));
+          const submit = ask.args.submit === true;
+          const hit = await el.executeJavaScript(resolveOne(sel,
+            `e.focus();
+               /* A rich-text editor (contenteditable, no value property) has no
+                setter to call. execCommand insertText runs the browser's own
+                editing path, so the page sees the beforeinput and input events
+                an editor built on them listens to, with isTrusted true. The
+                content is selected first, so the text REPLACES what is there
+                the way it does in an input. Measured against the debugger's
+                insertText, which never reached a page nobody was looking at. */
+             if (e.isContentEditable && !("value" in e)) {
+               const sel = window.getSelection();
+               if (sel && e.textContent) sel.selectAllChildren(e);
+               const did = document.execCommand("insertText", false, ${text});
+               if (!did) return { kind: "blocked", reason: "the editor refused the text" };
+               ${submit ? `e.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));` : ""}
+               return { kind: "ok", secret: false, rich: true };
+             }
+             // The native setter, then an input event: React and every other
+               // framework listens for the event and ignores a value assigned
+               // behind its back, so a plain e.value = x types into a field that
+               // snaps back on the next render.
+               const proto = e instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+               const set = Object.getOwnPropertyDescriptor(proto, "value");
+               if (set && set.set) set.set.call(e, ${text}); else e.value = ${text};
+               e.dispatchEvent(new Event("input", { bubbles: true }));
+               e.dispatchEvent(new Event("change", { bubbles: true }));
+               ${submit ? `if (e.form) e.form.requestSubmit ? e.form.requestSubmit() : e.form.submit();
+                            else e.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));` : ""}
+               /* Whether what was just typed is a secret, decided HERE because
+                  this is the only side that can see the node. The relay only
+                  ever sees the selector, so typing a real password into a field
+                  whose id a framework generated reaches its audit log intact:
+                  the id names nothing and the value has no token shape. That is
+                  the exact incident that got another browser MCP banned from
+                  this machine, and no selector heuristic can close it.
+                  (No backticks in here: this comment lives inside the template
+                  literal that builds the page script, and one would end it.) */
+               const secret = e.type === "password"
+                 || /(^|\\s)(current|new)-password|one-time-code/.test(e.autocomplete || "");
+               return { kind: "ok", secret };`,
+          )) as { kind: string; secret?: boolean } | boolean;
+          if (!hit || (hit as { kind: string }).kind !== "ok") {
+            return { ok: false, error: selectorError(String(ask.args.selector ?? ""), hit as never) };
+          }
+          if (submit && !(hit as { rich?: boolean }).rich) await settled(el, 20_000);
+          return {
+            ok: true,
+            value: {
+              typed: ask.args.selector, submitted: submit,
+              /* Carried back so the relay redacts the argument it logged. The
+                 value itself never crosses back — only the fact about it. */
+              secretField: (hit as { secret?: boolean }).secret === true,
+            },
+          };
+        });
+      }
+
       case "wait": {
+        /* An id cannot APPEAR. It names the node an observe saw, and a node
+           that is not in the document now is gone, or from another page:
+           polling for it spends the whole 30 s to say "never appeared", which
+           is true and no help. Resolved once instead, and the refusal says
+           which of the two it was. */
+        if (STABLE_ID.test(rawSel)) {
+          const hit = await el.executeJavaScript(resolveOne(sel, `return { kind: "ok" };`)) as { kind?: string } | null;
+          if (hit?.kind === "ok" || hit?.kind === "many") return { ok: true, value: { appeared: ask.args.selector } };
+          return { ok: false, error: selectorError(rawSel, hit as never) };
+        }
         // Polled inside the page rather than from here: one round trip instead
         // of one every 100ms, and it sees the DOM as it changes.
         const found = await el.executeJavaScript(
           `new Promise((resolve) => {
              const deadline = Date.now() + 30000;
+             const one = ${ONE};
              const tick = () => {
-               if (document.querySelector(${sel})) return resolve(true);
+               const got = one(${sel}, true, ${readIdSeq()});
+               if (got.kind === "ok" || got.kind === "many") return resolve(true);
+               if (got.kind === "invalid") return resolve(got);
                if (Date.now() > deadline) return resolve(false);
                setTimeout(tick, 120);
              };
              tick();
            })`,
-        );
-        return found === true
-          ? { ok: true, value: { appeared: ask.args.selector } }
+        ) as boolean | { kind: string; message?: string };
+        if (found === true) return { ok: true, value: { appeared: ask.args.selector } };
+        return typeof found === "object" && found
+          ? { ok: false, error: selectorError(String(ask.args.selector ?? ""), found) }
           : { ok: false, error: `${ask.args.selector} never appeared` };
       }
 
@@ -1254,6 +2558,45 @@ async function runVerb(
         // history is a silent no-op — and an agent that reads the same page
         // twice concludes the page did not change, not that it never moved.
         if (!can) return { ok: false, error: `there is nothing ${ask.op === "back" ? "back" : "forward"} from here` };
+        /*
+         * THROUGH THE PAGE'S OWN HISTORY, not the browser's button.
+         *
+         * Chromium skips, on a back the BROWSER initiates, every entry a page
+         * added without a user gesture — and a click an agent makes carries
+         * none. Measured: open /spa/, click Items, click About, `back` landed
+         * on the page before /spa/; on a multi-page site, before the first
+         * page reached by a click. `history.back()` run in the page is not
+         * browser-initiated and skips nothing: the same sequence landed on
+         * /spa/items. A page that cannot run script — or is still loading,
+         * where Electron would hold the script until it finished — gets the
+         * browser's back as before. One that ran it is never ALSO sent the
+         * browser's back: a navigation that starts late would go back twice.
+         */
+        const w = watchNavigation(el);
+        let ran: unknown = false;
+        try {
+          if (!el.isLoading?.()) {
+            /* Bounded: a page paused at a breakpoint holds the script until
+               it resumes, and then runs it — so a timeout is "cannot tell",
+               never licence to send the browser's back as well. */
+            ran = await within(el.executeJavaScript(`(() => { history.${ask.op}(); return true; })()`).catch(() => false), 1_000);
+            if (ran === null) {
+              return { ok: false, error: `the page did not answer history.${ask.op}() within 1 s (paused in the debugger?) — it may still run when the page resumes; observe before trying again` };
+            }
+          }
+          if (ran === true) {
+            const t = Date.now();
+            while (!w.inPage && !w.started && !w.subframe && Date.now() - t < NAV_CAP_MS) await new Promise((r) => setTimeout(r, 20));
+            if (w.started) await w.untilStopped(NAV_CAP_MS - (Date.now() - t));
+          }
+        } finally {
+          w.dispose();
+        }
+        if (ran === true) {
+          if (w.failed) return { ok: false, error: w.failed };
+          if (!w.inPage && !w.started && !w.subframe) return { ok: false, error: `history.${ask.op}() went nowhere in ${NAV_CAP_MS / 1000} s` };
+          return { ok: true, value: { url: el.getURL(), title: el.getTitle() } };
+        }
         const nav = settled(el);
         if (ask.op === "back") el.goBack(); else el.goForward();
         const err = await nav;
@@ -1266,13 +2609,17 @@ async function runVerb(
            the page rather than by curling the server and opening the .vue
            file it was built from — which is what somebody did today. */
         const max = Number(ask.args.max ?? 20_000);
-        const value = await el.executeJavaScript(
-          `(() => { const e = document.querySelector(${sel});
-             return e ? { html: e.outerHTML.slice(0, ${max}), truncated: e.outerHTML.length > ${max} } : null; })()`,
-        );
-        return value
-          ? { ok: true, value }
-          : { ok: false, error: `nothing on the page matches ${ask.args.selector}` };
+        const clean = ask.args.clean === true;
+        const idBase = clean ? reserveIds(CLEAN_HTML_IDS) : 0;
+        const got = await el.executeJavaScript(resolveOne(sel,
+          clean ? `const __m = ${mintingIds(idBase, `(() => { ${cleanHtmlBody(max)} })()`)};
+                   return Object.assign(__m.value, { idSeq: __m.idSeq });`
+            : `return { kind: "ok", html: e.outerHTML.slice(0, ${max}), truncated: e.outerHTML.length > ${max} };`, true,
+        )) as { kind: string; html?: string; truncated?: boolean; idSeq?: number };
+        if (clean) releaseIds(idBase, CLEAN_HTML_IDS, Number(got?.idSeq));
+        return got?.kind === "ok"
+          ? { ok: true, value: { html: got.html, truncated: got.truncated } }
+          : { ok: false, error: selectorError(String(ask.args.selector ?? ""), got as never) };
       }
       case "waitfor": {
         /* A CONDITION rather than an element appearing. "Until this text
@@ -1745,12 +3092,9 @@ async function runVerb(
         if (action === "dom") {
           /* "Who deleted this row." The one question a debugger answers that
              nothing else here can. */
-          const ev = await cdp("Runtime.evaluate", { expression: `document.querySelector(${sel})` }) as
-            { ok: boolean; result?: { result?: { objectId?: string; subtype?: string } }; error?: string };
-          const objectId = ev.result?.result?.objectId;
-          if (!objectId || ev.result?.result?.subtype === "null") {
-            return { ok: false, error: `nothing on the page matches ${String(a.selector ?? "")}` };
-          }
+          const found = await nodeFor(cdp, sel, String(a.selector ?? ""), true);
+          if ("error" in found) return { ok: false, error: found.error };
+          const objectId = found.objectId;
           await cdp("DOM.enable", {});
           /* The same protocol rule `upload` was caught by: DOM.requestNode
              translates a Runtime object through the DOM agent's node map, and
@@ -1828,12 +3172,13 @@ async function runVerb(
          * survives the whole gesture — a fresh one per event is the mistake
          * that makes a drop silently do nothing.
          */
-        const to = jsLit(String((ask.args as Record<string, unknown>).to ?? ""));
+        const to = locatorLit(String((ask.args as Record<string, unknown>).to ?? ""));
         const r = await el.executeJavaScript(`(async () => {
-          const pick = (q) => document.querySelector(/^e[0-9]+$/.test(q) ? '[data-agx-e="' + q + '"]' : q);
-          const a = pick(${sel}), b = pick(${to});
-          if (!a) return { kind: "none", which: "source" };
-          if (!b) return { kind: "none", which: "target" };
+          const one = ${ONE};
+          const ga = one(${sel}, false, ${readIdSeq()}), gb = one(${to}, false, ${readIdSeq()});
+          if (ga.kind !== "ok") return { ...ga, which: "source" };
+          if (gb.kind !== "ok") return { ...gb, which: "target" };
+          const a = ga.e, b = gb.e;
           const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
           const at = (r) => [r.left + r.width / 2, r.top + r.height / 2];
           const [x1, y1] = at(ra), [x2, y2] = at(rb);
@@ -1930,7 +3275,8 @@ async function runVerb(
           return { kind: "ok" };
         })()`) as { kind: string; which?: string };
         if (r.kind !== "ok") {
-          return { ok: false, error: `nothing on the page matches the ${r.which} of the drag` };
+          const raw = String((r.which === "target" ? (ask.args as Record<string, unknown>).to : ask.args.selector) ?? "");
+          return { ok: false, error: `the ${r.which} of the drag: ${selectorError(raw, r as never)}` };
         }
         /*
          * A DRAG DOES NOT NAVIGATE, so it must not wait for a load.
@@ -1954,13 +3300,12 @@ async function runVerb(
          * thin here and real over there.
          */
         const paths = ((ask.args as Record<string, unknown>).paths ?? []) as string[];
-        const node = await cdp("Runtime.evaluate", {
-          expression: `document.querySelector(${sel})`,
-        }) as { ok: boolean; result?: { result?: { objectId?: string; subtype?: string } }; error?: string };
-        const objectId = node.result?.result?.objectId;
-        if (!objectId || node.result?.result?.subtype === "null") {
-          return { ok: false, error: `nothing on the page matches ${String(ask.args.selector ?? "")}` };
-        }
+        /* A file input is usually display:none behind a styled button, so a
+           locator here finds hidden ones too. */
+        const raw = String(ask.args.selector ?? "");
+        const found = await nodeFor(cdp, jsLit({ ...parseLocator(raw), hidden: true }), raw, false);
+        if ("error" in found) return { ok: false, error: found.error };
+        const objectId = found.objectId;
         await cdp("DOM.enable", {});
         /*
          * getDocument, and it is not decoration.
@@ -2157,28 +3502,20 @@ async function runVerb(
          * §2's last flag: the tree of ONE subtree instead of the page. A
          * modal on a busy page is fifteen nodes inside three hundred, and the
          * other two hundred and eighty-five are paid for on every turn after
-         * (§14). Same shape as `observe`, scoped.
+         * (§14). Same shape as `observe`, scoped — and minted the same way,
+         * from the window's counter and into this document's ranges, or the
+         * ids it hands back would be refused as foreign by the next click.
          */
-        const r = await el.executeJavaScript(`(() => {
-          const pick = (q) => document.querySelector(/^e[0-9]+$/.test(q) ? '[data-agx-e="' + q + '"]' : q);
-          const root = pick(${sel});
-          if (!root) return { kind: "none" };
-          const name = (el2) => (
-            el2.getAttribute("aria-label") ||
-            el2.getAttribute("placeholder") ||
-            el2.getAttribute("title") ||
-            (el2.innerText || "").trim().slice(0, 80) || ""
-          ).trim().slice(0, 80);
-          const stamp = (el2) => {
-            if (!el2.dataset.agxE) {
-              window.__agxSeq = (window.__agxSeq || 0) + 1;
-              el2.dataset.agxE = "e" + window.__agxSeq;
-            }
-            return el2.dataset.agxE;
-          };
+        const base = reserveIds(REGION_MAX + 1);
+        const r = await el.executeJavaScript(resolveOne(sel, `
+          const root = e;
+          window.__agxSeq = Math.max(window.__agxSeq || 0, ${base});
+          const firstId = window.__agxSeq + 1;
+          const name = ${ACC_NAME};
+          const stamp = ${STAMP};
           const tree = [];
-          for (const el2 of root.querySelectorAll("a,button,input,select,textarea,[role],[data-testid],summary,h1,h2,h3")) {
-            if (tree.length >= 120) break;
+          for (const el2 of root.querySelectorAll(${jsLit(PICK)})) {
+            if (tree.length >= ${REGION_MAX}) break;
             const rect = el2.getBoundingClientRect();
             tree.push({
               e: stamp(el2),
@@ -2189,11 +3526,14 @@ async function runVerb(
               at: [Math.round(rect.x), Math.round(rect.y), Math.round(rect.width), Math.round(rect.height)],
             });
           }
-          return { kind: "ok", e: stamp(root), text: (root.innerText || "").trim().slice(0, 4000), tree };
-        })()`) as { kind: string; e?: string; text?: string; tree?: unknown[] };
-        return r.kind === "ok"
+          const rootId = stamp(root);
+          if (window.__agxSeq >= firstId) (window.__agxRanges = window.__agxRanges || []).push([firstId, window.__agxSeq]);
+          return { kind: "ok", e: rootId, text: (root.innerText || "").trim().slice(0, 4000), tree, idSeq: window.__agxSeq };
+        `, true)) as { kind: string; e?: string; text?: string; tree?: unknown[]; idSeq?: number };
+        releaseIds(base, REGION_MAX + 1, Number(r?.idSeq));
+        return r?.kind === "ok"
           ? { ok: true, value: { region: ask.args.selector, e: r.e, text: r.text, tree: r.tree } }
-          : { ok: false, error: `nothing on the page matches ${String(ask.args.selector ?? "")}` };
+          : { ok: false, error: selectorError(String(ask.args.selector ?? ""), r as never) };
       }
 
       case "throttle": {
@@ -2389,19 +3729,59 @@ async function runVerb(
            — §5. `DOMDebugger.getEventListeners` wants a remote object id, so
            the node is resolved through Runtime first; doing it in one verb is
            the difference between one call and four. */
-        const ev = await cdp("Runtime.evaluate", {
-          expression: `document.querySelector(${sel})`, includeCommandLineAPI: true,
-        }) as { ok: boolean; result?: { result?: { objectId?: string; subtype?: string } }; error?: string };
-        const objectId = ev.result?.result?.objectId;
-        if (!ev.ok) return { ok: false, error: ev.error || "the DevTools protocol refused that" };
-        if (!objectId || ev.result?.result?.subtype === "null") {
-          return { ok: false, error: `nothing on the page matches ${String(ask.args.selector ?? "")}` };
-        }
+        const found = await nodeFor(cdp, sel, String(ask.args.selector ?? ""), true);
+        if ("error" in found) return { ok: false, error: found.error };
+        const objectId = found.objectId;
         const got = await cdp("DOMDebugger.getEventListeners", { objectId, depth: 1 }) as
           { ok: boolean; result?: { listeners?: unknown[] }; error?: string };
         return got.ok
           ? { ok: true, value: { listeners: got.result?.listeners ?? [] } }
           : { ok: false, error: got.error || "could not read the listeners" };
+      }
+
+      case "screencast": {
+        /*
+         * The page as it moves, from Chromium's own compositor: `record` is
+         * N screenshots at an interval, and the thing it cannot see is the
+         * frame between two of them. `Page.startScreencast` pushes a frame
+         * whenever the page repaints; the shell acks each one the moment it
+         * lands (a frame nobody acks is the last frame Chromium sends) and
+         * keeps the newest thirty in a ring, and `frames` drains the ring —
+         * so the caller polls at its own pace and never holds a connection.
+         * Bounded on purpose: jpeg, a size cap, every Nth frame, so a busy
+         * page cannot fill the shell with pictures.
+         */
+        const which = String(ask.args.action ?? "start");
+        if (which === "start") {
+          const a = await cdp("Page.startScreencast", {
+            format: "jpeg",
+            quality: Number(ask.args.quality ?? 60),
+            maxWidth: Number(ask.args.maxWidth ?? 1024),
+            maxHeight: Number(ask.args.maxHeight ?? 768),
+            everyNthFrame: Number(ask.args.everyNth ?? 1),
+          });
+          if (!a.ok) return { ok: false, error: a.error || "could not start the screencast" };
+          return { ok: true, value: { screencast: "recording", url: el.getURL() } };
+        }
+        if (which === "stop") {
+          const drained = await cdp("Page.agxScreencastFrames", {}) as { ok: boolean; result?: { frames?: unknown[]; dropped?: number } };
+          const a = await cdp("Page.stopScreencast", {});
+          if (!a.ok) return { ok: false, error: a.error || "could not stop the screencast" };
+          return { ok: true, value: { screencast: "stopped", left: drained.ok ? (drained.result?.frames?.length ?? 0) : 0 } };
+        }
+        const r = await cdp("Page.agxScreencastFrames", {}) as {
+          ok: boolean; error?: string;
+          result?: { frames?: Array<{ at: number; data: string; metadata?: { deviceWidth?: number; deviceHeight?: number; timestamp?: number } }>; dropped?: number };
+        };
+        if (!r.ok) return { ok: false, error: r.error || "could not read the screencast" };
+        const frames = (r.result?.frames ?? []).map((f) => ({
+          at: f.at,
+          jpeg: `data:image/jpeg;base64,${f.data}`,
+          width: f.metadata?.deviceWidth ?? 0,
+          height: f.metadata?.deviceHeight ?? 0,
+          timestamp: f.metadata?.timestamp ?? 0,
+        }));
+        return { ok: true, value: { count: frames.length, dropped: r.result?.dropped ?? 0, frames } };
       }
 
       case "coverage": {
@@ -2516,58 +3896,111 @@ async function runVerb(
            `<select>` whose value changes without `change` leaves Vue and
            React holding the old one, which is the bug this verb exists to
            stop reproducing. */
+        /* Through `resolveOne` like every other act verb. It used to build its
+           own querySelector and was the one verb that missed the id rewrite:
+           measured on the bench, `select e3` on the <select> an observation
+           had just called e3 answered "nothing matched". */
         const value = jsLit(String(ask.args.value ?? ""));
-        const done = await el.executeJavaScript(
-          `(() => { const e = document.querySelector(${sel});
-             if (!e || e.tagName !== "SELECT") return { ok: false, why: e ? "not a <select>" : "nothing matched" };
+        const done = await el.executeJavaScript(resolveOne(sel,
+          `if (e.tagName !== "SELECT") return { kind: "refused", why: "not a select" };
              const opts = [...e.options];
              const hit = opts.find((o) => o.value === ${value}) || opts.find((o) => (o.text || "").trim() === ${value});
-             if (!hit) return { ok: false, why: "no such option", options: opts.map((o) => o.value).slice(0, 40) };
+             if (!hit) return { kind: "refused", why: "no such option", options: opts.map((o) => o.value).slice(0, 40) };
              e.value = hit.value;
              e.dispatchEvent(new Event("input", { bubbles: true }));
              e.dispatchEvent(new Event("change", { bubbles: true }));
-             return { ok: true, value: hit.value, text: (hit.text || "").trim() }; })()`,
-        ) as { ok: boolean; why?: string; options?: string[] };
-        return done?.ok
-          ? { ok: true, value: done }
-          : { ok: false, error: `${done?.why ?? "could not select"}${done?.options ? ` — options: ${done.options.join(", ")}` : ""}` };
+             return { kind: "ok", value: hit.value, text: (hit.text || "").trim() };`,
+        )) as { kind: string; value?: string; text?: string; why?: string; options?: string[] };
+        if (done?.kind === "ok") return { ok: true, value: { ok: true, value: done.value, text: done.text } };
+        if (done?.kind === "refused") {
+          /* "not a select" travels as plain words and becomes "<select>"
+             here, so the page script carries no less-than sign (see the
+             hostile-selector suite). */
+          const why = done.why === "not a select" ? "not a <select>" : done.why;
+          return { ok: false, error: `${why}${done.options ? ` — options: ${done.options.join(", ")}` : ""}` };
+        }
+        return { ok: false, error: selectorError(String(ask.args.selector ?? ""), done as never) };
       }
       case "reload": {
         const hard = ask.args.bypassCache !== false;
-        const nav = settled(el);
-        if (hard) el.reloadIgnoringCache(); else el.reload();
-        await nav;
+        await reloadAndSettle(el, hard);
         return { ok: true, value: { url: el.getURL(), bypassedCache: hard } };
       }
       case "cookies": {
-        /* Through the page rather than the session: document.cookie is what
-           the page itself sees, which is the thing an agent is reasoning
-           about. HttpOnly cookies are invisible here and that is honest —
-           they are invisible to the page too. */
+        /* A set goes through the network stack, not the page: measured in
+           headless Chromium, a `document.cookie = "__Host-x=..."` write is
+           silently dropped — no throw, nothing in the jar — because it never
+           carries Secure, and every other cookie it writes lands non-Secure,
+           non-HttpOnly, SameSite unset regardless of what was asked for.
+           `Network.setCookie` is the only door in this file that can set
+           those flags, so that is what a set goes through, checked against
+           `Network.getCookies` — the jar the network stack (and a site
+           checking a same-site twin of its session cookie on POST) actually
+           reads. The read below is unchanged: `document.cookie` is what the
+           page itself sees, and HttpOnly is invisible here honestly, because
+           it is invisible to the page too. */
         if (ask.args.set) {
-          const c = ask.args.set as { name: string; value: string; path?: string; domain?: string };
-          await el.executeJavaScript(
-            `(() => { document.cookie = ${jsLit(`${c.name}=${c.value}; path=${c.path || "/"}${c.domain ? `; domain=${c.domain}` : ""}`)}; return 1; })()`,
-          );
+          const set = ask.args.set as { name: string } & Record<string, unknown>;
+          const parsed = cookieSetParams(set, el.getURL());
+          if ("error" in parsed) return { ok: false, error: parsed.error };
+          const wrote = await cdp("Network.setCookie", parsed.params);
+          if (!wrote.ok) {
+            /* The relay itself refused — most often because DevTools is
+               already attached to this tab (electron/main.js only lets one
+               debugger session own a guest at a time) and a second `attach`
+               cannot happen alongside it. document.cookie is NOT a fallback
+               here: it is the write that silently drops Secure/HttpOnly/
+               SameSite, which is the defect this whole fix routes around —
+               falling back to it on a busy relay would just reopen it on a
+               schedule nobody controls. Closing the inspector is the actual
+               way out, so the error says so when that looks like what
+               happened, instead of repeating the generic relay line. */
+            const inspectorAttached = /inspector|debugger/i.test(wrote.error ?? "");
+            return {
+              ok: false,
+              error: `cookie "${set.name}" needs the DevTools relay to set${wrote.error ? ` — ${wrote.error}` : ""}`
+                + (inspectorAttached ? " — close the inspector and retry" : ""),
+            };
+          }
+          const success = (wrote.result as { success?: boolean } | undefined)?.success;
+          if (success === false) {
+            /* The relay answered fine; Chromium itself refused the cookie —
+               a prefix rule broken, an invalid domain, an unparseable value.
+               A different failure than the relay being unreachable, and
+               worded as one: "needs the DevTools relay" here would send
+               someone chasing a debugger connection that was never the
+               problem. */
+            return {
+              ok: false,
+              error: `Chromium refused cookie "${set.name}" — check the prefix rules (__Host-/__Secure-) and the domain`,
+            };
+          }
+          const got = await cdp("Network.getCookies", { urls: [parsed.params.url] });
+          const jar = (got.result as { cookies?: Array<Record<string, unknown>> } | undefined)?.cookies ?? [];
+          const match = jar.find((c) => c.name === set.name && c.value === parsed.params.value);
+          // A partitioned cookie is only visible from inside its partition,
+          // which a plain getCookies is not; its `success` is the whole answer.
+          if (!match && !parsed.params.partitionKey) {
+            return { ok: false, error: `cookie "${set.name}" was not set — it is not in the page's jar after the write` };
+          }
+          const value = await el.executeJavaScript(
+            `(() => ({ cookies: document.cookie, note: "httpOnly cookies are not visible to the page and so not here" }))()`,
+          ) as { cookies: string };
+          return {
+            ok: true,
+            value: {
+              ...value,
+              // Never the value: what landed, not an echo of the secret.
+              set: match
+                ? { name: match.name, domain: match.domain, path: match.path,
+                    secure: match.secure, httpOnly: match.httpOnly, sameSite: match.sameSite }
+                : { name: parsed.params.name, path: parsed.params.path, partitioned: true },
+            },
+          };
         }
         const value = await el.executeJavaScript(
           `(() => ({ cookies: document.cookie, note: "httpOnly cookies are not visible to the page and so not here" }))()`,
         ) as { cookies: string };
-        /* document.cookie can take a write and drop it without a throw — a
-           domain that does not match the page, a path outside the current
-           one, a session cookie policy. Answering `ok` because the script
-           didn't throw was reporting the write, not the result: check the
-           jar the same read just brought back before saying so. */
-        if (ask.args.set) {
-          const c = ask.args.set as { name: string; value: string };
-          const landed = value.cookies.split("; ").some((p) => {
-            const eq = p.indexOf("=");
-            return eq !== -1 && p.slice(0, eq) === c.name && p.slice(eq + 1) === c.value;
-          });
-          if (!landed) {
-            return { ok: false, error: `cookie "${c.name}" was not set — it is not in the page's jar after the write` };
-          }
-        }
         return { ok: true, value };
       }
       case "frames": {
@@ -2593,7 +4026,24 @@ async function runVerb(
            — it returns immediately when it is already there. */
         const since = Number(ask.args.since ?? 0);
         await el.executeJavaScript(COLLECTOR).catch(() => 0);
-        const value = await el.executeJavaScript(observeScript(since, 200)) as Record<string, unknown>;
+        /* `base` is filled in by the relay, never by the caller: it is the
+           relay's record of what this caller last saw. Keyed by the caller
+           so two agents on one tab do not diff against each other's look —
+           by a hash of the name, because the store lives on the page's own
+           window, and the page has no business learning who is driving it.
+           `idBase` is the other base: where this window's id counter stands,
+           reserved so two observes in flight mint disjoint ids. */
+        const base = ask.args.base as { doc?: unknown; seq?: unknown } | undefined;
+        const idBase = reserveIds(TREE_MAX);
+        const value = await el.executeJavaScript(observeScript(since, TREE_MAX, {
+          delta: ask.args.delta === true,
+          key: typeof ask.args.as === "string" ? callerKey(ask.args.as) : "",
+          base: base && typeof base.doc === "string" && Number.isInteger(base.seq)
+            ? { doc: base.doc, seq: base.seq as number } : null,
+          idBase,
+        })) as Record<string, unknown>;
+        releaseIds(idBase, TREE_MAX, Number(value?.idSeq));
+        if (value && typeof value === "object") delete value.idSeq;
         if (ask.args.shot === true) {
           /* In the SAME answer. Asking for the picture separately is the
              second call this verb exists to remove. The shell's capture
@@ -2715,34 +4165,29 @@ async function runVerb(
         return { ok: true, value: { width: got.w ?? w, height: got.h ?? h, asked: { width: w, height: h } } };
       }
       case "text": {
-        const value = await el.executeJavaScript(
-          `(() => { const e = document.querySelector(${sel});
-             return e ? { text: (e.innerText || e.textContent || "").slice(0, ${MAX_TEXT}) } : null; })()`,
-        );
-        return value
-          ? { ok: true, value }
-          : { ok: false, error: `nothing on the page matches ${ask.args.selector}` };
+        const got = await el.executeJavaScript(resolveOne(sel,
+          `return { kind: "ok", text: (e.innerText || e.textContent || "").slice(0, ${MAX_TEXT}) };`, true,
+        )) as { kind: string; text?: string };
+        return got?.kind === "ok"
+          ? { ok: true, value: { text: got.text } }
+          : { ok: false, error: selectorError(String(ask.args.selector ?? ""), got as never) };
       }
 
       case "scroll": {
         // Answers with where it ended up rather than "done": scrolling to the
         // bottom of a page that was already at the bottom, and scrolling a page
         // that cannot scroll at all, are both invisible from a bare success.
-        const move = ask.args.selector !== undefined
-          ? `{ const e = document.querySelector(${sel});
-               if (!e) return null;
-               e.scrollIntoView({ block: "center" }); }`
-          : ask.args.to !== undefined
+        const where = `return { kind: "ok", y: Math.round(window.scrollY),
+                      atBottom: Math.ceil(window.scrollY + window.innerHeight) >= document.body.scrollHeight - 1 };`;
+        const code = ask.args.selector !== undefined
+          ? resolveOne(sel, `e.scrollIntoView({ block: "center" }); ${where}`)
+          : `(() => { ${ask.args.to !== undefined
             ? `window.scrollTo({ top: ${ask.args.to === "top" ? "0" : "document.body.scrollHeight"} });`
-            : `window.scrollBy({ top: ${Number(ask.args.by)} });`;
-        const value = await el.executeJavaScript(
-          `(() => { ${move}
-             return { y: Math.round(window.scrollY),
-                      atBottom: Math.ceil(window.scrollY + window.innerHeight) >= document.body.scrollHeight - 1 }; })()`,
-        );
-        return value
-          ? { ok: true, value }
-          : { ok: false, error: `nothing on the page matches ${ask.args.selector}` };
+            : `window.scrollBy({ top: ${Number(ask.args.by)} });`} ${where} })()`;
+        const got = await el.executeJavaScript(code) as { kind: string; y?: number; atBottom?: boolean };
+        return got?.kind === "ok"
+          ? { ok: true, value: { y: got.y, atBottom: got.atBottom } }
+          : { ok: false, error: selectorError(String(ask.args.selector ?? ""), got as never) };
       }
 
       case "press": {
@@ -2769,7 +4214,10 @@ async function runVerb(
          * page that calls preventDefault is obeyed: `prevented` says so, and
          * nothing is applied.
          */
+        const before = el.getURL();
+        const watch = watchNavigation(el);
         const r = await el.executeJavaScript(`(() => {
+          const t0 = ${MUTATIONS_ON};
           const spec = ${jsLit(key)};
           const parts = spec.split("+");
           const name = parts.pop() || "";
@@ -2870,19 +4318,20 @@ async function runVerb(
           }
           send("keyup");
           return {
-            kind: "ok", applied, prevented: !wentThrough,
+            kind: "ok", applied, prevented: !wentThrough, t0,
             on: (target.id ? "#" + target.id : (target.tagName || "").toLowerCase()),
           };
-        })()`) as { kind: string; applied?: string; prevented?: boolean; on?: string };
+        })()`).catch((err: unknown) => { watch.dispose(); throw err; }) as { kind: string; applied?: string; prevented?: boolean; on?: string; t0?: number };
         // Enter and the like commonly navigate. Waiting on a navigation that
-        // never comes would cost forty seconds a keystroke, so this gives the
-        // page a beat and reports where it is, rather than promising either way.
-        await new Promise((r2) => setTimeout(r2, 250));
+        // never comes would cost forty seconds a keystroke, so this waits the
+        // way a click does — for the navigation if one starts, else for a
+        // quiet page, capped — and says what happened.
+        const effect = await settleAfterAct(el, watch, before, Number(r?.t0) || Date.now());
         return {
           ok: true,
           value: {
             pressed: key, on: r?.on, applied: r?.applied, prevented: !!r?.prevented,
-            url: el.getURL(), title: el.getTitle(),
+            url: el.getURL(), title: el.getTitle(), effect,
           },
         };
       }
@@ -2977,9 +4426,19 @@ async function runVerb(
         const highlightSel = typeof ask.args.highlight === "string" ? ask.args.highlight : null;
         if (highlightSel) {
           const label = typeof ask.args.label === "string" ? ask.args.label : undefined;
-          const hi = await el.executeJavaScript(highlightScript(jsLit(highlightSel), label)) as
+          const hi = await el.executeJavaScript(highlightScript(locatorLit(highlightSel), label)) as
             { kind: string; count?: number; samples?: string[]; message?: string };
           if (hi.kind !== "ok") return { ok: false, error: selectorError(highlightSel, hi) };
+        }
+        /* Set-of-mark labels, drawn after the highlight and taken down by the
+           same cleanup. A page that refuses the script still gets its picture. */
+        let marked: string[] | null = null;
+        if (ask.args.marks === true) {
+          const markBase = reserveIds(MARKS_MAX);
+          const m = await el.executeJavaScript(mintingIds(markBase, MARKS_SCRIPT)).catch(() => null) as
+            { value: string[]; idSeq: number } | null;
+          releaseIds(markBase, MARKS_MAX, Number(m?.idSeq));
+          marked = m ? m.value : null;
         }
         try {
           // The shell first: its capture can ask for a frame of a pane the window
@@ -3163,12 +4622,13 @@ async function runVerb(
           if (viaCdp.ok && viaCdp.result?.data) {
             const whole = `data:image/png;base64,${viaCdp.result.data}`;
             const shot = clip ? await cropPng(whole, clip, density).catch(() => whole) : whole;
-            if (highlightSel) await el.executeJavaScript(REMOVE_HIGHLIGHT_SCRIPT).catch(() => {});
+            if (highlightSel || marked) await el.executeJavaScript(REMOVE_HIGHLIGHT_SCRIPT).catch(() => {});
             const { png, extra } = await withInspectorHalf(shot);
             return {
               ok: true,
               value: {
                 url: el.getURL(), title: el.getTitle(), png, ...extra, via: "the debugger",
+                ...(marked ? { marks: marked } : {}),
               },
             };
           }
@@ -3176,7 +4636,7 @@ async function runVerb(
             /* No clip: the rectangle is taken out of the pixels here, once,
                whichever route produced them. */
             captureFromShell({ fullPage }),
-            new Promise<{ png: string | null; why: string; via?: string; cut?: boolean }>((r) => setTimeout(() => r({ png: null, why: "the shell did not answer in time" }), 12_000)),
+            new Promise<{ png: string | null; why: string; via?: string; cut?: boolean }>((r) => setTimeout(() => r({ png: null, why: "the shell did not answer in time" }), SHELL_SHOT_MS)),
           ]);
           let fromShell = await askShell();
           /* A guest whose frame sink is gone answers the same way forever, so it
@@ -3228,6 +4688,7 @@ async function runVerb(
             value: {
               url: el.getURL(), title: el.getTitle(), png: joined,
               ...extra,
+              ...(marked ? { marks: marked } : {}),
               via: fromShell.via ?? (fromShell.png ? "shell" : "the element itself"),
               // Chromium refuses a capture past 16384px: a `--full-page` shot
               // on a page taller than that comes back cropped rather than not
@@ -3237,7 +4698,7 @@ async function runVerb(
             },
           };
         } finally {
-          if (highlightSel) await el.executeJavaScript(REMOVE_HIGHLIGHT_SCRIPT).catch(() => {});
+          if (highlightSel || marked) await el.executeJavaScript(REMOVE_HIGHLIGHT_SCRIPT).catch(() => {});
         }
       }
 

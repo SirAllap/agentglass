@@ -17,7 +17,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { BROWSER_OPS } from "../src/browserdrive.ts";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { freePort } from "./freePort.ts";
@@ -30,7 +30,9 @@ const HAVE_PY = !!Bun.which("python3");
 let dir = "", base = "", proc: ReturnType<typeof Bun.spawn> | null = null;
 let ws: WebSocket | null = null;
 /** What the stand-in window should do with the next ask, by op. */
-let answers: Record<string, { ok: boolean; value?: unknown; error?: string }> = {};
+type Answer = { ok: boolean; value?: unknown; error?: string };
+/** A function answers differently each time it is asked: a slot that frees up. */
+let answers: Record<string, Answer | (() => Answer)> = {};
 /** Every ask the window was sent, so a test can assert on a retry. */
 let asked: string[] = [];
 /** The args of every ask, so a test can assert on what the CLI actually sent
@@ -90,7 +92,9 @@ async function openWindow() {
     if (frame.type !== "browser") return;
     asked.push(frame.data.op);
     askedArgs.push(frame.data.args ?? {});
-    const reply = answers[frame.data.op] ?? { ok: false, error: "the stand-in was not told what to say" };
+    const scripted = answers[frame.data.op];
+    const reply = (typeof scripted === "function" ? scripted() : scripted)
+      ?? { ok: false, error: "the stand-in was not told what to say" };
     await fetch(base + "/browser/result", {
       method: "POST",
       headers: { "content-type": "application/json", Origin: base },
@@ -239,6 +243,25 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     expect(asked).toEqual([]);
   });
 
+  test("cookies --set carries --domain/--http-only/--same-site/--insecure only when given", async () => {
+    await openWindow();
+    answers = { cookies: { ok: true, value: { cookies: "", note: "x" } } };
+    asked = []; askedArgs = [];
+    await cli("cookies", "--set", "session", "abc123", "--domain", "orbit.example",
+      "--http-only", "--same-site", "Lax");
+    expect(verbArgs(0)).toEqual({
+      set: { name: "session", value: "abc123", path: "/", domain: "orbit.example", httpOnly: true, sameSite: "Lax" },
+    });
+
+    asked = []; askedArgs = [];
+    await cli("cookies", "--set", "pref", "dark", "--insecure");
+    expect(verbArgs(0)).toEqual({ set: { name: "pref", value: "dark", path: "/", secure: false } });
+
+    asked = []; askedArgs = [];
+    await cli("cookies", "--set", "pref", "dark");
+    expect(verbArgs(0)).toEqual({ set: { name: "pref", value: "dark", path: "/" } });
+  });
+
   test("scroll insists on exactly one of its three ways", async () => {
     await openWindow();
     const r = await cli("scroll", "--by", "100", "--to", "top");
@@ -251,6 +274,36 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     const r = await cli("shot", "--selector", "#e17", "--full-page");
     expect(r.code).not.toBe(0);
     expect(r.err).toMatch(/not allowed|argument/i);
+  });
+
+  /* Locators are parsed in the panel, so the CLI and the relay must hand the
+     string over exactly as written — a quote, a bracket or an `=` inside it
+     mangled on the way is a different element. */
+  test("a locator reaches the window exactly as written, on its own and inside do", async () => {
+    await openWindow();
+    asked = []; askedArgs = [];
+    answers = { click: { ok: true, value: { clicked: "x", url: "u", title: "t" } } };
+    const loc = 'role=button[name="Save changes"]';
+    expect((await cli("click", loc)).code).toBe(0);
+    expect(verbArgs()).toEqual({ selector: loc });
+    asked = []; askedArgs = [];
+    const d = await cli("do", "click text=Save changes");
+    expect(d.code, d.err).toBe(0);
+    expect(verbArgs().selector).toBe("text=Save changes");
+  });
+
+  test("fill splits each field at the = that ends the selector, not the first one", async () => {
+    await openWindow();
+    asked = []; askedArgs = [];
+    answers = { fill: { ok: true, value: { filled: [] } } };
+    const r = await cli("fill", "--field", "label=Email=ada@orbit.example", "--field", "input[name=plan]=team",
+      "--field", 'role=textbox[name="Note = long"]=a=b', "--field", "#plan\\=b=solo");
+    expect(r.code).toBe(0);
+    // A CSS escape (`#plan\=b`, the id "plan=b") is part of the selector.
+    expect(verbArgs().fields).toEqual({
+      "label=Email": "ada@orbit.example", "input[name=plan]": "team", 'role=textbox[name="Note = long"]': "a=b",
+      "#plan\\=b": "solo",
+    });
   });
 
   test("shot --selector reaches the window as the selector the server validates", async () => {
@@ -403,6 +456,50 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     expect(controls).toContainEqual({ cmd: "view", to: "browser" });
   });
 
+  test("--wait-slot queues for a free slot instead of refusing, and only for that refusal", async () => {
+    await openWindow();
+    const full = { ok: false, error: "12 pages awake at once is the limit — each one is a live browser" };
+    let n = 0;
+    answers = { newtab: () => (++n < 3 ? full : { ok: true, value: { id: "t9", url: "u" } }) };
+    asked = [];
+    const waited = await cli("newtab", "http://localhost:5173/", "--wait-slot", "10");
+    expect(waited.code, waited.err).toBe(0);
+    expect(asked).toEqual(["newtab", "newtab", "newtab"]);
+    // Without it, the refusal stands, once.
+    n = -100; asked = [];
+    const plain = await cli("newtab", "http://localhost:5173/");
+    expect(plain.code).toBe(1);
+    expect(asked).toEqual(["newtab"]);
+    // A different refusal is not a full house and is not waited on.
+    answers = { newtab: { ok: false, error: "url must be an http(s) address" } };
+    asked = [];
+    const other = await cli("newtab", "http://localhost:5173/", "--wait-slot", "10");
+    expect(other.code).toBe(1);
+    expect(asked).toEqual(["newtab"]);
+  });
+
+  test("handoff arms once, checks until the person is done, and says so", async () => {
+    await openWindow();
+    let checks = 0;
+    answers = {
+      handoff: () => {
+        const a = askedArgs[askedArgs.length - 1] as Record<string, unknown>;
+        if (a.reason) return { ok: true, value: { state: "armed", url: "u", title: "t" } };
+        if (a.check) return { ok: true, value: { state: ++checks < 3 ? "waiting" : "done", url: "u", title: "t" } };
+        return { ok: true, value: { state: "cancelled" } };
+      },
+    };
+    asked = []; askedArgs = []; controls = [];
+    const r = await cli("handoff", "Enter the code", "--until", "#welcome");
+    expect(r.code, r.err).toBe(0);
+    expect(JSON.parse(r.out).state).toBe("done");
+    expect(asked).toEqual(["handoff", "handoff", "handoff", "handoff"]);
+    expect(verbArgs(0)).toMatchObject({ reason: "Enter the code", until: "#welcome" });
+    expect(verbArgs(1)).toMatchObject({ check: true, waitMs: 20_000 });
+    expect(verbArgs(1).reason).toBeUndefined();
+    expect(controls).toContainEqual({ cmd: "view", to: "browser" });
+  });
+
   test("but a refusal a retry cannot fix is not retried", async () => {
     await openWindow();
     asked = []; controls = [];
@@ -436,6 +533,59 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
       // A fresh process — no in-memory state — and it still picked up what
       // the FIRST process was told, because that is the whole point.
       expect(askedArgs[1]?.since).toBe(1000);
+    });
+
+    test("observe --delta asks for one, and --summary says what moved rather than counting a tree", async () => {
+      await openWindow();
+      asked = []; askedArgs = [];
+      answers = { observe: { ok: true, value: {
+        delta: true, base: 3, seq: 4, doc: "k3x9", url: "http://127.0.0.1:4000/app", title: "Orbit", now: 5,
+        added: [{ e: "e9", role: "h1", name: "Items" }], removed: ["e3"], changed: [], same: 7, console: [], network: [],
+      } } };
+      const r = await cli("observe", "--delta", "--summary");
+      expect(r.code).toBe(0);
+      expect(askedArgs[0]?.delta).toBe(true);
+      expect(r.out).toContain("delta: +1 -1 ~0 =7");
+      const plain = await cli("observe");
+      expect(plain.code).toBe(0);
+      expect(askedArgs[1]?.delta, "a plain observe asked for a delta").toBeUndefined();
+    });
+
+    test("a look the caller only sees part of says so, so it never becomes a delta's baseline", async () => {
+      await openWindow();
+      asked = []; askedArgs = [];
+      answers = { observe: { ok: true, value: { url: "u", title: "t", tree: [], console: [], network: [] } } };
+      expect((await cli("observe", "--summary")).code).toBe(0);
+      expect((await cli("--max-tokens", "300", "observe")).code).toBe(0);
+      expect((await cli("observe")).code).toBe(0);
+      expect((await cli("--out", join(dir, "look.json"), "--summary", "observe")).code).toBe(0);
+      expect(askedArgs.map((x) => x.partial === true)).toEqual([true, true, false, false]);
+    });
+
+    test("--max-tokens trims a delta's added nodes the way it trims a tree", async () => {
+      await openWindow();
+      const added = Array.from({ length: 150 }, (_, i) => ({ e: `e${i + 10}`, role: "button", name: `Edit order ORBIT-${1000 + i}` }));
+      answers = { observe: { ok: true, value: { delta: true, url: "u", title: "t", added, removed: [], changed: [], same: 3, console: [], network: [] } } };
+      const r = await cli("--max-tokens", "300", "observe", "--delta");
+      expect(r.code).toBe(0);
+      const v = JSON.parse(r.out);
+      expect(v.truncated).toBe(true);
+      expect(v.added.length).toBeLessThan(150);
+      expect(v.budgetNote).toContain("added:");
+    });
+
+    test("an act verb's --observe looks with a delta", async () => {
+      await openWindow();
+      asked = []; askedArgs = [];
+      answers = {
+        click: { ok: true, value: { clicked: "e4" } },
+        observe: { ok: true, value: { delta: false, reason: "new document", url: "u", title: "t", tree: [] } },
+      };
+      const r = await cli("click", "e4", "--observe");
+      expect(r.code).toBe(0);
+      expect(asked).toEqual(["click", "observe"]);
+      expect(askedArgs[1]?.delta).toBe(true);
+      expect(JSON.parse(r.out).after.reason).toBe("new document");
     });
 
     test("--max-tokens shrinks a large observe by real, measured bytes — viewport first, oldest console dropped first", async () => {
@@ -1364,3 +1514,125 @@ describe.skipIf(!HAVE_PY)("tab-map hygiene", () => {
   }, 60_000);
 });
 
+
+describe.skipIf(!HAVE_PY)("checkup, the dev loop in one call", () => {
+  /** The CLI with its own cache dir: a checkup that failed writes its picture
+   *  there, and never into the machine's ~/.cache. */
+  function cliCache(cache: string, ...args: string[]) {
+    const p = Bun.spawn(["python3", CLI, ...withActive(args)], {
+      env: {
+        PATH: process.env.PATH ?? "", AGENTGLASS_SERVER: base,
+        AGENTGLASS_BROWSER_STATE_DIR: join(dir, "state"), XDG_CACHE_HOME: cache,
+      },
+      stdout: "pipe", stderr: "pipe",
+    });
+    return Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited])
+      .then(([out, err, code]) => ({ out: out.trim(), err: err.trim(), code }));
+  }
+  const PNG = "data:image/png;base64,iVBORw0KGgo=";
+
+  test("the url, --reload, --no-shot and --settle-ms reach the window, clamped", async () => {
+    await openWindow();
+    answers = { checkup: { ok: true, value: { verdict: "ok", url: "u", title: "t" } } };
+    askedArgs = []; asked = [];
+    const cache = mkdtempSync(join(dir, "cache-"));
+    const a = await cliCache(cache, "checkup", "http://localhost:5173/", "--no-shot", "--settle-ms", "99999");
+    expect(a.code, a.err).toBe(0);
+    expect(verbArgs(0)).toMatchObject({ url: "http://localhost:5173/", noShot: true, settleMs: 15_000 });
+    const b = await cliCache(cache, "checkup", "--reload");
+    expect(b.code, b.err).toBe(0);
+    expect(verbArgs(1)).toMatchObject({ reload: true });
+    expect(verbArgs(1).url).toBeUndefined();
+    const both = await cliCache(cache, "checkup", "http://localhost:5173/", "--reload");
+    expect(both.code).toBe(1);
+    expect(asked).toEqual(["checkup", "checkup"]);
+  });
+
+  test("shot --marks reaches the window as a flag, and the ids come back in the answer", async () => {
+    await openWindow();
+    answers = { shot: { ok: true, value: { url: "u", title: "t", png: PNG, marks: ["e1", "e2"] } } };
+    askedArgs = []; asked = [];
+    const cache = mkdtempSync(join(dir, "cache-"));
+    const out = join(dir, "marked.png");
+    const r = await cliCache(cache, "shot", out, "--marks");
+    expect(r.code, r.err).toBe(0);
+    expect(verbArgs(0)).toMatchObject({ marks: true });
+    expect(r.out).toContain("e2");
+  });
+
+  test("dialog: the flags reach the window as booleans, and both sides are refused there", async () => {
+    await openWindow();
+    answers = { dialog: { ok: true, value: { armed: null, last: null } } };
+    askedArgs = []; asked = [];
+    const cache = mkdtempSync(join(dir, "cache-"));
+    const a = await cliCache(cache, "dialog", "--dismiss", "--always");
+    expect(a.code, a.err).toBe(0);
+    expect(verbArgs(0)).toEqual({ dismiss: true, always: true });
+    const b = await cliCache(cache, "dialog", "--accept", "--text", "ada");
+    expect(b.code, b.err).toBe(0);
+    expect(verbArgs(1)).toEqual({ accept: true, text: "ada" });
+    const both = await cliCache(cache, "dialog", "--accept", "--dismiss");
+    expect(both.code).toBe(1);
+    expect(asked).toEqual(["dialog", "dialog"]);
+  });
+
+  test("a failure's picture is written to a private file and the answer carries its path", async () => {
+    await openWindow();
+    answers = { checkup: { ok: true, value: { verdict: "1 problem", url: "u", title: "t", errors: ["TypeError: x"], png: PNG } } };
+    const cache = mkdtempSync(join(dir, "cache-"));
+    const r = await cliCache(cache, "checkup", "--no-shot");
+    expect(r.code, r.err).toBe(0);
+    const v = JSON.parse(r.out);
+    expect(v.png).toBeUndefined();
+    expect(v.shot.startsWith(join(cache, "agentglass", "checkup-"))).toBe(true);
+    // The pid beside the time: two checkups in one millisecond are two files.
+    expect(v.shot).toMatch(/\/checkup-\d+-\d+\.png$/);
+    expect(statSync(v.shot).mode & 0o777).toBe(0o600);
+    expect(readFileSync(v.shot).subarray(0, 4).toString("hex")).toBe("89504e47");
+    expect(Object.keys(v)[0]).toBe("verdict");
+  });
+
+  test("only the newest 20 pictures are kept", async () => {
+    await openWindow();
+    answers = { checkup: { ok: true, value: { verdict: "1 problem", url: "u", title: "t", errors: ["TypeError: x"], png: PNG } } };
+    const cache = mkdtempSync(join(dir, "cache-"));
+    const shots = join(cache, "agentglass");
+    mkdirSync(shots, { recursive: true });
+    for (let i = 1; i <= 25; i++) writeFileSync(join(shots, `checkup-${1_000 + i}.png`), "old");
+    writeFileSync(join(shots, "notes.txt"), "not a checkup");
+    const r = await cliCache(cache, "checkup");
+    expect(r.code, r.err).toBe(0);
+    const left = readdirSync(shots).filter((f) => f.startsWith("checkup-")).sort();
+    expect(left).toHaveLength(20);
+    expect(left).not.toContain("checkup-1006.png");
+    expect(left).toContain("checkup-1007.png");
+    expect(left).toContain(JSON.parse(r.out).shot.split("/").pop());
+    expect(readdirSync(shots)).toContain("notes.txt");
+  });
+
+  test("--max-tokens gives up the issues first, then the oldest errors, and keeps the verdict", async () => {
+    await openWindow();
+    const issues = Array.from({ length: 5 }, (_, i) => ({ code: `Issue${i}`, n: 3, about: "https://cdn.orbit.example/" + "x".repeat(150) }));
+    const errors = Array.from({ length: 10 }, (_, i) => `TypeError: e${i} ` + "y".repeat(120));
+    answers = { checkup: { ok: true, value: { verdict: "10 problems", url: "u", title: "t", errors, issues, a11y: { unlabelled: 1, samples: ["e4 button"] } } } };
+    const cache = mkdtempSync(join(dir, "cache-"));
+    const r = await cliCache(cache, "checkup", "--max-tokens", "200");
+    expect(r.code, r.err).toBe(0);
+    const v = JSON.parse(r.out);
+    expect(v.verdict).toBe("10 problems");
+    expect(v.issues).toBeUndefined();
+    expect(v.a11y.samples).toBeUndefined();
+    expect(v.errors.length).toBeLessThan(10);
+    expect(v.errors[v.errors.length - 1]).toContain("e9");
+    expect(v.budgetNote).toContain("issues: dropped 5");
+  });
+
+  test("--summary is one line: the verdict and the counts", async () => {
+    await openWindow();
+    answers = { checkup: { ok: true, value: { verdict: "2 problems", url: "u", title: "t", errors: ["a"], failed: ["500 GET /x"], issues: [{ code: "C", n: 1 }] } } };
+    const cache = mkdtempSync(join(dir, "cache-"));
+    const r = await cliCache(cache, "checkup", "--summary", "--no-shot");
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toBe("2 problems errors:1 failed:1 visible:0 issues:1");
+  });
+});

@@ -30,7 +30,7 @@ async function runGitIn(args: string[], cwd: string): Promise<{ ok: boolean; out
 import { LANTERN_PROMPT_MARK } from "./lanternmark.ts";
 import { isSeatSession } from "./seatrole.ts";
 import { seatPanes } from "./seatpanes.ts";
-import { isGone } from "../../shared/fieldRules.ts";
+import { attention, isGone, type Attention } from "../../shared/fieldRules.ts";
 export { LANTERN_PROMPT_MARK };
 
 /** Sessions that are the Lantern's own chat. Persisted (session_role) and
@@ -97,6 +97,11 @@ export type LanternCard = AgentBoard.BoardRow & {
   /** A name that is not somebody you can talk to — see `isGone`. Marked here
    *  so the view folds it the way the readout does: one rule, both screens. */
   gone?: true;
+  /** What the row asks of a person, by `attention` — the rule the strip, the
+   *  pip, the view and the push count by. On the wire so a reader outside
+   *  this codebase (the cockpit MCP) filters on it instead of writing the
+   *  rule again. Absent when it asks nothing. */
+  attention?: Attention;
 };
 
 /** What one tool call was doing, from its input, in a person's words. */
@@ -318,6 +323,8 @@ export async function boardNow(): Promise<LanternCard[]> {
     /* The readout collapsed these onto one line from the start; the view went
        on drawing every one of them as an idle agent. Marked once, here. */
     if (!r.role && isGone(r, now)) r.gone = true;
+    const a = attention(r, now);
+    if (a) r.attention = a;
   }
   return rows;
 }

@@ -29,7 +29,7 @@ const CLIS = ["agentglass-agent", "agentglass-browser", "agentglass-browser-mcp"
 function probe(file: string, body: string, env: Record<string, string> = {}): { code: number; out: string; err: string } {
   const src = `
 import json, os, sys
-ns = {"__name__": "probe"}
+ns = {"__name__": "probe", "__file__": ${JSON.stringify(file)}}
 exec(compile(open(${JSON.stringify(file)}).read(), ${JSON.stringify(file)}, "exec"), ns)
 ${body}
 `;
@@ -41,7 +41,7 @@ ${body}
 }
 
 describe.skipIf(!HAVE_PY)("where the token may go", () => {
-  test("plain http to a remote host is refused by every one, in one line, before any request", () => {
+  test("plain http to a remote host is refused by every one of them, in one line, before any request", () => {
     for (const cli of CLIS) {
       for (const url of ["http://10.0.0.5:4000", "http://agentglass.example.invalid", "http://192.168.1.20:4000"]) {
         const r = probe(BIN(cli), "print('loaded')", { AGENTGLASS_SERVER: url });

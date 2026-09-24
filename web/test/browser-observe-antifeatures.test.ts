@@ -118,8 +118,10 @@ describe("observe script anti-features", () => {
 
     test("stable ID is preserved across observations", () => {
       const script = observeScript(0, 200);
-      expect(script).toContain("if (!el.dataset.agxE)");
-      // Only stamp if not already stamped
+      // Only stamp if not already stamped BY THIS PAGE — a clone carries the
+      // attribute without having been given it (browser-observe-delta.test.ts
+      // runs the script and pins both halves).
+      expect(script).toContain("if (!el.dataset.agxE || !mine.has(el))");
       expect(script).toContain("el.dataset.agxE");
     });
 

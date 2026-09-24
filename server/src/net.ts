@@ -279,6 +279,104 @@ export function hostsOnly(domains: string[]): (u: URL) => string | null {
   };
 }
 
+/** The browser's URL policy on a host — `safeUrl` in browserdrive.ts and the
+ *  robots.txt fetch in robots.ts hold to the same one, which is why it lives
+ *  here. Addresses the browser relay refuses even over http(s): link-local — which is
+ *  where the cloud metadata endpoint 169.254.169.254 lives — and the unspecified
+ *  address. `open` drives a real, logged-in browser and `read` hands back the
+ *  page, so without this the relay is an SSRF probe with a credentialed response
+ *  channel. Loopback and RFC1918 are deliberately NOT blocked: pointing the
+ *  browser at a local dev server or a box on your own LAN is ordinary use here.
+ *  On a literal only: for `safeUrl` a bare hostname passes, because the browser
+ *  resolves it again when it connects, and the desktop app's egress guard
+ *  (electron/egress-guard.js) is where a name is judged at connect time. The
+ *  robots.txt fetch judges names too, through `browserUnfetchableHost`. */
+function blockedV4(h: string): boolean {
+  return h.startsWith("169.254.") || h === "0.0.0.0";
+}
+
+/** The eight 16-bit groups of a valid IPv6 address (isIP has already said v6),
+ *  with `::` expanded and any trailing dotted-quad (`::ffff:1.2.3.4`) folded
+ *  into its two hex groups. Given a valid address this always yields eight. */
+function ipv6Groups(h: string): number[] {
+  let s = h;
+  const lastColon = s.lastIndexOf(":");
+  const tail = s.slice(lastColon + 1);
+  if (tail.includes(".")) { // embedded IPv4 dotted-quad → two hex groups
+    const q = tail.split(".").map((n) => parseInt(n, 10) & 0xff);
+    s = s.slice(0, lastColon + 1) +
+      ((q[0]! << 8) | q[1]!).toString(16) + ":" + ((q[2]! << 8) | q[3]!).toString(16);
+  }
+  const [left, right] = s.split("::");
+  const head = left ? left.split(":") : [];
+  const rear = right !== undefined ? (right ? right.split(":") : []) : [];
+  const gap = right !== undefined ? 8 - head.length - rear.length : 0;
+  return [...head, ...Array(Math.max(gap, 0)).fill("0"), ...rear].map((g) => parseInt(g, 16));
+}
+
+export function blockedTarget(host: string): boolean {
+  const h = host.replace(/^\[|\]$/g, "").toLowerCase(); // URL keeps IPv6 brackets
+  const v = isIP(h);
+  if (v === 4) return blockedV4(h);
+  if (v === 6) {
+    if (/^fe[89ab]/.test(h) || h === "::") return true; // fe80::/10 link-local, unspecified
+    // IPv4-mapped (::ffff:0:0/96) and the deprecated IPv4-compatible (::/96) forms
+    // carry a v4 address in the low 32 bits — so `[::ffff:169.254.169.254]` (which
+    // the URL parser folds to `::ffff:a9fe:a9fe`) is the metadata endpoint wearing
+    // a v6 hat. Re-run the v4 rules on the embedded address; loopback/LAN mapped
+    // in this way (e.g. `::ffff:127.0.0.1`) stays allowed, same as its v4 self.
+    const g = ipv6Groups(h);
+    const embedded =
+      g[0] === 0 && g[1] === 0 && g[2] === 0 && g[3] === 0 && g[4] === 0 &&
+      (g[5] === 0xffff || g[5] === 0);
+    if (embedded) {
+      const v4 = `${g[6]! >> 8}.${g[6]! & 0xff}.${g[7]! >> 8}.${g[7]! & 0xff}`;
+      return blockedV4(v4);
+    }
+    // NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`) embed a v4 address the same
+    // way, just under a non-zero prefix — `[64:ff9b::a9fe:a9fe]` and
+    // `[2002:a9fe:a9fe::]` are 169.254.169.254 wearing a routable-looking hat.
+    // Fold each ONLY when its prefix actually matches, so a global v6 whose low
+    // bits merely resemble 169.254.x.x is not over-blocked.
+    if (g[0] === 0x0064 && g[1] === 0xff9b && g[2] === 0 && g[3] === 0 && g[4] === 0 && g[5] === 0) {
+      const v4 = `${g[6]! >> 8}.${g[6]! & 0xff}.${g[7]! >> 8}.${g[7]! & 0xff}`;
+      return blockedV4(v4);
+    }
+    if (g[0] === 0x2002) {
+      const v4 = `${g[1]! >> 8}.${g[1]! & 0xff}.${g[2]! >> 8}.${g[2]! & 0xff}`;
+      return blockedV4(v4);
+    }
+    return false;
+  }
+  return false;
+}
+
+/**
+ * Why a host may not be fetched under the BROWSER's policy — the one `safeUrl`
+ * applies to every `open`: link-local and the unspecified address refused,
+ * loopback and the LAN allowed, on the literal and on every address a name
+ * answers. `unfetchableHost` above is the stricter rule for what the server
+ * fetches on its own account; this one is for a fetch the server makes on
+ * the browser's behalf, and it must not reach further than the browser may.
+ */
+export type Resolver = (host: string) => Promise<{ address: string; family: number }[]>;
+export const dnsResolver: Resolver = (h) => lookup(h, { all: true, verbatim: true });
+
+export async function browserUnfetchableHost(hRaw: string, lookupImpl: Resolver = dnsResolver): Promise<string | null> {
+  const h = hRaw.replace(/^\[|\]$/g, "");
+  if (!h) return "no host";
+  if (blockedTarget(h)) return `${h} is link-local or unspecified`;
+  if (isIP(h)) return null;
+  try {
+    const answers = await lookupImpl(h);
+    if (!answers.length) return `${h} does not resolve`;
+    for (const a of answers) if (blockedTarget(a.address)) return `${h} resolves to ${a.address}, which is link-local or unspecified`;
+    return null;
+  } catch {
+    return `${h} does not resolve`;
+  }
+}
+
 export interface GuardedFetch {
   /** The final response, when every hop passed. */
   res?: Response;

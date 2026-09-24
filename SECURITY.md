@@ -93,12 +93,15 @@ complement, rather than replace, the private reporting path below.
   agents. Set `AGENTGLASS_GATE_FAILCLOSED=1` if you would rather a timeout or an
   unreachable control plane denied the call.
 - **A held call is not released by the process being held.** Answering one
-  (`/gate/decide`) needs a paired device with the `answer` grant, or an `Origin`
-  this server already trusts — a browser attaches one to every POST it makes,
-  and the desktop shell serves its renderer under a scheme of its own. The
-  machine token on its own is not an answer, because the agent whose call is
-  held holds that token too. *Raising* a hold (`POST /gate`) is untouched: that
-  one is the hook asking to be stopped. What this is and is not worth is in
+  (`/gate/decide`) needs a paired device with the `answer` grant, or — where the
+  desktop app started the server — the app's own key, which it mints at launch
+  and hands only to its sidecar, down a pipe, and to its own renderer. There an
+  `Origin` opens nothing. On a server started by hand, where no desk holds a
+  key, an `Origin` this server already trusts still does: a browser attaches one
+  to every POST it makes. The machine token on its own is not an answer, because
+  the agent whose call is held holds that token too. *Raising* a hold
+  (`POST /gate`) is untouched: that one is the hook asking to be stopped. What
+  this is and is not worth is in
   [What the gate does not protect against](#what-the-gate-does-not-protect-against).
 
 ## Pairing a device
@@ -235,27 +238,59 @@ which this app renders from whatever repository you happen to be triaging.
 
 So `/gate/decide` now asks for something the held party has no way to produce: a
 paired device with the `answer` grant, or one of the origins this server already
-trusts — a foreign website is turned away by that check as it always was.
-Between them they cover the three ways a person actually answers. The packaged
-shell serves its renderer from a scheme no browser can be served from; a browser
-attaches `Origin` to every POST it makes, same-origin ones included, so the
-dashboard on this machine is untouched; and a paired phone carries a credential
-minted at the desk that lives only on it. `curl`, `urllib` and the other
-libraries an agent reaches for send no such header, and the machine token on its
-own is no longer an answer — so the sentence the stopped model is handed, that a
-human reviewed this call, now costs one of those two things. Raising a hold is
-unchanged: `POST /gate` is the hook asking to be stopped, which was the half
-that worked.
+trusts — a foreign website is turned away by that check as it always was. `curl`,
+`urllib` and the other libraries an agent reaches for send no such header, and
+the machine token on its own is no longer an answer — so the sentence the
+stopped model is handed, that a human reviewed this call, now costs one of those
+two things. Raising a hold is unchanged: `POST /gate` is the hook asking to be
+stopped, which was the half that worked.
 
-What that is worth, at no more than its real value. It moves self-release from
-incidental to deliberate: the obvious `curl` gets a refusal that explains itself,
-where before it got an approval the log recorded as a person. It is **not** a
-boundary, and the reason fits in a line — a header is a string, and a local
-process that sets one on purpose passes. Nor is the device store a wall:
-`devices.json` is `0600` on this same machine, which is the same *already you*
-the bullet above ends on. Closing it properly would take a credential the agent
-cannot read, meaning one the desk holds and the token file does not, and that is
-not what this is.
+That much made self-release deliberate rather than incidental, and no more: a
+header is a string, and a local process that set `Origin: agentglass://app` on
+purpose, with the token it already had, released its own call. Closing that
+takes a credential the agent cannot read, one the desk holds and the token file
+does not, and where the desktop app runs the server that is what now stands in
+for the `Origin`. The app mints a key for each sidecar it starts and keeps it in
+memory. It hands it to that sidecar down a pipe on a descriptor of its own — not
+the environment and not the command line, which any process of this user reads
+in `/proc` — and to its own window through the preload, and to nothing the agent
+browser opens, nor to a server the app adopted instead of starting. The server
+reads it before anything it starts could inherit the pipe, and from then on a
+release carries that key or a paired device's credential, and an `Origin` counts
+for nothing (`server/src/desk.ts`). Accepting a pairing asks for the same,
+because a device accepted is a device that releases holds. That closes the
+`Origin` forgery. The other way in was the device store, and the server now
+holds that in memory (below).
+
+What is left, at no more than its real value:
+
+- **A server started by hand has no desk.** No key exists there, and the client
+  a person uses there without pairing first is a browser, which cannot hold a
+  secret an agent on the same machine could not also read. So the `Origin` rule
+  stands on such a server, with its limit: the obvious `curl` is refused and a
+  deliberate forgery passes. That is `bun run dev`, a sidecar you launch
+  yourself, and a desktop window that adopted a server it did not start — and,
+  for now, the desktop app on Windows, which does not hand its sidecar the pipe.
+- **Memory is not a wall against yourself either.** A process that can read
+  another's memory reads the key: `kernel.yama.ptrace_scope=0`, root, a core
+  dump the system keeps where you can read it (systemd-coredump does), or the
+  renderer's debugging port when you set `AGENTGLASS_DEBUG_PORT`. So does a
+  script running in the app's own window, as it reads the token. A key is only
+  good for the sidecar it was minted for, so one read out of a crashed sidecar
+  opens nothing the next one holds.
+- **The device store is read once.** `devices.json` is `0600` on this same
+  machine, which is the same *already you* the bullet above ends on. The server
+  used to read it on every request, so a process that wrote a device of its own
+  into it held a credential that answered gates. Now the server loads it when it
+  starts and changes it only through pairing: a row written behind its back is
+  not a device, the change is said on stderr and as an urgent notification at
+  the desk, and the next pairing write puts the server's own set back. A row
+  planted and then followed by a restart is loaded — the file is the store.
+- **Out of scope: a process that is you and sets out to.** One that can edit
+  the store and restart the server, or replace the app's files or the server's
+  binary, can make it trust anything. Nothing a server running as you checks
+  holds against code running as you with that intent; what these rules remove
+  is the accident, the helpful agent and the one an injected instruction sends.
 
 The record can only say what the caller proved, and it is worth reading it that
 way. A paired device signs its own line with the name that was accepted when it
@@ -468,8 +503,9 @@ to the machine you opened it on, is the tool working.** In particular:
   boundary against a process running as you — see
   [What the gate does not protect against](#what-the-gate-does-not-protect-against),
   which says so before a report has to. A local process that sets an `Origin`
-  header in order to release its own hold is that same case, and that section
-  says so in as many words rather than leaving it to be discovered.
+  header in order to release its own hold on a server started by hand, where no
+  desk holds a key, is that same case, and that section says so in as many
+  words rather than leaving it to be discovered.
 - Recorded data staying recorded (above) is a retention decision, not a leak.
 - Findings that require an attacker to already have a shell on the machine, or
   to already hold the token, are not separate issues — at that point they have
@@ -691,6 +727,19 @@ nothing else: the app's own renderer, and the token in it, are not on the other
 side of that relay. This is why the app is never started with a remote
 debugging port.
 
+That is also why there is no DevTools-protocol endpoint for Puppeteer,
+Playwright or a browser-use-style framework to connect to, and none is planned
+as a default. A raw protocol session is agent-supplied code on every page the
+browser holds, and it goes under everything this section describes — the URL
+policy, the allow-lists, read-only mode, the ownership check between agents,
+the redaction and the audit line per verb all sit above the verb, and a socket
+sits below it. What an agent that speaks the protocol gets instead is
+`browser_cdp`: one command at a time, through the relay, audited, and refused
+under read-only mode. If a drop-in is ever built it will be opt-in, scoped to
+one container, bound to loopback with a token, alive only while the process
+that asked for it is — and a decision made in the open, not a port that
+happens to be on.
+
 Some of those verbs **act**. `browser_eval` runs JavaScript in the page,
 `browser_addInitScript` installs JavaScript that runs before every page does,
 `browser_expose` gives the page a function that calls back into the agent, and
@@ -711,6 +760,78 @@ offer `ignoreCertErrors` at all. Both CLIs refuse to send the token over plain
 `http://` to any host that is not loopback — `https://` anywhere, `http://`
 only to this machine — before a single request is built. Cookies, storage
 state, HAR files and page snapshots the CLI writes land as `0600` files.
+
+Where the browser may be sent is held twice. The relay judges the literal host
+of every `open` before the browser sees it — `http(s)` only, and never
+link-local (169.254/16, where a cloud's metadata endpoint lives) or the
+unspecified address; loopback and LAN addresses are allowed on purpose, since a
+dev server on this machine is ordinary use. A hostname cannot be judged there,
+because the browser resolves it again when it connects and a name may answer
+differently the second time. So the desktop app also runs an **egress guard**:
+a proxy on a loopback port that every browsing session is pointed at, which
+resolves each name once per connection, refuses any answer in those ranges,
+opens the socket to the address it judged, reaches a name that answers a public
+and a private address in one set at the public ones only, and refuses a name
+that has ever answered a public address when it later answers a private or
+loopback one — the DNS rebinding shapes. A public name is remembered for the
+life of the app and never forgotten to make room; when the memory is full (100k
+names) a new public name is refused by name rather than let through unpinned,
+for every tab until a restart. The memory does not survive a restart, while a
+persistent profile's service workers and cache do: a page kept from an earlier
+run meets a guard that has not seen its name yet. A name that has only ever
+answered private (a hosts-file entry, a LAN box) is judged fresh every time and
+stays allowed, so nothing about local development changes.
+`AGENTGLASS_BROWSER_EGRESS=off` turns the guard off; a proxy set through the
+`session` verb replaces it while set, and the verb says so — which is also the
+ceiling: an agent with the `session` verb can replace the guard with a direct
+rule before it opens a name, and the reply says the guard is off rather than
+refusing. The verb is one that acts, so read-only mode refuses it.
+
+### The cockpit over MCP
+
+`bin/agentglass-cockpit-mcp` answers questions about the cockpit's own data —
+sessions, spend, tool latency, errors, the agent board, pending gates — and
+nothing else. It reaches the app only with GET requests (one request is built
+in the file, and a test holds it to GET), so no argument makes it write, kill
+or approve.
+
+What it reads is what the app's token reads, and that is a lot. For every
+session in scope: its title, project, model and spend, and which of its tool
+calls failed recently. The agent board, with what each agent says it is
+doing. Every held gate, with the tool and the call it holds. And, through
+`cockpit_session`, a session's own text: its conversation, each message up
+to 20,000 characters; its timeline, with each tool's output up to 4,000
+characters — a `printenv`, a `cat` of a config file; its file changes with
+their diffs; its first prompt and its last answer. And, through
+`cockpit_errors`, the text of its failed tool calls, up to 2,000 characters.
+
+That text comes for the caller's own session only: the one Claude Code names
+in `CLAUDE_CODE_SESSION_ID` when it starts the server over stdio — inherited,
+so any other client started from inside that session takes it as its own too.
+Another session's is left out, and the answer says what it withheld and why, unless
+`AGENTGLASS_COCKPIT_TRANSCRIPTS=all` is set. Over HTTP no session is the
+caller's own, so there it takes that setting too, and with it on, anyone
+holding the cockpit token reads every session's text.
+
+The gate ids it lists do not release anything by themselves: on a server the
+desktop app started, letting a hold go takes the app's key or a paired device,
+and elsewhere the `Origin` rule and its limit apply (see
+[The one on that list that was a bug](#the-one-on-that-list-that-was-a-bug)).
+
+This is the tool's default, not a boundary. The app token the cockpit carries
+reads `/session` directly, as the desk does, so any process holding that token
+— an agent's own shell included — reads every transcript without going through
+this server. What the default stops is the agent that asks its tools rather
+than writing a `curl`: the helpful one, and the one an injected instruction
+sends to read its neighbours.
+
+Over HTTP it runs behind the browser MCP server's transport, imported rather
+than copied: a loopback bind unless `--expose`, any `Origin` refused, only
+`application/json` bodies, and a bearer of its own, `AGENTGLASS_COCKPIT_TOKEN`,
+refused at start if it equals the app's token or the browser endpoint's. A
+cockpit token that leaks reads the cockpit; it does not drive the browser or
+open the app. Its bind and expose variables are its own as well, so setting
+the browser endpoint's never starts or exposes this one.
 
 ## What leaves through the webhook
 

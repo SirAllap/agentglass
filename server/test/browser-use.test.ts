@@ -11,10 +11,11 @@
  * Collapsing them gives one wrong instruction for two states.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { cliState, installSkill, skillDest, skillState } from "../src/browseruse.ts";
+import { dirname, join } from "node:path";
+import { cliState, installSkill, refreshSkill, shippedSkill, skillDest, skillState } from "../src/browseruse.ts";
+import { createHash } from "node:crypto";
 
 let dir = "";
 const HOME0 = process.env.HOME;
@@ -110,5 +111,71 @@ describe("installing the skill", () => {
     expect(second.ok).toBe(true);
     // Pressing Install twice leaves no trail of identical backups.
     expect(second.backup).toBeUndefined();
+  });
+});
+
+describe("refreshing the skill when the app ships a newer one", () => {
+  const shipped = () => shippedSkill();
+
+  test("a copy this app wrote and nobody edited follows the shipped one", () => {
+    if (!shipped()) return;
+    const dest = skillDest();
+    mkdirSync(join(dir, ".claude", "skills", "browser-use"), { recursive: true });
+    // An older shipped version, written the way Install writes it.
+    writeFileSync(dest, "an older shipped skill");
+    writeFileSync(join(dirname(dest), ".agentglass-installed"), createHash("sha256").update("an older shipped skill").digest("hex").slice(0, 16));
+    expect(refreshSkill(shipped())).toBe("updated");
+    expect(readFileSync(dest)).toEqual(readFileSync(shipped()!));
+    // And it is the shipped bytes now: nothing to do the next time.
+    expect(refreshSkill(shipped())).toBe("current");
+  });
+
+  test("a hand edit is left alone", () => {
+    if (!shipped()) return;
+    const dest = skillDest();
+    mkdirSync(join(dir, ".claude", "skills", "browser-use"), { recursive: true });
+    writeFileSync(dest, "an older shipped skill");
+    writeFileSync(join(dirname(dest), ".agentglass-installed"), createHash("sha256").update("an older shipped skill").digest("hex").slice(0, 16));
+    writeFileSync(dest, "an older shipped skill, plus a line somebody added");
+    expect(refreshSkill(shipped())).toBe("kept");
+    expect(readFileSync(dest, "utf8")).toContain("plus a line somebody added");
+  });
+
+  test("a copy from before there was a mark is left alone too", () => {
+    if (!shipped()) return;
+    mkdirSync(join(dir, ".claude", "skills", "browser-use"), { recursive: true });
+    writeFileSync(skillDest(), "an older shipped skill");
+    expect(refreshSkill(shipped())).toBe("kept");
+  });
+
+  test("no installed copy is not this function's business, and Install writes the mark", () => {
+    if (!shipped()) return;
+    expect(refreshSkill(shipped())).toBe("missing");
+    expect(installSkill().ok).toBe(true);
+    expect(refreshSkill(shipped())).toBe("current");
+    // Only the shipped bytes were written, so a later release may replace them.
+    writeFileSync(skillDest(), "x");
+    expect(refreshSkill(shipped())).toBe("kept");
+  });
+});
+
+describe("the refresh reads the app's own copy only", () => {
+  test("a skills directory in the launch cwd is not a source", () => {
+    const cwd = process.cwd();
+    const there = mkdtempSync(join(tmpdir(), "agx-cwd-"));
+    mkdirSync(join(there, "skills", "browser-use"), { recursive: true });
+    writeFileSync(join(there, "skills", "browser-use", "SKILL.md"), "somebody else's skill");
+    mkdirSync(join(dir, ".claude", "skills", "browser-use"), { recursive: true });
+    writeFileSync(skillDest(), "an older shipped skill");
+    writeFileSync(join(dirname(skillDest()), ".agentglass-installed"), createHash("sha256").update("an older shipped skill").digest("hex").slice(0, 16));
+    try {
+      process.chdir(there);
+      expect(shippedSkill(true)).toBeNull();
+      expect(refreshSkill()).toBe("unshipped");
+      expect(readFileSync(skillDest(), "utf8")).toBe("an older shipped skill");
+    } finally {
+      process.chdir(cwd);
+      rmSync(there, { recursive: true, force: true });
+    }
   });
 });

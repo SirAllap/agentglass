@@ -31,6 +31,41 @@ const os = require("os");
 const {
   BROWSER_PARTITION, isBrowserPartition, safeGuestUrl, applyGuestGuard,
 } = require("./guest-guard.js");
+const { startEgressProxy, literalRefusal, EGRESS_ENV } = require("./egress-guard.js");
+
+/**
+ * The browser's egress guard, once it is listening — see egress-guard.js for
+ * what it is and why a proxy is the only place the URL policy can be held at
+ * connect time. Null while it is starting, and for good when it is switched
+ * off (AGENTGLASS_BROWSER_EGRESS=off) or could not bind, in which case the
+ * browser reaches the network directly as it did before it existed.
+ * @type {{ port: number, proxyRules: string, refusals: () => Array<{ at: number, host: string, reason: string }>, refuse: (host: string, reason: string) => void } | null} */
+let egress = null;
+/** Sessions already pointed at the guard. One per partition, like `coopFreed`:
+ *  `setProxy` twice is harmless but `onBeforeRequest` twice is the second
+ *  listener replacing the first. @type {WeakSet<Electron.Session>} */
+const egressArmed = new WeakSet();
+
+/**
+ * Point a browsing session at the guard: its traffic goes through the proxy,
+ * and the requests the proxy can never see — Chromium sends link-local
+ * LITERALS straight to the network — are cancelled on the request hook.
+ * Called from `will-attach-webview` with the guest's partition, so the session
+ * is armed before the guest exists rather than after its first request.
+ * @param {string | undefined} partition */
+function armEgress(partition) {
+  if (!egress) return;
+  const ses = session.fromPartition(partition || BROWSER_PARTITION);
+  if (egressArmed.has(ses)) return;
+  egressArmed.add(ses);
+  ses.setProxy({ proxyRules: egress.proxyRules, proxyBypassRules: "" })
+    .catch((e) => console.error("[egress] could not set the session proxy:", e));
+  ses.webRequest.onBeforeRequest((details, callback) => {
+    const why = literalRefusal(details.url);
+    if (why && egress) egress.refuse(new URL(details.url).hostname, why);
+    callback({ cancel: !!why });
+  });
+}
 const { browserMenuTemplate } = require("./browser-menu.js");
 const power = require("./power.js");
 
@@ -622,6 +657,27 @@ function currentToken() {
 }
 
 /**
+ * The desk's key: what lets a held call go, and the one secret here that no
+ * agent this app runs can read.
+ *
+ * The token above is a file of this user's and a variable in every environment
+ * the sidecar starts, so the process whose call is held has it too. This is
+ * minted for each sidecar this app spawns (ensureServer), never written
+ * anywhere, and reaches that sidecar down a pipe and the renderer through the
+ * preload — see server/src/desk.ts for what it closes and what it does not.
+ * Null while the app runs on a server it adopted: that one was never given a
+ * key, and must not be handed this one by the first answer the window sends.
+ * @type {string | null}
+ */
+let deskKey = null;
+/* POSIX only. Windows hands a child a descriptor past stderr through the C
+   runtime's handle table, which nothing here has measured the compiled sidecar
+   reading — and a sidecar told to expect a key it cannot read refuses its own
+   window's answer. So a Windows sidecar is not told, and keeps the Origin rule
+   a server started by hand has (SECURITY.md). */
+const DESK_PIPE = process.platform !== "win32";
+
+/**
  * Throw away the shared secret and mint another.
  *
  * The toggle alone cannot do this. Turning remote access off shuts the port,
@@ -663,6 +719,10 @@ function sidecarEnv(port) {
     PATH: withBundledBin(process.env.PATH, { platform: process.platform, packaged: PACKAGED, resourcesPath: process.resourcesPath }),
     AGENTGLASS_PORT: String(port),
     AGENTGLASS_DIE_WITH_PARENT: "1",
+    // Opt-in for the server's skill refresh: an installed app only (a checkout
+    // run from a worktree must not push its older copy over the installed one),
+    // and an isolated instance says "0".
+    AGENTGLASS_SKILL_AUTOUPDATE: PACKAGED && process.env.AGENTGLASS_SKILL_AUTOUPDATE !== "0" ? "1" : "0",
     AGENTGLASS_WEB_DIR: DIST,
     /**
      * Always — remote access on or off.
@@ -690,6 +750,12 @@ function sidecarEnv(port) {
      */
     AGENTGLASS_TOKEN: currentToken(),
   };
+  // Not the desk's key: the descriptor it comes down, and this process as the
+  // parent holding the other end, so a server started by hand from a terminal
+  // that inherited this variable reads nothing (server/src/desk.ts). Without a
+  // pipe, one a relaunch carried in is dropped rather than passed on.
+  if (DESK_PIPE) env.AGENTGLASS_DESK_FD = `3:${process.pid}`;
+  else delete env.AGENTGLASS_DESK_FD;
   if (remoteEnabled()) {
     // An explicit env var wins: someone who set the bind by hand meant it.
     env.AGENTGLASS_BIND = process.env.AGENTGLASS_BIND || "0.0.0.0";
@@ -1025,7 +1091,7 @@ function tailStderr(child) {
 /** @param {boolean} adopt @returns {Promise<boolean>} */
 async function ensureServer(adopt) {
   const port = SERVER_PORT;
-  if (adopt) { reportSidecar(null); return true; } // a dev server or another instance is already up
+  if (adopt) { deskKey = null; reportSidecar(null); return true; } // a dev server or another instance is already up
   // AGENTGLASS_DIE_WITH_PARENT arms the server's own parent-death watchdog:
   // stopSidecar below cannot fire if this main process is SIGKILLed or crashes,
   // so the sidecar backs it up by exiting on its own once we are gone. Only
@@ -1038,9 +1104,20 @@ async function ensureServer(adopt) {
   const [cmd, argv] = PACKAGED
     ? [/** @type {string} */ (SIDECAR_BIN), []]
     : ["bun", ["run", path.join(REPO, "server", "src", "index.ts")]];
-  const child = spawn(cmd, argv, { stdio: ["ignore", "ignore", "pipe"], env });
+  const child = spawn(cmd, argv, { stdio: DESK_PIPE ? ["ignore", "ignore", "pipe", "pipe"] : ["ignore", "ignore", "pipe"], env });
   sidecar = child;
   const err = tailStderr(child);
+  /* A key per spawn, so one read out of a sidecar that is gone — a core dump —
+     opens nothing the next one holds. Minted before this function's first
+     await: createWindow() has just run, and its preload asks for the key once
+     this task yields. It goes down fd 3 with `end`, not `write`: the sidecar's
+     read at boot waits for the pipe to close. A sidecar that exits unread
+     answers with ECONNRESET, and an `error` with no listener takes this
+     process down. */
+  deskKey = DESK_PIPE ? require("crypto").randomBytes(32).toString("base64url") : null;
+  const desk = /** @type {import("stream").Writable | null} */ (child.stdio[3]);
+  desk?.on("error", () => { /* it went away before reading; `exit` below says why */ });
+  if (deskKey) desk?.end(deskKey + "\n");
 
   /*
    * The `error` event, which is what a missing binary actually is.
@@ -1227,7 +1304,7 @@ async function restartSidecar() {
   // live bindings (web/src/lib/api.ts), so handing it the new pair is enough —
   // the next fetch and the next socket connect use them.
   for (const w of BrowserWindow.getAllWindows()) {
-    try { w.webContents.send("ag:server-changed", { origin: apiOrigin, token: currentToken() }); } catch { /* window went away mid-toggle */ }
+    try { w.webContents.send("ag:server-changed", { origin: apiOrigin, token: currentToken(), deskKey }); } catch { /* window went away mid-toggle */ }
   }
 }
 
@@ -1834,6 +1911,16 @@ function registerIpc(win) {
   /** @type {Map<Electron.WebContents, Array<{at: number, method: string, params: unknown}>>} */
   const guestCdpEvents = new Map();
   const CDP_EVENT_CAP = 500;
+  /**
+   * Screencast frames, kept apart from the events above and for two reasons:
+   * a frame is a picture — thirty of them would push every debugger pause
+   * out of a 500-slot buffer — and a frame has to be ACKED the moment it
+   * lands, or Chromium sends no more. So the listener answers each one with
+   * `Page.screencastFrameAck` itself and keeps the newest thirty here, and
+   * `Page.agxScreencastFrames` hands the ring over and empties it.
+   * @type {Map<Electron.WebContents, { frames: Array<{at: number, sessionId: number, data: string, metadata: unknown}>, dropped: number }>} */
+  const guestScreencast = new Map();
+  const SCREENCAST_CAP = 30;
 
   /*
    * WHERE A DOWNLOAD IS MEANT TO LAND, per guest.
@@ -2035,6 +2122,11 @@ function registerIpc(win) {
      * turns the domain on when there is something to match and off when there
      * is not.
      */
+    if (method === "Page.agxScreencastFrames") {
+      const ring = guestScreencast.get(guest) || { frames: [], dropped: 0 };
+      guestScreencast.set(guest, { frames: [], dropped: 0 });
+      return { ok: true, result: { frames: ring.frames, dropped: ring.dropped } };
+    }
     if (method === "Fetch.agxSetRules") {
       const rules = Array.isArray(req?.params?.rules) ? req.params.rules : [];
       if (!rules.length) {
@@ -2121,6 +2213,15 @@ function registerIpc(win) {
              before the buffer, because a rule that matches nothing still has
              to let the request through. */
           if (m === "Fetch.requestPaused") answerPaused(guest, params);
+          if (m === "Page.screencastFrame") {
+            const p = /** @type {{ sessionId?: number, data?: string, metadata?: unknown }} */ (params || {});
+            guest.debugger.sendCommand("Page.screencastFrameAck", { sessionId: p.sessionId }).catch(() => { /* the cast just stopped */ });
+            const ring = guestScreencast.get(guest) || { frames: [], dropped: 0 };
+            ring.frames.push({ at: Date.now(), sessionId: Number(p.sessionId), data: String(p.data || ""), metadata: p.metadata });
+            if (ring.frames.length > SCREENCAST_CAP) { ring.dropped += ring.frames.length - SCREENCAST_CAP; ring.frames.splice(0, ring.frames.length - SCREENCAST_CAP); }
+            guestScreencast.set(guest, ring);
+            return;
+          }
           const buf = guestCdpEvents.get(guest);
           if (!buf) return;
           buf.push({ at: Date.now(), method: m, params });
@@ -2131,6 +2232,7 @@ function registerIpc(win) {
         guest.debugger.on("detach", () => {
           guestOwnsDebugger.delete(guest);
           guestCdpEvents.delete(guest);
+          guestScreencast.delete(guest);
         });
       }
       /*
@@ -2178,8 +2280,20 @@ function registerIpc(win) {
         const px = req.proxy;
         const rules = String(px.rules ?? "");
         const bypass = String(px.bypass ?? "");
-        await ses.setProxy({ proxyRules: rules, proxyBypassRules: bypass });
-        applied.push("proxy");
+        /*
+         * A proxy of the operator's replaces the egress guard's, and with an
+         * upstream proxy the name is resolved THERE — the connect-time policy
+         * cannot be held from here while one is set. Said in the reply rather
+         * than left to be discovered. Clearing the rules puts the guard back.
+         */
+        if (!rules.trim() && egress) {
+          await ses.setProxy({ proxyRules: egress.proxyRules, proxyBypassRules: "" });
+          applied.push("proxy:cleared (egress guard restored)");
+        } else {
+          await ses.setProxy({ proxyRules: rules, proxyBypassRules: bypass });
+          applied.push("proxy");
+          if (egress) applied.push("egress guard: its connect-time check is off while this proxy is set");
+        }
       }
       if (req?.cookies && typeof req.cookies === "object") {
         /*
@@ -2241,6 +2355,15 @@ function registerIpc(win) {
             return { ok: false, error: `could not list extensions: ${String(e instanceof Error ? e.message : e)}` };
           }
         }
+      }
+      if (req?.egress && typeof req.egress === "object") {
+        /* Why a navigation failed, when the guard is why. A refused CONNECT
+           reaches the page as a bare ERR_TUNNEL_CONNECTION_FAILED, which names
+           nothing an agent can act on; the guard kept the reason, and the
+           driver asks for it here to put it in the sentence. */
+        const host = String(req.egress.host ?? "").toLowerCase();
+        const rows = egress ? egress.refusals().filter((r) => !host || r.host === host) : [];
+        return { ok: true, applied: ["egress:refusals"], value: { armed: !!egress, refusals: rows.slice(-5) } };
       }
       if (req?.dns && typeof req.dns === "object") {
         /* Electron does not expose a method to change DNS at runtime — it must
@@ -3195,6 +3318,7 @@ function guardWebviews(win) {
   // means the guest never exists.
   win.webContents.on("will-attach-webview", (e, webPreferences, params) => {
     if (!applyGuestGuard(webPreferences, params)) e.preventDefault();
+    else armEgress(webPreferences.partition);
   });
 
   win.webContents.on("did-attach-webview", (_e, guest) => {
@@ -3923,6 +4047,23 @@ app.whenReady().then(async () => {
   }
   // A link that started the app cold: taken before any window exists and
   // handed over when the renderer asks for it.
+  /*
+   * The egress guard, before any window can attach a guest. Off by the
+   * environment only, and said out loud either way: a browser that reaches
+   * the network directly is the state this app was in for its first year,
+   * not a failure — but it should never be a surprise.
+   */
+  if (String(process.env[EGRESS_ENV] || "on").toLowerCase() === "off") {
+    console.log(`[egress] ${EGRESS_ENV}=off: the browser resolves names itself, and a name is free to answer a private address`);
+  } else {
+    try {
+      const started = await startEgressProxy({ log: (/** @type {string} */ line) => console.log(line) });
+      egress = started;
+      console.log(`[egress] guard listening on ${started.proxyRules}`);
+    } catch (e) {
+      console.error("[egress] the guard could not start; the browser reaches the network directly:", e);
+    }
+  }
   const coldLink = deepLinkFrom(process.argv.slice(1));
   if (coldLink) pendingDeepLink = parseDeepLink(coldLink);
   // The renderer asks once it has mounted, because a message sent to a window
@@ -3943,6 +4084,10 @@ app.whenReady().then(async () => {
   // caller, the local renderer included — without this the app would lock
   // itself out of its own sidecar the moment the toggle was flipped.
   ipcMain.on("ag:apiToken", (e) => { e.returnValue = currentToken(); });
+  // The desk's key, to a window's own page and to nothing a window hosts: the
+  // agent browser's guests are webviews, and a page an agent opened must not
+  // be the one thing on this machine that can let its hold go.
+  ipcMain.on("ag:deskKey", (e) => { e.returnValue = e.sender.getType() === "window" ? deskKey : null; });
   // Whether there is a server at all, for a window that opened AFTER the give-up
   // — a reload, or a second window. The push in `reportSidecar` only reaches
   // windows that already exist, and a page that reloads five minutes into a

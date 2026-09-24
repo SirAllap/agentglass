@@ -25,6 +25,48 @@ last time, a tree of the interactive page addressed by role and accessible
 name, the current value of every input, and optionally the picture. Polling six
 verbs in turn is where the time goes.
 
+After the first look, ask for **only what changed**:
+
+```bash
+agentglass-browser observe --delta            # {delta:true, added, removed, changed, same, console, network}
+agentglass-browser click e12 --observe        # `after` is a delta too
+```
+
+`added` are whole nodes, `removed` are ids gone from the page, `unlisted` are
+ids still there but past the tree's cap, `changed` is `{e, field: new value}`
+(null = the field went away), `same` is how many did not move. New console and
+network rows only. `form`, `storage` and `viewport` appear only when they
+changed — **absent means unchanged**. Positions (`at`) are not diffed. After a
+navigation, with no earlier look, or after a look you only saw part of
+(`--max-tokens`, `--summary`), you get the full answer with `delta:false` and a
+`reason`. Plain `observe` is always the full page.
+
+The baseline (and `checkup`'s "since your last checkup") is kept per `--as`
+name; callers without one share a single baseline, so pass `--as` to get your own.
+
+`click` and `press` wait for what they caused (the navigation, or a quiet page
+with no request in flight, capped at 1 s) and answer with an `effect`:
+`navigated`, `newDocument`, `newErrors`, `failedRequests`, `dialog`,
+`settledBy`. Often that is all you need to know — no look at all.
+
+## Did it break? One call
+
+The edit → reload → "is it broken?" loop is one verb:
+
+```bash
+agentglass-browser checkup http://localhost:5173/   # load it, wait for quiet, report
+agentglass-browser checkup --reload                 # after your edit
+agentglass-browser checkup                          # no navigation: since your last checkup
+```
+
+The first field is the verdict, `ok` or `N problems`. Problems are uncaught
+exceptions and console errors — **including the ones thrown while the page
+loaded**, which `console` and `observe` cannot see — failed requests (4xx/5xx,
+CORS, blocked) and visible error text (`role=alert`, so an alert toast counts). Chromium's `issues`,
+`perf` (LCP, CLS) and `a11y` (unlabelled controls, with ids) come along as
+advice and do not count. A screenshot path only when something failed
+(`--no-shot` to skip; `shot: "unavailable: …"` when there is no frame to take).
+
 ## Then the whole interaction in ONE call
 
 ```bash
@@ -49,29 +91,96 @@ once. "Nothing happened in thirty seconds" is an answer, not a failure.
 ## The verbs, by what you reach for them for
 
 ```
-look        observe · read · text · html · region · shot · frames · console · network
+dev loop    checkup (did it break — errors from load on, failed requests, visible errors)
+measure     vitals (LCP/CLS/INP/TTFB/FCP, rated) · a11y (unlabelled controls, alt, heading jumps, lang)
+look        observe · read · markdown · text · html (--clean: scripts/styles out, eN ids in) ·
+            region · shot · frames · console · network · extract · links · count · search
+            interactive · forms · attr
 page        resize · zoom (the one Ctrl+/Ctrl- move) · emulate · throttle
-act         click · type · select · check · fill · hover · dblclick · rightclick
-            focus · blur · press · scroll · drag · upload
+handoff     handoff "why" [--until sel|/path] — the person does the CAPTCHA/2FA/consent, you continue
+act         click · type (also rich editors: contenteditable) · select · check · fill · hover · dblclick · rightclick
+            focus · blur · press · scroll · drag · upload · dialog (answer the next confirm/prompt)
 wait        wait · waitfor (--until network-idle | no-timers) · events
+many pages  scrape URL... (--read markdown|links|extract… --concurrency 1-4): a tab each, closed after
 navigate    open · back · forward · reload
-tabs        tabs · tab · newtab · closetab · profiles
+tabs        tabs · tab · newtab · closetab · profiles (open|newtab --wait-slot S queues at 12 awake)
 containers  whoami · profiles (--make/--drop) · newtab --profile · lanes
-identity    cookies · storage · permission · permissions · clipboard
+identity    cookies · storage · session save/load (MCP: storage_state) · permission · permissions · clipboard
 run code    eval · eval --file · addInitScript · expose · exposed
-inspect     cdp · debug · listeners · coverage · trace
+inspect     cdp · debug · listeners · coverage · trace · screencast (start · frames · stop · watch --out DIR)
 devtools    inspect open|close · inspect panel <id> · inspect zoom <n> · inspect shot
 network     fake · intercept · throttle · headers · har
 pretend     emulate · resize · clock · settings
-evidence    shot · shot --with-inspector · record · pdf · save · download · audit --script
+evidence    shot · shot --marks (eN labels on the picture) · shot --with-inspector · record · pdf · save · download · audit --script
 batch       do (and `lanes` for several pages at once)
 ```
 
+## The structured readers — what an agent actually wants from a page
+
+`read` gives you the page, but as one wall of text. When the question is a
+question, not "give me the page", reach for the verb that answers it:
+
+```bash
+agentglass-browser markdown                    # the page as markdown — headings, lists, code, links
+agentglass-browser extract --field price=.price --field title=h1   # named fields, one round trip
+agentglass-browser links                       # what this page reaches, deduplicated
+agentglass-browser count "[data-testid=row]"   # how many match (omit the selector: interactive count)
+agentglass-browser search "shipping"           # find text, get the matches with their hrefs
+agentglass-browser interactive                 # what can be acted on: id, role, name, href/value/options
+agentglass-browser forms                       # the forms as forms: fields with labels, the submit, loose fields
+agentglass-browser attr e17 href data-testid   # one element's attributes (no names: all of them)
+```
+
+All eight are reads, all eight are clamped by `--max-tokens` and the same
+redaction seam as everything else, and only `extract`, `search` and `attr`
+take arguments — the others answer with the whole page in the right shape.
+`extract`'s answer names the fields that matched nothing, so you never invent
+a value for a field that was not there. `interactive` and `forms` hand out
+the same ids `observe` does, so what they list is what the next `click` or
+`fill` takes; a password's value never travels in any of them.
+
 ## The things worth knowing before you start
+
+Acts are as close to a person as a page can tell without lying. `click`
+runs with a user activation and the page believing it has focus for the length
+of the act, so a clipboard write or a popup a click is allowed to make works.
+That is a real grant: a hostile page can use it to write the person's clipboard
+or open a window, so click only what the task needs. `hover`, `dblclick`,
+`rightclick` and `check` carry no activation. `hover` also moves a real pointer,
+so `:hover` matches. Events you cause from a script are still `isTrusted:
+false`; nothing here fakes that. `type` reaches rich editors (contenteditable).
+`handoff` ends only on the person's own click on its Done button, on `--until`
+(a selector, or a path judged on the URL's pathname, never its query), or on a
+navigation (`navigated`); a page cannot end it by itself.
+Raw `cdp Input.*` stays refused: it lands in the app's own window.
 
 **Stable ids beat invented selectors.** Every node in an `observe` comes with an
 id like `e17`, stamped on the element so it survives a re-render. Every verb
 that takes a selector takes one of those instead. Do not go inventing CSS.
+An id is good for the page that handed it out: no two pages in a window ever
+share one, so an id used after a navigation, on another tab, or after the node
+was removed is refused with a sentence that says which — and the fix is always
+the same, `observe` again and use the new ids.
+
+**Or name it, and skip the look.** When you already know what a thing is
+called — you wrote the page, or just read it — every verb that takes a
+selector takes a locator too (CLI and MCP alike):
+
+```bash
+agentglass-browser click 'role=button[name="Save"]'  # observe's role or ARIA's: link, textbox, checkbox, combobox, heading
+agentglass-browser type label=Email ada@orbit.example
+agentglass-browser select label=Plan team
+agentglass-browser click text=Continue               # the innermost element with that text
+agentglass-browser fill --field 'label=Email=ada@orbit.example' --field 'placeholder=Search=orbit'
+# also testid=submit (exact, hidden ones included)
+```
+
+Case-insensitive substring. Exact: quote it (`text="Save"`, `label="Email"`);
+a role's name only with `s` (`[name="Save" s]`). A whole name beats a part
+of one, so "Save" is not confused with "Save draft". Only what is on screen
+matches (`upload` also finds a hidden file input). None or several is refused, and
+the refusal lists ids to use next (`e4 button "Save"`), the hidden matches,
+and what of that kind IS there.
 
 **A failure explains itself.** It comes back with the console errors and failed
 requests from just before it, and a screenshot. `selector matched 3 elements`
@@ -80,8 +189,9 @@ what went wrong.
 
 **JavaScript is yours.** `eval` reads the app's own runtime — a store, a
 component's state, `document.visibilityState`. `eval --file` for anything a
-shell would mangle. `addInitScript` runs BEFORE the page's own scripts, on every
-navigation, which is the one thing `eval` cannot do.
+shell would mangle. `addInitScript` runs in the page now and, in principle,
+before the page's own scripts; this browser drops it after a navigation, so
+register it again after one. For errors thrown during load, use `checkup`.
 
 **DevTools, whole.** `cdp <Domain.method>` relays the entire protocol —
 breakpoints, heap snapshots, the accessibility tree. On top of it: `debug` (a
@@ -293,6 +403,11 @@ claude mcp add agentglass-browser -- agentglass-browser-mcp
 
 Every verb above, as a tool with a schema. Same relay, same rules, same
 guardrails. Use whichever fits.
+
+The full list is ~19k tokens of schema, re-read every turn. Set
+`AGENTGLASS_MCP_TOOLS=core` for the 17 everyday verbs plus one generic
+`browser {verb, args}` tool that reaches the rest (verb `help` returns any
+verb's schema), or `generic` for that tool alone.
 
 ## When it cannot reach the browser
 

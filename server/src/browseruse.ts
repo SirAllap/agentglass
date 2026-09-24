@@ -53,14 +53,14 @@ export const cliLink = (): string => join(home(), ".local", "bin", "agentglass-b
  * rung is first and the checkout rung saves the developer, whose
  * `process.execPath` is bun's own binary and says nothing about this repo.
  */
-export function shippedSkill(): string | null {
+export function shippedSkill(installedOnly = false): string | null {
   const candidates = [
     join(dirname(process.execPath), "resources", "skills", "browser-use", "SKILL.md"),
     join(dirname(process.execPath), "skills", "browser-use", "SKILL.md"),
     join(import.meta.dir, "..", "..", "skills", "browser-use", "SKILL.md"),
     join(process.cwd(), "skills", "browser-use", "SKILL.md"),
     join(process.cwd(), "..", "skills", "browser-use", "SKILL.md"),
-  ];
+  ].slice(0, installedOnly ? 2 : undefined);
   for (const c of candidates) {
     try { if (statSync(c).isFile()) return resolve(c); } catch { /* next rung */ }
   }
@@ -136,6 +136,42 @@ export function browserUseStatus(readyWindows: number, desktop: boolean): Browse
   };
 }
 
+/** Beside the skill: the digest of the bytes THIS app last wrote there. A copy
+ *  that still matches it has not been touched since, so it is ours to replace;
+ *  one that does not was edited by a person and is theirs. */
+const installedMark = (): string => join(dirname(skillDest()), ".agentglass-installed");
+
+const readMark = (): string | null => {
+  try { return readFileSync(installedMark(), "utf8").trim() || null; } catch { return null; }
+};
+
+/**
+ * Bring an installed skill up to date when the app ships a newer one — but only
+ * a copy this app wrote and nobody has touched. That is what an update is: the
+ * installed skill went stale the day a verb was added, and the agents reading it
+ * never learned the verb existed, which is the failure this whole file is about.
+ *
+ * A hand-edited copy is left alone, and so is one with no mark at all — an
+ * install from before there was a mark cannot be told from an edit. The pane's
+ * Install button remains the way in for both, and it writes the mark.
+ */
+export function refreshSkill(src: string | null = shippedSkill(true)): "updated" | "current" | "kept" | "unshipped" | "missing" {
+  /* Only the copy inside the app: never one found in the directory the app was
+     launched from, which may be an older checkout or somebody else's repo, and
+     is read by every agent once it overwrites the installed skill. */
+  if (!src) return "unshipped";
+  let shipped: Buffer, current: Buffer;
+  try { shipped = readFileSync(src); } catch { return "unshipped"; }
+  try { current = readFileSync(skillDest()); } catch { return "missing"; }
+  if (digest(current) === digest(shipped)) return "current";
+  if (readMark() !== digest(current)) return "kept";
+  try {
+    writeFileSync(skillDest(), shipped);
+    writeFileSync(installedMark(), digest(shipped));
+  } catch { return "kept"; }
+  return "updated";
+}
+
 export interface InstallResult { ok: boolean; path?: string; backup?: string; error?: string }
 
 /**
@@ -157,7 +193,12 @@ export function installSkill(): InstallResult {
   try { current = readFileSync(dest); } catch { /* not there yet */ }
   let shipped: Buffer;
   try { shipped = readFileSync(src); } catch (e) { return { ok: false, error: `could not read ${src}: ${e instanceof Error ? e.message : e}` }; }
-  if (current && digest(current) === digest(shipped)) return { ok: true, path: dest };
+  if (current && digest(current) === digest(shipped)) {
+    // Already the shipped bytes: say so in the mark, so the NEXT release may
+    // replace them — a copy from before the mark existed would never update.
+    try { writeFileSync(installedMark(), digest(shipped)); } catch { /* the skill itself is fine */ }
+    return { ok: true, path: dest };
+  }
 
   let backup: string | undefined;
   try {
@@ -167,6 +208,7 @@ export function installSkill(): InstallResult {
       copyFileSync(dest, backup);
     }
     writeFileSync(dest, shipped);
+    writeFileSync(installedMark(), digest(shipped));
   } catch (e) {
     return { ok: false, error: `could not write ${dest}: ${e instanceof Error ? e.message : e}` };
   }
