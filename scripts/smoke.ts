@@ -313,7 +313,13 @@ async function main() {
       // The workspace is the window now — no modal to open with ⌘\ or close with
       // Escape, and the rail is always drawn. Check that it draws a set of view
       // tabs; the exact count is the user's rail to arrange.
-      const railTabs = await evaluate(`document.querySelectorAll('${railSel} [role="tab"]').length`);
+      // "Mounted" is the root's first paint, not the rail's: on a slow runner the
+      // rail lands a beat later, so wait for it (10 s) before counting.
+      const railTabs = await evaluate(`new Promise((r) => {
+        const t0 = Date.now();
+        const count = () => document.querySelectorAll('${railSel} [role="tab"]').length;
+        (function poll() { const n = count(); if (n >= 6 || Date.now() - t0 > 10000) r(n); else setTimeout(poll, 100); })();
+      })`);
       if (railTabs < 6) failures.push(`[workspace] expected a rail of view tabs, found ${railTabs}`);
 
       // ⌘1 and ⌘2 reach two DIFFERENT views: the numbers switch, and to
