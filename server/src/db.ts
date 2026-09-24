@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, chmodSync, readFileSync } from "node:fs";
 import { homedir, hostname, tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type {
   WatchEvent,
   SessionRollup,
@@ -63,12 +63,65 @@ function defaultDbPath(): string {
   const base =
     process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
   const dir = join(base, "agentglass");
+  const refused = defaultDbRefusal(join(dir, "agentglass.db"), {
+    // `B:/~BUN/root/…` is the same thing on Windows.
+    compiled: Bun.main.startsWith("/$bunfs/") || Bun.main.includes("~BUN"),
+    execPath: process.execPath,
+    tmp: tmpdir(),
+  });
+  if (refused) throw new Error(refused);
   try {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     return join(dir, "agentglass.db");
   } catch {
     return local; // unwritable data dir — better a local file than no database
   }
+}
+
+/**
+ * Why this process may not open the default database, or null when it may.
+ *
+ * THE DEFAULT DATABASE BELONGS TO THE INSTALLED APP. Nothing else asked for it:
+ * a server run from a checkout, a `bun -e` that imports this file, a binary
+ * built into a worktree's staging directory — each reaches the XDG data dir
+ * only because it named nothing else. Measured: a worktree build whose
+ * migration rebuilt a table with a new primary key ran there, and the
+ * installed release then failed on its first line at every launch, because
+ * its upsert names a conflict target the rebuilt table no longer has.
+ *
+ * "Installed" is a compiled binary that lives neither inside a checkout of
+ * this repo (one with `electron/build.mjs`, so a home directory kept in git
+ * does not count) nor under the temp directory, where a probe copies a build.
+ * An AppImage mount, a .deb, a Mac bundle and `make desktop-install`'s copy all
+ * qualify; `bun run src/index.ts` and `electron/staging/agentglass-server` do
+ * not. A database under the temp directory is nobody's history and is let
+ * through, as `testDbPath` lets it through.
+ *
+ * The ceilings: an installed binary of an OLDER or NEWER release is still an
+ * install, and opens the file — that is the schema generation's job below. A
+ * build copied somewhere else by hand passes for an install. And a run from
+ * source with XDG_DATA_HOME pointed at a scratch directory outside the temp
+ * directory is refused too: nothing here can tell that from a real data dir.
+ */
+export function defaultDbRefusal(
+  path: string,
+  run: { compiled: boolean; execPath: string; tmp: string },
+): string | null {
+  const under = (p: string, dir: string) => { const r = relative(dir, p); return !!r && !r.startsWith("..") && !isAbsolute(r); };
+  if (under(path, run.tmp)) return null;
+  let where: string | null = null;
+  if (run.compiled) {
+    if (under(run.execPath, run.tmp)) where = run.tmp;
+    else for (let d = dirname(run.execPath); ; d = dirname(d)) {
+      if (existsSync(join(d, ".git")) && existsSync(join(d, "electron", "build.mjs"))) { where = d; break; }
+      if (dirname(d) === d) break;
+    }
+    if (!where) return null;
+  }
+  const what = run.compiled ? `a binary built or copied into ${where}` : "a run from source";
+  return `agentglass: refusing to open the default database ${path} from ${what}; ` +
+    "only the installed app opens it. Give this run its own with AGENTGLASS_STATE_DIR=<dir>, " +
+    "or name the file with AGENTGLASS_DB=<path> to open it on purpose.";
 }
 
 /**
@@ -122,6 +175,57 @@ for (const suffix of ["", "-wal", "-shm"]) {
 // up. busy_timeout is a connection setting that needs no lock of its own, so
 // applying it first turns that crash into a wait.
 db.exec("PRAGMA busy_timeout = 5000;");
+
+/**
+ * Which schema generation last wrote this file, and the refusal when it is
+ * newer than this build.
+ *
+ * Almost every change to this schema is additive — a new table, a new column
+ * with a default — and an older build simply never looks at it. The ones that
+ * are not (a table rebuilt with a different primary key, a column or a unique
+ * index dropped) leave an older build preparing statements against a shape
+ * that is gone, and it dies on its first line with an SQLite message that says
+ * nothing about versions. A change of that kind bumps SCHEMA_GENERATION; every
+ * build from this one on reads the number first and stops with a sentence.
+ *
+ * Checked BEFORE anything below writes: an older build must not create its
+ * tables, switch the journal or run a migration inside a database it has just
+ * decided it does not understand. Its own table, not `PRAGMA user_version` —
+ * that already counts the error backfill in index.ts.
+ *
+ * `real-db-guard.test.ts` lists every statement in the source that an older
+ * build could not survive, and fails on one that arrives without a bump.
+ */
+export const SCHEMA_GENERATION = 1;
+{
+  const has = db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_generation'").get();
+  const found = has
+    ? db.query<{ generation: number }, []>("SELECT generation FROM schema_generation WHERE id = 1").get()?.generation ?? 0
+    : 0;
+  if (found > SCHEMA_GENERATION) {
+    db.close();
+    throw new Error(`agentglass: the database is newer than this app (${DB_PATH} is schema generation ${found}, ` +
+      `this build knows ${SCHEMA_GENERATION}). Install the newer release, or point AGENTGLASS_DB at another file.`);
+  }
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS schema_generation (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  generation INTEGER NOT NULL,
+  written_at INTEGER NOT NULL
+)`);
+    if (found < SCHEMA_GENERATION) {
+      db.run("INSERT INTO schema_generation (id, generation, written_at) VALUES (1, ?, ?) " +
+        "ON CONFLICT(id) DO UPDATE SET generation = excluded.generation, written_at = excluded.written_at " +
+        "WHERE excluded.generation > schema_generation.generation",
+        [SCHEMA_GENERATION, Date.now()]);
+    }
+  } catch (e) {
+    // A read-only database has nothing to record and nothing will be written.
+    // Anything else (a lock held past busy_timeout) is said, not swallowed.
+    if (!/readonly/i.test(String((e as Error)?.message ?? e))) console.error("[db] schema generation not recorded:", e);
+  }
+}
+
 db.exec("PRAGMA journal_mode = WAL;");
 db.exec("PRAGMA foreign_keys = ON;");
 
@@ -3225,6 +3329,78 @@ export function sessionsWhosePromptStarts(mark: string): string[] {
   for (const r of db.query<{ session_id: string }, [string]>(
     `SELECT DISTINCT session_id FROM events WHERE hook_event_type = 'UserPromptSubmit' AND payload LIKE ?`).all(`%${mark}%`)) out.add(r.session_id);
   return [...out];
+}
+
+/**
+ * Was this text ever typed at the session as a prompt?
+ *
+ * Asked by the tmux restore about the arguments of a running `claude`: a
+ * prompt given on the command line arrives through the same UserPromptSubmit
+ * hook as one typed at the box, so the events table can say which of a
+ * process's arguments is the prompt and which is a flag's value — exactly,
+ * with no list of flags to keep up to date. One indexed lookup per candidate.
+ */
+const promptSeen = db.query<{ one: number }, [string, number, string]>(
+  `SELECT 1 AS one FROM events WHERE session_id = ? AND timestamp >= ? AND hook_event_type = 'UserPromptSubmit' AND json_extract(payload, '$.prompt') = ? LIMIT 1`);
+/** `sinceMs`: see `wasPromptAnywhere` — a resumed conversation carries its
+ *  whole history, and a flag's value typed there once as an answer is not a
+ *  prompt on this process's command line. */
+export function wasPromptOf(sessionId: string, text: string, sinceMs = 0): boolean {
+  if (!sessionId || !text) return false;
+  try { return promptSeen.get(sessionId, Math.max(0, sinceMs), text) !== null; } catch { return false; }
+}
+
+/**
+ * The same question of every session, for when the pane's conversation is not
+ * the one the prompt was given to: `/clear` starts a new session in the same
+ * pane, and the argument on the command line was submitted to the old one.
+ *
+ * SINCE A MOMENT, and the caller gives the moment the process was born. Asked
+ * of everything ever, the question matched a flag's VALUE — `--model opus`,
+ * with "opus" typed as a prompt in some session weeks ago; prompts of one
+ * word are in this table — and the value was dropped from the flags, so the
+ * resume line read `claude --model --resume <id>`: the flag eats the id, and
+ * the id becomes a positional prompt. A prompt on this process's command line
+ * was submitted after this process started, so nothing older can be it. Zero
+ * asks of everything, for a machine that cannot say when a process started.
+ *
+ * Not cheap: with no statistics the planner walks every UserPromptSubmit row
+ * (idx_events_type) and extracts each payload's prompt, tens of milliseconds
+ * on a large table. The caller asks again only when a prompt has arrived
+ * since it last asked (`newestPromptId`).
+ */
+const promptSeenSince = db.query<{ one: number }, [number, string]>(
+  `SELECT 1 AS one FROM events WHERE timestamp >= ? AND hook_event_type = 'UserPromptSubmit' AND json_extract(payload, '$.prompt') = ? LIMIT 1`);
+export function wasPromptAnywhere(text: string, sinceMs = 0): boolean {
+  if (!text) return false;
+  try { return promptSeenSince.get(Math.max(0, sinceMs), text) !== null; } catch { return false; }
+}
+
+/** The row id of the newest prompt recorded, or 0: an answer about prompts
+ *  can only change when this does. One step down idx_events_type. */
+const newestPrompt = db.query<{ id: number | null }, []>(
+  `SELECT MAX(id) AS id FROM events WHERE hook_event_type = 'UserPromptSubmit'`);
+export function newestPromptId(): number {
+  try { return newestPrompt.get()?.id ?? 0; } catch { return 0; }
+}
+
+/** The first prompt this conversation was sent since a moment, or "": the
+ *  one a command line carries, when it carried one. idx_events_first_prompt
+ *  to the row, then its payload. */
+const firstPromptSinceQ = db.query<{ prompt: string | null }, [string, number]>(
+  `SELECT json_extract(payload, '$.prompt') AS prompt FROM events WHERE hook_event_type = 'UserPromptSubmit' AND session_id = ? AND timestamp >= ? ORDER BY timestamp LIMIT 1`);
+export function firstPromptSince(sessionId: string, sinceMs = 0): string {
+  if (!sessionId) return "";
+  try { return firstPromptSinceQ.get(sessionId, Math.max(0, sinceMs))?.prompt ?? ""; } catch { return ""; }
+}
+
+/** Has this conversation been sent any prompt since a moment? A covering
+ *  lookup on idx_events_first_prompt. */
+const promptedSinceQ = db.query<{ one: number }, [string, number]>(
+  `SELECT 1 AS one FROM events WHERE hook_event_type = 'UserPromptSubmit' AND session_id = ? AND timestamp >= ? LIMIT 1`);
+export function promptedSince(sessionId: string, sinceMs = 0): boolean {
+  if (!sessionId) return false;
+  try { return promptedSinceQ.get(sessionId, Math.max(0, sinceMs)) !== null; } catch { return false; }
 }
 
 export function noteWaitFromHook(e: { session_id?: unknown; hook_event_type?: unknown; payload?: unknown; role?: unknown }, at = Date.now()): void {

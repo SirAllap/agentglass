@@ -82,6 +82,19 @@ agentglass-agent finish <task-id> "<what came of it>"
 `recall` answers out of the precedent bank, and says so plainly when it has
 nothing rather than inventing a precedent.
 
+## Opening agents
+
+Through the app, never with a bare `tmux new-window "cli ..."`: a CLI that
+exits 0 closes that tab and takes its output with it.
+
+```bash
+agentglass-agent start <name> --cwd <checkout> --yolo        # an agent you will prompt
+agentglass-agent start <name> --cwd <checkout> --kind <cli> --keep -- <flags>
+                                                              # a one-shot whose answer you read after it exits
+agentglass-agent read <name>                                  # its answer, while the kept tab is there (a day)
+agentglass-agent stop <name>                                  # close the kept tab once it is read
+```
+
 ## The queue
 
 Work is added from the Orchestrator view, and every item carries **what would

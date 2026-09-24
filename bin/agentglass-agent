@@ -31,6 +31,13 @@ waiting, from the board), `needsYou` when it is stopped on a person, and
 `branch`. An agent is listed while its pane exists on the engine and not a
 second longer — liveness is the pane, not a heartbeat.
 
+`start --keep` keeps the tab when the CLI exits — a one-shot such as
+`qwen -p` or `opencode run` whose answer is read afterwards — under a line
+saying how it exited, for a day; the agent leaves the list all the same, and
+`read <name>` still shows the tab while it is there, and `stop <name>`
+closes it. Never open one with a bare `tmux new-window "cli ..."`: a CLI that
+exits 0 takes that tab and its answer with it.
+
 `start` refuses a name that is still running (exit 1, error "an agent by that
 name is still running", the existing agent under result.agent); pick another
 name or stop it. `--yolo` asks for the CLI's skip-permissions flag and is
@@ -161,6 +168,8 @@ def main():
     p.add_argument("--remote-control", metavar="NAME", help="Claude's --remote-control NAME")
     p.add_argument("--prompt", default="", help="a first message on the command line (prefer `prompt` after `start`)")
     p.add_argument("--timeout", type=int, default=180000, help="ms to wait for the CLI to be up (0: return at once)")
+    p.add_argument("--keep", action="store_true",
+                   help="keep the tab for a day after the CLI exits, to `read` its answer; the agent still ends")
     p.add_argument("args", nargs="*", help="extra CLI flags, after --")
 
     p = sub.add_parser("prompt", help="hand the agent a message and press Enter until it is taken")
@@ -311,6 +320,8 @@ def main():
                 "yolo": bool(a.yolo), "prompt": a.prompt, "timeout": a.timeout, "args": list(a.args) + passthrough}
         if a.remote_control:
             body["remoteControl"] = a.remote_control
+        if a.keep:
+            body["keep"] = True
         return emit(call("/agents/named/start", body))
     if a.cmd == "prompt":
         text = a.text

@@ -90,7 +90,13 @@ export interface GitFacts {
   /** When this was read; the view can say "as of". */
   at: number;
 }
-export type LanternCard = AgentBoard.BoardRow & { facts?: SessionFacts; git?: GitFacts };
+export type LanternCard = AgentBoard.BoardRow & {
+  facts?: SessionFacts;
+  git?: GitFacts;
+  /** A name that is not somebody you can talk to — see `isGone`. Marked here
+   *  so the view folds it the way the readout does: one rule, both screens. */
+  gone?: true;
+};
 
 /** What one tool call was doing, from its input, in a person's words. */
 export function toolWhat(name: string, input: unknown): string {
@@ -170,11 +176,14 @@ async function gitFactsFor(path: string, base: string, now: number): Promise<Git
 }
 
 export async function boardNow(): Promise<LanternCard[]> {
-  const panes = await tmux(["list-panes", "-a", "-F", "#{pane_id}\t#{window_name}\t#{pane_current_path}"])
+  /* A dead pane — the engine keeps one whose command failed — is not a pane
+     somebody can be sent to: left in, a crashed agent's row never folds and
+     its Go button lands on a status line. */
+  const panes = await tmux(["list-panes", "-a", "-F", "#{pane_id}\t#{window_name}\t#{pane_current_path}\t#{pane_dead}"])
     .then((r) => (r.ok ? r.stdout.split("\n") : []).map((l) => {
-      const [paneId = "", name = "", cwd = ""] = l.split("\t");
-      return { paneId, name, cwd };
-    }).filter((x) => x.paneId.startsWith("%")))
+      const [paneId = "", name = "", cwd = "", dead = ""] = l.split("\t");
+      return { paneId, name, cwd, dead };
+    }).filter((x) => x.paneId.startsWith("%") && x.dead !== "1").map(({ dead: _d, ...x }) => x))
     .catch(() => [] as { paneId: string; name: string; cwd: string }[]);
   const runs = Work.runningRuns().map((r) => ({
     title: r.title, worktree: r.worktree, branch: r.branch, startedAt: r.startedAt,
@@ -305,6 +314,9 @@ export async function boardNow(): Promise<LanternCard[]> {
     if (f) r.facts = f;
     const g = r.worktree ? gitBy.get(r.worktree) : undefined;
     if (g) r.git = g;
+    /* The readout collapsed these onto one line from the start; the view went
+       on drawing every one of them as an idle agent. Marked once, here. */
+    if (!r.role && isGone(r, now)) r.gone = true;
   }
   return rows;
 }

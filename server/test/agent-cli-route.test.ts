@@ -32,6 +32,10 @@ let proc: ReturnType<typeof Bun.spawn> | null = null;
 const STUB = `#!/usr/bin/env bash
 # The real one is asked \`--help\` once, to learn whether it takes --name.
 case " $* " in *" --help "*) echo "  -n, --name <name>  session name"; exit 0;; esac
+# A CLI that fails at launch — a missing binary's wrapper, a bad flag.
+[ -e "$AGX_STUB_LOG.die" ] && exit 1
+# A one-shot — \`qwen -p\`, \`opencode run\` — that prints its answer and exits 0.
+[ -e "$AGX_STUB_LOG.oneshot" ] && { printf 'the answer is 42\\n'; exit 0; }
 printf '%s\\n' "$@" > "$AGX_STUB_LOG.argv"
 printf '\\033[2J\\033[H'
 printf 'Welcome to the stub\\n\\n❯ '
@@ -243,6 +247,98 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
     expect(gone.code).toBe(0);
     expect((await cli("schedules")).out.result).toEqual({ schedules: [] });
     expect((await cli("unschedule", String(sched.id))).code, "cancelled once, not twice").toBe(1);
+  }, SLOW);
+
+  test("a CLI that fails at launch leaves no corpse in the agents session", async () => {
+    /*
+     * The engine keeps a pane whose command failed (tmuxconf.ts), and the
+     * window this app opens for a named agent is put back to closing itself
+     * only AFTER it exists. A CLI that fails at once — a bad flag, a wrapper
+     * for a binary that is not there — is dead before that second call, and
+     * setting the option late does not reap it (measured on the lease path,
+     * which checks). It sat in the agents session as a dead window, and
+     * `reconcile` marked the agent ended without ever closing it.
+     */
+    writeFileSync(`${log}.die`, "");
+    try {
+      const { out } = await cli("start", "wdie", "--cwd", wt, "--timeout", "3000");
+      /* Either the launch was seen failing (refused), or the window closed
+         itself a moment later (gone). Never a corpse. */
+      if (out.ok) expect(out.result?.state).toBe("gone");
+      else expect(out.error).toContain("exited");
+      await Bun.sleep(300);
+      const rows = await panes();
+      expect(rows.filter((r) => r.endsWith("\tagents\twdie")), "a dead window was left in the agents session").toEqual([]);
+      expect((await cli("list")).out.result?.agents?.some((a) => a.name === "wdie")).toBe(false);
+    } finally { rmSync(`${log}.die`, { force: true }); }
+  }, SLOW);
+
+  test("--keep: a one-shot that exits 0 leaves its tab to be read, and leaves the list", async () => {
+    /*
+     * The orchestrator opened its one-shots with a bare `tmux new-window
+     * "cli …"`: nothing kept the pane, so a CLI that finished — exit 0 —
+     * took its tab and its answer with it in the same second. `--keep`
+     * runs it through the wrapper every other window this app opens uses:
+     * the answer stays on screen under a line saying the CLI exited.
+     */
+    writeFileSync(`${log}.oneshot`, "");
+    try {
+      const { out } = await cli("start", "wkeep", "--cwd", wt, "--keep", "--timeout", "5000");
+      expect(out.ok, out.error).toBe(true);
+      expect(out.result?.state, "the wait ends when the CLI does").toBe("gone");
+      const paneId = String((out.result?.agent as Record<string, string> | undefined)?.paneId ?? "");
+      for (let i = 0; i < 30 && (await cli("list")).out.result?.agents?.some((a) => a.name === "wkeep"); i++) await Bun.sleep(100);
+      expect((await cli("list")).out.result?.agents?.some((a) => a.name === "wkeep"), "an agent whose CLI has exited is not live").toBe(false);
+      expect((await panes()).some((r) => r.endsWith("\tagents\twkeep")), "the tab is still there").toBe(true);
+      const screen = Bun.spawnSync(["tmux", "-L", SOCKET, ...TMUX_ISOLATED, "capture-pane", "-p", "-t", paneId], { env: { ...process.env, TMUX_TMPDIR: TMUX_TEST_TMPDIR } }).stdout.toString();
+      expect(screen).toContain("the answer is 42");
+      expect(screen).toContain("the CLI exited (0)");
+      /* The name is free again, as for any agent that has ended. */
+      expect((await cli("list", "--all")).out.result?.agents?.find((a) => a.name === "wkeep")?.endedAt).not.toBeNull();
+      /* And the answer is read by name, which is what --keep is for; the
+         agent in the tab is gone, and says so. */
+      const read = await cli("read", "wkeep");
+      expect(read.out.ok, read.out.error).toBe(true);
+      expect(String(read.out.result?.text)).toContain("the answer is 42");
+      expect(read.out.result?.state).toBe("gone");
+      /* Nothing to prompt, and nothing to enlist: the pane holds a sleep. */
+      expect((await cli("prompt", "wkeep", "anything")).code).toBe(1);
+      const enlisted = await cli("enlist", "wkeep2", "--pane", paneId);
+      expect(enlisted.out.ok, "a finished CLI's tab is not an agent to enlist").toBe(false);
+      /* And closed by name once it has been read: otherwise it stays for the
+         wrapper's day, and a seat that keeps every one-shot piles them up. */
+      const stop = await cli("stop", "wkeep");
+      expect(stop.out.ok, stop.out.error).toBe(true);
+      expect((await panes()).some((r) => r.endsWith("\tagents\twkeep")), "the tab is closed").toBe(false);
+      expect((await cli("read", "wkeep")).code, "and nothing is left to read").toBe(1);
+    } finally { rmSync(`${log}.oneshot`, { force: true }); }
+  }, SLOW);
+
+  test("--keep: a CLI that fails at launch is refused, and its kept tab is read by name", async () => {
+    /* The tab stays to say why, but the refusal came before the name was
+       recorded, so the reason could be read only through raw tmux. */
+    writeFileSync(`${log}.die`, "");
+    try {
+      const { out } = await cli("start", "wkdie", "--cwd", wt, "--keep", "--timeout", "3000");
+      expect(out.ok).toBe(false);
+      expect(out.error).toContain("exited");
+      expect(out.error, "the refusal says where the reason is").toContain("read wkdie");
+      const read = await cli("read", "wkdie");
+      expect(read.out.ok, read.out.error).toBe(true);
+      expect(String(read.out.result?.text)).toContain("the CLI exited (1)");
+      expect((await cli("list")).out.result?.agents?.some((a) => a.name === "wkdie"), "never live").toBe(false);
+      expect((await cli("stop", "wkdie")).out.ok).toBe(true);
+      expect((await panes()).some((r) => r.endsWith("\tagents\twkdie"))).toBe(false);
+    } finally { rmSync(`${log}.die`, { force: true }); }
+  }, SLOW);
+
+  test("without --keep the tab goes with the CLI, as a watched agent's always has", async () => {
+    writeFileSync(`${log}.oneshot`, "");
+    try {
+      await cli("start", "wgone", "--cwd", wt, "--timeout", "0");
+      for (let i = 0; i < 30 && (await panes()).some((r) => r.endsWith("\tagents\twgone")); i++) await Bun.sleep(100);
+      expect((await panes()).some((r) => r.endsWith("\tagents\twgone"))).toBe(false);
+    } finally { rmSync(`${log}.oneshot`, { force: true }); }
   }, SLOW);
 
   test("an agent whose CLI exits on its own is gone from the list without anybody stopping it", async () => {

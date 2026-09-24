@@ -108,5 +108,30 @@ export const lanternCacheTtlMs = (): number => cacheTtlMin * 60_000;
  *  not blocked, and is not a number that follows you around the app. */
 export const lanternNeed = (): number => rows?.filter((r) => r.needsYou && r.needsYou.kind !== "input" && r.role !== "lantern").length ?? 0;
 
+/**
+ * The field in the view's order, and what each row is set aside as.
+ *
+ * A row the server marked GONE — no pane on this machine and quiet for hours
+ * (`isGone` in lantern.ts, the same rule the readout collapses on) — is not
+ * an idle agent. The view drew every one of them as one: on the owner's
+ * board, twenty-five cards with five agents alive behind them, the rest names
+ * whose sessions had ended one and two days before without saying `done`.
+ * Set aside here so the fold under Idle holds agents, and the fold under Gone
+ * holds names a person can clear.
+ */
+export function groupLantern(rows: LanternRow[]): { need: LanternRow[]; finished: LanternRow[]; working: LanternRow[]; idle: LanternRow[]; gone: LanternRow[] } {
+  /* Two kinds of "needs you", and only one of them is urgent. A permission
+     or a held gate is an agent that CANNOT go on without you. A turn that
+     ended is an agent that finished and is waiting for whatever you say next
+     — its own group, not a number on the rail. Either outranks everything
+     below, gone included: a wait is never collapsed. */
+  const need = rows.filter((r) => r.needsYou && r.needsYou.kind !== "input");
+  const finished = rows.filter((r) => r.needsYou?.kind === "input");
+  const gone = rows.filter((r) => !r.needsYou && r.gone);
+  const working = rows.filter((r) => !r.needsYou && !r.gone && r.state === "working");
+  const idle = rows.filter((r) => !r.needsYou && !r.gone && r.state === "idle");
+  return { need, finished, working, idle, gone };
+}
+
 /** For tests that render the view with a known board. */
 export function __setLanternRows(next: LanternRow[] | null): void { rows = next; readAt = Date.now(); emit(); }

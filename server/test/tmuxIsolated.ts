@@ -21,3 +21,32 @@
  * Spread before `-L`, because tmux wants its options before the command.
  */
 export const TMUX_ISOLATED = ["-f", "/dev/null"] as const;
+
+/**
+ * `new-session`, repeated until tmux has actually made it.
+ *
+ * A server ends when its last session does, and it finishes ending after the
+ * client that killed it has returned. A `new-session` sent in that gap reaches
+ * a server on its way out and fails — "server exited unexpectedly", or "no
+ * server running" after `kill-server`. Measured with the raw CLI, a re-creation
+ * straight after the kill failed 131 times in 300 after `kill-session` and 67
+ * in 300 after `kill-server`. A suite that ends its session in one test and
+ * makes it again in the next is in that gap every time, and whether it loses
+ * depends on how busy the machine is: green alone, a different test red in each
+ * full run. So the fixture does not assume its own setup worked.
+ *
+ * "duplicate session" is success: an attempt the server did take, answered
+ * after the client had given up on it. Anything else past `tries` throws, so a
+ * flag tmux will never accept is an error and not a two-second wait.
+ */
+export function startSession(argv: string[], env: Record<string, string | undefined>, tries = 100): void {
+  let last = "";
+  for (let i = 0; i < tries; i++) {
+    const r = Bun.spawnSync(argv, { env, stdout: "ignore", stderr: "pipe" });
+    if (r.exitCode === 0) return;
+    last = new TextDecoder().decode(r.stderr).trim();
+    if (last.startsWith("duplicate session")) return;
+    Bun.sleepSync(20);
+  }
+  throw new Error(`${argv.join(" ")} failed ${tries} times: ${last}`);
+}

@@ -285,10 +285,11 @@ export function houseBlock(powers: Power, wakeHours: number, root = ""): string 
   const may = powers === "speak"
     ? "You may not start, stop or prompt any agent. If one is stuck, say so — do not push it."
     : powers === "nudge"
-      ? "You may prompt an agent that is ALREADY running, to unstick it (`agentglass-agent prompt --name <n> \"…\"`). You may not start or stop one."
+      ? "You may prompt an agent that is ALREADY running, to unstick it (`agentglass-agent prompt <name> \"…\"`). You may not start or stop one."
       : [
         "You may prompt an agent that is already running, and start or stop named agents (`agentglass-agent start|prompt|stop`).",
-        `When you OPEN one, its first message is this project's worker brief — the file beside your rules — and nothing else you write replaces it: \`claude --dangerously-skip-permissions "$(cat ${root ? briefPath(root) : "the brief file beside your rules"})"\`, or \`agentglass-agent start <name> --cwd <checkout> --yolo\` and then send it. Every agent gets the same rules, which is what makes their reports comparable.`,
+        `When you OPEN one, its first message is this project's worker brief — the file beside your rules — and nothing else you write replaces it: \`agentglass-agent start <name> --cwd <checkout> --yolo\`, then \`agentglass-agent prompt <name> --file ${root ? briefPath(root) : "<the brief file beside your rules>"}\`. Every agent gets the same rules, which is what makes their reports comparable.`,
+        "Open every agent and every one-shot CLI through `agentglass-agent start` (`--kind` for another CLI), never with a bare `tmux new-window \"cli …\"`: a CLI that exits 0 closes that tab and takes its output with it. Add `--keep` when you will read the answer after it exits.",
         `Ask for the report in one shape and no other: ${REPORT_SHAPE}. A report you have to read twice is a report that cost twice.`,
         "- One message to many: `agentglass-agent broadcast \"…\"` sends to every named agent, or `--to a,b,c` to some. Every name's outcome comes back, so a send that reached four of five is not read as five.",
         "- Their reports arrive in a tray, not in your context. `agentglass-agent inbox` hands you everything unread in one call and marks it read; you are woken when one arrives.",
@@ -433,10 +434,11 @@ export async function openSeat(p: {
   });
   if (!r.ok) {
     revokeSeatTokens(root);
-    const why: Record<string, string> = {
+    const why: Record<AgentOps.StartError, string> = {
       exists: "an agent is already running under the seat's name",
       "no-cli": "that agent CLI is not installed here",
       "no-window": "tmux would not open a window for the seat",
+      died: "the seat's CLI exited as soon as it was launched",
       "bad-name": "the seat's name is not one tmux can carry",
       "yolo-refused": "the seat runs unattended, and skipping permissions is off in Settings",
       "bad-args": "the model must be a plain string",

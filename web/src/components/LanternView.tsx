@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { fmtAgo, since as agoSentence } from "../lib/format.ts";
 import { jumpToPane } from "../lib/paneJump.ts";
-import { subscribeLantern, lanternRows, lanternFailed, lanternWatch, lanternCacheTtlMs, refreshLantern } from "../lib/lanternStore.ts";
+import { subscribeLantern, lanternRows, lanternFailed, lanternWatch, lanternCacheTtlMs, refreshLantern, groupLantern } from "../lib/lanternStore.ts";
 import { askLantern, hasLanternTab } from "../lib/lanternAsk.ts";
 import { subscribeBench } from "../lib/benchStore.ts";
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
@@ -11,7 +11,8 @@ import { ScheduleDialog, ScheduledSection, type AgentSchedule } from "./LanternS
 import { handOff } from "../lib/lanternAsk.ts";
 import { api } from "../lib/api.ts";
 import { ClockIcon, IconLabel } from "../lib/glyphIcons.tsx";
-import { ICON } from "../lib/iconSize.ts";
+import { ICON, MIN_BOX } from "../lib/iconSize.ts";
+import { CloseButton } from "./CloseButton.tsx";
 
 /**
  * THE LANTERN. Who needs you, what every agent is working on, and the way there.
@@ -62,6 +63,9 @@ export interface LanternRow {
   needsYou?: { kind: "permission" | "input" | "gate"; why: string; since: number };
   from: "said" | "seen";
   state: "working" | "waiting" | "idle";
+  /** No pane this machine can see and quiet for hours: a name, not somebody
+   *  to talk to. Marked by the server (`isGone`), folded by the view. */
+  gone?: boolean;
   /** Who this is and what it has done — see SessionFacts on the server. */
   facts?: {
     model?: string; tools: number; errors: number; turns: number; cost: number;
@@ -211,7 +215,7 @@ function HandOff({ session, kinds }: { session: string; kinds: { id: string; tit
   );
 }
 
-export function AgentCard({ r, onJump, quiet, cacheTtlMs, kinds }: { r: LanternRow; onJump?: (paneId: string) => void; quiet?: boolean; cacheTtlMs?: number; kinds?: { id: string; title: string }[] }) {
+export function AgentCard({ r, onJump, onClear, quiet, cacheTtlMs, kinds }: { r: LanternRow; onJump?: (paneId: string) => void; onClear?: (name: string) => void; quiet?: boolean; cacheTtlMs?: number; kinds?: { id: string; title: string }[] }) {
   const w = r.needsYou;
   const cache = cacheTtlMs ? cacheLeft(r, cacheTtlMs) : null;
   const tone = toneOf(r);
@@ -239,6 +243,13 @@ export function AgentCard({ r, onJump, quiet, cacheTtlMs, kinds }: { r: LanternR
               {!w && <Pill tone={tone} title={r.state === "working" ? "something ran in the last ten minutes" : "nothing has run for ten minutes"}>{r.state}</Pill>}
               {model && <Pill tone="var(--text3)" title={f?.model}>{model}</Pill>}
               {since ? <span className="text-[10.5px] tabular-nums" style={{ color: "var(--text4)" }} title={new Date(since).toLocaleString()}>{fmtAgo(since)}</span> : null}
+              {/* A line a person can take off the board, whoever posted it.
+                  Only a said line: a seen row is a hook's sighting and leaves
+                  with its pane. Never on a card stopped on you. */}
+              {onClear && r.from === "said" && !w && (
+                <CloseButton size={ICON.xs} hit={MIN_BOX} onClick={(e) => { e.stopPropagation(); onClear(r.name); }}
+                  style={{ color: "var(--text4)" }} title="Clear this line from the board, whoever posted it" />
+              )}
             </span>
           </div>
           <div className="flex items-center gap-1.5 min-w-0">
@@ -359,6 +370,7 @@ export function LanternView({ active }: { active: boolean }) {
   const watch = useSyncExternalStore((l) => subscribeLantern(l, false), lanternWatch, lanternWatch);
   const cacheTtlMs = useSyncExternalStore((l) => subscribeLantern(l, false), lanternCacheTtlMs, lanternCacheTtlMs);
   const [showIdle, setShowIdle] = useState(false);
+  const [showGone, setShowGone] = useState(false);
   const [asking, setAsking] = useState<string | null>(null);
   /* Scheduled starts: read with the view, refreshed after a change. */
   const [schedules, setSchedules] = useState<AgentSchedule[]>([]);
@@ -382,6 +394,9 @@ export function LanternView({ active }: { active: boolean }) {
   }, [active, readSchedules]);
   const cancelSchedule = useCallback((id: string) => { void api.agentUnschedule(id).then(readSchedules).catch(() => {}); }, [readSchedules]);
   const jump = useCallback((paneId: string) => { jumpToPane(paneId); }, []);
+  /* A person taking a line off the board; the field is re-read so the card
+     goes with it rather than lingering until the next poll. */
+  const clear = useCallback((name: string) => { void api.agentForget(name).then(() => refreshLantern()).catch(() => {}); }, []);
   /* The chat, on the floating bench — over this view, and from any other.
      See lanternAsk.ts. */
   const ask = useCallback(async () => {
@@ -402,10 +417,7 @@ export function LanternView({ active }: { active: boolean }) {
      for whatever you say next — amber, its own group, not a number on the
      rail: every session that ever answers you would otherwise be red until
      you typed again. */
-  const need = rows?.filter((r) => r.needsYou && r.needsYou.kind !== "input") ?? [];
-  const finished = rows?.filter((r) => r.needsYou?.kind === "input") ?? [];
-  const working = rows?.filter((r) => !r.needsYou && r.state === "working") ?? [];
-  const idle = rows?.filter((r) => !r.needsYou && r.state === "idle") ?? [];
+  const { need, finished, working, idle, gone } = groupLantern(rows ?? []);
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -447,7 +459,7 @@ export function LanternView({ active }: { active: boolean }) {
         )}
         {rows !== null && rows.length > 0 && (
           <span className="text-[10.5px]" style={{ color: "var(--text4)" }}>
-            {working.length} working · {idle.length} idle
+            {working.length} working · {idle.length} idle{gone.length ? ` · ${gone.length} gone` : ""}
           </span>
         )}
         {/* The watch's one line: that it looks, how often, and what the last
@@ -514,7 +526,26 @@ export function LanternView({ active }: { active: boolean }) {
             </button>
             {showIdle && (
               <div style={{ ...GRID, gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}>
-                {idle.map((r) => <AgentCard key={r.paneId ?? r.name} r={r} onJump={jump} quiet cacheTtlMs={cacheTtlMs} />)}
+                {idle.map((r) => <AgentCard key={r.paneId ?? r.name} r={r} onJump={jump} onClear={clear} quiet cacheTtlMs={cacheTtlMs} />)}
+              </div>
+            )}
+          </section>
+        )}
+
+        {gone.length > 0 && (
+          <section className="flex flex-col gap-2">
+            {/* Names, not agents: no pane on this machine and quiet for hours.
+                Folded like the idle ones, and each card can be cleared — this
+                is the fold that used to be twenty idle cards. */}
+            <button type="button" onClick={() => setShowGone((v) => !v)} aria-expanded={showGone}
+              className="agx-btn text-[9.5px] uppercase tracking-[0.14em] inline-flex items-center gap-1.5 self-start" style={{ color: "var(--text4)" }}
+              title="No pane on this machine and quiet for hours: a name, not somebody to talk to. Clear the ones you are done with.">
+              <span aria-hidden style={{ display: "inline-block", transform: showGone ? "none" : "rotate(-90deg)" }}>▾</span>
+              Gone · {gone.length}
+            </button>
+            {showGone && (
+              <div style={{ ...GRID, gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}>
+                {gone.map((r) => <AgentCard key={r.paneId ?? r.name} r={r} onJump={jump} onClear={clear} quiet cacheTtlMs={cacheTtlMs} />)}
               </div>
             )}
           </section>

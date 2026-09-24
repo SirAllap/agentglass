@@ -95,8 +95,12 @@ describe("the window a period covers", () => {
       `  day: periodWindow("day", now), month: periodWindow("month", now) }));`,
     ].join("\n");
     for (const [tz, localDate] of [["Pacific/Kiritimati", 16], ["Pacific/Niue", 15]] as const) {
+      /* NODE_ENV=test is what keeps the child's database a scratch file: the
+         import reaches db.ts through budget.ts, and without it a stripped
+         environment resolves to the developer's real history — where a
+         migration under test once rebuilt a table the installed app needs. */
       const r = Bun.spawnSync(["bun", "-e", script], {
-        env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", TZ: tz },
+        env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", TZ: tz, NODE_ENV: "test" },
       });
       const out = JSON.parse(r.stdout.toString().trim() || "{}");
       // The child really is in that zone — otherwise this test proves nothing.

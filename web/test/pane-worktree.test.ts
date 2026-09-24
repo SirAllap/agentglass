@@ -46,3 +46,31 @@ describe("what a pane keeps believing", () => {
     expect(nextSeen(undefined, null, "s-1")).toBeNull();
   });
 });
+
+describe("a read that did not happen", () => {
+  test("is not news: the memory stays, whoever is in the pane", () => {
+    /* The server was busy or offline. Forgetting on that dropped the chip to
+       the panel's own checkout on every hiccup — and for a pane whose agent
+       has no hooked session, nothing else could keep it. */
+    expect(nextSeen(seen, null, "s-1", false)).toEqual(seen);
+    expect(nextSeen({ root: seen.root, session: "" }, null, "", false)).toEqual({ root: seen.root, session: "" });
+    expect(nextSeen(undefined, null, "", false)).toBeNull();
+    /* The pane's own buffer still answered: that is a detection, and it wins. */
+    expect(nextSeen(undefined, "/home/dev/code/orbit-2001", "", false)).toEqual({ root: "/home/dev/code/orbit-2001", session: "" });
+  });
+});
+
+describe("a worktree the list has not caught up with", () => {
+  const cands = [{ root: "/home/dev/code/orbit" }, { root: "/home/dev/code/orbit-1042" }];
+  test("is the directory the agent stands in that no candidate names — asked about once", async () => {
+    const { unlistedWorktree } = await import("../src/lib/paneWorktree.ts");
+    const asked = new Map<string, number>();
+    expect(unlistedWorktree(["/home/dev/code/orbit-2001"], cands, asked, 1000)).toBe("/home/dev/code/orbit-2001");
+    expect(unlistedWorktree(["/home/dev/code/orbit-2001"], cands, asked, 5000), "not again on the next poll").toBeNull();
+    /* The server keeps its own list for some seconds, so the first re-read can
+       still be the old one: asked again after a minute, not never. */
+    expect(unlistedWorktree(["/home/dev/code/orbit-2001"], cands, asked, 1000 + 61_000), "asked again after a minute").toBe("/home/dev/code/orbit-2001");
+    expect(unlistedWorktree(["/home/dev/code/orbit-1042/src"], cands, asked, 1000), "inside a candidate is known").toBeNull();
+    expect(unlistedWorktree([], cands, asked, 1000)).toBeNull();
+  });
+});

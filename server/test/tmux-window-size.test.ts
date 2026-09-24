@@ -19,6 +19,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { runAction } from "../src/tmuxctl.ts";
 import { TEST_TERM } from "./tmuxTerm.ts";
+import { startSession } from "./tmuxIsolated.ts";
 
 const SOCK = `/tmp/agx-wsize-${process.pid}.sock`;
 const T = ["tmux", "-f", "/dev/null", "-S", SOCK];
@@ -88,7 +89,8 @@ const settleRows = (ok: (rows: number) => boolean) => until(() => ok(geom().pane
 
 beforeEach(() => {
   tmux("kill-server");
-  tmux("new-session", "-d", "-s", "probe", "-x", "200", "-y", "50", "sleep 300");
+  // Through `startSession`: the server killed a line above may still be going.
+  startSession([...T, "new-session", "-d", "-s", "probe", "-x", "200", "-y", "50", "sleep 300"], process.env);
   tmux("set-option", "-w", "-t", "probe", "window-size", "largest");
 });
 

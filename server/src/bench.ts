@@ -148,8 +148,27 @@ export async function benchLive(rootIn: unknown): Promise<BenchLive> {
   // perfectly good answer to this question.
   if (!r.ok) return { ok: true, slots: [] };
   const names = new Set(r.stdout.split("\n").map((s) => s.trim()).filter(Boolean));
+  /*
+   * A slot whose command has died is not live, and is closed here so the
+   * next open starts the command again. The engine keeps a pane whose command
+   * failed (tmuxconf.ts); the bench attaches with `new-session -A`, which
+   * would reattach to that corpse and report it live for as long as it stood.
+   */
+  const dead = new Set<string>();
+  const panes = await tmux(["list-panes", "-a", "-F", "#{session_name}\t#{pane_dead}"]);
+  const alive = new Set<string>();
+  for (const line of panes.ok ? panes.stdout.split("\n") : []) {
+    const [session = "", isDead = ""] = line.split("\t");
+    if (!session) continue;
+    if (isDead === "1") dead.add(session); else alive.add(session);
+  }
   const slots: number[] = [];
-  for (let n = 1; n <= 99; n++) if (names.has(benchSessionName(at.root, n))) slots.push(n);
+  for (let n = 1; n <= 99; n++) {
+    const name = benchSessionName(at.root, n);
+    if (!names.has(name)) continue;
+    if (dead.has(name) && !alive.has(name)) { await tmux(["kill-session", "-t", `=${name}`]); continue; }
+    slots.push(n);
+  }
   return { ok: true, slots };
 }
 

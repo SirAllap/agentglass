@@ -109,3 +109,14 @@ describe("one rule for both screens", () => {
     expect(isGone({ saidAt: NOW - 40 * 60 * 60_000, needsYou: { kind: "input" } }, NOW)).toBe(false);
   });
 });
+
+describe("the view is told the same thing", () => {
+  test("the board marks a gone row, so the view folds what the readout collapses", async () => {
+    /* `isGone` had one reader and needed two: the readout collapsed these and
+       the view went on drawing all of them as idle agents. The mark is set
+       once, on the board both screens read. */
+    const src = await Bun.file(new URL("../src/lantern.ts", import.meta.url)).text();
+    expect(src).toContain("if (!r.role && isGone(r, now)) r.gone = true;");
+    expect(src).toContain("gone?: true;");
+  });
+});
