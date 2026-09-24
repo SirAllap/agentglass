@@ -2389,12 +2389,36 @@ class _McpHttp(BaseHTTPRequestHandler):
             return _loopback(name)
         return name in (bound.lower(), self.server.typed_host.lower())
 
-    def _reject(self, code, text):
+    def _reject(self, code, text, body_read=False):
         # A check that fails before the body is read leaves unread bytes that
-        # the next keep-alive request would parse as its request line. Closing
-        # is the honest answer — the client opens a fresh socket.
+        # the next keep-alive request would parse as its request line, and
+        # closing with them unread is not safe either: a client that reuses a
+        # pooled socket can send its next request down one this server just
+        # closed, and one still uploading loses the answer to the reset. bun's
+        # fetch did both on the CI runner — "socket closed unexpectedly" where
+        # a 401 or a 431 was due. So the body is consumed first: one within the
+        # cap is read and dropped and the connection stays usable; one over it
+        # is drained in chunks, never kept, and the connection closes. Past
+        # four times the cap nothing is read and the close is the answer.
+        # `body_read` is a refusal of a body already consumed: nothing is left.
+        try:
+            n = 0 if body_read else int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = -1
+        try:
+            if 0 <= n <= _HTTP_BODY_MAX:
+                self.rfile.read(n)
+                return self._reply(code, {"error": text})
+            if _HTTP_BODY_MAX < n <= 4 * _HTTP_BODY_MAX:
+                while n > 0:
+                    got = len(self.rfile.read(min(n, 65536)))
+                    if not got:
+                        break
+                    n -= got
+        except OSError:
+            pass
         self.close_connection = True
-        return self._reply(code, {"error": text}, {"Connection": "close"})
+        self._reply(code, {"error": text}, {"Connection": "close"})
 
     def do_GET(self):
         # No server-to-client notification stream: this server never pushes
@@ -2454,10 +2478,10 @@ class _McpHttp(BaseHTTPRequestHandler):
         try:
             msg = json.loads(body or b"{}")
         except json.JSONDecodeError:
-            return self._reject(400, "body is not valid JSON")
+            return self._reject(400, "body is not valid JSON", body_read=True)
         batch = msg if isinstance(msg, list) else [msg]
         if len(batch) > _HTTP_BATCH_MAX:
-            return self._reject(400, f"batch over {_HTTP_BATCH_MAX} messages")
+            return self._reject(400, f"batch over {_HTTP_BATCH_MAX} messages", body_read=True)
         replies = []
         session = None
         for m in batch:

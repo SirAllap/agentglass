@@ -32,14 +32,18 @@ const where = () => out(["list-clients", "-F", "#{session_name}"]);
 let client: ReturnType<typeof Bun.spawn> | null = null;
 
 beforeAll(async () => {
-  sh(["new-session", "-d", "-s", "alfa", "-c", "/tmp"]);
-  sh(["new-window", "-t", "alfa", "-c", "/tmp", "-n", "w2"]);
-  sh(["new-session", "-d", "-s", "beta", "-c", "/tmp"]);
-  sh(["new-session", "-d", "-s", "gamma", "-c", "/tmp"]);
+  sh(["new-session", "-d", "-s", "alfa", "-c", "/tmp", "sleep", "600"]);
+  sh(["new-window", "-t", "alfa", "-c", "/tmp", "-n", "w2", "sleep", "600"]);
+  sh(["new-session", "-d", "-s", "beta", "-c", "/tmp", "sleep", "600"]);
+  sh(["new-session", "-d", "-s", "gamma", "-c", "/tmp", "sleep", "600"]);
   // A real attached client: `readFrame` resolves through `list-clients`, so
   // without one there is no frame at all and every assertion below is vacuous.
   /* TERM, because a test that builds its own pty IS a terminal emulator and
      tmux asks what kind. The house lint checks for exactly this. */
+  /* And every window runs `sleep`, not a shell: `script` answers the end of
+     its stdin (/dev/null) by typing Ctrl-D into the client, which hands it to
+     the active pane. A shell there logs out and takes its window with it, and
+     the count below read 1 where it made 2 — on the CI runner, not every run. */
   client = Bun.spawn(["script", "-qfc", `tmux ${sock.join(" ")} attach -t alfa`, "/dev/null"],
     { stdout: "ignore", stderr: "ignore", env: { ...process.env, TERM: TEST_TERM } });
   for (let i = 0; i < 40 && !tty(); i++) await Bun.sleep(50);

@@ -49,6 +49,11 @@ function attach(session: string) {
   // TERM is set explicitly: a CI runner has none (or `dumb`), and tmux then
   // refuses to attach — "missing or unsuitable terminal" — so the desk client
   // never appeared and every assertion below read an empty client list.
+  // The sessions run `sleep`, not a shell: `script` answers the end of its
+  // stdin (/dev/null) by typing Ctrl-D into the client, which hands it to the
+  // pane. A shell there logs out and takes the session with it; whether a
+  // dotfile in HOME happened to stop that is not something to depend on, and
+  // the tests' own scratch HOME has none.
   Bun.spawn(["script", "-qc", `tmux ${SOCK.join(" ")} attach -t ${session}`, "/dev/null"],
     { env: { ...process.env, TERM: "xterm-256color" }, stdout: "ignore", stderr: "ignore" });
 }
@@ -69,8 +74,8 @@ afterAll(() => { tmux("kill-server"); });
 describe("a scratch popup on the same server", () => {
   test("it is a second client, and the app can tell which one is the desk", async () => {
     await killServer();
-    tmux("new-session", "-d", "-s", "desk");
-    tmux("new-session", "-d", "-s", "scratch");
+    tmux("new-session", "-d", "-s", "desk", "sleep", "600");
+    tmux("new-session", "-d", "-s", "scratch", "sleep", "600");
     attach("desk");
     await until(1);
     const desk = clients()[0]?.tty;
@@ -120,8 +125,8 @@ describe("a scratch popup on the same server", () => {
 describe("opening a tab while the scratch is up", () => {
   test("the popup goes, the tab is created, and the desk stays the desk", async () => {
     await killServer();
-    tmux("new-session", "-d", "-s", "desk");
-    tmux("new-session", "-d", "-s", "scratch");
+    tmux("new-session", "-d", "-s", "desk", "sleep", "600");
+    tmux("new-session", "-d", "-s", "scratch", "sleep", "600");
     attach("desk");
     await until(1);
     expect(clients()).toHaveLength(1);
