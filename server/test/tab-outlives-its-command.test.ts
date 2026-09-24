@@ -119,8 +119,9 @@ describe("a tab on the engine", () => {
   test("a plain shell that exits with a status closes as it always did", async () => {
     /* An interactive shell exits with the status of its last command, so
        `false` then Ctrl-D would otherwise leave every Terminal tab a corpse
-       (measured). A pane born with no command is the shell's own tab, and
-       the engine's pane-died hook closes it. */
+       (measured). A pane born with no command is the shell's own tab: the
+       engine turns the option off on it at birth, and its pane-died hook
+       closes it if it was kept anyway. */
     await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "shell"]);
     await exitShell(`=${S}:shell`, /^(bash|fish|zsh|sh|dash|ksh)$/);
     expect(await until(async () => !(await windowsOf(S)).includes("shell")), "the shell's own tab is not a program that failed").toBe(true);
