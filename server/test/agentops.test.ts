@@ -5,7 +5,7 @@
  * flag has bought what Settings refused.
  */
 import { describe, expect, test } from "bun:test";
-import { keyNamed, stateOfScreen, startAgent, validName, refusedArg, NAME_RE } from "../src/agentops.ts";
+import { keyNamed, stateOfScreen, startAgent, validName, refusedArg, namedAgentArgv, NAME_RE } from "../src/agentops.ts";
 import { SPELLINGS } from "../src/agents/launch.ts";
 
 const READY = [
@@ -105,6 +105,92 @@ describe("start refuses before it reaches the engine", () => {
     }
   });
 
+  test("the Gemini CLI's own spellings of yolo: the shorthand, and the mode as a separate word", () => {
+    /* `gemini -y` and `gemini --approval-mode yolo` both start it with every
+       prompt answered yes, and the Qwen Code CLI kept both from it. The word
+       `yolo` as its own argument does not start with a dash, so the word
+       pattern never saw it; only the flag name can refuse it. */
+    for (const args of [["-y"], ["--approval-mode", "yolo"], ["--approval-mode", "auto_edit"]]) {
+      expect(refusedArg(args), JSON.stringify(args)).toBe(args[0]!);
+    }
+  });
+
+  test("the Qwen Code and Gemini name for extra directories, not only its alias", () => {
+    /* `--add-dir` is refused, and in both CLIs it is only the alias of
+       `--include-directories`, which reaches the same option under its own
+       name and passed. */
+    for (const args of [["--include-directories", "/"], ["--include-directories=/"]]) {
+      expect(refusedArg(args), JSON.stringify(args)).toBe(args[0]!);
+    }
+  });
+
+  test("a refused short flag grouped with others, or with its value glued on", () => {
+    /* The gate compared the whole arg with its set, so `-y` was caught and
+       `-cy` — continue and yolo, to a CLI whose parser groups short options —
+       was not. Codex's `-a` takes its value glued the same way. */
+    for (const args of [["-cy"], ["-yc"], ["-anever"], ["-ca", "never"], ["-cy=true"]]) {
+      expect(refusedArg(args), JSON.stringify(args)).toBe(args[0]!);
+    }
+    for (const args of [["-c"], ["-p"], ["-m", "opus"], ["-cp"]]) {
+      expect(refusedArg(args), JSON.stringify(args)).toBeNull();
+    }
+  });
+
+  test("a Codex config override that loosens approvals or the sandbox, in every spelling", () => {
+    /* `codex -c key=value` overrides any key of config.toml, so
+       `-c approval_policy=never` is `-a never` under another name, and the value
+       rides as its own word, which the gate skipped as a positional. Also its
+       short `-s` for `--sandbox`, and `--approve-for-me`. Measured against
+       codex-cli 0.155.1's --help. */
+    const refused: [string[], string][] = [
+      [["-c", "approval_policy=never"], "-c approval_policy=never"],
+      [["--config", "sandbox_mode=danger-full-access"], "--config sandbox_mode=danger-full-access"],
+      [["--config=approval_policy=never"], "--config=approval_policy=never"],
+      [["-c=sandbox_mode=danger-full-access"], "-c=sandbox_mode=danger-full-access"],
+      [["-capproval_policy=never"], "-capproval_policy=never"],
+      [["-c", 'approval_policy="never"'], '-c approval_policy="never"'],
+      [["-c", '"approval_policy"="never"'], '-c "approval_policy"="never"'],
+      [["-c", 'sandbox_mode = "danger-full-access"'], '-c sandbox_mode = "danger-full-access"'],
+      [["-c", "'sandbox_mode=danger-full-access'"], "-c 'sandbox_mode=danger-full-access'"],
+      [["-c", "sandbox_workspace_write.network_access=true"], "-c sandbox_workspace_write.network_access=true"],
+      [["-c", 'sandbox_permissions=["disk-full-read-access"]'], '-c sandbox_permissions=["disk-full-read-access"]'],
+      [["-c", 'projects."/srv/acme".trust_level="trusted"'], '-c projects."/srv/acme".trust_level="trusted"'],
+      [["-c", 'projects={"/srv/acme"={trust_level="trusted"}}'], '-c projects={"/srv/acme"={trust_level="trusted"}}'],
+      [["-c", "profile=loose"], "-c profile=loose"],
+      [["-c", 'profiles.loose.approval_policy="never"'], '-c profiles.loose.approval_policy="never"'],
+      [["-c", "approvals_reviewer=auto"], "-c approvals_reviewer=auto"],
+      [["-c", 'default_permissions="full"'], '-c default_permissions="full"'],
+      [["-c", 'mcp_servers.tools.command="/tmp/tools"'], '-c mcp_servers.tools.command="/tmp/tools"'],
+      [["-s", "danger-full-access"], "-s"],
+      [["--approve-for-me"], "--approve-for-me"],
+    ];
+    for (const [args, named] of refused) expect(refusedArg(["--model", "x", ...args]), JSON.stringify(args)).toBe(named);
+    for (const args of [["-c", 'model="o3"'], ["--config", "shell_environment_policy.inherit=all"], ["-c", 'model_reasoning_effort="high"'], ["-c"], ["-c", 'instructions="ask for approval first"']]) {
+      expect(refusedArg(args), JSON.stringify(args)).toBeNull();
+    }
+  });
+
+  test("Codex's profile, for Codex only: Claude's -p is print mode and stays", async () => {
+    /* `codex -p loose` layers $CODEX_HOME/loose.config.toml over the config,
+       and a profile can set approval_policy=never. The same letter is
+       Claude's print mode, so this is refused by kind, not by name. */
+    for (const args of [["-p", "loose"], ["--profile", "loose"], ["--profile=loose"], ["-ploose"]]) {
+      expect(refusedArg(args, "codex"), JSON.stringify(args)).toBe(args[0]!);
+      expect(await startAgent({ ...base, yoloAllowed: false, name: "w", kind: "codex", args })).toEqual({ ok: false, error: "arg-refused", flag: args[0]! });
+    }
+    for (const kind of ["claude", undefined]) expect(refusedArg(["-p"], kind), String(kind)).toBeNull();
+  });
+
+  test("OpenCode's --auto, whose help text says dangerous but whose name does not", async () => {
+    /* `opencode --auto` approves every permission that is not explicitly
+       denied. The word pattern reads the flag, not its help, so it passed with
+       chatBypass off and OpenCode started with its prompts answered. */
+    for (const args of [["--auto"], ["--auto=true"]]) {
+      expect(refusedArg(args), JSON.stringify(args)).toBe(args[0]!);
+      expect(await startAgent({ ...base, yoloAllowed: false, name: "w", kind: "opencode", args })).toEqual({ ok: false, error: "arg-refused", flag: args[0]! });
+    }
+  });
+
   test("the bypass flag of EVERY kind launch.ts knows is in the gate, so a new vendor cannot arrive without it", () => {
     for (const [kind, s] of Object.entries(SPELLINGS)) {
       expect(refusedArg([s.bypass]), `${kind}'s ${s.bypass} passed`).toBe(s.bypass);
@@ -116,5 +202,25 @@ describe("start refuses before it reaches the engine", () => {
        is on flags, not on prose. A refusal that fired on the word inside a
        positional would make "review the dangerous-goods form" unstartable. */
     expect(refusedArg(["--model", "opus", "--verbose", "review the dangerous-goods form", "yolo-mode.md"])).toBeNull();
+  });
+});
+
+describe("the command line a named agent starts with", () => {
+  test("pass-through flags go before the prompt, not between a prompt flag and its value", () => {
+    /* OpenCode, Gemini and Qwen Code take the prompt on a flag. The flags were
+       spliced in before the last element, which for them is the prompt's
+       VALUE: `opencode --prompt --model x "go"` hands `--model` to `--prompt`
+       and the prompt to nobody. */
+    expect(namedAgentArgv("/usr/bin/opencode", "opencode", { name: "w", prompt: "go", args: ["--model", "x"] }, false))
+      .toEqual(["/usr/bin/opencode", "--model", "x", "--prompt", "go"]);
+    expect(namedAgentArgv("/usr/bin/qwen", "qwen", { name: "w", prompt: "go", args: ["--model", "x"] }, false))
+      .toEqual(["/usr/bin/qwen", "--model", "x", "--prompt-interactive", "go"]);
+  });
+
+  test("and Claude's stays as it was: flags after the name, the prompt last", () => {
+    expect(namedAgentArgv("/usr/bin/claude", "claude", { name: "w", prompt: "go", remoteControl: "w", args: ["--model", "opus"] }, true))
+      .toEqual(["/usr/bin/claude", "--name", "w", "--remote-control", "w", "--model", "opus", "go"]);
+    expect(namedAgentArgv("/usr/bin/claude", "claude", { name: "w", args: ["--model", "opus"] }, false))
+      .toEqual(["/usr/bin/claude", "--model", "opus"]);
   });
 });

@@ -33,6 +33,7 @@ import { installedNotes, type NotesTarget } from "../lib/whatsNew.ts";
 import { autostartEnabled, setAutostart, isFullscreen, toggleFullscreen, IS_DESKTOP, IS_MAC_DESKTOP, HAS_BROWSER } from "../lib/desktop.ts";
 import { overlayOpen } from "../lib/overlays.ts";
 import { Select } from "./Select.tsx";
+import { WORKER_ROLES } from "../../../shared/workerRoles.ts";
 import { ALARM_VOICES, NOTIFY_VOICES, findVoice, playVoice, type Voice } from "../lib/sounds.ts";
 import { alarmVoiceId, setAlarmVoice } from "../lib/alarm.ts";
 import { SEARCH_ENGINE_LABELS, type SearchEngine } from "../lib/browserUrl.ts";
@@ -508,7 +509,7 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
      every pane and every chat runs on, with a binary, a config and a restore of
      its own — three settings deep is not a row in a list of "is it installed". */
   { id: "tmux", label: "tmux", group: "Agents & work", kw: "tmux panes engine pane prefix key binary bundled config override restore reboot layout scrollback resume socket status bar chat warm cli claude how new chats run", what: "What a pane runs on — the tmux binary, its config and prefix — and how a new chat picks one.", icon: PanesIcon },
-  { id: "hooks", label: "Agents", group: "Agents & work", kw: "agents hooks claude code install setup lantern reminder status what doing needs you ask sessions working on interval orchestrator seat wake floor chair post", what: "Wire Claude Code into this app, what the Lantern may ask of a session, and what else is installed.", icon: PlugIcon },
+  { id: "hooks", label: "Agents", group: "Agents & work", kw: "agents hooks claude code install setup lantern reminder status what doing needs you ask sessions working on interval orchestrator seat wake floor chair post worker roles scout builder verifier lock model opencode qwen", what: "Wire Claude Code into this app, what the Lantern may ask of a session, what else is installed, and which CLI each worker role runs on.", icon: PlugIcon },
   /* Filed beside Agents rather than under Your data, and the two readings are
      both defensible: it is a store of what you did, and it is a thing that
      watches agents work. It is here because the question people arrive with is
@@ -2096,6 +2097,71 @@ function LanternSection({ open }: { open: boolean }) {
         hint="Each card counts it down from the session's last turn: a turn sent while it is warm is the cheap one. Five minutes on most plans; an hour on some."
         options={[{ v: "5", label: "5 min" }, { v: "60", label: "1 hour" }]}
         onPick={(m) => save({ cacheTtlMinutes: Number(m) })} />
+      {note && <div className="text-[11px] px-1" style={{ color: "var(--text3)" }}>{note}</div>}
+    </Section>
+  );
+}
+
+/**
+ * WORKER ROLES — which CLI and model each context-diet role runs on.
+ *
+ * One row per role: the CLI (only the ones with a lock, since a role on any
+ * other would be refused at start) and a model handed to it as it is. A CLI
+ * that is offered but not installed says so rather than disappearing, so a
+ * choice made on another machine still reads.
+ */
+function WorkerRolesSection({ open }: { open: boolean }) {
+  type Choice = { provider: string; model: string };
+  const [roles, setRoles] = useState<Record<string, Choice>>({});
+  const [clis, setClis] = useState<{ id: string; title: string; installed: boolean }[]>([]);
+  const [models, setModels] = useState<Record<string, string>>({});
+  const [note, setNote] = useState<string | null>(null);
+  const take = (r: { roles?: Record<string, Choice> }) => {
+    if (!r.roles) return;
+    setRoles(r.roles);
+    setModels(Object.fromEntries(Object.entries(r.roles).map(([k, v]) => [k, v.model])));
+  };
+  useEffect(() => {
+    if (!open) return;
+    void api.workerRoles().then((r) => { take(r); setClis(r.providers ?? []); })
+      .catch(() => setNote("Could not reach the server — the worker roles are unavailable."));
+  }, [open]);
+  const save = (role: string, c: Choice) => {
+    setNote(null);
+    void api.workerRoleSave(role, c.provider, c.model)
+      .then((r) => { if (!r.ok) setNote(r.error ?? "Could not save."); else { take(r); setNote("Saved. Applies to the next worker started in that role."); } })
+      .catch(() => setNote("Could not save."));
+  };
+  const field = { color: "var(--text)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" };
+  return (
+    <Section title="Worker roles"
+      desc="Which CLI and model a worker started in a role runs on (agentglass-agent start --role). Every role is locked against push, commit, merge and the network clients, in a layer the project's own config cannot loosen (OpenCode's is checked against the project's config at each start, and refused if loosened); a CLI with no such lock is not offered.">
+      {WORKER_ROLES.map((r) => {
+        const c = roles[r.id];
+        if (!c) return null;
+        return (
+          <SettingRow key={r.id} label={r.title}
+            hint={`${r.what}${r.readOnly ? " File edits are refused too." : ""} Default: ${r.default.provider}, ${r.default.model}.`}
+            control={<span className="flex items-center gap-1.5">
+              {/* One width for the three, so the column reads as a column
+                  rather than three controls hung from their right edge. */}
+              <Select value={c.provider} align="right"
+                className="rounded-lg px-2 py-1 text-[11px] outline-none w-[128px] justify-between"
+                options={clis.map((p) => ({ value: p.id, label: p.installed ? p.title : `${p.title} (not installed)` }))}
+                onChange={(v) => save(r.id, { provider: v, model: "" })} />
+              <input
+                value={models[r.id] ?? ""}
+                onChange={(e) => setModels((m) => ({ ...m, [r.id]: e.target.value }))}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); save(r.id, { provider: c.provider, model: models[r.id] ?? "" }); } }}
+                onBlur={() => { if ((models[r.id] ?? "") !== c.model) save(r.id, { provider: c.provider, model: models[r.id] ?? "" }); }}
+                placeholder="default model"
+                aria-label={`${r.title} model`}
+                spellCheck={false}
+                className="text-[12px] t-mono px-2 py-1 rounded outline-none bg-transparent w-[150px]"
+                style={field} />
+            </span>} />
+        );
+      })}
       {note && <div className="text-[11px] px-1" style={{ color: "var(--text3)" }}>{note}</div>}
     </Section>
   );
@@ -4473,7 +4539,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                   </Section>
                   )}
 
-                  {pane === "hooks" && <><HooksPane open={open} /><LanternSection open={open} /><AgentsSection open={open} /></>}
+                  {pane === "hooks" && <><HooksPane open={open} /><LanternSection open={open} /><AgentsSection open={open} /><WorkerRolesSection open={open} /></>}
 
                   {pane === "tmux" && (
                   <>

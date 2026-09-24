@@ -7,6 +7,8 @@
 // overrides the file without editing it.
 
 import type { Budget, GateRule } from "../../shared/types.ts";
+import { agentProvider } from "../../shared/agentKinds.ts";
+import { WORKER_ROLES, MODEL_RE, workerRole, type RoleChoice, type RoleId } from "../../shared/workerRoles.ts";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve, dirname, sep, delimiter } from "node:path";
@@ -155,6 +157,9 @@ interface Config {
    *  — 5 on most plans, 60 on some. The Lantern's cards count it down, since
    *  it decides whether the next turn is cheap now or cheap in five minutes. */
   cacheTtlMinutes?: number;
+  /** Which CLI and model each worker role runs on — shared/workerRoles.ts.
+   *  A role left out, or one naming a CLI with no lock, is its default. */
+  workerRoles?: Partial<Record<RoleId, RoleChoice>>;
 }
 
 function load(path: string): Config {
@@ -1154,4 +1159,33 @@ export function writeLanternSettings(fields: { lanternNudge?: boolean; lanternNu
     out[key] = Math.min(LANTERN_NUDGE_MAX_MIN, Math.max(LANTERN_NUDGE_MIN_MIN, Math.round(n)));
   }
   return mergeConfig(out, "lantern settings");
+}
+
+/** A choice a role may hold: a CLI this app has a lock for, and a model a CLI
+ *  can be handed as one argument. */
+function validRoleChoice(c: unknown): RoleChoice | null {
+  if (!c || typeof c !== "object") return null;
+  const { provider: id, model } = c as { provider?: unknown; model?: unknown };
+  if (typeof id !== "string" || !agentProvider(id)?.lock) return null;
+  const m = typeof model === "string" ? model.trim() : "";
+  if (m && !MODEL_RE.test(m)) return null;
+  return { provider: id, model: m };
+}
+
+/** Every role's provider and model, defaults filled in. A hand-edited entry
+ *  that does not validate reads as the default rather than as whatever it
+ *  says: it decides which binary runs. */
+export function workerRoles(): Record<RoleId, RoleChoice> {
+  const saved = config().workerRoles ?? {};
+  const out = {} as Record<RoleId, RoleChoice>;
+  for (const r of WORKER_ROLES) out[r.id] = validRoleChoice((saved as Record<string, unknown>)[r.id]) ?? { ...r.default };
+  return out;
+}
+
+export function writeWorkerRole(role: unknown, choice: unknown): { ok: boolean; persisted: boolean; error?: string } {
+  const r = workerRole(role);
+  if (!r) return { ok: false, persisted: false, error: "no such role" };
+  const c = validRoleChoice(choice);
+  if (!c) return { ok: false, persisted: false, error: "that CLI has no lock this app can apply, or the model is not one word" };
+  return mergeConfig({ workerRoles: { ...(config().workerRoles ?? {}), [r.id]: c } }, "worker roles");
 }

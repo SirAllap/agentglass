@@ -17,7 +17,7 @@ function agent(over: Partial<AgentCard> = {}): AgentCard {
   return {
     key: "k", source_app: "app", session_id: "s", model_name: null,
     status: "waiting", outcome: "unclear", lastAction: "", lastType: "",
-    events: 0, tools: 0, errors: 0, toolErrors: 0, cost: 0, tokens: 0,
+    events: 0, tools: 0, errors: 0, toolErrors: 0, cost: 0, tokens: 0, turnCost: 0,
     lastSeen: 0, lastErrorTs: 0, spark: new Array(20).fill(0),
     subagents: 0, subagentTypes: [], needBecause: "", cwd: null, project: null,
     runningTool: null, runningSince: 0, evidenceAt: null, evidenceKind: "none",

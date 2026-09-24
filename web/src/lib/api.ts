@@ -1,6 +1,6 @@
 import type { UiAction, Field, NoteStatus, PluginPanel, PluginPrNotes } from "./pluginTypes.ts";
 import type { ImportedPlace } from "./desktop.ts";
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue } from "../../../shared/types.ts";
 import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember } from "../../../shared/providers.ts";
 import { DEFAULT_NOTIFY_PREFS, type NotifyPrefs } from "../../../shared/notifyPrefs.ts";
 
@@ -994,6 +994,9 @@ const realApi = {
   newProject: (name: string, parent: string) => post<{ ok: boolean; path?: string; error?: string }>("/projects/new", { name, parent }),
   // --- live git panel (lazygit-style) ---
   gitCapability: () => get<GitCapability>("/git/capability"),
+  /** A second agentglass.db the server found at startup and does not use,
+   *  or null. See DbNoticeBanner. */
+  dbNotice: () => get<DbNotice | null>("/db/notice"),
   /** Every outside tool the app shells out to, and what this machine has.
    *  `force` is the Recheck button: it re-probes inside the server's cache
    *  window, which is the only case where a stale answer is the wrong one. */
@@ -1347,6 +1350,12 @@ const realApi = {
       "/agents/named/broadcast", { text, names }),
   seatWake: () => get<{ ok: boolean; hours: number }>("/seat/wake"),
   seatWakeSave: (hours: number) => post<{ ok: boolean; error?: string }>("/seat/wake", { hours }),
+  /** Which CLI and model each worker role runs on (shared/workerRoles.ts). */
+  workerRoles: () => get<{ ok: boolean; error?: string; roles: Record<string, { provider: string; model: string }>;
+    providers?: { id: string; title: string; installed: boolean }[] }>("/agents/roles"),
+  workerRoleSave: (role: string, provider: string, model: string) =>
+    post<{ ok: boolean; error?: string; roles: Record<string, { provider: string; model: string }>;
+    providers?: { id: string; title: string; installed: boolean }[] }>("/agents/roles", { role, provider, model }),
   /** Whether hooked sessions get asked what they are working on, and how
    *  often — the Lantern's one setting. */
   lanternSettings: () => get<{ ok: boolean; nudge: boolean; minutes: number; watch: boolean; watchMinutes: number; cacheTtlMinutes: number; min: number; max: number }>("/lantern/settings"),
@@ -1771,8 +1780,9 @@ const realApi = {
     post<{ ok: boolean; error?: string }>("/plugins/enable", { name }),
   pluginDisable: (name: string) =>
     post<{ ok: boolean }>("/plugins/disable", { name }),
-  pluginRemove: (name: string) =>
-    post<{ ok: boolean }>("/plugins/remove", { name }),
+  /** Its settings are kept for a reinstall unless `dropSettings`. */
+  pluginRemove: (name: string, dropSettings = false) =>
+    post<{ ok: boolean }>("/plugins/remove", { name, dropSettings }),
   /** What every enabled plugin has drawn in the panels it declared. */
   pluginPanels: (plugin?: string, panel?: string) => get<{ ok: boolean; panels: PluginPanel[] }>(
     plugin && panel ? `/plugins/panels?plugin=${encodeURIComponent(plugin)}&panel=${encodeURIComponent(panel)}` : "/plugins/panels"),
@@ -2170,6 +2180,7 @@ const demoApi: typeof realApi = {
   cloneProject: (_url: string, _parent: string) => D({ ok: false, error: "unavailable in the demo" }),
   newProject: (_name: string, _parent: string) => D({ ok: false, error: "unavailable in the demo" }),
   gitCapability: () => D({ available: true } as GitCapability),
+  dbNotice: () => D(null as DbNotice | null),
   // The demo runs no local processes, so it has nothing to probe. The catalog
   // is still the honest thing to show: it is what the real app would check.
   dependencies: (_force = false) => D({
@@ -2331,7 +2342,7 @@ const demoApi: typeof realApi = {
   pluginInstall: (_source: string) => D({ ok: false, error: "not available in the demo" } as { ok: false; error: string }),
   pluginEnable: (_name: string) => D({ ok: false, error: "not available in the demo" }),
   pluginDisable: (_name: string) => D({ ok: false }),
-  pluginRemove: (_name: string) => D({ ok: false }),
+  pluginRemove: (_name: string, _dropSettings?: boolean) => D({ ok: false }),
   pluginPanels: (_plugin?: string, _panel?: string) => D({ ok: true, panels: [] as PluginPanel[] }),
   pluginAction: (_p: string, _panel: string | undefined, _a: UiAction, _v?: Record<string, unknown>) => D({ ok: false, error: "not available in the demo" }),
   notifyPrefs: () => D({ ok: true, prefs: DEFAULT_NOTIFY_PREFS }),
@@ -2512,6 +2523,12 @@ const demoApi: typeof realApi = {
   agentsBroadcast: (_t: string, _n?: string[]) => D({ ok: false, error: "not available in the demo" }),
   seatWake: () => D({ ok: true, hours: 4 }),
   seatWakeSave: (_h: number) => D({ ok: false, error: "not available in the demo" }),
+  workerRoles: () => D({
+    ok: true,
+    roles: { scout: { provider: "opencode", model: "" }, builder: { provider: "claude", model: "sonnet" }, verifier: { provider: "claude", model: "haiku" } },
+    providers: [{ id: "claude", title: "Claude Code", installed: true }, { id: "opencode", title: "OpenCode", installed: true }, { id: "qwen", title: "Qwen Code", installed: false }],
+  }),
+  workerRoleSave: (_r: string, _p: string, _m: string) => D({ ok: false, error: "not available in the demo", roles: {} }),
   lanternSettings: () => D({ ok: true, nudge: true, minutes: 20, watch: true, watchMinutes: 15, cacheTtlMinutes: 5, min: 5, max: 180 }),
   lanternSettingsSave: (_f: object) => D({ ok: false, error: "not available in the demo" }),
   lanternTicket: (_c?: string) => D({ ok: false, error: "not available in the demo" }),

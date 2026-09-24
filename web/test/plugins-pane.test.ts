@@ -10,6 +10,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { pinnedByMarket } from "../src/components/PluginsPane.tsx";
 
 const pane = readFileSync(new URL("../src/components/PluginsPane.tsx", import.meta.url), "utf8");
 /** The declaration a person approves moved out of the card into its own
@@ -98,5 +99,46 @@ describe("a card that grows does not drag its neighbour with it", () => {
     const grid = pane.slice(pane.indexOf('gridTemplateColumns: "repeat(auto-fill, minmax(360px'));
     expect(pane).toContain("grid gap-3 items-start");
     expect(grid.slice(0, 200)).toContain("minmax(360px, 1fr)");
+  });
+});
+
+describe("a pinned install says how it updates", () => {
+  const SHA = "0123456789abcdef0123456789abcdef01234567";
+  const code = pane.split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+
+  test("a market install at a commit is pinned; anything else is not", () => {
+    const at = (ref: string | null) => ({ kind: "marketplace" as const, marketplace: { url: "https://example.com/p.json", ref: null, resolvedCommit: ref }, plugin: { url: "https://github.com/acme/orbit", ref } });
+    expect(pinnedByMarket(at(SHA))).toBe(SHA);
+    expect(pinnedByMarket(at("main"))).toBeNull();
+    expect(pinnedByMarket(at(null))).toBeNull();
+    expect(pinnedByMarket({ kind: "git", url: "https://github.com/acme/orbit", ref: SHA })).toBeNull();
+    expect(pinnedByMarket({ kind: "local-path", path: "/x" })).toBeNull();
+  });
+
+  test("its card offers no Update that would fetch the same commit, and says where the update is", () => {
+    expect(code).toContain('const updatable = plugin.source.kind !== "local-path" && !pinned;');
+    expect(pane).toMatch(/Pinned to .* by the market/);
+    expect(pane).toContain("with an Update button when it lists a newer version");
+  });
+});
+
+describe("removing a plugin keeps what was typed into its settings", () => {
+  test("the remove confirmation offers to drop the settings, and does not by default", () => {
+    // Uninstalling to reinstall a fresh copy used to reset a settings page a
+    // person had filled in. The server now keeps them unless told otherwise;
+    // this is the one place a person tells it otherwise.
+    const remove = pane.slice(pane.indexOf("const remove = async () => {"));
+    expect(remove.slice(0, remove.indexOf("};"))).toContain("api.pluginRemove(plugin.name, dropSettings)");
+    expect(pane).toContain("const [dropSettings, setDropSettings] = useState(false);");
+    expect(pane).toMatch(/\{confirmRemove && hasSettings && \(/);
+    expect(pane).toContain("Also remove its settings");
+  });
+
+  test("the confirmation says the settings stay behind when the box is left clear", () => {
+    // After a Remove there is no card left, so nothing on screen shows that
+    // plugins.json still holds what was typed — possibly a token. The default
+    // is only not a surprise if the dialog says so before the click.
+    const label = pane.slice(pane.indexOf("{confirmRemove && hasSettings && ("));
+    expect(label.slice(0, label.indexOf("</label>"))).toContain("kept on this machine for a reinstall");
   });
 });

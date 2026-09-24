@@ -43,6 +43,13 @@ jobs:
       contains(github.event.issue.labels.*.name, 'plugin-submission')
       && (github.event.action != 'labeled' || github.event.label.name == 'plugin-submission')
     runs-on: ubuntu-latest
+    # Every git here reads a stranger's repository: it asks nobody for a
+    # password, and it fetches nothing through LFS, whose host a plugin's own
+    # .lfsconfig picks. The app installs the same way, so the pointers are
+    # what both hash.
+    env:
+      GIT_TERMINAL_PROMPT: "0"
+      GIT_LFS_SKIP_SMUDGE: "1"
     permissions:
       contents: read
     steps:
@@ -76,7 +83,9 @@ jobs:
             exit 0
           fi
           echo "true" > report/reachable
-          git -C /tmp/plugin rev-parse --short HEAD > report/sha
+          # The whole commit, because it is what the approval pins: a short
+          # one names a prefix nothing can fetch by.
+          git -C /tmp/plugin rev-parse HEAD > report/sha
           # Neither of these runs a line of what was cloned: one reads a JSON
           # manifest, the other reads text files and matches patterns.
           python3 bin/agentglass-plugin validate /tmp/plugin > report/validate.json || true
@@ -89,7 +98,7 @@ jobs:
       - name: Write what was found, without saying it anywhere yet
         run: |
           python3 - <<'PY' > report/comment.md
-          import json, os
+          import json, os, re
           def read(name, default=""):
               try:
                   return open(f"report/{name}").read().strip()
@@ -121,7 +130,9 @@ jobs:
               for a, b in (("`", "'"), ("<!--", "< !--"), ("-->", "-- >"), ("\r", " "), ("\n", " ")):
                   t = t.replace(a, b)
               return t
-          repo, sha = q(read("repo"), 120), q(read("sha"), 40)
+          repo = q(read("repo"), 120)
+          # A commit or nothing: this goes into the marker the approval reads.
+          sha = read("sha") if re.fullmatch(r"[0-9a-f]{40}", read("sha")) else ""
           reachable = read("reachable") == "true"
           v = load("validate.json", {"ok": False, "error": "the check did not run"})
           b = load("baseline.json", {"outcome": "unreadable", "findings": [], "capabilities": []})
@@ -131,7 +142,7 @@ jobs:
           elif not reachable:
               out.append(f"❌ `{repo}` could not be cloned — is it public?")
           else:
-              out.append(f"✅ Public and cloned: [{repo}](https://github.com/{repo}) at `{sha}`")
+              out.append(f"✅ Public and cloned: [{repo}](https://github.com/{repo}) at `{sha[:12]}`")
               if v.get("ok"):
                   draws = ", ".join(q(d, 40) for d in (v.get("draws") or [])) or "nothing"
                   out.append(f"✅ `plugin.json` is one agentglass accepts — **{q(v['name'], 60)}** by {q(v['publisher'])}, "
@@ -192,10 +203,13 @@ jobs:
               "on their own machine.",
           ]
           print("\n".join(out))
-          marker = {"repository": repo, "commit": sha, "manifest": bool(v.get("ok")),
+          # `ready` is the verdict the labels below are set from, carried in
+          # the marker so the approval lists only from a report that passed.
+          ready = bool(v.get("ok") and reachable)
+          marker = {"repository": repo, "commit": sha, "manifest": bool(v.get("ok")), "ready": ready,
                     "baseline": b.get("outcome"), "findings": len(b.get("findings") or [])}
           print(f"\n<!-- agentglass-plugin-submission-result {json.dumps(marker, separators=(',', ':'))} -->")
-          open("report/verdict", "w").write("READY" if (v.get("ok") and reachable) else "NOT-READY")
+          open("report/verdict", "w").write("READY" if ready else "NOT-READY")
           PY
 
       - uses: actions/upload-artifact@v7
@@ -258,22 +272,90 @@ jobs:
               > report/comment.md
             echo "NOT-READY" > report/verdict
           fi
-          # ONE comment per submission, rewritten — not a thread of them.
+          # ONE comment per commit the check validates.
           #
           # Two runs answer every submission (the template's label fires a
           # second `issues` event) and every edit of the issue answers again,
-          # so a new comment each time buries the repository it is about under
-          # its own history. The marker at the top of the body is what finds
-          # the one already there.
-          mine=$(gh api "repos/$REPO/issues/$ISSUE/comments" --paginate \
-            --jq '[.[] | select(.user.type == "Bot") | select(.body | startswith("<!-- agentglass-plugin-submission -->"))] | last | .id // empty')
+          # so a run about the commit the last report is about rewrites that
+          # report rather than burying the repository under its own history.
+          # A run about ANOTHER commit is a new comment. Rewritten in place, a
+          # report changed under a maintainer's eyes: the submitter pushed,
+          # the check validated the new commit into the same comment and put
+          # `ready for listing` back, and nothing on the issue said anything
+          # had moved. Now the new commit arrives as a comment of its own, and
+          # the one above it still says what the old commit was.
+          #
+          # And a report about another commit or another repository than the
+          # one before it is HELD. The maintainer who read the report above it
+          # and labels now would be approving what they never read, and the
+          # new comment alone did not stop that: the check put `ready for
+          # listing` back, and the approval listed the new commit. A held
+          # report takes `ready for listing` and `approved for listing` off
+          # the issue before it is posted and puts neither back, however it
+          # came out; a person reads it and applies `ready for listing` again.
+          # It stays held when the same commit is checked again. The first
+          # report on an issue is not held, and a check that read nothing is
+          # about nothing: it is not held, and it is not what the next report
+          # is compared with.
+          comments=$(mktemp)
+          gh api "repos/$REPO/issues/$ISSUE/comments" --paginate \
+            --jq '.[] | {id, login: .user.login, type: .user.type, body} | @json' > "$comments"
+          decision=$(COMMENTS="$comments" NEXT=report/comment.md python3 - <<'PY'
+          import json, os, re
+          MARK = re.compile(r"<!-- agentglass-plugin-submission-result (\{[^\n]*?\}) -->")
+          def about(body):
+              """The repository and commit a report is about, or None for one that read nothing."""
+              found = MARK.findall(body or "")
+              if len(found) != 1:
+                  return None
+              try:
+                  r = json.loads(found[0])
+              except json.JSONDecodeError:
+                  return None
+              return (str(r.get("repository", "")).casefold(), str(r.get("commit", "")))
+          rows = [json.loads(l) for l in open(os.environ["COMMENTS"]) if l.strip()]
+          # This workflow's own comments only: another bot's comment is not
+          # one this token may rewrite, and a person's is not a report at all.
+          reports = [c for c in rows
+                     if c.get("login") == "github-actions[bot]" and c.get("type") == "Bot"
+                     and str(c.get("body", "")).startswith("<!-- agentglass-plugin-submission -->")]
+          HELD = "<!-- agentglass-plugin-submission-held -->"
+          nxt = about(open(os.environ["NEXT"]).read())
+          # Held against the last report that was about something: a check
+          # that read nothing in between changes nothing about what was read.
+          last = next((r for r in reversed(reports) if about(r.get("body")) is not None), None)
+          if nxt is None or last is None:
+              held = False
+          elif about(last.get("body")) == nxt:
+              held = HELD in str(last.get("body", ""))
+          else:
+              held = True
+          rewrite = reports[-1]["id"] if reports and about(reports[-1].get("body")) == nxt else "-"
+          print(rewrite, "held" if held else "clear")
+          PY
+          )
+          read -r mine hold <<< "$decision"
+          [ "$mine" != "-" ] || mine=""
+          if [ "$hold" = held ]; then
+            printf '%s\n' "" "---" \
+              "**This report is about another commit or repository than the report before it**, so it does not put \`ready for listing\` back by itself, and an approval given before it no longer stands. A maintainer reads it, applies \`ready for listing\` again, and then \`approved for listing\`." \
+              "<!-- agentglass-plugin-submission-held -->" >> report/comment.md
+          fi
+          # Off before the report is up, and not quietly: a held report posted
+          # beside a `ready for listing` that stayed is the thing this closes,
+          # so if the labels cannot be taken off, nothing is posted.
+          if [ "$hold" = held ] && [ -z "$mine" ]; then
+            gh issue edit "$ISSUE" --repo "$REPO" --add-label "changes needed" \
+              --remove-label "ready for listing" --remove-label "approved for listing" \
+              || { echo "::error::could not take the labels off the issue; the report about the new commit is not posted"; exit 1; }
+          fi
           if [ -n "$mine" ]; then
             gh api -X PATCH "repos/$REPO/issues/comments/$mine" -F body=@report/comment.md >/dev/null
           else
             gh issue comment "$ISSUE" --repo "$REPO" --body-file report/comment.md
           fi
-          if [ "$(cat report/verdict 2>/dev/null)" = "READY" ]; then
-            gh issue edit "$ISSUE" --repo "$REPO" --add-label "ready for listing" --remove-label "changes needed" || true
-          else
+          if [ "$(cat report/verdict 2>/dev/null)" != "READY" ]; then
             gh issue edit "$ISSUE" --repo "$REPO" --add-label "changes needed" --remove-label "ready for listing" || true
+          elif [ "$hold" != held ]; then
+            gh issue edit "$ISSUE" --repo "$REPO" --add-label "ready for listing" --remove-label "changes needed" || true
           fi

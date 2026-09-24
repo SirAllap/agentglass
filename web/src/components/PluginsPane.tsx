@@ -118,6 +118,13 @@ function AddPluginCard({ onInstalled, open, setOpen, prefill }: {
   );
 }
 
+/** The commit a market install is pinned to, or null for anything else.
+ *  Such an install updates only by installing the version the market lists;
+ *  re-fetching its own source fetches the same commit again. */
+export function pinnedByMarket(source: InstallSource): string | null {
+  return source.kind === "marketplace" && source.plugin.ref && /^[0-9a-f]{40}$/.test(source.plugin.ref) ? source.plugin.ref : null;
+}
+
 /** The installed plugin that came from this git URL, if any. A trailing slash
  *  or a `.git` is the same repository to git and a different string here, so
  *  they are taken off both sides before comparing — a card that offers to
@@ -318,7 +325,7 @@ export function PluginsPane({ open, focus }: {
       {/* The same 24px every settings card keeps from the next one. The grid
           sat directly on the card below it, with nothing between them. */}
       <div className="h-6" aria-hidden />
-      <Market installed={(url) => !!installedFrom(url, plugins)} onInstalled={load} />
+      <Market installed={(url) => installedFrom(url, plugins)?.source ?? null} onInstalled={load} />
     </div>
   );
 }
@@ -332,6 +339,7 @@ function PluginCard({ plugin, masterOn, onChanged, onSettings }: {
   const [updating, setUpdating] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [dropSettings, setDropSettings] = useState(false);
 
   // The one fact the whole trust model rests on: is what is on disk right
   // now the thing a human last looked at, or has it started asking for
@@ -348,8 +356,11 @@ function PluginCard({ plugin, masterOn, onChanged, onSettings }: {
   // `enabled` can be true with `running` false for one tick after a crash.
   const running = plugin.running;
   // Only a git-backed source has an upstream to re-fetch — see
-  // server/src/plugins.ts, updatePlugin.
-  const updatable = plugin.source.kind !== "local-path";
+  // server/src/plugins.ts, updatePlugin. A market install pinned to a commit
+  // has one, and re-fetching it gets the same commit: its update is the
+  // market's, offered there when the listing moves on.
+  const pinned = pinnedByMarket(plugin.source);
+  const updatable = plugin.source.kind !== "local-path" && !pinned;
 
   const { ask, dialog } = useDialogs();
   const setEnabled = async (next: boolean) => {
@@ -383,9 +394,10 @@ function PluginCard({ plugin, masterOn, onChanged, onSettings }: {
 
   const remove = async () => {
     setBusy(true);
-    await api.pluginRemove(plugin.name);
+    await api.pluginRemove(plugin.name, dropSettings);
     setBusy(false);
     setConfirmRemove(false);
+    setDropSettings(false);
     onChanged();
   };
 
@@ -451,6 +463,12 @@ function PluginCard({ plugin, masterOn, onChanged, onSettings }: {
       <div className="text-[11px] t-dim mt-1.5 truncate" title={formatSource(plugin.source)}>
         From <span className="t-mono">{formatSource(plugin.source)}</span>
       </div>
+      {pinned && (
+        <div className="text-[11px] t-dim mt-1">
+          Pinned to <span className="t-mono" title={pinned}>{pinned.slice(0, 7)}</span> by the market. It updates by
+          installing the version the market lists: the plugin shows up there with an Update button when it lists a newer version.
+        </div>
+      )}
 
       {/* The re-consent case, drawn so it cannot be mistaken for an ordinary
           disabled card: its own colour, its own sentence, above the fold that
@@ -484,7 +502,15 @@ function PluginCard({ plugin, masterOn, onChanged, onSettings }: {
 
       {updateError && <Alert tone="error">{updateError}</Alert>}
 
-      <div className="mt-auto pt-1.5 flex items-center justify-between">
+      {/* Kept by default: what was typed into the settings page belongs to
+          the person, and a reinstall picks it back up. */}
+      {confirmRemove && hasSettings && (
+        <label className="mt-auto pt-1.5 flex items-center gap-2 self-end text-[11px] cursor-pointer select-none" style={{ color: "var(--text2)" }}>
+          <input type="checkbox" checked={dropSettings} onChange={(e) => setDropSettings(e.target.checked)} disabled={busy} />
+          <span>Also remove its settings <span className="t-dim">— otherwise they are kept on this machine for a reinstall</span></span>
+        </label>
+      )}
+      <div className={`${confirmRemove && hasSettings ? "" : "mt-auto "}pt-1.5 flex items-center justify-between`}>
         <span className="text-[10.5px] t-dim">installed {fmtAgo(plugin.installedAt)}</span>
         {confirmRemove ? (
           <span className="flex items-center gap-1.5">
@@ -493,7 +519,7 @@ function PluginCard({ plugin, masterOn, onChanged, onSettings }: {
               style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 44%, transparent)", opacity: busy ? 0.5 : 1 }}>
               {busy ? "Removing…" : "Remove"}
             </button>
-            <button onClick={() => setConfirmRemove(false)} disabled={busy}
+            <button onClick={() => { setConfirmRemove(false); setDropSettings(false); }} disabled={busy}
               className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80"
               style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
               Keep it

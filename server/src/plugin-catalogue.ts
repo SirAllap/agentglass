@@ -12,6 +12,11 @@ import { guardedFetch, type GuardedFetchOptions } from "./net.ts";
 export interface CataloguePlugin {
   id: string;
   source: { kind: "git"; url: string; ref: string | null };
+  /** The content hash of the tree at `source.ref`, by the walk the install
+   *  does. Present, the install refuses anything that hashes otherwise: the
+   *  entry then names bytes, not a repository its author can keep pushing
+   *  to. This project's catalogue writes one with every listing. */
+  sha256?: string;
   description: string;
   categories: string[];
   /** What the card says when there is one. A catalogue that carries none of
@@ -56,7 +61,10 @@ const MAX_CATEGORIES = 20;
 function validateCataloguePlugin(raw: unknown): CataloguePlugin | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const p = raw as Record<string, unknown>;
-  if (typeof p.id !== "string" || !p.id.trim() || p.id.length > 120) return null;
+  // Exactly as written, not trimmed into shape: ids are compared as they
+  // stand everywhere else, so "local-review\n" trimmed here was a second
+  // local-review card under whoever listed it.
+  if (typeof p.id !== "string" || !p.id.trim() || p.id !== p.id.trim() || p.id.length > 120) return null;
   const src = p.source;
   if (!src || typeof src !== "object" || (src as Record<string, unknown>).kind !== "git") return null;
   const url = (src as Record<string, unknown>).url;
@@ -64,6 +72,10 @@ function validateCataloguePlugin(raw: unknown): CataloguePlugin | null {
   const ref = (src as Record<string, unknown>).ref ?? null;
   if (pluginRefError(ref) !== null) return null;
   if (typeof p.description !== "string" || !p.description.trim() || p.description.length > MAX_TEXT) return null;
+  // Malformed is dropped, not ignored: ignoring it would install the entry
+  // with no hash to hold it to, which is the unpinned install it asked not
+  // to be.
+  if (p.sha256 !== undefined && (typeof p.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(p.sha256))) return null;
   const categories = Array.isArray(p.categories)
     ? p.categories.filter((c) => typeof c === "string" && c.trim()).slice(0, MAX_CATEGORIES).map((c) => String(c).trim())
     : [];
@@ -73,8 +85,9 @@ function validateCataloguePlugin(raw: unknown): CataloguePlugin | null {
     ? p.draws.filter((d) => typeof d === "string" && d.trim()).slice(0, 8).map((d) => String(d).trim().slice(0, 40))
     : undefined;
   return {
-    id: p.id.trim(),
+    id: p.id,
     source: { kind: "git", url: (url as string).trim(), ref: ref === null ? null : (ref as string).trim() },
+    ...(typeof p.sha256 === "string" ? { sha256: p.sha256 } : {}),
     description: p.description.trim().slice(0, MAX_TEXT),
     categories,
     ...(short(p.title, 80) ? { title: short(p.title, 80) } : {}),

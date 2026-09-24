@@ -47,6 +47,16 @@ describe.if(HAVE_TMUX)("a session made on a server that is still going down", ()
     }
   });
 
+  // A session that is already there before the first attempt is the last
+  // test's, with its windows and options, and a fixture built on it fails
+  // later on an assert that has nothing to do with the cause.
+  test("and refuses a session the last test left behind", () => {
+    run("kill-server");
+    startSession([...T, "new-session", "-d", "-s", "fixture", "sleep", "300"], env);
+    expect(() => startSession([...T, "new-session", "-d", "-s", "fixture", "sleep", "300"], env))
+      .toThrow(/duplicate session/);
+  });
+
   test("and says so when tmux will never make it, rather than spinning", () => {
     expect(() => startSession([...T, "new-session", "-d", "-s", "fixture", "--no-such-flag"], env, 3))
       .toThrow(/new-session/);

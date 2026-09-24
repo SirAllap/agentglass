@@ -72,7 +72,12 @@ nothing is coerced into a wider shape than what was declared.
 The folder itself is refused before the manifest is read when it holds more
 than 2000 files, a file over 10 MB, or more than 50 MB in total, and when any
 symlink in it resolves outside the folder — an install is a copy, and a copy
-that follows a link out is a copy of something else. A local install takes an
+that follows a link out is a copy of something else. A link is also refused
+when it is absolute, or climbs above the folder on its way back in: the folder
+is checked where it was fetched and installed somewhere else. A link that stays
+inside is kept as a link. Files a plugin keeps in Git LFS install as their
+pointers: an install never fetches through LFS, whose host the repository's
+own `.lfsconfig` names, and never stops to ask for a password. A local install takes an
 absolute path; a relative one is refused rather than resolved against whatever
 directory the server happens to be in.
 
@@ -120,8 +125,10 @@ whether to enable the plugin at all; a plugin cannot obtain `full` by writing
 2. **Review** shows what the manifest declares: publisher, description, the
    entrypoint command, the scope asked for. What was reviewed is recorded as a
    fingerprint over the scope, the presence of an executable entrypoint and a
-   content hash of **every file** in the folder (`.git` excluded) — not the name,
-   and not the manifest alone.
+   content hash of **every file and every link** in the folder (`.git`
+   excluded; a link by where it points, a file by its bytes and whether it
+   may be run, read from git's index in a checkout so Windows hashes it the
+   same) — not the name, and not the manifest alone.
 3. **Enable** is a per-plugin switch under a master switch. Enabling mints the
    token and starts the process; disabling stops it and revokes the token.
    Turning the master switch off stops every plugin.
@@ -165,8 +172,9 @@ exactly that, never as an empty list.
 |---|---|
 | `name` | A heading: 1-60 printable characters, no control characters. Not a plugin name — this one never becomes a path |
 | `owner` | 1–200 characters; shown, not verified |
-| `plugins[].id` | 1–120 characters; the handle an install-from-catalogue names |
-| `plugins[].source` | `{ "kind": "git", "url": "https://…", "ref": null \| "<branch, tag or commit>" }`; a missing `ref` installs the default branch |
+| `plugins[].id` | the handle an install-from-catalogue names, and the folder it installs into — so it follows the plugin-name rule (1–60 letters, digits, `.`, `_`, `-`, no leading dot) and must equal the `name` in the manifest at that source, or the install is refused |
+| `plugins[].source` | `{ "kind": "git", "url": "https://…", "ref": null \| "<branch, tag or commit>" }`; a missing `ref` installs the default branch, and a full 40-character commit is fetched by id and checked to be that commit |
+| `plugins[].sha256` | optional, 64 lowercase hex: the content hash of the tree at `ref` (`agentglass-plugin hash <folder>` prints it, over a checkout made with `core.autocrlf=false`, which is how the app checks out on every platform). Present, the install refuses a tree that hashes to anything else; malformed, the entry is dropped. This project's catalogue carries one on every listing |
 | `plugins[].description` | 1–500 characters |
 | `plugins[].categories` | optional list of short strings, at most 20 |
 | `plugins[].title` | optional, ≤80; the card's heading when there is one, otherwise the id |
@@ -301,7 +309,8 @@ has no Reply, and offers Resolve, Dismiss, Reopen and Copy. The person's choice
 outranks the plugin's: a note they resolved stays resolved when the plugin sends
 it again, and the plugin hears the change as an event, so its next pass can take
 it into account. Removing a plugin removes its notes; disabling it keeps them
-readable.
+readable. Removing it keeps what was chosen on its settings page, so a reinstall
+comes back configured; the remove dialog (or `--drop-settings`) clears them too.
 
 A worked plugin that uses all four is
 [local-review](https://github.com/SirAllap/agentglass-local-review): it reviews
@@ -318,6 +327,7 @@ keeps the findings in the pull request view.
     agentglass-plugin list --json
     agentglass-plugin enable <name> --approve
     agentglass-plugin disable | update | remove <name>
+    agentglass-plugin remove <name> --drop-settings  # its settings go too
     agentglass-plugin settings <name>               # what it holds
     agentglass-plugin settings <name> style=security
 
@@ -391,9 +401,9 @@ The machinery, because the shape of it is the security argument:
 |---|---|---|
 | The issue | The form asks for the repository, a category, what it costs, and a checklist | — |
 | `read` | Clones it shallow, validates the manifest, scans the source for a short list of patterns, writes a report | `contents: read` and nothing else, a checkout that keeps no credentials, and no write anywhere |
-| `say` | Re-reads the live issue, then posts the report and sets `ready for listing` or `changes needed` | `issues: write`, never looks at the submitted code |
-| `approved for listing` | A maintainer's label. Re-checks that the actor still has write access and the issue still qualifies, clones and validates **again**, and opens a pull request adding the entry | `contents: write` |
-| The merge | A person reads the diff and merges. The site and the app read the file | — |
+| `say` | Re-reads the live issue, then posts the report and sets `ready for listing` or `changes needed`. A run about the commit the last report names rewrites that report; a run about another commit or another repository posts a new one, so a push between two checks shows on the issue, and that report is held: it takes `ready for listing` and `approved for listing` off before it is posted and never puts `ready for listing` back, so a maintainer reads it and applies `ready for listing` again | `issues: write`, never looks at the submitted code |
+| `approved for listing` | A maintainer's label. Re-checks that the actor still has write access and the issue still qualifies, fetches the exact commit the latest submission check reported on — refusing if the issue does not carry `ready for listing`, if that check did not pass, if it is held and no person has applied `ready for listing` since it was posted, if the repository has moved since, or if the report changed after the label — validates and scans it **again**, and opens a pull request adding the entry pinned to that commit and the content hash of its tree. Refuses an id already listed from another repository, and the project's own name as a stranger's publisher | `contents: read` and `issues: write`; the branch is pushed and the pull request opened with a GitHub App token minted for the run (contents and pull requests, no bypass), and no check is reported by this job |
+| The merge | CI's `catalogue` job re-derives the entry from the pull request itself — one entry, the commit is on a branch or tag of the repository it names (not only a fork's), the id, draws, `minApp` and title are what the manifest at that commit makes them, a fresh clone hashes to the pinned hash — and the pull request merges on that and `build`. The App only opens it and arms auto-merge, and arms it only when `main`'s rules make `catalogue` a required check; otherwise the pull request waits for a maintainer and the issue says so. The site and the app read the file | — |
 
 The split between the first two is the point: the job that touches a
 stranger's repository has nothing in its environment worth stealing and no
@@ -477,8 +487,8 @@ const TOKEN = process.env.AGENTGLASS_READ_TOKEN ?? "";
 const ws = new WebSocket(`${URL_BASE.replace(/^http/, "ws")}/stream?token=${encodeURIComponent(TOKEN)}`);
 ws.addEventListener("message", (e) => {
   const frame = JSON.parse(String(e.data));
-  if (frame.type === "event" && frame.event?.hook_event_type === "Stop") {
-    console.log(new Date().toISOString(), "turn finished in", frame.event.session_id);
+  if (frame.type === "event" && frame.data?.hook_event_type === "Stop") {
+    console.log(new Date().toISOString(), "turn finished in", frame.data.session_id);
   }
 });
 ```

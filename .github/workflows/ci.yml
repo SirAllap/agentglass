@@ -17,6 +17,10 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.what.outputs.code }}
+      # Whether the pull request touches the catalogue, and whether that is
+      # ALL it touches. The `catalogue` job below reads both.
+      catalogue: ${{ steps.what.outputs.catalogue }}
+      catalogue_only: ${{ steps.what.outputs.catalogue_only }}
     steps:
       - id: what
         env:
@@ -24,7 +28,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "code=true" >> "$GITHUB_OUTPUT"; exit 0
+            { echo "code=true"; echo "catalogue=false"; echo "catalogue_only=false"; } >> "$GITHUB_OUTPUT"; exit 0
           fi
           # The API, not a checkout: the question is which files the pull
           # request touches, and cloning the repository to answer it is the
@@ -34,6 +38,16 @@ jobs:
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
             echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+          if printf '%s\n' "$files" | grep -qx 'landing/plugins.json'; then
+            echo "catalogue=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "catalogue=false" >> "$GITHUB_OUTPUT"
+          fi
+          if [ "$files" = "landing/plugins.json" ]; then
+            echo "catalogue_only=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "catalogue_only=false" >> "$GITHUB_OUTPUT"
           fi
 
   build:
@@ -182,6 +196,71 @@ jobs:
           sleep 2
           curl -sf http://localhost:4123/health
           kill $SVPID
+
+  # The catalogue's own check, and the one auto-merge should wait on.
+  #
+  # A listing is a pull request that changes `landing/plugins.json`, written
+  # by the approval workflow. That workflow used to report `build` on its own
+  # commit, so the only thing between a listing and main was a check the
+  # listing wrote about itself. This job re-derives the entry from the pull
+  # request instead: one entry added or replaced, pinned to a commit, and a
+  # fresh clone of that commit validates and hashes to what the entry says —
+  # see scripts/catalogue-check.py for the whole list.
+  #
+  # It always runs and always reports, so it can be a required check: a pull
+  # request that does not touch the catalogue passes it with nothing to do,
+  # and one that touches the catalogue AND anything else fails it, because a
+  # listing is one entry and nothing more. The one exception is a pull request
+  # the repository owner wrote: a release carries its own catalogue edits (pins,
+  # hashes) next to everything else, and the owner reviews it by hand. The
+  # approval workflow's listings are authored by its app, never by the owner,
+  # so they still travel alone and are still re-derived.
+  #
+  # The tools it runs are the BASE branch's, never the pull request's: a pull
+  # request that edited the check could otherwise pass it. It clones a
+  # stranger's repository, so it holds no secret and keeps no credentials.
+  catalogue:
+    needs: changes
+    # Not skipped when `changes` fails: a skipped job reports "skipped", and a
+    # required check that was skipped does not hold a merge back. It runs, and
+    # the first step turns a failed file list into a red check.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: The file list was read
+        if: needs.changes.result != 'success'
+        run: |
+          echo "::error::the changes job did not say what this pull request touches, so nothing here can say it is safe"
+          exit 1
+      - name: Nothing to check
+        if: needs.changes.result == 'success' && (github.event_name != 'pull_request' || needs.changes.outputs.catalogue != 'true')
+        run: echo "this change does not touch landing/plugins.json"
+      - name: The owner's own pull request
+        if: github.event_name == 'pull_request' && needs.changes.outputs.catalogue == 'true' && needs.changes.outputs.catalogue_only != 'true' && github.event.pull_request.author_association == 'OWNER'
+        run: echo "::notice::landing/plugins.json changed with other files in a pull request the owner wrote; reviewed by hand, not as a listing"
+      - name: A listing travels alone
+        if: github.event_name == 'pull_request' && needs.changes.outputs.catalogue == 'true' && needs.changes.outputs.catalogue_only != 'true' && github.event.pull_request.author_association != 'OWNER'
+        run: |
+          echo "::error::landing/plugins.json changed together with other files; a listing is one entry in its own pull request"
+          exit 1
+      - uses: actions/checkout@v7
+        if: github.event_name == 'pull_request' && needs.changes.outputs.catalogue_only == 'true'
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - name: The entry is what its commit holds
+        if: github.event_name == 'pull_request' && needs.changes.outputs.catalogue_only == 'true'
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # The pull request's version of the file, read as data from its head
+          # commit; the working tree stays the base branch's.
+          git fetch -q --depth 1 origin "$HEAD_SHA"
+          git show "$HEAD_SHA:landing/plugins.json" > "$RUNNER_TEMP/head.json"
+          python3 scripts/catalogue-check.py landing/plugins.json "$RUNNER_TEMP/head.json"
 
   # Windows and macOS have never run a line of this in CI.
   #

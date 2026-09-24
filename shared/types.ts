@@ -2810,6 +2810,20 @@ export interface GitCapability {
   reason?: string;
 }
 
+/** A second `agentglass.db` found in the directory the server started from,
+ *  which the server does not open — see defaultDbPath in server/src/db.ts.
+ *  `copied`: the data dir had no database, so this start copied that file
+ *  into it (the original is untouched). `ignored`: the data dir already has
+ *  one, and the other file's history is not on screen. `db` is the database
+ *  in use. */
+export interface DbNotice {
+  kind: "copied" | "ignored";
+  stray: string;
+  db: string;
+  /** For `ignored`: the shell line that swaps them, -wal files included. */
+  switchCommand?: string;
+}
+
 /** One `<<<<<<< / ======= / >>>>>>>` region of a conflicted file. */
 export type ConflictBlock = {
   index: number;
@@ -4733,7 +4747,7 @@ export type InstallSource =
   | {
       kind: "marketplace";
       marketplace: { url: string; ref: string | null; resolvedCommit: string | null };
-      plugin: { url: string; ref: string | null };
+      plugin: { url: string; ref: string | null; sha256?: string };
     };
 
 export interface PublicPlugin {
@@ -4784,6 +4798,7 @@ export interface PluginsStatus {
 export interface CataloguePlugin {
   id: string;
   source: { kind: "git"; url: string; ref: string | null };
+  sha256?: string;
   description: string;
   categories: string[];
   title?: string;

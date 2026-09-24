@@ -35,9 +35,12 @@ export const TMUX_ISOLATED = ["-f", "/dev/null"] as const;
  * depends on how busy the machine is: green alone, a different test red in each
  * full run. So the fixture does not assume its own setup worked.
  *
- * "duplicate session" is success: an attempt the server did take, answered
- * after the client had given up on it. Anything else past `tries` throws, so a
- * flag tmux will never accept is an error and not a two-second wait.
+ * "duplicate session" on a retry is success: an earlier attempt the server may
+ * have taken. On the first attempt it is not — the session was there before
+ * this call, which means the last test's kill did not happen, and a fixture
+ * that quietly reuses its windows and options fails later on an unrelated
+ * assert. That throws, and so does anything else past `tries`, so a flag tmux
+ * will never accept is an error and not a two-second wait.
  */
 export function startSession(argv: string[], env: Record<string, string | undefined>, tries = 100): void {
   let last = "";
@@ -45,7 +48,10 @@ export function startSession(argv: string[], env: Record<string, string | undefi
     const r = Bun.spawnSync(argv, { env, stdout: "ignore", stderr: "pipe" });
     if (r.exitCode === 0) return;
     last = new TextDecoder().decode(r.stderr).trim();
-    if (last.startsWith("duplicate session")) return;
+    if (last.startsWith("duplicate session")) {
+      if (i > 0) return;
+      throw new Error(`${argv.join(" ")}: ${last} before the first attempt — left over from an earlier test`);
+    }
     Bun.sleepSync(20);
   }
   throw new Error(`${argv.join(" ")} failed ${tries} times: ${last}`);
