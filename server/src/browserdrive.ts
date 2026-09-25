@@ -3428,6 +3428,9 @@ export async function downloadFile(p: {
   selector: string;
   dir: string;
   timeoutMs?: number;
+  /** Who is asking and which tab: `page`, `as`, `how`, `pageExplicit`, as the
+   *  `record` route forwards them. Absent means the active tab. */
+  via?: Record<string, unknown>;
 }): Promise<{ ok: boolean; value?: unknown; error?: string }> {
   const { mkdirSync, existsSync } = await import("node:fs");
   const { join } = await import("node:path");
@@ -3437,50 +3440,60 @@ export async function downloadFile(p: {
     return { ok: false, error: `could not make ${p.dir}: ${e instanceof Error ? e.message : e}` };
   }
 
-  const behavior = parseAsk("cdp", {
+  // Every ask carries the tab: arming one tab and clicking in another is a
+  // download that never arrives, or one that lands in the wrong place.
+  const at = (body: Record<string, unknown>) => ({ ...body, ...p.via });
+  const behavior = parseAsk("cdp", at({
     method: "Browser.setDownloadBehavior",
     params: { behavior: "allow", downloadPath: p.dir, eventsEnabled: true },
-  });
+  }));
   if ("error" in behavior) return { ok: false, error: behavior.error };
   const behaviorReply = await askBrowser(behavior.ask);
   if (!behaviorReply.ok) return { ok: false, error: `could not arm the download: ${behaviorReply.error}` };
 
-  const clickParsed = parseAsk("click", { selector: p.selector });
-  if ("error" in clickParsed) return { ok: false, error: clickParsed.error };
-  const clickReply = await askBrowser(clickParsed.ask);
-  if (!clickReply.ok) {
-    return { ok: false, error: `could not click ${p.selector} to start the download: ${clickReply.error}` };
-  }
+  // Armed for this one click. A click that fails or a wait that runs out must
+  // not leave the tab armed for whatever the page downloads next.
+  try {
+    const clickParsed = parseAsk("click", at({ selector: p.selector }));
+    if ("error" in clickParsed) return { ok: false, error: clickParsed.error };
+    const clickReply = await askBrowser(clickParsed.ask);
+    if (!clickReply.ok) {
+      return { ok: false, error: `could not click ${p.selector} to start the download: ${clickReply.error}` };
+    }
 
-  const deadline = Date.now() + (p.timeoutMs ?? 60_000);
-  let guid: string | undefined;
-  let filename: string | undefined;
-  for (;;) {
-    const drain = parseAsk("cdp", { events: true });
-    if (!("error" in drain)) {
-      const r = await askBrowser(drain.ask);
-      const events = (r.value as { events?: Array<{ method: string; params: Record<string, unknown> }> } | undefined)?.events ?? [];
-      for (const e of events) {
-        if (e.method === "Page.downloadWillBegin" && (!guid || e.params.guid === guid)) {
-          guid = String(e.params.guid ?? guid ?? "");
-          filename = String(e.params.suggestedFilename ?? filename ?? "");
-        }
-        if (e.method === "Page.downloadProgress" && (!guid || e.params.guid === guid)) {
-          const state = String(e.params.state ?? "");
-          if (state === "canceled") return { ok: false, error: "the download was canceled" };
-          if (state === "completed") {
-            if (!filename) return { ok: false, error: "the download finished but named no file" };
-            const at = join(p.dir, filename);
-            if (!existsSync(at)) return { ok: false, error: `the download reported complete but ${at} is missing` };
-            return { ok: true, value: { path: at, dir: p.dir, filename } };
+    const deadline = Date.now() + (p.timeoutMs ?? 60_000);
+    let guid: string | undefined;
+    let filename: string | undefined;
+    for (;;) {
+      const drain = parseAsk("cdp", at({ events: true }));
+      if (!("error" in drain)) {
+        const r = await askBrowser(drain.ask);
+        const events = (r.value as { events?: Array<{ method: string; params: Record<string, unknown> }> } | undefined)?.events ?? [];
+        for (const e of events) {
+          if (e.method === "Page.downloadWillBegin" && (!guid || e.params.guid === guid)) {
+            guid = String(e.params.guid ?? guid ?? "");
+            filename = String(e.params.suggestedFilename ?? filename ?? "");
+          }
+          if (e.method === "Page.downloadProgress" && (!guid || e.params.guid === guid)) {
+            const state = String(e.params.state ?? "");
+            if (state === "canceled") return { ok: false, error: "the download was canceled" };
+            if (state === "completed") {
+              if (!filename) return { ok: false, error: "the download finished but named no file" };
+              const at = join(p.dir, filename);
+              if (!existsSync(at)) return { ok: false, error: `the download reported complete but ${at} is missing` };
+              return { ok: true, value: { path: at, dir: p.dir, filename } };
+            }
           }
         }
       }
+      if (Date.now() >= deadline) {
+        return { ok: false, error: `no download finished within ${p.timeoutMs ?? 60_000}ms of clicking ${p.selector}` };
+      }
+      await new Promise((r) => setTimeout(r, 200));
     }
-    if (Date.now() >= deadline) {
-      return { ok: false, error: `no download finished within ${p.timeoutMs ?? 60_000}ms of clicking ${p.selector}` };
-    }
-    await new Promise((r) => setTimeout(r, 200));
+  } finally {
+    const off = parseAsk("cdp", at({ method: "Browser.setDownloadBehavior", params: { behavior: "default" } }));
+    if (!("error" in off)) await askBrowser(off.ask).catch(() => undefined);
   }
 }
 

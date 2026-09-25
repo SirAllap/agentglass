@@ -4486,8 +4486,10 @@ const server = Bun.serve<WsData>({
         try { b = await req.json(); } catch { b = {}; }
         const parsed = parseAsk("download", b);
         if ("error" in parsed) return json({ ok: false, error: parsed.error }, 400);
-        const a = parsed.ask.args as { selector: string; dir: string; timeoutMs?: number };
-        const r = await downloadFile({ selector: a.selector, dir: a.dir, timeoutMs: a.timeoutMs });
+        const a = parsed.ask.args as { selector: string; dir: string; timeoutMs?: number } & Record<string, unknown>;
+        const via: Record<string, unknown> = {};
+        for (const k of ["page", "as", "how", "pageExplicit"]) if (a[k] !== undefined) via[k] = a[k];
+        const r = await downloadFile({ selector: a.selector, dir: a.dir, timeoutMs: a.timeoutMs, via });
         return json(r);
       }
       if (op === "events") {

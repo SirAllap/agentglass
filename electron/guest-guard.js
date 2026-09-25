@@ -125,10 +125,88 @@ function applyGuestGuard(webPreferences, params) {
   return true;
 }
 
+/**
+ * The permissions a page in the browser may be granted, and nothing else.
+ *
+ * With no handler Electron grants every request, so a page an agent opened got
+ * the camera, the microphone, the clipboard and notifications with no prompt
+ * and nobody to see one. An allowlist rather than a list of the known-bad
+ * names, because the set of permission names grows with Chromium and a new one
+ * should start refused. What is left is what a page needs to behave: going
+ * fullscreen, writing (never reading) the clipboard from a user gesture, and
+ * pointer lock. The browser has no prompt UI, so "ask" is not an answer here.
+ * @param {unknown} permission */
+const permissionAllowed = (permission) =>
+  typeof permission === "string" && GRANTED_PERMISSIONS.has(permission);
+const GRANTED_PERMISSIONS = new Set(["fullscreen", "clipboard-sanitized-write", "pointerLock"]);
+
+/**
+ * What to do with a permission request, given who is asking.
+ *
+ * The allowlist above is the floor. On top of it, the tab a PERSON has in
+ * front may be asked about the microphone, the camera and notifications — a
+ * call or a chat site he uses by hand needs them — and the answer is his, made
+ * in a native dialog the page cannot draw or click. A lane, and any tab that
+ * is not in front, is an agent's: it is refused, never asked, because a dialog
+ * an agent's page can raise is a dialog an agent's page can wait out.
+ * Clipboard reads, HID, serial, USB, screen capture, location and everything
+ * this does not name stay refused for everyone; the dialog is not a way to
+ * widen them.
+ * @param {unknown} permission
+ * @param {{ frontTab?: boolean, lane?: boolean, mediaTypes?: unknown }} ctx
+ * @returns {{ verdict: "allow" | "deny" | "ask", what?: string }} */
+function permissionVerdict(permission, ctx) {
+  if (permissionAllowed(permission)) return { verdict: "allow" };
+  const person = !!ctx && ctx.frontTab === true && ctx.lane !== true;
+  if (!person) return { verdict: "deny" };
+  if (permission === "notifications") return { verdict: "ask", what: "notifications" };
+  if (permission === "media") {
+    const types = Array.isArray(ctx.mediaTypes) ? ctx.mediaTypes : [];
+    const mic = types.includes("audio");
+    const cam = types.includes("video");
+    if (mic || cam) return { verdict: "ask", what: mic && cam ? "microphone and camera" : mic ? "microphone" : "camera" };
+  }
+  return { verdict: "deny" };
+}
+
+/** The dialog's question: the site's own host and the thing asked for. The
+ *  origin is parsed, never printed as the page gave it.
+ * @param {string} what @param {string} origin */
+function permissionPrompt(what, origin) {
+  let host = "This page";
+  try { host = new URL(origin).host || host; } catch { /* keep the generic name */ }
+  return `${host} wants to ${what === "notifications" ? "show" : "use your"} ${what}`;
+}
+
+/**
+ * Where a download lands: `dir`, under a name that is not taken.
+ *
+ * The name comes from the page, so only its last segment is kept — a
+ * `../x` or an absolute path stays inside `dir` — and a name that already
+ * exists gets " (1)", " (2)" before the extension, so a page cannot pick the
+ * name of a file that is already there and have it replaced. `exists` is
+ * passed in so this stays a function of its inputs. Only the last extension
+ * is kept apart: "a.tar.gz" becomes "a.tar (1).gz", which is a free name and
+ * that is all this promises.
+ * @param {string} dir @param {string} name @param {(p: string) => boolean} exists */
+function uniqueSavePath(dir, name, exists) {
+  let base = String(name).split(/[\\/]/).pop() || "";
+  if (!base || base === "." || base === "..") base = "download";
+  const dot = base.lastIndexOf(".");
+  const [head, tail] = dot > 0 ? [base.slice(0, dot), base.slice(dot)] : [base, ""];
+  let at = `${dir}/${base}`;
+  for (let n = 1; exists(at); n++) at = `${dir}/${head} (${n})${tail}`;
+  return at;
+}
+
 module.exports = {
   BROWSER_PARTITION,
   BROWSER_PARTITION_RE,
   isBrowserPartition,
   safeGuestUrl,
   applyGuestGuard,
+  permissionAllowed,
+  permissionVerdict,
+  permissionPrompt,
+  uniqueSavePath,
 };
