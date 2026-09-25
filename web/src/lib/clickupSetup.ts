@@ -42,6 +42,10 @@ let inflight: Promise<ClickUpSetup> | null = null;
 
 const fresh = (): ClickUpSetup | null => (held && Date.now() - held.at < TTL ? held.value : null);
 
+/** The answer if it is already in, without asking: a click that can be served
+ *  from it is served inside the click, where a browser still lets a window open. */
+export const clickupSetupNow = fresh;
+
 export function clickupSetup(): Promise<ClickUpSetup> {
   const now = fresh();
   if (now) return Promise.resolve(now);

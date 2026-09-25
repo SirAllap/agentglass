@@ -16,6 +16,7 @@
 // become markup.
 import { createContext, memo, useContext, type ReactNode } from "react";
 import { externalUrl } from "./externalUrl.ts";
+import { openInApp } from "./linkRouter.ts";
 import { CodeBlock } from "./mdCode.tsx";
 
 /*
@@ -80,6 +81,15 @@ const CODE_BG = "color-mix(in srgb, var(--text) 13%, transparent)";
  */
 const CODE_INK = "color-mix(in srgb, var(--error) 78%, var(--text))";
 
+/** One link. A pull request or a card the app can show opens in it; see
+ *  linkRouter.ts. Anything else leaves by `target`, as it always did. */
+function mdLink(k: string, href: string, label: ReactNode) {
+  return (
+    <a key={k} href={href} target="_blank" rel="noreferrer noopener" style={{ color: "var(--primary-hover)", textDecoration: "underline" }}
+      onClick={(e) => { if (openInApp(href, e, { strict: true })) e.preventDefault(); }}>{label}</a>
+  );
+}
+
 /** Inline spans: `code`, **bold**, *italic*, [text](url). Applied in one pass so
  *  a URL containing an underscore can't be mangled into italics. */
 function inline(text: string, keyBase: string, depth = 0): ReactNode[] {
@@ -101,7 +111,14 @@ function inline(text: string, keyBase: string, depth = 0): ReactNode[] {
    * Only before ASCII punctuation, which is markdown's own rule — so a `\d` in
    * a regexp somebody pasted stays `\d` rather than becoming `d`.
    */
-  const re = /(\\[!-/:-@[-`{-~])|(!\[[^\]\n]*\]\([^)\s]+\))|(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\*[^*\n]+\*)|(\[[^\]\n]+\]\([^)\s]+\))/g;
+  /*
+   * The last alternative is a bare URL. A ClickUp description, and most of what
+   * an agent writes, pastes a pull request's address as it is rather than as
+   * `[text](url)`, and printed as text it was the one link on the card nothing
+   * could follow. It comes last so a URL inside a link or a code span is read
+   * as part of that, which starts earlier.
+   */
+  const re = /(\\[!-/:-@[-`{-~])|(!\[[^\]\n]*\]\([^)\s]+\))|(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\*[^*\n]+\*)|(\[[^\]\n]+\]\([^)\s]+\))|(https?:\/\/[^\s<>()[\]`"']+)/g;
   let last = 0;
   let m: RegExpExecArray | null;
   let i = 0;
@@ -137,6 +154,14 @@ function inline(text: string, keyBase: string, depth = 0): ReactNode[] {
         : <span key={k} style={{ color: "var(--text4)" }}>{alt ? `[image: ${alt}]` : "[image]"}</span>);
     } else if (tok.startsWith("`")) {
       out.push(<code key={k} className="px-1 py-0.5 rounded text-[0.92em]" style={{ background: CODE_BG, color: CODE_INK, fontFamily: "var(--font-mono, ui-monospace, monospace)" }}>{tok.slice(1, -1)}</code>);
+    } else if (m[7]) {
+      // The sentence's own full stop or comma is not part of the address.
+      const url = tok.replace(/[.,;:!?]+$/, "");
+      const safe = externalUrl(url);
+      out.push(safe
+        ? mdLink(k, safe, url)
+        : url);
+      if (url.length < tok.length) out.push(tok.slice(url.length));
     } else if (tok.startsWith("**")) {
       // Recursed, because emphasis nests: `**No \`service_specific\` flattening**`
       // is one bold run containing a symbol, and reading it as flat text put the
@@ -160,7 +185,7 @@ function inline(text: string, keyBase: string, depth = 0): ReactNode[] {
       // refuses anything that is not an absolute URL at all.
       const safe = externalUrl(href);
       out.push(safe
-        ? <a key={k} href={safe} target="_blank" rel="noreferrer noopener" style={{ color: "var(--primary-hover)", textDecoration: "underline" }}>{label}</a>
+        ? mdLink(k, safe, label)
         : <span key={k}>{label}</span>);
     }
     last = m.index + tok.length;

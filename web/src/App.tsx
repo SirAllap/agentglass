@@ -231,7 +231,7 @@ export default function App() {
   useEffect(() => onOpenPrs((j) => { setPrJump(j); toBoard("pr"); }), [toBoard]);
   /* The other half: a sender that knows exactly which pull request it means
      gets the panel's jump, which selects and opens, instead of a search. */
-  useEffect(() => onOpenPr(({ repo, number, mention, focus }) => { requestPrJump(repo, number, { mention, focus }); toBoard("pr"); }), [toBoard]);
+  useEffect(() => onOpenPr(({ repo, number, mention, focus, fallback }) => { requestPrJump(repo, number, { mention, focus, fallback }); toBoard("pr"); }), [toBoard]);
   /* A link clicked on the catalogue's web page. It opens the install box with
      the URL in it — the approval is the person's, exactly as it is for a URL
      they pasted. See lib/installPlugin.ts. */

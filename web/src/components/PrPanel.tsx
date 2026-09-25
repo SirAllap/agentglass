@@ -34,6 +34,7 @@ import { fileSection } from "../lib/patchLines.ts";
 import { groupPatch } from "../lib/changeGroups.ts";
 import { flashElement } from "../lib/flash.ts";
 import { shaFromHref } from "../lib/commitLink.ts";
+import { isShortRef, openInApp, wantsExternal } from "../lib/linkRouter.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
 import { ScopeChip } from "./workspace/Chrome.tsx";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
@@ -1005,15 +1006,20 @@ export function Md({ body, className, onToggleTask }: {
   /* Delegated from the wrapper rather than handed to each anchor: the markdown
      renderer is shared with chat, the document viewer and the release notes,
      and it should not learn what a pull request is to serve this. */
-  const onClick = jump ? (e: React.MouseEvent) => {
+  const onClick = (e: React.MouseEvent) => {
     // Never steal a modified click — that is somebody asking for a new window.
-    if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    if (e.defaultPrevented || wantsExternal(e, true)) return;
     const a = (e.target as HTMLElement | null)?.closest?.("a");
     const href = a?.getAttribute("href");
     if (!href) return;
-    const sha = shaFromHref(href, repo);
-    if (sha && jump(sha)) e.preventDefault();
-  } : undefined;
+    const sha = jump && shaFromHref(href, repo);
+    if (sha && jump(sha)) { e.preventDefault(); return; }
+    /* Another pull request, or a card, opens here rather than on GitHub. A
+       link that READS `#123` (prBody.ts autolinks them to `/issues/`, as
+       GitHub does, for issues and pull requests alike) is tried as a pull
+       request, and goes back to the browser if it is not one. */
+    if (openInApp(href, e, { shortRef: isShortRef(a!.textContent) })) e.preventDefault();
+  };
   const wiring: TaskWiring | undefined = onToggleTask
     ? { next: nextTask, onToggle: (i) => onToggleTask(toggleChecklistItem(body, i)) }
     : undefined;
@@ -2105,9 +2111,14 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   /** The jump whose locate call is out, so a re-render does not start it
    *  again while the first one is still walking the machine's checkouts. */
   const locating = useRef("");
+  /** A `#123` from a body being tried as a pull request: if GitHub says it is
+   *  not one (an issue, most likely), the click goes to the browser after all
+   *  and the panel goes back to what it was showing. */
+  const tryAsPr = useRef<{ number: number; url: string; prev: number | null } | null>(null);
   useEffect(() => {
     if (!jump || !repo) return;
-    if (jump.repo !== repo.nameWithOwner) {
+    // Case-blind, as GitHub is: `Acme/Orbit` in a link is the checkout's `acme/orbit`.
+    if (jump.repo.toLowerCase() !== repo.nameWithOwner.toLowerCase()) {
       const key = `${jump.repo}#${jump.number}/${jump.n}`;
       if (locating.current === key) return;
       locating.current = key;
@@ -2129,6 +2140,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
          * number. Less than opening it, and visibly something.
          */
         clearPrJump();
+        // A link somebody clicked has somewhere better to go than a search.
+        if (jump.fallback) { openExternal(jump.fallback); return; }
         setQuery(String(jump.number));
         setSelected(null);
         flash(false, `#${jump.number} is in ${jump.repo}, and there is no checkout of it on this machine — searching ${repo.nameWithOwner} instead`);
@@ -2148,6 +2161,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
        entries in it. Remembered here and served below, once the pull request
        this is about has actually loaded. */
     if (jump.mention) wantMention.current = { number: jump.number, n: jump.n };
+    tryAsPr.current = jump.fallback ? { number: jump.number, url: jump.fallback, prev: selected } : null;
     openPr(jump.number);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jump, repo, openPr]);
@@ -2660,6 +2674,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     setDetailErr("");
     api.prDetail(root, n, force).then((r) => {
       if (req !== detailReq.current) return; // a later selection already won
+      // Disarmed by any load, so a later, ordinary open of that number is ordinary.
+      const trying = tryAsPr.current?.number === n ? tryAsPr.current : null;
+      tryAsPr.current = null;
       if (r.ok && r.detail) {
         rememberDetail(root, n, r.detail); setDetail(r.detail); setDetailStale(false);
         /*
@@ -2676,6 +2693,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       }
       // A refresh that fails leaves what is on screen alone: the pull request
       // you are reading is better than an error where it used to be.
+      else if (trying) { openExternal(trying.url); setSelected(trying.prev); }
       else if (!force) setDetailErr(r.error || "");
       else { setDetail(null); setDetailErr(r.error || "Could not load this pull request"); }
     }).catch((e) => { if (req === detailReq.current) setDetailErr(String(e)); })

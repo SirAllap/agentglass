@@ -34,6 +34,7 @@ import "@xterm/xterm/css/xterm.css";
 import { answerDecrqm } from "../lib/xtermDecrqm.ts";
 import { openExternal } from "../lib/externalUrl.ts";
 import { registerPathLinks } from "../lib/termPathLinks.ts";
+import { followLink } from "../lib/linkRouter.ts";
 import type { GitRepoRef, GitBranch, PrBranchSummary, TerminalCommands, TmuxWindow, TmuxPane, PtyServerFrame, PtyClientFrame } from "../../../shared/types.ts";
 import { chipTarget } from "../lib/chipTarget.ts";
 import { openPr } from "../lib/openPrs.ts";
@@ -806,7 +807,9 @@ function createSession(root: string, agentTicket?: string): Sess {
   // and then xterm 6.0.0 throws inside its own parser and the screen stops
   // updating. See xtermDecrqm.
   answerDecrqm(term as never);
-  term.loadAddon(new WebLinksAddon((_e, uri) => { openExternal(uri); }));
+  // A pull request or a ClickUp card opens in the app; Ctrl/Cmd-click still
+  // goes to the browser. See linkRouter.ts.
+  term.loadAddon(new WebLinksAddon((e, uri) => { followLink(uri, e); }));
   // A path that exists opens in the finder. `root` is where this shell began.
   // Ceiling: after a `cd`, or over ssh, a relative path that ALSO exists under
   // `root` links to that one. Absolute and ~/ paths are exact.
