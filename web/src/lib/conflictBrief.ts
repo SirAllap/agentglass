@@ -1,4 +1,6 @@
 import type { GitBranchInfo, GitRepoRef, GitTreeState, MergeInfo, MergeSide } from "../../../shared/types.ts";
+import { CONFLICT_ASK } from "../../../shared/conflictAsk.ts";
+export { CONFLICT_ASK };
 
 /**
  * What to call one side on screen.
@@ -118,11 +120,33 @@ export function conflictBriefing(
   ];
 }
 
-/** The ask, unchanged in substance: reconcile intent, explain the judgement
- *  calls, and stop short of committing so the resolution can be reviewed. */
-export const CONFLICT_ASK = [
-  "Please resolve each conflict, keeping both sides' intent where they do",
-  "different things. Where they do the same thing differently, prefer the",
-  "incoming side named above. Explain anything you had to choose between.",
-  "Do not commit — leave the resolution staged so I can review it.",
-];
+
+/** What the server says for a conflict: the ask, an optional skill, and the
+ *  model the conflict deserves. */
+export interface ConflictHandoff { prompt: string; model?: string; effort?: string; why?: string }
+
+/**
+ * The whole message for a conflict, in one place both buttons share.
+ *
+ * The briefing (which branch, which side is which, which files) is written
+ * here from facts the panel has; the ask that follows is the user's prompt for
+ * this project, fetched from the server. A skill goes first, on its own line,
+ * because that is where Claude's parser looks for it. When the server cannot
+ * be reached the default ask is sent instead: a hand-off that fails because a
+ * setting could not be read is worse than one that says the usual thing.
+ */
+export async function conflictHandoff(
+  briefing: string[],
+  ask: () => Promise<{ ok: boolean; skill?: string; ask?: string; model?: string; effort?: string; why?: string }>,
+): Promise<ConflictHandoff> {
+  // A server that hangs must not leave the button doing nothing: after this the
+  // default ask goes, the same as when it is down.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const r = await Promise.race([ask().catch(() => null), new Promise<null>((ok) => { timer = setTimeout(ok, 3000, null); })])
+    .finally(() => clearTimeout(timer));
+  if (!r?.ok) return { prompt: [...briefing, ...CONFLICT_ASK].join("\n") };
+  return {
+    prompt: [...(r.skill ? [r.skill, ""] : []), ...briefing, ...(r.ask ?? "").split("\n")].join("\n"),
+    model: r.model, effort: r.effort, why: r.why,
+  };
+}

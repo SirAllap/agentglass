@@ -99,6 +99,8 @@ const LOCKFILES = new Set([
   "Cargo.lock", "poetry.lock", "uv.lock", "Pipfile.lock", "go.sum", "Gemfile.lock", "composer.lock",
   "flake.lock", "packages.lock.json", "gradle.lockfile",
 ]);
+/** By file name, wherever in the tree it sits. */
+export const isLockfile = (path: string): boolean => LOCKFILES.has(path.slice(path.lastIndexOf("/") + 1));
 const MANIFESTS = new Set([
   "pyproject.toml", "Cargo.toml", "go.mod", "Gemfile", "composer.json", "Pipfile",
   "build.gradle", "build.gradle.kts", "pom.xml",

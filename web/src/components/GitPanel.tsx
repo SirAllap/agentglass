@@ -4,7 +4,7 @@
 // renderer as the telemetry view.
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { diffSplit, diffWrap } from "../lib/diffPrefs.ts";
-import { conflictBriefing, CONFLICT_ASK } from "../lib/conflictBrief.ts";
+import { conflictBriefing, conflictHandoff } from "../lib/conflictBrief.ts";
 import { ConflictMode } from "./ConflictMode.tsx";
 import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
 import { RebaseModal } from "./RebaseModal.tsx";
@@ -1023,10 +1023,11 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
    *  part, and two copies of it would drift. */
   const conflictPrompt = () => {
     const rels = conflicts.map((p) => p.startsWith(root) ? p.slice(root.length + 1) : p);
-    return [
-      ...conflictBriefing(root, tree?.branch, repos.find((r) => r.root === root), mergeState, rels, merge),
-      ...CONFLICT_ASK,
-    ].join("\n");
+    const ref = repos.find((r) => r.root === root);
+    return conflictHandoff(
+      conflictBriefing(root, tree?.branch, ref, mergeState, rels, merge),
+      () => api.prConflictPrompt({ worktree: root, files: rels, branch: tree?.branch?.name, base: tree?.branch?.base ?? undefined }),
+    );
   };
 
   /**
@@ -1039,8 +1040,14 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
    * on whether you intend to watch or to join in, which is the same choice the
    * pull request panel already offers for a review.
    */
-  const askClaudeInTerminal = () => {
-    requestTermIssue(root, "conflicts", conflictPrompt(), true);
+  // The prompt is fetched first and can take a moment; without this a second
+  // press in that window opened a second tab.
+  const handing = useRef(false);
+  const askClaudeInTerminal = async () => {
+    if (handing.current) return;
+    handing.current = true;
+    const h = await conflictPrompt().finally(() => { handing.current = false; });
+    requestTermIssue(root, "conflicts", h.prompt, true, false, "", h.model, h.effort);
     // It opens a tmux window somewhere you are not looking, and until this said
     // so the button read as broken: it worked perfectly, silently, and people
     // pressed it again.
@@ -1059,8 +1066,11 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
    * only at mount — so the prompt landed in a tab nobody was looking at and the
    * chat opened blank. It looked exactly like the button doing nothing.
    */
-  const askClaude = () => {
-    seedChat(root, conflictPrompt(), "Resolve merge conflicts");
+  const askClaude = async () => {
+    if (handing.current) return;
+    handing.current = true;
+    const h = await conflictPrompt().finally(() => { handing.current = false; });
+    seedChat(root, h.prompt, "Resolve merge conflicts");
     onOpenChat?.();
   };
   // Only the branches whose upstream is gone — the merged-and-tidied ones. Off

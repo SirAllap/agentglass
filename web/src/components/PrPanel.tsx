@@ -95,7 +95,7 @@ import { suggestRecipeId } from "../../../shared/reviewSuggest.ts";
 import { openSettings } from "../lib/openSettings.ts";
 import { requestWorktreeJump } from "../lib/worktreeJump.ts";
 import { wtCell, wtCellTitle, folderOf } from "../lib/prWorktreeCell.ts";
-import { conflictBriefing, CONFLICT_ASK } from "../lib/conflictBrief.ts";
+import { conflictBriefing, conflictHandoff } from "../lib/conflictBrief.ts";
 import { openCard } from "../lib/openCard.ts";
 import { openIssue } from "../lib/openIssue.ts";
 import { useClickupSetup } from "../lib/clickupSetup.ts";
@@ -5092,8 +5092,8 @@ export type { MergeMethod };
  * cut — so the pair can be pressed in either order, and the one you did not
  * press stays available.
  */
-function ConflictActions({ root, number, branch, base, disabled }: {
-  root: string; number: number; branch: string; base: string; disabled?: boolean;
+function ConflictActions({ root, number, branch, base, repo, title, disabled }: {
+  root: string; number: number; branch: string; base: string; repo: string; title: string; disabled?: boolean;
 }) {
   const [busy, setBusy] = useState<"" | "open" | "claude">("");
   const [err, setErr] = useState("");
@@ -5125,27 +5125,25 @@ function ConflictActions({ root, number, branch, base, disabled }: {
       <Btn onClick={async () => {
           setBusy("claude");
           const p = await prepare();
-          setBusy("");
-          if (!p) return;
-          if (p.clean) { setNote(`Merged cleanly in ${p.root.split("/").pop()} — nothing to resolve, just push it`); return; }
+          if (!p) { setBusy(""); return; }
+          if (p.clean) { setBusy(""); setNote(`Merged cleanly in ${p.root.split("/").pop()} — nothing to resolve, just push it`); return; }
           // The same briefing the git panel writes, in a tmux window sitting in
           // the worktree the conflict is actually in — which is the difference
           // between an agent that can fix it and one being told about it.
-          requestTermIssue(
-            p.root,
-            `conflict-${number}`,
-            [
-              // The briefing reads two things off this — the branch's name and
-              // what it was cut from — and a pull request knows both.
-              ...conflictBriefing(
-                p.root,
-                { name: branch, base, upstream: null, ahead: 0, behind: 0, detached: false },
-                undefined, "merging", p.conflicts,
-              ),
-              ...CONFLICT_ASK,
-            ].join("\n"),
-            true,
+          const h = await conflictHandoff(
+            // The briefing reads two things off this — the branch's name and
+            // what it was cut from — and a pull request knows both.
+            conflictBriefing(
+              p.root,
+              { name: branch, base, upstream: null, ahead: 0, behind: 0, detached: false },
+              undefined, "merging", p.conflicts,
+            ),
+            () => api.prConflictPrompt({ worktree: p.root, files: p.conflicts, number, repo, branch, base, title }),
           );
+          requestTermIssue(p.root, `conflict-${number}`, h.prompt, true, false, "", h.model, h.effort);
+          // Held until here, not released after prepare(): the ask is fetched
+          // with a timeout, and a second press in that window opened a second tab.
+          setBusy("");
           // It opens somewhere you are not looking. Without this the button
           // did its whole job in silence and read as broken.
           setNote(`Claude is on it in a tmux window — "conflict-${number}", in ${p.root.split("/").pop()}`);
@@ -5740,7 +5738,7 @@ const v = p2Verdict(d.humanReview, reviewerRoster(d), d.reviewDecision, d.gate);
           {/* `conflicted` as well: git naming the files, or GitHub refusing the
               update over them, is a conflict GitHub has not caught up with. */}
           {(d.mergeable === "CONFLICTING" || conflicted) && (
-            <ConflictActions root={root} number={d.number} branch={d.headRefName} base={d.baseRefName} disabled={busy} />
+            <ConflictActions root={root} number={d.number} branch={d.headRefName} base={d.baseRefName} repo={/github\.com\/([^/]+\/[^/]+)\//.exec(d.url)?.[1] ?? ""} title={d.title} disabled={busy} />
           )}
           {/*
             * The space the answer will fill, while it is being fetched.
@@ -6224,6 +6222,7 @@ const GROUP_LABEL: Record<ReviewRecipeGroup, string> = {
   // here because the record is total, and because the day this group does get
   // shown somewhere it must not appear as the word `telling`.
   telling: "Telling somebody",
+  conflicts: "Merge conflicts",
 };
 
 /** The prompt behind the Ping button, by id. In the same catalogue as the

@@ -2836,7 +2836,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     // slot is cleared here: a second press must not be blocked waiting on the
     // first one's answer.
     lastIssue.current = issue;
-    tmuxCmd({ cmd: "issue", cwd: issue.cwd, name: issue.name, prompt: issue.prompt, agent: issue.agent, yolo: issue.yolo, title: issue.title });
+    tmuxCmd({ cmd: "issue", cwd: issue.cwd, name: issue.name, prompt: issue.prompt, agent: issue.agent, yolo: issue.yolo, title: issue.title, model: issue.model, effort: issue.effort });
     clearTermIssue();
   }, [issue, socketLive, tmuxCmd]);
 

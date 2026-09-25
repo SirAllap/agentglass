@@ -20,6 +20,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
+import { CONFLICT_EFFORTS, CONFLICT_MODELS } from "../../shared/types.ts";
 import type { ReviewRecipe, ReviewRecipeContext, ReviewRecipeGroup, ReviewRecipeWhen } from "../../shared/types.ts";
 import { BUILT_IN_RECIPES, expandRecipe, suggestRecipeId, type ReviewSituation } from "./reviewRecipes.ts";
 
@@ -37,7 +38,7 @@ const path = (): string => override ?? FILE;
 interface Store { prompts: ReviewRecipe[] }
 let cache: Store | undefined;
 
-const GROUPS: ReviewRecipeGroup[] = ["reviewing", "focused", "mine", "telling"];
+const GROUPS: ReviewRecipeGroup[] = ["reviewing", "focused", "mine", "telling", "conflicts"];
 const WHENS: ReviewRecipeWhen[] = ["any", "asked", "reviewed", "card", "mine", "mine-changes"];
 
 function load(): Store {
@@ -83,7 +84,7 @@ export function reviewRecipes(): ReviewRecipe[] {
     if (mine?.hidden) return;
     out.push({
       ...b,
-      ...(mine ? { title: mine.title || b.title, body: mine.body ?? b.body, skill: mine.skill, group: mine.group || b.group, when: mine.when || b.when } : {}),
+      ...(mine ? { title: mine.title || b.title, body: mine.body ?? b.body, skill: mine.skill, group: mine.group || b.group, when: mine.when || b.when, model: mine.model, effort: mine.effort } : {}),
       builtIn: true,
       rank: mine?.rank ?? i,
     });
@@ -118,12 +119,26 @@ function invalid(r: ReviewRecipe): string | null {
   return null;
 }
 
+function conflictFields(r: ReviewRecipe): Pick<ReviewRecipe, "repo" | "model" | "effort"> {
+  const repo = String(r.repo || "").trim();
+  return {
+    ...(repo ? { repo } : {}),
+    ...(CONFLICT_MODELS.includes(r.model as never) ? { model: r.model } : {}),
+    ...(CONFLICT_EFFORTS.includes(r.effort as never) ? { effort: r.effort } : {}),
+  };
+}
+
 let seq = 0;
 export function saveReviewRecipe(r: ReviewRecipe): { ok: boolean; error?: string; recipe?: ReviewRecipe } {
   const why = invalid(r);
   if (why) return { ok: false, error: why };
   const s = load();
-  const id = String(r.id || "").trim() || `p${Date.now().toString(36)}${(seq++).toString(36)}`;
+  // The built-in conflict prompt is the global one and stays that way: choosing
+  // a project while editing it saves a COPY for that project, and the built-in
+  // is left as it was. Otherwise "for this project" would quietly become the
+  // wording every other project gets too.
+  const forkBuiltIn = r.group === "conflicts" && !!String(r.repo || "").trim() && BUILT_IN_RECIPES.some((b) => b.id === r.id);
+  const id = (forkBuiltIn ? "" : String(r.id || "").trim()) || `p${Date.now().toString(36)}${(seq++).toString(36)}`;
   const next: ReviewRecipe = {
     id,
     title: String(r.title).trim(),
@@ -132,6 +147,9 @@ export function saveReviewRecipe(r: ReviewRecipe): { ok: boolean; error?: string
     group: GROUPS.includes(r.group) ? r.group : "reviewing",
     when: WHENS.includes(r.when) ? r.when : "any",
     ...(typeof r.rank === "number" ? { rank: r.rank } : {}),
+    // Conflict prompts only. A repo on a review prompt would be a field that
+    // does nothing, and a field that does nothing is one somebody trusts.
+    ...(r.group === "conflicts" ? conflictFields(r) : {}),
   };
   write({ prompts: [...s.prompts.filter((x) => x.id !== id), next] });
   return { ok: true, recipe: reviewRecipe(id) ?? next };
@@ -186,6 +204,22 @@ export function recipePromptText(input: {
   const skill = pick.skill ? expandRecipe(pick.skill, input.pr).trim() : "";
   const body = expandRecipe(pick.body ?? "", input.pr).trim();
   return [skill, body].filter(Boolean).join("\n\n");
+}
+
+/**
+ * The conflict prompt for a project: the one written for that checkout, else
+ * one the user wrote for every project, else the built-in (as edited). Never
+ * nothing — a prompt hidden from Settings still has to say something when the
+ * button is pressed, so the catalogue's own wording is the floor.
+ */
+export function conflictRecipe(repo: string): ReviewRecipe {
+  const list = reviewRecipes().filter((r) => r.group === "conflicts");
+  return (
+    (repo ? list.find((r) => r.repo === repo) : undefined) ??
+    list.find((r) => !r.repo && !r.builtIn) ??
+    list.find((r) => !r.repo && r.builtIn) ??
+    BUILT_IN_RECIPES.find((r) => r.group === "conflicts")!
+  );
 }
 
 /** Which recipe the menu should put first for this pull request — the rule

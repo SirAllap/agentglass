@@ -139,10 +139,10 @@ describe("the menu", () => {
     expect(list.length).toBe(C.BUILT_IN_RECIPES.length);
     expect(list.every((r) => r.builtIn)).toBe(true);
     // Grouped, and in the catalogue's order inside each group.
-    // `telling` last, and in the list on purpose: an unknown group sorts to -1,
+    // `telling` and `conflicts` last, and in the list on purpose: an unknown group sorts to -1,
     // which would put it first and make this pass while the menu drew it in the
     // wrong place.
-    const ORDER = ["reviewing", "focused", "mine", "telling"];
+    const ORDER = ["reviewing", "focused", "mine", "telling", "conflicts"];
     expect(list.map((r) => r.group)).toEqual([...list.map((r) => r.group)].sort((a, b) =>
       ORDER.indexOf(a) - ORDER.indexOf(b)));
   });

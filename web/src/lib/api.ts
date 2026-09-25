@@ -2029,6 +2029,10 @@ const realApi = {
   prPromptSave: (r: ReviewRecipe) =>
     post<{ ok: boolean; recipe?: ReviewRecipe; error?: string }>("/pr-prompts/save", r as unknown as Record<string, unknown>),
   prPromptRemove: (id: string) => post<{ ok: boolean }>("/pr-prompts/remove", { id }),
+  /** The conflict button's ask and the model the conflict deserves. The server
+   *  works out the project from the worktree. */
+  prConflictPrompt: (b: { worktree: string; files: string[]; number?: number; repo?: string; branch?: string; base?: string; title?: string }) =>
+    post<{ ok: boolean; skill?: string; ask?: string; model?: string; effort?: string; why?: string; error?: string }>("/pr-prompts/conflict", b),
   /** Put a built-in back the way it shipped, deleted or merely reworded. */
   prPromptReset: (id: string) => post<{ ok: boolean; recipe?: ReviewRecipe }>("/pr-prompts/reset", { id }),
   /** Where a local branch lives on the web. A live branch resolves to its tree
@@ -2477,6 +2481,7 @@ const demoApi: typeof realApi = {
   prPrompts: () => D({ ok: true, recipes: [] as ReviewRecipe[] }),
   prPromptSave: (_r: ReviewRecipe) => D({ ok: false, error: "not available in the demo" }),
   prPromptRemove: (_id: string) => D({ ok: false }),
+  prConflictPrompt: (_b: unknown) => D({ ok: false } as { ok: boolean; skill?: string; ask?: string; model?: string; effort?: string; why?: string }),
   prPromptReset: (_id: string) => D({ ok: false }),
   prPendingReview: (_r: string, _n: number) => D({ ok: true, id: null, comments: [] }),
   clickupComment: (_i: string, _t: string, _a?: number) => D({ ok: false, error: "not available in the demo" }),

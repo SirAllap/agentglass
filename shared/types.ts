@@ -644,7 +644,7 @@ export type PtyClientFrame =
   /** Start work on an issue in a window of the user's tmux. `agent` opens the
    *  CLI in it, `yolo` buys exactly one flag, and `title` is data that
    *  `sessionTitle` sanitises before it reaches an argv array. */
-  | { t: "tmux"; cmd: "issue"; cwd: string; name?: string; prompt?: string; agent?: boolean; yolo?: boolean; title?: string }
+  | { t: "tmux"; cmd: "issue"; cwd: string; name?: string; prompt?: string; agent?: boolean; yolo?: boolean; title?: string; model?: string; effort?: string }
   /** The tab strip's four window commands, plus take-over. Kept in step with
    *  `TmuxAction` in server/src/tmuxctl.ts, which is what runs them. */
   /** `fit` sizes the tmux window to THIS client — see tmuxctl.ts, and the
@@ -4665,7 +4665,20 @@ export interface ReviewRecipe {
   /** Sort order inside a group, ascending. Absent means "where the catalogue
    *  put it". */
   rank?: number;
+  /** Conflict prompts only: the checkout this one is FOR. Absent means every
+   *  project; set, it wins over the global one inside that project. */
+  repo?: string;
+  /** Conflict prompts only: which model the tab opens on. `auto` (or absent)
+   *  lets the conflict decide — see shared/conflictModel.ts. */
+  model?: ConflictModel;
+  effort?: ConflictEffort;
 }
+
+/** `auto` is a setting, not a model: it means "let the conflict decide". */
+export const CONFLICT_MODELS = ["auto", "haiku", "sonnet", "opus"] as const;
+export const CONFLICT_EFFORTS = ["auto", "low", "medium", "high"] as const;
+export type ConflictModel = (typeof CONFLICT_MODELS)[number];
+export type ConflictEffort = (typeof CONFLICT_EFFORTS)[number];
 
 /**
  * `telling` is the odd one and deliberately in the same catalogue: it is not a
@@ -4675,7 +4688,7 @@ export interface ReviewRecipe {
  * "Review with Claude" menu lists its three groups by name, so this one does
  * not appear in it; Settings lists them all, which is where it is edited.
  */
-export type ReviewRecipeGroup = "reviewing" | "focused" | "mine" | "telling";
+export type ReviewRecipeGroup = "reviewing" | "focused" | "mine" | "telling" | "conflicts";
 
 /**
  * Which day a recipe is written for:
@@ -4712,6 +4725,12 @@ export interface ReviewRecipeContext {
   /** Anything typed into the box beside the button, verbatim: what to look at
    *  first, why it is urgent, a caveat. Empty most of the time. */
   note?: string | null;
+  /** Conflict prompts: what the branch is being merged into. */
+  base?: string | null;
+  /** Conflict prompts: the conflicted files, one per line. */
+  files?: string | null;
+  /** Conflict prompts: the worktree the conflict is in. */
+  worktree?: string | null;
 }
 
 export interface ReviewRecipesResponse {

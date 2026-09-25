@@ -21,6 +21,7 @@
  */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api.ts";
+import { CONFLICT_EFFORTS, CONFLICT_MODELS, type ConflictEffort, type ConflictModel } from "../../../shared/types.ts";
 import type { ReviewRecipe, ReviewRecipeGroup, ReviewRecipeWhen, SkillInfo } from "../../../shared/types.ts";
 import { SettingRow } from "./SettingRow.tsx";
 import { bumpReviewRecipes } from "./PrPanel.tsx";
@@ -39,6 +40,11 @@ const GROUPS: { id: ReviewRecipeGroup; label: string; what: string }[] = [
      offered in the "Review with Claude" menu — that menu lists the three groups
      above by name — it is what the Ping button sends. */
   { id: "telling", label: "Telling somebody", what: "Asking for a review in chat, rather than reading one." },
+  /* Also not a review: what "Hand to Claude in a terminal" says on a pull
+     request that conflicts. One per project when a project needs its own
+     ("regenerate the lockfile, never merge it by hand"), and the model it opens
+     on is chosen from the conflict unless you pin one here. */
+  { id: "conflicts", label: "Merge conflicts", what: "What Claude is told when you hand it a conflict — for every project, or one." },
 ];
 
 /** What each situation means, in the words the menu would use. Shown beside the
@@ -69,6 +75,22 @@ const TOKENS: [string, string][] = [
   ["{note}", "what you typed in the box"],
 ];
 
+/** What a conflict prompt can say. `{files}` is a line per conflicted file. */
+const CONFLICT_TOKENS: [string, string][] = [
+  ["{number}", "the pull request number — empty in the Git panel"],
+  ["{repo}", "owner/name — empty in the Git panel"],
+  ["{branch}", "the head branch"],
+  ["{base}", "what it merges into"],
+  ["{files}", "the conflicted files, a line each"],
+  ["{worktree}", "where the conflict is"],
+  ["{title}", "the pull request title — empty in the Git panel"],
+];
+
+const AUTO = "Pick from the conflict";
+const cap = (v: string) => (v === "auto" ? AUTO : v[0]!.toUpperCase() + v.slice(1));
+const MODELS = CONFLICT_MODELS.map((v) => [v, cap(v)] as const);
+const EFFORTS = CONFLICT_EFFORTS.map((v) => [v, cap(v)] as const);
+
 const blank = (group: ReviewRecipeGroup): ReviewRecipe => ({
   id: "", title: "", body: "", group, when: "any",
 });
@@ -77,6 +99,7 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
   const [list, setList] = useState<ReviewRecipe[] | null>(null);
   const [editing, setEditing] = useState<ReviewRecipe | null>(null);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [projects, setProjects] = useState<{ root: string; name: string }[]>([]);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
 
   const load = useCallback(async () => {
@@ -88,6 +111,9 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
     // Skills, for the picker. A failure here is not an error on this page: it
     // only means the skill field falls back to being a text box.
     api.skills().then((r) => setSkills(r.skills ?? [])).catch(() => {});
+    // The projects a conflict prompt can be written for: main checkouts only,
+    // since a worktree is the same project under another name.
+    api.gitRepos().then((r) => setProjects((r.repos ?? []).filter((x) => !x.worktreeOf).map((x) => ({ root: x.root, name: x.name })))).catch(() => {});
   }, [open, load]);
 
   const after = async (text: string, ok = true) => {
@@ -151,7 +177,9 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
                 </span>}
                 hint={<>
                   {r.skill && <span className="block font-mono truncate" style={{ color: "var(--text3)" }}>{r.skill}</span>}
-                  {WHEN.find((w) => w.id === r.when)?.label}
+                  {g.id === "conflicts"
+                    ? `${r.repo ? `Only in ${projects.find((p) => p.root === r.repo)?.name ?? r.repo.split("/").pop()}` : "Every project"} · ${r.model && r.model !== "auto" ? r.model : "model from the conflict"}`
+                    : WHEN.find((w) => w.id === r.when)?.label}
                   {!r.builtIn && " · yours"}
                 </>}
                 control={<span className="flex items-center gap-2">
@@ -172,7 +200,7 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
                   Edit on the first prompt appeared to do nothing at all until
                   you scrolled past thirteen others to find it. */}
               {editing?.id === r.id && (
-                <Editor r={editing} skills={skills} presets={[]}
+                <Editor r={editing} skills={skills} projects={projects} presets={[]}
                   onChange={setEditing} onSave={save} onCancel={() => setEditing(null)} />
               )}
               </Fragment>
@@ -189,7 +217,7 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
               </div>
             )}
             {editing && !editing.id && editing.group === g.id && (
-              <Editor r={editing} skills={skills} presets={list.filter((x) => x.builtIn)}
+              <Editor r={editing} skills={skills} projects={projects} presets={list.filter((x) => x.builtIn && (x.group === "conflicts") === (g.id === "conflicts"))}
                 onChange={setEditing} onSave={save} onCancel={() => setEditing(null)} />
             )}
           </Wrap>
@@ -221,8 +249,8 @@ function Wrap({ title, desc, children }: { title?: string; desc?: string; childr
   );
 }
 
-function Editor({ r, skills, presets, onChange, onSave, onCancel }: {
-  r: ReviewRecipe; skills: SkillInfo[]; presets: ReviewRecipe[];
+function Editor({ r, skills, projects, presets, onChange, onSave, onCancel }: {
+  r: ReviewRecipe; skills: SkillInfo[]; projects: { root: string; name: string }[]; presets: ReviewRecipe[];
   onChange: (r: ReviewRecipe) => void; onSave: (r: ReviewRecipe) => void; onCancel: () => void;
 }) {
   const set = (patch: Partial<ReviewRecipe>) => onChange({ ...r, ...patch });
@@ -265,13 +293,44 @@ function Editor({ r, skills, presets, onChange, onSave, onCancel }: {
         </label>
       </div>
 
-      <label className="flex flex-col gap-1">
+      {r.group === "conflicts" ? (
+        <div className="flex gap-2 flex-wrap">
+          <label className="flex flex-col gap-1 flex-1 min-w-[160px]">
+            <span className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>{r.builtIn ? "Project — saves a copy for it" : "Project"}</span>
+            <select value={r.repo ?? ""} onChange={(e) => set({ repo: e.target.value || undefined })}
+              className="text-[11.5px] px-2 py-1.5 rounded-lg" style={style}>
+              <option value="">Every project</option>
+              {projects.map((p) => <option key={p.root} value={p.root}>{p.name}</option>)}
+              {/* A project that is no longer listed (moved, hidden, the list did
+                  not load) must not read as "every project" while the old path
+                  is still what gets saved. */}
+              {r.repo && !projects.some((p) => p.root === r.repo) && <option value={r.repo}>{r.repo.split("/").pop()} (not found)</option>}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>Model</span>
+            <select value={r.model ?? "auto"} onChange={(e) => set({ model: e.target.value as ConflictModel })}
+              className="text-[11.5px] px-2 py-1.5 rounded-lg" style={style}>
+              {MODELS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>Effort</span>
+            <select value={r.effort ?? "auto"} onChange={(e) => set({ effort: e.target.value as ConflictEffort })}
+              className="text-[11.5px] px-2 py-1.5 rounded-lg" style={style}>
+              {EFFORTS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+            </select>
+          </label>
+        </div>
+      ) : (
+        <label className="flex flex-col gap-1">
         <span className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>Suggest it</span>
         <select value={r.when} onChange={(e) => set({ when: e.target.value as ReviewRecipeWhen })}
           className="text-[11.5px] px-2 py-1.5 rounded-lg" style={style}>
           {WHEN.map((w) => <option key={w.id} value={w.id}>{w.label}</option>)}
         </select>
-      </label>
+        </label>
+      )}
 
       {/* The skill, in two halves: which one, and what to pass it. Split
           because the arguments are where the placeholders go and a single
@@ -314,7 +373,7 @@ function Editor({ r, skills, presets, onChange, onSave, onCancel }: {
       </label>
 
       <div className="flex flex-wrap gap-1">
-        {TOKENS.map(([tok, what]) => (
+        {(r.group === "conflicts" ? CONFLICT_TOKENS : TOKENS).map(([tok, what]) => (
           <button key={tok} title={what} onClick={() => set({ body: `${r.body}${tok}` })}
             className="text-[10px] font-mono px-1.5 py-0.5 rounded"
             style={{ border: edge(20), color: "var(--text3)" }}>{tok}</button>
@@ -330,7 +389,7 @@ function Editor({ r, skills, presets, onChange, onSave, onCancel }: {
           <select value="" className="text-[11.5px] px-2 py-1.5 rounded-lg" style={style}
             onChange={(e) => {
               const p = presets.find((x) => x.id === e.target.value);
-              if (p) set({ title: `${p.title} (mine)`, body: p.body, skill: p.skill, group: p.group, when: p.when });
+              if (p) set({ title: `${p.title} (mine)`, body: p.body, skill: p.skill, group: p.group, when: p.when, model: p.model, effort: p.effort });
             }}>
             <option value="">— empty —</option>
             {presets.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}

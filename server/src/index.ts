@@ -174,6 +174,7 @@ import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey
 import { takeLease, endLease, leaseHeld, reapLeases } from "./panelease.ts";
 import { runAgentInteractivePane } from "./understudy-pane.ts";
 import { startScanner, ownsSession, knownProjects, projectsKnownAtStart, resyncScope, scanningEnabled } from "./transcripts.ts";
+import { conflictPrompt } from "./conflictPrompt.ts";
 import { workspaceRoot, workspaceRoots, setWorkspaceRoot, setWorkspaceRoots, inScope, sessionInScope, chatBypassAllowed, readBudgets, writeBudgets, hiddenProjects, setProjectHidden, setRepoDir, configuredRepoDirs, panelRepoDirs, configPath, repoDirsUnstated, seedRepoDirs, fileRoots } from "./config.ts";
 import { cloneProject, createProject } from "./projectadd.ts";
 import { budgetStatus } from "./budget.ts";
@@ -5795,6 +5796,23 @@ const server = Bun.serve<WsData>({
     if (pathname === "/pr-prompts") {
       const { reviewRecipes } = await import("./reviewPrompts.ts");
       return json({ ok: true, recipes: reviewRecipes() });
+    }
+    /* Ahead of the /pr-prompts/ family below, whose prefix would answer
+       "not found" for it. What the conflict button says, and which model it opens on. POST because
+       the file list can be long; it reads only the worktree it is given, and
+       only when that is in scope. */
+    if (pathname === "/pr-prompts/conflict" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const worktree = String(b.worktree ?? "");
+      if (!worktree || !inScope(worktree)) return json({ ok: false, error: "that worktree is not in scope" }, 400);
+      const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+      const files = Array.isArray(b.files) ? b.files.filter((f): f is string => typeof f === "string").slice(0, 500) : [];
+      return json({ ok: true, ...conflictPrompt({
+        worktree, files,
+        number: typeof b.number === "number" ? b.number : 0,
+        repo: str(b.repo), branch: str(b.branch), base: str(b.base), title: str(b.title),
+      }) });
     }
     if (pathname.startsWith("/pr-prompts/") && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();

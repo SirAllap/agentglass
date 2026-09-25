@@ -22,6 +22,7 @@ import { tmpdir } from "node:os";
 import type { ServerWebSocket } from "bun";
 import { isViewTemp, viewTempDirOf } from "./viewtemp.ts";
 import { dropEditorSocket, newEditorSocket } from "./editorwhere.ts";
+import { CONFLICT_EFFORTS, CONFLICT_MODELS } from "../../shared/types.ts";
 import type { ProjectCommand, TerminalCommands, TerminalDisabledReason, TmuxWindow, PtyServerFrame, PtyClientMessage } from "../../shared/types.ts";
 import { safeAbs, repoRootOf, repoRootOfAsync } from "./git.ts";
 import { terminalActive } from "./loopwatch.ts";
@@ -537,6 +538,13 @@ function sealGuessRecord(
 
 const enc = new TextEncoder();
 
+/** `--model` / `--effort` for a hand-off that asked for them; nothing otherwise. */
+export function modelFlags(model: unknown, effort: unknown): string[] {
+  return [
+    ...(typeof model === "string" && CONFLICT_MODELS.some((m) => m !== "auto" && m === model) ? ["--model", model] : []),
+    ...(typeof effort === "string" && CONFLICT_EFFORTS.some((e) => e !== "auto" && e === effort) ? ["--effort", effort] : []),
+  ];
+}
 /**
  * A card's title, as a session name.
  *
@@ -2135,7 +2143,11 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
         // uses. Two call sites building the same command line is how the two
         // paths would quietly stop doing the same thing, and a third vendor
         // spelling its own flag inline is how they would stop for good.
-        const argv = agentArgv(bin, { prompt, yolo: msg.yolo === true, title }, supportsSessionName(bin));
+        // Model and effort are the client's request and the flag names are ours,
+        // the same division as `--name`: an allowlist, so a socket reachable from
+        // the UI still cannot pass an arbitrary argument. Claude only — another
+        // CLI's `--model` takes different values.
+        const argv = agentArgv(bin, { prompt, yolo: msg.yolo === true, title }, supportsSessionName(bin), modelFlags(msg.model, msg.effort));
         // No agent available is not a reason to open nothing: a shell in the
         // right worktree is still most of what was asked for.
         /* Into the session this client is attached to — see the note on
