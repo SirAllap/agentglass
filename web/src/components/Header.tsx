@@ -6,6 +6,7 @@ import { IS_DEMO, reauthPrompt } from "../lib/api.ts";
 import { subscribeUpdate, updateState, updateAvailable } from "../lib/updateStore.ts";
 import { MOD_KEY } from "../lib/format.ts";
 import { IS_MAC_DESKTOP, powerReadout, powerStatus, setPowerMode, type PowerMode, type PowerStatus } from "../lib/desktop.ts";
+import { usePoll } from "../lib/usePoll.ts";
 import { Logo } from "./Logo.tsx";
 import { Select } from "./Select.tsx";
 import { subscribe as subscribeChats, attentionCount } from "../lib/chatStore.ts";
@@ -80,11 +81,10 @@ function PowerModeButton() {
   const [status, setStatus] = useState<PowerStatus | null>(null);
   useEffect(() => {
     let alive = true;
-    const poll = () => { void powerStatus().then((s) => { if (alive) setStatus(s); }); };
-    poll();
-    const id = setInterval(poll, 5000);
-    return () => { alive = false; clearInterval(id); };
+    void powerStatus().then((s) => { if (alive) setStatus(s); });
+    return () => { alive = false; };
   }, []);
+  usePoll(true, () => { void powerStatus().then(setStatus); }, 5000);
   if (!status) return null;
   const { tone, title } = powerReadout(status);
   const color = tone === "warn" ? "var(--warning)" : tone === "held" ? "var(--success)" : "var(--text3)";

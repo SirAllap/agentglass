@@ -298,7 +298,7 @@ type Session = {
   killTimer: ReturnType<typeof setTimeout> | null;
   /** Cleared on close — a stray interval would keep reading /proc for a pty
    *  that no longer exists, once per session, forever. */
-  tmuxPoll?: ReturnType<typeof setInterval> | null;
+  tmuxPoll?: ReturnType<typeof setTimeout> | null;
   /** A one-shot sweep armed off pty output, so a keyboard window switch (which
    *  redraws) shows in the tab strip without waiting out the poll. Cleared on
    *  close like the poll. */
@@ -1413,8 +1413,31 @@ export function ptyOpen(ws: PtyWs) {
    * second is the ceiling for "instant" and the check is one small tmux call
    * that only speaks when something actually changed.
    */
-  const tmuxPoll = setInterval(() => { if (!session.clientHidden) sweep(); }, 500);
-  session.tmuxPoll = tmuxPoll;
+  /*
+   * …and slower once nothing has moved for a while. A quiet tmux answered the
+   * same JSON twenty times a minute per attached client, each one a synchronous
+   * spawn. After QUIET_SWEEPS unchanged answers, on a session tmux is already
+   * known for, the poll drops to SLOW_MS. The keyboard cannot be left waiting on
+   * it — `nudgeTmux` below fires from the redraw a switch causes — and any
+   * change, by poll or by nudge, puts it back to 500ms. What it gives up: a
+   * change tmux makes that draws nothing (a rename from another client) shows up
+   * within SLOW_MS instead of half a second. Detecting tmux arriving still uses
+   * the fast rate, since nothing is known yet.
+   */
+  const QUIET_SWEEPS = 10;
+  const SLOW_MS = 2000;
+  let quiet = 0;
+  let seen = sent;
+  const arm = () => {
+    if (session.closed) return;
+    const wait = quiet >= QUIET_SWEEPS && (session.tmux || session.onEngine) ? SLOW_MS : 500;
+    session.tmuxPoll = setTimeout(() => {
+      if (!session.clientHidden) sweep();
+      if (sent !== seen) { seen = sent; quiet = 0; } else quiet++;
+      arm();
+    }, wait);
+  };
+  arm();
 
   /*
    * Keep the tab strip up with the KEYBOARD, not just the poll.
@@ -2359,7 +2382,7 @@ export function ptyClose(ws: PtyWs) {
 function cleanup(ws: PtyWs, s: Session) {
   sessions.delete(ws);
   if (s.editorSocketId) { dropEditorSocket(s.editorSocketId); s.editorSocketId = null; }
-  if (s.tmuxPoll) { clearInterval(s.tmuxPoll); s.tmuxPoll = null; }
+  if (s.tmuxPoll) { clearTimeout(s.tmuxPoll); s.tmuxPoll = null; }
   if (s.tmuxNudge) { clearTimeout(s.tmuxNudge); s.tmuxNudge = null; }
   // Give the status line back before letting go. The panel borrowed it; a
   // session left with `status off` after the panel closed looks broken in the

@@ -1084,10 +1084,31 @@ function walkTranscripts(dir: string, out: string[] = []): string[] {
   return out;
 }
 
+/**
+ * Most of the transcripts on disk are finished. Measured on a machine with 3247
+ * of them (4.4 GB), the 3s sweep spent ~1100 stat calls a second — plus a
+ * database lookup each — confirming that files nobody has touched in days still
+ * had not changed. A file untouched for COLD_MS is looked at again only on a
+ * full sweep, every FULL_MS; the ticks in between walk the directories (a new
+ * file still turns up within one tick) and stat only what is warm or unknown.
+ *
+ * What that gives up: a cold transcript that gets appended to — an old session
+ * resumed — is noticed up to FULL_MS late instead of 3s. Its own hooks still
+ * report its events live, so the delay is the backfill's, not the screen's.
+ * Not here: watching the directories with inotify, which would drop the walk
+ * too. The walk is a readdir per directory, not a stat per file, and is cheap
+ * enough to leave.
+ */
+const COLD_MS = 10 * 60_000;
+const FULL_MS = 60_000;
+/** Last mtime seen for each transcript, so a light sweep can tell warm from cold. */
+const lastMtime = new Map<string, number>();
+
 /** One sweep over every project directory under every root.
  *  Exported for the scanner tests, which drive sweeps by hand rather than
- *  waiting on the 3s timer. */
-export async function scanOnce(onLive: ((r: InsertResult) => void) | null): Promise<number> {
+ *  waiting on the 3s timer. `full` (the default) looks at every file; the
+ *  timer passes false between full sweeps. */
+export async function scanOnce(onLive: ((r: InsertResult) => void) | null, full = true): Promise<number> {
   // Read the workspace once per sweep so every file in it sees the same scope.
   // As one string — every open project, NUL-separated — because it is also the
   // key the refused-file memo compares; see rootsOf().
@@ -1112,12 +1133,16 @@ export async function scanOnce(onLive: ((r: InsertResult) => void) | null): Prom
         continue;
       }
       for (const path of walkTranscripts(dirPath)) {
+        const seen = lastMtime.get(path);
+        if (!full && seen !== undefined && Date.now() - seen > COLD_MS) continue;
         let st: ReturnType<typeof statSync>;
         try {
           st = statSync(path);
         } catch {
+          lastMtime.delete(path);
           continue;
         }
+        lastMtime.set(path, st.mtimeMs);
         if (cutoff && st.mtimeMs < cutoff) continue; // outside retention
 
         const prev = getFile.get(path);
@@ -1320,6 +1345,7 @@ export function startScanner(onLive: (r: InsertResult) => void): void {
         .then((named) => { if (named) console.log(`🏷  named ${named} session${named === 1 ? "" : "s"} from their transcripts`); })
         .catch((e) => console.error(`[scan] title backfill failed: ${e instanceof Error ? e.message : e}`));
       let skipped = 0;
+      let lastFull = Date.now();
       setInterval(async () => {
         if (sweepBusy) return; // a slow sweep must not stack up behind the timer
         // Reading and parsing transcripts is synchronous work on the thread the
@@ -1331,7 +1357,10 @@ export function startScanner(onLive: (r: InsertResult) => void): void {
         entered("transcript sweep");
         sweepBusy = true;
         try {
-          await scanOnce(onLive);
+          const now = Date.now();
+          const full = now - lastFull >= FULL_MS;
+          if (full) lastFull = now;
+          await scanOnce(onLive, full);
         } catch (e) {
           console.error(`[scan] sweep failed: ${e instanceof Error ? e.message : e}`);
         } finally {

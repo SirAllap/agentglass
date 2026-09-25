@@ -10,6 +10,7 @@ import { api } from "../lib/api.ts";
 import { Select } from "./Select.tsx";
 import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./diff/DiffLines.tsx";
 import { ConsoleStrip, consoleRoot, runInConsole } from "./TerminalPanel.tsx";
+import { usePoll } from "../lib/usePoll.ts";
 import { useSidebarWidth } from "../lib/sidebarWidth.ts";
 import { SidebarGrip } from "./SidebarGrip.tsx";
 import { useDialogs } from "./ConfirmDialog.tsx";
@@ -424,10 +425,12 @@ export function DockerView({ active, onOpenBrowser }: {
     if (!active) return;
     setToast(null);
     loadOverview();
-    const t = setInterval(loadOverview, 5000);
     requestAnimationFrame(() => frameRef.current?.focus());
-    return () => clearInterval(t);
   }, [active, loadOverview]);
+  // Not while the window is unfocused or hidden: a panel left open on a second
+  // monitor asked `docker` every five seconds for nobody. It refreshes the
+  // moment the window is back.
+  usePoll(active, loadOverview, 5000);
 
   // Is docker even installed? Asked once per activation, not on the 5s poll —
   // a binary doesn't come and go mid-session, and all we take from it is the
@@ -443,9 +446,8 @@ export function DockerView({ active, onOpenBrowser }: {
   useEffect(() => {
     if (!active || view !== "containers") return;
     loadStats();
-    const t = setInterval(loadStats, 5000);
-    return () => clearInterval(t);
   }, [active, view, loadStats]);
+  usePoll(active && view === "containers", loadStats, 5000);
 
   /* The log used to be polled here every three seconds and repainted whole.
      It is followed now — LogView owns the stream, the cap, the pause and the

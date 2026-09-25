@@ -150,7 +150,7 @@ are:
 | `AGENTGLASS_PANE_STALL_CHECK_MS` | `8000` | How long a prompt only a person can answer must sit on the Clone's screen before the run is ended for it. |
 | `AGENTGLASS_RESTORE_SETTLE_MS` | `2000` | How long the tmux restore waits before checking what it rebuilt is still standing. |
 | `AGENTGLASS_EDITOR_DISABLED` | — | `1` → refuse **open in editor**, so the app cannot hand a path to a live nvim or `$EDITOR`. |
-| `AGENTGLASS_GPU` | — | `1` → opt an Electron window back into full GPU compositing. The desktop shell composites the final frame on the CPU on Linux by default, because some GPU/compositor stacks paint the window white. Unrelated to the terminal's own renderer setting. |
+| `AGENTGLASS_GPU` | — | `0` → composite the Electron window's final frame on the CPU on Linux. The desktop shell composites on the GPU by default; set this if a GPU/compositor stack paints the window white. Unrelated to the terminal's own renderer setting. |
 | `AGENTGLASS_MAX_TERMINALS` | `200` | Ceiling on concurrent PTY sessions. |
 | `AGENTGLASS_AUTOFETCH_SECONDS` | `60` | How often the git panel fetches in the background. |
 | `AGENTGLASS_GIT_TIMEOUT_SECONDS` | `120` | Ceiling on a single git subprocess. |

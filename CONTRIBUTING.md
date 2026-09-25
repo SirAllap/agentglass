@@ -39,8 +39,8 @@ python3 hooks/seed_demo.py   # populate with demo data
   and the packaged installer goes stale.
 - **`electron/`** — the Electron desktop shell. It runs the `web/` UI in
   Chromium and brings the Bun server up with it. Note the final frame is
-  **composited on the CPU on Linux** by default (`AGENTGLASS_GPU=1` opts back
-  in), because some GPU/compositor stacks paint the window white. `make desktop`
+  **composited on the GPU on Linux** by default (`AGENTGLASS_GPU=0` falls back
+  to the CPU), because some GPU/compositor stacks paint the window white. `make desktop`
   builds the UI and launches it; `make desktop-dist` packages installers with
   electron-builder (the sidecar is the Bun server compiled standalone, staged in
   via `extraResources`). Linux (AppImage/`.deb`), macOS (`.dmg`), Windows.

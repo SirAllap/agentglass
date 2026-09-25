@@ -29,6 +29,7 @@
  * remote and that decision is not the machine's to make.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { usePoll } from "../../lib/usePoll.ts";
 import { SERVER, authHeaders } from "../../lib/api.ts";
 import { Empty, wash, edge } from "../git/ui.tsx";
 import { Chip } from "../workspace/Chrome.tsx";
@@ -537,11 +538,7 @@ export function Work({ active, standing, goTo }: {
    * derived answer only changes when something actually starts or stops.
    */
   const working = busy !== null || shift?.state === "running" || runs.some((r) => r.state === "running");
-  useEffect(() => {
-    if (!active || !working) return;
-    const t = setInterval(() => { void load(); }, 6000);
-    return () => clearInterval(t);
-  }, [active, working, load]);
+  usePoll(active && working, () => { void load(); }, 6000);
 
   /*
    * THE COUNTER, and it reads on its own clock.

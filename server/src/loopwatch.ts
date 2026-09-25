@@ -16,8 +16,19 @@
 // view of the current session, not an audit trail, and the value is entirely in
 // the last few minutes.
 
-/** How often the heartbeat is supposed to fire. */
-const TICK_MS = 100;
+/**
+ * How often the heartbeat is supposed to fire.
+ *
+ * 250ms, down from 100. The tick is the whole cost of this file — ten timer
+ * wakeups a second forever, in a process that idles at about 600 — and the
+ * price of the coarser one is sampling: a block of B ms shows up as B minus the
+ * time left to the next tick, so with a 250ms tick a 200ms stall is caught about
+ * a third of the time where a 100ms tick caught four fifths. Blocks past ~370ms,
+ * the ones that freeze a terminal for real, are always caught. Stalls between
+ * STALL_MS and that are sampled now, not counted; a finer picture of those is the
+ * next thing this does not do.
+ */
+const TICK_MS = 250;
 /**
  * Drift past this counts as a stall. 120ms is roughly the point where typing
  * stops feeling immediate — under that, a keystroke still lands in the same

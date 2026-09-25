@@ -32,17 +32,18 @@ describe("loop watchdog", () => {
     // while the loop was blocked", so a tick that was already late — from
     // whatever the rest of the suite is doing — would make the block look like
     // it started before the label, and the label would rightly lose.
-    await Bun.sleep(120);
+    await Bun.sleep(300);
     const before = lw.stalls().stalls.at(-1)?.id ?? 0;
     lw.entered("GET /git/repos");
-    block(320);
-    await Bun.sleep(250);
+    block(520);
+    await Bun.sleep(300);
 
     const seen = lw.stalls(before).stalls;
     expect(seen.length).toBeGreaterThan(0);
     const worst = seen.reduce((a, b) => (b.ms > a.ms ? b : a));
     // Reported as drift past the heartbeat, not wall time — a 320ms block on a
-    // 100ms tick is ~220ms of loop unavailable to anyone else.
+    // 250ms tick is ~270ms of loop unavailable to anyone else. Long enough that
+    // the tick cannot fall in the gap: shorter blocks are only sampled.
     expect(worst.ms).toBeGreaterThanOrEqual(150);
     expect(worst.ms).toBeLessThan(1_000);
     expect(worst.what).toBe("GET /git/repos");
@@ -58,8 +59,8 @@ describe("loop watchdog", () => {
     lw.entered("GET /something-old");
     await Bun.sleep(300); // it has finished; the block below is not its doing
     const before = lw.stalls().stalls.at(-1)?.id ?? 0;
-    block(300);
-    await Bun.sleep(250);
+    block(520);
+    await Bun.sleep(300);
 
     const seen = lw.stalls(before).stalls;
     expect(seen.length).toBeGreaterThan(0);
@@ -74,7 +75,7 @@ describe("loop watchdog", () => {
   });
 
   it("is bounded — the thing that watches for growth must not grow", async () => {
-    for (let i = 0; i < 8; i++) { lw.entered(`burst ${i}`); block(240); await Bun.sleep(120); }
+    for (let i = 0; i < 8; i++) { lw.entered(`burst ${i}`); block(520); await Bun.sleep(300); }
     const s = lw.stalls();
     expect(s.stalls.length).toBeLessThanOrEqual(5);       // the ring trimmed
     expect(s.stalls.at(-1)!.id).toBeGreaterThan(5);        // …and kept the newest
@@ -135,13 +136,13 @@ describe("attribution across an await", () => {
       const owner = lw.currentLabel(); // captured while still inside the handler
       await Bun.sleep(60);            // …a subprocess, in real life
       lw.resumedAs(owner);            // its output is about to be parsed
-      block(300);
+      block(520);
     })();
     // Meanwhile a cheap poll arrives and finishes long before the block.
     await Bun.sleep(20);
     lw.entered("GET /__ping__");
     await slow;
-    await Bun.sleep(250);
+    await Bun.sleep(300);
 
     const seen = lw.stalls(before).stalls;
     const worst = seen.reduce((a, b) => (b.ms > a.ms ? b : a));

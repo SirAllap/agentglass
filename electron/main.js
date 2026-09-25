@@ -3,9 +3,9 @@
 //
 // Runs the EXACT web UI (web/dist) in Chromium, where GPU rasterisation keeps
 // the dashboard off the CPU — the previous WebKitGTK-based shell fell back to
-// software. On Linux the *final* frame is CPU-composited (see
-// disable-gpu-compositing below) to dodge a Wayland/GPU white-out; raster still
-// runs on the GPU, WebGL does not. Same pixels as the web app.
+// software. On Linux the final frame is GPU-composited too; AGENTGLASS_GPU=0 falls
+// back to CPU compositing (see disable-gpu-compositing below) for a stack that
+// paints the window white. Same pixels as the web app.
 //
 // It serves web/dist from the app's own `agentglass://` scheme and brings the
 // Bun server up with it unless one is already running.
@@ -115,7 +115,7 @@ const power = require("./power.js");
  * why, and still does today:
  *     ui/base/x/x11_software_bitmap_presenter.cc:147
  *       XGetWindowAttributes failed for window 1
- * With AGENTGLASS_GPU=1 (so this is not the white-out workaround below) it is the
+ * Without the CPU-compositing switch (so this is not the white-out workaround below) it is the
  * same, plus three ContextResult::kTransientFailure out of CreateCommandBuffer.
  * The switch is not being ignored — it reaches the children, it is right there in
  * /proc/<gpu-pid>/cmdline — it just cannot present.
@@ -166,18 +166,19 @@ if (process.platform === "linux") {
 }
 
 /*
- * Software-composite the final frame on Linux.
+ * GPU-composite the final frame on Linux, unless AGENTGLASS_GPU=0.
  *
  * On some Linux GPU/compositor stacks Chromium's GPU compositor hands the window
  * stale or empty tiles — the whole UI reads as solid white until a repaint
  * (switching theme) forces them to redraw. Compositing the final frame on the
- * CPU sidesteps it. Linux only, and AGENTGLASS_GPU=1 opts back in.
+ * CPU sidesteps it, and that used to be the default here. It is now the opt-out:
+ * AGENTGLASS_GPU=0 puts the switch back for a stack that shows the white-out.
  *
  * The price, MEASURED, because what used to be written here was wrong. This said
  * "GPU raster and WebGL still run… only the last composite is on the CPU". Half
  * of that is true. Read out of the running app through CDP SystemInfo.getInfo:
  *
- *                        default (this switch)   AGENTGLASS_GPU=1
+ *                        AGENTGLASS_GPU=0        default
  *     gpu_compositing    disabled_software       enabled
  *     rasterization      enabled                 enabled
  *     webgl              enabled_readback        enabled
@@ -190,18 +191,21 @@ if (process.platform === "linux") {
  * (web/src/components/TerminalPanel.tsx) exists precisely to keep a fast-writing
  * shell off the CPU.
  *
- * Kept anyway, for now. Under native Wayland on this machine (AMD Radeon 890M,
- * Mesa 25.2.8, GNOME 46) the white-out did not appear in either mode across a
- * dark→light theme change, view switches, maximise, unmaximise, fullscreen,
- * windowed, minimise and restore — nine frames each way, every one with the
- * right mean colour and a clean log. That is an absence of evidence from one
- * session, not evidence of absence, and the bug it guards against is
- * intermittent and stack-dependent; it was also tuned on XWayland under Electron
- * 33, which is no longer the configuration that ships. Whoever removes it should
- * do it deliberately, run without it for a week, and get the terminal's
- * acceleration back as the reward.
+ * Flipped to opt-out because a CPU-composited 4K window was the biggest single
+ * idle cost measured on the desktop (the renderer's compositor plus the GPU
+ * process reading WebGL back, about a third of a core). Under native Wayland on
+ * this machine (AMD Radeon 890M, Mesa 25.2.8, GNOME 46) the white-out did not
+ * appear in either mode across a dark→light theme change, view switches,
+ * maximise, unmaximise, fullscreen, windowed, minimise and restore — nine frames
+ * each way, every one with the right mean colour and a clean log. That is an
+ * absence of evidence from one session, not evidence of absence, and the bug it
+ * guards against is intermittent and stack-dependent; it was also tuned on
+ * XWayland under Electron 33, which is no longer the configuration that ships.
+ * If a solid-white window turns up, AGENTGLASS_GPU=0 is the first thing to try,
+ * and the report belongs with the GPU/compositor it came from. Not measured
+ * here: the CPU of each mode on a visible window, which needs frame callbacks.
  */
-if (process.platform === "linux" && !process.env.AGENTGLASS_GPU) {
+if (process.platform === "linux" && process.env.AGENTGLASS_GPU === "0") {
   app.commandLine.appendSwitch("disable-gpu-compositing");
 }
 

@@ -75,3 +75,25 @@ describe("the pull request panel's git poll", () => {
     expect(text).toContain("}, [active, root, detail?.headRefName]);");
   });
 });
+
+describe("the fixed-rate polls of five seconds or less that were still ungated", () => {
+  // Docker's overview and stats (5s), the power button (5s), the pairing state
+  // (2s) and the understudy's work list (6s) ran a raw interval, so they kept
+  // asking a second monitor's worth of nobody. They go through usePoll now,
+  // which also refreshes the instant the window is back. Left out on purpose:
+  // the 1s clocks that only repaint a label, the understudy's 2s pane watch
+  // (its read lives inside the effect it re-arms) and the editor cursor follow
+  // in PeekFile, which must keep running while the app is unfocused because
+  // the editor it follows is another window.
+  test.each([
+    ["components/DockerPanel.tsx", ["usePoll(active, loadOverview, 5000)", "usePoll(active && view === \"containers\", loadStats, 5000)"]],
+    ["components/Header.tsx", ["usePoll(true, () => { void powerStatus()"]],
+    ["components/PairPanel.tsx", ["usePoll(true, poll, 2000)"]],
+    ["components/understudy/Work.tsx", ["usePoll(active && working, () => { void load(); }, 6000)"]],
+  ] as const)("%s", async (rel, calls) => {
+    const text = await src(rel);
+    for (const c of calls) expect(text).toContain(c);
+    expect(text).not.toMatch(/setInterval\((loadOverview|loadStats|poll|load)\b/);
+    expect(text).not.toContain("setInterval(poll, 5000)");
+  });
+});

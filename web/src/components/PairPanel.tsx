@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SettingRow } from "./SettingRow.tsx";
 import { api } from "../lib/api.ts";
+import { usePoll } from "../lib/usePoll.ts";
 import { qrMatrix, qrSvgPath } from "../lib/qr.ts";
 import { fmtAgo } from "../lib/format.ts";
 import type { DeviceScope, PairedDevice, PairRequest, PairState } from "../../../shared/types.ts";
@@ -83,12 +84,12 @@ export function PairPanel({ baseUrl, variant = "hero", onPaired }: {
 
   useEffect(() => {
     poll();
-    const t = setInterval(poll, 2000);
     // A second timer only for the countdown, so the digits tick every second
     // without asking the server sixty times a minute.
     const c = setInterval(() => setNow(Date.now()), 1000);
-    return () => { clearInterval(t); clearInterval(c); };
+    return () => clearInterval(c);
   }, [poll]);
+  usePoll(true, poll, 2000);
 
   // Closing the pane closes the invitation. A QR left live because a window was
   // shut is exactly the code somebody scans off a screenshot later.
