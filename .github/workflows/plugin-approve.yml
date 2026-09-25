@@ -348,7 +348,7 @@ jobs:
       # checks and auto-merge wait on.
       - name: A token for this one pull request
         id: app
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.CATALOGUE_APP_ID }}
           private-key: ${{ secrets.CATALOGUE_APP_KEY }}
