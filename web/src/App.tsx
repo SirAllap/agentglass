@@ -57,6 +57,7 @@ import DbNoticeBanner from "./components/DbNoticeBanner.tsx";
 import { chordFromEvent, viewForChord, appActionForChord } from "./lib/keybindings.ts";
 import { openFocusedPaneDoor, type PaneDoor } from "./components/TerminalPanel.tsx";
 import { FilePalette } from "./components/FilePalette.tsx";
+import { onFinderAt, type FinderTarget } from "./lib/finderTarget.ts";
 import { WindowSwitcher } from "./components/terminal/WindowSwitcher.tsx";
 import { FloatingBench } from "./components/bench/FloatingBench.tsx";
 import { benchTakesBoard, toggleBench, showFile } from "./lib/benchStore.ts";
@@ -124,6 +125,9 @@ export default function App() {
    * to survive the palette closing.
    */
   const [filesOpen, setFilesOpen] = useState(false);
+  /** A path somebody clicked in a terminal: the finder opens on it. */
+  const [finderTarget, setFinderTarget] = useState<FinderTarget | null>(null);
+  useEffect(() => onFinderAt((t) => { setFinderTarget(t); setFilesOpen(true); }), []);
   /** The window switcher (its chord, from anywhere). */
   const [windowsOpen, setWindowsOpen] = useState(false);
   const [peek, setPeek] = useState<Peek | null>(null);
@@ -1223,6 +1227,7 @@ export default function App() {
       <FilePalette
         open={filesOpen}
         onClose={() => setFilesOpen(false)}
+        target={finderTarget}
         docOpen={peek !== null}
         onHeight={setPaletteH}
         onOpenFile={async (root, rel, branch, ref) => {

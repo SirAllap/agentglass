@@ -33,6 +33,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import { answerDecrqm } from "../lib/xtermDecrqm.ts";
 import { openExternal } from "../lib/externalUrl.ts";
+import { registerPathLinks } from "../lib/termPathLinks.ts";
 import type { GitRepoRef, GitBranch, PrBranchSummary, TerminalCommands, TmuxWindow, TmuxPane, PtyServerFrame, PtyClientFrame } from "../../../shared/types.ts";
 import { chipTarget } from "../lib/chipTarget.ts";
 import { openPr } from "../lib/openPrs.ts";
@@ -806,6 +807,10 @@ function createSession(root: string, agentTicket?: string): Sess {
   // updating. See xtermDecrqm.
   answerDecrqm(term as never);
   term.loadAddon(new WebLinksAddon((_e, uri) => { openExternal(uri); }));
+  // A path that exists opens in the finder. `root` is where this shell began.
+  // Ceiling: after a `cd`, or over ssh, a relative path that ALSO exists under
+  // `root` links to that one. Absolute and ~/ paths are exact.
+  registerPathLinks(term, root);
   /*
    * Draw on the GPU when the machine will let us.
    *

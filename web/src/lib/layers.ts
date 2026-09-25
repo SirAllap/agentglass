@@ -57,6 +57,15 @@ export const LAYER = {
   palette: 10040,
 
   /**
+   * A picture opened from the palette.
+   *
+   * Above the palette, unlike the rule above it: this one COVERS the list it
+   * was raised from, because a screenshot is read at size and Esc is what puts
+   * the list back. It still sits under the menus and the needs panel.
+   */
+  paletteImage: 10045,
+
+  /**
    * The "waiting on you" panel under the title-bar chip.
    *
    * Above the workspace's own layers because it is raised from the bar over
