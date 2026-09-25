@@ -150,7 +150,7 @@ import { transcribe, transcriberOn } from "./dictate.ts";
 import { AGENT_KINDS, agentKind } from "../../shared/agentKinds.ts";
 /* Both sides' imports: main added five, this branch still uses `panesWithPids`
    and `reapMirrorSessions`. Neither list is a superset of the other. */
-import { listPanes, withTmuxServer, focusPaneAnywhere, activePane, panesWithPids, sweepPinnedWindows, pinnedSockets, reapMirrorSessions, startMirrorSweeper, stopMirrorSweeper } from "./tmuxctl.ts";
+import { listPanes, withTmuxServer, focusPaneAnywhere, activePane, panesWithPids, sweepPinnedWindows, pinnedSockets, reapMirrorSessions, startMirrorSweeper, stopMirrorSweeper, socketPath } from "./tmuxctl.ts";
 import { repairLast, snapshot } from "./tmuxsnapshot.ts";
 import { withAgentSessions } from "./paneloc.ts";
 import { notePaneFromHook, paneDirs, paneAgentNote, paneHeldSessions } from "./panewt.ts";
@@ -1835,9 +1835,10 @@ setGitChangeHook(() => { treeCache.clear(); worktreesCache.clear(); rowsCache.cl
  * Rides on the working list rather than being a route of its own because the
  * list is the thing it qualifies: a section heading that names one branch and
  * may be two authors' work. The panes are read at most every ten seconds — the
- * list itself is re-read every two, and `listPanes` is synchronous: up to four
- * tmux spawns per socket plus a walk of /proc per pane, none of it worth a late
- * keystroke in the terminal that shares this thread. An agent arriving in or
+ * list itself is re-read every two, and `listPanes` is up to four tmux spawns
+ * per live socket plus a walk of /proc per pane (`withTmuxServer` is still one
+ * blocking ask per server), none of it worth a late keystroke in the terminal
+ * that shares this thread. An agent arriving in or
  * leaving a pane is a ten-second question; the edits are read forward from
  * the last rebuild, so each one costs this thread only the events since
  * (sharedtree.ts).
@@ -1853,11 +1854,11 @@ const PANES_HELD_TTL_MS = 10_000;
 const NAMES_TTL_MS = 60_000;
 let panesHeld: { at: number; ids: Set<string> } | null = null;
 const authorNames = new Map<string, { at: number; name: string }>();
-function authorsNow(repos: GitRepoRef[], rows: ChangeRow[]): TreeAuthorsInfo[] {
+async function authorsNow(repos: GitRepoRef[], rows: ChangeRow[]): Promise<TreeAuthorsInfo[]> {
   try {
     if (!panesHeld || Date.now() - panesHeld.at > PANES_HELD_TTL_MS) {
       let ids = new Set<string>();
-      try { ids = paneHeldSessions(withTmuxServer(listPanes(lastTmuxTarget()?.socket))); } catch { /* no tmux: last-seen alone decides */ }
+      try { ids = paneHeldSessions(withTmuxServer(await listPanes(lastTmuxTarget()?.socket))); } catch { /* no tmux: last-seen alone decides */ }
       panesHeld = { at: Date.now(), ids };
     }
     const live = liveSessions(recentSessions(), panesHeld.ids);
@@ -5248,7 +5249,7 @@ const server = Bun.serve<WsData>({
         const repos = await discoverRepos(paths, knownProjects().map((p) => p.path), {});
         const result = await changeRows(repos, mode, workspaceRoots(), ROWS_MAX);
         // Committed rows are history; who is writing into a tree NOW is not a question about them.
-        if (mode === "working") result.authors = authorsNow(repos, result.rows);
+        if (mode === "working") result.authors = await authorsNow(repos, result.rows);
         const out = JSON.stringify(result);
         rowsCache.set(mode, { at: Date.now(), body: out });
         return out;
@@ -5312,7 +5313,11 @@ const server = Bun.serve<WsData>({
        * agent last ran. A note pointing at a pane that has since closed drops
        * out with the list rather than becoming a button that goes nowhere.
        */
-      const live = listPanes(lastTmuxTarget()?.socket).map(({ socket: _s, ...p }) => p);
+      // Desktop, phone and an extra tab each poll this on their own timer, and
+      // a poll landing in the same instant as another was a second fan-out of
+      // tmux spawns for an answer already on its way — see singleflight.ts.
+      const live = (await singleFlight(`listPanes:${socketPath(lastTmuxTarget()?.socket ?? [])}`,
+        () => listPanes(lastTmuxTarget()?.socket))).map(({ socket: _s, ...p }) => p);
       /*
        * A note is only believed while the agent it was written for is STILL the
        * one in that pane — `paneDirs` has applied this rule for a while and this
@@ -6957,7 +6962,8 @@ const server = Bun.serve<WsData>({
        * belongs to a workspace is a session's transcripts, and that is a
        * different question asked at a different endpoint.
        */
-      const live = listPanes(lastTmuxTarget()?.socket)
+      const live = (await singleFlight(`listPanes:${socketPath(lastTmuxTarget()?.socket ?? [])}`,
+        () => listPanes(lastTmuxTarget()?.socket)))
         // The socket is a filesystem path and stays on this side of the wire.
         .map(({ socket: _s, ...p }) => p);
       /*
@@ -7038,7 +7044,8 @@ const server = Bun.serve<WsData>({
        */
       const win = url.searchParams.get("window") || "";
       if (url.searchParams.get("all") === "1") {
-        const panes = panesWithPids(lastTmuxTarget()?.socket, win);
+        const panes = await singleFlight(`panesWithPids:${socketPath(lastTmuxTarget()?.socket ?? [])}:${win}`,
+          () => panesWithPids(lastTmuxTarget()?.socket, win));
         return json({
           ok: true,
           panes: panes.map((p) => {
@@ -7053,7 +7060,8 @@ const server = Bun.serve<WsData>({
           }),
         });
       }
-      const pane = activePane(lastTmuxTarget()?.socket, win);
+      const pane = await singleFlight(`activePane:${socketPath(lastTmuxTarget()?.socket ?? [])}:${win}`,
+        () => activePane(lastTmuxTarget()?.socket, win));
       if (!pane) return json({ ok: true, pane: null, dirs: [] });
       const { dirs } = paneDirs(pane.paneId, pane.pid);
       /* WHOSE answer this is, alongside the answer.
@@ -7077,7 +7085,7 @@ const server = Bun.serve<WsData>({
       if (!trustedCaller(req, from)) return csrfBlocked();
       let b: { sessionId?: unknown; windowId?: unknown; paneId?: unknown };
       try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
-      const ok = focusPaneAnywhere(lastTmuxTarget()?.socket, String(b.sessionId ?? ""), String(b.windowId ?? ""), String(b.paneId ?? ""));
+      const ok = await focusPaneAnywhere(lastTmuxTarget()?.socket, String(b.sessionId ?? ""), String(b.windowId ?? ""), String(b.paneId ?? ""));
       return json(ok ? { ok } : { ok, error: "tmux would not go there — the pane may be gone" }, ok ? 200 : 409);
     }
 

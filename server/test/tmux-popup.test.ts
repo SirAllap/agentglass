@@ -18,6 +18,14 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { closePopup, outerClientTty, runAction, type TmuxTarget } from "../src/tmuxctl.ts";
 import { TMUX_ISOLATED } from "./tmuxIsolated.ts";
+import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
+
+/* A private socket directory, for this file's spawns, the attached `script`
+   client and the code under test alike: a bare `-L` lands in /tmp/tmux-<uid>
+   and `kill-server` leaves the socket file there. Restored only after the
+   server is gone. */
+const REAL_TMPDIR = process.env.TMUX_TMPDIR;
+process.env.TMUX_TMPDIR = TMUX_TEST_TMPDIR;
 
 const SOCK = [...TMUX_ISOLATED, "-L", "agx-popup-suite"];
 const tmux = (...a: string[]) =>
@@ -69,7 +77,11 @@ async function until(n: number, ms = 8000): Promise<void> {
   }
 }
 
-afterAll(() => { tmux("kill-server"); });
+afterAll(async () => {
+  await killServer();
+  if (REAL_TMPDIR === undefined) delete process.env.TMUX_TMPDIR;
+  else process.env.TMUX_TMPDIR = REAL_TMPDIR;
+});
 
 describe("a scratch popup on the same server", () => {
   test("it is a second client, and the app can tell which one is the desk", async () => {

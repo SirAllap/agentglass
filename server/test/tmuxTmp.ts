@@ -36,8 +36,23 @@
  * down: that one stops a test's tmux from loading the developer's config, this
  * one stops a test's server from finding the developer's tmux.
  */
-import { mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { lstatSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
+
+const myUid = typeof process.getuid === "function" ? process.getuid() : 0;
+
+/**
+ * `path` exists, is a real directory (not a symlink to one), and is ours.
+ * `lstatSync` — not `statSync` — is the point: `statSync` follows a symlink
+ * and would report the TARGET directory's own shape, which is exactly the
+ * case this exists to catch.
+ */
+function realOwnedDir(path: string): boolean {
+  try {
+    const st = lstatSync(path);
+    return st.isDirectory() && st.uid === myUid;
+  } catch { return false; }
+}
 
 export const TMUX_TEST_TMPDIR = `/tmp/agx-test-tmux-${process.pid}`;
 
@@ -81,6 +96,15 @@ try {
     `Refusing to export it: tmux falls back to /tmp/tmux-<uid> when TMUX_TMPDIR is absent, ` +
     `which is the developer's own socket directory.`,
     { cause: e },
+  );
+}
+// `mkdirSync(..., { recursive: true })` silently accepts a path that already
+// exists as a symlink to someone else's directory — no EEXIST, nothing
+// thrown, and every child below inherits a TMUX_TMPDIR pointing there.
+if (!realOwnedDir(TMUX_TEST_TMPDIR)) {
+  throw new Error(
+    `${TMUX_TEST_TMPDIR} exists but is not a real directory owned by this process. ` +
+    `Refusing to export it as TMUX_TMPDIR.`,
   );
 }
 
@@ -145,3 +169,70 @@ export const socketDirUnder = (tmpdir: string): string =>
    for the path. Never throws: a directory that cannot be tidied is not a reason
    to fail a suite, unlike one that cannot be CREATED — see above. */
 try { sweepDeadSockets(socketDirUnder(TMUX_TEST_TMPDIR)); } catch { /* best-effort */ }
+
+/*
+ * The servers a run never got to stop. A run that is interrupted — Ctrl-C, a
+ * harness timeout, a killed terminal — never reaches its `afterAll`, and the
+ * pane suites run a child `bun test` for up to three minutes, so that is not
+ * rare: tmux servers daemonize and outlive it, each still running its stub
+ * agent. Found alive days later, a dozen of them. The next run is the first
+ * thing that can notice, so it does: a directory of this shape whose pid is no
+ * longer a process gets `kill-server` on every socket in it, then removed.
+ *
+ * CEILING: once a directory is gone its live servers cannot be reached by path
+ * at all, and this cannot help them; a reused pid keeps its directory until
+ * that process ends.
+ *
+ * Two more guards, for the same reason the symlink check exists: acting on a
+ * directory this run does not actually own is worse than leaving an orphan
+ * alone one cycle longer.
+ *
+ *   not a symlink   `readdirSync` on a run dir that is a symlink would walk
+ *                    and `kill-server` whatever it points at, which can be
+ *                    anything. `realOwnedDir` requires a real directory we own,
+ *                    checked with `lstat` so a symlink cannot pass by having a
+ *                    directory on the other end.
+ *   old enough       `process.kill(pid, 0)` throwing ESRCH is read as "the run
+ *                    ended", but a pid-namespaced sandbox sharing /tmp with the
+ *                    host sees every host pid as ESRCH too — that is not proof
+ *                    of anything. A live run keeps touching its directory and
+ *                    its socket directory; 15 minutes of neither being touched
+ *                    is what actually distinguishes a dead run from a live one
+ *                    the namespace merely cannot see.
+ */
+const REAP_MIN_AGE_MS = 15 * 60_000;
+
+export function reapOrphanRuns(root = "/tmp"): number {
+  let reaped = 0;
+  let names: string[];
+  try { names = readdirSync(root); } catch { return 0; }
+  const now = Date.now();
+  for (const name of names) {
+    const m = /^agx-test-tmux-(\d+)$/.exec(name);
+    if (!m || Number(m[1]) === process.pid) continue;
+    try { process.kill(Number(m[1]), 0); continue; } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ESRCH") continue; // alive, not ours to judge
+    }
+    const dir = join(root, name);
+    if (!realOwnedDir(dir)) continue; // symlinked or not ours: never touch
+    let dirMtimeMs: number;
+    try { dirMtimeMs = lstatSync(dir).mtimeMs; } catch { continue; }
+    if (now - dirMtimeMs < REAP_MIN_AGE_MS) continue; // touched too recently to trust ESRCH
+
+    const sockets = socketDirUnder(dir);
+    let socks: string[] = [];
+    try {
+      const st = lstatSync(sockets);
+      if (!st.isDirectory() || st.uid !== myUid) continue; // symlinked: skip the whole dir
+      if (now - st.mtimeMs < REAP_MIN_AGE_MS) continue;
+      socks = readdirSync(sockets);
+    } catch { /* no server ever started */ }
+    for (const s of socks) {
+      Bun.spawnSync(["tmux", "-f", "/dev/null", "-S", join(sockets, s), "kill-server"],
+        { stdout: "ignore", stderr: "ignore" });
+    }
+    try { rmSync(dir, { recursive: true, force: true }); reaped++; } catch { /* in use */ }
+  }
+  return reaped;
+}
+try { reapOrphanRuns(); } catch { /* best-effort */ }

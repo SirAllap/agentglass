@@ -11,6 +11,7 @@ import { Select } from "./Select.tsx";
 import { subscribe as subscribeChats, attentionCount } from "../lib/chatStore.ts";
 import { WorkspaceIcon } from "./workspace/icons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { sharedPhase } from "../lib/sharedPhase.ts";
 import { CrossIcon, HomeIcon, SparkleIcon } from "../lib/glyphIcons.tsx";
 
 // Sessions whose model never resolved carry the "unknown" provider value; it
@@ -362,6 +363,7 @@ export function Header({
             background: `color-mix(in srgb, ${waiting ? "var(--success)" : "var(--primary)"} 18%, transparent)`,
             border: `1px solid color-mix(in srgb, ${waiting ? "var(--success)" : "var(--primary)"} ${waiting ? 70 : 50}%, transparent)`,
             animation: waiting ? "agx-attention 1.8s ease-in-out infinite" : undefined,
+            animationDelay: waiting ? sharedPhase(1800) : undefined,
           }}
         >
           <WorkspaceIcon />

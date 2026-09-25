@@ -63,6 +63,7 @@ import { CloseButton, CloseIcon } from "./CloseButton.tsx";
 import { FindArrow } from "./FindBar.tsx";
 import { PluckPalette } from "./terminal/PluckPalette.tsx";
 import { edgeMask, useTabStripScroll } from "../lib/tabStrip.ts";
+import { sharedPhase } from "../lib/sharedPhase.ts";
 import { StatusMark, STATUS_COLOR } from "./terminal/StatusMark.tsx";
 import { STATUS_WORDS } from "../../../shared/windowStatus.ts";
 import { buildGroups, openGroups, parseRules, setOpenGroups, subscribeTabGroups, tabGroupRulesText, tabGroupsOn, tabGroupsVersion, worthGrouping, type TabGroup } from "../lib/tabGroups.ts";
@@ -3475,7 +3476,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                                   larger than the number it annotates.
                                   icon-floor-exempt: a status badge, not a control */}
                               <svg width="9" height="13" viewBox="0 0 10 14" aria-label="phone attached"
-                                style={{ color: "var(--phone)", animation: "agx-phone-pulse 1.8s ease-in-out infinite" }}>
+                                style={{ color: "var(--phone)", animation: "agx-phone-pulse 1.8s ease-in-out infinite", animationDelay: sharedPhase(1800) }}>
                                 <rect x="0.7" y="0.7" width="8.6" height="12.6" rx="1.6"
                                   fill="none" stroke="currentColor" strokeWidth="1.4" />
                                 <circle cx="5" cy="10.8" r="0.9" fill="currentColor" />

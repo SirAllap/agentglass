@@ -114,7 +114,7 @@ beforeEach(() => {
 afterEach(() => { tmux("kill-server"); });
 
 describe("focusPaneAnywhere aims at the desk, not the phone mirror sharing its window", () => {
-  it("switches the client to the REAL session that owns the shared pane", () => {
+  it("switches the client to the REAL session that owns the shared pane", async () => {
     // REAL's pane, the one `list-panes -a` reports under both REAL and MIRROR.
     const pane = tmux("display", "-p", "-t", REAL, "#{pane_id}").out;
     expect(pane).toMatch(/^%\d+$/);
@@ -127,7 +127,7 @@ describe("focusPaneAnywhere aims at the desk, not the phone mirror sharing its w
     // row's own ids — `switch-client` would fail and the client would never move
     // to REAL. That it lands on REAL proves both that the mirror row was
     // filtered out AND that the real row's own ids were used.
-    const ok = focusPaneAnywhere(["-S", SOCK], "$99", "@99", pane);
+    const ok = await focusPaneAnywhere(["-S", SOCK], "$99", "@99", pane);
     expect(ok).toBe(true);
     settle();
 
@@ -135,13 +135,13 @@ describe("focusPaneAnywhere aims at the desk, not the phone mirror sharing its w
     expect(clientSession()).toBe(REAL);
   });
 
-  it("focuses nothing when the only row for a pane is a phone mirror", () => {
+  it("focuses nothing when the only row for a pane is a phone mirror", async () => {
     // A pane that appears ONLY under a phone session: there is no real session
     // to switch the desk onto, so the honest answer is to do nothing.
     const pane = tmux("display", "-p", "-t", PHONE_ONLY, "#{pane_id}").out;
     expect(pane).toMatch(/^%\d+$/);
 
-    const ok = focusPaneAnywhere(["-S", SOCK], "$99", "@99", pane);
+    const ok = await focusPaneAnywhere(["-S", SOCK], "$99", "@99", pane);
     expect(ok).toBe(false);
     // And it did not drag the desk anywhere: still where it was.
     expect(clientSession()).toBe(MIRROR);

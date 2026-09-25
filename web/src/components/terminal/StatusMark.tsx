@@ -14,6 +14,7 @@
  * glance and a quiet tab should look quiet.
  */
 import { ICON } from "../../lib/iconSize.ts";
+import { sharedPhase } from "../../lib/sharedPhase.ts";
 import { STATUS_WORDS, type WindowStatus } from "../../../../shared/windowStatus.ts";
 
 export const STATUS_COLOR: Record<WindowStatus, string> = {
@@ -32,7 +33,9 @@ export function StatusMark({ status, size = ICON.xs, title }: { status: WindowSt
       // Only `working` moves, and only in opacity — the phone mark's breathe,
       // so a busy tab reads "still going" without the row twitching. The
       // shape and colour carry it for anyone who asked for less motion.
-      style={status === "working" ? { animation: "agx-phone-pulse 1.8s ease-in-out infinite" } : undefined}>
+      // `animationDelay` puts every instance on the same shared clock, so a
+      // screen with several of them steps in phase — see sharedPhase.ts.
+      style={status === "working" ? { animation: "agx-phone-pulse 1.8s ease-in-out infinite", animationDelay: sharedPhase(1800) } : undefined}>
       {title && <title>{title}</title>}
       {status === "working" && <circle cx="6" cy="6" r="3.5" fill={c} />}
       {status === "waiting" && <circle cx="6" cy="6" r="3.4" fill="none" stroke={c} strokeWidth="2" />}

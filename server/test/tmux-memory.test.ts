@@ -112,7 +112,7 @@ describe("what is remembered", () => {
 });
 
 describe("the session you left is on offer again", () => {
-  it("lists the panes of a detached server we were last attached to", () => {
+  it("lists the panes of a detached server we were last attached to", async () => {
     /*
      * THE BUG. Before this, a server with no client was skipped outright, so
      * the session agentglass itself had just detached was the one it would not
@@ -121,11 +121,11 @@ describe("the session you left is on offer again", () => {
     const sock = detachedServer("workbench");
     expect(tmux(sock, "list-clients", "-F", "#{client_tty}")).toBe(""); // nobody is attached
     remember(sock, "workbench");
-    const rows = listPanes([]).filter((r) => r.session === "workbench");
+    const rows = (await listPanes([])).filter((r) => r.session === "workbench");
     expect(rows.length).toBeGreaterThan(0);
   });
 
-  it("still skips a detached server that is not ours", () => {
+  it("still skips a detached server that is not ours", async () => {
     /*
      * The filter is not being removed, and this is why it exists: the suite
      * leaves servers behind on scratch sockets and a resurrect config restores
@@ -135,26 +135,26 @@ describe("the session you left is on offer again", () => {
     const ours = detachedServer("workbench");
     const stray = detachedServer("not-ours");
     remember(ours, "workbench");
-    const names = listPanes([]).map((r) => r.session);
+    const names = (await listPanes([])).map((r) => r.session);
     expect(names).toContain("workbench");
     expect(names).not.toContain("not-ours");
     expect(stray).toBeTruthy();
   });
 
-  it("shows nothing extra when nothing is remembered", () => {
+  it("shows nothing extra when nothing is remembered", async () => {
     // The behaviour this app had before the file existed, asserted so that a
     // machine with no memory yet cannot start seeing stray servers.
     detachedServer("workbench");
-    expect(listPanes([]).map((r) => r.session)).not.toContain("workbench");
+    expect((await listPanes([])).map((r) => r.session)).not.toContain("workbench");
   });
 
-  it("does not resurrect a socket whose server has since died", () => {
+  it("does not resurrect a socket whose server has since died", async () => {
     // A remembered path that answers nothing is not an error and not a row: the
     // tmux call fails and the caller reports no panes.
     const sock = detachedServer("workbench");
     remember(sock, "workbench");
     tmux(sock, "kill-server");
-    expect(listPanes([]).map((r) => r.session)).not.toContain("workbench");
+    expect((await listPanes([])).map((r) => r.session)).not.toContain("workbench");
   });
 });
 

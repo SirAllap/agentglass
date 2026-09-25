@@ -762,6 +762,39 @@
   [style*="agx-phone-pulse"] { animation: none !important; }
 }
 
+/* The status loops that stay on screen for as long as an agent works or waits:
+   the working pulse (one per tab) and the waiting ring.
+
+   Any running animation that can be seen keeps Chromium producing a frame at
+   every vsync, and the desktop composites in software (electron/main.js), so
+   each one is a full-window composite charged to the CPU. Measured in headless
+   Chromium with software compositing at 3048x1678: three working tabs and one
+   waiting ring drew 60 frames/s for as long as they were shown, whole browser
+   53% against 22% without them — and still 60 frames/s with the window
+   unfocused, because nothing paused them.
+
+   Stepped, the same breathe is five levels instead of sixty: ~4 frames/s per
+   instance -- but only once every instance shares one clock. `animationDelay`
+   used to default to 0 at each element's own mount time, so instances that
+   mounted a beat apart stepped OUT of phase and a screen showing several drew
+   roughly their SUM, not their shared rate; `sharedPhase()` (web/src/lib/
+   sharedPhase.ts) reads `document.timeline.currentTime` so every instance
+   lands on the same step regardless of when it mounted. Measured with
+   scripts/smoke.ts after that fix, three tab pulses and one waiting ring:
+   4.5 frames/s total, against 13.5 frames/s for the same four instances
+   mounted out of phase. And paused, like the dashboard's loops above, while
+   nobody is looking at the window. A view that is merely hidden needs
+   nothing: `visibility: hidden`
+   already draws no frames for the animations inside it (measured, 0/s). */
+[style*="agx-phone-pulse"],
+[style*="agx-attention"] {
+  animation-timing-function: steps(4) !important;
+}
+:root[data-idle="1"] [style*="agx-phone-pulse"],
+:root[data-idle="1"] [style*="agx-attention"] {
+  animation-play-state: paused !important;
+}
+
 /* Keyboard focus.
  *
  * The app leans on `outline-none` for its own styling, which also removed the

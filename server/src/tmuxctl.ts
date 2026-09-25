@@ -287,23 +287,8 @@ function noteSuppressed(socket: string[], writes: string[][]): void {
   }
 }
 
-/**
- * Run a tmux command against a specific server. stdout only; a failure is a
- * null, never a throw, because every caller is inside a poll.
- *
- * With a locale, because every format in this file separates its fields with a
- * tab and tmux will not hand one back to a process that has none. Measured:
- * `list-panes -F "#{pane_active}\t#{pane_id}"` returns `1\t%0` from a normal
- * shell and `1_%0` under `env -i` — tmux sanitises what it cannot call
- * printable in the current locale, and the C locale is that. Nothing crashes;
- * every line simply becomes one field that no `split("\t")` can take apart, so
- * the tab strip empties and the machine reports no agents. Which environment
- * the server gets is not up to it — a desktop launcher hands over a full one, a
- * systemd unit or a test harness hands over almost nothing — so the answer must
- * not depend on that. An existing setting is kept: this is a floor, not a
- * preference.
- */
-function tmux(socket: string[], args: string[], keepPartial = false): string | null {
+/** The doors every tmux command passes before it runs, in order; true is a refusal. */
+function tmuxRefused(socket: string[], args: string[]): boolean {
   /*
    * Observe-only, and it is asked FIRST — before the two socket rules below
    * rather than after them.
@@ -321,7 +306,7 @@ function tmux(socket: string[], args: string[], keepPartial = false): string | n
    */
   if (observeOnly()) {
     const writes = tmuxWriteCommands(args);
-    if (writes.length) { noteSuppressed(socket, writes); return null; }
+    if (writes.length) { noteSuppressed(socket, writes); return true; }
   }
   /*
    * The backstop, at the one place every tmux command in this file goes
@@ -346,7 +331,7 @@ function tmux(socket: string[], args: string[], keepPartial = false): string | n
    * without a tmux command having to be issued to find out. See the note there
    * for why that distinction is not cosmetic.
    */
-  if (!tmuxSocketAllowed(socket)) return null;
+  if (!tmuxSocketAllowed(socket)) return true;
   /*
    * And the same door for a process that is NOT under `bun test`, which the
    * guard above cannot help with: its first line is `if (process.env.NODE_ENV
@@ -374,34 +359,79 @@ function tmux(socket: string[], args: string[], keepPartial = false): string | n
    * alternative is a rule that can be unset by the process it is meant to
    * confine.
    */
-  if (!tmuxSocketConfined(socket)) return null;
+  return !tmuxSocketConfined(socket);
+}
+
+/** The locale floor described on `tmux` below: an existing setting is kept. */
+function tmuxEnv(): Record<string, string | undefined> {
+  return process.env.LC_ALL || process.env.LANG || process.env.LC_CTYPE
+    ? process.env
+    : { ...process.env, LC_ALL: "C.UTF-8" };
+}
+
+/** What a finished tmux command answers, shared by `tmux` and `tmuxAsync`. */
+function tmuxResult(socket: string[], exitCode: number | null, out: string, err: string, keepPartial: boolean): string | null {
+  if (exitCode !== 0) noteDeadSocket(socket, err);
+  /*
+   * A command list ABORTS at the first command that fails, and tmux exits
+   * non-zero for the whole list — with everything the earlier commands printed
+   * already on stdout. Measured.
+   *
+   * For a single command that is the right answer: nothing useful came back.
+   * For the sweep's frame it is not, and the difference is the tab strip. A
+   * frame that answers null makes the sweep drop the client and tell the panel
+   * `active: false`, which empties the strip; and the frame is a list, so ONE
+   * unlucky command — an option a tmux is too old to have, a window that died
+   * between two lines of the same call — would take the strip down with it.
+   * `keepPartial` says: parse what did arrive. Every parser here already
+   * ignores lines it does not recognise, so a short answer is a smaller frame
+   * and never a wrong one.
+   */
+  if (exitCode !== 0) return keepPartial && out ? out : null;
+  return out;
+}
+
+/**
+ * Run a tmux command against a specific server. stdout only; a failure is a
+ * null, never a throw, because every caller is inside a poll.
+ *
+ * With a locale, because every format in this file separates its fields with a
+ * tab and tmux will not hand one back to a process that has none. Measured:
+ * `list-panes -F "#{pane_active}\t#{pane_id}"` returns `1\t%0` from a normal
+ * shell and `1_%0` under `env -i` — tmux sanitises what it cannot call
+ * printable in the current locale, and the C locale is that. Nothing crashes;
+ * every line simply becomes one field that no `split("\t")` can take apart, so
+ * the tab strip empties and the machine reports no agents. Which environment
+ * the server gets is not up to it — a desktop launcher hands over a full one, a
+ * systemd unit or a test harness hands over almost nothing — so the answer must
+ * not depend on that. An existing setting is kept: this is a floor, not a
+ * preference.
+ */
+function tmux(socket: string[], args: string[], keepPartial = false): string | null {
+  if (tmuxRefused(socket, args)) return null;
   try {
     const r = Bun.spawnSync(["tmux", ...socket, ...args], {
-      stdout: "pipe",
-      stderr: "pipe",
-      timeout: TMUX_TIMEOUT_MS,
-      env: process.env.LC_ALL || process.env.LANG || process.env.LC_CTYPE
-        ? process.env
-        : { ...process.env, LC_ALL: "C.UTF-8" },
+      stdout: "pipe", stderr: "pipe", timeout: TMUX_TIMEOUT_MS, env: tmuxEnv(),
     });
-    const out = r.stdout.toString();
-    /*
-     * A command list ABORTS at the first command that fails, and tmux exits
-     * non-zero for the whole list — with everything the earlier commands printed
-     * already on stdout. Measured.
-     *
-     * For a single command that is the right answer: nothing useful came back.
-     * For the sweep's frame it is not, and the difference is the tab strip. A
-     * frame that answers null makes the sweep drop the client and tell the panel
-     * `active: false`, which empties the strip; and the frame is a list, so ONE
-     * unlucky command — an option a tmux is too old to have, a window that died
-     * between two lines of the same call — would take the strip down with it.
-     * `keepPartial` says: parse what did arrive. Every parser here already
-     * ignores lines it does not recognise, so a short answer is a smaller frame
-     * and never a wrong one.
-     */
-    if (r.exitCode !== 0) return keepPartial && out ? out : null;
-    return out;
+    return tmuxResult(socket, r.exitCode, r.stdout.toString(), r.stderr.toString(), keepPartial);
+  } catch { return null; }
+}
+
+/**
+ * `tmux` without holding the event loop: same guards, same environment, same
+ * timeout, same null-on-failure. For the paths the panels poll, where a
+ * blocking spawn per socket is a terminal that stops echoing.
+ */
+async function tmuxAsync(socket: string[], args: string[], keepPartial = false): Promise<string | null> {
+  if (tmuxRefused(socket, args)) return null;
+  try {
+    const p = Bun.spawn(["tmux", ...socket, ...args], {
+      stdout: "pipe", stderr: "pipe", timeout: TMUX_TIMEOUT_MS, env: tmuxEnv(),
+    });
+    const [out, err, code] = await Promise.all([
+      new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited,
+    ]);
+    return tmuxResult(socket, code, out, err, keepPartial);
   } catch { return null; }
 }
 
@@ -987,14 +1017,17 @@ export function prefixKeys(t: TmuxTarget): string[] {
  * override, a tmux that refuses a line) must not turn every attach into a
  * re-source. Returns the keys as they are AFTER the attempt, or null when
  * there was nothing to do.
+ *
+ * `seen` is the prefix the caller already holds. The sweep has it from its own
+ * frame, and reading it again here was two `show-options` spawns per engine
+ * shell every half second, measured on an idle server, to learn nothing new.
  */
 const healedAt = new Map<string, number>();
 const HEAL_EVERY_MS = 30_000;
 
-export function healPrefix(t: TmuxTarget, want: string, conf: string): string[] | null {
+export function healPrefix(t: TmuxTarget, want: string, conf: string, seen: string[] = prefixKeys(t)): string[] | null {
   const now = Date.now();
   const key = t.socket.join(" ");
-  const seen = prefixKeys(t);
   if (seen[0] === want) return null;
   if (now - (healedAt.get(key) ?? 0) < HEAL_EVERY_MS) return null;
   healedAt.set(key, now);
@@ -2196,6 +2229,123 @@ export function tmuxSocketConfined(socket: string[]): boolean {
  * user is demonstrably using, so its panes are the likeliest match and the
  * ordering costs nothing.
  */
+/**
+ * The unix socket paths something is LISTENING on, out of `/proc/net/unix`.
+ *
+ * A dead socket file costs a spawned `tmux` that fails: 3.2ms each, blocking,
+ * and a socket directory collects them (127 measured: ~450ms per poll). The
+ * kernel's table answers for all of them at once, with no process. Listening
+ * rows carry flag `00010000` (__SO_ACCEPTCON); the path is the rest of the line
+ * after the seventh field, so a path with a space survives.
+ */
+// The inode field is printed "%5lu": an inode under 5 digits is padded with
+// spaces, not zeros, so splitting on a single space shifts every field after
+// it and the path column disappears into empty strings. Match on whitespace
+// runs instead, with the path as one capture (its own spaces survive).
+const UNIX_ROW = /^\S+:\s+\S+\s+\S+\s+(\S+)\s+\S+\s+\S+\s+\d+\s(.*)$/;
+
+export function listeningUnixPaths(procText: string): Set<string> {
+  const out = new Set<string>();
+  for (const line of procText.split("\n")) {
+    const m = UNIX_ROW.exec(line);
+    if (!m || m[1] !== "00010000") continue;
+    const path = m[2]!;
+    if (path.startsWith("/")) out.add(path);
+  }
+  return out;
+}
+
+/*
+ * Where /proc/net/unix cannot be read (a Mac, a locked-down sandbox): remember
+ * a socket tmux could not connect to, keyed by its mtime so a server started on
+ * the same path afterwards is asked again. Sixty seconds, a bounded map.
+ */
+const DEAD_TTL_MS = 60_000;
+const DEAD_MAX = 1024;
+const deadSockets = new Map<string, { mtimeMs: number; until: number }>();
+// "error connecting to <path> (<strerror>)" fires for ANY connect error, not
+// only a dead server: EAGAIN on a busy live server, EACCES, and friends print
+// it too. Only "no server running" reliably means ENOENT/ECONNREFUSED, i.e.
+// the server is actually gone; matching the broader phrase marked live
+// servers dead for DEAD_TTL_MS on a transient connect failure.
+/** Test seam: exported so the classification can be asserted directly. */
+export const NO_SERVER = /no server running/;
+
+function noteDeadSocket(socket: string[], stderr: string): void {
+  if (!NO_SERVER.test(stderr)) return;
+  const path = socketPath(socket);
+  try {
+    if (deadSockets.size >= DEAD_MAX) deadSockets.delete(deadSockets.keys().next().value!);
+    deadSockets.set(path, { mtimeMs: statSync(path).mtimeMs, until: Date.now() + DEAD_TTL_MS });
+  } catch { /* the file is gone: nothing left to skip */ }
+}
+
+function knownDead(path: string, now: number): boolean {
+  const d = deadSockets.get(path);
+  if (!d) return false;
+  try { if (now < d.until && statSync(path).mtimeMs === d.mtimeMs) return true; } catch { /* gone */ }
+  deadSockets.delete(path);
+  return false;
+}
+
+/**
+ * The files of `dir` a server is listening on. `null` when the kernel's table
+ * cannot be read; the caller then falls back to the dead-verdict cache.
+ *
+ * CEILING: a filesystem unix socket connects across network namespaces, but
+ * /proc/net/unix only lists sockets visible in THIS process's netns. A tmux
+ * server run inside its own netns (`unshare -n`, firejail `--net=none`,
+ * flatpak `--unshare=network`) is invisible here and only caught by the
+ * dead-verdict fallback below, when /proc cannot be read at all. Not fixed in
+ * this pass -- accepted, not solved.
+ */
+let procNetUnix = "/proc/net/unix";
+/** Test seam: point at an unreadable path to exercise the fallback. */
+export function __setProcNetUnixPath(p: string | null): void {
+  procNetUnix = p ?? "/proc/net/unix";
+  deadSockets.clear();
+  procUnixMemo = null;
+}
+
+// A poll burst (desktop + phone + extra tabs, each asking within the same
+// second) re-read and re-parsed /proc/net/unix once per caller. One second is
+// short enough that a server starting mid-burst is still seen by the next
+// poll, and long enough to collapse the burst to one read.
+//
+// Keyed on `dir` + the exact `names` asked for, not merely time: a socket
+// directory that has just gained a new file (a server that started between
+// polls) must never be answered from a snapshot taken before that file
+// existed, whatever the clock says. A `names` list that was not the one the
+// memo was built from is always a cache MISS and forces a fresh read, so the
+// only thing the memo ever collapses is genuinely repeated questions.
+const PROC_UNIX_MEMO_MS = 1000;
+let procUnixMemo: { at: number; key: string; live: Set<string> } | null = null;
+/** Test seam: counts real reads of `procNetUnix`, i.e. memo misses. */
+export let __procNetUnixReadCount = 0;
+export function __resetProcNetUnixReadCount(): void { __procNetUnixReadCount = 0; }
+
+function listeningIn(dir: string, names: string[]): Set<string> | null {
+  // No socket file exists to match against, so there is nothing /proc/net/unix
+  // could tell us: skip the read (and its parse) entirely.
+  if (names.length === 0) return new Set();
+  const now = Date.now();
+  const key = `${dir}\0${[...names].sort().join("\0")}`;
+  let live: Set<string>;
+  if (procUnixMemo && procUnixMemo.key === key && now - procUnixMemo.at < PROC_UNIX_MEMO_MS) {
+    live = procUnixMemo.live;
+  } else {
+    let text: string;
+    try { text = readFileSync(procNetUnix, "utf8"); } catch { procUnixMemo = null; return null; }
+    __procNetUnixReadCount++;
+    live = listeningUnixPaths(text);
+    procUnixMemo = { at: now, key, live };
+  }
+  // tmux may bind the realpath of its directory, so match either spelling.
+  let real = dir;
+  try { real = realpathSync(dir); } catch { /* absent: nothing listens there */ }
+  return new Set(names.filter((n) => live.has(join(dir, n)) || live.has(join(real, n))));
+}
+
 export function tmuxSockets(known?: string[]): string[][] {
   // Discovery is exactly how this process would learn about the developer's own
   // server: nothing else in the app knows that socket's name. See
@@ -2203,9 +2353,16 @@ export function tmuxSockets(known?: string[]): string[][] {
   // resolved out of /proc, and /proc on this machine has his tmux in it.
   if (blindTmuxBanned()) return [];
   const dir = socketDir();
-  let found: string[] = [];
-  try { found = readdirSync(dir).map((n) => join(dir, n)); }
+  let names: string[] = [];
+  try { names = readdirSync(dir); }
   catch { /* no socket directory: no tmux has ever run here */ }
+  // Only sockets something listens on: every file here is otherwise one tmux
+  // spawn per poll, and a dead one is a spawn that can only fail. See
+  // listeningUnixPaths.
+  const listening = listeningIn(dir, names);
+  const now = Date.now();
+  const found = names.map((n) => join(dir, n))
+    .filter((p, i) => listening ? listening.has(names[i]!) : !knownDead(p, now));
 
   // The known client's server first when there is one — it is demonstrably the
   // one the user is on, so its panes are the likeliest match — and then the
@@ -2303,8 +2460,10 @@ function attachedSessions(socket: string[]): Set<string> {
   return out === null ? new Set() : attachedFrom(out);
 }
 
-function nestedSessions(socket: string[]): Set<string> {
-  const clients = tmux(socket, ["list-clients", "-F", "#{client_session}\t#{client_termname}"]);
+const NESTED_FORMAT = "#{client_session}\t#{client_termname}";
+
+/** `list-clients -F NESTED_FORMAT` read as the sessions shown only inside another. */
+function nestedFrom(clients: string | null): Set<string> {
   if (clients === null) return new Set();
 
   const outer = new Set<string>();
@@ -2366,12 +2525,79 @@ export function withTmuxServer<T extends { socket: string[] }>(rows: T[]): (T & 
   });
 }
 
-export function listPanes(known?: string[]): PaneWireRow[] {
+const CLIENT_TTYS = ["list-clients", "-F", "#{client_tty}"];
+
+/*
+ * Servers are asked a few at a time, not all at once. `Bun.spawn` does its fork
+ * on this thread: measured, 100 spawns issued together held the loop 71ms
+ * before the first await and let no timer through until all had answered
+ * (131ms), where one at a time let the loop run between every spawn. Four lanes
+ * keep that yield and still overlap the waits. Answers keep socket order.
+ */
+const SOCKET_LANES = 4;
+async function perSocket<T>(sockets: string[][], ask: (socket: string[]) => Promise<T>): Promise<T[]> {
+  const out: T[] = new Array(sockets.length);
+  let next = 0;
+  const lane = async () => {
+    while (next < sockets.length) { const i = next++; out[i] = await ask(sockets[i]!); }
+  };
+  await Promise.all(Array.from({ length: Math.min(SOCKET_LANES, sockets.length) }, lane));
+  return out;
+}
+
+/** The rows one server answers, from the three reads `listPanes` makes of it. */
+function paneRowsOn(
+  socket: string[], ours: string | null, mine: boolean,
+  out: string | null, clients: string | null, sessions: string | null,
+): PaneWireRow[] {
+  if (!out) return [];
+  const nested = nestedFrom(clients);
+  const live = sessions === null ? new Set<string>() : attachedFrom(sessions);
   const rows: PaneWireRow[] = [];
+  // A plain loop rather than `push(...map(…))` so the object literal is
+  // checked against `PaneWireRow` at the point it is written: renaming a
+  // field here is then an unknown property on this line, which is exactly
+  // what did not happen while the shape lived in an inline return type.
+  for (const r of parsePanes(out)) {
+    /*
+     * `own` is `mine` on the wire, and it is the one fact the phone cannot
+     * work out for itself.
+     *
+     * The socket is a filesystem path and stays on this side — the panes
+     * route strips it deliberately. But WHICH SERVER a pane is on is the
+     * only thing that separates a session somebody works in from one a test
+     * left running: names do not (three servers on this machine each hold a
+     * session called `agentglass-understudy`) and pane ids do not, because
+     * they are per server — measured, two servers both answering `%0`.
+     *
+     * A boolean says which server without saying where it is. See the note
+     * on `AgentPane.own`.
+     */
+    rows.push({
+      ...r, socket,
+      /* Absent when there is nothing to compare against. `mine` is false both
+         for "another server" and for "this app has never attached anything",
+         and those are different answers: the first is a session to hide, the
+         second is a client that must keep seeing everything. Collapsing them
+         emptied the strip on a fresh profile. */
+      ...(ours === null ? {} : { own: mine }),
+      popup: nested.has(r.session), attached: live.has(r.session),
+    });
+  }
+  return rows;
+}
+
+/**
+ * Every pane on every server, asked a few servers at a time and without holding
+ * the event loop: the tab strip polls this, and a blocking spawn per socket was
+ * a terminal that stopped echoing for as long as the walk took. Rows come back
+ * in `tmuxSockets` order, the known server first.
+ */
+export async function listPanes(known?: string[]): Promise<PaneWireRow[]> {
   /* The server we were last on, read once rather than per socket. Null when
      nothing is remembered, which is exactly how this behaved before. */
   const ours = recall()?.socket ?? null;
-  for (const socket of tmuxSockets(known)) {
+  const per = await perSocket(tmuxSockets(known), async (socket) => {
     /*
      * Servers somebody is attached to — or the one we ourselves were last on.
      *
@@ -2393,43 +2619,36 @@ export function listPanes(known?: string[]): PaneWireRow[] {
      * through. Everything else is unchanged. See tmuxmemory.ts.
      */
     const mine = ours !== null && socketPath(socket) === ours;
-    if (!mine && !tmux(socket, ["list-clients", "-F", "#{client_tty}"])?.trim()) continue;
+    if (!mine && !(await tmuxAsync(socket, CLIENT_TTYS))?.trim()) return [];
+    const [out, clients, sessions] = await Promise.all([
+      tmuxAsync(socket, ["list-panes", "-a", "-F", PANE_FORMAT]),
+      tmuxAsync(socket, ["list-clients", "-F", NESTED_FORMAT]),
+      tmuxAsync(socket, ["list-sessions", "-F", ATTACHED_FORMAT]),
+    ]);
+    return paneRowsOn(socket, ours, mine, out, clients, sessions);
+  });
+  return per.flat();
+}
+
+/**
+ * `listPanes`, blocking, for the two one-shot callers that cannot wait: the
+ * terminal's attach (a websocket open builds its command synchronously) and an
+ * alert's pane label (composed inside a synchronous notifier). Neither runs on
+ * a timer, and with dead sockets filtered out it costs one walk of the live
+ * servers. Same reads, same rules; see `listPanes` for why a detached server
+ * is skipped.
+ */
+export function listPanesSync(known?: string[]): PaneWireRow[] {
+  const ours = recall()?.socket ?? null;
+  return tmuxSockets(known).flatMap((socket) => {
+    const mine = ours !== null && socketPath(socket) === ours;
+    if (!mine && !tmux(socket, CLIENT_TTYS)?.trim()) return [];
     const out = tmux(socket, ["list-panes", "-a", "-F", PANE_FORMAT]);
-    if (!out) continue;
-    const nested = nestedSessions(socket);
-    const live = attachedSessions(socket);
-    // A plain loop rather than `push(...map(…))` so the object literal is
-    // checked against `PaneWireRow` at the point it is written: renaming a
-    // field here is then an unknown property on this line, which is exactly
-    // what did not happen while the shape lived in an inline return type.
-    for (const r of parsePanes(out)) {
-      /*
-       * `own` is `mine` on the wire, and it is the one fact the phone cannot
-       * work out for itself.
-       *
-       * The socket is a filesystem path and stays on this side — the panes
-       * route strips it deliberately. But WHICH SERVER a pane is on is the
-       * only thing that separates a session somebody works in from one a test
-       * left running: names do not (three servers on this machine each hold a
-       * session called `agentglass-understudy`) and pane ids do not, because
-       * they are per server — measured, two servers both answering `%0`.
-       *
-       * A boolean says which server without saying where it is. See the note
-       * on `AgentPane.own`.
-       */
-      rows.push({
-        ...r, socket,
-        /* Absent when there is nothing to compare against. `mine` is false both
-           for "another server" and for "this app has never attached anything",
-           and those are different answers: the first is a session to hide, the
-           second is a client that must keep seeing everything. Collapsing them
-           emptied the strip on a fresh profile. */
-        ...(ours === null ? {} : { own: mine }),
-        popup: nested.has(r.session), attached: live.has(r.session),
-      });
-    }
-  }
-  return rows;
+    if (!out) return [];
+    return paneRowsOn(socket, ours, mine, out,
+      tmux(socket, ["list-clients", "-F", NESTED_FORMAT]),
+      tmux(socket, ["list-sessions", "-F", ATTACHED_FORMAT]));
+  });
 }
 
 /**
@@ -2462,10 +2681,9 @@ export function listPanes(known?: string[]): PaneWireRow[] {
  * grid could say anything. This is the same single `list-panes` call, unpicked
  * rather than filtered.
  */
-export function panesWithPids(known: string[] | undefined, windowId: string): { paneId: string; pid: number; active: boolean; socket: string[] }[] {
+export async function panesWithPids(known: string[] | undefined, windowId: string): Promise<{ paneId: string; pid: number; active: boolean; socket: string[] }[]> {
   if (!WINDOW_ID.test(windowId)) return [];
-  for (const socket of tmuxSockets(known)) {
-    const out = tmux(socket, ["list-panes", "-t", windowId, "-F", "#{pane_active}\t#{pane_id}\t#{pane_pid}"]);
+  for (const { socket, out } of await windowPanesEverywhere(known, windowId)) {
     if (!out) continue;
     const rows: { paneId: string; pid: number; active: boolean; socket: string[] }[] = [];
     for (const line of out.split("\n")) {
@@ -2478,10 +2696,9 @@ export function panesWithPids(known: string[] | undefined, windowId: string): { 
   return [];
 }
 
-export function activePane(known: string[] | undefined, windowId: string): { paneId: string; pid: number; socket: string[] } | null {
+export async function activePane(known: string[] | undefined, windowId: string): Promise<{ paneId: string; pid: number; socket: string[] } | null> {
   if (!WINDOW_ID.test(windowId)) return null;
-  for (const socket of tmuxSockets(known)) {
-    const out = tmux(socket, ["list-panes", "-t", windowId, "-F", "#{pane_active}\t#{pane_id}\t#{pane_pid}"]);
+  for (const { socket, out } of await windowPanesEverywhere(known, windowId)) {
     if (!out) continue;
     for (const line of out.split("\n")) {
       const [active, paneId, pid] = line.split("\t");
@@ -2492,6 +2709,29 @@ export function activePane(known: string[] | undefined, windowId: string): { pan
     }
   }
   return null;
+}
+
+/**
+ * `list-panes` of one window on every server, answers kept in `tmuxSockets`
+ * order — which is load-bearing, see above.
+ *
+ * The known socket — usually the only spawn there is — is asked alone first.
+ * Fanning `perSocket` out over every live server before looking at any answer
+ * spawned a `tmux` against each one even when the first (and almost always
+ * only relevant) answer already had the window's panes; a socket directory
+ * with a few live servers turned one hover into one spawn per server.
+ */
+async function windowPanesEverywhere(known: string[] | undefined, windowId: string): Promise<{ socket: string[]; out: string | null }[]> {
+  const sockets = tmuxSockets(known);
+  if (sockets.length === 0) return [];
+  const ask = (socket: string[]) =>
+    tmuxAsync(socket, ["list-panes", "-t", windowId, "-F", "#{pane_active}\t#{pane_id}\t#{pane_pid}"]);
+  const first = sockets[0]!;
+  const firstOut = await ask(first);
+  if (firstOut && firstOut.trim().length > 0) return [{ socket: first, out: firstOut }];
+  const rest = sockets.slice(1);
+  const restOuts = await perSocket(rest, ask);
+  return [{ socket: first, out: firstOut }, ...rest.map((socket, i) => ({ socket, out: restOuts[i] ?? null }))];
 }
 
 /**
@@ -2743,7 +2983,7 @@ export function leaveCopyMode(socket: string[], paneId: string): boolean {
 /** Find the server holding this pane, then go there. The socket is never sent
  *  to the client and never accepted from it — a filesystem path from the UI is
  *  exactly what must not reach a spawn. */
-export function focusPaneAnywhere(known: string[] | undefined, _sessionId: string, _windowId: string, paneId: string): boolean {
+export async function focusPaneAnywhere(known: string[] | undefined, _sessionId: string, _windowId: string, paneId: string): Promise<boolean> {
   if (!PANE_ID.test(paneId)) return false;
   // A grouped session — a phone mirror, `agx-phone-…` — shares this pane's
   // window, so `list-panes -a` reports the pane under BOTH the real session and
@@ -2752,7 +2992,7 @@ export function focusPaneAnywhere(known: string[] | undefined, _sessionId: strin
   // exclude the mirror and aim at the real session that owns the pane, using
   // that row's own session and window ids rather than the ones the click
   // carried — which, coming from the same duplicated list, may be the mirror's.
-  const row = listPanes(known).find((r) => r.paneId === paneId && !PHONE_SESSION.test(r.session));
+  const row = (await listPanes(known)).find((r) => r.paneId === paneId && !PHONE_SESSION.test(r.session));
   return row ? focusPane(row.socket, row.sessionId, row.windowId, paneId) : false;
 }
 
@@ -3815,7 +4055,7 @@ export function attachArgvFor(
    * really does have two answers, and this still declines — that is the rule
    * above doing its job rather than an omission in this one.
    */
-  const rows = listPanes(known).filter((r) => r.paneId === paneId && !PHONE_SESSION.test(r.session));
+  const rows = listPanesSync(known).filter((r) => r.paneId === paneId && !PHONE_SESSION.test(r.session));
   if (rows.length !== 1) return null;
   const row = rows[0]!;
   if (!SESSION_ID.test(row.sessionId) || !WINDOW_ID.test(row.windowId)) return null;

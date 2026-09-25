@@ -1329,7 +1329,12 @@ export function ptyOpen(ws: PtyWs) {
      * not ours to put back.
      */
     if (session.onEngine && session.tmux && confHealth().ok) {
-      const put = healPrefix(session.tmux, tmuxPrefix() || "C-b", ensureConf());
+      // An empty prefix can be a frame that aborted mid-parse before it
+      // finished reading show-options, not a confirmed "no prefix set" — see
+      // healPrefix. Passing it through as [] made every such frame look like
+      // "not what we want" and resource the conf on the next tick, forever;
+      // undefined tells healPrefix to fall back to prefixKeys() instead.
+      const put = healPrefix(session.tmux, tmuxPrefix() || "C-b", ensureConf(), session.tmuxPrefix?.length ? session.tmuxPrefix : undefined);
       if (put) session.tmuxPrefix = put;
     }
     /**
@@ -2019,7 +2024,7 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
          * mirror session, which shares the window and has cost a real session
          * before.
          */
-        if (opened) focusPaneAnywhere(undefined, "", opened.windowId, opened.paneId);
+        if (opened) await focusPaneAnywhere(undefined, "", opened.windowId, opened.paneId);
         s.tmuxSweep?.();
       })();
       return;
