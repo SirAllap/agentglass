@@ -119,7 +119,7 @@ import {
   addReminder, ackReminder, cancelReminder, snoozeReminder, listReminders,
   remindersFor, firedUnacked, setReminderHook, startReminderTick, localZone,
 } from "./reminders.ts";
-import { fileText, fileToTemp, fileTree, findFiles, grepFiles, listRefs, filesExist, heldBackFrom, heldBackTest, HELD_BACK, filesReach } from "./files.ts";
+import { fileText, fileToTemp, fileTree, findFiles, grepFiles, listRefs, filesExist, heldBackFrom, heldBackTest, HELD_BACK, filesReach, gitReadRefusal, gitReadTest } from "./files.ts";
 import { diskFind, diskGrep, diskPlaces } from "./disk.ts";
 import { browseDir, fileBytes, fileFacts, openInDesktop } from "./browse.ts";
 import { benchEdit, benchEnd, benchLive, readNote, writeNote } from "./bench.ts";
@@ -2734,6 +2734,11 @@ const server = Bun.serve<WsData>({
       understudyChanged();
     };
 
+    // Every /git/ read that names a repository is held to the open project —
+    // see gitReadRefusal.
+    const gitRefused = gitReadRefusal(caller, req.method, pathname, url.searchParams);
+    if (gitRefused) return json(gitRefused, 403);
+
     // Throttle the unauthenticated intake sinks so a runaway client can't flood
     // the DB and the broadcast fan-out. Keyed by source address + route.
     if (req.method === "POST" && isIntake(pathname)) {
@@ -5181,7 +5186,11 @@ const server = Bun.serve<WsData>({
       if (!localOrigin(req)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
-      const paths = Array.isArray(b.paths) ? b.paths.filter((p: unknown) => typeof p === "string").slice(0, 500) : [];
+      // Held to the open project like the GET reads — see gitReadTest.
+      const readable = gitReadTest(caller);
+      const paths = Array.isArray(b.paths)
+        ? b.paths.filter((p: unknown) => typeof p === "string" && readable(p)).slice(0, 500)
+        : [];
       return json({ repos: await statusForPaths(paths), commitEnabled: COMMIT_ENABLED });
     }
     if (pathname === "/git/commit" && req.method === "POST") {

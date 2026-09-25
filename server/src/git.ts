@@ -49,12 +49,61 @@ const PINNED: string[] = [
   "-c", "color.ui=false",
 ];
 
+/**
+ * Configuration that must not come from the repository, because it names a
+ * command git will run.
+ *
+ * A directory holding HEAD, objects/, refs/ and a config is a repository to
+ * git, even when it is ordinary files committed inside a project, and git run
+ * from inside it adopts that config, some keys of which name commands.
+ * `safe.bareRepository=explicit` keeps git from discovering such a directory at
+ * all; `core.fsmonitor=false` keeps a status from starting a monitor named by
+ * a checkout's own .git/config. The tests pin both.
+ *
+ * The limit: a real checkout's own config is still the user's, and anything
+ * else it names — a diff textconv, a clean filter — runs here exactly as it
+ * would in their terminal. So do the raw spawns outside this wrapper; the ones a
+ * request can aim (the /files search) run `git grep` over a tree or with
+ * `--untracked`, and neither asks fsmonitor — measured.
+ */
+const GIT_SAFE: string[] = [
+  "-c", "safe.bareRepository=explicit",
+  "-c", "core.fsmonitor=false",
+];
+
+/**
+ * Commands that only read, where a hook is never what anybody meant.
+ *
+ * They can still fire one: `status` refreshes the index and a refresh runs
+ * `post-index-change`. So these run with hooks off. Everything else — commit,
+ * merge, push, worktree add — keeps the user's hooks, because a pre-commit
+ * check silently skipped by the app is a check the user thinks they have.
+ */
+const READ_VERBS = new Set([
+  "rev-parse", "for-each-ref", "status", "log", "rev-list", "diff", "ls-files", "symbolic-ref",
+  "merge-base", "ls-tree", "cherry", "cat-file", "show", "reflog", "merge-tree", "describe",
+  "count-objects", "blame", "grep", "shortlog", "check-ignore", "show-ref", "name-rev", "config",
+]);
+
+function verbOf(args: string[]): string {
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "-c" || args[i] === "-C") { i++; continue; }
+    if (!args[i]!.startsWith("-")) return args[i]!;
+  }
+  return "";
+}
+
+function argv(cwd: string, args: string[]): string[] {
+  const hooks = READ_VERBS.has(verbOf(args)) ? ["-c", "core.hooksPath=/dev/null"] : [];
+  return ["git", ...PINNED, ...GIT_SAFE, ...hooks, "-C", cwd, ...args];
+}
+
 export function git(cwd: string, args: string[]): GitResult {
   const t0 = performance.now();
   try {
     // A hung git call (index.lock contention, a repo on a stalled mount) would
     // otherwise freeze the whole single-threaded server indefinitely.
-    const proc = Bun.spawnSync(["git", ...PINNED, "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe", timeout: 15_000 });
+    const proc = Bun.spawnSync(argv(cwd, args), { stdout: "pipe", stderr: "pipe", timeout: 15_000 });
     const r = {
       code: proc.exitCode ?? 1,
       stdout: proc.stdout?.toString() ?? "",
@@ -152,7 +201,7 @@ async function runGit(cwd: string, args: string[]): Promise<GitResult> {
   // arrive in the meantime. See loopwatch.
   const owner = currentLabel();
   try {
-    const proc = Bun.spawn(["git", ...PINNED, "-C", cwd, ...args], {
+    const proc = Bun.spawn(argv(cwd, args), {
       stdout: "pipe",
       stderr: "pipe",
       // A git that never returns used to cost one hung request: bad, bounded,

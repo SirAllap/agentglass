@@ -25,6 +25,7 @@ import { inScopeReal, realish, workspaceRoots } from "./config.ts";
 import type { Caller } from "./auth.ts";
 import { diskAllows } from "./disk.ts";
 import { makeViewTempDir } from "./viewtemp.ts";
+import { FS_BROWSE_ENABLED } from "./fsbrowse.ts";
 
 export interface FileEntry {
   name: string;
@@ -193,6 +194,47 @@ export function filesReach(pathname: string, q: URLSearchParams): string[] {
     : pathname === "/files/exist" ? [root, ...q.getAll("rel").map((r) => resolve(root, r))]
     : [root, resolve(root, q.get("rel") || "")];
   return out.filter(Boolean);
+}
+
+/**
+ * Why a /git/ read is refused, or null when it may go ahead.
+ *
+ * The writes had a gate (`guard()` in gitwork.ts); the reads took `root` off
+ * the query string and asked git only whether it was a repository, so a key
+ * paired for read could point them at any checkout on the disk and read its
+ * history, blame and untracked files. One function for the whole family, like
+ * the /files gate, because per route is how two dozen of them were missed.
+ *
+ * The same three questions /files asks, in the same order — except the disk
+ * door, which lets the finder open a document under home and has no business
+ * opening somebody else's repository. `root` plus each `path`, resolved against
+ * it; a route with no root has nothing to gate.
+ *
+ * Every method, not only GET: the read handlers do not look at the method, so a
+ * POST to /git/log is a read that a POST-only exemption waved through. The
+ * writes take their root from the query too and already required the project
+ * (`guard()`); what they gain is the dot-directory rule. The browsing switch
+ * stays with the reads — a git commit is not a directory listing.
+ */
+export function gitReadRefusal(caller: Caller | null, method: string, pathname: string, q: URLSearchParams): object | null {
+  if (!pathname.startsWith("/git/")) return null;
+  const root = q.get("root") || "";
+  if (!root) return null;
+  const reach = [root, ...q.getAll("path").filter(Boolean).map((p) => resolve(root, p))];
+  if (!FS_BROWSE_ENABLED && method !== "POST") return { error: "directory browsing is disabled (AGENTGLASS_FS_BROWSE_DISABLED=1)" };
+  if (heldBackFrom(caller, reach)) return HELD_BACK;
+  if (!reach.every((p) => inScopeReal(p))) return { error: "outside the open project — open the parent folder to work across repos" };
+  return null;
+}
+
+/**
+ * The same rule as a predicate, for `POST /git/status`: the composer sends a
+ * batch of paths, and one outside the project is dropped rather than refusing
+ * the rest. Home and the roots are resolved once for the batch.
+ */
+export function gitReadTest(caller: Caller | null): (path: string) => boolean {
+  const held = heldBackTest(caller);
+  return (p) => !held(p) && inScopeReal(p);
 }
 
 /**

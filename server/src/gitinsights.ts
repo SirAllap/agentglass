@@ -121,7 +121,9 @@ export async function generateChangelog(rootIn: unknown, fromIn: unknown, toIn: 
     from = tag.code === 0 ? tag.stdout.trim() : "";
   }
   const range = from ? `${from}..${to}` : to;
-  const r = await gitAsync(root, ["log", "--no-merges", `--pretty=%H${US}%s${RS}`, range]);
+  // `from` and `to` come off the query string; `--end-of-options` makes git
+  // read the range as a revision whatever it starts with.
+  const r = await gitAsync(root, ["log", "--no-merges", `--pretty=%H${US}%s${RS}`, "--end-of-options", range]);
   if (r.code !== 0) return { from, to, sections: [], error: r.stderr.trim() || "git log failed" };
   const entries: ChangelogEntry[] = [];
   const re = /^(\w+)(?:\(([^)]*)\))?(!)?:\s*(.+)$/;
