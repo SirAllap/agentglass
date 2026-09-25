@@ -4012,12 +4012,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     await act("Reviewers", () => api.prReviewers(root, detail.number, add, remove));
   };
 
-  const doCopyLink = async () => {
-    if (!detail) return;
-    try { await navigator.clipboard.writeText(detail.url); flash(true, "Link copied"); }
-    catch { flash(false, "Could not reach the clipboard"); }
-  };
-
   /** The chase, written for you: who it waits on, what for, where — on the
    *  clipboard always, and down the alerts' channel when one is configured. */
   const doNudge = async () => {
@@ -4648,7 +4642,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 onClose={doClose} onLocalReview={(recipe) => doLocalReview(undefined, recipe)}
                 onReviewInTerminal={onReviewInTerminal && d ? (recipe) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "") : undefined}
                 condensed={condensed}
-                onLabels={doLabels} onReviewers={doReviewers} onCopyLink={doCopyLink} onNudge={doNudge}
+                onLabels={doLabels} onReviewers={doReviewers} onNudge={doNudge}
                 onEditField={fieldPicker.open}
                 /* Your review, counted where the panel already counts it — the
                    strip is a reader of these three, never a second source. */
@@ -7687,7 +7681,7 @@ function prStateBadge(d: { state: PrSummary["state"]; isDraft: boolean }): { tin
   return { tint: "var(--success)", state: "Open", glyph: <PrIcon size={ICON.xs} /> };
 }
 
-function Masthead({ d, busy, local, onShowLocal, onEditTitle, onDraft, onClose, onLocalReview, onReviewInTerminal, onLabels, onReviewers, onCopyLink, onNudge, onEditField, condensed, viewed, threads, queued, awaitingChecks, localHead }: {
+function Masthead({ d, busy, local, onShowLocal, onEditTitle, onDraft, onClose, onLocalReview, onReviewInTerminal, onLabels, onReviewers, onNudge, onEditField, condensed, viewed, threads, queued, awaitingChecks, localHead }: {
   d: PrDetail; busy: boolean;
   /** What plugins have written here — what their buttons in this row say. */
   local: LocalNotes;
@@ -7706,7 +7700,7 @@ function Masthead({ d, busy, local, onShowLocal, onEditTitle, onDraft, onClose, 
   condensed?: boolean;
   /** The typed dialog behind the overflow menu; the inline ＋ buttons use the
    *  picker instead. */
-  onLabels: () => void; onReviewers: () => void; onCopyLink: () => void; onNudge?: () => void;
+  onLabels: () => void; onReviewers: () => void; onNudge?: () => void;
   /** Opens the shared reviewer/label picker anchored to the clicked ＋. */
   onEditField: (field: SidebarField, e: React.MouseEvent<HTMLButtonElement>) => void;
   /** How far YOUR review has got: files ticked off, threads still open, line
@@ -7793,6 +7787,12 @@ function Masthead({ d, busy, local, onShowLocal, onEditTitle, onDraft, onClose, 
      header claiming the opposite of the truth for the second before it lands. */
   const wt = wtCell(localHead);
   const [copied, setCopied] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
+  const copyLink = () => {
+    navigator.clipboard?.writeText(d.url)
+      .then(() => { setLinkCopied(true); setTimeout(() => setLinkCopied(false), 1400); })
+      .catch(() => { /* no clipboard permission */ });
+  };
   const copyNumber = () => {
     navigator.clipboard?.writeText(`#${d.number}`)
       .then(() => { setCopied(true); setTimeout(() => setCopied(false), 1400); })
@@ -7853,6 +7853,12 @@ function Masthead({ d, busy, local, onShowLocal, onEditTitle, onDraft, onClose, 
             controls in a row came out three different heights — which is the
             only reason the group looked wrong. */}
         <Btn small onClick={() => openExternal(d.url)} title="Open on GitHub">GitHub ↗</Btn>
+        {/* Out of the overflow too: the number beside the title copies "#N" for
+            a cross-reference, and this copies the address, which is the one
+            you paste into a chat. */}
+        <Btn small onClick={copyLink} title={linkCopied ? "Copied!" : "Copy the link to this pull request"}>
+          {linkCopied ? <DoneIcon size={ICON.xs} /> : <LinkIcon size={ICON.xs} />}{linkCopied ? "Copied" : "Copy link"}
+        </Btn>
         <Menu label={<MoreIcon size={ICON.sm} />} title="More actions">
           {(close) => (
             <>
@@ -7871,7 +7877,6 @@ function Masthead({ d, busy, local, onShowLocal, onEditTitle, onDraft, onClose, 
               </>}
               <MenuItem icon={<TagIcon size={ICON.xs} />} onClick={() => { close(); onLabels(); }}>Edit labels</MenuItem>
               <MenuSep />
-              <MenuItem onClick={() => { close(); onCopyLink(); }}>&#9033; Copy link</MenuItem>
               {onNudge && d.state === "OPEN" && (
                 <MenuItem onClick={() => { close(); onNudge(); }}>&#128276; Nudge the reviewers</MenuItem>
               )}
