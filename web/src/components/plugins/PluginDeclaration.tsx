@@ -22,12 +22,15 @@ import { ICON } from "../../lib/iconSize.ts";
  */
 
 const SCOPE_SENTENCE: Record<DeviceScope, string> = {
-  read: "Everything this app can read: every session's live output as it streams — the same prompts and replies you watch on screen — plus costs, diffs and pull requests. It cannot approve a gate, send a reply, or write anything.",
-  answer: "Everything a reader sees, and it can reply to a session that is already running. It cannot release a permission gate, start anything, or touch this machine.",
+  read: "Everything this app can read: every session's live output as it streams — the same prompts and replies you watch on screen — plus costs, diffs and pull requests. Through this app it can only look: no gate, no reply, no writes.",
+  answer: "Everything a reader sees, and it can reply to a session that is already running. Through this app it cannot release a permission gate or start anything.",
   full: "Everything this machine can do: a terminal, git writes, Docker, the browser, releasing permission gates. Give this to code you would run yourself.",
 };
 
-const SCOPE_WORD: Record<DeviceScope, string> = { read: "reads only", answer: "reads and replies", full: "everything" };
+/** Whatever the scope: it limits the token, and the process is the user's. */
+const PROCESS_WARNING = "This plugin runs as you. The scope limits its access to this app, not to your machine: it can still read your files and run programs. Approve it only if you would run its code yourself.";
+
+const SCOPE_WORD: Record<DeviceScope, string> = { read: "reads the app", answer: "reads and replies", full: "everything" };
 const SCOPE_TINT: Record<DeviceScope, string> = { read: "var(--success)", answer: "var(--warning)", full: "var(--error)" };
 
 /** One surface, as the person will meet it: a mark, what it is, and where. */
@@ -69,7 +72,8 @@ export function PluginDeclaration({ plugin }: { plugin: PublicPlugin }) {
         <p className="m-0 text-[12px] leading-relaxed" style={{ color: "var(--text2)" }}>{SCOPE_SENTENCE[plugin.scope]}</p>
       </Block>
 
-      <Block icon={<CommandIcon size={ICON.sm} />} tint="var(--text3)" head="What it runs">
+      <Block icon={<CommandIcon size={ICON.sm} />} tint="var(--warning)" head="What it runs">
+        <p className="m-0 mb-1.5 text-[12px] leading-relaxed" style={{ color: "var(--text2)" }}>{PROCESS_WARNING}</p>
         {/* The command, as a command: the one line here that is not prose, and
             the one a reader is most likely to want to recognise. */}
         <code className="block t-mono text-[11.5px] px-2 py-1.5 rounded-md break-all"

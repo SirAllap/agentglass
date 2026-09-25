@@ -22,6 +22,13 @@ the worked example, is [§6 of EXTENDING.md](EXTENDING.md#6-publish-a-plugin).
 
 ## What a plugin is
 
+**A plugin runs as you.** Its entrypoint is a command this server starts as your
+user, with your files and your network. The scope you grant limits the token the
+plugin is handed for talking to agentglass; the scope limits the token, not the
+process. Nothing here stops a plugin from reading a file, opening a socket or
+running a program on its own. Approve one only as you would run its code yourself,
+and read it first. A sandbox is planned and is not here yet.
+
 A folder with a `plugin.json` at its root. It is copied onto disk at install,
 under `~/.config/agentglass/plugins/<name>/`, and nothing in it runs at that
 point. When a person enables it, the server mints a token at the granted scope
@@ -89,7 +96,7 @@ nothing new has to be kept in step with the route table.
 
 - **`read`** — almost every `GET` route, including `/stream`: a session's live
   output as it happens, the same prompts and replies shown on screen, costs,
-  diffs, pull requests, the Lantern's board. Cannot write anything. Four reads
+  diffs, pull requests, the Lantern's board. Writes nothing *through this app's API*; the process itself is not confined. Four reads
   need `full` rather than `read`, because each one hands over something that is
   not this plugin's: `/terminal/pty`, `/browser/places/all`, and
   `/plugins/settings` and `/plugins/panels`, which are another plugin's settings
@@ -446,8 +453,10 @@ plugin's own window, a terminal UI or a web page it serves, talking to agentglas
 over the same HTTP. That window is outside the app's trust boundary, which is the
 point.
 
-**Answer a gate.** See above. **Read the machine token.** The plugin gets its own
-token at its own scope; the machine's is never in its environment. **Run before
+**Answer a gate.** See above. **Be handed the machine token.** The plugin gets its own
+token at its own scope; the machine's is never put in its environment. That is a
+statement about what the server passes, not about what the process can reach: it
+runs as you, and the machine's token is a file your user can read. **Run before
 it is enabled.** Install is a copy.
 
 ## Publishing one
