@@ -1220,8 +1220,6 @@ body.scene .sec>.w{position:relative;z-index:1}
 .nxi{flex:none;width:40px;height:40px;border-radius:12px;display:grid;place-items:center;color:var(--vio);
  background:rgba(167,139,250,.13);border:1px solid rgba(167,139,250,.28)}
 .nxc b{font-size:18px;font-weight:650;color:var(--txt);letter-spacing:-.01em}
-.nxh u{margin-left:auto;font:11.5px var(--mono);text-decoration:none;color:var(--vio);white-space:nowrap;
- padding:4px 10px;border-radius:999px;background:rgba(167,139,250,.1);border:1px solid rgba(167,139,250,.3)}
 .nxc>span:not(.nxh){position:relative;font-size:14px;line-height:1.65;color:var(--dim)}
 .nxl{display:flex;flex-wrap:wrap;gap:6px}
 .nxl i{font:11.5px var(--mono);font-style:normal;color:var(--dim2);padding:3px 9px;border-radius:999px;
@@ -1278,16 +1276,16 @@ body:not([data-route="home"]) .page{padding-top:calc(118px + var(--safe))}
    full width, so every paragraph broke early and the right third was empty. */
 .page h3+p,.page p{margin-top:11px;color:var(--dim);font-size:15px;line-height:1.65;
  text-wrap:balance}
-.page li,.pl-desc-full{text-wrap:pretty}
+.page li{text-wrap:pretty}
 /* `pretty` only nudges the last line; measured on this page it still left
    four-line paragraphs ending in one word. `balance` evens every line out and
    is what a block of two to six lines actually wants — which is all of these.
    Chrome ignores it past six lines, so the long prose keeps `pretty`. */
-.sec .sub,.page .lead,.steps span,.steps p,.an p,.qa p,.fcap span,.pl-step p,.pl-two p,
-.nxc>span,.pl-hint{text-wrap:balance}
+.sec .sub,.page .lead,.steps span,.steps p,.an p,.qa p,.fcap span,
+.nxc>span{text-wrap:balance}
 /* Short blocks get `balance` rather than `pretty`: three lines and a widow
    ("it waits." alone under two full lines) is the shape `balance` exists for. */
-.lead,.sub,.pl-lead,.oneline,.fcap span,.nxc>span:not(.nxh){text-wrap:balance}
+.lead,.sub,.oneline,.fcap span,.nxc>span:not(.nxh){text-wrap:balance}
 /*
  * Prose fills its column.
  *
@@ -1309,8 +1307,8 @@ body:not([data-route="home"]) .page{padding-top:calc(118px + var(--safe))}
  * justified text opened into rivers — "agentglass   and   every   agent" —
  * which is worse than the ragged edge it was there to remove.
  */
-.sec .sub,.page p,.page .lead,.pl-lead,.pl-hint,.pl-desc-full,.pl-note,.steps span,.steps p,
-.an p,.qa p,.pl-step p,.pl-two p,.nxc>span:not(.nxh):not(.nxl),.verify p,.facts span{
+.sec .sub,.page p,.page .lead,.steps span,.steps p,
+.an p,.qa p,.nxc>span:not(.nxh):not(.nxl),.verify p,.facts span{
  text-wrap:wrap}
 /* An inline chip never breaks in the middle, and never leaves its punctuation
    on the next line either: the mark after it travels with it. */
@@ -1446,209 +1444,6 @@ body:not([data-route="home"]) .page{padding-top:calc(118px + var(--safe))}
  .appbar{gap:12px;white-space:nowrap}
  .appbar span:nth-child(4),.appbar span:nth-child(5){display:none}
  .kick{font-size:11px;letter-spacing:.14em}}
-/* The plugins page. Cards read from plugins.json — the same file the app adds
-   as a catalogue, so what is listed here and what installs in one click there
-   cannot drift apart. */
-.pl-bar{margin-top:30px;display:flex;flex-wrap:wrap;gap:10px;align-items:center}
-.pl-q{flex:1 1 320px;display:flex;align-items:center;gap:10px;padding:0 14px;height:46px;border-radius:12px;
- background:rgba(167,139,250,.06);border:1px solid var(--line2)}
-.pl-q:focus-within{border-color:var(--vio);box-shadow:0 0 0 3px rgba(167,139,250,.14)}
-.pl-q input{flex:1;min-width:0;background:none;border:0;outline:0;color:var(--txt);font:15px var(--mono)}
-.pl-q input::placeholder{color:var(--dim2)}
-.pl-q kbd{font:11px var(--mono);color:var(--dim);border:1px solid var(--line2);border-radius:6px;padding:2px 6px}
-.pl-sort{height:46px;border-radius:12px;background:rgba(167,139,250,.06);border:1px solid var(--line2);color:var(--txt);
- font:13px var(--mono);padding:0 12px}
-.pl-acts{margin-top:16px;display:flex;flex-wrap:wrap;gap:10px}
-.pl-act{padding:9px 16px;font:12.5px var(--mono);color:var(--dim);text-decoration:none;border:1px solid var(--line2);
- border-radius:10px;transition:color .15s,border-color .15s,background .15s}
-.pl-act:hover{color:var(--fg);border-color:var(--vio)}
-.pl-act.p{color:var(--void);background:var(--vio);border-color:var(--vio)}
-.pl-act.p:hover{filter:brightness(1.12)}
-.pl-chip-n{margin-left:8px;color:var(--dim2);font-size:11px}
-.pl-chip[aria-pressed="true"] .pl-chip-n{color:inherit;opacity:.7}
-.pl-chips{margin-top:14px;display:flex;flex-wrap:wrap;gap:8px}
-.pl-chip{font:12px var(--mono);color:var(--dim);background:none;border:1px solid var(--line2);border-radius:999px;
- padding:6px 12px;cursor:pointer;transition:color .15s,border-color .15s,background .15s}
-.pl-chip:hover{color:var(--txt)}
-.pl-chip[aria-pressed="true"]{color:var(--void);background:var(--vio);border-color:var(--vio)}
-.pl-count{margin-top:22px;font:12px var(--mono);letter-spacing:.08em;color:var(--dim2);text-transform:uppercase}
-.pl-grid{margin-top:14px;display:grid;grid-template-columns:repeat(auto-fill,minmax(min(380px,100%),1fr));gap:18px}
-.pl-shot{margin:-20px -20px 4px;aspect-ratio:16/9;border-radius:16px 16px 0 0;overflow:hidden;position:relative;
- background:linear-gradient(135deg,rgba(167,139,250,.22),rgba(167,139,250,.04))}
-.pl-shot img{width:100%;height:100%;object-fit:cover;display:block}
-.pl-shot .mark{position:absolute;inset:0;display:grid;place-items:center;color:rgba(167,139,250,.5)}
-.pl-shot .mark svg{width:44px;height:44px}
-.pl-card{min-width:0;display:flex;flex-direction:column;gap:12px;padding:20px;border-radius:16px;
- background:linear-gradient(180deg,rgba(167,139,250,.07),rgba(167,139,250,.02));border:1px solid var(--line);
- transition:border-color .2s,transform .2s}
-.pl-card:hover{border-color:var(--line2);transform:translateY(-2px)}
-.pl-top{display:flex;align-items:flex-start;gap:12px}
-.pl-ic{flex:none;width:40px;height:40px;border-radius:11px;display:grid;place-items:center;
- background:rgba(167,139,250,.14);color:var(--vio)}
-.pl-name{display:block;font-size:17px;font-weight:650;color:var(--txt);line-height:1.25;text-decoration:none}
-.pl-name:hover{color:var(--vio)}
-.pl-desc-full{color:var(--dim);font-size:14.5px;line-height:1.7;margin:0 0 18px;max-width:70ch}
-.pl-note{color:var(--dim2);font-size:13px;line-height:1.7;margin:10px 0 0;max-width:70ch}
-.pl-by{margin-top:3px;font:12px var(--mono);color:var(--dim)}
-.pl-at{font:inherit;color:var(--vio);background:none;border:0;padding:0;cursor:pointer}
-.pl-at:hover{text-decoration:underline}
-.pl-ok{color:var(--run)}
-.pl-desc{color:var(--dim);font-size:13.5px;line-height:1.6;flex:1;margin:0;
- display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
-.pl-more-desc{align-self:flex-start;margin-top:-4px;padding:0;font:11.5px var(--mono);color:var(--vio);
- background:none;border:0;cursor:pointer}
-.pl-more-desc:hover{text-decoration:underline}
-.pl-card.open .pl-desc{-webkit-line-clamp:unset;display:block}
-.pl-tags{display:flex;flex-wrap:wrap;gap:6px}
-.pl-tag{font:11px var(--mono);color:var(--dim2);border:1px solid var(--line);border-radius:999px;padding:3px 9px}
-.pl-tag.t{border-style:dashed}
-.pl-tag.d{color:var(--vio);border-color:rgba(167,139,250,.35)}
-.pl-tag.s{color:var(--run);border-color:rgba(52,211,153,.35)}
-.pl-tag.w{color:var(--wait);border-color:rgba(251,191,36,.35)}
-.pl-inst{display:flex;align-items:center;gap:8px;margin-top:auto;padding:8px;border-radius:12px;
- background:rgba(7,6,13,.55);border:1px solid var(--line)}
-.pl-inst code{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:12px var(--mono);color:var(--txt)}
-.pl-copy{flex:none;font:11.5px var(--mono);color:var(--dim);background:transparent;border:1px solid var(--line2);
- border-radius:8px;padding:6px 10px;cursor:pointer}
-.pl-copy:hover{color:var(--txt);border-color:var(--vio)}
-.pl-copy.done{color:var(--run);border-color:rgba(52,211,153,.5)}
-.pl-links{display:flex;gap:14px;font:12px var(--mono);color:var(--dim2)}
-.pl-links a{color:var(--dim);text-decoration:none}
-.pl-links a:hover{color:var(--txt)}
-.pl-more[hidden]{display:none}
-.pl-more{margin:18px auto 0;display:block;padding:9px 18px;font:12.5px var(--mono);color:var(--dim);background:transparent;border:1px solid var(--line2);border-radius:10px;cursor:pointer}
-.pl-more:hover{color:var(--fg);border-color:var(--vio)}
-.pl-go{padding:5px 12px;font:12px var(--mono);color:var(--bg);background:var(--vio);border:0;border-radius:8px;cursor:pointer;white-space:nowrap}
-.pl-go:hover{filter:brightness(1.12)}
-.pl-go.miss{background:transparent;color:var(--dim);border:1px solid var(--line2)}
-/* One plugin's own page. The card on the shelf is a label; this is the thing,
-   and the thing is mostly a picture — so the picture opens the page at the
-   width of the column and enlarges to the width of the screen. Everything
-   else is arranged around it: who made it, what it costs to install, where it
-   will draw. */
-.pl-crumb{font:12px var(--mono);color:var(--dim2);margin-bottom:18px}
-.pl-crumb a{color:var(--dim);text-decoration:none}
-.pl-crumb a:hover{color:var(--vio)}
-.pl-one{animation:pl-in .36s cubic-bezier(.2,.7,.3,1) both}
-@keyframes pl-in{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
-.pl-hero{position:relative;overflow:hidden;border:1px solid var(--line2);border-radius:22px;padding:34px;
- display:grid;grid-template-columns:minmax(0,1fr) 296px;gap:34px;align-items:start;
- background:linear-gradient(152deg,rgba(167,139,250,.15),rgba(167,139,250,.03) 44%,rgba(255,255,255,.012) 72%)}
-.pl-hero::before{content:"";position:absolute;width:560px;height:560px;right:-140px;top:-330px;border-radius:50%;
- background:radial-gradient(circle,rgba(167,139,250,.24),transparent 62%);pointer-events:none}
-.pl-hero>div{position:relative;min-width:0}
-@media(max-width:940px){.pl-hero{grid-template-columns:minmax(0,1fr)}}
-.pl-one-top{position:relative;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
-.pl-one-ic{flex:none;width:62px;height:62px;border-radius:17px;display:grid;place-items:center;color:var(--vio);
- background:rgba(167,139,250,.16);border:1px solid rgba(167,139,250,.32);box-shadow:0 12px 34px -18px rgba(167,139,250,.9)}
-.pl-one-ic svg{width:30px;height:30px}
-.pl-one h2{margin:0;font-size:clamp(26px,4.4vw,38px);line-height:1.08;letter-spacing:-.025em}
-.pl-one-sub{margin-top:6px;font:12.5px var(--mono);color:var(--dim)}
-.pl-badges{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
-.pl-badge{font:11.5px var(--mono);padding:6px 12px;border-radius:999px;white-space:nowrap;
- color:var(--vio);border:1px solid rgba(167,139,250,.35);background:rgba(167,139,250,.1)}
-.pl-badge.s{color:var(--run);border-color:rgba(52,211,153,.35);background:rgba(52,211,153,.09)}
-.pl-badge.w{color:var(--wait);border-color:rgba(251,191,36,.35);background:rgba(251,191,36,.09)}
-.pl-lead{position:relative;margin:22px 0 0;font-size:17.5px;line-height:1.62;color:var(--txt);max-width:62ch}
-.pl-cta{position:relative;margin-top:24px;display:flex;flex-wrap:wrap;gap:10px;align-items:center}
-.pl-big{display:inline-flex;align-items:center;gap:9px;padding:12px 22px;border:0;border-radius:12px;cursor:pointer;
- font:14px var(--mono);color:var(--void);background:var(--vio);box-shadow:0 16px 40px -20px rgba(167,139,250,1)}
-.pl-big:hover{filter:brightness(1.12)}
-.pl-big.miss{background:transparent;color:var(--dim);border:1px solid var(--line2);box-shadow:none}
-.pl-ghost{display:inline-flex;align-items:center;gap:8px;padding:12px 18px;border-radius:12px;cursor:pointer;
- font:13px var(--mono);color:var(--dim);text-decoration:none;background:transparent;border:1px solid var(--line2)}
-.pl-ghost:hover{color:var(--fg);border-color:var(--vio)}
-.pl-ghost.done{color:var(--run);border-color:rgba(52,211,153,.5)}
-.pl-hint{position:relative;margin:14px 0 0;font:12px var(--mono);color:var(--dim2);max-width:66ch;line-height:1.65}
-/* The picture, staged. A plugin is bought with its screenshot, and a screenshot
-   inside a 280px column is a thumbnail nobody clicks. */
-.pl-stage{position:relative;margin-top:22px;padding:14px;border-radius:22px;border:1px solid var(--line);
- background:linear-gradient(180deg,rgba(167,139,250,.11),rgba(167,139,250,.015))}
-.pl-stage img{display:block;width:100%;border-radius:13px;border:1px solid var(--line2);cursor:zoom-in;
- box-shadow:0 30px 80px -44px #000;transition:transform .32s cubic-bezier(.2,.7,.3,1),box-shadow .32s}
-.pl-stage:hover img{transform:translateY(-3px);box-shadow:0 44px 100px -40px #000}
-.pl-zoom{position:absolute;right:28px;bottom:28px;display:flex;align-items:center;gap:8px;pointer-events:none;
- padding:8px 14px;border-radius:999px;font:11.5px var(--mono);color:var(--fg);opacity:.72;
- background:rgba(7,6,13,.76);border:1px solid var(--line2);backdrop-filter:blur(8px);transition:opacity .2s}
-.pl-stage:hover .pl-zoom{opacity:1}
-/* The specification, beside the pitch rather than under it: five lines of
-   fact against a paragraph of prose, which is also what keeps the right half
-   of a wide hero from being empty. */
-.pl-spec{border:1px solid var(--line2);border-radius:16px;padding:6px 0;background:rgba(7,6,13,.45)}
-.pl-fact{display:flex;justify-content:space-between;align-items:baseline;gap:14px;padding:11px 16px}
-.pl-fact+.pl-fact{border-top:1px solid var(--line)}
-.pl-fact dt{flex:none;font:10.5px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--dim2)}
-.pl-fact dd{margin:0;font:12.5px var(--mono);color:var(--fg);text-align:right;word-break:break-word;min-width:0}
-.pl-fact a{color:var(--vio);text-decoration:none}
-.pl-fact a:hover{text-decoration:underline}
-/* The two closing sections sit side by side. Stacked, each one was a column of
-   text down the left of a page as wide as the picture above it, and the right
-   half of the screen was empty twice. */
-.pl-close{margin-top:36px;display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:28px;align-items:start}
-@media(max-width:940px){.pl-close{grid-template-columns:minmax(0,1fr)}}
-.pl-sec h3{margin:0 0 12px;font-size:18px;letter-spacing:-.01em}
-.pl-aside{border:1px solid var(--line);border-radius:16px;padding:20px 22px;background:rgba(255,255,255,.012)}
-.pl-aside h3{font-size:15px}
-.pl-aside .pl-hint{margin:0;max-width:none}
-/* `.page ul` caps prose at 62ch, which is right for a list of sentences and
-   wrong for a grid of cards: it held four cards inside half the width. */
-.page ul.pl-draws{margin:0;padding:0;list-style:none;max-width:none;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
-.pl-draws li{display:flex;gap:12px;align-items:flex-start;padding:15px 17px;border:1px solid var(--line);border-radius:15px}
-.pl-draws .n{flex:none;width:28px;height:28px;border-radius:9px;display:grid;place-items:center;
- font:11px var(--mono);color:var(--vio);background:rgba(167,139,250,.14)}
-.pl-draws b{display:block;color:var(--fg);font-weight:550;font-size:14px}
-.pl-draws span{display:block;margin-top:3px;font-size:12.5px;line-height:1.55;color:var(--dim2)}
-.pl-lb{position:fixed;inset:0;z-index:90;background:rgba(4,3,9,.9);backdrop-filter:blur(10px);
- display:grid;place-items:center;padding:34px;cursor:zoom-out;animation:pl-fade .18s ease both}
-@keyframes pl-fade{from{opacity:0}to{opacity:1}}
-.pl-lb img{max-width:min(1700px,96vw);max-height:88vh;border:1px solid var(--line2);border-radius:14px;
- box-shadow:0 50px 140px -40px #000;animation:pl-pop .32s cubic-bezier(.2,.7,.3,1) both}
-@keyframes pl-pop{from{opacity:0;transform:scale(.965)}to{opacity:1;transform:none}}
-/* Fit first, then actual pixels: a wide screenshot fitted to the window is
-   still smaller than the window it was taken from, and the point of enlarging
-   it is to read the text in it. */
-.pl-lb.full{padding:0;place-items:start;overflow:auto;cursor:zoom-out}
-.pl-lb.full img{max-width:none;max-height:none;border:0;border-radius:0;animation:none}
-.pl-lb-cap{position:fixed;left:0;right:0;bottom:18px;text-align:center;pointer-events:none;
- font:12px var(--mono);color:var(--dim)}
-.pl-lb-x{position:fixed;top:18px;right:20px;width:38px;height:38px;border-radius:11px;cursor:pointer;
- display:grid;place-items:center;font:16px var(--mono);color:var(--fg);
- background:rgba(7,6,13,.7);border:1px solid var(--line2);backdrop-filter:blur(8px)}
-.pl-lb-x:hover{border-color:var(--vio)}
-.pl-none{margin-top:18px;padding:40px 20px;text-align:center;color:var(--dim);border:1px dashed var(--line2);border-radius:16px}
-/* A path through the app is one word for wrapping: "Settings →" on one line
-   and "Plugins" on the next reads as two places. */
-.nb{white-space:nowrap;font-weight:600;color:var(--txt)}
-/* Two columns of prose rather than one 62ch ribbon down a 1000px page. */
-/* min(), because a 320px track inside a column narrower than 320px does not
-   shrink: on a 320px phone it pushed the page to 342 and zoomed it out. */
-.pl-two{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(320px,100%),1fr));gap:10px 34px}
-.pl-two p{max-width:none}
-/*
- * Four cards of very different lengths, packed rather than laid on a grid.
- *
- * A grid gives every card in a row the height of the tallest, so the two
- * short steps were drawn as tall boxes a third empty. Forcing spans fixed
- * that and left a hole instead, because a spanned row is still a row. Two
- * text columns pack them: each card takes the height it needs and the next
- * one starts under it, with `break-inside: avoid` keeping a card whole.
- */
-.pl-steps{margin-top:18px;columns:2;column-gap:14px}
-.pl-step{break-inside:avoid;display:inline-block;width:100%;margin:0 0 14px}
-@media(max-width:760px){.pl-steps{columns:1}}
-.pl-step{padding:18px;border-radius:14px;border:1px solid var(--line);box-sizing:border-box}
-.pl-step>b{display:block;font:12px var(--mono);color:var(--vio);letter-spacing:.1em;margin-bottom:8px}
-.pl-step p b{font-weight:600;color:var(--txt)}
-.pl-step p{margin-top:0;font-size:14px;max-width:none;text-wrap:pretty}
-.pl-step p+p{margin-top:10px}
-/* The one file an author writes by hand, shown rather than described: the
-   site demanded `agentglass-plugin validate .` on the issue form and never
-   named the command, and showed a catalogue entry — which is generated FOR
-   them — while the manifest stayed prose. */
-.pl-code{margin:10px 0 0;padding:11px 12px;border-radius:10px;overflow-x:auto;
- background:rgba(0,0,0,.45);border:1px solid var(--line)}
-.pl-code code{font:11.5px/1.65 var(--mono);color:var(--dim);white-space:pre-wrap;word-break:break-word}
-@media (max-width:560px){.pl-sort{flex:1 1 100%}}
 </style>
 <!-- The deploy writes a cookieless page counter between these when one is
      configured as a repository variable, and nothing at all when it is not,
@@ -1698,7 +1493,7 @@ body:not([data-route="home"]) .page{padding-top:calc(118px + var(--safe))}
           <g><animate attributeName="opacity" values="1;0" keyTimes="0;.5" dur="48s" calcMode="discrete" repeatCount="indefinite"/><animateMotion dur="48s" repeatCount="indefinite" path="M66.2 20.9 A36 14 -18 0 1 -2.2 43.1 A36 14 -18 0 1 66.2 20.9"/><circle r=".9" fill="#fbbf24" fill-opacity=".8"/></g>
         </g>
       </svg></div>
-<header class="hd"><div class="hd-bar"></div><a class="hd-lock" href="#"><svg class="mk" viewBox="0 0 64 64" aria-hidden="true"><defs><radialGradient id="hsheen" cx=".34" cy=".28" r=".82"><stop offset="0" stop-color="#fff" stop-opacity=".72"/><stop offset=".5" stop-color="#fff" stop-opacity=".15"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient><radialGradient id="hatmo"><stop offset=".8" stop-color="#a78bfa" stop-opacity="0"/><stop offset=".88" stop-color="#a78bfa" stop-opacity=".22"/><stop offset="1" stop-color="#a78bfa" stop-opacity="0"/></radialGradient></defs><g fill="none" stroke="#8b88a4" stroke-opacity=".16" stroke-dasharray="2 5"><path d="M-2.2 43.1 A36 14 -18 0 1 66.2 20.9"/></g><g opacity="0"><animate attributeName="opacity" values="0;1" keyTimes="0;.5" dur="48s" calcMode="discrete" repeatCount="indefinite"/><animateMotion dur="48s" repeatCount="indefinite" path="M66.2 20.9 A36 14 -18 0 1 -2.2 43.1 A36 14 -18 0 1 66.2 20.9"/><circle r="1.1" fill="#fbbf24" fill-opacity=".55"/></g><path d="M14.1 54.9 A29 8 -52 0 1 49.9 9.1" fill="none" stroke="#a78bfa" stroke-opacity=".4" stroke-width="3.2" stroke-linecap="round"/><g opacity="0"><animate attributeName="opacity" values="0;1" keyTimes="0;.5" dur="16s" calcMode="discrete" repeatCount="indefinite"/><animateMotion dur="16s" repeatCount="indefinite" path="M49.9 9.1 A29 8 -52 0 1 14.1 54.9 A29 8 -52 0 1 49.9 9.1"/><circle r="6.8" fill="#34d399" fill-opacity=".18"/><circle r="3.6" fill="#34d399"/></g><circle cx="30" cy="34" r="14.6" fill="url(#hatmo)"/><circle cx="30" cy="34" r="12.5" fill="#a78bfa"/><circle cx="30" cy="34" r="12.5" fill="url(#hsheen)"/><g fill="none" stroke="#fff" stroke-opacity=".2" stroke-width="1.1"><ellipse cx="30" cy="34" rx="12.5" ry="4.5"/><ellipse cx="30" cy="34" rx="6" ry="12.1"/></g><path d="M30 21.5 A12.5 12.5 0 0 1 30 46.5 A17 17 0 0 0 30 21.5 Z" fill="#1b0b38" fill-opacity=".42"/><path d="M49.9 9.1 A29 8 -52 0 1 14.1 54.9" fill="none" stroke="#a78bfa" stroke-width="3.2" stroke-linecap="round"/><g><animate attributeName="opacity" values="1;0" keyTimes="0;.5" dur="16s" calcMode="discrete" repeatCount="indefinite"/><animateMotion dur="16s" repeatCount="indefinite" path="M49.9 9.1 A29 8 -52 0 1 14.1 54.9 A29 8 -52 0 1 49.9 9.1"/><circle r="6.8" fill="#34d399" fill-opacity=".18"/><circle r="3.6" fill="#34d399"/></g><g fill="none" stroke="#8b88a4" stroke-opacity=".22" stroke-dasharray="2 5"><path d="M66.2 20.9 A36 14 -18 0 1 -2.2 43.1"/></g><g><animate attributeName="opacity" values="1;0" keyTimes="0;.5" dur="48s" calcMode="discrete" repeatCount="indefinite"/><animateMotion dur="48s" repeatCount="indefinite" path="M66.2 20.9 A36 14 -18 0 1 -2.2 43.1 A36 14 -18 0 1 66.2 20.9"/><circle r="1.1" fill="#fbbf24" fill-opacity=".8"/></g></svg><span class="lk"><span class="lk-cue">&gt;</span><span class="lk-tag"><span class="lk-pl">agent</span><span class="lk-wi"><i class="lk-bar"></i><i class="lk-d1"></i><i class="lk-d2"></i><i class="lk-d3"></i>glass</span></span><span class="lk-car"></span></span></a><nav class="hd-nav"><a href="#/" data-r="home">Home</a><a href="#/guide" data-r="guide">Guide</a><a href="#/plugins" data-r="plugins">Plugins</a><a href="#/faq" data-r="faq">Questions</a><a class="dl" href="#/#get">Get it →</a></nav></header>
+<header class="hd"><div class="hd-bar"></div><a class="hd-lock" href="#"><svg class="mk" viewBox="0 0 64 64" aria-hidden="true"><defs><radialGradient id="hsheen" cx=".34" cy=".28" r=".82"><stop offset="0" stop-color="#fff" stop-opacity=".72"/><stop offset=".5" stop-color="#fff" stop-opacity=".15"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient><radialGradient id="hatmo"><stop offset=".8" stop-color="#a78bfa" stop-opacity="0"/><stop offset=".88" stop-color="#a78bfa" stop-opacity=".22"/><stop offset="1" stop-color="#a78bfa" stop-opacity="0"/></radialGradient></defs><g fill="none" stroke="#8b88a4" stroke-opacity=".16" stroke-dasharray="2 5"><path d="M-2.2 43.1 A36 14 -18 0 1 66.2 20.9"/></g><g opacity="0"><animate attributeName="opacity" values="0;1" keyTimes="0;.5" dur="48s" calcMode="discrete" repeatCount="indefinite"/><animateMotion dur="48s" repeatCount="indefinite" path="M66.2 20.9 A36 14 -18 0 1 -2.2 43.1 A36 14 -18 0 1 66.2 20.9"/><circle r="1.1" fill="#fbbf24" fill-opacity=".55"/></g><path d="M14.1 54.9 A29 8 -52 0 1 49.9 9.1" fill="none" stroke="#a78bfa" stroke-opacity=".4" stroke-width="3.2" stroke-linecap="round"/><g opacity="0"><animate attributeName="opacity" values="0;1" keyTimes="0;.5" dur="16s" calcMode="discrete" repeatCount="indefinite"/><animateMotion dur="16s" repeatCount="indefinite" path="M49.9 9.1 A29 8 -52 0 1 14.1 54.9 A29 8 -52 0 1 49.9 9.1"/><circle r="6.8" fill="#34d399" fill-opacity=".18"/><circle r="3.6" fill="#34d399"/></g><circle cx="30" cy="34" r="14.6" fill="url(#hatmo)"/><circle cx="30" cy="34" r="12.5" fill="#a78bfa"/><circle cx="30" cy="34" r="12.5" fill="url(#hsheen)"/><g fill="none" stroke="#fff" stroke-opacity=".2" stroke-width="1.1"><ellipse cx="30" cy="34" rx="12.5" ry="4.5"/><ellipse cx="30" cy="34" rx="6" ry="12.1"/></g><path d="M30 21.5 A12.5 12.5 0 0 1 30 46.5 A17 17 0 0 0 30 21.5 Z" fill="#1b0b38" fill-opacity=".42"/><path d="M49.9 9.1 A29 8 -52 0 1 14.1 54.9" fill="none" stroke="#a78bfa" stroke-width="3.2" stroke-linecap="round"/><g><animate attributeName="opacity" values="1;0" keyTimes="0;.5" dur="16s" calcMode="discrete" repeatCount="indefinite"/><animateMotion dur="16s" repeatCount="indefinite" path="M49.9 9.1 A29 8 -52 0 1 14.1 54.9 A29 8 -52 0 1 49.9 9.1"/><circle r="6.8" fill="#34d399" fill-opacity=".18"/><circle r="3.6" fill="#34d399"/></g><g fill="none" stroke="#8b88a4" stroke-opacity=".22" stroke-dasharray="2 5"><path d="M66.2 20.9 A36 14 -18 0 1 -2.2 43.1"/></g><g><animate attributeName="opacity" values="1;0" keyTimes="0;.5" dur="48s" calcMode="discrete" repeatCount="indefinite"/><animateMotion dur="48s" repeatCount="indefinite" path="M66.2 20.9 A36 14 -18 0 1 -2.2 43.1 A36 14 -18 0 1 66.2 20.9"/><circle r="1.1" fill="#fbbf24" fill-opacity=".8"/></g></svg><span class="lk"><span class="lk-cue">&gt;</span><span class="lk-tag"><span class="lk-pl">agent</span><span class="lk-wi"><i class="lk-bar"></i><i class="lk-d1"></i><i class="lk-d2"></i><i class="lk-d3"></i>glass</span></span><span class="lk-car"></span></span></a><nav class="hd-nav"><a href="#/" data-r="home">Home</a><a href="#/guide" data-r="guide">Guide</a><a href="https://sirallap.github.io/agentglass-plugins/">Plugins</a><a href="#/faq" data-r="faq">Questions</a><a class="dl" href="#/#get">Get it →</a></nav></header>
 <main id="home"><section class="one">
  <div class="kick">The workspace for your coding agents</div>
  <div class="field"><div class="chip" data-k="diff" style="--cx:-344px;--cy:-198px"><svg class="ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M12 11.5v5M9.5 14h5"/><path d="M9.5 18.4h5"/></svg><span>nvim</span></div><div class="chip" data-k="terminal" style="--cx:322px;--cy:-208px"><svg class="ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 10l2.5 2.5L7 15"/><path d="M12.5 15.5H17"/></svg><span>tmux</span></div><div class="chip" data-k="git" style="--cx:-408px;--cy:-52px"><svg class="ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="5" r="2.6"/><circle cx="7" cy="19" r="2.6"/><circle cx="17.5" cy="12" r="2.6"/><path d="M7 7.6v8.8"/><path d="M9.6 5h3.4a2 2 0 0 1 2 2v2.6"/></svg><span>lazygit</span></div><div class="chip" data-k="docker" style="--cx:386px;--cy:-46px"><svg class="ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="9.5" width="3.2" height="3.2" rx=".5"/><rect x="7.4" y="9.5" width="3.2" height="3.2" rx=".5"/><rect x="11.8" y="9.5" width="3.2" height="3.2" rx=".5"/><rect x="7.4" y="5.8" width="3.2" height="3.2" rx=".5"/><rect x="11.8" y="5.8" width="3.2" height="3.2" rx=".5"/><rect x="11.8" y="2.1" width="3.2" height="3.2" rx=".5"/><path d="M2 14.2c.4 3.4 2.8 5.6 7.2 5.6 5.2 0 8.8-2.6 10-6.6 1.4.2 2.6-.3 3.2-1.3-1.2-.9-2.5-.8-3.5-.2"/></svg><span>lazydocker</span></div><div class="chip" data-k="issues" style="--cx:-366px;--cy:106px"><svg class="ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 6.5l2 2 3.5-3.5"/><path d="M12 7h9"/><path d="M3.5 15.5l2 2 3.5-3.5"/><path d="M12 16h9"/></svg><span>ClickUp</span></div><div class="chip" data-k="pr" style="--cx:346px;--cy:94px"><svg class="ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><path d="M6 9v12"/><circle cx="18" cy="18" r="3"/><path d="M18 15V8a2 2 0 0 0-2-2h-4.5"/><path d="M13.5 3.5 11 6l2.5 2.5"/></svg><span>GitHub PRs</span></div><div class="chip" data-k="browser" style="--cx:-266px;--cy:218px"><svg class="ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18Z"/></svg><span>Chrome</span></div><div class="chip" data-k="chat" style="--cx:272px;--cy:224px"><svg class="ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 4.5h-17v12h5v4l5-4h7z"/></svg><span>Claude</span></div>
@@ -1883,13 +1678,12 @@ body:not([data-route="home"]) .page{padding-top:calc(118px + var(--safe))}
 <section class="sec" id="more"><div class="w">
  <div class="eb">Not on this page</div>
  <h2>A catalogue, a manual, and the awkward questions.</h2>
- <p class="sub">Three pages of their own, because this one is about the window.</p>
+ <p class="sub">Three places of their own, because this one is about the window.</p>
  <div class="nx">
-  <a class="nxc big" href="#/plugins">
-   <span class="nxh"><span class="nxi"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M5 7.2h3.7a2.3 2.3 0 1 1 4.6 0H17v3.7a2.3 2.3 0 1 1 0 4.6v3.7h-3.7a2.3 2.3 0 1 0-4.6 0H5v-3.7a2.3 2.3 0 1 0 0-4.6z"/></svg></span><b>Plugins</b><u id="nx-n">&nbsp;</u></span>
+  <a class="nxc big" href="https://sirallap.github.io/agentglass-plugins/">
+   <span class="nxh"><span class="nxi"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M5 7.2h3.7a2.3 2.3 0 1 1 4.6 0H17v3.7a2.3 2.3 0 1 1 0 4.6v3.7h-3.7a2.3 2.3 0 1 0-4.6 0H5v-3.7a2.3 2.3 0 1 0 0-4.6z"/></svg></span><b>Plugins</b></span>
    <span>A plugin is its own git repository and installs from its URL — no account, no registry, nobody's permission. It runs as its own process with the scope you approve, and draws with the app's own parts: a panel, a settings page, notes in a pull request, a button in its header.</span>
-   <span class="nxl" id="nx-list"></span>
-   <em>Browse the catalogue &rarr;</em>
+   <em>Browse the market &rarr;</em>
   </a>
   <a class="nxc" href="#/guide">
    <span class="nxh"><span class="nxi"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H11v16H5.5A1.5 1.5 0 0 1 4 18.5z"/><path d="M20 5.5A1.5 1.5 0 0 0 18.5 4H13v16h5.5a1.5 1.5 0 0 0 1.5-1.5z"/></svg></span><b>The guide</b></span>
@@ -2004,7 +1798,7 @@ body:not([data-route="home"]) .page{padding-top:calc(118px + var(--safe))}
   revokes the token; tokens live in memory and are never written to disk.</p>
  <p>A plugin can also draw: a panel in the Plugins view, a page in Settings, notes
   in a pull request and a button in its header. It sends what to show as data, and agentglass draws it
-  with its own parts. <a href="#/plugins" style="color:var(--vio)">Browse the plugins</a>.</p>
+  with its own parts. <a href="https://sirallap.github.io/agentglass-plugins/" style="color:var(--vio)">Browse the plugins</a>.</p>
  <div class="grid2">
   <div><b>read</b><span>Almost every GET route, including <code>/stream</code>: live output, costs,
    diffs, pull requests, the board. Cannot write anything, and cannot read another plugin's settings or
@@ -2102,89 +1896,7 @@ body:not([data-route="home"]) .page{padding-top:calc(118px + var(--safe))}
    path.</p></div></details>
  </div>
 </div></section></main>
-<main id="plugins" hidden><section class="page"><div class="w">
- <div id="pl-one" hidden></div>
- <div id="pl-list">
- <div class="eb">Plugins</div>
- <h1>Plugins that draw in agentglass.</h1>
- <p class="lead">Each one is its own git repository. It runs as its own process with a token scoped to
-  what you approve, and it draws with agentglass's own parts: a panel, a settings page, notes in a
-  pull request and a button in its header. None of its code runs inside the window.</p>
- <div class="pl-bar">
-  <label class="pl-q"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" style="color:var(--dim)"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
-   <input id="pl-q" type="search" placeholder="Search plugins, tags, authors" autocomplete="off" aria-label="Search plugins"><kbd>/</kbd></label>
-  <select id="pl-by" class="pl-sort" aria-label="Author"><option value="">Every author</option></select>
-  <select id="pl-sort" class="pl-sort" aria-label="Sort"><option value="new">Recently added</option><option value="az">A–Z</option></select>
- </div>
- <div class="pl-acts">
-  <a class="pl-act" href="#install">Install one</a>
-  <a class="pl-act" href="#publish">Publish yours</a>
-  <a class="pl-act p" href="https://github.com/SirAllap/agentglass/issues/new?template=plugin_submission.yml">Ask to be listed →</a>
- </div>
- <div class="pl-chips" id="pl-chips" role="group" aria-label="Filter"></div>
- <div class="pl-count" id="pl-count"></div>
- <div class="pl-grid" id="pl-grid"></div>
- <button class="pl-more" id="pl-more" type="button" hidden></button>
- <div class="pl-none" id="pl-none" hidden>Nothing matches. <a href="https://github.com/SirAllap/agentglass/blob/main/docs/PLUGINS.md" style="color:var(--vio)">Write it?</a></div>
 
- </div>
-
- <div id="pl-tail">
- <h3 id="publish">Publish one</h3>
- <div class="pl-steps">
-  <div class="pl-step"><b>01 · WRITE</b><p>One file at the root of a public repository. It is the whole
-   manifest: what it runs, the scope it asks for, and where it draws.</p>
-   <pre class="pl-code"><code>{
-  "name": "hello-stream",
-  "publisher": "you",
-  "description": "Writes a line to its log when an agent finishes.",
-  "entrypoint": "python3 -u main.py",
-  "scope": "read",
-  "minApp": "0.17.0",
-  "contributes": {
-    "panels": [{ "id": "log", "title": "Hello" }]
-  }
-}</code></pre>
-   <p>Add a <code>preview.png</code> beside it — a wide screenshot of the thing working. It is what the
-   card above draws, and without one your plugin is listed as a puzzle piece. A README and a licence are
-   the other two the check looks for.</p>
-   <p><b class="nb">Where it may write:</b> its own folder, and what you ask the app to keep for you
-   through <code>/plugin/self/settings</code>. Not the person's configuration — naming
-   <code>~/.claude</code>, <code>~/.config/agentglass</code>, a shell rc, <code>crontab</code> or
-   <code>systemctl --user</code> is enough to be flagged, because that directory holds the machine token
-   and every other plugin on disk.</p></div>
-  <div class="pl-step"><b>02 · TRY IT</b><p>Install it on your own machine before you ask anybody to
-   list it. Four commands, and the last one leaves nothing behind:</p>
-   <pre class="pl-code"><code>agentglass-plugin validate .
-agentglass-plugin add /abs/path/to/plugin --approve
-# look at it in Settings → Plugins
-agentglass-plugin remove your-plugin</code></pre>
-   <p><code>validate</code> is the same check the listing runs, so it is the cheapest way to find out
-   that a manifest is wrong. <code>--approve</code> prints the scope, the command and every surface it
-   draws on before it switches anything on.</p></div>
-  <div class="pl-step"><b>03 · PUSH</b><p>Any host <code>git clone</code> reaches. The URL is already the
-   publication: pasting it into Settings → Plugins installs it, with no account, no registry and nobody's
-   permission. Being listed below is only about being found.</p></div>
-  <div class="pl-step"><b>04 · LIST IT</b><p>Open the <a href="https://github.com/SirAllap/agentglass/issues/new?template=plugin_submission.yml" style="color:var(--vio)">List a plugin</a> issue.
-   A check clones what you named, runs <code>validate</code> and reads the source for a short list of
-   patterns — it never runs your code. A maintainer then approves, and the entry is written from your
-   manifest into <code>landing/plugins.json</code> by a pull request somebody merges. Listing is not
-   auditing: a plugin here has a public repository, a manifest the app accepts, a README and a licence.
-   That is what a machine can tell, and whoever installs it still approves what it asks for.
-   <a href="https://github.com/SirAllap/agentglass/blob/main/docs/PLUGINS.md" style="color:var(--vio)">The guide</a>
-   has the routes and the drawing vocabulary.</p></div>
- </div>
- <h3 id="install">Install one</h3>
- <div class="pl-two">
-  <p>In agentglass, open <b class="nb">Settings → Plugins</b>. This page's catalogue is offered there by
-   name — press Add, open it, and install from the card. Or paste a plugin's URL straight in; the
-   catalogue is a convenience, not a gate.</p>
-  <p>Nothing runs at install: you read what it asks for and switch it on, and an update that changes
-   what it asks for is asked about again. Verified means a maintainer read that plugin at the listed
-   source — it does not vouch for later changes, which is why an update always asks.</p>
- </div>
- </div>
-</div></section></main>
 
 <footer class="foot2">
  <div class="fw">
@@ -2200,14 +1912,6 @@ agentglass-plugin remove your-plugin</code></pre>
 </footer>
 <script>
 const calm=matchMedia('(prefers-reduced-motion: reduce)').matches;
-/* Served from this machine next to the market, the links that lead to it
-   lead to it: the header's PLUGINS and every footer link on the market's
-   address. Deployed, nothing here runs and the links stay as written. */
-if(/^(127\.0\.0\.1|localhost)$/.test(location.hostname)){
- for(const a of document.querySelectorAll('.hd-nav a[data-r="plugins"]')){ a.removeAttribute('data-r'); a.href='http://127.0.0.1:4780/'; }
- for(const a of document.querySelectorAll('a[href^="https://sirallap.github.io/agentglass-plugins/"]'))
-  a.href=a.href.replace('https://sirallap.github.io/agentglass-plugins/','http://127.0.0.1:4780/');
-}
 /*
  * The header's scroll choreography, for an engine that says yes and means no.
  *
@@ -3134,477 +2838,22 @@ new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){g.classList.add
   'On an Intel one take <a href="#get">the x64 build</a>.';
 })();
 
-/* The plugins page, from plugins.json. Fetched the first time the page is
-   shown, and drawn with textContent only: the catalogue is a file other people
-   send pull requests to, so nothing in it is ever treated as markup. */
-(() => {
- const DRAW = { "panel": "adds a panel", "panels": "adds a panel", "settings": "settings page", "pr-notes": "notes in pull requests", "prNotes": "notes in pull requests", "pr-button": "a button in pull requests", "prActions": "a button in pull requests" };
- /* What each surface is, on the plugin's own page: the short name is the card's
-    word, and the sentence under it says where the person will actually meet it. */
- const WHERE = {
-  "panel": "Its own panel in the Plugins view, drawn with agentglass's parts.",
-  "panels": "Its own panel in the Plugins view, drawn with agentglass's parts.",
-  "settings": "A page of fields in Settings, filled in by you.",
-  "pr-notes": "Notes inside a pull request — shown here only, never sent to GitHub.",
-  "prNotes": "Notes inside a pull request — shown here only, never sent to GitHub.",
-  "pr-button": "A button in the header of every pull request.",
-  "prActions": "A button in the header of every pull request.",
- };
- const SCOPE = { read: ["reads only", "s"], answer: ["can answer chats", "w"], full: ["full access", "w"] };
- let all = null, cat = "all";
- const $ = (id) => document.getElementById(id);
- const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
- const safe = (u) => { try { const x = new URL(u); return x.protocol === "https:" ? x.href : null; } catch { return null; } };
- /*
-  * Who to credit, and who to filter by.
-  *
-  * `publisher` in a manifest is a name a plugin gives itself — "agentglass"
-  * here — and two people can write the same one. The account that actually
-  * published it is the owner of the repository the catalogue points at, which
-  * is also the thing somebody means by "show me everything by them".
-  */
- const authorOf = (p) => {
-  const u = safe(p.source && p.source.url) || "";
-  const m = u.match(/^https:\/\/[^/]*github\.com\/([^/]+)\//);
-  return m ? m[1] : (p.publisher || "unknown");
- };
- /** Show that author's plugins, from wherever you pressed their name. */
- const byAuthor = (a) => {
-  const sel = $("pl-by");
-  if (sel) sel.value = a;
-  if (location.hash.startsWith("#/plugins/")) location.hash = "#/plugins";
-  else render();
-  const bar = $("pl-q");
-  if (bar) bar.scrollIntoView({ block: "center", behavior: "smooth" });
- };
- const PIECE = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M5 7.2h3.7a2.3 2.3 0 1 1 4.6 0H17v3.7a2.3 2.3 0 1 1 0 4.6v3.7h-3.7a2.3 2.3 0 1 0-4.6 0H5v-3.7a2.3 2.3 0 1 0 0-4.6z"/></svg>';
- const card = (p) => {
-  const c = el("article", "pl-card");
-  /* The picture, when the plugin ships one: `preview` is a raw URL inside its
-     own repository, so a card can show what it looks like before anybody
-     installs it. Without one the mark fills the same space — a grid where
-     some cards have a picture and others have a hole reads as broken. */
-  const shot = el("div", "pl-shot");
-  const preview = safe(p.preview) || "";
-  if (preview) {
-   const img = el("img");
-   img.src = preview;
-   img.alt = "";
-   img.loading = "lazy";
-   img.onerror = () => { img.remove(); const m = el("div", "mark"); m.innerHTML = PIECE; shot.append(m); };
-   shot.append(img);
-  } else {
-   const m = el("div", "mark");
-   m.innerHTML = PIECE;
-   shot.append(m);
-  }
-  shot.style.cursor = "pointer";
-  shot.title = "Open " + (p.title || p.id);
-  shot.onclick = () => { location.hash = "#/plugins/" + encodeURIComponent(p.id); };
-  c.append(shot);
-  const top = el("div", "pl-top");
-  const ic = el("div", "pl-ic");
-  ic.innerHTML = PIECE;
-  const who = el("div");
-  const nameLink = el("a", "pl-name", p.title || p.id);
-  nameLink.href = "#/plugins/" + encodeURIComponent(p.id);
-  who.append(nameLink);
-  const by = el("div", "pl-by", "by ");
-  const who2 = el("button", "pl-at", "@" + authorOf(p));
-  who2.type = "button";
-  who2.title = "Everything by @" + authorOf(p);
-  who2.onclick = (e) => { e.preventDefault(); byAuthor(authorOf(p)); };
-  by.append(who2);
-  if (p.verified) by.append(el("span", "pl-ok", " · verified"));
-  who.append(by);
-  top.append(ic, who);
-  /* Chips in one order, and not all of them: what it may do, then where it
-     draws, then what it is about. A card that lists eleven of them reads as a
-     wall and hides the two that decide whether you want it — so the tags are
-     deduplicated and cut, with the count of what was left out. */
-  const tags = el("div", "pl-tags");
-  const sc = SCOPE[p.scope];
-  if (sc) tags.append(el("span", "pl-tag " + sc[1], sc[0]));
-  const draws = (p.draws || []).filter((d) => DRAW[d]);
-  draws.slice(0, 3).forEach((d) => tags.append(el("span", "pl-tag d", DRAW[d])));
-  if (draws.length > 3) tags.append(el("span", "pl-tag d", "+" + (draws.length - 3) + " more"));
-  if (p.minApp) tags.append(el("span", "pl-tag w", "needs " + p.minApp + "+"));
-  /* No topics on the card. They are the filter chips above it, where they
-     do something; repeated here they were four more grey pills between the
-     description and the button, on every card. */
-  const url = safe(p.source && p.source.url);
-  const inst = el("div", "pl-inst");
-  const btn = el("button", "pl-copy", "Copy");
-  btn.type = "button";
-  btn.onclick = () => copyClick(btn, url);
-  /*
-   * "Install", which is a link the app claims rather than anything this page
-   * can do. agentglass registers `agentglass://`, and the click hands over a
-   * URL: the app opens its install box with it and the person approves what
-   * the plugin declares, exactly as they would for a URL they pasted. This
-   * page never installs anything and cannot.
-   *
-   * A browser cannot be asked whether an application is installed — it either
-   * hands the link over or does nothing at all, silently. So: if this page
-   * still has the focus a moment later, nothing took it, and the button says
-   * so and offers the thing that always works.
-   */
-  const go = el("button", "pl-go", "Install");
-  go.type = "button";
-  go.title = "Opens agentglass and fills its install box — nothing installs until you approve it";
-  go.onclick = () => installClick(go, url);
-  inst.append(el("code", null, url || ""), go, btn);
-  const links = el("div", "pl-links");
-  if (url) { const a = el("a", null, "Source ↗"); a.href = url; a.target = "_blank"; a.rel = "noopener"; links.append(a); }
-  if (p.added) links.append(el("span", null, "added " + p.added));
-  const desc = el("p", "pl-desc", p.description || "");
-  c.append(top, desc);
-  /* Only when there is something to unfold: measured after paint, because the
-     clamp is a CSS one and the answer is whether it actually clipped. */
-  const more = el("button", "pl-more-desc", "Read the rest");
-  more.type = "button";
-  more.hidden = true;
-  more.onclick = () => {
-   c.classList.add("open");
-   more.hidden = true;
-  };
-  c.append(more);
-  requestAnimationFrame(() => { more.hidden = desc.scrollHeight <= desc.clientHeight + 2; });
-  c.append(tags, inst, links);
-  return c;
- };
- /* The picture, full size, over everything. A card's preview is 380 pixels
-    wide and the thing it shows is a screen: without this the only way to read
-    it is to open the raw file in another tab. */
- const copyClick = (btn, url, label) => {
-  if (!navigator.clipboard || !url) return;
-  navigator.clipboard.writeText(url).then(() => {
-   btn.textContent = "Copied"; btn.classList.add("done");
-   setTimeout(() => { btn.textContent = label || "Copy"; btn.classList.remove("done"); }, 1400);
-  });
- };
-
- /*
-  * "Install", which is a link the app claims rather than anything this page
-  * can do. agentglass registers `agentglass://`, and the click hands over a
-  * URL: the app opens its install box with it and the person approves what
-  * the plugin declares. This page never installs anything and cannot.
-  *
-  * A browser cannot be asked whether an application is installed — it either
-  * hands the link over or does nothing at all, silently. So: if this page
-  * still has the focus a moment later, nothing took it, and the button says
-  * so and offers the thing that always works.
-  */
- const installClick = (go, url, label) => {
-  if (!url) return;
-  const back = label || "Install";
-  let answered = false;
-  const away = () => { answered = true; };
-  window.addEventListener("blur", away, { once: true });
-  document.addEventListener("visibilitychange", away, { once: true });
-  window.location.href = "agentglass://plugin/install?url=" + encodeURIComponent(url);
-  setTimeout(() => {
-   window.removeEventListener("blur", away);
-   document.removeEventListener("visibilitychange", away);
-   if (answered) return;
-   go.textContent = "No agentglass here — copy instead";
-   go.classList.add("miss");
-   setTimeout(() => { go.textContent = back; go.classList.remove("miss"); }, 4000);
-  }, 1500);
- };
-
- /*
-  * The picture, at the size of the screen. Two steps rather than one: fitted
-  * to the window first, and on a second click at its own pixels with the page
-  * scrolling under it — a 1760px wide screenshot fitted into a 1200px window
-  * is smaller than the window it was taken from, and the only reason to
-  * enlarge a screenshot is to read what is written in it.
-  */
- const lightbox = (src, caption) => {
-  const box = el("div", "pl-lb");
-  const img = el("img");
-  img.src = src;
-  img.alt = caption || "";
-  const cap = el("div", "pl-lb-cap", "Click the image for actual size  ·  Esc to close");
-  const x = el("button", "pl-lb-x", "×");
-  x.type = "button";
-  x.setAttribute("aria-label", "Close");
-  const close = () => { box.remove(); x.remove(); cap.remove(); removeEventListener("keydown", esc); };
-  const esc = (e) => { if (e.key === "Escape") close(); };
-  img.onclick = (e) => {
-   e.stopPropagation();
-   const full = box.classList.toggle("full");
-   cap.textContent = full ? "Click again to fit  ·  Esc to close" : "Click the image for actual size  ·  Esc to close";
-  };
-  box.onclick = close;
-  x.onclick = close;
-  addEventListener("keydown", esc);
-  box.append(img);
-  document.body.append(box, x, cap);
- };
-
- /*
-  * One plugin's own page: `#/plugins/<id>`.
-  *
-  * A card is a thing on a shelf — enough to choose by. This is what somebody
-  * reads before installing: the whole description, the picture at a size you
-  * can read, what it draws, what it asks for, and the command. Same data as
-  * the card; nothing here is fetched from anywhere else.
-  */
- const detail = (p) => {
-  const w = el("div", "pl-one");
-  const crumb = el("div", "pl-crumb");
-  const back = el("a", null, "Plugins");
-  back.href = "#/plugins";
-  crumb.append(back, document.createTextNode("  /  " + (p.title || p.id)));
-  w.append(crumb);
-
-  const url = safe(p.source && p.source.url);
-  const scope = SCOPE[p.scope] || ["unknown", "w"];
-  const drawn = (p.draws || []).filter((d) => DRAW[d]);
-
-  /* The hero says the four things somebody decides on — what it is, who wrote
-     it, what it may do, and the one button — before any scrolling. */
-  const hero = el("div", "pl-hero");
-  const pitch = el("div");
-  const top = el("div", "pl-one-top");
-  const ic = el("div", "pl-one-ic");
-  ic.innerHTML = PIECE;
-  const who = el("div");
-  who.append(el("h2", null, p.title || p.id));
-  const sub = el("div", "pl-one-sub", p.id + "  ·  by ");
-  const at = el("button", "pl-at", "@" + authorOf(p));
-  at.type = "button";
-  at.title = "Everything by @" + authorOf(p);
-  at.onclick = () => byAuthor(authorOf(p));
-  sub.append(at);
-  who.append(sub);
-  top.append(ic, who);
-  pitch.append(top);
-  const badges = el("div", "pl-badges");
-  badges.append(el("span", "pl-badge " + scope[1], scope[0]));
-  badges.append(el("span", "pl-badge", String(drawn.length) + (drawn.length === 1 ? " surface" : " surfaces")));
-  if (p.verified) badges.append(el("span", "pl-badge s", "verified"));
-  pitch.append(badges);
-  pitch.append(el("p", "pl-lead", p.description || ""));
-
-  const cta = el("div", "pl-cta");
-  const go = el("button", "pl-big", "Install in agentglass");
-  go.type = "button";
-  go.onclick = () => installClick(go, url, "Install in agentglass");
-  const cp = el("button", "pl-ghost", "Copy URL");
-  cp.type = "button";
-  cp.onclick = () => copyClick(cp, url, "Copy URL");
-  cta.append(go, cp);
-  if (url) {
-   const src = el("a", "pl-ghost", "Read the source ↗");
-   src.href = url; src.target = "_blank"; src.rel = "noopener";
-   cta.append(src);
-  }
-  pitch.append(cta);
-  pitch.append(el("p", "pl-hint", "The button hands this URL to agentglass and it opens its install box. Nothing runs until you have read what the plugin declares and switched it on — and an update that changes what it asks for asks again."));
-
-  const spec = el("div");
-  const facts = el("div", "pl-spec");
-  const fact = (k, v, href) => {
-   const d = el("div", "pl-fact");
-   d.append(el("dt", null, k));
-   const dd = el("dd");
-   if (href) { const a = el("a", null, v); a.href = href; a.target = "_blank"; a.rel = "noopener"; dd.append(a); }
-   else dd.textContent = v;
-   d.append(dd);
-   facts.append(d);
-  };
-  const author = el("div", "pl-fact");
-  author.append(el("dt", null, "Author"));
-  const addd = el("dd");
-  const alink = el("button", "pl-at", "@" + authorOf(p));
-  alink.type = "button";
-  alink.onclick = () => byAuthor(authorOf(p));
-  addd.append(alink);
-  author.append(addd);
-  facts.append(author);
-  fact("Scope", scope[0]);
-  fact("Draws", String(drawn.length) + (drawn.length === 1 ? " place" : " places"));
-  fact("Needs", p.minApp ? "agentglass " + p.minApp + "+" : "any version");
-  if (p.added) fact("Listed", p.added);
-  if (url) fact("Source", url.replace(/^https:\/\/(www\.)?github\.com\//, "").replace(/^https:\/\//, ""), url);
-  spec.append(facts);
-  hero.append(pitch, spec);
-  w.append(hero);
-
-  const preview = safe(p.preview) || "";
-  if (preview) {
-   const stage = el("div", "pl-stage");
-   const img = el("img");
-   img.src = preview;
-   img.alt = (p.title || p.id) + ", running in agentglass";
-   img.onerror = () => stage.remove();
-   const zoom = el("div", "pl-zoom", "Click to enlarge");
-   stage.onclick = () => lightbox(preview, img.alt);
-   stage.append(img, zoom);
-   w.append(stage);
-  }
-
-  const close = el("div", "pl-close");
-  if (drawn.length) {
-   const sec = el("div", "pl-sec");
-   sec.append(el("h3", null, "Where it draws"));
-   const ul = el("ul", "pl-draws");
-   drawn.forEach((d, i) => {
-    const li = el("li");
-    li.append(el("span", "n", String(i + 1)));
-    const body = el("div");
-    body.append(el("b", null, DRAW[d]));
-    if (WHERE[d]) body.append(el("span", null, WHERE[d]));
-    li.append(body);
-    ul.append(li);
-   });
-   sec.append(ul);
-   close.append(sec);
-  }
-
-  const note = el("div", "pl-sec pl-aside");
-  note.append(el("h3", null, "What being listed means"));
-  note.append(el("p", "pl-hint", "The repository is public, its manifest is one agentglass accepts, and it has a README and a licence. A check read its source for a short list of patterns and never ran it. That is what a machine can tell: listing is not auditing, and whoever installs it still approves the scope and the places it draws."));
-  close.append(note);
-  w.append(close);
-  return w;
- };
-
- const PAGE = 24;
- let shown = PAGE;
- let loaded = false;
- /** Which plugin the hash names, if it names one. */
- const wanted = () => {
-  const h = location.hash.replace(/^#\/?/, "").split("#")[0].split("/");
-  return h[0] === "plugins" && h[1] ? decodeURIComponent(h[1]) : "";
- };
-
- const render = () => {
-  if (!all) return;
-  const one = wanted();
-  const found = one && all.find((p) => p.id === one);
-  $("pl-list").hidden = !!found;
-  $("pl-one").hidden = !found;
-  /* "Publish one" and "Install one" belong to the shelf, not to one plugin:
-     they stood under the detail page offering to list a plugin that is listed. */
-  $("pl-tail").hidden = !!found;
-  if (found) {
-   $("pl-one").replaceChildren(detail(found));
-   return;
-  }
-  /* Only once the document has actually arrived: `all` is set to an empty
-     list the moment the fetch starts, and redirecting on that sent every
-     deep link back to the list before it could find anything. */
-  if (one && !found && loaded) location.hash = "#/plugins";
-  const raw = $("pl-q").value.trim();
-  let rows = all.filter((p) => cat === "all" || (p.categories || []).includes(cat) || (p.draws || []).includes(cat));
-  /* "@name" in the box is a search for an author, because that is what people
-     type when they mean one. The dropdown beside it is the same filter for
-     people who would rather pick than type. */
-  const at = raw.startsWith("@") ? raw.slice(1).toLowerCase() : "";
-  const who = $("pl-by").value;
-  if (who) rows = rows.filter((p) => authorOf(p) === who);
-  if (at) rows = rows.filter((p) => authorOf(p).toLowerCase().includes(at));
-  const q = at ? "" : raw.toLowerCase();
-  if (q) rows = rows.filter((p) => [p.id, p.title, p.publisher, authorOf(p), p.description, ...(p.categories || [])].join(" ").toLowerCase().includes(q));
-  rows.sort($("pl-sort").value === "az"
-   ? (a, b) => (a.title || a.id).localeCompare(b.title || b.id)
-   : (a, b) => String(b.added || "").localeCompare(String(a.added || "")));
-  /* A page at a time. The whole list is in memory either way — it arrived in
-     one fetch — but building three thousand cards blocks the thread that is
-     scrolling, and nobody reads past the second screen. "Show more" rather
-     than numbered pages: this is a shelf you browse, not a table you page
-     through, and a page number is one more thing to put in the URL. */
-  if (shown > rows.length) shown = PAGE;
-  $("pl-grid").replaceChildren(...rows.slice(0, shown).map(card));
-  const more = rows.length - shown;
-  $("pl-more").hidden = more <= 0;
-  $("pl-more").textContent = more > 0 ? "Show " + Math.min(more, PAGE) + " more" : "";
-  $("pl-count").textContent = rows.length + (rows.length === 1 ? " plugin" : " plugins") + (rows.length !== all.length ? " of " + all.length : "");
-  $("pl-none").hidden = rows.length > 0;
- };
- const chips = () => {
-  const cats = new Map([["all", "All"], ["panel", "Draws a panel"], ["pr-notes", "Notes in pull requests"]]);
-  all.forEach((p) => (p.categories || []).forEach((t) => { if (!cats.has(t)) cats.set(t, t); }));
-  $("pl-more").onclick = () => { shown += PAGE; render(); };
-  const count = (k) => (k === "all" ? all.length
-   : all.filter((p) => (p.categories || []).includes(k) || (p.draws || []).includes(k)).length);
-  $("pl-chips").replaceChildren(...[...cats].map(([k, label]) => {
-   const b = el("button", "pl-chip", label);
-   b.append(el("span", "pl-chip-n", String(count(k))));
-   b.type = "button";
-   b.setAttribute("aria-pressed", String(k === cat));
-   b.onclick = () => { cat = k; shown = PAGE; chips(); render(); };
-   return b;
-  }));
-  /* Every author in the catalogue, with how many each has. Rebuilt from the
-     data rather than written down, so a new listing needs no edit here. */
-  const sel = $("pl-by");
-  const keep = sel.value;
-  const tally = new Map();
-  all.forEach((p) => { const a = authorOf(p); tally.set(a, (tally.get(a) || 0) + 1); });
-  const opts = [el("option", null, "Every author")];
-  opts[0].value = "";
-  [...tally].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).forEach(([a, n]) => {
-   const o = el("option", null, "@" + a + "  ·  " + n);
-   o.value = a;
-   opts.push(o);
-  });
-  sel.replaceChildren(...opts);
-  sel.value = keep;
- };
- const load = () => {
-  if (all) return;
-  all = [];
-  fetch("plugins.json", { cache: "no-cache" }).then((r) => r.json()).then((d) => {
-   all = Array.isArray(d.plugins) ? d.plugins.filter((p) => p && typeof p.id === "string") : [];
-   loaded = true;
-   chips(); render();
-  }).catch(() => { $("pl-count").textContent = "The list could not be loaded."; });
- };
- $("pl-q").addEventListener("input", () => { shown = PAGE; render(); });
- $("pl-sort").addEventListener("change", render);
- $("pl-by").addEventListener("change", () => { shown = PAGE; render(); });
- addEventListener("keydown", (e) => {
-  if (e.key === "/" && document.body.dataset.route === "plugins" && document.activeElement !== $("pl-q")) { e.preventDefault(); $("pl-q").focus(); }
- });
- const check = () => {
-  const first = location.hash.replace(/^#\/?/, "").split("#")[0].split("/")[0];
-  if (first !== "plugins") return;
-  load();
-  // Already loaded: the hash changed between the list and one plugin.
-  if (all) render();
- };
- addEventListener("hashchange", check);
- check();
-
- /* The home's card says how many plugins are listed and names a few, from the
-    same file the catalogue is drawn from — so the day a second one lands the
-    home page is already telling the truth about it. One fetch, cached, and
-    the card reads fine if it never arrives. */
- fetch("plugins.json", { cache: "no-cache" }).then((r) => r.json()).then((d) => {
-  const list = Array.isArray(d.plugins) ? d.plugins.filter((p) => p && typeof p.id === "string") : [];
-  if (!list.length) return;
-  const n = $("nx-n"), names = $("nx-list");
-  if (n) n.textContent = list.length === 1 ? "1 listed" : list.length + " listed";
-  if (names) names.replaceChildren(...list.slice(0, 4).map((p) => el("i", null, p.title || p.id)));
- }).catch(() => { /* the card stands on its own words */ });
-})();
-
-/* Four pages out of one hash. `#/guide`, `#/faq` and `#/plugins` are pages; anything else,
+/* Three pages out of one hash. `#/guide` and `#/faq` are pages; anything else,
    including a bare `#get`, is the home — a hash that names a section on the
    home must still land on the home and then jump, which is what `#/#get` from
    another page relies on. */
 (() => {
- const pages = ["home", "guide", "faq", "plugins"];
+ const pages = ["home", "guide", "faq"];
  const go = () => {
   const h = location.hash.replace(/^#\/?/, "");
-  /* `#/plugins/<id>` is one plugin's own page. The route is still "plugins";
-     what follows is handed to that page, which draws either the list or the
-     one it names. */
   const first = h.split("#")[0].split("/")[0];
+  /* The plugins live on their own site now. A link to the page that used to
+     be here, or to one plugin on it, still lands on that plugin. */
+  if (first === "plugins") {
+   const id = h.split("#")[0].split("/")[1];
+   location.replace("https://sirallap.github.io/agentglass-plugins/" + (id ? "#/plugin/" + id : ""));
+   return;
+  }
   const r = pages.includes(first) ? first : "home";
   pages.forEach((k) => { document.getElementById(k).hidden = k !== r; });
   document.body.dataset.route = r;
@@ -3676,12 +2925,12 @@ new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){g.classList.add
  * app's own browser is built on, measured, it does not: a dozen paragraphs
  * across the five pages ended on a line holding one word, some at a tenth
  * of the column. The last two words are joined with a no-break space
- * instead, which cannot fail. Run again on every route change, because the
- * plugin pages are drawn by script after the page loads.
+ * instead, which cannot fail. Run again on every route change, in case a page drew
+ * something after the load.
  */
 (()=>{
- const PROSE='.sec .sub,.page p,.page .lead,.pl-lead,.pl-hint,.pl-desc-full,.pl-note,.steps span,.steps p,'
-  +'.an p,.qa p,.pl-step p,.pl-two p,.nxc>span:not(.nxh):not(.nxl),.verify p,.facts span,.fcap span';
+ const PROSE='.sec .sub,.page p,.page .lead,.steps span,.steps p,'
+  +'.an p,.qa p,.nxc>span:not(.nxh):not(.nxl),.verify p,.facts span,.fcap span';
  const glue=()=>{
   for(const el of document.querySelectorAll(PROSE)){
    if(el.dataset.glued) continue;

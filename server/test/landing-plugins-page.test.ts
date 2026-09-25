@@ -1,65 +1,46 @@
 /*
- * The plugins page on the site draws a list that strangers write.
+ * The plugins have a site of their own, and the landing only points at it.
  *
- * Two things follow from that and neither is visible in a screenshot: every
- * field goes in as text rather than as markup, because a title is somebody
- * else's string and `innerHTML` would run it; and the list is drawn a page at
- * a time, because a catalogue grows and three thousand cards built in one go
- * block the thread that is scrolling.
+ * The landing used to draw its own copy of the catalogue from a plugins.json
+ * that stays frozen for released apps. A second shelf reading a frozen file is
+ * a market that goes stale without anybody noticing, so the landing keeps no
+ * list at all: every link that says "plugins" leads to the market site, and an
+ * old link to the page that used to be here still reaches the plugin it named.
  */
 import { describe, expect, test } from "bun:test";
 
 const PAGE = await Bun.file(new URL("../../landing/index.html", import.meta.url)).text();
+const MARKET = "https://sirallap.github.io/agentglass-plugins/";
 
-/** The plugins page's own script, from its catalogue fetch to the end of the
- *  block that renders it. Never a fixed window. */
-const SECTION = PAGE.slice(PAGE.indexOf("const DRAW = {"), PAGE.indexOf('$("pl-q").addEventListener'));
+/** The page's script with comment lines dropped, so a word in a comment is not
+ *  mistaken for code. */
+const CODE = PAGE.split("\n").filter((l) => !/^\s*(\/\*|\*|\/\/)/.test(l)).join("\n");
 
-describe("the plugins page", () => {
-  test("draws a page of cards and offers the rest, rather than all of them", () => {
-    expect(SECTION).toContain("const PAGE = 24");
-    expect(SECTION).toContain("rows.slice(0, shown)");
-    expect(SECTION, "and a new search starts at the top again").toContain("shown = PAGE");
+describe("the landing's plugins", () => {
+  test("draws no catalogue of its own", () => {
+    expect(PAGE).not.toContain('<main id="plugins"');
+    expect(CODE).not.toContain('fetch("plugins.json"');
+    expect(PAGE).not.toMatch(/class="pl-/);
   });
 
-  test("says how many matched and how many there are", () => {
-    expect(SECTION).toContain('$("pl-count").textContent');
+  test("the header, the home's card and the guide all lead to the market site", () => {
+    const nav = PAGE.match(/<nav class="hd-nav">[\s\S]*?<\/nav>/);
+    expect(nav).not.toBeNull();
+    expect(nav![0]).toContain(`<a href="${MARKET}">Plugins</a>`);
+    expect(PAGE).toContain(`<a class="nxc big" href="${MARKET}">`);
+    expect(PAGE).toContain(`<a href="${MARKET}" style="color:var(--vio)">Browse the plugins</a>`);
+    expect(PAGE).not.toContain('href="#/plugins');
   });
 
-  test("puts a stranger's strings in as text, never as markup", () => {
-    /* `el(tag, class, text)` sets textContent. The one `innerHTML` on this
-       path is the page's own icon constant, which is markup this repository
-       wrote — so the rule is not "no innerHTML", it is that nothing from a
-       catalogue entry ever reaches one. A card built the other way would run
-       whatever a title carried. */
-    const cardFn = SECTION.slice(SECTION.indexOf("const card ="), SECTION.indexOf("const render ="));
-    expect(cardFn).not.toContain("insertAdjacentHTML");
-    for (const m of cardFn.matchAll(/innerHTML\s*=\s*([^;]+);/g)) {
-      const assigned = m[1]!.trim();
-      expect(assigned, `innerHTML is fed ${assigned}`).toMatch(/^[A-Z_][A-Z0-9_]*$/);
-    }
-  });
-});
-
-describe("the Install button on a card", () => {
-  test("hands the app a link and installs nothing itself", () => {
-    const card = SECTION.slice(SECTION.indexOf("const card ="), SECTION.indexOf("const render ="));
-    expect(card).toContain("agentglass://plugin/install?url=");
-    expect(card).toContain("encodeURIComponent(url)");
-    // A page that could install would be a page that installs for anybody who
-    // can get a link in front of you.
-    expect(card).not.toContain("fetch(");
-    expect(card).not.toContain("/plugins/install");
+  test("asks to be listed in the plugins repository, never in this one", () => {
+    expect(PAGE).not.toContain("SirAllap/agentglass/issues/new?template=plugin_submission");
   });
 
-  test("says so when nothing answered, because a browser cannot be asked", () => {
-    const card = SECTION.slice(SECTION.indexOf("const card ="), SECTION.indexOf("const render ="));
-    expect(card).toContain("visibilitychange");
-    expect(card).toContain("copy instead");
-  });
-
-  test("warns about a version this app may be too old for, before the press", () => {
-    const card = SECTION.slice(SECTION.indexOf("const card ="), SECTION.indexOf("const render ="));
-    expect(card).toContain("p.minApp");
+  test("an old link to the plugins page, or to one plugin on it, lands on the market", () => {
+    const start = CODE.indexOf('const pages = ["home", "guide", "faq"];');
+    expect(start).toBeGreaterThan(-1);
+    const router = CODE.slice(start, CODE.indexOf('addEventListener("hashchange", go);', start));
+    expect(router).toContain('if (first === "plugins")');
+    expect(router).toContain(`location.replace("${MARKET}" + (id ? "#/plugin/" + id : ""));`);
   });
 });
