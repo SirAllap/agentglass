@@ -22,6 +22,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { healPrefix, prefixKeys, __resetHeal, type TmuxTarget } from "../src/tmuxctl.ts";
 import { TMUX_ISOLATED } from "./tmuxIsolated.ts";
+import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
+
+/* A private socket directory, for this file's spawns and for the code under
+   test alike: a bare `-L` lands in /tmp/tmux-<uid> and `kill-server` leaves
+   the socket file there. Restored only after the server is gone. */
+const REAL_TMPDIR = process.env.TMUX_TMPDIR;
+process.env.TMUX_TMPDIR = TMUX_TEST_TMPDIR;
 
 const SOCK = [...TMUX_ISOLATED, "-L", "agx-prefix-heal"];
 const tmux = (...a: string[]) =>
@@ -30,7 +37,11 @@ const dir = mkdtempSync(join(tmpdir(), "agx-prefix-heal-"));
 const conf = join(dir, "tmux.conf");
 writeFileSync(conf, "unbind C-b\nset -g prefix C-f\nbind C-f send-prefix\n");
 
-afterAll(() => { tmux("kill-server"); });
+afterAll(() => {
+  tmux("kill-server");
+  if (REAL_TMPDIR === undefined) delete process.env.TMUX_TMPDIR;
+  else process.env.TMUX_TMPDIR = REAL_TMPDIR;
+});
 
 describe("an engine server that never read the config", () => {
   test("comes up on tmux's own prefix, which is the bug as the user sees it", () => {
@@ -56,6 +67,17 @@ describe("an engine server that never read the config", () => {
     expect(healPrefix({ socket: SOCK } as TmuxTarget, "C-f", conf)).toBe(null);
   });
 
+  test("the prefix the caller already read is not read again", () => {
+    /* The sweep holds the prefix from its own frame. Re-reading it here was two
+       show-options spawns per engine shell every half second. Handed a prefix
+       that agrees, it must answer from that alone, whatever tmux would say. */
+    __resetHeal();
+    tmux("set-option", "-g", "prefix", "C-b");
+    expect(healPrefix({ socket: SOCK } as TmuxTarget, "C-f", conf, ["C-f"])).toBe(null);
+    expect(tmux("show-options", "-gqv", "prefix")).toBe("C-b");
+    tmux("set-option", "-g", "prefix", "C-f");
+  });
+
   test("and a config that cannot take is not re-sourced on every attach", () => {
     /* Throttled per socket: a conf tmux refuses would otherwise turn every
        attach into a failed re-source for as long as the session lives. */
@@ -65,6 +87,20 @@ describe("an engine server that never read the config", () => {
     writeFileSync(empty, "# nothing that moves the prefix\n");
     expect(healPrefix(t, "M-x", empty)).toEqual(["C-f"]);  // tried, did not take
     expect(healPrefix(t, "M-x", empty)).toBe(null);        // and does not try again
+  });
+
+  test("an empty `have` from an aborted frame must not be passed through as a confirmed read", () => {
+    /* A frame that aborted mid-parse before finishing show-options hands the
+       sweep `[]`, not the server's real prefix. Passed straight through as
+       `have`, it never equals `want` and keeps forcing a resource on every
+       throttle window forever -- even once the server already agrees. This is
+       why the sweep's call site turns an empty array into `undefined`: only
+       `undefined` tells healPrefix to go read the truth for itself. */
+    __resetHeal();
+    tmux("set-option", "-g", "prefix", "C-f"); // the server already agrees
+    expect(healPrefix({ socket: SOCK } as TmuxTarget, "C-f", conf, [])).not.toBe(null); // [] : forced anyway, the bug
+    __resetHeal();
+    expect(healPrefix({ socket: SOCK } as TmuxTarget, "C-f", conf, undefined)).toBe(null); // undefined: reads and sees it already agrees
   });
 });
 
@@ -84,7 +120,9 @@ describe("where the check lives", () => {
   test("in the sweep, beside the read it compares against", async () => {
     const src = await Bun.file(new URL("../src/terminal.ts", import.meta.url)).text();
     const sweep = src.slice(src.indexOf("if (frame) session.tmuxPrefix = frame.prefix;"));
-    expect(sweep.slice(0, 2000)).toContain("healPrefix(session.tmux, tmuxPrefix() || \"C-b\", ensureConf())");
+    expect(sweep.slice(0, 2000)).toContain(
+      "healPrefix(session.tmux, tmuxPrefix() || \"C-b\", ensureConf(), session.tmuxPrefix?.length ? session.tmuxPrefix : undefined)",
+    );
   });
 
   test("and not only where a client arrives", () => {

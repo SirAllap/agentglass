@@ -59,7 +59,7 @@ describe("the checkbox is only interactive when Md was asked for it", () => {
 
 describe("one counter for the whole body", () => {
   test("Md resets it once per render, not once per list", () => {
-    const mdFn = src.slice(src.indexOf("export function Md("), src.indexOf("export function Md(") + 3000);
+    const mdFn = src.slice(src.indexOf("export function Md("), src.indexOf("\n}\n", src.indexOf("export function Md(")));
     expect(mdFn).toContain("const nextTask = useRef(0);");
     expect(mdFn).toContain("nextTask.current = 0;");
     // Passed to every top-level block the same way a details fold passes it
@@ -68,7 +68,7 @@ describe("one counter for the whole body", () => {
   });
 
   test("the callback hands the caller a whole new body, never just an index", () => {
-    const mdFn = src.slice(src.indexOf("export function Md("), src.indexOf("export function Md(") + 3000);
+    const mdFn = src.slice(src.indexOf("export function Md("), src.indexOf("\n}\n", src.indexOf("export function Md(")));
     expect(mdFn).toContain("onToggle: (i) => onToggleTask(toggleChecklistItem(body, i))");
   });
 });

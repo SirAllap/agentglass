@@ -356,6 +356,33 @@ flag works on `read`, `click`, `type`, `wait` and `observe`. Tab ids come from
 **It is one browser, and it is theirs.** The person can see every page you open.
 Open what the task needs and leave it somewhere reasonable.
 
+## A window of your own: lanes
+
+The person's window is theirs. To work without it — and without it having to be
+open on a project or a page — make a lane: a private browser window nobody sees.
+
+```bash
+agentglass-browser lane new            # prints {"lane": {"id": "l1a2b3c4d", ...}}
+agentglass-browser open https://example.com --lane l1a2b3c4d
+agentglass-browser read --lane l1a2b3c4d
+agentglass-browser lane close l1a2b3c4d
+```
+
+`--lane ID` goes on any verb (MCP: a `lane` argument on any tool, and the
+`browser_lane` tool to make and close them). A lane has one tab, so `--page` and
+your identity's tab do not apply in it.
+
+- **Its cookie jar is empty** and wiped when the lane closes. `lane new --shared`
+  opens it in the person's own container (their logins: only on purpose);
+  `lane new --as NAME` in a container `profiles` lists.
+- **A few at once, and idle ones go.** The cap is 4; a lane nobody asked anything
+  of for 15 minutes is closed. `lane list` shows what is open and who opened it.
+- **A lane that is gone is refused by name.** It never falls back to the
+  person's tab: read the refusal, `lane new` again.
+- Screencast and screenshots work in a lane; a page that pauses while it is
+  hidden may pause here after it navigates (its `visibilityState` says
+  `hidden`), though it keeps painting.
+
 ## The inspector, when the data verbs cannot answer
 
 `console` and `network` already answer as DATA, and are better that way — a picture of a console is a picture of text, and costs a hundred times the tokens to read.

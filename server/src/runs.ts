@@ -439,7 +439,7 @@ export interface AdoptResult {
  *  decisions below can be exercised without a tmux server or a machine that
  *  happens to have a codex running on it. */
 export interface AdoptDeps {
-  panes: () => AdoptablePane[];
+  panes: () => AdoptablePane[] | Promise<AdoptablePane[]>;
   agentIn: (dir: string) => string;
 }
 
@@ -492,7 +492,7 @@ export async function adoptPane(
   const had = run.legs.find((l) => l.paneId === paneId && l.state !== "gone");
   if (had) return { ok: true, run, leg: had, detail: "that pane is already in this run" };
 
-  const row = deps.panes().find((p) => p.paneId === paneId);
+  const row = (await deps.panes()).find((p) => p.paneId === paneId);
   if (!row) return { ok: false, error: "that pane is not on this machine" };
 
   if (row.agentCwds.length > 1) {

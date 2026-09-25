@@ -51,8 +51,8 @@ describe("Refresh, inside a pull request", () => {
     /* Everything after `loadDetail(selected, true)` in the handler: a tick, and
        no `setDiff("")`. Three occurrences of that call exist in the file; the
        one on a change of pull request is the only one that may blank. */
-    const at = src.indexOf("boardForce.current = true;");
-    const handler = src.slice(at, at + 900);
+    const at = src.indexOf("const plan = refreshPlan(selected);");
+    const handler = src.slice(at, src.indexOf("return;", at));
     expect(handler).toContain("setDetailTick((n) => n + 1);");
     expect(handler).not.toContain('setDiff("")');
   });

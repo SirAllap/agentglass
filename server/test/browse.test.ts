@@ -153,6 +153,50 @@ describe("the boundary", () => {
   });
 });
 
+/*
+ * The in-app picture viewer reads through `fileBytes`, so these are the ways a
+ * picture could be asked for from outside the places the finder may look. Each
+ * one is spelled as an image on purpose: the viewer is what asks for those.
+ */
+describe("the picture the viewer asks for stays inside the finder's places", () => {
+  test("a link to a picture outside them is refused, and one inside is served", async () => {
+    const d = tmp();
+    const outside = mkdtempSync(join(tmpdir(), "agx-browse-outside-"));
+    try {
+      writeFileSync(join(outside, "shot.png"), png(4, 4));
+      symlinkSync(join(outside, "shot.png"), join(d, "shot.png"));
+      const r = await fileBytes(join(d, "shot.png"));
+      expect(r.ok).toBe(false);
+      // A link to a folder outside, with the picture under it, is the same door.
+      symlinkSync(outside, join(d, "gallery"));
+      expect((await fileBytes(join(d, "gallery", "shot.png"))).ok).toBe(false);
+      writeFileSync(join(d, "here.png"), png(4, 4));
+      const ok = await fileBytes(join(d, "here.png"));
+      expect(ok.ok).toBe(true);
+      if (ok.ok) expect(ok.mime).toBe("image/png");
+    } finally { rmSync(outside, { recursive: true, force: true }); }
+  });
+
+  test("`..` out of an allowed folder is judged where it lands", async () => {
+    const d = tmp();
+    const outside = mkdtempSync(join(tmpdir(), "agx-browse-outside-"));
+    try {
+      writeFileSync(join(outside, "shot.png"), png(4, 4));
+      mkdirSync(join(d, "inner"));
+      const climb = join(d, "inner", "..", "..", outside.split("/").pop()!, "shot.png");
+      expect(browseReal(climb)).toBeNull();
+      expect((await fileBytes(climb)).ok).toBe(false);
+    } finally { rmSync(outside, { recursive: true, force: true }); }
+  });
+
+  test("a picture under a hidden folder is not served even inside an allowed root", async () => {
+    const d = tmp();
+    mkdirSync(join(d, ".private"));
+    writeFileSync(join(d, ".private", "shot.png"), png(4, 4));
+    expect((await fileBytes(join(d, ".private", "shot.png"))).ok).toBe(false);
+  });
+});
+
 describe("what a file is", () => {
   test("images the browser draws by itself", () => {
     for (const [name, mime] of [["a.png", "image/png"], ["b.JPG", "image/jpeg"], ["c.webp", "image/webp"],

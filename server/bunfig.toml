@@ -2,4 +2,4 @@
 # remove one. See test/tmpsweep.ts for what that cost and why the cleanup lives
 # in a preload rather than in 182 `afterAll`s.
 [test]
-preload = ["./test/isolation.ts", "./test/tmpsweep.ts"]
+preload = ["./test/isolation.ts", "./test/tmuxleak.ts", "./test/tmpsweep.ts"]

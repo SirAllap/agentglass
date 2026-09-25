@@ -50,13 +50,15 @@ import { getCollisions } from "./collisions.ts";
 import { getUsage, ingestStatusline } from "./usage.ts";
 import { chooseModel, type UsageNow, type Choice } from "./understudy-model.ts";
 import { allProviderUsage } from "./providerusage.ts";
+import { claimPaceAlerts, coerceAlertAt } from "./paceAlert.ts";
 import { refreshCodexUsage } from "./codexusage.ts";
 import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, typedReason, GATE_MAX_MS, gateFailClosed, denyByRule, allowByRule, validGateId } from "./gate.ts";
 import { budgetHoldFor } from "./budget.ts";
 import { gateCwd, gateRuleFor } from "./gaterules.ts";
 import { parseControlCmd } from "./control.ts";
 import { outwardAction, outwardLine } from "./outward.ts";
-import { askBrowser, browserReadyCount, exportAudit, noteBrowserReady, parseAsk, setBrowserSink, settleBrowser, type BrowserOp, runSteps, waitForEvents, recordFrames, traceRecording, auditAsScript, downloadFile, runLanes, withObservation, parseScrape, runScrape } from "./browserdrive.ts";
+import { listLanes } from "./lanes.ts";
+import { gateLane, dropBrowserTarget, askBrowser, browserReadyCount, exportAudit, noteBrowserManager, noteBrowserReady, parseAsk, setBrowserSink, settleBrowser, type BrowserOp, runSteps, waitForEvents, recordFrames, traceRecording, auditAsScript, downloadFile, runLanes, withObservation, parseScrape, runScrape } from "./browserdrive.ts";
 import { browserUseStatus, installSkill, refreshSkill } from "./browseruse.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
 import { decodeOtlpTraces, decodeOtlpLogs } from "./otlp_pb.ts";
@@ -99,7 +101,7 @@ import { syncTheme, snippetStatus, SNIPPETS, tmuxThemePath, repairTmuxTheme, cur
 import { desktopPalette, desktopLogo } from "./desktopPalette.ts";
 import { existsSync as fsExists, readFileSync as fsRead, writeFileSync as fsWrite, mkdtempSync } from "node:fs";
 import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
-import { listPorts, listResources, spaceFor, killPort } from "./machine.ts";
+import { listPortsAsync, listResources, spaceFor, killPort } from "./machine.ts";
 import { gitLocks, removeStaleLock } from "./gitlocks.ts";
 import { procDetail, revealEnv } from "./procdetail.ts";
 import {
@@ -150,7 +152,7 @@ import { transcribe, transcriberOn } from "./dictate.ts";
 import { AGENT_KINDS, agentKind } from "../../shared/agentKinds.ts";
 /* Both sides' imports: main added five, this branch still uses `panesWithPids`
    and `reapMirrorSessions`. Neither list is a superset of the other. */
-import { listPanes, withTmuxServer, focusPaneAnywhere, activePane, panesWithPids, sweepPinnedWindows, pinnedSockets, reapMirrorSessions, startMirrorSweeper, stopMirrorSweeper } from "./tmuxctl.ts";
+import { listPanes, withTmuxServer, focusPaneAnywhere, activePane, panesWithPids, sweepPinnedWindows, pinnedSockets, reapMirrorSessions, startMirrorSweeper, stopMirrorSweeper, socketPath } from "./tmuxctl.ts";
 import { repairLast, snapshot } from "./tmuxsnapshot.ts";
 import { withAgentSessions } from "./paneloc.ts";
 import { notePaneFromHook, paneDirs, paneAgentNote, paneHeldSessions } from "./panewt.ts";
@@ -174,6 +176,7 @@ import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey
 import { takeLease, endLease, leaseHeld, reapLeases } from "./panelease.ts";
 import { runAgentInteractivePane } from "./understudy-pane.ts";
 import { startScanner, ownsSession, knownProjects, projectsKnownAtStart, resyncScope, scanningEnabled } from "./transcripts.ts";
+import { conflictPrompt } from "./conflictPrompt.ts";
 import { workspaceRoot, workspaceRoots, setWorkspaceRoot, setWorkspaceRoots, inScope, sessionInScope, chatBypassAllowed, readBudgets, writeBudgets, hiddenProjects, setProjectHidden, setRepoDir, configuredRepoDirs, panelRepoDirs, configPath, repoDirsUnstated, seedRepoDirs, fileRoots } from "./config.ts";
 import { cloneProject, createProject } from "./projectadd.ts";
 import { budgetStatus } from "./budget.ts";
@@ -1474,6 +1477,9 @@ const BUDGET_WRITE_ENABLED = process.env.AGENTGLASS_BUDGET_WRITE_DISABLED !== "1
 // on its own, which is a revoke in the list and not on the wire.
 type WsData = ({ kind: "events" } | { kind: "notify" } | PtyWsData) & { ip?: string | null; deviceId?: string | null };
 const clients = new Set<ServerWebSocket<WsData>>();
+/** A window's own name for itself (its `hello`) to its latest socket, which is
+ *  how a browser ask reaches one window instead of all of them. */
+const browserSockets = new Map<string, ServerWebSocket<WsData>>();
 /**
  * When each event-stream socket last PROVED its peer is still running.
  *
@@ -1562,6 +1568,29 @@ function vouchedOrigin(o: string): boolean {
   try {
     return trusted(new URL(o).hostname);
   } catch { return false; }
+}
+
+/**
+ * Who may say "I am a window that can drive a browser". Registering decides who
+ * receives every ask — fill text and URLs included — so it is not a thing the
+ * machine token buys: every agent shell holds that. Where the desktop app
+ * started this server, only the app's own renderer holds the key (desk.ts) and
+ * an Origin opens nothing. On a server started by hand there is no key, and the
+ * Origin rule is all there is: it turns away the Origin-less `curl` and lets a
+ * deliberate forgery through, the limit SECURITY.md states for such a server.
+ */
+/*
+ * CEILING, stated where it is decided: where the desktop app ADOPTS a server
+ * that was already running (electron/main.js pickPort, `adopt`), that server has
+ * no desk key, DESK_STARTED is false and the Origin rule below is all there is,
+ * so a machine-token holder that sets one can register. Closing it needs the app
+ * to refuse adoption, or a first-contact key exchange, and neither is in this
+ * change. SECURITY.md says the same.
+ */
+function mayHostBrowser(req: Request): boolean {
+  if (DESK_STARTED) return deskKeyOk(req);
+  const o = req.headers.get("origin");
+  return !!o && vouchedOrigin(o);
 }
 
 function localOrigin(req: Request): boolean {
@@ -1835,9 +1864,10 @@ setGitChangeHook(() => { treeCache.clear(); worktreesCache.clear(); rowsCache.cl
  * Rides on the working list rather than being a route of its own because the
  * list is the thing it qualifies: a section heading that names one branch and
  * may be two authors' work. The panes are read at most every ten seconds — the
- * list itself is re-read every two, and `listPanes` is synchronous: up to four
- * tmux spawns per socket plus a walk of /proc per pane, none of it worth a late
- * keystroke in the terminal that shares this thread. An agent arriving in or
+ * list itself is re-read every two, and `listPanes` is up to four tmux spawns
+ * per live socket plus a walk of /proc per pane (`withTmuxServer` is still one
+ * blocking ask per server), none of it worth a late keystroke in the terminal
+ * that shares this thread. An agent arriving in or
  * leaving a pane is a ten-second question; the edits are read forward from
  * the last rebuild, so each one costs this thread only the events since
  * (sharedtree.ts).
@@ -1853,11 +1883,11 @@ const PANES_HELD_TTL_MS = 10_000;
 const NAMES_TTL_MS = 60_000;
 let panesHeld: { at: number; ids: Set<string> } | null = null;
 const authorNames = new Map<string, { at: number; name: string }>();
-function authorsNow(repos: GitRepoRef[], rows: ChangeRow[]): TreeAuthorsInfo[] {
+async function authorsNow(repos: GitRepoRef[], rows: ChangeRow[]): Promise<TreeAuthorsInfo[]> {
   try {
     if (!panesHeld || Date.now() - panesHeld.at > PANES_HELD_TTL_MS) {
       let ids = new Set<string>();
-      try { ids = paneHeldSessions(withTmuxServer(listPanes(lastTmuxTarget()?.socket))); } catch { /* no tmux: last-seen alone decides */ }
+      try { ids = paneHeldSessions(withTmuxServer(await listPanes(lastTmuxTarget()?.socket))); } catch { /* no tmux: last-seen alone decides */ }
       panesHeld = { at: Date.now(), ids };
     }
     const live = liveSessions(recentSessions(), panesHeld.ids);
@@ -1987,7 +2017,15 @@ setAlertSink({
 });
 // The browser relay speaks through the same socket, and counts the same
 // clients: "is there a window to ask" is exactly "is anybody listening".
-setBrowserSink({ send: (ask) => broadcast({ type: "browser", data: ask }), listeners: () => clients.size });
+setBrowserSink({
+  send: (ask, clientId) => {
+    const ws = browserSockets.get(clientId);
+    if (!ws || !clients.has(ws)) return false;
+    try { return ws.send(JSON.stringify({ type: "browser", data: ask } satisfies WsFrame)) !== 0; } catch { return false; }
+  },
+  listeners: () => clients.size,
+  live: (id) => { const w = browserSockets.get(id); return !!w && clients.has(w); },
+});
 // The task store has a second writer — the user's editor — so a change there
 // reaches the panel through a sweep rather than through anything we did.
 setTaskChangeHook(() => broadcast({ type: "tasks" }));
@@ -3266,6 +3304,17 @@ const server = Bun.serve<WsData>({
     // section and the notch all read this one answer. No desktop-only gate:
     // there is no path on disk in the payload and nothing here can act.
     if (pathname === "/usage/providers") return json(await allProviderUsage());
+    // A client asks whether a long window has newly reached its alert level.
+    // The server decides and remembers, once for every client, and tells them
+    // all by frame; the answer here is only how many it raised.
+    if (pathname === "/usage/pace-claim" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { alertAt?: unknown } = {};
+      try { b = (await req.json()) as typeof b; } catch { /* an empty body means the default level */ }
+      const fired = claimPaceAlerts(await allProviderUsage(), coerceAlertAt(b?.alertAt));
+      for (const a of fired) broadcast({ type: "pace-alert", data: a });
+      return json({ ok: true, fired: fired.length });
+    }
 
     /*
      * A live Claude Code session handing over the plan windows it got for free
@@ -4324,6 +4373,12 @@ const server = Bun.serve<WsData>({
       if (!trustedCaller(req, from)) return csrfBlocked();
       return json({ ok: true, entries: exportAudit() });
     }
+    /* The lanes that are open, for the Browser panel's quiet row. A read, so the
+       same gate as the audit; ids and owners, nothing a page said. */
+    if (pathname === "/browser/lanes" && req.method === "GET") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      return json({ ok: true, lanes: listLanes() });
+    }
     const browserDataPost = pathname === "/browser/places" || pathname === "/browser/places/forget" || pathname === "/browser/visit";
     if (pathname.startsWith("/browser/") && req.method === "POST" && !browserDataPost) {
       if (!trustedCaller(req, from)) return csrfBlocked();
@@ -4331,9 +4386,13 @@ const server = Bun.serve<WsData>({
       if (op === "ready") {
         // A window saying it has a browser panel that can answer. Heartbeat, so
         // a window that dies without saying goodbye stops being counted.
+        if (!mayHostBrowser(req)) return json({ ok: false, error: "only the desktop app can register a browser window" }, 403);
         let b: any = {};
         try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
-        return json({ ok: noteBrowserReady(b.client, b.on !== false) });
+        // The app's own window registering to make lane hosts, which needs no panel.
+        // The lanes it knows come back so the app can destroy a host the table has forgotten.
+        if (b.manager === true) return json({ ok: noteBrowserManager(b.client, b.on !== false), lanes: listLanes().map((l) => l.id) });
+        return json({ ok: noteBrowserReady(b.client, b.on !== false, b.lanes) });
       }
       if (op === "result") {
         // The window reporting back. Not an agent-facing route.
@@ -4342,8 +4401,19 @@ const server = Bun.serve<WsData>({
         const known = settleBrowser(b.id, {
           ok: b.ok === true, value: b.value, error: typeof b.error === "string" ? b.error : undefined,
           diagnosis: b.diagnosis,
-        });
+        }, typeof b.client === "string" ? b.client : "");
         return json({ ok: true, known });
+      }
+      /* A request that names a lane is gated ONCE, here, for every verb the relay
+         answers itself as much as the ones it forwards: closed, unknown or
+         somebody else's is a named refusal before anything is asked, and an open
+         one is put in scope so every ask this request makes goes to that lane
+         and never to the person's tab (browserdrive.ts, laneScope). */
+      if (op !== "lane") {
+        let pre: unknown = null;
+        try { pre = await req.clone().json(); } catch { /* the route reports its own bad json */ }
+        const refused = gateLane(op, pre);
+        if (refused) return json({ ok: false, error: refused });
       }
       if (op === "audit") {
         /* §16 built this list to prove what an agent touched; §12 wants the
@@ -5248,7 +5318,7 @@ const server = Bun.serve<WsData>({
         const repos = await discoverRepos(paths, knownProjects().map((p) => p.path), {});
         const result = await changeRows(repos, mode, workspaceRoots(), ROWS_MAX);
         // Committed rows are history; who is writing into a tree NOW is not a question about them.
-        if (mode === "working") result.authors = authorsNow(repos, result.rows);
+        if (mode === "working") result.authors = await authorsNow(repos, result.rows);
         const out = JSON.stringify(result);
         rowsCache.set(mode, { at: Date.now(), body: out });
         return out;
@@ -5312,7 +5382,11 @@ const server = Bun.serve<WsData>({
        * agent last ran. A note pointing at a pane that has since closed drops
        * out with the list rather than becoming a button that goes nowhere.
        */
-      const live = listPanes(lastTmuxTarget()?.socket).map(({ socket: _s, ...p }) => p);
+      // Desktop, phone and an extra tab each poll this on their own timer, and
+      // a poll landing in the same instant as another was a second fan-out of
+      // tmux spawns for an answer already on its way — see singleflight.ts.
+      const live = (await singleFlight(`listPanes:${socketPath(lastTmuxTarget()?.socket ?? [])}`,
+        () => listPanes(lastTmuxTarget()?.socket))).map(({ socket: _s, ...p }) => p);
       /*
        * A note is only believed while the agent it was written for is STILL the
        * one in that pane — `paneDirs` has applied this rule for a while and this
@@ -5791,6 +5865,23 @@ const server = Bun.serve<WsData>({
       const { reviewRecipes } = await import("./reviewPrompts.ts");
       return json({ ok: true, recipes: reviewRecipes() });
     }
+    /* Ahead of the /pr-prompts/ family below, whose prefix would answer
+       "not found" for it. What the conflict button says, and which model it opens on. POST because
+       the file list can be long; it reads only the worktree it is given, and
+       only when that is in scope. */
+    if (pathname === "/pr-prompts/conflict" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const worktree = String(b.worktree ?? "");
+      if (!worktree || !inScope(worktree)) return json({ ok: false, error: "that worktree is not in scope" }, 400);
+      const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+      const files = Array.isArray(b.files) ? b.files.filter((f): f is string => typeof f === "string").slice(0, 500) : [];
+      return json({ ok: true, ...conflictPrompt({
+        worktree, files,
+        number: typeof b.number === "number" ? b.number : 0,
+        repo: str(b.repo), branch: str(b.branch), base: str(b.base), title: str(b.title),
+      }) });
+    }
     if (pathname.startsWith("/pr-prompts/") && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       const { saveReviewRecipe, removeReviewRecipe, resetReviewRecipe } = await import("./reviewPrompts.ts");
@@ -6187,7 +6278,7 @@ const server = Bun.serve<WsData>({
       return json({ ok: true, reminders: listReminders(window), zone: localZone() });
     }
 
-    if (pathname === "/machine/ports") return json(listPorts());
+    if (pathname === "/machine/ports") return json(await listPortsAsync());
     if (pathname === "/machine/resources") return json(listResources(Number(url.searchParams.get("limit") || 40)));
     // On demand only, and never on a poll: `du` over a checkout walks every
     // inode in it, which is seconds on a repository with a node_modules.
@@ -6957,7 +7048,8 @@ const server = Bun.serve<WsData>({
        * belongs to a workspace is a session's transcripts, and that is a
        * different question asked at a different endpoint.
        */
-      const live = listPanes(lastTmuxTarget()?.socket)
+      const live = (await singleFlight(`listPanes:${socketPath(lastTmuxTarget()?.socket ?? [])}`,
+        () => listPanes(lastTmuxTarget()?.socket)))
         // The socket is a filesystem path and stays on this side of the wire.
         .map(({ socket: _s, ...p }) => p);
       /*
@@ -7038,7 +7130,8 @@ const server = Bun.serve<WsData>({
        */
       const win = url.searchParams.get("window") || "";
       if (url.searchParams.get("all") === "1") {
-        const panes = panesWithPids(lastTmuxTarget()?.socket, win);
+        const panes = await singleFlight(`panesWithPids:${socketPath(lastTmuxTarget()?.socket ?? [])}:${win}`,
+          () => panesWithPids(lastTmuxTarget()?.socket, win));
         return json({
           ok: true,
           panes: panes.map((p) => {
@@ -7053,7 +7146,8 @@ const server = Bun.serve<WsData>({
           }),
         });
       }
-      const pane = activePane(lastTmuxTarget()?.socket, win);
+      const pane = await singleFlight(`activePane:${socketPath(lastTmuxTarget()?.socket ?? [])}:${win}`,
+        () => activePane(lastTmuxTarget()?.socket, win));
       if (!pane) return json({ ok: true, pane: null, dirs: [] });
       const { dirs } = paneDirs(pane.paneId, pane.pid);
       /* WHOSE answer this is, alongside the answer.
@@ -7077,7 +7171,7 @@ const server = Bun.serve<WsData>({
       if (!trustedCaller(req, from)) return csrfBlocked();
       let b: { sessionId?: unknown; windowId?: unknown; paneId?: unknown };
       try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
-      const ok = focusPaneAnywhere(lastTmuxTarget()?.socket, String(b.sessionId ?? ""), String(b.windowId ?? ""), String(b.paneId ?? ""));
+      const ok = await focusPaneAnywhere(lastTmuxTarget()?.socket, String(b.sessionId ?? ""), String(b.windowId ?? ""), String(b.paneId ?? ""));
       return json(ok ? { ok } : { ok, error: "tmux would not go there — the pane may be gone" }, ok ? 200 : 409);
     }
 
@@ -8334,12 +8428,34 @@ const server = Bun.serve<WsData>({
         return;
       }
       clients.delete(ws);
+      // Only if it is still the latest: a reconnect has already replaced it.
+      const cid = (ws.data as { clientId?: string }).clientId;
+      if (cid && browserSockets.get(cid) === ws) { browserSockets.delete(cid); dropBrowserTarget(cid); }
     },
     message(ws: ServerWebSocket<WsData>, msg) {
       // A frame that did arrive is still proof somebody is running — for a
       // pty this is a keystroke or a resize, not just the event stream.
       alive.set(ws, Date.now());
-      if (ws.data?.kind === "pty") ptyMessage(ws, msg as string | Buffer);
+      if (ws.data?.kind === "pty") { ptyMessage(ws, msg as string | Buffer); return; }
+      if (ws.data?.kind === "events" && typeof msg === "string" && msg.length < 512 && msg.startsWith("{")) {
+        let f: { type?: unknown; clientId?: unknown; browser?: unknown } = {};
+        try { f = JSON.parse(msg); } catch { return; }
+        /* Named once, and only by a socket that is not a paired device: a phone
+           or a dashboard tab has no browser to host, and a socket that could
+           rename itself at will would be a way to squat on another window's
+           name. The role itself is granted by /browser/ready, which is gated. */
+        if (f.type === "hello" && f.browser === true && typeof f.clientId === "string" && f.clientId && f.clientId.length <= 128
+          && !ws.data?.deviceId && !(ws.data as { clientId?: string }).clientId) {
+          /* A later hello under the same id takes over from a socket that is still
+             open, on purpose: a window that reconnects after a network flap says
+             hello before the server has noticed the old socket is dead, and
+             refusing it would leave that window unaddressable for a minute. The
+             id is what protects it (a random UUID, in no route or log), so the
+             ceiling is: whoever learns a window's id can take its asks. */
+          (ws.data as { clientId?: string }).clientId = f.clientId;
+          browserSockets.set(f.clientId, ws);
+        }
+      }
     },
     /** The answer to the sweep's ping, and — for an event-stream or notify
      *  socket — the only routine evidence its peer ever sends; a pty socket
@@ -8493,6 +8609,9 @@ function prune() {
 }
 prune();
 setInterval(prune, 3_600_000);
+// The idle clock only advances when somebody looks, so look every five minutes
+// even with the Machine panel closed; ss twice is cheap next to a stale server.
+setInterval(() => { void listPortsAsync().catch(() => {}); }, 300_000).unref?.();
 
 /* And once, if what retention has already deleted is a third of the file. See
    reclaimFreePages: pruning frees pages, it does not give them back, and this

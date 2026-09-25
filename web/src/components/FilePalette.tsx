@@ -23,7 +23,7 @@ import { IconLabel, SearchIcon, UndoIcon } from "../lib/glyphIcons.tsx";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
-import { api } from "../lib/api.ts";
+import { api, SERVER, withToken } from "../lib/api.ts";
 import { iconFor } from "../lib/fileIcons.ts";
 import { requestFilesReveal } from "../lib/filesReveal.ts";
 import { recents, remember, forget, subscribeRecents, ago } from "../lib/fileRecents.ts";
@@ -35,6 +35,9 @@ import { LAYER } from "../lib/layers.ts";
 import { shortPath } from "../lib/shortPath.ts";
 import type { DiskPlace, FsEntry, GitRepoRef, GrepHit } from "../../../shared/types.ts";
 import { CloseButton } from "./CloseButton.tsx";
+import { FileViewer } from "./CardFiles.tsx";
+import type { CardAttachment } from "../../../shared/providers.ts";
+import type { FinderTarget } from "../lib/finderTarget.ts";
 
 export type PaletteTab = "names" | "contents" | "recent" | "machine";
 
@@ -173,6 +176,9 @@ const rememberPlace = (p: string): string[] => {
   try { localStorage.setItem(PLACE_RECENTS_KEY, JSON.stringify(next)); } catch { /* non-fatal */ }
   return next;
 };
+/** Pictures a browser draws itself; everything else picture-like keeps the pane and ⌘⏎. */
+const VIEWABLE = /\.(png|jpe?g|webp|gif|svg)$/i;
+
 const REF_KEY = "agentglass.files.paletteRef";
 const readRoot = (): string => { try { return localStorage.getItem(ROOT_KEY) ?? ""; } catch { return ""; } };
 const saveRoot = (r: string) => { try { localStorage.setItem(ROOT_KEY, r); } catch { /* non-fatal */ } };
@@ -204,9 +210,12 @@ const saveRef = (root: string, ref: string) => {
 };
 
 export function FilePalette({
-  open, onClose, onOpenFile, onRevealDir, docOpen, onHeight,
+  open, onClose, onOpenFile, onRevealDir, docOpen, onHeight, target,
 }: {
   open: boolean;
+  /** Somewhere to be when it opens: a path clicked in a terminal. Each new `n`
+   *  is a new request, so the same path asked for twice still goes there. */
+  target?: FinderTarget | null;
   onClose: () => void;
   /** Raise the viewer on this file. The palette stays put — see the note above. */
   onOpenFile: (root: string, rel: string, branch: string, ref?: string) => void | Promise<void>;
@@ -270,6 +279,11 @@ export function FilePalette({
   const [browsePath, setBrowsePath] = useState<string | null>(null);
   const [browsed, setBrowsed] = useState<BrowseReport | null>(null);
   const [cursor, setCursor] = useState(0);
+  /** Which picture the in-app viewer is on, by index into `viewFiles`. Null is closed. */
+  const [viewAt, setViewAt] = useState<number | null>(null);
+  /** A file to land the cursor on once its folder has loaded. */
+  const [wantFile, setWantFile] = useState<{ dir: string; name: string } | null>(null);
+  const handledTarget = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -322,6 +336,28 @@ export function FilePalette({
   }, [open, tab]);
 
   useEffect(() => { if (place) savePlace(place); }, [place]);
+
+  /*
+   * A path somebody clicked in a terminal: the Machine tab, in that folder.
+   *
+   * A file has no listing of its own, so it opens the folder it is in and asks
+   * the cursor to land on it once the listing arrives — see `wantFile`. `n` is
+   * remembered so closing and reopening the finder by hand does not replay a
+   * request that was already answered.
+   */
+  useEffect(() => {
+    if (!open || !target || handledTarget.current === target.n) return;
+    handledTarget.current = target.n;
+    const cut = target.path.lastIndexOf("/");
+    const dir = target.kind === "dir" ? target.path.replace(/\/+$/, "") || "/" : target.path.slice(0, cut) || "/";
+    setTab("machine");
+    setQ("");
+    setViewAt(null);
+    setPlace(dir);
+    setPlaceRecents(rememberPlace(dir));
+    setBrowsePath(dir);
+    setWantFile(target.kind === "file" ? { dir, name: target.path.slice(cut + 1) } : null);
+  }, [open, target]);
 
   /*
    * A branch belongs to a checkout, so moving to another one loads THAT
@@ -595,6 +631,63 @@ export function FilePalette({
   }, [listCap, docOpen]);
 
   /*
+   * The pictures in this list, as the viewer wants them.
+   *
+   * The viewer is the one the card attachments use, and it takes attachments:
+   * an id, a title, a url. A file here has all three, the url being the engine's
+   * read-file route — the same one the preview pane draws from, so it is held
+   * to the same places (`browseReal`) and there is no second door.
+   *
+   * Only what a browser draws itself. Everything else that looks like a picture
+   * (heic, tiff, raw) keeps the preview pane and ⌘⏎, as before.
+   */
+  const { viewFiles, viewRows } = useMemo(() => {
+    const files: CardAttachment[] = [];
+    const rowsOf: Row[] = [];
+    // A file found on a branch is not on disk, so it has nothing to draw.
+    const onBranch = !!ref && tab === "names" && !at;
+    if (!onBranch) {
+      for (const r of shown) {
+        if (r.kind === "dir" || (r.kind === "recent" && r.gone) || !VIEWABLE.test(r.rel)) continue;
+        const abs = absOf(r);
+        if (!abs) continue;
+        const url = withToken(`${SERVER}/preview/raw?path=${encodeURIComponent(abs)}`);
+        files.push({ id: abs, title: abs.slice(abs.lastIndexOf("/") + 1), ext: (/\.(\w+)$/.exec(abs)?.[1] ?? "").toLowerCase(), size: r.kind === "file" ? r.bytes ?? 0 : 0, url, thumb: url });
+        rowsOf.push(r);
+      }
+    }
+    return { viewFiles: files, viewRows: rowsOf };
+  }, [shown, absOf, ref, tab, at]);
+  const viewImage = useCallback((row: Row) => {
+    const i = viewRows.indexOf(row);
+    if (i >= 0) setViewAt(i);
+  }, [viewRows]);
+
+  /* The list follows the viewer: leaving it lands on the picture it was
+     showing, not on the one it was opened from. */
+  useEffect(() => {
+    if (viewAt === null) return;
+    const row = viewRows[viewAt];
+    const i = row ? shown.indexOf(row) : -1;
+    if (i >= 0) setCursor(i);
+  }, [viewAt, viewRows, shown]);
+
+  /* The file a terminal link pointed at, once its folder has been listed. */
+  useEffect(() => {
+    // `browsed` still holds the previous folder until the new listing lands, so
+    // only a listing OF the wanted folder can answer.
+    if (!wantFile || browsed?.path.replace(/\/+$/, "") !== wantFile.dir) return;
+    const i = shown.findIndex((r) => r.rel === wantFile.name);
+    if (i >= 0) setCursor(i);
+    setWantFile(null);   // found, or listed and not there: stop waiting
+  }, [wantFile, shown, browsed]);
+
+  /* The viewer is an index into a list that a keystroke or a closing palette
+     can change under it. */
+  useEffect(() => { setViewAt(null); }, [q, tab, open]);
+  useEffect(() => { if (viewAt !== null && !viewFiles[viewAt]) setViewAt(null); }, [viewAt, viewFiles]);
+
+  /*
    * The formats that must never reach a text editor.
    *
    * Opening a `.png` from here sent it to the floating nvim modal — a modal
@@ -604,8 +697,13 @@ export function FilePalette({
    */
   const IMAGEY = /\.(png|jpe?g|jfif|gif|webp|avif|bmp|ico|cur|svg|apng|tiff?|heic|heif|psd|xcf|jp2|jxl|exr|hdr|tga|pcx|ppm|pgm|pbm|cr2|cr3|nef|arw|dng|orf|raf|rw2|sr2|pdf|mp4|webm|mkv|mov|m4v|mp3|wav|ogg|flac|m4a|opus)$/i;
 
-  const openRow = useCallback((row: Row | undefined, secondary = false) => {
+  const openRow = useCallback((row: Row | undefined, secondary = false, click = false) => {
     if (!row) return;
+
+    /* A picture the browser can draw opens in the app, on ⏎ or a double-click.
+       A single click only selects it, as it always did: the pane beside the
+       list is already showing it. ⌘⏎ is still the editor. */
+    if (!secondary && viewRows.includes(row)) { if (!click) viewImage(row); return; }
 
     /* Browsing: a folder is somewhere to go, and a file is looked at where it
        is. This is the same on every tab, which is the point. */
@@ -679,9 +777,11 @@ export function FilePalette({
     if (IMAGEY.test(row.rel) && !secondary && !ref) return;   // the pane is showing it
     if (!ref) remember(root, row.rel);
     onOpenFile(root, row.rel, branch, ref || undefined);
-  }, [tab, at, place, root, branch, ref, repos, onOpenFile, onRevealDir, onClose]);
+  }, [tab, at, place, root, branch, ref, repos, onOpenFile, onRevealDir, onClose, viewRows, viewImage]);
 
   const onKey = (e: React.KeyboardEvent) => {
+    // The viewer owns the keys while it is up — it listens on window, first.
+    if (viewAt !== null) return;
     if (e.key === "ArrowDown" || (e.key === "n" && e.ctrlKey)) {
       e.preventDefault(); setCursor((c) => (shown.length ? (c + 1) % shown.length : 0)); return;
     }
@@ -765,6 +865,7 @@ export function FilePalette({
   const status = tab === "names" ? found : tab === "contents" ? grepped : tab === "machine" ? onDisk : null;
 
   return (
+    <>
     <AnimatePresence>
       {open && (
         // Above the viewer it raises — see layers.ts for why that number is
@@ -915,8 +1016,8 @@ export function FilePalette({
                 style={{ borderTop: edge(12), color: "var(--text4)" }}>
                 {browsePath && (
                   <>
-                    <button onClick={() => setBrowsePath(null)} title="Volver al sitio elegido"
-                      className="px-1.5 py-0.5 rounded min-h-[20px]" style={{ color: "var(--primary-hover)" }}><IconLabel icon={<UndoIcon size={ICON.xs} />}>volver</IconLabel></button>
+                    <button onClick={() => setBrowsePath(null)} title="Back to the place you picked"
+                      className="px-1.5 py-0.5 rounded min-h-[20px]" style={{ color: "var(--primary-hover)" }}><IconLabel icon={<UndoIcon size={ICON.xs} />}>Back</IconLabel></button>
                     <span>·</span>
                   </>
                 )}
@@ -942,7 +1043,8 @@ export function FilePalette({
                    than being stretched to a box sized for more. */
                 style={listCap ? { maxHeight: listCap } : undefined}>
                 <Answers tab={tab} q={q} root={root} place={place} placeErr={placeErr} rows={shown} cursor={cursor}
-                  status={status} onHover={setCursor} onPick={openRow} browsing={!!at}
+                  status={status} onHover={setCursor} onPick={(r) => openRow(r, false, true)}
+                  onDouble={(r) => { if (viewRows.includes(r)) viewImage(r); else openRow(r); }} browsing={!!at}
                   browseError={browsed && !browsed.ok ? browsed.error ?? null : null} />
               </div>
               {/* The pane that answers "is this the one I mean" without opening
@@ -972,15 +1074,24 @@ export function FilePalette({
         </Portal>
       )}
     </AnimatePresence>
+    {open && viewAt !== null && viewFiles.length > 0 && (
+      // Over the finder, which stays where it is underneath: Esc comes back to it.
+      <Portal z={LAYER.paletteImage}>
+        <FileViewer files={viewFiles} at={viewAt} setAt={setViewAt} openLink={false} />
+      </Portal>
+    )}
+    </>
   );
 }
 
 /* --------------------------------------------------------------- the list */
 
-function Answers({ tab, q, root, place, placeErr, rows, cursor, status, onHover, onPick, browsing, browseError }: {
+function Answers({ tab, q, root, place, placeErr, rows, cursor, status, onHover, onPick, onDouble, browsing, browseError }: {
   tab: PaletteTab; q: string; root: string; place: string; placeErr: string | null; rows: Row[]; cursor: number;
   status: { pending: boolean; error: string | null; data: { ok: boolean; error?: string; via?: string; truncated?: boolean } | null } | null;
   onHover: (i: number) => void; onPick: (row: Row, secondary?: boolean) => void;
+  /** A picture opens in the viewer on a double-click; nothing else does. */
+  onDouble: (row: Row) => void;
   /** Looking at a folder rather than at results: the empty state, the floors
    *  and the "no checkout" note are all different questions there. */
   browsing?: boolean;
@@ -995,7 +1106,7 @@ function Answers({ tab, q, root, place, placeErr, rows, cursor, status, onHover,
       <>
         {rows.map((row, i) => (
           <RowView key={`${row.kind}:${row.rel}:${i}`} row={row} i={i} on={i === cursor}
-            onHover={onHover} onPick={onPick} />
+            onHover={onHover} onPick={onPick} onDouble={onDouble} />
         ))}
       </>
     );
@@ -1032,20 +1143,20 @@ function Answers({ tab, q, root, place, placeErr, rows, cursor, status, onHover,
       )}
       {rows.map((row, i) => (
         <RowView key={`${row.kind}:${row.rel}:${i}`} row={row} i={i} on={i === cursor}
-          onHover={onHover} onPick={onPick} />
+          onHover={onHover} onPick={onPick} onDouble={onDouble} />
       ))}
     </>
   );
 }
 
-function RowView({ row, i, on, onHover, onPick }: {
-  row: Row; i: number; on: boolean; onHover: (i: number) => void; onPick: (row: Row) => void;
+function RowView({ row, i, on, onHover, onPick, onDouble }: {
+  row: Row; i: number; on: boolean; onHover: (i: number) => void; onPick: (row: Row) => void; onDouble: (row: Row) => void;
 }) {
   const cut = row.rel.lastIndexOf("/");
   const name = row.rel.slice(cut + 1);
   const icon = iconFor(name, row.kind === "dir");
   return (
-    <button data-row={i} onMouseEnter={() => onHover(i)} onClick={() => onPick(row)}
+    <button data-row={i} onMouseEnter={() => onHover(i)} onClick={() => onPick(row)} onDoubleClick={() => onDouble(row)}
       className="w-full text-left px-3 py-2" title={row.rel}
       style={{
         ...(on ? { background: "color-mix(in srgb, var(--primary) 16%, transparent)" } : null),
@@ -1060,7 +1171,7 @@ function RowView({ row, i, on, onHover, onPick }: {
             noise in a column people scan. */}
         {(row.kind === "file" && row.bytes != null) || (row.kind === "dir" && row.items != null) ? (
           <span className="ml-auto shrink-0 flex items-baseline gap-3 text-[9.5px] tabular-nums" style={{ color: "var(--text4)" }}>
-            <span>{row.kind === "dir" ? `${row.items} elemento${row.items === 1 ? "" : "s"}` : humanBytes(row.bytes!)}</span>
+            <span>{row.kind === "dir" ? `${row.items} item${row.items === 1 ? "" : "s"}` : humanBytes(row.bytes!)}</span>
             {row.mtime ? <span>{ago(row.mtime)}</span> : null}
           </span>
         ) : row.kind === "dir" ? (

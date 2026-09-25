@@ -26,6 +26,7 @@
  */
 
 import type { ReviewRecipe, ReviewRecipeContext, ReviewRecipeWhen } from "../../shared/types.ts";
+import { CONFLICT_ASK } from "../../shared/conflictAsk.ts";
 export { suggestRecipeId, type ReviewSituation } from "../../shared/reviewSuggest.ts";
 
 /* The placeholders and the substitution live in `shared/recipeText.ts`: the
@@ -388,6 +389,18 @@ export const BUILT_IN_RECIPES: ReviewRecipe[] = [
       "",
       "Read the diff first if you need it (`gh pr diff {number}`) — write about the change, not about its title. Show me the draft and where it will land, and wait: I will tell you to send it.",
     ),
+  },
+  // -------------------------------------------------------------- conflicts
+  // Not a review either: what the "Hand to Claude in a terminal" button on a
+  // blocked pull request says. The facts (which branch, which side is which,
+  // which files) are written by the panel; this is the ASK that follows them,
+  // and it is the part that differs from one project to the next.
+  {
+    id: "conflicts",
+    title: "Resolve a merge conflict",
+    group: "conflicts",
+    when: "any",
+    body: CONFLICT_ASK.join("\n"),
   },
 ];
 

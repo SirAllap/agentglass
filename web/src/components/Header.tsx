@@ -6,11 +6,13 @@ import { IS_DEMO, reauthPrompt } from "../lib/api.ts";
 import { subscribeUpdate, updateState, updateAvailable } from "../lib/updateStore.ts";
 import { MOD_KEY } from "../lib/format.ts";
 import { IS_MAC_DESKTOP, powerReadout, powerStatus, setPowerMode, type PowerMode, type PowerStatus } from "../lib/desktop.ts";
+import { usePoll } from "../lib/usePoll.ts";
 import { Logo } from "./Logo.tsx";
 import { Select } from "./Select.tsx";
 import { subscribe as subscribeChats, attentionCount } from "../lib/chatStore.ts";
 import { WorkspaceIcon } from "./workspace/icons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { sharedPhase } from "../lib/sharedPhase.ts";
 import { CrossIcon, HomeIcon, SparkleIcon } from "../lib/glyphIcons.tsx";
 
 // Sessions whose model never resolved carry the "unknown" provider value; it
@@ -79,11 +81,10 @@ function PowerModeButton() {
   const [status, setStatus] = useState<PowerStatus | null>(null);
   useEffect(() => {
     let alive = true;
-    const poll = () => { void powerStatus().then((s) => { if (alive) setStatus(s); }); };
-    poll();
-    const id = setInterval(poll, 5000);
-    return () => { alive = false; clearInterval(id); };
+    void powerStatus().then((s) => { if (alive) setStatus(s); });
+    return () => { alive = false; };
   }, []);
+  usePoll(true, () => { void powerStatus().then(setStatus); }, 5000);
   if (!status) return null;
   const { tone, title } = powerReadout(status);
   const color = tone === "warn" ? "var(--warning)" : tone === "held" ? "var(--success)" : "var(--text3)";
@@ -362,6 +363,7 @@ export function Header({
             background: `color-mix(in srgb, ${waiting ? "var(--success)" : "var(--primary)"} 18%, transparent)`,
             border: `1px solid color-mix(in srgb, ${waiting ? "var(--success)" : "var(--primary)"} ${waiting ? 70 : 50}%, transparent)`,
             animation: waiting ? "agx-attention 1.8s ease-in-out infinite" : undefined,
+            animationDelay: waiting ? sharedPhase(1800) : undefined,
           }}
         >
           <WorkspaceIcon />

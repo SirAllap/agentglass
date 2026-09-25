@@ -13,6 +13,7 @@ import { api } from "../lib/api.ts";
 import { ClockIcon, IconLabel } from "../lib/glyphIcons.tsx";
 import { ICON, MIN_BOX } from "../lib/iconSize.ts";
 import { CloseButton } from "./CloseButton.tsx";
+import { forgottenPorts, type Forgotten } from "../lib/portsForgotten.ts";
 
 /**
  * THE LANTERN. Who needs you, what every agent is working on, and the way there.
@@ -394,6 +395,15 @@ export function LanternView({ active }: { active: boolean }) {
     const t = setInterval(readSchedules, 30_000);
     return () => clearInterval(t);
   }, [active, readSchedules]);
+  /* Servers nobody seems to be using. Read with the view, like the schedules. */
+  const [forgotten, setForgotten] = useState<Forgotten[]>([]);
+  useEffect(() => {
+    if (!active) return;
+    const read = () => { api.machinePorts().then((r) => setForgotten(forgottenPorts(r.ports))).catch(() => {}); };
+    read();
+    const t = setInterval(read, 60_000);
+    return () => clearInterval(t);
+  }, [active]);
   const cancelSchedule = useCallback((id: string) => { void api.agentUnschedule(id).then(readSchedules).catch(() => {}); }, [readSchedules]);
   const jump = useCallback((paneId: string) => { jumpToPane(paneId); }, []);
   /* A person taking a line off the board; the field is re-read so the card
@@ -514,6 +524,30 @@ export function LanternView({ active }: { active: boolean }) {
         )}
 
         <ScheduledSection items={schedules} onCancel={cancelSchedule} />
+
+        {forgotten.length > 0 && (
+          <section data-lantern-ports className="flex flex-col gap-1.5">
+            {/* Quiet on purpose: no colour, no count on the rail. A server left
+                running is worth seeing when you look, not worth a tap on the
+                shoulder — only an agent stopped on you does that. */}
+            <div className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}
+              title="Servers of yours that look forgotten. Stop them in Machine › Ports; nothing is stopped for you.">
+              Forgotten servers · {forgotten.length}
+            </div>
+            <div className="flex flex-col">
+              {forgotten.map(({ port: p, why }) => (
+                <div key={`${p.pid}:${p.port}`} className="flex items-baseline gap-2 text-[11px] min-w-0 py-0.5" style={{ color: "var(--text3)" }}>
+                  <span className="tabular-nums shrink-0" style={{ color: "var(--text2)" }}>{p.port}</span>
+                  <span className="shrink-0">{p.proc ?? "—"}</span>
+                  <span className="truncate min-w-0" style={{ color: "var(--text4)" }} title={p.dir ?? p.cwd ?? ""}>
+                    {(p.dir ?? p.cwd ?? "").split("/").filter(Boolean).pop() ?? ""}
+                  </span>
+                  <span className="ml-auto shrink-0" style={{ color: "var(--text4)" }}>{why.join(" · ")}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
         {idle.length > 0 && (
           <section className="flex flex-col gap-2">

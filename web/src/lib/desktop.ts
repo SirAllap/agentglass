@@ -32,6 +32,10 @@ type DesktopBridge = {
    *  Absent on a shell built before the app claimed its own scheme, and in a
    *  browser tab, where there is no scheme to claim. */
   takeDeepLink?: () => Promise<DeepLink | null>;
+  /** Make or destroy a lane's hidden window (the app's own window only). */
+  laneOpen?: (id: string, slug: string) => Promise<{ ok: boolean; error?: string }>;
+  laneClose?: (id: string) => Promise<{ ok: boolean; error?: string }>;
+  laneKeep?: (ids: string[]) => Promise<number>;
   onDeepLink?: (fn: (link: DeepLink) => void) => () => void;
   /** The window's own controls. Optional because an older shell still has a
    *  system title bar and does not need them — and because a renderer that
@@ -142,6 +146,28 @@ export async function forgetCookies(sites: string[], profileIds: readonly string
   if (!b?.forgetCookies) return { ok: false, error: "this build cannot remove them" };
   const partitions = partitionsFor(BROWSER_PARTITION, profileIds);
   try { return await b.forgetCookies({ sites, partitions }); } catch (e) { return { ok: false, error: String(e) }; }
+}
+
+/** Whether this shell can make lanes, which is what lets it register as the window that does. */
+export const CAN_MAKE_LANES = typeof (typeof window !== "undefined"
+  ? (window as unknown as { agentglass?: { laneOpen?: unknown } }).agentglass?.laneOpen
+  : undefined) === "function";
+
+export async function openLaneWindow(id: string, slug: string): Promise<{ ok: boolean; error?: string }> {
+  const b = bridge();
+  if (!b?.laneOpen) return { ok: false, error: "this build cannot make lanes" };
+  try { return await b.laneOpen(id, slug); } catch (e) { return { ok: false, error: String(e) }; }
+}
+
+/** The lanes the server still knows: every other host of this app is destroyed. */
+export async function keepLaneWindows(ids: string[]): Promise<void> {
+  try { await bridge()?.laneKeep?.(ids); } catch { /* the next heartbeat says it again */ }
+}
+
+export async function closeLaneWindow(id: string): Promise<{ ok: boolean; error?: string }> {
+  const b = bridge();
+  if (!b?.laneClose) return { ok: false, error: "this build cannot close lanes" };
+  try { return await b.laneClose(id); } catch (e) { return { ok: false, error: String(e) }; }
 }
 
 function bridge(): DesktopBridge | null {

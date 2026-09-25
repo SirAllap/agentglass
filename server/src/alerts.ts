@@ -18,7 +18,7 @@
 // for when nobody is looking at agentglass at all.
 import type { WatchEvent, AlertNote } from "../../shared/types.ts";
 import { paneForSession, noteForSession } from "./panewt.ts";
-import { listPanes } from "./tmuxctl.ts";
+import { listPanesSync } from "./tmuxctl.ts";
 import { ErrorStreaks, STOP_QUIET_MS, lanternStep, lanternState, type ErrorAlert, type LanternFinding } from "./notePolicy.ts";
 import { webhookDestination } from "./egress.ts";
 import { kindOfNotification, type NotifyKind } from "../../shared/notifyPrefs.ts";
@@ -498,7 +498,7 @@ function paneLabel(pane: string): string {
   try {
     // Cached for a few seconds because this spawns tmux, and a burst of alerts
     // from one stopped agent would otherwise spawn one per alert.
-    paneCache ??= listPanes();
+    paneCache ??= listPanesSync();
     const row = paneCache.find((r) => r.paneId === pane);
     if (!row) return pane;
     const name = row.windowName ? ` «${row.windowName}»` : "";
@@ -507,7 +507,7 @@ function paneLabel(pane: string): string {
     return pane;
   }
 }
-let paneCache: ReturnType<typeof listPanes> | null = null;
+let paneCache: ReturnType<typeof listPanesSync> | null = null;
 let paneCacheAt = 0;
 /** Long enough to absorb a burst, short enough that a renamed window is right
  *  by the time anybody looks. */

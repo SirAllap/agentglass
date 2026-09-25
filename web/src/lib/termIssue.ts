@@ -45,6 +45,10 @@ export type TermIssue = {
    * they answer different questions and neither replaces the other.
    */
   title?: string;
+  /** `haiku` / `sonnet` / `opus` and `low` / `medium` / `high`, or nothing for
+   *  the CLI's own default. Names, not flags — the server owns the flags. */
+  model?: string;
+  effort?: string;
   n: number;
 };
 
@@ -61,8 +65,8 @@ export function termIssue(): TermIssue | null { return pending; }
 /** `n` increments so starting the same issue twice is two requests — otherwise
  *  closing the window and pressing Start again would look like the request that
  *  has already been served. */
-export function requestTermIssue(cwd: string, name: string, prompt: string, agent: boolean, yolo = false, title = ""): void {
-  pending = { cwd, name, prompt, agent, yolo, title, n: (pending?.n ?? 0) + 1 };
+export function requestTermIssue(cwd: string, name: string, prompt: string, agent: boolean, yolo = false, title = "", model = "", effort = ""): void {
+  pending = { cwd, name, prompt, agent, yolo, title, model, effort, n: (pending?.n ?? 0) + 1 };
   subs.forEach((f) => f());
 }
 

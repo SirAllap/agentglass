@@ -66,6 +66,17 @@ function buildRepo(base: string): string {
 
 const base = mkdtempSync(join(tmpdir(), "agx-perf-"));
 const home = mkdtempSync(join(tmpdir(), "agx-perf-home-"));
+
+/** Both temp roots, gone. Called on every exit path -- a seed failure used to
+ *  `process.exit(1)` before reaching the `finally` below, which only ever
+ *  cleaned up the happy path, and every failed run left `agx-perf-*` and
+ *  `agx-perf-home-*` behind under /tmp. */
+function cleanupAndExit(code: number): never {
+  try { rmSync(home, { recursive: true, force: true }); } catch { /* best-effort */ }
+  if (!process.env.AGX_PERF_ROOT) { try { rmSync(base, { recursive: true, force: true }); } catch { /* best-effort */ } }
+  process.exit(code);
+}
+
 const repo = process.env.AGX_PERF_ROOT || buildRepo(base);
 const port = 4960 + Math.floor(Math.random() * 30);
 const S = `http://127.0.0.1:${port}`;
@@ -114,12 +125,38 @@ const childEnv = {
   AGENTGLASS_DIE_WITH_PARENT: "1",
 };
 
+/**
+ * Dead tmux sockets, the way a machine accumulates them.
+ *
+ * Every tmux server that exits uncleanly — a killed test run, a crashed
+ * session — leaves its socket file behind, and the panes routes walk the whole
+ * socket directory. With one blocking `tmux list-clients` per file, 127 dead
+ * sockets measured ~450ms of frozen loop per poll (/terminal/panes: 567ms
+ * median, against 21ms with one socket). An empty directory hid that, so this
+ * seeds leftovers: bound, closed, the file kept, nothing listening.
+ * `AGX_PERF_DEAD_SOCKETS=0` skips it.
+ */
+const DEAD_SOCKETS = Number(process.env.AGX_PERF_DEAD_SOCKETS ?? 120);
+if (DEAD_SOCKETS > 0) {
+  const dir = join(childEnv.TMUX_TMPDIR, `tmux-${process.getuid?.() ?? 0}`);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const seeded = spawnSync("python3", ["-c", [
+    "import socket, sys",
+    "for i in range(int(sys.argv[2])):",
+    "    s = socket.socket(socket.AF_UNIX); s.bind(f'{sys.argv[1]}/agx-orbit-{i}'); s.close()",
+  ].join("\n"), dir, String(DEAD_SOCKETS)], { encoding: "utf8" });
+  if (seeded.status !== 0) {
+    console.log(`✗ perf: could not seed dead tmux sockets\n${seeded.stderr ?? ""}`);
+    cleanupAndExit(1);
+  }
+}
+
 if (SEED_EVENTS > 0) {
   const seed = spawnSync("bun", [join(ROOT, "scripts", "seedEvents.ts"), join(home, "perf.db"), repo, String(SEED_EVENTS)],
     { encoding: "utf8", env: childEnv });
   if (seed.status !== 0) {
     console.log(`✗ perf: could not seed the fixture database\n${seed.stderr ?? ""}`);
-    process.exit(1);
+    cleanupAndExit(1);
   }
   process.stdout.write(seed.stdout ?? "");
 }
@@ -165,6 +202,11 @@ const POLLED = [
   // slow insight is the whole server not answering, terminal included.
   `/insights`,
   `/skills`,
+  // The tab strip and the worktree menu. Both walk every socket in the tmux
+  // directory, which is what the dead sockets seeded above are for.
+  `/terminal/panes`,
+  `/terminal/pane-dirs?window=@1`,
+  `/terminal/pane-dirs?window=@1&all=1`,
 ];
 
 /**
@@ -227,6 +269,8 @@ try {
     .sort((a, b) => b.p99 - a.p99)
     .slice(0, 3);
   console.log(`slowest routes: ${worst.map((w) => `${w.path.split("?")[0]} ${w.p99.toFixed(0)}ms`).join(" · ")}`);
+  const panes = [...(routeMs.get("/terminal/panes") ?? [])].sort((a, b) => a - b);
+  if (panes.length) console.log(`/terminal/panes: median ${(panes[Math.floor(panes.length / 2)] ?? 0).toFixed(0)}ms over ${panes.length} polls`);
 
   if (ms.length < 50) {
     console.log(`\n✗ perf: only ${ms.length} samples — the probe never got going, so this proved nothing`);

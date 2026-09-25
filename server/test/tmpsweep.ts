@@ -32,6 +32,7 @@ import { afterAll } from "bun:test";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
+import { killServersUnder, manifestPath, reapDead, record } from "./tmpreap.ts";
 
 type Fs = {
   mkdtempSync: (...a: unknown[]) => string;
@@ -55,9 +56,12 @@ const ours = (p: unknown): p is string =>
   typeof p === "string" && resolve(p).startsWith(TMP + "/");
 
 const note = <T,>(p: T): T => {
-  if (ours(p)) made.push(p);
+  if (ours(p)) { made.push(p); record(TMP, process.pid, p); }
   return p;
 };
+
+// Whatever a run that could not sweep (SIGKILL, out of memory) left behind.
+reapDead(TMP);
 
 const realSync = fs.mkdtempSync;
 fs.mkdtempSync = (...a: unknown[]) => note(realSync(...a));
@@ -101,6 +105,7 @@ function sweep(): void {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* already gone */ }
   }
   sweepPidNamed();
+  try { fs.rmSync(manifestPath(TMP, process.pid), { force: true }); } catch { /* already gone */ }
 }
 
 /*
@@ -123,6 +128,7 @@ function sweepPidNamed(): void {
   catch { return; }
   for (const name of names) {
     if (!new RegExp(`(^|[^0-9])${pid}([^0-9]|$)`).test(name)) continue;
+    killServersUnder(`${TMP}/${name}`);
     try { fs.rmSync(`${TMP}/${name}`, { recursive: true, force: true }); } catch { /* not ours to remove */ }
   }
 }

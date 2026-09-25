@@ -65,6 +65,6 @@ test.skipIf(!have)("rows are tagged with their server, one ask per socket, and a
 test("the Diff view's pane liveness reads each pane's own server", () => {
   /* The reader is wired in index.ts, where no test reaches it without a whole
      server; the rule about which note it may read is asserted where it is. */
-  expect(INDEX).toContain("paneHeldSessions(withTmuxServer(listPanes(");
-  expect(INDEX).not.toContain("paneHeldSessions(listPanes(");
+  expect(INDEX).toContain("paneHeldSessions(withTmuxServer(await listPanes(");
+  expect(INDEX).not.toMatch(/paneHeldSessions\((await )?listPanes\(/);
 });

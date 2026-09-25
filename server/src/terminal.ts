@@ -22,6 +22,7 @@ import { tmpdir } from "node:os";
 import type { ServerWebSocket } from "bun";
 import { isViewTemp, viewTempDirOf } from "./viewtemp.ts";
 import { dropEditorSocket, newEditorSocket } from "./editorwhere.ts";
+import { CONFLICT_EFFORTS, CONFLICT_MODELS } from "../../shared/types.ts";
 import type { ProjectCommand, TerminalCommands, TerminalDisabledReason, TmuxWindow, PtyServerFrame, PtyClientMessage } from "../../shared/types.ts";
 import { safeAbs, repoRootOf, repoRootOfAsync } from "./git.ts";
 import { terminalActive } from "./loopwatch.ts";
@@ -298,7 +299,7 @@ type Session = {
   killTimer: ReturnType<typeof setTimeout> | null;
   /** Cleared on close — a stray interval would keep reading /proc for a pty
    *  that no longer exists, once per session, forever. */
-  tmuxPoll?: ReturnType<typeof setInterval> | null;
+  tmuxPoll?: ReturnType<typeof setTimeout> | null;
   /** A one-shot sweep armed off pty output, so a keyboard window switch (which
    *  redraws) shows in the tab strip without waiting out the poll. Cleared on
    *  close like the poll. */
@@ -537,6 +538,13 @@ function sealGuessRecord(
 
 const enc = new TextEncoder();
 
+/** `--model` / `--effort` for a hand-off that asked for them; nothing otherwise. */
+export function modelFlags(model: unknown, effort: unknown): string[] {
+  return [
+    ...(typeof model === "string" && CONFLICT_MODELS.some((m) => m !== "auto" && m === model) ? ["--model", model] : []),
+    ...(typeof effort === "string" && CONFLICT_EFFORTS.some((e) => e !== "auto" && e === effort) ? ["--effort", effort] : []),
+  ];
+}
 /**
  * A card's title, as a session name.
  *
@@ -1329,7 +1337,12 @@ export function ptyOpen(ws: PtyWs) {
      * not ours to put back.
      */
     if (session.onEngine && session.tmux && confHealth().ok) {
-      const put = healPrefix(session.tmux, tmuxPrefix() || "C-b", ensureConf());
+      // An empty prefix can be a frame that aborted mid-parse before it
+      // finished reading show-options, not a confirmed "no prefix set" — see
+      // healPrefix. Passing it through as [] made every such frame look like
+      // "not what we want" and resource the conf on the next tick, forever;
+      // undefined tells healPrefix to fall back to prefixKeys() instead.
+      const put = healPrefix(session.tmux, tmuxPrefix() || "C-b", ensureConf(), session.tmuxPrefix?.length ? session.tmuxPrefix : undefined);
       if (put) session.tmuxPrefix = put;
     }
     /**
@@ -1408,8 +1421,31 @@ export function ptyOpen(ws: PtyWs) {
    * second is the ceiling for "instant" and the check is one small tmux call
    * that only speaks when something actually changed.
    */
-  const tmuxPoll = setInterval(() => { if (!session.clientHidden) sweep(); }, 500);
-  session.tmuxPoll = tmuxPoll;
+  /*
+   * …and slower once nothing has moved for a while. A quiet tmux answered the
+   * same JSON twenty times a minute per attached client, each one a synchronous
+   * spawn. After QUIET_SWEEPS unchanged answers, on a session tmux is already
+   * known for, the poll drops to SLOW_MS. The keyboard cannot be left waiting on
+   * it — `nudgeTmux` below fires from the redraw a switch causes — and any
+   * change, by poll or by nudge, puts it back to 500ms. What it gives up: a
+   * change tmux makes that draws nothing (a rename from another client) shows up
+   * within SLOW_MS instead of half a second. Detecting tmux arriving still uses
+   * the fast rate, since nothing is known yet.
+   */
+  const QUIET_SWEEPS = 10;
+  const SLOW_MS = 2000;
+  let quiet = 0;
+  let seen = sent;
+  const arm = () => {
+    if (session.closed) return;
+    const wait = quiet >= QUIET_SWEEPS && (session.tmux || session.onEngine) ? SLOW_MS : 500;
+    session.tmuxPoll = setTimeout(() => {
+      if (!session.clientHidden) sweep();
+      if (sent !== seen) { seen = sent; quiet = 0; } else quiet++;
+      arm();
+    }, wait);
+  };
+  arm();
 
   /*
    * Keep the tab strip up with the KEYBOARD, not just the poll.
@@ -2019,7 +2055,7 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
          * mirror session, which shares the window and has cost a real session
          * before.
          */
-        if (opened) focusPaneAnywhere(undefined, "", opened.windowId, opened.paneId);
+        if (opened) await focusPaneAnywhere(undefined, "", opened.windowId, opened.paneId);
         s.tmuxSweep?.();
       })();
       return;
@@ -2107,7 +2143,11 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
         // uses. Two call sites building the same command line is how the two
         // paths would quietly stop doing the same thing, and a third vendor
         // spelling its own flag inline is how they would stop for good.
-        const argv = agentArgv(bin, { prompt, yolo: msg.yolo === true, title }, supportsSessionName(bin));
+        // Model and effort are the client's request and the flag names are ours,
+        // the same division as `--name`: an allowlist, so a socket reachable from
+        // the UI still cannot pass an arbitrary argument. Claude only — another
+        // CLI's `--model` takes different values.
+        const argv = agentArgv(bin, { prompt, yolo: msg.yolo === true, title }, supportsSessionName(bin), modelFlags(msg.model, msg.effort));
         // No agent available is not a reason to open nothing: a shell in the
         // right worktree is still most of what was asked for.
         /* Into the session this client is attached to — see the note on
@@ -2354,7 +2394,7 @@ export function ptyClose(ws: PtyWs) {
 function cleanup(ws: PtyWs, s: Session) {
   sessions.delete(ws);
   if (s.editorSocketId) { dropEditorSocket(s.editorSocketId); s.editorSocketId = null; }
-  if (s.tmuxPoll) { clearInterval(s.tmuxPoll); s.tmuxPoll = null; }
+  if (s.tmuxPoll) { clearTimeout(s.tmuxPoll); s.tmuxPoll = null; }
   if (s.tmuxNudge) { clearTimeout(s.tmuxNudge); s.tmuxNudge = null; }
   // Give the status line back before letting go. The panel borrowed it; a
   // session left with `status off` after the panel closed looks broken in the

@@ -33,6 +33,8 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import { answerDecrqm } from "../lib/xtermDecrqm.ts";
 import { openExternal } from "../lib/externalUrl.ts";
+import { registerPathLinks } from "../lib/termPathLinks.ts";
+import { followLink } from "../lib/linkRouter.ts";
 import type { GitRepoRef, GitBranch, PrBranchSummary, TerminalCommands, TmuxWindow, TmuxPane, PtyServerFrame, PtyClientFrame } from "../../../shared/types.ts";
 import { chipTarget } from "../lib/chipTarget.ts";
 import { openPr } from "../lib/openPrs.ts";
@@ -63,6 +65,7 @@ import { CloseButton, CloseIcon } from "./CloseButton.tsx";
 import { FindArrow } from "./FindBar.tsx";
 import { PluckPalette } from "./terminal/PluckPalette.tsx";
 import { edgeMask, useTabStripScroll } from "../lib/tabStrip.ts";
+import { sharedPhase } from "../lib/sharedPhase.ts";
 import { StatusMark, STATUS_COLOR } from "./terminal/StatusMark.tsx";
 import { STATUS_WORDS } from "../../../shared/windowStatus.ts";
 import { buildGroups, openGroups, parseRules, setOpenGroups, subscribeTabGroups, tabGroupRulesText, tabGroupsOn, tabGroupsVersion, worthGrouping, type TabGroup } from "../lib/tabGroups.ts";
@@ -804,7 +807,13 @@ function createSession(root: string, agentTicket?: string): Sess {
   // and then xterm 6.0.0 throws inside its own parser and the screen stops
   // updating. See xtermDecrqm.
   answerDecrqm(term as never);
-  term.loadAddon(new WebLinksAddon((_e, uri) => { openExternal(uri); }));
+  // A pull request or a ClickUp card opens in the app; Ctrl/Cmd-click still
+  // goes to the browser. See linkRouter.ts.
+  term.loadAddon(new WebLinksAddon((e, uri) => { followLink(uri, e); }));
+  // A path that exists opens in the finder. `root` is where this shell began.
+  // Ceiling: after a `cd`, or over ssh, a relative path that ALSO exists under
+  // `root` links to that one. Absolute and ~/ paths are exact.
+  registerPathLinks(term, root);
   /*
    * Draw on the GPU when the machine will let us.
    *
@@ -2835,7 +2844,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     // slot is cleared here: a second press must not be blocked waiting on the
     // first one's answer.
     lastIssue.current = issue;
-    tmuxCmd({ cmd: "issue", cwd: issue.cwd, name: issue.name, prompt: issue.prompt, agent: issue.agent, yolo: issue.yolo, title: issue.title });
+    tmuxCmd({ cmd: "issue", cwd: issue.cwd, name: issue.name, prompt: issue.prompt, agent: issue.agent, yolo: issue.yolo, title: issue.title, model: issue.model, effort: issue.effort });
     clearTermIssue();
   }, [issue, socketLive, tmuxCmd]);
 
@@ -3475,7 +3484,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                                   larger than the number it annotates.
                                   icon-floor-exempt: a status badge, not a control */}
                               <svg width="9" height="13" viewBox="0 0 10 14" aria-label="phone attached"
-                                style={{ color: "var(--phone)", animation: "agx-phone-pulse 1.8s ease-in-out infinite" }}>
+                                style={{ color: "var(--phone)", animation: "agx-phone-pulse 1.8s ease-in-out infinite", animationDelay: sharedPhase(1800) }}>
                                 <rect x="0.7" y="0.7" width="8.6" height="12.6" rx="1.6"
                                   fill="none" stroke="currentColor" strokeWidth="1.4" />
                                 <circle cx="5" cy="10.8" r="0.9" fill="currentColor" />

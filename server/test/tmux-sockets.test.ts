@@ -5,14 +5,18 @@
 // one server in the list twice. Every pane on it then came back twice, which in
 // the UI reads as two identical panes to choose between.
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
-import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const base = mkdtempSync(join(tmpdir(), "agx-sock-"));
 const dir = join(base, `tmux-${process.getuid?.() ?? 0}`);
 mkdirSync(dir, { recursive: true });
-for (const n of ["default", "work", "stray"]) writeFileSync(join(dir, n), "");
+// Listening, not just present: `tmuxSockets` only answers sockets something
+// is listening on (a dead file is a tmux spawn that can only fail). A plain
+// unix listener is what tmux's own server looks like in /proc/net/unix.
+const listeners = ["default", "work", "stray"].map((n) =>
+  Bun.listen({ unix: join(dir, n), socket: { data() { /* never spoken to */ } } }));
 
 const prev = process.env.TMUX_TMPDIR;
 /*
@@ -34,6 +38,7 @@ beforeAll(async () => {
   tmuxctl = await import("../src/tmuxctl.ts");
 });
 afterAll(() => {
+  for (const l of listeners) l.stop(true);
   if (prev === undefined) delete process.env.TMUX_TMPDIR; else process.env.TMUX_TMPDIR = prev;
   if (prevTmux === undefined) delete process.env.TMUX; else process.env.TMUX = prevTmux;
 });

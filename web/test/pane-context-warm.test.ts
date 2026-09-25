@@ -72,8 +72,9 @@ describe("the whole window, in one request", () => {
   test("and it comes off the same list-panes call", () => {
     // Not one subprocess per pane: this is polled while the grid is open.
     const ctl = readFileSync(new URL("../../server/src/tmuxctl.ts", import.meta.url), "utf8");
-    const fn = ctl.slice(ctl.indexOf("export function panesWithPids"));
-    expect((fn.slice(0, fn.indexOf("\nexport ")).match(/tmux\(socket, \[/g) ?? []).length).toBe(1);
+    const body = (head: string) => { const f = ctl.slice(ctl.indexOf(head)); return f.slice(0, f.indexOf("\n}\n")); };
+    expect(body("export async function panesWithPids(")).toContain("await windowPanesEverywhere(known, windowId)");
+    expect((body("async function windowPanesEverywhere(").match(/tmux(Async)?\(socket, \[/g) ?? []).length).toBe(1);
   });
 
   test("the hover reads the book before the network", () => {

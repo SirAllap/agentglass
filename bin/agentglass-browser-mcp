@@ -973,6 +973,30 @@ TOOLS = [
         },
     },
     {
+        "name": "browser_lane",
+        "description": (
+            "A PRIVATE BROWSER WINDOW of your own that the person never sees and never has to have open. "
+            "action \"new\" makes one and returns its `id`; then pass `lane: <id>` to any other browser tool "
+            "and it runs there, not in the person's window. \"list\" shows what is open; \"close\" closes one.\n\n"
+            "A new lane has a fresh, empty cookie jar, wiped when it closes. `shared: true` opens it in the "
+            "person's own container instead (their logins — only on purpose); `profile: \"<name>\"` opens it in "
+            "a container browser_profiles lists. Only a few lanes exist at once and one idle for 15 minutes "
+            "is closed. A lane that is closed, or never was, is refused by name — it never falls back to the "
+            "person's tab."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["new", "list", "close"]},
+                "id": {"type": "string", "description": "The lane to close."},
+                "profile": {"type": "string", "description": "new: a container by name, instead of a private one."},
+                "shared": {"type": "boolean", "description": "new: the person's own container."},
+                "force": {"type": "boolean", "description": "list every agent's lanes, or close one somebody else opened."},
+            },
+            "required": ["action"],
+        },
+    },
+    {
         # §11. THE PRE-FLIGHT, and the one call to make before any other.
         #
         # `browser_profiles` used to answer a flat list of bare names, which was
@@ -1531,7 +1555,7 @@ VERB = {t["name"]: t["name"][len("browser_"):] for t in TOOLS}
 # a client written against the 68 names must not lose one on upgrade.
 CORE_TOOLS = (
     "open", "read", "observe", "checkup", "click", "type", "fill", "press",
-    "scroll", "wait", "shot", "eval", "console", "network", "tabs", "newtab", "closetab",
+    "scroll", "wait", "shot", "eval", "console", "network", "tabs", "newtab", "closetab", "lane",
 )
 
 
@@ -1596,7 +1620,7 @@ def _generic_call(args, raw=False):
 # is the hole reopened by hand. Caught here by REQ-11's own MCP test, which
 # asked `browser_whoami` with no tab and got the refusal sentence where it
 # expected JSON.
-TAB_OPS = {"tabs", "tab", "newtab", "closetab", "profiles", "whoami", "health", "settings", "scrape"}
+TAB_OPS = {"tabs", "tab", "newtab", "closetab", "profiles", "whoami", "health", "settings", "scrape", "lane"}
 
 # `profile` and `shared` say WHO, not WHAT: they choose which tab this call is
 # addressed to and never travel to the relay as part of the verb's body.
@@ -1619,6 +1643,12 @@ def _address_schemas():
     own `page`, and its wording is better than a generic one.
     """
     for t in TOOLS:
+        if VERB[t["name"]] != "lane":
+            t["inputSchema"].setdefault("properties", {}).setdefault("lane", {
+                "type": "string",
+                "description": "Work in this lane (browser_lane new) instead of the person's window. "
+                               "A lane that is gone is refused, never replaced by the visible tab.",
+            })
         if VERB[t["name"]] in TAB_OPS:
             continue
         props = t["inputSchema"].setdefault("properties", {})
@@ -1967,7 +1997,18 @@ def run(name, args, raw=False):
     # are left alone, exactly as in bin/agentglass-browser.
     for key in ADDRESSING:
         body.pop(key, None)
-    who = "" if args.get("shared") else my_name(args.get("profile"))
+    # A lane has one tab and it is the lane's: the tab this client holds in the
+    # person's window is not addressed there (the host refuses a page that is
+    # not its own). `lane` is the verb that makes them, and there `profile` and
+    # `shared` choose the cookie jar and are the relay's to read.
+    lane = args.get("lane") if verb != "lane" else None
+    if lane:
+        body["lane"] = lane
+    if verb == "lane":
+        for key in ("profile", "shared", "force"):
+            if args.get(key) is not None:
+                body[key] = args[key]
+    who = "" if args.get("shared") and verb != "lane" else my_name(None if verb == "lane" and args.get("shared") else args.get("profile"))
     mine = my_tab(who) if who else None
     sent_to = None
 
@@ -1976,7 +2017,7 @@ def run(name, args, raw=False):
         # one; the empty profile is the person's own, which is what `shared`
         # means here too.
         body["profile"] = who or ""
-    if verb in ("open", "newtab") and who:
+    if verb in ("open", "newtab") and who and not lane:
         # NAMING A TAB IS THE WHOLE ANSWER, and it is also the trap: an `open`
         # that carries a profile is routed by the panel to "make a tab in that
         # container", so setting both a page and a profile minted a NEW tab,
@@ -1992,7 +2033,7 @@ def run(name, args, raw=False):
             body["page"] = sent_to = mine
         else:
             body["profile"] = who
-    elif verb not in TAB_OPS:
+    elif verb not in TAB_OPS and not lane:
         target = args.get("page") or mine
         if not target:
             if who:

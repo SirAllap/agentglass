@@ -644,7 +644,7 @@ export type PtyClientFrame =
   /** Start work on an issue in a window of the user's tmux. `agent` opens the
    *  CLI in it, `yolo` buys exactly one flag, and `title` is data that
    *  `sessionTitle` sanitises before it reaches an argv array. */
-  | { t: "tmux"; cmd: "issue"; cwd: string; name?: string; prompt?: string; agent?: boolean; yolo?: boolean; title?: string }
+  | { t: "tmux"; cmd: "issue"; cwd: string; name?: string; prompt?: string; agent?: boolean; yolo?: boolean; title?: string; model?: string; effort?: string }
   /** The tab strip's four window commands, plus take-over. Kept in step with
    *  `TmuxAction` in server/src/tmuxctl.ts, which is what runs them. */
   /** `fit` sizes the tmux window to THIS client — see tmuxctl.ts, and the
@@ -1177,6 +1177,17 @@ export interface BrowserUseStatus {
   desktop: boolean;
 }
 
+/** One open lane, as the Browser panel's quiet row and `lane list` show it. */
+export interface LaneRow {
+  id: string;
+  /** Who opened it — self-asserted, like every `as`. */
+  as?: string;
+  container: "private" | "shared" | "named";
+  name?: string;
+  created: number;
+  lastAsk: number;
+}
+
 export interface BrowserAskFrame {
   id: string;
   /** Kept in step with BrowserOp in server/src/browserdrive.ts by hand, and the
@@ -1296,6 +1307,7 @@ export interface BrowserAskFrame {
     /* One line: window open, panel mounted, page alive — see §15 of the
        browser spec. Answered even when there is nothing to drive, which is
        the point of it. */
+    | "lane"
     | "health";
   args: Record<string, unknown>;
 }
@@ -1861,6 +1873,10 @@ export interface UnderstudyAsked {
   repo: string;
 }
 
+/** The one frame a `/stream` client sends: its own name, so the server can
+ *  address a browser ask to this window alone. */
+export interface WsClientHello { type: "hello"; clientId: string; browser: true }
+
 /** WebSocket frames. */
 export type WsFrame =
   | { type: "initial"; data: WatchEvent[]; openTools?: OpenToolCall[] }
@@ -1904,7 +1920,24 @@ export type WsFrame =
   /** Notification prefs changed — on this device, or from another one open on
    *  the same server. Whole object, not a diff: it is small, and a diff would
    *  need its own merge rule the day two tabs edit at once. */
-  | { type: "notify-prefs"; data: NotifyPrefs };
+  | { type: "notify-prefs"; data: NotifyPrefs }
+  /** A long plan window reached the alert level. Decided once on the server
+   *  (see paceAlert.ts there); each client words it in its own working hours. */
+  | { type: "pace-alert"; data: PaceAlert };
+
+export interface PaceAlert {
+  provider: string;
+  /** The provider's display name. */
+  providerLabel: string;
+  /** The window's label, e.g. "weekly". */
+  label: string;
+  usedPercent: number;
+  /** The window's length. */
+  minutes: number;
+  /** Epoch ms. */
+  resetsAt: number;
+  alertAt: number;
+}
 
 export interface AlertNote {
   title: string;
@@ -4113,6 +4146,15 @@ export interface PortEntry {
    *  keeps the inode alive, so it is still running code you no longer have.
    *  Usually a rebuild underneath a server somebody forgot to restart. */
   exeGone: boolean;
+  /** The folder it is about: what it serves when its command line says so
+   *  (`http.server --directory`), else where it was started. */
+  dir: string | null;
+  /** That folder is under /tmp or /var/tmp. */
+  tmpLeftover: boolean;
+  /** Another listener of the same program serves the same folder. */
+  duplicate: boolean;
+  /** Seconds since anything last connected, once past the idle limit. */
+  idleSec: number | null;
 }
 /** One rung of a process's ancestry. */
 export interface Forebear { pid: number; name: string }
@@ -4656,7 +4698,20 @@ export interface ReviewRecipe {
   /** Sort order inside a group, ascending. Absent means "where the catalogue
    *  put it". */
   rank?: number;
+  /** Conflict prompts only: the checkout this one is FOR. Absent means every
+   *  project; set, it wins over the global one inside that project. */
+  repo?: string;
+  /** Conflict prompts only: which model the tab opens on. `auto` (or absent)
+   *  lets the conflict decide — see shared/conflictModel.ts. */
+  model?: ConflictModel;
+  effort?: ConflictEffort;
 }
+
+/** `auto` is a setting, not a model: it means "let the conflict decide". */
+export const CONFLICT_MODELS = ["auto", "haiku", "sonnet", "opus"] as const;
+export const CONFLICT_EFFORTS = ["auto", "low", "medium", "high"] as const;
+export type ConflictModel = (typeof CONFLICT_MODELS)[number];
+export type ConflictEffort = (typeof CONFLICT_EFFORTS)[number];
 
 /**
  * `telling` is the odd one and deliberately in the same catalogue: it is not a
@@ -4666,7 +4721,7 @@ export interface ReviewRecipe {
  * "Review with Claude" menu lists its three groups by name, so this one does
  * not appear in it; Settings lists them all, which is where it is edited.
  */
-export type ReviewRecipeGroup = "reviewing" | "focused" | "mine" | "telling";
+export type ReviewRecipeGroup = "reviewing" | "focused" | "mine" | "telling" | "conflicts";
 
 /**
  * Which day a recipe is written for:
@@ -4703,6 +4758,12 @@ export interface ReviewRecipeContext {
   /** Anything typed into the box beside the button, verbatim: what to look at
    *  first, why it is urgent, a caveat. Empty most of the time. */
   note?: string | null;
+  /** Conflict prompts: what the branch is being merged into. */
+  base?: string | null;
+  /** Conflict prompts: the conflicted files, one per line. */
+  files?: string | null;
+  /** Conflict prompts: the worktree the conflict is in. */
+  worktree?: string | null;
 }
 
 export interface ReviewRecipesResponse {

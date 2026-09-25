@@ -1,6 +1,6 @@
 import type { UiAction, Field, NoteStatus, PluginPanel, PluginPrNotes } from "./pluginTypes.ts";
 import type { ImportedPlace } from "./desktop.ts";
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue, LaneRow } from "../../../shared/types.ts";
 import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember } from "../../../shared/providers.ts";
 import { DEFAULT_NOTIFY_PREFS, type NotifyPrefs } from "../../../shared/notifyPrefs.ts";
 
@@ -904,6 +904,7 @@ const realApi = {
   skillsExportUrl: (fmt: "md" | "csv" | "json" = "md") => withToken(`${SERVER}/skills/export?format=${fmt}`),
   providerUsage: () => get<ProviderUsage[]>(`/usage/providers`),
   refreshCodexUsage: () => post<{ ok: boolean; error?: string }>(`/usage/codex/refresh`, {}),
+  claimPaceAlerts: (alertAt: number) => post<{ ok: boolean; fired: number }>(`/usage/pace-claim`, { alertAt }),
   // usage_since: the epoch the call counts are known from. They are bounded
   // by AGENTGLASS_RETENTION_DAYS, so a bare count reads as a lifetime total
   // and is not. 0 means pruning is off and it really is all time.
@@ -978,10 +979,14 @@ const realApi = {
   /** Say that this window has a browser panel that can answer an agent's ask —
    *  or that it no longer does. A heartbeat: the server expires it, so a window
    *  that dies without saying goodbye stops being counted. */
-  browserReady: (client: string, on: boolean) => post<{ ok: boolean }>("/browser/ready", { client, on }),
+  /** The app's own window offering to make lane hosts. Not a panel: it needs none. */
+  browserManager: (client: string, on: boolean) => post<{ ok: boolean; lanes?: string[] }>("/browser/ready", { client, on, manager: true }, deskHeader()),
+  /** The lanes that are open, for the Browser panel's quiet row. */
+  browserLanes: () => get<{ ok: boolean; lanes: LaneRow[] }>("/browser/lanes"),
+  browserReady: (client: string, on: boolean, lanes: string[] = []) => post<{ ok: boolean }>("/browser/ready", { client, on, lanes }, deskHeader()),
   /** Report what the built-in browser did with an agent's ask. The server is
    *  holding that agent's request open until this lands — see browserdrive.ts. */
-  browserResult: (r: { id: string; ok: boolean; value?: unknown; error?: string; diagnosis?: unknown }) =>
+  browserResult: (r: { client?: string; id: string; ok: boolean; value?: unknown; error?: string; diagnosis?: unknown }) =>
     post<{ ok: boolean; known: boolean }>("/browser/result", r),
   /** Stop offering a project in the picker, or offer it again. Nothing on disk
    *  is touched — see config.ts. */
@@ -2029,6 +2034,10 @@ const realApi = {
   prPromptSave: (r: ReviewRecipe) =>
     post<{ ok: boolean; recipe?: ReviewRecipe; error?: string }>("/pr-prompts/save", r as unknown as Record<string, unknown>),
   prPromptRemove: (id: string) => post<{ ok: boolean }>("/pr-prompts/remove", { id }),
+  /** The conflict button's ask and the model the conflict deserves. The server
+   *  works out the project from the worktree. */
+  prConflictPrompt: (b: { worktree: string; files: string[]; number?: number; repo?: string; branch?: string; base?: string; title?: string }) =>
+    post<{ ok: boolean; skill?: string; ask?: string; model?: string; effort?: string; why?: string; error?: string }>("/pr-prompts/conflict", b),
   /** Put a built-in back the way it shipped, deleted or merely reworded. */
   prPromptReset: (id: string) => post<{ ok: boolean; recipe?: ReviewRecipe }>("/pr-prompts/reset", { id }),
   /** Where a local branch lives on the web. A live branch resolves to its tree
@@ -2155,6 +2164,7 @@ const demoApi: typeof realApi = {
   skillsExportUrl: () => demo.skillsExportUri(),
   providerUsage: () => D(demo.providerUsage() as ProviderUsage[]),
   refreshCodexUsage: () => D({ ok: false, error: "not available in the demo" }),
+  claimPaceAlerts: (_alertAt: number) => D({ ok: true, fired: 0 }),
   skills: () => D(demo.skills()),
   changes: () => D(demo.changes()),
   session: (id: string) => D(demo.session(id)),
@@ -2206,8 +2216,10 @@ const demoApi: typeof realApi = {
     windows: 0, desktop: false,
   }),
   browserUseInstall: () => D({ ok: false, error: "unavailable in the demo" }),
-  browserReady: (_client: string, _on: boolean) => D({ ok: true }),
-  browserResult: (_r: { id: string; ok: boolean; value?: unknown; error?: string; diagnosis?: unknown }) => D({ ok: true, known: false }),
+  browserManager: (_client: string, _on: boolean) => D({ ok: true, lanes: [] as string[] }),
+  browserLanes: () => D({ ok: true, lanes: [] as LaneRow[] }),
+  browserReady: (_client: string, _on: boolean, _lanes?: string[]) => D({ ok: true }),
+  browserResult: (_r: { client?: string; id: string; ok: boolean; value?: unknown; error?: string; diagnosis?: unknown }) => D({ ok: true, known: false }),
   hideProject: (_path: string, _hidden: boolean) => D({ ok: false, hidden: [] as string[], persisted: false, error: "unavailable in the demo" }),
   gitTree: (root: string) => D(demo.gitTree(root)),
   // There is no git behind a demo build, so the Diff view lands on its own
@@ -2477,6 +2489,7 @@ const demoApi: typeof realApi = {
   prPrompts: () => D({ ok: true, recipes: [] as ReviewRecipe[] }),
   prPromptSave: (_r: ReviewRecipe) => D({ ok: false, error: "not available in the demo" }),
   prPromptRemove: (_id: string) => D({ ok: false }),
+  prConflictPrompt: (_b: unknown) => D({ ok: false } as { ok: boolean; skill?: string; ask?: string; model?: string; effort?: string; why?: string }),
   prPromptReset: (_id: string) => D({ ok: false }),
   prPendingReview: (_r: string, _n: number) => D({ ok: true, id: null, comments: [] }),
   clickupComment: (_i: string, _t: string, _a?: number) => D({ ok: false, error: "not available in the demo" }),

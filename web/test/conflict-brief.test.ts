@@ -1,5 +1,5 @@
-import { describe, expect, it } from "bun:test";
-import { conflictBriefing, sidesOf, nameSide, bandLabels, stepLabel, CONFLICT_ASK } from "../src/lib/conflictBrief.ts";
+import { describe, expect, it, test } from "bun:test";
+import { conflictBriefing, conflictHandoff, sidesOf, nameSide, bandLabels, stepLabel, CONFLICT_ASK } from "../src/lib/conflictBrief.ts";
 import type { GitBranchInfo, GitRepoRef, MergeInfo, MergeSide } from "../../shared/types.ts";
 
 /**
@@ -185,5 +185,28 @@ describe("the band labels", () => {
 
   it("fall back to the branch on screen when nothing is stopped", () => {
     expect(bandLabels(null, "feat/rail-layout").ours).toBe("feat/rail-layout");
+  });
+});
+
+describe("conflictHandoff — the server's ask after the panel's briefing", () => {
+  const briefing = ["I am on feat/x.", ""];
+
+  test("a skill goes first, on its own line, then the briefing, then the ask", async () => {
+    const h = await conflictHandoff(briefing, async () => ({ ok: true, skill: "/base-merge 7", ask: "Regenerate uv.lock.", model: "sonnet", effort: "medium", why: "a few small hunks" }));
+    expect(h.prompt).toBe("/base-merge 7\n\nI am on feat/x.\n\nRegenerate uv.lock.");
+    expect([h.model, h.effort]).toEqual(["sonnet", "medium"]);
+  });
+
+  test("with no skill the briefing opens", async () => {
+    const h = await conflictHandoff(briefing, async () => ({ ok: true, ask: "Do it." }));
+    expect(h.prompt.startsWith("I am on feat/x.")).toBe(true);
+  });
+
+  test("a server that cannot be reached sends the default ask and no model, rather than nothing", async () => {
+    for (const ask of [async () => { throw new Error("down"); }, async () => ({ ok: false })]) {
+      const h = await conflictHandoff(briefing, ask);
+      expect(h.prompt).toContain("Do not commit");
+      expect(h.model).toBeUndefined();
+    }
   });
 });

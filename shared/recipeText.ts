@@ -26,15 +26,18 @@ import type { ReviewRecipeContext } from "./types.ts";
  *   {cardUrl} https://…          that card's page, when the tracker links
  *   {who}     Alex Doe           who the message is for, by name
  *   {note}    …                  whatever was typed in the box beside the button
+ *   {base}    main               conflict prompts: what the branch merges into
+ *   {files}   a.ts\nb.ts         conflict prompts: the conflicted files, a line each
+ *   {worktree} /path             conflict prompts: where the conflict is
  *
  * An unknown placeholder is left exactly as typed: a prompt that says `{foo}`
  * meant to say it, and silently deleting a brace from somebody's careful
  * wording is worse than showing it.
  */
 export function expandRecipe(body: string, ctx: ReviewRecipeContext): string {
-  return body.replace(/\{(number|repo|head|branch|title|author|url|since|card|cardUrl|who|note)\}/g, (whole, key: string) => {
+  return body.replace(/\{(number|repo|head|branch|title|author|url|since|card|cardUrl|who|note|base|files|worktree)\}/g, (whole, key: string) => {
     const v = {
-      number: String(ctx.number),
+      number: ctx.number ? String(ctx.number) : "",
       repo: ctx.repo,
       head: ctx.head,
       branch: ctx.branch,
@@ -46,6 +49,9 @@ export function expandRecipe(body: string, ctx: ReviewRecipeContext): string {
       cardUrl: ctx.cardUrl ?? "",
       who: ctx.who ?? "",
       note: ctx.note ?? "",
+      base: ctx.base ?? "",
+      files: ctx.files ?? "",
+      worktree: ctx.worktree ?? "",
     }[key];
     return v === undefined ? whole : v;
   });

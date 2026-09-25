@@ -60,18 +60,25 @@ const CHROME = [
 // and a Chrome the whole file spawns for tests that then error out on a
 // missing import is worse than not spawning one.
 const HAVE_CHROME = !!CHROME && built;
-const CDP = 9457;
 /*
- * The two sockets this file needs are asked for by number 0 — whatever is free
- * — and read back, rather than written down.
+ * The three sockets this file needs are asked for by number 0 — whatever is
+ * free — and read back, rather than written down.
  *
  * They were 4711 and 4712, and the whole file failed in `beforeAll` with
  * EADDRINUSE because another agent's scratch server on this machine happened to
  * be on 4711. That is not a flake: this repo is worked on by several sessions at
  * once, a fixed port is a lock shared with all of them, and the failure lands
- * before a single assertion runs. The CDP port below is still fixed because
- * Chrome only reports a chosen one through a file in its profile.
+ * before a single assertion runs.
+ *
+ * The third is Chrome's debugging port, which was 9457 for a long time. With a
+ * stale Chromium of an earlier run still on it, this run's own Chrome failed to
+ * bind and exited, and every call went to the ORPHAN's page instead: measured,
+ * 3 of 38 red (the drag tests and one colour test) with nothing in the output
+ * naming a port. Chrome reports a port it chose through
+ * `DevToolsActivePort` in its own profile, which is a directory this run made,
+ * so what answers is the browser this run started or nothing.
  */
+let CDP = 0;
 let PORT = 0;
 /** Where the page's own socket lands — see the drag rig at the bottom. */
 let WIRE = 0;
@@ -223,7 +230,7 @@ beforeAll(async () => {
   chrome = Bun.spawn([
     CHROME!, "--headless=new", "--disable-gpu", "--no-first-run", "--no-sandbox",
     `--user-data-dir=${profile}`, "--window-size=412,915",
-    `--remote-debugging-port=${CDP}`, "about:blank",
+    "--remote-debugging-port=0", "about:blank",
   ], { stdout: "ignore", stderr: "ignore" });
 
   /*
@@ -240,7 +247,12 @@ beforeAll(async () => {
   let target = "";
   for (let i = 0; i < 240 && !target; i++) {
     await Bun.sleep(250);
+    // Exited already (bad flag, no display, profile refused): nothing will
+    // ever answer, so say so now rather than after the minute.
+    if (chrome.exitCode !== null) break;
     try {
+      CDP = CDP || Number((await Bun.file(join(profile, "DevToolsActivePort")).text()).split("\n")[0]);
+      if (!CDP) continue;
       const list = await (await fetch(`http://127.0.0.1:${CDP}/json/list`)).json() as
         { type: string; webSocketDebuggerUrl?: string }[];
       target = list.find((t) => t.type === "page")?.webSocketDebuggerUrl ?? "";
@@ -256,7 +268,7 @@ beforeAll(async () => {
    */
   if (!target) {
     throw new Error(
-      `Chrome never exposed a debuggable page on 127.0.0.1:${CDP} within 60s (binary: ${CHROME}). ` +
+      `Chrome never exposed a debuggable page (port: ${CDP || "never reported"}, exit code: ${chrome.exitCode}, binary: ${CHROME}). ` +
       `Its output is discarded here; re-run with stdout/stderr inherited on the spawn above to see why.`,
     );
   }
@@ -290,10 +302,15 @@ beforeAll(async () => {
   await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
   await cdp.send("Page.navigate", { url: `http://127.0.0.1:${PORT}/` });
   // The engine is a megabyte of bundled JavaScript; it is not instant.
-  for (let i = 0; i < 40; i++) {
+  // A minute, like the wait for the page above: ten seconds can run out on a
+  // loaded machine, and running out was silent — the tests went on
+  // against a page that had not started.
+  let ready = false;
+  for (let i = 0; i < 240 && !ready; i++) {
     await Bun.sleep(250);
-    if (await cdp.value<boolean>(`!!(window.AGX && (window.__agx || []).some(function (m) { return m.t === 'ready'; }))`)) break;
+    ready = await cdp.value<boolean>(`!!(window.AGX && (window.__agx || []).some(function (m) { return m.t === 'ready'; }))`);
   }
+  if (!ready) throw new Error("the terminal page never said it was ready within 60s");
   /*
    * A budget for the hook, because this one cannot fit in bun's 5s default and
    * never could: it launches Chrome, serves the document, opens a CDP socket
@@ -316,9 +333,11 @@ beforeAll(async () => {
    */
 }, 120_000);
 
-afterAll(() => {
+afterAll(async () => {
   cdp?.close();
   chrome?.kill();
+  // Gone before the profile it is writing to is deleted.
+  await chrome?.exited;
   server?.stop(true);
   if (profile) rmSync(profile, { recursive: true, force: true });
 });

@@ -6,6 +6,7 @@ import { sessionIsLive } from "../lib/derive.ts";
 import { Panel } from "./Panel.tsx";
 import { usePoll } from "../lib/usePoll.ts";
 import { fmtUsd, fmtMs, fmtEq, modelColor, modelLabelOf } from "../lib/format.ts";
+import { sharedPhase } from "../lib/sharedPhase.ts";
 
 export const Sessions = memo(function Sessions({ provider = "", active = true }: { provider?: string; active?: boolean }) {
   const [sessions, setSessions] = useState<SessionRollup[]>([]);
@@ -52,7 +53,8 @@ export const Sessions = memo(function Sessions({ provider = "", active = true }:
                       instance, measured at +33 points of CPU on a dashboard with 7 (--disable-gpu,
                       matching the desktop app's software compositing). `agx-phone-pulse` says the
                       same "still live" with opacity alone on a dot that never changes size. */}
-                  {live && <span className="h-1.5 w-1.5 rounded-full mr-1" style={{ background: "var(--success)", animation: "agx-phone-pulse 1.6s ease-in-out infinite" }} />}
+                  {live && <span className="h-1.5 w-1.5 rounded-full mr-1"
+                    style={{ background: "var(--success)", animation: "agx-phone-pulse 1.8s ease-in-out infinite", animationDelay: sharedPhase(1800) }} />}
                   <span className="truncate" style={{ color: "var(--text2)" }}>{fmtEq(s.equiv_tokens ?? s.input_tokens + s.output_tokens)}</span>
                 </motion.div>
               </div>

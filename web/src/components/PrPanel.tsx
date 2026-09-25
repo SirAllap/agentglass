@@ -34,6 +34,7 @@ import { fileSection } from "../lib/patchLines.ts";
 import { groupPatch } from "../lib/changeGroups.ts";
 import { flashElement } from "../lib/flash.ts";
 import { shaFromHref } from "../lib/commitLink.ts";
+import { isShortRef, openInApp, wantsExternal } from "../lib/linkRouter.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
 import { ScopeChip } from "./workspace/Chrome.tsx";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
@@ -64,7 +65,8 @@ import { buildFileTree, treeOrder, type TreeNode } from "../lib/prFileTree.ts";
 import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
 import { keepLoadedChecks } from "../lib/prMerge.ts";
 import { askingBehind, behindAnswer, forgetBehind, forgetOneBehind, onBehind, refreshBehind } from "../lib/prBehindStore.ts";
-import { forgetRollups } from "../lib/prRollupStore.ts";
+import { forgetRollups, refreshRollup } from "../lib/prRollupStore.ts";
+import { overlayDetail, refreshPlan } from "../lib/prRefresh.ts";
 import {
   anchorId, bootstrapSince, clearSeen, foldedIdx, markAllSeen, newKeys, newSince, onSeenChange, readSeen,
   reviewSpeaks, threadLastAt, threadMovedOn, writeSeen, type NewAtom,
@@ -95,7 +97,7 @@ import { suggestRecipeId } from "../../../shared/reviewSuggest.ts";
 import { openSettings } from "../lib/openSettings.ts";
 import { requestWorktreeJump } from "../lib/worktreeJump.ts";
 import { wtCell, wtCellTitle, folderOf } from "../lib/prWorktreeCell.ts";
-import { conflictBriefing, CONFLICT_ASK } from "../lib/conflictBrief.ts";
+import { conflictBriefing, conflictHandoff } from "../lib/conflictBrief.ts";
 import { openCard } from "../lib/openCard.ts";
 import { openIssue } from "../lib/openIssue.ts";
 import { useClickupSetup } from "../lib/clickupSetup.ts";
@@ -1005,15 +1007,20 @@ export function Md({ body, className, onToggleTask }: {
   /* Delegated from the wrapper rather than handed to each anchor: the markdown
      renderer is shared with chat, the document viewer and the release notes,
      and it should not learn what a pull request is to serve this. */
-  const onClick = jump ? (e: React.MouseEvent) => {
+  const onClick = (e: React.MouseEvent) => {
     // Never steal a modified click — that is somebody asking for a new window.
-    if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    if (e.defaultPrevented || wantsExternal(e, true)) return;
     const a = (e.target as HTMLElement | null)?.closest?.("a");
     const href = a?.getAttribute("href");
     if (!href) return;
-    const sha = shaFromHref(href, repo);
-    if (sha && jump(sha)) e.preventDefault();
-  } : undefined;
+    const sha = jump && shaFromHref(href, repo);
+    if (sha && jump(sha)) { e.preventDefault(); return; }
+    /* Another pull request, or a card, opens here rather than on GitHub. A
+       link that READS `#123` (prBody.ts autolinks them to `/issues/`, as
+       GitHub does, for issues and pull requests alike) is tried as a pull
+       request, and goes back to the browser if it is not one. */
+    if (openInApp(href, e, { shortRef: isShortRef(a!.textContent) })) e.preventDefault();
+  };
   const wiring: TaskWiring | undefined = onToggleTask
     ? { next: nextTask, onToggle: (i) => onToggleTask(toggleChecklistItem(body, i)) }
     : undefined;
@@ -2105,9 +2112,14 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   /** The jump whose locate call is out, so a re-render does not start it
    *  again while the first one is still walking the machine's checkouts. */
   const locating = useRef("");
+  /** A `#123` from a body being tried as a pull request: if GitHub says it is
+   *  not one (an issue, most likely), the click goes to the browser after all
+   *  and the panel goes back to what it was showing. */
+  const tryAsPr = useRef<{ number: number; url: string; prev: number | null } | null>(null);
   useEffect(() => {
     if (!jump || !repo) return;
-    if (jump.repo !== repo.nameWithOwner) {
+    // Case-blind, as GitHub is: `Acme/Orbit` in a link is the checkout's `acme/orbit`.
+    if (jump.repo.toLowerCase() !== repo.nameWithOwner.toLowerCase()) {
       const key = `${jump.repo}#${jump.number}/${jump.n}`;
       if (locating.current === key) return;
       locating.current = key;
@@ -2129,6 +2141,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
          * number. Less than opening it, and visibly something.
          */
         clearPrJump();
+        // A link somebody clicked has somewhere better to go than a search.
+        if (jump.fallback) { openExternal(jump.fallback); return; }
         setQuery(String(jump.number));
         setSelected(null);
         flash(false, `#${jump.number} is in ${jump.repo}, and there is no checkout of it on this machine — searching ${repo.nameWithOwner} instead`);
@@ -2148,6 +2162,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
        entries in it. Remembered here and served below, once the pull request
        this is about has actually loaded. */
     if (jump.mention) wantMention.current = { number: jump.number, n: jump.n };
+    tryAsPr.current = jump.fallback ? { number: jump.number, url: jump.fallback, prev: selected } : null;
     openPr(jump.number);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jump, repo, openPr]);
@@ -2660,6 +2675,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     setDetailErr("");
     api.prDetail(root, n, force).then((r) => {
       if (req !== detailReq.current) return; // a later selection already won
+      // Disarmed by any load, so a later, ordinary open of that number is ordinary.
+      const trying = tryAsPr.current?.number === n ? tryAsPr.current : null;
+      tryAsPr.current = null;
       if (r.ok && r.detail) {
         rememberDetail(root, n, r.detail); setDetail(r.detail); setDetailStale(false);
         /*
@@ -2676,6 +2694,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       }
       // A refresh that fails leaves what is on screen alone: the pull request
       // you are reading is better than an error where it used to be.
+      else if (trying) { openExternal(trying.url); setSelected(trying.prev); }
       else if (!force) setDetailErr(r.error || "");
       else { setDetail(null); setDetailErr(r.error || "Could not load this pull request"); }
     }).catch((e) => { if (req === detailReq.current) setDetailErr(String(e)); })
@@ -2720,6 +2739,16 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     return () => clearTimeout(t);
   }, [root, detail?.number, detail?.mergeable]);
   loadDetailRef.current = loadDetail;
+
+  /* The detail is the newer reading of its own row. The lists are not fetched
+     again when only that pull request is refreshed, so the board is brought
+     up to date from it instead (see `overlayDetail`). */
+  useEffect(() => {
+    if (!detail || away) return;
+    setPrs((cur) => overlayDetail(cur, detail));
+    setBoardMine((cur) => overlayDetail(cur, detail));
+    setBoardReview((cur) => overlayDetail(cur, detail));
+  }, [detail, away]);
 
   useEffect(() => {
     if (!active || !root) return;
@@ -3983,12 +4012,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     await act("Reviewers", () => api.prReviewers(root, detail.number, add, remove));
   };
 
-  const doCopyLink = async () => {
-    if (!detail) return;
-    try { await navigator.clipboard.writeText(detail.url); flash(true, "Link copied"); }
-    catch { flash(false, "Could not reach the clipboard"); }
-  };
-
   /** The chase, written for you: who it waits on, what for, where — on the
    *  clipboard always, and down the alerts' channel when one is configured. */
   const doNudge = async () => {
@@ -4264,6 +4287,23 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             * re-read everything around a diff that stayed as it was.
             */}
           <Btn onClick={() => {
+            const plan = refreshPlan(selected);
+            if (plan.pr != null) {
+              /* One pull request open: refresh that one. The lists, and the
+                 check, behind and card caches of every other row, stay as they
+                 are, so going back to the board does not reload every card. */
+              refreshBehind(root, plan.pr);
+              refreshRollup(root, plan.pr);
+              loadDetail(plan.pr, true);
+              diffFresh.current = true;
+              setDiffErr("");
+              /* Everything per-pull-request re-asks off this: the diff, and the
+                 review GitHub is holding for you. Nothing is emptied first —
+                 pressing Refresh must not make the page you are reading
+                 disappear for a second. */
+              setDetailTick((n) => n + 1);
+              return;
+            }
             forgetBehind();
             forgetRollups();
             /* And the tracker cards, which were the one reading Refresh could
@@ -4273,17 +4313,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             boardForce.current = true;
             setBoardTick((n) => n + 1);
             loadList(true);
-            if (selected != null) {
-              loadDetail(selected, true);
-              diffFresh.current = true;
-              setDiffErr("");
-              /* Everything per-pull-request re-asks off this: the diff, and the
-                 review GitHub is holding for you. Nothing is emptied first —
-                 pressing Refresh must not make the page you are reading
-                 disappear for a second. */
-              setDetailTick((n) => n + 1);
-            }
-          }} disabled={busy} small>Refresh</Btn>
+          }} disabled={busy} small
+            title={selected != null ? "Refresh this pull request" : "Refresh the list"}>Refresh</Btn>
         </div>
       </div>
 
@@ -4611,7 +4642,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 onClose={doClose} onLocalReview={(recipe) => doLocalReview(undefined, recipe)}
                 onReviewInTerminal={onReviewInTerminal && d ? (recipe) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "") : undefined}
                 condensed={condensed}
-                onLabels={doLabels} onReviewers={doReviewers} onCopyLink={doCopyLink} onNudge={doNudge}
+                onLabels={doLabels} onReviewers={doReviewers} onNudge={doNudge}
                 onEditField={fieldPicker.open}
                 /* Your review, counted where the panel already counts it — the
                    strip is a reader of these three, never a second source. */
@@ -5092,8 +5123,8 @@ export type { MergeMethod };
  * cut — so the pair can be pressed in either order, and the one you did not
  * press stays available.
  */
-function ConflictActions({ root, number, branch, base, disabled }: {
-  root: string; number: number; branch: string; base: string; disabled?: boolean;
+function ConflictActions({ root, number, branch, base, repo, title, disabled }: {
+  root: string; number: number; branch: string; base: string; repo: string; title: string; disabled?: boolean;
 }) {
   const [busy, setBusy] = useState<"" | "open" | "claude">("");
   const [err, setErr] = useState("");
@@ -5125,27 +5156,25 @@ function ConflictActions({ root, number, branch, base, disabled }: {
       <Btn onClick={async () => {
           setBusy("claude");
           const p = await prepare();
-          setBusy("");
-          if (!p) return;
-          if (p.clean) { setNote(`Merged cleanly in ${p.root.split("/").pop()} — nothing to resolve, just push it`); return; }
+          if (!p) { setBusy(""); return; }
+          if (p.clean) { setBusy(""); setNote(`Merged cleanly in ${p.root.split("/").pop()} — nothing to resolve, just push it`); return; }
           // The same briefing the git panel writes, in a tmux window sitting in
           // the worktree the conflict is actually in — which is the difference
           // between an agent that can fix it and one being told about it.
-          requestTermIssue(
-            p.root,
-            `conflict-${number}`,
-            [
-              // The briefing reads two things off this — the branch's name and
-              // what it was cut from — and a pull request knows both.
-              ...conflictBriefing(
-                p.root,
-                { name: branch, base, upstream: null, ahead: 0, behind: 0, detached: false },
-                undefined, "merging", p.conflicts,
-              ),
-              ...CONFLICT_ASK,
-            ].join("\n"),
-            true,
+          const h = await conflictHandoff(
+            // The briefing reads two things off this — the branch's name and
+            // what it was cut from — and a pull request knows both.
+            conflictBriefing(
+              p.root,
+              { name: branch, base, upstream: null, ahead: 0, behind: 0, detached: false },
+              undefined, "merging", p.conflicts,
+            ),
+            () => api.prConflictPrompt({ worktree: p.root, files: p.conflicts, number, repo, branch, base, title }),
           );
+          requestTermIssue(p.root, `conflict-${number}`, h.prompt, true, false, "", h.model, h.effort);
+          // Held until here, not released after prepare(): the ask is fetched
+          // with a timeout, and a second press in that window opened a second tab.
+          setBusy("");
           // It opens somewhere you are not looking. Without this the button
           // did its whole job in silence and read as broken.
           setNote(`Claude is on it in a tmux window — "conflict-${number}", in ${p.root.split("/").pop()}`);
@@ -5740,7 +5769,7 @@ const v = p2Verdict(d.humanReview, reviewerRoster(d), d.reviewDecision, d.gate);
           {/* `conflicted` as well: git naming the files, or GitHub refusing the
               update over them, is a conflict GitHub has not caught up with. */}
           {(d.mergeable === "CONFLICTING" || conflicted) && (
-            <ConflictActions root={root} number={d.number} branch={d.headRefName} base={d.baseRefName} disabled={busy} />
+            <ConflictActions root={root} number={d.number} branch={d.headRefName} base={d.baseRefName} repo={/github\.com\/([^/]+\/[^/]+)\//.exec(d.url)?.[1] ?? ""} title={d.title} disabled={busy} />
           )}
           {/*
             * The space the answer will fill, while it is being fetched.
@@ -6224,6 +6253,7 @@ const GROUP_LABEL: Record<ReviewRecipeGroup, string> = {
   // here because the record is total, and because the day this group does get
   // shown somewhere it must not appear as the word `telling`.
   telling: "Telling somebody",
+  conflicts: "Merge conflicts",
 };
 
 /** The prompt behind the Ping button, by id. In the same catalogue as the
@@ -7651,7 +7681,7 @@ function prStateBadge(d: { state: PrSummary["state"]; isDraft: boolean }): { tin
   return { tint: "var(--success)", state: "Open", glyph: <PrIcon size={ICON.xs} /> };
 }
 
-function Masthead({ d, busy, local, onShowLocal, onEditTitle, onDraft, onClose, onLocalReview, onReviewInTerminal, onLabels, onReviewers, onCopyLink, onNudge, onEditField, condensed, viewed, threads, queued, awaitingChecks, localHead }: {
+function Masthead({ d, busy, local, onShowLocal, onEditTitle, onDraft, onClose, onLocalReview, onReviewInTerminal, onLabels, onReviewers, onNudge, onEditField, condensed, viewed, threads, queued, awaitingChecks, localHead }: {
   d: PrDetail; busy: boolean;
   /** What plugins have written here — what their buttons in this row say. */
   local: LocalNotes;
@@ -7670,7 +7700,7 @@ function Masthead({ d, busy, local, onShowLocal, onEditTitle, onDraft, onClose, 
   condensed?: boolean;
   /** The typed dialog behind the overflow menu; the inline ＋ buttons use the
    *  picker instead. */
-  onLabels: () => void; onReviewers: () => void; onCopyLink: () => void; onNudge?: () => void;
+  onLabels: () => void; onReviewers: () => void; onNudge?: () => void;
   /** Opens the shared reviewer/label picker anchored to the clicked ＋. */
   onEditField: (field: SidebarField, e: React.MouseEvent<HTMLButtonElement>) => void;
   /** How far YOUR review has got: files ticked off, threads still open, line
@@ -7757,6 +7787,12 @@ function Masthead({ d, busy, local, onShowLocal, onEditTitle, onDraft, onClose, 
      header claiming the opposite of the truth for the second before it lands. */
   const wt = wtCell(localHead);
   const [copied, setCopied] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
+  const copyLink = () => {
+    navigator.clipboard?.writeText(d.url)
+      .then(() => { setLinkCopied(true); setTimeout(() => setLinkCopied(false), 1400); })
+      .catch(() => { /* no clipboard permission */ });
+  };
   const copyNumber = () => {
     navigator.clipboard?.writeText(`#${d.number}`)
       .then(() => { setCopied(true); setTimeout(() => setCopied(false), 1400); })
@@ -7817,6 +7853,12 @@ function Masthead({ d, busy, local, onShowLocal, onEditTitle, onDraft, onClose, 
             controls in a row came out three different heights — which is the
             only reason the group looked wrong. */}
         <Btn small onClick={() => openExternal(d.url)} title="Open on GitHub">GitHub ↗</Btn>
+        {/* Out of the overflow too: the number beside the title copies "#N" for
+            a cross-reference, and this copies the address, which is the one
+            you paste into a chat. */}
+        <Btn small onClick={copyLink} title={linkCopied ? "Copied!" : "Copy the link to this pull request"}>
+          {linkCopied ? <DoneIcon size={ICON.xs} /> : <LinkIcon size={ICON.xs} />}{linkCopied ? "Copied" : "Copy link"}
+        </Btn>
         <Menu label={<MoreIcon size={ICON.sm} />} title="More actions">
           {(close) => (
             <>
@@ -7835,7 +7877,6 @@ function Masthead({ d, busy, local, onShowLocal, onEditTitle, onDraft, onClose, 
               </>}
               <MenuItem icon={<TagIcon size={ICON.xs} />} onClick={() => { close(); onLabels(); }}>Edit labels</MenuItem>
               <MenuSep />
-              <MenuItem onClick={() => { close(); onCopyLink(); }}>&#9033; Copy link</MenuItem>
               {onNudge && d.state === "OPEN" && (
                 <MenuItem onClick={() => { close(); onNudge(); }}>&#128276; Nudge the reviewers</MenuItem>
               )}

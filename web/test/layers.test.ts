@@ -30,6 +30,13 @@ describe("stacking", () => {
     expect(LAYER.palette - LAYER.viewer).toBeGreaterThanOrEqual(10);
   });
 
+  it("puts a picture opened from the palette over it and under the menus", () => {
+    // Esc on the picture has to land back on the list it was raised from, and a
+    // dropdown opened from that list still has to be able to escape it.
+    expect(LAYER.paletteImage).toBeGreaterThan(LAYER.palette);
+    expect(LAYER.menu).toBeGreaterThan(LAYER.paletteImage);
+  });
+
   it("keeps a menu above the panel it was opened from", () => {
     // A dropdown that opens from inside the palette has to escape it, and a
     // portal only helps if it is also drawn above.

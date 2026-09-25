@@ -492,7 +492,7 @@ describe("the desktop app hands its key to the two ends that use it, and nowhere
   });
 
   test("the renderer asks for it from a window's own page, is handed the next one on a restart, and carries it on the two requests that need it", () => {
-    expect(MAIN).toContain('ipcMain.on("ag:deskKey", (e) => { e.returnValue = e.sender.getType() === "window" ? deskKey : null; });');
+    expect(MAIN).toContain('ipcMain.on("ag:deskKey", (e) => { e.returnValue = (e.sender.getType() === "window" || isLaneHost(e.sender)) ? deskKey : null; });');
     expect(code(body(MAIN, "async function restartSidecar("))).toContain("{ origin: apiOrigin, token: currentToken(), deskKey }");
     expect(PRELOAD).toContain('ipcRenderer.sendSync("ag:deskKey")');
     expect(API).toContain(`"${DESK_HEADER}": DESK_KEY`);
@@ -500,7 +500,12 @@ describe("the desktop app hands its key to the two ends that use it, and nowhere
     const sent = code(API);
     expect(sent).toContain('fetch(SERVER + "/gate/decide", {\n      method: "POST",\n      headers: authHeaders({ "content-type": "application/json", ...deskHeader() }),');
     expect(sent).toContain('"/pair/accept", { ticket, scope }, deskHeader())');
-    expect([...sent.matchAll(/deskHeader\(\)/g)]).toHaveLength(2);
+    /* And the two registrations a browser window makes (who receives an agent's
+       asks is as much the app's to say as who releases its gate). The count is
+       the point: a fifth use is a change somebody has to look at. */
+    expect(sent).toContain('"/browser/ready", { client, on, manager: true }, deskHeader())');
+    expect(sent).toContain('"/browser/ready", { client, on, lanes }, deskHeader())');
+    expect([...sent.matchAll(/deskHeader\(\)/g)]).toHaveLength(4);
   });
 });
 

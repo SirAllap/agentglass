@@ -85,8 +85,11 @@ const ZOOM_MAX = 8;
  * outside — the grid sets it from a thumbnail, the activity feed from an image in a
  * comment, and both get the same viewer with the same keys.
  */
-export function FileViewer({ files, at, setAt }: {
+export function FileViewer({ files, at, setAt, openLink = true }: {
   files: CardAttachment[];
+  /** Whether to offer "Open ↗". Off for a file read off this machine, whose url
+   *  carries the engine's token and is not something to hand to a browser tab. */
+  openLink?: boolean;
   /** Which one is open, by index into the viewable ones. Null is closed. */
   at: number | null;
   /** A setter and not a plain callback: walking with ←/→ reads the index it is
@@ -268,8 +271,10 @@ export function FileViewer({ files, at, setAt }: {
               className="agx-btn px-2 py-0.5 rounded disabled:opacity-30" style={{ border: edge(18), color: "var(--text2)" }}>←</button>
             <button onClick={() => step(1)} disabled={images.length < 2} title="Next (→)"
               className="agx-btn px-2 py-0.5 rounded disabled:opacity-30" style={{ border: edge(18), color: "var(--text2)" }}>→</button>
-            <a href={externalUrl(open.url) || undefined} target="_blank" rel="noreferrer noopener"
-              className="px-2 py-0.5 rounded" style={{ border: edge(18), color: "var(--text2)" }} title="Open the file itself">Open ↗</a>
+            {openLink && (
+              <a href={externalUrl(open.url) || undefined} target="_blank" rel="noreferrer noopener"
+                className="px-2 py-0.5 rounded" style={{ border: edge(18), color: "var(--text2)" }} title="Open the file itself">Open ↗</a>
+            )}
             {/* The app's one close control — same grid, same stroke, and a target
                 you can actually hit. See CloseButton. */}
             <CloseButton onClick={() => setAt(null)} title="Close (Esc)" />

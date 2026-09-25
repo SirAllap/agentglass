@@ -128,18 +128,18 @@ export function Preview({ path, onOpen, onCopyPath, compact }: {
       <div className="px-3 py-2 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
         <div className="text-[12px] truncate" style={{ color: "var(--text)" }} title={facts.name}>{facts.name}</div>
         <div className="text-[10px] t-dim2 flex items-center gap-2 flex-wrap">
-          <span>{facts.kind === "dir" ? "carpeta" : facts.mime.split(";")[0] || facts.kind}</span>
+          <span>{facts.kind === "dir" ? "folder" : facts.mime.split(";")[0] || facts.kind}</span>
           {facts.width && facts.height ? <span>{facts.width}×{facts.height}</span> : null}
           {facts.kind !== "dir" && <span>{human(facts.bytes)}</span>}
           <span>{ago(facts.mtime)}</span>
         </div>
         <div className="flex items-center gap-1.5 mt-1.5">
           {/*
-            * "Abrir" is not one action.
+            * "Open" is not one action.
             *
             * A text file opens in the editor, which is what an editor is for. A
             * picture, a pdf, a video opens in whatever this desktop opens those
-            * with — sending them to the editor is how "abrir" on a PNG drew a
+            * with — sending them to the editor is how "Open" on a PNG drew a
             * floating nvim with a binary in it, which is the report this fixes.
             */}
           {facts.kind === "text" || facts.kind === "binary" ? (
@@ -147,15 +147,15 @@ export function Preview({ path, onOpen, onCopyPath, compact }: {
               <button onClick={() => onOpen(path, facts)}
                 className="text-[10px] px-2 py-0.5 rounded-md min-h-[20px]"
                 style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}>
-                editar
+                Edit
               </button>
             )
           ) : facts.kind !== "dir" ? (
-            <button onClick={() => { setOpenErr(null); void api.previewOpen(path).then((r) => { if (!r.ok) setOpenErr(r.error ?? "no se pudo abrir"); }); }}
+            <button onClick={() => { setOpenErr(null); void api.previewOpen(path).then((r) => { if (!r.ok) setOpenErr(r.error ?? "could not open"); }); }}
               className="text-[10px] px-2 py-0.5 rounded-md min-h-[20px]"
               style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}
               title="Open with the desktop application">
-              abrir
+              Open
             </button>
           ) : null}
           {openErr && <span className="text-[9.5px]" style={{ color: "var(--warning)" }}>{openErr}</span>}
@@ -163,7 +163,7 @@ export function Preview({ path, onOpen, onCopyPath, compact }: {
             <button onClick={() => onCopyPath(path)}
               className="text-[10px] px-2 py-0.5 rounded-md min-h-[20px]"
               style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
-              copiar ruta
+              Copy path
             </button>
           )}
         </div>

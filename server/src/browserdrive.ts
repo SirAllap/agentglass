@@ -38,6 +38,8 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { configPath, inScope, workspaceRoot } from "./config.ts";
 import { robotsOn, robotsRefusal } from "./robots.ts";
 import { blockedTarget } from "./net.ts";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { closeLane, configureLanes, isLaneId, laneKnown, laneRefusal, listLanes, openLane, resetLanes, touchLane } from "./lanes.ts";
 import { diskAllows, diskEnabled } from "./disk.ts";
 
 /** What the panel can be asked to do. Each one is implemented there; nothing
@@ -80,6 +82,7 @@ export type BrowserOp =
   | "trace" | "intercept" | "checkup" | "dialog" | "handoff" | "vitals" | "a11y"
   | "inspect"
   | "whoami"
+  | "lane"
   | "health";
 /** Every verb, exported so a test can hold the CLI and the MCP to it — see
  *  `browser-cli.test.ts`. Seven §3 verbs once shipped reachable by neither. */
@@ -99,6 +102,7 @@ export const BROWSER_OPS: readonly BrowserOp[] = [
   "throttle", "har", "region", "clipboard", "save", "headers", "fake", "trace", "intercept",
   "checkup", "dialog", "handoff", "vitals", "a11y",
   "whoami",
+  "lane",
   "health",
 ];
 
@@ -192,7 +196,7 @@ const TIMEOUT_MS: Record<BrowserOp, number> = {
   cdp: 60_000, listeners: 15_000, coverage: 30_000, screencast: 20_000,
   /* A question the panel answers from memory. `whoami` is the same question
      with the caller's own identity folded in, and one extra `tabs` behind it. */
-  profiles: 5_000, whoami: 5_000,
+  profiles: 5_000, whoami: 5_000, lane: 20_000,
   /* Several CDP overrides in one round trip, none of them slow. */
   emulate: 20_000,
   /* The one verb whose whole point is waiting. Its own `wait` bounds it; this
@@ -260,7 +264,7 @@ const TIMEOUT_MS: Record<BrowserOp, number> = {
 };
 
 /** Requests handed to the window and not yet answered. */
-const pending = new Map<string, { resolve: (r: BrowserReply) => void; timer: ReturnType<typeof setTimeout> }>();
+const pending = new Map<string, { resolve: (r: BrowserReply) => void; timer: ReturnType<typeof setTimeout>; target?: string }>();
 
 /** How this reaches the window. Injected so the whole relay can be tested
  *  without a server, a socket or a browser. */
@@ -279,7 +283,9 @@ const pending = new Map<string, { resolve: (r: BrowserReply) => void; timer: Ret
 export type BrowserWireOp = Exclude<BrowserOp, "whoami">;
 export interface BrowserWireAsk { id: string; op: BrowserWireOp; args: Record<string, unknown> }
 
-let sink: { send: (ask: BrowserWireAsk) => void; listeners: () => number } | null = null;
+/** `send` addresses ONE window. `false` says the address has no live socket (a
+ *  registration that outlived its connection); anything else counts as sent. */
+let sink: { send: (ask: BrowserWireAsk, clientId: string) => unknown; listeners: () => number; live?: (clientId: string) => boolean } | null = null;
 export function setBrowserSink(s: typeof sink) { sink = s; }
 
 /**
@@ -297,25 +303,129 @@ export function setBrowserSink(s: typeof sink) { sink = s; }
  * fifteen-second timeout — so it is a heartbeat with a TTL rather than a flag
  * somebody has to remember to clear on a crash.
  */
-const ready = new Map<string, number>();
+const ready = new Map<string, { at: number; since: number; lanes: string[] }>();
 const READY_TTL_MS = 90_000;
 
-export function noteBrowserReady(client: unknown, on: boolean): boolean {
+/**
+ * `lanes` are the lane names a window hosts; empty for the main window. An ask
+ * goes to exactly one registered window: the host of `args.lane`, else the most
+ * recently REGISTERED one with no lanes (not the latest heartbeat, which would swap the target every 30 s between two windows). The ask used to be broadcast to every open socket,
+ * fill and type text included, so a phone or a dashboard tab read what an agent
+ * typed into a page. Which callers may REGISTER is decided at the route, not
+ * here (mayHostBrowser in index.ts: the desktop app's key). What is decided
+ * here is only that the newest registration wins among those admitted.
+ */
+export function noteBrowserReady(client: unknown, on: boolean, lanes?: unknown): boolean {
   if (typeof client !== "string" || !client || client.length > 128) return false;
-  if (on) ready.set(client, Date.now());
-  else ready.delete(client);
+  if (!on) { ready.delete(client); return true; }
+  const names = Array.isArray(lanes)
+    ? lanes.filter((l): l is string => typeof l === "string" && l.length > 0 && l.length <= 64).slice(0, 16)
+    : [];
+  ready.set(client, { at: Date.now(), since: ready.get(client)?.since ?? Date.now(), lanes: names });
   return true;
+}
+
+/**
+ * The window that makes lane hosts. Not the Browser panel and not a lane: the
+ * app's own window, which registers for this alone, so lanes can be opened
+ * while no panel is mounted — the whole point of a lane is that the agent does
+ * not need the person's view. Its own map, because the same window is often
+ * also a panel under the same client id and one registration must not shadow
+ * the other.
+ */
+const managers = new Map<string, { at: number; since: number }>();
+
+export function noteBrowserManager(client: unknown, on: boolean): boolean {
+  if (typeof client !== "string" || !client || client.length > 128) return false;
+  if (!on) { managers.delete(client); return true; }
+  managers.set(client, { at: Date.now(), since: managers.get(client)?.since ?? Date.now() });
+  return true;
+}
+
+function pickManager(): string | null {
+  const cutoff = Date.now() - READY_TTL_MS;
+  let best: string | null = null;
+  let bestSince = -1;
+  for (const [id, r] of managers) {
+    if (r.at < cutoff) { managers.delete(id); continue; }
+    if (sink?.live && !sink.live(id)) continue;
+    if (r.since >= bestSince) { best = id; bestSince = r.since; }
+  }
+  return best;
+}
+
+/** Whether a live window registered as the host of this lane. */
+function laneHosted(lane: string): boolean {
+  browserReadyCount();
+  for (const [id, r] of ready) if (r.lanes.includes(lane) && (!sink?.live || sink.live(id))) return true;
+  return false;
+}
+
+/** A closed lane's registration goes with it, and so does whatever it was asked. */
+function forgetLaneHost(lane: string): void {
+  for (const [id, r] of ready) {
+    if (!r.lanes.includes(lane)) continue;
+    ready.delete(id);
+    dropBrowserTarget(id);
+  }
 }
 
 /** How many windows could drive a browser right now. */
 export function browserReadyCount(): number {
   const cutoff = Date.now() - READY_TTL_MS;
-  for (const [id, at] of ready) if (at < cutoff) ready.delete(id);
+  for (const [id, r] of ready) if (r.at < cutoff) ready.delete(id);
   return ready.size;
 }
 
+/** The one window an ask is for, or null when nobody can take it. */
+function pickTarget(lane: unknown): string | null {
+  browserReadyCount();
+  let best: string | null = null;
+  let bestSince = -1;
+  for (const [id, r] of ready) {
+    const fits = typeof lane === "string" && lane ? r.lanes.includes(lane) : r.lanes.length === 0;
+    /* A registration whose socket is gone is not a candidate: a closed window,
+       or a bare POST /browser/ready with no socket, must not win the pick and
+       blackhole every ask while a healthy window sits idle. */
+    if (sink?.live && !sink.live(id)) continue;
+    if (fits && r.since >= bestSince) { best = id; bestSince = r.since; }
+  }
+  return best;
+}
+
+/**
+ * The lane a request named, for everything that request goes on to ask.
+ *
+ * `--lane` used to ride only on the ask the CLI sent, so a verb the relay
+ * composes out of several (`do`, `record`, `download`, `events`, `scrape`,
+ * `whoami`) sent its steps with no lane and they landed in the person's visible
+ * tab. Carrying it on each of those hand-built asks is what went missing six
+ * times; the request is the one place that knows it, so it is kept there.
+ */
+const laneScope = new AsyncLocalStorage<{ lane: string; as?: string; force: boolean }>();
+
+/**
+ * The door for a request that names a lane: refuses at once, by name, one that
+ * is closed, unknown or somebody else's, and otherwise puts the lane in scope for
+ * the rest of this request. Returns the refusal, or null.
+ */
+export function gateLane(op: string, body: unknown): string | null {
+  const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+  if (b.lane === undefined || op === "lane") return null;
+  const as = typeof b.as === "string" ? b.as : undefined;
+  const msg = !isLaneId(b.lane) ? "lane must be the id `lane new` printed" : laneRefusal(b.lane, as, b.force === true);
+  if (msg) {
+    recordAudit(op as BrowserOp, { lane: b.lane }, false, msg, false, undefined, as ? { as } : undefined);
+    return msg;
+  }
+  laneScope.enterWith({ lane: b.lane as string, ...(as ? { as } : {}), force: b.force === true });
+  return null;
+}
+
 let seq = 0;
-const nextId = () => `b${++seq}`;
+/* Unguessable: a caller that can POST /browser/result must not be able to
+   answer an ask it was never sent by counting. */
+const nextId = () => `b${++seq}-${crypto.randomUUID()}`;
 
 /** The URLs the browser may be sent to. Same rule as the address bar: a page,
  *  not a `file://` read of somebody's keys and not a `javascript:` that would
@@ -598,6 +708,9 @@ const OBSERVE_OPS: ReadonlySet<BrowserOp> = new Set([
      refused it, the one call an agent should make BEFORE deciding whether it
      may act would be the first thing refused. */
   "whoami",
+  /* Opening a lane touches no page and no person's window: it makes a room for
+     an agent to work in, which read-only mode has no reason to refuse. */
+  "lane",
 ]);
 
 /** `cookies` is the one verb that is sometimes each: reading the jar is an
@@ -605,6 +718,8 @@ const OBSERVE_OPS: ReadonlySet<BrowserOp> = new Set([
  *  verdict per op, and anything this switch has never heard of falls through
  *  to `true` — acting — on purpose. */
 function isActing(op: BrowserOp, args: Record<string, unknown>): boolean {
+  /* Making a lane touches nothing of anybody's; closing one ends another's work. */
+  if (op === "lane") return args.action === "close";
   if (op === "cookies") return args.set !== undefined;
   /* `debug` is two verbs wearing one name: asking where it is paused only
      looks, while setting a breakpoint or stepping changes what the page does
@@ -681,8 +796,10 @@ const REDACTED = "[redacted]";
    the word "[redacted]", which the CLI decodes to zero bytes and writes as a
    capture. Measured today: every `shot` above about 84KB came back destroyed
    by its own guardrail, and the failure looked exactly like the capture bug it
-   was sitting next to. */
-const BINARY_FIELDS: ReadonlySet<string> = new Set(["png", "pdf", "mhtml", "data", "script"]);
+   was sitting next to. The screencast's frames are the same thing under `jpeg`:
+   2 runs in 20 came back with a token-shaped stretch replaced inside the
+   base64, and the CLI died decoding it. */
+const BINARY_FIELDS: ReadonlySet<string> = new Set(["png", "jpeg", "pdf", "mhtml", "data", "script"]);
 
 /** How many spans were masked, and under which key, so a caller can be TOLD
  *  rather than left to notice. */
@@ -934,6 +1051,9 @@ export interface AuditEntry {
   tab?: string;
   /** That tab's container, when the reply or the request named it. */
   owner?: string;
+  /** The lane this call was addressed to, when it was: which of an agent's
+   *  private windows acted, and not the person's. */
+  lane?: string;
   how: AuditHow;
 }
 const AUDIT: AuditEntry[] = [];
@@ -1092,6 +1212,7 @@ function recordAudit(op: BrowserOp, args: Record<string, unknown>, ok: boolean, 
     ...(declaredAs ? { as: declaredAs } : {}),
     ...(tab ? { tab } : {}),
     ...(owner ? { owner } : {}),
+    ...(typeof clean.lane === "string" ? { lane: clean.lane } : {}),
     how,
   };
   AUDIT.push(entry);
@@ -1392,7 +1513,40 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
     if (!HOWS.includes(b.how as AuditHow)) return { error: `how must be one of: ${HOWS.join(", ")}` };
     caller.how = b.how as AuditHow;
   }
+  /* Any verb may be addressed to a lane. Named, not fallen through: see askOnce. */
+  if (b.lane !== undefined && op !== "lane") {
+    if (!isLaneId(b.lane)) return { error: "lane must be the id `lane new` printed" };
+    args.lane = b.lane;
+  }
   switch (op as BrowserOp) {
+    case "lane": {
+      const action = String(b.action ?? "");
+      if (action === "new") {
+        args.action = "new";
+        if (b.shared === true) {
+          args.container = "shared";
+        } else if (b.profile !== undefined) {
+          if (typeof b.profile !== "string" || !b.profile.trim() || b.profile.length > 64 || /[\r\n]/.test(b.profile)) {
+            return { error: "profile must be the name of a container" };
+          }
+          args.container = "named";
+          args.name = b.profile.trim();
+        } else {
+          args.container = "private";
+        }
+      } else if (action === "list") {
+        args.action = "list";
+        if (b.force === true) args.force = true;
+      } else if (action === "close") {
+        if (!isLaneId(b.id)) return { error: "close needs the lane id" };
+        args.action = "close";
+        args.id = b.id;
+        if (b.force === true) args.force = true;
+      } else {
+        return { error: "lane action must be one of: new, list, close" };
+      }
+      break;
+    }
     case "open":
     case "newtab": {
       if (b.profile !== undefined) {
@@ -3768,6 +3922,7 @@ export async function askBrowser(ask: BrowserAsk): Promise<BrowserReply> {
    * what actually crossed the wire, and §9's audit is evidence.
    */
   if (ask.op === "whoami") return composeWhoami(ask);
+  if (ask.op === "lane") return composeLane(ask);
   if (ask.op === "profiles" && ask.args.make === undefined && ask.args.drop === undefined) {
     return composeProfiles(ask);
   }
@@ -3858,6 +4013,34 @@ async function composeDrop(ask: BrowserAsk): Promise<BrowserReply> {
   };
 }
 
+/**
+ * `lane new | list | close`, answered by the relay's own table; only making and
+ * destroying a host reaches a window (askOnce, `managing`). Audited like every
+ * other verb, so "which lanes did that agent open" is in the same log.
+ */
+const wireLanes = (): void => configureLanes({
+  manage: (args) => askOnce({ id: nextId(), op: "lane", args }),
+  hosted: laneHosted,
+  forget: forgetLaneHost,
+});
+wireLanes();
+
+async function composeLane(ask: BrowserAsk): Promise<BrowserReply> {
+  const as = typeof ask.args.as === "string" ? ask.args.as : undefined;
+  let reply: BrowserReply;
+  if (ask.args.action === "list") {
+    reply = { ok: true, value: { lanes: listLanes(ask.args.force === true ? undefined : as) } };
+  } else if (ask.args.action === "close") {
+    const r = await closeLane(String(ask.args.id), as, ask.args.force === true);
+    reply = r.ok ? { ok: true, value: { closed: ask.args.id } } : { ok: false, error: r.error };
+  } else {
+    const r = await openLane(as, ask.args.container as "private" | "shared" | "named", typeof ask.args.name === "string" ? ask.args.name : undefined);
+    reply = r.ok ? { ok: true, value: { lane: r.lane } } : { ok: false, error: r.error };
+  }
+  recordAudit("lane", ask.args, reply.ok, reply.error);
+  return reply;
+}
+
 async function composeProfiles(ask: BrowserAsk): Promise<BrowserReply> {
   const names = await askWithRetry(ask);
   if (!names.ok) return names;
@@ -3941,8 +4124,39 @@ function askOnce(ask: BrowserAsk): Promise<BrowserReply> {
   if (!windowOpen) {
     return Promise.resolve({ ok: false, error: "the agentglass window is not open — the browser lives in it" });
   }
-  if (!panelMounted) {
+  /* A lane-management ask goes to the window that makes hosts, and needs no
+     panel: an agent that has no Browser view is exactly who opens a lane. */
+  const managing = ask.op === "lane";
+  if (!panelMounted && !managing) {
     return Promise.resolve({ ok: false, error: "the browser view is not open in this window" });
+  }
+  /* The lane the REQUEST named, even for an ask this relay composed itself (a
+     `do` step, a recording's frame, a download's click): they inherit it from
+     the request scope, so no verb has to remember to carry it. */
+  const scoped = laneScope.getStore();
+  if (scoped && ask.op !== "lane" && ask.args.lane === undefined) ask = { ...ask, args: { ...ask.args, lane: scoped.lane } };
+  const lane = ask.args.lane;
+  if (typeof lane === "string") {
+    /* Never a fallback to the visible tab: an agent that lost its lane must
+       not start clicking in the person's window. */
+    const msg = laneRefusal(lane, ask.args.as ?? scoped?.as, scoped?.force === true);
+    if (msg) {
+      recordAudit(ask.op, ask.args, false, msg);
+      return Promise.resolve({ ok: false, error: msg });
+    }
+  }
+  touchLane(lane);
+  const target = managing ? pickManager() : pickTarget(lane);
+  if (!target && managing) {
+    return Promise.resolve({ ok: false, error: "the agentglass window is not open — it is what makes a lane's window" });
+  }
+  if (!target) {
+    return Promise.resolve({
+      ok: false,
+      error: typeof ask.args.lane === "string" && ask.args.lane
+        ? `no window hosts lane "${ask.args.lane}"`
+        : "the browser view is not open in this window",
+    });
   }
   return new Promise<BrowserReply>((resolve) => {
     /* Redaction and the audit line happen here, at the one seam every op
@@ -3972,6 +4186,15 @@ function askOnce(ask: BrowserAsk): Promise<BrowserReply> {
       const namedSecret = Array.isArray(v?.secretFields)
         ? (v!.secretFields as unknown[]).filter((x): x is string => typeof x === "string")
         : undefined;
+      /* A lane's page reports visibilityState "hidden" after it navigates though
+         it paints (measured, electron/main.js above createLaneHost). An
+         observation says `visible: false` and means "behaves like a background
+         tab", which sends a reader to open the pane: so it says which lane it
+         came from, and the CLI does not raise the alarm for one. The page's own
+         answer is left alone. */
+      if (typeof ask.args.lane === "string" && redacted.value && typeof redacted.value === "object" && "visible" in redacted.value) {
+        (redacted.value as Record<string, unknown>).lane = ask.args.lane;
+      }
       if (redacted.value && typeof redacted.value === "object") {
         if (wasSecret) delete (redacted.value as Record<string, unknown>).secretField;
         if (namedSecret) delete (redacted.value as Record<string, unknown>).secretFields;
@@ -3999,24 +4222,41 @@ function askOnce(ask: BrowserAsk): Promise<BrowserReply> {
       pending.delete(ask.id);
       settle({ ok: false, error: `the browser did not answer in time (${ask.op})` });
     }, TIMEOUT_MS[ask.op]);
-    pending.set(ask.id, { resolve: settle, timer });
+    pending.set(ask.id, { resolve: settle, timer, target });
     /* Re-built rather than cast, so the narrowing above is what proves the op
        is sendable. A cast here would pass a verb the panel cannot answer and
        the caller would get "not a tab operation" from three layers down. */
-    sink!.send({ id: ask.id, op, args: ask.args });
+    if (sink!.send({ id: ask.id, op, args: ask.args }, target) === false) {
+      /* Registered, but its socket is gone (a reload between heartbeats). Said
+         now instead of after the timeout. Kept registered: its new hello lands
+         within a retry, and dropping it here made the caller open a second view. */
+      settle({ ok: false, error: "the browser view is not open in this window" });
+    }
   });
 }
 
 /** The panel reporting back. Unknown ids are dropped rather than logged loudly:
  *  a reply arriving after its timeout is ordinary, not an error. */
-export function settleBrowser(id: unknown, reply: BrowserReply): boolean {
+export function settleBrowser(id: unknown, reply: BrowserReply, from?: string): boolean {
   if (typeof id !== "string") return false;
   const p = pending.get(id);
   if (!p) return false;
+  /* Only the window the ask was addressed to may answer it. `from` undefined is
+     the in-process caller (tests); the HTTP route always passes one. */
+  if (from !== undefined && p.target !== undefined && p.target !== from) return false;
   pending.delete(id);
   clearTimeout(p.timer);
   p.resolve(reply);
   return true;
+}
+
+/** A window's socket closed: its in-flight asks will never be answered. Said
+ *  now, because a click or a fill may have run before it went and the caller
+ *  cannot tell from a timeout. */
+export function dropBrowserTarget(clientId: string): void {
+  for (const [id, p] of pending) {
+    if (p.target === clientId) { pending.delete(id); clearTimeout(p.timer); p.resolve({ ok: false, error: "the window closed before answering" }); }
+  }
 }
 
 /** For tests, and for a shutdown that should not leave timers behind. */
@@ -4024,6 +4264,9 @@ export function resetBrowserDrive(): void {
   NAMED_TABS.clear();
   LAST_OBSERVED.clear();
   ready.clear();
+  managers.clear();
+  resetLanes();
+  wireLanes();
   for (const [, p] of pending) { clearTimeout(p.timer); p.resolve({ ok: false, error: "cancelled" }); }
   pending.clear();
   sink = null;

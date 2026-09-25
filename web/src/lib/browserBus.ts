@@ -30,7 +30,7 @@ let handler: ((ask: BrowserAskFrame) => void) | null = null;
  */
 let id = "";
 export function clientId(): string {
-  if (!id) id = `w${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+  if (!id) id = `w${crypto.randomUUID()}`;
   return id;
 }
 
@@ -268,12 +268,12 @@ export async function serveBrowserAsk(el: DrivableWebview | null, ask: BrowserAs
      take this branch. */
   if (TAB_OPS.has(ask.op) || (ask.op === "open" && typeof ask.args.profile === "string")) {
     const reply = serveTabs(ask);
-    try { await api.browserResult({ id: ask.id, ...reply }); } catch { /* already timed out */ }
+    try { await api.browserResult({ client: clientId(), id: ask.id, ...reply }); } catch { /* already timed out */ }
     return;
   }
   if (ask.op === "health") {
     const reply = await serveHealth(el);
-    try { await api.browserResult({ id: ask.id, ...reply }); } catch { /* already timed out */ }
+    try { await api.browserResult({ client: clientId(), id: ask.id, ...reply }); } catch { /* already timed out */ }
     return;
   }
   /* A screenshot is the one verb that needs the pane to be PAINTING, not just
@@ -424,7 +424,7 @@ export async function serveBrowserAsk(el: DrivableWebview | null, ask: BrowserAs
         }))
     : { ok: false, error: "the browser view is not open in this window" };
   const withDiagnosis = await attachDiagnosis(el, ask.op, reply);
-  try { await api.browserResult({ id: ask.id, ...withDiagnosis }); } catch { /* the ask has already timed out */ }
+  try { await api.browserResult({ client: clientId(), id: ask.id, ...withDiagnosis }); } catch { /* the ask has already timed out */ }
 }
 
 /**
@@ -460,17 +460,25 @@ export function setBrowserAskHandler(fn: ((ask: BrowserAskFrame) => void) | null
  * Hand an ask to the panel, if this window has one.
  *
  * Silence when it does not, and that is the fix rather than an oversight: the
- * ask is broadcast to every open client, and a dashboard in an ordinary browser
- * tab is a client with no `<webview>` in it. Answering "the browser view is not
- * open in this window" from there was answering for everybody — first reply
- * wins — while the desktop app sat there able to do the work.
- *
- * Nothing is lost by staying quiet: the server only sends an ask when some
- * window has registered as able to answer it (POST /browser/ready), and fails
- * fast with a sentence when none has.
+ * server addresses an ask to one registered window (POST /browser/ready, and
+ * the `hello` this window sends on /stream), so a dashboard in an ordinary
+ * browser tab never receives one. This stays as the guard for a window that
+ * has no panel mounted at the moment an ask lands.
  */
 export function emitBrowserAsk(ask: BrowserAskFrame): void {
+  /* Making and destroying a lane's window is the app's, whether or not a panel
+     is mounted: the point of a lane is that its agent needs no Browser view. */
+  if (ask.op === "lane") {
+    if (laneHandler) laneHandler(ask);
+    else void api.browserResult({ client: clientId(), id: ask.id, ok: false, error: "this window does not make lanes" }).catch(() => { /* already timed out */ });
+    return;
+  }
   if (handler) handler(ask);
+}
+
+let laneHandler: ((ask: BrowserAskFrame) => void) | null = null;
+export function setLaneAskHandler(fn: ((ask: BrowserAskFrame) => void) | null): void {
+  laneHandler = fn;
 }
 
 /** The tab and profile verbs, reachable from a test. `serveBrowserAsk` reports

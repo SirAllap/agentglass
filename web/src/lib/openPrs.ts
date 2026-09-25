@@ -56,7 +56,7 @@ export function openPrs(query: string, scope: PrScope = "open"): void {
  *  go to the place somebody named me and flash it — the inbox knows THAT you
  *  were mentioned and nothing about where, which is the half that made a
  *  mention notification end at the top of a forty-entry conversation. */
-export interface PrOpen { repo: string; number: number; mention?: boolean; focus?: "local"; n?: number }
+export interface PrOpen { repo: string; number: number; mention?: boolean; focus?: "local"; fallback?: string; n?: number }
 
 let exact: ((j: PrOpen) => void) | null = null;
 
@@ -65,7 +65,7 @@ export function onOpenPr(fn: ((j: PrOpen) => void) | null): () => void {
   return () => { if (exact === fn) exact = null; };
 }
 
-export function openPr(repo: string, number: number, opts: { mention?: boolean; focus?: "local" } = {}): void {
+export function openPr(repo: string, number: number, opts: { mention?: boolean; focus?: "local"; fallback?: string } = {}): void {
   // `n` rises so asking for the same pull request twice arrives twice: pressing
   // the same inbox row again should jump to the mention again.
   exact?.({ repo, number, ...opts, n: ++seq });

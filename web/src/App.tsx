@@ -1,6 +1,7 @@
 import { lazy, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { WatchEvent, SessionRollup } from "../../shared/types.ts";
 import { useLive } from "./lib/useLive.ts";
+import { useLaneManager } from "./lib/laneManager.ts";
 import { subscribeWorktreeJump, worktreeJump, requestWorktreeJump } from "./lib/worktreeJump.ts";
 import type { SystemNote } from "./lib/sysNotify.ts";
 import { setAlertGoto } from "./lib/sysNotify.ts";
@@ -56,6 +57,7 @@ import DbNoticeBanner from "./components/DbNoticeBanner.tsx";
 import { chordFromEvent, viewForChord, appActionForChord } from "./lib/keybindings.ts";
 import { openFocusedPaneDoor, type PaneDoor } from "./components/TerminalPanel.tsx";
 import { FilePalette } from "./components/FilePalette.tsx";
+import { onFinderAt, type FinderTarget } from "./lib/finderTarget.ts";
 import { WindowSwitcher } from "./components/terminal/WindowSwitcher.tsx";
 import { FloatingBench } from "./components/bench/FloatingBench.tsx";
 import { benchTakesBoard, toggleBench, showFile } from "./lib/benchStore.ts";
@@ -123,6 +125,9 @@ export default function App() {
    * to survive the palette closing.
    */
   const [filesOpen, setFilesOpen] = useState(false);
+  /** A path somebody clicked in a terminal: the finder opens on it. */
+  const [finderTarget, setFinderTarget] = useState<FinderTarget | null>(null);
+  useEffect(() => onFinderAt((t) => { setFinderTarget(t); setFilesOpen(true); }), []);
   /** The window switcher (its chord, from anywhere). */
   const [windowsOpen, setWindowsOpen] = useState(false);
   const [peek, setPeek] = useState<Peek | null>(null);
@@ -226,7 +231,7 @@ export default function App() {
   useEffect(() => onOpenPrs((j) => { setPrJump(j); toBoard("pr"); }), [toBoard]);
   /* The other half: a sender that knows exactly which pull request it means
      gets the panel's jump, which selects and opens, instead of a search. */
-  useEffect(() => onOpenPr(({ repo, number, mention, focus }) => { requestPrJump(repo, number, { mention, focus }); toBoard("pr"); }), [toBoard]);
+  useEffect(() => onOpenPr(({ repo, number, mention, focus, fallback }) => { requestPrJump(repo, number, { mention, focus, fallback }); toBoard("pr"); }), [toBoard]);
   /* A link clicked on the catalogue's web page. It opens the install box with
      the URL in it — the approval is the person's, exactly as it is for a URL
      they pasted. See lib/installPlugin.ts. */
@@ -340,6 +345,8 @@ export default function App() {
   // fleet spine reads them in every view, and holding them would freeze a
   // streaming answer mid-word.
   const { events, conn, lastEvent, openTools } = useLive(anyPanelOpen);
+  // Offers to make the hidden windows agents work in; needs no panel open.
+  useLaneManager();
   // The dashboard draws from the live feed; on screen at launch, the cover waits
   // for the feed's first answer rather than showing an empty board fill in.
   useCoverHold("dashboard", !IS_DEMO && dashActive && conn === "connecting");
@@ -1220,6 +1227,7 @@ export default function App() {
       <FilePalette
         open={filesOpen}
         onClose={() => setFilesOpen(false)}
+        target={finderTarget}
         docOpen={peek !== null}
         onHeight={setPaletteH}
         onOpenFile={async (root, rel, branch, ref) => {

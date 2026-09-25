@@ -23,6 +23,9 @@ export type PrJump = {
    *  plugins wrote here, because a row saying "2 high, 3 medium" that lands on
    *  the Overview has not answered the click. */
   focus?: "local";
+  /** Where to send the click instead when this number turns out not to be a
+   *  pull request: `#123` in a body names issues and pull requests alike. */
+  fallback?: string;
   /** Increments per request, so asking for the same PR twice is two requests.
    *  Without it, closing a PR and clicking the same notification again would
    *  look like the request that has already been served. */
@@ -39,7 +42,7 @@ export function subscribePrJump(fn: () => void): () => void {
 
 export function prJump(): PrJump | null { return pending; }
 
-export function requestPrJump(repo: string, number: number, opts: { mention?: boolean; focus?: "local" } = {}): void {
+export function requestPrJump(repo: string, number: number, opts: { mention?: boolean; focus?: "local"; fallback?: string } = {}): void {
   pending = { repo, number, ...opts, n: (pending?.n ?? 0) + 1 };
   subs.forEach((f) => f());
 }
