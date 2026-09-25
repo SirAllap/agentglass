@@ -65,6 +65,13 @@ export function rollupOf(root: string, number: number): PrCheckRollup | null {
   return hit?.checks ?? null;
 }
 
+/** Drop one pull request's answer and ask again, for a detail refresh. */
+export function refreshRollup(root: string, number: number): void {
+  if (!root || !number) return;
+  seen.delete(keyOf(root, number));
+  rollupOf(root, number);
+}
+
 export function forgetRollups(): void {
   seen.clear();
   waiting.length = 0;

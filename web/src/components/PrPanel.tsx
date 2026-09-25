@@ -65,7 +65,8 @@ import { buildFileTree, treeOrder, type TreeNode } from "../lib/prFileTree.ts";
 import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
 import { keepLoadedChecks } from "../lib/prMerge.ts";
 import { askingBehind, behindAnswer, forgetBehind, forgetOneBehind, onBehind, refreshBehind } from "../lib/prBehindStore.ts";
-import { forgetRollups } from "../lib/prRollupStore.ts";
+import { forgetRollups, refreshRollup } from "../lib/prRollupStore.ts";
+import { overlayDetail, refreshPlan } from "../lib/prRefresh.ts";
 import {
   anchorId, bootstrapSince, clearSeen, foldedIdx, markAllSeen, newKeys, newSince, onSeenChange, readSeen,
   reviewSpeaks, threadLastAt, threadMovedOn, writeSeen, type NewAtom,
@@ -2739,6 +2740,16 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   }, [root, detail?.number, detail?.mergeable]);
   loadDetailRef.current = loadDetail;
 
+  /* The detail is the newer reading of its own row. The lists are not fetched
+     again when only that pull request is refreshed, so the board is brought
+     up to date from it instead (see `overlayDetail`). */
+  useEffect(() => {
+    if (!detail || away) return;
+    setPrs((cur) => overlayDetail(cur, detail));
+    setBoardMine((cur) => overlayDetail(cur, detail));
+    setBoardReview((cur) => overlayDetail(cur, detail));
+  }, [detail, away]);
+
   useEffect(() => {
     if (!active || !root) return;
     loadList();
@@ -4282,6 +4293,23 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             * re-read everything around a diff that stayed as it was.
             */}
           <Btn onClick={() => {
+            const plan = refreshPlan(selected);
+            if (plan.pr != null) {
+              /* One pull request open: refresh that one. The lists, and the
+                 check, behind and card caches of every other row, stay as they
+                 are, so going back to the board does not reload every card. */
+              refreshBehind(root, plan.pr);
+              refreshRollup(root, plan.pr);
+              loadDetail(plan.pr, true);
+              diffFresh.current = true;
+              setDiffErr("");
+              /* Everything per-pull-request re-asks off this: the diff, and the
+                 review GitHub is holding for you. Nothing is emptied first —
+                 pressing Refresh must not make the page you are reading
+                 disappear for a second. */
+              setDetailTick((n) => n + 1);
+              return;
+            }
             forgetBehind();
             forgetRollups();
             /* And the tracker cards, which were the one reading Refresh could
@@ -4291,17 +4319,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             boardForce.current = true;
             setBoardTick((n) => n + 1);
             loadList(true);
-            if (selected != null) {
-              loadDetail(selected, true);
-              diffFresh.current = true;
-              setDiffErr("");
-              /* Everything per-pull-request re-asks off this: the diff, and the
-                 review GitHub is holding for you. Nothing is emptied first —
-                 pressing Refresh must not make the page you are reading
-                 disappear for a second. */
-              setDetailTick((n) => n + 1);
-            }
-          }} disabled={busy} small>Refresh</Btn>
+          }} disabled={busy} small
+            title={selected != null ? "Refresh this pull request" : "Refresh the list"}>Refresh</Btn>
         </div>
       </div>
 
