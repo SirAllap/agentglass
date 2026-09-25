@@ -4113,6 +4113,15 @@ export interface PortEntry {
    *  keeps the inode alive, so it is still running code you no longer have.
    *  Usually a rebuild underneath a server somebody forgot to restart. */
   exeGone: boolean;
+  /** The folder it is about: what it serves when its command line says so
+   *  (`http.server --directory`), else where it was started. */
+  dir: string | null;
+  /** That folder is under /tmp or /var/tmp. */
+  tmpLeftover: boolean;
+  /** Another listener of the same program serves the same folder. */
+  duplicate: boolean;
+  /** Seconds since anything last connected, once past the idle limit. */
+  idleSec: number | null;
 }
 /** One rung of a process's ancestry. */
 export interface Forebear { pid: number; name: string }

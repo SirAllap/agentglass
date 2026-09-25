@@ -18,6 +18,9 @@
 
 import { existsSync, readdirSync, readFileSync, readlinkSync, statSync, statfsSync } from "node:fs";
 import { failed } from "./refused.ts";
+import {
+  duplicatePids, foldSample, folderOf, idleFor, parseEstablished, readLastSeen, underTmp, writeLastSeen,
+} from "./portstale.ts";
 
 /** One listening TCP socket. */
 export interface PortEntry {
@@ -79,6 +82,19 @@ export interface PortEntry {
    * Ours only. Null where /proc would not say.
    */
   exeGone: boolean;
+  /**
+   * The folder this listener is about: what it serves when its command line
+   * says (`http.server --directory`), else where it was started. `cwd` is
+   * kept as it was read; this is the one the row is named after.
+   */
+  dir: string | null;
+  /** That folder is under /tmp or /var/tmp: a throwaway that outlived its use. */
+  tmpLeftover: boolean;
+  /** Another listener of the same program is serving the same folder. */
+  duplicate: boolean;
+  /** Seconds since anything last connected, once that is past the idle limit.
+   *  Null while it is still in use or has not been watched long enough. */
+  idleSec: number | null;
 }
 
 /** One rung of a process's ancestry. */
@@ -207,7 +223,32 @@ export async function listPortsAsync(): Promise<PortsReport> {
   } catch {
     return { ports: [], mine: 0, external: 0, error: "ss is not installed — it ships with iproute2" };
   }
-  return parsePorts(out);
+  const report = parsePorts(out);
+  await markIdle(report);
+  return report;
+}
+
+/**
+ * Sample who is connected to what, and mark the listeners nobody has used.
+ *
+ * Runs on the panel's own poll and on a slow timer besides (see `index.ts`), so
+ * the clock keeps running with the panel closed. A failed sample changes
+ * nothing: no `ss` reading is not "no connections", and treating it as one
+ * would start every clock at once.
+ */
+export async function markIdle(report: PortsReport, now = Date.now()): Promise<void> {
+  let est: Map<number, number>;
+  try {
+    const p = Bun.spawn(["ss", "-tnH", "state", "established"], { stdout: "pipe", stderr: "pipe", timeout: 5_000 });
+    const [stdout, code] = await Promise.all([new Response(p.stdout).text(), p.exited]);
+    if (code !== 0) return;
+    est = parseEstablished(stdout);
+  } catch { return; }
+  const mine = report.ports.filter((p) => p.mine && p.pid != null);
+  const key = (p: PortEntry) => `${p.pid}:${p.port}`;
+  const seen = foldSample(readLastSeen(), mine.map((p) => ({ key: key(p), connections: est.get(p.port) ?? 0 })), now);
+  writeLastSeen(seen);
+  for (const p of mine) p.idleSec = idleFor(seen, key(p), now);
 }
 
 /**
@@ -262,7 +303,16 @@ export function parsePorts(out: string): PortsReport {
       // A null cwd is unknown, not gone — an unreadable link and a deleted
       // directory are different facts and only one of them is a verdict.
       cwdGone: cwd != null && !existsSync(cwd),
+      // Neither can be known for a pid we may not read; both are decided after
+      // the loop, where the whole list is in view.
+      dir: mine && pid != null ? folderOf(argvOf(pid), cwd) : null,
+      tmpLeftover: false, duplicate: false, idleSec: null,
     });
+  }
+  const twins = duplicatePids(ports);
+  for (const p of ports) {
+    p.tmpLeftover = underTmp(p.dir);
+    p.duplicate = p.pid != null && twins.has(p.pid);
   }
 
   // Ours first and by port, then everything else by port: the list is read
@@ -778,6 +828,12 @@ export function exeDeleted(pid: number): boolean {
 
 export function isPublicBind(addr: string): boolean {
   return addr === "0.0.0.0" || addr === "::" || addr === "*";
+}
+
+/** The command line as the kernel holds it, one string per argument — kept
+ *  apart so a path with a space in it is still one path. */
+function argvOf(pid: number): string[] {
+  try { return readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").filter(Boolean); } catch { return []; }
 }
 
 /** Enough of the command line to tell two `node`s apart, and no more: a webpack

@@ -99,7 +99,7 @@ import { syncTheme, snippetStatus, SNIPPETS, tmuxThemePath, repairTmuxTheme, cur
 import { desktopPalette, desktopLogo } from "./desktopPalette.ts";
 import { existsSync as fsExists, readFileSync as fsRead, writeFileSync as fsWrite, mkdtempSync } from "node:fs";
 import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
-import { listPorts, listResources, spaceFor, killPort } from "./machine.ts";
+import { listPortsAsync, listResources, spaceFor, killPort } from "./machine.ts";
 import { gitLocks, removeStaleLock } from "./gitlocks.ts";
 import { procDetail, revealEnv } from "./procdetail.ts";
 import {
@@ -6192,7 +6192,7 @@ const server = Bun.serve<WsData>({
       return json({ ok: true, reminders: listReminders(window), zone: localZone() });
     }
 
-    if (pathname === "/machine/ports") return json(listPorts());
+    if (pathname === "/machine/ports") return json(await listPortsAsync());
     if (pathname === "/machine/resources") return json(listResources(Number(url.searchParams.get("limit") || 40)));
     // On demand only, and never on a poll: `du` over a checkout walks every
     // inode in it, which is seconds on a repository with a node_modules.
@@ -8501,6 +8501,9 @@ function prune() {
 }
 prune();
 setInterval(prune, 3_600_000);
+// The idle clock only advances when somebody looks, so look every five minutes
+// even with the Machine panel closed; ss twice is cheap next to a stale server.
+setInterval(() => { void listPortsAsync().catch(() => {}); }, 300_000).unref?.();
 
 /* And once, if what retention has already deleted is a third of the file. See
    reclaimFreePages: pruning frees pages, it does not give them back, and this

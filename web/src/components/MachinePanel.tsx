@@ -106,7 +106,7 @@ function Ports({ onOpenBrowser }: { onOpenBrowser?: () => void }) {
   const hit = useCallback((p: PortEntry) => {
     const needle = q.trim().toLowerCase();
     if (!needle) return true;
-    return [String(p.port), p.proc ?? "", p.cwd ?? "", p.addr, ...p.ancestry.map((a) => a.name)]
+    return [String(p.port), p.proc ?? "", p.dir ?? p.cwd ?? "", p.addr, ...p.ancestry.map((a) => a.name)]
       .some((s) => s.toLowerCase().includes(needle));
   }, [q]);
   const mine = useMemo(() => data?.ports.filter((p) => p.mine && hit(p)) ?? [], [data, hit]);
@@ -278,7 +278,7 @@ function MachineStrip({ m }: { m: MachineTotals }) {
  * `agentglass-work-2026-08-05` is a real directory name here — and the 1fr
  * column has room to give now that the panel is wider.
  */
-export const PORT_GRID = "8px 52px minmax(0, 1fr) 190px 176px 76px";
+export const PORT_GRID = "8px 52px minmax(0, 1fr) 420px 176px 76px";
 
 /**
  * The same row with the detail pane open.
@@ -403,13 +403,37 @@ function Row({ p, actions, dim, selected, onSelect, narrow }: {
           checkout gone
         </span>
       )}
+      {/* Three warnings about a listener nobody may want any more. Amber and
+          worded as a question of fact: none of them is proof, and none of them
+          is ever acted on for you. */}
+      {p.tmpLeftover && (
+        <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap"
+          title={`It is serving from ${p.dir}, a scratch directory. Whatever it was for, nobody is likely to look at it again.`}
+          style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>
+          tmp leftover
+        </span>
+      )}
+      {p.duplicate && (
+        <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap"
+          title={`Another ${p.proc} is serving the same folder (${p.dir}). One of them is probably left over.`}
+          style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>
+          duplicate
+        </span>
+      )}
+      {p.idleSec != null && (
+        <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap"
+          title={`Nothing has connected for ${forAge(p.idleSec!)}.`}
+          style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>
+          idle
+        </span>
+      )}
       </span>}
       {!narrow && <span className="flex items-center justify-end min-w-0 overflow-hidden">
-      {p.cwd && (
+      {(p.dir ?? p.cwd) && (
         <span className="min-w-0 truncate text-[10px] px-1.5 py-0.5 rounded-full max-w-full"
-          title={p.cwd}
+          title={p.dir && p.dir !== p.cwd ? `Serving ${p.dir}\nStarted in ${p.cwd ?? "?"}` : p.dir ?? p.cwd ?? ""}
           style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
-          {p.cwd.split("/").filter(Boolean).pop()}
+          {(p.dir ?? p.cwd)!.split("/").filter(Boolean).pop()}
         </span>
       )}
       </span>}
