@@ -9,9 +9,9 @@
 import type { Budget, GateRule } from "../../shared/types.ts";
 import { agentProvider } from "../../shared/agentKinds.ts";
 import { WORKER_ROLES, MODEL_RE, workerRole, type RoleChoice, type RoleId } from "../../shared/workerRoles.ts";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, realpathSync, readlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join, resolve, dirname, sep, delimiter } from "node:path";
+import { join, resolve, dirname, relative, sep, delimiter } from "node:path";
 import { worktreeFamily } from "./worktree.ts";
 
 /**
@@ -599,6 +599,127 @@ export function inScope(path: string | null | undefined, scope: Scope = workspac
   // subprocess, including the container-folder scope where the family is moot.
   if (roots.some((r) => isWithin(p, r))) return true;
   return roots.some((root) => worktreeFamily(root).some((r) => isWithin(p, r)));
+}
+
+/**
+ * The path with its symlinks resolved — including for a file that does not
+ * exist yet, by resolving the deepest ancestor that does.
+ *
+ * A read of a missing file has to be refused with "no such file" rather than
+ * with "outside", and that difference is only knowable after the containment
+ * check has been given something real to check.
+ *
+ * A DANGLING link is followed by hand rather than climbed past. `realpath`
+ * fails on it exactly as it fails on a missing file, and climbing would join
+ * the link's own name back onto its directory — so `repo/x -> /elsewhere/new`
+ * would come back as `repo/x`, inside, and the first write through it would
+ * land outside. Bounded by the same 64 steps, which also ends a loop of links;
+ * a loop cannot be opened, so what it resolves to does not matter.
+ */
+export function realish(abs: string): string {
+  let head = abs;
+  const tail: string[] = [];
+  for (let i = 0; i < 64; i++) {
+    try { return join(realpathSync(head), ...tail); } catch { /* a link to nowhere, or missing */ }
+    let to: string | null = null;
+    try { to = readlinkSync(head); } catch { /* not a link: climb */ }
+    if (to !== null) { head = resolve(dirname(head), to); continue; }
+    const up = dirname(head);
+    if (up === head) return abs;
+    tail.unshift(head.slice(up.length + 1));
+    head = up;
+  }
+  return abs;
+}
+
+/**
+ * Does `abs` still land inside `root` once its links are resolved?
+ *
+ * The rule for a reader bound to one repository — a conflicted file, the
+ * CODEOWNERS, an untracked file's text. A repo tracks symlinks, git checks them
+ * out as symlinks, and `readFileSync` follows them: the path that `validRels`
+ * approved as a string is not the file the kernel opens.
+ */
+export function staysIn(root: string, abs: string): boolean {
+  return isWithin(realish(abs), realish(root));
+}
+
+/**
+ * Is this this app's own config, data, state or cache — whatever the scope says?
+ *
+ * The machine token lives there and carries full scope, so no read route may
+ * hand it to a narrower caller, and no scope choice changes that: not a project
+ * that happens to contain the directory, and not the whole-machine mode, where
+ * `inScope` answers yes to every path.
+ *
+ * Every `agentglass*` entry directly under each XDG base counts (plugins keep
+ * theirs beside ours), plus the two places the environment can move things
+ * to. Asked of the spelling and of the resolved path, against bases taken both
+ * ways, so neither a link to the directory nor a base behind a link gets past.
+ *
+ * What this cannot stop is a caller that already runs as this user — an
+ * understudy run or a plugin has a shell and reads the file with `cat`. This is
+ * the boundary for callers whose only way to the disk is these routes.
+ */
+/** The XDG bases, resolved both ways — memoised on the environment that names
+ *  them, because a listing asks this once per entry and they do not move. */
+let basesFor = "";
+let basesMemo: string[] = [];
+function privateBases(): string[] {
+  const h = homedir();
+  const named = [
+    process.env.XDG_CONFIG_HOME || join(h, ".config"),
+    process.env.XDG_DATA_HOME || join(h, ".local", "share"),
+    process.env.XDG_STATE_HOME || join(h, ".local", "state"),
+    process.env.XDG_CACHE_HOME || join(h, ".cache"),
+  ];
+  const key = named.join("\0");
+  if (key !== basesFor) {
+    basesFor = key;
+    basesMemo = named.flatMap((b) => [resolve(b), realish(resolve(b))]);
+  }
+  return basesMemo;
+}
+
+export function agentglassPrivate(path: string): boolean {
+  const lexical = resolve(expand(path));
+  const paths = [lexical, realish(lexical)];
+  const bases = privateBases();
+  if (paths.some((p) => bases.some((b) => {
+    const rel = relative(b, p);
+    return !!rel && !rel.startsWith("..") && !rel.startsWith(sep) && rel.split(sep)[0]!.startsWith("agentglass");
+  }))) return true;
+  const moved = [process.env.AGENTGLASS_STATE_DIR, process.env.AGENTGLASS_DB]
+    .filter((x): x is string => !!x)
+    .flatMap((x) => [resolve(x), realish(resolve(x))]);
+  // The database is a file with -wal and -shm beside it: the prefix is the rule.
+  return paths.some((p) => moved.some((m) => isWithin(p, m) || p.startsWith(m + "-")));
+}
+
+/**
+ * `inScope`, asked of what the kernel will actually open.
+ *
+ * `inScope` is a string test, and that is right for what most callers give it
+ * — a session's recorded cwd, a rule's root — which are names to match rather
+ * than files to open. It is wrong for a path that is about to be read: a
+ * symlink inside a checkout can point anywhere while its spelling stays inside
+ * the project. So anything that opens, lists, measures or stats a path off the
+ * wire asks this instead: the spelling must be in scope AND so must the real
+ * path, measured against the scope roots as written and as resolved (a root
+ * reached through a link of its own is not an escape).
+ *
+ * The ceiling is the usual one for a check-then-open: a link swapped in between
+ * this answer and the read wins the race. Closing that needs an open that
+ * refuses links (openat2 with RESOLVE_BENEATH), which Bun does not expose; the
+ * window is one syscall wide and needs write access inside the checkout, which
+ * is already more than a read-only caller has.
+ */
+export function inScopeReal(path: string | null | undefined, scope: Scope = workspaceRoots()): boolean {
+  if (!inScope(path, scope) || agentglassPrivate(path!)) return false;
+  const roots = scopeList(scope);
+  if (!roots.length) return true;
+  const real = realish(resolve(expand(path!)));
+  return inScope(real, scope) || inScope(real, roots.map((r) => realish(r)));
 }
 
 /**

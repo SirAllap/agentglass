@@ -1801,8 +1801,8 @@ body:not([data-route="home"]) .page{padding-top:calc(118px + var(--safe))}
   with its own parts. <a href="https://sirallap.github.io/agentglass-plugins/" style="color:var(--vio)">Browse the plugins</a>.</p>
  <div class="grid2">
   <div><b>read</b><span>Almost every GET route, including <code>/stream</code>: live output, costs,
-   diffs, pull requests, the board. Cannot write anything, and cannot read another plugin's settings or
-   screen.</span></div>
+   diffs, pull requests, the board. Writes nothing through the app's API, and cannot read another plugin's settings or
+   screen. The plugin itself runs as you: the scope limits its token, not the process.</span></div>
   <div><b>answer</b><span>Everything read gets, plus replying to a session already
    running. It cannot release a gate.</span></div>
   <div><b>full</b><span>Everything this machine can do: a terminal, git writes,

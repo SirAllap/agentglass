@@ -119,7 +119,7 @@ import {
   addReminder, ackReminder, cancelReminder, snoozeReminder, listReminders,
   remindersFor, firedUnacked, setReminderHook, startReminderTick, localZone,
 } from "./reminders.ts";
-import { fileText, fileToTemp, fileTree, findFiles, grepFiles, listRefs, filesExist } from "./files.ts";
+import { fileText, fileToTemp, fileTree, findFiles, grepFiles, listRefs, filesExist, heldBackFrom, heldBackTest, HELD_BACK, filesReach, gitReadRefusal, gitReadTest } from "./files.ts";
 import { diskFind, diskGrep, diskPlaces } from "./disk.ts";
 import { browseDir, fileBytes, fileFacts, openInDesktop } from "./browse.ts";
 import { benchEdit, benchEnd, benchLive, readNote, writeNote } from "./bench.ts";
@@ -168,7 +168,7 @@ import {
   windowTree, newWindow, splitPane, killWindow, killPane as killLayoutPane, selectWindow, selectPane,
   renameWindow, resizePane,
 } from "./tmuxlayout.ts";
-import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource, tmuxPrefix, tmuxTerminal, validTmuxPrefix, writeTmuxSettings, lanternNudge, lanternWatch, lanternWatchMinutes, cacheTtlMinutes, lanternNudgeMinutes, writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN, seatWakeHours, writeSeatSettings, workerRoles, writeWorkerRole } from "./config.ts";
+import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource, tmuxPrefix, tmuxTerminal, validTmuxPrefix, writeTmuxSettings, lanternNudge, lanternWatch, lanternWatchMinutes, cacheTtlMinutes, lanternNudgeMinutes, writeLanternSettings, LANTERN_NUDGE_MIN_MIN, LANTERN_NUDGE_MAX_MIN, seatWakeHours, writeSeatSettings, workerRoles, writeWorkerRole, inScopeReal } from "./config.ts";
 import { claudeModels } from "./claudemodels.ts";
 import { codexStream, codexModels, codexTranscript, codexCwd, CODEX_ENABLED, CODEX_BYPASS_ALLOWED } from "./codex.ts";
 import { antigravityStream, antigravityModels, ANTIGRAVITY_ENABLED, ANTIGRAVITY_BYPASS_ALLOWED } from "./antigravity.ts";
@@ -183,7 +183,7 @@ import { budgetStatus } from "./budget.ts";
 import type { Budget } from "../../shared/types.ts";
 import { hookStatus, applyHooks, applyGate, hooksDir, hookPython } from "./hooksetup.ts";
 import { probeAgents, ROSTER } from "./agentprobe.ts";
-import { join as joinPath, basename } from "node:path";
+import { join as joinPath, resolve as resolvePath, basename } from "node:path";
 import { hostname, tmpdir } from "node:os";
 import { privateHost, resolvePeer, originOf, guardedFetch, hostsOnly } from "./net.ts";
 import { DESK_HEADER, DESK_STARTED } from "./desk.ts";
@@ -2734,6 +2734,11 @@ const server = Bun.serve<WsData>({
       understudyChanged();
     };
 
+    // Every /git/ read that names a repository is held to the open project —
+    // see gitReadRefusal.
+    const gitRefused = gitReadRefusal(caller, req.method, pathname, url.searchParams);
+    if (gitRefused) return json(gitRefused, 403);
+
     // Throttle the unauthenticated intake sinks so a runaway client can't flood
     // the DB and the broadcast fan-out. Keyed by source address + route.
     if (req.method === "POST" && isIntake(pathname)) {
@@ -4486,8 +4491,10 @@ const server = Bun.serve<WsData>({
         try { b = await req.json(); } catch { b = {}; }
         const parsed = parseAsk("download", b);
         if ("error" in parsed) return json({ ok: false, error: parsed.error }, 400);
-        const a = parsed.ask.args as { selector: string; dir: string; timeoutMs?: number };
-        const r = await downloadFile({ selector: a.selector, dir: a.dir, timeoutMs: a.timeoutMs });
+        const a = parsed.ask.args as { selector: string; dir: string; timeoutMs?: number } & Record<string, unknown>;
+        const via: Record<string, unknown> = {};
+        for (const k of ["page", "as", "how", "pageExplicit"]) if (a[k] !== undefined) via[k] = a[k];
+        const r = await downloadFile({ selector: a.selector, dir: a.dir, timeoutMs: a.timeoutMs, via });
         return json(r);
       }
       if (op === "events") {
@@ -5179,7 +5186,11 @@ const server = Bun.serve<WsData>({
       if (!localOrigin(req)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
-      const paths = Array.isArray(b.paths) ? b.paths.filter((p: unknown) => typeof p === "string").slice(0, 500) : [];
+      // Held to the open project like the GET reads — see gitReadTest.
+      const readable = gitReadTest(caller);
+      const paths = Array.isArray(b.paths)
+        ? b.paths.filter((p: unknown) => typeof p === "string" && readable(p)).slice(0, 500)
+        : [];
       return json({ repos: await statusForPaths(paths), commitEnabled: COMMIT_ENABLED });
     }
     if (pathname === "/git/commit" && req.method === "POST") {
@@ -5329,9 +5340,10 @@ const server = Bun.serve<WsData>({
       const path = url.searchParams.get("path") || "";
       const mode = url.searchParams.get("mode") === "committed" ? "committed" : "working";
       if (!root || !path) return json({ error: "root and path are required" }, 400);
+      if (heldBackFrom(caller, [root, resolvePath(root, path)])) return json(HELD_BACK, 403);
       // The same scope gate every other git route uses: a root off the wire is
       // not a licence to read any repo on the disk.
-      if (!inScope(root)) return json({ error: "out of scope" }, 403);
+      if (!inScopeReal(root)) return json({ error: "out of scope" }, 403);
       const d = await fileDiff(root, path, mode);
       /* Keyed on content, so re-selecting a file the reader has already opened
          costs a 304 rather than another diff. `sig` is mtime+size while
@@ -5467,6 +5479,8 @@ const server = Bun.serve<WsData>({
       return json(updateLog());
     }
     if (pathname === "/git/conflicts") return json(gitConflicts(url.searchParams.get("root") || ""));
+    if ((pathname === "/git/conflict-blocks" || pathname === "/git/conflict-file")
+      && heldBackFrom(caller, [url.searchParams.get("root") || "", resolvePath(url.searchParams.get("root") || "/", url.searchParams.get("path") || "")])) return json(HELD_BACK, 403);
     if (pathname === "/git/conflict-blocks") return json(conflictBlocks(url.searchParams.get("root") || "", url.searchParams.get("path") || ""));
     if (pathname === "/git/merge-session") return json(mergeSession(url.searchParams.get("root") || ""));
     if (pathname === "/git/conflict-file") return json(conflictFile(url.searchParams.get("root") || "", url.searchParams.get("path") || ""));
@@ -6056,7 +6070,7 @@ const server = Bun.serve<WsData>({
       // vets one: a path outside the configured scope is refused rather than
       // corrected, and `gh` then runs where the app already lives.
       const asked = url.searchParams.get("root") ?? "";
-      const root = asked && inScope(asked) ? asked : (workspaceRoot() ?? process.cwd());
+      const root = asked && inScopeReal(asked) ? asked : (workspaceRoot() ?? process.cwd());
       const r = await cardPullRequests(
         url.searchParams.get("card") ?? "",
         url.searchParams.get("field") ?? undefined,
@@ -6299,7 +6313,15 @@ const server = Bun.serve<WsData>({
     if (pathname.startsWith("/files/")) {
       if (!FS_BROWSE_ENABLED) return json({ error: "directory browsing is disabled (AGENTGLASS_FS_BROWSE_DISABLED=1)" }, 403);
       const root = url.searchParams.get("root") || "";
-      if (pathname === "/files/tree") return json(fileTree(root, url.searchParams.get("rel") || ""));
+      if (heldBackFrom(caller, filesReach(pathname, url.searchParams))) return json(HELD_BACK, 403);
+      // What a listing or a search RETURNS is narrowed the same way: a name
+      // under ~/.ssh is not the key, but it is a map of where the keys are.
+      const held = heldBackTest(caller);
+      const shown = (rel: string) => !held(resolvePath(root, rel));
+      if (pathname === "/files/tree") {
+        const t = fileTree(root, url.searchParams.get("rel") || "");
+        return json({ ...t, entries: t.entries.filter((e) => shown(e.rel)) });
+      }
       /* One file's text, for the viewer that renders markdown rather than
          editing it. Same containment as the tree — see files.ts. */
       // `ref` is optional everywhere: absent means this working tree, which is
@@ -6318,8 +6340,14 @@ const server = Bun.serve<WsData>({
       }
       // A ref's copy written out so the editor can open it — see fileToTemp.
       if (pathname === "/files/temp") return json(fileToTemp(root, url.searchParams.get("rel") || "", url.searchParams.get("ref") || ""));
-      if (pathname === "/files/find") return json(findFiles(root, url.searchParams.get("q") || "", undefined, url.searchParams.get("ref") || undefined));
-      if (pathname === "/files/grep") return json(grepFiles(root, url.searchParams.get("q") || "", undefined, url.searchParams.get("ref") || undefined));
+      if (pathname === "/files/find") {
+        const f = findFiles(root, url.searchParams.get("q") || "", undefined, url.searchParams.get("ref") || undefined);
+        return json({ ...f, files: f.files.filter(shown), dirs: f.dirs.filter(shown) });
+      }
+      if (pathname === "/files/grep") {
+        const g = grepFiles(root, url.searchParams.get("q") || "", undefined, url.searchParams.get("ref") || undefined);
+        return json({ ...g, hits: g.hits.filter((h) => shown(h.rel)) });
+      }
       if (pathname === "/files/refs") return json(listRefs(root));
       if (pathname === "/files/exist") return json(filesExist(root, url.searchParams.getAll("rel")));
     }
@@ -6390,6 +6418,7 @@ const server = Bun.serve<WsData>({
      * leave a second door standing. */
     if (pathname === "/browse" || pathname.startsWith("/preview/")) {
       if (!FS_BROWSE_ENABLED) return json({ error: "directory browsing is disabled (AGENTGLASS_FS_BROWSE_DISABLED=1)" }, 403);
+      if (req.method === "GET" && heldBackFrom(caller, [url.searchParams.get("path") || ""].filter(Boolean))) return json(HELD_BACK, 403);
       /* Handing a file to the desktop starts a process, so it takes the same
          gate every other write on this surface takes. */
       if (pathname === "/preview/open" && req.method === "POST") {
@@ -6743,7 +6772,7 @@ const server = Bun.serve<WsData>({
       if (!trustedCaller(req, from)) return csrfBlocked();
       const b = await req.json().catch(() => ({})) as Record<string, unknown>;
       const asked = String(b.root ?? "");
-      const root = asked && inScope(asked) ? asked : (workspaceRoot() ?? process.cwd());
+      const root = asked && inScopeReal(asked) ? asked : (workspaceRoot() ?? process.cwd());
       const number = Number(b.number ?? 0);
       const pr = await prBranches(root, number);
       if (!pr) return json({ ok: false, error: "could not read that pull request's branches" });
@@ -6754,7 +6783,7 @@ const server = Bun.serve<WsData>({
        untouched. */
     if (pathname === "/prs/conflict-files") {
       const asked = url.searchParams.get("root") ?? "";
-      const root = asked && inScope(asked) ? asked : (workspaceRoot() ?? process.cwd());
+      const root = asked && inScopeReal(asked) ? asked : (workspaceRoot() ?? process.cwd());
       const number = Number(url.searchParams.get("number") ?? 0);
       const pr = await prBranches(root, number);
       if (!pr) return json({ ok: false, conflicts: [], clean: false, error: "could not read that pull request's branches" });
@@ -6767,7 +6796,7 @@ const server = Bun.serve<WsData>({
        about an AUTHOR and this question is about a branch. */
     if (pathname === "/prs/for-branch") {
       const asked = url.searchParams.get("root") ?? "";
-      const root = asked && inScope(asked) ? asked : (workspaceRoot() ?? process.cwd());
+      const root = asked && inScopeReal(asked) ? asked : (workspaceRoot() ?? process.cwd());
       return json(await prsForBranch(root, url.searchParams.get("branch") ?? ""));
     }
     /*
@@ -6798,7 +6827,7 @@ const server = Bun.serve<WsData>({
     }
     if (pathname === "/prs/behind") {
       const asked = url.searchParams.get("root") ?? "";
-      const root = asked && inScope(asked) ? asked : (workspaceRoot() ?? process.cwd());
+      const root = asked && inScopeReal(asked) ? asked : (workspaceRoot() ?? process.cwd());
       return json(await branchBehind(root, Number(url.searchParams.get("number") ?? 0)));
     }
     /* What this project's agents have spent, by branch and by checkout — the
@@ -6808,7 +6837,7 @@ const server = Bun.serve<WsData>({
        on a repository the cockpit is not showing. See spend.ts. */
     if (pathname === "/prs/spend") {
       const asked = url.searchParams.get("root") ?? "";
-      const root = asked && inScope(asked) ? asked : (workspaceRoot() ?? process.cwd());
+      const root = asked && inScopeReal(asked) ? asked : (workspaceRoot() ?? process.cwd());
       return json(await repoSpend(root));
     }
     /* Where this app keeps things, and for how long — read by Settings →
@@ -6845,6 +6874,7 @@ const server = Bun.serve<WsData>({
     }
     /* The repository's own CODEOWNERS, read from the checkout — see codeowners. */
     if (pathname === "/prs/codeowners") {
+      if (heldBackFrom(caller, [url.searchParams.get("root") || ""].filter(Boolean))) return json(HELD_BACK, 403);
       return json(await codeowners(url.searchParams.get("root") || ""));
     }
     if (pathname === "/prs/file-slice") {

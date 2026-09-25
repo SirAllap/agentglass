@@ -18,7 +18,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { safeAbs } from "./git.ts";
-import { inScope } from "./config.ts";
+import { inScope, inScopeReal } from "./config.ts";
 
 export const EDITOR_ENABLED = process.env.AGENTGLASS_EDITOR_DISABLED !== "1";
 
@@ -168,7 +168,7 @@ export async function openInEditor(pathIn: unknown, lineIn: unknown): Promise<Op
   if (!abs) return { ok: false, error: "invalid path" };
   // The same boundary every other write-ish capability honours: an instance
   // opened for one project must not reach into another repo's files.
-  if (!inScope(abs)) return { ok: false, error: "outside the open project" };
+  if (!inScopeReal(abs)) return { ok: false, error: "outside the open project" };
   try { statSync(abs); } catch { return { ok: false, error: "file does not exist" }; }
   const line = Math.max(1, Math.min(10_000_000, Math.floor(Number(lineIn)) || 1));
 

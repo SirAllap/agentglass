@@ -20,7 +20,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { gitAsync, safeAbs, repoRootOf } from "./git.ts";
 import { makeViewTempDir } from "./viewtemp.ts";
-import { inScope } from "./config.ts";
+import { inScopeReal, staysIn } from "./config.ts";
 import { recipePromptText } from "./reviewPrompts.ts";
 import { boardHolding, knownStatuses } from "./clickupviews.ts";
 import type {
@@ -3371,7 +3371,7 @@ function writeGuard(rootIn: unknown): PrActionResult | null {
   const abs = safeAbs(rootIn);
   const root = abs ? repoRootOf(abs) : null;
   if (!root) return { ok: false, error: "not a git repository" };
-  if (!inScope(root)) return { ok: false, error: "outside the open project — open the parent folder to work across repos" };
+  if (!inScopeReal(root)) return { ok: false, error: "outside the open project — open the parent folder to work across repos" };
   return null;
 }
 
@@ -4199,7 +4199,7 @@ export async function prepareReviewPrompt(rootIn: unknown, numberIn: unknown, re
   // No `writeGuard`: nothing here writes, so a read-only scope can still review
   // a pull request. The scope check is still owed, because the chat is about to
   // be pointed at this directory.
-  if (!inScope(root)) return { ok: false, error: "outside the open project — open the parent folder to work across repos" };
+  if (!inScopeReal(root)) return { ok: false, error: "outside the open project — open the parent folder to work across repos" };
   const repo = await repoIdFor(rootIn);
   if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
 
@@ -4349,6 +4349,7 @@ export async function codeowners(rootIn: unknown): Promise<{
   for (const rel of WHERE) {
     const full = join(root, rel);
     let text: string;
+    if (!staysIn(root, full)) continue;
     try { text = readFileSync(full, "utf8"); } catch { continue; }
     const rules: { pattern: string; owners: string[] }[] = [];
     for (const raw of text.split("\n")) {

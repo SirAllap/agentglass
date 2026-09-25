@@ -25,7 +25,7 @@ import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:f
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { safeAbs } from "./git.ts";
-import { inScope } from "./config.ts";
+import { inScopeReal } from "./config.ts";
 import { diskAllows } from "./disk.ts";
 import { isViewTemp } from "./viewtemp.ts";
 import { benchSessionName, tmux } from "./tmuxpane.ts";
@@ -57,7 +57,7 @@ function checkout(rootIn: unknown): { root: string } | { error: string } {
   if (!root) return { error: "no checkout given" };
   try { if (!statSync(root).isDirectory()) return { error: "not a directory" }; }
   catch { return { error: "no such directory" }; }
-  if (!inScope(root)) return { error: "outside the open project" };
+  if (!inScopeReal(root)) return { error: "outside the open project" };
   return { root };
 }
 
@@ -205,7 +205,7 @@ function openable(pathIn: unknown): { abs: string } | { error: string } {
   if (!abs) return { error: "no file given" };
   try { if (!statSync(abs).isFile()) return { error: "not a file" }; }
   catch { return { error: "no such file" }; }
-  if (!inScope(abs) && !diskAllows(abs) && !isViewTemp(abs)) return { error: "outside what the bench may open" };
+  if (!inScopeReal(abs) && !diskAllows(abs) && !isViewTemp(abs)) return { error: "outside what the bench may open" };
   return { abs };
 }
 

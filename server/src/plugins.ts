@@ -433,8 +433,8 @@ function serverBase(): string {
  * purpose — that is the exact mistake `auth.ts` documents having made once
  * already for launched agents: "They inherit the process environment, which
  * carries the MACHINE token." A plugin gets `PATH`/`HOME` to find its own
- * runtime and nothing that would let it read or write more than the scope a
- * human just approved.
+ * runtime and no token but its own. It is still a process of the user's: what
+ * that process can reach on disk is not limited by the scope.
  */
 async function startProcess(rec: PluginRecord): Promise<void> {
   await stopRunning(rec.name);
@@ -483,7 +483,39 @@ async function startProcess(rec: PluginRecord): Promise<void> {
  * keeps files in LFS installs with the pointers, which is also what the
  * catalogue's runner hashes.
  */
-const pluginGitEnv = (): Record<string, string | undefined> => ({ ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_LFS_SKIP_SMUDGE: "1" });
+/**
+ * Names that are not secrets and without which git cannot reach a host at
+ * all: where the proxy is, which certificates to trust, and on Windows the
+ * folders the runtime looks for. The proxy URL may carry a login, and it goes
+ * to the proxy, which is the one place it was always meant for.
+ */
+const GIT_PASSTHROUGH = [
+  "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+  "SSL_CERT_FILE", "SSL_CERT_DIR", "SystemRoot", "USERPROFILE", "TEMP", "TMP",
+];
+
+export const pluginGitEnv = (): Record<string, string> => {
+  const env: Record<string, string> = {
+    PATH: process.env.PATH ?? "",
+    HOME: process.env.HOME ?? "",
+    LANG: process.env.LANG ?? "C",
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_LFS_SKIP_SMUDGE: "1",
+    // The user's own gitconfig is not read. A `-c` reset cannot clear a
+    // header or helper scoped to one URL (`[http "https://host/"]`): git
+    // keeps the more specific match over the command line. Measured.
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    // ssh has no terminal to ask on: a passphrase or a host key prompt would
+    // wait on the server's tty until the install timed out.
+    GIT_SSH_COMMAND: "ssh -o BatchMode=yes",
+  };
+  for (const k of GIT_PASSTHROUGH) { const v = process.env[k]; if (v) env[k] = v; }
+  return env;
+};
+
+/** Belt to the braces above: the two keys that carry a credential, cleared on the command line. */
+export const PLUGIN_GIT_CONFIG = ["-c", "credential.helper=", "-c", "http.extraheader="];
 
 /**
  * Every git a plugin install runs. The line endings are pinned because a
@@ -494,7 +526,7 @@ const pluginGitEnv = (): Record<string, string | undefined> => ({ ...process.env
  */
 async function git(args: string[], cwd: string, timeoutMs: number): Promise<{ ok: boolean; err: string }> {
   try {
-    const p = Bun.spawn(["git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", ...args], { cwd, env: pluginGitEnv(), stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+    const p = Bun.spawn(["git", ...PLUGIN_GIT_CONFIG, "-c", "core.autocrlf=false", "-c", "core.eol=lf", ...args], { cwd, env: pluginGitEnv(), stdout: "pipe", stderr: "pipe", stdin: "ignore" });
     const timer = setTimeout(() => { try { p.kill(); } catch { /* already gone */ } }, timeoutMs);
     const [code, err] = await Promise.all([p.exited, new Response(p.stderr).text()]);
     clearTimeout(timer);
@@ -603,7 +635,7 @@ export type InstallInput =
 
 async function resolveHead(dir: string): Promise<string | null> {
   try {
-    const p = Bun.spawn(["git", "rev-parse", "HEAD"], { cwd: dir, env: pluginGitEnv(), stdout: "pipe", stderr: "ignore", stdin: "ignore" });
+    const p = Bun.spawn(["git", ...PLUGIN_GIT_CONFIG, "rev-parse", "HEAD"], { cwd: dir, env: pluginGitEnv(), stdout: "pipe", stderr: "ignore", stdin: "ignore" });
     const [code, out] = await Promise.all([p.exited, new Response(p.stdout).text()]);
     return code === 0 ? out.trim() : null;
   } catch {

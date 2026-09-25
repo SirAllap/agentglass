@@ -613,7 +613,9 @@ master switch (`/plugins/master`) stops every plugin at once.
 
 A plugin runs as **its own process**, started by this server with four
 variables in its environment (`PATH`, `HOME`, `AGENTGLASS_URL`,
-`AGENTGLASS_READ_TOKEN`) and nothing inherited. The token is minted at enable
+`AGENTGLASS_READ_TOKEN`) and nothing inherited. **It runs as you**: the
+scope limits that token, not the process, so a plugin can read your files and
+run programs whatever scope it holds, and a sandbox is not here yet. The token is minted at enable
 time at the scope the manifest asked for — `read`, `answer` or `full`, the same
 three a paired device has — lives only in the server's memory, and is revoked
 when the plugin is disabled or the process exits. What was approved is a
@@ -917,8 +919,15 @@ the `/control` UI-navigation endpoint, which is unswitchable by design — it
 grants no capability the keyboard does not already have.
 
 Beyond the knobs, **scope is itself a boundary**: with a project open, git
-writes, the terminal, chat, pull-request actions and editor opens are all
-refused outside it.
+writes and git reads, the terminal, chat, pull-request actions and editor opens
+are all refused outside it.
+
+**Git never takes a command from a repository it merely found.** Every git call
+the server makes runs with `safe.bareRepository=explicit`, so a directory that
+only looks like a repository (committed as ordinary files inside a project) is
+not one, and with `core.fsmonitor=false`; reads also run with hooks off. A real
+checkout's own `.git/config` is still yours and is honoured as your terminal
+honours it — that is the limit.
 
 ## What it can do to your tmux
 

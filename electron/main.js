@@ -29,7 +29,7 @@ const os = require("os");
 // The `<webview>` boundary, in its own file so it can be read and tested on its
 // own. Shipped inside the asar with this one — see build.files in package.json.
 const {
-  BROWSER_PARTITION, isBrowserPartition, safeGuestUrl, applyGuestGuard,
+  BROWSER_PARTITION, isBrowserPartition, safeGuestUrl, applyGuestGuard, permissionVerdict, permissionPrompt, uniqueSavePath,
 } = require("./guest-guard.js");
 const { startEgressProxy, literalRefusal, EGRESS_ENV } = require("./egress-guard.js");
 
@@ -45,6 +45,58 @@ let egress = null;
  *  `setProxy` twice is harmless but `onBeforeRequest` twice is the second
  *  listener replacing the first. @type {WeakSet<Electron.Session>} */
 const egressArmed = new WeakSet();
+/** Sessions whose permission handlers are set. @type {WeakSet<Electron.Session>} */
+const permissionArmed = new WeakSet();
+
+/** Guests that belong to a lane, an agent's own tab. @type {WeakSet<Electron.WebContents>} */
+const laneGuests = new WeakSet();
+/** What the person answered this session, by origin and thing: true = allowed.
+ *  Denials are kept too, so a page cannot ask again until he says yes.
+ *  @type {Map<string, boolean>} */
+const permissionAnswers = new Map();
+/** Dialogs on screen, so two asks for one thing raise one dialog. @type {Map<string, Promise<boolean>>} */
+const permissionPending = new Map();
+/** @param {string} what @param {string} origin */
+const permissionKey = (what, origin) => `${origin}\u0000${what}`;
+
+/** @param {Electron.WebContents | null} wc @param {string} permission @param {unknown} mediaTypes */
+function permissionAsk(wc, permission, mediaTypes) {
+  return permissionVerdict(permission, { frontTab: !!wc && !!browserGuest && wc === browserGuest, lane: !!wc && laneGuests.has(wc), mediaTypes });
+}
+
+/**
+ * Ask the person, natively, and remember what he said until the app closes.
+ * The dialog belongs to the window the tab lives in, and the page has no
+ * handle on it.
+ * @param {Electron.WebContents} wc @param {string | undefined} what @param {string | undefined} requestingUrl
+ * @returns {Promise<boolean>} */
+function askPermission(wc, what, requestingUrl) {
+  let origin = "";
+  try { origin = new URL(requestingUrl || wc.getURL()).origin; } catch { return Promise.resolve(false); }
+  if (!what || origin === "null") return Promise.resolve(false);
+  const key = permissionKey(what, origin);
+  const known = permissionAnswers.get(key);
+  if (known !== undefined) return Promise.resolve(known);
+  const open = permissionPending.get(key);
+  if (open) return open;
+  const host = wc.hostWebContents ? BrowserWindow.fromWebContents(wc.hostWebContents) : null;
+  const options = {
+    type: /** @type {const} */ ("question"),
+    buttons: ["Allow", "Deny"],
+    defaultId: 1,
+    cancelId: 1,
+    message: permissionPrompt(what, origin),
+    detail: "Until agentglass closes, this site is remembered for this. Agents' tabs are never asked.",
+  };
+  const shown = host ? dialog.showMessageBox(host, options) : dialog.showMessageBox(options);
+  const answer = shown.then((r) => r.response === 0, () => false).then((ok) => {
+    permissionAnswers.set(key, ok);
+    permissionPending.delete(key);
+    return ok;
+  });
+  permissionPending.set(key, answer);
+  return answer;
+}
 
 /**
  * Point a browsing session at the guard: its traffic goes through the proxy,
@@ -54,8 +106,27 @@ const egressArmed = new WeakSet();
  * is armed before the guest exists rather than after its first request.
  * @param {string | undefined} partition */
 function armEgress(partition) {
-  if (!egress) return;
   const ses = session.fromPartition(partition || BROWSER_PARTITION);
+  // The permission policy is not the egress guard's to skip: with the guard
+  // off or unbound the browser still must not hand a page the camera.
+  if (!permissionArmed.has(ses)) {
+    permissionArmed.add(ses);
+    ses.setPermissionRequestHandler((wc, permission, callback, details) => {
+      const ask = permissionAsk(wc, permission, details && "mediaTypes" in details ? details.mediaTypes : undefined);
+      if (ask.verdict !== "ask") return callback(ask.verdict === "allow");
+      void askPermission(wc, ask.what, details && details.requestingUrl).then(callback);
+    });
+    // Synchronous, so it can only repeat an answer already given.
+    ses.setPermissionCheckHandler((wc, permission, origin, details) => {
+      const ask = permissionAsk(wc, permission, details && details.mediaType ? [details.mediaType] : undefined);
+      if (ask.verdict !== "ask") return ask.verdict === "allow";
+      return permissionAnswers.get(permissionKey(ask.what || "", origin)) === true;
+    });
+    // No streams offered is a refusal; getDisplayMedia rejects in the page.
+    ses.setDisplayMediaRequestHandler((_request, callback) => callback({}));
+    ses.setDevicePermissionHandler(() => false);
+  }
+  if (!egress) return;
   if (egressArmed.has(ses)) return;
   egressArmed.add(ses);
   ses.setProxy({ proxyRules: egress.proxyRules, proxyBypassRules: "" })
@@ -1954,6 +2025,10 @@ function registerIpc(win) {
    */
   /** @type {Map<Electron.WebContents, string>} */
   const guestDownloadDir = new Map();
+  /** Save paths chosen for downloads still in flight. @type {Set<string>} */
+  const reservedSavePaths = new Set();
+  /** lstat, not exists: a dangling symlink is a name that is taken. @param {string} p */
+  const pathTaken = (p) => { try { fs.lstatSync(p); return true; } catch { return false; } };
   /** Sessions already wired, so a second download does not stack handlers. */
   const downloadWired = new WeakSet();
 
@@ -1963,15 +2038,26 @@ function registerIpc(win) {
     if (downloadWired.has(ses)) return;
     downloadWired.add(ses);
     ses.on("will-download", (_ev, item, wc) => {
-      const dir = guestDownloadDir.get(wc) ?? guestDownloadDir.get(guest);
+      // Keyed by the tab the download came from and by nothing else: a fallback
+      // to the tab that wired the session let a download from ANY other tab of
+      // the profile land in an agent's directory.
+      const dir = guestDownloadDir.get(wc);
       if (!dir) return; // nobody asked for this one; leave Electron's default alone
-      const name = item.getFilename();
-      item.setSavePath(path.join(dir, name));
+      // One download per arming. The verb arms a directory for the click it is
+      // about to make; left armed, the next download of the profile took it.
+      guestDownloadDir.delete(wc);
+      // Chromium renames onto the path only when the download finishes, so a
+      // name is held from here to `done`: two downloads into one directory
+      // must not both find it free.
+      const savePath = uniqueSavePath(dir, item.getFilename(), (p) => reservedSavePaths.has(p) || pathTaken(p));
+      reservedSavePaths.add(savePath);
+      const name = path.basename(savePath);
+      item.setSavePath(savePath);
       // Spelled out because this file is typechecked and an untyped parameter
       // here is two more tsc errors on a list that has to stay readable.
       /** @param {string} method @param {Record<string, unknown>} params */
       const push = (method, params) => {
-        const buf = guestCdpEvents.get(wc) || guestCdpEvents.get(guest);
+        const buf = guestCdpEvents.get(wc);
         if (!buf) return;
         buf.push({ at: Date.now(), method, params });
         if (buf.length > CDP_EVENT_CAP) buf.splice(0, buf.length - CDP_EVENT_CAP);
@@ -1982,6 +2068,7 @@ function registerIpc(win) {
       const guid = `agx-dl-${Date.now()}-${Math.round(Math.random() * 1e6)}`;
       push("Page.downloadWillBegin", { guid, suggestedFilename: name, url: item.getURL() });
       item.once("done", (_e2, state) => {
+        reservedSavePaths.delete(savePath);
         push("Page.downloadProgress", {
           guid,
           // `completed` and `canceled` are the two the loop acts on; anything
@@ -3332,6 +3419,7 @@ function guardWebviews(win, opts = {}) {
   });
 
   win.webContents.on("did-attach-webview", (_e, guest) => {
+    if (opts.lane) laneGuests.add(guest);
     // A guest is its own Chromium process and its key events never reach the
     // renderer, so with a page focused every app shortcut silently stops
     // working — the workspace cannot be switched or closed and the pane is a

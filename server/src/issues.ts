@@ -25,7 +25,7 @@ import { dirname, join, basename } from "node:path";
 import { gh, ghGraphql } from "./prs.ts";
 import { git, safeAbs } from "./git.ts";
 import { addWorktree, removeWorktree } from "./gitwork.ts";
-import { inScope } from "./config.ts";
+import { inScopeReal } from "./config.ts";
 
 export interface IssueRow {
   number: number;
@@ -195,7 +195,7 @@ async function repoOf(root: string): Promise<string | null> {
 export async function listIssues(rootIn: unknown, opts: { state?: string; assignee?: string; search?: string; limit?: number } = {}): Promise<IssuesReport> {
   const root = safeAbs(rootIn);
   if (!root) return { ok: false, issues: [], error: "no directory given" };
-  if (!inScope(root)) return { ok: false, issues: [], error: "outside the open project" };
+  if (!inScopeReal(root)) return { ok: false, issues: [], error: "outside the open project" };
 
   const args = ["issue", "list", "--json", LIST_FIELDS, "--limit", String(Math.min(200, opts.limit ?? 60))];
   // `--state all` rather than two calls: the panel's Open/Closed toggle is a
@@ -220,7 +220,7 @@ export async function issueDetail(rootIn: unknown, numberIn: unknown): Promise<{
   const root = safeAbs(rootIn);
   const number = Number(numberIn);
   if (!root || !Number.isInteger(number) || number <= 0) return { ok: false, error: "invalid request" };
-  if (!inScope(root)) return { ok: false, error: "outside the open project" };
+  if (!inScopeReal(root)) return { ok: false, error: "outside the open project" };
 
   const r = await gh(["issue", "view", String(number), "--json", `${LIST_FIELDS},body,createdAt,milestone`], root);
   if (r.code !== 0) return { ok: false, error: r.stderr.trim() || "gh failed" };
@@ -312,7 +312,7 @@ export async function issuePullRequests(
   const root = safeAbs(rootIn);
   const number = Number(numberIn);
   if (!root || !Number.isInteger(number) || number <= 0) return { ok: false, prs: [], error: "invalid request" };
-  if (!inScope(root)) return { ok: false, prs: [], error: "outside the open project" };
+  if (!inScopeReal(root)) return { ok: false, prs: [], error: "outside the open project" };
 
   const repo = await repoOf(root);
   const [owner, name] = (repo ?? "").split("/");
@@ -424,7 +424,7 @@ export async function startIssue(rootIn: unknown, numberIn: unknown, modeIn: unk
   const number = Number(numberIn);
   const mode = (["worktree", "shell", "claude", "plan", "branch"] as const).find((m) => m === modeIn) ?? "claude";
   if (!root || !Number.isInteger(number) || number <= 0) return { ok: false, error: "invalid request" };
-  if (!inScope(root)) return { ok: false, error: "outside the open project" };
+  if (!inScopeReal(root)) return { ok: false, error: "outside the open project" };
 
   const d = await issueDetail(root, number);
   if (!d.ok || !d.issue) return { ok: false, error: d.error ?? "could not read that issue" };
@@ -506,7 +506,7 @@ export async function claimIssue(rootIn: unknown, numberIn: unknown, comment?: u
   const root = safeAbs(rootIn);
   const number = Number(numberIn);
   if (!root || !Number.isInteger(number)) return { ok: false, error: "invalid request" };
-  if (!inScope(root)) return { ok: false, error: "outside the open project" };
+  if (!inScopeReal(root)) return { ok: false, error: "outside the open project" };
   const a = await gh(["issue", "edit", String(number), "--add-assignee", "@me"], root);
   if (a.code !== 0) return { ok: false, error: a.stderr.trim() || "could not assign it" };
   const text = typeof comment === "string" ? comment.trim() : "";
@@ -522,7 +522,7 @@ export async function commentIssue(rootIn: unknown, numberIn: unknown, body: unk
   const number = Number(numberIn);
   const text = typeof body === "string" ? body.trim() : "";
   if (!root || !Number.isInteger(number) || !text) return { ok: false, error: "invalid request" };
-  if (!inScope(root)) return { ok: false, error: "outside the open project" };
+  if (!inScopeReal(root)) return { ok: false, error: "outside the open project" };
   const r = await gh(["issue", "comment", String(number), "--body", text], root);
   return r.code === 0 ? { ok: true, detail: "Comment posted" } : { ok: false, error: r.stderr.trim() || "could not comment" };
 }
@@ -531,7 +531,7 @@ export async function setIssueState(rootIn: unknown, numberIn: unknown, close: b
   const root = safeAbs(rootIn);
   const number = Number(numberIn);
   if (!root || !Number.isInteger(number)) return { ok: false, error: "invalid request" };
-  if (!inScope(root)) return { ok: false, error: "outside the open project" };
+  if (!inScopeReal(root)) return { ok: false, error: "outside the open project" };
   const r = await gh(["issue", close ? "close" : "reopen", String(number)], root);
   return r.code === 0
     ? { ok: true, detail: close ? "Closed" : "Reopened" }

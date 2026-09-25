@@ -51,7 +51,9 @@ beforeAll(() => {
   git(repo, ["push", "-q", "-u", "origin", "was-on-the-remote"]);
   git(repo, ["checkout", "-q", "main"]);
   // The remote branch disappears — what a merged pull request does.
-  git(remote, ["update-ref", "-d", "refs/heads/was-on-the-remote"]);
+  // Named with --git-dir: the wrapper does not discover a bare repository on
+  // its own (safe.bareRepository=explicit, see git.ts).
+  git(remote, ["--git-dir=.", "update-ref", "-d", "refs/heads/was-on-the-remote"]);
   git(repo, ["fetch", "-q", "--prune"]);
   remoteDir = remote;
 
@@ -154,7 +156,7 @@ describe("what it reports", () => {
     git(repo, ["commit", "-q", "-m", "work nobody else has"]);
     git(repo, ["push", "-q", "-u", "origin", "gone-but-unmerged"]);
     git(repo, ["checkout", "-q", "main"]);
-    git(remoteDir, ["update-ref", "-d", "refs/heads/gone-but-unmerged"]);
+    git(remoteDir, ["--git-dir=.", "update-ref", "-d", "refs/heads/gone-but-unmerged"]);
     git(repo, ["fetch", "-q", "--prune"]);
 
     const gone = find(tidyReport(repo), "gone");

@@ -39,8 +39,8 @@ describe("the scope sentence is honest about `read`", () => {
     expect(declaration).toMatch(/the same prompts and replies you watch on screen/);
   });
 
-  test("and says what it cannot do", () => {
-    expect(declaration).toMatch(/cannot approve a gate, send a reply, or write anything/i);
+  test("and says what it cannot do through the app, not on the machine", () => {
+    expect(declaration).toMatch(/through this app it can only look: no gate, no reply, no writes/i);
   });
 });
 
