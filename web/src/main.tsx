@@ -5,6 +5,8 @@ import ReactDOM from "react-dom/client";
 import { coverMounted } from "./lib/cover.ts";
 import App from "./App.tsx";
 import { PairScreen } from "./PairScreen.tsx";
+import { LaneHost } from "./components/LaneHost.tsx";
+import { laneFromHash, laneProfileFromHash } from "./lib/lane.ts";
 import { adoptServer } from "./lib/api.ts";
 import { ticketFromUrl, clearTicketFromUrl } from "./lib/pairing.ts";
 import { followServerChanges } from "./lib/desktop.ts";
@@ -78,7 +80,10 @@ const mount = (tree: React.ReactNode) => root.render(<React.StrictMode><Mounted>
  * happened.
  */
 const invitation = ticketFromUrl(location.href);
-if (invitation) {
+const lane = laneFromHash(location.hash);
+if (lane) {
+  mount(<LaneHost id={lane} profile={laneProfileFromHash(location.hash)} />);
+} else if (invitation) {
   mount(
     <PairScreen
       ticket={invitation}

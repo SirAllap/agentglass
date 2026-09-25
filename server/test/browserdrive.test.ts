@@ -1109,6 +1109,19 @@ describe("§16 — reply redaction masks the span, and says it fired", () => {
     expect((r.value as { png: string }).png).toBe(png);
     expect(r.redacted).toBeUndefined();
   });
+
+  test("a screencast's frames are exempt too: a token-shaped run inside the base64 is not a secret", async () => {
+    // Twenty screencast runs of an animated page, two of which had a stretch of a
+    // frame's base64 read as a token and replaced, then a Python traceback in the CLI.
+    const jpeg = "data:image/jpeg;base64," + "/9j/4AAQ" + "Zm9v/" + "5d41402abc4b2a76b9719d911017c592".repeat(2) + "/YmFy" + "Q".repeat(50);
+    setBrowserSink({ send: (a) => queueMicrotask(() => settleBrowser(a.id, { ok: true, value: { frames: [{ jpeg }] } })), listeners: () => 1 });
+    noteBrowserReady("w1", true);
+    const p = parseAsk("screencast", { action: "frames" });
+    if (!("ask" in p)) throw new Error("unreachable");
+    const r = await askBrowser(p.ask);
+    expect((r.value as { frames: Array<{ jpeg: string }> }).frames[0].jpeg).toBe(jpeg);
+    expect(r.redacted).toBeUndefined();
+  });
 });
 
 describe("several verbs in one call", () => {

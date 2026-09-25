@@ -1157,6 +1157,9 @@ async function ensureServer(adopt) {
   let started = false;
   child.on("exit", (code, signal) => {
     exit = { code, signal };
+    /* Its lane table died with it, so the windows hosting those lanes are
+       orphans that would count against the cap for nothing. */
+    for (const id of Array.from(laneHosts.keys())) destroyLaneHost(id);
     // A kill we asked for is not a failure. `killSidecar` nulls `sidecar`
     // before this can fire, and `stopped` covers the app going down, so the
     // identity check is what tells "it died" from "we ended it".
@@ -1278,6 +1281,9 @@ function describeSidecarFailure(port, exit, spawnError, stderr, hadStarted) {
  * with it, which the smoke test pins.
  */
 async function restartSidecar() {
+  /* The new server has no lanes, so the windows that were hosting the old one's
+     would sit registered with a key it will not accept. */
+  for (const id of Array.from(laneHosts.keys())) destroyLaneHost(id);
   killSidecar();
 
   // Wait for the socket to actually be gone before looking for a port.
@@ -3315,8 +3321,8 @@ function canNav(guest, dir) {
   } catch { return false; }
 }
 
-/** @param {AppWindow} win */
-function guardWebviews(win) {
+/** @param {AppWindow} win @param {{ lane?: boolean }} [opts] */
+function guardWebviews(win, opts = {}) {
   // The decision itself lives in guest-guard.js so a test can call it — see the
   // header there. This is only the wiring: the guard says yes or no, and no
   // means the guest never exists.
@@ -3496,7 +3502,9 @@ function guardWebviews(win) {
      * version always did and is right until the first tab switch.
      */
     browserGuests.add(guest);
-    browserGuest = guest;
+    // A lane's guest is addressed by id only. It never becomes the fallback
+    // "front tab": that one must be a page somebody can see.
+    if (!opts.lane) browserGuest = guest;
     guest.once("destroyed", () => {
       browserGuests.delete(guest);
       guestFavicons.delete(guest);
@@ -3565,6 +3573,10 @@ function guardWebviews(win) {
      * profile — and everything else still becomes a tab.
      */
     guest.setWindowOpenHandler(({ url, disposition, features }) => {
+      /* A lane has no window a person could see, and a popup would map a real,
+         visible one: denied outright, not left to the webview lacking
+         `allowpopups`. A sign-in that needs a popup fails in a lane. */
+      if (opts.lane) return { action: "deny" };
       const safe = safeGuestUrl(url);
       if (!safe) return { action: "deny" };
       /*
@@ -3763,6 +3775,114 @@ function guardWebviews(win) {
   });
 }
 
+/*
+ * A LANE HOST: a window nobody sees, where an agent's browser tab lives.
+ *
+ * It loads the same app with `#lane=<id>`, which mounts only a webview and the
+ * browser ask handler, so the driver in browserDrive.ts runs there unchanged.
+ * Measured on Linux/Wayland (Electron 43), a webview guest in the host:
+ *
+ *   show:false             rAF 1/s, Page.captureScreenshot 9/10 time out,
+ *                          capturePage 10/10 time out, screencast 0 frames
+ *   show:false + offscreen rAF 30/s, captureScreenshot p50 100 ms,
+ *                          capturePage p50 33 ms, screencast 59 frames in 2 s
+ *
+ * A hidden window gets no frames because the compositor never asks it for one,
+ * and `backgroundThrottling` does not change that. An offscreen window paints
+ * on its own clock, so the guest inside it does too. `stayHidden` on
+ * capturePage made no difference. Moving a real window off screen was not an
+ * option: a Wayland client cannot place itself, and a window on a workspace
+ * nobody looks at gets no frames either.
+ *
+ * Driven through the CLI in a lane (20 reps, main window on a workspace nobody
+ * looks at): observe p50 83 ms, click 250, fill 83, shot 188, screencast 59
+ * frames in 2 s, none failed on the lane's side.
+ *
+ * Ceilings: offscreen paints in software (no GPU for the guest); one webview
+ * per host; and a page the guest navigates to reports visibilityState "hidden"
+ * (the first document is "visible", the new process after a cross-site load
+ * is not, and neither setBackgroundThrottling(false), startPainting, focus
+ * emulation nor a lifecycle override changed it), so a page that pauses when
+ * hidden will pause here though it keeps painting.
+ *
+ * The server decides how many lanes there may be and which are idle
+ * (server/src/lanes.ts); this is only the window, made and destroyed when the
+ * app's own renderer asks (`ag:laneOpen`, `ag:laneClose`). The count and the
+ * memory are capped here too, because this is where they are spent.
+ */
+const LANE_FRAME_RATE = 30;
+const LANE_MAX = 4;
+/** Working set of every lane's processes together, in MB. A lane is a renderer
+ *  plus a guest; software paint makes an animated page dear. */
+const LANE_RSS_MB = Number(process.env.AGENTGLASS_LANE_RSS_MB) || 2048;
+/** id -> its window, its guest, and its container. Ids are what the server minted.
+ *  @type {Map<string, { host: Electron.BrowserWindow, guest: Electron.WebContents | null, slug: string, private: boolean }>} */
+const laneHosts = new Map();
+
+/** Combined working set of the lanes' processes, in MB. */
+/* CEILING: this is checked when a lane opens, not while it runs. A lane on a
+   heavy animated page can grow past the cap after it opened, and nothing stops
+   it short of `lane close`, the idle TTL, or the app. */
+function laneRssMb() {
+  const pids = new Set();
+  for (const l of laneHosts.values()) {
+    for (const wc of [l.host.isDestroyed() ? null : l.host.webContents, l.guest && !l.guest.isDestroyed() ? l.guest : null]) {
+      const pid = wc?.getOSProcessId?.();
+      if (pid) pids.add(pid);
+    }
+  }
+  let kb = 0;
+  for (const m of app.getAppMetrics()) if (pids.has(m.pid)) kb += m.memory?.workingSetSize ?? 0;
+  return kb / 1024;
+}
+
+/**
+ * @param {string} id
+ * @param {string} slug the container the lane browses in: a profile id, "" for
+ *   the person's own, or the lane's own id for a private one.
+ */
+function createLaneHost(id, slug) {
+  const host = new BrowserWindow({
+    show: false,
+    width: 1280,
+    height: 800,
+    title: `agentglass lane ${id}`,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      webviewTag: true,
+      offscreen: true,
+      backgroundThrottling: false,
+    },
+  });
+  host.webContents.setFrameRate(LANE_FRAME_RATE);
+  guardWebviews(host, { lane: true });
+  const entry = /** @type {NonNullable<ReturnType<typeof laneHosts.get>>} */ ({ host, guest: null, slug, private: slug === id });
+  host.webContents.on("did-attach-webview", (_e, guest) => { entry.guest = guest; });
+  laneHosts.set(id, entry);
+  host.once("closed", () => { laneHosts.delete(id); });
+  host.loadURL(`${APP_ORIGIN}/#lane=${encodeURIComponent(id)}${slug ? `&p=${slug}` : ""}`);
+  return host;
+}
+
+/** @param {Electron.WebContents} wc */
+const isLaneHost = (wc) => [...laneHosts.values()].some((l) => !l.host.isDestroyed() && l.host.webContents === wc);
+
+/** Destroy a lane's window, and its cookie jar when the lane was the only one who had it.
+ *  @param {string} id */
+function destroyLaneHost(id) {
+  const l = laneHosts.get(id);
+  if (!l) return false;
+  laneHosts.delete(id);
+  if (!l.host.isDestroyed()) l.host.destroy();
+  if (l.private) {
+    /* A private lane's jar is its own and nobody can come back to it: wiped, not
+       left on disk under a name that says nothing. */
+    const ses = session.fromPartition(`persist:agentglass-browser-${l.slug}`);
+    void ses.clearStorageData().then(() => ses.clearCache()).catch(() => { /* the profile dir goes on its own */ });
+  }
+  return true;
+}
+
 function createWindow() {
   const st = readWindowState();
   const place = onSomeDisplay(st, screen) ? { x: st.x, y: st.y } : {};
@@ -3903,7 +4023,12 @@ function createWindow() {
     e.preventDefault();
     try { win.webContents.send("ag:app-back", { back: cmd === "browser-backward" }); } catch { /* gone */ }
   });
-  win.on("closed", () => { if (mainWindow === win) mainWindow = null; });
+  win.on("closed", () => {
+    if (mainWindow === win) mainWindow = null;
+    /* A lane host is a window too: left alive, closing the app's window would
+       not end the app, which would keep running with nothing on screen. */
+    for (const id of Array.from(laneHosts.keys())) destroyLaneHost(id);
+  });
 }
 
 /**
@@ -4091,7 +4216,37 @@ app.whenReady().then(async () => {
   // The desk's key, to a window's own page and to nothing a window hosts: the
   // agent browser's guests are webviews, and a page an agent opened must not
   // be the one thing on this machine that can let its hold go.
-  ipcMain.on("ag:deskKey", (e) => { e.returnValue = e.sender.getType() === "window" ? deskKey : null; });
+  /* Lanes are made and destroyed by the app's own renderer, at the server's
+     request (server/src/browserdrive.ts, the lane manager). Only that window
+     may: a lane host or a guest asking for another window is not a thing. */
+  ipcMain.handle("ag:laneOpen", (e, id, slug) => {
+    if (!mainWindow || e.sender !== mainWindow.webContents) return { ok: false, error: "only the app window opens lanes" };
+    if (typeof id !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) return { ok: false, error: "bad lane id" };
+    if (typeof slug !== "string" || !/^[a-z0-9]{0,16}$/.test(slug)) return { ok: false, error: "bad container" };
+    if (laneHosts.has(id)) return { ok: false, error: "that lane exists" };
+    if (laneHosts.size >= LANE_MAX) return { ok: false, error: `${LANE_MAX} lanes are already open` };
+    const used = laneRssMb();
+    if (used > LANE_RSS_MB) return { ok: false, error: `the lanes hold ${Math.round(used)} MB (the cap is ${LANE_RSS_MB}); close one` };
+    createLaneHost(id, slug);
+    return { ok: true };
+  });
+  /* The server's own list of lanes, on every manager heartbeat: a host it no
+     longer knows (its table row went while no manager could be asked to drop
+     it) is destroyed here, so it cannot sit against the cap for ever. */
+  ipcMain.handle("ag:laneKeep", (e, ids) => {
+    if (!mainWindow || e.sender !== mainWindow.webContents || !Array.isArray(ids)) return 0;
+    let gone = 0;
+    for (const id of Array.from(laneHosts.keys())) if (!ids.includes(id) && destroyLaneHost(id)) gone++;
+    return gone;
+  });
+  ipcMain.handle("ag:laneClose", (e, id) => {
+    if (!mainWindow || e.sender !== mainWindow.webContents) return { ok: false, error: "only the app window closes lanes" };
+    return { ok: typeof id === "string" && destroyLaneHost(id) };
+  });
+  /* An offscreen window's contents are typed "offscreen", not "window", so a
+     lane host would be handed nothing and could never register: it is our own
+     page in a window we made, which is why it is let in, and only it. */
+  ipcMain.on("ag:deskKey", (e) => { e.returnValue = (e.sender.getType() === "window" || isLaneHost(e.sender)) ? deskKey : null; });
   // Whether there is a server at all, for a window that opened AFTER the give-up
   // — a reload, or a second window. The push in `reportSidecar` only reaches
   // windows that already exist, and a page that reloads five minutes into a
@@ -4105,6 +4260,8 @@ app.whenReady().then(async () => {
   // The theme's background, on every paint of a theme — see windowBackground.
   // Painted on the window now, so a resize edge matches, and saved for the next.
   ipcMain.on("ag:setWindowBackground", (e, color, both) => {
+    // A lane host runs the same theme code and would save ITS bounds as the app window's.
+    if (isLaneHost(e.sender)) return;
     const bg = windowBackground(color);
     const dark = both && typeof both === "object" ? windowBackground(both.dark) : null;
     const light = both && typeof both === "object" ? windowBackground(both.light) : null;

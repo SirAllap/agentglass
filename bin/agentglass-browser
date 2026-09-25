@@ -849,13 +849,15 @@ def summarize(cmd, value):
                          f"~{len(value.get('changed') or [])} ={value.get('same', 0)}",
                          f"console:{len(value.get('console') or [])}",
                          f"network:{len(value.get('network') or [])}"]
-                        + (["NOT VISIBLE"] if value.get("visible") is False else []))
+                        + (["NOT VISIBLE"] if value.get("visible") is False and not value.get("lane") else []))
     if cmd == "observe":
         bits = [f"{value.get('title', '')!r}", value.get("url", ""),
                 f"tree:{len(value.get('tree') or [])}",
                 f"console:{len(value.get('console') or [])}",
                 f"network:{len(value.get('network') or [])}"]
-        if value.get("visible") is False:
+        # A lane is on nobody's screen by design and its page says "hidden"
+        # after it navigates though it paints: not an alarm there.
+        if value.get("visible") is False and not value.get("lane"):
             bits.append("NOT VISIBLE")
         return " ".join(bits)
     if cmd in ("console", "network"):
@@ -1042,6 +1044,11 @@ def stamped(a, body, who=None):
         body.setdefault("as", who)
     if getattr(a, "page", None):
         body["pageExplicit"] = True
+    # In the one place every request passes, so the verbs that return early (the
+    # screencast's watch, session, cdp, do) reach the lane too and not the
+    # person's window.
+    if getattr(a, "lane", None):
+        body["lane"] = a.lane
     body.setdefault("how", (
         "explicit-page" if getattr(a, "page", None)
         else "active-explicit" if getattr(a, "active", False)
@@ -1082,6 +1089,9 @@ def addressed(a, cmd=None):
     container; and `(None, message)` for an identity that does not, which is a
     refusal rather than a fall-through.
     """
+    if getattr(a, "lane", None):
+        # A lane has one tab and it is the lane's: nothing of this identity's own.
+        return "", None
     if getattr(a, "active", False):
         return "", None
     if getattr(a, "page", None):
@@ -1293,7 +1303,13 @@ def _write_frames(out_dir, frames, start_index):
     paths = []
     for i, fr in enumerate(frames):
         data = str(fr.get("jpeg") or "")
-        raw = base64.b64decode(data.split(",", 1)[1]) if "," in data else b""
+        try:
+            raw = base64.b64decode(data.split(",", 1)[1]) if "," in data else b""
+        except ValueError:
+            # A frame that does not decode is one frame lost, said so, not the
+            # whole recording and a traceback.
+            print(f"frame {start_index + i}: not valid base64, skipped", file=sys.stderr)
+            continue
         path = os.path.join(out_dir, f"frame-{start_index + i:04d}.jpg")
         with open(path, "wb") as f:
             f.write(raw)
@@ -2357,6 +2373,23 @@ def main():
                    help="drop a container you did not create anyway. It closes every tab in it "
                         "and clears its login, so read `profiles` first and know whose it is")
     p = sub.add_parser(
+        "lane",
+        help="private browser windows nobody sees: `lane new`, `lane list`, `lane close ID`, "
+             "then `--lane ID` on any verb",
+        description="A lane is a window of your own that the person never sees and never has to "
+                    "have open: work in it with `--lane ID` on any verb. `lane new` makes one with "
+                    "a fresh, empty cookie jar that is wiped when it closes. `--shared` opens it "
+                    "in the person's own container instead (their logins — say so on purpose); "
+                    "`--as NAME` opens it in a container `profiles` lists. At most a few lanes "
+                    "exist at once and one left idle for 15 minutes is closed. A lane that is "
+                    "closed, or never was, is REFUSED by name — it never falls back to the "
+                    "person's tab.")
+    p.add_argument("action", choices=["new", "list", "close"])
+    p.add_argument("id", nargs="?", help="the lane to close (from `lane new` or `lane list`)")
+    p.add_argument("--force", action="store_true",
+                   help="list every agent's lanes, or close one somebody else opened. "
+                        "Read `lane list` first: it is their work")
+    p = sub.add_parser(
         "whoami",
         help="who you are, whether you still hold a tab, and which container owns the "
              "screen — the pre-flight, and it touches no page",
@@ -2530,6 +2563,10 @@ def main():
                    help="work in the person's own container (the default profile)")
         add_global(sp, "--active", action="store_true",
                    help="act on whichever tab is in front, whoever owns it")
+        if name != "lane":
+            add_global(sp, "--lane", metavar="ID",
+                       help="work in this lane (see `lane new`) instead of the person's window; "
+                            "a lane that is gone is refused, never replaced by the visible tab")
         if name != "settings":
             # `settings` has an argument of its own called `page` — the internal
             # page a webview renders, where "blank" is the only allowed value —
@@ -2931,6 +2968,27 @@ def main():
             body["abort"] = True
             if a.reason is not None:
                 body["reason"] = a.reason
+    elif a.cmd == "lane":
+        # Explicit flags only: the identity derived from the environment must
+        # not decide which cookie jar a lane opens in.
+        # The owner is the identity the caller works as, which `stamped` writes;
+        # `--shared` is the person's container, not an identity, so it is the
+        # caller's own name that owns that lane.
+        body = {"action": a.action}
+        if getattr(a, "shared", False):
+            body["as"] = my_name(None)
+        if getattr(a, "force", False) and a.action != "new":
+            body["force"] = True
+        if a.action == "new":
+            if getattr(a, "shared", False):
+                body["shared"] = True
+            elif getattr(a, "asProfile", None):
+                body["profile"] = a.asProfile
+        elif a.action == "close":
+            if not a.id:
+                print("lane close needs the lane id (see `lane list`)", file=sys.stderr)
+                return 1
+            body["id"] = a.id
     elif a.cmd == "whoami":
         # No page, no selector, nothing to validate: the whole request is who
         # this shell is, and the answer is composed by the relay out of the tab
@@ -3170,7 +3228,12 @@ def main():
         if held:
             body["tab"] = held
 
-    if a.cmd in ("newtab", "open") and who:
+    # A lane has one tab and it is the lane's: the tab this identity holds in the
+    # person's window is not a thing to address there, so none of the tab
+    # bookkeeping below applies (the host refuses a page that is not its own).
+    lane = getattr(a, "lane", None)
+
+    if a.cmd in ("newtab", "open") and who and not lane:
         mine = my_tab(who)
         # NAMING A TAB IS THE WHOLE ANSWER. `--page t63 open <url>` set the
         # identity's `profile` here, and the panel routes an `open` that
@@ -3239,7 +3302,7 @@ def main():
     # `agentglass-browser --page t17 whoami` parses; sending it would ask a
     # question about the list while naming one page, which the relay refuses.
     # Better to answer the question that was actually asked.
-    if a.cmd in ("whoami", "profiles"):
+    if a.cmd in ("whoami", "profiles", "lane"):
         body.pop("page", None)
 
     # ── EVERY VERB GOES TO YOUR OWN TAB ─────────────────────────────────────
@@ -3257,7 +3320,11 @@ def main():
     # the screen — never about a page inside a tab. They are in here so they are
     # not auto-addressed at this identity's tab, and `page` is stripped from
     # them below so a stray global `--page` cannot address them either.
-    TAB_OPS = {"tabs", "tab", "newtab", "closetab", "profiles", "whoami", "health", "settings", "scrape"}
+    TAB_OPS = {"tabs", "tab", "newtab", "closetab", "profiles", "whoami", "health", "settings", "scrape", "lane"}
+    if lane:
+        # Every verb is about the lane's one tab: nothing here addresses a tab of
+        # the identity's own, which lives in the person's window.
+        TAB_OPS = TAB_OPS | {a.cmd}
     # `open` under `--shared` carries neither a page nor a profile ON PURPOSE:
     # the person's own container IS the empty profile field, so "make me a tab
     # there" is a request with nothing on it. That is the one shape that looks

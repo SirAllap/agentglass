@@ -1,6 +1,7 @@
 import { lazy, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { WatchEvent, SessionRollup } from "../../shared/types.ts";
 import { useLive } from "./lib/useLive.ts";
+import { useLaneManager } from "./lib/laneManager.ts";
 import { subscribeWorktreeJump, worktreeJump, requestWorktreeJump } from "./lib/worktreeJump.ts";
 import type { SystemNote } from "./lib/sysNotify.ts";
 import { setAlertGoto } from "./lib/sysNotify.ts";
@@ -340,6 +341,8 @@ export default function App() {
   // fleet spine reads them in every view, and holding them would freeze a
   // streaming answer mid-word.
   const { events, conn, lastEvent, openTools } = useLive(anyPanelOpen);
+  // Offers to make the hidden windows agents work in; needs no panel open.
+  useLaneManager();
   // The dashboard draws from the live feed; on screen at launch, the cover waits
   // for the feed's first answer rather than showing an empty board fill in.
   useCoverHold("dashboard", !IS_DEMO && dashActive && conn === "connecting");

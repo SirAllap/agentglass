@@ -1177,6 +1177,17 @@ export interface BrowserUseStatus {
   desktop: boolean;
 }
 
+/** One open lane, as the Browser panel's quiet row and `lane list` show it. */
+export interface LaneRow {
+  id: string;
+  /** Who opened it — self-asserted, like every `as`. */
+  as?: string;
+  container: "private" | "shared" | "named";
+  name?: string;
+  created: number;
+  lastAsk: number;
+}
+
 export interface BrowserAskFrame {
   id: string;
   /** Kept in step with BrowserOp in server/src/browserdrive.ts by hand, and the
@@ -1296,6 +1307,7 @@ export interface BrowserAskFrame {
     /* One line: window open, panel mounted, page alive — see §15 of the
        browser spec. Answered even when there is nothing to drive, which is
        the point of it. */
+    | "lane"
     | "health";
   args: Record<string, unknown>;
 }

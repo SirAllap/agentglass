@@ -92,6 +92,15 @@ complement, rather than replace, the private reporting path below.
   out (`AGENTGLASS_GATE_TIMEOUT`, 300s) falls through rather than blocking your
   agents. Set `AGENTGLASS_GATE_FAILCLOSED=1` if you would rather a timeout or an
   unreachable control plane denied the call.
+- **Who receives a browser ask is the app's to say.** Registering a window that
+  can drive the built-in browser (`/browser/ready`), or the app window that makes
+  lane hosts, decides who is sent every ask, fill text and URLs included, so it
+  is held to the same key as releasing a hold. The same ceiling applies, and one
+  more: where the app **adopts** a server that is already running (a sidecar left
+  from an earlier launch, one started by hand) that server has no desk key, so
+  the `Origin` rule is all there is and a caller holding the machine token can
+  register. An agent's lane is likewise only as private as `as` is honest: an
+  identity is a claim, not a credential.
 - **A held call is not released by the process being held.** Answering one
   (`/gate/decide`) needs a paired device with the `answer` grant, or — where the
   desktop app started the server — the app's own key, which it mints at launch

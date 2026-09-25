@@ -22,6 +22,7 @@
 // back reflowed to a single column.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { CloseButton } from "./CloseButton.tsx";
+import { LanesRow } from "./LanesRow.tsx";
 import { Portal } from "./Portal.tsx";
 import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
 import { BROWSER_PARTITION, HAS_BROWSER, IS_DESKTOP, browserDevtools, browserDevtoolsClose, browserDevtoolsRect, browserDevtoolsZoom, browserCdp, browserZoom, browserShelfRead, captureFullPage, cookieSources, onDevtoolsZoom, onDevtoolsOpen, onBrowserZoom, onBrowserOpenTab, onBrowserKey, onBrowserSearch, onBrowserInspect, setActiveBrowserGuest } from "../lib/desktop.ts";
@@ -2690,6 +2691,7 @@ export function BrowserView({ active: viewOn, scope }: {
             style={{ background: "var(--bg2)", color: "var(--text)" }} />
         </div>
       )}
+      <LanesRow />
     </div>
   );
 

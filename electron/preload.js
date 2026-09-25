@@ -60,6 +60,10 @@ contextBridge.exposeInMainWorld("agentglass", {
   deskKey: (() => {
     try { return ipcRenderer.sendSync("ag:deskKey") || null; } catch { return null; }
   })(),
+  /** Make or destroy a lane's hidden window. Answered only for the app's own window. */
+  laneOpen: (/** @type {string} */ id, /** @type {string} */ slug) => ipcRenderer.invoke("ag:laneOpen", id, slug),
+  laneClose: (/** @type {string} */ id) => ipcRenderer.invoke("ag:laneClose", id),
+  laneKeep: (/** @type {string[]} */ ids) => ipcRenderer.invoke("ag:laneKeep", ids),
   remoteEnabled: () => ipcRenderer.invoke("ag:remoteEnabled"),
   /** @param {boolean} on */
   setRemote: (on) => ipcRenderer.invoke("ag:setRemote", on),

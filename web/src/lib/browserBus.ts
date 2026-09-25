@@ -30,7 +30,7 @@ let handler: ((ask: BrowserAskFrame) => void) | null = null;
  */
 let id = "";
 export function clientId(): string {
-  if (!id) id = `w${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+  if (!id) id = `w${crypto.randomUUID()}`;
   return id;
 }
 
@@ -466,7 +466,19 @@ export function setBrowserAskHandler(fn: ((ask: BrowserAskFrame) => void) | null
  * has no panel mounted at the moment an ask lands.
  */
 export function emitBrowserAsk(ask: BrowserAskFrame): void {
+  /* Making and destroying a lane's window is the app's, whether or not a panel
+     is mounted: the point of a lane is that its agent needs no Browser view. */
+  if (ask.op === "lane") {
+    if (laneHandler) laneHandler(ask);
+    else void api.browserResult({ client: clientId(), id: ask.id, ok: false, error: "this window does not make lanes" }).catch(() => { /* already timed out */ });
+    return;
+  }
   if (handler) handler(ask);
+}
+
+let laneHandler: ((ask: BrowserAskFrame) => void) | null = null;
+export function setLaneAskHandler(fn: ((ask: BrowserAskFrame) => void) | null): void {
+  laneHandler = fn;
 }
 
 /** The tab and profile verbs, reachable from a test. `serveBrowserAsk` reports

@@ -57,7 +57,8 @@ import { budgetHoldFor } from "./budget.ts";
 import { gateCwd, gateRuleFor } from "./gaterules.ts";
 import { parseControlCmd } from "./control.ts";
 import { outwardAction, outwardLine } from "./outward.ts";
-import { dropBrowserTarget, askBrowser, browserReadyCount, exportAudit, noteBrowserReady, parseAsk, setBrowserSink, settleBrowser, type BrowserOp, runSteps, waitForEvents, recordFrames, traceRecording, auditAsScript, downloadFile, runLanes, withObservation, parseScrape, runScrape } from "./browserdrive.ts";
+import { listLanes } from "./lanes.ts";
+import { gateLane, dropBrowserTarget, askBrowser, browserReadyCount, exportAudit, noteBrowserManager, noteBrowserReady, parseAsk, setBrowserSink, settleBrowser, type BrowserOp, runSteps, waitForEvents, recordFrames, traceRecording, auditAsScript, downloadFile, runLanes, withObservation, parseScrape, runScrape } from "./browserdrive.ts";
 import { browserUseStatus, installSkill, refreshSkill } from "./browseruse.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
 import { decodeOtlpTraces, decodeOtlpLogs } from "./otlp_pb.ts";
@@ -1567,6 +1568,29 @@ function vouchedOrigin(o: string): boolean {
   try {
     return trusted(new URL(o).hostname);
   } catch { return false; }
+}
+
+/**
+ * Who may say "I am a window that can drive a browser". Registering decides who
+ * receives every ask — fill text and URLs included — so it is not a thing the
+ * machine token buys: every agent shell holds that. Where the desktop app
+ * started this server, only the app's own renderer holds the key (desk.ts) and
+ * an Origin opens nothing. On a server started by hand there is no key, and the
+ * Origin rule is all there is: it turns away the Origin-less `curl` and lets a
+ * deliberate forgery through, the limit SECURITY.md states for such a server.
+ */
+/*
+ * CEILING, stated where it is decided: where the desktop app ADOPTS a server
+ * that was already running (electron/main.js pickPort, `adopt`), that server has
+ * no desk key, DESK_STARTED is false and the Origin rule below is all there is,
+ * so a machine-token holder that sets one can register. Closing it needs the app
+ * to refuse adoption, or a first-contact key exchange, and neither is in this
+ * change. SECURITY.md says the same.
+ */
+function mayHostBrowser(req: Request): boolean {
+  if (DESK_STARTED) return deskKeyOk(req);
+  const o = req.headers.get("origin");
+  return !!o && vouchedOrigin(o);
 }
 
 function localOrigin(req: Request): boolean {
@@ -4349,6 +4373,12 @@ const server = Bun.serve<WsData>({
       if (!trustedCaller(req, from)) return csrfBlocked();
       return json({ ok: true, entries: exportAudit() });
     }
+    /* The lanes that are open, for the Browser panel's quiet row. A read, so the
+       same gate as the audit; ids and owners, nothing a page said. */
+    if (pathname === "/browser/lanes" && req.method === "GET") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      return json({ ok: true, lanes: listLanes() });
+    }
     const browserDataPost = pathname === "/browser/places" || pathname === "/browser/places/forget" || pathname === "/browser/visit";
     if (pathname.startsWith("/browser/") && req.method === "POST" && !browserDataPost) {
       if (!trustedCaller(req, from)) return csrfBlocked();
@@ -4356,8 +4386,12 @@ const server = Bun.serve<WsData>({
       if (op === "ready") {
         // A window saying it has a browser panel that can answer. Heartbeat, so
         // a window that dies without saying goodbye stops being counted.
+        if (!mayHostBrowser(req)) return json({ ok: false, error: "only the desktop app can register a browser window" }, 403);
         let b: any = {};
         try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+        // The app's own window registering to make lane hosts, which needs no panel.
+        // The lanes it knows come back so the app can destroy a host the table has forgotten.
+        if (b.manager === true) return json({ ok: noteBrowserManager(b.client, b.on !== false), lanes: listLanes().map((l) => l.id) });
         return json({ ok: noteBrowserReady(b.client, b.on !== false, b.lanes) });
       }
       if (op === "result") {
@@ -4369,6 +4403,17 @@ const server = Bun.serve<WsData>({
           diagnosis: b.diagnosis,
         }, typeof b.client === "string" ? b.client : "");
         return json({ ok: true, known });
+      }
+      /* A request that names a lane is gated ONCE, here, for every verb the relay
+         answers itself as much as the ones it forwards: closed, unknown or
+         somebody else's is a named refusal before anything is asked, and an open
+         one is put in scope so every ask this request makes goes to that lane
+         and never to the person's tab (browserdrive.ts, laneScope). */
+      if (op !== "lane") {
+        let pre: unknown = null;
+        try { pre = await req.clone().json(); } catch { /* the route reports its own bad json */ }
+        const refused = gateLane(op, pre);
+        if (refused) return json({ ok: false, error: refused });
       }
       if (op === "audit") {
         /* §16 built this list to prove what an agent touched; §12 wants the
@@ -8395,9 +8440,18 @@ const server = Bun.serve<WsData>({
       if (ws.data?.kind === "events" && typeof msg === "string" && msg.length < 512 && msg.startsWith("{")) {
         let f: { type?: unknown; clientId?: unknown; browser?: unknown } = {};
         try { f = JSON.parse(msg); } catch { return; }
-        if (f.type === "hello" && f.browser === true && typeof f.clientId === "string" && f.clientId && f.clientId.length <= 128) {
-          const prev = (ws.data as { clientId?: string }).clientId;
-          if (prev && browserSockets.get(prev) === ws) browserSockets.delete(prev);
+        /* Named once, and only by a socket that is not a paired device: a phone
+           or a dashboard tab has no browser to host, and a socket that could
+           rename itself at will would be a way to squat on another window's
+           name. The role itself is granted by /browser/ready, which is gated. */
+        if (f.type === "hello" && f.browser === true && typeof f.clientId === "string" && f.clientId && f.clientId.length <= 128
+          && !ws.data?.deviceId && !(ws.data as { clientId?: string }).clientId) {
+          /* A later hello under the same id takes over from a socket that is still
+             open, on purpose: a window that reconnects after a network flap says
+             hello before the server has noticed the old socket is dead, and
+             refusing it would leave that window unaddressable for a minute. The
+             id is what protects it (a random UUID, in no route or log), so the
+             ceiling is: whoever learns a window's id can take its asks. */
           (ws.data as { clientId?: string }).clientId = f.clientId;
           browserSockets.set(f.clientId, ws);
         }
