@@ -13,7 +13,7 @@
 import { resolve, dirname, relative, sep } from "node:path";
 // readFileSync: /etc/wsl.conf, for the Windows drive translation below.
 import { readFileSync, statSync } from "node:fs";
-import { inScope } from "./config.ts";
+import { inScopeReal } from "./config.ts";
 import { record } from "./gitlog.ts";
 import { currentLabel, resumedAs } from "./loopwatch.ts";
 import { withSpawnSlot } from "./spawnpool.ts";
@@ -439,7 +439,7 @@ export function commit(root: string, files: string[], title: string, body: strin
   // Source Control panel's own commit. This is the older commit-composer path
   // and it was the one mutating git endpoint that never checked: a cockpit
   // opened for one project could still commit into any repo on the machine.
-  if (!inScope(absRoot)) return { ok: false, error: "outside the open project — open the parent folder to work across repos" };
+  if (!inScopeReal(absRoot)) return { ok: false, error: "outside the open project — open the parent folder to work across repos" };
   if (!title.trim()) return { ok: false, error: "commit title required" };
 
   const rels = (Array.isArray(files) ? files : []).map((f) => String(f)).filter(Boolean);
@@ -481,7 +481,7 @@ export function amend(root: string, files: string[], title: string, body: string
   if (!COMMIT_ENABLED) return { ok: false, error: "commit is disabled (AGENTGLASS_COMMIT_DISABLED=1)" };
   const absRoot = safeAbs(root);
   if (!absRoot) return { ok: false, error: "invalid repo path" };
-  if (!inScope(absRoot)) return { ok: false, error: "outside the open project — open the parent folder to work across repos" };
+  if (!inScopeReal(absRoot)) return { ok: false, error: "outside the open project — open the parent folder to work across repos" };
   if (!title.trim()) return { ok: false, error: "commit title required" };
   // The mirror of gitwork's own guard: never rewrite HEAD in the middle of a
   // merge, rebase, cherry-pick or revert.

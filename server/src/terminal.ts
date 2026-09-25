@@ -26,7 +26,7 @@ import { CONFLICT_EFFORTS, CONFLICT_MODELS } from "../../shared/types.ts";
 import type { ProjectCommand, TerminalCommands, TerminalDisabledReason, TmuxWindow, PtyServerFrame, PtyClientMessage } from "../../shared/types.ts";
 import { safeAbs, repoRootOf, repoRootOfAsync } from "./git.ts";
 import { terminalActive } from "./loopwatch.ts";
-import { inScope, workspaceRoot, terminalDisabledSource, tmuxTerminal, tmuxPrefix } from "./config.ts";
+import { inScope, workspaceRoot, terminalDisabledSource, tmuxTerminal, tmuxPrefix, inScopeReal } from "./config.ts";
 import { engineAttachArgv, engineBenchArgv, engineConsoleArgv, engineWindowRunning, engineSplitRunning } from "./tmuxpane.ts";
 import { confHealth, ensureConf } from "./tmuxconf.ts";
 import { readerSocketPath } from "./bench.ts";
@@ -740,7 +740,7 @@ export function ptyOpen(ws: PtyWs) {
   // In scope, or a copy this server itself wrote: a pull request's file is
   // fetched to a temp path precisely because it is not in the workspace, and
   // the check has to admit that without admitting /tmp in general.
-  const viewable = !!wanted && (inScope(wanted) || tempCopy);
+  const viewable = !!wanted && (inScopeReal(wanted) || tempCopy);
   const editor = viewable && existsSync(wanted!) ? editorFor() : null;
   /*
    * Read-only unless the caller asked for an editor, and never for a copy.

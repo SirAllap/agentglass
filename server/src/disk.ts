@@ -41,10 +41,11 @@
  * avoid it would be.
  */
 
-import { readdirSync, realpathSync, statSync } from "node:fs";
+import { readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { safeAbs } from "./git.ts";
+import { agentglassPrivate, realish } from "./config.ts";
 import type { FindReport } from "./files.ts";
 import type { GrepHit, GrepReport } from "../../shared/types.ts";
 
@@ -103,27 +104,6 @@ function within(p: string, root: string): boolean {
 }
 
 /**
- * The path with its symlinks resolved — including for a file that does not
- * exist yet, by resolving the deepest ancestor that does.
- *
- * A read of a missing file has to be refused with "no such file" rather than
- * with "outside", and that difference is only knowable after the containment
- * check has been given something real to check.
- */
-function realish(abs: string): string {
-  let head = abs;
-  const tail: string[] = [];
-  for (let i = 0; i < 64; i++) {
-    try { return join(realpathSync(head), ...tail); } catch { /* climb */ }
-    const up = dirname(head);
-    if (up === head) return abs;
-    tail.unshift(head.slice(up.length + 1));
-    head = up;
-  }
-  return abs;
-}
-
-/**
  * May the machine search touch this path?
  *
  * Asked of the root of a search AND of every path it hands back, because the
@@ -134,6 +114,7 @@ export function diskAllows(p: unknown): boolean {
   const abs = safeAbs(p);
   if (!abs) return false;
   const real = realish(abs);
+  if (agentglassPrivate(abs)) return false;
   return diskRoots().some((root) => {
     if (!within(real, root)) return false;
     // Hidden is measured from the ROOT, not from "/": a root the operator named

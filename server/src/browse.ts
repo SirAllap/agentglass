@@ -19,12 +19,12 @@
  * rule is loosened here — this is a third door into the same two rooms, not a
  * new room.
  */
-import { readdirSync, statSync, lstatSync, readFileSync, realpathSync } from "node:fs";
+import { readdirSync, statSync, lstatSync, readFileSync } from "node:fs";
 import { failed } from "./refused.ts";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { diskAllows, diskRoots } from "./disk.ts";
 import { safeAbs } from "./git.ts";
-import { inScope, workspaceRoots } from "./config.ts";
+import { agentglassPrivate, inScope, realish, workspaceRoots } from "./config.ts";
 
 /** How many entries one folder hands back. A directory with 40,000 files in it
  *  is not a list anybody reads, and the count says what was left. */
@@ -76,39 +76,21 @@ export function browseAllows(p: unknown): boolean {
 }
 
 /**
- * The path with its symlinks resolved — the deepest ancestor that exists
- * resolved, the rest appended — so a file that is not there yet is judged by
- * where it WOULD be, and refused as "no such file" rather than "outside".
- * Same shape as disk.ts's, kept private there for the same reason it is here:
- * it is a step in a check, not a check.
- */
-function realOf(abs: string): string {
-  let head = abs;
-  const tail: string[] = [];
-  for (let i = 0; i < 64; i++) {
-    try { return join(realpathSync(head), ...tail); } catch { /* climb */ }
-    const up = dirname(head);
-    if (up === head) return abs;
-    tail.unshift(head.slice(up.length + 1));
-    head = up;
-  }
-  return abs;
-}
-
-/**
  * The REAL path this may look at, or null.
  *
  * Judged after the symlinks are resolved, and it is the resolved path that
- * gets read or handed to the desktop. `diskAllows` always did this; the
- * checkout door did not, and a cloned repository that tracks
- * `notes -> ~/.ssh/id_rsa` passed `inScope` on its spelling while `Bun.file`
- * followed the link. A link whose target leaves both worlds is refused the
- * same as typing the target would be.
+ * gets read or handed to the desktop, by both doors: the disk door always
+ * judged the real path, and the checkout door now does too, since a tracked
+ * link's spelling says nothing about its target. A link whose target leaves
+ * both worlds is refused the same as typing the target would be.
  */
 export function browseReal(p: unknown): string | null {
   const abs = safeAbs(p);
   if (!abs) return null;
-  const real = realOf(abs);
+  const real = realish(abs);
+  // Before either door: this app's own directories are never served, even
+  // from a project that contains them.
+  if (agentglassPrivate(real)) return null;
   if (diskAllows(real)) return real;
   /*
    * The checkout door, and it is CLOSED when there is no checkout.
@@ -189,7 +171,6 @@ export function browseDir(pathIn: unknown): BrowseReport {
 }
 
 const safeStat = (p: string) => { try { return statSync(p); } catch { return null; } };
-const realish = (p: string) => { try { return realpathSync(p); } catch { return p; } };
 
 /** How many things are in a folder, for the row. Bounded: this runs once per
  *  visible row and a home directory full of caches must not make a listing

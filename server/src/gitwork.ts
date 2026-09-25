@@ -9,7 +9,7 @@ import { seedWorktree, type SeedReport } from "./worktreeseed.ts";
 import { statSync, readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, rmSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { git, gitAsync, safeAbs, repoRootOfAsync, currentBranch } from "./git.ts";
-import { configuredRepoDirs, panelRepoDirs, workspaceRoots, inScope, hiddenProjects } from "./config.ts";
+import { configuredRepoDirs, panelRepoDirs, workspaceRoots, hiddenProjects, inScopeReal, staysIn } from "./config.ts";
 import { worktreeParent, gitDir } from "./worktree.ts";
 import { observe, noteResolved, noteReopened, stopFor, forget } from "./mergesession.ts";
 import { entered, backoff } from "./loopwatch.ts";
@@ -168,7 +168,8 @@ async function untracked(root: string): Promise<GitFileChange[]> {
     const abs = resolve(root, rel);
     let binary = false, content = "";
     try {
-      if (statSync(abs).size > UNTRACKED_MAX_BYTES) binary = true;
+      // An untracked link is shown, never followed: its target may be anywhere.
+      if (!staysIn(root, abs) || statSync(abs).size > UNTRACKED_MAX_BYTES) binary = true;
       else content = readFileSync(abs, "utf8");
     } catch { continue; }
     if (!binary && content.includes("\0")) binary = true;
@@ -806,7 +807,7 @@ function guard(root: string): GitActionResult | null {
   // A cockpit opened for one project should not be able to commit, stage or
   // discard in a different one. The message names the way out rather than just
   // refusing: scoping to a parent folder is the supported multi-repo setup.
-  if (!inScope(root)) return { ok: false, error: "outside the open project — open the parent folder to work across repos" };
+  if (!inScopeReal(root)) return { ok: false, error: "outside the open project — open the parent folder to work across repos" };
   return null;
 }
 
@@ -4768,6 +4769,7 @@ export function markersLeft(root: string, rels: string[]): string[] {
   const out: string[] = [];
   for (const rel of rels) {
     let text: string;
+    if (!staysIn(root, join(root, rel))) continue;
     try { text = readFileSync(join(root, rel), "utf8"); } catch { continue; }
     if (text.includes("\u0000")) continue;
     for (const line of text.split("\n")) {
@@ -4918,6 +4920,7 @@ export function conflictFile(rootIn: unknown, relIn: unknown): ConflictFile {
   const root = repoRoot(rootIn); if (!root) return { ok: false, ...empty, error: "not a git repository root" };
   const rels = validRels(root, [relIn]);
   if (!rels?.length) return { ok: false, ...empty, error: "invalid path" };
+  if (!staysIn(root, join(root, rels[0]!))) return { ok: false, ...empty, error: "that path leaves the repository" };
   let text: string;
   try { text = readFileSync(join(root, rels[0]!), "utf8"); }
   catch { return { ok: false, ...empty, error: "cannot read that file" }; }
@@ -4950,6 +4953,7 @@ export function conflictBlocks(rootIn: unknown, relIn: unknown): {
   const root = repoRoot(rootIn); if (!root) return { ok: false, blocks: [], error: "not a git repository root" };
   const rels = validRels(root, [relIn]);
   if (!rels?.length) return { ok: false, blocks: [], error: "invalid path" };
+  if (!staysIn(root, join(root, rels[0]!))) return { ok: false, blocks: [], error: "that path leaves the repository" };
   let text: string;
   try { text = readFileSync(join(root, rels[0]!), "utf8"); }
   catch { return { ok: false, blocks: [], error: "cannot read that file" }; }
@@ -5016,6 +5020,8 @@ export function resolveBlocks(rootIn: unknown, relIn: unknown, choicesIn: unknow
   const choices = choicesIn as BlockChoice[];
 
   const abs = join(root, rels[0]!);
+  // A write too: resolving through a link would rewrite whatever it points at.
+  if (!staysIn(root, abs)) return { ok: false, error: "that path leaves the repository" };
   let text: string;
   try { text = readFileSync(abs, "utf8"); } catch { return { ok: false, error: "cannot read that file" }; }
   // The count check below catches a stale parse only when the number of

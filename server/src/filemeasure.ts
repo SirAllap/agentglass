@@ -14,7 +14,7 @@
  */
 import { statSync } from "node:fs";
 import { isViewTemp } from "./viewtemp.ts";
-import { inScope } from "./config.ts";
+import { inScopeReal } from "./config.ts";
 
 /** Past this, the answer is the size rather than a count: a 40MB log is not a
  *  file anybody is reading in a pane with a rail down its side, and reading it
@@ -23,7 +23,7 @@ const MAX_BYTES = 8 * 1024 * 1024;
 
 export async function measureFile(path: string): Promise<{ ok: boolean; lines?: number; error?: string }> {
   if (!path.startsWith("/")) return { ok: false, error: "that is not a path" };
-  if (!inScope(path) && !isViewTemp(path)) return { ok: false, error: "that file is outside this project" };
+  if (!inScopeReal(path) && !isViewTemp(path)) return { ok: false, error: "that file is outside this project" };
   let size = 0;
   try { size = statSync(path).size; } catch { return { ok: false, error: "no such file" }; }
   if (size > MAX_BYTES) return { ok: false, error: "too big to measure" };

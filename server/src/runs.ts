@@ -53,7 +53,7 @@ import { basename, dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { git, repoRootOf, safeAbs } from "./git.ts";
 import { addWorktree, removeWorktree, worktrees } from "./gitwork.ts";
-import { inScope, isWithin } from "./config.ts";
+import { inScope, isWithin, inScopeReal } from "./config.ts";
 import { engineWindowRunning } from "./tmuxpane.ts";
 import { listPanes as livePanes } from "./tmuxctl.ts";
 import { ROSTER } from "./agentprobe.ts";
@@ -313,7 +313,7 @@ export async function startRun(
   // refuses, one leg at a time and with a confusing message.
   const root = repoRootOf(asked) ?? asked;
   const prompt = typeof promptIn === "string" ? promptIn.trim() : "";
-  if (!inScope(root)) return { ok: false, error: "outside the open project" };
+  if (!inScopeReal(root)) return { ok: false, error: "outside the open project" };
   if (!prompt) return { ok: false, error: "a run needs something to ask" };
   const specs = Array.isArray(legsIn) ? (legsIn as RunLegSpec[]) : [];
   if (!specs.length) return { ok: false, error: "a run needs at least one leg" };

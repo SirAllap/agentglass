@@ -16,12 +16,13 @@
 // it before it reaches the filesystem — a listing endpoint that accepts
 // `../../../etc` is a file server for the whole machine.
 
-import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { failed } from "./refused.ts";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve, relative, sep } from "node:path";
 import { git, safeAbs } from "./git.ts";
-import { inScope } from "./config.ts";
+import { inScopeReal, realish, workspaceRoots } from "./config.ts";
+import type { Caller } from "./auth.ts";
 import { diskAllows } from "./disk.ts";
 import { makeViewTempDir } from "./viewtemp.ts";
 
@@ -113,7 +114,7 @@ function inside(rootIn: unknown, relIn: unknown): { root: string; abs: string; r
   if (!root) return { error: "no directory given" };
   try { if (!statSync(root).isDirectory()) return { error: "not a directory" }; }
   catch { return { error: "no such directory" }; }
-  const scoped = inScope(root);
+  const scoped = inScopeReal(root);
   if (!scoped && !diskAllows(root)) return { error: "outside the open project — open the parent folder to work across repos" };
   const rel = typeof relIn === "string" ? relIn : "";
   if (rel.includes("\0")) return { error: "invalid path" };
@@ -122,8 +123,76 @@ function inside(rootIn: unknown, relIn: unknown): { root: string; abs: string; r
   // startsWith would say it is.
   const back = relative(root, abs);
   if (back.startsWith("..") || back.startsWith(sep) || resolve(root, back) !== abs) return { error: "outside the checkout" };
-  if (!scoped && !diskAllows(abs)) return { error: "outside what this search may read" };
+  // Asked of the resolved path whichever way the root was allowed: `rel` may
+  // name a link, or pass through one, and its spelling says nothing about where
+  // it lands.
+  if (scoped ? !inScopeReal(abs) : !diskAllows(abs)) return { error: "outside what this search may read" };
   return { root, abs, rel: back };
+}
+
+/** The refusal every narrowed route answers with. */
+export const HELD_BACK = { ok: false, error: "outside what this key may read" } as const;
+
+/**
+ * Is this path held back from this caller?
+ *
+ * The dot-directories directly under $HOME — ~/.ssh, ~/.config/gh, ~/.aws —
+ * are where a machine keeps its keys. The owner at the desk opens things there
+ * on purpose (their finder and image viewer reach into ~/.cache and ~/.config),
+ * so the desk keeps that. Anything holding a narrower key — a phone paired for
+ * read, a plugin, an understudy run, a seat — does not, unless the open project
+ * itself is that directory or inside it. "Open a project" is not enough on its
+ * own: a project of ~ contains every dot-directory, and whole-machine mode (no
+ * project at all, the default install) contains everything. Judged on the
+ * spelling and on the resolved path.
+ *
+ * The desk is a caller with no token at all (only loopback gets that far) or
+ * the machine token itself. The limit is the list's: a secret kept outside a
+ * dot-directory (a key file in ~/Documents) is still readable to a read key
+ * whose scope contains it.
+ */
+export function heldBackFrom(caller: Caller | null, paths: readonly string[]): boolean {
+  return paths.some(heldBackTest(caller));
+}
+
+/**
+ * The same question as a predicate, with home and the roots resolved once —
+ * for filtering a listing, where asking `heldBackFrom` per entry resolved them
+ * again for every row.
+ */
+export function heldBackTest(caller: Caller | null): (path: string) => boolean {
+  if (!caller || (caller.kind === "machine" && !caller.principal)) return () => false;
+  const home = resolve(homedir());
+  const homes = [...new Set([home, realish(home)])];
+  const roots = workspaceRoots().flatMap((r) => [r, realish(r)]);
+  const held = (x: string): boolean => {
+    for (const h of homes) {
+      const first = relative(h, x).split(sep)[0] ?? "";
+      if (!first.startsWith(".") || first === "..") continue;
+      const dot = join(h, first);
+      if (!roots.some((r) => r === dot || r.startsWith(dot + sep))) return true;
+    }
+    return false;
+  };
+  return (p) => {
+    const lexical = resolve(p);
+    return held(lexical) || held(realish(lexical));
+  };
+}
+
+/**
+ * Every path a /files/ request will open, for `heldBackFrom`.
+ *
+ * `resolve`, the same join `inside` opens with, so the path judged is the path
+ * opened. path.join would glue an absolute `rel` onto the root and judge a path
+ * nobody reads; the test pins an absolute `rel`.
+ */
+export function filesReach(pathname: string, q: URLSearchParams): string[] {
+  const root = q.get("root") || "";
+  const out = pathname === "/files/measure" ? [q.get("path") || ""]
+    : pathname === "/files/exist" ? [root, ...q.getAll("rel").map((r) => resolve(root, r))]
+    : [root, resolve(root, q.get("rel") || "")];
+  return out.filter(Boolean);
 }
 
 /**
@@ -149,7 +218,13 @@ export function fileTree(rootIn: unknown, relIn: unknown): TreeReport {
     if (name === ".git") continue;
     const rel = at.rel ? `${at.rel}/${name}` : name;
     let st;
-    try { st = statSync(join(at.abs, name)); } catch { continue; } // a broken symlink
+    try { st = lstatSync(join(at.abs, name)); } catch { continue; }
+    // A link is listed only when it lands somewhere this listing could open;
+    // otherwise its type and size are a peek at what is on the far side.
+    if (st.isSymbolicLink()) {
+      if ("error" in inside(at.abs, name)) continue;
+      try { st = statSync(join(at.abs, name)); } catch { continue; } // a broken symlink
+    }
     const dir = st.isDirectory();
     entries.push({ name, rel, dir, ...(dir ? {} : { size: st.size }), ...(marks.get(rel) ? { status: marks.get(rel) } : {}) });
     if (entries.length >= MAX_ENTRIES) break;
