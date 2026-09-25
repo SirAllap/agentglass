@@ -23,6 +23,9 @@ import { subscribeProviderUsage, usageOf, busiestOf, providerUsage, resetShort, 
 import { providerInContext } from "../lib/providerContext.ts";
 import { windowLabel } from "../../../shared/quota.ts";
 import { stalenessLabel } from "../lib/usageAge.ts";
+import { paceConfig, subscribePaceConfig } from "../lib/paceConfig.ts";
+import { OLD_READING_MS, windowPace } from "../lib/usagePace.ts";
+import { DayStrip, PaceLines, PaceMarker } from "./PlanPace.tsx";
 import { metersMustHide } from "../lib/topbarFit.ts";
 import { subscribe as subscribeChats, listChats, getActiveChatId, getChat } from "../lib/chatStore.ts";
 import type { AgentKind } from "../lib/agents.ts";
@@ -292,6 +295,10 @@ function PlanPanel({ u, age, at, onClose, onRefresh, busy }: {
   onClose: () => void; onRefresh: () => void; busy: boolean;
 }) {
   const windows = [...u.windows].sort((a, b) => a.minutes - b.minutes);
+  const cfg = useSyncExternalStore(subscribePaceConfig, paceConfig, paceConfig);
+  // Read once per open: a panel that re-ticked its own clock would move the
+  // numbers under the eye, and it is closed again within seconds.
+  const [now] = useState(() => Date.now());
   return (
     <Portal z={10050}>
       {/* The scrim is what closes it. A panel this small does not deserve a
@@ -325,6 +332,7 @@ function PlanPanel({ u, age, at, onClose, onRefresh, busy }: {
         <div className="flex flex-col gap-3 px-3 py-3">
           {windows.map((w) => {
             const reset = resetLabel(w.resetsAt);
+            const wp = windowPace(u.provider, w, now, cfg);
             return (
               <div key={w.label}>
                 <div className="flex items-baseline gap-2">
@@ -332,23 +340,26 @@ function PlanPanel({ u, age, at, onClose, onRefresh, busy }: {
                   <span className="ml-auto text-[11px] tabular-nums"
                     style={{ color: usedColor(w.usedPercent) }}>{w.usedPercent}% used</span>
                 </div>
-                <span className="block rounded-full mt-1.5" style={{ height: 4, background: "color-mix(in srgb, var(--text) 14%, transparent)" }}>
+                <span className="block rounded-full mt-1.5 relative" style={{ height: 4, background: "color-mix(in srgb, var(--text) 14%, transparent)" }}>
                   <span className="block h-full rounded-full" style={{
                     width: `${Math.max(2, Math.min(100, w.usedPercent))}%`,
                     background: usedColor(w.usedPercent),
                   }} />
+                  {wp && <PaceMarker expected={wp.pace.expected} />}
                 </span>
                 {reset && (
                   <span className="block text-[10px] mt-1" style={{ color: "var(--text4)" }}>
                     Resets {reset}
                   </span>
                 )}
+                {wp && <PaceLines wp={wp} now={now} cfg={cfg} oldReading={u.observedAt != null && now - u.observedAt > OLD_READING_MS} />}
               </div>
             );
           })}
           {!windows.length && (
             <span className="text-[11.5px]" style={{ color: "var(--text4)" }}>This provider reports no windows.</span>
           )}
+          <DayStrip provider={u.provider} />
         </div>
       </div>
     </Portal>

@@ -50,6 +50,7 @@ import { getCollisions } from "./collisions.ts";
 import { getUsage, ingestStatusline } from "./usage.ts";
 import { chooseModel, type UsageNow, type Choice } from "./understudy-model.ts";
 import { allProviderUsage } from "./providerusage.ts";
+import { claimPaceAlerts, coerceAlertAt } from "./paceAlert.ts";
 import { refreshCodexUsage } from "./codexusage.ts";
 import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, typedReason, GATE_MAX_MS, gateFailClosed, denyByRule, allowByRule, validGateId } from "./gate.ts";
 import { budgetHoldFor } from "./budget.ts";
@@ -3268,6 +3269,17 @@ const server = Bun.serve<WsData>({
     // section and the notch all read this one answer. No desktop-only gate:
     // there is no path on disk in the payload and nothing here can act.
     if (pathname === "/usage/providers") return json(await allProviderUsage());
+    // A client asks whether a long window has newly reached its alert level.
+    // The server decides and remembers, once for every client, and tells them
+    // all by frame; the answer here is only how many it raised.
+    if (pathname === "/usage/pace-claim" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { alertAt?: unknown } = {};
+      try { b = (await req.json()) as typeof b; } catch { /* an empty body means the default level */ }
+      const fired = claimPaceAlerts(await allProviderUsage(), coerceAlertAt(b?.alertAt));
+      for (const a of fired) broadcast({ type: "pace-alert", data: a });
+      return json({ ok: true, fired: fired.length });
+    }
 
     /*
      * A live Claude Code session handing over the plan windows it got for free

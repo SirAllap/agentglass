@@ -1904,7 +1904,24 @@ export type WsFrame =
   /** Notification prefs changed — on this device, or from another one open on
    *  the same server. Whole object, not a diff: it is small, and a diff would
    *  need its own merge rule the day two tabs edit at once. */
-  | { type: "notify-prefs"; data: NotifyPrefs };
+  | { type: "notify-prefs"; data: NotifyPrefs }
+  /** A long plan window reached the alert level. Decided once on the server
+   *  (see paceAlert.ts there); each client words it in its own working hours. */
+  | { type: "pace-alert"; data: PaceAlert };
+
+export interface PaceAlert {
+  provider: string;
+  /** The provider's display name. */
+  providerLabel: string;
+  /** The window's label, e.g. "weekly". */
+  label: string;
+  usedPercent: number;
+  /** The window's length. */
+  minutes: number;
+  /** Epoch ms. */
+  resetsAt: number;
+  alertAt: number;
+}
 
 export interface AlertNote {
   title: string;

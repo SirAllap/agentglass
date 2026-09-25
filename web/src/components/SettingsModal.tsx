@@ -84,6 +84,8 @@ import type { DepReport, DepStatus } from "../../../shared/deps.ts";
 import { clock24, setClock24 } from "../lib/clockPref.ts";
 import { setSplashOn, splashOn } from "../lib/splashPref.ts";
 import { usageRefreshOn, setUsageRefreshOn } from "../lib/usageRefreshPref.ts";
+import { paceConfig, setPaceConfig, subscribePaceConfig } from "../lib/paceConfig.ts";
+import { hourLabel, type PaceConfig } from "../../../shared/pace.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { bindings, rebind, resetBindings, subscribeBindings, isCustomised, LABELS, DEFAULTS, type ActionId,
          chordFor, hasCustomChord, rebindChord, clearChord, resetChords, chordsCustomised, chordFromEvent, chordLabel,
@@ -799,6 +801,62 @@ function MiniBtn({ label, disabled, onClick, children }: { label: string; disabl
  */
 /** Panes whose content is a grid of cards, not a column of rows. */
 const WIDE_PANES = new Set(["plugins"]);
+
+const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+/** The hours a plan's weekly budget is spread over. See shared/pace.ts. */
+function PacePane() {
+  const cfg = useSyncExternalStore(subscribePaceConfig, paceConfig, paceConfig);
+  const working = cfg.spread === "working";
+  return (
+    <>
+      <Group>Plan pace</Group>
+      <Choice<PaceConfig["spread"]>
+        label="Spread the week's budget over"
+        hint="Working hours earn the budget, so the pace marker holds still overnight and at weekends. Every hour is a straight line across the week."
+        value={cfg.spread}
+        onPick={(spread) => setPaceConfig({ spread })}
+        options={[{ v: "working", label: "Working hours" }, { v: "all", label: "Every hour" }]} />
+      <SettingRow label="Working days" disabled={!working}
+        hint={working && !cfg.workDays.some(Boolean) ? "None ticked: every hour counts, as if Every hour were chosen." : "Days that earn budget."}
+        control={
+          <span className="flex items-center gap-1 justify-self-end">
+            {DAY_NAMES.map((d, i) => (
+              <button key={d} disabled={!working} aria-pressed={cfg.workDays[i]}
+                onClick={() => setPaceConfig({ workDays: cfg.workDays.map((x, j) => (j === i ? !x : x)) })}
+                className="text-[11px] px-1.5 py-1 rounded-md disabled:cursor-not-allowed"
+                style={cfg.workDays[i]
+                  ? { background: "color-mix(in srgb, var(--primary) 55%, transparent)", color: "var(--text)" }
+                  : { color: "var(--text3)" }}>
+                {d}
+              </button>
+            ))}
+          </span>
+        } />
+      <Stepper label="Work starts" hint="Hour the day begins earning budget"
+        value={hourLabel(cfg.workStart)} canDec={working && cfg.workStart > 0} canInc={working && cfg.workStart < cfg.workEnd - 1}
+        onDec={() => setPaceConfig({ workStart: cfg.workStart - 1 })} onInc={() => setPaceConfig({ workStart: cfg.workStart + 1 })} />
+      <Stepper label="Work ends" hint="Hour it stops"
+        value={hourLabel(cfg.workEnd)} canDec={working && cfg.workEnd > cfg.workStart + 1} canInc={working && cfg.workEnd < 24}
+        onDec={() => setPaceConfig({ workEnd: cfg.workEnd - 1 })} onInc={() => setPaceConfig({ workEnd: cfg.workEnd + 1 })} />
+      <Toggle on={cfg.rollover} onClick={() => setPaceConfig({ rollover: !cfg.rollover })}
+        label="Roll unused share forward"
+        hint="Room left over from earlier today may be spent later, up to one extra day's share. Off, a day's share is a hard cap." />
+      <Choice<"1" | "3" | "6">
+        label="Recent burn looks back"
+        hint="How far back the runs-out projection measures your speed"
+        value={String(cfg.burnWindowHours) as "1" | "3" | "6"}
+        onPick={(v) => setPaceConfig({ burnWindowHours: Number(v) })}
+        options={[{ v: "1", label: "1h" }, { v: "3", label: "3h" }, { v: "6", label: "6h" }]} />
+      <Choice<"80" | "90" | "95">
+        label="Alert when a weekly window reaches"
+        hint="One notification per window, and only while Usage is on under Notifications (off by default)"
+        value={String(cfg.alertAt) as "80" | "90" | "95"}
+        onPick={(v) => setPaceConfig({ alertAt: Number(v) })}
+        options={[{ v: "80", label: "80%" }, { v: "90", label: "90%" }, { v: "95", label: "95%" }]} />
+    </>
+  );
+}
 
 function Section({ title, desc, children }: { title?: string; desc?: string; children: React.ReactNode }) {
   return (
@@ -4229,6 +4287,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                         heading, and a group titled twice reads as two groups
                         with nothing in the first. */}
                     <BudgetsPane open={open} />
+                    <PacePane />
                     {/* The consequence of the setting above, made visible.
                         Panes outlive the app, so "how new chats run" quietly
                         decides how much memory is resident on this machine an

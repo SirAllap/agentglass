@@ -14,6 +14,7 @@ import { talkBody, talkShouldNotify, talkSummary, talkUrgency } from "./talkNoti
 import { raiseAlarm } from "./alarm.ts";
 import { nudgeReminders } from "./reminderStore.ts";
 import { receiveNotifyPrefs } from "./notifyPrefsStore.ts";
+import { showPaceAlert } from "./paceAlert.ts";
 
 const MAX_EVENTS = 2000;
 const FLUSH_MS = 220; // coalesce bursts into ~5 renders/sec
@@ -219,6 +220,11 @@ export function useLive(paused = false): LiveData {
         // the store adopts whatever the server now says is current rather
         // than trusting only its own save.
         receiveNotifyPrefs(frame.data);
+        return;
+      }
+      if (frame.type === "pace-alert") {
+        // Decided once on the server; this only words it in this person's hours.
+        showPaceAlert(frame.data);
         return;
       }
       if (frame.type === "plugin") {

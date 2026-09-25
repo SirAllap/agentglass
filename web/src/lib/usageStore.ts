@@ -1,6 +1,8 @@
 import { api } from "./api.ts";
 import type { ProviderUsage } from "../../../shared/types.ts";
 import { usageRefreshOn, shouldRefresh } from "./usageRefreshPref.ts";
+import { recordSnapshot } from "./paceSamples.ts";
+import { checkPaceAlerts } from "./paceAlert.ts";
 
 /**
  * Plan quota for every provider, polled once for the whole app.
@@ -21,6 +23,12 @@ let poller: ReturnType<typeof setInterval> | null = null;
  *  moves by a fraction of a percent a minute. Polling harder than this once
  *  earned a 429 that made the meters vanish entirely. */
 const EVERY_MS = 5 * 60_000;
+
+/** Everything that wants to see a fresh reading, so a new poll site cannot skip one. */
+function onSnapshot(next: ProviderUsage[]): void {
+  recordSnapshot(next);
+  checkPaceAlerts(next);
+}
 
 export const providerUsage = (): ProviderUsage[] | null => snapshot;
 
@@ -60,7 +68,7 @@ export function subscribeProviderUsage(fn: () => void): () => void {
     const load = () => api.providerUsage()
       // A failed poll leaves the last good answer standing: the meters must
       // never blink out because one request lost.
-      .then((next) => { snapshot = next; void maybeRefreshCodex(); })
+      .then((next) => { snapshot = next; onSnapshot(next); void maybeRefreshCodex(); })
       .catch(() => { /* offline — keep what we have */ })
       .finally(() => { firstFetchDone = true; for (const l of listeners) l(); });
     load();
@@ -89,6 +97,7 @@ export function subscribeProviderUsage(fn: () => void): () => void {
 export async function refreshProviderUsage(): Promise<void> {
   try {
     snapshot = await api.providerUsage();
+    onSnapshot(snapshot);
   } catch { /* offline — keep what we have */ } finally {
     firstFetchDone = true;
     for (const l of listeners) l();
@@ -117,7 +126,7 @@ async function maybeRefreshCodex(): Promise<void> {
   lastPing = now;
   try {
     const r = await api.refreshCodexUsage();
-    if (r.ok) snapshot = await api.providerUsage();
+    if (r.ok) { snapshot = await api.providerUsage(); onSnapshot(snapshot); }
   } catch { /* the reading simply stays as old as it was */ }
   for (const l of listeners) l();
 }

@@ -21,7 +21,7 @@ export type NotifyKind =
   | "failures" // a tool error, or a high failure rate
   | "autopilot" // the understudy or the Lantern watch says something needs a person
   | "reminders" // an alarm the person set themselves came due
-  | "usage"; // a usage limit reset
+  | "usage"; // a plan window crossed the alert level, or a usage limit reset
 
 /** chip = the title-bar strip and its popover; bell = the bell/toast/unread
  *  badge. Both are always DRAWN somewhere quiet; these four are what may
@@ -61,7 +61,7 @@ export const NOTIFY_KIND_LABEL: Record<NotifyKind, { label: string; desc: string
   failures: { label: "Failures", desc: "A tool error, or a high failure rate." },
   autopilot: { label: "Autopilot needs you", desc: "The understudy or the Lantern watch says something needs a person." },
   reminders: { label: "Reminders", desc: "An alarm you set yourself came due." },
-  usage: { label: "Usage", desc: "A usage limit reset." },
+  usage: { label: "Usage", desc: "A plan window reached your alert level (Budgets › Plan pace), or a usage limit reset." },
 };
 
 export const NOTIFY_CHANNEL_LABEL: Record<NotifyChannel, { label: string; desc: string }> = {
