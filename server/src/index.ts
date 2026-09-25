@@ -57,7 +57,7 @@ import { budgetHoldFor } from "./budget.ts";
 import { gateCwd, gateRuleFor } from "./gaterules.ts";
 import { parseControlCmd } from "./control.ts";
 import { outwardAction, outwardLine } from "./outward.ts";
-import { askBrowser, browserReadyCount, exportAudit, noteBrowserReady, parseAsk, setBrowserSink, settleBrowser, type BrowserOp, runSteps, waitForEvents, recordFrames, traceRecording, auditAsScript, downloadFile, runLanes, withObservation, parseScrape, runScrape } from "./browserdrive.ts";
+import { dropBrowserTarget, askBrowser, browserReadyCount, exportAudit, noteBrowserReady, parseAsk, setBrowserSink, settleBrowser, type BrowserOp, runSteps, waitForEvents, recordFrames, traceRecording, auditAsScript, downloadFile, runLanes, withObservation, parseScrape, runScrape } from "./browserdrive.ts";
 import { browserUseStatus, installSkill, refreshSkill } from "./browseruse.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
 import { decodeOtlpTraces, decodeOtlpLogs } from "./otlp_pb.ts";
@@ -1476,6 +1476,9 @@ const BUDGET_WRITE_ENABLED = process.env.AGENTGLASS_BUDGET_WRITE_DISABLED !== "1
 // on its own, which is a revoke in the list and not on the wire.
 type WsData = ({ kind: "events" } | { kind: "notify" } | PtyWsData) & { ip?: string | null; deviceId?: string | null };
 const clients = new Set<ServerWebSocket<WsData>>();
+/** A window's own name for itself (its `hello`) to its latest socket, which is
+ *  how a browser ask reaches one window instead of all of them. */
+const browserSockets = new Map<string, ServerWebSocket<WsData>>();
 /**
  * When each event-stream socket last PROVED its peer is still running.
  *
@@ -1990,7 +1993,15 @@ setAlertSink({
 });
 // The browser relay speaks through the same socket, and counts the same
 // clients: "is there a window to ask" is exactly "is anybody listening".
-setBrowserSink({ send: (ask) => broadcast({ type: "browser", data: ask }), listeners: () => clients.size });
+setBrowserSink({
+  send: (ask, clientId) => {
+    const ws = browserSockets.get(clientId);
+    if (!ws || !clients.has(ws)) return false;
+    try { return ws.send(JSON.stringify({ type: "browser", data: ask } satisfies WsFrame)) !== 0; } catch { return false; }
+  },
+  listeners: () => clients.size,
+  live: (id) => { const w = browserSockets.get(id); return !!w && clients.has(w); },
+});
 // The task store has a second writer — the user's editor — so a change there
 // reaches the panel through a sweep rather than through anything we did.
 setTaskChangeHook(() => broadcast({ type: "tasks" }));
@@ -4347,7 +4358,7 @@ const server = Bun.serve<WsData>({
         // a window that dies without saying goodbye stops being counted.
         let b: any = {};
         try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
-        return json({ ok: noteBrowserReady(b.client, b.on !== false) });
+        return json({ ok: noteBrowserReady(b.client, b.on !== false, b.lanes) });
       }
       if (op === "result") {
         // The window reporting back. Not an agent-facing route.
@@ -4356,7 +4367,7 @@ const server = Bun.serve<WsData>({
         const known = settleBrowser(b.id, {
           ok: b.ok === true, value: b.value, error: typeof b.error === "string" ? b.error : undefined,
           diagnosis: b.diagnosis,
-        });
+        }, typeof b.client === "string" ? b.client : "");
         return json({ ok: true, known });
       }
       if (op === "audit") {
@@ -8372,12 +8383,25 @@ const server = Bun.serve<WsData>({
         return;
       }
       clients.delete(ws);
+      // Only if it is still the latest: a reconnect has already replaced it.
+      const cid = (ws.data as { clientId?: string }).clientId;
+      if (cid && browserSockets.get(cid) === ws) { browserSockets.delete(cid); dropBrowserTarget(cid); }
     },
     message(ws: ServerWebSocket<WsData>, msg) {
       // A frame that did arrive is still proof somebody is running — for a
       // pty this is a keystroke or a resize, not just the event stream.
       alive.set(ws, Date.now());
-      if (ws.data?.kind === "pty") ptyMessage(ws, msg as string | Buffer);
+      if (ws.data?.kind === "pty") { ptyMessage(ws, msg as string | Buffer); return; }
+      if (ws.data?.kind === "events" && typeof msg === "string" && msg.length < 512 && msg.startsWith("{")) {
+        let f: { type?: unknown; clientId?: unknown; browser?: unknown } = {};
+        try { f = JSON.parse(msg); } catch { return; }
+        if (f.type === "hello" && f.browser === true && typeof f.clientId === "string" && f.clientId && f.clientId.length <= 128) {
+          const prev = (ws.data as { clientId?: string }).clientId;
+          if (prev && browserSockets.get(prev) === ws) browserSockets.delete(prev);
+          (ws.data as { clientId?: string }).clientId = f.clientId;
+          browserSockets.set(f.clientId, ws);
+        }
+      }
     },
     /** The answer to the sweep's ping, and — for an event-stream or notify
      *  socket — the only routine evidence its peer ever sends; a pty socket

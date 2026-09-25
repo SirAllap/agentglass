@@ -66,6 +66,7 @@ async function openWindow() {
   try { ws?.close(); } catch { /* fine */ }
   ws = new WebSocket(base.replace("http", "ws") + "/stream");
   await new Promise((r) => ws!.addEventListener("open", r));
+  ws!.send(JSON.stringify({ type: "hello", clientId: CLIENT, browser: true }));
   ws.addEventListener("message", async (ev) => {
     let frame: { type?: string; data?: { op?: string; id?: string; args?: Record<string, unknown> } };
     try { frame = JSON.parse(String((ev as MessageEvent).data)); } catch { return; }
@@ -76,7 +77,7 @@ async function openWindow() {
     await fetch(base + "/browser/result", {
       method: "POST",
       headers: { "content-type": "application/json", Origin: base },
-      body: JSON.stringify({ id: frame.data.id, ...reply }),
+      body: JSON.stringify({ client: CLIENT, id: frame.data.id, ...reply }),
     });
   });
   await fetch(base + "/browser/ready", {

@@ -979,10 +979,10 @@ const realApi = {
   /** Say that this window has a browser panel that can answer an agent's ask —
    *  or that it no longer does. A heartbeat: the server expires it, so a window
    *  that dies without saying goodbye stops being counted. */
-  browserReady: (client: string, on: boolean) => post<{ ok: boolean }>("/browser/ready", { client, on }),
+  browserReady: (client: string, on: boolean, lanes: string[] = []) => post<{ ok: boolean }>("/browser/ready", { client, on, lanes }),
   /** Report what the built-in browser did with an agent's ask. The server is
    *  holding that agent's request open until this lands — see browserdrive.ts. */
-  browserResult: (r: { id: string; ok: boolean; value?: unknown; error?: string; diagnosis?: unknown }) =>
+  browserResult: (r: { client?: string; id: string; ok: boolean; value?: unknown; error?: string; diagnosis?: unknown }) =>
     post<{ ok: boolean; known: boolean }>("/browser/result", r),
   /** Stop offering a project in the picker, or offer it again. Nothing on disk
    *  is touched — see config.ts. */
@@ -2212,8 +2212,8 @@ const demoApi: typeof realApi = {
     windows: 0, desktop: false,
   }),
   browserUseInstall: () => D({ ok: false, error: "unavailable in the demo" }),
-  browserReady: (_client: string, _on: boolean) => D({ ok: true }),
-  browserResult: (_r: { id: string; ok: boolean; value?: unknown; error?: string; diagnosis?: unknown }) => D({ ok: true, known: false }),
+  browserReady: (_client: string, _on: boolean, _lanes?: string[]) => D({ ok: true }),
+  browserResult: (_r: { client?: string; id: string; ok: boolean; value?: unknown; error?: string; diagnosis?: unknown }) => D({ ok: true, known: false }),
   hideProject: (_path: string, _hidden: boolean) => D({ ok: false, hidden: [] as string[], persisted: false, error: "unavailable in the demo" }),
   gitTree: (root: string) => D(demo.gitTree(root)),
   // There is no git behind a demo build, so the Diff view lands on its own

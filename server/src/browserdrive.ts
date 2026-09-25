@@ -260,7 +260,7 @@ const TIMEOUT_MS: Record<BrowserOp, number> = {
 };
 
 /** Requests handed to the window and not yet answered. */
-const pending = new Map<string, { resolve: (r: BrowserReply) => void; timer: ReturnType<typeof setTimeout> }>();
+const pending = new Map<string, { resolve: (r: BrowserReply) => void; timer: ReturnType<typeof setTimeout>; target?: string }>();
 
 /** How this reaches the window. Injected so the whole relay can be tested
  *  without a server, a socket or a browser. */
@@ -279,7 +279,9 @@ const pending = new Map<string, { resolve: (r: BrowserReply) => void; timer: Ret
 export type BrowserWireOp = Exclude<BrowserOp, "whoami">;
 export interface BrowserWireAsk { id: string; op: BrowserWireOp; args: Record<string, unknown> }
 
-let sink: { send: (ask: BrowserWireAsk) => void; listeners: () => number } | null = null;
+/** `send` addresses ONE window. `false` says the address has no live socket (a
+ *  registration that outlived its connection); anything else counts as sent. */
+let sink: { send: (ask: BrowserWireAsk, clientId: string) => unknown; listeners: () => number; live?: (clientId: string) => boolean } | null = null;
 export function setBrowserSink(s: typeof sink) { sink = s; }
 
 /**
@@ -297,25 +299,55 @@ export function setBrowserSink(s: typeof sink) { sink = s; }
  * fifteen-second timeout — so it is a heartbeat with a TTL rather than a flag
  * somebody has to remember to clear on a crash.
  */
-const ready = new Map<string, number>();
+const ready = new Map<string, { at: number; since: number; lanes: string[] }>();
 const READY_TTL_MS = 90_000;
 
-export function noteBrowserReady(client: unknown, on: boolean): boolean {
+/**
+ * `lanes` are the lane names a window hosts; empty for the main window. An ask
+ * goes to exactly one registered window: the host of `args.lane`, else the most
+ * recently REGISTERED one with no lanes (not the latest heartbeat, which would swap the target every 30 s between two windows). The ask used to be broadcast to every open socket,
+ * fill and type text included, so a phone or a dashboard tab read what an agent
+ * typed into a page. Which windows may CLAIM the main role is not decided here:
+ * the newest registration wins, and nobody is authenticated as a window, so a
+ * caller that may POST /browser/ready can take every ask (ceiling, not a fix).
+ */
+export function noteBrowserReady(client: unknown, on: boolean, lanes?: unknown): boolean {
   if (typeof client !== "string" || !client || client.length > 128) return false;
-  if (on) ready.set(client, Date.now());
-  else ready.delete(client);
+  if (!on) { ready.delete(client); return true; }
+  const names = Array.isArray(lanes)
+    ? lanes.filter((l): l is string => typeof l === "string" && l.length > 0 && l.length <= 64).slice(0, 16)
+    : [];
+  ready.set(client, { at: Date.now(), since: ready.get(client)?.since ?? Date.now(), lanes: names });
   return true;
 }
 
 /** How many windows could drive a browser right now. */
 export function browserReadyCount(): number {
   const cutoff = Date.now() - READY_TTL_MS;
-  for (const [id, at] of ready) if (at < cutoff) ready.delete(id);
+  for (const [id, r] of ready) if (r.at < cutoff) ready.delete(id);
   return ready.size;
 }
 
+/** The one window an ask is for, or null when nobody can take it. */
+function pickTarget(lane: unknown): string | null {
+  browserReadyCount();
+  let best: string | null = null;
+  let bestSince = -1;
+  for (const [id, r] of ready) {
+    const fits = typeof lane === "string" && lane ? r.lanes.includes(lane) : r.lanes.length === 0;
+    /* A registration whose socket is gone is not a candidate: a closed window,
+       or a bare POST /browser/ready with no socket, must not win the pick and
+       blackhole every ask while a healthy window sits idle. */
+    if (sink?.live && !sink.live(id)) continue;
+    if (fits && r.since >= bestSince) { best = id; bestSince = r.since; }
+  }
+  return best;
+}
+
 let seq = 0;
-const nextId = () => `b${++seq}`;
+/* Unguessable: a caller that can POST /browser/result must not be able to
+   answer an ask it was never sent by counting. */
+const nextId = () => `b${++seq}-${crypto.randomUUID()}`;
 
 /** The URLs the browser may be sent to. Same rule as the address bar: a page,
  *  not a `file://` read of somebody's keys and not a `javascript:` that would
@@ -3944,6 +3976,15 @@ function askOnce(ask: BrowserAsk): Promise<BrowserReply> {
   if (!panelMounted) {
     return Promise.resolve({ ok: false, error: "the browser view is not open in this window" });
   }
+  const target = pickTarget(ask.args.lane);
+  if (!target) {
+    return Promise.resolve({
+      ok: false,
+      error: typeof ask.args.lane === "string" && ask.args.lane
+        ? `no window hosts lane "${ask.args.lane}"`
+        : "the browser view is not open in this window",
+    });
+  }
   return new Promise<BrowserReply>((resolve) => {
     /* Redaction and the audit line happen here, at the one seam every op
      * passes through on its way back to a caller — not in the panel, which
@@ -3999,24 +4040,41 @@ function askOnce(ask: BrowserAsk): Promise<BrowserReply> {
       pending.delete(ask.id);
       settle({ ok: false, error: `the browser did not answer in time (${ask.op})` });
     }, TIMEOUT_MS[ask.op]);
-    pending.set(ask.id, { resolve: settle, timer });
+    pending.set(ask.id, { resolve: settle, timer, target });
     /* Re-built rather than cast, so the narrowing above is what proves the op
        is sendable. A cast here would pass a verb the panel cannot answer and
        the caller would get "not a tab operation" from three layers down. */
-    sink!.send({ id: ask.id, op, args: ask.args });
+    if (sink!.send({ id: ask.id, op, args: ask.args }, target) === false) {
+      /* Registered, but its socket is gone (a reload between heartbeats). Said
+         now instead of after the timeout. Kept registered: its new hello lands
+         within a retry, and dropping it here made the caller open a second view. */
+      settle({ ok: false, error: "the browser view is not open in this window" });
+    }
   });
 }
 
 /** The panel reporting back. Unknown ids are dropped rather than logged loudly:
  *  a reply arriving after its timeout is ordinary, not an error. */
-export function settleBrowser(id: unknown, reply: BrowserReply): boolean {
+export function settleBrowser(id: unknown, reply: BrowserReply, from?: string): boolean {
   if (typeof id !== "string") return false;
   const p = pending.get(id);
   if (!p) return false;
+  /* Only the window the ask was addressed to may answer it. `from` undefined is
+     the in-process caller (tests); the HTTP route always passes one. */
+  if (from !== undefined && p.target !== undefined && p.target !== from) return false;
   pending.delete(id);
   clearTimeout(p.timer);
   p.resolve(reply);
   return true;
+}
+
+/** A window's socket closed: its in-flight asks will never be answered. Said
+ *  now, because a click or a fill may have run before it went and the caller
+ *  cannot tell from a timeout. */
+export function dropBrowserTarget(clientId: string): void {
+  for (const [id, p] of pending) {
+    if (p.target === clientId) { pending.delete(id); clearTimeout(p.timer); p.resolve({ ok: false, error: "the window closed before answering" }); }
+  }
 }
 
 /** For tests, and for a shutdown that should not leave timers behind. */

@@ -1861,6 +1861,10 @@ export interface UnderstudyAsked {
   repo: string;
 }
 
+/** The one frame a `/stream` client sends: its own name, so the server can
+ *  address a browser ask to this window alone. */
+export interface WsClientHello { type: "hello"; clientId: string; browser: true }
+
 /** WebSocket frames. */
 export type WsFrame =
   | { type: "initial"; data: WatchEvent[]; openTools?: OpenToolCall[] }

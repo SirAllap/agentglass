@@ -68,12 +68,13 @@ async function startServer() {
 async function openWindow(reply: (op: string) => { ok: boolean; value?: unknown; error?: string }) {
   ws = new WebSocket(base.replace("http", "ws") + "/stream");
   await new Promise((r) => ws!.addEventListener("open", r));
+  ws!.send(JSON.stringify({ type: "hello", clientId: CLIENT, browser: true }));
   ws.addEventListener("message", async (ev) => {
     let frame: { type?: string; data?: { id: string; op: string; args?: Record<string, unknown> } };
     try { frame = JSON.parse(String((ev as MessageEvent).data)); } catch { return; }
     if (frame.type !== "browser" || !frame.data) return;
     asked.push({ op: frame.data.op, args: frame.data.args ?? {} });
-    await post("/browser/result", { id: frame.data.id, ...reply(frame.data.op) });
+    await post("/browser/result", { client: CLIENT, id: frame.data.id, ...reply(frame.data.op) });
   });
   await post("/browser/ready", { client: CLIENT, on: true });
   await Bun.sleep(150);

@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import type { WatchEvent, WsFrame, OpenToolCall } from "../../../shared/types.ts";
+import type { WatchEvent, WsFrame, WsClientHello, OpenToolCall } from "../../../shared/types.ts";
 import { WS_URL, IS_DEMO, hasToken, probeAuth, whenServerUp } from "./api.ts";
 import * as demo from "./demo.ts";
 import { gitChanged } from "./gitBus.ts";
 import { emitControl } from "./controlBus.ts";
-import { emitBrowserAsk } from "./browserBus.ts";
+import { clientId, emitBrowserAsk } from "./browserBus.ts";
 import { emitUnderstudy } from "./understudyBus.ts";
 import { emitPlugin } from "./pluginBus.ts";
 import { recordNote, fireDesktopAlert, firePopupOnly } from "./sysNotify.ts";
@@ -163,6 +163,8 @@ export function useLive(paused = false): LiveData {
       firstFailAt.current = 0;
       opened.current = true;
       setConn("open");
+      // Name this window, so a browser ask is addressed to it and not broadcast.
+      try { ws.send(JSON.stringify({ type: "hello", clientId: clientId(), browser: true } satisfies WsClientHello)); } catch { /* closing */ }
     };
     ws.onclose = async () => {
       if (disposed.current || wsRef.current !== ws) return;
