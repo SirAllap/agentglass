@@ -71,6 +71,10 @@ complement, rather than replace, the private reporting path below.
 - **Desktop-only routes.** The self-update route executes arbitrary code and is
   reachable from the packaged shell's own origin and nothing else — not from a
   browser, not from another machine.
+  It builds only an annotated release tag, pinned to the commit the tag names
+  (a signature, when a tag carries one, has to verify), installs from the
+  lockfile, and writes its log under the user's cache rather than `/tmp`. An
+  unsigned tag is still accepted, so this does not prove who cut a release.
 - **The token is never served over any route, to anyone.** `/remote/status`
   reports where the server is reachable and whether a device has arrived, and
   the addresses it returns are addresses — nothing in that answer, or in any

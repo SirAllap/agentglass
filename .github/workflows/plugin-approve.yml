@@ -101,7 +101,7 @@ jobs:
       # Without its credentials: nothing from the clone runs today, and a step
       # that one day does (an install, a linter) must find no token in
       # .git/config to take with it.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
@@ -348,7 +348,7 @@ jobs:
       # checks and auto-merge wait on.
       - name: A token for this one pull request
         id: app
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
           app-id: ${{ secrets.CATALOGUE_APP_ID }}
           private-key: ${{ secrets.CATALOGUE_APP_KEY }}
