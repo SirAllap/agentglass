@@ -24,12 +24,16 @@ const GIT_PASSTHROUGH = [
  * plugin made this machine talk to a server the plugin chose. A plugin that
  * keeps files in LFS installs with the pointers, which is also what the
  * catalogue's runner hashes.
+ *
+ * `from` is the server's own environment; a test hands in a copy rather than
+ * setting a proxy on process.env, because Bun 1.3.14 keeps sending https
+ * through an HTTPS_PROXY after it is deleted from process.env.
  */
-export const pluginGitEnv = (): Record<string, string> => {
+export const pluginGitEnv = (from: Record<string, string | undefined> = process.env): Record<string, string> => {
   const env: Record<string, string> = {
-    PATH: process.env.PATH ?? "",
-    HOME: process.env.HOME ?? "",
-    LANG: process.env.LANG ?? "C",
+    PATH: from.PATH ?? "",
+    HOME: from.HOME ?? "",
+    LANG: from.LANG ?? "C",
     GIT_TERMINAL_PROMPT: "0",
     GIT_LFS_SKIP_SMUDGE: "1",
     // The user's own gitconfig is not read. A `-c` reset cannot clear a
@@ -41,7 +45,7 @@ export const pluginGitEnv = (): Record<string, string> => {
     // wait on the server's tty until the install timed out.
     GIT_SSH_COMMAND: "ssh -o BatchMode=yes",
   };
-  for (const k of GIT_PASSTHROUGH) { const v = process.env[k]; if (v) env[k] = v; }
+  for (const k of GIT_PASSTHROUGH) { const v = from[k]; if (v) env[k] = v; }
   return env;
 };
 

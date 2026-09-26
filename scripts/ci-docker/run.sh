@@ -3,7 +3,8 @@
 # a container that is the runner (see Dockerfile), on the tree as it is now —
 # tracked and untracked files, gitignored ones left out, as a checkout would
 # have it. Logs land in $AGX_CI_OUT (default ~/.cache/agentglass-ci-docker/out).
-# CPUS / MEM override the runner-like default (2 cores, 7g).
+# CPUS / MEM override the runner-like default (2 cores, 7g); AGX_CI_SEED
+# replays a test file order (entry.sh prints the one it used).
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
@@ -17,4 +18,4 @@ echo "bun $bun_version · logs in $out"
 # container does not have, so the container cannot list files itself.
 cd "$root" && git ls-files -z --cached --others --exclude-standard --deduplicate \
   | tar --null -T - --ignore-failed-read -cf - 2>/dev/null \
-  | docker run --rm -i --cpus "${CPUS:-2}" --memory "${MEM:-7g}" -v "$out:/out" -v "$here:/ci:ro" agx-ci-docker bash /ci/entry.sh
+  | docker run --rm -i -e AGX_CI_SEED --cpus "${CPUS:-2}" --memory "${MEM:-7g}" -v "$out:/out" -v "$here:/ci:ro" agx-ci-docker bash /ci/entry.sh

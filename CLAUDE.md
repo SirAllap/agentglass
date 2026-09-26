@@ -82,7 +82,9 @@ here will stop you.
 
 - `bun test` runs every file in a single process. Globals a test sets leak
   into the others: stub the minimum and restore in `afterAll`. Known leaks:
-  `AGENTGLASS_ROOT`, `__setPrivateTermsPath`, anything on PATH, the scope cache.
+  `AGENTGLASS_ROOT`, `__setPrivateTermsPath`, anything on PATH, the scope cache,
+  and a proxy variable: Bun 1.3.14 goes on using an `HTTPS_PROXY` deleted from
+  `process.env`, so a function that reads one takes the env as an argument.
 - `Bun.which` resolves with the PATH the process started with; changing
   `process.env.PATH` in a hook does nothing. A stub agent goes in a child
   process with the PATH already set, and the test asserts it ran against the
