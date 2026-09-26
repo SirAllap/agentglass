@@ -437,7 +437,9 @@ export async function engineWindowRunning(
      session, so `-t a.b` then addresses a session that does not exist and the
      window is lost. Measured against a real tmux — no session this app makes
      has ever contained one. */
-  const namedSession = typeof into === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(into) ? into : "";
+  /* Never a phone's mirror: the caller's "session this client is on" is one for
+     a phone, and this server is not the one the phone is attached to. */
+  const namedSession = typeof into === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(into) && !into.startsWith("agx-phone-") ? into : "";
   const session = namedSession || engineSessionName(root);
   if (!validSessionName(session)) return null;
   /* The config, before the first tmux call rather than only on the attach path.

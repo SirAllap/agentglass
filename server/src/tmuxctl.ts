@@ -3470,6 +3470,14 @@ export function isPhoneSession(session: string | null | undefined): boolean {
   return typeof session === "string" && PHONE_SESSION.test(session);
 }
 
+/** How many phones are attached: the mirror sessions among the ones a client
+ *  is on. The frame already carries that set, so this costs no tmux call. */
+export function phonesAttached(sessions: Iterable<string>): number {
+  let n = 0;
+  for (const name of sessions) if (isPhoneSession(name)) n++;
+  return n;
+}
+
 /**
  * Put the phone's view back on one of OUR mirrors when its client has
  * wandered onto a session that is not ours.

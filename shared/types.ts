@@ -559,6 +559,9 @@ export type PtyServerFrame =
        * or it hovers over a popup on a pane nobody can see.
        */
       popup?: boolean;
+      /** Phones attached to this tmux on a mirror session of their own. The
+       *  panel says so quietly; nothing else on the desk changes. */
+      phones?: number;
     }
   /**
    * A window this socket was asked to open, and the pane it landed on.

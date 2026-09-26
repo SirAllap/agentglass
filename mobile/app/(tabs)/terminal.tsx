@@ -2487,9 +2487,17 @@ function TerminalPane(): React.ReactNode {
                 ) : null}
               </View>
             ))}
+            {/* Always here, agents installed or not: a prompt in the project
+                is a thing people want on its own, and the server treats
+                "shell" as a window with no agent in it. */}
+            <SheetRow
+              label="Shell"
+              sub="A plain prompt in this project, no agent."
+              onPress={() => openAgent("shell", false)}
+            />
             {agents.every((a) => !a.installed) ? (
               <Note tone="bad">
-                No agent CLI is installed on that computer. A new tab would be a plain shell.
+                No agent CLI is installed on that computer. Every choice here opens a plain shell.
               </Note>
             ) : null}
           </View>
