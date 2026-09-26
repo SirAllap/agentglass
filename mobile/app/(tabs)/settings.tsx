@@ -30,6 +30,7 @@ import {
   alertsDeliverable, askForAlerts, notificationsSupported, raise,
   type Blocked, type Delivery,
 } from "../../src/notifications/notify.ts";
+import { onTalkPref, setTalkPref, talkPref, type TalkPref } from "../../src/notifications/talkPref.ts";
 import { Btn, Group, GroupTitle, Note, Row, Sheet, Switch, TAP } from "../../src/ui.tsx";
 import { Glyph, type GlyphName } from "../../src/nav/glyphs.tsx";
 import { KeyboardIcon } from "../../src/nav/icons.tsx";
@@ -277,6 +278,12 @@ export default function SettingsScreen(): React.ReactNode {
   const [alerts, setAlerts] = useState<Delivery | null>(null);
   const [asking, setAsking] = useState(false);
 
+  /* This phone's own preference for a live comment/review — never sent to the
+     server (see talkPref.ts). Mirrored the way termColumns/termAssist are:
+     read once at module scope, told when it changes. */
+  const [talk, setTalk] = useState<TalkPref>(talkPref);
+  useEffect(() => onTalkPref(() => setTalk(talkPref())), []);
+
   /* The terminal's preferences are module singletons shared with the pane;
      these are the local mirrors that make this screen repaint. */
   const [cols, setCols] = useState(termColumns);
@@ -391,6 +398,36 @@ export default function SettingsScreen(): React.ReactNode {
             else void turnOn();
           }}
         />
+        <View>
+          <Row
+            title="Comments on your pull requests"
+            // This-phone-only, and said so: the preference lives in this
+            // phone's keystore (talkPref.ts) rather than at the computer, so
+            // pairing a second phone starts it at Off again. Bots never reach
+            // this either way — the server drops them before a "talk" note
+            // exists (see mapTalk in prs.ts). While alerts cannot be raised
+            // the row says what it waits on, not the reason again: that is
+            // written on the row above.
+            sub={alerts?.ok ? "This phone only, never for a bot. The «new» badges show either way."
+              : "Needs agent alerts on first"}
+            lead={<Lead name="comment" />}
+            disabled={!alerts?.ok}
+          />
+          {/* Below the text, as the accent swatches are: three options beside
+              a title this long truncated it to "Comments on you…". */}
+          <View style={{ paddingLeft: 50, paddingRight: SPACE.md, paddingBottom: SPACE.md, alignItems: "flex-start", opacity: alerts?.ok ? 1 : 0.45 }}>
+            <Pick<TalkPref>
+              value={talk}
+              onChange={(v) => { if (alerts?.ok) setTalkPref(v); }}
+              label="Comments on your pull requests"
+              options={[
+                { id: "off", name: "Off" },
+                { id: "reviews", name: "Reviews" },
+                { id: "everything", name: "All" },
+              ]}
+            />
+          </View>
+        </View>
         {alerts && !alerts.ok && alerts.why === "channel-off" ? (
           // The one this app cannot undo from script: an Android channel set to
           // no importance can only be raised in system settings.

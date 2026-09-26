@@ -26,6 +26,7 @@ const host: Host = {
 
 const realFetch = globalThis.fetch;
 let calls = 0;
+let lastUrl = "";
 /** A gate every stubbed read waits behind, so a second and third caller arrive
  *  while the first is still in flight — the only moment a join can be seen.
  *  Opened for ALL of them, so a broken join fails with the wrong count rather
@@ -43,8 +44,9 @@ beforeEach(() => {
   // Typed like the stub in ask-refusals.test.ts: a bare async function is not
   // `typeof fetch` — that type carries `preconnect` — and the parameters are
   // what makes the cast honest rather than a silencer.
-  globalThis.fetch = ((_url: string | URL | Request, _init?: RequestInit) => {
+  globalThis.fetch = ((url: string | URL | Request, _init?: RequestInit) => {
     calls++;
+    lastUrl = String(url);
     const n = calls;
     return (gate ? gate.wait : Promise.resolve()).then(() => answer(`read ${n}`));
   }) as typeof fetch;
@@ -114,5 +116,17 @@ describe("nothing to read", () => {
     await readPrDetail(host, "", "12");
     await readPrDetail(host, "/code/widget", "");
     expect(calls).toBe(0);
+  });
+});
+
+describe("a read after a remark landed", () => {
+  test("goes past the server's cache; an ordinary read does not ask it to", async () => {
+    // The server answers /prs/detail from a 45 s cache, and a stale hit first
+    // with the refresh behind it: a `talk` frame followed by a plain read
+    // repainted the conversation without the remark it announced.
+    await readPrDetail(host, "/code/widget", "12");
+    expect(lastUrl).not.toContain("force=1");
+    await readPrDetail(host, "/code/widget", "12", true);
+    expect(lastUrl).toContain("force=1");
   });
 });

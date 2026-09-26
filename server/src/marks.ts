@@ -20,7 +20,8 @@
  * after a reconnect comes back empty and the route broadcasts nothing.
  */
 import { db } from "./db.ts";
-import type { MarkKind, MarkOp, MarkRow } from "../../shared/types.ts";
+import type { MarkKind, MarkOp, MarkRow, PrTalkNote } from "../../shared/types.ts";
+import { prMarkKey } from "../../shared/prUnread.ts";
 import { MARK_KINDS, MARK_KEY_MAX, MARK_BATCH_MAX, MARK_ROWS_MAX, MARK_KEY_SHAPE } from "../../shared/marks.ts";
 
 export { MARK_KINDS, MARK_KEY_MAX, MARK_BATCH_MAX, MARK_ROWS_MAX };
@@ -109,6 +110,26 @@ const prune = db.query(
      SELECT key FROM read_marks WHERE kind = $kind ORDER BY updated_at DESC LIMIT -1 OFFSET $keep)`,
 );
 const one = db.query<Raw, [string, string]>(`SELECT * FROM read_marks WHERE kind = ? AND key = ?`);
+
+/**
+ * Whether a "talk" note is already accounted for by a read mark.
+ *
+ * A read mark is "seen up to", not "dismiss this one event" — so a remark is
+ * already read once the pull request's `seenAt` is at or after it. Without
+ * this, `noteTalk`'s latch (which only tracks the newest remark it has told a
+ * listener about, never who has since read it) would re-announce a comment
+ * that was already read on another device the next time something re-asks the
+ * list — which prWatch.ts now does on a timer, with nobody at the PRs tab.
+ */
+export function talkAlreadyRead(note: Pick<PrTalkNote, "url" | "number" | "at">, rows: MarkRow[]): boolean {
+  const at = Date.parse(note.at);
+  if (!Number.isFinite(at)) return false;
+  // The key the devices write, from the URL — not `note.repo`, which is
+  // `owner/name` and matches no mark (those carry the host too).
+  const key = prMarkKey(note);
+  const row = rows.find((r) => r.kind === "pr" && r.key === key);
+  return !!row && row.seenAt >= at;
+}
 
 /** Apply a validated batch in one transaction; the rows it changed, each once,
  *  as they stand afterwards. `now` is a parameter for the tests. */

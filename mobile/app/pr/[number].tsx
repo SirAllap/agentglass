@@ -31,6 +31,8 @@ import { Md, outline } from "../../src/md/Md.tsx";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
 import { usePrDetail } from "../../src/state/pr-detail.ts";
+import { prMarkKey } from "../../../shared/prUnread.ts";
+import { usePrTalkTick, useReloadOnTick } from "../../src/state/pr-talk.ts";
 import { useReadOnOpen } from "../../src/state/read-marks.ts";
 import { useTracksWork } from "../../src/state/use-tracks-work.ts";
 import { TaskChip } from "../../src/review/TaskChip.tsx";
@@ -174,10 +176,17 @@ export default function PrScreen(): React.ReactNode {
      same pull request, and a write in either of them re-reads this. Before
      that, resolving a thread left the count on this screen saying what it said
      when you arrived. See state/pr-detail.ts. */
-  const { detail, error, reload: load } = usePrDetail(host, root ?? "", String(number ?? ""));
+  const { detail, error, reload: load, refresh } = usePrDetail(host, root ?? "", String(number ?? ""));
   /* Opening it is reading it: the mark moves to now, and what it was BEFORE is
      what the Talk pane draws its divider against. See state/read-marks.ts. */
   const lastLooked = useReadOnOpen(host, detail);
+
+  // A live comment or review on THIS pull request. The key comes off the
+  // detail's own URL, as the read marks' does: the route only carries a
+  // checkout root and a number. Empty until the detail loads, which
+  // subscribes to nothing.
+  const talkKey = detail?.url ? prMarkKey(detail) : "";
+  useReloadOnTick(usePrTalkTick(talkKey), refresh, talkKey);
 
   const [handing, setHanding] = useState(false);
   /* `ask=1` opens the Claude menu: Checks sends you back here with it, so a

@@ -132,7 +132,8 @@ import {
 import { streamLogs } from "./dockerlogs.ts";
 import { capBuildCache, removeImages } from "./dockerprune.ts";
 import { inbox, markRead, markRepoRead, unsubscribe } from "./ghinbox.ts";
-import { applyMarks, listMarks, parseMarkOps, MARK_KINDS } from "./marks.ts";
+import { applyMarks, listMarks, parseMarkOps, talkAlreadyRead, MARK_KINDS } from "./marks.ts";
+import { noteAsk as noteWatchAsk, startPrWatch } from "./prWatch.ts";
 import { measureFile } from "./filemeasure.ts";
 import { editorCursor } from "./editorwhere.ts";
 import {
@@ -6879,10 +6880,16 @@ const server = Bun.serve<WsData>({
       });
     }
     if (pathname === "/prs/list") {
+      const root = url.searchParams.get("root") || "";
+      const filter = url.searchParams.get("filter") || "mine";
+      const state = url.searchParams.get("state") || "open";
+      // A real client just asked for this — worth re-asking on a timer even
+      // while nobody is on this tab. See prWatch.ts.
+      noteWatchAsk(root, filter, state);
       return json(await listPrs(
-        url.searchParams.get("root") || "",
-        url.searchParams.get("filter") || "mine",
-        url.searchParams.get("state") || "open",
+        root,
+        filter,
+        state,
         url.searchParams.get("force") === "1",
         url.searchParams.get("after") || undefined,
         url.searchParams.get("q") || undefined,
@@ -9173,8 +9180,17 @@ void resumeEnabledPlugins().then((names) => { if (names.length) console.log(`   
 /* And somebody speaking on one. Derived from the same poll — GitHub's
    notifications are an inbox rather than a feed a desktop app can subscribe to —
    with the latch on the server, so a review carrying nine line comments is one
-   message and not nine. Never a bot. See noteTalk. */
-subscribeTalk((n) => broadcast({ type: "talk", data: n }));
+   message and not nine. Never a bot. See noteTalk.
+
+   Gated on the read marks first: `noteTalk`'s latch only knows the newest
+   remark it has already told a listener about, not whether a person has since
+   read the pull request on another device — and prWatch.ts now re-asks the
+   list on a timer with nobody at the PRs tab, so a comment read on the desk
+   would otherwise buzz a phone that never opened it. See talkAlreadyRead. */
+subscribeTalk((n) => {
+  if (talkAlreadyRead(n, listMarks("pr"))) return;
+  broadcast({ type: "talk", data: n });
+});
 /* A card of yours moved. Derived from a poll rather than received — ClickUp has
    no notifications API — and silent on the first run, so connecting an account
    does not announce a day of history. See clickupwatch.ts. */
@@ -9202,6 +9218,19 @@ subscribeNotifications((n) => {
 });
 
 startCardWatch((n) => broadcast({ type: "card", data: n }));
+/* Re-asks the open pull request lists a real client has looked at, on a timer,
+   so a comment posted while nobody is on the PRs tab still reaches `noteTalk`
+   the next time somebody could actually be told about it. See prWatch.ts. Off
+   under `bun test`: a suite that left this running would fire real `gh` calls
+   on a schedule nothing in the test asked for, against whatever pairs an
+   earlier test's process-wide map still holds. */
+if (process.env.NODE_ENV !== "test") {
+  startPrWatch({
+    liveClients: () => clients.size,
+    // A root that no longer resolves rejects; a timer has nobody to tell.
+    relist: (root, filter) => { void listPrs(root, filter, "open").catch(() => {}); },
+  });
+}
 /* The Lantern's watch: the field re-read every N minutes, a loud word when
    something on it needs a person. See lanternwatch.ts. */
 startLanternWatch();

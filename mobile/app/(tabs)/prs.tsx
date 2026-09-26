@@ -25,6 +25,7 @@ import type { GitRepoRef, PrSummary } from "../../../shared/types.ts";
 import { prRepoKey, unreadOf, unreadTitle, type Unread } from "../../../shared/prUnread.ts";
 import { ask } from "../../src/lib/api.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
+import { useReloadOnTick, useTalkTick } from "../../src/state/pr-talk.ts";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
 import { useSeenMarks } from "../../src/state/read-marks.ts";
 import { Card, Chip, CommandLine, Field, FilterChips, GroupTitle, Note, Segmented, groupEdge } from "../../src/ui.tsx";
@@ -230,6 +231,9 @@ export default function PrsScreen(): React.ReactNode {
   }, [host, shown, filter, view]);
 
   useEffect(() => { setGroups(null); void load(); }, [load]);
+
+  // A live comment or review landed on one of these pull requests.
+  useReloadOnTick(useTalkTick(), load);
 
   // Counts follow what is shown and not the filter — they are the counts OF
   // the filters, so re-asking when one is tapped would be asking the same

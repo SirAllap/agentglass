@@ -26,14 +26,17 @@ import {
 } from "react";
 import { AppState, type AppStateStatus } from "react-native";
 import type {
-  AlertNote, GitRepoRef, PendingGate, PrSummary,
+  AlertNote, GitRepoRef, PendingGate, PrSummary, PrTalkNote,
 } from "../../../shared/types.ts";
+import { talkBody, talkSummary, talkUrgency } from "../../../shared/talkWords.ts";
 import { dedupePrs, mainCheckouts } from "../model/prRows.ts";
 import { ask, REVOKED } from "../lib/api.ts";
 import { forgetHost, loadHost, saveHost, type Host } from "../lib/host.ts";
 import { openLive, type LiveHandle, type LiveState } from "../lib/live.ts";
-import { remember, shouldNotify } from "../notifications/policy.ts";
+import { remember, shouldNotify, shouldNotifyTalk } from "../notifications/policy.ts";
 import { alertsDeliverable, raise } from "../notifications/notify.ts";
+import { noteTalk } from "./pr-talk.ts";
+import { talkPref } from "../notifications/talkPref.ts";
 import { applyMarks, loadPrMarks, resetMarks } from "./read-marks.ts";
 
 /** The backstop, not the mechanism. Long enough that a phone sitting in a
@@ -324,6 +327,33 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
              * window is about how recently the user was told about this text,
              * and an await in between would drift it.
              */
+            const undo = remember(alert, { lastSeen: seen.current, now });
+            void raise(alert).then((d) => { if (!d.ok) undo(); });
+          }
+        }
+        /*
+         * Somebody spoke on a pull request of yours. Unlike an alert, the
+         * live tick fires ALWAYS — it is what moves the "N new" badge on the
+         * list and refetches a pane already open on it — and only the
+         * system notification is behind a gate, because that gate is a
+         * per-device preference (talkPref.ts) the server has no opinion on.
+         * See shouldNotifyTalk.
+         */
+        if (frame.type === "talk" && frame.data) {
+          const note = frame.data as PrTalkNote;
+          noteTalk(note);
+          const now = Date.now();
+          const verdict = shouldNotifyTalk(note, {
+            pref: talkPref(),
+            foreground: AppState.currentState === "active",
+            lastSeen: seen.current,
+            now,
+          });
+          if (verdict.notify) {
+            const alert: AlertNote = { title: talkSummary(note), body: talkBody(note), urgency: talkUrgency(note) };
+            // Same remember/undo shape as the alert branch above: opened
+            // before the await so two notes arriving inside it cannot both
+            // pass, rolled back if the OS never actually drew it.
             const undo = remember(alert, { lastSeen: seen.current, now });
             void raise(alert).then((d) => { if (!d.ok) undo(); });
           }
