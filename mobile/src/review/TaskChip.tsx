@@ -15,14 +15,18 @@
 import { useMemo } from "react";
 import { Linking, Pressable, Text } from "react-native";
 import { chipFor, readTaskRef } from "../../../shared/taskref.ts";
+import { cardIdFromUrl } from "../model/cardFromUrl.ts";
 import { C, RADIUS, SPACE, T } from "../theme.ts";
 
-export function TaskChip({ pr, tracked, onFind }: {
+export function TaskChip({ pr, tracked, onFind, onOpenCard }: {
   pr: { headRefName?: string; title?: string; body?: string; url?: string };
   /** Whether anything is connected that could resolve a bare id — from the
    *  provider catalogue, never from a product name. Null while unknown. */
   tracked: boolean | null;
   onFind: (query: string, label: string) => void;
+  /** Given only when the connected board can draw a card itself: a link to one
+   *  then opens here, with the way back to this pull request kept. */
+  onOpenCard?: (id: string) => void;
 }): React.ReactNode {
   const ref = useMemo(
     () => readTaskRef(pr),
@@ -31,15 +35,20 @@ export function TaskChip({ pr, tracked, onFind }: {
   const go = useMemo(() => chipFor(ref, tracked), [ref, tracked]);
   if (!ref || !go) return null;
 
-  const away = "open" in go;
+  const cardId = "open" in go && onOpenCard ? cardIdFromUrl(go.open) : null;
+  // A door that stays in the app carries no "leaves the app" mark.
+  const away = "open" in go && !cardId;
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={away
-        ? `Open ${ref.label}, the item this pull request came from`
-        : `Find ${ref.label} in the cards on this machine`}
+      accessibilityLabel={cardId
+        ? `Open card ${ref.label}, the item this pull request came from`
+        : away
+          ? `Open ${ref.label}, the item this pull request came from`
+          : `Find ${ref.label} in the cards on this machine`}
       onPress={() => {
-        if ("open" in go) void Linking.openURL(go.open).catch(() => { /* no app for it */ });
+        if (cardId) onOpenCard?.(cardId);
+        else if ("open" in go) void Linking.openURL(go.open).catch(() => { /* no app for it */ });
         else onFind(go.find, ref.label);
       }}
       style={({ pressed }) => ({

@@ -34,7 +34,7 @@ import { usePrDetail } from "../../src/state/pr-detail.ts";
 import { prMarkKey } from "../../../shared/prUnread.ts";
 import { usePrTalkTick, useReloadOnTick } from "../../src/state/pr-talk.ts";
 import { useReadOnOpen } from "../../src/state/read-marks.ts";
-import { useTracksWork } from "../../src/state/use-tracks-work.ts";
+import { useTaskProvider, useTracksWork } from "../../src/state/use-tracks-work.ts";
 import { TaskChip } from "../../src/review/TaskChip.tsx";
 import { FilesPane } from "../../src/review/FilesPane.tsx";
 import { ThreadsPane } from "../../src/review/ThreadsPane.tsx";
@@ -136,6 +136,7 @@ export default function PrScreen(): React.ReactNode {
      not a product's. It decides only whether an id read from a branch may be
      offered as something to look up; an address in the body opens either way. */
   const tracked = useTracksWork(host);
+  const provider = useTaskProvider(host);
 
   const router = useRouter();
   const { number, root, review, pane: wanted, ask: asked } = useLocalSearchParams<{
@@ -579,6 +580,9 @@ export default function PrScreen(): React.ReactNode {
                   pr={detail}
                   tracked={tracked}
                   onFind={(query) => router.push({ pathname: "/(tabs)/tasks", params: { q: query } })}
+                  onOpenCard={provider?.id === "clickup"
+                    ? (id) => router.push({ pathname: "/card/[id]", params: { id } })
+                    : undefined}
                 />
                 {detail.isDraft ? <Chip label="Draft" /> : null}
                 <Text style={{ color: C.text3, fontSize: T.small }}>
