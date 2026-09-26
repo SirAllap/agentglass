@@ -20,7 +20,7 @@ import {
   ActivityIndicator, FlatList, Pressable, RefreshControl, ScrollView, Text, TextInput, View,
 } from "react-native";
 import * as Haptics from "expo-haptics";
-import type { GitCommit, GitFileStatus, GitRepoRef, PrBranchSummary, RepoStatus } from "../../../shared/types.ts";
+import type { GitBranch, GitCommit, GitFileStatus, GitRepoRef, GitStash, PrBranchSummary, RepoStatus } from "../../../shared/types.ts";
 import { ask } from "../../src/lib/api.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
@@ -29,6 +29,7 @@ import { C, MONO, RADIUS, SPACE, T, ink, tint } from "../../src/theme.ts";
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { ChevronIcon } from "../../src/nav/icons.tsx";
 import { branchLookup, checkoutFor } from "../../src/model/checkout.ts";
+import { keepOrder, newBranchProblem, orderBranches, stashTitle, trackWords, VIEWS, type ScmView } from "../../src/model/scm.ts";
 import { Glyph } from "../../src/nav/glyphs.tsx";
 import { ReposIcon } from "../../src/nav/icons.tsx";
 
@@ -140,13 +141,16 @@ export default function ReposScreen(): React.ReactNode {
   }, []);
   const router = useRouter();
   /*
-   * Three views of one checkout, which is the shape a person already has in
-   * their head: what I have changed, what I have landed, and what is waiting
-   * to be reviewed. The server has answered all three the whole time —
-   * /git/status, /git/log and /prs/for-branch — and this screen asked one.
+   * Views of one checkout, which is the shape a person already has in their
+   * head: what I have changed, what I have landed, where I can go, what I put
+   * aside, and what is waiting to be reviewed. The server has answered all of
+   * them the whole time; see model/scm.ts for what is deliberately not here.
    */
-  const [view, setView] = useState<"changes" | "commits" | "pr">("changes");
+  const [view, setView] = useState<ScmView>("changes");
   const [commits, setCommits] = useState<GitCommit[] | null>(null);
+  const [branches, setBranches] = useState<GitBranch[] | null>(null);
+  const [stashes, setStashes] = useState<GitStash[] | null>(null);
+  const [newName, setNewName] = useState("");
   const [branchPrs, setBranchPrs] = useState<BranchPrs | null>(null);
 
   const mayWrite = host?.scope === "full";
@@ -162,6 +166,19 @@ export default function ReposScreen(): React.ReactNode {
       setRoot((current) => (asked ? checkoutFor(asked, roots) : current ?? found[0]?.root ?? null));
     })();
   }, [host, asked]);
+
+  /** The chip strip and the branch line read /git/repos, which a checkout or a
+   *  new branch has just made stale. Only the list is replaced: the choice of
+   *  checkout stays where the person put it. */
+  const refreshRepos = useCallback(async (): Promise<void> => {
+    if (!host) return;
+    const answer = await ask<{ repos: GitRepoRef[] }>(host, "/git/repos");
+    if (!answer.ok || !Array.isArray(answer.value.repos)) return;
+    const fresh = answer.value.repos;
+    // The server orders by recent activity, so a write would shuffle the chip
+    // under the finger. Keep the order the person was already looking at.
+    setRepos((prev) => (prev ? keepOrder(prev, fresh) : fresh));
+  }, [host]);
 
   const load = useCallback(async (): Promise<void> => {
     if (!host || !root) return;
@@ -190,10 +207,10 @@ export default function ReposScreen(): React.ReactNode {
    * changes, because a commit list belonging to another worktree drawn under
    * this one's name is the worst kind of wrong here: it is plausible.
    */
-  useEffect(() => { setCommits(null); setBranchPrs(null); }, [root]);
+  useEffect(() => { setCommits(null); setBranches(null); setStashes(null); setBranchPrs(null); setNewName(""); }, [root]);
 
   useEffect(() => {
-    if (!host || !root || view !== "commits" || commits !== null) return;
+    if (!host || !root || view !== "log" || commits !== null) return;
     let gone = false;
     void (async () => {
       const answer = await ask<{ commits?: GitCommit[] }>(
@@ -204,6 +221,30 @@ export default function ReposScreen(): React.ReactNode {
     })();
     return () => { gone = true; };
   }, [host, root, view, commits]);
+
+  useEffect(() => {
+    if (!host || !root || view !== "branches" || branches !== null) return;
+    let gone = false;
+    void (async () => {
+      const answer = await ask<{ branches?: GitBranch[] }>(host, `/git/branches?root=${encodeURIComponent(root)}`);
+      if (gone) return;
+      if (!answer.ok) { setSaid({ ok: false, text: answer.error }); setBranches([]); return; }
+      setBranches(answer.value.branches ?? []);
+    })();
+    return () => { gone = true; };
+  }, [host, root, view, branches]);
+
+  useEffect(() => {
+    if (!host || !root || view !== "stash" || stashes !== null) return;
+    let gone = false;
+    void (async () => {
+      const answer = await ask<{ stashes?: GitStash[] }>(host, `/git/stashes?root=${encodeURIComponent(root)}`);
+      if (gone) return;
+      if (!answer.ok) { setSaid({ ok: false, text: answer.error }); setStashes([]); return; }
+      setStashes(answer.value.stashes ?? []);
+    })();
+    return () => { gone = true; };
+  }, [host, root, view, stashes]);
 
   useEffect(() => {
     if (!host || !root || view !== "pr" || branchPrs !== null) return;
@@ -238,8 +279,14 @@ export default function ReposScreen(): React.ReactNode {
     if (!answer.ok) { setSaid({ ok: false, text: answer.error }); return; }
     if (!answer.value.ok) { setSaid({ ok: false, text: answer.value.error ?? "git refused that" }); return; }
     setSaid(null);
-    await load();
-  }, [host, load]);
+    // What a write can have moved. Cleared, not patched, so the view that is
+    // open asks again. Staging moves neither the head line nor the pull request
+    // (a GitHub round trip), so those are left alone for it.
+    setBranches(null); setStashes(null); setCommits(null);
+    if (path === "/git/stage" || path === "/git/unstage") { await load(); return; }
+    setBranchPrs(null);
+    await Promise.all([load(), refreshRepos()]);
+  }, [host, load, refreshRepos]);
 
   const files = useMemo(() => status?.files ?? [], [status]);
   const staged = useMemo(() => files.filter((f) => f.staged), [files]);
@@ -272,6 +319,8 @@ export default function ReposScreen(): React.ReactNode {
   }, [navigation, root, router]);
 
   if (!host) return null;
+
+  const newProblem = newName.trim() ? newBranchProblem(newName, branches ?? []) : null;
 
   const chips = (
     <>
@@ -354,12 +403,8 @@ export default function ReposScreen(): React.ReactNode {
       <View style={{ paddingHorizontal: SPACE.lg, paddingTop: SPACE.md }}>
         <Segmented
           value={view}
-          onChange={setView}
-          options={[
-            { id: "changes" as const, label: "Changes", count: files.length || undefined },
-            { id: "commits" as const, label: "Commits" },
-            { id: "pr" as const, label: "Pull request" },
-          ]}
+          onChange={(next) => { setSaid(null); setView(next); }}
+          options={VIEWS.map((v) => ({ id: v.id, label: v.label, count: v.id === "changes" ? files.length || undefined : undefined }))}
         />
       </View>
 
@@ -464,7 +509,7 @@ export default function ReposScreen(): React.ReactNode {
       ) : null}
 
       {/* ── the commits ────────────────────────────────────────────────── */}
-      {view === "commits" ? (
+      {view === "log" ? (
         <ScrollView contentContainerStyle={{ padding: SPACE.lg, paddingBottom: SPACE.xl }}>
           {commits === null ? (
             <View style={{ padding: SPACE.xl }}><ActivityIndicator color={C.text3} /></View>
@@ -494,6 +539,120 @@ export default function ReposScreen(): React.ReactNode {
                 </View>
               </View>
             ))
+          )}
+        </ScrollView>
+      ) : null}
+
+      {/* ── the branches ───────────────────────────────────────────────── */}
+      {view === "branches" ? (
+        <ScrollView contentContainerStyle={{ padding: SPACE.lg, gap: SPACE.md, paddingBottom: SPACE.xl }} keyboardShouldPersistTaps="handled">
+          {mayWrite ? (
+            <View style={{ gap: SPACE.sm }}>
+              <Label text="New branch, from here" />
+              <View style={{ flexDirection: "row", gap: SPACE.sm }}>
+                <TextInput
+                  value={newName}
+                  onChangeText={setNewName}
+                  placeholder="feat/name"
+                  placeholderTextColor={C.text3}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  style={{
+                    flex: 1, minHeight: 48, borderRadius: RADIUS.md, backgroundColor: C.bg2,
+                    borderWidth: 1, borderColor: C.border, color: C.text,
+                    paddingHorizontal: SPACE.md, fontSize: T.body, fontFamily: MONO,
+                  }}
+                />
+                <Btn
+                  label="Create"
+                  tone="primary"
+                  disabled={!newName.trim() || newProblem !== null}
+                  busy={busy === "branch:new"}
+                  onPress={() => { void act("branch:new", "/git/branch-create", { root, name: newName.trim() }).then(() => setNewName("")); }}
+                />
+              </View>
+              {newProblem ? <Text style={{ color: C.text3, fontSize: T.eyebrow }}>{newProblem}</Text> : null}
+            </View>
+          ) : null}
+          {branches === null ? (
+            <View style={{ padding: SPACE.xl }}><ActivityIndicator color={C.text3} /></View>
+          ) : branches.length === 0 ? (
+            <Card><Note>No branches yet. A repository gets its first one with its first commit.</Note></Card>
+          ) : (
+            <View>
+              {repo?.branch === "(detached)" ? (
+                <View style={{ paddingBottom: SPACE.sm }}>
+                  <Note>HEAD is detached: no branch is checked out. Tap one to go back to it.</Note>
+                </View>
+              ) : null}
+              {orderBranches(branches).map((b, i, all) => (
+                <Pressable
+                  key={b.name}
+                  disabled={!mayWrite || !!busy || b.current}
+                  onPress={() => { void act(`branch:${b.name}`, "/git/checkout", { root, name: b.name }); }}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: b.current, disabled: !mayWrite || b.current }}
+                  accessibilityLabel={b.current ? `${b.name}, checked out` : `Switch to ${b.name}`}
+                  style={({ pressed }) => [
+                    groupEdge(i === 0, i === all.length - 1),
+                    {
+                      flexDirection: "row", alignItems: "center", gap: SPACE.md, minHeight: 56,
+                      paddingHorizontal: SPACE.lg, paddingVertical: SPACE.sm,
+                      backgroundColor: pressed ? C.bg3 : "transparent",
+                    },
+                  ]}
+                >
+                  {b.current
+                    ? <Glyph name="check" color={C.primary} size={18} weight={2.4} />
+                    : <Glyph name="branch" color={C.text3} size={18} />}
+                  <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+                    <Text numberOfLines={1} style={{ color: b.current ? C.primary : C.text, fontSize: 13.5, fontWeight: b.current ? "600" : "500", fontFamily: MONO }}>{b.name}</Text>
+                    <Text numberOfLines={1} style={{ color: C.text3, fontSize: T.eyebrow }}>{b.date} · {b.subject}</Text>
+                  </View>
+                  {b.track ? <Chip label={trackWords(b.track)} tone={b.track.includes("gone") ? "warn" : "neutral"} /> : null}
+                  {busy === `branch:${b.name}` ? <ActivityIndicator color={C.text3} /> : null}
+                </Pressable>
+              ))}
+            </View>
+          )}
+        </ScrollView>
+      ) : null}
+
+      {/* ── the stash ──────────────────────────────────────────────────── */}
+      {view === "stash" ? (
+        <ScrollView contentContainerStyle={{ padding: SPACE.lg, paddingBottom: SPACE.xl }}>
+          {stashes === null ? (
+            <View style={{ padding: SPACE.xl }}><ActivityIndicator color={C.text3} /></View>
+          ) : stashes.length === 0 ? (
+            <Card><Note>Nothing is stashed here.</Note></Card>
+          ) : (
+            stashes.map((st, i) => {
+              const t = stashTitle(st.message);
+              return (
+                <View
+                  key={st.ref}
+                  style={[
+                    groupEdge(i === 0, i === stashes.length - 1),
+                    { flexDirection: "row", alignItems: "center", gap: SPACE.md, paddingLeft: SPACE.lg, paddingRight: SPACE.sm, paddingVertical: SPACE.sm, minHeight: 56 },
+                  ]}
+                >
+                  <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+                    <Text numberOfLines={2} style={{ color: C.text, fontSize: 14, fontWeight: "500" }}>{t.title}</Text>
+                    <Text numberOfLines={1} style={{ color: C.text3, fontSize: T.eyebrow, fontFamily: MONO }}>
+                      {st.ref}{t.branch ? ` · ${t.branch}` : ""}
+                    </Text>
+                  </View>
+                  {mayWrite ? (
+                    <Btn
+                      label="Apply"
+                      disabled={!!busy}
+                      busy={busy === `stash:${st.index}`}
+                      onPress={() => { void act(`stash:${st.index}`, "/git/stash-apply", { root, index: st.index }); }}
+                    />
+                  ) : null}
+                </View>
+              );
+            })
           )}
         </ScrollView>
       ) : null}

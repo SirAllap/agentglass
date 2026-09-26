@@ -92,7 +92,12 @@ import { repoStats, generateChangelog } from "./gitinsights.ts";
 import { saveShot } from "./shots.ts";
 import { allPlaces, forgetPlaces, placeCount, recordVisit, saveFrom } from "./placestore.ts";
 import { recent as gitCommandLog } from "./gitlog.ts";
-import { worktreeParent } from "./worktree.ts";
+import { gitDir, worktreeParent } from "./worktree.ts";
+/** What HEAD says, read from its file: a branch ref, or a hash when detached. */
+function headOf(root: string): string {
+  const dir = gitDir(root);
+  try { return dir ? fsRead(joinPath(dir, "HEAD"), "utf8").trim() : ""; } catch { return ""; }
+}
 import { watchLoop, entered, stalls, backoff } from "./loopwatch.ts";
 import { spawnPoolStats } from "./spawnpool.ts";
 import { singleFlight, inflightCount } from "./singleflight.ts";
@@ -5386,7 +5391,12 @@ const server = Bun.serve<WsData>({
     }
     if (pathname === "/git/branches") {
       const root = url.searchParams.get("root") || "";
-      return body(await singleFlight(`branches:${root}`, () => whileRefsHoldAsync(`branches:${root}`, root, () => gitBranches(root))));
+      // HEAD is in the key: the fingerprint is of the branch TIPS, shared by every
+      // worktree of the repo, and a checkout moves HEAD without moving one. A
+      // fingerprint alone kept naming the old branch as current — from the phone,
+      // from a terminal, from anywhere. One small file read, no subprocess.
+      const key = `branches:${root}:${headOf(root)}`;
+      return body(await singleFlight(key, () => whileRefsHoldAsync(key, root, () => gitBranches(root))));
     }
     // `scope=all` is the whole graph; anything else is this checkout's own
     // history, which is what the pane defaults to.
