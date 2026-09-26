@@ -36,14 +36,11 @@ export interface Tab {
   label: string;
   /** The session it belongs to, for the second line. */
   session: string;
-  /** The directory, for when two windows share a name. */
+  /** The pane's full directory: what Source control and Files take as a root. */
   where: string;
   /** An agent is running under this pane. The reason to open it. */
   agent: boolean;
 }
-
-/** The last segment of a path, which is what a person calls a checkout. */
-const leaf = (path: string): string => path.split("/").filter(Boolean).pop() ?? "";
 
 /**
  * Windows as tabs, splits as suffixed tabs.
@@ -164,7 +161,11 @@ export function paneTabs(panes: readonly AgentPane[]): Tab[] {
         // labelled `·p1` reads as "there is a p2 somewhere", and there is not.
         label: group.length > 1 ? `${name}·p${i + 1}` : name,
         session: pane.session,
-        where: leaf(pane.path),
+        // The whole directory. It used to be the last segment, which is what a
+        // person calls a checkout, and Source control and Files sent that as
+        // the root: a name is no directory, and both answered as if the
+        // checkout were empty. The screens draw the leaf themselves.
+        where: pane.path,
         agent: pane.agentCwds.length > 0,
       });
     });

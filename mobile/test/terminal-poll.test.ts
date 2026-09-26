@@ -68,18 +68,27 @@ describe("a tick that changes nothing", () => {
     expect(again.changed).toBe(false);
   });
 
-  test("even when a pane moved somewhere the strip does not show", () => {
+  test("even when a pane's ids moved, which the strip does not show", () => {
     /*
-     * `pane_current_path` moves with every `cd` and the strip shows nothing of
-     * it but the last segment; the session and window IDS are on the wire and
-     * are drawn nowhere at all. Repainting on those would be repainting on
-     * somebody typing `cd ..` at the desk.
+     * The session and window IDS are on the wire and are drawn nowhere at all.
+     * Repainting on those would be repainting on somebody's tmux housekeeping.
+     * The directory is NOT in this list any more: the tab carries it whole,
+     * because Source control and Files open from it, and a `cd` to another
+     * checkout has to reach them. The next test holds that.
      */
     const again = readStrip(first(ONE), {
       canAttach: true,
-      panes: [pane({ path: "/somewhere/else/work", sessionId: "$7", windowId: "@9" })],
+      panes: [pane({ sessionId: "$7", windowId: "@9" })],
     });
     expect(again.changed).toBe(false);
+  });
+
+  test("but a pane that changed directory is a change", () => {
+    const again = readStrip(first(ONE), {
+      canAttach: true,
+      panes: [pane({ path: "/somewhere/else/work" })],
+    });
+    expect(again.changed).toBe(true);
   });
 
   test("even when an agent's cwd list churns under a pane", () => {

@@ -82,7 +82,9 @@ describe("windows as tabs", () => {
   test("an agent under a pane is carried, because it is why you open it", () => {
     const tabs = paneTabs([pane({ agentCwds: ["/home/x/code/orbit"] })]);
     expect(tabs[0]!.agent).toBe(true);
-    expect(tabs[0]!.where).toBe("orbit");
+    // The whole directory: Source control and Files send it as the root, and
+    // a bare leaf names no checkout ("no such directory", "No commits here").
+    expect(tabs[0]!.where).toBe("/home/x/code/orbit");
   });
 
   test("nothing in, nothing out", () => {

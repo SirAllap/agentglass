@@ -15,7 +15,7 @@
  * and no buttons, which is the honest shape: the grant was chosen at the
  * computer by somebody looking at the request.
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator, FlatList, Pressable, RefreshControl, ScrollView, Text, TextInput, View,
 } from "react-native";
@@ -28,7 +28,7 @@ import { Btn, Card, Chip, Label, Note, Segmented, TAP, groupEdge } from "../../s
 import { C, MONO, RADIUS, SPACE, T, ink, tint } from "../../src/theme.ts";
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { ChevronIcon } from "../../src/nav/icons.tsx";
-import { checkoutFor } from "../../src/model/checkout.ts";
+import { branchLookup, checkoutFor } from "../../src/model/checkout.ts";
 import { Glyph } from "../../src/nav/glyphs.tsx";
 import { ReposIcon } from "../../src/nav/icons.tsx";
 
@@ -109,6 +109,8 @@ interface BranchPrs {
   from?: PrBranchSummary;
   into: PrBranchSummary[];
   needsAuth?: boolean;
+  /** Said here, without asking GitHub: there was nothing to ask about. */
+  local?: boolean;
   error?: string;
 }
 
@@ -126,6 +128,16 @@ export default function ReposScreen(): React.ReactNode {
   const [busy, setBusy] = useState<string | null>(null);
   const [said, setSaid] = useState<{ ok: boolean; text: string } | null>(null);
   const [pulling, setPulling] = useState(false);
+  /** The server answered, and the directory is in no repository. */
+  const [noRepo, setNoRepo] = useState(false);
+  /** The chip strip scrolls; the checkout in use must not sit off its edge. */
+  const strip = useRef<ScrollView>(null);
+  const chipAt = useRef(new Map<string, number>());
+  /** The checkout the strip was last scrolled to, so a resize does not undo a manual scroll. */
+  const revealed = useRef<string | null>(null);
+  const reveal = useCallback((at: string, animated: boolean): void => {
+    strip.current?.scrollTo({ x: Math.max(0, (chipAt.current.get(at) ?? 0) - SPACE.lg), animated });
+  }, []);
   const router = useRouter();
   /*
    * Three views of one checkout, which is the shape a person already has in
@@ -162,10 +174,12 @@ export default function ReposScreen(): React.ReactNode {
     });
     if (!answer.ok) { setSaid({ ok: false, text: answer.error }); return; }
     setCommitEnabled(answer.value.commitEnabled !== false);
-    setStatus(Array.isArray(answer.value.repos) ? answer.value.repos[0] ?? null : null);
+    const first = Array.isArray(answer.value.repos) ? answer.value.repos[0] ?? null : null;
+    setStatus(first);
+    setNoRepo(first === null);
   }, [host, root]);
 
-  useEffect(() => { setStatus(null); setTitle(""); void load(); }, [load]);
+  useEffect(() => { setStatus(null); setNoRepo(false); setTitle(""); void load(); }, [load]);
 
   /*
    * The other two views, fetched only when they are LOOKED at.
@@ -193,8 +207,12 @@ export default function ReposScreen(): React.ReactNode {
 
   useEffect(() => {
     if (!host || !root || view !== "pr" || branchPrs !== null) return;
-    const branch = status?.branch;
-    if (!branch) return;
+    const look = branchLookup(status?.branch);
+    if (!look.ask) {
+      if (look.reason) setBranchPrs({ ok: false, into: [], local: true, error: look.reason });
+      return;
+    }
+    const branch = look.branch;
     let gone = false;
     void (async () => {
       const answer = await ask<BranchPrs>(
@@ -255,12 +273,13 @@ export default function ReposScreen(): React.ReactNode {
 
   if (!host) return null;
 
-  return (
-    <View style={{ flex: 1, backgroundColor: C.bg }}>
+  const chips = (
+    <>
       {/* The checkouts, as chips: the one this screen is about is filled and
           ticked, and a dot marks uncommitted work — "there is something to
           commit here" is the thing you scan twenty checkouts for. */}
       <ScrollView
+        ref={strip}
         horizontal
         showsHorizontalScrollIndicator={false}
         style={{ flexGrow: 0 }}
@@ -271,10 +290,14 @@ export default function ReposScreen(): React.ReactNode {
           return (
             <Pressable
               key={r.root}
+              onLayout={(e) => {
+                chipAt.current.set(r.root, e.nativeEvent.layout.x);
+                if (r.root === root && revealed.current !== root) { revealed.current = root; reveal(root, false); }
+              }}
               accessibilityRole="radio"
               accessibilityState={{ checked: on }}
               accessibilityLabel={`${r.name}${r.dirty ? ", has changes" : ""}`}
-              onPress={() => setRoot(r.root)}
+              onPress={() => { revealed.current = r.root; setRoot(r.root); reveal(r.root, true); }}
               hitSlop={{ top: 8, bottom: 8 }}
               style={({ pressed }) => ({
                 flexDirection: "row", alignItems: "center", gap: 6, height: 32, paddingHorizontal: 12,
@@ -290,6 +313,26 @@ export default function ReposScreen(): React.ReactNode {
           );
         })}
       </ScrollView>
+    </>
+  );
+
+  if (noRepo) {
+    return (
+      <View style={{ flex: 1, backgroundColor: C.bg }}>
+        {chips}
+        <View style={{ padding: SPACE.lg }}>
+          <Card>
+            <Label text="Not a repository" />
+            <Note>This folder is not in a git repository, so there is nothing to commit or compare. The folder button above still browses it.</Note>
+          </Card>
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <View style={{ flex: 1, backgroundColor: C.bg }}>
+      {chips}
 
       {/* Where you are in it: the branch, and what is waiting to go up or come
           down. It was the second line of every chip, which made each chip two
@@ -469,7 +512,7 @@ export default function ReposScreen(): React.ReactNode {
             </Card>
           ) : !branchPrs.ok ? (
             <Card>
-              <Label text="Cannot ask GitHub" />
+              <Label text={branchPrs.local ? "No branch" : "Cannot ask GitHub"} />
               <Note tone="bad">{branchPrs.error ?? "That branch could not be looked up."}</Note>
             </Card>
           ) : (
