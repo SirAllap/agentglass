@@ -61,6 +61,19 @@ export interface Tab {
 const OURS = /^agx-phone-/;
 
 export function paneTabs(panes: readonly AgentPane[]): Tab[] {
+  /*
+   * Nothing else to show is the one case where a detached session on the
+   * app's own server is worth a tab: a shell opened from the empty state has
+   * no client and no agent, and after a relaunch it would be the only thing
+   * there and be filtered like a stray. Asked second, so a machine with real
+   * windows never lists the app's old detached sessions beside them. Ceiling:
+   * a machine with only stale detached sessions on the app's server lists them.
+   */
+  const tabs = tabsOf(panes, false);
+  return tabs.length ? tabs : tabsOf(panes, true);
+}
+
+function tabsOf(panes: readonly AgentPane[], keepOwnDetached: boolean): Tab[] {
   const windows = new Map<string, AgentPane[]>();
   for (const pane of panes) {
     if (OURS.test(pane.session)) continue;
@@ -124,7 +137,7 @@ export function paneTabs(panes: readonly AgentPane[]): Tab[] {
      * the one case where a session nobody is watching still matters, which is
      * an agent working in it.
      */
-    if (pane.attached === false && !pane.agentCwds.length) continue;
+    if (pane.attached === false && !pane.agentCwds.length && !(keepOwnDetached && pane.own === true)) continue;
     /*
      * Keyed on the session's NAME and the window, not on the session's id.
      *
@@ -184,6 +197,39 @@ export function paneTabs(panes: readonly AgentPane[]): Tab[] {
  *  them at once is not a strip anybody reads. */
 export function sessionsOf(tabs: readonly Tab[]): string[] {
   return [...new Set(tabs.map((t) => t.session))];
+}
+
+/** A pane this phone itself just asked the server to open, held until the
+ *  poll lists it for real. See `pendingTab`. */
+export interface PendingTab {
+  paneId: string;
+  session: string;
+  where: string;
+  label: string;
+}
+
+/**
+ * The tab for a pane this phone itself just opened, before the next poll
+ * lists it — bridging the gap `paneTabs` leaves ON PURPOSE two comments up:
+ * a session with no tmux client on it and no agent under it is filtered out,
+ * forever, and a plain shell this screen just asked the server to create is
+ * exactly that case until something attaches to it.
+ *
+ * Reported from a real device: the empty state's "Open a shell in <name>"
+ * button made the window on the computer — one pane, one window, zero
+ * clients — and the phone sat on "Nothing open" through repeated presses of
+ * "Look again", because nothing ever attached to make the session's `attached`
+ * true. This is the bridge: the screen renders a terminal for the pane it was
+ * just told exists, which is what makes the WebSocket attach in the first
+ * place — `TerminalView` needs only a pane id, never `strip` membership (see
+ * its own comment). Once that attach lands, the next poll lists the pane for
+ * real and `paneTabs`'s own answer takes over; this is never consulted again
+ * for a pane already found there, which is `null` FIRST and the only reason
+ * this function ever runs.
+ */
+export function pendingTab(pending: PendingTab | null, active: string | null): Tab | null {
+  if (!pending || !active || pending.paneId !== active) return null;
+  return { paneId: pending.paneId, label: pending.label, session: pending.session, where: pending.where, agent: false };
 }
 
 /** Either the strip moved, and here is the whole of it, or it did not and there

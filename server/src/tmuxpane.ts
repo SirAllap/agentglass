@@ -196,6 +196,26 @@ const underScratch = (p: string): boolean => p.startsWith(tmpdir());
  *  a wedged tmux must not be able to hang a chat turn. */
 const TMUX_TIMEOUT_MS = 5_000;
 
+/**
+ * The locale floor `tmuxctl.ts` already keeps for the user's own tmux, missing
+ * here for the engine's — and the engine is the one a systemd unit or a
+ * bare-env launcher is more likely to start with nothing in it at all.
+ *
+ * Every format here separates fields with a tab, and tmux will not hand one
+ * back to a process with no locale: `-F "#{pane_id}\t#{window_id}"` came back
+ * `%0_@0` under a stripped environment — the C locale is not printable to
+ * tmux, so the tab became `_` and the id split on it came out empty. That
+ * looked like tmux refusing to open the window at all: `engineWindowRunning`
+ * parses the pane and window ids off that same separator and returns null the
+ * moment it does not find both, with nothing in the reply to say why. An
+ * existing setting is kept — this is a floor, not a preference.
+ */
+function tmuxEnv(): Record<string, string | undefined> {
+  return process.env.LC_ALL || process.env.LANG || process.env.LC_CTYPE
+    ? process.env
+    : { ...process.env, LC_ALL: "C.UTF-8" };
+}
+
 export interface TmuxResult { ok: boolean; stdout: string; stderr: string }
 
 /** Run one tmux command against our server. `stdin` feeds commands that read it
@@ -234,8 +254,11 @@ export async function tmux(args: string[], stdin?: string): Promise<TmuxResult> 
        * environment the child would have inherited anyway. It only ever gives a
        * caller that CAN set a variable a way to have it honoured. `tmuxctl.ts`
        * has done this for the same reason since its own version of this bug.
+       *
+       * `tmuxEnv()` rather than the bare `process.env` this used to be: see
+       * its own comment for the locale floor it adds.
        */
-      env: process.env,
+      env: tmuxEnv(),
     });
     const kill = setTimeout(() => { try { proc.kill(); } catch { /* gone */ } }, TMUX_TIMEOUT_MS);
     const [stdout, stderr, code] = await Promise.all([

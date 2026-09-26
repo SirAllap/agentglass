@@ -33,6 +33,6 @@ describe("onOpened", () => {
   });
 
   test("the type carries a session, not just a pane", () => {
-    expect(screen).toContain('answer: { pane: string; session: string } | { error: string }');
+    expect(screen).toContain('answer: { pane: string; cwd: string; session: string } | { error: string }');
   });
 });

@@ -4385,8 +4385,17 @@ export interface IssueWork {
   window?: string;
   startedAt: number;
 }
+/** One comment under an issue. */
+export interface IssueComment {
+  author: string;
+  body: string;
+  createdAt: string;
+  url: string;
+}
 export interface IssueDetail extends IssueRow {
   body: string;
+  /** Oldest first, the newest 50 of a longer thread. */
+  thread: IssueComment[];
   createdAt: string;
   milestone: string | null;
   work: IssueWork | null;

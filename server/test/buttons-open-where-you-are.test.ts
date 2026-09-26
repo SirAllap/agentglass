@@ -144,11 +144,15 @@ test("selecting the new window is opt-in, and the clone does not opt in", () => 
   /* `-d` unless the caller asked to be taken there. */
   expect(body).toContain('select ? [] : ["-d"]');
 
-  /* The clone's two openers take the default. */
+  /* The clone's two openers take the default. `index.ts` also has
+     `/terminal/open-shell` — a person pressing the empty state's own button,
+     not a run the machine started, so it is excluded here and checked with
+     the other button calls below instead. */
   for (const f of ["../src/understudy-pane.ts", "../src/index.ts", "../src/runs.ts"]) {
     const src = readFileSync(new URL(f, import.meta.url), "utf8");
     for (const m of src.matchAll(/engineWindowRunning\(([^;]*?)\)\s*[;,)]/gs)) {
       const args = m[1]!;
+      if (f === "../src/index.ts" && args.includes("root, name, [], root,")) continue;
       expect(args.trimEnd().endsWith("true"), `${f}: a clone window must not select — ${args.slice(0, 60)}`).toBe(false);
     }
   }
@@ -163,4 +167,16 @@ test("and the buttons a person presses DO opt in", () => {
   for (const m of calls) {
     expect(m[1]!.trimEnd().endsWith("true"), `a person's window must select — ${m[1]!.slice(0, 50)}`).toBe(true);
   }
+
+  /* The empty state's "Open a shell in <project>" has no pane, and so no
+     socket, to press a button on terminal.ts's own controls — it is a plain
+     HTTP route in index.ts instead, but the rule is the same one: somebody
+     pressed something and is waiting to see it. */
+  const idx = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
+  const at = idx.indexOf('pathname === "/terminal/open-shell"');
+  expect(at, "the route moved").toBeGreaterThan(-1);
+  const body = idx.slice(at, idx.indexOf("\n    }", at));
+  const call = body.match(/engineWindowRunning\(([^;]*?)\)\s*[;.]/s);
+  expect(call, "the route's own call moved").not.toBeNull();
+  expect(call![1]!.trimEnd().endsWith("true"), "the empty state's window must select").toBe(true);
 });

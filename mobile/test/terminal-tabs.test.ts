@@ -202,6 +202,24 @@ describe("sessions nobody is looking at", () => {
     expect(sessionsOf(tabs)).toEqual(["work"]);
   });
 
+  test("unless nothing else is left and the app's own server holds it", () => {
+    // A shell opened from the phone has no client and no agent; after a
+    // relaunch it is the only thing on the machine and must still be a tab.
+    const tabs = paneTabs([
+      { ...base, session: "orbit", paneId: "%1", attached: false, own: true },
+      { ...base, session: "stray", sessionId: "$2", paneId: "%2", attached: false, own: false },
+    ]);
+    expect(sessionsOf(tabs)).toEqual(["orbit"]);
+  });
+
+  test("but never beside real windows", () => {
+    const tabs = paneTabs([
+      { ...base, session: "work", paneId: "%1", attached: true, own: true },
+      { ...base, session: "orbit", sessionId: "$2", paneId: "%2", attached: false, own: true },
+    ]);
+    expect(sessionsOf(tabs)).toEqual(["work"]);
+  });
+
   test("unless an agent is running in one", () => {
     // The one case where a session nobody is watching still matters.
     const tabs = paneTabs([

@@ -28,6 +28,7 @@ import { validSessionName } from "./tmuxpane.ts";
 import { isLocked } from "./tmuxlock.ts";
 import { findTmuxBelow } from "./procchildren.ts";
 import { recall } from "./tmuxmemory.ts";
+import { engineSocketArgs } from "./tmuxbin.ts";
 import { mirrorLeases, recordMirrorLease, forgetMirrorLease, type MirrorLease } from "./mirrorlease.ts";
 
 /** How long a tmux call may take before we give up on it. Generous for a local
@@ -2580,11 +2581,27 @@ function paneRowsOn(
          and those are different answers: the first is a session to hide, the
          second is a client that must keep seeing everything. Collapsing them
          emptied the strip on a fresh profile. */
-      ...(ours === null ? {} : { own: mine }),
+      ...(mine ? { own: true } : ours === null ? {} : { own: false }),
       popup: nested.has(r.session), attached: live.has(r.session),
     });
   }
   return rows;
+}
+
+/**
+ * Whether a socket is one this app has a claim on: the server it was last
+ * attached to, or the engine's own.
+ *
+ * The engine's server is the app's by construction. A shell opened from a
+ * phone is made there with nobody attached, and `tmux-last.json` only ever
+ * names a server a desk client was on, so a machine where the desk never
+ * attached had no memory at all and the pane list skipped the app's own
+ * server as somebody else's stray. Measured: the pane existed, the attach was
+ * refused with "that pane is gone", and the phone showed Disconnected.
+ */
+function isOurSocket(socket: string[], remembered: string | null): boolean {
+  const p = socketPath(socket);
+  return p === remembered || p === socketPath(engineSocketArgs());
 }
 
 /**
@@ -2618,7 +2635,7 @@ export async function listPanes(known?: string[]): Promise<PaneWireRow[]> {
      * the client count says now, and it is the ONE detached server that gets
      * through. Everything else is unchanged. See tmuxmemory.ts.
      */
-    const mine = ours !== null && socketPath(socket) === ours;
+    const mine = isOurSocket(socket, ours);
     if (!mine && !(await tmuxAsync(socket, CLIENT_TTYS))?.trim()) return [];
     const [out, clients, sessions] = await Promise.all([
       tmuxAsync(socket, ["list-panes", "-a", "-F", PANE_FORMAT]),
@@ -2641,7 +2658,7 @@ export async function listPanes(known?: string[]): Promise<PaneWireRow[]> {
 export function listPanesSync(known?: string[]): PaneWireRow[] {
   const ours = recall()?.socket ?? null;
   return tmuxSockets(known).flatMap((socket) => {
-    const mine = ours !== null && socketPath(socket) === ours;
+    const mine = isOurSocket(socket, ours);
     if (!mine && !tmux(socket, CLIENT_TTYS)?.trim()) return [];
     const out = tmux(socket, ["list-panes", "-a", "-F", PANE_FORMAT]);
     if (!out) return [];

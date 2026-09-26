@@ -478,7 +478,7 @@ export default function ReposScreen(): React.ReactNode {
         renderItem={({ item, index }) => {
           const m = mark(item);
           return (
-            <View style={groupEdge(index === 0, index === files.length - 1)}>
+            <View style={[groupEdge(index === 0, index === files.length - 1), { flexDirection: "row", alignItems: "center" }]}>
             <Pressable
               disabled={!mayWrite || !!busy}
               onPress={() => {
@@ -493,8 +493,8 @@ export default function ReposScreen(): React.ReactNode {
               accessibilityState={{ checked: item.staged, disabled: !mayWrite }}
               accessibilityLabel={`${m.says}: ${item.path}`}
               style={({ pressed }) => ({
-                flexDirection: "row", alignItems: "center", gap: SPACE.md,
-                minHeight: 52, paddingHorizontal: SPACE.lg, backgroundColor: pressed ? C.bg3 : "transparent",
+                flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: SPACE.md,
+                minHeight: 52, paddingLeft: SPACE.lg, backgroundColor: pressed ? C.bg3 : "transparent",
               })}
             >
               {/* A box, because staging is choosing — which files go in the
@@ -521,6 +521,19 @@ export default function ReposScreen(): React.ReactNode {
               >
                 {item.path}
               </Text>
+            </Pressable>
+            {/* What changed in it: its own control, so staging stays one tap on
+                the name and reading the change is one tap on the chevron. */}
+            <Pressable
+              onPress={() => router.push({ pathname: "/git-diff", params: { root, path: item.path } })}
+              accessibilityRole="button"
+              accessibilityLabel={`See what changed in ${item.path}`}
+              style={({ pressed }) => ({
+                width: TAP, minHeight: 52, alignItems: "center", justifyContent: "center",
+                backgroundColor: pressed ? C.bg3 : "transparent",
+              })}
+            >
+              <ChevronIcon color={C.text3} size={16} />
             </Pressable>
             </View>
           );

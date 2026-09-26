@@ -179,7 +179,7 @@ import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource,
 import { claudeModels } from "./claudemodels.ts";
 import { codexStream, codexModels, codexTranscript, codexCwd, CODEX_ENABLED, CODEX_BYPASS_ALLOWED } from "./codex.ts";
 import { antigravityStream, antigravityModels, ANTIGRAVITY_ENABLED, ANTIGRAVITY_BYPASS_ALLOWED } from "./antigravity.ts";
-import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs, reloadEngineConf, tmuxCapability, engineWindowRunning, tmux } from "./tmuxpane.ts";
+import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs, reloadEngineConf, tmuxCapability, engineWindowRunning, engineSessionName, tmux } from "./tmuxpane.ts";
 import { takeLease, endLease, leaseHeld, reapLeases } from "./panelease.ts";
 import { runAgentInteractivePane } from "./understudy-pane.ts";
 import { startScanner, ownsSession, knownProjects, projectsKnownAtStart, resyncScope, scanningEnabled } from "./transcripts.ts";
@@ -7343,6 +7343,39 @@ const server = Bun.serve<WsData>({
       if (!agentKind(wanted)) return json({ ok: false, error: "no such agent" }, 400);
       const id = mintAgentTicket({ cwd, prompt, yolo, title: sessionTitle(b.title), kind: wanted });
       return json({ ok: true, ticket: id });
+    }
+
+    /*
+     * A shell, for a phone with no pane to anchor the socket's own `+` to.
+     *
+     * That control (`cmd:"agent"` over the terminal WebSocket) reads its
+     * project off the pane it is attached to — the point of it — and so it
+     * has nothing to read from the empty state, where there is no pane and
+     * therefore no socket at all (`TerminalView` is only mounted `if (open)`).
+     * A plain HTTP route, taking the project the caller already named rather
+     * than one read off a pane, is the narrowest way out of that: the phone
+     * already reads `/git/repos` (scoped to the paired project server-side)
+     * for the empty state's own list, so `root` is one of its own entries,
+     * never free text.
+     *
+     * No `into`: this is the exact case `engineWindowRunning`'s own fallback
+     * exists for — nothing on screen to open "where the client is looking",
+     * so a session named after the checkout is the only sensible answer, the
+     * same one an unattached run gets.
+     */
+    if (pathname === "/terminal/open-shell" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      if (!TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
+      let b: { root?: unknown };
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const root = gitSafeAbs(b.root);
+      if (!root || !inScope(root) || !fsExists(root)) {
+        return json({ ok: false, error: "that project is not open" }, 400);
+      }
+      const name = basename(root) || "shell";
+      const opened = await engineWindowRunning(root, name, [], root, undefined, undefined, true);
+      if (!opened) return json({ ok: false, error: "the engine would not open a window" }, 500);
+      return json({ ok: true, pane: opened.paneId, window: opened.windowId, cwd: root, session: engineSessionName(root) });
     }
 
     /*
