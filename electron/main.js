@@ -764,8 +764,10 @@ let letDeskGo = /** @type {(() => void) | null} */ (null);
  * told null when it does not. Null means one of three things: the server is on
  * the Origin rule for a moment between claims; another process holds its desk;
  * or an earlier launch of this app piped it a key this launch does not have. In
- * the last two, this window can neither host the browser nor release a hold
- * there until that server is restarted — the ceiling desk.ts states. A claim made on
+ * the last two the app leaves that server for one of its own
+ * (leaveTakenServer); with no free port it stays, unable to host the browser
+ * or release a hold there, and does not claim again — the ceiling desk.ts
+ * states. A claim made on
  * behalf of a server this app has since replaced with its own says nothing.
  * @param {number} port
  */
@@ -783,7 +785,34 @@ function holdAdoptedDesk(port) {
         try { w.webContents.send("ag:server-changed", { deskKey: k }); } catch { /* window went away */ }
       }
     },
+    onTaken: () => { if (!sidecar && SERVER_PORT === port) void leaveTakenServer(); },
   });
+}
+
+/**
+ * Leave an adopted server whose desk another process claimed first, and run
+ * this app's own on the next free port, as for a server that fails the proof.
+ * Staying would leave this window without the browser role and the desk
+ * release there for as long as that server lives. With no free candidate port
+ * the adoption stands, on the ceiling holdAdoptedDesk states.
+ */
+async function leaveTakenServer() {
+  const ports = Array.from({ length: PORT_CANDIDATES }, (_, i) => PREFERRED_PORT + i);
+  const states = await Promise.all(ports.map((p) => probe(p, 400)));
+  const at = states.indexOf("free");
+  if (at < 0) {
+    console.error(`[agentglass] :${SERVER_PORT} desk is held by another process and no candidate port is free; staying on it`);
+    return;
+  }
+  console.error(`[agentglass] :${SERVER_PORT} desk is held by another process; starting this app's own server on :${ports[at]}`);
+  deskKey = null;
+  for (const id of Array.from(laneHosts.keys())) destroyLaneHost(id);
+  SERVER_PORT = ports[at];
+  apiOrigin = `http://127.0.0.1:${SERVER_PORT}`;
+  await ensureServer(false);
+  for (const w of BrowserWindow.getAllWindows()) {
+    try { w.webContents.send("ag:server-changed", { origin: apiOrigin, token: sidecarUp ? currentToken() : null, deskKey }); } catch { /* window went away */ }
+  }
 }
 /* POSIX only. Windows hands a child a descriptor past stderr through the C
    runtime's handle table, which nothing here has measured the compiled sidecar

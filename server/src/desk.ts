@@ -71,11 +71,12 @@ if (DESK_STARTED) {
  * that can register a browser window or release a hold from the desk, and the
  * app's own window is refused both (a paired phone still answers a hold). The
  * same caller could already take the browser role by forging the Origin, or
- * stop the server; what it gains is keeping the person's window out, quietly,
- * and the app says so in its log. A server started by an app — this launch or
+ * stop the server; what it gains is keeping the person's window out of that
+ * server — the app leaves it for a server of its own on the next free port, and
+ * says so in its log. A server started by an app — this launch or
  * an earlier one, whose sidecar outlived it — never takes a claim: it has its
- * key from the pipe, and an app that adopts it is refused both until that
- * server is restarted.
+ * key from the pipe, and an app that adopts it is refused: it leaves that
+ * server for one of its own, or, with no free port, stays refused.
  */
 let claim: { key: string } | null = null;
 

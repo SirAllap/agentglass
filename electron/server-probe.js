@@ -82,7 +82,9 @@ function probe(port, opts) {
  * as long as the connection lives, and `onChange` hears it — the key once the
  * server holds it, null while it does not. A dropped claim is tried again after
  * `retryMs`, doubling while attempts keep failing (a tokenless dev server never
- * will) up to a minute, until `stop()`.
+ * will) up to a minute, until `stop()`. A claim refused because another
+ * process holds the desk (409) is the exception when `onTaken` is given: the
+ * caller is told once and the claim is not retried.
  *
  * Every attempt proves the server first. A server restarted under the shell
  * leaves the port to whoever binds it next, and a claim carries both the token
@@ -92,11 +94,11 @@ function probe(port, opts) {
  * the renderer sends after adoption already has.
  *
  * @param {number} port
- * @param {{ token: () => string | null, key: string, onChange: (key: string | null) => void, retryMs?: number, host?: string }} opts
+ * @param {{ token: () => string | null, key: string, onChange: (key: string | null) => void, onTaken?: () => void, retryMs?: number, host?: string }} opts
  * @returns {() => void} stop, which lets the claim go
  */
 function holdDesk(port, opts) {
-  const { token, key, onChange, retryMs = 5000, host = "127.0.0.1" } = opts;
+  const { token, key, onChange, onTaken, retryMs = 5000, host = "127.0.0.1" } = opts;
   let stopped = false;
   /** @type {http.ClientRequest | null} */
   let req = null;
@@ -124,6 +126,14 @@ function holdDesk(port, opts) {
       host, port, path: "/desk/claim", method: "POST",
       headers: { authorization: `Bearer ${t}`, "x-agentglass-desk": key, "content-length": 0 },
     }, (res) => {
+      if (res.statusCode === 409 && onTaken) {
+        // Someone else holds this server's desk. A caller that would rather
+        // leave than wait is told once, and the claim is not retried.
+        res.resume();
+        stopped = true;
+        done();
+        return onTaken();
+      }
       if (res.statusCode !== 200) { res.resume(); return done(); }
       res.on("data", () => say(key));
       res.on("end", done);

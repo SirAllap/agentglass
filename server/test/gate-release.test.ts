@@ -487,10 +487,11 @@ describe("the desktop app hands its key to the two ends that use it, and nowhere
     expect(listen).toBeGreaterThan(-1);
     expect(listen).toBeLessThan(boot.indexOf('if (deskKey) desk?.end(deskKey + "\\n");'));
     // Declared, cleared, set and pushed by the adopted server's claim, minted,
-    // piped (twice on one line), pushed on restart, and the IPC line (the
-    // channel's name and the answer): a use past these — a file, a variable, a
+    // piped (twice on one line), pushed on restart, cleared and pushed when an
+    // adopted server's desk is taken and the app leaves it, and the IPC line
+    // (the channel's name and the answer): a use past these — a file, a variable, a
     // log line — is a change somebody has to look at.
-    expect([...code(MAIN).matchAll(/\bdeskKey\b/g)]).toHaveLength(10);
+    expect([...code(MAIN).matchAll(/\bdeskKey\b/g)]).toHaveLength(12);
   });
 
   test("the renderer asks for it from a window's own page, is handed the next one on a restart, and carries it on the two requests that need it", () => {

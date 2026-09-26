@@ -28,7 +28,7 @@ const require = createRequire(import.meta.url);
 const shell = require("../../electron/server-probe.js") as {
   holdDesk(port: number, opts: {
     token: () => string | null; key: string; onChange: (key: string | null) => void;
-    retryMs?: number; host?: string;
+    retryMs?: number; host?: string; onTaken?: () => void;
   }): () => void;
 };
 
@@ -212,6 +212,22 @@ describe("a server the app did not start", () => {
       expect(await until(async () => seen.includes(KEY))).toBe(true);
     } finally { stop(); }
   });
+
+  test("a shell that would rather leave than wait is told once that the desk is taken, and stops claiming", async () => {
+    const other = await claim(base, { ...bearer, "x-agentglass-desk": "someone-else-got-here-first-0123456789ab" });
+    expect(other.status).toBe(200);
+    const seen: (string | null)[] = [];
+    let taken = 0;
+    const stop = shell.holdDesk(port, { token: () => TOKEN, key: KEY, onChange: (k) => seen.push(k), onTaken: () => { taken++; }, retryMs: 50 });
+    try {
+      expect(await until(async () => taken > 0)).toBe(true);
+      other.close();
+      await Bun.sleep(400);
+      // Released by the other holder, and still not claimed: it left.
+      expect(taken).toBe(1);
+      expect(seen.includes(KEY)).toBe(false);
+    } finally { stop(); other.close(); }
+  });
 });
 
 describe("a server the app started", () => {
@@ -299,6 +315,14 @@ describe("the wiring", () => {
     expect(hold).toContain("letDeskGo = holdDesk(port, {");
     expect(hold).toContain("if (sidecar || SERVER_PORT !== port) return;");
     expect(own(MAIN, "function stopSidecar(")).toContain("letDeskGo?.();");
+  });
+
+  test("an adopted server whose desk another process holds is left: the app starts its own on a free port", () => {
+    expect(own(MAIN, "function holdAdoptedDesk(")).toContain("onTaken: () => { if (!sidecar && SERVER_PORT === port) void leaveTakenServer(); },");
+    const leave = own(MAIN, "async function leaveTakenServer(");
+    expect(leave).toContain('states.indexOf("free")');
+    expect(leave).toContain("await ensureServer(false);");
+    expect(leave).not.toContain("holdAdoptedDesk(");
   });
 
   test("a key taken or lost does not reconnect every socket in the window", () => {
