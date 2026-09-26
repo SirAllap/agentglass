@@ -4820,7 +4820,7 @@ const server = Bun.serve<WsData>({
       const said =
         r.error === "unknown" ? "that invitation has expired — start a new one on the computer"
         : r.error === "taken" ? "another device is already using that invitation"
-        : r.error === "locked" ? `too many wrong codes — the invitation is closed, start a new one on the computer`
+        : r.error === "locked" ? `too many wrong codes — start a new invitation on the computer`
         : r.error === "shape" ? "this browser could not generate a key for the connection"
         : `that code is wrong — ${r.left} ${r.left === 1 ? "try" : "tries"} left of ${MAX_ATTEMPTS}`;
       return json({ ok: false, error: said, left: r.left, reason: r.error }, r.error === "code" ? 401 : 410);

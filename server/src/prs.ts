@@ -3274,15 +3274,15 @@ export function assetAllowed(raw: string): URL | null {
  *
  * A separate, narrower question than `assetAllowed`: that one decides what we
  * will fetch, this one decides what we will hand a credential to. It has to be
- * an exact domain match — `hostname.endsWith("github.com")`, which is what
- * stood here, is also true of `evilgithub.com`. Nothing reachable today gets
- * through `assetAllowed` to ask, but a substring test on a hostname is one
- * allowlist edit away from posting `gh auth token` to somebody else's server,
- * and the edit would look harmless.
+ * an exact host match. A suffix test — `endsWith("github.com")` was here first,
+ * `endsWith(".github.com")` after it — admits every subdomain, and a subdomain
+ * is a name somebody else may be able to register or point elsewhere (a
+ * dangling `*.github.com` record is a known kind of takeover). Only `github.com`
+ * itself serves an attachment that needs the credential, so it is the only
+ * host that gets it; a new host is a line added here, on purpose.
  */
 export function tokenAllowedHost(hostname: string): boolean {
-  const h = hostname.toLowerCase().replace(/\.$/, "");
-  return h === "github.com" || h.endsWith(".github.com");
+  return hostname.toLowerCase().replace(/\.$/, "") === "github.com";
 }
 
 let tokenCache: { at: number; token: string } | null = null;
@@ -3353,12 +3353,34 @@ export async function prAsset(rawUrl: unknown): Promise<Response> {
     return new Response(failed("pr/asset", e, "upstream did not answer"), { status: 502 });
   }
   if (!res.ok) return new Response(`upstream ${res.status}`, { status: res.status === 404 ? 404 : 502 });
-  const type = res.headers.get("content-type") || "application/octet-stream";
-  // Refuse to relay anything that is not an image: this endpoint must not
-  // become a general-purpose fetcher for whatever a body links to.
-  if (!/^image\//i.test(type)) return new Response("not an image", { status: 415 });
+  return assetReply(res);
+}
+
+/** Types a PR-body image proxy will relay. Raster only: SVG is an image that
+ *  can carry script, and this response is served from the app's own origin. */
+const RASTER_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/bmp", "image/x-icon", "image/vnd.microsoft.icon"]);
+
+/**
+ * What the proxy hands back for an upstream image response.
+ *
+ * `image/*` was the test before, which passes `image/svg+xml`; opened as a
+ * document (a click on the image, a link to the proxy URL) an SVG runs its
+ * script on the server's origin, with the page's storage and its token. Only
+ * the raster types above pass, the type is rewritten to the bare type (no
+ * parameters), `nosniff` stops a browser reading a PNG as something else, and
+ * the CSP sandbox means that even a mis-typed body opened as a document has no
+ * script and no origin.
+ */
+export function assetReply(res: Response): Response {
+  const type = (res.headers.get("content-type") || "").split(";")[0]!.trim().toLowerCase();
+  if (!RASTER_TYPES.has(type)) return new Response("not a supported image", { status: 415 });
   return new Response(res.body, {
-    headers: { "content-type": type, "cache-control": "private, max-age=600" },
+    headers: {
+      "content-type": type,
+      "cache-control": "private, max-age=600",
+      "x-content-type-options": "nosniff",
+      "content-security-policy": "default-src 'none'; sandbox",
+    },
   });
 }
 

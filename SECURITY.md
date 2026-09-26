@@ -136,7 +136,10 @@ The handshake, in `server/src/pairing.ts`:
    code is shown on the screen and nowhere else. Both last two minutes.
 2. **The phone proves it can see that screen.** It scans the QR, generates a
    P-256 keypair that never leaves the browser, and types the code. Five wrong
-   guesses closes the invitation outright rather than refusing one attempt.
+   guesses from one address shuts that address out, even for the right code; ten
+   from all addresses together closes the invitation outright. Knowing the
+   invitation's id, which is in the QR, is not enough to close it from one
+   address; a guesser with several addresses can still spend the shared ten.
 3. **A person at the machine agrees.** The request appears in the Remote pane
    naming the device, the address it came from and the same six digits, and
    waits. Nothing is minted until somebody accepts, and accepting is where the
@@ -644,6 +647,10 @@ the same guarded fetch the server uses for any address it did not choose: each
 hop is checked against private, loopback and link-local ranges before it is
 connected to, redirects are followed one hop at a time with that check repeated,
 five hops at most, and a body over 5 MB or a fetch over 15 seconds is dropped.
+Private addresses are recognised in every spelling of an IPv4 host inside an
+IPv6 address (`::ffff:127.0.0.1` and `::ffff:7f00:1` alike, NAT64 and 6to4
+too), and the connection is made to the address that was checked rather than to
+a second lookup of the name.
 
 ## The Clone, unattended
 
@@ -942,3 +949,12 @@ vulnerability, but it is one worth being able to look up rather than discover.
 [docs/BLAST-RADIUS.md](docs/BLAST-RADIUS.md) lists every such command, what
 triggers it, and the `AGENTGLASS_TMUX_OBSERVE_ONLY=1` switch that turns all of
 them off while leaving the read-only cockpit working.
+
+## The phone app and plain http
+
+The native app keeps cleartext http allowed for every host. Pairing over a bare
+LAN or tailnet address is plain http, Android's network security config cannot
+scope cleartext by address range, and the pairing token is the protection, not
+the transport (see the handshake above: the credential is sealed to the phone's
+key). The config does restrict https to the system certificate store, so a
+certificate authority installed on the phone cannot vouch for a host.
