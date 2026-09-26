@@ -40,10 +40,10 @@ describe("pluginGitEnv", () => {
   });
 
   test("a proxy the machine needs is kept", () => {
-    const was = process.env.HTTPS_PROXY;
-    process.env.HTTPS_PROXY = "http://proxy.example.test:3128";
-    try { expect(pluginGitEnv().HTTPS_PROXY).toBe("http://proxy.example.test:3128"); }
-    finally { if (was === undefined) delete process.env.HTTPS_PROXY; else process.env.HTTPS_PROXY = was; }
+    // Never on process.env: Bun 1.3.14 goes on sending https through a deleted
+    // HTTPS_PROXY, and every later https fetch in the run is refused.
+    const env = pluginGitEnv({ ...process.env, HTTPS_PROXY: "http://proxy.example.test:3128" });
+    expect(env.HTTPS_PROXY).toBe("http://proxy.example.test:3128");
   });
 
   test("a header scoped to one URL in the user's gitconfig never reaches the host", async () => {
