@@ -354,10 +354,17 @@ describe("who may see the GitHub token", () => {
    * Narrower than the fetch allowlist on purpose: being allowed to serve us an
    * image is not the same as being allowed to hold the user's credential.
    */
-  test("github.com and its own subdomains, and nothing else", () => {
+  test("github.com itself, and nothing else", () => {
     expect(prs.tokenAllowedHost("github.com")).toBe(true);
     expect(prs.tokenAllowedHost("GitHub.com")).toBe(true);
-    expect(prs.tokenAllowedHost("codeload.github.com")).toBe(true);
+    expect(prs.tokenAllowedHost("github.com.")).toBe(true);
+  });
+
+  /** A subdomain is a name somebody else may control (a dangling record). */
+  test("a subdomain of github.com does not get the credential", () => {
+    expect(prs.tokenAllowedHost("codeload.github.com")).toBe(false);
+    expect(prs.tokenAllowedHost("gist.github.com")).toBe(false);
+    expect(prs.tokenAllowedHost("a.b.github.com")).toBe(false);
   });
 
   test("a lookalike that ends in the same letters gets nothing", () => {
@@ -464,5 +471,31 @@ describe("CI notifications are scoped to your stake (#244)", () => {
     expect(prs.ciNotifiesFor("mine")).toBe(true);
     expect(prs.ciNotifiesFor("review")).toBe(true);
     expect(prs.ciNotifiesFor("all")).toBe(false);
+  });
+});
+
+describe("what the image proxy relays", () => {
+  const upstream = (type: string | null, body = "x") =>
+    new Response(body, type === null ? {} : { headers: { "content-type": type } });
+
+  test("a raster image passes, with the bare type, nosniff and a sandboxing CSP", () => {
+    const r = prs.assetReply(upstream("image/png; charset=binary"));
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toBe("image/png");
+    expect(r.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(r.headers.get("content-security-policy")).toBe("default-src 'none'; sandbox");
+  });
+
+  /** SVG is an image that carries script; this response is on the app's origin. */
+  test("an SVG is refused, whatever it is called", () => {
+    for (const t of ["image/svg+xml", "IMAGE/SVG+XML; charset=utf-8", "image/svg"]) {
+      expect(prs.assetReply(upstream(t)).status, t).toBe(415);
+    }
+  });
+
+  test("anything that is not a known raster type is refused, including no type at all", () => {
+    for (const t of ["text/html", "application/octet-stream", "image/x-unknown", "image/", null]) {
+      expect(prs.assetReply(upstream(t)).status, String(t)).toBe(415);
+    }
   });
 });

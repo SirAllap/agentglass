@@ -20,7 +20,7 @@
 // It never runs that command. Handing a GUI a root shell to fix a network
 // problem is a worse trade than reading one line and pasting it.
 import { networkInterfaces } from "node:os";
-import { readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 
 /**
  * A non-loopback address that has talked to us, and what we know about it.
@@ -295,20 +295,24 @@ export function __resetRemoteClients(): void {
  *  Root is the honest default: tailscaled needs it for the TUN device. */
 const TAILSCALED_SOCK = "/var/run/tailscale/tailscaled.sock";
 
-let uidCache: { uid: number; at: number } | null = null;
+let uidCache: { uid: number; found: boolean; at: number } | null = null;
 /** Set only by __trustProxyUid, declared here rather than beside it: a `let`
  *  read by a function defined above it is a TDZ crash waiting for the first
  *  caller that runs during module evaluation. This codebase has had that
  *  black-screen bug once already. */
 let forcedUid: number | null = null;
 
-function tailscaledUid(now = Date.now()): number {
-  if (forcedUid !== null) return forcedUid;
-  if (uidCache && now - uidCache.at < 60_000) return uidCache.uid;
+/** Where the socket table is read from; a test points it at a fixture. */
+let procNetFiles = ["/proc/net/tcp", "/proc/net/tcp6"];
+
+function tailscaled(now = Date.now()): { uid: number; found: boolean } {
+  if (forcedUid !== null) return { uid: forcedUid, found: true };
+  if (uidCache && now - uidCache.at < 60_000) return uidCache;
   let uid = 0;
-  try { uid = statSync(TAILSCALED_SOCK).uid; } catch { /* not Linux, or not installed */ }
-  uidCache = { uid, at: now };
-  return uid;
+  let found = false;
+  try { uid = statSync(TAILSCALED_SOCK).uid; found = true; } catch { /* not Linux, or not installed */ }
+  uidCache = { uid, found, at: now };
+  return uidCache;
 }
 
 /**
@@ -321,21 +325,32 @@ function tailscaledUid(now = Date.now()): number {
  * than a second stale, for the same cost: the parse measured 2.2-4.5ms over
  * 185 rows, so one read per second is ~0.25% of a core even under load.
  *
- * Reading it at all is rare: the trigger below fires only on requests carrying
- * forwarding headers, and his hooks send none.
+ * It is read for every loopback request once tailscaled is installed, not
+ * only for those carrying forwarding headers: a raw TCP forward sends none.
+ * Where tailscaled is absent it is never read for a header-less request.
  */
 let tableCache: { map: Map<number, number>; port: number; at: number } | null = null;
+
+/** Whether a socket table exists here to consult at all (no on macOS, Windows). */
+function procReadable(): boolean {
+  return procNetFiles.some((f) => existsSync(f));
+}
 
 function socketOwners(ourPort: number, now = Date.now()): Map<number, number> {
   if (tableCache && tableCache.port === ourPort && now - tableCache.at < 1000) return tableCache.map;
   const map = new Map<number, number>();
-  for (const file of ["/proc/net/tcp", "/proc/net/tcp6"]) {
+  for (const file of procNetFiles) {
     let text: string;
     try { text = readFileSync(file, "utf8"); } catch { continue; }
     for (const line of text.split("\n").slice(1)) {
       const c = line.trim().split(/\s+/);
       if (c.length < 10) continue;
-      if (c[3] !== "01") continue; // ESTABLISHED only; a TIME_WAIT row reports uid 0 for everyone
+      // Every state a live client can be in while its request is handled, not
+      // ESTABLISHED alone: a client that sends and half-closes is FIN_WAIT1/2
+      // (04/05) by the time the handler runs, and skipping those rows let a
+      // forward through tailscaled read as a socket nobody owns. TIME_WAIT (06)
+      // and LISTEN (0A) are left out; a TIME_WAIT row reports uid 0 for everyone.
+      if (c[3] === "06" || c[3] === "0A") continue;
       const localPort = parseInt(c[1]!.split(":")[1] ?? "", 16);
       const remPort = parseInt(c[2]!.split(":")[1] ?? "", 16);
       if (remPort !== ourPort || !Number.isFinite(localPort)) continue;
@@ -351,6 +366,12 @@ export function __resetProxyProbe(): void {
   uidCache = null;
   tableCache = null;
   forcedUid = null;
+}
+
+/** Test seam: read the socket table from these files instead of /proc; null restores it. */
+export function __setProcNetFiles(files: string[] | null): void {
+  procNetFiles = files ?? ["/proc/net/tcp", "/proc/net/tcp6"];
+  tableCache = null;
 }
 
 /**
@@ -370,20 +391,34 @@ export function __trustProxyUid(uid: number): void {
 /**
  * True when the local tailscaled is the one holding this connection.
  *
- * Two stages, cheap then certain:
+ * The decision is the uid that owns the connecting socket. Un-forgeable by any
+ * non-root local process. If an attacker is already root the token file is
+ * readable anyway, so root is not a boundary this check pretends to hold.
  *
- *  1. Trigger — does the request carry any forwarding header at all. Broad on
- *     purpose (any of the three, not the exact marker), because a false
- *     negative here silently re-opens the hole while a false positive costs
- *     one cached /proc read and is then rejected by stage 2. His hooks carry
- *     none of them and never reach stage 2.
+ * It runs for every loopback connection, header or not. A header-only trigger
+ * missed `tailscale serve --tcp` and `--tls-terminated-tcp`: a raw TCP forward
+ * re-dials 127.0.0.1 and adds nothing to the bytes, so a tailnet peer arrived
+ * as loopback and got the tokenless sinks (on a tokenless server, everything).
+ * The header still matters for what happens when the owner cannot be read:
  *
- *  2. Decision — the uid that owns the connecting socket. Un-forgeable by any
- *     non-root local process. If an attacker is already root the token file is
- *     readable anyway, so root is not a boundary this check pretends to hold.
+ *  - Owner unknown with a header -> believe the header (below).
+ *  - Owner unknown without a header, tailscaled present under another uid ->
+ *    NOT loopback. A table that was just re-read and still has no row for a
+ *    live connection is the thing to distrust; the cost is a 401 to a local
+ *    client whose socket is already gone, which is not reading the answer.
+ *  - No /proc at all -> loopback without a header: there is nothing to read.
+ *  - No header and tailscaled runs as this process's own uid -> loopback.
+ *    Every local process then shares tailscaled's uid, so the owner proves
+ *    nothing and only the header is left to go on.
+ *  - No header and no tailscaled on the machine -> loopback, without the read.
  *
- * Where /proc does not exist (macOS, Windows) stage 2 cannot run and the
- * trigger stands alone, so the headers are believed. That is safe *for
+ * Other raw forwarders (socat, `ssh -R`, `ngrok tcp`) run as the user and are
+ * indistinguishable from his own processes by uid; this check does not cover
+ * them, and binding to loopback is what keeps them the user's own choice.
+ *
+ * Where /proc does not exist (macOS, Windows) the owner cannot be read, so a
+ * raw TCP forward is not caught there and a request with a header is
+ * believed on the header alone. That is safe *for
  * authorization* and not for bookkeeping, and the difference matters: a forged
  * `X-Forwarded-For` can only ever move a caller from loopback to remote, which
  * takes privilege away — remote needs a token, loopback does not. What it can
@@ -398,11 +433,13 @@ export function proxiedByTailscaled(
   now = Date.now()
 ): boolean {
   if (!peer?.address || !isLoopback(peer.address)) return false;
-  const forwarded =
+  const forwarded = !!(
     headers.get("x-forwarded-for") ||
     headers.get("tailscale-headers-info") ||
-    headers.get("tailscale-user-login");
-  if (!forwarded) return false;
+    headers.get("tailscale-user-login")
+  );
+  const daemon = tailscaled(now);
+  if (!forwarded && (!daemon.found || daemon.uid === process.getuid?.())) return false;
   let owners = socketOwners(ourPort, now);
   let uid = peer.port === undefined ? undefined : owners.get(peer.port);
   // A miss is usually a connection newer than the one-second table, so pay for
@@ -414,11 +451,12 @@ export function proxiedByTailscaled(
     owners = socketOwners(ourPort, now);
     uid = owners.get(peer.port);
   }
-  // Genuinely nothing to consult: no /proc (macOS, Windows), or the socket went
-  // away between accept and now. Both land on the trigger alone — see above for
-  // why believing a forwarding header can only ever cost privilege, not grant it.
-  if (owners.size === 0 || uid === undefined) return true;
-  return uid === tailscaledUid(now);
+  // Nothing to consult (no /proc: macOS, Windows): the header alone decides —
+  // see above for why believing one can only ever cost privilege, not grant it.
+  if (owners.size === 0 && !procReadable()) return forwarded;
+  // A fresh table with no row for this port: fail closed (see the list above).
+  if (uid === undefined) return forwarded || peer.port !== undefined;
+  return uid === daemon.uid;
 }
 
 export interface Reachable {

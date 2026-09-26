@@ -12,6 +12,7 @@
 // browser on a colleague's machine gets for free.
 import { isIP } from "node:net";
 import { lookup } from "node:dns/promises";
+import tls from "node:tls";
 
 export function privateHost(hRaw: string, trustLan: boolean): boolean {
   const h = hRaw.replace(/^\[|\]$/g, ""); // a URL keeps IPv6 brackets
@@ -207,6 +208,23 @@ export function originOf(peer: Peer): "loopback" | "remote" {
  * ---------------------------------------------------------------------------
  */
 
+/** The IPv4 address a v6 address carries in its low 32 bits, when it is one of
+ *  the wrappers that means "that v4 host": IPv4-mapped (`::ffff:0:0/96`), the
+ *  deprecated IPv4-compatible (`::/96`), NAT64 (`64:ff9b::/96`) and 6to4
+ *  (`2002::/16`, where the v4 sits in groups 1-2). Null for any other v6. */
+function embeddedV4(h: string): string | null {
+  const g = ipv6Groups(h);
+  const quad = (hi: number, lo: number) => `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
+  if (g[0] === 0 && g[1] === 0 && g[2] === 0 && g[3] === 0 && g[4] === 0 && (g[5] === 0xffff || g[5] === 0)) {
+    // `::` and `::1` are v6 addresses in their own right; they fall through.
+    if (g[5] === 0 && g[6] === 0 && g[7]! <= 1) return null;
+    return quad(g[6]!, g[7]!);
+  }
+  if (g[0] === 0x0064 && g[1] === 0xff9b && g[2] === 0 && g[3] === 0 && g[4] === 0 && g[5] === 0) return quad(g[6]!, g[7]!);
+  if (g[0] === 0x2002) return quad(g[1]!, g[2]!);
+  return null;
+}
+
 /**
  * A literal host this server must not fetch from, judged without a resolver:
  * loopback, RFC1918, CGNAT, unique-local, link-local (169.254/16 is where cloud
@@ -218,8 +236,13 @@ export function originOf(peer: Peer): "loopback" | "remote" {
 export function privateAddress(hRaw: string): boolean {
   let h = hRaw.replace(/^\[|\]$/g, "").toLowerCase();
   if (h === "localhost" || h.endsWith(".localhost")) return true;
-  const mapped = h.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (mapped) h = mapped[1]!;
+  // The address inside a v6 wrapper, however it is spelled: the dotted form
+  // (`::ffff:127.0.0.1`), the hex form the URL parser and a resolver both
+  // produce (`::ffff:7f00:1`), the long form, and the NAT64 and 6to4 prefixes.
+  // A regex on the dotted form alone judged the hex spelling of loopback and of
+  // the metadata address to be public.
+  const inner = isIP(h) === 6 ? embeddedV4(h) : null;
+  if (inner) h = inner;
   const v = isIP(h);
   if (v === 4) {
     const [a, b] = h.split(".").map(Number) as [number, number];
@@ -231,7 +254,7 @@ export function privateAddress(hRaw: string): boolean {
     return false;
   }
   if (v === 6) {
-    if (h === "::" || h === "::1") return true;
+    if (ipv6Groups(h).slice(0, 7).every((x) => x === 0) && ipv6Groups(h)[7]! <= 1) return true; // :: and ::1, any spelling
     if (/^f[cd]/.test(h)) return true;      // fc00::/7 unique-local
     if (/^fe[89ab]/.test(h)) return true;   // fe80::/10 link-local
     return false;
@@ -250,18 +273,8 @@ export function privateAddress(hRaw: string): boolean {
  * this is async and the caller pays it once per hop, not per byte.
  */
 export async function unfetchableHost(hRaw: string): Promise<string | null> {
-  const h = hRaw.replace(/^\[|\]$/g, "");
-  if (!h) return "no host";
-  if (privateAddress(h)) return `${h} is a private or local address`;
-  if (isIP(h)) return null;
-  try {
-    const answers = await lookup(h, { all: true, verbatim: true });
-    if (!answers.length) return `${h} does not resolve`;
-    for (const a of answers) if (privateAddress(a.address)) return `${h} resolves to ${a.address}, a private or local address`;
-    return null;
-  } catch {
-    return `${h} does not resolve`;
-  }
+  const t = await resolveTarget(hRaw);
+  return "error" in t ? t.error : null;
 }
 
 /**
@@ -290,7 +303,7 @@ export function hostsOnly(domains: string[]): (u: URL) => string | null {
  *  On a literal only: for `safeUrl` a bare hostname passes, because the browser
  *  resolves it again when it connects, and the desktop app's egress guard
  *  (electron/egress-guard.js) is where a name is judged at connect time. The
- *  robots.txt fetch judges names too, through `browserUnfetchableHost`. */
+ *  robots.txt fetch judges names too, through `resolveTarget(…, blockedTarget)`. */
 function blockedV4(h: string): boolean {
   return h.startsWith("169.254.") || h === "0.0.0.0";
 }
@@ -320,62 +333,19 @@ export function blockedTarget(host: string): boolean {
   if (v === 4) return blockedV4(h);
   if (v === 6) {
     if (/^fe[89ab]/.test(h) || h === "::") return true; // fe80::/10 link-local, unspecified
-    // IPv4-mapped (::ffff:0:0/96) and the deprecated IPv4-compatible (::/96) forms
-    // carry a v4 address in the low 32 bits — so `[::ffff:169.254.169.254]` (which
-    // the URL parser folds to `::ffff:a9fe:a9fe`) is the metadata endpoint wearing
-    // a v6 hat. Re-run the v4 rules on the embedded address; loopback/LAN mapped
-    // in this way (e.g. `::ffff:127.0.0.1`) stays allowed, same as its v4 self.
-    const g = ipv6Groups(h);
-    const embedded =
-      g[0] === 0 && g[1] === 0 && g[2] === 0 && g[3] === 0 && g[4] === 0 &&
-      (g[5] === 0xffff || g[5] === 0);
-    if (embedded) {
-      const v4 = `${g[6]! >> 8}.${g[6]! & 0xff}.${g[7]! >> 8}.${g[7]! & 0xff}`;
-      return blockedV4(v4);
-    }
-    // NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`) embed a v4 address the same
-    // way, just under a non-zero prefix — `[64:ff9b::a9fe:a9fe]` and
-    // `[2002:a9fe:a9fe::]` are 169.254.169.254 wearing a routable-looking hat.
-    // Fold each ONLY when its prefix actually matches, so a global v6 whose low
-    // bits merely resemble 169.254.x.x is not over-blocked.
-    if (g[0] === 0x0064 && g[1] === 0xff9b && g[2] === 0 && g[3] === 0 && g[4] === 0 && g[5] === 0) {
-      const v4 = `${g[6]! >> 8}.${g[6]! & 0xff}.${g[7]! >> 8}.${g[7]! & 0xff}`;
-      return blockedV4(v4);
-    }
-    if (g[0] === 0x2002) {
-      const v4 = `${g[1]! >> 8}.${g[1]! & 0xff}.${g[2]! >> 8}.${g[2]! & 0xff}`;
-      return blockedV4(v4);
-    }
+    // A v4 host wearing a v6 hat — `[::ffff:169.254.169.254]` (which the URL
+    // parser folds to `::ffff:a9fe:a9fe`), NAT64, 6to4 — is judged by the v4
+    // rules only; loopback/LAN mapped this way stays allowed, like its v4 self.
+    const inner = embeddedV4(h);
+    if (inner) return blockedV4(inner);
     return false;
   }
   return false;
 }
 
-/**
- * Why a host may not be fetched under the BROWSER's policy — the one `safeUrl`
- * applies to every `open`: link-local and the unspecified address refused,
- * loopback and the LAN allowed, on the literal and on every address a name
- * answers. `unfetchableHost` above is the stricter rule for what the server
- * fetches on its own account; this one is for a fetch the server makes on
- * the browser's behalf, and it must not reach further than the browser may.
- */
+/** How a host name is turned into addresses; a parameter so a test can answer. */
 export type Resolver = (host: string) => Promise<{ address: string; family: number }[]>;
 export const dnsResolver: Resolver = (h) => lookup(h, { all: true, verbatim: true });
-
-export async function browserUnfetchableHost(hRaw: string, lookupImpl: Resolver = dnsResolver): Promise<string | null> {
-  const h = hRaw.replace(/^\[|\]$/g, "");
-  if (!h) return "no host";
-  if (blockedTarget(h)) return `${h} is link-local or unspecified`;
-  if (isIP(h)) return null;
-  try {
-    const answers = await lookupImpl(h);
-    if (!answers.length) return `${h} does not resolve`;
-    for (const a of answers) if (blockedTarget(a.address)) return `${h} resolves to ${a.address}, which is link-local or unspecified`;
-    return null;
-  } catch {
-    return `${h} does not resolve`;
-  }
-}
 
 export interface GuardedFetch {
   /** The final response, when every hop passed. */
@@ -399,10 +369,74 @@ export interface GuardedFetch {
  * without a resolver, let the test prove the second hop is never made without
  * depending on what this machine's DNS says about an invented name.
  */
+export type Fetcher = (url: string, init: RequestInit, address?: string) => Promise<Response>;
+
 export interface GuardedFetchOptions {
   maxHops?: number;
-  fetchImpl?: typeof fetch;
+  /** Test seam: what makes the request. Given the address the check settled on. */
+  fetchImpl?: Fetcher;
+  /** Test seam: a host judgement that does not resolve. When set, nothing is pinned. */
   hostCheck?: (host: string) => Promise<string | null>;
+  /** How a name is resolved (default: the system resolver). */
+  resolver?: Resolver;
+  /** Which resolved or literal addresses are refused (default: `privateAddress`). */
+  refuses?: (address: string) => boolean;
+}
+
+/**
+ * The address a fetch will be connected to, judged, or why not.
+ *
+ * Every answer a name gives is judged (one private record is enough to refuse),
+ * and the first one is returned so the caller connects to THAT address rather
+ * than asking the resolver again. Checking a name and then fetching it resolves
+ * twice, and a resolver the owner of the name controls can answer a public
+ * address to the check and a private one to the connect.
+ */
+export async function resolveTarget(
+  hRaw: string,
+  resolver: Resolver = dnsResolver,
+  refuses: (address: string) => boolean = privateAddress,
+): Promise<{ address: string } | { error: string }> {
+  const h = hRaw.replace(/^\[|\]$/g, "");
+  if (!h) return { error: "no host" };
+  if (refuses(h)) return { error: `${h} is a private or local address` };
+  if (isIP(h)) return { address: h };
+  try {
+    const answers = await resolver(h);
+    if (!answers.length) return { error: `${h} does not resolve` };
+    for (const a of answers) if (refuses(a.address)) return { error: `${h} resolves to ${a.address}, a private or local address` };
+    // v4 first: a host that answers a v6 address first is unreachable from a
+    // machine with no v6 route, where the fetch it replaces fell back to v4.
+    return { address: (answers.find((a) => isIP(a.address) === 4) ?? answers[0]!).address };
+  } catch {
+    return { error: `${h} does not resolve` };
+  }
+}
+
+/**
+ * `fetch` with the connection made to a given address.
+ *
+ * The request goes to the address itself, with the name kept where it matters:
+ * `Host` from the URL's host and the TLS server name from its hostname, so the
+ * certificate is still checked against the name and only the DNS answer
+ * changes. (node:https with a `lookup` hook was tried first: Bun then checks the
+ * certificate against the IP and every https fetch fails.) Redirects are left to
+ * guardedFetch, which judges each hop.
+ */
+export function pinnedFetch(url: string, init: RequestInit, address: string): Promise<Response> {
+  const u = new URL(url);
+  const target = new URL(u);
+  target.hostname = isIP(address) === 6 ? `[${address}]` : address;
+  const headers = new Headers(init.headers);
+  headers.set("host", u.host);
+  return fetch(target.toString(), {
+    ...init,
+    headers,
+    redirect: "manual",
+    ...(u.protocol === "https:" ? { tls: { ...(init as { tls?: object }).tls, serverName: u.hostname,
+      // Bun checks the certificate against the address it connected to unless told otherwise.
+      checkServerIdentity: (_h: string, cert: tls.PeerCertificate) => tls.checkServerIdentity(u.hostname, cert) } } : {}),
+  } as RequestInit);
 }
 
 export async function guardedFetch(
@@ -412,14 +446,22 @@ export async function guardedFetch(
   opts: GuardedFetchOptions = {},
 ): Promise<GuardedFetch> {
   const maxHops = opts.maxHops ?? 5;
-  const doFetch = opts.fetchImpl ?? fetch;
-  const hostCheck = opts.hostCheck ?? unfetchableHost;
   let url: URL;
   try { url = new URL(urlIn); } catch { return { error: "not a URL" }; }
   for (let hop = 0; hop <= maxHops; hop++) {
-    const bad = allow(url) ?? await hostCheck(url.hostname);
+    let bad = allow(url);
+    let address: string | undefined;
+    if (!bad) {
+      const t = opts.hostCheck
+        ? { error: await opts.hostCheck(url.hostname) }
+        : await resolveTarget(url.hostname, opts.resolver, opts.refuses);
+      if ("address" in t) address = t.address; else bad = t.error;
+    }
     if (bad) return { error: hop === 0 ? bad : `redirected to ${url.host}: ${bad}` };
-    const res = await doFetch(url.toString(), { ...init, redirect: "manual" });
+    const req = { ...init, redirect: "manual" as const };
+    const res = opts.fetchImpl
+      ? await opts.fetchImpl(url.toString(), req, address)
+      : address ? await pinnedFetch(url.toString(), req, address) : await fetch(url.toString(), req);
     if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
       if (hop === maxHops) return { error: "too many redirects" };
       try { url = new URL(res.headers.get("location")!, url); } catch { return { error: "redirected to something that is not a URL" }; }

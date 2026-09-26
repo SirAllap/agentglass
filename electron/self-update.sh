@@ -11,13 +11,17 @@
 # ever edited, so there is no work to lose and no HEAD anyone cares about.
 set -uo pipefail
 
-LOG="${AGENTGLASS_UPDATE_LOG:-/tmp/agentglass-update.log}"
+LOG="${AGENTGLASS_UPDATE_LOG:-$HOME/.cache/agentglass/update.log}"
 STAMP="${AGENTGLASS_UPDATE_STAMP:-$HOME/.cache/agentglass/last-update.json}"
 SRC="${AGENTGLASS_UPDATE_SRC:-$HOME/.cache/agentglass/source}"
 TAG="${AGENTGLASS_UPDATE_TAG:-}"
 ORIGIN="${AGENTGLASS_UPDATE_ORIGIN:-}"
 
-mkdir -p "$(dirname "$STAMP")" "$(dirname "$SRC")" 2>/dev/null || true
+mkdir -p "$(dirname "$STAMP")" "$(dirname "$SRC")" "$(dirname "$LOG")" 2>/dev/null || true
+# The log carries paths and git output, so it is created private and lives under
+# the user's own cache — a fixed name in a shared directory is a name anyone can
+# plant a link at. Only the log is made 0600: a umask here would reach the build.
+( umask 077; : >>"$LOG" ) 2>/dev/null; chmod 600 "$LOG" 2>/dev/null || true
 exec >>"$LOG" 2>&1
 
 say() { printf '\n==> %s\n' "$*"; }
@@ -52,17 +56,35 @@ else
   git clone --quiet "$ORIGIN" "$SRC" || fail "cannot clone $ORIGIN"
 fi
 
+say "checking the tag $TAG"
+# What this builds is whatever the tag names once it is fetched, so the tag is
+# pinned to a commit here and the checkout is held to it. An annotated tag is
+# what release.yml cuts, and a signature, when the tag carries one, has to
+# verify (which needs the signer's key on this machine; a signed tag from
+# someone whose key is not here is refused, on purpose). A lightweight tag is
+# refused too, which rules out the seven releases before v0.16.0 — updating
+# goes forward to the newest tag, so it is not a path anyone takes. An unsigned tag is still accepted — none of the releases so far are
+# signed — so this narrows what an update can be made to build; it does not
+# prove who cut the tag.
+[ "$(git -C "$SRC" for-each-ref --format='%(objecttype)' "refs/tags/$TAG")" = tag ] \
+  || fail "$TAG is not an annotated release tag"
+WANT="$(git -C "$SRC" rev-parse "refs/tags/$TAG^{commit}")" || fail "cannot resolve $TAG"
+if git -C "$SRC" cat-file tag "refs/tags/$TAG" | grep -q -e '-----BEGIN \(PGP\|SSH\) SIGNATURE-----'; then
+  git -C "$SRC" verify-tag "refs/tags/$TAG" >/dev/null 2>&1 || fail "the signature on $TAG does not verify"
+fi
+
 say "checking out $TAG"
 # Discards anything in this clone without a thought, which is safe precisely
 # because it is ours: a half-applied previous run must not survive into this one.
 git -C "$SRC" reset --hard --quiet HEAD
 git -C "$SRC" clean -qfd
 git -C "$SRC" checkout --quiet --detach "refs/tags/$TAG" || fail "no such tag: $TAG"
+[ "$(git -C "$SRC" rev-parse HEAD)" = "$WANT" ] || fail "the checkout is not the commit $TAG names"
 say "now at $(git -C "$SRC" rev-parse --short HEAD) ($TAG)"
 
 say "installing dependencies"
-( cd "$SRC/web" && bun install --silent ) || fail "web dependencies failed"
-( cd "$SRC/electron" && bun install --silent ) || fail "electron dependencies failed"
+( cd "$SRC/web" && bun install --frozen-lockfile --silent ) || fail "web dependencies failed"
+( cd "$SRC/electron" && bun install --frozen-lockfile --silent ) || fail "electron dependencies failed"
 
 say "building and installing (this stops the running app)"
 # The old wording here promised "the installed app is untouched", which was only

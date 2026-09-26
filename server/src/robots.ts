@@ -32,7 +32,7 @@
  * address, which `fetch` has no way to be told; the switch being off by
  * default is what bounds it.
  */
-import { browserUnfetchableHost, dnsResolver, guardedFetch, type Resolver } from "./net.ts";
+import { blockedTarget, dnsResolver, guardedFetch, type Resolver } from "./net.ts";
 
 export const ROBOTS_ENV = "AGENTGLASS_BROWSER_ROBOTS";
 export const ROBOTS_AGENT = "agentglass";
@@ -127,7 +127,7 @@ async function robotsFor(origin: string, now: number): Promise<string | null> {
   try {
     const r = await guardedFetch(`${origin}/robots.txt`, { signal: AbortSignal.timeout(8000), headers: { "user-agent": `${ROBOTS_AGENT}/robots` } },
       (u) => (u.protocol === "http:" || u.protocol === "https:" ? null : "robots.txt is fetched over http(s) only"),
-      { ...(fetchImpl ? { fetchImpl } : {}), hostCheck: (h) => browserUnfetchableHost(h, lookupImpl) });
+      { ...(fetchImpl ? { fetchImpl } : {}), resolver: lookupImpl, refuses: blockedTarget });
     if (r.res && r.res.ok) {
       const body = await r.res.text();
       text = body.length > MAX_BYTES ? body.slice(0, MAX_BYTES) : body;

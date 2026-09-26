@@ -12,8 +12,11 @@
  * for, so the property under test — "the second hop is never made" — is read
  * off that list rather than inferred from an error string.
  */
-import { describe, expect, test } from "bun:test";
-import { guardedFetch, hostsOnly, privateAddress, unfetchableHost } from "../src/net.ts";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { guardedFetch, hostsOnly, pinnedFetch, privateAddress, unfetchableHost } from "../src/net.ts";
 import { fetchCatalogue } from "../src/plugin-catalogue.ts";
 
 describe("a private address, judged without a resolver", () => {
@@ -158,4 +161,104 @@ describe("the catalogue fetch", () => {
     expect(!r.ok && r.error).toContain("off https");
     expect(asked).toHaveLength(1);
   }, 20_000);
+});
+
+describe("a v6 address that is a v4 host in disguise", () => {
+  /** The URL parser and a resolver both hand back the hex form, so a check on
+   *  the dotted spelling alone let loopback and the metadata address through. */
+  test("the hex, long and translated spellings of private v4 hosts are private", () => {
+    for (const h of ["::ffff:7f00:1", "::ffff:a9fe:a9fe", "::ffff:c0a8:101", "::ffff:a00:1", "0:0:0:0:0:ffff:7f00:1",
+      "[::ffff:a9fe:a9fe]", "::7f00:1", "0:0:0:0:0:0:0:1", "0:0:0:0:0:0:0:0", "64:ff9b::a9fe:a9fe", "64:ff9b::7f00:1", "2002:7f00:1::", "2002:a9fe:a9fe::1"]) {
+      expect(privateAddress(h), h).toBe(true);
+    }
+  });
+
+  test("the same wrappers around a public v4 host, and ordinary public v6, are not", () => {
+    for (const h of ["::ffff:5db8:d822", "::ffff:8.8.8.8", "64:ff9b::808:808", "2002:808:808::1", "2606:4700::1111", "2001:db8::1"]) {
+      expect(privateAddress(h), h).toBe(false);
+    }
+  });
+
+  test("a name whose only record is a hex-mapped loopback is refused by what it resolves to", async () => {
+    const t = await guardedFetch("https://mapped.example.invalid/x", {}, () => null,
+      { resolver: async () => [{ address: "::ffff:7f00:1", family: 6 }], fetchImpl: async () => { throw new Error("must not connect"); } });
+    expect(t.error).toContain("private or local");
+  });
+});
+
+describe("the address that was checked is the address that is connected to", () => {
+  /** Check-then-fetch resolved twice: a resolver the name's owner controls
+   *  answers a public address to the check and a private one to the connect. */
+  test("guardedFetch hands the judged address to the fetch and never resolves again", async () => {
+    let lookups = 0;
+    let connectedTo: string | undefined;
+    const resolver = async () => (++lookups === 1
+      ? [{ address: "93.184.216.34", family: 4 }]
+      : [{ address: "127.0.0.1", family: 4 }]);
+    const got = await guardedFetch("https://rebind.example.invalid/x", {}, () => null, {
+      resolver,
+      fetchImpl: async (_u, _i, address) => { connectedTo = address; return new Response("ok"); },
+    });
+    expect(got.res?.status).toBe(200);
+    expect(connectedTo).toBe("93.184.216.34");
+    expect(lookups).toBe(1);
+  });
+
+  test("a redirect hop is pinned to its own judged address", async () => {
+    const seen: (string | undefined)[] = [];
+    const answers: Record<string, string> = { "a.example.invalid": "93.184.216.34", "b.example.invalid": "1.1.1.1" };
+    const got = await guardedFetch("https://a.example.invalid/1", {}, () => null, {
+      resolver: async (h) => [{ address: answers[h]!, family: 4 }],
+      fetchImpl: async (u, _i, address) => {
+        seen.push(address);
+        return u.includes("a.example") ? new Response(null, { status: 302, headers: { location: "https://b.example.invalid/2" } }) : new Response("done");
+      },
+    });
+    expect(got.res?.status).toBe(200);
+    expect(seen).toEqual(["93.184.216.34", "1.1.1.1"]);
+  });
+
+  test("pinnedFetch connects to the address, whatever the name says, and keeps the name in Host", async () => {
+    let host = "";
+    const srv = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (r) => { host = r.headers.get("host") ?? ""; return new Response("pinned"); } });
+    try {
+      // `pin.invalid` cannot resolve; only a connection made to the given address can answer.
+      const res = await pinnedFetch(`http://pin.invalid:${srv.port}/x`, {}, "127.0.0.1");
+      expect(await res.text()).toBe("pinned");
+      expect(host).toBe(`pin.invalid:${srv.port}`);
+    } finally { srv.stop(true); }
+  });
+
+  test("a redirect from pinnedFetch is returned, not followed", async () => {
+    const srv = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null, { status: 302, headers: { location: "http://elsewhere.invalid/" } }) });
+    try {
+      const res = await pinnedFetch(`http://pin.invalid:${srv.port}/x`, {}, "127.0.0.1");
+      expect(res.status).toBe(302);
+      expect(res.headers.get("location")).toBe("http://elsewhere.invalid/");
+    } finally { srv.stop(true); }
+  });
+});
+
+describe("pinnedFetch over https", () => {
+  /** A connection to an address must still check the certificate against the NAME. */
+  const dir = mkdtempSync(join(tmpdir(), "agx-pin-"));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  const cert = (cn: string) => {
+    const key = join(dir, `${cn}.key`), crt = join(dir, `${cn}.crt`);
+    const r = Bun.spawnSync(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", crt,
+      "-subj", `/CN=${cn}`, "-addext", `subjectAltName=DNS:${cn}`, "-days", "1"]);
+    expect(r.exitCode).toBe(0);
+    return { key: Bun.file(key), crt: Bun.file(crt) };
+  };
+
+  test("the certificate is checked against the name, not the address", async () => {
+    const ok = cert("pinned.test");
+    const srv = Bun.serve({ hostname: "127.0.0.1", port: 0, tls: { key: ok.key, cert: ok.crt }, fetch: () => new Response("secure") });
+    try {
+      const good = await pinnedFetch(`https://pinned.test:${srv.port}/`, { tls: { ca: ok.crt } } as RequestInit, "127.0.0.1");
+      expect(await good.text()).toBe("secure");
+      // Same server, a name the certificate does not cover: refused.
+      await expect(pinnedFetch(`https://other.test:${srv.port}/`, { tls: { ca: ok.crt } } as RequestInit, "127.0.0.1")).rejects.toThrow();
+    } finally { srv.stop(true); }
+  });
 });

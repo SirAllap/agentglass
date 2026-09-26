@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import type { UpdateStatus } from "../../shared/types.ts";
 
 /**
@@ -101,7 +101,7 @@ function scriptEnv(): NodeJS.ProcessEnv {
 // can point the clone at a fixture instead of writing into the developer's
 // real one — the mistake #144 fixed for the database.
 const SRC = process.env.AGENTGLASS_UPDATE_SRC || join(homedir(), ".cache", "agentglass", "source");
-const LOG = join(tmpdir(), "agentglass-update.log");
+const LOG = join(homedir(), ".cache", "agentglass", "update.log");
 const STAMP = join(homedir(), ".cache", "agentglass", "last-update.json");
 
 function git(cwd: string, args: string[], timeout = 30_000) {
@@ -396,7 +396,7 @@ export async function startUpdate(): Promise<{ ok: boolean; error?: string; log?
   if (!script) return { ok: false, error: "this build has no update script" };
 
   try { mkdirSync(dirname(STAMP), { recursive: true }); } catch { /* non-fatal */ }
-  try { writeFileSync(LOG, `updating to ${st.branch} from ${st.info.origin}\n`); } catch { /* non-fatal */ }
+  try { writeFileSync(LOG, `updating to ${st.branch} from ${st.info.origin}\n`, { mode: 0o600 }); } catch { /* non-fatal */ }
 
   running = true;
   const child = spawn("bash", [script], {

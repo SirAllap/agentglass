@@ -97,14 +97,15 @@ nothing new has to be kept in step with the route table.
 
 - **`read`** — almost every `GET` route, including `/stream`: a session's live
   output as it happens, the same prompts and replies shown on screen, costs,
-  diffs, pull requests, the Lantern's board. Writes nothing *through this app's API*; the process itself is not confined. Four reads
+  diffs, pull requests, the Lantern's board. Writes nothing *through this app's API*; the process itself is not confined. Six reads
   need `full` rather than `read`, because each one hands over something that is
-  not this plugin's: `/terminal/pty`, `/browser/places/all`, and
+  not this plugin's: `/terminal/pty`, `/browser/places/all`, the desktop's
+  notifications (`/notifications`, `/notifications/capability`), and
   `/plugins/settings` and `/plugins/panels`, which are another plugin's settings
   and another plugin's screen. A plugin reads and writes its own through
   `/plugin/self/…` at any scope.
 - **`answer`** — everything `read` gets, plus replying to a session that is
-  already running (`/chat/send`, `/chat/pane/key`). It does **not** include
+  running now, an open chat pane (`/chat/send`, `/chat/pane/key`). It does **not** include
   releasing a permission gate — see the next paragraph.
 - **`full`** — everything this machine can do: a terminal, git writes, Docker
   control, merging pull requests, installing other plugins.

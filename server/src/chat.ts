@@ -12,7 +12,7 @@
 // line carrying text and image content blocks together, which is the only
 // channel structured content has into a `claude -p` run.
 import { safeAbs, repoRootOf, gitCapability } from "./git.ts";
-import { inScope, chatBypassAllowed } from "./config.ts";
+import { inScopeReal, chatBypassAllowed } from "./config.ts";
 import { paneTurnStream, paneEngineCapability } from "./chatpane.ts";
 import type { Scope } from "./devices.ts";
 import { CHAT_EFFORTS } from "../../shared/types.ts";
@@ -309,7 +309,7 @@ export type ScopedTurn =
   | { ok: true; mode: string; allow: string[] }
   | { ok: false; error: string };
 
-export function scopedTurn(scope: Scope, mode: string, allowedTools: unknown, resumeId: string): ScopedTurn {
+export function scopedTurn(scope: Scope, mode: string, allowedTools: unknown, resumeId: string, live = false): ScopedTurn {
   // Bypass already allows everything, so an allowlist alongside it is noise.
   if (scope === "full") return { ok: true, mode, allow: mode === "bypassPermissions" ? [] : allowList(allowedTools) };
   if (!resumeId) {
@@ -318,7 +318,56 @@ export function scopedTurn(scope: Scope, mode: string, allowedTools: unknown, re
       error: "this device is paired to answer sessions that are already running — starting a new one needs full access",
     };
   }
+  // "Already running" is a fact this server knows, not a shape the id has. Any
+  // id off /sessions passed SESSION_RE, so a finished session from last month
+  // could be woken with a fresh instruction — a new unattended agent by another
+  // name. `live` is a turn in flight or a chat pane still open (the route asks
+  // both); an idle session needs the desk.
+  if (!live) {
+    return {
+      ok: false,
+      error: "this device answers sessions that are running now — that one is idle, and waking it needs full access",
+    };
+  }
   return { ok: true, mode: "default", allow: [] };
+}
+
+/**
+ * Which device last sent a turn into a session.
+ *
+ * The half of "answer" the liveness check above cannot close: a phone that may
+ * reply to a running session and may also approve that session's held tool
+ * call can ask for a command and then wave it through, and nobody else ever
+ * looked. So the device that spoke to a session is not the one that lets its
+ * gate allow; another device or the desk has to. A deny stays open to it — a
+ * phone stopping its own request is the safe direction.
+ *
+ * In memory and bounded: a restart forgets, which reopens nothing, because the
+ * turn the record was about died with the server. The oldest entry goes first.
+ */
+const TURN_SENDERS_MAX = 512;
+const turnSenders = new Map<string, string>();
+
+/**
+ * The key a sender is remembered by: a paired device's id, or a plugin's name.
+ * A plugin holds no device id, and an `answer`-scoped one is the same party
+ * twice as surely as a phone is. The machine and a tokenless caller have none,
+ * which is what leaves the desk out of the rule.
+ */
+export function turnSenderKey(caller: { device?: { id: string }; plugin?: string } | null | undefined): string | null {
+  return caller?.device?.id ?? (caller?.plugin ? `plugin:${caller.plugin}` : null);
+}
+
+export function noteTurnSender(sessionId: string, deviceId: string | null | undefined): void {
+  if (!sessionId || !deviceId) return;
+  turnSenders.delete(sessionId);
+  turnSenders.set(sessionId, deviceId);
+  if (turnSenders.size > TURN_SENDERS_MAX) turnSenders.delete(turnSenders.keys().next().value!);
+}
+
+/** Did this device send a turn into this session? */
+export function sentTurnTo(sessionId: string, deviceId: string | null | undefined): boolean {
+  return !!sessionId && !!deviceId && turnSenders.get(sessionId) === deviceId;
 }
 
 /**
@@ -348,7 +397,7 @@ export function turnArgv(bin: string, plan: Extract<TurnPlan, { ok: true }>): st
   return args;
 }
 
-export function planTurn(scope: Scope, cwd: unknown, message: unknown, model: unknown, resumeId: unknown, mode: unknown, allowedTools?: unknown, images?: unknown, effort?: unknown): TurnPlan {
+export function planTurn(scope: Scope, cwd: unknown, message: unknown, model: unknown, resumeId: unknown, mode: unknown, allowedTools?: unknown, images?: unknown, effort?: unknown, live = false): TurnPlan {
   const no = (r: Response): TurnPlan => ({ ok: false, response: r });
   if (!claudeBin()) return no(err("no local `claude` CLI: install Claude Code to chat (Settings ▸ Requirements lists it, with the install guide)", 403));
   if (process.env.AGENTGLASS_CHAT_DISABLED === "1") return no(err("chat is disabled (AGENTGLASS_CHAT_DISABLED=1)", 403));
@@ -363,7 +412,9 @@ export function planTurn(scope: Scope, cwd: unknown, message: unknown, model: un
   // the terminal). A chat runs a real `claude` with tools in that directory, so
   // it can change anything a shell could — leaving it machine-wide would have
   // made the boundary decorative in exactly the place it matters most.
-  if (!inScope(dir)) return no(err("outside the open project — open the parent folder to work across repos", 403));
+  // The real path, not the spelling: a link inside the checkout that points
+  // out of it would run the agent wherever it points.
+  if (!inScopeReal(dir)) return no(err("outside the open project — open the parent folder to work across repos", 403));
   const imgs = chatImages(images);
   if (!imgs) return no(err("invalid image attachment"));
   if (typeof message !== "string" || message.length > 100_000) return no(err("invalid message"));
@@ -381,7 +432,7 @@ export function planTurn(scope: Scope, cwd: unknown, message: unknown, model: un
   // phone paired for "answer" from running an unattended agent in this
   // directory. 403 rather than 400: the request is well formed, the credential
   // is real and was accepted, and it is the credential that is short.
-  const scoped = scopedTurn(scope, pm, allowedTools, rid);
+  const scoped = scopedTurn(scope, pm, allowedTools, rid, live);
   if (!scoped.ok) return no(err(scoped.error, 403));
   return { ok: true, dir, text: message, model: m, mode: scoped.mode, effort: effortLevel(effort), resumeId: rid, images: imgs, allow: scoped.allow };
 }
@@ -401,9 +452,18 @@ export const CHAT_ENGINE_DEFAULT = process.env.AGENTGLASS_CHAT_ENGINE === "tmux"
  *
  *  Validation happens once, before the split, so neither engine can be reached
  *  with a directory the other would have refused. */
-export function chatSend(b: Record<string, unknown>, scope: Scope): Response {
-  const plan = planTurn(scope, b.cwd, b.message, b.model, b.resumeId, b.mode, b.allowedTools, b.images, b.effort);
+export function chatSend(b: Record<string, unknown>, scope: Scope, live = false, deviceId: string | null = null): Response {
+  const plan = planTurn(scope, b.cwd, b.message, b.model, b.resumeId, b.mode, b.allowedTools, b.images, b.effort, live);
   if (!plan.ok) return plan.response;
+  const res = routeTurn(b, plan);
+  // Only a turn that was taken, and only a caller short of `full`: a full
+  // credential already opens a shell, so refusing it its own gate would guard
+  // nothing.
+  if (scope !== "full" && res.ok) noteTurnSender(plan.resumeId, deviceId);
+  return res;
+}
+
+function routeTurn(b: Record<string, unknown>, plan: Extract<TurnPlan, { ok: true }>): Response {
   const want = b.engine === "tmux" || b.engine === "process" ? b.engine : CHAT_ENGINE_DEFAULT;
   if (want !== "tmux") return chatStreamPlanned(plan);
   const cap = paneEngineCapability();

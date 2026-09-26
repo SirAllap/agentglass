@@ -3239,6 +3239,8 @@ export async function prDiff(rootIn: unknown, numberIn: unknown, force = false):
 
 /** For a test, and for a Refresh that means it. */
 export function __clearDiffCache(): void { diffCache.clear(); diffInflight.clear(); }
+/** For a test: a pull request as if it had just been read. */
+export function __seedDetail(key: string, detail: PrDetail): void { detailCache.set(key, { at: Date.now(), detail }); }
 
 // ---------------------------------------------------------------------------
 // asset proxy
@@ -3274,15 +3276,15 @@ export function assetAllowed(raw: string): URL | null {
  *
  * A separate, narrower question than `assetAllowed`: that one decides what we
  * will fetch, this one decides what we will hand a credential to. It has to be
- * an exact domain match — `hostname.endsWith("github.com")`, which is what
- * stood here, is also true of `evilgithub.com`. Nothing reachable today gets
- * through `assetAllowed` to ask, but a substring test on a hostname is one
- * allowlist edit away from posting `gh auth token` to somebody else's server,
- * and the edit would look harmless.
+ * an exact host match. A suffix test — `endsWith("github.com")` was here first,
+ * `endsWith(".github.com")` after it — admits every subdomain, and a subdomain
+ * is a name somebody else may be able to register or point elsewhere (a
+ * dangling `*.github.com` record is a known kind of takeover). Only `github.com`
+ * itself serves an attachment that needs the credential, so it is the only
+ * host that gets it; a new host is a line added here, on purpose.
  */
 export function tokenAllowedHost(hostname: string): boolean {
-  const h = hostname.toLowerCase().replace(/\.$/, "");
-  return h === "github.com" || h.endsWith(".github.com");
+  return hostname.toLowerCase().replace(/\.$/, "") === "github.com";
 }
 
 let tokenCache: { at: number; token: string } | null = null;
@@ -3329,6 +3331,39 @@ async function ghToken(): Promise<string> {
 }
 
 /**
+ * Is this exact URL in a pull request this server has fetched?
+ *
+ * Asked of the detail cache: body, comments and reviews as GitHub returned
+ * them. Each string is read as text — markdown or HTML — and every https URL in
+ * it is taken whole, up to where a URL in text ends; the answer is set
+ * membership, never a substring, so neither `https://github.com/` nor a path
+ * spliced out of a longer URL counts. The ceiling is the cache: an image in a
+ * pull request that has aged out of it loads for the desk and not for a phone
+ * until the phone opens that pull request again.
+ */
+const detailUrls = new WeakMap<PrDetail, Set<string>>();
+const URL_IN_TEXT = /https:\/\/[^\s"'<>()[\]]+/g;
+
+function urlsIn(value: unknown, into: Set<string>): Set<string> {
+  if (typeof value === "string") for (const m of value.match(URL_IN_TEXT) ?? []) into.add(m);
+  else if (Array.isArray(value)) for (const v of value) urlsIn(v, into);
+  else if (value && typeof value === "object") for (const v of Object.values(value)) urlsIn(v, into);
+  return into;
+}
+
+export function assetReferenced(raw: string): boolean {
+  if (!raw) return false;
+  for (const { detail } of detailCache.values()) {
+    // Collected once per detail object: a page of screenshots asks this once
+    // per image, and a refresh replaces the object, which drops the entry.
+    let urls = detailUrls.get(detail);
+    if (!urls) detailUrls.set(detail, urls = urlsIn(detail, new Set()));
+    if (urls.has(raw)) return true;
+  }
+  return false;
+}
+
+/**
  * Fetch an image in a PR body on the user's behalf.
  *
  * `https://github.com/user-attachments/assets/<uuid>` — which is what GitHub
@@ -3337,15 +3372,23 @@ async function ghToken(): Promise<string> {
  * before/after screenshots that carry the actual evidence in a review, without
  * this every one of them is a broken box.
  */
-export async function prAsset(rawUrl: unknown): Promise<Response> {
-  const u = assetAllowed(String(rawUrl || ""));
+export async function prAsset(rawUrl: unknown, referencedOnly = false): Promise<Response> {
+  const raw = String(rawUrl || "");
+  const u = assetAllowed(raw);
   if (!u) return new Response("blocked", { status: 400 });
   const token = await ghToken();
   const headers: Record<string, string> = { accept: "image/*" };
   // Only GitHub gets the credential. ClickUp is public and has no business
   // receiving a GitHub token. Redirects stay safe on their own: fetch drops
   // Authorization when a redirect crosses to another origin.
-  if (token && tokenAllowedHost(u.hostname)) headers.authorization = `token ${token}`;
+  //
+  // `referencedOnly` is a caller short of `full`. With the token, any URL on
+  // github.com is an image out of any private repository the user can read,
+  // so such a caller gets it lent only for a URL a pull request it was shown
+  // actually carries. Anything else is still fetched, anonymously: a public
+  // image loads, a private one comes back 404.
+  const lend = !referencedOnly || assetReferenced(raw);
+  if (token && lend && tokenAllowedHost(u.hostname)) headers.authorization = `token ${token}`;
   let res: Response;
   try {
     res = await fetch(u.toString(), { headers, redirect: "follow", signal: AbortSignal.timeout(20_000) });
@@ -3353,12 +3396,34 @@ export async function prAsset(rawUrl: unknown): Promise<Response> {
     return new Response(failed("pr/asset", e, "upstream did not answer"), { status: 502 });
   }
   if (!res.ok) return new Response(`upstream ${res.status}`, { status: res.status === 404 ? 404 : 502 });
-  const type = res.headers.get("content-type") || "application/octet-stream";
-  // Refuse to relay anything that is not an image: this endpoint must not
-  // become a general-purpose fetcher for whatever a body links to.
-  if (!/^image\//i.test(type)) return new Response("not an image", { status: 415 });
+  return assetReply(res);
+}
+
+/** Types a PR-body image proxy will relay. Raster only: SVG is an image that
+ *  can carry script, and this response is served from the app's own origin. */
+const RASTER_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/bmp", "image/x-icon", "image/vnd.microsoft.icon"]);
+
+/**
+ * What the proxy hands back for an upstream image response.
+ *
+ * `image/*` was the test before, which passes `image/svg+xml`; opened as a
+ * document (a click on the image, a link to the proxy URL) an SVG runs its
+ * script on the server's origin, with the page's storage and its token. Only
+ * the raster types above pass, the type is rewritten to the bare type (no
+ * parameters), `nosniff` stops a browser reading a PNG as something else, and
+ * the CSP sandbox means that even a mis-typed body opened as a document has no
+ * script and no origin.
+ */
+export function assetReply(res: Response): Response {
+  const type = (res.headers.get("content-type") || "").split(";")[0]!.trim().toLowerCase();
+  if (!RASTER_TYPES.has(type)) return new Response("not a supported image", { status: 415 });
   return new Response(res.body, {
-    headers: { "content-type": type, "cache-control": "private, max-age=600" },
+    headers: {
+      "content-type": type,
+      "cache-control": "private, max-age=600",
+      "x-content-type-options": "nosniff",
+      "content-security-policy": "default-src 'none'; sandbox",
+    },
   });
 }
 

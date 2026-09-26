@@ -24,8 +24,7 @@ on:
 # Actions token meant the reverse. Each does the half it is entitled to, and
 # the PAT stays read-only, which is the whole reason to scope it that way.
 permissions:
-  contents: write
-  issues: write # for the health issue below — see the step's own note
+  contents: read
 
 concurrency:
   group: traffic
@@ -34,9 +33,14 @@ concurrency:
 jobs:
   snapshot:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write # for the health issue below — see the step's own note
     steps:
-      - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.9 # pinned — see the note in ci.yml
 
@@ -85,7 +89,7 @@ jobs:
       # precisely the one where the step above has already failed.
       - name: Raise it where it will be seen
         if: always()
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           # The job, not the reading step: a push that gets refused leaves that
           # step green and the day's traffic just as unrecorded.

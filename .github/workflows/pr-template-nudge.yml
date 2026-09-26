@@ -9,17 +9,18 @@ on:
   pull_request_target:
     types: [opened, edited]
 
-permissions:
-  pull-requests: write
+permissions: {}
 
 jobs:
   nudge:
+    permissions:
+      pull-requests: write
     # Not on a catalogue listing either: the body is generated from a
     # manifest and there is nothing a human wrote to remind them about.
     if: github.event.pull_request.user.type != 'Bot' && !startsWith(github.event.pull_request.head.ref, 'list-')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/github-script@v9
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const marker = '<!-- pr-template-nudge -->'

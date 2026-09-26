@@ -358,7 +358,9 @@ export interface PaneTurnOptions {
  *  to catch a running turn: that one says "esc to interrupt", which is a
  *  different string and deliberately not matched here. */
 const NEEDS_YOU_RE = /Esc to cancel|Enter to confirm|to use this session only/;
-export const __needsYou = (screen: string): boolean => NEEDS_YOU_RE.test(screen);
+/** The pane is showing a prompt of its own (a permission, a confirmation). */
+export const screenNeedsYou = (screen: string): boolean => NEEDS_YOU_RE.test(screen);
+export const __needsYou = screenNeedsYou;
 export const __isRunning = (screen: string): boolean => RUNNING_RE.test(screen);
 
 /** The CLI is holding prompts it has accepted but not started.

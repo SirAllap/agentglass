@@ -144,6 +144,7 @@ function armEgress(partition) {
 }
 const { browserMenuTemplate } = require("./browser-menu.js");
 const power = require("./power.js");
+const { probe: probeServer, holdDesk } = require("./server-probe.js");
 
 /*
  * What `// @ts-check` at the top of this file buys, and why the JSDoc below it
@@ -745,11 +746,72 @@ function currentToken() {
  * minted for each sidecar this app spawns (ensureServer), never written
  * anywhere, and reaches that sidecar down a pipe and the renderer through the
  * preload — see server/src/desk.ts for what it closes and what it does not.
- * Null while the app runs on a server it adopted: that one was never given a
- * key, and must not be handed this one by the first answer the window sends.
+ * A server the app adopted was never piped one: there it is the key the app
+ * claimed (holdAdoptedDesk), and null until that server holds it.
  * @type {string | null}
  */
 let deskKey = null;
+/** Lets the claim on an adopted server's desk go; null when there is none. */
+let letDeskGo = /** @type {(() => void) | null} */ (null);
+
+/**
+ * Claim the desk of a server this app adopted, and keep claiming it.
+ *
+ * It was started by hand or by an earlier launch, so no pipe handed it a key
+ * and the Origin rule was all that guarded the browser role and a held call's
+ * release there (server/src/desk.ts). The claim is proved and held by
+ * server-probe.js; the windows are told the key once the server holds it, and
+ * told null when it does not. Null means one of three things: the server is on
+ * the Origin rule for a moment between claims; another process holds its desk;
+ * or an earlier launch of this app piped it a key this launch does not have. In
+ * the last two this window can neither host the browser nor release a hold
+ * there — the ceiling desk.ts states. When another process holds it the
+ * window is told (noteDeskTaken) and claims again only on its Retry. A claim made on
+ * behalf of a server this app has since replaced with its own says nothing.
+ * @param {number} port
+ */
+function holdAdoptedDesk(port, settleMs = 0) {
+  letDeskGo?.();
+  deskKey = null;
+  letDeskGo = holdDesk(port, {
+    token: currentToken,
+    key: require("crypto").randomBytes(32).toString("base64url"),
+    onChange: (k) => {
+      if (sidecar || SERVER_PORT !== port) return;
+      if (!k) console.error(`[agentglass] :${port} did not give this app its desk: if another process holds it, or an earlier launch started that server, this window cannot drive the browser or release a held call there until the server is restarted`);
+      if (k) noteDeskTaken(null); // the banner stays until a claim is held
+      deskKey = k;
+      for (const w of BrowserWindow.getAllWindows()) {
+        try { w.webContents.send("ag:server-changed", { deskKey: k }); } catch { /* window went away */ }
+      }
+    },
+    onTaken: () => { if (!sidecar && SERVER_PORT === port) noteDeskTaken(port); },
+    settleMs,
+  });
+}
+
+/** The port of an adopted server whose desk another process holds, or null. */
+let deskTaken = /** @type {number | null} */ (null);
+
+/**
+ * Tell the windows that an adopted server's desk is held by another process,
+ * or (null) that it no longer is.
+ *
+ * The app does not leave for a server of its own: two servers on one database
+ * would leave the second without the lock — no transcript scan — and the hooks
+ * still posting to the first. It stays, refused the browser role and a hold's
+ * release there, and the window says so with a Retry (ag:retryDesk). No token
+ * goes anywhere: the claim was refused, not sent on.
+ * @param {number | null} port
+ */
+function noteDeskTaken(port) {
+  if (port === deskTaken) return;
+  deskTaken = port;
+  if (port !== null) console.error(`[agentglass] :${port} desk is claimed by another process; this window cannot drive the browser or release a held call there until it lets go, or that server is restarted`);
+  for (const w of BrowserWindow.getAllWindows()) {
+    try { w.webContents.send("ag:desk-taken", port === null ? null : { port }); } catch { /* window went away */ }
+  }
+}
 /* POSIX only. Windows hands a child a descriptor past stderr through the C
    runtime's handle table, which nothing here has measured the compiled sidecar
    reading — and a sidecar told to expect a key it cannot read refuses its own
@@ -956,39 +1018,14 @@ function serveApp() {
 }
 
 /**
- * What is answering on a port: our server, someone else's, or nothing.
- *
- * "Answers 200" is NOT proof it is us, and treating it as proof is a bug with
- * teeth: a machine that autostarts any other local dev server on :4000 -- an
- * observability server, an API stub, anything -- handed agentglass a stranger,
- * which the shell then adopted. Every panel fetched from it, got whatever it
- * says, and the app came up empty ("no repos found") with no error anywhere.
- * That is why /health names itself and why this reads the body.
+ * What is answering on a port: our server, someone else's, or nothing. "Ours"
+ * means it proved it holds this app's token; see server-probe.js for why the
+ * body saying so is not enough, and why a development shell still takes it.
  * @param {number} port @param {number} [timeoutMs]
  * @returns {Promise<"ours" | "foreign" | "free">}
  */
 function probe(port, timeoutMs = 1000) {
-  return new Promise((resolve) => {
-    const req = http.get(`http://127.0.0.1:${port}/health`, (r) => {
-      if (r.statusCode !== 200) { r.resume(); return resolve("foreign"); }
-      let body = "";
-      r.setEncoding("utf8");
-      // Bounded: a foreign server may stream something enormous at us.
-      r.on("data", (c) => { body += c; if (body.length > 4096) req.destroy(); });
-      r.on("end", () => {
-        try {
-          const j = JSON.parse(body);
-          // `service` is the marker; the shape check keeps a sidecar built
-          // before that field existed adoptable rather than orphaned.
-          const ours = j.service === "agentglass" || (j.ok === true && typeof j.clients === "number");
-          resolve(ours ? "ours" : "foreign");
-        } catch { resolve("foreign"); }
-      });
-      r.on("error", () => resolve("foreign"));
-    });
-    req.on("error", () => resolve("free")); // refused == nothing listening
-    req.setTimeout(timeoutMs, () => { req.destroy(); resolve("foreign") });
-  });
+  return probeServer(port, { token: currentToken(), allowUnproven: !PACKAGED, timeoutMs });
 }
 
 /**
@@ -1145,6 +1182,11 @@ function reportSidecar(failure) {
   if (failure) console.error(`[agentglass] sidecar: ${failure.reason} — ${failure.detail || "(no detail)"}`);
   if (failure) writeSidecarLog(failure);
   for (const w of BrowserWindow.getAllWindows()) {
+    // No server of ours came up, so whatever holds the port is unproven: take
+    // the token back before the failure releases the window's first requests
+    // (whenServerUp in web/src/lib/api.ts), or they carry it to a squatter
+    // that won the bind. Sent first; one webContents delivers in order.
+    if (failure) { try { w.webContents.send("ag:server-changed", { token: null }); } catch { /* window went away */ } }
     try { w.webContents.send("ag:server-failed", failure); } catch { /* window went away */ }
   }
 }
@@ -1171,7 +1213,10 @@ function tailStderr(child) {
 /** @param {boolean} adopt @returns {Promise<boolean>} */
 async function ensureServer(adopt) {
   const port = SERVER_PORT;
-  if (adopt) { deskKey = null; reportSidecar(null); return true; } // a dev server or another instance is already up
+  if (adopt) { holdAdoptedDesk(port); reportSidecar(null); return true; } // a dev server or another instance is already up
+  letDeskGo?.();
+  letDeskGo = null;
+  noteDeskTaken(null);
   // AGENTGLASS_DIE_WITH_PARENT arms the server's own parent-death watchdog:
   // stopSidecar below cannot fire if this main process is SIGKILLed or crashes,
   // so the sidecar backs it up by exiting on its own once we are gone. Only
@@ -1360,6 +1405,7 @@ async function restartSidecar() {
   /* The new server has no lanes, so the windows that were hosting the old one's
      would sit registered with a key it will not accept. */
   for (const id of Array.from(laneHosts.keys())) destroyLaneHost(id);
+  const hadChild = !!sidecar;
   killSidecar();
 
   // Wait for the socket to actually be gone before looking for a port.
@@ -1370,8 +1416,15 @@ async function restartSidecar() {
   // finishes dying, and the app is left with no server at all — no window, no
   // error, just every panel failing. Measured intermittent: the same click
   // worked and then did not.
+  //
+  // "Gone" is nothing listening, not "no longer proves it is ours": revoking
+  // remote access rotates the token before this runs, so the corpse fails the
+  // proof while it still holds the port, and pickPort would then move away.
+  // An adopted server had no child to kill and will not go away, so there is
+  // nothing to wait for once it stops answering as ours.
   for (let i = 0; i < 50; i++) {
-    if ((await probe(SERVER_PORT, 300)) !== "ours") break;
+    const state = await probe(SERVER_PORT, 300);
+    if (state === "free" || (!hadChild && state === "foreign")) break;
     await new Promise((r) => setTimeout(r, 100));
   }
 
@@ -1390,7 +1443,7 @@ async function restartSidecar() {
   // live bindings (web/src/lib/api.ts), so handing it the new pair is enough —
   // the next fetch and the next socket connect use them.
   for (const w of BrowserWindow.getAllWindows()) {
-    try { w.webContents.send("ag:server-changed", { origin: apiOrigin, token: currentToken(), deskKey }); } catch { /* window went away mid-toggle */ }
+    try { w.webContents.send("ag:server-changed", { origin: apiOrigin, token: sidecarUp ? currentToken() : null, deskKey }); } catch { /* window went away mid-toggle */ }
   }
 }
 
@@ -4312,7 +4365,9 @@ app.whenReady().then(async () => {
   // body runs. Turning remote access on makes the token mandatory for *every*
   // caller, the local renderer included — without this the app would lock
   // itself out of its own sidecar the moment the toggle was flipped.
-  ipcMain.on("ag:apiToken", (e) => { e.returnValue = currentToken(); });
+  // Withheld once the sidecar has failed: a window loaded after that would
+  // otherwise send it to whatever holds the port (see reportSidecar).
+  ipcMain.on("ag:apiToken", (e) => { e.returnValue = sidecarFailure ? null : currentToken(); });
   // The desk's key, to a window's own page and to nothing a window hosts: the
   // agent browser's guests are webviews, and a page an agent opened must not
   // be the one thing on this machine that can let its hold go.
@@ -4352,6 +4407,11 @@ app.whenReady().then(async () => {
   // windows that already exist, and a page that reloads five minutes into a
   // dead sidecar would otherwise come up with no idea anything is wrong.
   ipcMain.on("ag:sidecarFailure", (e) => { e.returnValue = sidecarFailure; });
+  // The desk notice, for a window that opened after it was pushed, and the
+  // Retry that claims again. Only on an adopted server: a sidecar of ours has
+  // its key from the pipe.
+  ipcMain.on("ag:deskTaken", (e) => { e.returnValue = deskTaken === null ? null : { port: deskTaken }; });
+  ipcMain.on("ag:retryDesk", () => { if (!sidecar && deskTaken !== null) holdAdoptedDesk(SERVER_PORT, 3000); });
   /* Asked at CALL time, not captured at load like the line above: the renderer
      needs this exactly when it does not yet know, and a page that came up
      before the sidecar would freeze a false forever and go back to asking the
@@ -4412,7 +4472,7 @@ app.whenReady().then(async () => {
   void ensureServer(adopt);
   /* Never fatal. A window that keeps the machine awake is a convenience; a
      window that does not open is not one. */
-  try { power.init({ configDir: CONFIG_DIR, apiOrigin: () => apiOrigin, token: currentToken }); }
+  try { power.init({ configDir: CONFIG_DIR, apiOrigin: () => apiOrigin, token: () => (sidecarUp ? currentToken() : "") }); }
   catch (e) { console.error("[power] not started:", e instanceof Error ? e.message : e); }
 });
 
@@ -4433,6 +4493,7 @@ let stopped = false;
 function stopSidecar() {
   if (stopped) return;
   stopped = true;
+  letDeskGo?.();
   try { power.shutdown(); } catch { /* nothing held */ }
   killSidecar();
 }

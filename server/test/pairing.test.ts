@@ -16,7 +16,7 @@ import { join } from "node:path";
 import {
   mintTicket, claimTicket, pending, acceptTicket, rejectTicket, collect,
   getTicket, dropTicket, validPub, sealTo, __resetPairing,
-  TICKET_TTL_MS, MAX_ATTEMPTS, MAX_TICKETS, INFO,
+  TICKET_TTL_MS, MAX_ATTEMPTS, MAX_ATTEMPTS_ALL, MAX_TICKETS, INFO,
 } from "../src/pairing.ts";
 import { deviceFor, activeDevices, __resetDevices } from "../src/devices.ts";
 
@@ -104,17 +104,38 @@ describe("typing the code", () => {
       .toMatchObject({ ok: false, error: "code", left: MAX_ATTEMPTS - 1 });
   });
 
-  test("running out of guesses kills the invitation rather than just refusing one", () => {
-    // A lockout that leaves the target alive is a rate limit. Six digits is a
-    // million, and a million requests is minutes — the cap is what makes the
-    // short code safe to type.
+  test("an address that runs out of guesses is shut out, right code included", () => {
+    // A refusal that still checked the code would tell that address when it had
+    // guessed right. Six digits is a million and a million requests is minutes:
+    // the cap is what makes the short code safe to type.
     const t = mintTicket()!;
     const wrong = t.code === "000000" ? "111111" : "000000";
-    for (let i = 1; i < MAX_ATTEMPTS; i++) expect(claimTicket(t.id, wrong, { pub: phone().pub })).toMatchObject({ ok: false, error: "code" });
-    expect(claimTicket(t.id, wrong, { pub: phone().pub })).toEqual({ ok: false, error: "locked" });
-    // Gone: even the right code cannot revive it.
+    const ip = "192.0.2.10";
+    for (let i = 1; i < MAX_ATTEMPTS; i++) expect(claimTicket(t.id, wrong, { pub: phone().pub, ip })).toMatchObject({ ok: false, error: "code" });
+    expect(claimTicket(t.id, wrong, { pub: phone().pub, ip })).toEqual({ ok: false, error: "locked" });
+    expect(claimTicket(t.id, t.code, { pub: phone().pub, ip })).toEqual({ ok: false, error: "locked" });
+  });
+
+  test("knowing the ticket id is not enough to close it: another address still claims", () => {
+    // The id is in the QR and in a status query, so anybody on the network has
+    // it. Wrong codes from one address must not be able to burn the invitation.
+    const t = mintTicket()!;
+    const wrong = t.code === "000000" ? "111111" : "000000";
+    for (let i = 0; i < MAX_ATTEMPTS + 3; i++) claimTicket(t.id, wrong, { pub: phone().pub, ip: "192.0.2.66" });
+    expect(getTicket(t.id)).not.toBeNull();
+    expect(claimTicket(t.id, t.code, { pub: phone().pub, ip: "192.0.2.7" }).ok).toBe(true);
+  });
+
+  test("guesses from many addresses together still kill the invitation", () => {
+    // The ceiling on a guesser who changes address; without it the per-address
+    // cap is a per-address rate limit.
+    const t = mintTicket()!;
+    const wrong = t.code === "000000" ? "111111" : "000000";
+    let last: unknown;
+    for (let i = 0; i < MAX_ATTEMPTS_ALL; i++) last = claimTicket(t.id, wrong, { pub: phone().pub, ip: `192.0.2.${i}` });
+    expect(last).toEqual({ ok: false, error: "locked" });
     expect(getTicket(t.id)).toBeNull();
-    expect(claimTicket(t.id, t.code, { pub: phone().pub })).toEqual({ ok: false, error: "unknown" });
+    expect(claimTicket(t.id, t.code, { pub: phone().pub, ip: "192.0.2.200" })).toEqual({ ok: false, error: "unknown" });
   });
 
   test("the second scanner cannot displace the first by guessing faster", () => {

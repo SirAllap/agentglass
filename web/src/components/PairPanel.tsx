@@ -376,7 +376,7 @@ function Request({ req, busy, onDecide }: {
 /** The three levels, in the words that say what changes rather than what the
  *  field is called. See server/src/devices.ts for why there are only three. */
 const SCOPES: { key: DeviceScope; title: string; what: string }[] = [
-  { key: "answer", title: "Answer things", what: "Everything below, plus approving gates and replying to a session that is already running. What a phone is for." },
+  { key: "answer", title: "Answer things", what: "Everything below, plus approving gates and replying to a chat that is open now. A tool call in a chat it sent the turn to needs another device or the desk. What a phone is for." },
   { key: "read", title: "Look only", what: "Sessions, costs, changes, pull requests. It cannot approve anything or send anything." },
   { key: "full", title: "Everything this machine can do", what: "A terminal, git write access, docker control, merging pull requests. Give this to a laptop you trust, not to a phone." },
 ];

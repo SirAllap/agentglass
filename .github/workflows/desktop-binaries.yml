@@ -14,15 +14,18 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write # uploading installers onto the tag's release
-  # Both for actions/attest-build-provenance: it asks Actions for an OIDC token
-  # and gets a short-lived Sigstore certificate with it, then writes the signed
-  # statement back to this repository's attestation store.
-  id-token: write
-  attestations: write
+  contents: read
+
 
 jobs:
   build:
+    permissions:
+      contents: write # uploading installers onto the tag's release
+      # Both for actions/attest-build-provenance: it asks Actions for an OIDC
+      # token and gets a short-lived Sigstore certificate with it, then writes
+      # the signed statement back to this repository's attestation store.
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false # one platform failing shouldn't strand the others
       matrix:
@@ -42,15 +45,16 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           # Full history + tags, so `git describe --tags` in build.mjs can name
           # the release this build descends from. A shallow checkout has no tag
           # object, which would stamp the installer with an empty baseTag and
           # leave the About pane unable to say which release it is.
           fetch-depth: 0
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           # Pinned — see the note in ci.yml. A release binary especially cannot
           # be built by whatever Bun happened to be newest that morning: this
@@ -97,7 +101,7 @@ jobs:
       # binaries landed died on.
       - name: zig, for the musl target
         if: runner.os == 'Linux'
-        uses: mlugg/setup-zig@v2
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
           # The version this repository's own builds are made with.
           version: 0.16.0
@@ -227,7 +231,7 @@ jobs:
       # that built it, before anything else can touch the bytes.
       - name: Attest the installers
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/attest-build-provenance@v4
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
           subject-path: |
             electron/dist-app/*.AppImage
@@ -250,7 +254,7 @@ jobs:
 
       - name: Keep the build even when there is no tag
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: agentglass-${{ matrix.bunTarget }}
           path: |

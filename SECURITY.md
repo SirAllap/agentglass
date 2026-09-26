@@ -57,7 +57,11 @@ complement, rather than replace, the private reporting path below.
   tailnet the loopback exemption above. Forwarding headers are never the
   decision on their own: `X-Forwarded-For` is consulted only when the socket peer
   is loopback *and* the uid owning that socket is tailscaled's, and a proxied
-  request is treated as remote unconditionally.
+  request is treated as remote unconditionally. The socket owner is checked for
+  every loopback connection, header or not, so a raw TCP forward
+  (`tailscale serve --tcp`) that adds no header is remote too. Not covered: a
+  forwarder running as your own user (`socat`, `ssh -R`, `ngrok tcp`), which is
+  indistinguishable from your own processes, and systems without `/proc`.
 - **Intake is rate-limited** rather than authenticated: `AGENTGLASS_RATE_MAX`
   requests per source-address+route inside `AGENTGLASS_RATE_WINDOW_MS`.
 - **Hooks refuse to send anywhere but this machine.** The hook and seed scripts
@@ -71,6 +75,10 @@ complement, rather than replace, the private reporting path below.
 - **Desktop-only routes.** The self-update route executes arbitrary code and is
   reachable from the packaged shell's own origin and nothing else — not from a
   browser, not from another machine.
+  It builds only an annotated release tag, pinned to the commit the tag names
+  (a signature, when a tag carries one, has to verify), installs from the
+  lockfile, and writes its log under the user's cache rather than `/tmp`. An
+  unsigned tag is still accepted, so this does not prove who cut a release.
 - **The token is never served over any route, to anyone.** `/remote/status`
   reports where the server is reachable and whether a device has arrived, and
   the addresses it returns are addresses — nothing in that answer, or in any
@@ -95,18 +103,43 @@ complement, rather than replace, the private reporting path below.
 - **Who receives a browser ask is the app's to say.** Registering a window that
   can drive the built-in browser (`/browser/ready`), or the app window that makes
   lane hosts, decides who is sent every ask, fill text and URLs included, so it
-  is held to the same key as releasing a hold. The same ceiling applies, and one
-  more: where the app **adopts** a server that is already running (a sidecar left
-  from an earlier launch, one started by hand) that server has no desk key, so
-  the `Origin` rule is all there is and a caller holding the machine token can
-  register. An agent's lane is likewise only as private as `as` is honest: an
-  identity is a claim, not a credential.
+  is held to the same key as releasing a hold. The same ceiling applies. Where
+  the app **adopts** a server that is already running (a sidecar left from an
+  earlier launch, one started by hand), no pipe from this launch handed that
+  server a key, so the app claims its desk: it proves the server holds the token, names a fresh key
+  on `/desk/claim` and keeps that request open, and while it does the key is
+  what both gates ask for. Only the machine token itself may claim, with no
+  `Origin`, from a direct loopback socket — callers that could forge the app's
+  `Origin` anyway — so a claim made by something other than the app gains it
+  nothing it could not already reach by forging that `Origin`. The limit is first
+  come, first served: a token holder that claims before the app does, or in the
+  moment after the app's claim drops, holds the desk until it lets go, and the
+  app's own window is refused the browser role and a hold's release there (a
+  paired phone still answers). The app does not start a second server on the
+  same database to get around it; it says so in its log and in a banner in the
+  window, which claims again on Retry once the other process has let go, or
+  that server is restarted. A sidecar that outlived an earlier launch was piped
+  that launch's key and refuses a claim the same way. With no app attached, a server started by hand is on the
+  `Origin` rule. An agent's lane is likewise only as private as
+  `as` is honest: an identity is a claim, not a credential.
+- **The desktop app adopts only a server that proves it holds the token.** A
+  server already on its port must answer a fresh random challenge on `/health`
+  with an HMAC made with the token and bound to that port; until it does, the
+  app sends it nothing secret, and a server that cannot prove it (another
+  account's process, a container on the host network, a build from before the
+  check, a server started by hand without a token) is left alone while the app
+  starts its own on the next free port. If the app's own server then fails to
+  come up — something won the bind first, or every candidate port is taken —
+  the windows drop the token before they make a request. A development shell
+  (`make desktop-dev`) still adopts the tokenless `make dev` server on the
+  marker alone.
 - **A held call is not released by the process being held.** Answering one
   (`/gate/decide`) needs a paired device with the `answer` grant, or — where the
   desktop app started the server — the app's own key, which it mints at launch
   and hands only to its sidecar, down a pipe, and to its own renderer. There an
-  `Origin` opens nothing. On a server started by hand, where no desk holds a
-  key, an `Origin` this server already trusts still does: a browser attaches one
+  `Origin` opens nothing, and the same holds on a server the app adopted while
+  the app holds its claim (above). On a server started by hand, where no desk
+  holds a key, an `Origin` this server already trusts still does: a browser attaches one
   to every POST it makes. The machine token on its own is not an answer, because
   the agent whose call is held holds that token too. *Raising* a hold
   (`POST /gate`) is untouched: that one is the hook asking to be stopped. What
@@ -132,7 +165,10 @@ The handshake, in `server/src/pairing.ts`:
    code is shown on the screen and nowhere else. Both last two minutes.
 2. **The phone proves it can see that screen.** It scans the QR, generates a
    P-256 keypair that never leaves the browser, and types the code. Five wrong
-   guesses closes the invitation outright rather than refusing one attempt.
+   guesses from one address shuts that address out, even for the right code; ten
+   from all addresses together closes the invitation outright. Knowing the
+   invitation's id, which is in the QR, is not enough to close it from one
+   address; a guesser with several addresses can still spend the shared ten.
 3. **A person at the machine agrees.** The request appears in the Remote pane
    naming the device, the address it came from and the same six digits, and
    waits. Nothing is minted until somebody accepts, and accepting is where the
@@ -162,8 +198,8 @@ request is accepted and defaulting to `answer`:
 
 | Level | What it can do |
 |---|---|
-| `read` | Every GET, plus the POSTs that only read. Approves nothing, sends nothing. |
-| `answer` | The above, plus `/gate/decide` and replying to a session that is already running. |
+| `read` | Every GET but the desk's private ones (the terminal, browsing history, plugin settings, desktop notifications), plus the POSTs that only read. Approves nothing, sends nothing. |
+| `answer` | The above, plus `/gate/decide` and replying to a session that is running now — an open chat pane, not any session id it can read. It cannot allow a tool call in a session it sent the turn to: another device or the desk has to. |
 | `full` | Everything the machine can do: the terminal, git write, Docker, merging pull requests. |
 
 Enforcement is **deny by default**: anything that changes state and is not named
@@ -172,6 +208,12 @@ paired phone's reach until somebody decides otherwise. `/terminal/pty` is
 explicitly `full` despite arriving as a `GET` — a browser cannot put a header on
 a WebSocket upgrade, and a rule that trusted the method would hand a read-only
 device an interactive shell.
+
+Below `full`, two reads are narrowed further. The pull-request image proxy
+lends your GitHub token only to an image URL that a pull request this server
+has fetched actually carries; any other URL is fetched anonymously. And the
+Docker reads that start a process per request are capped at four in flight per
+credential.
 
 **Revoking one device** (Settings › Remote › Paired devices › Forget) revokes
 that credential and closes the sockets it is holding, and leaves every other
@@ -640,6 +682,10 @@ the same guarded fetch the server uses for any address it did not choose: each
 hop is checked against private, loopback and link-local ranges before it is
 connected to, redirects are followed one hop at a time with that check repeated,
 five hops at most, and a body over 5 MB or a fetch over 15 seconds is dropped.
+Private addresses are recognised in every spelling of an IPv4 host inside an
+IPv6 address (`::ffff:127.0.0.1` and `::ffff:7f00:1` alike, NAT64 and 6to4
+too), and the connection is made to the address that was checked rather than to
+a second lookup of the name.
 
 ## The Clone, unattended
 
@@ -938,3 +984,12 @@ vulnerability, but it is one worth being able to look up rather than discover.
 [docs/BLAST-RADIUS.md](docs/BLAST-RADIUS.md) lists every such command, what
 triggers it, and the `AGENTGLASS_TMUX_OBSERVE_ONLY=1` switch that turns all of
 them off while leaving the read-only cockpit working.
+
+## The phone app and plain http
+
+The native app keeps cleartext http allowed for every host. Pairing over a bare
+LAN or tailnet address is plain http, Android's network security config cannot
+scope cleartext by address range, and the pairing token is the protection, not
+the transport (see the handshake above: the credential is sealed to the phone's
+key). The config does restrict https to the system certificate store, so a
+certificate authority installed on the phone cannot vouch for a host.

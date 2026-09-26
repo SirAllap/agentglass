@@ -118,6 +118,15 @@ sign.
 
 ## Decisions worth knowing before you change something
 
+**Cleartext http stays allowed; user-installed CAs do not.**
+`plugins/with-network-security.js` writes an Android network security config.
+Pairing over a bare LAN or tailnet address (`http://192.168.1.20:4000`) is plain
+http and the pairing token is the protection, not the transport. Android matches
+names and single addresses, never ranges, so cleartext cannot be scoped to
+private ranges: it is all hosts or a list of names, and a list of names refuses
+the main path. What the file does add is https verified against the system
+certificate store only.
+
 **`legacy-peer-deps` in `.npmrc`.** Expo pins React to what the SDK was built
 against while `expo-router` pulls a radix tree whose `react-dom` asks for a
 newer one. Both are right and neither will move, so npm's strict resolution

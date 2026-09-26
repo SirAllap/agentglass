@@ -15,7 +15,7 @@
 // sender on this machine: local hooks and OTel exporters have no way to carry
 // a secret, and everything they can reach without one now has to come from
 // loopback.
-import { timingSafeEqual, randomBytes } from "node:crypto";
+import { createHmac, timingSafeEqual, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
@@ -198,6 +198,17 @@ function persist(t: string): void {
   } catch {
     /* best effort — the token still works for this run */
   }
+}
+
+/**
+ * The answer to `/health?challenge=<nonce>`: proof this server holds the
+ * token, without sending it. The desktop shell adopts a server already on its
+ * port only when this checks out (electron/server-probe.js, which must compute
+ * the same bytes). The port is in the message so a squatter cannot relay a
+ * challenge to a genuine server on another port and pass its answer off.
+ */
+export function healthProof(token: string, port: number, nonce: string): string {
+  return createHmac("sha256", token).update(`agentglass-health:${port}:${nonce}`).digest("hex");
 }
 
 function eq(a: string, b: string): boolean {
@@ -493,6 +504,13 @@ const FULL_GET = new Set([
   // /plugin/self.
   "/plugins/settings",
   "/plugins/panels",
+  // The desktop's notifications, mirrored. Their bodies carry sign-in codes,
+  // direct messages and mail previews, and the only switch that turns the
+  // mirror off lives in the desk's own UI, so a read-scope credential opening
+  // the socket was reading them whatever that switch said. The phone does not
+  // use either route; the desk holds the machine token.
+  "/notifications",
+  "/notifications/capability",
 ]);
 
 /**

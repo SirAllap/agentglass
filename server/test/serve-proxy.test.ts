@@ -295,3 +295,13 @@ test("only the desk may disconnect a device, even over the proxy", async () => {
   });
   expect(r.status).toBe(403);
 });
+
+test("/health proves the token to a direct loopback caller and to nobody through the proxy", async () => {
+  // The desktop shell's adoption challenge (electron/server-probe.js). Signed
+  // for a caller off the tailnet, it would be a signing service a squatter on
+  // the loopback port could relay the shell's challenge to.
+  const direct = (await (await fetch(base + "/health?challenge=abc")).json()) as { proof?: string };
+  expect(typeof direct.proof).toBe("string");
+  const proxied = (await (await fetch(via + "/health?challenge=abc")).json()) as { proof?: string };
+  expect(proxied.proof).toBeUndefined();
+});
