@@ -19,6 +19,7 @@
 // a multi-select checkbox facet has to be OR, or ticking a second box can only
 // ever shrink the result to zero, which reads as broken.
 import type { PrSummary } from "../../../shared/types.ts";
+import { prTextMatch } from "../../../shared/prSearch.ts";
 import type { FieldSpec, ReadField, Rule } from "../components/tasks/filters.ts";
 
 export type ReviewTok = "approved" | "changes-requested" | "required" | "none";
@@ -274,15 +275,7 @@ export function peopleMatched(p: PrSummary, text: string): string[] {
   return who.filter((l, i) => l.toLowerCase().includes(q) && who.indexOf(l) === i);
 }
 
-function textMatch(p: PrSummary, text: string): boolean {
-  const q = text.trim().toLowerCase();
-  if (!q) return true;
-  if (String(p.number).includes(q) || p.title.toLowerCase().includes(q) || p.author.toLowerCase().includes(q)) return true;
-  // `?? []` on both: a row from a fixture, an older cache or a by-branch lookup
-  // may carry neither field, and a filter is not the place to find that out.
-  if ((p.assignees ?? []).some((a) => a.toLowerCase().includes(q))) return true;
-  return (p.reviewers ?? []).some((r) => r.login.toLowerCase().includes(q));
-}
+const textMatch = prTextMatch;
 
 // AND across facets, OR within a facet. A facet with nothing selected is a
 // no-op. A `null` field (checks still loading) fails open.

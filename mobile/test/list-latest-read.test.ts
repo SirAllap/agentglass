@@ -17,7 +17,8 @@ const screens = {
 function loadBody(src: string): string {
   const at = src.indexOf("const load = useCallback(async (");
   expect(at).toBeGreaterThan(-1);
-  const end = src.indexOf("\n  }, [host, shown, filter]);", at);
+  // The deps array varies per screen (prs also depends on its state chip).
+  const end = src.slice(at).search(/\n  \}, \[host, shown, filter[^\]]*\]\);/) + at;
   expect(end).toBeGreaterThan(at);
   return src.slice(at, end);
 }

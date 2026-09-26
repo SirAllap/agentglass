@@ -666,8 +666,13 @@ export function FilterChips<V extends string>({ options, value, onChange, label 
       horizontal
       showsHorizontalScrollIndicator={false}
       accessibilityLabel={label}
+      /* "handled", or the first tap on a chip while a search box has the
+         keyboard up only closes the keyboard and the chip needs a second. */
+      keyboardShouldPersistTaps="handled"
       contentContainerStyle={{ paddingHorizontal: SPACE.lg, gap: SPACE.sm }}
-      style={{ flexGrow: 0 }}
+      /* flexShrink too: beside a long list this row is the flexible child and
+         was squeezed a dozen points, its chips clipped along the bottom. */
+      style={{ flexGrow: 0, flexShrink: 0 }}
     >
       {options.map((o) => {
         const on = o.id === value;

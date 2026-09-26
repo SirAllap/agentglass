@@ -25,8 +25,10 @@ import type { GitRepoRef, PrSummary } from "../../../shared/types.ts";
 import { ask } from "../../src/lib/api.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
-import { Card, Chip, CommandLine, FilterChips, GroupTitle, Note, Segmented, groupEdge } from "../../src/ui.tsx";
+import { Card, Chip, CommandLine, Field, FilterChips, GroupTitle, Note, Segmented, groupEdge } from "../../src/ui.tsx";
 import { mainCheckouts } from "../../src/model/prRows.ts";
+import { byState, stateQuery, STATE_LABEL, STATE_VIEWS, type StateView } from "../../src/model/prState.ts";
+import { prTextMatch } from "../../../shared/prSearch.ts";
 import { ciLook, flatten, reviewLook, type CiMark, type RepoGroup } from "../../src/model/prLook.ts";
 import { Glyph, type GlyphName } from "../../src/nav/glyphs.tsx";
 import { since } from "../../src/lib/dates.ts";
@@ -83,11 +85,12 @@ function Row({ pr, now, forMe, onOpen }: {
   const ci = ciLook(pr);
   const review = reviewLook(pr, forMe);
   const mark = MARK[ci.mark];
+  const gone = pr.state === "OPEN" ? null : pr.state === "MERGED" ? "Merged" : "Closed";
   return (
     <Pressable
       onPress={onOpen}
       accessibilityRole="button"
-      accessibilityLabel={`${pr.title}. ${mark.says}${ci.label ? `, ${ci.label}` : ""}. ${review?.label ?? ""}. #${pr.number} by ${pr.author}`}
+      accessibilityLabel={`${pr.title}. ${gone ? `${gone}. ` : ""}${mark.says}${ci.label ? `, ${ci.label}` : ""}. ${review?.label ?? ""}. #${pr.number} by ${pr.author}`}
     >
       {({ pressed }) => (
         /* Padding, not a card. The surface and the border belong to the group
@@ -102,6 +105,10 @@ function Row({ pr, now, forMe, onOpen }: {
               {pr.title}
             </Text>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+              {/* An open one says nothing: it is the default, and the list is
+                  mostly it. A merged or closed one has to say so, or under
+                  "Any" it reads as one still waiting on somebody. */}
+              {gone ? <Chip label={gone} tone={gone === "Merged" ? "accent" : "neutral"} /> : null}
               {review ? <Chip label={review.label} tone={review.tone} /> : null}
               {ci.label ? <Chip label={ci.label} tone={ci.tone} /> : null}
               <View style={{ flex: 1 }} />
@@ -130,6 +137,10 @@ export default function PrsScreen(): React.ReactNode {
   /** A repository's root, or ALL. */
   const [pick, setPick] = useState<string>(ALL);
   const [filter, setFilter] = useState<Filter>("review");
+  /** Open unless asked: the list answers "what is waiting", and a closed
+   *  pull request is a thing you go looking for, with the chips or the box. */
+  const [view, setView] = useState<StateView>("open");
+  const [text, setText] = useState("");
   const [groups, setGroups] = useState<RepoGroup<PrSummary>[] | null>(null);
   const [failed, setFailed] = useState<{ error: string; needsAuth: boolean } | null>(null);
   const [loading, setLoading] = useState(false);
@@ -183,7 +194,7 @@ export default function PrsScreen(): React.ReactNode {
     const mine = ++asked.current;
     const answers = await Promise.all(shown.map(async (repo) => ({
       repo,
-      answer: await ask<PrList>(host, `/prs/list?root=${encodeURIComponent(repo.root)}&filter=${filter}&state=open`),
+      answer: await ask<PrList>(host, `/prs/list?root=${encodeURIComponent(repo.root)}&filter=${filter}&state=${stateQuery(view)}`),
     })));
     if (mine !== asked.current) return;
     const good = answers.filter((a) => a.answer.ok && a.answer.value.ok);
@@ -205,7 +216,7 @@ export default function PrsScreen(): React.ReactNode {
       name: repo.name,
       items: answer.ok && Array.isArray(answer.value.prs) ? answer.value.prs : [],
     })));
-  }, [host, shown, filter]);
+  }, [host, shown, filter, view]);
 
   useEffect(() => { setGroups(null); void load(); }, [load]);
 
@@ -216,9 +227,12 @@ export default function PrsScreen(): React.ReactNode {
     if (!host || !shown.length) return;
     let gone = false;
     setCounts(null);
+    // "Merged" is asked as "closed", so its counts would count the closed ones
+    // too: no number is truer than a wrong one.
+    if (view === "merged") return;
     void (async () => {
       const answers = await Promise.all(shown.map((r) =>
-        ask<{ ok: boolean; counts?: PrViewCounts }>(host, `/prs/counts?root=${encodeURIComponent(r.root)}&state=open`)));
+        ask<{ ok: boolean; counts?: PrViewCounts }>(host, `/prs/counts?root=${encodeURIComponent(r.root)}&state=${stateQuery(view)}`)));
       if (gone) return;
       const got = answers.flatMap((a) => (a.ok && a.value.ok && a.value.counts ? [a.value.counts] : []));
       if (!got.length) return;
@@ -228,7 +242,7 @@ export default function PrsScreen(): React.ReactNode {
       })));
     })();
     return () => { gone = true; };
-  }, [host, shown]);
+  }, [host, shown, view]);
 
   // The check rollup lands on a second pass, so one re-read a moment later is
   // the difference between "checks…" forever and the row settling.
@@ -243,7 +257,16 @@ export default function PrsScreen(): React.ReactNode {
     void load().finally(() => setPulling(false));
   }, [load]);
 
-  const rows = useMemo(() => flatten(groups ?? []), [groups]);
+  /* The state split and the search are both applied here, on what the server
+     sent, so typing never asks GitHub anything. A repository with nothing left
+     loses its heading rather than showing an empty one. */
+  const narrowed = useMemo(() => (groups ?? []).map((g) => ({
+    ...g, items: byState(g.items, view).filter((p) => prTextMatch(p, text)),
+  })).filter((g) => g.items.length), [groups, view, text]);
+  const rows = useMemo(() => flatten(narrowed), [narrowed]);
+  const searching = text.trim().length > 0;
+  /** "No merged pull request…" / "No pull request…" */
+  const kind = view === "all" ? "" : `${view} `;
   const isItem = (r: (typeof rows)[number] | undefined): boolean => !!r && "item" in r;
   const now = Date.now();
 
@@ -256,7 +279,8 @@ export default function PrsScreen(): React.ReactNode {
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
-      <View style={{ paddingHorizontal: SPACE.lg, paddingTop: SPACE.xs, paddingBottom: SPACE.md }}>
+      <View style={{ paddingHorizontal: SPACE.lg, paddingTop: SPACE.xs, gap: SPACE.sm, paddingBottom: SPACE.md }}>
+        <Field value={text} onChangeText={setText} placeholder="Search title, #number, author, branch" />
         <Segmented
           value={filter}
           onChange={setFilter}
@@ -267,11 +291,18 @@ export default function PrsScreen(): React.ReactNode {
           }))}
         />
       </View>
+      <FilterChips
+        label="State"
+        options={STATE_VIEWS.map((id) => ({ id, label: STATE_LABEL[id] }))}
+        value={view}
+        onChange={setView}
+      />
       {/* Only with more than one repository: a single chip is a label. */}
       {(repos?.length ?? 0) > 1 ? <FilterChips label="Repository" options={chips} value={pick} onChange={setPick} /> : null}
 
       <FlatList
         data={rows}
+        keyboardShouldPersistTaps="handled"
         keyExtractor={(row) => ("heading" in row ? `h:${row.heading}` : `${row.root}#${row.item.number}`)}
         /* No gap between rows: they are one card divided by hairlines, not a
            stack of cards. See groupEdge in src/ui.tsx. */
@@ -281,16 +312,18 @@ export default function PrsScreen(): React.ReactNode {
           groups === null && !failed ? null : (
             <Card>
               <Text style={{ color: failed ? C.error : C.text, fontSize: T.body, fontWeight: "600" }}>
-                {failed ? "Can't ask GitHub" : "Nothing open"}
+                {failed ? "Can't ask GitHub" : searching ? "No match" : view === "open" ? "Nothing open" : `Nothing ${view === "all" ? "here" : view}`}
               </Text>
               <Note tone={failed ? "bad" : "quiet"}>
                 {failed
                   ? (failed.needsAuth
                     ? "GitHub has not been signed in to on the computer. Run this there:"
                     : failed.error)
-                  : filter === "review"
-                    ? "Nobody is waiting on your review."
-                    : `No open pull request matches this filter${pick === ALL ? "" : " in this repository"}.`}
+                  : searching
+                    ? `No ${kind}pull request matches “${text.trim()}”${pick === ALL ? "" : " in this repository"}.${view === "all" ? "" : " Try Any, which includes the merged and the closed."}`
+                    : filter === "review" && view === "open"
+                      ? "Nobody is waiting on your review."
+                      : `No ${kind}pull request matches this filter${pick === ALL ? "" : " in this repository"}.`}
               </Note>
               {/* The fix is one command on the computer, and it is copied
                   rather than retyped: a phone is where it is read, the
