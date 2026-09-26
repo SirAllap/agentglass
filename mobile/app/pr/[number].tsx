@@ -8,7 +8,7 @@
  * and nothing on the phone ever asked.
  *
  * ── what it does not try to be ────────────────────────────────────────────
- * Not the diff, and not the conversation. Both are real screens and both are
+ * Not the diff, and not the whole conversation. Both are real screens and both are
  * bigger than this one; what belongs here is the question you open a pull
  * request to answer on a phone — is this alright, and if not, what is wrong
  * with it. Files are a list with their weights, threads are a count, and the
@@ -35,6 +35,8 @@ import { useTracksWork } from "../../src/state/use-tracks-work.ts";
 import { TaskChip } from "../../src/review/TaskChip.tsx";
 import { FilesPane } from "../../src/review/FilesPane.tsx";
 import { ThreadsPane } from "../../src/review/ThreadsPane.tsx";
+import { Timeline } from "../../src/review/Timeline.tsx";
+import { conversation } from "../../../shared/prConversation.ts";
 import { RECIPES_PATH, menuFor, situationOf } from "../../src/model/reviewMenu.ts";
 import { requestHandoff } from "../../src/terminal/handoff.ts";
 import { clearDraft, draft, forWire } from "../../src/model/reviewDraft.ts";
@@ -116,13 +118,13 @@ const VERDICTS: { id: "approve" | "request_changes" | "comment"; label: string; 
 
 /** The three faces of a review. Overview is what a pull request IS; the other
  *  two are what it changed and what was said about it. */
-type Pane = "overview" | "files" | "threads";
+type Pane = "overview" | "conversation" | "files" | "threads";
 
 /** A parameter is a stranger's string. Anything that is not one of the three
  *  is the overview, which is where somebody arriving with a broken link should
  *  land rather than on a blank pane. */
 const asPane = (raw: string | undefined): Pane =>
-  raw === "files" || raw === "threads" ? raw : "overview";
+  raw === "conversation" || raw === "files" || raw === "threads" ? raw : "overview";
 
 export default function PrScreen(): React.ReactNode {
   usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
@@ -150,7 +152,8 @@ export default function PrScreen(): React.ReactNode {
    */
   const [pane, setPaneState] = useState<Pane>(asPane(wanted));
   const [seen, setSeen] = useState<Record<Pane, boolean>>(() => ({
-    overview: true, files: asPane(wanted) === "files", threads: asPane(wanted) === "threads",
+    overview: true, conversation: asPane(wanted) === "conversation",
+    files: asPane(wanted) === "files", threads: asPane(wanted) === "threads",
   }));
   /** The file the Files pane should land on, when it was opened by tapping one. */
   const [file, setFile] = useState<string | null>(null);
@@ -514,6 +517,7 @@ export default function PrScreen(): React.ReactNode {
           <Segmented
             options={[
               { id: "overview", label: "Overview" },
+              { id: "conversation", label: "Talk", count: conversation(detail).length || undefined },
               { id: "files", label: "Files", count: files.length },
               { id: "threads", label: "Threads", count: openThreads || undefined },
             ]}
@@ -719,6 +723,12 @@ export default function PrScreen(): React.ReactNode {
       {/* Mounted on first visit and kept. `seen` is what makes that true: a
           pane the reader never opened costs nothing, and one they did keeps
           its scroll, its expanded threads and its half-typed remark. */}
+      {seen.conversation ? (
+        <View style={{ flex: 1, display: pane === "conversation" ? "flex" : "none" }}>
+          <Timeline number={String(number)} root={root ?? ""} onOpenThreads={() => setPane("threads")} />
+        </View>
+      ) : null}
+
       {seen.files ? (
         <View style={{ flex: 1, display: pane === "files" ? "flex" : "none" }}>
           <FilesPane number={String(number)} root={root ?? ""} path={file ?? undefined} bar={false} />

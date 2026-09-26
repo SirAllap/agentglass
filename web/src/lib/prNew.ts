@@ -20,6 +20,7 @@
 // question is "since *I* last looked", and only this browser knows that.
 
 import type { PrDetail, PrThread } from "../../../shared/types.ts";
+import { reviewSpeaks } from "../../../shared/prConversation.ts";
 
 /**
  * Where the last-looked-at timestamps live. One object, keyed by pull request
@@ -212,23 +213,8 @@ export function threadMovedOn(t: Pick<PrThread, "comments">, reviewAt: string | 
   return r > 0 && threadLastAt(t) > r;
 }
 
-/**
- * Does this review actually say anything?
- *
- * GitHub records a review for every batch of line comments, so replying on one
- * line creates a `COMMENTED` review with an empty body. The timeline has always
- * dropped those — its comments are already on the page, inside their threads,
- * and a card reading "(commented, no note)" under them is the same remark drawn
- * twice.
- *
- * Which made the count disagree with the page: "3 new" over two visible
- * markers, and a "3 of 3" that jumped to an anchor that was never rendered.
- * Reported that way. The rule lives here now so the counter and the timeline
- * cannot hold different opinions about what counts as somebody speaking.
- */
-export function reviewSpeaks(r: { body?: string; state?: string }): boolean {
-  return !!(r.body?.trim() || (r.state && r.state !== "COMMENTED"));
-}
+// The rule lives in shared/ so the phone counts a review the way this panel does.
+export { reviewSpeaks };
 
 /** One thing that has been said since your last visit, in the order it was
  *  said. `key` is the anchor the jump scrolls to. */
