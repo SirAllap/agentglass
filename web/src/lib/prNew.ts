@@ -23,6 +23,8 @@
 
 import type { MarkOp, PrDetail, PrThread } from "../../../shared/types.ts";
 import { reviewSpeaks } from "../../../shared/prConversation.ts";
+import { at, bootstrapSince, newSince, prSeenKey, type NewAtom } from "../../../shared/prUnread.ts";
+export { at, bootstrapSince, newSince, prSeenKey, type NewAtom };
 
 /**
  * Where the last-looked-at timestamps live. One object, keyed by pull request
@@ -46,11 +48,6 @@ export const SEEN_KEY = "agentglass.pr.lastlooked";
  */
 export const SEEN_MAX = 400;
 
-/** `owner/repo#123`. The repo is part of it because pull request numbers are
- *  per repository and a bare number collides across every project you have. */
-export function prSeenKey(repo: string | undefined, number: number): string {
-  return `${repo || "?"}#${number}`;
-}
 
 /**
  * Marks written by a build that wrote them wrong are thrown away, once.
@@ -215,13 +212,6 @@ export function markAllSeen(numbers: number[], repo: string | undefined, at: num
   return all;
 }
 
-/** Epoch milliseconds, or 0 for anything unparseable — an unreadable date must
- *  not read as "just now" and put a NEW badge on a two-year-old comment. */
-export function at(iso: string | undefined | null): number {
-  if (!iso) return 0;
-  const n = Date.parse(iso);
-  return Number.isFinite(n) ? n : 0;
-}
 
 /**
  * When a thread was last spoken in.
@@ -259,74 +249,9 @@ export function threadMovedOn(t: Pick<PrThread, "comments">, reviewAt: string | 
 // The rule lives in shared/ so the phone counts a review the way this panel does.
 export { reviewSpeaks };
 
-/** One thing that has been said since your last visit, in the order it was
- *  said. `key` is the anchor the jump scrolls to. */
-export interface NewAtom {
-  key: string;
-  at: number;
-  author: string;
-  /** Human-readable place, for the bar: a path or "the conversation". */
-  where: string;
-  kind: "thread" | "comment" | "review";
-  /** The thread it belongs to, when it is a reply. */
-  threadId?: string;
-}
-
 /** The id an atom's element carries, so the bar can scroll to it. */
 export const anchorId = (key: string): string => `agx-new-${key}`;
 
-/**
- * Everything said since `since`, oldest first.
- *
- * `since` of 0 means "never looked at this one" and returns nothing on purpose.
- * The first time you open a pull request every comment on it is, technically,
- * new to you — and a bar announcing "41 new" on a pull request you have simply
- * never seen is noise dressed as news. The visit is recorded and the next
- * arrival is the first thing marked.
- *
- * Your own remarks never count. A reply you just posted is not something to go
- * and find, and counting it means the badge lights up because you spoke.
- *
- * Neither does automation, unless asked for. On a live pull request the
- * machines outnumber the people two to one — that ratio is the whole reason
- * this panel has a Humans filter — so counting them would light this up on
- * every push and turn "3 new" into a number nobody reads. A coverage report is
- * not somebody waiting on you.
- */
-export function newSince(
-  d: PrDetail | null | undefined,
-  since: number,
-  opts: { includeBots?: boolean } = {},
-): NewAtom[] {
-  if (!d || !since) return [];
-  const out: NewAtom[] = [];
-  const mine = (viewerDidAuthor?: boolean) => viewerDidAuthor === true;
-  const machine = (isBot?: boolean) => !opts.includeBots && isBot === true;
-
-  for (const t of d.threads ?? []) {
-    for (const c of t.comments) {
-      const when = at(c.createdAt);
-      if (when <= since || mine(c.viewerDidAuthor) || machine(c.isBot)) continue;
-      out.push({
-        key: `${t.id}:${c.id}`, at: when, author: c.author, kind: "thread",
-        where: t.path ? `${t.path}${t.line ? `:${t.line}` : ""}` : "a line comment",
-        threadId: t.id,
-      });
-    }
-  }
-  for (const c of d.comments ?? []) {
-    const when = at(c.createdAt);
-    if (when <= since || mine(c.viewerDidAuthor) || machine(c.isBot)) continue;
-    out.push({ key: `c${c.id}`, at: when, author: c.author, kind: "comment", where: "the conversation" });
-  }
-  for (const r of d.reviews ?? []) {
-    const when = at(r.submittedAt);
-    if (when <= since || mine(r.viewerDidAuthor) || machine(r.isBot) || !reviewSpeaks(r)) continue;
-    out.push({ key: `r${r.author}-${r.submittedAt}`, at: when, author: r.author, kind: "review", where: "a review" });
-  }
-
-  return out.sort((a, b) => a.at - b.at || a.key.localeCompare(b.key));
-}
 
 /** The atoms, by anchor key, for the O(1) "is this one new" the rendering asks
  *  once per comment. */
@@ -334,36 +259,6 @@ export function newKeys(atoms: NewAtom[]): Set<string> {
   return new Set(atoms.map((a) => a.key));
 }
 
-/**
- * What counts as "last looked" on a pull request this browser has no mark for.
- *
- * The first version had no answer to this and returned nothing, which is
- * defensible and useless: the pull request you are staring at right now is
- * exactly the one with no mark, so the feature announced itself by doing
- * nothing at all. Reported that way — "pero yo lo veo igual" — with the panel
- * open on a thread where somebody had answered him two days after he wrote.
- *
- * The honest fallback is your own last word. Everything after the last thing
- * YOU said on a pull request is, by definition, the part you have not answered
- * — it is the same question as "what came in while I was away", asked of a
- * pull request instead of of a browser. And it is exactly the case that hurts:
- * a reply to your comment, buried in a thread you started.
- *
- * Still 0 for a pull request you have never spoken on. There, everything is
- * somebody else's conversation and marking all of it as owed to you would be
- * an opinion, not a fact.
- */
-export function bootstrapSince(d: PrDetail | null | undefined): number {
-  if (!d) return 0;
-  let last = 0;
-  const mine = (v: boolean | undefined, iso: string | undefined) => {
-    if (v === true) last = Math.max(last, at(iso));
-  };
-  for (const t of d.threads ?? []) for (const c of t.comments) mine(c.viewerDidAuthor, c.createdAt);
-  for (const c of d.comments ?? []) mine(c.viewerDidAuthor, c.createdAt);
-  for (const r of d.reviews ?? []) mine(r.viewerDidAuthor, r.submittedAt);
-  return last;
-}
 
 /**
  * Which replies to hide when a thread is long.

@@ -22,9 +22,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FlatList, Pressable, RefreshControl, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import type { GitRepoRef, PrSummary } from "../../../shared/types.ts";
+import { prRepoKey, unreadOf, unreadTitle, type Unread } from "../../../shared/prUnread.ts";
 import { ask } from "../../src/lib/api.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
+import { useSeenMarks } from "../../src/state/read-marks.ts";
 import { Card, Chip, CommandLine, Field, FilterChips, GroupTitle, Note, Segmented, groupEdge } from "../../src/ui.tsx";
 import { mainCheckouts } from "../../src/model/prRows.ts";
 import { byState, stateQuery, STATE_LABEL, STATE_VIEWS, type StateView } from "../../src/model/prState.ts";
@@ -76,10 +78,12 @@ const MARK: Record<CiMark, { glyph: GlyphName; ink: () => string; says: string }
   loading: { glyph: "circle", ink: () => C.text4, says: "Checks not read yet" },
 };
 
-function Row({ pr, now, forMe, onOpen }: {
+function Row({ pr, now, forMe, unread, onOpen }: {
   pr: PrSummary;
   now: number;
   forMe: boolean;
+  /** Something said on it since this person last looked — see shared/prUnread.ts. */
+  unread: Unread | null;
   onOpen: () => void;
 }): React.ReactNode {
   const ci = ciLook(pr);
@@ -90,7 +94,7 @@ function Row({ pr, now, forMe, onOpen }: {
     <Pressable
       onPress={onOpen}
       accessibilityRole="button"
-      accessibilityLabel={`${pr.title}. ${gone ? `${gone}. ` : ""}${mark.says}${ci.label ? `, ${ci.label}` : ""}. ${review?.label ?? ""}. #${pr.number} by ${pr.author}`}
+      accessibilityLabel={`${pr.title}. ${gone ? `${gone}. ` : ""}${mark.says}${ci.label ? `, ${ci.label}` : ""}. ${review?.label ?? ""}. #${pr.number} by ${pr.author}${unread ? `. ${unreadTitle(unread)}` : ""}`}
     >
       {({ pressed }) => (
         /* Padding, not a card. The surface and the border belong to the group
@@ -105,6 +109,9 @@ function Row({ pr, now, forMe, onOpen }: {
               {pr.title}
             </Text>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+              {/* First: the one chip that says "go and look", where the rest
+                  describe the state. */}
+              {unread ? <Chip label={`${unread.count} new`} tone="accent" /> : null}
               {/* An open one says nothing: it is the default, and the list is
                   mostly it. A merged or closed one has to say so, or under
                   "Any" it reads as one still waiting on somebody. */}
@@ -155,6 +162,10 @@ export default function PrsScreen(): React.ReactNode {
    */
   const [counts, setCounts] = useState<PrViewCounts | null>(null);
   const [pulling, setPulling] = useState(false);
+  /* The marks the server holds, moved live by the desk and by this phone. The
+     rows are not re-read when one changes: the badge is a function of the row's
+     talk and the mark, so it repaints from here. */
+  const seenMarks = useSeenMarks();
 
   useEffect(() => {
     if (!host) return;
@@ -341,6 +352,7 @@ export default function PrsScreen(): React.ReactNode {
                   pr={row.item}
                   now={now}
                   forMe={filter === "review"}
+                  unread={unreadOf(row.item, prRepoKey(row.item), seenMarks)}
                   // The object form, not a built string: a checkout path is full
                   // of characters a URL segment has opinions about.
                   onOpen={() => router.push({

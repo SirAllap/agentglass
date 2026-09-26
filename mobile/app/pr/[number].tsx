@@ -31,6 +31,7 @@ import { Md, outline } from "../../src/md/Md.tsx";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
 import { usePrDetail } from "../../src/state/pr-detail.ts";
+import { useReadOnOpen } from "../../src/state/read-marks.ts";
 import { useTracksWork } from "../../src/state/use-tracks-work.ts";
 import { TaskChip } from "../../src/review/TaskChip.tsx";
 import { FilesPane } from "../../src/review/FilesPane.tsx";
@@ -174,6 +175,9 @@ export default function PrScreen(): React.ReactNode {
      that, resolving a thread left the count on this screen saying what it said
      when you arrived. See state/pr-detail.ts. */
   const { detail, error, reload: load } = usePrDetail(host, root ?? "", String(number ?? ""));
+  /* Opening it is reading it: the mark moves to now, and what it was BEFORE is
+     what the Talk pane draws its divider against. See state/read-marks.ts. */
+  const lastLooked = useReadOnOpen(host, detail);
 
   const [handing, setHanding] = useState(false);
   /* `ask=1` opens the Claude menu: Checks sends you back here with it, so a
@@ -725,7 +729,7 @@ export default function PrScreen(): React.ReactNode {
           its scroll, its expanded threads and its half-typed remark. */}
       {seen.conversation ? (
         <View style={{ flex: 1, display: pane === "conversation" ? "flex" : "none" }}>
-          <Timeline number={String(number)} root={root ?? ""} onOpenThreads={() => setPane("threads")} />
+          <Timeline number={String(number)} root={root ?? ""} since={lastLooked ?? 0} onOpenThreads={() => setPane("threads")} />
         </View>
       ) : null}
 

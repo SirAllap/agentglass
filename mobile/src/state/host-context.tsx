@@ -34,6 +34,7 @@ import { forgetHost, loadHost, saveHost, type Host } from "../lib/host.ts";
 import { openLive, type LiveHandle, type LiveState } from "../lib/live.ts";
 import { remember, shouldNotify } from "../notifications/policy.ts";
 import { alertsDeliverable, raise } from "../notifications/notify.ts";
+import { applyMarks, loadPrMarks, resetMarks } from "./read-marks.ts";
 
 /** The backstop, not the mechanism. Long enough that a phone sitting in a
  *  pocket with the screen on is not talking to the network every few seconds. */
@@ -248,6 +249,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
   // time its URL or credential can differ.
   useEffect(() => {
     if (!host) { setLive("offline"); return; }
+    resetMarks(); // another computer's marks are not this one's
     let dirty = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -270,7 +272,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
         setLive(state);
         // A socket that has just come up may have been down for a while, and
         // what it missed is exactly what the queue is made of.
-        if (state === "open") { dirty = true; settle(); }
+        if (state === "open") { dirty = true; settle(); void loadPrMarks(host); }
       },
       onFrame: (frame) => {
         /*
@@ -283,6 +285,9 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
          * whole feature, and a companion that notifies too much is one people
          * silence.
          */
+        // A read on another device: the desk, or another phone. See state/read-marks.ts.
+        if (frame.type === "marks") applyMarks(frame.data);
+
         if (frame.type === "alert" && frame.data) {
           const alert = frame.data as AlertNote;
           const now = Date.now();
