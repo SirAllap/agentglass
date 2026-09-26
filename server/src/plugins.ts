@@ -25,10 +25,12 @@ import { cloneUrlError } from "./projectadd.ts";
 import {
   type InstallSource, FULL_COMMIT, contentHash, pluginGitUrlError, pluginRefError, walkPluginDir,
 } from "./plugin-sources.ts";
+import { pluginGitEnv, PLUGIN_GIT_CONFIG } from "./plugin-env.ts";
 import { fetchCatalogue } from "./plugin-catalogue.ts";
 import type { GuardedFetchOptions } from "./net.ts";
 import { blockedEntry, type BlockEntry } from "./plugin-blocklist.ts";
 import { type Contributes, validateContributes } from "../../shared/pluginUi.ts";
+import { type PluginSandbox, validateSandbox } from "../../shared/pluginSandbox.ts";
 import { coerceSettings, dropNotesOf, fieldsWithOptions, forgetPlugin, pushEvent, resolveSettings, setLivenessCheck } from "./plugin-ui.ts";
 
 /** What a plugin folder must carry at its root, translated from `orca-plugin.json`
@@ -54,6 +56,10 @@ export interface PluginManifest {
    *  this app does not draw should not be sitting in the list waiting to be
    *  switched on. */
   minApp?: string;
+  /** What it asks to be given inside a box. Absent means it asked for nothing
+   *  and runs as it always did; a block, even an empty one, is a declaration
+   *  the reviewer approves. Declared only: nothing enforces it yet. */
+  sandbox?: PluginSandbox;
 }
 
 /**
@@ -151,6 +157,12 @@ export function validateManifest(raw: unknown): PluginManifest | string {
   if (m.minApp !== undefined && (typeof m.minApp !== "string" || !/^\d{1,4}(\.\d{1,4}){0,2}$/.test(m.minApp))) {
     return "minApp must be a version like 0.18.0";
   }
+  let sandbox: PluginSandbox | undefined;
+  if (m.sandbox !== undefined) {
+    const r = validateSandbox(m.sandbox);
+    if (!r.ok) return r.error;
+    sandbox = r.value;
+  }
   return {
     name: m.name,
     publisher: m.publisher.trim().slice(0, 200),
@@ -161,6 +173,7 @@ export function validateManifest(raw: unknown): PluginManifest | string {
     ...(typeof m.icon === "string" ? { icon: m.icon } : {}),
     ...(typeof m.color === "string" ? { color: m.color.toLowerCase() } : {}),
     ...(typeof m.minApp === "string" ? { minApp: m.minApp } : {}),
+    ...(sandbox ? { sandbox } : {}),
   };
 }
 
@@ -210,6 +223,10 @@ export function manifestHash(m: PluginManifest): string {
     // another's face after the fact; absent keeps the old hash.
     ...(m.icon ? { icon: m.icon } : {}),
     ...(m.color ? { color: m.color } : {}),
+    // What it asks to be given is what was approved, so a grant that grows
+    // asks again. Present even when empty: a block that says "nothing extra"
+    // is a claim; absent keeps the old hash.
+    ...(m.sandbox ? { sandbox: m.sandbox } : {}),
   });
   return createHash("sha256").update(canonical).digest("hex");
 }
@@ -473,49 +490,7 @@ async function startProcess(rec: PluginRecord): Promise<void> {
   }
 }
 
-/**
- * The environment of every git a plugin install runs. It asks nobody for a
- * password: the server is not somebody at a terminal, and a repository that
- * answered 401 left an install waiting on a prompt in whatever terminal the
- * server was started from. And it fetches nothing through Git LFS, where the
- * user has it: a plugin's own .lfsconfig names the LFS host, so installing a
- * plugin made this machine talk to a server the plugin chose. A plugin that
- * keeps files in LFS installs with the pointers, which is also what the
- * catalogue's runner hashes.
- */
-/**
- * Names that are not secrets and without which git cannot reach a host at
- * all: where the proxy is, which certificates to trust, and on Windows the
- * folders the runtime looks for. The proxy URL may carry a login, and it goes
- * to the proxy, which is the one place it was always meant for.
- */
-const GIT_PASSTHROUGH = [
-  "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy",
-  "SSL_CERT_FILE", "SSL_CERT_DIR", "SystemRoot", "USERPROFILE", "TEMP", "TMP",
-];
-
-export const pluginGitEnv = (): Record<string, string> => {
-  const env: Record<string, string> = {
-    PATH: process.env.PATH ?? "",
-    HOME: process.env.HOME ?? "",
-    LANG: process.env.LANG ?? "C",
-    GIT_TERMINAL_PROMPT: "0",
-    GIT_LFS_SKIP_SMUDGE: "1",
-    // The user's own gitconfig is not read. A `-c` reset cannot clear a
-    // header or helper scoped to one URL (`[http "https://host/"]`): git
-    // keeps the more specific match over the command line. Measured.
-    GIT_CONFIG_GLOBAL: "/dev/null",
-    GIT_CONFIG_NOSYSTEM: "1",
-    // ssh has no terminal to ask on: a passphrase or a host key prompt would
-    // wait on the server's tty until the install timed out.
-    GIT_SSH_COMMAND: "ssh -o BatchMode=yes",
-  };
-  for (const k of GIT_PASSTHROUGH) { const v = process.env[k]; if (v) env[k] = v; }
-  return env;
-};
-
-/** Belt to the braces above: the two keys that carry a credential, cleared on the command line. */
-export const PLUGIN_GIT_CONFIG = ["-c", "credential.helper=", "-c", "http.extraheader="];
+export { pluginGitEnv, PLUGIN_GIT_CONFIG };
 
 /**
  * Every git a plugin install runs. The line endings are pinned because a

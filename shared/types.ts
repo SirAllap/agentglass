@@ -4883,6 +4883,9 @@ export interface PublicPlugin {
   settings?: Record<string, unknown>;
   icon?: string;
   color?: string;
+  /** What it asks to be given inside a box — see shared/pluginSandbox.ts.
+   *  Declared, not yet enforced. */
+  sandbox?: import("./pluginSandbox.ts").PluginSandbox;
   running: boolean;
   pid: number | null;
 }

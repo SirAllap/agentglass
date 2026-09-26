@@ -72,6 +72,7 @@ never written to disk.
 | `icon` | optional; a relative path inside the folder to an `.svg`, `.png` or `.webp`, at most 256 KB, served to the window with `nosniff` and a sandbox policy. Named and not shipped is the mistake `agentglass-plugin validate` warns about. |
 | `color` | optional `#rrggbb`; the tint of its mark and of the button it puts in a pull request. |
 | `minApp` | optional `major.minor.patch`; the oldest agentglass this works on. An older app refuses the install and says both versions, rather than installing something whose panel would never appear. |
+| `sandbox` | optional; what the plugin asks to be given inside a box: `network` (`agentglass`, the default, or `internet`), `read` and `write` (lists of `~/…` or absolute paths, at most 16 each) and `programs` (bare command names to put on its PATH). It is part of what a reviewer approves, so a grant that grows asks again, and the approval screen lists every path, in red when the name looks like a login. A grant of `~/.ssh`, `~/.gnupg`, `~/.config/agentglass`, the session bus folder or `~/.local/share/keyrings`, or of a folder that contains one, is refused. **Declared only for now: nothing enforces it yet and the plugin still runs as you.** No block means no declaration, and the plugin is unchanged. |
 
 A manifest that fails any rule is refused with the sentence naming the rule;
 nothing is coerced into a wider shape than what was declared.

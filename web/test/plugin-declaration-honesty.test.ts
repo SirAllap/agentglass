@@ -32,10 +32,39 @@ describe("approval screen", () => {
   });
 });
 
+describe("approval screen, sandbox grants", () => {
+  const body = SRC.slice(SRC.indexOf("export function PluginDeclaration("));
+
+  test("draws the block from the shared description, and only when the plugin declared one", () => {
+    expect(SRC).toContain("describeSandbox(");
+    expect(body).toMatch(/plugin\.sandbox\s*\?\s*describeSandbox|d\s*&&/);
+  });
+
+  test("lists every read, write and program, and the network", () => {
+    expect(body).toContain("d.reads");
+    expect(body).toContain("d.writes");
+    expect(body).toContain("d.programs");
+    expect(body).toContain("d.internet");
+  });
+
+  test("marks a secret-looking path in the error colour", () => {
+    expect(body).toMatch(/g\.secret[^\n]*var\(--error\)|var\(--error\)[^\n]*g\.secret/);
+  });
+
+  test("says it is declared and not enforced, while nothing enforces it", () => {
+    expect(SRC).toMatch(/not enforced/i);
+    expect(SRC).toMatch(/still runs as you/i);
+  });
+});
+
 describe("docs/PLUGINS.md", () => {
   test("says a plugin runs as the user and scope limits only the token", () => {
     expect(DOC).toMatch(/runs as you/i);
     expect(DOC).toMatch(/scope limits the token, not the process/i);
+  });
+
+  test("documents the sandbox block as declared and not enforced", () => {
+    expect(DOC).toMatch(/`sandbox` \|[^|]*Declared only for now: nothing enforces it yet/);
   });
 
   test("no longer promises a read plugin cannot write", () => {

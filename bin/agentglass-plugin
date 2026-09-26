@@ -231,6 +231,94 @@ def check_contributes(c):
     return None
 
 
+# The sandbox block, from shared/pluginSandbox.ts. Same rules, same words.
+NEVER_MOUNTABLE = ("~/.config/agentglass", "~/.ssh", "~/.gnupg", "/run/user", "~/.local/share/keyrings")
+PROGRAM_RE = re.compile(r"^[A-Za-z0-9._+-]{1,60}$")
+SANDBOX_KEYS = ("network", "read", "write", "programs")
+SECRET_SEGMENTS = (".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker", ".netrc", ".npmrc", ".pypirc",
+                   ".pgpass", ".git-credentials", ".password-store", ".gnome-keyring", "keyrings")
+SECRET_CONFIG = ("gh", "gcloud", "rclone", "hub", "glab-cli")
+SECRET_NAME = re.compile(r"(token|secret|credential|passwd|password|auth\.json|\.pem$|\.key$|^id_(rsa|ed25519|ecdsa|dsa)|keyring|keychain)", re.I)
+
+
+def _segments(p):
+    return [s for i, s in enumerate(p.split("/")) if s != "" or i == 0]
+
+
+def _sandbox_path(raw, key):
+    at = f"sandbox.{key}"
+    if not isinstance(raw, str) or not raw.strip():
+        return None, f"{at} entries must be non-empty text"
+    if len(raw) > 200 or CONTROL.search(raw):
+        return None, f"{at} paths must be at most 200 characters with no control characters"
+    if not (raw.startswith("~/") or raw.startswith("/")):
+        return None, f'{at} paths must start with ~/ or /, and "{raw}" does not'
+    segs = _segments(raw.rstrip("/") or "/")
+    if any(s in ("..", ".") for s in segs):
+        return None, f'{at} path "{raw}" may not contain . or .. segments'
+    if raw in ("/", "~/") or len(segs) < 2:
+        return None, f"{at} may not be the whole disk or the whole home folder"
+    for never in NEVER_MOUNTABLE:
+        n = _segments(never)
+        if segs[:len(n)] == n or n[:len(segs)] == segs:
+            return None, f'{at} path "{raw}" is or leads to {never}, which no plugin can be given'
+    return "/".join(segs), None
+
+
+def check_sandbox(b):
+    """Returns (normalized block, None) or (None, the reason)."""
+    if not isinstance(b, dict):
+        return None, "sandbox must be an object"
+    for k in b:
+        if k not in SANDBOX_KEYS:
+            return None, f'sandbox has no "{k}": it takes network, read, write and programs'
+    if "network" in b and b["network"] not in ("agentglass", "internet"):
+        return None, "sandbox.network must be agentglass or internet"
+    lists = {}
+    for key in ("read", "write"):
+        raw = b.get(key)
+        if raw is None and key not in b:
+            lists[key] = []
+            continue
+        if not isinstance(raw, list):
+            return None, f"sandbox.{key} must be a list of paths"
+        if len(raw) > 16:
+            return None, f"sandbox.{key} may list at most 16 paths"
+        out = set()
+        for item in raw:
+            path, why = _sandbox_path(item, key)
+            if why:
+                return None, why
+            out.add(path)
+        lists[key] = sorted(out)
+    programs = []
+    if "programs" in b:
+        raw = b["programs"]
+        if not isinstance(raw, list) or len(raw) > 16:
+            return None, "sandbox.programs must be a list of at most 16 command names"
+        for p in raw:
+            if not isinstance(p, str) or not PROGRAM_RE.fullmatch(p) or p in (".", ".."):
+                return None, "sandbox.programs entries must be bare command names, with no slash"
+        programs = sorted(set(raw))
+    return {"network": "internet" if b.get("network") == "internet" else "agentglass",
+            "read": lists["read"], "write": lists["write"], "programs": programs}, None
+
+
+def secret_grant(path):
+    """Why a path looks like it holds a login, or None. A hint, not a fence."""
+    segs = _segments(path)
+    if ".config" in segs:
+        i = segs.index(".config")
+        if i + 1 < len(segs) and segs[i + 1] in SECRET_CONFIG:
+            return f"keeps a login for {segs[i + 1]}"
+    for s in segs:
+        if s in SECRET_SEGMENTS:
+            return f"{s} holds credentials"
+        if SECRET_NAME.search(s):
+            return "the name says it holds a secret"
+    return None
+
+
 def check_manifest(m):
     """The manifest rules, in the order the app applies them. Returns the
     first reason it is not installable, or None."""
@@ -261,6 +349,10 @@ def check_manifest(m):
     min_app = m.get("minApp")
     if min_app is not None and (not isinstance(min_app, str) or not VERSION_RE.fullmatch(min_app)):
         return "minApp must be a version like 0.18.0"
+    if "sandbox" in m:
+        _, why = check_sandbox(m["sandbox"])
+        if why:
+            return why
     return None
 
 
@@ -288,10 +380,19 @@ def cmd_validate(args):
     for expected in ("README.md", "LICENSE"):
         if not any(os.path.isfile(os.path.join(folder, expected + ext)) for ext in ("", ".md", ".txt")):
             warnings.append(f"no {expected} — a catalogue will ask for one")
+    sandbox = None
+    if "sandbox" in manifest:
+        sandbox, _ = check_sandbox(manifest["sandbox"])
+        for key in ("read", "write"):
+            for path in sandbox[key]:
+                why = secret_grant(path)
+                if why:
+                    warnings.append(f"sandbox.{key} {path} looks like a login ({why}): a reviewer will see it in red")
     draws = sorted(k for k in (manifest.get("contributes") or {}))
     return emit({"ok": True, "name": manifest["name"], "publisher": manifest["publisher"],
                  "scope": manifest["scope"], "draws": draws,
                  **({"minApp": manifest["minApp"]} if manifest.get("minApp") else {}),
+                 **({"sandbox": sandbox} if sandbox else {}),
                  "warnings": warnings})
 
 

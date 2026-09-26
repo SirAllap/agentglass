@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 import type { DeviceScope, PublicPlugin } from "../../../../shared/types.ts";
 import { EyeIcon, NoteIcon, HandIcon } from "../../lib/glyphIcons.tsx";
-import { CommandIcon, PuzzleIcon, SlidersIcon } from "../settingsNavIcons.tsx";
+import { CommandIcon, PuzzleIcon, ShieldIcon, SlidersIcon } from "../settingsNavIcons.tsx";
+import { describeSandbox, type SandboxGrant } from "../../../../shared/pluginSandbox.ts";
 import { ICON } from "../../lib/iconSize.ts";
 
 /**
@@ -29,6 +30,9 @@ const SCOPE_SENTENCE: Record<DeviceScope, string> = {
 
 /** Whatever the scope: it limits the token, and the process is the user's. */
 const PROCESS_WARNING = "This plugin runs as you. The scope limits its access to this app, not to your machine: it can still read your files and run programs. Approve it only if you would run its code yourself.";
+
+/** The block is a request for a box, and no box is built yet: saying otherwise would be the gate lying. */
+const SANDBOX_NOTE = "Declared, not enforced: this version does not build the box yet, so the plugin still runs as you. The list is what a later version will hold it to.";
 
 const SCOPE_WORD: Record<DeviceScope, string> = { read: "reads the app", answer: "reads and replies", full: "everything" };
 const SCOPE_TINT: Record<DeviceScope, string> = { read: "var(--success)", answer: "var(--warning)", full: "var(--error)" };
@@ -66,6 +70,7 @@ export function surfaces(p: PublicPlugin): Surface[] {
 export function PluginDeclaration({ plugin }: { plugin: PublicPlugin }) {
   const tint = SCOPE_TINT[plugin.scope];
   const drawn = surfaces(plugin);
+  const d = plugin.sandbox ? describeSandbox(plugin.sandbox) : null;
   return (
     <div className="flex flex-col gap-2.5 min-w-0">
       <Block icon={<EyeIcon size={ICON.sm} />} tint={tint} head="What it sees" chip={SCOPE_WORD[plugin.scope]}>
@@ -81,6 +86,21 @@ export function PluginDeclaration({ plugin }: { plugin: PublicPlugin }) {
           {plugin.entrypoint}
         </code>
       </Block>
+
+      {d && (
+        <Block icon={<ShieldIcon size={ICON.sm} />} tint={d.secretCount ? "var(--error)" : "var(--warning)"} head="What it asks to be given"
+          chip={d.secretCount ? `${d.secretCount} look${d.secretCount === 1 ? "s" : ""} like a login` : "declared"}>
+          <p className="m-0 mb-1.5 text-[12px] leading-relaxed" style={{ color: "var(--text2)" }}>{SANDBOX_NOTE}</p>
+          <div className="flex flex-col gap-1">
+            <Row label="Network" tint={d.internet ? "var(--warning)" : undefined}>
+              {d.internet ? "any host on the internet" : "this app only"}
+            </Row>
+            <Grants label="Reads" grants={d.reads} />
+            <Grants label="Writes" grants={d.writes} />
+            {d.programs.length > 0 && <Row label="Programs">{d.programs.join(", ")}</Row>}
+          </div>
+        </Block>
+      )}
 
       {drawn.length > 0 && (
         <Block icon={<PuzzleIcon size={ICON.sm} />} tint="var(--primary)" head="Where it draws"
@@ -99,6 +119,31 @@ export function PluginDeclaration({ plugin }: { plugin: PublicPlugin }) {
         </Block>
       )}
     </div>
+  );
+}
+
+function Row({ label, tint, children }: { label: string; tint?: string; children: ReactNode }) {
+  return (
+    <div className="flex items-start gap-2 min-w-0 text-[12px] leading-snug">
+      <span className="shrink-0 w-[68px] t-dim">{label}</span>
+      <span className="min-w-0 break-all" style={{ color: tint ?? "var(--text)" }}>{children}</span>
+    </div>
+  );
+}
+
+/** One line per path, so a red one cannot hide in a comma-separated run. */
+function Grants({ label, grants }: { label: string; grants: SandboxGrant[] }) {
+  if (grants.length === 0) return null;
+  return (
+    <Row label={label}>
+      <span className="flex flex-col gap-0.5">
+        {grants.map((g) => (
+          <span key={g.path} className="t-mono text-[11.5px]" style={{ color: g.secret ? "var(--error)" : "var(--text)" }}>
+            {g.path}{g.secret && <span className="t-dim" style={{ color: "var(--error)" }}> · {g.secret}</span>}
+          </span>
+        ))}
+      </span>
+    </Row>
   );
 }
 

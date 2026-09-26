@@ -73,6 +73,23 @@ const CASES: { what: string; manifest: unknown }[] = [
   { what: "an icon with a newline on the end", manifest: { ...OK, icon: "icon.svg\n" } },
   { what: "a colour with a newline on the end", manifest: { ...OK, color: "#8B5CF6\n" } },
   { what: "a minApp with a newline on the end", manifest: { ...OK, minApp: "0.18.0\n" } },
+  { what: "an empty sandbox block", manifest: { ...OK, sandbox: {} } },
+  { what: "a full sandbox block", manifest: { ...OK, sandbox: { network: "internet", read: ["~/.config/gh", "/opt/orbit/data"], write: ["~/.local/share/orbit"], programs: ["gh", "claude"] } } },
+  { what: "a sandbox that is a list", manifest: { ...OK, sandbox: [] } },
+  { what: "a sandbox network nobody offers", manifest: { ...OK, sandbox: { network: "everything" } } },
+  { what: "a sandbox key it does not know", manifest: { ...OK, sandbox: { reads: ["~/x"] } } },
+  { what: "a sandbox read that is not a list", manifest: { ...OK, sandbox: { read: "~/x" } } },
+  { what: "a relative sandbox path", manifest: { ...OK, sandbox: { read: ["notes/x"] } } },
+  { what: "a sandbox path that walks up", manifest: { ...OK, sandbox: { read: ["~/code/../.ssh"] } } },
+  { what: "the whole home folder", manifest: { ...OK, sandbox: { read: ["~"] } } },
+  { what: "a sandbox path with a newline on the end", manifest: { ...OK, sandbox: { read: ["~/x\n"] } } },
+  { what: "the ssh folder", manifest: { ...OK, sandbox: { read: ["~/.ssh/id_orbit"] } } },
+  { what: "the parent of the app's own config", manifest: { ...OK, sandbox: { write: ["~/.config"] } } },
+  { what: "the session bus folder", manifest: { ...OK, sandbox: { read: ["/run/user/1000"] } } },
+  { what: "a sibling that only shares a prefix with a never-mountable folder", manifest: { ...OK, sandbox: { read: ["~/.config/agentglass-local-review", "~/.sshfs-mounts"] } } },
+  { what: "seventeen sandbox programs", manifest: { ...OK, sandbox: { programs: Array.from({ length: 17 }, (_, i) => `p${i}`) } } },
+  { what: "a sandbox program with a slash", manifest: { ...OK, sandbox: { programs: ["bin/gh"] } } },
+  { what: "a sandbox program with a newline on the end", manifest: { ...OK, sandbox: { programs: ["gh\n"] } } },
 ];
 
 function cliSays(manifest: unknown): { ok: boolean; error?: string } {
@@ -122,6 +139,23 @@ describe("the CLI's copy of the manifest rules", () => {
       expect(r.exitCode).toBe(0);
       expect(out.warnings.join(" ")).toContain("icon.svg");
       expect(out.warnings.join(" ")).toContain("README");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("says what the sandbox block asks for, and flags a grant that looks like a login", () => {
+    const dir = mkdtempSync(join(tmpdir(), "agx-plugin-cli-"));
+    try {
+      writeFileSync(join(dir, "plugin.json"), JSON.stringify({ ...OK, sandbox: { network: "internet", read: ["~/.config/gh", "~/code/orbit"], write: ["~/.aws"], programs: ["gh"] } }));
+      const r = Bun.spawnSync(["python3", CLI, "validate", dir]);
+      const out = JSON.parse(r.stdout.toString()) as { ok: boolean; sandbox: { network: string; read: string[]; write: string[]; programs: string[] }; warnings: string[] };
+      expect(out.ok).toBe(true);
+      expect(out.sandbox).toEqual({ network: "internet", read: ["~/.config/gh", "~/code/orbit"], write: ["~/.aws"], programs: ["gh"] });
+      const w = out.warnings.join("\n");
+      expect(w).toContain("~/.config/gh");
+      expect(w).toContain("~/.aws");
+      expect(w).not.toContain("~/code/orbit");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
