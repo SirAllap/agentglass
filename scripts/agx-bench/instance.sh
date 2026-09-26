@@ -84,7 +84,7 @@ start)
   [ -f "$REPO/web/dist/index.html" ] || { echo "web/dist is missing — run: (cd web && bun run build)" >&2; exit 1; }
   if ours "$(cat "$DIR/electron.pid" 2>/dev/null || true)"; then echo "already running: $DIR"; exit 0; fi
   if [ -n "$(port_pid "$PORT")" ]; then echo "port $PORT is taken by something else" >&2; exit 1; fi
-  mkdir -p "$DIR"/{cfg,data,cache,xdg-state,state,tmux,browser}
+  mkdir -p "$DIR"/{cfg,data,cache,xdg-state,state,tmux,browser,project}
   ELECTRON=$(electron_bin)
   BUN_DIR=$(dirname "$(command -v bun)")
   {
@@ -106,6 +106,10 @@ start)
     printf 'export AGENTGLASS_SCAN_DISABLED=1\n'
     # HOME is the real one (the agents need it), so the skill refresh must not run.
     printf 'export AGENTGLASS_SKILL_AUTOUPDATE=0\n'
+    # A fresh profile has no project open, so the app waits on the project
+    # picker and never mounts the browser panel: start timed out after 60 s.
+    # The instance opens an empty project of its own, inside DIR.
+    printf 'export AGENTGLASS_ROOT=%q\n' "$DIR/project"
     printf 'export SHELL=/bin/bash\n'
   } > "$DIR/launch.env"
   echo "$PORT" > "$DIR/port"
@@ -153,7 +157,9 @@ start)
     alive "$PID" || { echo "electron exited; see $DIR/electron.log" >&2; exit 1; }
     sleep 0.2
   done
-  echo "no browser window registered within 60 s; see $DIR/electron.log" >&2
+  OPEN=$(curl -s -m 2 -H "Authorization: Bearer $(cat "$TOKEN_FILE" 2>/dev/null)" "http://127.0.0.1:$PORT/projects" \
+    | python3 -c "import json,sys; print('a project is open' if json.load(sys.stdin).get('workspace') else 'no project is open: the app is on the project picker')" 2>/dev/null || echo "the server did not answer")
+  echo "no browser window registered within 60 s ($OPEN); see $DIR/electron.log" >&2
   exit 1
   ;;
 
