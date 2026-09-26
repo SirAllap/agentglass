@@ -1877,6 +1877,29 @@ export interface UnderstudyAsked {
  *  address a browser ask to this window alone. */
 export interface WsClientHello { type: "hello"; clientId: string; browser: true }
 
+/** What a read mark is about. `card` is in the API and the table; nothing on
+ *  the desk keeps a card's read state yet, so nothing writes one. */
+export type MarkKind = "pr" | "inbox" | "card";
+
+/** One read mark as the server holds it. `seenAt` is "read up to" for a pull
+ *  request or a card (0 = marked unread); `state` is an inbox thread's shelf,
+ *  `saved`, `done` or `""`. `updatedAt` is the server's clock. */
+export interface MarkRow {
+  kind: MarkKind;
+  key: string;
+  seenAt: number;
+  state: string;
+  updatedAt: number;
+}
+
+/** A change to a mark. `seenAt` only ever moves a mark forward; `clear` is the
+ *  one way back. `ifAbsent` writes an inbox shelf only where the server has no
+ *  row, so a browser's first sync never overrides what another device said. */
+export type MarkOp =
+  | { kind: "pr" | "card"; key: string; seenAt: number }
+  | { kind: "pr" | "card"; key: string; clear: true }
+  | { kind: "inbox"; key: string; state: "saved" | "done" | ""; ifAbsent?: boolean };
+
 /** WebSocket frames. */
 export type WsFrame =
   | { type: "initial"; data: WatchEvent[]; openTools?: OpenToolCall[] }
@@ -1923,7 +1946,10 @@ export type WsFrame =
   | { type: "notify-prefs"; data: NotifyPrefs }
   /** A long plan window reached the alert level. Decided once on the server
    *  (see paceAlert.ts there); each client words it in its own working hours. */
-  | { type: "pace-alert"; data: PaceAlert };
+  | { type: "pace-alert"; data: PaceAlert }
+  /** Read marks that moved, on any device. Only the rows that changed — a
+   *  batch that changed nothing sends no frame at all. */
+  | { type: "marks"; data: MarkRow[] };
 
 export interface PaceAlert {
   provider: string;

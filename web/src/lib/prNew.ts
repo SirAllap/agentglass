@@ -15,11 +15,13 @@
 // gone the moment you glance at the page from anywhere else.
 //
 // Everything here is pure and takes the detail the panel already loaded. No
-// request is made and nothing is stored on the server: the one piece of state
-// is a timestamp per pull request in this browser, which is enough because the
-// question is "since *I* last looked", and only this browser knows that.
+// request is made from here: the one piece of state is a timestamp per pull
+// request in this browser, and it is read from this browser. "Since *I* last
+// looked" means on any of my machines, though, so each write is also handed
+// to marksSync.ts, which shares it through the server and brings the other
+// devices' marks back in through `applyServerSeen`.
 
-import type { PrDetail, PrThread } from "../../../shared/types.ts";
+import type { MarkOp, PrDetail, PrThread } from "../../../shared/types.ts";
 import { reviewSpeaks } from "../../../shared/prConversation.ts";
 
 /**
@@ -65,7 +67,11 @@ export function prSeenKey(repo: string | undefined, number: number): string {
  * anyway. The cost of leaving them is somebody staring at a conversation that
  * says nothing happened when two people replied to them.
  *
- * Bump `SEEN_EPOCH` if that ever happens again. Nothing else should.
+ * Bump `SEEN_EPOCH` if that ever happens again. Nothing else should. And the
+ * bump alone no longer does it: marksSync.ts shares these marks through the
+ * server, and the next full GET brings the bad ones straight back. The `pr`
+ * rows in the server's read_marks table have to be dropped as well, by hand —
+ * nothing sends the epoch to the server yet. A known ceiling, not an oversight.
  */
 export const SEEN_EPOCH = 2;
 const EPOCH_KEY = `${SEEN_KEY}.epoch`;
@@ -98,6 +104,23 @@ function announceSeen(): void {
   for (const fn of [...seenWatchers]) { try { fn(); } catch { /* a badge must not break a write */ } }
 }
 
+/** Where a local write goes after it is stored: marksSync, when it is running.
+ *  Marks arriving FROM the server never come through here, or every device
+ *  would send each mark straight back. */
+let seenSink: ((op: MarkOp) => void) | null = null;
+export function setSeenSink(fn: ((op: MarkOp) => void) | null): void { seenSink = fn; }
+
+/** Persist the map, keeping the newest `SEEN_MAX`. */
+function storeSeen(all: Record<string, number>): void {
+  const keys = Object.keys(all);
+  if (keys.length > SEEN_MAX) {
+    // Oldest visit first, and drop from that end.
+    keys.sort((a, b) => (all[a] ?? 0) - (all[b] ?? 0));
+    for (const k of keys.slice(0, keys.length - SEEN_MAX)) delete all[k];
+  }
+  try { localStorage.setItem(SEEN_KEY, JSON.stringify(all)); } catch { /* private mode */ }
+}
+
 export function readSeen(): Record<string, number> {
   // Here rather than wired into the panel, so there is no ordering to get
   // wrong: nothing can read the map before the migration has had its say.
@@ -127,14 +150,9 @@ export function writeSeen(key: string, at: number): Record<string, number> {
   const all = readSeen();
   if ((all[key] ?? 0) >= at) return all;
   all[key] = at;
-  const keys = Object.keys(all);
-  if (keys.length > SEEN_MAX) {
-    // Oldest visit first, and drop from that end.
-    keys.sort((a, b) => (all[a] ?? 0) - (all[b] ?? 0));
-    for (const k of keys.slice(0, keys.length - SEEN_MAX)) delete all[k];
-  }
-  try { localStorage.setItem(SEEN_KEY, JSON.stringify(all)); } catch { /* private mode */ }
+  storeSeen(all);
   announceSeen();
+  seenSink?.({ kind: "pr", key, seenAt: at });
   return all;
 }
 
@@ -152,7 +170,32 @@ export function clearSeen(key: string): Record<string, number> {
   delete all[key];
   try { localStorage.setItem(SEEN_KEY, JSON.stringify(all)); } catch { /* private mode */ }
   announceSeen();
+  seenSink?.({ kind: "pr", key, clear: true });
   return all;
+}
+
+const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+/**
+ * Marks another device wrote, as the server holds them: the same two rules as
+ * `writeSeen` and `clearSeen` — forward only, and 0 is an explicit "unread" —
+ * applied in one pass and one write, and never handed to the sink.
+ */
+export function applyServerSeen(rows: { key: string; seenAt: number }[]): void {
+  const all = readSeen();
+  let moved = false;
+  for (const r of rows) {
+    // The map is a plain object: "__proto__" would reach its prototype, and
+    // "toString" is `in` every object. The server refuses both shapes; this
+    // does not rely on it.
+    if (UNSAFE_KEYS.has(r.key)) continue;
+    if (r.seenAt > 0) {
+      if ((Object.hasOwn(all, r.key) ? all[r.key]! : 0) < r.seenAt) { all[r.key] = r.seenAt; moved = true; }
+    } else if (Object.hasOwn(all, r.key)) { delete all[r.key]; moved = true; }
+  }
+  if (!moved) return;
+  storeSeen(all);
+  announceSeen();
 }
 
 /**

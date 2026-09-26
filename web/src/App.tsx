@@ -84,6 +84,7 @@ import { NeedsPopover, type NeedsItem } from "./components/NeedsPopover.tsx";
 import { requestPrJump } from "./lib/prJump.ts";
 import { requestPluginInstall } from "./lib/installPlugin.ts";
 import { subscribeGates, listGates } from "./lib/gateStore.ts";
+import { startMarksSync, syncMarks } from "./lib/marksSync.ts";
 
 /** The last segment of a path — a project's name as anyone says it out loud. */
 const leafOf = (p: string): string => p.split("/").filter(Boolean).pop() ?? p;
@@ -345,6 +346,10 @@ export default function App() {
   // fleet spine reads them in every view, and holding them would freeze a
   // streaming answer mid-word.
   const { events, conn, lastEvent, openTools } = useLive(anyPanelOpen);
+  // Read marks shared with the other devices on this server. Started here and
+  // not in useLive, which a lane host also runs and which has no badges to
+  // keep; the socket's own open asks again on every reconnect.
+  useEffect(() => { startMarksSync(); void syncMarks(); }, []);
   // Offers to make the hidden windows agents work in; needs no panel open.
   useLaneManager();
   // The dashboard draws from the live feed; on screen at launch, the cover waits

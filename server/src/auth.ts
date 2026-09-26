@@ -514,6 +514,10 @@ const ANSWER_POST = new Set([
   "/gate/decide",
   "/chat/send",
   "/chat/pane/key",
+  // "I have read this". Moves a badge on the other devices and nothing else:
+  // no agent, no repository and nothing on GitHub hears about it. A read-scope
+  // credential still only GETs it.
+  "/marks",
 ]);
 
 export function scopeNeeded(method: string, pathname: string): Scope {

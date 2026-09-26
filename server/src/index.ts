@@ -6,7 +6,7 @@ import "./cookieentry.ts";
 // spawn a child that would inherit the descriptor (desk.ts).
 import "./desk.ts";
 import type { ServerWebSocket } from "bun";
-import type { IngestBody, WsFrame, WorkingTree, PanesResponse, AgentSessionRow, GitRepoRef, TreeAuthorsInfo, ChangeRow } from "../../shared/types.ts";
+import type { IngestBody, WsFrame, MarkKind, WorkingTree, PanesResponse, AgentSessionRow, GitRepoRef, TreeAuthorsInfo, ChangeRow } from "../../shared/types.ts";
 import { slackReachable } from "./slackreach.ts";
 import { normalize, detectError, clampIngestTimestamp, externalIngestError } from "./ingest.ts";
 import { pricingProvenance, startPricingRefresh } from "./pricing.ts";
@@ -132,6 +132,7 @@ import {
 import { streamLogs } from "./dockerlogs.ts";
 import { capBuildCache, removeImages } from "./dockerprune.ts";
 import { inbox, markRead, markRepoRead, unsubscribe } from "./ghinbox.ts";
+import { applyMarks, listMarks, parseMarkOps, MARK_KINDS } from "./marks.ts";
 import { measureFile } from "./filemeasure.ts";
 import { editorCursor } from "./editorwhere.ts";
 import {
@@ -5079,6 +5080,31 @@ const server = Bun.serve<WsData>({
       const prefs = writeNotifyPrefs(b);
       broadcast({ type: "notify-prefs", data: prefs });
       return json({ ok: true, prefs });
+    }
+    // Read marks, synced between devices — see marks.ts. Reading them is a
+    // GET like any other; writing them is `answer` scope (auth.ts), because a
+    // phone that may reply to a pull request may certainly say it has read one.
+    if (pathname === "/marks" && req.method === "GET") {
+      const kind = url.searchParams.get("kind") || undefined;
+      if (kind && !MARK_KINDS.includes(kind as MarkKind)) return json({ ok: false, error: "unknown kind" }, 400);
+      const since = Number(url.searchParams.get("since") || 0);
+      // `now` is taken before the read, so asking again from it repeats a row
+      // rather than skipping one written while this answer was being built.
+      const now = Date.now();
+      return json({ marks: listMarks(kind as MarkKind | undefined, since), now });
+    }
+    if (pathname === "/marks" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: unknown;
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const parsed = parseMarkOps(b);
+      if ("error" in parsed) return json({ ok: false, error: parsed.error }, 400);
+      const changed = applyMarks(parsed.ops);
+      // Only what moved. A replayed batch — a reconnect resending what already
+      // landed — changes nothing, and every other device hearing about it
+      // would be a frame per reconnect saying nothing.
+      if (changed.length) broadcast({ type: "marks", data: changed });
+      return json({ ok: true, changed });
     }
     if (pathname === "/plugins/settings" && req.method === "GET") {
       const s = pluginSettings(url.searchParams.get("name") ?? "");
