@@ -28,7 +28,7 @@ const require = createRequire(import.meta.url);
 const shell = require("../../electron/server-probe.js") as {
   holdDesk(port: number, opts: {
     token: () => string | null; key: string; onChange: (key: string | null) => void;
-    retryMs?: number; host?: string; onTaken?: () => void;
+    retryMs?: number; host?: string; onTaken?: () => void; settleMs?: number;
   }): () => void;
 };
 
@@ -228,6 +228,41 @@ describe("a server the app did not start", () => {
       expect(seen.includes(KEY)).toBe(false);
     } finally { stop(); other.close(); }
   });
+
+  test("a Retry made the instant the other holder lets go takes the desk instead of reporting it taken", async () => {
+    // The server frees a claim when it sees the connection drop, a beat after
+    // the holder closes it: a claim sent in that beat meets the old one and is
+    // refused, and a shell that treats the first 409 as final leaves the
+    // banner up over a desk that is free.
+    for (let round = 0; round < 8; round++) {
+      const other = await claim(base, { ...bearer, "x-agentglass-desk": "someone-else-got-here-first-0123456789ab" });
+      expect(other.status).toBe(200);
+      other.close();
+      const seen: (string | null)[] = [];
+      let taken = 0;
+      const stop = shell.holdDesk(port, { token: () => TOKEN, key: KEY, onChange: (k) => seen.push(k), onTaken: () => { taken++; }, retryMs: 50, settleMs: 1500 });
+      try {
+        expect(await until(async () => seen.includes(KEY) || taken > 0), `round ${round}`).toBe(true);
+        expect(seen.includes(KEY), `round ${round}: taken=${taken}`).toBe(true);
+        expect(taken).toBe(0);
+      } finally { stop(); }
+      expect(await until(async () => (await register(base)).status === 200)).toBe(true);
+    }
+  });
+
+  test("a Retry against a desk that stays held still says so, once, after the settle window", async () => {
+    const other = await claim(base, { ...bearer, "x-agentglass-desk": "someone-else-got-here-first-0123456789ab" });
+    expect(other.status).toBe(200);
+    let taken = 0;
+    const t0 = Date.now();
+    const stop = shell.holdDesk(port, { token: () => TOKEN, key: KEY, onChange: () => {}, onTaken: () => { taken++; }, retryMs: 50, settleMs: 400 });
+    try {
+      expect(await until(async () => taken > 0)).toBe(true);
+      expect(Date.now() - t0).toBeGreaterThanOrEqual(400);
+      await Bun.sleep(300);
+      expect(taken).toBe(1);
+    } finally { stop(); other.close(); }
+  });
 });
 
 describe("a server the app started", () => {
@@ -330,7 +365,7 @@ describe("the wiring", () => {
     expect(note).toContain("console.error(");
     expect(hold).toContain("noteDeskTaken(null)");
     const retry = MAIN.slice(MAIN.indexOf('ipcMain.on("ag:retryDesk"'));
-    expect(retry.slice(0, 400)).toContain("holdAdoptedDesk(SERVER_PORT)");
+    expect(retry.slice(0, 400)).toContain("holdAdoptedDesk(SERVER_PORT, 3000)");
     expect(MAIN).toContain('ipcMain.on("ag:deskTaken"');
   });
 

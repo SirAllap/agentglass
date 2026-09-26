@@ -84,7 +84,10 @@ function probe(port, opts) {
  * `retryMs`, doubling while attempts keep failing (a tokenless dev server never
  * will) up to a minute, until `stop()`. A claim refused because another
  * process holds the desk (409) is the exception when `onTaken` is given: the
- * caller is told once and the claim is not retried.
+ * caller is told once and the claim is not retried, unless `settleMs` is
+ * given: a 409 in the first `settleMs` is asked again every half second (or `retryMs`, if shorter), so a
+ * Retry made the moment the other holder lets go is not answered with the
+ * refusal that was true a beat ago.
  *
  * Every attempt proves the server first. A server restarted under the shell
  * leaves the port to whoever binds it next, and a claim carries both the token
@@ -94,11 +97,12 @@ function probe(port, opts) {
  * the renderer sends after adoption already has.
  *
  * @param {number} port
- * @param {{ token: () => string | null, key: string, onChange: (key: string | null) => void, onTaken?: () => void, retryMs?: number, host?: string }} opts
+ * @param {{ token: () => string | null, key: string, onChange: (key: string | null) => void, onTaken?: () => void, settleMs?: number, retryMs?: number, host?: string }} opts
  * @returns {() => void} stop, which lets the claim go
  */
 function holdDesk(port, opts) {
-  const { token, key, onChange, onTaken, retryMs = 5000, host = "127.0.0.1" } = opts;
+  const { token, key, onChange, onTaken, retryMs = 5000, settleMs = 0, host = "127.0.0.1" } = opts;
+  const began = Date.now();
   let stopped = false;
   /** @type {http.ClientRequest | null} */
   let req = null;
@@ -127,9 +131,17 @@ function holdDesk(port, opts) {
       headers: { authorization: `Bearer ${t}`, "x-agentglass-desk": key, "content-length": 0 },
     }, (res) => {
       if (res.statusCode === 409 && onTaken) {
+        res.resume();
+        // Inside the settle window a refusal may be a claim the server has not
+        // yet seen dropped: ask again at the base pace before saying so.
+        if (Date.now() - began < settleMs) {
+          over = true;
+          req = null;
+          if (!stopped) timer = setTimeout(attempt, Math.min(retryMs, 500));
+          return;
+        }
         // Someone else holds this server's desk. A caller that would rather
         // leave than wait is told once, and the claim is not retried.
-        res.resume();
         stopped = true;
         done();
         return onTaken();

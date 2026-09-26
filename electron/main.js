@@ -770,7 +770,7 @@ let letDeskGo = /** @type {(() => void) | null} */ (null);
  * behalf of a server this app has since replaced with its own says nothing.
  * @param {number} port
  */
-function holdAdoptedDesk(port) {
+function holdAdoptedDesk(port, settleMs = 0) {
   letDeskGo?.();
   deskKey = null;
   letDeskGo = holdDesk(port, {
@@ -786,6 +786,7 @@ function holdAdoptedDesk(port) {
       }
     },
     onTaken: () => { if (!sidecar && SERVER_PORT === port) noteDeskTaken(port); },
+    settleMs,
   });
 }
 
@@ -4410,7 +4411,7 @@ app.whenReady().then(async () => {
   // Retry that claims again. Only on an adopted server: a sidecar of ours has
   // its key from the pipe.
   ipcMain.on("ag:deskTaken", (e) => { e.returnValue = deskTaken === null ? null : { port: deskTaken }; });
-  ipcMain.on("ag:retryDesk", () => { if (!sidecar && deskTaken !== null) holdAdoptedDesk(SERVER_PORT); });
+  ipcMain.on("ag:retryDesk", () => { if (!sidecar && deskTaken !== null) holdAdoptedDesk(SERVER_PORT, 3000); });
   /* Asked at CALL time, not captured at load like the line above: the renderer
      needs this exactly when it does not yet know, and a page that came up
      before the sidecar would freeze a false forever and go back to asking the
