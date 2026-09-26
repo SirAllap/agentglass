@@ -166,8 +166,9 @@ import { notePaneFromHook, paneDirs, paneAgentNote, paneHeldSessions } from "./p
 import { treeAuthors, liveSessions, recentSessions, editsBy } from "./sharedtree.ts";
 import { paneStatus } from "./agentdone.ts";
 import { windowRepo } from "./windowrepo.ts";
-import { chatSend, activeTurns, CHAT_ENABLED, CHAT_BYPASS_ALLOWED, CHAT_ENGINE_DEFAULT } from "./chat.ts";
-import { paneEngineCapability, attachCommand, validPaneName } from "./chatpane.ts";
+import { takeSpawnSlot } from "./spawncap.ts";
+import { chatSend, activeTurns, turnActive, sentTurnTo, turnSenderKey, CHAT_ENABLED, CHAT_BYPASS_ALLOWED, CHAT_ENGINE_DEFAULT } from "./chat.ts";
+import { paneEngineCapability, attachCommand, validPaneName, screenNeedsYou } from "./chatpane.ts";
 import { tmuxBinStatus, tmuxSocket, engineSocketArgs } from "./tmuxbin.ts";
 import { applyTmuxConf, resetTmuxConf, confHealth, ensureConf, sweepStaleConfs } from "./tmuxconf.ts";
 import { captureLayout, restoreLayout, clearRestoreState, lastCaptureAt, startRestoreSweeper, noteLaunch, forgetSession, noteCrashLoop, crashLoopWarning, captureLayoutSync } from "./tmuxrestore.ts";
@@ -1483,6 +1484,13 @@ const BUDGET_WRITE_ENABLED = process.env.AGENTGLASS_BUDGET_WRITE_DISABLED !== "1
 // already holding — an event stream, a terminal — running until it disconnects
 // on its own, which is a revoke in the list and not on the wire.
 type WsData = ({ kind: "events" } | { kind: "notify" } | PtyWsData) & { ip?: string | null; deviceId?: string | null };
+/** The docker reads that start a process per request and have no cache or
+ *  single-flight in front of them. See spawncap.ts. */
+const DOCKER_SPAWNS = new Set([
+  "/docker/disk", "/docker/volume", "/docker/volume/peek", "/docker/env-diff",
+  "/docker/inspect", "/docker/top", "/docker/logs",
+]);
+
 const clients = new Set<ServerWebSocket<WsData>>();
 /** A window's own name for itself (its `hello`) to its latest socket, which is
  *  how a browser ask reaches one window instead of all of them. */
@@ -3498,6 +3506,12 @@ const server = Bun.serve<WsData>({
       // the line worth keeping is what was held, not the uuid it was held
       // under. "denied Bash · rm -rf build" is an audit line; a uuid is not.
       const held = getGate(String(b.id));
+      // The device that sent this session its last turn does not also let that
+      // turn's tool call through: that is one phone asking for a command and
+      // approving it, with nobody else in the loop. See noteTurnSender.
+      if (decision === "allow" && held && sentTurnTo(held.session_id, turnSenderKey(caller))) {
+        return json({ ok: false, error: "this device sent that session its turn — another device or the desk has to allow it" }, 403);
+      }
       // "Who approved that" is the question #299 opens with, and a gate is the
       // one write with a stopped agent on the other end of it. Resolved once
       // and handed to both writers, so the gate row and the log line cannot
@@ -6530,25 +6544,37 @@ const server = Bun.serve<WsData>({
     // --- the slow lane -------------------------------------------------
     // Everything here makes the daemon do real work, so none of it is on a
     // timer: it is asked for when somebody opens the section that needs it.
-    if (pathname === "/docker/disk") {
-      const d = await dockerDisk(url.searchParams.get("force") === "1");
-      return json(d ?? { error: "docker could not report disk usage" }, d ? 200 : 503);
-    }
-    if (pathname === "/docker/volume") return json(await dockerVolumeDetail(url.searchParams.get("name") || ""));
-    if (pathname === "/docker/volume/peek") {
-      return json(await dockerVolumePeek(url.searchParams.get("name") || "", url.searchParams.get("path") || ""));
-    }
-    // Two environments, compared on this side of the wire — see dockerenv.ts
-    // for why the values of anything credential-shaped never cross it.
-    if (pathname === "/docker/env-diff") {
-      return json(await dockerEnvCompare(url.searchParams.get("a") || "", url.searchParams.get("b") || ""));
-    }
-    if (pathname === "/docker/inspect") return json(await dockerInspect(url.searchParams.get("id") || ""));
-    if (pathname === "/docker/top") return json(await dockerTop(url.searchParams.get("id") || ""));
-    if (pathname === "/docker/logs") {
-      const id = url.searchParams.get("id") || "";
-      const tail = Number(url.searchParams.get("tail") || 400);
-      return json(await dockerLogs(id, tail));
+    // A credential short of `full` gets SPAWN_CAP of these at a time (see
+    // spawncap.ts); the log follow below has its own global cap in dockerlogs.
+    if (DOCKER_SPAWNS.has(pathname)) {
+      const release = caller && caller.scope !== "full"
+        ? takeSpawnSlot(caller.device?.id ?? (caller.plugin ? `plugin:${caller.plugin}` : caller.kind))
+        : () => {};
+      if (!release) return json({ ok: false, error: "too many docker requests in flight from this device — wait for one to finish" }, 429);
+      try {
+        if (pathname === "/docker/disk") {
+          const d = await dockerDisk(url.searchParams.get("force") === "1");
+          return json(d ?? { error: "docker could not report disk usage" }, d ? 200 : 503);
+        }
+        if (pathname === "/docker/volume") return json(await dockerVolumeDetail(url.searchParams.get("name") || ""));
+        if (pathname === "/docker/volume/peek") {
+          return json(await dockerVolumePeek(url.searchParams.get("name") || "", url.searchParams.get("path") || ""));
+        }
+        // Two environments, compared on this side of the wire — see dockerenv.ts
+        // for why the values of anything credential-shaped never cross it.
+        if (pathname === "/docker/env-diff") {
+          return json(await dockerEnvCompare(url.searchParams.get("a") || "", url.searchParams.get("b") || ""));
+        }
+        if (pathname === "/docker/inspect") return json(await dockerInspect(url.searchParams.get("id") || ""));
+        if (pathname === "/docker/top") return json(await dockerTop(url.searchParams.get("id") || ""));
+        if (pathname === "/docker/logs") {
+          const id = url.searchParams.get("id") || "";
+          const tail = Number(url.searchParams.get("tail") || 400);
+          return json(await dockerLogs(id, tail));
+        }
+      } finally {
+        release();
+      }
     }
     // The same log, followed instead of re-asked every three seconds. Kept
     // beside the one-shot rather than replacing it: the phone and the demo
@@ -7020,7 +7046,7 @@ const server = Bun.serve<WsData>({
     }
     // Images in a PR body. Not JSON — it streams the bytes back, because
     // GitHub's own attachment URLs 404 without the token this attaches.
-    if (pathname === "/prs/asset") return prAsset(url.searchParams.get("url") || "");
+    if (pathname === "/prs/asset") return prAsset(url.searchParams.get("url") || "", !!caller && caller.scope !== "full");
     if (pathname === "/prs/commit-diff") {
       return json(await prCommitDiff(url.searchParams.get("root") || "", url.searchParams.get("sha") || ""));
     }
@@ -8148,7 +8174,21 @@ const server = Bun.serve<WsData>({
       // anything but loopback (resolveToken), so there is nobody else it could
       // be — and no device credentials exist in that world to be narrower than
       // it.
-      return chatSend(b, caller?.scope ?? "full");
+      const scope = caller?.scope ?? "full";
+      // Is the session it names running now — a turn in flight, or a chat pane
+      // still open? Asked only of a caller it can refuse, so the desk's turns
+      // never wait on a tmux round trip.
+      const rid = typeof b.resumeId === "string" ? b.resumeId : "";
+      const live = scope !== "full" && validPaneName(rid) && (turnActive(rid) || await paneAlive(rid));
+      const sender = turnSenderKey(caller);
+      // A turn is pasted into the pane's input, and when the pane is showing a
+      // permission prompt the paste lands on the prompt instead: a "1" there is
+      // an approval. The sender may not answer its own prompt through the
+      // keys route, so it may not through this one either.
+      if (live && sentTurnTo(rid, sender) && screenNeedsYou(await capturePane(rid))) {
+        return json({ error: "that chat is asking to run a tool it was sent — another device or the desk has to answer it" }, 403);
+      }
+      return chatSend(b, scope, live, sender);
     }
     // The command that hands a chat to the user's own terminal. Server-side
     // because the socket name and flags are the engine's business, and a string
@@ -8226,6 +8266,11 @@ const server = Bun.serve<WsData>({
       const id = typeof b.session === "string" ? b.session : "";
       if (!validPaneName(id)) return json({ error: "invalid session id" }, 400);
       if (!sendableKey(b.key)) return json({ error: "key not allowed" }, 400);
+      // The pane's own permission prompt is the gate's second door: when the
+      // hook falls back, a keystroke here is the approval. The same device may
+      // not send a session its turn and then answer the prompt it raised.
+      // Escape stays open to it: it cancels the prompt, the pane's deny.
+      if (b.key !== "Escape" && sentTurnTo(id, turnSenderKey(caller))) return json({ error: "this device sent that chat its turn — another device or the desk has to answer its prompt" }, 403);
       if (!(await paneAlive(id))) return json({ error: "that chat's pane is gone" }, 409);
       const r = await sendKey(id, b.key);
       if (!r.ok) return json({ error: r.stderr.trim() || "could not send the key" }, 500);

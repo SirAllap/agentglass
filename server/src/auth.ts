@@ -504,6 +504,13 @@ const FULL_GET = new Set([
   // /plugin/self.
   "/plugins/settings",
   "/plugins/panels",
+  // The desktop's notifications, mirrored. Their bodies carry sign-in codes,
+  // direct messages and mail previews, and the only switch that turns the
+  // mirror off lives in the desk's own UI, so a read-scope credential opening
+  // the socket was reading them whatever that switch said. The phone does not
+  // use either route; the desk holds the machine token.
+  "/notifications",
+  "/notifications/capability",
 ]);
 
 /**

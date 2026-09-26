@@ -446,7 +446,7 @@ What each scope actually permits, in reviewer language, not the field's name:
   as it happens, the same prompts and replies shown on screen, plus costs,
   diffs and pull requests. Cannot reply to a session or write anything.
 - **`answer`** — everything `read` gets, plus replying to a session that is
-  already running (`/chat/send`, `/chat/pane/key`).
+  running now, an open chat pane (`/chat/send`, `/chat/pane/key`).
 - **`full`** — everything this machine can do: a terminal, git write access,
   docker control, merging pull requests.
 

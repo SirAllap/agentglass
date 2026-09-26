@@ -184,8 +184,8 @@ request is accepted and defaulting to `answer`:
 
 | Level | What it can do |
 |---|---|
-| `read` | Every GET, plus the POSTs that only read. Approves nothing, sends nothing. |
-| `answer` | The above, plus `/gate/decide` and replying to a session that is already running. |
+| `read` | Every GET but the desk's private ones (the terminal, browsing history, plugin settings, desktop notifications), plus the POSTs that only read. Approves nothing, sends nothing. |
+| `answer` | The above, plus `/gate/decide` and replying to a session that is running now — an open chat pane, not any session id it can read. It cannot allow a tool call in a session it sent the turn to: another device or the desk has to. |
 | `full` | Everything the machine can do: the terminal, git write, Docker, merging pull requests. |
 
 Enforcement is **deny by default**: anything that changes state and is not named
@@ -194,6 +194,12 @@ paired phone's reach until somebody decides otherwise. `/terminal/pty` is
 explicitly `full` despite arriving as a `GET` — a browser cannot put a header on
 a WebSocket upgrade, and a rule that trusted the method would hand a read-only
 device an interactive shell.
+
+Below `full`, two reads are narrowed further. The pull-request image proxy
+lends your GitHub token only to an image URL that a pull request this server
+has fetched actually carries; any other URL is fetched anonymously. And the
+Docker reads that start a process per request are capped at four in flight per
+credential.
 
 **Revoking one device** (Settings › Remote › Paired devices › Forget) revokes
 that credential and closes the sockets it is holding, and leaves every other

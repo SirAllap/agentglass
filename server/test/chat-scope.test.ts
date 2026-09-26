@@ -47,7 +47,9 @@ const plan = (over: Partial<Extract<TurnPlan, { ok: true }>> = {}): Extract<Turn
 
 /** What a caller of `scope` ends up running, asking for everything. */
 function argvFor(scope: Scope, asked: { mode: string; allowedTools?: unknown; resumeId: string }): string[] {
-  const s = scopedTurn(scope, asked.mode, asked.allowedTools, asked.resumeId);
+  // Live: what is being measured here is the clamp on a turn that is allowed
+  // at all. Whether an idle session is allowed is read-scope-tightening's.
+  const s = scopedTurn(scope, asked.mode, asked.allowedTools, asked.resumeId, true);
   if (!s.ok) throw new Error(s.error);
   return turnArgv("claude", plan({ mode: s.mode, allow: s.allow, resumeId: asked.resumeId }));
 }
@@ -98,7 +100,7 @@ describe("a device paired to answer", () => {
     // "anything that is not full" rather than as "answer" so the rule does not
     // have to be revisited when a fourth scope appears.
     expect(scopedTurn("read", "bypassPermissions", ["Bash"], "")).toMatchObject({ ok: false });
-    expect(scopedTurn("read", "bypassPermissions", ["Bash"], SESSION)).toEqual({ ok: true, mode: "default", allow: [] });
+    expect(scopedTurn("read", "bypassPermissions", ["Bash"], SESSION, true)).toEqual({ ok: true, mode: "default", allow: [] });
   });
 });
 
