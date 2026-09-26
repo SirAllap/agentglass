@@ -127,8 +127,13 @@ agx-bench: build ## Scripted agent tasks through the browser CLI on an isolated 
 # for by name: mobile is outside the workspaces, so npm puts its local bin
 # exactly there and nowhere else. That is a path this repo's layout guarantees,
 # unlike the path of a hoisted dependency.
-check: ## Types AND tests for server, web and mobile — the one thing `bun test` alone cannot answer
+# Lint and the logo sync run first, as they do in CI: the cheapest steps of the
+# job, and two v0.20.0 reds came from them while this target stayed green.
+check: ## Lint, types AND tests for server, web and mobile — the one thing `bun test` alone cannot answer
 	@set -e; \
+	echo "── lint ──"; \
+	bun scripts/logo.mjs --check; \
+	bun run lint; \
 	echo "── types ──"; \
 	(cd web && bun run typecheck); \
 	(cd server && bun run typecheck); \
