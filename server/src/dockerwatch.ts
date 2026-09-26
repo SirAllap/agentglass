@@ -82,6 +82,23 @@ export function recordExit(facts: ExitFacts | null, now: () => Date = () => new 
  * The transport.
  * ---------------------------------------------------------------------- */
 
+/*
+ * `docker events` learns its reader is gone only when it next writes, and on a
+ * quiet machine that is never: thirty of them were found orphaned, hours old,
+ * one per server that had exited (SIGKILL included, which runs no handler). So
+ * the child is a shell that polls for the server's pid and takes docker down
+ * with it, and on SIGTERM as well, because killing the shell alone would leave
+ * docker behind. Ceiling: it notices within a second, not instantly, and it
+ * needs a POSIX `sh`.
+ */
+const WATCH_SCRIPT = `parent=$1; shift
+"$@" &
+child=$!
+trap 'kill $child 2>/dev/null; exit 0' TERM INT
+while kill -0 "$parent" 2>/dev/null && kill -0 $child 2>/dev/null; do sleep 1; done
+kill $child 2>/dev/null
+wait $child`;
+
 let proc: ReturnType<typeof Bun.spawn> | null = null;
 let stopping = false;
 let restartAt = 0;
@@ -103,7 +120,8 @@ export function startVolumeWatch(): void {
   if (!bin) return;
 
   try {
-    proc = Bun.spawn([bin, "events", "--filter", "type=container", "--filter", "event=die", "--format", "{{json .}}"], {
+    proc = Bun.spawn(["sh", "-c", WATCH_SCRIPT, "sh", String(process.pid), bin,
+      "events", "--filter", "type=container", "--filter", "event=die", "--format", "{{json .}}"], {
       stdout: "pipe", stderr: "ignore",
     });
   } catch {
