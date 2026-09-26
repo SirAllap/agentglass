@@ -30,6 +30,9 @@ import {
   alertsDeliverable, askForAlerts, notificationsSupported, raise,
   type Blocked, type Delivery,
 } from "../../src/notifications/notify.ts";
+import {
+  keepAliveAvailable, keepAliveRunning, loadKeepAlivePref, saveKeepAlivePref, syncKeepAlive, wantKeepAlive,
+} from "../../src/notifications/keepAlive.ts";
 import { onTalkPref, setTalkPref, talkPref, type TalkPref } from "../../src/notifications/talkPref.ts";
 import { Btn, Group, GroupTitle, Note, Row, Sheet, Switch, TAP } from "../../src/ui.tsx";
 import { Glyph, type GlyphName } from "../../src/nav/glyphs.tsx";
@@ -277,6 +280,15 @@ export default function SettingsScreen(): React.ReactNode {
    */
   const [alerts, setAlerts] = useState<Delivery | null>(null);
   const [asking, setAsking] = useState(false);
+  /* Android + the native module linked, or the row has nothing to do — see
+     keepAlive.ts. Computed once: it does not change for the life of the
+     process (there is no "install the module while running"). */
+  const [canKeepAlive] = useState(keepAliveAvailable);
+  /* Defaults true (see keepAlive.ts) until the keystore answers, so the row
+     does not flash off-then-on on every open. What it shows afterwards is
+     ACTUAL state, not the preference: see the effect below and
+     keepAliveRunning's own comment for why those can differ. */
+  const [keepAlive, setKeepAlive] = useState(true);
 
   /* This phone's own preference for a live comment/review — never sent to the
      server (see talkPref.ts). Mirrored the way termColumns/termAssist are:
@@ -309,6 +321,15 @@ export default function SettingsScreen(): React.ReactNode {
     return () => sub.remove();
   }, [refresh]);
 
+  useEffect(() => {
+    if (!canKeepAlive) return;
+    // The saved preference decides what host-context.tsx's own sync WANTS;
+    // what this switch shows is whatever that sync has actually landed as, by
+    // the time this screen asks — not the preference echoed back, which would
+    // draw ON through a start() Android refused.
+    void loadKeepAlivePref().then(() => { setKeepAlive(keepAliveRunning()); });
+  }, [canKeepAlive]);
+
   const turnOn = useCallback(async (): Promise<void> => {
     setAsking(true);
     // Asked only now, when somebody has actually reached for the switch. An
@@ -317,6 +338,14 @@ export default function SettingsScreen(): React.ReactNode {
     setAlerts(await askForAlerts());
     setAsking(false);
   }, []);
+
+  const toggleKeepAlive = useCallback((on: boolean): void => {
+    void saveKeepAlivePref(on);
+    // The switch shows what start()/stop() actually did, not the tap: a
+    // refused start() (background-start limits, battery restrictions the
+    // owner set by hand) draws OFF rather than a switch that lies.
+    setKeepAlive(syncKeepAlive(wantKeepAlive({ alertsOk: !!alerts?.ok, pref: on })));
+  }, [alerts]);
 
   const onForget = useCallback((): void => {
     Alert.alert(
@@ -454,16 +483,34 @@ export default function SettingsScreen(): React.ReactNode {
             }}
           />
         ) : null}
+        {alerts?.ok && canKeepAlive ? (
+          <Row
+            title="Stay connected in the background"
+            sub="A silent notification keeps alerts coming with the app closed"
+            lead={<Lead name="shield" />}
+            checked={keepAlive}
+            trail={<Switch on={keepAlive} />}
+            onPress={() => toggleKeepAlive(!keepAlive)}
+          />
+        ) : null}
       </Group>
-      <View style={{ paddingHorizontal: SPACE.xs, paddingTop: SPACE.xs }}>
-        {/* Said plainly rather than implied. A companion that claims to watch
-            a pocket it cannot reach is worse than one that says where it
-            stops. */}
-        <Note>
-          They arrive over the live connection, so they reach you while the app is running and for a
-          while after the screen goes off — not for ever. Android eventually freezes it.
-        </Note>
-      </View>
+      {alerts?.ok && canKeepAlive ? (
+        <View style={{ paddingHorizontal: SPACE.xs, paddingTop: SPACE.xs }}>
+          {/* Said plainly rather than implied. Android 15 (API 35) cuts a
+              background process's network a few seconds after the screen goes
+              off, which is what silently dropped alerts that arrived while the
+              phone was in a pocket — measured on the emulator, the live socket
+              in src/lib/live.ts died 3-6s after HOME. The switch above is what
+              keeps that connection open; without it, this is what happens.
+              Only drawn next to the switch it names: on iOS, in Expo Go, or
+              with alerts off there is no such switch, and this used to claim
+              one anyway. */}
+          <Note>
+            Without "Stay connected in the background", Android cuts this connection a few seconds
+            after you leave the app.
+          </Note>
+        </View>
+      ) : null}
 
       <GroupTitle text="Appearance" />
       <Group inset={50}>

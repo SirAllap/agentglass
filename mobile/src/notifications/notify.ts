@@ -45,9 +45,11 @@
  * an hour.
  *
  * What local notifications cost even when they work: the app has to be alive
- * to hear the socket. Android keeps one open for a while after the screen goes
- * off and then freezes the process, so this reaches a pocket for a while and
- * not for ever. Settings says so rather than implying otherwise.
+ * to hear the socket, and on its own it is not: measured on API 35, the
+ * process's network is blocked (APP_BACKGROUND) five seconds after it leaves
+ * the screen, and the socket dies with it. keepAlive.ts is what keeps it
+ * reachable; without that switch Settings says so rather than implying
+ * otherwise.
  */
 import Constants, { ExecutionEnvironment } from "expo-constants";
 import { Platform } from "react-native";

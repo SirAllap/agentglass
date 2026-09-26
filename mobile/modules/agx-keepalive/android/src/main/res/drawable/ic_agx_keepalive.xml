@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  A status-bar small icon, not the launcher icon.
+
+  applicationInfo.icon (the adaptive launcher icon) is what this used to pass
+  to setSmallIcon(), and it renders as a plain white blob in the status bar
+  and shade — the adaptive icon's foreground/background layers are not a
+  notification-icon mask, so Android just clips it, and on 8.0 that path has
+  crashed SystemUI outright. A notification's small icon has to be its own
+  monochrome, alpha-only asset. This is a plain filled dot: it says
+  "connected", not what the app itself looks like.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+  <path
+      android:fillColor="#FFFFFFFF"
+      android:pathData="M12,12m-8,0a8,8 0,1 1,16 0a8,8 0,1 1,-16 0"/>
+</vector>
