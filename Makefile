@@ -58,13 +58,21 @@ ci: ## Run everything CI runs, in CI's order — plus headcheck, which only a lo
 	$(MAKE) smoke
 	$(MAKE) perf
 
+# The same jobs on the runner's own image: ubuntu 24.04 (tmux 3.4, python 3.12),
+# the bun ci.yml pins, Chrome, a non-root user, no TERM, a fresh checkout of the
+# tree as it is now. `make ci` runs on this machine's tmux and python, which is
+# how a commit passed here and failed there; run this before pushing. Needs
+# Docker; logs go to ~/.cache/agentglass-ci-docker/out.
+ci-docker: ## The CI jobs in a container that is the runner (ubuntu 24.04, pinned bun) — names the step that failed
+	scripts/ci-docker/run.sh
+
 # `npm ci` and not `npm install`, because that is what the CI job runs — which
 # means it deletes and rebuilds mobile/node_modules, and regenerates
 # engine.generated.ts and nerdfont.generated.ts through the postinstall.
 mobile-test: ## Install and check the phone app exactly as CI's mobile job does (npm ci wipes mobile/node_modules)
 	cd mobile && npm ci
 	cd mobile && npm run typecheck
-	cd mobile && npm test
+	scripts/tranche.sh mobile npm test
 
 # The scripts kill the server/Chrome they spawn on their own SIGINT/SIGTERM;
 # `trap 'kill 0'` here is the group-wide backstop for a SIGTERM aimed at make.
@@ -144,9 +152,9 @@ check: ## Lint, types AND tests for server, web and mobile — the one thing `bu
 		echo "skipping mobile types: no mobile/node_modules — run \`make mobile-test\`, or \`cd mobile && npm install\`"; \
 	fi; \
 	echo "── tests ──"; \
-	(cd server && bun test --timeout 20000); \
-	(cd web && bun test); \
-	(cd mobile && bun test)
+	scripts/tranche.sh server bun test --timeout 20000; \
+	scripts/tranche.sh web bun test; \
+	scripts/tranche.sh mobile bun test
 
 # `bun run typecheck`, not `bunx tsc`: bunx downloads the newest published
 # TypeScript when the directory has none, which is how server/ ended up being
@@ -251,5 +259,5 @@ desktop-open: ## Open the desktop app scoped to a project — make desktop-open 
 	@test -n "$(DIR)" || { echo "usage: make desktop-open DIR=/path/to/repo" >&2; exit 1; }
 	AGENTGLASS_PROJECT="$(DIR)" ~/.local/share/agentglass-desktop/agentglass
 
-.PHONY: help install dev server web build test ci mobile-test smoke perf soak loadtest agx-bench lint typecheck headcheck start setup setup-undo connect connect-undo connect-opencode connect-opencode-undo demo-feed assets \
+.PHONY: help install dev server web build test ci ci-docker mobile-test smoke perf soak loadtest agx-bench lint typecheck headcheck start setup setup-undo connect connect-undo connect-opencode connect-opencode-undo demo-feed assets \
         desktop desktop-dev desktop-dist desktop-dist-linux desktop-install desktop-update desktop-open

@@ -65,14 +65,18 @@ here will stop you.
   Chrome and fails on a blank screen or a console error.
 - A check that failed because of the environment (missing `node_modules`,
   no `LANG`, no `TERM`) is not a check that passed. Note it and rerun it.
-- Neither is a check that SKIPPED. `make check` exits 0 with tests it never
-  ran, and says so only in a line nobody reads: a fresh worktree without
-  `mobile/node_modules` reported "586 pass, 0 fail" out of 723 in three
-  seconds. Read the skip count, not the exit code — the tranche totals are
-  5250, 4320 and 721, and anything short of those is a tranche that did not
-  run.
-- Before pushing, emulate the CI runner (tmux 3.4, Python 3.12, no `TERM`, no `claude`, reverse file order):
-  `env -u TERM PATH="<python3→3.12,tmux→/usr/bin/tmux>:$(dirname $(which bun)):/usr/bin:/bin" bun test $(ls test/*.test.ts | sort -r)`
+- Neither is a check that SKIPPED. `bun test` exits 0 with tests it never
+  ran: a fresh worktree without `mobile/node_modules` reported "586 pass,
+  0 fail" out of 723 in three seconds. `make check` now prints each tranche's
+  total (`tranche server: N pass, ...`) and fails a tranche that ran fewer
+  than its floor in `scripts/tranche-floors.txt`, the one place those numbers
+  live. A commit that adds tests may raise a floor; one that removes tests
+  lowers it on purpose. Read the line, not the exit code, when it is missing.
+- Before pushing, `make ci-docker`: the CI jobs in a container that is the
+  runner (ubuntu 24.04, tmux 3.4, python 3.12, the bun `ci.yml` pins, Chrome,
+  no `TERM`, a non-root user) on the tree as it is now. It runs every step
+  and names each one that failed. `make ci` runs on this machine's tmux and
+  python, which is how a commit passed here and failed there.
 
 ## Tests share one process
 

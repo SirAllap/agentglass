@@ -1,0 +1,3 @@
+server 6990
+web 5370
+mobile 1000
