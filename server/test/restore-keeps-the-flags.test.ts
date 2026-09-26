@@ -17,7 +17,7 @@
  * reboot; this is the part that can be pinned.
  */
 import { describe, expect, test } from "bun:test";
-import { agentArgsOf } from "../src/tmuxrestore.ts";
+import { agentArgsOf, runArgs, type CapturedPane } from "../src/tmuxrestore.ts";
 
 const ID = "ae162752-359d-4df2-b70d-12efbb62ce7e";
 
@@ -76,5 +76,29 @@ describe("what a restored pane is started with", () => {
   test("an empty argv is an empty answer, not a crash", () => {
     expect(agentArgsOf([])).toEqual([]);
     expect(agentArgsOf(["claude"])).toEqual([]);
+  });
+
+  test("the end of the options is not a flag: nothing after `--` is replayed, and `--` itself is gone", () => {
+    /* A launcher that ends its options with `--` before the brief. Kept, the
+       rebuilt line read `claude … -- --resume <id>`: the id and the flag became
+       the new session's first prompt, and the conversation was not resumed. */
+    const argv = ["claude", "--model", "opus", "--disallowedTools", "Bash(git push)", "Bash(gh release:*)",
+      "--", "Read the brief and follow it"];
+    expect(agentArgsOf(argv)).toEqual(["--model", "opus", "--disallowedTools", "Bash(git push)", "Bash(gh release:*)"]);
+    expect(agentArgsOf(argv, (t) => t === "Read the brief and follow it"))
+      .toEqual(["--model", "opus", "--disallowedTools", "Bash(git push)", "Bash(gh release:*)"]);
+  });
+
+  test("a photograph that already holds `--` still resumes: the id is never past the end of the options", () => {
+    const pane = { agentSession: ID, agentArgs: ["--model", "opus", "--"], startCommand: "" } as unknown as CapturedPane;
+    const line = runArgs("all", pane, "/bin/claude");
+    expect(line).toEqual(["/bin/claude", "--model", "opus", "--resume", ID]);
+  });
+
+  test("the ceiling cuts where a flag begins, never between a flag and its value", () => {
+    const argv = ["claude", ...Array.from({ length: 31 }, (_, i) => `--f${i}`), "--model", "opus", "--effort", "high"];
+    const kept = agentArgsOf(argv);
+    expect(kept.at(-1)).not.toBe("--model");
+    expect(kept).toHaveLength(31);
   });
 });

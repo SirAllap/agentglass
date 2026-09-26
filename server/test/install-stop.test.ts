@@ -17,26 +17,11 @@
 // text would have passed against the broken version too.
 import { describe, expect, test, afterEach } from "bun:test";
 import { readFileSync } from "node:fs";
-import { mkdtempSync, mkdirSync, copyFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync } from "node:fs";
 import { join } from "node:path";
+import { APPCTL, AWAIT_MAIN, fakeInstall } from "./fakeInstall.ts";
 
-const APPCTL = join(import.meta.dir, "..", "..", "electron", "appctl.sh");
-
-/** Wait, inside the shell, for the reopened instance to exist — same reason as
- *  `visible` below, on the other side of the process boundary. */
-const AWAIT_MAIN = 'for _ in $(seq 200); do [ -n "$(main_pids)" ] && break; sleep 0.025; done';
 const spawned: number[] = [];
-
-/** A fake install: our own copy of a shell, named the way the real one is. The
- *  copy matters — /proc/<pid>/exe has to point inside the install directory. */
-function fakeInstall() {
-  const app = mkdtempSync(join(tmpdir(), "agx-install-"));
-  mkdirSync(join(app, "resources"));
-  copyFileSync("/bin/sh", join(app, "agentglass"));
-  copyFileSync("/bin/sh", join(app, "resources", "agentglass-server"));
-  return app;
-}
 
 /**
  * Run a process out of the fake install.

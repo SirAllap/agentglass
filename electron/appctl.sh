@@ -263,9 +263,9 @@ start_app() {
   # spawned with the sidecar's environment — and that difference is the whole
   # bug. Both doors, or neither is shut.
   if command -v setsid >/dev/null 2>&1; then
-    setsid env "${APPCTL_UNSET[@]}" "${env[@]}" "$APP/agentglass" "${args[@]}" </dev/null >/dev/null 2>&1 &
+    setsid env "${APPCTL_UNSET[@]}" "${env[@]}" "$APP/agentglass" "${args[@]}" </dev/null >/dev/null 2>&1 9>&- &
   else
-    env "${APPCTL_UNSET[@]}" "${env[@]}" "$APP/agentglass" "${args[@]}" </dev/null >/dev/null 2>&1 &
+    env "${APPCTL_UNSET[@]}" "${env[@]}" "$APP/agentglass" "${args[@]}" </dev/null >/dev/null 2>&1 9>&- &
     disown 2>/dev/null || true
   fi
   return 0
@@ -317,6 +317,40 @@ restore_after_failed_install() {
   echo "Putting back the instance this script stopped:" >&2
   start_app >&2 && return 0
   echo "  could not reopen it — start agentglass from your launcher" >&2
+  return 1
+}
+
+# One install at a time, from here to the reopen.
+#
+# Two installs that overlap lose the app: the second starts while the first has
+# it down, finds nothing running and so captures nothing to reopen, then
+# replaces the files under the instance the first has just reopened. Measured
+# with three installs a few minutes apart: the reopened instance lived
+# twenty-one seconds and nothing brought it back.
+#
+# So the second waits, and when its turn comes it stops, captures and reopens
+# what the first put back. A lock rather than a refusal because a queued install
+# is what the person asked for; flock rather than a lock directory because the
+# kernel drops it when the holder dies, so a killed install cannot wedge the
+# next one. fd 9 must not reach the app start_app launches, or the app would
+# hold it for as long as it runs.
+#
+# Taken after packaging, so installs from different worktrees still build in
+# parallel; two installs from the SAME worktree share its dist-app and are not
+# protected while they build. Give one of them AGENTGLASS_DIST_DIR.
+#
+# No flock (it is util-linux), no lock: the install runs as it did before.
+take_install_lock() {
+  command -v flock >/dev/null 2>&1 || return 0
+  mkdir -p "$(dirname "$APP")"
+  if ! { exec 9>"$APP.install.lock"; } 2>/dev/null; then
+    echo "cannot create the install lock ($APP.install.lock)" >&2
+    return 1
+  fi
+  flock -n 9 && return 0
+  echo "==> another install is replacing this app; waiting for it to finish"
+  flock -w "${APPCTL_LOCK_WAIT_S:-600}" 9 && return 0
+  echo "gave up after ${APPCTL_LOCK_WAIT_S:-600}s waiting for the other install ($APP.install.lock)" >&2
   return 1
 }
 

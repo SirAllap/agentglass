@@ -254,6 +254,9 @@ export function agentArgsOf(argv: string[], isPrompt: (text: string) => boolean 
   const out: string[] = [];
   for (let i = 1; i < argv.length; i++) {
     const a = argv[i]!;
+    /* `--` ends the options: what follows is prompts, and the `--` itself,
+       kept, would turn the `--resume <id>` appended after it into one. */
+    if (a === "--") break;
     if (!a || /[\n\r\0]/.test(a)) continue;
     const bare = a.includes("=") ? a.slice(0, a.indexOf("=")) : a;
     if (NOT_REPLAYED.has(bare)) {
@@ -264,8 +267,12 @@ export function agentArgsOf(argv: string[], isPrompt: (text: string) => boolean 
     if (!a.startsWith("-") && isPrompt(a)) continue;
     out.push(a);
   }
-  /* A command line this long is not a command line any more. */
-  return out.slice(0, 32);
+  /* A command line this long is not a command line any more. Cut where a
+     flag begins, never between a flag and its value: `--model` kept without
+     `opus` would take the `--resume` after it as its value. */
+  if (out.length <= 32) return out;
+  const end = !out[32]!.startsWith("-") && out[31]!.startsWith("-") ? 31 : 32;
+  return out.slice(0, end);
 }
 
 /**
@@ -1123,7 +1130,10 @@ export function runArgs(mode: "lazy" | "all", pane: CapturedPane | undefined, bi
     if (!bin) return [];
     /* The flags first, then the id: the id is the one part of this line this
        file built itself, and it goes last so nothing captured can displace it. */
-    return [bin, ...(pane.agentArgs ?? []), "--resume", id];
+    /* Through `agentArgsOf` again: a photograph taken before it stopped at
+       `--` still holds one, and `--resume` after it is a prompt. */
+    const flags = agentArgsOf(["", ...(pane.agentArgs ?? [])]);
+    return [bin, ...flags, "--resume", id];
   }
   if (pane.startArgv?.length) return [...pane.startArgv];
   /* A photograph from before the capture knew the wrapper carries its line;

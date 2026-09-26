@@ -110,6 +110,9 @@ done
 #
 # shellcheck source=appctl.sh
 . "$HERE/appctl.sh"
+# Before the deputy check and the stop, so a queued install asks both questions
+# about the machine as it is when its turn comes. See take_install_lock.
+take_install_lock || exit 1
 refuse_if_deputy_busy || exit 1
 
 # A running instance holds these files open, and `rm -rf` under it leaves the

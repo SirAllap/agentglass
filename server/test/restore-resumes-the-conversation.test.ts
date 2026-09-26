@@ -53,11 +53,11 @@ const CWD = join(tmpdir(), `agx-resume-cwd-${process.pid}`);
  *  nothing else about it. bash's `exec -a` sets argv[0]; the loop keeps the
  *  process alive; everything after `--` is what a real CLI would have. */
 const fakeClaude = (...args: string[]) =>
-  ["bash", "-c", `exec -a claude /bin/sh -c 'while :; do sleep 1; done' -- "$@"`, "x", ...args];
+  ["bash", "-c", `exec -a claude /bin/sh -c 'while :; do sleep 1; done' stub "$@"`, "x", ...args];
 /** The same, but it dies with status 1 the moment `stop` exists — a CLI
  *  that crashed mid-conversation. */
 const fakeCrashingClaude = (stop: string, ...args: string[]) =>
-  ["bash", "-c", `exec -a claude /bin/sh -c 'while [ ! -e ${stop} ]; do sleep 0.2; done; exit 1' -- "$@"`, "x", ...args];
+  ["bash", "-c", `exec -a claude /bin/sh -c 'while [ ! -e ${stop} ]; do sleep 0.2; done; exit 1' stub "$@"`, "x", ...args];
 
 beforeAll(async () => {
   mkdirSync(TMPDIR, { recursive: true });
@@ -431,7 +431,7 @@ describe("a pane run through the wrapper that keeps it after the CLI exits", () 
   beforeAll(async () => { layout = await import("../src/tmuxlayout.ts"); });
   const wrapped = (argv: string[]) => ["sh", "-c", layout.paneCommand(argv)];
   const fakeOneShot = (...args: string[]) =>
-    ["bash", "-c", `exec -a opencode /bin/sh -c 'while :; do sleep 1; done' -- "$@"`, "x", ...args];
+    ["bash", "-c", `exec -a opencode /bin/sh -c 'while :; do sleep 1; done' stub "$@"`, "x", ...args];
 
   test("a Claude in it keeps its conversation", async () => {
     await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "keptclaude", "-c", CWD, ...wrapped(fakeClaude("--model", "opus", "--resume", OTHER))]);

@@ -51,7 +51,7 @@ const S = `agxreused${process.pid}`;
 const CWD = join(tmpdir(), `agx-reused-cwd-${process.pid}`);
 
 const fakeClaude = (...args: string[]) =>
-  ["bash", "-c", `exec -a claude /bin/sh -c 'while :; do sleep 1; done' -- "$@"`, "x", ...args];
+  ["bash", "-c", `exec -a claude /bin/sh -c 'while :; do sleep 1; done' stub "$@"`, "x", ...args];
 
 /* The person's server, run the way the suite runs every tmux: no config, its
    own socket under the private TMUX_TMPDIR, outside any tmux of ours. */
