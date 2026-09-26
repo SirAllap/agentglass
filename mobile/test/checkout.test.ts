@@ -6,7 +6,7 @@
  * branch drawn under the name of this one.
  */
 import { describe, expect, test } from "bun:test";
-import { checkoutFor } from "../src/model/checkout.ts";
+import { branchLookup, checkoutFor } from "../src/model/checkout.ts";
 
 const roots = ["/work/orbit", "/work/orbit-wt/feat-search", "/work/lantern"];
 const repos = await Bun.file(new URL("../app/(tabs)/repos.tsx", import.meta.url)).text();
@@ -32,5 +32,19 @@ describe("the screens, read", () => {
   test("Source control reads it rather than taking the first checkout", () => {
     expect(repos).toContain("useLocalSearchParams<{ root?: string }>()");
     expect(repos).toContain("checkoutFor(asked, roots)");
+  });
+});
+
+describe("branchLookup", () => {
+  test("a named branch is looked up", () => {
+    expect(branchLookup("feat-search")).toEqual({ ask: true, branch: "feat-search" });
+  });
+  test("a detached HEAD has no branch, and says so instead of asking GitHub", () => {
+    const r = branchLookup("(detached)");
+    expect(r.ask).toBe(false);
+    expect(r.ask === false && r.reason).toMatch(/no branch/i);
+  });
+  test("no branch read yet is not an answer", () => {
+    expect(branchLookup(undefined)).toEqual({ ask: false, reason: null });
   });
 });

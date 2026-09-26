@@ -231,3 +231,24 @@ describe("threadDigest", () => {
     expect(got.replies).toBe(0);
   });
 });
+
+/*
+ * MEASURED: with the keyboard up, the first tap on "Send reply" only
+ * dismissed the keyboard — the reply composer (`ThreadCard.tsx`) lives inside
+ * this pane's `ScrollView`, and a `ScrollView` without
+ * `keyboardShouldPersistTaps="handled"` spends that first tap closing the
+ * keyboard instead of reaching the button under it. No renderer here, so the
+ * source fact that fixes it is what is asserted, the same way
+ * `diff-rows.test.ts` does for `FilesPane`.
+ */
+describe("the pane's list still takes a tap while the keyboard is up", () => {
+  test("its ScrollView carries keyboardShouldPersistTaps", async () => {
+    const screen = await Bun.file(new URL("../src/review/ThreadsPane.tsx", import.meta.url)).text();
+    const at = screen.indexOf("<ScrollView");
+    expect(at).toBeGreaterThan(-1);
+    // The opening tag, from "<ScrollView" to its own closing ">" — never a
+    // fixed window, so a longer prop list still lands inside it.
+    const tag = screen.slice(at, screen.indexOf(">", at) + 1);
+    expect(tag).toContain('keyboardShouldPersistTaps="handled"');
+  });
+});

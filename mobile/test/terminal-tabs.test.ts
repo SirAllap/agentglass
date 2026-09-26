@@ -82,7 +82,9 @@ describe("windows as tabs", () => {
   test("an agent under a pane is carried, because it is why you open it", () => {
     const tabs = paneTabs([pane({ agentCwds: ["/home/x/code/orbit"] })]);
     expect(tabs[0]!.agent).toBe(true);
-    expect(tabs[0]!.where).toBe("orbit");
+    // The whole directory: Source control and Files send it as the root, and
+    // a bare leaf names no checkout ("no such directory", "No commits here").
+    expect(tabs[0]!.where).toBe("/home/x/code/orbit");
   });
 
   test("nothing in, nothing out", () => {
@@ -196,6 +198,24 @@ describe("sessions nobody is looking at", () => {
     const tabs = paneTabs([
       { ...base, session: "work", paneId: "%1", attached: true },
       { ...base, session: "leftover", sessionId: "$2", paneId: "%2", attached: false },
+    ]);
+    expect(sessionsOf(tabs)).toEqual(["work"]);
+  });
+
+  test("unless nothing else is left and the app's own server holds it", () => {
+    // A shell opened from the phone has no client and no agent; after a
+    // relaunch it is the only thing on the machine and must still be a tab.
+    const tabs = paneTabs([
+      { ...base, session: "orbit", paneId: "%1", attached: false, own: true },
+      { ...base, session: "stray", sessionId: "$2", paneId: "%2", attached: false, own: false },
+    ]);
+    expect(sessionsOf(tabs)).toEqual(["orbit"]);
+  });
+
+  test("but never beside real windows", () => {
+    const tabs = paneTabs([
+      { ...base, session: "work", paneId: "%1", attached: true, own: true },
+      { ...base, session: "orbit", sessionId: "$2", paneId: "%2", attached: false, own: true },
     ]);
     expect(sessionsOf(tabs)).toEqual(["work"]);
   });

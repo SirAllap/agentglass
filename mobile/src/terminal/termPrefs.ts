@@ -86,12 +86,15 @@ interface Prefs {
  *  does not contain — the argument is set out at length in theme.ts. This file
  *  is also imported by `bun test`, where there is no phone and no keystore,
  *  and the `null` is what makes that work rather than throw. */
-interface KeystoreModule {
+export interface KeystoreModule {
   getItemAsync(key: string): Promise<string | null>;
   setItemAsync(key: string, value: string): Promise<void>;
 }
 
-function keystore(): KeystoreModule | null {
+/** Exported for keepAlive.ts, which wants the exact same lazy, literal
+ *  `require("expo-secure-store")` and has no reason to carry a second copy of
+ *  it — see the comment above for why the require has to look like this. */
+export function keystore(): KeystoreModule | null {
   try {
     return require("expo-secure-store") as KeystoreModule;
   } catch {

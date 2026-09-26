@@ -87,6 +87,13 @@ export interface RestoreState {
   /** The tmux server this was photographed on (`liveSessions().engine`).
    *  The window and pane ids in the file are only that server's. */
   engine?: string;
+  /** The tmux server this desk was last WHOLE on — put back, or adopted — as
+   *  opposed to merely photographed. A boot that finds this server still
+   *  running knows tmux never died while the app was away, so whatever it no
+   *  longer lists was closed by somebody. Separate from `engine`, which a
+   *  sweep writes before the desk has been put back and so would call a
+   *  crashed-and-remade server "the same one". */
+  wholeOn?: string;
 }
 
 /*
@@ -254,6 +261,9 @@ export function agentArgsOf(argv: string[], isPrompt: (text: string) => boolean 
   const out: string[] = [];
   for (let i = 1; i < argv.length; i++) {
     const a = argv[i]!;
+    /* `--` ends the options: what follows is prompts, and the `--` itself,
+       kept, would turn the `--resume <id>` appended after it into one. */
+    if (a === "--") break;
     if (!a || /[\n\r\0]/.test(a)) continue;
     const bare = a.includes("=") ? a.slice(0, a.indexOf("=")) : a;
     if (NOT_REPLAYED.has(bare)) {
@@ -264,8 +274,12 @@ export function agentArgsOf(argv: string[], isPrompt: (text: string) => boolean 
     if (!a.startsWith("-") && isPrompt(a)) continue;
     out.push(a);
   }
-  /* A command line this long is not a command line any more. */
-  return out.slice(0, 32);
+  /* A command line this long is not a command line any more. Cut where a
+     flag begins, never between a flag and its value: `--model` kept without
+     `opus` would take the `--resume` after it as its value. */
+  if (out.length <= 32) return out;
+  const end = !out[32]!.startsWith("-") && out[31]!.startsWith("-") ? 31 : 32;
+  return out.slice(0, end);
 }
 
 /**
@@ -722,7 +736,8 @@ function writeMerged(fresh: CapturedSession[], now: number, whole: boolean, engi
     kept.push({ ...old, lastSeen });
   }
   const sessions = [...fresh.map((s) => ({ ...s, windows: carried.get(s.name) ?? s.windows, lastSeen: now })), ...kept];
-  const state: RestoreState = { capturedAt: now, sessions, ...(engine ? { engine } : {}) };
+  const wholeOn = whole ? engine : before?.wholeOn;
+  const state: RestoreState = { capturedAt: now, sessions, ...(engine ? { engine } : {}), ...(wholeOn ? { wholeOn } : {}) };
   mkdirSync(restoreDir(), { recursive: true });
   const tmp = `${layoutPath()}.${process.pid}.tmp`;
   /* The person's own, and now with the arguments of what they were running
@@ -1035,6 +1050,7 @@ export function captureLayoutSync(now = Date.now()): void {
     const engine = pid.trim() && started.trim() ? `${pid.trim()}.${started.trim()}` : "";
     if (!names.length) return;
     const before = readRestoreState();
+    const wholeOn = deskIsWhole(engine) ? engine : before?.wholeOn;
     const known = new Map((before?.sessions ?? []).map((s) => [s.name, s]));
     for (const name of names) {
       const had = known.get(name);
@@ -1042,7 +1058,8 @@ export function captureLayoutSync(now = Date.now()): void {
     }
     mkdirSync(restoreDir(), { recursive: true });
     const tmp = `${layoutPath()}.${process.pid}.tmp`;
-    writeFileSync(tmp, JSON.stringify({ capturedAt: now, sessions: [...known.values()], ...(engine ? { engine } : {}) }), { mode: 0o600 });
+    writeFileSync(tmp, JSON.stringify({ capturedAt: now, sessions: [...known.values()], ...(engine ? { engine } : {}),
+      ...(wholeOn ? { wholeOn } : {}) }), { mode: 0o600 });
     swapInLayout(tmp);
   } catch { /* never block an exit on bookkeeping */ }
 }
@@ -1123,7 +1140,10 @@ export function runArgs(mode: "lazy" | "all", pane: CapturedPane | undefined, bi
     if (!bin) return [];
     /* The flags first, then the id: the id is the one part of this line this
        file built itself, and it goes last so nothing captured can displace it. */
-    return [bin, ...(pane.agentArgs ?? []), "--resume", id];
+    /* Through `agentArgsOf` again: a photograph taken before it stopped at
+       `--` still holds one, and `--resume` after it is a prompt. */
+    const flags = agentArgsOf(["", ...(pane.agentArgs ?? [])]);
+    return [bin, ...flags, "--resume", id];
   }
   if (pane.startArgv?.length) return [...pane.startArgv];
   /* A photograph from before the capture knew the wrapper carries its line;
@@ -1324,6 +1344,11 @@ async function restorePass(mode: "lazy" | "all"): Promise<{ ok: boolean; restore
   /* Everything this pass built, so the sweep below can ask what survived. */
   const made: Made[] = [];
   const { engine } = await liveSessions();
+  /* The same tmux server the desk was last whole on: it never died while the
+     app was away, so a session or window it does not list was CLOSED — by a
+     person, with nobody photographing — and is not this pass's to rebuild.
+     A different server is the crash this file exists for. */
+  const sameServer = !!engine && state.wholeOn === engine;
   for (const s of state.sessions) {
     /*
      * A mirror in the file is a mirror this build must not rebuild.
@@ -1336,6 +1361,7 @@ async function restorePass(mode: "lazy" | "all"): Promise<{ ok: boolean; restore
     if (isEphemeralSession(s.name)) continue;
     if (!validSessionName(s.name)) continue;
     const have = await tmux(["has-session", "-t", `=${s.name}`]);
+    if (!have.ok && sameServer) continue;
     if (have.ok) {
       /*
        * THE SESSION IS BACK AND STILL MISSING MOST OF ITSELF.
@@ -1360,7 +1386,7 @@ async function restorePass(mode: "lazy" | "all"): Promise<{ ok: boolean; restore
        * process has finished its first pass, true forever after, so the repair
        * happens at boot and the promise holds every other minute of the day.
        */
-      if (deskIsWhole(engine)) continue;
+      if (deskIsWhole(engine) || sameServer) continue;
       const live = await windowTree(s.name).catch(() => [] as TmuxWindowDetail[]);
       const key = (n: string | undefined, path: string | undefined) => `${n ?? ""}\u0000${path ?? ""}`;
       const here = new Set(live.map((w) => key(w.name, w.panes[0]?.path)));

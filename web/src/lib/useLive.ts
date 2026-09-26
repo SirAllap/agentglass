@@ -15,6 +15,7 @@ import { raiseAlarm } from "./alarm.ts";
 import { nudgeReminders } from "./reminderStore.ts";
 import { receiveNotifyPrefs } from "./notifyPrefsStore.ts";
 import { showPaceAlert } from "./paceAlert.ts";
+import { applyMarkRows, syncMarks } from "./marksSync.ts";
 
 const MAX_EVENTS = 2000;
 const FLUSH_MS = 220; // coalesce bursts into ~5 renders/sec
@@ -165,6 +166,9 @@ export function useLive(paused = false): LiveData {
       setConn("open");
       // Name this window, so a browser ask is addressed to it and not broadcast.
       try { ws.send(JSON.stringify({ type: "hello", clientId: clientId(), browser: true } satisfies WsClientHello)); } catch { /* closing */ }
+      // Marks that moved elsewhere while this socket was down were broadcast to
+      // nobody here; ask for them. A no-op in a window that never started sync.
+      void syncMarks();
     };
     ws.onclose = async () => {
       if (disposed.current || wsRef.current !== ws) return;
@@ -222,6 +226,12 @@ export function useLive(paused = false): LiveData {
         // the store adopts whatever the server now says is current rather
         // than trusting only its own save.
         receiveNotifyPrefs(frame.data);
+        return;
+      }
+      if (frame.type === "marks") {
+        // Read on another device, or the echo of this one's own POST — applied
+        // the same way, and never sent back.
+        applyMarkRows(frame.data);
         return;
       }
       if (frame.type === "pace-alert") {

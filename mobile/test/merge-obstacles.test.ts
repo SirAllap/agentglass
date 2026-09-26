@@ -7,7 +7,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import type { PrCheckRollup } from "../../shared/types.ts";
-import { mergeObstacles, type MergeFacts } from "../src/model/mergeObstacles.ts";
+import { changesRequestedWarning, mergeObstacles, type MergeFacts } from "../src/model/mergeObstacles.ts";
 
 const rollup = (over: Partial<PrCheckRollup>): PrCheckRollup => ({
   total: 16, success: 16, failure: 0, skipped: 0, pending: 0,
@@ -67,5 +67,49 @@ describe("mergeObstacles", () => {
   test("a draft and requested changes each get their own row", () => {
     const rows = mergeObstacles(facts({ isDraft: true, mergeState: "DRAFT", reviewDecision: "CHANGES_REQUESTED" }));
     expect(rows.map((r) => r.title)).toEqual(["It is a draft", "Changes were requested"]);
+  });
+});
+
+/*
+ * The merge sheet's own second question: `mergeVerdict` (mergeReason.ts) says
+ * "Ready to merge" once GitHub itself will take it, which is true of a
+ * CHANGES_REQUESTED pull request whenever branch protection does not require
+ * a review — the sheet went on to draw the header green and the button green
+ * under it, naming neither the review nor the threads still open on it.
+ */
+describe("changesRequestedWarning", () => {
+  test("null when nobody asked for changes", () => {
+    expect(changesRequestedWarning({ reviewDecision: "APPROVED" })).toBeNull();
+    expect(changesRequestedWarning({ reviewDecision: "REVIEW_REQUIRED" })).toBeNull();
+    expect(changesRequestedWarning({ reviewDecision: null })).toBeNull();
+  });
+
+  test("names the reviewer and the open threads when both are known", () => {
+    const warning = changesRequestedWarning({
+      reviewDecision: "CHANGES_REQUESTED",
+      humanReview: { who: ["orbit-reviewer"] },
+      openThreads: { open: 3, more: false },
+    });
+    expect(warning?.note).toBe(
+      "Changes were requested (by orbit-reviewer) · 3 open threads — merging lands it over that review.",
+    );
+    expect(warning?.buttonTone).toBe("plain");
+  });
+
+  test("says one thread, not '1 threads', and drops the reviewer when unknown", () => {
+    const warning = changesRequestedWarning({
+      reviewDecision: "CHANGES_REQUESTED",
+      openThreads: { open: 1, more: false },
+    });
+    expect(warning?.note).toBe("Changes were requested · 1 open thread — merging lands it over that review.");
+  });
+
+  test("no thread count at all when none is open, or none was asked for", () => {
+    const warning = changesRequestedWarning({
+      reviewDecision: "CHANGES_REQUESTED",
+      humanReview: { who: ["orbit-reviewer"] },
+      openThreads: { open: 0, more: false },
+    });
+    expect(warning?.note).toBe("Changes were requested (by orbit-reviewer) — merging lands it over that review.");
   });
 });

@@ -30,7 +30,7 @@ import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-nati
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import type { PrCheckJob } from "../../../shared/types.ts";
 import { ask } from "../../src/lib/api.ts";
-import { byUrgency, looksFailed, ranFor, standingOf, tailOf } from "../../src/model/checkJobs.ts";
+import { byUrgency, foldJobLog, looksFailed, ranFor, standingOf, tailOf } from "../../src/model/checkJobs.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
 import * as Clipboard from "expo-clipboard";
@@ -105,8 +105,13 @@ export default function ChecksScreen(): React.ReactNode {
     setLog({ text: answer.value.text ?? "", truncated: answer.value.truncated });
   }, [host, root]);
 
-  const tail = useMemo(() => tailOf(log?.text ?? "", TAIL), [log]);
-  const shown = whole ? (log?.text ?? "").replace(/\s+$/, "").split("\n") : tail.lines;
+  /* GitHub's timestamp and step markers, folded for a screen with no room for
+   *  either — see foldJobLog. The tail and the "show all" toggle both work on
+   *  the folded text; "Copy the log" below reaches past this to `log.text`,
+   *  the wire's own bytes, deliberately. */
+  const folded = useMemo(() => foldJobLog(log?.text ?? ""), [log]);
+  const tail = useMemo(() => tailOf(folded, TAIL), [folded]);
+  const shown = whole ? folded.replace(/\s+$/, "").split("\n") : tail.lines;
   const now = Date.now();
   const [allFine, setAllFine] = useState(false);
   const bands = useMemo(() => ({
@@ -117,9 +122,12 @@ export default function ChecksScreen(): React.ReactNode {
 
   const copyLog = useCallback((): void => {
     if (!log) return;
-    void Clipboard.setStringAsync(shown.join("\n"));
+    // The ORIGINAL text, not `shown` — folding is a reading aid, and
+    // whoever pastes this into an issue or a terminal wants GitHub's own
+    // bytes, timestamps and all.
+    void Clipboard.setStringAsync(log.text);
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-  }, [log, shown]);
+  }, [log]);
 
   /**
    * Back to the pull request with its Claude menu open.

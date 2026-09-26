@@ -253,7 +253,6 @@ export default function IssueScreen(): React.ReactNode {
               quiet={!detail.work}
             />
             {detail.milestone ? <Fact name="Milestone" value={detail.milestone} /> : null}
-            {detail.comments ? <Fact name="Comments" value={String(detail.comments)} /> : null}
           </Group>
           {said ? <View style={{ paddingHorizontal: SPACE.xs, paddingTop: SPACE.xs }}><Note tone={said.ok ? "quiet" : "bad"}>{said.text}</Note></View> : null}
 
@@ -275,6 +274,27 @@ export default function IssueScreen(): React.ReactNode {
               </Card>
             )}
           </View>
+
+          {/* The discussion, read here. The count used to be all there was and
+              the way to the comments was GitHub. Oldest first, like the page. */}
+          {detail.thread.length ? (
+            <>
+              <GroupTitle text={detail.comments > detail.thread.length
+                ? `Comments · latest ${detail.thread.length} of ${detail.comments}`
+                : `Comments · ${detail.thread.length}`} />
+              <View style={{ gap: SPACE.xs }}>
+                {detail.thread.map((c, i) => (
+                  <Card key={`${c.createdAt}-${i}`}>
+                    <Text style={{ color: C.text3, fontSize: T.small }}>
+                      <Text style={{ color: C.text, fontWeight: "600" }}>{c.author}</Text>
+                      {c.createdAt ? ` · ${since(c.createdAt, now)}` : ""}
+                    </Text>
+                    {c.body.trim() ? <Md text={c.body.trim()} host={host} /> : <Note>No text.</Note>}
+                  </Card>
+                ))}
+              </View>
+            </>
+          ) : null}
 
           <GroupTitle text="Linked pull requests" />
           {prs === null ? (
@@ -306,7 +326,7 @@ export default function IssueScreen(): React.ReactNode {
           )}
 
           {/* The way out to the full thing, for everything this screen does not
-              carry — the comment thread, the reactions, the cross-references.
+              carry — the reactions, the cross-references.
               At the BOTTOM and not the primary action: the point of this screen
               is that you did not have to go there. */}
           {detail.url ? (

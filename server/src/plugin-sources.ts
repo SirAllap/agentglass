@@ -10,6 +10,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { pluginGitEnv, PLUGIN_GIT_CONFIG } from "./plugin-env.ts";
 import { dirname, isAbsolute, join, normalize, relative, sep } from "node:path";
 
 /**
@@ -272,12 +273,10 @@ export function contentHash(dir: string, files: string[], platform: NodeJS.Platf
 function indexExecutables(dir: string): Set<string> {
   const found = new Set<string>();
   if (!existsSync(join(dir, ".git"))) return found;
-  const env: Record<string, string> = { GIT_TERMINAL_PROMPT: "0", GIT_LFS_SKIP_SMUDGE: "1" };
-  for (const [k, v] of Object.entries(process.env)) if (!k.startsWith("GIT_") && v !== undefined) env[k] = v;
   try {
     const p = Bun.spawnSync(
-      ["git", "-C", dir, "-c", "core.fsmonitor=false", "--git-dir", join(dir, ".git"), "--work-tree", dir, "ls-files", "--stage", "-z"],
-      { cwd: tmpdir(), env, stdout: "pipe", stderr: "ignore", stdin: "ignore" },
+      ["git", ...PLUGIN_GIT_CONFIG, "-C", dir, "-c", "core.fsmonitor=false", "--git-dir", join(dir, ".git"), "--work-tree", dir, "ls-files", "--stage", "-z"],
+      { cwd: tmpdir(), env: pluginGitEnv(), stdout: "pipe", stderr: "ignore", stdin: "ignore" },
     );
     if (p.exitCode !== 0) return found;
     for (const entry of p.stdout.toString("utf8").split("\0")) {

@@ -42,7 +42,7 @@ describe("what a restored pane is told to run", () => {
      * of this command line the file builds itself, and nothing captured may
      * displace it.
      */
-    expect(fn).toContain('return [bin, ...(pane.agentArgs ?? []), "--resume", id];');
+    expect(fn).toContain('return [bin, ...flags, "--resume", id];');
     const resume = fn.indexOf('"--resume"');
     const argv = fn.indexOf("pane.startArgv");
     const line = fn.indexOf('["sh", "-c", pane.startCommand]');

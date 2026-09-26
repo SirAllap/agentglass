@@ -39,8 +39,18 @@ export interface IssueRow {
   url: string;
 }
 
+/** One comment under an issue. */
+export interface IssueComment {
+  author: string;
+  body: string;
+  createdAt: string;
+  url: string;
+}
+
 export interface IssueDetail extends IssueRow {
   body: string;
+  /** Oldest first, the newest 50 of a longer thread. */
+  thread: IssueComment[];
   createdAt: string;
   milestone: string | null;
   /** The work started from this issue, if any is still on disk. */
@@ -216,6 +226,23 @@ export async function listIssues(rootIn: unknown, opts: { state?: string; assign
   }
 }
 
+/**
+ * The comments `gh issue view --json comments` returns, in the shape the phone
+ * draws. The newest 50, oldest first: a long thread is read from where it
+ * ended, and the rest is one link away on GitHub. A body is cut at 4000
+ * characters so fifty long comments cannot make one answer enormous. A deleted account has no
+ * author, which GitHub itself shows as "ghost".
+ */
+export function threadOf(raw: unknown): IssueComment[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(-50).map((c: any) => ({
+    author: String(c?.author?.login ?? "ghost"),
+    body: String(c?.body ?? "").slice(0, 4000),
+    createdAt: String(c?.createdAt ?? ""),
+    url: String(c?.url ?? ""),
+  }));
+}
+
 export async function issueDetail(rootIn: unknown, numberIn: unknown): Promise<{ ok: boolean; issue?: IssueDetail; error?: string }> {
   const root = safeAbs(rootIn);
   const number = Number(numberIn);
@@ -233,6 +260,7 @@ export async function issueDetail(rootIn: unknown, numberIn: unknown): Promise<{
       issue: {
         ...normalise(raw, repo, []),
         body: String(raw.body ?? ""),
+        thread: threadOf(raw.comments),
         createdAt: String(raw.createdAt ?? ""),
         milestone: raw.milestone?.title ?? null,
         work,

@@ -26,14 +26,19 @@ import {
 } from "react";
 import { AppState, type AppStateStatus } from "react-native";
 import type {
-  AlertNote, GitRepoRef, PendingGate, PrSummary,
+  AlertNote, GitRepoRef, PendingGate, PrSummary, PrTalkNote,
 } from "../../../shared/types.ts";
+import { talkBody, talkSummary, talkUrgency } from "../../../shared/talkWords.ts";
 import { dedupePrs, mainCheckouts } from "../model/prRows.ts";
 import { ask, REVOKED } from "../lib/api.ts";
 import { forgetHost, loadHost, saveHost, type Host } from "../lib/host.ts";
 import { openLive, type LiveHandle, type LiveState } from "../lib/live.ts";
-import { remember, shouldNotify } from "../notifications/policy.ts";
+import { remember, shouldNotify, shouldNotifyTalk } from "../notifications/policy.ts";
 import { alertsDeliverable, raise } from "../notifications/notify.ts";
+import { loadKeepAlivePref, syncKeepAlive, wantKeepAlive } from "../notifications/keepAlive.ts";
+import { noteTalk } from "./pr-talk.ts";
+import { talkPref } from "../notifications/talkPref.ts";
+import { applyMarks, loadPrMarks, resetMarks } from "./read-marks.ts";
 
 /** The backstop, not the mechanism. Long enough that a phone sitting in a
  *  pocket with the screen on is not talking to the network every few seconds. */
@@ -159,6 +164,13 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
     // person at the computer took this phone off the list, and every request
     // from here on is a 401. Drop it and land on the pairing screen.
     if (!gates.ok && gates.error === REVOKED) {
+      // Stopped explicitly, not left to the lifecycle effect noticing `host`
+      // went null: a revoke is usually noticed while the phone is in the
+      // background, which is exactly where the service is still running and
+      // the notification still up. Leaving it to the effect worked in
+      // principle (see its own `if (!host)` branch) but made the fix invisible
+      // at the one call site a reviewer would look at first.
+      syncKeepAlive(false);
       await forgetHost();
       setHost(null);
       setFleet(EMPTY);
@@ -248,6 +260,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
   // time its URL or credential can differ.
   useEffect(() => {
     if (!host) { setLive("offline"); return; }
+    resetMarks(); // another computer's marks are not this one's
     let dirty = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -270,7 +283,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
         setLive(state);
         // A socket that has just come up may have been down for a while, and
         // what it missed is exactly what the queue is made of.
-        if (state === "open") { dirty = true; settle(); }
+        if (state === "open") { dirty = true; settle(); void loadPrMarks(host); }
       },
       onFrame: (frame) => {
         /*
@@ -283,6 +296,9 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
          * whole feature, and a companion that notifies too much is one people
          * silence.
          */
+        // A read on another device: the desk, or another phone. See state/read-marks.ts.
+        if (frame.type === "marks") applyMarks(frame.data);
+
         if (frame.type === "alert" && frame.data) {
           const alert = frame.data as AlertNote;
           const now = Date.now();
@@ -323,6 +339,33 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
             void raise(alert).then((d) => { if (!d.ok) undo(); });
           }
         }
+        /*
+         * Somebody spoke on a pull request of yours. Unlike an alert, the
+         * live tick fires ALWAYS — it is what moves the "N new" badge on the
+         * list and refetches a pane already open on it — and only the
+         * system notification is behind a gate, because that gate is a
+         * per-device preference (talkPref.ts) the server has no opinion on.
+         * See shouldNotifyTalk.
+         */
+        if (frame.type === "talk" && frame.data) {
+          const note = frame.data as PrTalkNote;
+          noteTalk(note);
+          const now = Date.now();
+          const verdict = shouldNotifyTalk(note, {
+            pref: talkPref(),
+            foreground: AppState.currentState === "active",
+            lastSeen: seen.current,
+            now,
+          });
+          if (verdict.notify) {
+            const alert: AlertNote = { title: talkSummary(note), body: talkBody(note), urgency: talkUrgency(note) };
+            // Same remember/undo shape as the alert branch above: opened
+            // before the await so two notes arriving inside it cannot both
+            // pass, rolled back if the OS never actually drew it.
+            const undo = remember(alert, { lastSeen: seen.current, now });
+            void raise(alert).then((d) => { if (!d.ok) undo(); });
+          }
+        }
         dirty = true;
         settle();
       },
@@ -342,8 +385,21 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
   // battery half, and waking the socket is the correctness half — after the OS
   // has frozen the process the connection is usually dead and says otherwise.
   useEffect(() => {
-    if (!host) return;
+    // Stopped, not merely skipped: an unpaired phone (forget(), or a 401
+    // REVOKED landing while this app sat in the background — see load()'s own
+    // syncKeepAlive(false)) must not be left running the service from before.
+    // `forget()` already calls it directly; this is the backstop for every
+    // OTHER way `host` can go null, so there is one place a stray keep-alive
+    // cannot survive rather than one per caller.
+    if (!host) { syncKeepAlive(false); return; }
     let timer: ReturnType<typeof setInterval> | null = null;
+    // Set false in cleanup and checked before every syncKeepAlive call this
+    // effect makes. `syncNow` awaits two promises with nothing to cancel them:
+    // without this flag, a sync started just before `host` changes or this
+    // effect tears down can still resolve afterwards and call start() —
+    // restarting the service right after forget()'s syncKeepAlive(false), or
+    // after a newer host's own effect instance already decided otherwise.
+    let alive = true;
 
     const start = (): void => {
       if (timer) return;
@@ -353,14 +409,33 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
       if (timer) { clearInterval(timer); timer = null; }
     };
 
+    /*
+     * The foreground keep-alive service, synced to the same ACTIVE edge as
+     * the poll above and for a related reason: Android refuses to START a
+     * foreground service from a process that is not itself in the
+     * foreground, so this can only ever be attempted here, not from a
+     * background wakeup. It is re-synced on every return to ACTIVE (not just
+     * once) because the two things `wantKeepAlive` depends on besides pairing
+     * — whether alerts can be delivered at all, and the owner's own switch in
+     * Settings — are both things that change while this app is in someone's
+     * pocket and are only ever noticed again when it comes back.
+     */
+    const syncNow = (): void => {
+      void (async () => {
+        const [alerts, pref] = await Promise.all([alertsDeliverable(), loadKeepAlivePref()]);
+        if (!alive) return;
+        syncKeepAlive(wantKeepAlive({ alertsOk: alerts.ok, pref }));
+      })();
+    };
+
     const onChange = (state: AppStateStatus): void => {
-      if (state === "active") { liveRef.current?.wake(); void load(host); start(); }
+      if (state === "active") { liveRef.current?.wake(); void load(host); start(); syncNow(); }
       else stop();
     };
 
-    if (AppState.currentState === "active") start();
+    if (AppState.currentState === "active") { start(); syncNow(); }
     const sub = AppState.addEventListener("change", onChange);
-    return () => { stop(); sub.remove(); };
+    return () => { alive = false; stop(); sub.remove(); };
   }, [host, load]);
 
   const value = useMemo<Ctx>(() => ({
@@ -375,6 +450,7 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
       setHost(next);
     },
     forget: async (): Promise<void> => {
+      syncKeepAlive(false);
       await forgetHost();
       setFleet(EMPTY);
       setHost(null);

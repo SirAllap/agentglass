@@ -8,8 +8,12 @@
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { pluginGitEnv, PLUGIN_GIT_CONFIG } from "../src/plugins.ts";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const PLUGINS = await Bun.file(new URL("../src/plugins.ts", import.meta.url)).text();
+const SOURCES = await Bun.file(new URL("../src/plugin-sources.ts", import.meta.url)).text();
 
 const LEAKS = ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_CONFIG_PARAMETERS", "SSH_AUTH_SOCK", "GH_TOKEN", "GITHUB_TOKEN", "AGENTGLASS_TOKEN", "ORBIT_SECRET"];
 const before: Record<string, string | undefined> = {};
@@ -83,5 +87,37 @@ describe("pluginGitEnv", () => {
 
   test("the HEAD lookup carries the cleared config too", () => {
     expect(PLUGINS).toContain('["git", ...PLUGIN_GIT_CONFIG, "rev-parse", "HEAD"]');
+  });
+  test("the ls-files behind the content hash gets the scrubbed env, not the server's", async () => {
+    // A stub git on the child's PATH writes the environment it was given.
+    // Bun.which resolves against the PATH the process started with, so the
+    // stub has to be there before the child starts.
+    const root = mkdtempSync(join(tmpdir(), "agx-lsfiles-"));
+    try {
+      const bin = join(root, "bin");
+      const plugin = join(root, "orbit-plugin");
+      mkdirSync(bin);
+      mkdirSync(join(plugin, ".git"), { recursive: true });
+      writeFileSync(join(plugin, "run.sh"), "echo hi\n");
+      writeFileSync(join(bin, "git"), `#!/bin/sh\nenv > "${join(root, "seen.txt")}"\n`);
+      chmodSync(join(bin, "git"), 0o755);
+      const src = new URL("../src/plugin-sources.ts", import.meta.url).pathname;
+      const child = Bun.spawn(["bun", "-e", `import { contentHash } from ${JSON.stringify(src)}; contentHash(${JSON.stringify(plugin)}, ["run.sh"]);`], {
+        env: { PATH: `${bin}:${process.env.PATH ?? ""}`, HOME: root, GH_TOKEN: "orbit-value", SSH_AUTH_SOCK: "/run/orbit.sock", ORBIT_SECRET: "orbit-value" },
+        stdout: "pipe", stderr: "pipe", stdin: "ignore",
+      });
+      const [, err] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      const seen = readFileSync(join(root, "seen.txt"), "utf8");
+      expect(seen).toContain("GIT_CONFIG_GLOBAL=/dev/null");
+      for (const k of ["GH_TOKEN", "SSH_AUTH_SOCK", "ORBIT_SECRET"]) expect(seen).not.toContain(`${k}=`);
+      expect(err).not.toContain("error");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test("indexExecutables builds no env of its own", () => {
+    const i = SOURCES.indexOf("function indexExecutables(");
+    const body = SOURCES.slice(i, SOURCES.indexOf("\n}\n", i)).split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+    expect(body).toContain("env: pluginGitEnv()");
+    expect(body).not.toContain("process.env");
   });
 });

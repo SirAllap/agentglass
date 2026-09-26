@@ -8,7 +8,7 @@
  * and nothing on the phone ever asked.
  *
  * ── what it does not try to be ────────────────────────────────────────────
- * Not the diff, and not the conversation. Both are real screens and both are
+ * Not the diff, and not the whole conversation. Both are real screens and both are
  * bigger than this one; what belongs here is the question you open a pull
  * request to answer on a phone — is this alright, and if not, what is wrong
  * with it. Files are a list with their weights, threads are a count, and the
@@ -31,10 +31,15 @@ import { Md, outline } from "../../src/md/Md.tsx";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
 import { usePrDetail } from "../../src/state/pr-detail.ts";
-import { useTracksWork } from "../../src/state/use-tracks-work.ts";
+import { prMarkKey } from "../../../shared/prUnread.ts";
+import { usePrTalkTick, useReloadOnTick } from "../../src/state/pr-talk.ts";
+import { useReadOnOpen } from "../../src/state/read-marks.ts";
+import { useTaskProvider, useTracksWork } from "../../src/state/use-tracks-work.ts";
 import { TaskChip } from "../../src/review/TaskChip.tsx";
 import { FilesPane } from "../../src/review/FilesPane.tsx";
 import { ThreadsPane } from "../../src/review/ThreadsPane.tsx";
+import { Timeline } from "../../src/review/Timeline.tsx";
+import { conversation } from "../../../shared/prConversation.ts";
 import { RECIPES_PATH, menuFor, situationOf } from "../../src/model/reviewMenu.ts";
 import { requestHandoff } from "../../src/terminal/handoff.ts";
 import { clearDraft, draft, forWire } from "../../src/model/reviewDraft.ts";
@@ -45,7 +50,7 @@ import {
   type MergeMethod,
 } from "../../../shared/mergeMethod.ts";
 import { Btn, Card, Chip, Group, GroupTitle, Label, Note, Row, Segmented, Sheet, SheetRow, TAP, Toggle } from "../../src/ui.tsx";
-import { mergeObstacles } from "../../src/model/mergeObstacles.ts";
+import { changesRequestedWarning, mergeObstacles } from "../../src/model/mergeObstacles.ts";
 import { Glyph, type GlyphName } from "../../src/nav/glyphs.tsx";
 import { ChevronIcon } from "../../src/nav/icons.tsx";
 import { C, MONO, RADIUS, SPACE, T, ink } from "../../src/theme.ts";
@@ -116,13 +121,13 @@ const VERDICTS: { id: "approve" | "request_changes" | "comment"; label: string; 
 
 /** The three faces of a review. Overview is what a pull request IS; the other
  *  two are what it changed and what was said about it. */
-type Pane = "overview" | "files" | "threads";
+type Pane = "overview" | "conversation" | "files" | "threads";
 
 /** A parameter is a stranger's string. Anything that is not one of the three
  *  is the overview, which is where somebody arriving with a broken link should
  *  land rather than on a blank pane. */
 const asPane = (raw: string | undefined): Pane =>
-  raw === "files" || raw === "threads" ? raw : "overview";
+  raw === "conversation" || raw === "files" || raw === "threads" ? raw : "overview";
 
 export default function PrScreen(): React.ReactNode {
   usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
@@ -131,6 +136,7 @@ export default function PrScreen(): React.ReactNode {
      not a product's. It decides only whether an id read from a branch may be
      offered as something to look up; an address in the body opens either way. */
   const tracked = useTracksWork(host);
+  const provider = useTaskProvider(host);
 
   const router = useRouter();
   const { number, root, review, pane: wanted, ask: asked } = useLocalSearchParams<{
@@ -150,7 +156,8 @@ export default function PrScreen(): React.ReactNode {
    */
   const [pane, setPaneState] = useState<Pane>(asPane(wanted));
   const [seen, setSeen] = useState<Record<Pane, boolean>>(() => ({
-    overview: true, files: asPane(wanted) === "files", threads: asPane(wanted) === "threads",
+    overview: true, conversation: asPane(wanted) === "conversation",
+    files: asPane(wanted) === "files", threads: asPane(wanted) === "threads",
   }));
   /** The file the Files pane should land on, when it was opened by tapping one. */
   const [file, setFile] = useState<string | null>(null);
@@ -170,7 +177,17 @@ export default function PrScreen(): React.ReactNode {
      same pull request, and a write in either of them re-reads this. Before
      that, resolving a thread left the count on this screen saying what it said
      when you arrived. See state/pr-detail.ts. */
-  const { detail, error, reload: load } = usePrDetail(host, root ?? "", String(number ?? ""));
+  const { detail, error, reload: load, refresh } = usePrDetail(host, root ?? "", String(number ?? ""));
+  /* Opening it is reading it: the mark moves to now, and what it was BEFORE is
+     what the Talk pane draws its divider against. See state/read-marks.ts. */
+  const lastLooked = useReadOnOpen(host, detail);
+
+  // A live comment or review on THIS pull request. The key comes off the
+  // detail's own URL, as the read marks' does: the route only carries a
+  // checkout root and a number. Empty until the detail loads, which
+  // subscribes to nothing.
+  const talkKey = detail?.url ? prMarkKey(detail) : "";
+  useReloadOnTick(usePrTalkTick(talkKey), refresh, talkKey);
 
   const [handing, setHanding] = useState(false);
   /* `ask=1` opens the Claude menu: Checks sends you back here with it, so a
@@ -419,6 +436,9 @@ export default function PrScreen(): React.ReactNode {
   const methods = useMemo(() => allowedMethods(detail?.mergePolicy), [detail?.mergePolicy]);
   /** The parts of a blocked verdict, one row each. See src/model/mergeObstacles.ts. */
   const obstacles = useMemo(() => (detail ? mergeObstacles(detail) : []), [detail]);
+  /** "Ready to merge" is GitHub's answer to "will it take it", not to "should
+   *  you take it over this review" — see src/model/mergeObstacles.ts. */
+  const changesRequested = useMemo(() => (detail ? changesRequestedWarning(detail) : null), [detail]);
   useEffect(() => {
     if (detail && method === null) setMethod(pickMergeMethod(undefined, detail.mergePolicy));
   }, [detail, method]);
@@ -514,6 +534,7 @@ export default function PrScreen(): React.ReactNode {
           <Segmented
             options={[
               { id: "overview", label: "Overview" },
+              { id: "conversation", label: "Talk", count: conversation(detail).length || undefined },
               { id: "files", label: "Files", count: files.length },
               { id: "threads", label: "Threads", count: openThreads || undefined },
             ]}
@@ -562,6 +583,9 @@ export default function PrScreen(): React.ReactNode {
                   pr={detail}
                   tracked={tracked}
                   onFind={(query) => router.push({ pathname: "/(tabs)/tasks", params: { q: query } })}
+                  onOpenCard={provider?.id === "clickup"
+                    ? (id) => router.push({ pathname: "/card/[id]", params: { id } })
+                    : undefined}
                 />
                 {detail.isDraft ? <Chip label="Draft" /> : null}
                 <Text style={{ color: C.text3, fontSize: T.small }}>
@@ -719,6 +743,12 @@ export default function PrScreen(): React.ReactNode {
       {/* Mounted on first visit and kept. `seen` is what makes that true: a
           pane the reader never opened costs nothing, and one they did keeps
           its scroll, its expanded threads and its half-typed remark. */}
+      {seen.conversation ? (
+        <View style={{ flex: 1, display: pane === "conversation" ? "flex" : "none" }}>
+          <Timeline number={String(number)} root={root ?? ""} since={lastLooked ?? 0} onOpenThreads={() => setPane("threads")} />
+        </View>
+      ) : null}
+
       {seen.files ? (
         <View style={{ flex: 1, display: pane === "files" ? "flex" : "none" }}>
           <FilesPane number={String(number)} root={root ?? ""} path={file ?? undefined} bar={false} />
@@ -950,6 +980,14 @@ export default function PrScreen(): React.ReactNode {
                 place to tell them the branch is behind. */}
             <Note tone={gate?.blocked ? "bad" : "quiet"}>{gate?.line ?? ""}</Note>
 
+            {/* GitHub's verdict above is about whether it will TAKE the merge,
+                not about the review sitting under it — a required approval is
+                the only kind `gate` refuses over, and branch protection can
+                leave a CHANGES_REQUESTED review mergeable anyway. Said here so
+                the button one screen down does not contradict the green line
+                above it. */}
+            {changesRequested ? <Note tone="bad">{changesRequested.note}</Note> : null}
+
             {/* Then the parts of it, when it is blocked: the line above names
                 the first problem, and a pull request that is red, behind and
                 unreviewed is all three. A failed check opens the logs; the
@@ -1028,7 +1066,7 @@ export default function PrScreen(): React.ReactNode {
 
             <Btn
               label={auto ? "Arm it" : method ? MERGE_LABEL[method] : "Merge"}
-              tone="good"
+              tone={changesRequested ? changesRequested.buttonTone : "good"}
               busy={mergeBusy}
               // Blocked is not disabled. GitHub is the authority on whether it
               // will take it, `mergeState` can be stale by minutes, and a

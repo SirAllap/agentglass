@@ -81,6 +81,9 @@ const MUTATING = [
   `pathname.startsWith("/clickup/")`,
   `pathname.startsWith("/tasks/write/")`,
   `pathname.startsWith("/tasks/remind")`,
+  // The read marks every device syncs through. Not dangerous, but durable and
+  // broadcast: a page in the user's browser must not be able to mark things read.
+  `pathname === "/marks" && req.method === "POST"`,
 ];
 
 describe("the gate a route sits behind", () => {

@@ -61,9 +61,9 @@ import {
   commentableLine, fileLabel, parseDiff, type DiffFile, type DiffLine,
 } from "../model/diffLines.ts";
 import { gapLabel, gapsIn, nextSlice, type Gap } from "../model/expand.ts";
-import { draft, takeDraft, type LineNote } from "../model/reviewDraft.ts";
+import { draft, subscribeDraft, takeDraft, type LineNote } from "../model/reviewDraft.ts";
 import { threadsOnFile } from "../model/threads.ts";
-import { FIRST_ROWS, rowsOf } from "../model/diffRows.ts";
+import { FIRST_ROWS, rowIndexForLine, rowsOf } from "../model/diffRows.ts";
 import { pairsIn, tokenDiff, type Seg } from "../../../shared/tokenDiff.ts";
 import { ApplyConfirm } from "./ApplyConfirm.tsx";
 import { ThreadCard } from "./ThreadCard.tsx";
@@ -177,7 +177,14 @@ export function FilesPane({ number, root, path, bar = true }: {
 
   const key = `${root}#${number}`;
 
-  useEffect(() => { setQueued(draft(key)); }, [key]);
+  /* Reads the module's copy on every change to THIS key, not only when the
+   *  key itself changes — `clearDraft` (send) and a second tab writing here
+   *  both happen without this screen's props moving, and a `useEffect` keyed
+   *  on `key` alone would never re-run for either. */
+  useEffect(() => {
+    setQueued(draft(key));
+    return subscribeDraft(key, () => setQueued(draft(key)));
+  }, [key]);
 
   /** Which read is the current one. Two can be in flight — the first on
    *  arrival, a second after a suggestion is committed — and the answer that
@@ -380,6 +387,19 @@ export function FilesPane({ number, root, path, bar = true }: {
   /** The file as a flat list of rows, which is what lets the list window it —
    *  see model/diffRows.ts for why a column of nested maps could not be. */
   const rows = useMemo(() => rowsOf(file), [file]);
+
+  /* The composer opens under the row that was tapped, and on a phone that row
+   * can be in the bottom half of the screen — where "Add to review" lands
+   * under the keyboard the instant it opens, before anyone has scrolled.
+   * `viewPosition: 0.5` puts the newly-opened composer mid-screen, above
+   * where the keyboard is about to cover, rather than merely on screen. */
+  const listRef = useRef<FlatList<import("../model/diffRows.ts").DiffRow>>(null);
+  useEffect(() => {
+    if (!writing) return;
+    const at = rowIndexForLine(rows, writing.line);
+    if (at === null) return;
+    listRef.current?.scrollToIndex({ index: at, viewPosition: 0.5, animated: true });
+  }, [writing?.line, rows]);
 
   /** Which way a gap grows. Stated once, because the renderer and the fetcher
    *  must agree — a gap drawn as growing up and fetched downward would append
@@ -621,12 +641,17 @@ export function FilesPane({ number, root, path, bar = true }: {
         cost back; clipping would only buy memory this screen does not need.
       */}
       <FlatList
+        ref={listRef}
         data={rows}
         keyExtractor={(row) => row.key}
         contentContainerStyle={{ paddingBottom: SPACE.xl }}
         /* The comment box lives inside a row, so a tap must reach the row
            while the keyboard is up rather than being spent dismissing it. */
         keyboardShouldPersistTaps="handled"
+        /* The row that opens a composer was just tapped, so it is already
+           rendered; a scroll target further out (one this list never mounted)
+           fails silently here rather than throwing. */
+        onScrollToIndexFailed={() => {}}
         initialNumToRender={FIRST_ROWS}
         maxToRenderPerBatch={FIRST_ROWS}
         windowSize={7}

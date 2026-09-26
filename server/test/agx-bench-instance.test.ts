@@ -23,6 +23,23 @@ describe("the isolated instance", () => {
   });
 });
 
+describe("a fresh profile opens a project", () => {
+  /* Measured: on a profile with no project open the app waits on the project
+     picker and never mounts the panels, so no window ever registers its
+     browser panel and start timed out after 60 s. The launcher gives the
+     instance a project of its own, inside DIR, so the picker has nothing to
+     ask. AGENTGLASS_ROOT, because the config file is empty on a new profile. */
+  test("launch.env names a project inside DIR, made before the launch", () => {
+    const env = CODE.slice(CODE.indexOf("start)"), CODE.indexOf('> "$DIR/launch.env"'));
+    expect(env).toMatch(/export AGENTGLASS_ROOT=%q/);
+    expect(env).toContain('"$DIR/project"');
+    expect(CODE).toMatch(/mkdir -p [^\n]*\bproject\b/);
+  });
+  test("a start that times out says whether a project was open", () => {
+    expect(CODE).toContain("/projects");
+  });
+});
+
 describe("the window never lands on a screen", () => {
   /* A headless output shows up to the person as a second monitor and breaks
      their screenshots, so the launcher never creates one: the window goes,

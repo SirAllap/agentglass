@@ -44,3 +44,21 @@ export function paneFor<T extends { label: string; where: string }>(
     : undefined;
   return named ?? tabs.find(at) ?? tabs.find(inside) ?? null;
 }
+
+/**
+ * Whether a checkout's branch can be looked up on GitHub.
+ *
+ * A detached HEAD reports the branch as "(detached)" — the server's word for
+ * "there is none" — and the screen asked GitHub about a branch of that name
+ * and printed "GitHub did not answer", which blames the wrong party. `reason`
+ * null means the branch is not known yet: the caller keeps waiting.
+ */
+export function branchLookup(
+  branch: string | undefined,
+): { ask: true; branch: string } | { ask: false; reason: string | null } {
+  if (!branch) return { ask: false, reason: null };
+  if (branch === "(detached)") {
+    return { ask: false, reason: "This checkout has no branch (detached HEAD), so there is no pull request to look for. Check out a branch first." };
+  }
+  return { ask: true, branch };
+}

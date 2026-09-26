@@ -96,7 +96,7 @@ interface Props {
   /** A window this client asked the server to open, and the pane it landed on.
    *  The `+` uses it to put the user inside the tab they just made rather than
    *  leaving them to find it in a strip that repolls every two seconds. */
-  onOpened?: (opened: { pane: string; window: string; cwd: string } | { error: string }) => void;
+  onOpened?: (opened: { pane: string; window: string; cwd: string; session: string } | { error: string }) => void;
   /** How wide and tall the tmux window really is, once the server has said.
    *  Without a fit this is the desk's size, and the difference between it and
    *  what is on screen is exactly what is missing. */
@@ -298,7 +298,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
         // saying why. "that pane is gone" is a real answer somebody can act on.
         if (frame.t === "fatal") handlers.current.onState("gone", frame.error);
         if (frame.t === "opened") {
-          handlers.current.onOpened?.({ pane: frame.pane, window: frame.window, cwd: frame.cwd });
+          handlers.current.onOpened?.({ pane: frame.pane, window: frame.window, cwd: frame.cwd, session: frame.session });
         }
         // The refusal, and NOT through onState: see the note on `openfail`.
         // A button that did not work must not read as a terminal that died.

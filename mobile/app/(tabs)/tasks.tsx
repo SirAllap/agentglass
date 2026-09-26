@@ -36,8 +36,9 @@ import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
 import { useTaskProvider } from "../../src/state/use-tracks-work.ts";
 import { localMeta, visibleLocal } from "../../src/model/localTasks.ts";
+import { projectNames, scopeLocal } from "../../src/model/taskScope.ts";
 import { matchesQuery } from "../../../shared/taskref.ts";
-import { Card, Label, Note, Segmented, Sheet, SheetRow, TAP, groupEdge } from "../../src/ui.tsx";
+import { Card, Label, ListEmpty, Note, Segmented, Sheet, SheetRow, TAP, groupEdge } from "../../src/ui.tsx";
 import { Glyph } from "../../src/nav/glyphs.tsx";
 import { dueIn } from "../../src/lib/dates.ts";
 import { C, MONO, RADIUS, SPACE, T, tint } from "../../src/theme.ts";
@@ -55,6 +56,9 @@ type ViewsAnswer = ClickUpBoards;
 interface ViewTasks {
   tasks: ProviderTask[];
   truncated: boolean;
+  /** A 200 that carries the failure: the read did not happen, and `tasks` is
+   *  empty or the last good list. */
+  error?: string;
 }
 
 function Row({ task, prefix, onCopied, onOpen }: {
@@ -95,7 +99,7 @@ function Row({ task, prefix, onCopied, onOpen }: {
           ) : null}
         </View>
 
-        <Text style={{ color: C.text, fontSize: 15, fontWeight: "500", lineHeight: 20 }}>{task.title}</Text>
+        <Text numberOfLines={3} style={{ color: C.text, fontSize: 15, fontWeight: "500", lineHeight: 20 }}>{task.title}</Text>
 
         <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap" }}>
           {/* The status in the colour the board gave it, as a dot and a tint
@@ -154,7 +158,7 @@ function LocalRow({ task, onCopied }: {
           ) : null}
         </View>
 
-        <Text style={{ color: task.status === "pending" ? C.text : C.text3, fontSize: T.body, lineHeight: 19 }}>
+        <Text numberOfLines={4} style={{ color: task.status === "pending" ? C.text : C.text3, fontSize: T.body, lineHeight: 19 }}>
           {task.description}
         </Text>
 
@@ -184,6 +188,13 @@ export default function TasksScreen(): React.ReactNode {
   const [pulling, setPulling] = useState(false);
   const [said, setSaid] = useState<string | null>(null);
   const [openOnly, setOpenOnly] = useState(true);
+  /* The open project(s) the server was paired for — the same `workspaces`
+     every other list here already honours. `null` until asked, and `[]` on an
+     unscoped server, where there is no project to be inside of and the switch
+     below is not drawn. The tab opens INSIDE the project: a phone paired for
+     one project should not start on the whole machine's task store. */
+  const [names, setNames] = useState<string[] | null>(null);
+  const [everything, setEverything] = useState(false);
   /* Which tracker this machine keeps its work in — the same read the Inbox
      uses to decide whether to offer this screen at all. `undefined` while it
      is in the air, `null` when there is none; either way nothing is fetched
@@ -223,6 +234,10 @@ export default function TasksScreen(): React.ReactNode {
   const load = useCallback(async (): Promise<void> => {
     if (!host) return;
     if (localList) {
+      // A failed read of the scope is "no scope", not an error of the list: the
+      // rows below are still the machine's, and the switch simply is not there.
+      const scope = await ask<{ workspaces?: string[] }>(host, "/projects");
+      setNames(scope.ok ? projectNames(scope.value.workspaces) : []);
       const answer = await ask<TasksListResponse>(host, "/tasks/list");
       if (!answer.ok) { setError(answer.error); setLocal([]); return; }
       // The route answers 200 with `ok: false` and `error` when the tool is
@@ -234,7 +249,7 @@ export default function TasksScreen(): React.ReactNode {
     if (!board || !chosen) return;
     const answer = await ask<ViewTasks>(host, `/clickup/view?id=${encodeURIComponent(chosen)}`);
     if (!answer.ok) { setError(answer.error); setTasks([]); return; }
-    setError(null);
+    setError(answer.value.error ?? null);
     setTasks(Array.isArray(answer.value.tasks) ? answer.value.tasks : []);
   }, [host, board, localList, chosen]);
 
@@ -254,10 +269,11 @@ export default function TasksScreen(): React.ReactNode {
       .filter((t) => !finding || matchesQuery([t.title, t.customId, t.id, t.list], finding)),
     [tasks, openOnly, finding],
   );
+  const scoped = !!names?.length && !everything;
   const shownLocal = useMemo(
-    () => visibleLocal(local, openOnly)
+    () => visibleLocal(scopeLocal(local, scoped ? names ?? [] : []), openOnly)
       .filter((t) => !finding || matchesQuery([t.description, t.project, ...t.tags], finding)),
-    [local, openOnly, finding],
+    [local, openOnly, finding, scoped, names],
   );
 
   const onRefresh = useCallback((): void => {
@@ -295,6 +311,18 @@ export default function TasksScreen(): React.ReactNode {
               { id: "all" as const, label: "All" },
             ]}
           />
+          {localList && names?.length ? (
+            <View style={{ marginTop: SPACE.md }}>
+              <Segmented
+                value={everything ? "everything" : "project"}
+                onChange={(id) => setEverything(id === "everything")}
+                options={[
+                  { id: "project" as const, label: names.join(", ") },
+                  { id: "everything" as const, label: "Everything" },
+                ]}
+              />
+            </View>
+          ) : null}
           {board ? (
             <Pressable
               accessibilityRole="button"
@@ -386,12 +414,15 @@ export default function TasksScreen(): React.ReactNode {
           refreshControl={<RefreshControl refreshing={pulling} onRefresh={onRefresh} tintColor={C.text3} />}
           ListEmptyComponent={
             local === null ? null : (
-              <Card>
-                <Label text={error ? "Cannot read the list" : "Nothing here"} />
-                <Note tone={error ? "bad" : "quiet"}>
-                  {error ?? "Nothing is still open. The switch above shows the rest."}
-                </Note>
-              </Card>
+              <ListEmpty
+                error={error}
+                errorTitle="Cannot read the list"
+                emptyTitle="Nothing here"
+                emptyText={scoped
+                  ? "Nothing for this project. Tap Everything above to see the rest of the machine."
+                  : "Nothing is still open. The switch above shows the rest."}
+                onRetry={() => { void load(); }}
+              />
             )
           }
           renderItem={({ item, index }) => (
@@ -413,12 +444,13 @@ export default function TasksScreen(): React.ReactNode {
           refreshControl={<RefreshControl refreshing={pulling} onRefresh={onRefresh} tintColor={C.text3} />}
           ListEmptyComponent={
             tasks === null ? null : (
-              <Card>
-                <Label text={error ? "Cannot read the board" : "Nothing here"} />
-                <Note tone={error ? "bad" : "quiet"}>
-                  {error ?? "This view has no cards that are still open. The switch above shows the rest."}
-                </Note>
-              </Card>
+              <ListEmpty
+                error={error}
+                errorTitle="Cannot read the board"
+                emptyTitle="Nothing here"
+                emptyText={"This view has no cards that are still open. The switch above shows the rest."}
+                onRetry={() => { void load(); }}
+              />
             )
           }
           renderItem={({ item, index }) => (

@@ -13,6 +13,12 @@ expo-env.d.ts
 # the numbers it is weighed against.
 /android
 /ios
+android/local.properties
+
+# A local Expo module's own Gradle output — the same generated-not-committed
+# rule as /android above, one level down: `assembleRelease` writes a build/
+# tree under each module in modules/ and it is exactly as disposable.
+modules/*/android/build/
 
 # Metro
 .metro-health-check*

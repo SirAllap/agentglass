@@ -32,7 +32,7 @@ import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-nati
 import { Stack } from "expo-router";
 import type { DepStatus } from "../../shared/deps.ts";
 import { ask } from "../src/lib/api.ts";
-import { DEP_LOOK, depNeedsAttention, depSummary, type DepTone } from "../src/model/depLook.ts";
+import { DEP_LOOK, brokenHeading, depNeedsAttention, depSummary, depTone, type DepTone } from "../src/model/depLook.ts";
 import { useAgentglass } from "../src/state/host-context.tsx";
 import { useComputer } from "../src/state/use-computer.ts";
 import { usePaletteTick } from "../src/state/use-palette.ts";
@@ -99,7 +99,8 @@ export default function TroubleshootScreen(): React.ReactNode {
   const fine = deps.filter((d) => !depNeedsAttention(d.status));
   const [allFine, setAllFine] = useState(false);
   const summary = depSummary(deps);
-  const summaryInk = summary.tone === "good" ? C.success : summary.tone === "warn" ? C.warning : C.error;
+  const summaryInk = summary.tone === "good" ? C.success : summary.tone === "mute" ? C.text3 : C.error;
+  const heading = brokenHeading(broken);
 
   if (!host) return null;
 
@@ -140,7 +141,7 @@ export default function TroubleshootScreen(): React.ReactNode {
            missing — said once, before the list it was counted from. */
         <Banner
           ink={summaryInk}
-          glyph={summary.tone === "good" ? "ok_circle" : "alert"}
+          glyph={summary.tone === "good" ? "ok_circle" : summary.tone === "mute" ? "info" : "alert"}
           title={summary.title}
         >{summary.sub}</Banner>
       ) : null}
@@ -151,7 +152,7 @@ export default function TroubleshootScreen(): React.ReactNode {
 
       {broken.length ? (
         <>
-          <GroupTitle text="Needs attention" />
+          <GroupTitle text={heading ?? "Needs attention"} />
           <Group>
             {/* Required first, and only those start open: measured on a
                 machine missing fourteen optional tools, opening every row was
@@ -238,7 +239,7 @@ function Tool({ dep, open: startOpen }: {
 }): React.ReactNode {
   const [open, setOpen] = useState(!!startOpen);
   const look = DEP_LOOK[dep.status] ?? DEP_LOOK.attention;
-  const ink = INK[look.tone]();
+  const ink = INK[depTone(dep)]();
   return (
     <Pressable
       onPress={() => setOpen((v) => !v)}
@@ -271,7 +272,7 @@ function Tool({ dep, open: startOpen }: {
           {dep.status !== "ok" && dep.detail ? (
             // "not used on linux" is a fact, not a warning; it keeps the row's
             // own ink rather than borrowing the amber.
-            <Text style={{ color: look.tone === "mute" ? ink : C.warning, fontSize: T.small }}>{dep.detail}</Text>
+            <Text style={{ color: depTone(dep) === "mute" ? ink : C.warning, fontSize: T.small }}>{dep.detail}</Text>
           ) : null}
           {dep.install ? (
             <CommandLine line={dep.install} />

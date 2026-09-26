@@ -15,11 +15,16 @@
 // gone the moment you glance at the page from anywhere else.
 //
 // Everything here is pure and takes the detail the panel already loaded. No
-// request is made and nothing is stored on the server: the one piece of state
-// is a timestamp per pull request in this browser, which is enough because the
-// question is "since *I* last looked", and only this browser knows that.
+// request is made from here: the one piece of state is a timestamp per pull
+// request in this browser, and it is read from this browser. "Since *I* last
+// looked" means on any of my machines, though, so each write is also handed
+// to marksSync.ts, which shares it through the server and brings the other
+// devices' marks back in through `applyServerSeen`.
 
-import type { PrDetail, PrThread } from "../../../shared/types.ts";
+import type { MarkOp, PrDetail, PrThread } from "../../../shared/types.ts";
+import { reviewSpeaks } from "../../../shared/prConversation.ts";
+import { at, bootstrapSince, newSince, prSeenKey, type NewAtom } from "../../../shared/prUnread.ts";
+export { at, bootstrapSince, newSince, prSeenKey, type NewAtom };
 
 /**
  * Where the last-looked-at timestamps live. One object, keyed by pull request
@@ -43,11 +48,6 @@ export const SEEN_KEY = "agentglass.pr.lastlooked";
  */
 export const SEEN_MAX = 400;
 
-/** `owner/repo#123`. The repo is part of it because pull request numbers are
- *  per repository and a bare number collides across every project you have. */
-export function prSeenKey(repo: string | undefined, number: number): string {
-  return `${repo || "?"}#${number}`;
-}
 
 /**
  * Marks written by a build that wrote them wrong are thrown away, once.
@@ -64,7 +64,11 @@ export function prSeenKey(repo: string | undefined, number: number): string {
  * anyway. The cost of leaving them is somebody staring at a conversation that
  * says nothing happened when two people replied to them.
  *
- * Bump `SEEN_EPOCH` if that ever happens again. Nothing else should.
+ * Bump `SEEN_EPOCH` if that ever happens again. Nothing else should. And the
+ * bump alone no longer does it: marksSync.ts shares these marks through the
+ * server, and the next full GET brings the bad ones straight back. The `pr`
+ * rows in the server's read_marks table have to be dropped as well, by hand —
+ * nothing sends the epoch to the server yet. A known ceiling, not an oversight.
  */
 export const SEEN_EPOCH = 2;
 const EPOCH_KEY = `${SEEN_KEY}.epoch`;
@@ -97,6 +101,23 @@ function announceSeen(): void {
   for (const fn of [...seenWatchers]) { try { fn(); } catch { /* a badge must not break a write */ } }
 }
 
+/** Where a local write goes after it is stored: marksSync, when it is running.
+ *  Marks arriving FROM the server never come through here, or every device
+ *  would send each mark straight back. */
+let seenSink: ((op: MarkOp) => void) | null = null;
+export function setSeenSink(fn: ((op: MarkOp) => void) | null): void { seenSink = fn; }
+
+/** Persist the map, keeping the newest `SEEN_MAX`. */
+function storeSeen(all: Record<string, number>): void {
+  const keys = Object.keys(all);
+  if (keys.length > SEEN_MAX) {
+    // Oldest visit first, and drop from that end.
+    keys.sort((a, b) => (all[a] ?? 0) - (all[b] ?? 0));
+    for (const k of keys.slice(0, keys.length - SEEN_MAX)) delete all[k];
+  }
+  try { localStorage.setItem(SEEN_KEY, JSON.stringify(all)); } catch { /* private mode */ }
+}
+
 export function readSeen(): Record<string, number> {
   // Here rather than wired into the panel, so there is no ordering to get
   // wrong: nothing can read the map before the migration has had its say.
@@ -126,14 +147,9 @@ export function writeSeen(key: string, at: number): Record<string, number> {
   const all = readSeen();
   if ((all[key] ?? 0) >= at) return all;
   all[key] = at;
-  const keys = Object.keys(all);
-  if (keys.length > SEEN_MAX) {
-    // Oldest visit first, and drop from that end.
-    keys.sort((a, b) => (all[a] ?? 0) - (all[b] ?? 0));
-    for (const k of keys.slice(0, keys.length - SEEN_MAX)) delete all[k];
-  }
-  try { localStorage.setItem(SEEN_KEY, JSON.stringify(all)); } catch { /* private mode */ }
+  storeSeen(all);
   announceSeen();
+  seenSink?.({ kind: "pr", key, seenAt: at });
   return all;
 }
 
@@ -151,7 +167,32 @@ export function clearSeen(key: string): Record<string, number> {
   delete all[key];
   try { localStorage.setItem(SEEN_KEY, JSON.stringify(all)); } catch { /* private mode */ }
   announceSeen();
+  seenSink?.({ kind: "pr", key, clear: true });
   return all;
+}
+
+const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+/**
+ * Marks another device wrote, as the server holds them: the same two rules as
+ * `writeSeen` and `clearSeen` — forward only, and 0 is an explicit "unread" —
+ * applied in one pass and one write, and never handed to the sink.
+ */
+export function applyServerSeen(rows: { key: string; seenAt: number }[]): void {
+  const all = readSeen();
+  let moved = false;
+  for (const r of rows) {
+    // The map is a plain object: "__proto__" would reach its prototype, and
+    // "toString" is `in` every object. The server refuses both shapes; this
+    // does not rely on it.
+    if (UNSAFE_KEYS.has(r.key)) continue;
+    if (r.seenAt > 0) {
+      if ((Object.hasOwn(all, r.key) ? all[r.key]! : 0) < r.seenAt) { all[r.key] = r.seenAt; moved = true; }
+    } else if (Object.hasOwn(all, r.key)) { delete all[r.key]; moved = true; }
+  }
+  if (!moved) return;
+  storeSeen(all);
+  announceSeen();
 }
 
 /**
@@ -171,13 +212,6 @@ export function markAllSeen(numbers: number[], repo: string | undefined, at: num
   return all;
 }
 
-/** Epoch milliseconds, or 0 for anything unparseable — an unreadable date must
- *  not read as "just now" and put a NEW badge on a two-year-old comment. */
-export function at(iso: string | undefined | null): number {
-  if (!iso) return 0;
-  const n = Date.parse(iso);
-  return Number.isFinite(n) ? n : 0;
-}
 
 /**
  * When a thread was last spoken in.
@@ -212,92 +246,12 @@ export function threadMovedOn(t: Pick<PrThread, "comments">, reviewAt: string | 
   return r > 0 && threadLastAt(t) > r;
 }
 
-/**
- * Does this review actually say anything?
- *
- * GitHub records a review for every batch of line comments, so replying on one
- * line creates a `COMMENTED` review with an empty body. The timeline has always
- * dropped those — its comments are already on the page, inside their threads,
- * and a card reading "(commented, no note)" under them is the same remark drawn
- * twice.
- *
- * Which made the count disagree with the page: "3 new" over two visible
- * markers, and a "3 of 3" that jumped to an anchor that was never rendered.
- * Reported that way. The rule lives here now so the counter and the timeline
- * cannot hold different opinions about what counts as somebody speaking.
- */
-export function reviewSpeaks(r: { body?: string; state?: string }): boolean {
-  return !!(r.body?.trim() || (r.state && r.state !== "COMMENTED"));
-}
-
-/** One thing that has been said since your last visit, in the order it was
- *  said. `key` is the anchor the jump scrolls to. */
-export interface NewAtom {
-  key: string;
-  at: number;
-  author: string;
-  /** Human-readable place, for the bar: a path or "the conversation". */
-  where: string;
-  kind: "thread" | "comment" | "review";
-  /** The thread it belongs to, when it is a reply. */
-  threadId?: string;
-}
+// The rule lives in shared/ so the phone counts a review the way this panel does.
+export { reviewSpeaks };
 
 /** The id an atom's element carries, so the bar can scroll to it. */
 export const anchorId = (key: string): string => `agx-new-${key}`;
 
-/**
- * Everything said since `since`, oldest first.
- *
- * `since` of 0 means "never looked at this one" and returns nothing on purpose.
- * The first time you open a pull request every comment on it is, technically,
- * new to you — and a bar announcing "41 new" on a pull request you have simply
- * never seen is noise dressed as news. The visit is recorded and the next
- * arrival is the first thing marked.
- *
- * Your own remarks never count. A reply you just posted is not something to go
- * and find, and counting it means the badge lights up because you spoke.
- *
- * Neither does automation, unless asked for. On a live pull request the
- * machines outnumber the people two to one — that ratio is the whole reason
- * this panel has a Humans filter — so counting them would light this up on
- * every push and turn "3 new" into a number nobody reads. A coverage report is
- * not somebody waiting on you.
- */
-export function newSince(
-  d: PrDetail | null | undefined,
-  since: number,
-  opts: { includeBots?: boolean } = {},
-): NewAtom[] {
-  if (!d || !since) return [];
-  const out: NewAtom[] = [];
-  const mine = (viewerDidAuthor?: boolean) => viewerDidAuthor === true;
-  const machine = (isBot?: boolean) => !opts.includeBots && isBot === true;
-
-  for (const t of d.threads ?? []) {
-    for (const c of t.comments) {
-      const when = at(c.createdAt);
-      if (when <= since || mine(c.viewerDidAuthor) || machine(c.isBot)) continue;
-      out.push({
-        key: `${t.id}:${c.id}`, at: when, author: c.author, kind: "thread",
-        where: t.path ? `${t.path}${t.line ? `:${t.line}` : ""}` : "a line comment",
-        threadId: t.id,
-      });
-    }
-  }
-  for (const c of d.comments ?? []) {
-    const when = at(c.createdAt);
-    if (when <= since || mine(c.viewerDidAuthor) || machine(c.isBot)) continue;
-    out.push({ key: `c${c.id}`, at: when, author: c.author, kind: "comment", where: "the conversation" });
-  }
-  for (const r of d.reviews ?? []) {
-    const when = at(r.submittedAt);
-    if (when <= since || mine(r.viewerDidAuthor) || machine(r.isBot) || !reviewSpeaks(r)) continue;
-    out.push({ key: `r${r.author}-${r.submittedAt}`, at: when, author: r.author, kind: "review", where: "a review" });
-  }
-
-  return out.sort((a, b) => a.at - b.at || a.key.localeCompare(b.key));
-}
 
 /** The atoms, by anchor key, for the O(1) "is this one new" the rendering asks
  *  once per comment. */
@@ -305,36 +259,6 @@ export function newKeys(atoms: NewAtom[]): Set<string> {
   return new Set(atoms.map((a) => a.key));
 }
 
-/**
- * What counts as "last looked" on a pull request this browser has no mark for.
- *
- * The first version had no answer to this and returned nothing, which is
- * defensible and useless: the pull request you are staring at right now is
- * exactly the one with no mark, so the feature announced itself by doing
- * nothing at all. Reported that way — "pero yo lo veo igual" — with the panel
- * open on a thread where somebody had answered him two days after he wrote.
- *
- * The honest fallback is your own last word. Everything after the last thing
- * YOU said on a pull request is, by definition, the part you have not answered
- * — it is the same question as "what came in while I was away", asked of a
- * pull request instead of of a browser. And it is exactly the case that hurts:
- * a reply to your comment, buried in a thread you started.
- *
- * Still 0 for a pull request you have never spoken on. There, everything is
- * somebody else's conversation and marking all of it as owed to you would be
- * an opinion, not a fact.
- */
-export function bootstrapSince(d: PrDetail | null | undefined): number {
-  if (!d) return 0;
-  let last = 0;
-  const mine = (v: boolean | undefined, iso: string | undefined) => {
-    if (v === true) last = Math.max(last, at(iso));
-  };
-  for (const t of d.threads ?? []) for (const c of t.comments) mine(c.viewerDidAuthor, c.createdAt);
-  for (const c of d.comments ?? []) mine(c.viewerDidAuthor, c.createdAt);
-  for (const r of d.reviews ?? []) mine(r.viewerDidAuthor, r.submittedAt);
-  return last;
-}
 
 /**
  * Which replies to hide when a thread is long.

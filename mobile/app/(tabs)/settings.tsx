@@ -27,9 +27,13 @@ import { since } from "../../src/lib/dates.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { useComputer } from "../../src/state/use-computer.ts";
 import {
-  alertsDeliverable, askForAlerts, notificationsSupported, raise,
-  type Blocked, type Delivery,
+  alertsDeliverable, askForAlerts, blockedText, notificationsSupported, offersOpenSettings, raise,
+  type Delivery,
 } from "../../src/notifications/notify.ts";
+import {
+  keepAliveAvailable, keepAliveRunning, loadKeepAlivePref, saveKeepAlivePref, syncKeepAlive, wantKeepAlive,
+} from "../../src/notifications/keepAlive.ts";
+import { onTalkPref, setTalkPref, talkPref, type TalkPref } from "../../src/notifications/talkPref.ts";
 import { Btn, Group, GroupTitle, Note, Row, Sheet, Switch, TAP } from "../../src/ui.tsx";
 import { Glyph, type GlyphName } from "../../src/nav/glyphs.tsx";
 import { KeyboardIcon } from "../../src/nav/icons.tsx";
@@ -61,31 +65,12 @@ const SCOPE: Record<DeviceScope, { name: string; chip: string; what: string }> =
     what: "The above, plus approving a held gate and replying to a running session.",
   },
   full: {
-    name: "Everything",
+    // Was "Everything" on the sheet's own card, "Full access" on the chip
+    // three inches away — one grant, described two ways on the same screen.
+    name: "Full access",
     chip: "Full access",
     what: "The terminal, git write, Docker and merging. A grant for a laptop you trust.",
   },
-};
-
-/**
- * Why this phone cannot buzz, in the words of somebody who would have to fix it.
- *
- * One sentence each, and each names the thing to go and do. The screen used to
- * have exactly one of these — the Expo Go one — and drew every other reason as
- * a switch that was simply off, or, when the permission had been granted and
- * something after it had failed, as a switch that was ON.
- */
-const WHY: Record<Blocked, string> = {
-  unsupported:
-    "Expo Go does not carry the notifications module on Android. This works in a real installed build.",
-  denied:
-    "Android is not letting this app post notifications. Turn them on for agentglass in the phone's settings.",
-  "channel-off":
-    "The «Agent alerts» channel is switched off in Android's settings, so notifications are accepted and never drawn.",
-  "setup-failed":
-    "Notifications could not be set up on this phone. Nothing will be raised until that succeeds — try again.",
-  threw:
-    "Android refused the last notification. Nothing was drawn.",
 };
 
 const Lead = ({ name }: { name: GlyphName }): React.ReactNode => <Glyph name={name} color={C.text2} size={20} />;
@@ -276,6 +261,21 @@ export default function SettingsScreen(): React.ReactNode {
    */
   const [alerts, setAlerts] = useState<Delivery | null>(null);
   const [asking, setAsking] = useState(false);
+  /* Android + the native module linked, or the row has nothing to do — see
+     keepAlive.ts. Computed once: it does not change for the life of the
+     process (there is no "install the module while running"). */
+  const [canKeepAlive] = useState(keepAliveAvailable);
+  /* Defaults true (see keepAlive.ts) until the keystore answers, so the row
+     does not flash off-then-on on every open. What it shows afterwards is
+     ACTUAL state, not the preference: see the effect below and
+     keepAliveRunning's own comment for why those can differ. */
+  const [keepAlive, setKeepAlive] = useState(true);
+
+  /* This phone's own preference for a live comment/review — never sent to the
+     server (see talkPref.ts). Mirrored the way termColumns/termAssist are:
+     read once at module scope, told when it changes. */
+  const [talk, setTalk] = useState<TalkPref>(talkPref);
+  useEffect(() => onTalkPref(() => setTalk(talkPref())), []);
 
   /* The terminal's preferences are module singletons shared with the pane;
      these are the local mirrors that make this screen repaint. */
@@ -302,6 +302,15 @@ export default function SettingsScreen(): React.ReactNode {
     return () => sub.remove();
   }, [refresh]);
 
+  useEffect(() => {
+    if (!canKeepAlive) return;
+    // The saved preference decides what host-context.tsx's own sync WANTS;
+    // what this switch shows is whatever that sync has actually landed as, by
+    // the time this screen asks — not the preference echoed back, which would
+    // draw ON through a start() Android refused.
+    void loadKeepAlivePref().then(() => { setKeepAlive(keepAliveRunning()); });
+  }, [canKeepAlive]);
+
   const turnOn = useCallback(async (): Promise<void> => {
     setAsking(true);
     // Asked only now, when somebody has actually reached for the switch. An
@@ -310,6 +319,14 @@ export default function SettingsScreen(): React.ReactNode {
     setAlerts(await askForAlerts());
     setAsking(false);
   }, []);
+
+  const toggleKeepAlive = useCallback((on: boolean): void => {
+    void saveKeepAlivePref(on);
+    // The switch shows what start()/stop() actually did, not the tap: a
+    // refused start() (background-start limits, battery restrictions the
+    // owner set by hand) draws OFF rather than a switch that lies.
+    setKeepAlive(syncKeepAlive(wantKeepAlive({ alertsOk: !!alerts?.ok, pref: on })));
+  }, [alerts]);
 
   const onForget = useCallback((): void => {
     Alert.alert(
@@ -378,7 +395,7 @@ export default function SettingsScreen(): React.ReactNode {
              permission was granted and something else had failed — as ON. */
           sub={alerts === null ? "Checking…"
             : alerts.ok ? "When an agent waits on you, fails or stops"
-            : WHY[alerts.why]}
+            : blockedText(alerts.why)}
           lead={<Lead name="bell" />}
           checked={!!alerts?.ok}
           trail={<Switch on={!!alerts?.ok} disabled={!supported} />}
@@ -391,9 +408,42 @@ export default function SettingsScreen(): React.ReactNode {
             else void turnOn();
           }}
         />
-        {alerts && !alerts.ok && alerts.why === "channel-off" ? (
-          // The one this app cannot undo from script: an Android channel set to
-          // no importance can only be raised in system settings.
+        <View>
+          <Row
+            title="Comments on your pull requests"
+            // This-phone-only, and said so: the preference lives in this
+            // phone's keystore (talkPref.ts) rather than at the computer, so
+            // pairing a second phone starts it at Off again. Bots never reach
+            // this either way — the server drops them before a "talk" note
+            // exists (see mapTalk in prs.ts). While alerts cannot be raised
+            // the row says what it waits on, not the reason again: that is
+            // written on the row above.
+            sub={alerts?.ok ? "This phone only, never for a bot. The «new» badges show either way."
+              : "Needs agent alerts on first"}
+            lead={<Lead name="comment" />}
+            disabled={!alerts?.ok}
+          />
+          {/* Below the text, as the accent swatches are: three options beside
+              a title this long truncated it to "Comments on you…". */}
+          <View style={{ paddingLeft: 50, paddingRight: SPACE.md, paddingBottom: SPACE.md, alignItems: "flex-start", opacity: alerts?.ok ? 1 : 0.45 }}>
+            <Pick<TalkPref>
+              value={talk}
+              onChange={(v) => { if (alerts?.ok) setTalkPref(v); }}
+              label="Comments on your pull requests"
+              options={[
+                { id: "off", name: "Off" },
+                { id: "reviews", name: "Reviews" },
+                { id: "everything", name: "All" },
+              ]}
+            />
+          </View>
+        </View>
+        {alerts && !alerts.ok && offersOpenSettings(alerts.why) ? (
+          // Only when Android will no longer show its own prompt — a channel
+          // switched off, or a permission refused once already. `not-asked`
+          // is deliberately not this: the switch above still asks the OS
+          // directly, and a button that jumps to Settings before anybody has
+          // even been asked once is the bug this row used to have.
           <Row
             title="Open Android's settings"
             lead={<Lead name="external" />}
@@ -412,21 +462,39 @@ export default function SettingsScreen(): React.ReactNode {
               void raise({ title: "agentglass", body: "This is what an alert looks like.", urgency: 1 })
                 .then((d) => {
                   setAlerts(d);
-                  if (!d.ok) Alert.alert("That alert was not shown", WHY[d.why]);
+                  if (!d.ok) Alert.alert("That alert was not shown", blockedText(d.why));
                 });
             }}
           />
         ) : null}
+        {alerts?.ok && canKeepAlive ? (
+          <Row
+            title="Stay connected in the background"
+            sub="A silent notification keeps alerts coming with the app closed"
+            lead={<Lead name="shield" />}
+            checked={keepAlive}
+            trail={<Switch on={keepAlive} />}
+            onPress={() => toggleKeepAlive(!keepAlive)}
+          />
+        ) : null}
       </Group>
-      <View style={{ paddingHorizontal: SPACE.xs, paddingTop: SPACE.xs }}>
-        {/* Said plainly rather than implied. A companion that claims to watch
-            a pocket it cannot reach is worse than one that says where it
-            stops. */}
-        <Note>
-          They arrive over the live connection, so they reach you while the app is running and for a
-          while after the screen goes off — not for ever. Android eventually freezes it.
-        </Note>
-      </View>
+      {alerts?.ok && canKeepAlive ? (
+        <View style={{ paddingHorizontal: SPACE.xs, paddingTop: SPACE.xs }}>
+          {/* Said plainly rather than implied. Android 15 (API 35) cuts a
+              background process's network a few seconds after the screen goes
+              off, which is what silently dropped alerts that arrived while the
+              phone was in a pocket — measured on the emulator, the live socket
+              in src/lib/live.ts died 3-6s after HOME. The switch above is what
+              keeps that connection open; without it, this is what happens.
+              Only drawn next to the switch it names: on iOS, in Expo Go, or
+              with alerts off there is no such switch, and this used to claim
+              one anyway. */}
+          <Note>
+            Without "Stay connected in the background", Android cuts this connection a few seconds
+            after you leave the app.
+          </Note>
+        </View>
+      ) : null}
 
       <GroupTitle text="Appearance" />
       <Group inset={50}>

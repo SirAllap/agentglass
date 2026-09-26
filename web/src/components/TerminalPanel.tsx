@@ -229,6 +229,8 @@ type Sess = {
   tmuxClient: { cols: number; rows: number } | null;
   /** The keys tmux treats as its prefix, as tmux spells them ("C-f"). */
   tmuxPrefix: string[];
+  /** Phones attached to this tmux, from the frame. Zero draws nothing. */
+  tmuxPhones: number;
   /** When one of them was last pressed. The status line most configs draw
    *  flashes to say "tmux is listening"; hiding it for our tabs took that away,
    *  so the strip says it instead. */
@@ -674,6 +676,7 @@ function connect(s: Sess) {
       s.tmuxSession = typeof f.session === "string" ? f.session : null;
       s.tmuxClient = f.client ?? null;
       s.tmuxPrefix = Array.isArray(f.prefix) ? f.prefix : [];
+      s.tmuxPhones = typeof f.phones === "number" ? f.phones : 0;
       s.tmuxDue = false;
       settle(s);
       notify(s);
@@ -916,7 +919,7 @@ function createSession(root: string, agentTicket?: string): Sess {
       .catch(() => { /* no clipboard permission — the menu stayed shut, nothing pasted */ });
   });
   const id = `t${++seq}-${Date.now().toString(36)}`;
-  const sess: Sess = { id, root, title: `shell ${sessionsFor(root).length + 1}`, term, fit, search, holder, ws: null, status: "idle", mode: null, shell: "shell", canResize: true, opened: false, tmux: false, openFail: null, agentTicket: agentTicket ?? null, tmuxWindows: [], tmuxSessions: [], tmuxPanes: [], tmuxSession: null, tmuxClient: null, tmuxPrefix: [], tmuxPrefixAt: 0, pending: [], createdAt: Date.now(), lastUsed: Date.now(), retries: 0, retryTimer: null, subs: new Set() };
+  const sess: Sess = { id, root, title: `shell ${sessionsFor(root).length + 1}`, term, fit, search, holder, ws: null, status: "idle", mode: null, shell: "shell", canResize: true, opened: false, tmux: false, openFail: null, agentTicket: agentTicket ?? null, tmuxWindows: [], tmuxSessions: [], tmuxPanes: [], tmuxSession: null, tmuxClient: null, tmuxPrefix: [], tmuxPhones: 0, tmuxPrefixAt: 0, pending: [], createdAt: Date.now(), lastUsed: Date.now(), retries: 0, retryTimer: null, subs: new Set() };
   term.onData((d) => {
     sess.lastUsed = Date.now();
     /*
@@ -3121,6 +3124,17 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         : { color: "var(--text4)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
                       {(sess?.tmuxPrefix[0] ?? "tmux")}
                     </span>
+                    {/* A badge and nothing more: a phone on this tmux can resize or
+                        scroll a window with nobody touching it, and this is the
+                        one place that says why. */}
+                    {(sess?.tmuxPhones ?? 0) > 0 && (
+                      <span
+                        title="A phone is attached to a session on this tmux, so a window may be sized or scrolled by it"
+                        className="shrink-0 px-1.5 py-0.5 rounded-md text-[10px] font-semibold"
+                        style={{ color: "var(--text3)", background: "var(--surface-inset)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+                        {sess!.tmuxPhones > 1 ? `${sess!.tmuxPhones} phones attached` : "phone attached"}
+                      </span>
+                    )}
                     {/* Which session this strip is describing.
                         It was in most people's status line, and with several
                         sessions on one socket the tabs alone do not say which

@@ -108,7 +108,11 @@ describe("lanes are made on request, and only by the app's own window", () => {
   test("a lane's guest may not open a window, and a lane host cannot save its bounds as the app's", () => {
     const guard = body("guardWebviews");
     expect(guard).toContain("if (opts.lane) return { action: \"deny\" };");
-    expect(guard.indexOf("if (opts.lane) return { action: \"deny\" };")).toBeLessThan(guard.indexOf("safeGuestUrl(url)"));
+    // The one thing a lane may do with a window request is fetch an armed
+    // download in its own tab (browser-blank-download.test.ts); the denial
+    // still precedes anything that opens a tab or a window.
+    expect(guard.indexOf("if (opts.lane) return { action: \"deny\" };")).toBeLessThan(guard.indexOf("ag:browser-open-tab"));
+    expect(guard.indexOf("if (opts.lane) return { action: \"deny\" };")).toBeLessThan(guard.indexOf('action: "allow"'));
     const at = MAIN.indexOf('ipcMain.on("ag:setWindowBackground"');
     expect(MAIN.slice(at, at + 400)).toContain("if (isLaneHost(e.sender)) return;");
   });

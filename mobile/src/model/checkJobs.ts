@@ -113,3 +113,32 @@ export function ranFor(job: PrCheckJob, now: number): string {
 export function looksFailed(line: string): boolean {
   return /(^|\s)(✗|✕|×|FAIL\b|FAILED\b)|\b[Ee]rror:|##\[error\]|exited with code [1-9]|^\s*(Expected|Received):/.test(line);
 }
+
+/**
+ * GitHub Actions' own log, folded to what a phone can read.
+ *
+ * Every line arrives stamped with an ISO timestamp — about 28 characters,
+ * half the width of this screen before the log itself starts — and each step
+ * is wrapped in `##[group]` / `##[endgroup]`, GitHub's own markers for a
+ * collapsible section on its own log viewer, which this screen has no
+ * equivalent chrome for and drew as two more lines of noise instead. The web
+ * panel already folds on the same markers (PrPanel.tsx's `JobLog`); this is
+ * the same rule where there is no renderer to fold INTO steps, so the group
+ * marker becomes its title line and the close marker is dropped rather than
+ * built into a collapsible tree.
+ *
+ * `##[error]` is left exactly as GitHub wrote it — `looksFailed` matches that
+ * marker to tint the row, and stripping it here would blind the one styling
+ * this was asked to keep.
+ */
+export function foldJobLog(text: string): string {
+  const out: string[] = [];
+  for (const raw of text.split("\n")) {
+    const line = raw.replace(/^﻿?\d{4}-\d\d-\d\dT[\d:.]+Z\s?/, "");
+    const group = line.match(/^##\[group\](.*)$/);
+    if (group) { out.push(group[1] || "step"); continue; }
+    if (/^##\[endgroup\]/.test(line)) continue;
+    out.push(line);
+  }
+  return out.join("\n");
+}

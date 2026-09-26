@@ -6,7 +6,7 @@ import "./cookieentry.ts";
 // spawn a child that would inherit the descriptor (desk.ts).
 import "./desk.ts";
 import type { ServerWebSocket } from "bun";
-import type { IngestBody, WsFrame, WorkingTree, PanesResponse, AgentSessionRow, GitRepoRef, TreeAuthorsInfo, ChangeRow } from "../../shared/types.ts";
+import type { IngestBody, WsFrame, MarkKind, WorkingTree, PanesResponse, AgentSessionRow, GitRepoRef, TreeAuthorsInfo, ChangeRow } from "../../shared/types.ts";
 import { slackReachable } from "./slackreach.ts";
 import { normalize, detectError, clampIngestTimestamp, externalIngestError } from "./ingest.ts";
 import { pricingProvenance, startPricingRefresh } from "./pricing.ts";
@@ -92,7 +92,12 @@ import { repoStats, generateChangelog } from "./gitinsights.ts";
 import { saveShot } from "./shots.ts";
 import { allPlaces, forgetPlaces, placeCount, recordVisit, saveFrom } from "./placestore.ts";
 import { recent as gitCommandLog } from "./gitlog.ts";
-import { worktreeParent } from "./worktree.ts";
+import { gitDir, worktreeParent } from "./worktree.ts";
+/** What HEAD says, read from its file: a branch ref, or a hash when detached. */
+function headOf(root: string): string {
+  const dir = gitDir(root);
+  try { return dir ? fsRead(joinPath(dir, "HEAD"), "utf8").trim() : ""; } catch { return ""; }
+}
 import { watchLoop, entered, stalls, backoff } from "./loopwatch.ts";
 import { spawnPoolStats } from "./spawnpool.ts";
 import { singleFlight, inflightCount } from "./singleflight.ts";
@@ -132,6 +137,8 @@ import {
 import { streamLogs } from "./dockerlogs.ts";
 import { capBuildCache, removeImages } from "./dockerprune.ts";
 import { inbox, markRead, markRepoRead, unsubscribe } from "./ghinbox.ts";
+import { applyMarks, listMarks, parseMarkOps, talkAlreadyRead, MARK_KINDS } from "./marks.ts";
+import { noteAsk as noteWatchAsk, startPrWatch } from "./prWatch.ts";
 import { measureFile } from "./filemeasure.ts";
 import { editorCursor } from "./editorwhere.ts";
 import {
@@ -172,7 +179,7 @@ import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource,
 import { claudeModels } from "./claudemodels.ts";
 import { codexStream, codexModels, codexTranscript, codexCwd, CODEX_ENABLED, CODEX_BYPASS_ALLOWED } from "./codex.ts";
 import { antigravityStream, antigravityModels, ANTIGRAVITY_ENABLED, ANTIGRAVITY_BYPASS_ALLOWED } from "./antigravity.ts";
-import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs, reloadEngineConf, tmuxCapability, engineWindowRunning, tmux } from "./tmuxpane.ts";
+import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs, reloadEngineConf, tmuxCapability, engineWindowRunning, engineSessionName, tmux } from "./tmuxpane.ts";
 import { takeLease, endLease, leaseHeld, reapLeases } from "./panelease.ts";
 import { runAgentInteractivePane } from "./understudy-pane.ts";
 import { startScanner, ownsSession, knownProjects, projectsKnownAtStart, resyncScope, scanningEnabled } from "./transcripts.ts";
@@ -5080,6 +5087,31 @@ const server = Bun.serve<WsData>({
       broadcast({ type: "notify-prefs", data: prefs });
       return json({ ok: true, prefs });
     }
+    // Read marks, synced between devices — see marks.ts. Reading them is a
+    // GET like any other; writing them is `answer` scope (auth.ts), because a
+    // phone that may reply to a pull request may certainly say it has read one.
+    if (pathname === "/marks" && req.method === "GET") {
+      const kind = url.searchParams.get("kind") || undefined;
+      if (kind && !MARK_KINDS.includes(kind as MarkKind)) return json({ ok: false, error: "unknown kind" }, 400);
+      const since = Number(url.searchParams.get("since") || 0);
+      // `now` is taken before the read, so asking again from it repeats a row
+      // rather than skipping one written while this answer was being built.
+      const now = Date.now();
+      return json({ marks: listMarks(kind as MarkKind | undefined, since), now });
+    }
+    if (pathname === "/marks" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: unknown;
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const parsed = parseMarkOps(b);
+      if ("error" in parsed) return json({ ok: false, error: parsed.error }, 400);
+      const changed = applyMarks(parsed.ops);
+      // Only what moved. A replayed batch — a reconnect resending what already
+      // landed — changes nothing, and every other device hearing about it
+      // would be a frame per reconnect saying nothing.
+      if (changed.length) broadcast({ type: "marks", data: changed });
+      return json({ ok: true, changed });
+    }
     if (pathname === "/plugins/settings" && req.method === "GET") {
       const s = pluginSettings(url.searchParams.get("name") ?? "");
       return s ? json({ ok: true, ...s }) : json({ ok: false, error: "no such plugin" }, 404);
@@ -5359,7 +5391,12 @@ const server = Bun.serve<WsData>({
     }
     if (pathname === "/git/branches") {
       const root = url.searchParams.get("root") || "";
-      return body(await singleFlight(`branches:${root}`, () => whileRefsHoldAsync(`branches:${root}`, root, () => gitBranches(root))));
+      // HEAD is in the key: the fingerprint is of the branch TIPS, shared by every
+      // worktree of the repo, and a checkout moves HEAD without moving one. A
+      // fingerprint alone kept naming the old branch as current — from the phone,
+      // from a terminal, from anywhere. One small file read, no subprocess.
+      const key = `branches:${root}:${headOf(root)}`;
+      return body(await singleFlight(key, () => whileRefsHoldAsync(key, root, () => gitBranches(root))));
     }
     // `scope=all` is the whole graph; anything else is this checkout's own
     // history, which is what the pane defaults to.
@@ -6853,10 +6890,16 @@ const server = Bun.serve<WsData>({
       });
     }
     if (pathname === "/prs/list") {
+      const root = url.searchParams.get("root") || "";
+      const filter = url.searchParams.get("filter") || "mine";
+      const state = url.searchParams.get("state") || "open";
+      // A real client just asked for this — worth re-asking on a timer even
+      // while nobody is on this tab. See prWatch.ts.
+      noteWatchAsk(root, filter, state);
       return json(await listPrs(
-        url.searchParams.get("root") || "",
-        url.searchParams.get("filter") || "mine",
-        url.searchParams.get("state") || "open",
+        root,
+        filter,
+        state,
         url.searchParams.get("force") === "1",
         url.searchParams.get("after") || undefined,
         url.searchParams.get("q") || undefined,
@@ -7300,6 +7343,39 @@ const server = Bun.serve<WsData>({
       if (!agentKind(wanted)) return json({ ok: false, error: "no such agent" }, 400);
       const id = mintAgentTicket({ cwd, prompt, yolo, title: sessionTitle(b.title), kind: wanted });
       return json({ ok: true, ticket: id });
+    }
+
+    /*
+     * A shell, for a phone with no pane to anchor the socket's own `+` to.
+     *
+     * That control (`cmd:"agent"` over the terminal WebSocket) reads its
+     * project off the pane it is attached to — the point of it — and so it
+     * has nothing to read from the empty state, where there is no pane and
+     * therefore no socket at all (`TerminalView` is only mounted `if (open)`).
+     * A plain HTTP route, taking the project the caller already named rather
+     * than one read off a pane, is the narrowest way out of that: the phone
+     * already reads `/git/repos` (scoped to the paired project server-side)
+     * for the empty state's own list, so `root` is one of its own entries,
+     * never free text.
+     *
+     * No `into`: this is the exact case `engineWindowRunning`'s own fallback
+     * exists for — nothing on screen to open "where the client is looking",
+     * so a session named after the checkout is the only sensible answer, the
+     * same one an unattached run gets.
+     */
+    if (pathname === "/terminal/open-shell" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      if (!TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
+      let b: { root?: unknown };
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const root = gitSafeAbs(b.root);
+      if (!root || !inScope(root) || !fsExists(root)) {
+        return json({ ok: false, error: "that project is not open" }, 400);
+      }
+      const name = basename(root) || "shell";
+      const opened = await engineWindowRunning(root, name, [], root, undefined, undefined, true);
+      if (!opened) return json({ ok: false, error: "the engine would not open a window" }, 500);
+      return json({ ok: true, pane: opened.paneId, window: opened.windowId, cwd: root, session: engineSessionName(root) });
     }
 
     /*
@@ -9147,8 +9223,17 @@ void resumeEnabledPlugins().then((names) => { if (names.length) console.log(`   
 /* And somebody speaking on one. Derived from the same poll — GitHub's
    notifications are an inbox rather than a feed a desktop app can subscribe to —
    with the latch on the server, so a review carrying nine line comments is one
-   message and not nine. Never a bot. See noteTalk. */
-subscribeTalk((n) => broadcast({ type: "talk", data: n }));
+   message and not nine. Never a bot. See noteTalk.
+
+   Gated on the read marks first: `noteTalk`'s latch only knows the newest
+   remark it has already told a listener about, not whether a person has since
+   read the pull request on another device — and prWatch.ts now re-asks the
+   list on a timer with nobody at the PRs tab, so a comment read on the desk
+   would otherwise buzz a phone that never opened it. See talkAlreadyRead. */
+subscribeTalk((n) => {
+  if (talkAlreadyRead(n, listMarks("pr"))) return;
+  broadcast({ type: "talk", data: n });
+});
 /* A card of yours moved. Derived from a poll rather than received — ClickUp has
    no notifications API — and silent on the first run, so connecting an account
    does not announce a day of history. See clickupwatch.ts. */
@@ -9176,6 +9261,19 @@ subscribeNotifications((n) => {
 });
 
 startCardWatch((n) => broadcast({ type: "card", data: n }));
+/* Re-asks the open pull request lists a real client has looked at, on a timer,
+   so a comment posted while nobody is on the PRs tab still reaches `noteTalk`
+   the next time somebody could actually be told about it. See prWatch.ts. Off
+   under `bun test`: a suite that left this running would fire real `gh` calls
+   on a schedule nothing in the test asked for, against whatever pairs an
+   earlier test's process-wide map still holds. */
+if (process.env.NODE_ENV !== "test") {
+  startPrWatch({
+    liveClients: () => clients.size,
+    // A root that no longer resolves rejects; a timer has nobody to tell.
+    relist: (root, filter) => { void listPrs(root, filter, "open").catch(() => {}); },
+  });
+}
 /* The Lantern's watch: the field re-read every N minutes, a loud word when
    something on it needs a person. See lanternwatch.ts. */
 startLanternWatch();

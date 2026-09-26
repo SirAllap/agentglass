@@ -112,8 +112,13 @@ describe("taskProvider — which tracker the Cards tab reads", () => {
     expect(taskProvider([at("taskwarrior", "connected"), at("clickup", "needs-auth")])?.id).toBe("taskwarrior");
   });
 
-  test("connected beats a refused token", () => {
-    expect(taskProvider([at("taskwarrior", "connected"), at("clickup", "error")])?.id).toBe("taskwarrior");
+  test("a set-up ClickUp outranks another tracker's state, error included", () => {
+    /* The bug this fixes: ClickUp's own notification poll got one 404, its
+       state flipped to "error", and a connected Taskwarrior outranked it —
+       the board a person had set up disappeared behind a tracker they never
+       touched. ClickUp still counts as set up (see `setUp`), and the screen
+       that reads the board is where the error shows, not this ranking. */
+    expect(taskProvider([at("taskwarrior", "connected"), at("clickup", "error")])?.id).toBe("clickup");
   });
 
   test("a refused token is still the tracker when nothing else is", () => {

@@ -49,8 +49,8 @@ function tell(entry: Entry): void {
   for (const listen of entry.listeners) listen();
 }
 
-async function read(host: Host, root: string, number: string, entry: Entry): Promise<void> {
-  const query = `root=${encodeURIComponent(root)}&number=${encodeURIComponent(number)}`;
+async function read(host: Host, root: string, number: string, entry: Entry, force: boolean): Promise<void> {
+  const query = `root=${encodeURIComponent(root)}&number=${encodeURIComponent(number)}${force ? "&force=1" : ""}`;
   const answer = await ask<{ ok: boolean; detail?: PrDetail; error?: string }>(host, `/prs/detail?${query}`);
   if (!answer.ok) { entry.error = answer.error; tell(entry); return; }
   if (!answer.value.ok || !answer.value.detail) {
@@ -75,11 +75,11 @@ async function read(host: Host, root: string, number: string, entry: Entry): Pro
  * project, and "three callers, one request" is a fact about this function
  * rather than about a screen.
  */
-export async function readPrDetail(host: Host | null, root: string, number: string): Promise<void> {
+export async function readPrDetail(host: Host | null, root: string, number: string, force = false): Promise<void> {
   if (!host || !root || !number) return;
   const entry = entryFor(keyOf(root, number));
   if (entry.reading) return entry.reading;
-  const run = read(host, root, number, entry).finally(() => { entry.reading = null; });
+  const run = read(host, root, number, entry, force).finally(() => { entry.reading = null; });
   entry.reading = run;
   return run;
 }
@@ -106,6 +106,11 @@ export function usePrDetail(host: Host | null, root: string, number: string): {
   detail: PrDetail | null;
   error: string | null;
   reload: () => Promise<void>;
+  /** Past the server's own cache: for when something says GitHub has moved
+   *  (a `talk` frame) and the server's answer from a minute ago is exactly
+   *  what is out of date — it serves a stale hit first and refreshes behind
+   *  it, so a plain reload repaints the old conversation. */
+  refresh: () => Promise<void>;
 } {
   const key = keyOf(root, number);
   const entry = entryFor(key);
@@ -122,9 +127,14 @@ export function usePrDetail(host: Host | null, root: string, number: string): {
     [host, root, number],
   );
 
+  const refresh = useCallback(
+    async (): Promise<void> => readPrDetail(host, root, number, true),
+    [host, root, number],
+  );
+
   useEffect(() => { void reload(); }, [reload]);
 
-  return { detail: entry.detail, error: entry.error, reload };
+  return { detail: entry.detail, error: entry.error, reload, refresh };
 }
 
 /** Drop what is held for one pull request. Only tests need this: the store is

@@ -72,7 +72,7 @@ import { paneFor } from "../../src/model/checkout.ts";
 import { ImageIcon, KeyboardIcon, MicIcon, SettingsIcon } from "../../src/nav/icons.tsx";
 import { since } from "../../src/lib/dates.ts";
 import { canRunAgents } from "../../src/model/scope.ts";
-import type { AgentSessionRow, DeviceScope } from "../../../shared/types.ts";
+import type { AgentSessionRow, DeviceScope, GitRepoRef } from "../../../shared/types.ts";
 
 /** The last segment of a path, which is what a person calls a checkout — the
  *  same rule src/terminal/tabs.ts uses to name a window. */
@@ -121,7 +121,7 @@ interface AgentOffer {
   /** Whether this CLI has a skip-permissions flag at all. */
   canBypass: boolean;
 }
-import { bestSession, readStrip, sessionsOf, type Tab } from "../../src/terminal/tabs.ts";
+import { bestSession, pendingTab, readStrip, sessionsOf, type PendingTab, type Tab } from "../../src/terminal/tabs.ts";
 import type { PanesResponse } from "../../../shared/types.ts";
 import { Btn, Card, Label, Note, Sheet, SheetRow, TAP, Toggle } from "../../src/ui.tsx";
 import { C, MONO, RADIUS, SPACE, T, currentLook, ink } from "../../src/theme.ts";
@@ -599,6 +599,14 @@ function TerminalPane(): React.ReactNode {
    * happened", and the second press opens a second agent.
    */
   const [opening, setOpening] = useState(false);
+  /**
+   * The empty state's own way forward: which paired project to open a plain
+   * shell in, when there is no pane to read one off. Null until `/git/repos`
+   * answers — same rule as `agents` below, so "no projects" is never drawn
+   * before the read that would say so.
+   */
+  const [emptyRepos, setEmptyRepos] = useState<GitRepoRef[] | null>(null);
+  const [openingRoot, setOpeningRoot] = useState<string | null>(null);
   /** The new-tab menu, and the agents the MACHINE reports. Null until it
    *  answers, so the sheet says it is asking rather than drawing an empty list
    *  that reads as "none available". */
@@ -689,6 +697,15 @@ function TerminalPane(): React.ReactNode {
    * state updater.
    */
   const wanted = useRef<string | null>(null);
+  /**
+   * A pane this screen itself just asked the server to open, held until the
+   * poll lists it for real — see `pendingTab`. A ref rather than state, like
+   * `wanted` just above: it is read inside the same render `setActive`
+   * already re-runs, and read again inside `load`, which must not gain it as
+   * a dependency (see `load`'s own note on why it re-reads state through
+   * refs and functional updaters instead of closing over it).
+   */
+  const pendingOpen = useRef<PendingTab | null>(null);
 
   /*
    * Open a window in the project this pane is in, with the agent running in it.
@@ -913,11 +930,21 @@ function TerminalPane(): React.ReactNode {
     setError(null);
     setStrip(next.tabs);
     const all = next.tabs;
+    // The bridge has done its job the moment the real poll agrees a pane
+    // exists — `paneTabs`'s own answer is never wrong once it lists something,
+    // only ever late. Cleared here rather than left to rot: `pendingTab` only
+    // ever fires for this exact pane id, so nothing breaks by leaving it, but
+    // a ref nothing ever reads again is not evidence of anything.
+    if (pendingOpen.current && all.some((t) => t.paneId === pendingOpen.current!.paneId)) pendingOpen.current = null;
     // Where the work is, not the first name alphabetically. See `bestSession`:
     // opening on a session with one idle shell while five agents run in another
     // is how "I cannot see my tabs" happens.
     const best = bestSession(all);
-    setSession((current) => (current && all.some((t) => t.session === current) ? current : best));
+    setSession((current) => (
+      current && (all.some((t) => t.session === current) || pendingOpen.current?.session === current)
+        ? current
+        : best
+    ));
     setActive((current) => {
       // A pane we asked for and the strip has not listed yet — see `wanted`.
       // Held rather than adopted, so the selection does not bounce off it.
@@ -982,7 +1009,7 @@ function TerminalPane(): React.ReactNode {
   }, [load]));
 
   /** What came back from that. Either a pane to go to, or a reason. */
-  const onOpened = useCallback((answer: { pane: string } | { error: string }): void => {
+  const onOpened = useCallback((answer: { pane: string; cwd: string; session: string } | { error: string }): void => {
     // The answer landed, so the deadline above has nothing left to say.
     if (openTimer.current) { clearTimeout(openTimer.current); openTimer.current = null; }
     setOpening(false);
@@ -992,6 +1019,20 @@ function TerminalPane(): React.ReactNode {
     // is what stops the next poll undoing this.
     wanted.current = answer.pane;
     setActive(answer.pane);
+    // Follow it to its OWN session rather than keep whichever one was on
+    // screen. A window can land somewhere other than the session already
+    // open — a phone's mirror is grouped with a desk session that does not
+    // share the repo's name, and the fallback session tmux picks for a
+    // pressed button is the repo's basename regardless. Left unset, `open`
+    // stayed null forever: the strip's filter is `t.session === session`, the
+    // new pane sat in a session the screen never switched to, and the phone
+    // showed "Nothing open" over three windows that all existed.
+    setSession(answer.session);
+    // And a bridge for `open` itself: a freshly made session with no client on
+    // it and no agent under it is exactly what `paneTabs` filters out, so the
+    // strip would never list this pane on its own — attaching IS what mounting
+    // a terminal for it does. See `pendingTab`.
+    pendingOpen.current = { paneId: answer.pane, session: answer.session, where: answer.cwd, label: leafOf(answer.cwd) };
     setWhy(null);
     void load();
   }, [load]);
@@ -1318,7 +1359,7 @@ function TerminalPane(): React.ReactNode {
   const all = strip ?? [];
   const sessions = sessionsOf(all);
   const tabs = all.filter((t) => !session || t.session === session);
-  const open = tabs.find((t) => t.paneId === active) ?? null;
+  const open = tabs.find((t) => t.paneId === active) ?? pendingTab(pendingOpen.current, active);
 
   /* Asked when the menu opens rather than on the way into the screen: a list
      of past sessions is not what anybody arrives for, and it is a read against
@@ -1336,6 +1377,53 @@ function TerminalPane(): React.ReactNode {
     })();
     return () => { gone = true; };
   }, [host, more, past, open?.where]);
+
+  /**
+   * The empty state's own list: the paired projects, so "Open a shell in
+   * <name>" has something to press. Asked only once nothing is attached —
+   * the strip is what the header's own `+` reads, and a project list this
+   * screen never shows is a read it never needed.
+   */
+  useEffect(() => {
+    if (!host || open || emptyRepos !== null) return;
+    let gone = false;
+    void (async () => {
+      const answer = await ask<{ repos: GitRepoRef[] }>(host, "/git/repos");
+      if (gone) return;
+      setEmptyRepos(answer.ok && Array.isArray(answer.value.repos) ? answer.value.repos : []);
+    })();
+    return () => { gone = true; };
+  }, [host, open, emptyRepos]);
+
+  /** A shell in a named project, for the empty state's own buttons — the same
+   *  server call the header's `+` makes, except it names WHERE instead of
+   *  reading it off an attached pane, which is exactly what the empty state
+   *  does not have. */
+  const openShellIn = useCallback((root: string): void => {
+    if (!host) return;
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setOpeningRoot(root);
+    setError(null);
+    void (async () => {
+      const answer = await ask<{ pane: string; window: string; cwd: string; session: string }>(
+        host, "/terminal/open-shell", { method: "POST", body: { root } },
+      );
+      setOpeningRoot(null);
+      if (!answer.ok) { setError(answer.error); return; }
+      wanted.current = answer.value.pane;
+      setActive(answer.value.pane);
+      setSession(answer.value.session);
+      // The freshest possible session, made for this one press, has no tmux
+      // client on it and no agent under it — precisely what `paneTabs` filters
+      // out. Bridge it the same way `onOpened` does, or this stays "Nothing
+      // open" until something else happens to attach it. See `pendingTab`.
+      pendingOpen.current = {
+        paneId: answer.value.pane, session: answer.value.session,
+        where: answer.value.cwd, label: leafOf(answer.value.cwd),
+      };
+      void load();
+    })();
+  }, [host, load]);
 
   /** Bring a past session back, in a window of its own. */
   /**
@@ -1674,10 +1762,28 @@ function TerminalPane(): React.ReactNode {
                 {error
                   ? error
                   : strip === null
-                    ? "Reading the machine's tmux panes…"
-                    : "No tmux pane is open on the computer, or none is in this project. " +
-                      "tmux has to have a client attached for its panes to be listed."}
+                    ? "Reading what is open on the computer…"
+                    : "Nothing is open on the computer right now — no window, no running agent."}
               </Note>
+              {/*
+                A way forward, not just a retry. The header's own `+` needs a
+                pane to read a project off (see the comment on it above), which
+                is exactly what is missing here — so this reads the paired
+                projects instead and opens straight into one.
+              */}
+              {strip !== null && emptyRepos?.length ? (
+                <View style={{ gap: SPACE.xs }}>
+                  {emptyRepos.map((r) => (
+                    <Btn
+                      key={r.root}
+                      label={`Open a shell in ${r.name}`}
+                      busy={openingRoot === r.root}
+                      disabled={openingRoot !== null && openingRoot !== r.root}
+                      onPress={() => openShellIn(r.root)}
+                    />
+                  ))}
+                </View>
+              ) : null}
               <Btn label="Look again" onPress={() => { void load(); }} />
             </Card>
           </View>
@@ -2487,9 +2593,17 @@ function TerminalPane(): React.ReactNode {
                 ) : null}
               </View>
             ))}
+            {/* Always here, agents installed or not: a prompt in the project
+                is a thing people want on its own, and the server treats
+                "shell" as a window with no agent in it. */}
+            <SheetRow
+              label="Shell"
+              sub="A plain prompt in this project, no agent."
+              onPress={() => openAgent("shell", false)}
+            />
             {agents.every((a) => !a.installed) ? (
               <Note tone="bad">
-                No agent CLI is installed on that computer. A new tab would be a plain shell.
+                No agent CLI is installed on that computer. Every choice here opens a plain shell.
               </Note>
             ) : null}
           </View>

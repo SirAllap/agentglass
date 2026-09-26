@@ -1,0 +1,7 @@
+{
+  "name": "agx-keepalive",
+  "version": "1.0.0",
+  "description": "Local Expo module: a foreground service that keeps the live socket alive past Android 15's background network cutoff.",
+  "main": "index.ts",
+  "private": true
+}

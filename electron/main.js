@@ -48,6 +48,11 @@ const egressArmed = new WeakSet();
 /** Sessions whose permission handlers are set. @type {WeakSet<Electron.Session>} */
 const permissionArmed = new WeakSet();
 
+/** Where each tab's armed download is meant to land, set by the `download`
+ *  verb and consumed by the first download that tab starts. Module scope
+ *  because the window-open handler reads it too. @type {Map<Electron.WebContents, string>} */
+const guestDownloadDir = new Map();
+
 /** Guests that belong to a lane, an agent's own tab. @type {WeakSet<Electron.WebContents>} */
 const laneGuests = new WeakSet();
 /** What the person answered this session, by origin and thing: true = allowed.
@@ -2023,8 +2028,6 @@ function registerIpc(win) {
    * printToPDF branch further down and for the same reason: the answer stops
    * coming from the protocol without anything downstream needing to learn that.
    */
-  /** @type {Map<Electron.WebContents, string>} */
-  const guestDownloadDir = new Map();
   /** Save paths chosen for downloads still in flight. @type {Set<string>} */
   const reservedSavePaths = new Set();
   /** lstat, not exists: a dangling symlink is a name that is taken. @param {string} p */
@@ -3661,12 +3664,21 @@ function guardWebviews(win, opts = {}) {
      * profile — and everything else still becomes a tab.
      */
     guest.setWindowOpenHandler(({ url, disposition, features }) => {
+      const safe = safeGuestUrl(url);
+      if (!safe) return { action: "deny" };
+      /* A `target="_blank"` download link asks for a window, and the file is
+         then requested by the new tab, which nothing armed: the verb timed out
+         with an empty directory. While THIS tab is armed the link is fetched
+         here, by the tab that holds the arming, and no tab opens. A lane takes
+         this branch too: it is where agents run the verb. */
+      if (guestDownloadDir.has(guest)) {
+        guest.downloadURL(safe);
+        return { action: "deny" };
+      }
       /* A lane has no window a person could see, and a popup would map a real,
          visible one: denied outright, not left to the webview lacking
          `allowpopups`. A sign-in that needs a popup fails in a lane. */
       if (opts.lane) return { action: "deny" };
-      const safe = safeGuestUrl(url);
-      if (!safe) return { action: "deny" };
       /*
        * READ THIS BEFORE TRUSTING THE PARAGRAPH ABOVE.
        *

@@ -3,6 +3,7 @@
   "version": "0.20.0",
   "private": true,
   "main": "expo-router/entry",
+  "workspaces": ["modules/*"],
   "scripts": {
     "start": "expo start",
     "android": "expo run:android",

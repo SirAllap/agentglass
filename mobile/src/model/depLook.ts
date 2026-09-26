@@ -41,17 +41,50 @@ export const depNeedsAttention = (status: DepStatus): boolean =>
   status === "attention" || status === "missing";
 
 /**
+ * The tone a ROW takes, which is not simply `DEP_LOOK[status].tone`.
+ *
+ * A tool this app never actually needs missing is not the same shade as one
+ * it does: every REQUIRED tool present and only optional ones missing still
+ * drew a red dot, a red "missing", an amber banner and a "Needs attention"
+ * heading — measured on a machine with `gh` and `git` both installed and one
+ * optional formatter absent, which is the calm case this app should have
+ * about zero to say about. `mute` is reused rather than adding a fifth tone:
+ * it is already how "not used here" reads, and an optional gap not installed
+ * is the same kind of "nothing to do here" as a tool the platform never uses.
+ */
+export function depTone(dep: { status: DepStatus; required: boolean }): DepTone {
+  if (!dep.required && depNeedsAttention(dep.status)) return "mute";
+  return DEP_LOOK[dep.status].tone;
+}
+
+/**
+ * The heading over the "what needs attention" group.
+ *
+ * `null` when there is nothing broken at all — the caller does not show the
+ * group. Otherwise: red urgency only when something REQUIRED is missing;
+ * calm, informational wording when the only gaps are optional tools nobody
+ * has to go and install.
+ */
+export function brokenHeading(broken: { required: boolean }[]): string | null {
+  if (!broken.length) return null;
+  return broken.some((d) => d.required) ? "Needs attention" : "Optional, not installed";
+}
+
+/**
  * The one line at the top of Troubleshooting: how many tools were found, and
  * whether what is missing matters.
  *
  * The screen was a list of twenty rows with a dot each, and the answer to the
  * question somebody arrives with — is anything I need missing — had to be
  * counted off it. A required tool missing is red and said first; an optional
- * one is amber and said as optional; "not used here" is neither, and counts as
- * neither found nor missing.
+ * one used to be amber and said as a warning, which is the wrong register for
+ * "nothing to do here" — a machine with every required tool present has
+ * nothing wrong with it, whatever is missing from the optional list. `mute`
+ * reads calm rather than alarming, and it is the same tone `depTone` gives
+ * the rows themselves.
  */
 export function depSummary(deps: { status: DepStatus; required: boolean }[]): {
-  tone: "good" | "warn" | "bad";
+  tone: "good" | "mute" | "bad";
   title: string;
   sub: string;
 } {
@@ -65,9 +98,9 @@ export function depSummary(deps: { status: DepStatus; required: boolean }[]): {
   }
   if (optional) {
     return {
-      tone: "warn",
+      tone: "mute",
       title,
-      sub: `Everything required is there. ${optional === 1 ? "One optional tool is" : `${optional} optional tools are`} missing.`,
+      sub: `Everything required is there. ${optional === 1 ? "One optional tool is" : `${optional} optional tools are`} not installed.`,
     };
   }
   return { tone: "good", title, sub: "Everything this app shells out to is installed." };

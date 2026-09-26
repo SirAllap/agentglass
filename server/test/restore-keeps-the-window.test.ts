@@ -130,7 +130,8 @@ describe("the desk comes back even when the commands do not", () => {
        must not depend on — see the note in restore-keeps-the-flags.test.ts. */
     const src = await Bun.file(new URL("../src/tmuxrestore.ts", import.meta.url)).text();
     const fn = src.slice(src.indexOf("function runArgs("), src.indexOf("\n}", src.indexOf("function runArgs(")));
-    expect(fn).toContain("...(pane.agentArgs ?? [])");
+    expect(fn).toContain("pane.agentArgs ?? []");
+    expect(fn).toContain('...flags, "--resume", id');
     const flags = fn.indexOf("pane.agentArgs");
     const id = fn.indexOf('"--resume"');
     expect(flags, "the flags must go before the id, so nothing captured displaces it").toBeLessThan(id);

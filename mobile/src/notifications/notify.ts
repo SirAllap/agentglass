@@ -45,9 +45,11 @@
  * an hour.
  *
  * What local notifications cost even when they work: the app has to be alive
- * to hear the socket. Android keeps one open for a while after the screen goes
- * off and then freezes the process, so this reaches a pocket for a while and
- * not for ever. Settings says so rather than implying otherwise.
+ * to hear the socket, and on its own it is not: measured on API 35, the
+ * process's network is blocked (APP_BACKGROUND) five seconds after it leaves
+ * the screen, and the socket dies with it. keepAlive.ts is what keeps it
+ * reachable; without that switch Settings says so rather than implying
+ * otherwise.
  */
 import Constants, { ExecutionEnvironment } from "expo-constants";
 import { Platform } from "react-native";
@@ -103,7 +105,17 @@ function load(): NotificationsModule | null {
 export type Blocked =
   /** No notifications module in this build at all — Expo Go on Android. */
   | "unsupported"
-  /** The OS permission is not granted, or was taken away in system settings. */
+  /** Never asked (a fresh install), or Android will still show its own
+   *  prompt — `canAskAgain`. Tapping the switch is the whole remedy: it opens
+   *  that system prompt, not the phone's Settings app. Conflated with
+   *  `denied` until measured on a fresh install, where the switch read
+   *  "Android is not letting this app post notifications … in the phone's
+   *  settings" before anybody had been asked anything — false, and it sent a
+   *  first-time user out of the app for a permission a single tap grants. */
+  | "not-asked"
+  /** Asked once already and refused, or taken away in system settings.
+   *  Android will not show its own prompt again — this IS the trip to
+   *  Settings. */
   | "denied"
   /** The Android channel exists and the user has switched it to no importance:
    *  posting succeeds and nothing is ever drawn. */
@@ -117,6 +129,43 @@ export type Delivery = { ok: true } | { ok: false; why: Blocked; detail?: string
 
 const no = (why: Blocked, detail?: string): Delivery =>
   ({ ok: false, why, ...(detail ? { detail } : {}) });
+
+/**
+ * What the Settings row says for each reason an alert cannot be raised.
+ *
+ * Kept as a function rather than the screen's own literal so it can be
+ * tested without a renderer, and short enough on every branch to fit the
+ * row's two-line cap without an ellipsis eating the sentence — the `denied`
+ * copy used to run long enough to clip on a narrow phone.
+ */
+export function blockedText(why: Blocked): string {
+  switch (why) {
+    case "unsupported":
+      return "Expo Go does not carry the notifications module on Android. This works in a real installed build.";
+    case "not-asked":
+      return "Tap to allow alerts on this phone.";
+    case "denied":
+      return "Android is blocking alerts for this app. Open Settings to turn them on.";
+    case "channel-off":
+      return "The «Agent alerts» channel is switched off in Android's settings, so alerts are accepted and never drawn.";
+    case "setup-failed":
+      return "Notifications could not be set up on this phone. Nothing will be raised until that succeeds — try again.";
+    case "threw":
+      return "Android refused the last notification. Nothing was drawn.";
+  }
+}
+
+/**
+ * Does this reason mean the OS will no longer show its own prompt — so the
+ * only way back is the phone's Settings app?
+ *
+ * `not-asked` is NOT this: Android still owns that prompt, and a phone
+ * sending somebody to Settings before they have even been asked once is the
+ * bug this type split fixes.
+ */
+export function offersOpenSettings(why: Blocked): boolean {
+  return why === "denied" || why === "channel-off";
+}
 
 /** The last thing that stopped an alert, so Settings can say it instead of
  *  drawing a switch that claims everything is fine. Cleared on a success. */
@@ -261,7 +310,8 @@ export async function alertsDeliverable(): Promise<Delivery> {
   const prepared = await ensureSetUp();
   if (!prepared.ok) return record(prepared);
   try {
-    if (!(await N.getPermissionsAsync()).granted) return record(no("denied"));
+    const perm = await N.getPermissionsAsync();
+    if (!perm.granted) return record(no(perm.canAskAgain === false ? "denied" : "not-asked"));
     if (Platform.OS === "android") {
       const channel = await N.getNotificationChannelAsync(CHANNEL);
       if (channel && channel.importance === N.AndroidImportance.NONE) return record(no("channel-off"));

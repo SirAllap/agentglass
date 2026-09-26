@@ -846,6 +846,30 @@ CREATE TABLE IF NOT EXISTS actions (
 CREATE INDEX IF NOT EXISTS idx_actions_at ON actions(at);
 `);
 
+/*
+ * What has been read, shared between every device on this server.
+ *
+ * The browser keeps its own copy in localStorage and reads from that; this
+ * table is how a pull request read on the desk stops being "3 new" on the
+ * laptop. One row per thing, not a log: the question is only ever "how far
+ * has it been read", and marks.ts owns the rules for moving a row.
+ *
+ * `updated_at` is the server's clock and nobody else's, so `?since=` asks one
+ * clock a question about itself instead of comparing two devices' ideas of
+ * the time.
+ */
+db.exec(`
+CREATE TABLE IF NOT EXISTS read_marks (
+  kind TEXT NOT NULL,                  -- 'pr' | 'inbox' | 'card'
+  key TEXT NOT NULL,                   -- pr: 'owner/repo#n'; inbox: thread id; card: card id
+  seen_at INTEGER NOT NULL DEFAULT 0,  -- pr/card: read up to (epoch ms); 0 = cleared
+  state TEXT NOT NULL DEFAULT '',      -- inbox: 'saved' | 'done' | '' (off)
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (kind, key)
+);
+CREATE INDEX IF NOT EXISTS read_marks_updated ON read_marks (kind, updated_at);
+`);
+
 export interface ActionRow {
   id: number;
   at: number;

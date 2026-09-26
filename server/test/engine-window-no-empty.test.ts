@@ -35,15 +35,19 @@ import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 const SOCKET = `agx-noempty-${process.pid}`;
 const REAL_SOCKET = process.env.AGENTGLASS_TMUX_SOCKET;
 const REAL_TMPDIR = process.env.TMUX_TMPDIR;
-process.env.AGENTGLASS_TMUX_SOCKET = SOCKET;
-process.env.TMUX_TMPDIR = TMUX_TEST_TMPDIR;
 
 const { engineWindowRunning, tmux, tmuxCapability } = await import("../src/tmuxpane.ts");
 
 let dir = "";
 const have = tmuxCapability().available;
 
-beforeAll(() => { dir = mkdtempSync(join(tmpdir(), "agx-noempty-")); });
+// Set in beforeAll, not at import: every file shares one process, and a
+// variable assigned at import is still assigned while the OTHER files run.
+beforeAll(() => {
+  process.env.AGENTGLASS_TMUX_SOCKET = SOCKET;
+  process.env.TMUX_TMPDIR = TMUX_TEST_TMPDIR;
+  dir = mkdtempSync(join(tmpdir(), "agx-noempty-"));
+});
 afterAll(async () => {
   // The kill BEFORE the env is put back: restore first and it goes to whichever
   // server the restored socket names, which is his.
