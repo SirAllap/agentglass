@@ -160,6 +160,10 @@ test("a restore that blows up leaves the record protected, not settled", async (
   const state = JSON.parse(readFileSync(join(dir, "layout.json"), "utf8")) as { sessions: any[] };
   writeFileSync(join(dir, "layout.json"), JSON.stringify({
     ...state,
+    /* A boot on a server that is not the one the desk was last whole on: the
+       tmux crash this test is about. On the same server the pass would leave
+       the missing windows alone and never reach the broken entry. */
+    wholeOn: "0.0",
     sessions: [{ name: `${SESSION}-broken`, windows: null }, ...state.sessions],
   }));
 
