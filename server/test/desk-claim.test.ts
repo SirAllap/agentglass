@@ -284,6 +284,8 @@ describe("a squatter on an adopted port", () => {
 // route's caller rule has shapes (a paired device, a plugin, a seat) this file
 // does not boot, so those are asserted against source.
 const MAIN = await Bun.file(new URL("../../electron/main.js", import.meta.url)).text();
+const PRELOAD = await Bun.file(new URL("../../electron/preload.js", import.meta.url)).text();
+const BANNER = await Bun.file(new URL("../../web/src/components/ServerBanner.tsx", import.meta.url)).text();
 const INDEX = await Bun.file(new URL("../src/index.ts", import.meta.url)).text();
 const DESKTOP = await Bun.file(new URL("../../web/src/lib/desktop.ts", import.meta.url)).text();
 const own = (src: string, head: string): string => {
@@ -317,12 +319,28 @@ describe("the wiring", () => {
     expect(own(MAIN, "function stopSidecar(")).toContain("letDeskGo?.();");
   });
 
-  test("an adopted server whose desk another process holds is left: the app starts its own on a free port", () => {
-    expect(own(MAIN, "function holdAdoptedDesk(")).toContain("onTaken: () => { if (!sidecar && SERVER_PORT === port) void leaveTakenServer(); },");
-    const leave = own(MAIN, "async function leaveTakenServer(");
-    expect(leave).toContain('states.indexOf("free")');
-    expect(leave).toContain("await ensureServer(false);");
-    expect(leave).not.toContain("holdAdoptedDesk(");
+  test("an adopted server whose desk another process holds is not left for a second server: the window is told, and can retry", () => {
+    // Two servers on one database is worse than the refusal (no transcript
+    // scan, hooks posting to the old port), so the app stays and says so.
+    expect(MAIN).not.toContain("leaveTakenServer");
+    const hold = own(MAIN, "function holdAdoptedDesk(");
+    expect(hold).toContain("onTaken: () => { if (!sidecar && SERVER_PORT === port) noteDeskTaken(port); },");
+    const note = own(MAIN, "function noteDeskTaken(");
+    expect(note).toContain('"ag:desk-taken"');
+    expect(note).toContain("console.error(");
+    expect(hold).toContain("noteDeskTaken(null)");
+    const retry = MAIN.slice(MAIN.indexOf('ipcMain.on("ag:retryDesk"'));
+    expect(retry.slice(0, 400)).toContain("holdAdoptedDesk(SERVER_PORT)");
+    expect(MAIN).toContain('ipcMain.on("ag:deskTaken"');
+  });
+
+  test("the window shows why it has no desk, with a Retry, from what the shell reports", () => {
+    expect(PRELOAD).toContain('"ag:desk-taken"');
+    expect(PRELOAD).toContain('ipcRenderer.send("ag:retryDesk")');
+    const banner = BANNER.slice(BANNER.indexOf("function DeskBanner("), BANNER.indexOf("/** The row itself"));
+    expect(banner).toContain("held by another process");
+    expect(banner).toContain("Retry");
+    expect(banner).toContain("onClick={retryDesk}");
   });
 
   test("a key taken or lost does not reconnect every socket in the window", () => {

@@ -764,10 +764,9 @@ let letDeskGo = /** @type {(() => void) | null} */ (null);
  * told null when it does not. Null means one of three things: the server is on
  * the Origin rule for a moment between claims; another process holds its desk;
  * or an earlier launch of this app piped it a key this launch does not have. In
- * the last two the app leaves that server for one of its own
- * (leaveTakenServer); with no free port it stays, unable to host the browser
- * or release a hold there, and does not claim again — the ceiling desk.ts
- * states. A claim made on
+ * the last two this window can neither host the browser nor release a hold
+ * there — the ceiling desk.ts states. When another process holds it the
+ * window is told (noteDeskTaken) and claims again only on its Retry. A claim made on
  * behalf of a server this app has since replaced with its own says nothing.
  * @param {number} port
  */
@@ -780,38 +779,36 @@ function holdAdoptedDesk(port) {
     onChange: (k) => {
       if (sidecar || SERVER_PORT !== port) return;
       if (!k) console.error(`[agentglass] :${port} did not give this app its desk: if another process holds it, or an earlier launch started that server, this window cannot drive the browser or release a held call there until the server is restarted`);
+      if (k) noteDeskTaken(null); // the banner stays until a claim is held
       deskKey = k;
       for (const w of BrowserWindow.getAllWindows()) {
         try { w.webContents.send("ag:server-changed", { deskKey: k }); } catch { /* window went away */ }
       }
     },
-    onTaken: () => { if (!sidecar && SERVER_PORT === port) void leaveTakenServer(); },
+    onTaken: () => { if (!sidecar && SERVER_PORT === port) noteDeskTaken(port); },
   });
 }
 
+/** The port of an adopted server whose desk another process holds, or null. */
+let deskTaken = /** @type {number | null} */ (null);
+
 /**
- * Leave an adopted server whose desk another process claimed first, and run
- * this app's own on the next free port, as for a server that fails the proof.
- * Staying would leave this window without the browser role and the desk
- * release there for as long as that server lives. With no free candidate port
- * the adoption stands, on the ceiling holdAdoptedDesk states.
+ * Tell the windows that an adopted server's desk is held by another process,
+ * or (null) that it no longer is.
+ *
+ * The app does not leave for a server of its own: two servers on one database
+ * would leave the second without the lock — no transcript scan — and the hooks
+ * still posting to the first. It stays, refused the browser role and a hold's
+ * release there, and the window says so with a Retry (ag:retryDesk). No token
+ * goes anywhere: the claim was refused, not sent on.
+ * @param {number | null} port
  */
-async function leaveTakenServer() {
-  const ports = Array.from({ length: PORT_CANDIDATES }, (_, i) => PREFERRED_PORT + i);
-  const states = await Promise.all(ports.map((p) => probe(p, 400)));
-  const at = states.indexOf("free");
-  if (at < 0) {
-    console.error(`[agentglass] :${SERVER_PORT} desk is held by another process and no candidate port is free; staying on it`);
-    return;
-  }
-  console.error(`[agentglass] :${SERVER_PORT} desk is held by another process; starting this app's own server on :${ports[at]}`);
-  deskKey = null;
-  for (const id of Array.from(laneHosts.keys())) destroyLaneHost(id);
-  SERVER_PORT = ports[at];
-  apiOrigin = `http://127.0.0.1:${SERVER_PORT}`;
-  await ensureServer(false);
+function noteDeskTaken(port) {
+  if (port === deskTaken) return;
+  deskTaken = port;
+  if (port !== null) console.error(`[agentglass] :${port} desk is claimed by another process; this window cannot drive the browser or release a held call there until it lets go, or that server is restarted`);
   for (const w of BrowserWindow.getAllWindows()) {
-    try { w.webContents.send("ag:server-changed", { origin: apiOrigin, token: sidecarUp ? currentToken() : null, deskKey }); } catch { /* window went away */ }
+    try { w.webContents.send("ag:desk-taken", port === null ? null : { port }); } catch { /* window went away */ }
   }
 }
 /* POSIX only. Windows hands a child a descriptor past stderr through the C
@@ -1218,6 +1215,7 @@ async function ensureServer(adopt) {
   if (adopt) { holdAdoptedDesk(port); reportSidecar(null); return true; } // a dev server or another instance is already up
   letDeskGo?.();
   letDeskGo = null;
+  noteDeskTaken(null);
   // AGENTGLASS_DIE_WITH_PARENT arms the server's own parent-death watchdog:
   // stopSidecar below cannot fire if this main process is SIGKILLed or crashes,
   // so the sidecar backs it up by exiting on its own once we are gone. Only
@@ -4408,6 +4406,11 @@ app.whenReady().then(async () => {
   // windows that already exist, and a page that reloads five minutes into a
   // dead sidecar would otherwise come up with no idea anything is wrong.
   ipcMain.on("ag:sidecarFailure", (e) => { e.returnValue = sidecarFailure; });
+  // The desk notice, for a window that opened after it was pushed, and the
+  // Retry that claims again. Only on an adopted server: a sidecar of ours has
+  // its key from the pipe.
+  ipcMain.on("ag:deskTaken", (e) => { e.returnValue = deskTaken === null ? null : { port: deskTaken }; });
+  ipcMain.on("ag:retryDesk", () => { if (!sidecar && deskTaken !== null) holdAdoptedDesk(SERVER_PORT); });
   /* Asked at CALL time, not captured at load like the line above: the renderer
      needs this exactly when it does not yet know, and a page that came up
      before the sidecar would freeze a false forever and go back to asking the

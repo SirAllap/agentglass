@@ -208,10 +208,28 @@ type ShellBridge = {
   /** Whether the shell has CONFIRMED a server, as opposed to not having seen
    *  one fail. Asked at call time; see whenServerUp. */
   sidecarUp?: () => boolean;
+  /** The adopted server whose desk another process holds, if any. */
+  deskTaken?: () => { port: number } | null;
+  onDeskTaken?: (fn: (d: { port: number } | null) => void) => () => void;
+  retryDesk?: () => void;
 };
 
 const SHELL: ShellBridge | undefined =
   typeof window !== "undefined" ? (window as unknown as { agentglass?: ShellBridge }).agentglass : undefined;
+
+/** The desk notice: which adopted server another process holds the desk of.
+ *  Asked once after subscribing, like onSidecarFailure, so a push that landed
+ *  between load and mount is not lost. A no-op outside the desktop. */
+export function onDeskTaken(fn: (d: { port: number } | null) => void): () => void {
+  if (!SHELL?.onDeskTaken) return () => {};
+  const off = SHELL.onDeskTaken(fn);
+  fn(SHELL.deskTaken?.() ?? null);
+  return off;
+}
+
+export function retryDesk(): void {
+  SHELL?.retryDesk?.();
+}
 
 /** What the shell knew when this page loaded. Null in a browser tab, which has
  *  no shell to ask and keeps the origin-probe path below instead. */

@@ -141,6 +141,19 @@ contextBridge.exposeInMainWorld("agentglass", {
     ipcRenderer.on("ag:server-failed", h);
     return () => ipcRenderer.removeListener("ag:server-failed", h);
   },
+  /** Which adopted server's desk another process holds, or null; asked now,
+   *  and pushed after. See noteDeskTaken in main.js. */
+  deskTaken: () => {
+    try { return ipcRenderer.sendSync("ag:deskTaken") || null; } catch { return null; }
+  },
+  /** @param {(p: { port: number } | null) => void} fn */
+  onDeskTaken: (fn) => {
+    /** @type {IpcListener} */
+    const h = (_e, payload) => { try { fn(payload || null); } catch { /* renderer's problem */ } };
+    ipcRenderer.on("ag:desk-taken", h);
+    return () => ipcRenderer.removeListener("ag:desk-taken", h);
+  },
+  retryDesk: () => ipcRenderer.send("ag:retryDesk"),
   // The window's own controls, because the frame that used to carry them is
   // gone. See main.js for why.
   winMinimize: () => ipcRenderer.invoke("ag:winMinimize"),

@@ -114,16 +114,12 @@ complement, rather than replace, the private reporting path below.
   nothing it could not already reach by forging that `Origin`. The limit is first
   come, first served: a token holder that claims before the app does, or in the
   moment after the app's claim drops, holds the desk until it lets go, and the
-  app's own window would be refused the browser role and a hold's release there
-  (a paired phone still answers). The app does not stay on such a server: when
-  its claim is refused because another process holds the desk, it leaves that
-  server and starts its own on the next free port, as for a server that fails
-  the proof, and says so in its log. Only when no candidate port is free does it
-  stay, refused, and it does not claim again until the app is restarted. A
-  sidecar that outlived an earlier launch was piped that launch's key and
-  refuses a claim the same way, so the app leaves it too. The app's own server
-  shares the database with the one it left, so it does not scan transcripts
-  while the other runs. With no app attached, a server started by hand is on the
+  app's own window is refused the browser role and a hold's release there (a
+  paired phone still answers). The app does not start a second server on the
+  same database to get around it; it says so in its log and in a banner in the
+  window, which claims again on Retry once the other process has let go, or
+  that server is restarted. A sidecar that outlived an earlier launch was piped
+  that launch's key and refuses a claim the same way. With no app attached, a server started by hand is on the
   `Origin` rule. An agent's lane is likewise only as private as
   `as` is honest: an identity is a claim, not a credential.
 - **The desktop app adopts only a server that proves it holds the token.** A
