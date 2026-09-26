@@ -802,7 +802,9 @@ export function followServerChanges(): () => void {
   if (!b?.onServerChanged) return () => {};
   return b.onServerChanged((p) => {
     adoptServer(p);
-    window.dispatchEvent(new CustomEvent("agentglass:server-changed"));
+    // The desk key alone — a claim on an adopted server taken or lost — moves
+    // no socket: same server, same token, and a reconnect would drop them all.
+    if (p.origin !== undefined || p.token !== undefined) window.dispatchEvent(new CustomEvent("agentglass:server-changed"));
   });
 }
 

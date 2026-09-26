@@ -28,8 +28,9 @@
  * it, or the renderer's debugging port when AGENTGLASS_DEBUG_PORT is set — and
  * so does a script running in the app's own window. It answers the Origin
  * forgery; the device store, the other way in, is held in memory (devices.ts).
- * And a server started by hand has no desk, so the Origin rule
- * and its limit stand there (mayReleaseAHold in index.ts).
+ * And a server started by hand has no desk until the app adopts it and claims
+ * one (below); until then the Origin rule and its limit stand there
+ * (mayReleaseAHold in index.ts).
  */
 import { closeSync, readFileSync } from "node:fs";
 
@@ -49,8 +50,53 @@ if (DESK_STARTED) {
   }
 }
 
+/*
+ * The claim: the key of a server the desktop app ADOPTED rather than started.
+ *
+ * Such a server was never handed a pipe — it was started by hand, or by an
+ * earlier launch — so it has no key, and the Origin rule was all that stood
+ * between a machine-token holder and the two things the key guards. The app
+ * that adopts it names a key of its own on `/desk/claim` and holds that request
+ * open; the key is this server's for exactly as long as the connection lives.
+ *
+ * Who may claim is the point, and index.ts decides it: the machine token
+ * itself, with no Origin, from a direct loopback socket. Every one of those
+ * callers can already forge the app's Origin, so a claim made by one that is
+ * not the app buys it nothing it did not have — except turning the forgery away
+ * from everyone else, which the same caller could do by stopping the server.
+ *
+ * CEILING: first come, first served. A token holder that claims before the app
+ * adopts the server, or in the moment between a dropped claim and the app's
+ * next attempt, holds the desk until it lets go: it is then the only caller
+ * that can register a browser window or release a hold from the desk, and the
+ * app's own window is refused both (a paired phone still answers a hold). The
+ * same caller could already take the browser role by forging the Origin, or
+ * stop the server; what it gains is keeping the person's window out, quietly,
+ * and the app says so in its log. A server started by an app — this launch or
+ * an earlier one, whose sidecar outlived it — never takes a claim: it has its
+ * key from the pipe, and an app that adopts it is refused both until that
+ * server is restarted.
+ */
+let claim: { key: string } | null = null;
+
+/**
+ * Take the desk for `k`: the release for this claim, or null where there is a
+ * key already, piped or claimed. The release frees only the claim it came with
+ * and does nothing a second time, so a drop that arrives late cannot free a
+ * later claim made with the same key.
+ */
+export function claimDesk(k: string): (() => void) | null {
+  if (DESK_STARTED || claim) return null;
+  const mine = { key: k };
+  claim = mine;
+  return () => { if (claim === mine) claim = null; };
+}
+
 /** The key, or "" where there is none. */
-export const deskKey = (): string => key;
+export const deskKey = (): string => key || claim?.key || "";
+
+/** Somebody holds this server's desk: the key, and not an Origin, lets a hold go. */
+export const deskHeld = (): boolean => DESK_STARTED || !!claim;
 
 /** The header the desktop app's renderer carries it in. */
 export const DESK_HEADER = "x-agentglass-desk";

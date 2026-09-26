@@ -103,12 +103,24 @@ complement, rather than replace, the private reporting path below.
 - **Who receives a browser ask is the app's to say.** Registering a window that
   can drive the built-in browser (`/browser/ready`), or the app window that makes
   lane hosts, decides who is sent every ask, fill text and URLs included, so it
-  is held to the same key as releasing a hold. The same ceiling applies, and one
-  more: where the app **adopts** a server that is already running (a sidecar left
-  from an earlier launch, one started by hand) that server has no desk key, so
-  the `Origin` rule is all there is and a caller holding the machine token can
-  register. An agent's lane is likewise only as private as `as` is honest: an
-  identity is a claim, not a credential.
+  is held to the same key as releasing a hold. The same ceiling applies. Where
+  the app **adopts** a server that is already running (a sidecar left from an
+  earlier launch, one started by hand), no pipe from this launch handed that
+  server a key, so the app claims its desk: it proves the server holds the token, names a fresh key
+  on `/desk/claim` and keeps that request open, and while it does the key is
+  what both gates ask for. Only the machine token itself may claim, with no
+  `Origin`, from a direct loopback socket — callers that could forge the app's
+  `Origin` anyway — so a claim made by something other than the app gains it
+  nothing it could not already reach by forging that `Origin`. The limit is first
+  come, first served: a token holder that claims before the app does, or in the
+  moment after the app's claim drops, holds the desk until it lets go, and the
+  app's own window is refused the browser role and a hold's release there (a
+  paired phone still answers); the app says so in its log, and restarting that
+  server ends it. A sidecar that outlived an earlier launch was piped that
+  launch's key, cannot be claimed, and refuses the new window the same way until
+  it is restarted. With no app attached, a server started by hand is on the
+  `Origin` rule. An agent's lane is likewise only as private as
+  `as` is honest: an identity is a claim, not a credential.
 - **The desktop app adopts only a server that proves it holds the token.** A
   server already on its port must answer a fresh random challenge on `/health`
   with an HMAC made with the token and bound to that port; until it does, the
@@ -124,8 +136,9 @@ complement, rather than replace, the private reporting path below.
   (`/gate/decide`) needs a paired device with the `answer` grant, or — where the
   desktop app started the server — the app's own key, which it mints at launch
   and hands only to its sidecar, down a pipe, and to its own renderer. There an
-  `Origin` opens nothing. On a server started by hand, where no desk holds a
-  key, an `Origin` this server already trusts still does: a browser attaches one
+  `Origin` opens nothing, and the same holds on a server the app adopted while
+  the app holds its claim (above). On a server started by hand, where no desk
+  holds a key, an `Origin` this server already trusts still does: a browser attaches one
   to every POST it makes. The machine token on its own is not an answer, because
   the agent whose call is held holds that token too. *Raising* a hold
   (`POST /gate`) is untouched: that one is the hook asking to be stopped. What

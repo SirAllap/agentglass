@@ -465,15 +465,16 @@ describe("the desktop app hands its key to the two ends that use it, and nowhere
     throw new Error(`no end to ${head}`);
   };
 
-  test("minted for each sidecar and sent down fd 3, never into its environment, never to a server the app adopted", () => {
+  test("minted for each sidecar and sent down fd 3, never into its environment; an adopted server gets the key it is claimed with", () => {
     expect(MAIN).toMatch(/^let deskKey = null;/m);
     const env = code(body(MAIN, "function sidecarEnv("));
     expect(env).not.toContain("deskKey");
     expect(env).toContain("if (DESK_PIPE) env.AGENTGLASS_DESK_FD = `3:${process.pid}`;");
     const boot = code(body(MAIN, "async function ensureServer("));
-    // An adopted server was never given a key, so the window is not handed one
-    // to send it.
-    expect(boot).toContain("if (adopt) { deskKey = null;");
+    // An adopted server was never piped a key: the app claims one for it
+    // (desk-claim.test.ts), and a spawn lets any such claim go.
+    expect(boot).toContain("if (adopt) { holdAdoptedDesk(port); reportSidecar(null); return true; }");
+    expect(boot.indexOf("letDeskGo?.();")).toBeLessThan(boot.indexOf("spawn(cmd"));
     const mint = boot.indexOf('deskKey = DESK_PIPE ? require("crypto").randomBytes(32)');
     expect(mint).toBeGreaterThan(-1);
     // Before the first await: createWindow() has just run, and its preload asks
@@ -485,10 +486,11 @@ describe("the desktop app hands its key to the two ends that use it, and nowhere
     const listen = boot.indexOf('desk?.on("error"');
     expect(listen).toBeGreaterThan(-1);
     expect(listen).toBeLessThan(boot.indexOf('if (deskKey) desk?.end(deskKey + "\\n");'));
-    // Declared, cleared on adopt, minted, piped (twice on one line), pushed on
-    // restart, and the IPC line (the channel's name and the answer): a use past
-    // these — a file, a variable, a log line — is a change somebody has to look at.
-    expect([...code(MAIN).matchAll(/\bdeskKey\b/g)]).toHaveLength(8);
+    // Declared, cleared, set and pushed by the adopted server's claim, minted,
+    // piped (twice on one line), pushed on restart, and the IPC line (the
+    // channel's name and the answer): a use past these — a file, a variable, a
+    // log line — is a change somebody has to look at.
+    expect([...code(MAIN).matchAll(/\bdeskKey\b/g)]).toHaveLength(10);
   });
 
   test("the renderer asks for it from a window's own page, is handed the next one on a restart, and carries it on the two requests that need it", () => {

@@ -194,7 +194,7 @@ import { probeAgents, ROSTER } from "./agentprobe.ts";
 import { join as joinPath, resolve as resolvePath, basename } from "node:path";
 import { hostname, tmpdir } from "node:os";
 import { privateHost, resolvePeer, originOf, guardedFetch, hostsOnly } from "./net.ts";
-import { DESK_HEADER, DESK_STARTED } from "./desk.ts";
+import { DESK_HEADER, claimDesk, deskHeld } from "./desk.ts";
 import { resolveToken, healthProof, tokenOk, isIntake, isAuthExempt, callerFor, allowed, scopeNeeded, pluginOfRequest, answersFromADevice, deskKeyOk, understudyRequiresToken, UNDERSTUDY_NO_TOKEN_ERROR, mintUnderstudyToken, revokeUnderstudyToken, type Caller, type Origin } from "./auth.ts";
 import {
   listPlugins, masterEnabled, setMaster, installPlugin, installFromCatalogue, updatePlugin, enablePlugin, disablePlugin, removePlugin,
@@ -1595,15 +1595,15 @@ function vouchedOrigin(o: string): boolean {
  * deliberate forgery through, the limit SECURITY.md states for such a server.
  */
 /*
- * CEILING, stated where it is decided: where the desktop app ADOPTS a server
- * that was already running (electron/main.js pickPort, `adopt`), that server has
- * no desk key, DESK_STARTED is false and the Origin rule below is all there is,
- * so a machine-token holder that sets one can register. Closing it needs the app
- * to refuse adoption, or a first-contact key exchange, and neither is in this
- * change. SECURITY.md says the same.
+ * Where the desktop app ADOPTS a server that was already running (electron/
+ * main.js pickPort, `adopt`), that server was never piped a key; the app claims
+ * one on /desk/claim and holds it while it runs (desk.ts, and its ceiling:
+ * whoever claims first holds it). With no claim held, the Origin rule below is
+ * all there is. SECURITY.md says
+ * the same.
  */
 function mayHostBrowser(req: Request): boolean {
-  if (DESK_STARTED) return deskKeyOk(req);
+  if (deskHeld()) return deskKeyOk(req);
   const o = req.headers.get("origin");
   return !!o && vouchedOrigin(o);
 }
@@ -1715,14 +1715,15 @@ function asActor(c: Caller | null | undefined): ActorSource | null {
  *   * or, where the desktop app started this server, **the app's key**
  *     (desk.ts): minted for each sidecar, handed down a pipe to this process
  *     and through the preload to the renderer, in no file, environment or argv
- *     an agent can read. There an Origin opens nothing. It used to, and a header
+ *     an agent can read. A server the app adopted instead holds the key the app
+ *     claimed for it, while the app holds the claim (desk.ts, and its ceiling). There an Origin opens nothing. It used to, and a header
  *     is a string: `curl -H "Origin: agentglass://app"` with the machine token
  *     released the agent's own call, for the helpful agent that reads "approve
  *     it" as the next step and for the one an injected instruction sends alike.
  *     The device store above it is read once, at start, for the same reason:
  *     a row planted in devices.json afterwards is not a device (devices.ts).
- *   * or, on a server started by hand, an **Origin** this server vouches for.
- *     No desk started it, so there is no key, and the client a person uses
+ *   * or, on a server started by hand and not claimed, an **Origin** this
+ *     server vouches for. There is no key, and the client a person uses
  *     there without pairing first is a browser, which attaches `Origin` to
  *     every POST and cannot hold a secret an agent on the same machine could
  *     not read as well. That keeps the obvious `curl` out and lets a deliberate
@@ -1740,7 +1741,7 @@ function asActor(c: Caller | null | undefined): ActorSource | null {
  */
 function mayReleaseAHold(req: Request, caller: Caller | null): boolean {
   if (answersFromADevice(caller)) return true;
-  if (DESK_STARTED) return deskKeyOk(req);
+  if (deskHeld()) return deskKeyOk(req);
   const o = req.headers.get("origin");
   return !!o && vouchedOrigin(o);
 }
@@ -2149,6 +2150,7 @@ const UNDERSTUDY_BLIND_PREFIXES = ["/pair/", "/providers/", "/auth/"];
  */
 const UNDERSTUDY_MACHINE = new Set([
   "/ingest", "/browser/ready", "/statusline", "/v1/traces", "/otlp/v1/traces", "/v1/logs", "/otlp/v1/logs",
+  "/desk/claim",
 ]);
 const UNDERSTUDY_BLIND = new Set(["/control", "/providers", "/pair", ...UNDERSTUDY_MACHINE]);
 function understudyBlind(pathname: string): boolean {
@@ -2499,8 +2501,8 @@ const server = Bun.serve<WsData>({
      */
     const heldPartyBlocked = () => json({
       ok: false,
-      error: "a held call is released by a person, not by the process being held — " + (DESK_STARTED
-        ? "the desktop app started this server, and it takes that from the app's own key or a "
+      error: "a held call is released by a person, not by the process being held — " + (deskHeld()
+        ? "the desktop app holds this server's desk, and it takes that from the app's own key or a "
           + "paired-device credential; this request carried neither, whatever its Origin says. "
           + "Answer it in the desktop app, or on a paired phone or browser."
         : "this request carried no Origin and no paired-device credential, which is "
@@ -4409,6 +4411,40 @@ const server = Bun.serve<WsData>({
     if (pathname === "/browser/audit" && req.method === "GET") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       return json({ ok: true, entries: exportAudit() });
+    }
+    if (pathname === "/desk/claim" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      /*
+       * The desktop app taking the desk of a server it adopted (desk.ts). Only
+       * the machine token itself — not a device, a plugin, the understudy or a
+       * seat — with no Origin, so no page, from a socket that is loopback
+       * without anything forwarding it, so nothing off the machine. Those are
+       * exactly the callers that could forge the app's Origin already.
+       */
+      const direct = peer.source === "socket" && !!clientIp && isLoopback(clientIp);
+      if (caller?.kind !== "machine" || caller.principal || req.headers.get("origin") || !direct) {
+        return json({ ok: false, error: "only the desktop app, on this machine, claims its desk" }, 403);
+      }
+      const k = req.headers.get(DESK_HEADER) || "";
+      if (k.length < 32 || k.length > 128) return json({ ok: false, error: "a desk key is 32 to 128 characters" }, 400);
+      const release = claimDesk(k);
+      if (!release) return json({ ok: false, error: "this server's desk is already held" }, 409);
+      /* Held while this response is open: the app reads it and never ends it.
+         A line a minute keeps the connection inside idleTimeout (255 s). The
+         release is this claim's own, so a late drop cannot free the next one
+         the app makes with the same key. */
+      let beat: ReturnType<typeof setInterval> | undefined;
+      const drop = () => { clearInterval(beat); release(); };
+      if (req.signal.aborted) { drop(); return new Response(null, { status: 499 }); }
+      req.signal.addEventListener("abort", drop, { once: true });
+      return new Response(new ReadableStream<Uint8Array>({
+        start(c) {
+          const line = new TextEncoder().encode("held\n");
+          c.enqueue(line);
+          beat = setInterval(() => { try { c.enqueue(line); } catch { drop(); } }, 60_000);
+        },
+        cancel: drop,
+      }), { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
     }
     /* The lanes that are open, for the Browser panel's quiet row. A read, so the
        same gate as the audit; ids and owners, nothing a page said. */

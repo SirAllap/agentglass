@@ -144,7 +144,7 @@ function armEgress(partition) {
 }
 const { browserMenuTemplate } = require("./browser-menu.js");
 const power = require("./power.js");
-const { probe: probeServer } = require("./server-probe.js");
+const { probe: probeServer, holdDesk } = require("./server-probe.js");
 
 /*
  * What `// @ts-check` at the top of this file buys, and why the JSDoc below it
@@ -746,11 +746,45 @@ function currentToken() {
  * minted for each sidecar this app spawns (ensureServer), never written
  * anywhere, and reaches that sidecar down a pipe and the renderer through the
  * preload — see server/src/desk.ts for what it closes and what it does not.
- * Null while the app runs on a server it adopted: that one was never given a
- * key, and must not be handed this one by the first answer the window sends.
+ * A server the app adopted was never piped one: there it is the key the app
+ * claimed (holdAdoptedDesk), and null until that server holds it.
  * @type {string | null}
  */
 let deskKey = null;
+/** Lets the claim on an adopted server's desk go; null when there is none. */
+let letDeskGo = /** @type {(() => void) | null} */ (null);
+
+/**
+ * Claim the desk of a server this app adopted, and keep claiming it.
+ *
+ * It was started by hand or by an earlier launch, so no pipe handed it a key
+ * and the Origin rule was all that guarded the browser role and a held call's
+ * release there (server/src/desk.ts). The claim is proved and held by
+ * server-probe.js; the windows are told the key once the server holds it, and
+ * told null when it does not. Null means one of three things: the server is on
+ * the Origin rule for a moment between claims; another process holds its desk;
+ * or an earlier launch of this app piped it a key this launch does not have. In
+ * the last two, this window can neither host the browser nor release a hold
+ * there until that server is restarted — the ceiling desk.ts states. A claim made on
+ * behalf of a server this app has since replaced with its own says nothing.
+ * @param {number} port
+ */
+function holdAdoptedDesk(port) {
+  letDeskGo?.();
+  deskKey = null;
+  letDeskGo = holdDesk(port, {
+    token: currentToken,
+    key: require("crypto").randomBytes(32).toString("base64url"),
+    onChange: (k) => {
+      if (sidecar || SERVER_PORT !== port) return;
+      if (!k) console.error(`[agentglass] :${port} did not give this app its desk: if another process holds it, or an earlier launch started that server, this window cannot drive the browser or release a held call there until the server is restarted`);
+      deskKey = k;
+      for (const w of BrowserWindow.getAllWindows()) {
+        try { w.webContents.send("ag:server-changed", { deskKey: k }); } catch { /* window went away */ }
+      }
+    },
+  });
+}
 /* POSIX only. Windows hands a child a descriptor past stderr through the C
    runtime's handle table, which nothing here has measured the compiled sidecar
    reading — and a sidecar told to expect a key it cannot read refuses its own
@@ -1152,7 +1186,9 @@ function tailStderr(child) {
 /** @param {boolean} adopt @returns {Promise<boolean>} */
 async function ensureServer(adopt) {
   const port = SERVER_PORT;
-  if (adopt) { deskKey = null; reportSidecar(null); return true; } // a dev server or another instance is already up
+  if (adopt) { holdAdoptedDesk(port); reportSidecar(null); return true; } // a dev server or another instance is already up
+  letDeskGo?.();
+  letDeskGo = null;
   // AGENTGLASS_DIE_WITH_PARENT arms the server's own parent-death watchdog:
   // stopSidecar below cannot fire if this main process is SIGKILLed or crashes,
   // so the sidecar backs it up by exiting on its own once we are gone. Only
@@ -4424,6 +4460,7 @@ let stopped = false;
 function stopSidecar() {
   if (stopped) return;
   stopped = true;
+  letDeskGo?.();
   try { power.shutdown(); } catch { /* nothing held */ }
   killSidecar();
 }

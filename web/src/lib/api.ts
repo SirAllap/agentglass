@@ -493,7 +493,8 @@ export let WS_URL = withToken(SERVER.replace(/^http/, "ws") + "/stream");
  */
 export function adoptServer(next: { origin?: string | null; token?: string | null; deskKey?: string | null }): void {
   if (next.origin) SERVER = next.origin.replace(/\/$/, "");
-  // A new sidecar has a new desk key, and one the app adopted has none.
+  // A new sidecar has a new desk key, and one the app adopted has the key the
+  // app claimed for it, or none while that claim is not held.
   if (next.deskKey !== undefined) DESK_KEY = next.deskKey ?? "";
   if (next.token !== undefined) {
     TOKEN = next.token ?? "";

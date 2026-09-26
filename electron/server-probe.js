@@ -74,4 +74,67 @@ function probe(port, opts) {
   });
 }
 
-module.exports = { healthProof, probe };
+/**
+ * Hold the desk of a server the shell adopted rather than started.
+ *
+ * Such a server was never piped a key (server/src/desk.ts), so the shell names
+ * one on `/desk/claim` and keeps that request open: the key is the server's for
+ * as long as the connection lives, and `onChange` hears it — the key once the
+ * server holds it, null while it does not. A dropped claim is tried again after
+ * `retryMs`, doubling while attempts keep failing (a tokenless dev server never
+ * will) up to a minute, until `stop()`.
+ *
+ * Every attempt proves the server first. A server restarted under the shell
+ * leaves the port to whoever binds it next, and a claim carries both the token
+ * and the key, so neither goes to a port that has not just answered the
+ * challenge. The proof and the claim are two connections: a server that dies
+ * and is replaced in the milliseconds between them is the window every request
+ * the renderer sends after adoption already has.
+ *
+ * @param {number} port
+ * @param {{ token: () => string | null, key: string, onChange: (key: string | null) => void, retryMs?: number, host?: string }} opts
+ * @returns {() => void} stop, which lets the claim go
+ */
+function holdDesk(port, opts) {
+  const { token, key, onChange, retryMs = 5000, host = "127.0.0.1" } = opts;
+  let stopped = false;
+  /** @type {http.ClientRequest | null} */
+  let req = null;
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let timer;
+  /** @type {string | null | undefined} */
+  let told;
+  let wait = retryMs;
+  const say = (/** @type {string | null} */ k) => { if (!stopped && k !== told) { told = k; onChange(k); } };
+  async function attempt() {
+    let over = false;
+    const done = () => {
+      if (over) return;
+      over = true;
+      req = null;
+      // A claim that was held and dropped retries at once-ish; one that never
+      // got that far backs off.
+      wait = told === key ? retryMs : Math.min(wait * 2, Math.max(retryMs, 60_000));
+      say(null);
+      if (!stopped) timer = setTimeout(attempt, wait);
+    };
+    const t = token();
+    if (!t || (await probe(port, { token: t, host })) !== "ours" || stopped) return done();
+    req = http.request({
+      host, port, path: "/desk/claim", method: "POST",
+      headers: { authorization: `Bearer ${t}`, "x-agentglass-desk": key, "content-length": 0 },
+    }, (res) => {
+      if (res.statusCode !== 200) { res.resume(); return done(); }
+      res.on("data", () => say(key));
+      res.on("end", done);
+      res.on("close", done);
+      res.on("error", done);
+    });
+    req.on("error", done);
+    req.end();
+  }
+  void attempt();
+  return () => { stopped = true; clearTimeout(timer); req?.destroy(); };
+}
+
+module.exports = { healthProof, probe, holdDesk };
