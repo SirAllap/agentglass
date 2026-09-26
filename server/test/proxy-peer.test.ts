@@ -9,9 +9,12 @@
 //
 // The obvious fix (read X-Forwarded-For) is a worse bug, so most of what is
 // asserted here is the *refusals*.
-import { describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { resolvePeer, originOf, tailnetAddress, type Peer } from "../src/net.ts";
-import { proxiedByTailscaled, __resetProxyProbe } from "../src/remote.ts";
+import { proxiedByTailscaled, __resetProxyProbe, __setProcNetFiles, __trustProxyUid } from "../src/remote.ts";
 
 const H = (h: Record<string, string>) => new Headers(h);
 
@@ -131,12 +134,21 @@ describe("resolvePeer — fails closed rather than guessing", () => {
   });
 });
 
-describe("proxiedByTailscaled — the trigger stays off the hot path", () => {
-  it("says no when the request carries no forwarding header", () => {
-    // His hooks. They must never pay for the /proc read, and they must never
-    // stop being loopback.
+describe("proxiedByTailscaled — his own requests stay loopback", () => {
+  it("says no for a real header-less request from this user", () => {
+    // His hooks: a fresh connection, no forwarding header, his own uid. They
+    // must never stop being loopback, whether or not tailscaled is installed.
+    if (process.platform !== "linux") return;
     __resetProxyProbe();
-    expect(proxiedByTailscaled({ address: "127.0.0.1", port: 12345 }, 4000, H({}))).toBe(false);
+    const srv = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: (req, s) => new Response(String(proxiedByTailscaled(s.requestIP(req), s.port!, req.headers))),
+    });
+    return fetch(`http://127.0.0.1:${srv.port}/`)
+      .then((r) => r.text())
+      .then((t) => expect(t).toBe("false"))
+      .finally(() => srv.stop(true));
   });
 
   it("says no for a socket peer that is not loopback", () => {
@@ -173,5 +185,102 @@ describe("proxiedByTailscaled — the trigger stays off the hot path", () => {
         expect(t).toBe("false");
       })
       .finally(() => srv.stop(true));
+  });
+});
+
+describe("proxiedByTailscaled — a raw TCP forward carries no header", () => {
+  // `tailscale serve --tcp` (and --tls-terminated-tcp) re-dials 127.0.0.1 and
+  // adds nothing to the bytes, so a header trigger never fires and the socket
+  // alone said "loopback": a tailnet peer reached the tokenless sinks, and on a
+  // hand-started server with no token, everything. The uid that owns the
+  // connecting socket is what tells the two apart, header or not.
+  //
+  // /proc is faked with a fixture so the test can say "tailscaled owns this
+  // socket" without root and without Tailscale. The fixture uid is never this
+  // process's own: a CI container runs as root, and a tailscaled that shares
+  // our uid is a case the code refuses to decide on (see below).
+  const ours = 4000;
+  const peerPort = 51234;
+  const hex = (n: number) => n.toString(16).toUpperCase().padStart(4, "0");
+  const me = typeof process.getuid === "function" ? process.getuid() : 1000;
+  const daemon = me + 1;
+  const row = (uid: number, st = "01") =>
+    `   0: 0100007F:${hex(peerPort)} 0100007F:${hex(ours)} ${st} 00000000:00000000 00:00000000 00000000  ${uid}        0 4242 1 0000000000000000 20 4 30 10 -1`;
+  const header = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode";
+  let dir = "";
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "agx-procnet-"));
+  });
+  afterAll(() => {
+    __setProcNetFiles(null);
+    __resetProxyProbe();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const fake = (body: string) => {
+    const f = join(dir, `tcp-${Math.random().toString(36).slice(2)}`);
+    writeFileSync(f, header + "\n" + body + "\n");
+    __resetProxyProbe();
+    __setProcNetFiles([f]);
+  };
+
+  it("treats a header-less loopback socket owned by tailscaled as proxied, so not loopback", () => {
+    fake(row(daemon));
+    __trustProxyUid(daemon);
+    const proxied = proxiedByTailscaled({ address: "127.0.0.1", port: peerPort }, ours, H({}));
+    expect(proxied).toBe(true);
+    // And what that means for the caller: no forwarded address, never loopback.
+    const p = resolvePeer({ socketAddress: "127.0.0.1", headers: H({}), proxied });
+    expect(originOf(p)).not.toBe("loopback");
+  });
+
+  it("keeps a header-less loopback socket owned by this user as loopback", () => {
+    // His hooks: same shape, his own uid. They must stay local.
+    fake(row(me));
+    __trustProxyUid(daemon);
+    expect(proxiedByTailscaled({ address: "127.0.0.1", port: peerPort }, ours, H({}))).toBe(false);
+  });
+
+  it("treats a half-closed socket owned by tailscaled as proxied", () => {
+    // A forward that sends and then half-closes is FIN_WAIT1 (04) by the time
+    // the handler runs, with its owner still on the row.
+    fake(row(daemon, "04"));
+    __trustProxyUid(daemon);
+    expect(proxiedByTailscaled({ address: "127.0.0.1", port: peerPort }, ours, H({}))).toBe(true);
+    fake(row(daemon, "05"));
+    __trustProxyUid(daemon);
+    expect(proxiedByTailscaled({ address: "127.0.0.1", port: peerPort }, ours, H({}))).toBe(true);
+  });
+
+  it("keeps a half-closed socket owned by this user as loopback", () => {
+    // The other side of reading FIN_WAIT rows: a hook that half-closes is
+    // found, and so is not failed closed as a socket nobody owns.
+    fake(row(me, "04"));
+    __trustProxyUid(daemon);
+    expect(proxiedByTailscaled({ address: "127.0.0.1", port: peerPort }, ours, H({}))).toBe(false);
+  });
+
+  it("fails closed when a readable table has no row for the connection", () => {
+    // tailscaled is present under another uid and the socket cannot be found
+    // even after a fresh read: not loopback. Only a TIME_WAIT row, which is
+    // ignored, is left for the port.
+    fake(row(me, "06"));
+    __trustProxyUid(daemon);
+    expect(proxiedByTailscaled({ address: "127.0.0.1", port: peerPort }, ours, H({}))).toBe(true);
+  });
+
+  it("keeps a header-less socket as loopback where there is no socket table at all", () => {
+    __resetProxyProbe();
+    __setProcNetFiles([join(dir, "no-such-table")]);
+    __trustProxyUid(daemon);
+    expect(proxiedByTailscaled({ address: "127.0.0.1", port: peerPort }, ours, H({}))).toBe(false);
+  });
+
+  it("refuses to decide from the uid alone when tailscaled runs as this user", () => {
+    // Then every local process has tailscaled's uid and the socket owner says
+    // nothing; only the header trigger is left, as before.
+    fake(row(me));
+    __trustProxyUid(me);
+    expect(proxiedByTailscaled({ address: "127.0.0.1", port: peerPort }, ours, H({}))).toBe(false);
   });
 });

@@ -57,7 +57,11 @@ complement, rather than replace, the private reporting path below.
   tailnet the loopback exemption above. Forwarding headers are never the
   decision on their own: `X-Forwarded-For` is consulted only when the socket peer
   is loopback *and* the uid owning that socket is tailscaled's, and a proxied
-  request is treated as remote unconditionally.
+  request is treated as remote unconditionally. The socket owner is checked for
+  every loopback connection, header or not, so a raw TCP forward
+  (`tailscale serve --tcp`) that adds no header is remote too. Not covered: a
+  forwarder running as your own user (`socat`, `ssh -R`, `ngrok tcp`), which is
+  indistinguishable from your own processes, and systems without `/proc`.
 - **Intake is rate-limited** rather than authenticated: `AGENTGLASS_RATE_MAX`
   requests per source-address+route inside `AGENTGLASS_RATE_WINDOW_MS`.
 - **Hooks refuse to send anywhere but this machine.** The hook and seed scripts
@@ -105,6 +109,17 @@ complement, rather than replace, the private reporting path below.
   the `Origin` rule is all there is and a caller holding the machine token can
   register. An agent's lane is likewise only as private as `as` is honest: an
   identity is a claim, not a credential.
+- **The desktop app adopts only a server that proves it holds the token.** A
+  server already on its port must answer a fresh random challenge on `/health`
+  with an HMAC made with the token and bound to that port; until it does, the
+  app sends it nothing secret, and a server that cannot prove it (another
+  account's process, a container on the host network, a build from before the
+  check, a server started by hand without a token) is left alone while the app
+  starts its own on the next free port. If the app's own server then fails to
+  come up — something won the bind first, or every candidate port is taken —
+  the windows drop the token before they make a request. A development shell
+  (`make desktop-dev`) still adopts the tokenless `make dev` server on the
+  marker alone.
 - **A held call is not released by the process being held.** Answering one
   (`/gate/decide`) needs a paired device with the `answer` grant, or — where the
   desktop app started the server — the app's own key, which it mints at launch

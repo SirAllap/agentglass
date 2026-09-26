@@ -194,7 +194,7 @@ import { join as joinPath, resolve as resolvePath, basename } from "node:path";
 import { hostname, tmpdir } from "node:os";
 import { privateHost, resolvePeer, originOf, guardedFetch, hostsOnly } from "./net.ts";
 import { DESK_HEADER, DESK_STARTED } from "./desk.ts";
-import { resolveToken, tokenOk, isIntake, isAuthExempt, callerFor, allowed, scopeNeeded, pluginOfRequest, answersFromADevice, deskKeyOk, understudyRequiresToken, UNDERSTUDY_NO_TOKEN_ERROR, mintUnderstudyToken, revokeUnderstudyToken, type Caller, type Origin } from "./auth.ts";
+import { resolveToken, healthProof, tokenOk, isIntake, isAuthExempt, callerFor, allowed, scopeNeeded, pluginOfRequest, answersFromADevice, deskKeyOk, understudyRequiresToken, UNDERSTUDY_NO_TOKEN_ERROR, mintUnderstudyToken, revokeUnderstudyToken, type Caller, type Origin } from "./auth.ts";
 import {
   listPlugins, masterEnabled, setMaster, installPlugin, installFromCatalogue, updatePlugin, enablePlugin, disablePlugin, removePlugin,
   contributesOf, isRunning, pluginSettings, setPluginSettings, resumeEnabledPlugins, stopAllPluginsSync, pluginIcon,
@@ -2849,9 +2849,20 @@ const server = Bun.serve<WsData>({
        * That cost an afternoon of looking for a bug in the wrong half. The
        * window compares this against what it saw when it loaded.
        */
+      // The marker above is claimable by any process that binds the port
+      // first, so the shell also asks for proof this server holds the token
+      // before it adopts it and sends that token here (auth.ts healthProof).
+      // A tokenless server has nothing to prove with and answers without it.
+      const challenge = url.searchParams.get("challenge");
+      // Only to a direct loopback peer: the shell asks over 127.0.0.1, and
+      // answering anyone else turns /health into a signing service a squatter
+      // could relay a challenge to through the LAN or tailnet address.
+      const direct = peer.source === "socket" && !!clientIp && isLoopback(clientIp);
+      const proof = challenge && challenge.length <= 128 && AUTH_TOKEN && direct
+        ? healthProof(AUTH_TOKEN, srv.port ?? PORT, challenge) : undefined;
       return json({
         ok: true, service: "agentglass", clients: clients.size,
-        notifyWatching: notifyWatching(), build: buildStamp(),
+        notifyWatching: notifyWatching(), build: buildStamp(), proof,
       });
     }
 

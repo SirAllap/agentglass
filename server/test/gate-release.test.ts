@@ -493,7 +493,7 @@ describe("the desktop app hands its key to the two ends that use it, and nowhere
 
   test("the renderer asks for it from a window's own page, is handed the next one on a restart, and carries it on the two requests that need it", () => {
     expect(MAIN).toContain('ipcMain.on("ag:deskKey", (e) => { e.returnValue = (e.sender.getType() === "window" || isLaneHost(e.sender)) ? deskKey : null; });');
-    expect(code(body(MAIN, "async function restartSidecar("))).toContain("{ origin: apiOrigin, token: currentToken(), deskKey }");
+    expect(code(body(MAIN, "async function restartSidecar("))).toContain("{ origin: apiOrigin, token: sidecarUp ? currentToken() : null, deskKey }");
     expect(PRELOAD).toContain('ipcRenderer.sendSync("ag:deskKey")');
     expect(API).toContain(`"${DESK_HEADER}": DESK_KEY`);
     expect(code(body(API, "export function adoptServer(", "): void {"))).toContain('if (next.deskKey !== undefined) DESK_KEY = next.deskKey ?? "";');

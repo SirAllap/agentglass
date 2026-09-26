@@ -646,10 +646,21 @@ export function whenServerUp(): Promise<void> {
        * shape of the bug that opened this app onto a black screen once already.
        */
       let off: (() => void) | null = null;
+      let timer: ReturnType<typeof setTimeout> | undefined;
       const done = () => { clearTimeout(timer); off?.(); resolve(); };
-      // Bounded: a sidecar that is never coming has to surface as the errors
-      // the banner reads, not as a cockpit that waits for ever in silence.
-      const timer = setTimeout(done, 6000);
+      // A timeout is not a verdict. Releasing on one sent every boot request,
+      // token included, to whatever held the port while the app's own server
+      // hung — a server nobody had proved. So the timer only re-asks whether
+      // the shell has confirmed ours (a missed report), and otherwise the gate
+      // waits for the verdict. That is still bounded: the shell's start poll
+      // gives up at twelve seconds and reports a failure, after taking the
+      // token back (reportSidecar in electron/main.js). A shell too old to
+      // answer sidecarUp keeps the plain timeout.
+      const check = () => {
+        if (!SHELL.sidecarUp || SHELL.sidecarUp()) done();
+        else timer = setTimeout(check, 1000);
+      };
+      timer = setTimeout(check, 6000);
       // ANY verdict releases the gate, not only the good one. The shell reports
       // a failure down this same channel, and holding the requests back after
       // it has said "there is no server" would spend the probe's 1.5s, then six

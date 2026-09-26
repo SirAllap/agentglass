@@ -144,6 +144,7 @@ function armEgress(partition) {
 }
 const { browserMenuTemplate } = require("./browser-menu.js");
 const power = require("./power.js");
+const { probe: probeServer } = require("./server-probe.js");
 
 /*
  * What `// @ts-check` at the top of this file buys, and why the JSDoc below it
@@ -956,39 +957,14 @@ function serveApp() {
 }
 
 /**
- * What is answering on a port: our server, someone else's, or nothing.
- *
- * "Answers 200" is NOT proof it is us, and treating it as proof is a bug with
- * teeth: a machine that autostarts any other local dev server on :4000 -- an
- * observability server, an API stub, anything -- handed agentglass a stranger,
- * which the shell then adopted. Every panel fetched from it, got whatever it
- * says, and the app came up empty ("no repos found") with no error anywhere.
- * That is why /health names itself and why this reads the body.
+ * What is answering on a port: our server, someone else's, or nothing. "Ours"
+ * means it proved it holds this app's token; see server-probe.js for why the
+ * body saying so is not enough, and why a development shell still takes it.
  * @param {number} port @param {number} [timeoutMs]
  * @returns {Promise<"ours" | "foreign" | "free">}
  */
 function probe(port, timeoutMs = 1000) {
-  return new Promise((resolve) => {
-    const req = http.get(`http://127.0.0.1:${port}/health`, (r) => {
-      if (r.statusCode !== 200) { r.resume(); return resolve("foreign"); }
-      let body = "";
-      r.setEncoding("utf8");
-      // Bounded: a foreign server may stream something enormous at us.
-      r.on("data", (c) => { body += c; if (body.length > 4096) req.destroy(); });
-      r.on("end", () => {
-        try {
-          const j = JSON.parse(body);
-          // `service` is the marker; the shape check keeps a sidecar built
-          // before that field existed adoptable rather than orphaned.
-          const ours = j.service === "agentglass" || (j.ok === true && typeof j.clients === "number");
-          resolve(ours ? "ours" : "foreign");
-        } catch { resolve("foreign"); }
-      });
-      r.on("error", () => resolve("foreign"));
-    });
-    req.on("error", () => resolve("free")); // refused == nothing listening
-    req.setTimeout(timeoutMs, () => { req.destroy(); resolve("foreign") });
-  });
+  return probeServer(port, { token: currentToken(), allowUnproven: !PACKAGED, timeoutMs });
 }
 
 /**
@@ -1145,6 +1121,11 @@ function reportSidecar(failure) {
   if (failure) console.error(`[agentglass] sidecar: ${failure.reason} — ${failure.detail || "(no detail)"}`);
   if (failure) writeSidecarLog(failure);
   for (const w of BrowserWindow.getAllWindows()) {
+    // No server of ours came up, so whatever holds the port is unproven: take
+    // the token back before the failure releases the window's first requests
+    // (whenServerUp in web/src/lib/api.ts), or they carry it to a squatter
+    // that won the bind. Sent first; one webContents delivers in order.
+    if (failure) { try { w.webContents.send("ag:server-changed", { token: null }); } catch { /* window went away */ } }
     try { w.webContents.send("ag:server-failed", failure); } catch { /* window went away */ }
   }
 }
@@ -1360,6 +1341,7 @@ async function restartSidecar() {
   /* The new server has no lanes, so the windows that were hosting the old one's
      would sit registered with a key it will not accept. */
   for (const id of Array.from(laneHosts.keys())) destroyLaneHost(id);
+  const hadChild = !!sidecar;
   killSidecar();
 
   // Wait for the socket to actually be gone before looking for a port.
@@ -1370,8 +1352,15 @@ async function restartSidecar() {
   // finishes dying, and the app is left with no server at all — no window, no
   // error, just every panel failing. Measured intermittent: the same click
   // worked and then did not.
+  //
+  // "Gone" is nothing listening, not "no longer proves it is ours": revoking
+  // remote access rotates the token before this runs, so the corpse fails the
+  // proof while it still holds the port, and pickPort would then move away.
+  // An adopted server had no child to kill and will not go away, so there is
+  // nothing to wait for once it stops answering as ours.
   for (let i = 0; i < 50; i++) {
-    if ((await probe(SERVER_PORT, 300)) !== "ours") break;
+    const state = await probe(SERVER_PORT, 300);
+    if (state === "free" || (!hadChild && state === "foreign")) break;
     await new Promise((r) => setTimeout(r, 100));
   }
 
@@ -1390,7 +1379,7 @@ async function restartSidecar() {
   // live bindings (web/src/lib/api.ts), so handing it the new pair is enough —
   // the next fetch and the next socket connect use them.
   for (const w of BrowserWindow.getAllWindows()) {
-    try { w.webContents.send("ag:server-changed", { origin: apiOrigin, token: currentToken(), deskKey }); } catch { /* window went away mid-toggle */ }
+    try { w.webContents.send("ag:server-changed", { origin: apiOrigin, token: sidecarUp ? currentToken() : null, deskKey }); } catch { /* window went away mid-toggle */ }
   }
 }
 
@@ -4312,7 +4301,9 @@ app.whenReady().then(async () => {
   // body runs. Turning remote access on makes the token mandatory for *every*
   // caller, the local renderer included — without this the app would lock
   // itself out of its own sidecar the moment the toggle was flipped.
-  ipcMain.on("ag:apiToken", (e) => { e.returnValue = currentToken(); });
+  // Withheld once the sidecar has failed: a window loaded after that would
+  // otherwise send it to whatever holds the port (see reportSidecar).
+  ipcMain.on("ag:apiToken", (e) => { e.returnValue = sidecarFailure ? null : currentToken(); });
   // The desk's key, to a window's own page and to nothing a window hosts: the
   // agent browser's guests are webviews, and a page an agent opened must not
   // be the one thing on this machine that can let its hold go.
@@ -4412,7 +4403,7 @@ app.whenReady().then(async () => {
   void ensureServer(adopt);
   /* Never fatal. A window that keeps the machine awake is a convenience; a
      window that does not open is not one. */
-  try { power.init({ configDir: CONFIG_DIR, apiOrigin: () => apiOrigin, token: currentToken }); }
+  try { power.init({ configDir: CONFIG_DIR, apiOrigin: () => apiOrigin, token: () => (sidecarUp ? currentToken() : "") }); }
   catch (e) { console.error("[power] not started:", e instanceof Error ? e.message : e); }
 });
 

@@ -43,6 +43,7 @@
       "egress-guard.js",
       "browser-menu.js",
       "power.js",
+      "server-probe.js",
       "preload.js",
       "icons/**"
     ],
