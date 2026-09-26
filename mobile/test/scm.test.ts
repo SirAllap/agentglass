@@ -7,7 +7,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import type { GitBranch } from "../../shared/types.ts";
-import { keepOrder, newBranchProblem, orderBranches, stashTitle, trackWords, VIEWS } from "../src/model/scm.ts";
+import { keepOrder, newBranchProblem, orderBranches, scmSuccessText, stashTitle, trackWords, VIEWS } from "../src/model/scm.ts";
 
 const repos = await Bun.file(new URL("../app/(tabs)/repos.tsx", import.meta.url)).text();
 
@@ -85,6 +85,48 @@ describe("the screen, read", () => {
   test("no stash-drop, no branch-delete: those are left for later", () => {
     expect(repos).not.toContain("/git/stash-drop");
     expect(repos).not.toContain("/git/branch-delete");
+  });
+  test("the commit footer rises above the keyboard rather than under it", () => {
+    // The footer is a flex sibling of the file list, not inside a Modal, so a
+    // screen-level KeyboardAvoidingView (unlike Sheet's) does reach it.
+    expect(repos).toContain("<KeyboardAvoidingView");
+    expect(repos).toContain('behavior="padding"');
+  });
+  test("the avoider counts the header it sits under", () => {
+    // Without the offset the padding came out one header short and the
+    // footer stopped just under the keyboard's top edge on the emulator.
+    expect(repos).toContain("keyboardVerticalOffset={headerHeight}");
+    expect(repos).toContain("const headerHeight = useHeaderHeight();");
+  });
+  test("a write that lands says so, not just a write that fails", () => {
+    // `said` used to be set on failure and cleared to null on success — the
+    // commit footer's only feedback was silence. `ok: true` is what makes the
+    // same line that shows an error show a landed write instead.
+    expect(repos).toContain("setSaid(text ? { ok: true, text } : null)");
+    expect(repos).toContain('void act("push", "/git/push", { root }, { branch: repo?.branch });');
+  });
+});
+
+describe("scmSuccessText", () => {
+  // Push, Commit, stash Apply and branch Switch used to clear `said` on
+  // success and say nothing — the one write that leaves the machine (Push)
+  // included. This is the line that goes there instead.
+  test("commit counts the files, singular and plural", () => {
+    expect(scmSuccessText("/git/commit-staged", { files: 1 })).toBe("Committed 1 file");
+    expect(scmSuccessText("/git/commit-staged", { files: 2 })).toBe("Committed 2 files");
+  });
+  test("push names the branch it went to, or says nothing more than Pushed", () => {
+    expect(scmSuccessText("/git/push", { branch: "feat/orbit-1042" })).toBe("Pushed feat/orbit-1042 to origin");
+    expect(scmSuccessText("/git/push", {})).toBe("Pushed to origin");
+  });
+  test("stash apply names the slot", () => {
+    expect(scmSuccessText("/git/stash-apply", { index: 0 })).toBe("Applied stash@{0}");
+  });
+  test("checkout names where it landed", () => {
+    expect(scmSuccessText("/git/checkout", { branch: "main" })).toBe("Switched to main");
+  });
+  test("a write nobody asked a success line for gets none", () => {
+    expect(scmSuccessText("/git/stage", {})).toBeNull();
   });
 });
 

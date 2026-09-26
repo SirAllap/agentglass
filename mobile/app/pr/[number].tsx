@@ -50,7 +50,7 @@ import {
   type MergeMethod,
 } from "../../../shared/mergeMethod.ts";
 import { Btn, Card, Chip, Group, GroupTitle, Label, Note, Row, Segmented, Sheet, SheetRow, TAP, Toggle } from "../../src/ui.tsx";
-import { mergeObstacles } from "../../src/model/mergeObstacles.ts";
+import { changesRequestedWarning, mergeObstacles } from "../../src/model/mergeObstacles.ts";
 import { Glyph, type GlyphName } from "../../src/nav/glyphs.tsx";
 import { ChevronIcon } from "../../src/nav/icons.tsx";
 import { C, MONO, RADIUS, SPACE, T, ink } from "../../src/theme.ts";
@@ -436,6 +436,9 @@ export default function PrScreen(): React.ReactNode {
   const methods = useMemo(() => allowedMethods(detail?.mergePolicy), [detail?.mergePolicy]);
   /** The parts of a blocked verdict, one row each. See src/model/mergeObstacles.ts. */
   const obstacles = useMemo(() => (detail ? mergeObstacles(detail) : []), [detail]);
+  /** "Ready to merge" is GitHub's answer to "will it take it", not to "should
+   *  you take it over this review" — see src/model/mergeObstacles.ts. */
+  const changesRequested = useMemo(() => (detail ? changesRequestedWarning(detail) : null), [detail]);
   useEffect(() => {
     if (detail && method === null) setMethod(pickMergeMethod(undefined, detail.mergePolicy));
   }, [detail, method]);
@@ -977,6 +980,14 @@ export default function PrScreen(): React.ReactNode {
                 place to tell them the branch is behind. */}
             <Note tone={gate?.blocked ? "bad" : "quiet"}>{gate?.line ?? ""}</Note>
 
+            {/* GitHub's verdict above is about whether it will TAKE the merge,
+                not about the review sitting under it — a required approval is
+                the only kind `gate` refuses over, and branch protection can
+                leave a CHANGES_REQUESTED review mergeable anyway. Said here so
+                the button one screen down does not contradict the green line
+                above it. */}
+            {changesRequested ? <Note tone="bad">{changesRequested.note}</Note> : null}
+
             {/* Then the parts of it, when it is blocked: the line above names
                 the first problem, and a pull request that is red, behind and
                 unreviewed is all three. A failed check opens the logs; the
@@ -1055,7 +1066,7 @@ export default function PrScreen(): React.ReactNode {
 
             <Btn
               label={auto ? "Arm it" : method ? MERGE_LABEL[method] : "Merge"}
-              tone="good"
+              tone={changesRequested ? changesRequested.buttonTone : "good"}
               busy={mergeBusy}
               // Blocked is not disabled. GitHub is the authority on whether it
               // will take it, `mergeState` can be stale by minutes, and a

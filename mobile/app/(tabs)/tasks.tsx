@@ -38,7 +38,7 @@ import { useTaskProvider } from "../../src/state/use-tracks-work.ts";
 import { localMeta, visibleLocal } from "../../src/model/localTasks.ts";
 import { projectNames, scopeLocal } from "../../src/model/taskScope.ts";
 import { matchesQuery } from "../../../shared/taskref.ts";
-import { Card, Label, Note, Segmented, Sheet, SheetRow, TAP, groupEdge } from "../../src/ui.tsx";
+import { Card, Label, ListEmpty, Note, Segmented, Sheet, SheetRow, TAP, groupEdge } from "../../src/ui.tsx";
 import { Glyph } from "../../src/nav/glyphs.tsx";
 import { dueIn } from "../../src/lib/dates.ts";
 import { C, MONO, RADIUS, SPACE, T, tint } from "../../src/theme.ts";
@@ -414,14 +414,15 @@ export default function TasksScreen(): React.ReactNode {
           refreshControl={<RefreshControl refreshing={pulling} onRefresh={onRefresh} tintColor={C.text3} />}
           ListEmptyComponent={
             local === null ? null : (
-              <Card>
-                <Label text={error ? "Cannot read the list" : "Nothing here"} />
-                <Note tone={error ? "bad" : "quiet"}>
-                  {error ?? (scoped
-                    ? "Nothing for this project. Tap Everything above to see the rest of the machine."
-                    : "Nothing is still open. The switch above shows the rest.")}
-                </Note>
-              </Card>
+              <ListEmpty
+                error={error}
+                errorTitle="Cannot read the list"
+                emptyTitle="Nothing here"
+                emptyText={scoped
+                  ? "Nothing for this project. Tap Everything above to see the rest of the machine."
+                  : "Nothing is still open. The switch above shows the rest."}
+                onRetry={() => { void load(); }}
+              />
             )
           }
           renderItem={({ item, index }) => (
@@ -443,12 +444,13 @@ export default function TasksScreen(): React.ReactNode {
           refreshControl={<RefreshControl refreshing={pulling} onRefresh={onRefresh} tintColor={C.text3} />}
           ListEmptyComponent={
             tasks === null ? null : (
-              <Card>
-                <Label text={error ? "Cannot read the board" : "Nothing here"} />
-                <Note tone={error ? "bad" : "quiet"}>
-                  {error ?? "This view has no cards that are still open. The switch above shows the rest."}
-                </Note>
-              </Card>
+              <ListEmpty
+                error={error}
+                errorTitle="Cannot read the board"
+                emptyTitle="Nothing here"
+                emptyText={"This view has no cards that are still open. The switch above shows the rest."}
+                onRetry={() => { void load(); }}
+              />
             )
           }
           renderItem={({ item, index }) => (

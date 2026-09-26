@@ -7,7 +7,7 @@
  * a checklist it renders as a wall of `- [x]`.
  */
 import { describe, expect, test } from "bun:test";
-import { inlineText, parseInline, parseMarkdown, type Block } from "../src/md/parse.ts";
+import { inlineText, parseInline, parseMarkdown, plainInline, type Block } from "../src/md/parse.ts";
 
 const md = (...lines: string[]): string => lines.join("\n");
 
@@ -233,4 +233,28 @@ describe("a hostile body cannot hang the screen", () => {
   under("a thousand comment openings that never close", `${"<!--".repeat(1000)}text`);
   under("a comment full of dashes", `<!-- ${"-".repeat(8000)} -->tail`);
   under("four hundred lines of shifting indent", Array.from({ length: 400 }, (_, i) => `${" ".repeat(i % 20)}- item`).join("\n"));
+});
+
+/*
+ * The Talk tab's collapsed bot row draws one line with no `Md` under it, so
+ * a coverage bot's own emphasis and links used to show up literally:
+ * "Coverage: **87.4%**" rather than "Coverage: 87.4%".
+ */
+describe("plainInline, for a preview with no renderer under it", () => {
+  test("emphasis is taken off, the words kept", () => {
+    expect(plainInline("Coverage: **87.4%**")).toBe("Coverage: 87.4%");
+    expect(plainInline("_patch_ coverage")).toBe("patch coverage");
+  });
+
+  test("a code span keeps its text and drops the backticks", () => {
+    expect(plainInline("run `make check` first")).toBe("run make check first");
+  });
+
+  test("a link keeps its label, drops the address", () => {
+    expect(plainInline("see the [report](https://example.test/cov)")).toBe("see the report");
+  });
+
+  test("plain text with nothing to strip is unchanged", () => {
+    expect(plainInline("3 files failed")).toBe("3 files failed");
+  });
 });

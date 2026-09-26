@@ -27,8 +27,8 @@ import { since } from "../../src/lib/dates.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { useComputer } from "../../src/state/use-computer.ts";
 import {
-  alertsDeliverable, askForAlerts, notificationsSupported, raise,
-  type Blocked, type Delivery,
+  alertsDeliverable, askForAlerts, blockedText, notificationsSupported, offersOpenSettings, raise,
+  type Delivery,
 } from "../../src/notifications/notify.ts";
 import {
   keepAliveAvailable, keepAliveRunning, loadKeepAlivePref, saveKeepAlivePref, syncKeepAlive, wantKeepAlive,
@@ -65,31 +65,12 @@ const SCOPE: Record<DeviceScope, { name: string; chip: string; what: string }> =
     what: "The above, plus approving a held gate and replying to a running session.",
   },
   full: {
-    name: "Everything",
+    // Was "Everything" on the sheet's own card, "Full access" on the chip
+    // three inches away — one grant, described two ways on the same screen.
+    name: "Full access",
     chip: "Full access",
     what: "The terminal, git write, Docker and merging. A grant for a laptop you trust.",
   },
-};
-
-/**
- * Why this phone cannot buzz, in the words of somebody who would have to fix it.
- *
- * One sentence each, and each names the thing to go and do. The screen used to
- * have exactly one of these — the Expo Go one — and drew every other reason as
- * a switch that was simply off, or, when the permission had been granted and
- * something after it had failed, as a switch that was ON.
- */
-const WHY: Record<Blocked, string> = {
-  unsupported:
-    "Expo Go does not carry the notifications module on Android. This works in a real installed build.",
-  denied:
-    "Android is not letting this app post notifications. Turn them on for agentglass in the phone's settings.",
-  "channel-off":
-    "The «Agent alerts» channel is switched off in Android's settings, so notifications are accepted and never drawn.",
-  "setup-failed":
-    "Notifications could not be set up on this phone. Nothing will be raised until that succeeds — try again.",
-  threw:
-    "Android refused the last notification. Nothing was drawn.",
 };
 
 const Lead = ({ name }: { name: GlyphName }): React.ReactNode => <Glyph name={name} color={C.text2} size={20} />;
@@ -414,7 +395,7 @@ export default function SettingsScreen(): React.ReactNode {
              permission was granted and something else had failed — as ON. */
           sub={alerts === null ? "Checking…"
             : alerts.ok ? "When an agent waits on you, fails or stops"
-            : WHY[alerts.why]}
+            : blockedText(alerts.why)}
           lead={<Lead name="bell" />}
           checked={!!alerts?.ok}
           trail={<Switch on={!!alerts?.ok} disabled={!supported} />}
@@ -457,9 +438,12 @@ export default function SettingsScreen(): React.ReactNode {
             />
           </View>
         </View>
-        {alerts && !alerts.ok && alerts.why === "channel-off" ? (
-          // The one this app cannot undo from script: an Android channel set to
-          // no importance can only be raised in system settings.
+        {alerts && !alerts.ok && offersOpenSettings(alerts.why) ? (
+          // Only when Android will no longer show its own prompt — a channel
+          // switched off, or a permission refused once already. `not-asked`
+          // is deliberately not this: the switch above still asks the OS
+          // directly, and a button that jumps to Settings before anybody has
+          // even been asked once is the bug this row used to have.
           <Row
             title="Open Android's settings"
             lead={<Lead name="external" />}
@@ -478,7 +462,7 @@ export default function SettingsScreen(): React.ReactNode {
               void raise({ title: "agentglass", body: "This is what an alert looks like.", urgency: 1 })
                 .then((d) => {
                   setAlerts(d);
-                  if (!d.ok) Alert.alert("That alert was not shown", WHY[d.why]);
+                  if (!d.ok) Alert.alert("That alert was not shown", blockedText(d.why));
                 });
             }}
           />

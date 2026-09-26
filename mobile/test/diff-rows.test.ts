@@ -10,7 +10,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { rowsOf } from "../src/model/diffRows.ts";
+import { rowIndexForLine, rowsOf } from "../src/model/diffRows.ts";
 import { parseDiff } from "../src/model/diffLines.ts";
 
 const DIFF = [
@@ -117,6 +117,22 @@ describe("a hunk that starts at line 1", () => {
   });
 });
 
+describe("rowIndexForLine", () => {
+  test("finds the added line's own row, not the deleted line at the same spot", () => {
+    // "was" (deleted) and "is" (added) sit at the same place in the hunk; only
+    // the added side has a newNo, so only it may be found by one.
+    const at = rowIndexForLine(rows, 11);
+    expect(at).not.toBeNull();
+    expect(rows[at!]).toMatchObject({ t: "line", line: { text: "is" } });
+  });
+
+  test("a line number nothing in the file has comes back null, not -1", () => {
+    // -1 read straight into a FlatList index scrolls to the row before the
+    // first one; null is a value a caller has to notice and skip.
+    expect(rowIndexForLine(rows, 9999)).toBeNull();
+  });
+});
+
 /*
  * Two things about the screen that no assertion about data can reach, and both
  * of which put back the defect this file exists for.
@@ -152,5 +168,16 @@ describe("the pane actually windows it", () => {
     // The comment box is inside a row; without this a tap is spent dismissing
     // the keyboard instead of reaching the control under the thumb.
     expect(screen).toContain('keyboardShouldPersistTaps="handled"');
+  });
+
+  test("opening the composer scrolls its row into view", () => {
+    // Measured: the composer opened with "Add to review" half under the
+    // keyboard when the tapped row was in the bottom half of the screen.
+    // `rowIndexForLine` is what finds the row; the list has to be told to go
+    // there, and a `ref` without a matching `scrollToIndex` call is the two
+    // halves of this fix passing separately and doing nothing together.
+    expect(screen).toContain("ref={listRef}");
+    expect(screen).toContain("rowIndexForLine(rows, writing.line)");
+    expect(screen).toContain("listRef.current?.scrollToIndex(");
   });
 });

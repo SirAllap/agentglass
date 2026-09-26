@@ -63,7 +63,13 @@ export function ThreadsPane({ number, root }: { number: string; root: string }):
        is in test/keyboard-inset.test.ts. This screen takes typing. */
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: C.bg }} behavior="padding">
 
-      <ScrollView contentContainerStyle={{ padding: SPACE.lg, gap: SPACE.lg, paddingBottom: SPACE.xl }}>
+      {/* The reply composer under a thread lives in this list, not below it,
+          so the first tap on "Send reply" while the keyboard is up must reach
+          the button rather than only dismiss the keyboard. */}
+      <ScrollView
+        contentContainerStyle={{ padding: SPACE.lg, gap: SPACE.lg, paddingBottom: SPACE.xl }}
+        keyboardShouldPersistTaps="handled"
+      >
         {error ? (
           <Card>
             <Label text="Cannot read them" />

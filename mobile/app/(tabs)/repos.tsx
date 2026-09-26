@@ -17,9 +17,10 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator, FlatList, Pressable, RefreshControl, ScrollView, Text, TextInput, View,
+  ActivityIndicator, FlatList, KeyboardAvoidingView, Pressable, RefreshControl, ScrollView, Text, TextInput, View,
 } from "react-native";
 import * as Haptics from "expo-haptics";
+import { useHeaderHeight } from "expo-router/react-navigation";
 import type { GitBranch, GitCommit, GitFileStatus, GitRepoRef, GitStash, PrBranchSummary, RepoStatus } from "../../../shared/types.ts";
 import { ask } from "../../src/lib/api.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
@@ -29,7 +30,7 @@ import { C, MONO, RADIUS, SPACE, T, ink, tint } from "../../src/theme.ts";
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { ChevronIcon } from "../../src/nav/icons.tsx";
 import { branchLookup, checkoutFor } from "../../src/model/checkout.ts";
-import { keepOrder, newBranchProblem, orderBranches, stashTitle, trackWords, VIEWS, type ScmView } from "../../src/model/scm.ts";
+import { keepOrder, newBranchProblem, orderBranches, scmSuccessText, stashTitle, trackWords, VIEWS, type ScmView } from "../../src/model/scm.ts";
 import { Glyph } from "../../src/nav/glyphs.tsx";
 import { ReposIcon } from "../../src/nav/icons.tsx";
 
@@ -270,6 +271,7 @@ export default function ReposScreen(): React.ReactNode {
    *  that re-reads, and one that cannot be pressed twice. */
   const act = useCallback(async (
     what: string, path: string, body: Record<string, unknown>,
+    successInfo?: { files?: number; branch?: string; index?: number },
   ): Promise<void> => {
     if (!host) return;
     setBusy(what);
@@ -278,7 +280,8 @@ export default function ReposScreen(): React.ReactNode {
     setBusy(null);
     if (!answer.ok) { setSaid({ ok: false, text: answer.error }); return; }
     if (!answer.value.ok) { setSaid({ ok: false, text: answer.value.error ?? "git refused that" }); return; }
-    setSaid(null);
+    const text = successInfo ? scmSuccessText(path, successInfo) : null;
+    setSaid(text ? { ok: true, text } : null);
     // What a write can have moved. Cleared, not patched, so the view that is
     // open asks again. Staging moves neither the head line nor the pull request
     // (a GitHub round trip), so those are left alone for it.
@@ -298,6 +301,7 @@ export default function ReposScreen(): React.ReactNode {
      are views of one question — what has changed here — and a file browser is
      a different errand that happens to start from the same place. */
   const navigation = useNavigation();
+  const headerHeight = useHeaderHeight();
   useLayoutEffect(() => {
     navigation.setOptions({
       headerRight: () => (
@@ -380,7 +384,23 @@ export default function ReposScreen(): React.ReactNode {
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: C.bg }}>
+    // The commit footer (message field + Commit/Push) sits below the file
+    // list rather than pinned, so a screen-level avoider is what raises it —
+    // unlike Sheet, this screen is not inside a Modal. "padding": the footer
+    // itself has a fixed height, so there is nothing to resize, only room to
+    // make above the keyboard.
+    //
+    // The offset is the header. The avoider pads by `frame.y + frame.height -
+    // keyboardTop`, and its frame is measured from the top of the scene, which
+    // starts BELOW this screen's header — so without it the padding came out
+    // one header short and the footer stopped just under the keyboard's top
+    // edge (measured: footer top at y≈1476, keyboard from y≈1510, 1080x2400).
+    // The terminal needs none because it hides its header.
+    <KeyboardAvoidingView
+      style={{ flex: 1, backgroundColor: C.bg }}
+      behavior="padding"
+      keyboardVerticalOffset={headerHeight}
+    >
       {chips}
 
       {/* Where you are in it: the branch, and what is waiting to go up or come
@@ -589,7 +609,7 @@ export default function ReposScreen(): React.ReactNode {
                 <Pressable
                   key={b.name}
                   disabled={!mayWrite || !!busy || b.current}
-                  onPress={() => { void act(`branch:${b.name}`, "/git/checkout", { root, name: b.name }); }}
+                  onPress={() => { void act(`branch:${b.name}`, "/git/checkout", { root, name: b.name }, { branch: b.name }); }}
                   accessibilityRole="button"
                   accessibilityState={{ selected: b.current, disabled: !mayWrite || b.current }}
                   accessibilityLabel={b.current ? `${b.name}, checked out` : `Switch to ${b.name}`}
@@ -647,7 +667,7 @@ export default function ReposScreen(): React.ReactNode {
                       label="Apply"
                       disabled={!!busy}
                       busy={busy === `stash:${st.index}`}
-                      onPress={() => { void act(`stash:${st.index}`, "/git/stash-apply", { root, index: st.index }); }}
+                      onPress={() => { void act(`stash:${st.index}`, "/git/stash-apply", { root, index: st.index }, { index: st.index }); }}
                     />
                   ) : null}
                 </View>
@@ -745,14 +765,14 @@ export default function ReposScreen(): React.ReactNode {
                  */
                 void act("commit", "/git/commit-staged", {
                   root, title: title.trim(), body: "",
-                }).then(() => setTitle(""));
+                }, { files: staged.length }).then(() => setTitle(""));
               }}
             />
             <Btn
               label={repo?.ahead ? `Push ${repo.ahead}` : "Push"}
               style={{ flex: 1 }}
               busy={busy === "push"}
-              onPress={() => { void act("push", "/git/push", { root }); }}
+              onPress={() => { void act("push", "/git/push", { root }, { branch: repo?.branch }); }}
             />
           </View>
         </View>
@@ -766,6 +786,6 @@ export default function ReposScreen(): React.ReactNode {
           </Note>
         </View>
       ) : null}
-    </View>
+    </KeyboardAvoidingView>
   );
 }

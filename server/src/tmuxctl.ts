@@ -3961,6 +3961,26 @@ export function deskAttachArgv(socketPath: string, session: string): string[] | 
   return ["tmux", ...socket, "attach-session"];
 }
 
+/**
+ * The session NAME a `#{session_id}` currently belongs to, or null.
+ *
+ * `PhoneAttach.sessionId` (this file's `groupedWith`) is a `$id`, stable
+ * across a rename and safe to hold across the gap between the attach and a
+ * later command — but tmux commands that pick a session to open a window IN
+ * (`new-session -A -s <name>`) want the name, not the id. Resolved fresh each
+ * time rather than cached: renaming the session is exactly the case this
+ * exists to survive.
+ */
+export function sessionNameOf(socket: string[], sessionId: string): string | null {
+  const out = tmux(socket, ["list-sessions", "-F", "#{session_id}\t#{session_name}"]);
+  if (!out) return null;
+  for (const line of out.split("\n")) {
+    const [id, name] = line.split("\t");
+    if (id === sessionId) return name ?? null;
+  }
+  return null;
+}
+
 export function attachArgvFor(
   known: string[] | undefined,
   paneId: string,

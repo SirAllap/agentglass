@@ -422,3 +422,16 @@ export function parseInline(src: string): Inline[] {
 export function inlineText(kids: Inline[]): string {
   return kids.map((k) => (k.t === "text" || k.t === "code" ? k.text : inlineText(k.kids))).join("");
 }
+
+/**
+ * One already-chosen line, with its markdown taken off rather than shown.
+ *
+ * For a one-line preview that has no `Md` under it to render the syntax —
+ * the Talk tab's collapsed bot row, a thread's opening remark — so
+ * `**87.4%**` read as asterisks rather than as bold. `parseInline` already
+ * separates the syntax from the words for the real renderer; this is the
+ * same split with only the words kept.
+ */
+export function plainInline(text: string): string {
+  return inlineText(parseInline(text));
+}

@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { alertKey, remember, shouldNotify, SAME_ALERT_MS } from "../src/notifications/policy.ts";
 import type { AlertNote } from "../../shared/types.ts";
+import type { Blocked } from "../src/notifications/notify.ts";
 
 // react-native's entry point is Flow, not TypeScript, so importing it under
 // `bun test` is a syntax error — which is why every other suite here tests
@@ -19,10 +20,15 @@ let askForAlerts: typeof notify.askForAlerts;
 let lastAlertFailure: typeof notify.lastAlertFailure;
 let notificationsSupported: typeof notify.notificationsSupported;
 let raise: typeof notify.raise;
+let blockedText: typeof notify.blockedText;
+let offersOpenSettings: typeof notify.offersOpenSettings;
 
 beforeAll(async () => {
   notify = await import("../src/notifications/notify.ts");
-  ({ __setNotificationsModule, alertsDeliverable, askForAlerts, lastAlertFailure, notificationsSupported, raise } = notify);
+  ({
+    __setNotificationsModule, alertsDeliverable, askForAlerts, lastAlertFailure, notificationsSupported, raise,
+    blockedText, offersOpenSettings,
+  } = notify);
 });
 
 /*
@@ -53,6 +59,10 @@ const ANDROID_IMPORTANCE = { NONE: 0, MIN: 1, LOW: 2, DEFAULT: 3, HIGH: 4, MAX: 
 
 interface Fake {
   granted: boolean;
+  /** Whether Android will still show its own prompt. `true` on a fresh
+   *  install (nobody has been asked); `false` once refused once, or taken
+   *  away in system settings after that. */
+  canAskAgain: boolean;
   /** Android's own importance for our channel; NONE means the user switched it
    *  off in system settings, where the app is never told. */
   channelImportance: number;
@@ -63,7 +73,7 @@ interface Fake {
 
 function fakeModule(over: Partial<Fake> = {}): { mod: any; state: Fake } {
   const state: Fake = {
-    granted: true, channelImportance: ANDROID_IMPORTANCE.HIGH,
+    granted: true, canAskAgain: true, channelImportance: ANDROID_IMPORTANCE.HIGH,
     channelThrows: false, scheduleThrows: false, posted: [], ...over,
   };
   const mod = {
@@ -72,8 +82,13 @@ function fakeModule(over: Partial<Fake> = {}): { mod: any; state: Fake } {
       if (state.channelThrows) throw new Error("channel refused");
     },
     getNotificationChannelAsync: async () => ({ id: "agentglass-alerts", importance: state.channelImportance }),
-    getPermissionsAsync: async () => ({ granted: state.granted, status: state.granted ? "granted" : "denied" }),
-    requestPermissionsAsync: async () => { state.granted = true; return { granted: true, status: "granted" }; },
+    getPermissionsAsync: async () => ({
+      granted: state.granted, canAskAgain: state.canAskAgain,
+      status: state.granted ? "granted" : state.canAskAgain ? "undetermined" : "denied",
+    }),
+    requestPermissionsAsync: async () => {
+      state.granted = true; return { granted: true, canAskAgain: true, status: "granted" };
+    },
     scheduleNotificationAsync: async (req: any) => {
       if (state.scheduleThrows) throw new Error("android refused");
       state.posted.push({ title: req.content.title, body: req.content.body });
@@ -183,6 +198,26 @@ describe("what the switch is allowed to claim", () => {
     __setNotificationsModule(mod);
     expect(await alertsDeliverable()).toEqual({ ok: true });
     state.granted = false;
+    state.canAskAgain = false;
+    expect(await alertsDeliverable()).toEqual({ ok: false, why: "denied" });
+  });
+
+  /*
+   * The bug this pair of cases guards: a fresh install, permission never
+   * asked, used to answer `denied` — the exact same reason as "refused, and
+   * Android will not ask again" — and Settings sent somebody who had tapped
+   * the switch for the FIRST time off to the phone's own Settings app to
+   * flip something that a single tap on the switch would have asked for.
+   */
+  test("never asked yet (fresh install): not-asked, not denied", async () => {
+    const { mod } = fakeModule({ granted: false, canAskAgain: true });
+    __setNotificationsModule(mod);
+    expect(await alertsDeliverable()).toEqual({ ok: false, why: "not-asked" });
+  });
+
+  test("asked once and refused, Android will not prompt again: denied", async () => {
+    const { mod } = fakeModule({ granted: false, canAskAgain: false });
+    __setNotificationsModule(mod);
     expect(await alertsDeliverable()).toEqual({ ok: false, why: "denied" });
   });
 
@@ -322,5 +357,26 @@ describe("the dedupe window is opened first and taken back if nothing was drawn"
     expect(lastSeen.get(alertKey(NOTE))).toBe(now);
     expect(shouldNotify(NOTE, { foreground: false, lastSeen, now: now + 1_000 }))
       .toEqual({ notify: false, because: "repeat" });
+  });
+});
+
+describe("what Settings says for each reason, and when it offers the phone's own Settings app", () => {
+  test("not-asked never sends anybody out of the app", () => {
+    expect(blockedText("not-asked")).toMatch(/tap/i);
+    expect(offersOpenSettings("not-asked")).toBe(false);
+  });
+
+  test("denied and channel-off both send somebody to Settings", () => {
+    expect(offersOpenSettings("denied")).toBe(true);
+    expect(offersOpenSettings("channel-off")).toBe(true);
+  });
+
+  test("no reason's text is cut short — every branch fits a two-line row", () => {
+    const reasons: Blocked[] = ["unsupported", "not-asked", "denied", "channel-off", "setup-failed", "threw"];
+    for (const why of reasons) {
+      const text = blockedText(why);
+      expect(text.length).toBeGreaterThan(0);
+      expect(text.length).toBeLessThanOrEqual(120);
+    }
   });
 });

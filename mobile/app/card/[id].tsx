@@ -115,6 +115,13 @@ export default function CardScreen(): React.ReactNode {
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [said, setSaid] = useState<{ ok: boolean; text: string } | null>(null);
+  /** The last successful move: what it was on before, so "Undo" has
+   *  somewhere to send it back to. Its own state rather than folded into
+   *  `said` — the confirmation belongs beside the chips that caused it, not
+   *  buried under the assignee row where a one-tap board write used to leave
+   *  its only trace, with no way back short of tapping through the other
+   *  status again by hand. */
+  const [moved, setMoved] = useState<{ from: string; to: string } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   /** Everything on the card that is not the card's own row. Null until the
    *  first read lands — an empty description and "not read yet" are different
@@ -233,6 +240,8 @@ export default function CardScreen(): React.ReactNode {
 
   const move = useCallback(async (status: string): Promise<void> => {
     if (!host || !card) return;
+    const from = card.status;
+    setMoved(null);
     setBusy(status);
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     /*
@@ -257,7 +266,7 @@ export default function CardScreen(): React.ReactNode {
       return;
     }
     landed(answer.value.task);
-    setSaid({ ok: true, text: `Moved to ${status}` });
+    setMoved({ from, to: status });
     await load();
   }, [host, card, load, landed]);
 
@@ -515,6 +524,23 @@ export default function CardScreen(): React.ReactNode {
                     );
                   })}
                 </ScrollView>
+                {/* Beside the chips that caused it, not under the assignee row
+                    a scroll away: the one thing a one-tap board write needs is
+                    a way back, next to where the tap happened. */}
+                {moved ? (
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.md, paddingTop: SPACE.sm }}>
+                    <Text style={{ color: C.text3, fontSize: T.small, flexShrink: 1 }}>Moved to {moved.to}</Text>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Undo, move back to ${moved.from}`}
+                      disabled={!!busy}
+                      onPress={() => { const from = moved.from; void move(from); }}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    >
+                      <Text style={{ color: C.primary, fontSize: T.small, fontWeight: "600" }}>Undo</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
               </>
             ) : null}
 

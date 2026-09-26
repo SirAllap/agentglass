@@ -10,7 +10,7 @@
  */
 import { forwardRef, type ReactNode } from "react";
 import {
-  ActivityIndicator, Modal, Pressable, ScrollView, Text, TextInput, View,
+  ActivityIndicator, KeyboardAvoidingView, Modal, Pressable, ScrollView, Text, TextInput, View,
   type StyleProp, type TextStyle, type ViewStyle,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -18,6 +18,7 @@ import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { C, MONO, RADIUS, SCRIM, SPACE, T, ink, tint } from "./theme.ts";
 import { ChevronIcon } from "./nav/icons.tsx";
+import { listErrorText } from "./lib/listError.ts";
 import { Glyph } from "./nav/glyphs.tsx";
 
 /**
@@ -141,6 +142,37 @@ export function Card({ children, style }: { children: ReactNode; style?: StylePr
       padding: SPACE.lg,
       gap: SPACE.md,
     }, style]}>{children}</View>
+  );
+}
+
+/**
+ * What a list says when it has no rows: nothing to show, or why it could not
+ * ask. One component because three lists (issues, the local task list, the
+ * board) had grown the same card by copy, and the retry wiring is exactly the
+ * part that drifts between copies.
+ *
+ * When the phone cannot reach the computer, `listErrorText` replaces the
+ * screen's own error title — the list's service never saw the request — and a
+ * "Try again" appears. Any other error keeps the screen's own title.
+ */
+export function ListEmpty({ error, errorTitle, emptyTitle, emptyText, onRetry }: {
+  error: string | null;
+  errorTitle: string;
+  emptyTitle: string;
+  emptyText: string;
+  onRetry: () => void;
+}): ReactNode {
+  const unreachable = listErrorText(error);
+  return (
+    <Card>
+      <Text style={{ color: error ? C.error : C.text, fontSize: T.body, fontWeight: "600" }}>
+        {unreachable.title ?? (error ? errorTitle : emptyTitle)}
+      </Text>
+      <Note tone={error ? "bad" : "quiet"}>{unreachable.hint ?? error ?? emptyText}</Note>
+      {unreachable.canRetry ? (
+        <View style={{ paddingTop: SPACE.sm }}><Btn label="Try again" onPress={onRetry} /></View>
+      ) : null}
+    </Card>
   );
 }
 
@@ -386,45 +418,58 @@ export function Sheet({ open, onClose, title, children }: {
   const insets = useSafeAreaInsets();
   return (
     <Modal visible={open} transparent animationType="slide" onRequestClose={onClose}>
-      {/* The scrim closes it. Tapping outside is how every sheet on either
-          platform is dismissed, and a sheet that can only be closed by a button
-          is a dialog wearing a sheet's shape. */}
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`Close ${title}`}
-        onPress={onClose}
-        style={{ flex: 1, backgroundColor: SCRIM }}
-      />
-      <View style={{
-        backgroundColor: C.bg2,
-        borderTopWidth: 1,
-        borderTopColor: C.border2,
-        // The capsule radius, because a sheet's top edge IS the round thing on
-        // the screen it covers — same reason and same number as the composer.
-        borderTopLeftRadius: RADIUS.pill,
-        borderTopRightRadius: RADIUS.pill,
-        paddingTop: SPACE.md,
-        // The gesture bar, paid once. Nothing else in the sheet knows about it.
-        paddingBottom: insets.bottom + SPACE.md,
-        maxHeight: "75%",
-      }}>
-        {/* The grabber. It does not drag — this sheet is dismissed by the
-            scrim or the back gesture — and it is here because it is the one
-            mark that says "this came up from the bottom and will go back
-            down", which a plain rounded box does not. */}
+      {/* `KeyboardAvoidingView` inside the Modal, not on the screen behind it:
+          a `Modal` mounts into its own native root, so a screen-level avoider
+          never moves this subtree. Measured on a Pixel 7 emulator (Android 15,
+          edge-to-edge): the card's comment field sat at y≈1854-2106 under a
+          keyboard starting at y≈1510, and "Post it" could not be reached.
+
+          It wraps the scrim AND the sheet, with `flex: 1`. Wrapped around the
+          sheet alone it has no height of its own, so the sheet's `maxHeight:
+          "75%"` resolved against nothing and the sheet was drawn half off the
+          bottom of the screen. "padding" on both platforms: "height" fights
+          that same `maxHeight` and collapses the grabber and the title. */}
+      <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
+        {/* The scrim closes it. Tapping outside is how every sheet on either
+            platform is dismissed, and a sheet that can only be closed by a
+            button is a dialog wearing a sheet's shape. */}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Close ${title}`}
+          onPress={onClose}
+          style={{ flex: 1, backgroundColor: SCRIM }}
+        />
         <View style={{
-          width: 36, height: 4, borderRadius: 2, backgroundColor: C.border2, alignSelf: "center",
-        }} />
-        <View style={{ paddingHorizontal: SPACE.lg, paddingTop: SPACE.md, paddingBottom: SPACE.sm }}>
-          <Text style={{ color: C.text, fontSize: T.title, fontWeight: "700" }}>{title}</Text>
+          backgroundColor: C.bg2,
+          borderTopWidth: 1,
+          borderTopColor: C.border2,
+          // The capsule radius, because a sheet's top edge IS the round thing on
+          // the screen it covers — same reason and same number as the composer.
+          borderTopLeftRadius: RADIUS.pill,
+          borderTopRightRadius: RADIUS.pill,
+          paddingTop: SPACE.md,
+          // The gesture bar, paid once. Nothing else in the sheet knows about it.
+          paddingBottom: insets.bottom + SPACE.md,
+          maxHeight: "75%",
+        }}>
+          {/* The grabber. It does not drag — this sheet is dismissed by the
+              scrim or the back gesture — and it is here because it is the one
+              mark that says "this came up from the bottom and will go back
+              down", which a plain rounded box does not. */}
+          <View style={{
+            width: 36, height: 4, borderRadius: 2, backgroundColor: C.border2, alignSelf: "center",
+          }} />
+          <View style={{ paddingHorizontal: SPACE.lg, paddingTop: SPACE.md, paddingBottom: SPACE.sm }}>
+            <Text style={{ color: C.text, fontSize: T.title, fontWeight: "700" }}>{title}</Text>
+          </View>
+          <ScrollView
+            contentContainerStyle={{ paddingHorizontal: SPACE.lg, paddingBottom: SPACE.sm }}
+            keyboardShouldPersistTaps="handled"
+          >
+            {children}
+          </ScrollView>
         </View>
-        <ScrollView
-          contentContainerStyle={{ paddingHorizontal: SPACE.lg, paddingBottom: SPACE.sm }}
-          keyboardShouldPersistTaps="handled"
-        >
-          {children}
-        </ScrollView>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }

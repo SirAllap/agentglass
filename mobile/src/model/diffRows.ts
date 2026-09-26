@@ -60,6 +60,16 @@ export function rowsOf(file: Pick<DiffFile, "hunks" | "binary"> | undefined): Di
   return rows;
 }
 
+/** Which row the composer for `newLine` opens under, so the screen can scroll
+ *  a FlatList to it. The composer used to open below whatever the list had
+ *  already scrolled to, half under the keyboard; a `FlatList` cannot measure
+ *  a not-yet-mounted child, so the fix is an index it CAN scroll to, not a
+ *  ref read after the fact. */
+export function rowIndexForLine(rows: DiffRow[], newLine: number): number | null {
+  const at = rows.findIndex((row) => row.t === "line" && row.line.newNo === newLine);
+  return at === -1 ? null : at;
+}
+
 /**
  * How many rows to draw before the list is handed the rest.
  *

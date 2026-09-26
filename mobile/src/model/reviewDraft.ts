@@ -39,6 +39,35 @@ export interface LineNote {
  *  once and a comment written on one must never travel to the other. */
 const drafts = new Map<string, LineNote[]>();
 
+/**
+ * Who to tell when a draft changes, keyed the same way as `drafts`.
+ *
+ * The diff screen keeps its own copy of the queue so it repaints — the draft
+ * itself lives here so it survives leaving that screen and coming back — and
+ * `clearDraft` used to tell nobody. The Files tab, still mounted underneath
+ * the send button, went on reading the copy it took when the key first
+ * changed: "Yours · not sent yet" outlived the review it described. A
+ * listener per key rather than one for everything, so an unrelated pull
+ * request's send does not repaint a screen that has nothing to do with it.
+ */
+const listeners = new Map<string, Set<() => void>>();
+
+/** Told once for every change to this key's draft: written, taken back, sent,
+ *  or reset for a test. Returns the way to stop listening. */
+export function subscribeDraft(key: string, onChange: () => void): () => void {
+  let set = listeners.get(key);
+  if (!set) { set = new Set(); listeners.set(key, set); }
+  set.add(onChange);
+  return () => {
+    set!.delete(onChange);
+    if (set!.size === 0) listeners.delete(key);
+  };
+}
+
+function notify(key: string): void {
+  for (const fn of listeners.get(key) ?? []) fn();
+}
+
 /** What is queued for this pull request. Always an array — "none yet" and
  *  "none left" are the same thing to every caller. */
 export function draft(key: string): LineNote[] {
@@ -61,6 +90,7 @@ export function takeDraft(key: string, change: (was: LineNote[]) => LineNote[]):
   const next = change(draft(key));
   if (next.length) drafts.set(key, next);
   else drafts.delete(key);
+  notify(key);
   return next;
 }
 
@@ -69,11 +99,14 @@ export function takeDraft(key: string, change: (was: LineNote[]) => LineNote[]):
  *  network dropped. */
 export function clearDraft(key: string): void {
   drafts.delete(key);
+  notify(key);
 }
 
 /** For tests, which must not inherit a draft from the one before. */
 export function clearAllDrafts(): void {
+  const keys = [...drafts.keys()];
   drafts.clear();
+  for (const key of keys) notify(key);
 }
 
 /**

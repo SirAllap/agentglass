@@ -18,6 +18,7 @@ import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-nati
 import type { PrReview } from "../../../shared/types.ts";
 import { conversation, countLanes, inLane, type ConvEntry, type Lane } from "../../../shared/prConversation.ts";
 import { Md } from "../md/Md.tsx";
+import { plainInline } from "../md/parse.ts";
 import { useAgentglass } from "../state/host-context.tsx";
 import { usePaletteTick } from "../state/use-palette.ts";
 import { usePrDetail } from "../state/pr-detail.ts";
@@ -106,7 +107,13 @@ function Entry({ e, host, now, isNew, onOpenThreads }: {
   }
 
   if (e.isBot && !open) {
-    const first = (e.kind === "comment" && e.comment.digest) || body.trim().split("\n")[0] || "(no text)";
+    const raw = (e.kind === "comment" && e.comment.digest) || body.trim().split("\n")[0] || "(no text)";
+    // Neither source is guaranteed plain: the digest can carry the source
+    // comment's own markdown through untouched (`digestBotComment`'s
+    // fallback is a raw line), and the body's first line always is. There is
+    // no `Md` here to render `**87.4%**` as bold — only the row to draw it
+    // literally — so the syntax comes off instead.
+    const first = plainInline(raw);
     return (
       <Pressable accessibilityRole="button" onPress={() => setOpen(true)} style={{ minHeight: TAP, justifyContent: "center" }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm }}>

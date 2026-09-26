@@ -78,11 +78,17 @@ export function tracksWork(statuses: ProviderStatus[] | null | undefined): boole
  *   nothing set up               → `null`, and the tab says so
  *   no answer                    → `undefined`, and the tab waits
  *
- * `connected` beats `error` and, at equal state, ClickUp beats the rest — it
+ * ClickUp beats the rest whenever it is set up at all, `error` included — it
  * is the one with views to choose from, and a person with both wants the board
  * on the phone and the local list where the editor is. `error` still counts as
  * set up, for the reason `tracksWork` gives: a refused token is something you
- * configured, and the screen that reads it is where you find out.
+ * configured, and the screen that reads it is where you find out. Ranking by
+ * state FIRST used to let a connected Taskwarrior outrank a ClickUp that was
+ * merely erroring (one bad notification poll) — the board a person set up
+ * disappeared behind a tracker they never touched. ClickUp's identity is
+ * ranked ahead of state so a set-up ClickUp never loses to another provider's
+ * state; connected-vs-error only breaks a tie between two non-ClickUp
+ * providers.
  */
 export function taskProvider(statuses: ProviderStatus[] | null | undefined): ProviderSpec | null | undefined {
   if (!statuses) return undefined;
@@ -90,7 +96,7 @@ export function taskProvider(statuses: ProviderStatus[] | null | undefined): Pro
   if (!statuses.some((p) => TASK_IDS.has(p.id))) return undefined;
   if (!known.length) return null;
   const rank = (p: ProviderStatus): number =>
-    (p.state === "connected" ? 0 : 2) + (p.id === "clickup" ? 0 : 1);
+    (p.id === "clickup" ? 0 : 2) + (p.state === "connected" ? 0 : 1);
   const best = [...known].sort((a, b) => rank(a) - rank(b))[0]!;
   return PROVIDERS.find((p) => p.id === best.id) ?? null;
 }

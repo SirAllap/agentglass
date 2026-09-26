@@ -24,7 +24,7 @@ import type { GitRepoRef, IssueRow, IssuesReport } from "../../../shared/types.t
 import { ask } from "../../src/lib/api.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
-import { Card, Chip, FilterChips, GroupTitle, LabelChip, Note, Segmented, groupEdge } from "../../src/ui.tsx";
+import { Chip, FilterChips, GroupTitle, LabelChip, ListEmpty, Segmented, groupEdge } from "../../src/ui.tsx";
 import { mainCheckouts } from "../../src/model/prRows.ts";
 import { flatten, type RepoGroup } from "../../src/model/prLook.ts";
 import { IssuesIcon } from "../../src/nav/icons.tsx";
@@ -173,17 +173,15 @@ export default function IssuesScreen(): React.ReactNode {
         refreshControl={<RefreshControl refreshing={pulling} onRefresh={onRefresh} tintColor={C.text3} />}
         ListEmptyComponent={
           groups === null && !error ? null : (
-            <Card>
-              <Text style={{ color: error ? C.error : C.text, fontSize: T.body, fontWeight: "600" }}>
-                {error ? "Can't ask GitHub" : "Nothing open"}
-              </Text>
-              <Note tone={error ? "bad" : "quiet"}>
-                {error
-                  ?? (filter === "mine"
-                    ? `No open issue is assigned to you${pick === ALL ? "" : " in this repository"}.`
-                    : `No issue matches this filter${pick === ALL ? "" : " in this repository"}.`)}
-              </Note>
-            </Card>
+            <ListEmpty
+              error={error}
+              errorTitle="Can't ask GitHub"
+              emptyTitle="Nothing open"
+              emptyText={filter === "mine"
+                ? `No open issue is assigned to you${pick === ALL ? "" : " in this repository"}.`
+                : `No issue matches this filter${pick === ALL ? "" : " in this repository"}.`}
+              onRetry={() => { void load(); }}
+            />
           )
         }
         renderItem={({ item: row, index }) => (

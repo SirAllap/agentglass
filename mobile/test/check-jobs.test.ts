@@ -8,7 +8,7 @@
  * ordinary row.
  */
 import { describe, expect, test } from "bun:test";
-import { byUrgency, standingOf, tailOf } from "../src/model/checkJobs.ts";
+import { byUrgency, foldJobLog, looksFailed, standingOf, tailOf } from "../src/model/checkJobs.ts";
 import type { PrCheckJob } from "../../shared/types.ts";
 
 const job = (over: Partial<PrCheckJob> = {}): PrCheckJob => ({
@@ -118,5 +118,45 @@ describe("which lines of the log open", () => {
   test("exactly the limit is not trimmed", () => {
     const text = "a\nb\nc";
     expect(tailOf(text, 3).lines).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("foldJobLog", () => {
+  // Shaped like a real Actions log, with an invented workflow so nobody's
+  // name lands in the fixture: the stamp, one folded step, and a failure
+  // inside another.
+  const raw = [
+    "2026-03-04T09:12:03.5910000Z ##[group]Run npm ci",
+    "2026-03-04T09:12:03.6010000Z added 412 packages in 6s",
+    "2026-03-04T09:12:04.1000000Z ##[endgroup]",
+    "2026-03-04T09:12:05.2200000Z ##[group]Run the acme-widget test suite",
+    "2026-03-04T09:12:07.0000000Z ##[error]Process completed with exit code 1.",
+    "2026-03-04T09:12:07.0100000Z ##[endgroup]",
+  ].join("\n");
+
+  test("strips the timestamp from every line", () => {
+    for (const line of foldJobLog(raw).split("\n")) {
+      expect(/^\d{4}-\d\d-\d\dT/.test(line)).toBe(false);
+    }
+  });
+
+  test("a group marker becomes its title, and the close marker is gone", () => {
+    const lines = foldJobLog(raw).split("\n");
+    expect(lines).toEqual([
+      "Run npm ci",
+      "added 412 packages in 6s",
+      "Run the acme-widget test suite",
+      "##[error]Process completed with exit code 1.",
+    ]);
+  });
+
+  test("##[error] survives folding, so the row still tints red", () => {
+    const errorLine = foldJobLog(raw).split("\n").find((l) => l.includes("exit code 1"));
+    expect(errorLine).toBeDefined();
+    expect(looksFailed(errorLine!)).toBe(true);
+  });
+
+  test("a group with no title still gets a line, not a blank one lost to trimming", () => {
+    expect(foldJobLog("2026-01-01T00:00:00.0000000Z ##[group]").split("\n")).toEqual(["step"]);
   });
 });

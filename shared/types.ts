@@ -577,7 +577,7 @@ export type PtyServerFrame =
    * root, not the pane's subdirectory — so a client can say where it went
    * without asking a second question.
    */
-  | { t: "opened"; pane: string; window: string; cwd: string }
+  | { t: "opened"; pane: string; window: string; cwd: string; session: string }
   /**
    * That window did not open, and why — which is NOT a `fatal`.
    *

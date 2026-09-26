@@ -82,3 +82,47 @@ export function mergeObstacles(pr: MergeFacts): Obstacle[] {
   }
   return out;
 }
+
+/** Enough of `PrDetail` to decide the merge sheet's warning — named rather
+ *  than the whole type so a test can hand in exactly what the decision reads. */
+export interface ChangesRequestedFacts {
+  reviewDecision: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
+  openThreads?: { open: number; more: boolean };
+  humanReview?: { who: string[] } | null;
+}
+
+export interface ChangesRequestedWarning {
+  note: string;
+  /** The bottom Merge button's tone. Green reads as "go ahead" — GitHub will
+   *  take a CHANGES_REQUESTED pull request when branch protection does not
+   *  require review, and `mergeVerdict` (mergeReason.ts) says "Ready to
+   *  merge" on the strength of that alone, without ever asking who reviewed
+   *  it. This is the sheet's own second question, so the button does not
+   *  contradict the row it sits under. */
+  buttonTone: "plain";
+}
+
+/**
+ * Merging is still allowed and the header still says "Ready to merge" —
+ * `mergeVerdict` answers "will GitHub take it", not "should you take it
+ * over this review" — so the sheet asks that second question here and says
+ * it out loud rather than only in the green button matching the green line
+ * above it.
+ *
+ * Null when there is nothing to add: no review has asked for changes, or one
+ * did and was superseded (`mergeObstacles`/GitHub's `reviewDecision` already
+ * stops saying `CHANGES_REQUESTED` once a fresh review clears it).
+ */
+export function changesRequestedWarning(pr: ChangesRequestedFacts): ChangesRequestedWarning | null {
+  if (pr.reviewDecision !== "CHANGES_REQUESTED") return null;
+  const who = pr.humanReview?.who?.[0];
+  const threads = pr.openThreads?.open ?? 0;
+  const parts = [
+    `Changes were requested${who ? ` (by ${who})` : ""}`,
+    ...(threads > 0 ? [`${threads} open ${threads === 1 ? "thread" : "threads"}`] : []),
+  ];
+  return {
+    note: `${parts.join(" · ")} — merging lands it over that review.`,
+    buttonTone: "plain",
+  };
+}

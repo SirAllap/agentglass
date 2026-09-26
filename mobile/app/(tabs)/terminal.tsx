@@ -982,7 +982,7 @@ function TerminalPane(): React.ReactNode {
   }, [load]));
 
   /** What came back from that. Either a pane to go to, or a reason. */
-  const onOpened = useCallback((answer: { pane: string } | { error: string }): void => {
+  const onOpened = useCallback((answer: { pane: string; session: string } | { error: string }): void => {
     // The answer landed, so the deadline above has nothing left to say.
     if (openTimer.current) { clearTimeout(openTimer.current); openTimer.current = null; }
     setOpening(false);
@@ -992,6 +992,15 @@ function TerminalPane(): React.ReactNode {
     // is what stops the next poll undoing this.
     wanted.current = answer.pane;
     setActive(answer.pane);
+    // Follow it to its OWN session rather than keep whichever one was on
+    // screen. A window can land somewhere other than the session already
+    // open — a phone's mirror is grouped with a desk session that does not
+    // share the repo's name, and the fallback session tmux picks for a
+    // pressed button is the repo's basename regardless. Left unset, `open`
+    // stayed null forever: the strip's filter is `t.session === session`, the
+    // new pane sat in a session the screen never switched to, and the phone
+    // showed "Nothing open" over three windows that all existed.
+    setSession(answer.session);
     setWhy(null);
     void load();
   }, [load]);

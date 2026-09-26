@@ -27,7 +27,7 @@ import type { ProjectCommand, TerminalCommands, TerminalDisabledReason, TmuxWind
 import { safeAbs, repoRootOf, repoRootOfAsync } from "./git.ts";
 import { terminalActive } from "./loopwatch.ts";
 import { inScope, workspaceRoot, terminalDisabledSource, tmuxTerminal, tmuxPrefix, inScopeReal } from "./config.ts";
-import { engineAttachArgv, engineBenchArgv, engineConsoleArgv, engineWindowRunning, engineSplitRunning } from "./tmuxpane.ts";
+import { engineAttachArgv, engineBenchArgv, engineConsoleArgv, engineWindowRunning, engineSplitRunning, engineSessionName } from "./tmuxpane.ts";
 import { confHealth, ensureConf } from "./tmuxconf.ts";
 import { readerSocketPath } from "./bench.ts";
 import { SKIP_DIRS } from "./gitwork.ts";
@@ -491,7 +491,7 @@ import { recall, remember, SETTLE_MS } from "./tmuxmemory.ts";
 import { deskAttachArgv } from "./tmuxctl.ts";
 import { forgetSession } from "./tmuxrestore.ts";
 import { setLocked, lockedSessions } from "./tmuxlock.ts";
-import { focusPaneAnywhere, switchClientToSession, killSessionByName, resolveClient, readFrameCached, runAction, setStatusLine, releaseStale, clearAsk, prefixKeys, healPrefix, paneCwd, selectPane, attachArgvFor, restoreWindows, endPhoneSession, phoneWindows, fitWindow, reclaimPinnedWindow, windowSize, socketPath, scrollPhonePane, leaveCopyMode, remountPhoneClient, isPhoneSession, phonesAttached, redrawClient, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
+import { focusPaneAnywhere, switchClientToSession, killSessionByName, resolveClient, readFrameCached, runAction, setStatusLine, releaseStale, clearAsk, prefixKeys, healPrefix, paneCwd, selectPane, attachArgvFor, restoreWindows, endPhoneSession, phoneWindows, fitWindow, reclaimPinnedWindow, windowSize, socketPath, scrollPhonePane, leaveCopyMode, remountPhoneClient, isPhoneSession, phonesAttached, redrawClient, sessionNameOf, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
 import { paneStatus, markSeen } from "./agentdone.ts";
 import { worstStatus } from "../../shared/windowStatus.ts";
 import { windowRepo } from "./windowrepo.ts";
@@ -1948,7 +1948,16 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
       void (async () => {
         /* Into the session this client is on — a button somebody pressed opens
            where they are looking. Only the clone's own runs get a session of
-           their own; see the note on `engineWindowRunning`. */
+           their own; see the note on `engineWindowRunning`.
+           `lastTmuxTarget()` is which socket last swept, not which session
+           THIS client is on — for a phone it is the mirror
+           (`agx-phone-<n>-…`), and a window "into" a mirror lands on a session
+           the phone is not attached to, invisible to it and reaped with the
+           mirror. A phone's real session is `at.sessionId`, the $id tmux
+           grouped its mirror with; resolved to a name here because that is
+           what a session-targeting tmux command takes. Anything else (no
+           phone attach, or the id no longer resolves) keeps the old answer. */
+        const into = (at && sessionNameOf(target.socket, at.sessionId)) || lastTmuxTarget()?.session || "";
         /* A person pressed something and is waiting to see it: select. */
         const opened = await engineWindowRunning(root, name, bin
           // The flag is the SPEC's, never the client's, and only where the CLI
@@ -1958,12 +1967,17 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
           // No agent on this machine is not a reason to open nothing: a shell
           // in the right project is still most of what was asked for, and the
           // same answer `cmd:"issue"` gives.
-          : [], root, undefined, lastTmuxTarget()?.session ?? "", true);
+          : [], root, undefined, into, true);
         if (!opened) {
           ctl(ws, { t: "openfail", error: "the engine would not open a window" });
           return;
         }
-        ctl(ws, { t: "opened", pane: opened.paneId, window: opened.windowId, cwd: root });
+        /* The session the window actually landed in — `engineWindowRunning`'s
+           own fallback, repeated rather than returned, because a phone with a
+           stale `session` in hand is the bug this whole path exists to fix
+           (see the note on `into` above). */
+        const landedIn = /^[A-Za-z0-9_-]{1,64}$/.test(into) && !into.startsWith("agx-phone-") ? into : engineSessionName(root);
+        ctl(ws, { t: "opened", pane: opened.paneId, window: opened.windowId, cwd: root, session: landedIn });
         s.tmuxSweep?.();
       })();
       return;

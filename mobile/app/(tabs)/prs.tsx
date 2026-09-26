@@ -30,6 +30,7 @@ import { usePaletteTick } from "../../src/state/use-palette.ts";
 import { useSeenMarks } from "../../src/state/read-marks.ts";
 import { Card, Chip, CommandLine, Field, FilterChips, GroupTitle, Note, Segmented, groupEdge } from "../../src/ui.tsx";
 import { mainCheckouts } from "../../src/model/prRows.ts";
+import { sumPrCounts, type PrViewCounts } from "../../src/model/prCounts.ts";
 import { byState, stateQuery, STATE_LABEL, STATE_VIEWS, type StateView } from "../../src/model/prState.ts";
 import { prTextMatch } from "../../../shared/prSearch.ts";
 import { ciLook, flatten, reviewLook, type CiMark, type RepoGroup } from "../../src/model/prLook.ts";
@@ -65,10 +66,10 @@ interface PrList {
   total?: number;
 }
 
-/** What `/prs/counts` answers with. Same reason as `PrList`. The one field
- *  this screen reads is named after a filter, which is what keeps the two in
- *  step: a rename on either side stops matching `FILTERS`. */
-interface PrViewCounts { review: number; mine: number; failing: number; ready: number; all: number }
+// PrViewCounts and how repositories' counts add up live in
+// src/model/prCounts.ts — the one field this screen reads is named after a
+// filter, which is what keeps the two in step: a rename on either side stops
+// matching `FILTERS`.
 
 const MARK: Record<CiMark, { glyph: GlyphName; ink: () => string; says: string }> = {
   fail: { glyph: "x_circle", ink: () => C.error, says: "Checks failed" },
@@ -235,29 +236,39 @@ export default function PrsScreen(): React.ReactNode {
   // A live comment or review landed on one of these pull requests.
   useReloadOnTick(useTalkTick(), load);
 
-  // Counts follow what is shown and not the filter — they are the counts OF
-  // the filters, so re-asking when one is tapped would be asking the same
-  // question again.
+  /* Which count read is the latest — same reason `asked` guards `load`: a
+   *  pull-to-refresh and a live tick can both ask this while a slower answer
+   *  to an older ask is still out. */
+  const countsAsked = useRef(0);
+  const loadCounts = useCallback(async (): Promise<void> => {
+    if (!host || !shown.length || view === "merged") return;
+    const mine = ++countsAsked.current;
+    const answers = await Promise.all(shown.map((r) =>
+      ask<{ ok: boolean; counts?: PrViewCounts }>(host, `/prs/counts?root=${encodeURIComponent(r.root)}&state=${stateQuery(view)}`)));
+    if (mine !== countsAsked.current) return;
+    const got = answers.flatMap((a) => (a.ok && a.value.ok && a.value.counts ? [a.value.counts] : []));
+    const sum = sumPrCounts(got);
+    if (sum) setCounts(sum);
+  }, [host, shown, view]);
+
+  // Counts follow what is shown and not the filter — a new repo set or state
+  // split really is a different question, so the row goes quiet while the
+  // new numbers are asked. "Review 0 · Mine 0 · All 0" was one of those
+  // asked once, for THIS reason, and then never again: a pull-to-refresh or
+  // a live tick changes what a filter counts (a new review request, a check
+  // going red) without host/shown/view moving, so this effect never re-fires
+  // for either — the list refetched on both and the header did not.
   useEffect(() => {
     if (!host || !shown.length) return;
-    let gone = false;
     setCounts(null);
-    // "Merged" is asked as "closed", so its counts would count the closed ones
-    // too: no number is truer than a wrong one.
-    if (view === "merged") return;
-    void (async () => {
-      const answers = await Promise.all(shown.map((r) =>
-        ask<{ ok: boolean; counts?: PrViewCounts }>(host, `/prs/counts?root=${encodeURIComponent(r.root)}&state=${stateQuery(view)}`)));
-      if (gone) return;
-      const got = answers.flatMap((a) => (a.ok && a.value.ok && a.value.counts ? [a.value.counts] : []));
-      if (!got.length) return;
-      setCounts(got.reduce((sum, c) => ({
-        review: sum.review + c.review, mine: sum.mine + c.mine, failing: sum.failing + c.failing,
-        ready: sum.ready + c.ready, all: sum.all + c.all,
-      })));
-    })();
-    return () => { gone = true; };
-  }, [host, shown, view]);
+    void loadCounts();
+  }, [host, shown, view, loadCounts]);
+
+  // The same signals `load` re-reads the list on. Re-asks the SAME question,
+  // so it must not flash to null while it waits — the numbers on screen are
+  // still true until told otherwise, and a background refresh that blanked
+  // them for a second was worse than the stale ones it was fixing.
+  useReloadOnTick(useTalkTick(), loadCounts);
 
   // The check rollup lands on a second pass, so one re-read a moment later is
   // the difference between "checks…" forever and the row settling.
@@ -269,8 +280,9 @@ export default function PrsScreen(): React.ReactNode {
 
   const onRefresh = useCallback((): void => {
     setPulling(true);
+    void loadCounts();
     void load().finally(() => setPulling(false));
-  }, [load]);
+  }, [load, loadCounts]);
 
   /* The state split and the search are both applied here, on what the server
      sent, so typing never asks GitHub anything. A repository with nothing left

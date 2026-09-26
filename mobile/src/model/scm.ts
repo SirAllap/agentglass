@@ -51,6 +51,28 @@ export function stashTitle(message: string): { title: string; branch: string | n
   return m ? { title: m[2] || message, branch: m[1] ?? null } : { title: message, branch: null };
 }
 
+/** The one line that says a write landed. `act` in repos.tsx cleared `said` on
+ *  success and let a push — the one write that leaves the machine — succeed
+ *  as silently as a stage toggle; this is what goes in its place instead. */
+export function scmSuccessText(
+  path: string, info: { files?: number; branch?: string; index?: number },
+): string | null {
+  switch (path) {
+    case "/git/commit-staged": {
+      const n = info.files ?? 0;
+      return `Committed ${n} ${n === 1 ? "file" : "files"}`;
+    }
+    case "/git/push":
+      return info.branch ? `Pushed ${info.branch} to origin` : "Pushed to origin";
+    case "/git/stash-apply":
+      return `Applied stash@{${info.index ?? 0}}`;
+    case "/git/checkout":
+      return info.branch ? `Switched to ${info.branch}` : "Switched branch";
+    default:
+      return null;
+  }
+}
+
 /** `fresh` in the order `prev` had it, anything new after. */
 export function keepOrder<T extends { root: string }>(prev: T[], fresh: T[]): T[] {
   const at = new Map(prev.map((r, i) => [r.root, i]));
