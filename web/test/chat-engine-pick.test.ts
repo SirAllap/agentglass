@@ -76,7 +76,7 @@ test("no preference means the server decides, which is a real answer", () => {
 // a pane that did not exist, and a "⧉ tmux on send" chip that was just wrong.
 test("an agent that cannot run in a pane ignores the preference entirely", () => {
   setChatEnginePref("tmux");
-  for (const agent of ["codex", "antigravity"] as const) {
+  for (const agent of ["codex", "antigravity", "hermes"] as const) {
     // Both states a chat can be in: not yet started, and already holding a
     // thread. Neither may come back as "tmux".
     expect(engineFor({ agent, sessionId: "", engine: undefined }), agent).toBe("process");

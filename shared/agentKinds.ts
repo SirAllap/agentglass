@@ -250,6 +250,37 @@ export const AGENT_PROVIDERS: Provider[] = [
     },
   },
   {
+    // Nous Research's agent CLI. Stream-first chat panel only — no pane engine,
+    // no phone tab, no ACP. Not on the tab menu: nothing has launched it in a
+    // pane yet, and the thin path is deliberately Antigravity-shaped.
+    id: "hermes",
+    title: "Hermes",
+    what: "Nous Research agent CLI, driven by the chat panel.",
+    bin: "hermes",
+    mode: "flag", // prompt via -q
+    tab: false,
+    probe: {
+      label: "Hermes Agent",
+      via: "chat",
+      configPath: "", // do not write ~/.hermes/config.yaml from the browser
+      match: "hermes",
+      install: "https://hermes-agent.nousresearch.com/docs/",
+      connects: "the chat panel, which turns its own turns into events",
+    },
+    chat: {
+      label: "Hermes",
+      // Fallback when config.yaml is unread; /hermes/enabled prefers the
+      // configured model.default. Keep in step with FALLBACK in hermes.ts.
+      defaultModel: "anthropic/claude-sonnet-4",
+      defaultMode: "default",       // Hermes vocabulary — no extra flag
+      bypassMode: "yolo",           // maps to --yolo when chatBypassAllowed
+      canAttach: false,
+      hasTranscript: false,         // no /hermes/transcript until export is measured
+      hasEffort: false,
+      canPane: false,
+    },
+  },
+  {
     id: "codex",
     title: "Codex",
     what: "OpenAI's CLI, in a pane of its own.",

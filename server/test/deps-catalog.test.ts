@@ -139,7 +139,7 @@ describe("the requirements catalogue matches what the app actually runs", () => 
     // The gap this test was written for. `codex` and `agy` are chat engines
     // beside Claude Code: absent, the engine is simply not offered, which is
     // exactly the shape `task` has and the reason `task` earned its row.
-    for (const id of ["codex", "agy"]) {
+    for (const id of ["codex", "agy", "hermes"]) {
       const d = DEPS.find((x) => x.id === id);
       expect(d?.required).toBe(false);
       expect(ALL).toContain(`Bun.which("${d?.bin}")`);

@@ -181,6 +181,7 @@ import { tmuxConfMode, tmuxOverride, tmuxRestoreEnabled, tmuxResume, tmuxSource,
 import { claudeModels } from "./claudemodels.ts";
 import { codexStream, codexModels, codexTranscript, codexCwd, CODEX_ENABLED, CODEX_BYPASS_ALLOWED } from "./codex.ts";
 import { antigravityStream, antigravityModels, ANTIGRAVITY_ENABLED, ANTIGRAVITY_BYPASS_ALLOWED } from "./antigravity.ts";
+import { hermesStream, hermesModels, HERMES_ENABLED, HERMES_BYPASS_ALLOWED } from "./hermes.ts";
 import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs, reloadEngineConf, tmuxCapability, engineWindowRunning, engineSessionName, tmux } from "./tmuxpane.ts";
 import { takeLease, endLease, leaseHeld, reapLeases } from "./panelease.ts";
 import { runAgentInteractivePane } from "./understudy-pane.ts";
@@ -8424,6 +8425,22 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // at all: unlike Claude (hooks) and Codex (OTel), this CLI reports to
       // nobody, so its own frames are the only source there is.
       return antigravityStream(b.cwd, b.message, b.model, b.resumeId, b.mode, b.images, ingestBody);
+    }
+
+    // --- multi-chat: the same panel, driving Hermes Agent ---
+    // No /hermes/transcript in the thin PR: hasTranscript stays false until a
+    // stable export path is measured. Like Antigravity, Hermes exports neither
+    // hooks nor OTel, so frames of a turn started here are teed into ingestBody.
+    if (pathname === "/hermes/enabled") {
+      return json({ enabled: HERMES_ENABLED(), bypass: HERMES_BYPASS_ALLOWED, models: HERMES_ENABLED() ? hermesModels() : [] });
+    }
+    if (pathname === "/hermes/send" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
+      noteAction(clientIp, "/hermes/send",
+        { root: b.cwd, name: b.model }, { ok: true }, asActor(caller));
+      return hermesStream(b.cwd, b.message, b.model, b.resumeId, b.mode, b.images, ingestBody);
     }
 
     // --- LLM walkthrough: AI-authored review itinerary for the changes ---

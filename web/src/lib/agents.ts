@@ -11,8 +11,8 @@ import { agentProvider } from "../../../shared/agentKinds.ts";
 /**
  * Which CLI is behind a conversation.
  *
- * A chat is bound to one for life. All three are driven the same way — spawn
- * the binary non-interactively, stream its JSONL back — and all three land in
+ * A chat is bound to one for life. All four are driven the same way — spawn
+ * the binary non-interactively, stream its JSONL back — and all four land in
  * the same `ChatMsg` / `ChatTool` shapes, which is what lets the panel render
  * any of them without knowing. What it changes is the endpoint, the model list,
  * and what the mode dropdown even means, so it is settled when the chat is
@@ -20,7 +20,7 @@ import { agentProvider } from "../../../shared/agentKinds.ts";
  * minted it, and there is no such thing as handing a thread from one to
  * another.
  */
-export type AgentKind = "claude" | "codex" | "antigravity";
+export type AgentKind = "claude" | "codex" | "antigravity" | "hermes";
 
 /**
  * Everything that differs between the CLIs, in one table.
@@ -71,7 +71,7 @@ export type AgentSpec = {
  *
  * A row that loses its `chat` facet fails here, at load, rather than as a
  * chat that silently gets Claude's defaults; a test pins that every one of
- * the three is there.
+ * the four is there.
  */
 function chatSpec(id: AgentKind): AgentSpec {
   const row = agentProvider(id);
@@ -83,6 +83,7 @@ export const AGENTS: Record<AgentKind, AgentSpec> = {
   claude: chatSpec("claude"),
   codex: chatSpec("codex"),
   antigravity: chatSpec("antigravity"),
+  hermes: chatSpec("hermes"),
 };
 
 export const DEFAULT_MODEL = AGENTS.claude.defaultModel;
@@ -94,10 +95,13 @@ export const DEFAULT_CODEX_MODE = AGENTS.codex.defaultMode;
 /** Antigravity's. */
 export const DEFAULT_ANTIGRAVITY_MODEL = AGENTS.antigravity.defaultModel;
 export const DEFAULT_ANTIGRAVITY_MODE = AGENTS.antigravity.defaultMode;
+/** Hermes's. The mode is its own vocabulary (`default` / `yolo`), not Claude's. */
+export const DEFAULT_HERMES_MODEL = AGENTS.hermes.defaultModel;
+export const DEFAULT_HERMES_MODE = AGENTS.hermes.defaultMode;
 
 /** Narrow an untrusted string to an agent. Anything unrecognised is Claude:
  *  everything written down before chats had a second agent was a Claude chat,
  *  so a missing field is an older payload saying what it knew rather than
  *  corruption — and it is the recoverable direction either way. */
 export const asAgent = (v: unknown): AgentKind =>
-  v === "codex" || v === "antigravity" ? v : "claude";
+  v === "codex" || v === "antigravity" || v === "hermes" ? v : "claude";

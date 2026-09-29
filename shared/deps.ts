@@ -33,7 +33,7 @@
 export type DepPlatform = "linux" | "darwin" | "win32";
 
 export type DepId =
-  | "git" | "claude" | "codex" | "agy" | "python" | "tmux" | "gh" | "glab" | "docker" | "nvim" | "task"
+  | "git" | "claude" | "codex" | "agy" | "hermes" | "python" | "tmux" | "gh" | "glab" | "docker" | "nvim" | "task"
   | "whisper"
   | "tailscale"
   | "setsid" | "script" | "ss" | "dbus-monitor" | "notify-send" | "opener" | "pkexec" | "bash" | "bwrap";
@@ -199,6 +199,12 @@ export const DEPS: DepSpec[] = [
     what: "Runs chats on Antigravity, as a third engine alongside Claude Code and Codex.",
     url: "https://antigravity.google",
     note: "Like Codex, its absence removes an option and nothing else.",
+  },
+  {
+    id: "hermes", bin: "hermes", title: "Hermes Agent CLI", required: false,
+    what: "Runs chats on Hermes Agent, as a fourth engine alongside Claude Code, Codex and Antigravity.",
+    url: "https://hermes-agent.nousresearch.com/docs/",
+    note: "Like Codex and Antigravity, its absence removes an option and nothing else.",
   },
   {
     id: "tailscale", bin: "tailscale", title: "Tailscale", required: false,
