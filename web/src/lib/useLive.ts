@@ -3,6 +3,7 @@ import type { WatchEvent, WsFrame, WsClientHello, OpenToolCall } from "../../../
 import { WS_URL, IS_DEMO, hasToken, probeAuth, whenServerUp } from "./api.ts";
 import * as demo from "./demo.ts";
 import { gitChanged } from "./gitBus.ts";
+import { desktopPaletteMoved } from "./themes.ts";
 import { emitControl } from "./controlBus.ts";
 import { clientId, emitBrowserAsk } from "./browserBus.ts";
 import { emitUnderstudy } from "./understudyBus.ts";
@@ -171,6 +172,9 @@ export function useLive(paused = false): LiveData {
       // Marks that moved elsewhere while this socket was down were broadcast to
       // nobody here; ask for them. A no-op in a window that never started sync.
       void syncMarks();
+      // A switch of the desktop's theme made while this socket was down was
+      // announced to nobody here.
+      desktopPaletteMoved();
     };
     ws.onclose = async () => {
       if (disposed.current || wsRef.current !== ws) return;
@@ -200,6 +204,10 @@ export function useLive(paused = false): LiveData {
       try {
         frame = JSON.parse(msg.data);
       } catch {
+        return;
+      }
+      if (frame.type === "desktop-palette") {
+        desktopPaletteMoved();
         return;
       }
       if (frame.type === "git") {

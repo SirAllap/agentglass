@@ -103,7 +103,7 @@ import { spawnPoolStats } from "./spawnpool.ts";
 import { singleFlight, inflightCount } from "./singleflight.ts";
 import { openInEditor, editorTarget, editorCapability, HAS_NVIM } from "./editor.ts";
 import { syncTheme, snippetStatus, SNIPPETS, tmuxThemePath, repairTmuxTheme, currentTheme, automatedThemeClient } from "./themesync.ts";
-import { desktopPalette, desktopLogo } from "./desktopPalette.ts";
+import { desktopPalette, desktopLogo, watchDesktopPalette } from "./desktopPalette.ts";
 import { existsSync as fsExists, readFileSync as fsRead, writeFileSync as fsWrite, mkdtempSync } from "node:fs";
 import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
 import { listPortsAsync, listResources, spaceFor, killPort } from "./machine.ts";
@@ -9755,6 +9755,9 @@ startCardWatch((n) => broadcast({ type: "card", data: n }));
    on a schedule nothing in the test asked for, against whatever pairs an
    earlier test's process-wide map still holds. */
 if (process.env.NODE_ENV !== "test") {
+  /* The desktop switched theme: windows re-read its palette, instead of each
+     asking every few seconds whether it had. */
+  watchDesktopPalette(() => broadcast({ type: "desktop-palette" }));
   startPrWatch({
     liveClients: () => clients.size,
     // A root that no longer resolves rejects; a timer has nobody to tell.

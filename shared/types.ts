@@ -1923,6 +1923,9 @@ export type WsFrame =
    *  each need a different slice of git state, so they re-read what they show
    *  rather than the server guessing which of them cares about what. */
   | { type: "git" }
+  /** The desktop's theme changed. Carries nothing: the client reads
+   *  `/desktop/palette`, as it does at boot, instead of polling it. */
+  | { type: "desktop-palette" }
   | { type: "tasks" }
   /** The list of pending gate holds changed (one arrived, was decided, timed
    *  out, or was answered by a rule). Carries no payload: the client re-reads

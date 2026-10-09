@@ -13,7 +13,7 @@
  *
  * The next desktop is another function returning the same shape, tried in turn.
  */
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync, watch } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { desktopTheme, parseColors, type DesktopTheme } from "../../shared/desktopPalette.ts";
@@ -71,6 +71,45 @@ function omarchy(): DesktopPalette | null {
 /** The desktop's palette, or null on a desktop that publishes none. */
 export function desktopPalette(): DesktopPalette | null {
   return omarchy();
+}
+
+/**
+ * Say so when the desktop switches theme, so nobody has to ask on a clock.
+ *
+ * The clients asked every three seconds, in every window, to notice a thing
+ * that happens a handful of times a day. The switch replaces `theme` and
+ * rewrites `theme.name` inside the same directory, so that directory is what is
+ * watched (the files themselves are swapped for new inodes and a watch on one
+ * would go quiet after the first switch). Debounced, because one switch is
+ * several events, and compared by stamp, so an event that changed nothing the
+ * palette reads says nothing.
+ *
+ * Returns the stop function. On a desktop that has no such directory nothing is
+ * watched and the stop does nothing; one that appears later is not noticed
+ * until the server restarts, which is the ceiling of this version.
+ */
+export function watchDesktopPalette(onChange: () => void): () => void {
+  let last = desktopPalette()?.stamp ?? "";
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const schedule = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      const now = desktopPalette()?.stamp ?? "";
+      if (now === last) return;
+      last = now;
+      onChange();
+    }, 250);
+  };
+  let watcher: ReturnType<typeof watch>;
+  try { watcher = watch(omarchyDir(), schedule); } catch { return () => {}; }
+  /* An error event with nobody listening throws; the types here do not name
+     the emitter. The directory went away: the next ask answers null. */
+  (watcher as unknown as { on(e: "error", f: () => void): void }).on("error", () => {});
+  return () => {
+    if (timer) clearTimeout(timer);
+    watcher.close();
+  };
 }
 
 /** For a test that points HOME somewhere else between cases. */

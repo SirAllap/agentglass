@@ -55,15 +55,14 @@ async function boot(stored: Record<string, string>, { dark = true, palette = nul
   /* What main.tsx does, in its order. */
   m.applyTheme(m.initialTheme());
   const painted = () => attrs.get("data-theme");
-  let poll: () => void = () => {};
   const settle = async () => { for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0)); };
+  /* No timer to catch any more: the first answer is the boot read, and a later
+     one is what useLive does on the server's frame or a reconnect. */
   const afterFirstPoll = async () => {
-    g.setInterval = (fn: () => void) => { poll = fn; return 0; };
     m.watchDesktopPalette();
     await settle();
-    g.setInterval = saved.setInterval;
   };
-  const nextPoll = async () => { poll(); await settle(); };
+  const nextPoll = async () => { m.desktopPaletteMoved(); await settle(); };
   const serverStarts = () => { serverUp = true; };
   const serverGoes = () => { serverUp = false; };
   return { m, store, painted, afterFirstPoll, nextPoll, serverStarts, serverGoes, synced };

@@ -7,11 +7,11 @@
  * the terminal colours — with invented values.
  */
 import { describe, test, expect, beforeEach, afterEach, afterAll } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync, renameSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { desktopTheme, parseColors, mix } from "../../shared/desktopPalette.ts";
-import { desktopPalette, __forgetDesktopPalette } from "../src/desktopPalette.ts";
+import { desktopPalette, watchDesktopPalette, __forgetDesktopPalette } from "../src/desktopPalette.ts";
 
 const COLORS = `mode = "dark"
 
@@ -180,5 +180,72 @@ describe("the desktop's mark, rebuilt from geometry", () => {
   test("a file with no geometry is no mark", () => {
     expect(rebuildMark('<svg viewBox="0 0 1 1"></svg>')).toBeNull();
     expect(rebuildMark("<svg><path d=\"m0 0\"/></svg>")).toBeNull();
+  });
+});
+
+describe("telling the app when the desktop switches theme", () => {
+  const prior = { home: process.env.HOME, state: process.env.XDG_STATE_HOME };
+  let home = "";
+  let current = "";
+  const stage = (slug: string, colors = COLORS) => {
+    /* How the desktop switches: a new `theme` directory renamed over the old one. */
+    const next = join(current, "theme-next");
+    mkdirSync(next, { recursive: true });
+    writeFileSync(join(next, "colors.toml"), colors);
+    rmSync(join(current, "theme"), { recursive: true, force: true });
+    renameSync(next, join(current, "theme"));
+    writeFileSync(join(current, "theme.name"), slug + "\n");
+  };
+  const settle = (ms = 700) => new Promise((r) => setTimeout(r, ms));
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "agx-desk-watch-"));
+    current = join(home, ".local", "state", "omarchy", "current");
+    mkdirSync(current, { recursive: true });
+    process.env.HOME = home;
+    delete process.env.XDG_STATE_HOME;
+    __forgetDesktopPalette();
+    stage("orbit-night");
+  });
+  afterEach(() => { rmSync(home, { recursive: true, force: true }); });
+  afterAll(() => {
+    if (prior.home === undefined) delete process.env.HOME; else process.env.HOME = prior.home;
+    if (prior.state === undefined) delete process.env.XDG_STATE_HOME; else process.env.XDG_STATE_HOME = prior.state;
+    __forgetDesktopPalette();
+  });
+
+  test("a switch is announced once, however many files it writes", async () => {
+    let calls = 0;
+    const stop = watchDesktopPalette(() => { calls++; });
+    try {
+      stage("orbit-day", COLORS.replace("#1a1b26", "#f5f0e6"));
+      await settle();
+      expect(calls).toBe(1);
+    } finally { stop(); }
+  });
+
+  test("nothing is announced while nothing changes", async () => {
+    let calls = 0;
+    const stop = watchDesktopPalette(() => { calls++; });
+    try {
+      writeFileSync(join(current, "unrelated"), "x");
+      await settle();
+      expect(calls).toBe(0);
+    } finally { stop(); }
+  });
+
+  test("a stopped watcher says nothing more", async () => {
+    let calls = 0;
+    const stop = watchDesktopPalette(() => { calls++; });
+    stop();
+    stage("orbit-day", COLORS.replace("#1a1b26", "#f5f0e6"));
+    await settle();
+    expect(calls).toBe(0);
+  });
+
+  test("a desktop that publishes nothing costs nothing: no watcher, no error", () => {
+    rmSync(current, { recursive: true, force: true });
+    const stop = watchDesktopPalette(() => {});
+    expect(typeof stop).toBe("function");
+    stop();
   });
 });

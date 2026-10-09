@@ -27,9 +27,9 @@ const browser = await web("components/BrowserPanel.tsx");
 /** Source without its comment lines, so a word in prose is not a call. */
 const code = (s: string) => s.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
 
-test("the palette, reminder and session polls go through the focus gate", () => {
-  expect(code(themes)).toContain("pollWhileLooking(");
-  expect(code(themes)).not.toMatch(/setInterval\(\s*\(\)\s*=>\s*\{\s*void tick\(\)/);
+test("the reminder and session polls go through the focus gate, and the palette has no poll at all", () => {
+  /* The palette is pushed by the server (web/test/desktop-palette-follow.test.ts). */
+  expect(code(themes)).not.toMatch(/pollWhileLooking|setInterval/);
   expect(code(reminders)).toContain("pollWhileLooking(");
   expect(code(reminders)).not.toContain("setInterval(");
   expect(code(app)).toMatch(/usePoll\(true, \(\) => \{ void loadSessions\(\); \}, 30_000\)/);
