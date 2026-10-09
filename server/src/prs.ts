@@ -913,7 +913,8 @@ const LIST_FIELDS_FAST = "number,title,author,state,isDraft,headRefName,baseRefN
 
 type Entry = { at: number; prs: PrSummary[]; loading: boolean; checksPending: boolean; error?: string; total?: number; hasNext?: boolean; cursor?: string | null; fp?: string };
 const listCache = new Map<string, Entry>();
-const inflight = new Set<string>();
+/** List key -> when its read began. */
+const inflight = new Map<string, number>();
 
 /**
  * The list cache, kept across restarts.
@@ -1910,11 +1911,36 @@ function refreshChecks(repo: PrRepoId, filter: PrFilter, state: PrState, rows: P
   })();
 }
 
+/** Lists whose forced refresh arrived while a read was running. */
+const followUp = new Set<string>();
+const SAME_PRESS_MS = 150;
+
+/**
+ * Run `run` once the read in flight has ended, however many callers ask meanwhile.
+ * A forced read pressed while another is running must not be answered by that
+ * one: it began before the press. Exported for its test.
+ */
+export function afterFlight<T>(follows: Map<string, Promise<T>>, key: string, flying: Promise<T>, run: () => Promise<T>): Promise<T> {
+  const asked = follows.get(key);
+  if (asked) return asked;
+  const p: Promise<T> = flying.catch(() => undefined).then(run).finally(() => { if (follows.get(key) === p) follows.delete(key); });
+  follows.set(key,p);
+  return p;
+}
+
 /** Refresh behind the response. Never awaited by a request handler. */
 function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: string, query?: string, force = false): void {
   const key = cacheKey(repo, filter, state, after, query);
-  if (inflight.has(key)) return;
-  inflight.add(key);
+  /* A forced read asked for while one is running is NOT answered by it: that
+     one began before the press, and the change the press was for may be newer.
+     It runs when the current one ends — once, however many presses came. */
+  const began = inflight.get(key);
+  /* Presses of ONE Refresh (the table and the board's two lists ask in the same
+     breath) share the read they started; ceiling: a press within SAME_PRESS_MS
+     of a read that began before it is taken for the same press. */
+  if (began !== undefined) { if (force && Date.now() - began > SAME_PRESS_MS) followUp.add(key); return; }
+  inflight.set(key, Date.now());
+  const epoch = listEpoch.get(repo.key) ?? 0;
   const prev = listCache.get(key);
   const keep = (over: Partial<Entry>): Entry => ({
     at: prev?.at ?? 0, prs: prev?.prs ?? [], loading: true, checksPending: true, error: prev?.error, ...over,
@@ -1999,6 +2025,11 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
       listCache.set(key, keep({ loading: false, checksPending: false, error: failed("prs/list", e, "the pull requests could not be read") }));
     } finally {
       inflight.delete(key);
+      /* A write landed while this read ran: what it stored may predate the
+         write (a reopened pull request missing from an open list, kept as
+         "fresh"), so it is dropped and read again. */
+      if ((listEpoch.get(repo.key) ?? 0) !== epoch) { listCache.delete(key); followUp.add(key); }
+      if (followUp.delete(key)) refreshList(repo, filter, state, after, query, true);
     }
   })();
 }
@@ -2017,7 +2048,11 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
  * spend, the tracker card) are not the detail's to say.
  */
 const SHARED_FIELDS = ["title", "state", "isDraft", "reviewDecision", "updatedAt", "additions",
-  "deletions", "changedFiles", "labels", "assignees", "reviewers", "milestone", "checks", "headSha"] as const;
+  "deletions", "changedFiles", "labels", "assignees", "reviewers", "milestone", "checks", "headSha",
+  /* The verdict header on the card ("Approved by ada") and on the detail's
+     Overview: `reviewDecision` alone left one of the two saying "No review
+     asked for yet" after a review landed. */
+  "humanReview"] as const;
 
 /** `row` brought up to date from a detail read, or `row` itself when the
  *  detail is older (its `updatedAt`) or says nothing new. An UNKNOWN
@@ -2048,6 +2083,22 @@ export function projectRowOnDetail(d: PrDetail, row: PrSummary): PrDetail {
     if (row.mergeable !== "UNKNOWN" && row.mergeable !== d.mergeable) patch.mergeable = row.mergeable;
   } else if (d.mergeable === "UNKNOWN" && row.mergeable !== "UNKNOWN") patch.mergeable = row.mergeable;
   return Object.keys(patch).length ? { ...d, ...patch } as PrDetail : d;
+}
+
+/**
+ * The cached detail after a list row of the same pull request was read.
+ *
+ * A row newer than the detail (its `updatedAt` moved) means something changed
+ * on GitHub that the row can only partly say: the shared fields are copied over
+ * at once, and the entry is made stale so the next open answers instantly AND
+ * re-reads. Threads and comments are the ones a row cannot carry: without this a
+ * detail opened after the board learned that a thread was resolved kept
+ * listing it until the 45 s cache ran out.
+ */
+export function detailAfterRow(hit: { at: number; detail: PrDetail }, row: PrSummary): { at: number; detail: PrDetail } {
+  const detail = projectRowOnDetail(hit.detail, row);
+  const newer = row.updatedAt > hit.detail.updatedAt;
+  return detail === hit.detail && !newer ? hit : { ...hit, detail, at: newer ? 0 : hit.at };
 }
 
 /** Detail reads by pull request, so a list read that STARTED before one cannot
@@ -2155,8 +2206,8 @@ function storePage(repo: PrRepoId, filter: PrFilter, state: PrState, key: string
   for (const r of listCache.get(key)!.prs) {
     const dk = `${repo.key}#${r.number}`, hit = detailCache.get(dk);
     if (!hit) continue;
-    const next = projectRowOnDetail(hit.detail, r);
-    if (next !== hit.detail) detailCache.set(dk, { ...hit, detail: next });
+    const next = detailAfterRow(hit, r);
+    if (next !== hit) detailCache.set(dk, next);
   }
   // Only open PRs raise CI notifications — a merged or closed PR's checks
   // are history, not something to alert on.
@@ -2932,6 +2983,8 @@ const DETAIL_FILE = join(CACHE_DIR, "pr-detail.json");
 const DETAIL_MAX_ENTRIES = 24;
 let detailWriteTimer: ReturnType<typeof setTimeout> | null = null;
 /** Refreshes already running, so ten glances at a stale card make one call. */
+const detailFollows = new Map<string, Promise<any>>();
+const detailFlightAt = new Map<string, number>();
 const detailFlights = new Map<string, Promise<{ ok: boolean; detail?: PrDetail; error?: string }>>();
 
 function loadDetailCache(): void {
@@ -3208,6 +3261,9 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
      that arrives while a read is running joins it. A write drops the entry
      (see `invalidate`) so a read that began before it is never joined after. */
   const flying = detailFlights.get(key);
+  if (flying && force && Date.now() - (detailFlightAt.get(key) ?? 0) > SAME_PRESS_MS) {
+    return afterFlight(detailFollows, key, flying, () => prDetail(rootIn, number, true));
+  }
   if (flying && (force || !hit)) return flying;
   /*
    * Stale, but on screen now.
@@ -3227,7 +3283,7 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
   }
 
   const p = readDetail(rootIn, number, repo, key).finally(() => { if (detailFlights.get(key) === p) detailFlights.delete(key); });
-  detailFlights.set(key, p);
+  detailFlights.set(key, p); detailFlightAt.set(key, Date.now());
   return p;
 }
 
@@ -3894,7 +3950,12 @@ function writeGuard(rootIn: unknown): PrActionResult | null {
   return null;
 }
 
+/** Bumped by every write: a list read that began before it must not be kept. */
+const listEpoch = new Map<string, number>();
+export async function __invalidate(rootIn: unknown): Promise<void> { const repo = await repoIdFor(rootIn); if (repo) invalidate(repo); }
+
 function invalidate(repo: PrRepoId, number?: number): void {
+  listEpoch.set(repo.key, (listEpoch.get(repo.key) ?? 0) + 1);
   for (const k of listCache.keys()) if (k.startsWith(`${repo.key}\u0000`)) listCache.delete(k);
   if (number !== undefined) {
     detailCache.delete(`${repo.key}#${number}`);

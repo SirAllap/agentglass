@@ -30,6 +30,13 @@ export function rowPatch(d: PrDetail) {
     updatedAt: d.updatedAt, additions: d.additions, deletions: d.deletions,
     changedFiles: d.changedFiles, labels: d.labels, assignees: d.assignees,
     reviewers: d.reviewers,
+    // The card's verdict header reads this, not `reviewDecision`.
+    ...(d.humanReview ? { humanReview: d.humanReview } : {}),
+    /* The card's "N open" chip: resolving a thread in the detail left it saying
+       "1 open" until the next list read (9.8 s against a stub GitHub). Pending
+       own-review threads are not in the detail's list, so this can read one
+       lower than the list's count until the next read. */
+    ...(Array.isArray(d.threads) ? { openThreads: { open: d.threads.filter((t) => !t.isResolved).length, more: !!d.truncated?.threads } } : {}),
     milestone: d.milestone, checks: d.checks, checksLoaded: true,
     /* The board files a card by these two, and a base that moved changes the
        first without touching `updatedAt`, so the detail can learn it first. An
@@ -49,6 +56,40 @@ export function overlayDetail(rows: PrSummary[], d: PrDetail): PrSummary[] {
   if ((Object.keys(patch) as (keyof typeof patch)[]).every((k) => JSON.stringify(r[k]) === JSON.stringify(patch[k]))) return rows;
   const out = rows.slice();
   out[at] = { ...r, ...patch };
+  return out;
+}
+
+/**
+ * A reopened pull request, written into the lists it left.
+ *
+ * `overlayDetail` only patches a row the list already has, and a closed pull
+ * request is in no open list, so the card came back only after a list read
+ * (3 s against a stub GitHub with a 1.2 s list) while the detail said Open.
+ * The row is built from the detail and HELD for a short while: a list read
+ * that began before the reopen must not take it away again, and one that began
+ * after is GitHub's own. Only the author's own pull requests are held: whose
+ * review queue it belongs to is not something the detail knows, and those
+ * still wait for the read.
+ */
+export const REOPEN_HOLD_MS = 30_000;
+export type Reopened = Map<number, { at: number; row: PrSummary }>;
+
+export function reopenedRow(d: PrDetail): PrSummary | null {
+  if (!d.viewerDidAuthor) return null;
+  return {
+    number: d.number, author: d.author, headRefName: d.headRefName, baseRefName: d.baseRefName, url: d.url,
+    ...rowPatch(d), state: "OPEN",
+  } as unknown as PrSummary;
+}
+
+/** `rows` with every held reopen that this read (started at `fetchedAt`) predates. */
+export function holdReopened(rows: PrSummary[], held: Reopened, fetchedAt: number, now = Date.now()): PrSummary[] {
+  let out = rows;
+  for (const [n, e] of held) {
+    if (now - e.at > REOPEN_HOLD_MS) { held.delete(n); continue; }
+    if (fetchedAt >= e.at || out.some((r) => r.number === n)) continue;
+    out = [e.row, ...out];
+  }
   return out;
 }
 

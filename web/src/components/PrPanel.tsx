@@ -67,7 +67,7 @@ import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
 import { keepLoadedChecks } from "../lib/prMerge.ts";
 import { askingBehind, behindAnswer, forgetBehind, forgetOneBehind, onBehind, refreshBehind } from "../lib/prBehindStore.ts";
 import { refreshRollup } from "../lib/prRollupStore.ts";
-import { overlayDetail, holdEdits, refreshPlan, rowPatch, landedDetail, dropLanded, staleOpen, once, type EditLog, type Landed } from "../lib/prRefresh.ts";
+import { overlayDetail, reopenedRow, holdReopened, holdEdits, refreshPlan, rowPatch, landedDetail, dropLanded, staleOpen, once, type EditLog, type Landed, type Reopened } from "../lib/prRefresh.ts";
 import {
   anchorId, bootstrapSince, clearSeen, foldedIdx, markAllSeen, newKeys, newSince, onSeenChange, readSeen,
   reviewSpeaks, writeSeen, type NewAtom,
@@ -2594,9 +2594,13 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const [refreshing, setRefreshing] = useState(false);
   /** Merges this session saw land, so neither view waits for a poll to know. */
   const landedRef = useRef<Landed>(new Map());
+  const reopenedRef = useRef<Reopened>(new Map());
   /** The open lists never carry a pull request whose merge we just saw land,
    *  even when a read that began before it comes back still listing it. */
   const openLists = (rows: PrSummary[]) => (stateSel === "open" ? dropLanded(rows, landedRef.current) : rows);
+  /** The author's own lists also keep a pull request the detail just reopened. */
+  const withReopened = (rows: PrSummary[], fetchedAt: number) =>
+    (stateSel === "open" ? holdReopened(rows, reopenedRef.current, fetchedAt) : rows);
 
   const loadList = useCallback((force = false) => {
     if (!root) return;
@@ -2608,7 +2612,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       // Same rule as the board: a refresh may add and correct, but it may not
       // un-know. Every fetch starts at the fast pass, so without this a list
       // that had its check states dropped back to "not in yet" on every poll.
-      setPrs((cur) => openLists(holdEdits(keepLoadedChecks(cur, r.prs), editLog.current, r.fetchedAt)));
+      setPrs((cur) => (want === "mine" ? withReopened : (x: PrSummary[]) => x)(openLists(holdEdits(keepLoadedChecks(cur, r.prs), editLog.current, r.fetchedAt)), r.fetchedAt));
       setListState({ fetchedAt: r.fetchedAt, loading: r.loading, checksPending: r.checksPending, error: r.error, needsAuth: r.needsAuth, total: r.total, hasNext: r.hasNext, cursor: r.cursor ?? null, pageSize: r.pageSize });
       // The keyboard cursor, never the open pull request. This lands on every
       // poll and on every scope switch, and when the list was a column beside a
@@ -2816,7 +2820,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     const n = detail?.number;
     if (!root || !n || detail?.mergeable !== "UNKNOWN" || askedAgain.current === n) return;
     askedAgain.current = n;
-    const t = setTimeout(() => { void loadDetailRef.current?.(n); }, 1500);
+    /* Forced: the server holds a detail for 45 s, so an ordinary read 1.5 s
+       later is answered from that cache with the same UNKNOWN and the recheck
+       is spent on nothing (measured against a stub GitHub that flips to
+       CONFLICTING at once: the detail stayed on "still working it out"). */
+    const t = setTimeout(() => { void loadDetailRef.current?.(n, true); }, 1500);
     return () => clearTimeout(t);
   }, [root, detail?.number, detail?.mergeable]);
   loadDetailRef.current = loadDetail;
@@ -3276,6 +3284,12 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
      once, and last minute's answer beats a skeleton. */
   const boardSettling = !boardWhole && !boardDrawn.current && !boardWaited;
 
+  /* Coming back to Open after reading a closed one there: the open lists on
+     screen are the closed ones until the read lands, so the reopened pull
+     request is put back straight away. */
+  useEffect(() => {
+    if (stateSel === "open" && reopenedRef.current.size) setBoardMine((cur) => holdReopened(cur.filter((r) => r.state === "OPEN"), reopenedRef.current, 0));
+  }, [stateSel]);
   const [boardTick, setBoardTick] = useState(0);
   /** Set by Refresh, read once by the board's fetch. See the button. */
   const boardForce = useRef(false);
@@ -3306,7 +3320,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     void Promise.allSettled([
       api.prList(root, "mine", stateSel, force).then((r) => {
         if (!live) return;
-        setBoardMine((cur) => openLists(holdEdits(keepLoadedChecks(cur, r.prs ?? []), editLog.current, r.fetchedAt)));
+        setBoardMine((cur) => withReopened(openLists(holdEdits(keepLoadedChecks(cur, r.prs ?? []), editLog.current, r.fetchedAt)), r.fetchedAt));
         if (typeof r.total === "number") setViewCounts((c) => ({ ...c, mine: r.total! }));
       }),
       api.prList(root, "review", stateSel, force).then((r) => {
@@ -4065,8 +4079,18 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     const ok2 = await field(statePatch(detail.number, reopen ? "OPEN" : "CLOSED", new Date().toISOString()),
       () => api.prClose(root, detail.number, reopen), reopen ? "Reopen failed" : "Close failed", "state");
     if (ok2) flash(true, reopen ? "Reopen — done" : "Close — done");
-    // A reopened pull request is not in the lists it left; only a read brings it back.
-    if (ok2 && reopen) loadList(true);
+    /* A reopened pull request is in none of the lists it left, so its row is
+       written into the author's own and held (see holdReopened); a read
+       confirms behind it. */
+    if (ok2 && reopen) {
+      const row = reopenedRow({ ...detail, state: "OPEN" });
+      if (row) {
+        reopenedRef.current.set(detail.number, { at: Date.now(), row });
+        setBoardMine((cur) => withReopened(cur, 0));
+        if (filter === "mine") setPrs((cur) => withReopened(cur, 0));
+      }
+      loadList(true);
+    }
   };
 
   /**
