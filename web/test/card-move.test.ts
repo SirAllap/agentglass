@@ -159,7 +159,7 @@ describe("the panel", () => {
     // that gh refused would leave the board claiming work shipped that did not
     // — and the panel already knows better, because `act` hands back whether
     // it worked.
-    expect(PANEL).toMatch(/if \(!merged \|\| !move\) return;[\s\S]{0,600}clickupStatus\(/);
+    expect(PANEL).toMatch(/if \(!merged\) return;[\s\S]{0,900}clickupStatus\(/);
   });
 
   it("asks before it moves anything", () => {

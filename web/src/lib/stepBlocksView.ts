@@ -33,6 +33,11 @@ export function blockClause(trigger: StepTrigger, b: StepBlock, o: { item: strin
     const who = b.who === "people" ? ((b.people ?? []).length ? `take ${pickSentence((b.people ?? []).map((x) => ({ kind: "person" as const, id: x.id, name: x.name })))} off the ${o.item}` : `take nobody off the ${o.item}`) : b.who === "none" ? UNASSIGN_WORDS.none : `${UNASSIGN_WORDS[b.who]} the ${o.item}`;
     return b.ask ? `ask who to take off the ${o.item}, starting with: ${who.replace(/^take /, "").replace(` off the ${o.item}`, "")}` : who;
   }
+  if (b.type === "comment") {
+    const quoted = b.text.length > 40 ? `${b.text.slice(0, 40).trim()}…` : b.text;
+    return b.ask ? `ask what to comment on the ${o.item}, starting from “${quoted}”` : `comment “${quoted}”`;
+  }
+  if (b.type === "field") return b.ask ? `ask for ${b.field}, starting at ${b.value || "empty"}` : `set ${b.field} to ${b.value}`;
   const w = assignWords(b);
   const who = b.who === "person" && b.also?.length ? pickSentence([b.person!, ...b.also].map((x) => ({ kind: "person" as const, id: x.id, name: x.name }))) : w === "whoever presses it" ? "you" : (w ?? "nobody");
   return b.ask ? `ask who to assign it to, starting at ${who}` : `assign it to ${who}`;

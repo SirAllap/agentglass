@@ -36,10 +36,10 @@ describe("which blocks a place can take", () => {
     expect(blockRefusal("move", [move("qa")], "move")).toMatch(/Already in this step. Remove it/);
     expect(blockRefusal("move", [assign("me")], "assign")).toMatch(/Already in this step/);
   });
-  test("the kinds the list is only open for are listed, and refused, until they are built", () => {
-    const later = BLOCK_INFO.filter((b) => !b.built).map((b) => b.type);
-    expect(later.length).toBeGreaterThan(0);
-    for (const t of later) expect(blockRefusal("move", [], t)).toMatch(/Not built yet/);
+  test("every kind the list shows is built, a kind that is not is refused with that said, and an unknown one is not a block", () => {
+    expect(BLOCK_INFO.map((b) => b.type)).toEqual(["move", "unassign", "assign", "comment", "field"]);
+    for (const t of BLOCK_INFO.map((b) => b.type)) expect(blockRefusal("move", [], t)).toBeNull();
+    expect(blockRefusal("move", [{ type: "comment", text: "x" }], "comment")).toMatch(/Already in this step/);
     expect(blockRefusal("move", [], "teleport")).toMatch(/not a block/);
   });
   test("a whole list is judged block by block, so the first bad one is named", () => {

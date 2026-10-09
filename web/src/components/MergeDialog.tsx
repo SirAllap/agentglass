@@ -4,7 +4,9 @@ import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { Select } from "./Select.tsx";
 import { AssignPicker, useAskAssign } from "./AssignPicker.tsx";
-import { planOf } from "../../../shared/stepBlocks.ts";
+import { hasExtras, planOf } from "../../../shared/stepBlocks.ts";
+import { AskedExtras } from "./AskedExtras.tsx";
+import { prContext, type ExtraItem } from "../lib/stepExtras.ts";
 import { StatusPill } from "./StatusPill.tsx";
 import { Spinner } from "./Spinner.tsx";
 import { MERGE_OPTION, mergeBody, mergeSubject, type MergeMethod, type MergeCommit } from "../../../shared/mergeMethod.ts";
@@ -46,6 +48,8 @@ import { INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 
 export type MergeSpec = {
   number: number;
+  /** The pull request's address, for a comment's {pr_url}. */
+  url?: string;
   title: string;
   method: MergeMethod;
   baseRefName: string;
@@ -94,6 +98,8 @@ export type MergeChoice = {
   subject?: string;
   body?: string;
   deleteBranch: boolean;
+  /** A step's comment and fields, as the dialog showed them, to send after the merge (each is a request of its own). */
+  extras?: { id: string; label: string; items: ExtraItem[] };
   /** Set only when a status other than the card's own was picked. Absent means
    *  "leave the board alone", which is what the dialog opens on. */
   card?: {
@@ -143,6 +149,10 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
   const readyCard = card.kind === "ready" ? card.card : null;
   const asked = useAskAssign({ on: mergeOn && !!askAssign && !!readyCard, ...(readyCard?.listId ? { listId: readyCard.listId } : null), ...(askAssign ? { start: askAssign } : null), author: pending?.author ?? null, onCard: readyCard?.people });
   const ensure: Ensure = askAssign ? asked.ensure : fixedEnsure;
+  /* A comment or a field: shown here, asked where it asks, sent after the merge. */
+  const [extraItems, setExtraItems] = useState<ExtraItem[]>([]);
+  useEffect(() => { setExtraItems([]); }, [pending]);
+  const mergeExtras = !!mergePrefs && mergeOn && hasExtras(planOf("merge", mergePrefs));
   const subjectRef = useRef<HTMLInputElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const rebase = pending?.method === "rebase";
@@ -205,6 +215,7 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
         id: task.id, label: ref.label, title: task.title, ...(task.listId ? { listId: task.listId } : null),
         status: task.status, statusColor: task.statusColor, updated: task.updated,
         statuses: meta?.ok ? (meta.statuses ?? []) : [],
+        ...(meta?.ok && meta.fields ? { fields: meta.fields } : null),
         people: task.people ?? [],
       };
       setStatus(mergePreselect(move.statuses, move.status, mergeNames ? mergeNames.split("\u0000") : []));
@@ -255,6 +266,7 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
       subject: rebase ? undefined : subject.trim() || undefined,
       body: rebase ? undefined : body.trim() || undefined,
       deleteBranch,
+      ...(on && extraItems.length ? { extras: { id: on.id, label: on.label, items: extraItems } } : null),
       card: on && moves
         ? {
           id: on.id, label: on.label, to: status, updated: on.updated,
@@ -474,6 +486,12 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
                               })),
                             ]}
                           />
+                        )}
+                        {card.kind === "ready" && mergeExtras && (
+                          <div className="basis-full">
+                            <AskedExtras blocks={mergePrefs?.blocks ?? []} fields={card.card.fields ?? null} listId={card.card.listId} onChange={setExtraItems}
+                              ctx={prContext({ pr: { number: pending.number, title: pending.title, ...(pending.url ? { url: pending.url } : null) }, author: pending.author, status: movesCard(card.card.status, status) ? status : card.card.status })} />
+                          </div>
                         )}
                         {card.kind === "ready" && movesCard(card.card.status, status) && askAssign && (
                           <span className="basis-full flex items-center gap-2 text-[10.5px]" data-merge-ask="" style={{ color: "var(--text3)" }}>

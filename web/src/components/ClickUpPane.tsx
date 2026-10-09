@@ -6,6 +6,8 @@ import { __forgetClickupSpaces, PENDING_CARDS, useClickupSpaces } from "../lib/c
 import { __forgetClickupPrefs } from "../lib/clickupPrefs.ts";
 import { CLICKUP, addTurnsWritesOn, clickupAdd, clickupBlocks, clickupRemove, clickupSteps, type PrefsPatch } from "../lib/clickupWorkflow.ts";
 import { blocksSentence, peopleButtonLabel, triggerOf } from "../lib/stepBlocksView.ts";
+import { fieldIsWritable } from "../lib/stepExtras.ts";
+import type { FieldChoice } from "./StepExtraRows.tsx";
 import { allStatuses, countedIds, isActive, moments, movesNothing, resolveImplicit, withCounted, type MapSpace, type StepKind } from "../lib/workflowMap.ts";
 import { eyeIds, pageState, partitionUnits, type Partition } from "../lib/workflowLayout.ts";
 import { openSettings } from "../lib/openSettings.ts";
@@ -258,6 +260,25 @@ export function ClickUpPane() {
   /* The pick goes through its def, the one write path a row and an agent share. It saves through the same
      /clickup/prefs and re-answers from the spaces the server holds: no ClickUp request. An empty list is the default. */
   const count = useCallback((ids: string[]) => { setting("clickup.statusSpaces.counted").set(ids.join(",")); }, []);
+  /* The custom fields of the lists this person works in (the saved boards' lists), for "Set a field": each list's own
+     cached answer, so it costs the lists' reads and nothing new. Read-only fields and kinds this cannot write are left out. */
+  const readFields = useCallback(async (): Promise<FieldChoice[] | null> => {
+    const v = await api.clickupViews().catch(() => null);
+    if (!v) return null;
+    const ids = [...new Set((v.views ?? []).map((x) => x.listId).filter((x): x is string => !!x))].slice(0, 8);
+    const out = new Map<string, FieldChoice>();
+    for (const id of ids) {
+      const r = await api.clickupList(id).catch(() => null);
+      for (const f of r?.ok ? (r.fields ?? []) : []) {
+        if (!fieldIsWritable(f)) continue;
+        const key = f.name.trim().toLowerCase();
+        const cur = out.get(key) ?? { name: f.name, type: f.type, options: [] as { id: string; name: string }[] };
+        for (const o of f.options ?? []) if (!cur.options!.some((x) => x.name.toLowerCase() === o.name.toLowerCase())) cur.options!.push({ id: o.id, name: o.name });
+        out.set(key, cur);
+      }
+    }
+    return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }, []);
   /* The workspace's people for "a person…", read when that list opens: the answer the member picker already holds. */
   const readPeople = useCallback(async () => {
     const r = await api.clickupMembers("", true).catch(() => null);
@@ -392,6 +413,7 @@ export function ClickUpPane() {
         onBlocks={(kind, blocks) => { const t = triggerOf(kind); if (t) void send(clickupBlocks(t, blocks)); }}
         onRemove={(kind) => { void send(clickupRemove(kind)); }}
         people={readPeople}
+        fields={readFields}
         onToggleCounted={toggleCounted}
         onCountAgain={(u) => { const ids = withCounted(units, u.fromList && u.spaceId ? u.spaceId : u.id, true); if (ids) count(ids); }}
         onRetry={reread} />

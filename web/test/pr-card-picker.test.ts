@@ -159,14 +159,14 @@ describe("the confirmation that came half true", () => {
     // The old loop was inside a `try` that could not fail: the failure came
     // back as `{ ok: false }`, which is not thrown, so every outcome read as
     // success and nothing was reported either way.
-    expect(CLICKUP).toContain("note(r.ok,");
-    expect(CLICKUP).toContain("return r.ok;");
+    expect(CLICKUP).toContain("note(r.ok && (!ex || ex.ok),");
+    expect(CLICKUP).toContain("return r.ok && (!ex || ex.ok);");
   });
 
   it("builds the summary and the write from the same plan", () => {
     expect(CLICKUP).toContain("cardPlan({");
     expect(CLICKUP).toContain("{ add: plan.add, rem: plan.drop, status: plan.status || undefined }");
-    expect(CLICKUP).toContain("lines: folded ? [] : plan.lines");
+    expect(CLICKUP).toContain("lines: folded ? [] : [...plan.lines, ...extraLines]");
   });
 
   it("waits for GitHub before it touches the card", () => {

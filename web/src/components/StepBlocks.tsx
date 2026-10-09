@@ -11,6 +11,8 @@ import { UNASSIGN_LABEL, type Unassign } from "../lib/workflowMap.ts";
 import { BLOCK_INFO, blockRefusal, type StepTrigger } from "../../../shared/stepBlocks.ts";
 import { AUTHOR_IS_MEMBER, type ListMember, type StepBlock } from "../../../shared/providers.ts";
 import { moveBlock } from "../lib/stepBlocksView.ts";
+const blocksHaveExtras = (bs: readonly StepBlock[]): boolean => bs.some((b) => b.type === "comment" || b.type === "field");
+import { CommentEditor, FieldEditor, type FieldChoice } from "./StepExtraRows.tsx";
 import { shortName } from "../lib/askAtRun.ts";
 
 /**
@@ -122,6 +124,7 @@ export function AssignMenu({ anchor, value, people, withNobody, also, onPeople, 
 const withoutAsk = (b: StepBlock): StepBlock => {
   if (b.type === "move") { const { ask: _a, ...rest } = b; return rest; }
   if (b.type === "assign") { const { ask: _a, also: _o, ...rest } = b; return rest.who === "none" ? { type: "assign", who: "me" } : rest; }
+  if (b.type === "comment" || b.type === "field") { const { ask: _a, ...rest } = b; return rest; }
   if (b.type === "unassign") { const { ask: _a, ...rest } = b; return rest.who === "people" && !rest.people?.length ? { type: "unassign", who: "none" } : rest; }
   return b;
 };
@@ -130,10 +133,10 @@ const GLYPH: Record<string, (p: { size?: number }) => React.ReactElement> = { mo
 function ListGlyph({ size }: { size?: number }) { return <PlusIcon size={size} />; }
 
 const titleOf = (b: StepBlock["type"], trigger: StepTrigger, n: { item: string; verb: string }): string =>
-  b === "move" ? (trigger === "merge" ? "Preselect" : `${n.verb} the ${n.item} to`) : b === "unassign" ? `Take people off the ${n.item}` : "Assign the " + n.item + " to";
+  b === "move" ? (trigger === "merge" ? "Preselect" : `${n.verb} the ${n.item} to`) : b === "unassign" ? `Take people off the ${n.item}` : b === "comment" ? `Comment on the ${n.item}` : b === "field" ? "Set a field" : "Assign the " + n.item + " to";
 const hintOf = (b: StepBlock["type"], trigger: StepTrigger, n: { item: string }): string =>
   b === "move" ? (trigger === "merge" ? "Offered at merge time; you can still change it" : `Where the ${n.item} goes`)
-    : b === "unassign" ? "Who comes off" : trigger === "merge" ? "Added if missing, when the merge moves the card" : "Added if missing";
+    : b === "unassign" ? "Who comes off" : b === "comment" ? "One comment, posted when it runs" : b === "field" ? `One of the ${n.item}'s custom fields` : trigger === "merge" ? "Added if missing, when the merge moves the card" : "Added if missing";
 
 type Open = { type: StepBlock["type"] | "add" };
 
@@ -153,6 +156,8 @@ export interface StepBlocksProps {
   onPickStatus: (anchor: HTMLElement) => void;
   /** The map's own popover for a status is open on this step. */
   statusOpen: boolean;
+  /** The custom fields of the lists this person works in, read when a field block is shown (the lists' cached answers). */
+  fields?: () => Promise<FieldChoice[] | null>;
 }
 
 export function StepBlocks(p: StepBlocksProps) {
@@ -270,8 +275,29 @@ export function StepBlocks(p: StepBlocksProps) {
     setSaid(`Restored “${titleOf(undo.block.type, trigger, n)}”.`);
     setUndo(null);
   };
+  /* The custom fields of this person's lists, read when a field block is on the page. */
+  const [known, setKnown] = useState<FieldChoice[] | null>(null);
+  const hasField = shown.some((b) => b.type === "field");
+  useEffect(() => {
+    if (!p.fields || !hasField) return;
+    let live = true;
+    void p.fields().then((r) => { if (live) setKnown(r); }).catch(() => { if (live) setKnown([]); });
+    return () => { live = false; };
+  }, [hasField]);
+  const addField = async () => {
+    setOpen(null);
+    const list = (await p.fields?.().catch(() => null)) ?? [];
+    setKnown(list);
+    const f = list[0];
+    if (!f) { setSaid("No custom field could be read from your lists, so there is none to set."); return; }
+    commit([...shown, { type: "field", field: f.name, value: f.options?.[0]?.name ?? "" }]);
+    setUndo(null);
+    setSaid(`Added “Set a field” at position ${shown.length + 1}.`);
+  };
   const add = (type: string) => {
     if (blockRefusal(trigger, shown, type)) return;
+    if (type === "field") { void addField(); return; }
+    if (type === "comment") { commit([...shown, { type: "comment", text: "{pr_url}" }]); setUndo(null); setOpen(null); setSaid(`Added “Comment on the ${n.item}” at position ${shown.length + 1}.`); return; }
     const b: StepBlock = type === "move" ? { type: "move", statusNames: [] } : type === "unassign" ? { type: "unassign", who: "none" } : { type: "assign", who: "me" };
     commit([...shown, b]);
     setUndo(null); setOpen(null); setAdded(b.type);
@@ -285,6 +311,7 @@ export function StepBlocks(p: StepBlocksProps) {
 
   /* ---- a row ---- */
   const valueButton = (b: StepBlock, i: number) => {
+    if (b.type === "comment" || b.type === "field") return null;
     const id = `${uid}-${b.type}`;
     const common = { type: "button" as const, "data-val": "", className: "wfm-pick", disabled: p.frozen, "aria-haspopup": "listbox" as const, "aria-labelledby": `${id}-l ${id}-v` };
     if (b.type === "move") {
@@ -318,13 +345,15 @@ export function StepBlocks(p: StepBlocksProps) {
         <button type="button" data-grip="" className="wfm-grip" disabled={p.frozen} aria-roledescription="drag handle"
           aria-label={`Reorder “${titleOf(b.type, trigger, n)}”. Drag it, or press arrow up and down.`}
           onPointerDown={(e) => startDrag(e, b.type)} onKeyDown={(e) => keyMove(e, i, b)}><GripIcon size={ICON.md} /></button>
-        <span className="wfm-lb"><b id={`${id}-l`} className="text-[13px] inline-flex items-center gap-2"><span className="wfm-gl"><Icon size={ICON.xs} /></span>{titleOf(b.type, trigger, n)}</b>{hint(hintOf(b.type, trigger, n))}{(b.type === "move" || b.type === "assign" || b.type === "unassign") && (
+        <span className="wfm-lb"><b id={`${id}-l`} className="text-[13px] inline-flex items-center gap-2"><span className="wfm-gl"><Icon size={ICON.xs} /></span>{titleOf(b.type, trigger, n)}</b>{hint(hintOf(b.type, trigger, n))}{b.type !== undefined && (
             <button type="button" data-ask="" className="wfm-ask" aria-pressed={b.ask === true} disabled={p.frozen}
               title={b.ask ? "It asks when it runs; the value is where the question starts. Press to fix it." : "Fix this value, or ask when it runs: the value becomes where the question starts."}
               onClick={() => setBlock(b.type, b.ask ? withoutAsk(b) : { ...b, ask: true } as StepBlock, '[data-blk="' + b.type + '"] [data-ask]')}>Ask when it runs</button>
           )}</span>
-        <span className="relative">{valueButton(b, i)}</span>
+        <span className="relative">{b.type === "comment" || b.type === "field" ? null : valueButton(b, i)}</span>
         <button type="button" data-rmb="" className="wfm-rmx" disabled={p.frozen} aria-label={`Remove block: ${titleOf(b.type, trigger, n)}`} onClick={() => remove(i)}><CrossIcon size={ICON.xs} /></button>
+        {b.type === "comment" && <div className="wfm-blk-wide"><CommentEditor block={b} frozen={p.frozen} onChange={(nb) => setBlock("comment", nb, undefined, true)} /></div>}
+        {b.type === "field" && <div className="wfm-blk-wide"><FieldEditor block={b} fields={known} frozen={p.frozen} onChange={(nb) => setBlock("field", nb, undefined, true)} /></div>}
       </div>
     );
   };
@@ -343,7 +372,7 @@ export function StepBlocks(p: StepBlocksProps) {
           <Button size="compact" data-addblock="" aria-haspopup="menu" aria-expanded={open?.type === "add"} disabled={p.frozen}
             onClick={(e) => (open?.type === "add" ? setOpen(null) : openAt("add", e.currentTarget))}><PlusIcon size={ICON.xs} /> Add a block</Button>
           <span className="flex-1" />
-          {hint("Runs top to bottom, sent to the tracker in as few writes as it allows.")}
+          {hint(blocksHaveExtras(shown) ? "Runs top to bottom. The status and people are one write; each field and a comment is one more request." : "Runs top to bottom, sent to the tracker in as few writes as it allows.")}
         </div>
       </div>
       {undo && <div className="wfm-undo" role="status">Removed “{titleOf(undo.block.type, trigger, n)}”. <Button size="compact" onClick={restore}>Undo</Button></div>}

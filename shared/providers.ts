@@ -591,7 +591,18 @@ export type StepBlock =
    * Assign the card. With `ask` the person is picked when it runs, and `who` is where the picker starts
    * (`none` is "nobody"; without `ask` that is not a block, it is the absence of one).
    */
-  | ({ type: "assign"; ask?: true; /** More people the question starts with, beside `person` (only with `ask`). */ also?: { id: number; name: string }[] } & StepAssign);
+  | ({ type: "assign"; ask?: true; /** More people the question starts with, beside `person` (only with `ask`). */ also?: { id: number; name: string }[] } & StepAssign)
+  /**
+   * Comment on the card. `text` is a template (see PLACEHOLDERS in shared/stepBlocks.ts). With `ask` it is
+   * the text the person edits when it runs, prefilled with the template filled in.
+   */
+  | { type: "comment"; text: string; ask?: true }
+  /**
+   * Set a custom field of the card, by the field's NAME (ids differ per list; the name is what a person
+   * reads) and the value as a person writes it: an option's name, text, a number, a date as YYYY-MM-DD.
+   * With `ask` the value is where the question starts.
+   */
+  | { type: "field"; field: string; value: string; ask?: true };
 
 export interface HandoffConfig {
   /** Off until a workspace says it has a QA column. */

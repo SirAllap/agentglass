@@ -70,6 +70,8 @@ export type CardMove = {
   statuses: ListStatus[];
   /** The list it lives in, for reading who can be put on it. */
   listId?: string;
+  /** The list's custom fields, from the read that gave its statuses, for a step's "Set a field". */
+  fields?: import("../../../shared/providers.ts").ListField[];
   /** Who is on the card now: what "Also assign" is decided against. */
   people?: { id?: number | null; me?: boolean; name?: string }[];
 };

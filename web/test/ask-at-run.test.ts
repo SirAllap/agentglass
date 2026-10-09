@@ -188,7 +188,7 @@ describe("the three places that ask", () => {
     const src = await read("components/PrPanel.tsx");
     const at = src.indexOf("function CardReadyForQaButton(");
     const body = src.slice(at, src.indexOf("\nfunction ", at + 10));
-    expect(body).toContain("if (askStatus || askAssign || askUnassign) { await runAsked(); return; }");
+    expect(body).toContain("if (askStatus || askAssign || askUnassign || extras) { await runAsked(); return; }");
     expect(body.match(/api\.clickupCard\(/g)?.length).toBe(1);
   });
   test("the review menu's item reads the picker's choice, with the members it already holds", async () => {

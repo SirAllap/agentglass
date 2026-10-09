@@ -74,7 +74,9 @@ import { useDialogs } from "./ConfirmDialog.tsx";
 import { confirmMergeGuard } from "../lib/mergeGuard.ts";
 import { useMergeDialog } from "./MergeDialog.tsx";
 import { authorOf, assignedNote, ensureIds, resolveEnsure, stepChanges, type Ensure, type PrAuthor } from "../lib/stepAssign.ts";
-import { blocksOf, planOf, touchesPeople } from "../../../shared/stepBlocks.ts";
+import { blocksOf, hasExtras, planOf, touchesPeople } from "../../../shared/stepBlocks.ts";
+import { AskedExtras, sendExtras } from "./AskedExtras.tsx";
+import { prContext, type ExtraItem } from "../lib/stepExtras.ts";
 import { AssignPicker, useAskAssign, useAskTakeOff } from "./AssignPicker.tsx";
 import { blocksSentence, peopleButtonLabel } from "../lib/stepBlocksView.ts";
 import { mergeCardRef, mergeNote, statusColor, readyForQaStatus, reviewStatus, cardNoteText, whoToTell } from "../lib/cardMove.ts";
@@ -4140,7 +4142,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     const head = detail.commits[detail.commits.length - 1]?.oid;
     if (!(await confirmMergeGuard(detail, ask, prefill?.by))) return;
     const choice = await askMerge({
-      number: detail.number, title: detail.title, method,
+      number: detail.number, title: detail.title, url: detail.url, method,
       baseRefName: detail.baseRefName, headRefName: detail.headRefName, headRepoOwner: detail.headRepoOwner,
       commits: detail.commits,
       repoDeletesBranch: !!detail.mergePolicy?.deletesBranch,
@@ -4181,7 +4183,18 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
         return res;
       });
       const move = choice.card;
-      if (!merged || !move) return;
+      /* A comment or a field the merge step carries: one request each, after the merge, whether or not the card moves. */
+      const sendMergeExtras = async () => {
+        if (!choice.extras) return null;
+        const r = await sendExtras(choice.extras.id, choice.extras.items);
+        return r;
+      };
+      if (!merged) return;
+      if (!move) {
+        const ex = await sendMergeExtras();
+        if (ex) flash(ex.ok, ex.ok ? `Merged · ${ex.done.join(" · ")}` : `Merged — but ${ex.error}`);
+        return;
+      }
       setMergeWork(MOVING_CARD);
       // `updated` is the precondition, not decoration: somebody else moving the
       // card while the merge form was open should come back as a conflict rather
@@ -4194,8 +4207,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       // write's own answer rather than wait out its minute.
       const query = mergeCardRef(detail, clickup)?.query;
       if (r.ok && query) putCard(query, "task" in r ? r.task : undefined);
-      flash(r.ok, mergeNote(true, {
-        asked: true, ok: r.ok, to: move.to, extra: move.note,
+      const ex = r.ok ? await sendMergeExtras() : null;
+      flash(r.ok && (!ex || ex.ok), mergeNote(true, {
+        asked: true, ok: r.ok, to: move.to, extra: [move.note, ex?.ok ? ex.done.join(" · ") : ex ? `but ${ex.error}` : ""].filter(Boolean).join(" · ") || undefined,
         unauthorised: "unauthorised" in r ? r.unauthorised : undefined,
         error: r.ok ? undefined : ("conflict" in r && r.conflict ? "somebody moved it while this was open" : r.error),
       }));
@@ -7522,6 +7536,10 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
   const label = ref?.label ?? "";
   const [card, setCard] = useState<{ id: string; title: string; status: string; updated?: number; listId?: string } | null>(null);
   const [statuses, setStatuses] = useState<CuStatus[]>([]);
+  /* The card's list's custom fields, from the same read as its statuses, for a step's "Set a field". */
+  const [fields, setFields] = useState<import("../../../shared/providers.ts").ListField[] | null>(null);
+  /* A step's comment and fields as the menu showed them, sent with Done (a request each). */
+  const [menuExtras, setMenuExtras] = useState<ExtraItem[]>([]);
   const [members, setMembers] = useState<CuMember[] | null>(null);
   const [on, setOn] = useState<Set<number>>(new Set());
   const [was, setWas] = useState<Set<number>>(new Set());
@@ -7542,7 +7560,9 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
      With a move block it shows the status to move to; with only an assign block it moves nothing
      and says what it assigns. With no blocks it does nothing and is not drawn. */
   const menuPlan = reviewPrefs ? planOf("menu", reviewPrefs) : null;
-  const stepOn = reviewPrefs?.enabled === true && !!menuPlan && (!!menuPlan.move || touchesPeople(menuPlan));
+  const stepOn = reviewPrefs?.enabled === true && !!menuPlan && (!!menuPlan.move || touchesPeople(menuPlan) || hasExtras(menuPlan));
+  const menuHasExtras = stepOn && !!menuPlan && hasExtras(menuPlan);
+  const extraLines = menuExtras.map((i) => (i.kind === "comment" ? "comment on the card" : `set ${i.name} to ${i.shown}`));
   const moveOn = stepOn && !!menuPlan?.move;
 
   /* Nothing to read for a menu that will draw nothing: neither step added. Unknown prefs read as off. */
@@ -7568,6 +7588,7 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
       if (!live) return;
       const st = meta?.ok ? (meta.statuses ?? []) : [];
       setStatuses(st);
+      setFields(meta?.ok ? (meta.fields ?? []) : []);
       setMembers(mem?.ok ? (mem.members ?? []) : []);
       /* Code review by default, found by asking the LIST rather than by
          knowing the word: the workspace's own names first (Settings), else any
@@ -7624,7 +7645,7 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
   const unmappedNote = stepOn && (!moveOn || movesStatus) && ensure.kind === "unmapped" ? ensure.why : "";
 
   const run = useCallback(async () => {
-    if (folded || !card || !plan.lines.length) return true;
+    if (folded || !card || (!plan.lines.length && !menuExtras.length)) return true;
     /*
      * One write, not three.
      *
@@ -7635,13 +7656,15 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
      * the card would move to Code Review, gain Ana and lose him, and what
      * happened was only the first of the three.
      */
-    const r = await api.clickupCard(
+    const r = plan.lines.length ? await api.clickupCard(
       card.id,
       { add: plan.add, rem: plan.drop, status: plan.status || undefined },
       card.updated,
-    ).catch(() => ({ ok: false, error: "Could not reach the server", task: undefined }));
-    note(r.ok, r.ok ? cardPlanNote(plan, label) : (r.error || `${label} did not move`));
-    if (r.ok) {
+    ).catch(() => ({ ok: false, error: "Could not reach the server", task: undefined })) : { ok: true as const, error: undefined, task: undefined };
+    /* A comment and a field are requests of their own, sent once the card's own write has gone through. */
+    const ex = r.ok && menuExtras.length ? await sendExtras(card.id, menuExtras) : null;
+    note(r.ok && (!ex || ex.ok), r.ok ? `${plan.lines.length ? cardPlanNote(plan, label) : label}${ex ? (ex.ok ? ` · ${ex.done.join(" · ")}` : ` — but ${ex.error}`) : ""}` : (r.error || `${label} did not move`));
+    if (r.ok && plan.lines.length) {
       setWas(new Set(effective));
       setPick("");
       const moved = plan.status;
@@ -7652,14 +7675,14 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
          replaces it, so the board's row agrees too. */
       putCard(query, r.task);
     }
-    return r.ok;
-  }, [folded, card, plan, effective, label, note, query]);
+    return r.ok && (!ex || ex.ok);
+  }, [folded, card, plan, effective, label, note, query, menuExtras]);
 
   /* Folded means "not this time": the plan it publishes is empty, so the button
      downstairs goes back to plain Done. It was still announcing its changes
      while put away, which left "Done · and ClickUp" on a menu with nothing
      showing. */
-  useEffect(() => { onPlan({ lines: folded ? [] : plan.lines, run }); }, [folded, plan, run, onPlan]);
+  useEffect(() => { onPlan({ lines: folded ? [] : [...plan.lines, ...extraLines], run }); }, [folded, plan, run, onPlan, extraLines.join("|")]);
 
   /*
    * Every hook above this line, and that is not a style rule.
@@ -7762,6 +7785,12 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
               </div>
             )}
           </div>
+          )}
+          {menuHasExtras && card && (
+            <div className="px-3 pb-2 shrink-0" data-menu-extras="">
+              <AskedExtras blocks={reviewPrefs?.blocks ?? []} fields={fields} listId={card.listId} onChange={setMenuExtras}
+                ctx={prContext({ pr: { number: d.number, title: d.title, url: d.url }, author: authorOf(d), status: pick || card.status })} />
+            </div>
           )}
           {askAssign && (
             <div className="px-3 pb-2 shrink-0 flex items-center gap-2 text-[10.5px]" data-menu-ask="" style={{ color: "var(--text3)" }}>
@@ -8132,7 +8161,7 @@ function CardPeoplePick({ task, query, onSaid }: { task: ProviderTask; query: st
  * What was chosen goes back through `onChange` on every change, so the press that confirms writes exactly
  * what the dialog shows.
  */
-export function AskedHandoff({ task, statuses, start, author, askStatus, askAssign, askUnassign, fixed, unassign, takeOff, onChange }: {
+export function AskedHandoff({ task, statuses, start, author, askStatus, askAssign, askUnassign, fixed, unassign, takeOff, extras, onChange }: {
   task: ProviderTask; statuses: CuStatus[];
   /** The status the dialog starts at, or "" for leaving the card where it is. */
   start: string;
@@ -8147,15 +8176,18 @@ export function AskedHandoff({ task, statuses, start, author, askStatus, askAssi
   askUnassign: { who: HandoffUnassign | "people"; people: { id: number; name: string }[] } | null;
   /** Named people the step takes off, when that is fixed. */
   takeOff?: number[];
-  onChange: (c: { status: string; ensure: Ensure; takeOff?: number[] }) => void;
+  /** The step's comment and field blocks, shown (and asked, where they ask) beside the rest. */
+  extras?: { blocks: import("../../../shared/providers.ts").StepBlock[]; fields: import("../../../shared/providers.ts").ListField[] | null; pr: { number: number; title: string; url: string }; ctxAuthor: PrAuthor | null };
+  onChange: (c: { status: string; ensure: Ensure; takeOff?: number[]; extras: ExtraItem[] }) => void;
 }) {
+  const [extraItems, setExtraItems] = useState<ExtraItem[]>([]);
   const [status, setStatus] = useState(start);
   const cardPeople: CuMember[] = (task.people ?? []).filter((p): p is typeof p & { id: number } => p.id != null).map((p) => ({ id: p.id, name: p.name ?? "", initials: p.initials ?? "", ...(p.color ? { color: p.color } : null), ...(p.avatar ? { avatar: p.avatar } : null), ...(p.me ? { me: true } : null) }));
   const off = useAskTakeOff({ on: !!askUnassign, cardPeople, ...(askUnassign ? { start: askUnassign } : null) });
   const takeOffIds = askUnassign ? off.ids : takeOff;
   const a = useAskAssign({ on: !!askAssign, ...(task.listId ? { listId: task.listId } : null), ...(askAssign ? { start: askAssign } : null), author, onCard: task.people });
   const ensure = askAssign ? a.ensure : fixed;
-  useEffect(() => { onChange({ status, ensure, ...(takeOffIds ? { takeOff: takeOffIds } : null) }); }, [status, JSON.stringify(ensure), JSON.stringify(takeOffIds ?? null)]);
+  useEffect(() => { onChange({ status, ensure, ...(takeOffIds ? { takeOff: takeOffIds } : null), extras: extraItems }); }, [status, JSON.stringify(ensure), JSON.stringify(takeOffIds ?? null), JSON.stringify(extraItems)]);
   const key = { color: "var(--text3)", fontSize: 10.5, textTransform: "uppercase" as const, letterSpacing: "0.04em" };
   return (
     <div className="flex flex-col gap-2">
@@ -8176,6 +8208,8 @@ export function AskedHandoff({ task, statuses, start, author, askStatus, askAssi
           </>}
         </div>
       )}
+      {extras && <AskedExtras blocks={extras.blocks} fields={extras.fields} listId={task.listId} onChange={setExtraItems}
+        ctx={prContext({ pr: extras.pr, author: extras.ctxAuthor, status: status || task.status })} />}
       <ReadyForQaSummary task={task} {...(status ? { target: status, targetColor: statusColor(statuses, status) } : null)} unassign={unassign} {...(takeOffIds ? { takeOff: takeOffIds } : null)} ensure={ensure} />
     </div>
   );
@@ -8265,20 +8299,24 @@ export function ReadyForQaSummary({ task, target, targetColor, unassign = "all",
  * picker's is: hover cannot decide whether to show a button at all. One extra
  * read per card the sidebar already opened for.
  */
-function CardReadyForQaButton({ task, query, onSaid, ask, author }: {
+function CardReadyForQaButton({ task, query, onSaid, ask, author, pr }: {
   task: ProviderTask; query: string; onSaid: (s: string) => void;
+  /** The pull request, for a comment's {pr} and {pr_url}. */
+  pr: { number: number; title: string; url: string };
   /** The pull request's author, for "Also assign: the pull request's author". */
   author: PrAuthor | null;
   ask: (spec: { title: string; body?: string; node?: React.ReactNode; confirmLabel?: string; danger?: boolean }) => Promise<boolean>;
 }) {
   const blocked = writeBlock(useClickupSetup());
   const [statuses, setStatuses] = useState<CuStatus[] | null>(null);
+  /* The list's custom fields, from the same read as its statuses (one request), for a "Set a field" block. */
+  const [fields, setFields] = useState<import("../../../shared/providers.ts").ListField[] | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     let live = true;
     if (!task.listId) { setStatuses([]); return; }
     void api.clickupList(task.listId)
-      .then((r) => { if (live) setStatuses(r?.ok ? (r.statuses ?? []) : []); })
+      .then((r) => { if (live) { setStatuses(r?.ok ? (r.statuses ?? []) : []); setFields(r?.ok ? (r.fields ?? []) : []); } })
       .catch(() => { if (live) setStatuses([]); });
     return () => { live = false; };
   }, [task.listId]);
@@ -8294,8 +8332,10 @@ function CardReadyForQaButton({ task, query, onSaid, ask, author }: {
   const askAssign = plan?.askAssign ?? null;
   const askUnassign = plan?.askUnassign ?? null;
   const fixedTakeOff = plan && plan.takeOff.length ? plan.takeOff.map((p) => p.id) : undefined;
-  if (!handoff || !plan || (!target && !peopleOnly && !askStatus)) return null;
-  const label = target ? `Move to ${target}` : askStatus ? "Move card…" : peopleButtonLabel(plan);
+  /* A comment or a field is a step of its own kind: the button is there for it even with nothing to move. */
+  const extras = !!handoff?.enabled && !!plan && hasExtras(plan);
+  if (!handoff || !plan || (!target && !peopleOnly && !askStatus && !extras)) return null;
+  const label = target ? `Move to ${target}` : askStatus ? "Move card…" : peopleOnly ? peopleButtonLabel(plan) : plan.field && !plan.comment ? `Set ${plan.field.field}` : plan.comment && !plan.field ? "Comment on card" : "Update card…";
 
   /* Who "Assign" means. Only the author needs the team read (the member list the server already holds for
      this list: no request when it is warm); "me" is answered by the server from the connected account, a
@@ -8306,38 +8346,42 @@ function CardReadyForQaButton({ task, query, onSaid, ask, author }: {
 
   /* The one write, whichever way the choices were made. One request: the same write the status picker and the
      people picker each make half of — see cardMove's note on the three-call version racing its own `updated` stamp. */
-  const send = async (to: string | undefined, ensure: Ensure, takeOff?: number[]) => {
+  const send = async (to: string | undefined, ensure: Ensure, takeOff?: number[], extraItems: ExtraItem[] = []) => {
     const { write, named } = stepChanges({ ...(to ? { status: to } : null), people: task.people, unassign: plan.unassign, ...(takeOff ? { takeOff } : null), ensure });
+    const nothingOnCard = !write.status && !write.add && !write.rem && !write.addMe;
     /* A step whose answer is already true has nothing to send. */
-    if (!write.status && !write.add && !write.rem && !write.addMe) { onSaid(ensure.kind === "unmapped" ? `!${ensure.why}` : "nothing to change: the card is already as asked"); return; }
+    if (nothingOnCard && !extraItems.length) { onSaid(ensure.kind === "unmapped" ? `!${ensure.why}` : "nothing to change: the card is already as asked"); return; }
     setBusy(true);
     onSaid(to ? "moving…" : "updating…");
-    const r = await api.clickupCard(task.id, write, task.updated)
+    /* The status and the people are one request; each field and a comment is one more (see lib/stepExtras). */
+    const r = nothingOnCard ? { ok: true as const, task: undefined, error: undefined } : await api.clickupCard(task.id, write, task.updated)
       .catch(() => ({ ok: false, error: "Could not reach the server", task: undefined }));
+    const ex = r.ok && extraItems.length ? await sendExtras(task.id, extraItems) : null;
     setBusy(false);
-    onSaid(r.ok ? `${to ? `now ${to}` : "card updated"}${write.rem ? " · unassigned" : ""}${assignedNote(named)}${ensure.kind === "unmapped" ? ` · ${ensure.why}` : ""}` : `!${r.error || "ClickUp refused that"}`);
-    if (r.ok) putCard(query, r.task);
+    onSaid(!r.ok ? `!${r.error || "ClickUp refused that"}` : ex && !ex.ok ? `!${nothingOnCard ? "" : "card updated, but "}${ex.error}` : `${nothingOnCard ? "done" : to ? `now ${to}` : "card updated"}${write.rem ? " · unassigned" : ""}${assignedNote(named)}${ex?.done.length ? ` · ${ex.done.join(" · ")}` : ""}${ensure.kind === "unmapped" ? ` · ${ensure.why}` : ""}`);
+    if (r.ok && r.task) putCard(query, r.task);
   };
 
   /* When a block asks when it runs, the dialog carries the question, starting where Settings says; what was
      chosen is what is written. */
   const runAsked = async () => {
     const members = await readMembers();
-    const chosen = { current: { status: target ?? "", ensure: resolveEnsure(plan.assign, { author, members }), takeOff: fixedTakeOff } as { status: string; ensure: Ensure; takeOff?: number[] } };
+    const chosen = { current: { status: target ?? "", ensure: resolveEnsure(plan.assign, { author, members }), takeOff: fixedTakeOff, extras: [] } as { status: string; ensure: Ensure; takeOff?: number[]; extras: ExtraItem[] } };
     const said = await ask({
       title: `${label.replace("…", "")}?`,
       node: <AskedHandoff task={task} statuses={statuses ?? []} start={target ?? ""} author={author} askStatus={askStatus} askAssign={askAssign} askUnassign={askUnassign}
-        fixed={chosen.current.ensure} unassign={plan.unassign} {...(fixedTakeOff ? { takeOff: fixedTakeOff } : null)} onChange={(c) => { chosen.current = c; }} />,
+        fixed={chosen.current.ensure} unassign={plan.unassign} {...(fixedTakeOff ? { takeOff: fixedTakeOff } : null)}
+        {...(extras ? { extras: { blocks: handoff.blocks ?? [], fields, pr, ctxAuthor: author } } : null)} onChange={(c) => { chosen.current = c; }} />,
       confirmLabel: "Confirm",
     });
     if (!said) return;
-    const { status, ensure, takeOff } = chosen.current;
-    await send(status && status !== task.status ? status : undefined, ensure, takeOff);
+    const { status, ensure, takeOff, extras: extraItems } = chosen.current;
+    await send(status && status !== task.status ? status : undefined, ensure, takeOff, extraItems);
   };
 
   const move = async () => {
     if (busy || blocked) return;
-    if (askStatus || askAssign || askUnassign) { await runAsked(); return; }
+    if (askStatus || askAssign || askUnassign || extras) { await runAsked(); return; }
     const members = await readMembers();
     const ensure = resolveEnsure(plan.assign, { author, members });
     const { write } = stepChanges({ ...(target ? { status: target } : null), people: task.people, unassign: plan.unassign, ...(fixedTakeOff ? { takeOff: fixedTakeOff } : null), ensure });
@@ -8441,7 +8485,7 @@ function CardFacts({ d }: { d: PrDetail }) {
                   Note on card
                 </button>
               )}
-              <CardReadyForQaButton task={task} query={query} onSaid={setSaid} ask={ask} author={authorOf(d)} />
+              <CardReadyForQaButton task={task} query={query} onSaid={setSaid} ask={ask} author={authorOf(d)} pr={{ number: d.number, title: d.title, url: d.url }} />
               {said && <span className="text-[10px]" style={{ color: said.startsWith("!") ? "var(--warning)" : "var(--success)" }}>{said.replace(/^!/, "")}</span>}
             </div>
             {blocked && <div className="text-[10px]" style={{ color: "var(--text3)" }}>{blocked}</div>}

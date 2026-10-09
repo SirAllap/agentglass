@@ -21,7 +21,7 @@ import { join, dirname } from "node:path";
 import { CLICKUP_BELL_KINDS, DEFAULT_SPRINT_LIST_PATTERN, DEFAULT_READ_ONLY_FIELD_PATTERN } from "../../shared/providers.ts";
 import { DEFAULT_CARD_SKILL_PATTERN } from "../../shared/cardSkills.ts";
 import type { ClickUpPrefs, ClickUpBellKind, HandoffUnassign, StepAssign, StepBlock } from "../../shared/providers.ts";
-import { MAX_BLOCKS, blocksFromLegacy, blocksProblem, legacyFromBlocks, type StepTrigger } from "../../shared/stepBlocks.ts";
+import { MAX_BLOCKS, MAX_COMMENT, MAX_FIELD_NAME, MAX_FIELD_VALUE, blocksFromLegacy, blocksProblem, legacyFromBlocks, type StepTrigger } from "../../shared/stepBlocks.ts";
 
 const FILE = join(
   process.env.XDG_CONFIG_HOME || join(homedir(), ".config"),
@@ -217,7 +217,23 @@ function blockList(name: string, v: unknown, trigger: StepTrigger): Res<StepBloc
         }
       }
       out.push({ type: "assign", ...(ask === true ? { ask: true as const } : null), ...r.value, ...(more.length ? { also: more } : null) });
-    } else return bad(`${at}.type must be move, unassign or assign`);
+    } else if (b.type === "comment") {
+      for (const k of Object.keys(b)) if (k !== "type" && k !== "text" && k !== "ask") return bad(`${at}.${k} is not a setting`);
+      if (typeof b.text !== "string" || !b.text.trim()) return bad(`${at}.text must be the comment, with {pr}, {pr_url}, {author}, {status} or {me} where they belong`);
+      if (b.text.length > MAX_COMMENT) return bad(`${at}.text is longer than ${MAX_COMMENT} characters`);
+      if ("ask" in b && b.ask !== true && b.ask !== false) return bad(`${at}.ask must be true or false`);
+      out.push({ type: "comment", text: b.text, ...(b.ask === true ? { ask: true as const } : null) });
+    } else if (b.type === "field") {
+      for (const k of Object.keys(b)) if (k !== "type" && k !== "field" && k !== "value" && k !== "ask") return bad(`${at}.${k} is not a setting`);
+      const f = text(`${at}.field`, b.field);
+      if (!f.ok) return f;
+      if (!f.value) return bad(`${at}.field must be the name of one of the card's custom fields`);
+      if (f.value.length > MAX_FIELD_NAME) return bad(`${at}.field is longer than ${MAX_FIELD_NAME} characters`);
+      if (typeof b.value !== "string") return bad(`${at}.value must be text: an option's name, a number, or a date as YYYY-MM-DD`);
+      if (b.value.length > MAX_FIELD_VALUE) return bad(`${at}.value is longer than ${MAX_FIELD_VALUE} characters`);
+      if ("ask" in b && b.ask !== true && b.ask !== false) return bad(`${at}.ask must be true or false`);
+      out.push({ type: "field", field: f.value, value: b.value.trim(), ...(b.ask === true ? { ask: true as const } : null) });
+    } else return bad(`${at}.type must be move, unassign, assign, comment or field`);
   }
   const problem = blocksProblem(trigger, out);
   return problem ? bad(`${name} ${problem}`) : { ok: true, value: out };
@@ -238,6 +254,8 @@ function carryAsk(prev: StepBlock[] | undefined, next: StepBlock[], assignSet: b
   if (pm && pm.type === "move" && mi >= 0 && !namesSet) out[mi] = { ...(out[mi] as Extract<StepBlock, { type: "move" }>), ask: true };
   const pa = prev.find((b) => b.type === "assign" && b.ask);
   if (pa && !assignSet && !out.some((b) => b.type === "assign")) out.push(pa);
+  /* A comment and a field have no old key at all: they are only ever in the blocks, and stay. */
+  for (const b of prev) if ((b.type === "comment" || b.type === "field") && !out.some((x) => x.type === b.type)) out.push(b);
   /* The order the person gave stays: kinds that were there keep their places, new ones follow. */
   const at = (b: StepBlock) => { const i = prev.findIndex((x) => x.type === b.type); return i < 0 ? prev.length + out.indexOf(b) : i; };
   return [...out].sort((x, y) => at(x) - at(y));

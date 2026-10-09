@@ -59,8 +59,8 @@ describe("what is refused, and nothing is written", () => {
   });
   test("two of a kind, an unknown kind, a kind not built yet, an unknown key", () => {
     refused({ handoff: { blocks: [{ type: "move", statusNames: ["a"] }, { type: "move", statusNames: ["b"] }] } }, /Already in this step/);
-    refused({ handoff: { blocks: [{ type: "teleport" }] } }, /must be move, unassign or assign/);
-    refused({ handoff: { blocks: [{ type: "comment" }] } }, /must be move, unassign or assign/);
+    refused({ handoff: { blocks: [{ type: "teleport" }] } }, /must be move, unassign, assign, comment or field/);
+    refused({ handoff: { blocks: [{ type: "poke" }] } }, /must be move, unassign, assign, comment or field/);
     refused({ handoff: { blocks: [{ type: "move", statusNames: ["a"], colour: "red" }] } }, /colour is not a setting/);
   });
   test("an assign that assigns nobody, a person without an id, a list that is not a list, too many", () => {
@@ -172,5 +172,31 @@ describe("taking named people off", () => {
     expect(save({ handoff: { blocks: [{ type: "unassign", who: "people", people: [] }] } }).ok).toBe(false);
     expect(save({ handoff: { blocks: [{ type: "unassign", who: "all", people: [{ id: 1, name: "A" }] }] } }).ok).toBe(false);
     expect(save({ handoff: { blocks: [{ type: "unassign", who: "people", people: [{ id: -1, name: "A" }] }] } }).ok).toBe(false);
+  });
+});
+
+describe("comment and field blocks", () => {
+  test("a comment template and a field are saved in order, and the old keys know nothing of them", () => {
+    expect(save({ handoff: { enabled: true, blocks: [{ type: "field", field: "Squad", value: "Platform" }, { type: "move", statusNames: ["qa"] }, { type: "comment", text: "{pr} is in QA ({pr_url})", ask: true }] } }).ok).toBe(true);
+    P.__setPrefsPath(file);
+    const g = P.clickupPrefs().handoff;
+    expect(g.blocks!.map((b) => b.type)).toEqual(["field", "move", "comment"]);
+    expect(g.blocks![2]).toEqual({ type: "comment", text: "{pr} is in QA ({pr_url})", ask: true });
+    expect(g).toMatchObject({ statusNames: ["qa"], unassign: "none", assign: { who: "none" } });
+  });
+  test("an empty comment, an over-long one, a field with no name, a value that is not text, a stray key are refused", () => {
+    for (const blocks of [
+      [{ type: "comment", text: "   " }], [{ type: "comment", text: "x".repeat(2001) }], [{ type: "comment", text: "x", mood: 1 }],
+      [{ type: "field", field: "", value: "a" }], [{ type: "field", field: "Squad", value: 3 }], [{ type: "field", field: "Squad", value: "x".repeat(501) }],
+      [{ type: "field", field: "Squad", value: "a", colour: "red" }], [{ type: "comment", text: "x", ask: "yes" }],
+    ]) expect(save({ handoff: { blocks } }).ok).toBe(false);
+  });
+  test("one of each kind, as with every block", () => {
+    expect(save({ merge: { blocks: [{ type: "comment", text: "a" }, { type: "comment", text: "b" }] } }).ok).toBe(false);
+  });
+  test("a save that only knows the old keys keeps them, and where they were", () => {
+    save({ review: { enabled: true, blocks: [{ type: "comment", text: "hello {pr}" }, { type: "move", statusNames: ["code review"] }, { type: "field", field: "Squad", value: "Platform", ask: true }] } });
+    save({ review: { statusNames: ["in review"] } });
+    expect(P.clickupPrefs().review.blocks).toEqual([{ type: "comment", text: "hello {pr}" }, { type: "move", statusNames: ["in review"] }, { type: "field", field: "Squad", value: "Platform", ask: true }]);
   });
 });

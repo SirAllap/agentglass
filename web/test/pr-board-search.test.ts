@@ -693,7 +693,7 @@ describe("assigning on GitHub, and the card on the other board", () => {
        change, and leaving yourself on it is not an assignment. An empty plan
        skips the confirmation entirely and the press is a GitHub assignment. */
     expect(src).toContain("if (!plan.lines.length) { void onCommit(selRef.current); onClose(); return; }");
-    expect(src).toContain("if (folded || !card || !plan.lines.length) return true;");
+    expect(src).toContain("if (folded || !card || (!plan.lines.length && !menuExtras.length)) return true;");
   });
 
   it("does GitHub first and ClickUp only after it", () => {
@@ -783,8 +783,8 @@ describe("folding it away", () => {
     /* It was still announcing its changes while put away, which left "Done ·
        and ClickUp" on a menu with nothing showing. Folded means "not this
        time". */
-    expect(src).toContain("onPlan({ lines: folded ? [] : plan.lines, run })");
-    expect(src).toContain("if (folded || !card || !plan.lines.length) return true;");
+    expect(src).toContain("onPlan({ lines: folded ? [] : [...plan.lines, ...extraLines], run })");
+    expect(src).toContain("if (folded || !card || (!plan.lines.length && !menuExtras.length)) return true;");
   });
 
   it("drops a summary that no longer has anything to summarise", () => {
