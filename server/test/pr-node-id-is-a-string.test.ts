@@ -55,7 +55,7 @@ console.log(JSON.stringify(out));
 `;
 
 const ran = await (async () => {
-  await Bun.$`mkdir -p ${BIN} ${REPO}`.quiet();
+  await Bun.$`mkdir -p ${BIN} ${REPO} ${join(TMP, "state")}`.quiet();
   writeFileSync(join(BIN, "gh"), [
     "#!/usr/bin/env bash",
     /* One line per call, argv NUL-joined so a field holding a space survives. */
@@ -68,7 +68,11 @@ const ran = await (async () => {
   await Bun.$`git init -q ${REPO}`.quiet();
   await Bun.$`git -C ${REPO} remote add origin https://github.com/acme/demo.git`.quiet();
   const proc = Bun.spawn(["bun", "run", DRIVER, REPO], {
-    env: { ...process.env, PATH: `${BIN}:${process.env.PATH}`, AGENTGLASS_ROOT: TMP, AGENTGLASS_CACHE_DIR: join(TMP, "cache"), XDG_CONFIG_HOME: join(TMP, "xdg"), AGENTGLASS_STATE_DIR: join(TMP, "state") },
+    env: { ...process.env, PATH: `${BIN}:${process.env.PATH}`, AGENTGLASS_ROOT: TMP, AGENTGLASS_CACHE_DIR: join(TMP, "cache"), XDG_CONFIG_HOME: join(TMP, "xdg"), AGENTGLASS_STATE_DIR: join(TMP, "state"),
+      /* Its own database: an AGENTGLASS_DB another file left behind, naming a
+         scratch folder already removed, made the child die on its first line
+         (SQLITE_CANTOPEN) in one shuffled CI order. */
+      AGENTGLASS_DB: join(TMP, "state", "agx.db") },
     stdout: "pipe", stderr: "pipe",
   });
   const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
