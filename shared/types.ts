@@ -1934,6 +1934,10 @@ export type WsFrame =
   | { type: "prwatch"; data: PrWatchState }
   /** A notify watch fired. One frame per firing; the client raises the popup. */
   | { type: "prwatchfire"; data: PrWatchFire }
+  /** The notify watch read a pull request's checks and they differ from the last
+   *  read it sent. The open detail and the board take them as their own: the
+   *  watch's answer must not be fresher than the screen it sits on. */
+  | { type: "prchecks"; data: PrChecksRead }
   /** Somebody said something on a pull request you have a stake in. One frame
    *  per pull request per poll — the server holds the latch, exactly as it does
    *  for `ci` — and never a bot. See PrTalkNote. */
@@ -2109,6 +2113,8 @@ export interface PrWatchFire {
   detail: string;
   ok: boolean;
 }
+
+export interface PrChecksRead { repo: string; number: number; checks: PrCheckRollup; all: PrCheck[] }
 
 export interface PrWatchState { watches: PrWatch[]; presets: PrWatchPreset[] }
 

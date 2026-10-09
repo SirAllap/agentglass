@@ -37,7 +37,7 @@
 import { randomUUID } from "node:crypto";
 import { db } from "./db.ts";
 import { entered } from "./loopwatch.ts";
-import type { PrCheck, PrTalk, PrWatch, PrWatchFire, PrWatchPreset, PrWatchRule } from "../../shared/types.ts";
+import type { PrCheck, PrCheckRollup, PrChecksRead, PrTalk, PrWatch, PrWatchFire, PrWatchPreset, PrWatchRule } from "../../shared/types.ts";
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS pr_watch (
@@ -88,7 +88,7 @@ const MAX_RULES_PER_PR = 20;
 const MAX_READS_PER_TICK = 20;
 
 /** `state` is the PR's own state, when the read had it: a merged or closed PR ends every watch on it. */
-export interface Snapshot { allDone: boolean; verdict: "green" | "red" | null; all: PrCheck[]; state?: string }
+export interface Snapshot { checks?: PrCheckRollup; allDone: boolean; verdict: "green" | "red" | null; all: PrCheck[]; state?: string }
 export type ReadChecks = (root: string, number: number) => Promise<Snapshot | null>;
 export interface Outcome { summary: string; detail: string; ok: boolean }
 
@@ -195,6 +195,19 @@ export function listWatches(): { watches: PrWatch[]; presets: PrWatchPreset[] } 
 const changeListeners = new Set<() => void>();
 const fireListeners = new Set<(f: PrWatchFire) => void>();
 export function subscribeWatchChange(fn: () => void): () => void { changeListeners.add(fn); return () => { changeListeners.delete(fn); }; }
+const checksListeners = new Set<(c: PrChecksRead) => void>();
+export function subscribeWatchChecks(fn: (c: PrChecksRead) => void): () => void { checksListeners.add(fn); return () => { checksListeners.delete(fn); }; }
+const sentChecks = new Map<string, string>();
+/** What the watch just read, said once per change: the same read that decides a fire is the freshest one anyone has of these checks. */
+export function shareChecks(repo: string, number: number, s: Snapshot): void {
+  if (!s.checks) return;
+  const k = `${repo}#${number}`;
+  const sig = JSON.stringify(s.checks);
+  if (sentChecks.get(k) === sig) return;
+  sentChecks.set(k, sig);
+  if (sentChecks.size > 500) sentChecks.delete(sentChecks.keys().next().value!);
+  for (const fn of checksListeners) { try { fn({ repo, number, checks: s.checks, all: s.all }); } catch { /* a listener must not break the tick */ } }
+}
 export function subscribeWatchFire(fn: (f: PrWatchFire) => void): () => void { fireListeners.add(fn); return () => { fireListeners.delete(fn); }; }
 const changed = () => { for (const fn of changeListeners) { try { fn(); } catch { /* a listener must not break a write */ } } };
 
@@ -387,6 +400,7 @@ export async function checkWatches(read: ReadChecks, now = Date.now(), gate = fa
     const wait = schedule.get(k)?.wait ?? base;
     schedule.set(k, snap ? { next: now + base, wait: base } : { next: now + Math.min(wait * 2, 10 * 60_000), wait: Math.min(wait * 2, 10 * 60_000) });
     if (!snap) continue;
+    shareChecks(rows[0]!.repo, rows[0]!.number, snap);
     if (snap.state && snap.state !== "OPEN") { endPr(rows[0]!.repo, rows[0]!.number, snap.state === "MERGED" ? "merged" : "closed", now); continue; }
     for (const { r, rule } of withRule(rows)) {
       if (rule.type === "comment") continue;

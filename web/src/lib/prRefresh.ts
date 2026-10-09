@@ -1,4 +1,4 @@
-import type { PrDetail, PrSummary } from "../../../shared/types.ts";
+import type { PrCheck, PrCheckRollup, PrChecksRead, PrDetail, PrSummary } from "../../../shared/types.ts";
 
 /**
  * What the Refresh button asks GitHub for.
@@ -179,3 +179,23 @@ export async function once<T>(lock: { current: boolean }, fn: () => Promise<T>):
   lock.current = true;
   try { return await fn(); } finally { lock.current = false; }
 }
+
+/**
+ * A checks read the server made for its notify watch, written into the open
+ * detail: the chip and the strip under it are one datum. The detail's
+ * `required` marks come from its own gate query, so they are carried over by
+ * name. Null when the read is not this pull request or changes nothing.
+ */
+export function detailWithChecks(d: PrDetail, repo: string, r: PrChecksRead): PrDetail | null {
+  if (d.number !== r.number || repo.toLowerCase() !== r.repo.toLowerCase()) return null;
+  const key = (c: PrCheck) => `${c.workflow ?? ""}\u0000${c.name}`;
+  const req = new Map((d.checksAll ?? []).map((c) => [key(c), c.required]));
+  const all = r.all.map((c) => (req.get(key(c)) === undefined ? c : { ...c, required: req.get(key(c)) }));
+  if (JSON.stringify(d.checks) === JSON.stringify(r.checks)) return null;
+  return { ...d, checks: r.checks, checksAll: all };
+}
+
+export const rowWithChecks = (rows: PrSummary[], repo: string, r: PrChecksRead): PrSummary[] =>
+  repo.toLowerCase() !== r.repo.toLowerCase() || !rows.some((x) => x.number === r.number)
+    ? rows
+    : rows.map((x) => (x.number === r.number ? { ...x, checks: r.checks as PrCheckRollup, checksLoaded: true } : x));

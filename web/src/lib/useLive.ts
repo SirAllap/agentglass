@@ -8,7 +8,7 @@ import { clientId, emitBrowserAsk } from "./browserBus.ts";
 import { emitUnderstudy } from "./understudyBus.ts";
 import { emitPlugin } from "./pluginBus.ts";
 import { recordNote, fireDesktopAlert, firePopupOnly, fireWatchAlert, deliverPendingWatchFires } from "./sysNotify.ts";
-import { setPrWatchState, hasActiveWatch, reloadPrWatches } from "./prWatchStore.ts";
+import { setPrWatchState, publishChecksRead, hasActiveWatch, reloadPrWatches } from "./prWatchStore.ts";
 import { pollGatesNow } from "./gateStore.ts";
 import { ciShouldNotify } from "./ciNotifyPref.ts";
 import { talkBody, talkShouldNotify, talkSummary, talkUrgency } from "./talkNotify.ts";
@@ -374,6 +374,7 @@ export function useLive(paused = false): LiveData {
         return;
       }
       if (frame.type === "prwatch") { setPrWatchState(frame.data); return; }
+      if (frame.type === "prchecks") { publishChecksRead(frame.data); return; }
       if (frame.type === "prwatchfire") { fireWatchAlert(frame.data); return; }
       if (frame.type === "ci") {
         /*

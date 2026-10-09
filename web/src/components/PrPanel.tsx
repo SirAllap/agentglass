@@ -70,7 +70,7 @@ import { keepLoadedChecks } from "../lib/prMerge.ts";
 import { applyFilter, checkLabel, checkSpan, checkStatusLine, filterCounts, formatSpan, isSlow, sectionChecks, shortName, slowest, spanShare, verdictHero, workflowCards, type CheckFilter } from "../lib/prChecksList.ts";
 import { askingBehind, behindAnswer, forgetBehind, forgetOneBehind, onBehind, refreshBehind } from "../lib/prBehindStore.ts";
 import { refreshRollup } from "../lib/prRollupStore.ts";
-import { overlayDetail, reopenedRow, holdReopened, reopenKey, holdEdits, refreshPlan, rowPatch, landedDetail, dropLanded, staleOpen, once, type EditLog, type Landed, type Reopened } from "../lib/prRefresh.ts";
+import { detailWithChecks, rowWithChecks, overlayDetail, reopenedRow, holdReopened, reopenKey, holdEdits, refreshPlan, rowPatch, landedDetail, dropLanded, staleOpen, once, type EditLog, type Landed, type Reopened } from "../lib/prRefresh.ts";
 import {
   anchorId, bootstrapSince, clearSeen, foldedIdx, markAllSeen, newKeys, newSince, onSeenChange, readSeen,
   reviewSpeaks, writeSeen, type NewAtom,
@@ -112,6 +112,7 @@ import { ICON } from "../lib/iconSize.ts";
 import { AgentIcon, ArrowIcon, AttachIcon, BlockedIcon, BoltIcon, BranchIcon, CaretIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CommitIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, EditIcon, EyeIcon, FileIcon, FlagIcon, IconLabel, LinkIcon, MergeIcon, MoreIcon, PlusIcon, RefreshIcon, SearchIcon, SparkleIcon, StarIcon, TagIcon, UndoIcon, UserIcon } from "../lib/glyphIcons.tsx";
 import { PrIcon } from "./workspace/icons.tsx";
 import { PrWatchMenu } from "./PrWatchMenu.tsx";
+import { onChecksRead } from "../lib/prWatchStore.ts";
 import { CardChip } from "../lib/priority.tsx";
 import { ColumnsIcon, InboxIcon, QuoteIcon } from "./settingsNavIcons.tsx";
 import { pins, isPinned, togglePin, subscribePins, type Pin } from "../lib/prPins.ts";
@@ -2758,6 +2759,18 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     setBoardMine((cur) => openLists(overlayDetail(cur, detail)));
     setBoardReview((cur) => openLists(overlayDetail(cur, detail)));
   }, [detail, away, detailStale]);
+
+  /* The server's notify watch reads the checks on its own clock. What it read is the freshest answer anyone
+     has: the open detail and the board rows take it, so the chip cannot say "CI passed" over a strip that
+     still says one check is running. No request: the frame already carries them. */
+  const repoName = repo?.nameWithOwner ?? "";
+  useEffect(() => onChecksRead((r) => {
+    if (!repoName) return;
+    setDetail((cur) => (cur ? detailWithChecks(cur, repoName, r) ?? cur : cur));
+    setPrs((cur) => rowWithChecks(cur, repoName, r));
+    setBoardMine((cur) => rowWithChecks(cur, repoName, r));
+    setBoardReview((cur) => rowWithChecks(cur, repoName, r));
+  }), [repoName]);
 
   useEffect(() => {
     if (!active || !root) return;

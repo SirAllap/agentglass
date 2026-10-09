@@ -141,7 +141,7 @@ import { applyMarks, listMarks, parseMarkOps, talkAlreadyRead, MARK_KINDS } from
 import { noteAsk as noteWatchAsk, startPrWatch } from "./prWatch.ts";
 import {
   listWatches, addWatch, removeWatch, setPreset, applyPreset, sawMine, onTalkSeen as watchOnTalkSeen, pendingFires, ackFire,
-  subscribeWatchChange, subscribeWatchFire, startPrNotifyWatch,
+  subscribeWatchChange, subscribeWatchFire, subscribeWatchChecks, startPrNotifyWatch,
 } from "./prNotifyWatch.ts";
 import { measureFile } from "./filemeasure.ts";
 import { editorCursor } from "./editorwhere.ts";
@@ -9514,12 +9514,13 @@ function noteMine(root: string, filter: string, state: string, r: { repo: { name
 subscribeTalkSeen(watchOnTalkSeen);
 subscribeWatchChange(() => broadcast({ type: "prwatch", data: listWatches() }));
 subscribeWatchFire((f) => broadcast({ type: "prwatchfire", data: f }));
+subscribeWatchChecks((c) => broadcast({ type: "prchecks", data: c }));
 const prNotifyKick = process.env.NODE_ENV === "test" ? () => {} : startPrNotifyWatch(async (root, number) => {
   const r = await prRollup(root, number);
   if (!(r.ok && r.checks && r.all)) return null;
   // Past 100 contexts `all` is only the first page: never conclude "all done" from it.
   const complete = !r.truncated;
-  return { allDone: r.checks.allDone && complete, verdict: complete ? r.checks.verdict : null, all: r.all, state: r.state };
+  return { checks: complete ? r.checks : undefined, allDone: r.checks.allDone && complete, verdict: complete ? r.checks.verdict : null, all: r.all, state: r.state };
 }).kick;
 // A plugin drew something, or wrote notes on a pull request. The frame says
 // only where to look again; what was drawn is fetched over the token.

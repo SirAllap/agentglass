@@ -51,8 +51,8 @@ describe("the button after a fire", () => {
   test("says what happened and when, then goes back to Notify once seen", () => {
     const w = fired();
     expect(store.bellState([w], 0).kind).toBe("fired");
-    expect(store.firedLabel(w)).toBe("CI passed · notified 10:42");
-    expect(store.firedLabel(fired({ lastText: "CI failed: unit" }))).toBe("CI failed · notified 10:42");
+    expect(store.firedLabel(w)).toBe("CI passed · 10:42");
+    expect(store.firedLabel(fired({ lastText: "CI failed: unit" }))).toBe("CI failed · 10:42");
     expect(store.firedOk(w)).toBe(true);
     expect(store.firedOk(fired({ lastText: "CI failed: unit" }))).toBe(false);
     expect(store.bellState([w], w.lastAt!).kind).toBe("off");

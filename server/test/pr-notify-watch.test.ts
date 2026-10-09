@@ -450,3 +450,18 @@ describe("wiring in the server", () => {
     expect(route.slice(0, 200)).toContain("trustedCaller(req, from)");
   });
 });
+
+describe("shareChecks", () => {
+  const snap = (pending: number): any => ({ checks: { total: 2, success: 2 - pending, failure: 0, skipped: 0, pending, allDone: !pending, verdict: pending ? null : "green" }, allDone: !pending, verdict: pending ? null : "green", all: [] });
+  it("a read is said once per change, and only when it holds the whole rollup", () => {
+    const got: number[] = [];
+    const { shareChecks, subscribeWatchChecks } = W;
+    const off = subscribeWatchChecks((c: any) => got.push(c.checks.pending));
+    shareChecks("acme/orbit", 9001, snap(1));
+    shareChecks("acme/orbit", 9001, snap(1));
+    shareChecks("acme/orbit", 9001, snap(0));
+    shareChecks("acme/orbit", 9002, { allDone: false, verdict: null, all: [] });
+    off();
+    expect(got).toEqual([1, 0]);
+  });
+});

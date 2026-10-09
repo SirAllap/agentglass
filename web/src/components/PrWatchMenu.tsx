@@ -41,12 +41,12 @@ function Row({ on, onToggle, children }: { on: boolean; onToggle: () => void; ch
 }
 
 export function PrWatchMenu({ root, repo, d }: {
-  root: string; repo: string; d: { number: number; title: string; checksAll: PrCheck[] };
+  root: string; repo: string; d: { number: number; title: string; checksAll: PrCheck[]; checks?: { allDone: boolean } };
 }) {
   const state = usePrWatchState();
   const mine = watchesOf(state, repo, d.number);
   const seen = useFireSeen(repo, d.number);
-  const bell = bellState(mine, seen);
+  const bell = bellState(mine, seen, d.checks?.allDone ?? true);
   const preset = presetOf(state, repo);
   const [open, setOpen] = useState(false);
   const [match, setMatch] = useState("");
