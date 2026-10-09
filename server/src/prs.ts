@@ -369,7 +369,7 @@ export async function prRollup(rootIn: unknown, numberIn: unknown, fresh = false
     const ctxs = pr?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts;
     const raw = ctxs?.nodes;
     if (!raw) return { ok: false, error: "GitHub would not list its checks" };
-    const normalised = raw.map((c: any) => ({ ...c, workflowName: c.checkSuite?.workflowRun?.workflow?.name || "" }));
+    const normalised = raw.map(withWorkflow);
     const r2 = rollupChecks(normalised);
     if (Number(ctxs?.totalCount ?? 0) <= raw.length) projectChecks(repo, number, r2.rollup, r2.all, began);
     return { ok: true, checks: r2.rollup, all: r2.all, state: typeof pr?.state === "string" ? pr.state : undefined, truncated: Number(ctxs?.totalCount ?? 0) > raw.length };
@@ -647,12 +647,21 @@ export async function repoIdFor(rootIn: unknown): Promise<PrRepoId | null> {
 type RawCheck = {
   __typename?: string;
   name?: string; workflowName?: string; context?: string;
+  /** The trigger of the workflow run (`pull_request`, `push`, ...). */
+  event?: string; startedAt?: string; completedAt?: string; title?: string;
   status?: string; conclusion?: string; state?: string; detailsUrl?: string; targetUrl?: string;
 };
 
 const TERMINAL_CONCLUSIONS = new Set([
   "SUCCESS", "FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "NEUTRAL", "SKIPPED", "STALE", "STARTUP_FAILURE",
 ]);
+
+/** A GraphQL check node, flattened: the workflow and the event it ran for live two levels down. */
+export const withWorkflow = (c: any): RawCheck => ({
+  ...c,
+  workflowName: c.checkSuite?.workflowRun?.workflow?.name || "",
+  event: c.checkSuite?.workflowRun?.event || "",
+});
 
 function checkState(c: RawCheck): { state: PrCheckState; done: boolean } {
   // Two shapes come back in one array: CheckRun (status + conclusion) and
@@ -675,7 +684,13 @@ function checkState(c: RawCheck): { state: PrCheckState; done: boolean } {
 }
 
 /**
- * One run per check name — the newest.
+ * One run per check name and trigger — the newest.
+ *
+ * The trigger is part of the key. A workflow that listens to both
+ * `pull_request` and `pull_request_review` runs the same job name once for
+ * each, and GitHub lists both: a real pull request had 71 runs on its head
+ * and this function kept 69, because two names were folded together across
+ * events. github.com counts them apart, and so does this.
  *
  * A re-run does not replace the run it repeats: GitHub keeps both, so a check
  * that failed and was re-run comes back twice, once FAILURE and once
@@ -693,7 +708,7 @@ function checkState(c: RawCheck): { state: PrCheckState; done: boolean } {
 export function latestPerName(raw: RawCheck[]): RawCheck[] {
   const by = new Map<string, RawCheck>();
   for (const c of raw) {
-    const name = `${c.workflowName || ""}\u0001${c.name || c.context || "check"}`;
+    const name = `${c.workflowName || ""}\u0001${c.name || c.context || "check"}\u0001${c.event || ""}`;
     const had = by.get(name);
     if (!had) { by.set(name, c); continue; }
     const hadRunning = !checkState(had).done;
@@ -711,6 +726,10 @@ export function rollupChecks(raw: RawCheck[] | null | undefined): { rollup: PrCh
     const check: PrCheck = {
       name: c.name || c.context || "check",
       workflow: c.workflowName || "",
+      ...(c.event ? { event: c.event } : null),
+      ...(c.startedAt ? { startedAt: c.startedAt } : null),
+      ...(c.completedAt ? { completedAt: c.completedAt } : null),
+      ...(c.title ? { title: c.title } : null),
       state, done,
       url: c.detailsUrl || c.targetUrl || undefined,
       ...((c.conclusion || "").toUpperCase() === "CANCELLED" ? { cancelled: true } : null),
@@ -2856,7 +2875,7 @@ const SEL_TIMELINE = `nodes{
     }`;
 const SEL_CHECKS = `nodes{
       __typename
-      ... on CheckRun{name status conclusion detailsUrl checkSuite{workflowRun{workflow{name}}}}
+      ... on CheckRun{name status conclusion detailsUrl title startedAt completedAt checkSuite{workflowRun{event workflow{name}}}}
       ... on StatusContext{context state targetUrl}
     }`;
 const TIMELINE_TYPES = `[
@@ -3367,10 +3386,7 @@ async function readDetail(rootIn: unknown, number: number, repo: PrRepoId, key: 
   await fillPages(p, repo, number);
 
   const rawChecks = p.statusCheckRollup?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes ?? [];
-  const normalised = rawChecks.map((c: any) => ({
-    ...c,
-    workflowName: c.checkSuite?.workflowRun?.workflow?.name || "",
-  }));
+  const normalised = rawChecks.map(withWorkflow);
   const { rollup, all } = rollupChecks(normalised);
   const gate = mergeGateOf(gateData?.data?.repository) ?? undefined;
   if (gate) {

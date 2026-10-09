@@ -3161,6 +3161,13 @@ export type PrCheckState = "success" | "failure" | "pending" | "skipped" | "neut
 export interface PrCheck {
   name: string;
   workflow: string;
+  /** What triggered the workflow run (`pull_request`, `pull_request_review`...). The same job name runs once per event. */
+  event?: string;
+  /** ISO times of the run; the duration GitHub prints is their difference. */
+  startedAt?: string;
+  completedAt?: string;
+  /** The title the check wrote about its own result ("No code pitfalls detected"), when it wrote one. */
+  title?: string;
   state: PrCheckState;
   /** Terminal means it will not change without a new push or a re-run. */
   done: boolean;
