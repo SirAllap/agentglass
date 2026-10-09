@@ -384,3 +384,28 @@ describe("where the fold cuts", () => {
     expect(foldAt([], 5)).toBe(5);
   });
 });
+
+describe("what a tap may hand to the system", () => {
+  // A body is text somebody else wrote. A link or a picture whose address is
+  // not a web or mail address keeps its words and loses its destination.
+  const links = (src: string) => parseInline(src).filter((k) => k.t === "link") as { t: "link"; href: string }[];
+  test("web and mail addresses stay links", () => {
+    expect(links("[docs](https://example.test/a)")[0]!.href).toBe("https://example.test/a");
+    expect(links("[docs](http://example.test/a)")).toHaveLength(1);
+    expect(links("[write](mailto:ada@acme.test)")).toHaveLength(1);
+  });
+  test("any other scheme, or a path, is its label as plain text", () => {
+    for (const href of ["intent://scan/#Intent;scheme=zxing;end", "tel:+15550100", "file:///sdcard/a", "content://media/1", "javascript:void", "orbit://do?x=1", "docs/a.md"]) {
+      const kids = parseInline(`[Approve](${href})`);
+      expect(kids.some((k) => k.t === "link"), href).toBe(false);
+      expect(inlineText(kids), href).toBe("Approve");
+    }
+  });
+  test("a picture from anywhere but a web address is named, not loaded", () => {
+    for (const src of ["content://media/1", "file:///sdcard/a.png", "data:image/png;base64,AAAA"]) {
+      expect(parseInline(`a ![shot](${src}) b`).some((k) => k.t === "image"), src).toBe(false);
+      expect(parseMarkdown(`![shot](${src})`).some((b) => b.t === "image"), src).toBe(false);
+      expect(inlineText(parseInline(`![shot](${src})`)), src).toBe("[image: shot]");
+    }
+  });
+});
