@@ -100,10 +100,15 @@ const DENY_TREES: readonly (readonly string[])[] = [
   [".config", "BraveSoftware"], [".config", "microsoft-edge"], [".config", "vivaldi"],
   [".mozilla"], [".zen"], [".librewolf"], [".config", "mozilla"],
   [".local", "share", "keyrings"], [".local", "share", "Bitwarden"],
-  [".claude", ".credentials.json"],
+  [".claude", ".credentials.json"], [".claude.json"],
+  // Agent and tool logins, cloud and sync tools, and apps that keep a session.
+  [".codex"], [".gemini"], [".config", "github-copilot"], [".config", "hub"], [".config", "glab-cli"],
+  [".cargo", "credentials"], [".cargo", "credentials.toml"], [".terraform.d"], [".vault-token"],
+  [".config", "rclone"], [".config", "Slack"], [".thunderbird"], [".config", "Code", "User", "globalStorage"],
 ];
-/** File names that are secrets wherever they sit under a dotted path. */
-const DENY_NAMES = /^(\.netrc|_netrc|\.git-credentials|\.npmrc|\.pypirc|\.pgpass|\.env(\..*)?|\.credentials\.json|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?|.*\.(pem|key|kdbx))$/i;
+/** File names that are secrets wherever they sit under a dotted path. A shell
+ *  or REPL history holds every token ever pasted on a command line. */
+const DENY_NAMES = /^(\.netrc|_netrc|\.git-credentials|\.npmrc|\.pypirc|\.pgpass|\.env(\..*)?|\.credentials\.json|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?|.*\.(pem|key|kdbx)|.*_history|\.histfile)$/i;
 
 function underDenied(p: string): boolean {
   const roots = diskRoots();
