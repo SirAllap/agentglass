@@ -31,7 +31,7 @@ import { dayToMs, describeWithComment, estimateText, msToDay, parseEstimate, par
 import { branchName, checkoutCommand, commitCommand, worktreeCommand } from "../lib/cardBranch.ts";
 import { neighbours, shortTitle, hopMatches } from "../lib/cardHop.ts";
 import { CardFiles, FileViewer, isViewable } from "./CardFiles.tsx";
-import { Composer } from "./tasks/Composer.tsx";
+import { Composer, COMPOSER_MIN } from "./tasks/Composer.tsx";
 import { readState } from "../lib/boardStaleness.ts";
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
 import { useDismiss } from "../lib/useDismiss.ts";
@@ -5142,6 +5142,8 @@ function CommentAction({ label, title, d, onClick, busy, on, tone, iconOnly }: {
  *  makes Chrome ignore the ::-webkit- rules, and its own thin bar still draws a
  *  ▲ at the top and a ▼ at the bottom (measured in the running app), so this
  *  pane hands the styling back to the pseudo-elements and hides the buttons. */
+/** The share of the card pane the pinned comment box may take before it scrolls inside. */
+const COMPOSER_SHARE = 0.3;
 const CARD_SCROLL_CSS = ".agx-scroll.agx-cu-scroll{scrollbar-width:auto;scrollbar-color:auto}.agx-cu-scroll::-webkit-scrollbar-button{display:none;width:0;height:0}";
 
 /** Per card, for the life of the window: see lib/cardTabCache.ts. */
@@ -5945,6 +5947,38 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
   const [saying, setSaying] = useState(false);
   const [sayErr, setSayErr] = useState("");
   useEffect(() => { setSay(""); setSayErr(""); }, [t.id]);
+  /* The pinned box: how tall it may grow, and what keeps the list where the
+     reader left it while it does. The cap is a share of the whole pane,
+     measured, because the pane is whatever the window and the dock make it. */
+  const paneRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const [sayCap, setSayCap] = useState(160);
+  const atEnd = useRef(false);
+  const sentRef = useRef(false);
+  useEffect(() => {
+    const pane = paneRef.current;
+    const list = listRef.current;
+    if (!pane || !list) return;
+    const onScroll = () => { atEnd.current = list.scrollHeight - list.scrollTop - list.clientHeight < 4; };
+    list.addEventListener("scroll", onScroll, { passive: true });
+    let last = list.clientHeight;
+    const ro = new ResizeObserver(() => {
+      setSayCap(Math.max(COMPOSER_MIN, Math.round(pane.clientHeight * COMPOSER_SHARE)));
+      /* The box grew or shrank, so the list did the opposite: a reader at the
+         end of the thread stays at the end instead of watching it slide up. */
+      if (list.clientHeight !== last && atEnd.current) list.scrollTop = list.scrollHeight;
+      last = list.clientHeight;
+    });
+    ro.observe(pane); ro.observe(list);
+    return () => { list.removeEventListener("scroll", onScroll); ro.disconnect(); };
+  }, [view]);
+  /* A comment just posted lands at the end of the thread; take the reader there. */
+  useEffect(() => {
+    if (!sentRef.current) return;
+    sentRef.current = false;
+    const list = listRef.current;
+    if (list) list.scrollTop = list.scrollHeight;
+  }, [rows.length]);
   /** Which comment is being answered or edited, and with what. One at a time:
    *  two open boxes on the same thread is a way to post the wrong one. */
   const [replyTo, setReplyTo] = useState<string | null>(null);
@@ -6026,7 +6060,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
      * showed it, because `bottom-0` holds it to the bottom of that same short
      * box either way.
      */
-    <div className="flex flex-col flex-1 min-h-0 min-w-0">
+    <div ref={paneRef} className="flex flex-col flex-1 min-h-0 min-w-0">
       {/* The id somebody recognises, first and copyable: it is what goes in a
           branch name, a commit and a message to a colleague. The internal one is
           a fallback, not the headline. */}
@@ -6371,7 +6405,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           button's are one line whether or not the card scrolls: 16px of
           padding on the left, 4 + the 11px bar on the right. */}
       <style>{SCROLLBAR_CSS + CARD_SCROLL_CSS}</style>
-      <div className="agx-scroll agx-cu-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden pl-4 pr-1 [scrollbar-gutter:stable]">
+      <div ref={listRef} className="agx-scroll agx-cu-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden pl-4 pr-1 [scrollbar-gutter:stable]">
       {/* One at a time. Unmounting the other half is safe here: what the card
           knows — `full`, the fetch, the status options — lives on CardDetail
           itself, not in this subtree, so switching tabs re-renders and never
@@ -7288,14 +7322,25 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
         );
       })()}
 
+      </></MarkdownImages>)}
+
+      {full === null && <div className="mb-3"><Spinner label="Reading the card…" className="" /></div>}
+      </div>
+
       {/* Saying something, from here.
           The card could be read and could not be answered — every note went
           through the website, which is the thing this panel exists to make
-          unnecessary. Below the conversation on purpose: a box above it is a
-          box you write in before reading what is already there. */}
-      {writable && (
-        <div className="mb-3 pt-2" style={{ borderTop: rows.length ? LINE : undefined }}>
-          <Composer value={say} onChange={(v) => { setSay(v); setSayErr(""); }} busy={saying}
+          unnecessary.
+
+          Pinned under the scroller, not at the end of what scrolls: at the end
+          of a seventeen-comment thread the box was a full scroll away, and the
+          one control this tab exists for was the one you had to hunt for. The
+          list scrolls above it; the box grows with what is typed up to a
+          share of the pane and scrolls inside after that, so a long draft
+          never squeezes the conversation out. */}
+      {writable && view === "activity" && (
+        <div className="shrink-0 px-4 pt-2 pb-3" style={{ borderTop: LINE }}>
+          <Composer value={say} growTo={sayCap} onChange={(v) => { setSay(v); setSayErr(""); }} busy={saying}
             placeholder="Say something on this card. Markdown, and @ to call somebody."
             sendLabel="Comment"
             people={members}
@@ -7310,7 +7355,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                  mention op on the wire (see clickupDelta), which is what
                  ClickUp itself writes and what actually notifies. */
               void api.clickupComment(t.id, say).then((r) => {
-                if (r.ok) { setSay(""); reread(); }
+                if (r.ok) { setSay(""); sentRef.current = true; reread(); }
                 /* Kept, not cleared: a comment refused by the workspace is
                    still the comment somebody wrote, and losing it to a failed
                    request is how people stop trusting the box. */
@@ -7320,10 +7365,6 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           {sayErr && <div className="text-[10.5px] mt-1" style={{ color: "var(--error-ink)" }}>{sayErr}</div>}
         </div>
       )}
-      </></MarkdownImages>)}
-
-      {full === null && <div className="mb-3"><Spinner label="Reading the card…" className="" /></div>}
-      </div>
 
       {dialog}
     </div>

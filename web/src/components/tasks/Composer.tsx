@@ -78,7 +78,11 @@ const GROUPS: Tool[][] = [
   ],
 ];
 
-export function Composer({ value, onChange, onSend, onCancel, busy, placeholder, sendLabel, autoFocus, people, onNeedPeople }: {
+/** A composer pinned to the foot of a pane: the box starts at three lines and
+ *  grows with what is typed, up to `max` px, then scrolls inside. */
+export const COMPOSER_MIN = 56;
+
+export function Composer({ value, onChange, onSend, onCancel, busy, placeholder, sendLabel, autoFocus, people, onNeedPeople, growTo }: {
   value: string;
   onChange: (v: string) => void;
   onSend: () => void;
@@ -94,6 +98,9 @@ export function Composer({ value, onChange, onSend, onCancel, busy, placeholder,
   /** Asked the first time somebody types `@` — a card is read far more often
    *  than it is commented on, and the roster is a call. */
   onNeedPeople?: () => void;
+  /** The box grows with its text up to this many px, and scrolls after. Absent
+   *  for the reply and edit boxes, which keep their fixed, resizable height. */
+  growTo?: number;
 }) {
   const box = useRef<HTMLTextAreaElement>(null);
   const shell = useRef<HTMLDivElement>(null);
@@ -105,6 +112,17 @@ export function Composer({ value, onChange, onSend, onCancel, busy, placeholder,
   /** The mention being typed, and which row of the menu is under the cursor. */
   const [at, setAt] = useState<{ at: number; query: string } | null>(null);
   const [pick, setPick] = useState(0);
+
+  /* Height follows the text: measured with the height released, because
+     scrollHeight of a box that is already tall never reports it shrinking. */
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el || growTo == null) return;
+    el.style.height = "auto";
+    const want = Math.max(COMPOSER_MIN, Math.min(el.scrollHeight, growTo));
+    el.style.height = `${want}px`;
+    el.style.overflowY = el.scrollHeight > growTo ? "auto" : "hidden";
+  }, [value, growTo, preview]);
 
   useEffect(() => {
     if (!caret || !box.current) return;
@@ -211,7 +229,8 @@ export function Composer({ value, onChange, onSend, onCancel, busy, placeholder,
       </div>
 
       {preview
-        ? <div className="px-2.5 py-2 text-[11.5px]" style={{ minHeight: 72 }}>
+        ? <div className="px-2.5 py-2 text-[11.5px] overflow-y-auto agx-scroll"
+            style={{ minHeight: growTo == null ? 72 : COMPOSER_MIN, maxHeight: growTo }}>
             {value.trim()
               ? <Markdown text={value} />
               : <span style={{ color: "var(--text4)" }}>Nothing to preview yet.</span>}
@@ -249,8 +268,8 @@ export function Composer({ value, onChange, onSend, onCancel, busy, placeholder,
                  behind it and close the card with a comment half-written. */
               if (e.key === "Escape" && onCancel) { e.preventDefault(); e.stopPropagation(); onCancel(); }
             }}
-            className="agx-scroll px-2.5 py-2 text-[11.5px] outline-none resize-y"
-            style={{ background: "transparent", color: "var(--text)", minHeight: 84, fontFamily: "inherit" }} />}
+            className={`agx-scroll px-2.5 py-2 text-[11.5px] outline-none ${growTo == null ? "resize-y" : "resize-none"}`}
+            style={{ background: "transparent", color: "var(--text)", minHeight: growTo == null ? 84 : COMPOSER_MIN, fontFamily: "inherit" }} />}
 
       {/* The people menu. Anchored under the box rather than at the caret: a
           textarea gives no caret coordinates without measuring a mirror of
