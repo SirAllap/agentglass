@@ -18,6 +18,8 @@ import { usePoll } from "./lib/usePoll.ts";
 import { refusalFinal, useCoverHold } from "./lib/cover.ts";
 import { initialTheme, applyTheme, THEMES } from "./lib/themes.ts";
 import { subscribeControl } from "./lib/controlBus.ts";
+import { routeControl, offers, attachIdleApply } from "./lib/agentOffers.ts";
+import { focusKindOf, noteInput, sinceInputMs } from "./lib/quietPresent.ts";
 import { controlReplyLater, type UiCtx } from "./lib/uiActions.ts";
 import { answerControl } from "./lib/controlAnswer.ts";
 import { liveSources } from "./lib/uiSnapshotSources.ts";
@@ -1111,9 +1113,32 @@ export default function App() {
       // with the first render's state.
       sources: liveSources(() => appSliceRef.current),
     };
-    return subscribeControl((cmd, rid) => {
-      void controlReplyLater(cmd, ctx).then((reply) => answerControl(rid, reply, api.controlResult, document.visibilityState === "hidden"));
+    return subscribeControl((cmd, rid, meta) => {
+      const hidden = document.visibilityState === "hidden";
+      const run = () => controlReplyLater(cmd, ctx);
+      // A command off the server's socket says how to show it; one without
+      // (a window's own button) is the person's own doing, so it is now.
+      const go = routeControl(cmd, meta?.present ?? "now", focusKindOf(document.activeElement), sinceInputMs());
+      if (go.route === "queue") {
+        offers.hold({ key: go.key, as: meta?.as, label: go.label, heldAt: Date.now(), apply: () => { void run(); } });
+        // Taken, not shown: the caller hears that, not a bare ok.
+        answerControl(rid, { ok: true, applied: false, queued: true, value: { queued: true, label: go.label } }, api.controlResult, hidden);
+        return;
+      }
+      void run().then((reply) => answerControl(rid, reply, api.controlResult, hidden));
     });
+  }, []);
+
+  // The input clock a quiet open is judged by, and the timer that applies a held
+  // one once the person has gone quiet (lib/quietPresent.ts, lib/agentOffers.ts).
+  // Capture and passive: it only reads the time, and it must hear a key a
+  // terminal swallows.
+  useEffect(() => {
+    const note = () => noteInput();
+    const evs = ["keydown", "pointerdown", "paste"] as const;
+    for (const e of evs) window.addEventListener(e, note, { capture: true, passive: true });
+    const detach = attachIdleApply();
+    return () => { for (const e of evs) window.removeEventListener(e, note, { capture: true }); detach(); };
   }, []);
 
   // /stats carries the server's process start; fall back to page mount for

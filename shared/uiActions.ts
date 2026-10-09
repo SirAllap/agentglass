@@ -121,6 +121,10 @@ export interface UiActionDef {
    *  tell two entries with one `cmd` apart; every other field of the old body
    *  is the argument of the same name. */
   legacy?: { cmd: string; pin?: Readonly<Record<string, string>> };
+  /** The door closes or repaints what is already on screen and moves the
+   *  person to nothing (Escape, a palette, zoom), so a quiet caller gets it at
+   *  once: there is no view or dialog to queue behind a chip. */
+  inPlace?: true;
   /** Cross-field rules a per-argument spec cannot say. Null refuses. */
   refine?: (a: Record<string, unknown>) => Record<string, unknown> | null;
   /** App chords (keybindings.ts AppChordId) this entry is the agent's door for. */
@@ -140,7 +144,7 @@ export const UI_ACTIONS = {
     level: 1, kind: "open", surface: "the workspace (last view that was not the dashboard)", legacy: { cmd: "workspace" },
     args: { open: { t: "bool", optional: true } },
   }),
-  "esc.peel": def({ level: 1, kind: "open", surface: "peels the top overlay, as Escape does", legacy: { cmd: "esc" }, args: {} }),
+  "esc.peel": def({ inPlace: true, level: 1, kind: "open", surface: "peels the top overlay, as Escape does", legacy: { cmd: "esc" }, args: {} }),
   "panel.open": def({ modals: ["CommandPalette.tsx", "HelpLegend.tsx", "SearchModal.tsx", "SkillsModal.tsx", "StatsModal.tsx"], level: 1, kind: "open", surface: "stats, skills, search, help or the command palette", legacy: { cmd: "open" }, args: { what: { t: "enum", values: PANEL_IDS } } }),
   "finder.open": def({ modals: ["FilePalette.tsx"],
     level: 1, kind: "open", surface: "the file finder on one absolute path", legacy: { cmd: "open", pin: { what: "finder" } }, chords: ["files.palette"],
@@ -150,12 +154,12 @@ export const UI_ACTIONS = {
   // sending, reach into a real conversation.
   "chat.new": def({ level: 1, kind: "open", surface: "a new chat tab", legacy: { cmd: "chat", pin: { do: "new" } }, args: {} }),
   "theme.set": def({
-    level: 1, kind: "open", surface: "pins a palette by name, or steps the list", legacy: { cmd: "theme" },
+    inPlace: true, level: 1, kind: "open", surface: "pins a palette by name, or steps the list", legacy: { cmd: "theme" },
     args: { name: { t: "slug", max: 64, optional: true }, dir: { t: "num", values: [1, -1], optional: true } },
     // A name pins one palette and wins over a direction; neither is no command.
     refine: (a) => (a.name !== undefined ? { name: a.name } : a.dir !== undefined ? { dir: a.dir } : null),
   }),
-  "zoom.step": def({ level: 1, kind: "open", surface: "window zoom in, out or reset", legacy: { cmd: "zoom" }, args: { dir: { t: "num", values: [1, -1, 0] } } }),
+  "zoom.step": def({ inPlace: true, level: 1, kind: "open", surface: "window zoom in, out or reset", legacy: { cmd: "zoom" }, args: { dir: { t: "num", values: [1, -1, 0] } } }),
   "settings.open": def({ modals: ["SettingsModal.tsx", "plugins/Market.tsx"],
     level: 1, kind: "open", surface: "Settings on one page, optionally scrolled to one row (the plugin market is inside page plugins)",
     args: { page: { t: "enum", values: SETTINGS_PAGE_IDS }, row: { t: "slug", max: 80, optional: true } },
@@ -252,7 +256,34 @@ export interface UiSnapshot {
 export const UNTRUSTED_MAX_BYTES = 16 * 1024;
 
 /** What a window says it did with a command that carried a request id. */
-export interface UiReply { ok: boolean; applied: boolean; value?: unknown; error?: string }
+export interface UiReply {
+  ok: boolean; applied: boolean; value?: unknown; error?: string;
+  /** A quiet open the window held behind a chip instead of running (the person
+   *  was typing). `ok` is true and `applied` is false: it was taken, not shown. */
+  queued?: true;
+}
+
+/**
+ * How an open reaches the person's screen. `now` runs at once, as it always did
+ * for a Stream Deck button. `quiet` never raises the OS window and never takes
+ * the keyboard, and when the person is typing the window holds the open behind
+ * a chip they can click (web/src/lib/quietPresent.ts decides).
+ */
+export type UiPresent = "quiet" | "now";
+
+/**
+ * The mode a /control body asks for: `undefined`/`null` on the wire means "the
+ * default", which is quiet for a caller that stamped `as` (the CLI and the MCP
+ * server always do) and now for one that did not. A caller can always omit `as`
+ * and get `now`; that is an annoyance and not a privilege, so declaring
+ * yourself is the safe direction. An explicit value that is neither word is
+ * refused (null) rather than guessed at, because the guess decides whether a
+ * dialog lands on somebody who is typing.
+ */
+export function presentOf(raw: unknown, as: string | null): UiPresent | null {
+  if (raw === undefined || raw === null) return as ? "quiet" : "now";
+  return raw === "quiet" || raw === "now" ? raw : null;
+}
 /** The most a reply may weigh on the wire; larger is refused by the server. */
 export const UI_REPLY_MAX_BYTES = 64 * 1024;
 

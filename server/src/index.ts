@@ -56,7 +56,7 @@ import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, onGateCh
 import { budgetHoldFor } from "./budget.ts";
 import { gateCwd, gateRuleFor } from "./gaterules.ts";
 import { parseControlCmd, controlId, awaitControl, settleControl, parseReply, nextControlRid, callerRequestId, CONTROL_TIMEOUT_ERROR, changedSetting, makeWriteLimiter, controlLevel } from "./control.ts";
-import { isReadAction, describeUiActions, UI_ACTIONS } from "../../shared/uiActions.ts";
+import { isReadAction, describeUiActions, presentOf, UI_ACTIONS } from "../../shared/uiActions.ts";
 import { outwardAction, outwardLine } from "./outward.ts";
 import { listLanes } from "./lanes.ts";
 import { gateLane, dropBrowserTarget, askBrowser, browserReadyCount, exportAudit, noteBrowserManager, noteBrowserReady, parseAsk, setBrowserSink, settleBrowser, type BrowserOp, runSteps, waitForEvents, recordFrames, traceRecording, auditAsScript, downloadFile, runLanes, withObservation, parseScrape, runScrape } from "./browserdrive.ts";
@@ -3730,8 +3730,16 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // `as` is the name a CLI or an MCP server stamps itself with (the browser
       // CLI's --as): a label for the log line, never a credential.
       const as = callerRequestId((b as { as?: unknown }).as);
-      const audit = (ok: boolean, error?: string) =>
-        noteAction(clientIp, `/control/${controlId(cmd) ?? "unknown"}`, { ...(setting ? { setting } : {}), ...(as ? { as } : {}) }, { ok, error }, who);
+      // How it is shown: quiet for a caller that named itself, now for one that
+      // did not, or what the body says. An unknown word is a refusal, since a
+      // guess here decides whether a dialog lands on somebody who is typing.
+      const present = presentOf((b as { present?: unknown }).present, as);
+      if (!present) return json({ ok: false, error: "present is quiet or now" }, 400);
+      // The mode is a fact about an open; a read or a settings change shows
+      // nothing, so its line does not carry one.
+      const opens = (UI_ACTIONS[controlId(cmd) as keyof typeof UI_ACTIONS] as { kind?: string } | undefined)?.kind === "open";
+      const audit = (ok: boolean, error?: string, queued?: boolean) =>
+        noteAction(clientIp, `/control/${controlId(cmd) ?? "unknown"}`, { ...(setting ? { setting } : {}), ...(as ? { as } : {}), ...(opens ? { present } : {}), ...(queued ? { queued: true } : {}) }, { ok, error }, who);
       if (setting && !controlWriteLimit.hit(actorOf(clientIp, who))) {
         audit(false, "rate limited");
         return json({ ok: false, error: "too many settings changes; slow down" }, 429);
@@ -3751,15 +3759,19 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
        */
       const label = callerRequestId((b as { id?: unknown }).id);
       // A settings change is answered as well: what it replaced, and the undo handle.
-      const asks = label !== null || setting !== null || (cmd.cmd === "ui" && isReadAction(cmd.do));
+      // A quiet open asks too: the window may hold it behind a chip, and a caller
+      // told "ok" for something nobody has seen would be told wrong.
+      const asks = label !== null || setting !== null || (cmd.cmd === "ui" && isReadAction(cmd.do)) || (opens && present === "quiet");
+      const frame = { present, ...(as ? { as } : {}) };
       if (!asks) {
-        broadcast({ type: "control", data: cmd });
+        broadcast({ type: "control", data: cmd, ...frame });
         audit(true);
         return json({ ok: true, windows: clients.size });
       }
       const rid = nextControlRid();
-      const reply = await awaitControl(rid, () => broadcast({ type: "control", data: cmd, rid }));
-      audit(reply.ok && reply.applied, reply.error);
+      const reply = await awaitControl(rid, () => broadcast({ type: "control", data: cmd, rid, ...frame }));
+      // Held behind a chip is a verdict too: taken, not yet shown.
+      audit(reply.ok && (reply.applied || reply.queued === true), reply.error, reply.queued === true);
       return json({ ...reply, ...(label ? { id: label } : {}) }, reply.error === CONTROL_TIMEOUT_ERROR ? 504 : 200);
     }
 

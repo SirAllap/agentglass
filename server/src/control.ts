@@ -162,6 +162,7 @@ export function parseReply(b: unknown): UiReply | null {
   if (!b || typeof b !== "object" || Array.isArray(b)) return null;
   const r = b as Record<string, unknown>;
   const reply: UiReply = { ok: r.ok === true, applied: r.applied === true };
+  if (r.queued === true && reply.ok && !reply.applied) reply.queued = true;
   if (typeof r.error === "string") reply.error = stripSecrets(r.error).slice(0, 300);
   if (r.value !== undefined) {
     let size = 0;

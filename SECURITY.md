@@ -1050,6 +1050,14 @@ the machine token can already do everything through `/control` that a forged
 answer could, so the route widens nothing. This does not stop an agent from
 being talked into acting on text it read: that is why the text is marked.
 
+An open has a `present` mode, `quiet` by default for a caller that names itself.
+A quiet open never raises the OS window and never takes the keyboard, and while
+the person is in a field or a terminal or has just typed it waits behind a chip
+they click, so a dialog cannot land on their keystrokes. It is a courtesy and
+not a gate: `now` is one word away, and a caller that omits `as` gets it, which
+is an annoyance and no privilege. The action line names the mode and whether the
+open was held.
+
 `bin/agentglass-ui` and `bin/agentglass-ui-mcp` are a front door to those same
 doors and add none: they read `GET /control/actions` (the registry cut at the
 level the server allows, which names doors and opens none) and send what

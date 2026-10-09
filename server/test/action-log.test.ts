@@ -166,13 +166,14 @@ describe("nothing writes without being recorded", () => {
     // line, `/control/<registry id>`, with an empty body: a path or a settings
     // row a command named is a value, not an audit fact. The one body it may
     // carry is a settings.set's setting id, and the name a CLI stamped itself
-    // with (`as`, a label); control-settings.test.ts pins that the setting is
-    // never the value.
+    // with (`as`, a label), and for an open its present mode and whether it was
+    // held behind a chip (two closed words); control-settings.test.ts pins that
+    // the setting is never the value.
     const at = index.indexOf('pathname === "/control"');
     expect(at).toBeGreaterThan(-1);
     const handler = index.slice(at, index.indexOf("\n    }", at));
     expect(handler).toContain("noteAction(");
-    expect(handler, "the command's arguments must not reach the audit log").toMatch(/noteAction\([^)]*`\/control\/\$\{controlId\(cmd\) \?\? "unknown"\}`, \{ \.\.\.\(setting \? \{ setting \} : \{\}\), \.\.\.\(as \? \{ as \} : \{\}\) \},/s);
+    expect(handler, "the command's arguments must not reach the audit log").toMatch(/noteAction\([^)]*`\/control\/\$\{controlId\(cmd\) \?\? "unknown"\}`, \{ \.\.\.\(setting \? \{ setting \} : \{\}\), \.\.\.\(as \? \{ as \} : \{\}\), \.\.\.\(opens \? \{ present \} : \{\}\), \.\.\.\(queued \? \{ queued: true \} : \{\}\) \},/s);
     expect(handler).toContain("const setting = changedSetting(cmd);");
   });
 });

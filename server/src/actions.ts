@@ -163,7 +163,7 @@ export function targetOf(pathname: string, b: Record<string, unknown>): string {
   // A settings change from an agent: which setting, never to what.
   // A door an agent opened: who (the name it stamped), and for a settings
   // change which setting, never to what.
-  if (pathname.startsWith("/control/")) return [b.as ? `as ${named(b.as)}` : "", named(b.setting)].filter(Boolean).join(" · ");
+  if (pathname.startsWith("/control/")) return [b.as ? `as ${named(b.as)}` : "", named(b.setting), named(b.present), b.queued ? "queued" : ""].filter(Boolean).join(" · ");
   // A chat launch: where it runs and on what. Never the prompt — see index.ts.
   if (pathname === "/chat/send") return clip([repo, named(b.name)].filter(Boolean).join(" · "));
   if (pathname.startsWith("/prs/")) {

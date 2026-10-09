@@ -96,6 +96,20 @@ describe.skipIf(!HAVE_PY)("a command, built from what the app offers", () => {
     });
   });
 
+  const buildP = (id: string, present: string | null, given: Record<string, unknown> = { page: "diff" }, level = 2) =>
+    py(CLI, "print(json.dumps(g['build_command'](D['a'], D['l'], D['id'], D['g'], 'tester', 'cli', D['p'])))",
+      { a: level === 2 ? L2 : L1, l: level, id, p: present, g: given }) as [Record<string, unknown> | null, string | null];
+
+  test("--now and --quiet become `present` on an open, and no flag leaves it to the server", () => {
+    expect(buildP("settings.open", "now")[0]).toMatchObject({ present: "now", as: "tester" });
+    expect(buildP("settings.open", "quiet")[0]).toMatchObject({ present: "quiet" });
+    expect(buildP("settings.open", null)[0]).not.toHaveProperty("present");
+  });
+  test("a mode on a read or a change is refused, and so is a word that is neither", () => {
+    expect(buildP("ui.state", "now", {})[1]).toContain("only an open has a present mode");
+    expect(buildP("settings.open", "soon")[1]).toBe("present is now or quiet");
+  });
+
   test("no name, no `as`", () => {
     expect(build("ui.state", {}, 2, "")[0]).toEqual({ cmd: "ui", do: "ui.state", args: {}, id: "cli" });
   });
@@ -185,7 +199,9 @@ describe.skipIf(!HAVE_PY)("the MCP tool list is the registry", () => {
     for (const id of UI_ACTION_IDS) {
       const d = UI_ACTIONS[id] as UiActionDef;
       const tool = byName.get(toolOf.get(id)!)!;
-      expect(Object.keys(tool.inputSchema.properties).sort(), id).toEqual(Object.keys(d.args).sort());
+      // An open also takes `now`, the one argument that is not its door's own.
+      const own = d.kind === "open" ? [...Object.keys(d.args), "now"] : Object.keys(d.args);
+      expect(Object.keys(tool.inputSchema.properties).sort(), id).toEqual(own.sort());
       const required = Object.entries(d.args).filter(([, s]) => !("optional" in s && s.optional) && s.t !== "pathKind").map(([k]) => k).sort();
       expect([...tool.inputSchema.required].sort(), id).toEqual(required);
       expect(tool.inputSchema.additionalProperties, id).toBe(false);
@@ -262,16 +278,18 @@ async function window_(reply: (data: any) => Record<string, unknown>) {
   const ws = new WebSocket(base.replace("http", "ws") + "/stream");
   sockets.push(ws);
   const seen: any[] = [];
+  const frames: { present?: string; as?: string }[] = [];
   ws.addEventListener("message", async (ev) => {
     let f: any;
     try { f = JSON.parse(String((ev as MessageEvent).data)); } catch { return; }
     if (f.type !== "control" || !f.rid) return;
     seen.push(f.data);
+    frames.push({ present: f.present, as: f.as });
     await fetch(base + "/control/result", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ rid: f.rid, ...reply(f.data) }) });
   });
   await new Promise((r) => ws.addEventListener("open", r));
   await Bun.sleep(100);
-  return { seen, close: () => { try { ws.close(); } catch { /* gone */ } } };
+  return { seen, frames, close: () => { try { ws.close(); } catch { /* gone */ } } };
 }
 
 const env = () => ({ PATH: process.env.PATH ?? "", HOME: dir, XDG_CONFIG_HOME: dir, AGENTGLASS_SERVER: base });
@@ -328,6 +346,30 @@ describe.skipIf(!HAVE_PY)("against a running app", () => {
     w.close();
   });
 
+  test("an open from a named caller is quiet by default, --now is now, and a held one comes back queued", async () => {
+    const w = await window_(() => ({ ok: true, applied: false, queued: true, value: { queued: true } }));
+    const held = await cli("--as", "orbit-agent", "open", "settings.open", "--arg", "page=notifications");
+    expect(held.code).toBe(0);
+    expect(held.out).toMatchObject({ ok: true, applied: false, queued: true });
+    expect(w.frames.at(-1)).toMatchObject({ present: "quiet", as: "orbit-agent" });
+    w.close();
+    await Bun.sleep(150);
+    const w2 = await window_(() => ({ ok: true, applied: true }));
+    const now = await cli("--as", "orbit-agent", "open", "--now", "settings.open", "--arg", "page=notifications");
+    expect(now.out).toMatchObject({ ok: true, applied: true });
+    expect(w2.frames.at(-1)).toMatchObject({ present: "now" });
+    const log = await (await fetch(base + "/actions?limit=50")).json() as { actions: { action: string; target: string }[] };
+    const targets = log.actions.filter((a) => a.action === "/control/settings.open").map((a) => a.target);
+    expect(targets).toContain("as orbit-agent · quiet · queued");
+    expect(targets).toContain("as orbit-agent · now");
+    w2.close();
+  });
+
+  test("--now and --quiet together, or on a read, are a usage mistake", async () => {
+    expect((await cli("open", "--now", "--quiet", "view.open")).code).toBe(2);
+    expect((await cli("read", "--now", "chat")).code).toBe(2);
+  });
+
   test("a window that refuses keeps its words, exit 1", async () => {
     const w = await window_(() => ({ ok: false, applied: false, error: "not exposed" }));
     const r = await cli("settings", "get", "notifications.apiKey");
@@ -366,12 +408,20 @@ describe.skipIf(!HAVE_PY)("against a running app", () => {
     expect(called.result.isError).toBeUndefined();
     expect(JSON.parse(called.result.content[0].text)).toMatchObject({ ok: true, applied: true });
     expect(w.seen.at(-1)).toEqual({ cmd: "ui", do: "settings.open", args: { page: "diff", row: "wrap-long-lines" } });
+    expect(w.frames.at(-1)).toMatchObject({ present: "quiet", as: "orbit-mcp" });
+    send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "ui_settings_open", arguments: { page: "diff", now: true } } });
+    expect((await reply(5)).result.isError).toBeUndefined();
+    expect(w.frames.at(-1)).toMatchObject({ present: "now" });
+    send({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "ui_settings_open", arguments: { page: "diff", now: "yes" } } });
+    expect((await reply(6)).result.isError).toBe(true);
     send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "ui_view_open", arguments: { to: "nowhere" } } });
     const bad = await reply(4);
     expect(bad.result.isError).toBe(true);
     expect(bad.result.content[0].text).toContain("to must be one of");
     const log = await (await fetch(base + "/actions?limit=50")).json() as { actions: { action: string; target: string }[] };
-    expect(log.actions.find((a) => a.action === "/control/settings.open")?.target).toBe("as orbit-mcp");
+    const targets = log.actions.filter((a) => a.action === "/control/settings.open").map((a) => a.target);
+    expect(targets).toContain("as orbit-mcp · quiet");
+    expect(targets).toContain("as orbit-mcp · now");
     try { p.kill(); } catch { /* gone */ }
     await reader.catch(() => {});
     w.close();

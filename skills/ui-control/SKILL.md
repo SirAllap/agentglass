@@ -14,7 +14,8 @@ every call so the person can see in the action log that it was you.
 agentglass-ui list                                   # every door, its level, its arguments
 agentglass-ui state                                  # what is open now; which panels `read` describes
 agentglass-ui read chat                              # one panel's state, shown nowhere
-agentglass-ui open settings.open --arg page=diff --arg row=wrap-long-lines
+agentglass-ui open settings.open --arg page=diff --arg row=wrap-long-lines   # quiet: a chip if they are typing
+agentglass-ui open --now settings.open --arg page=diff       # they said "show me": at once
 agentglass-ui settings list                          # what you may read and write
 agentglass-ui settings get diff.wrap
 agentglass-ui settings set diff.wrap true
@@ -73,10 +74,16 @@ Read the sentence and do what it says; do not retry the same call.
 - **Never set a secret, and never go looking for one.** Credential fields answer
   only whether they are set (`{"set": true}`) and are refused on write. A token,
   a key or a password is not a setting you change on the way to something else.
-- **Show or read in the background?** An `open` takes the person's screen now:
-  a modal appears, the view changes. A read (`state`, `read`, `settings get`,
+- **Show or read in the background?** A read (`state`, `read`, `settings get`,
   `settings list`) shows nothing and moves no focus. If you only need to know,
-  read; open only when the person asked to be shown, or the next step is theirs.
+  read. An `open` is **quiet** by default: it never raises the window or takes
+  the keyboard, and if the person is typing in a field or a terminal it waits as
+  a chip they click ("<you> wants to show you: Settings > Notifications"); the
+  answer says `"queued": true`, which is not a failure, so do not repeat it. Say
+  nothing more until they click. Add `--now` (MCP: `now: true`) **only** when the
+  person has just asked you, in this conversation, to show them something ("show
+  me the diff settings"): that runs at once, even over their typing. A call that
+  carries no name (`--as`) is `now` too, so keep the name.
 - **Do not change a setting you were not asked to.** A setting is the person's
   taste, and "this would look better" is not a request.
 - **Undo a change** by setting the value back to `prev`, which the answer

@@ -362,9 +362,36 @@ pairs with `settings.set`.)
 
 With no window attached the answer is `503 {"ok":false,"error":"no window"}`;
 otherwise `200 {"ok":true,"windows":N}`, which says the command was sent, not that
-a window ran it. Each command leaves one line in `GET /actions`
+a window ran it (a quiet open is always answered by the window instead, below). Each command leaves one line in `GET /actions`
 (`/control/<id>`, the verdict, never the path or row it named; a `settings.set`
 also names the setting, never the value).
+
+### Quiet or now: how an open reaches the screen
+
+An open has a `present` mode. A body that carries `as` (a name; the `agentglass-ui`
+CLI and the MCP server always send one) is `quiet` by default; a body without it
+is `now`, which is what a Stream Deck button has always had. Say it outright with
+`"present":"now"` or `"present":"quiet"`; any other word is a `400`. Reads and
+settings changes have no mode, since they show nothing to hold.
+
+- **`now`** runs at once, as before. Use it only when the person has just asked
+  you to show them something.
+- **`quiet`** never raises the OS window and never takes the keyboard. If the
+  person is in a text field or a terminal, or has typed or clicked in the last
+  five seconds, the window holds the open behind a chip in the corner ("claude-1
+  wants to show you: Settings > Notifications", with a Show me button and a
+  cross). It runs when they click, or by itself after 45 seconds with no input.
+  Otherwise it runs at once. Escape, zoom and theme are never held: they move
+  nobody anywhere.
+
+A held open is answered `{"ok":true,"applied":false,"queued":true}`: taken, not
+shown. The action line names the mode (`as claude-1 · quiet · queued`). The
+chip is the window's, so it keeps the same for every caller; there is no way to
+skip it from outside except `now`, and a caller can always omit `as` and get
+`now` anyway, which is an annoyance and not a privilege. What this cannot do: stop
+a dialog's own autofocus once it runs (a click or the idle timer applied it), and
+tell a person reading from one who left the room, which is why the idle wait is
+long. The decision is `web/src/lib/quietPresent.ts`, a pure function.
 
 ### Asking for an answer, and reading state
 
