@@ -1629,8 +1629,11 @@ function Pill({ on, label, icon, dot, count, countTint, title, onClick }: {
   dot?: string;
   count?: number;
   /** A count that means something other than "how many are in here". The
-   *  inbox's is unread, so it keeps warning colour even when you are elsewhere. */
-  countTint?: string;
+   *  inbox's is unread, so it keeps warning colour even when you are elsewhere.
+   *  A semantic colour's NAME (`warning`): the fill is the tint and the number is
+   *  its ink — the bare tint on its own 18% wash measured under 2:1 in the light
+   *  theme, which is the badge that read as washed out. */
+  countTint?: "warning" | "error" | "success" | "info";
   title: string;
   onClick: () => void;
 }) {
@@ -1652,10 +1655,10 @@ function Pill({ on, label, icon, dot, count, countTint, title, onClick }: {
       {count != null && count > 0 && (
         <span className="tabular-nums text-[9px] px-1.5 py-px rounded-full"
           style={{
-            color: countTint ?? (on ? "var(--primary-hover)" : "var(--text3)"),
+            color: countTint ? `var(--${countTint}-ink)` : on ? "var(--primary-hover)" : "var(--text3)",
             background: on
               ? "color-mix(in srgb, var(--primary) 22%, transparent)"
-              : `color-mix(in srgb, ${countTint ?? "var(--text)"} ${countTint ? "18%" : "10%"}, transparent)`,
+              : `color-mix(in srgb, ${countTint ? `var(--${countTint})` : "var(--text)"} ${countTint ? "18%" : "10%"}, transparent)`,
           }}>{count}</span>
       )}
     </button>
@@ -2177,18 +2180,30 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
           return;
         }
         /*
-         * Nowhere to read it from, and the request must not be left lying
-         * there: it stayed pending and would open that pull request later,
-         * whenever a panel happened to be bound to the right repository.
-         * Answered with the thing that always works — a search for the
-         * number. Less than opening it, and visibly something.
+         * No checkout of it here — an upstream project the Inbox knows about
+         * because a pull request was opened against it. Read it anyway: the
+         * server takes `gh:owner/name` as a root that has no directory, reads
+         * the pull request from GitHub, and refuses every write. The strip says
+         * so, and the controls that write are off (see `readOnly`). The jump
+         * stays pending, as above, and opens the pull request once the list
+         * has named the repository.
+         *
+         * This used to clear the jump and answer with a search for the number
+         * in the wrong repository plus a red sentence the header cut off.
          */
+        if (/^(?!\.+\/)[\w.-]+\/(?!\.+$)[\w.-]+$/.test(jump.repo)) {
+          const ghRoot = `gh:${jump.repo}`;
+          setAway({ root: ghRoot, repo: jump.repo, back: away?.back ?? { root, repo: repo.nameWithOwner } });
+          setSelected(null);
+          setRoot(ghRoot);
+          return;
+        }
+        // A name that cannot be a repository has nothing to read: the old answers.
         clearPrJump();
-        // A link somebody clicked has somewhere better to go than a search.
         if (jump.fallback) { openExternal(jump.fallback); return; }
         setQuery(String(jump.number));
         setSelected(null);
-        flash(false, `#${jump.number} is in ${jump.repo}, and there is no checkout of it on this machine — searching ${repo.nameWithOwner} instead`);
+        flash(false, `#${jump.number} is in ${jump.repo}, which is not a repository name this panel can read — searching ${repo.nameWithOwner} instead`);
       }).catch(() => { clearPrJump(); });
       return;
     }
@@ -2210,7 +2225,13 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jump, repo, openPr]);
 
-  const [busy, setBusy] = useState(false);
+  const [running, setBusy] = useState(false);
+  /* A checkout-less repository (see `away`) is read-only: `busy` is what greys
+     every control that writes and what `act` refuses on, so it is true for the
+     whole visit. The refresh button reads `running` instead — reading is the
+     one thing this mode is for. */
+  const readOnly = away?.root.startsWith("gh:") === true;
+  const busy = running || readOnly;
   /** The label passed to `act` for the request in flight — see Btn `pending`. */
   const [busyWhat, setBusyWhat] = useState("");
   /* One scroller serves every tab, so each tab's place in it is remembered here
@@ -2445,7 +2466,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
 
   const flash = useCallback((ok: boolean, msg: string) => {
     setToast({ ok, msg });
-    setTimeout(() => setToast(null), 4500);
+    setTimeout(() => setToast(null), ok ? 4500 : 9000);
   }, []);
   /* A cheap write that did not land is reported where every other write is. */
   layerFail.current = (text) => flash(false, text);
@@ -4070,6 +4091,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const doLocalReview = async (n?: number, recipe = "") => {
     const num = n ?? detail?.number;
     if (num == null) return;
+    // A review works in a checkout of the repository; this one has none.
+    if (readOnly) { flash(false, `A review needs a checkout of ${away?.repo} to work in, and there is none on this machine. Clone it and add it as a project, then review it from there.`); return; }
     setBusy(true);
     try {
       /* The card id is worked out here and sent, rather than looked up there:
@@ -4417,7 +4440,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
           * for the same pull requests.
           */}
         {projects.length > 1 && (
-          <CheckoutPicker repos={projects} value={projectRoot} onPick={setRoot}
+          <CheckoutPicker repos={projects} value={projectRoot} onPick={(r) => { setAway(null); setRoot(r); }}
             placeholder="Pick a repository" triggerMaxWidth={220} branchLabel={null}
             title="Which repository's pull requests" />
         )}
@@ -4475,7 +4498,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
         />
 
         <div className="ml-auto flex items-center gap-2 shrink-0">
-          {toast && <span className="text-[10px] max-w-[380px] truncate" style={{ color: toast.ok ? "var(--success)" : "var(--error)" }}>{toast.msg}</span>}
+          {toast?.ok && <span className="text-[10px] max-w-[380px] truncate" style={{ color: "var(--success)" }}>{toast.msg}</span>}
           {/* The loud "Loading pull requests…" is for a genuinely empty pane
               only. Once rows are up, the 20-second poll revalidates in the
               background every minute and a half — announcing that each time read
@@ -4556,7 +4579,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             const tableIsQueue = stateSel === "open" && (filter === "mine" || filter === "review") && !cursor && !serverQuery;
             reads.push(Promise.resolve(loadList(!boardShown || tableIsQueue)));
             settled();
-          }} busy={busy} spinning={refreshing}
+          }} busy={running} spinning={refreshing}
             title={selected != null ? "Refresh this pull request" : "Refresh the list"} />
         </div>
       </div>
@@ -4567,12 +4590,25 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       {away && (
         <div className="flex items-center gap-2 px-2.5 py-1.5 shrink-0 text-[11px] border-b"
           style={{ borderColor: "color-mix(in srgb, var(--warning) 30%, transparent)", background: "color-mix(in srgb, var(--warning) 8%, transparent)" }}>
-          <span style={{ color: "var(--warning-ink)" }}>Showing {away.repo} on top of {away.back.repo}</span>
+          <span style={{ color: "var(--warning-ink)" }}>
+            Showing {away.repo} on top of {away.back.repo}
+            {readOnly && ` — read-only: there is no checkout of ${away.repo} on this machine, so nothing here can be changed`}
+          </span>
           <span className="ml-auto">
             <Btn onClick={() => { setAway(null); setSelected(null); setRoot(away.back.root); }} small>
               Back to {away.back.repo}
             </Btn>
           </span>
+        </div>
+      )}
+
+      {/* A failure is a sentence, and a sentence is read whole: in the header it
+          was cut at 380px ("...and there is no checko"), which named the
+          problem and hid the way out. Here it has the width of the panel. */}
+      {toast && !toast.ok && (
+        <div role="alert" className="px-2.5 py-1.5 shrink-0 text-[11px] border-b"
+          style={{ color: "var(--error-ink)", borderColor: "color-mix(in srgb, var(--error) 30%, transparent)", background: "color-mix(in srgb, var(--error) 8%, transparent)" }}>
+          {toast.msg}
         </div>
       )}
 
@@ -4622,7 +4658,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 the view you are in. */}
             <Pill on={inboxOn} icon={<InboxIcon size={ICON.xs} />} label="Inbox"
               title="What happened while you were away — GitHub's notifications, filtered to this repository"
-              count={inboxUnread || undefined} countTint="var(--warning)"
+              count={inboxUnread || undefined} countTint="warning"
               onClick={() => { setMetricsOn(false); setInboxOn(true); }} />
             <Pill on={metricsOn} icon={<ChartIcon size={ICON.xs} />} label="CI"
               title="Every check of this repository against its own history — slow, flaky, drifting"
@@ -4892,7 +4928,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 d={d} busy={busy || !!mergeWork} local={local} onShowLocal={showLocal}
                 onEditTitle={doEditTitle} onDraft={() => { void field(draftPatch(d.number, !d.isDraft), () => api.prDraft(root, d.number, !d.isDraft), d.isDraft ? "Mark ready failed" : "Convert to draft failed", "draft"); }}
                 onClose={doClose} onLocalReview={(recipe) => doLocalReview(undefined, recipe)}
-                onReviewInTerminal={onReviewInTerminal && d ? (recipe) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "") : undefined}
+                onReviewInTerminal={onReviewInTerminal && d && !readOnly ? (recipe) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "") : undefined}
                 condensed={condensed}
                 onLabels={doLabels} onReviewers={doReviewers} onNudge={doNudge}
                 onEditField={fieldPicker.open}
@@ -5025,7 +5061,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                           onEditRequest={() => setEditingBody(true)}
                           onToggleTask={doToggleTask}
                           onLocalReview={(recipe) => doLocalReview(undefined, recipe)}
-                          onReviewInTerminal={onReviewInTerminal && d ? (recipe) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "") : undefined}
+                          onReviewInTerminal={onReviewInTerminal && d && !readOnly ? (recipe) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "") : undefined}
                           onMerge={doMerge} onClose={doClose} onAskReview={doReviewers}
                           method={mergeMethod} onMethod={setMergeMethod}
                           onUpdateBranch={(syncLocal: boolean) => {
@@ -7735,8 +7771,12 @@ function CardFacts({ d, root }: { d: PrDetail; root: string }) {
                           who: target?.name ?? "",
                           note: msg.trim(),
                         });
-                        requestTermIssue(root, `slack-${d.number}`, text, true, false, `Ping about #${d.number}`);
-                        setTell(null); setSaid(`an agent has it in a tmux tab — "slack-${d.number}"`);
+                        // The agent's window opens in a checkout; a read-only visit has none.
+                        if (root.startsWith("gh:")) setSaid("no agent can be started here — there is no checkout of this repository on this machine");
+                        else {
+                          requestTermIssue(root, `slack-${d.number}`, text, true, false, `Ping about #${d.number}`);
+                          setTell(null); setSaid(`an agent has it in a tmux tab — "slack-${d.number}"`);
+                        }
                         return;
                       }
                       if (!task) return;

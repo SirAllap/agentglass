@@ -615,7 +615,36 @@ export async function locateRepo(want: string, roots: string[]): Promise<string 
 
 const idInflight = new Map<string, Promise<PrRepoId | null>>();
 
+/**
+ * A root with no directory behind it: `gh:owner/name`.
+ *
+ * Every read here goes through a "root" because that is where a repository's
+ * identity comes from, and an Inbox row can name a pull request in a project
+ * with no checkout on this machine (an upstream the person opened a pull
+ * request against). For those the identity is in the name itself, so reads work
+ * from it — they are GraphQL by owner and name, and `gh` is told `-R` — while
+ * everything that needs a working tree or a write is refused, in a sentence
+ * (`prWriteRefusal`), and `safeAbs` refuses the prefix so no path-taking
+ * function can be handed the server's own repository by mistake.
+ *
+ * github.com only: a GitHub Enterprise host is not in the name, so a
+ * checkout-less pull request on one is not reachable this way.
+ */
+// `.` and `..` are not names: `gh:../..` would aim `gh api repos/../..` at another endpoint.
+const FOREIGN_ROOT = /^gh:(?!\.+\/)([\w.-]+)\/(?!\.+$)([\w.-]+)$/;
+const foreignOf = (root: unknown) => (typeof root === "string" ? FOREIGN_ROOT.exec(root) : null);
+export const isForeignRoot = (root: unknown): boolean => foreignOf(root) !== null;
+
+/** The refusal for a write aimed at a checkout-less root; null for any other root. */
+export function prWriteRefusal(rootIn: unknown): PrActionResult | null {
+  const m = foreignOf(rootIn);
+  if (!m) return null;
+  return { ok: false, error: `Read-only — there is no checkout of ${m[1]}/${m[2]} on this machine. Clone it and add it as a project to act on this pull request.` };
+}
+
 export async function repoIdFor(rootIn: unknown): Promise<PrRepoId | null> {
+  const f = foreignOf(rootIn);
+  if (f) return { key: `github.com/${f[1]}/${f[2]}`, host: "github.com", owner: f[1]!, name: f[2]!, nameWithOwner: `${f[1]}/${f[2]}` };
   const abs = safeAbs(rootIn);
   if (!abs) return null;
   const root = repoRootOf(abs);
@@ -4007,6 +4036,7 @@ export function assetReply(res: Response): Response {
 // ---------------------------------------------------------------------------
 
 function writeGuard(rootIn: unknown): PrActionResult | null {
+  const foreign = prWriteRefusal(rootIn); if (foreign) return foreign;
   if (!WRITE_ENABLED) return { ok: false, error: "writes are disabled (AGENTGLASS_GIT_WRITE_DISABLED=1)" };
   const abs = safeAbs(rootIn);
   const root = abs ? repoRootOf(abs) : null;

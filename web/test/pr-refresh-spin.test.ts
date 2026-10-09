@@ -67,6 +67,8 @@ describe("the panel ties it to the reads the press started", () => {
     expect(code).toMatch(/boardSettle\.current\?\.\(\); boardSettle\.current = null;/);
   });
   it("the button is given the read, not the write's flag", () => {
-    expect(handler).toContain("busy={busy} spinning={refreshing}");
+    // `running` is the write in flight; `busy` also includes a read-only visit to a
+    // repository with no checkout, where refreshing is the one thing that works.
+    expect(handler).toContain("busy={running} spinning={refreshing}");
   });
 });

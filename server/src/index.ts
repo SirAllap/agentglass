@@ -154,7 +154,7 @@ import {
   prBaseOf,
   ghRateLimit,
   branchBehind, localHead, prRollup, repoIdFor as prRepoIdFor, subscribeTalkSeen,
-  prBranches, prsForBranch, nodeIdOk, locateRepo } from "./prs.ts";
+  prBranches, prsForBranch, nodeIdOk, locateRepo, isForeignRoot } from "./prs.ts";
 import { repoSpend } from "./spend.ts";
 import { repoMetrics } from "./checkRuns.ts";
 import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
@@ -243,6 +243,22 @@ let lastUnderstudyLearn: import("./understudy-ingest.ts").IngestResult | null = 
  */
 
 /** Checkouts the loop may work in. The open project, and today only that. */
+/**
+ * The root a pull request route reads or acts through.
+ *
+ * A root out of scope falls back to the open project — right for a stale path,
+ * and a confident wrong answer for `gh:owner/name`, the checkout-less root a
+ * repository with no local copy is read by (see prs.ts): it is not a path, so
+ * it is never "in scope", and the six routes below answered with the OPEN
+ * project's spend, behind-count and conflicts for a pull request of the same
+ * number in another repository. It is passed through as it is; whatever needs a
+ * working tree refuses it there, in a sentence.
+ */
+function prRouteRoot(asked: string): string {
+  if (isForeignRoot(asked)) return asked;
+  return asked && inScopeReal(asked) ? asked : (workspaceRoot() ?? process.cwd());
+}
+
 async function openProjectRepos(): Promise<string[]> {
   const paths = getChanges(300, undefined, false).map((c) => c.file_path);
   const found = await discoverRepos(paths, knownProjects().map((p) => p.path), {});
@@ -6270,7 +6286,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // vets one: a path outside the configured scope is refused rather than
       // corrected, and `gh` then runs where the app already lives.
       const asked = url.searchParams.get("root") ?? "";
-      const root = asked && inScopeReal(asked) ? asked : (workspaceRoot() ?? process.cwd());
+      const root = prRouteRoot(asked);
       const r = await cardPullRequests(
         url.searchParams.get("card") ?? "",
         url.searchParams.get("field") ?? undefined,
@@ -7008,7 +7024,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (!trustedCaller(req, from)) return csrfBlocked();
       const b = await req.json().catch(() => ({})) as Record<string, unknown>;
       const asked = String(b.root ?? "");
-      const root = asked && inScopeReal(asked) ? asked : (workspaceRoot() ?? process.cwd());
+      const root = prRouteRoot(asked);
       const number = Number(b.number ?? 0);
       const pr = await prBranches(root, number);
       if (!pr) return json({ ok: false, error: "could not read that pull request's branches" });
@@ -7019,7 +7035,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
        untouched. */
     if (pathname === "/prs/conflict-files") {
       const asked = url.searchParams.get("root") ?? "";
-      const root = asked && inScopeReal(asked) ? asked : (workspaceRoot() ?? process.cwd());
+      const root = prRouteRoot(asked);
       const number = Number(url.searchParams.get("number") ?? 0);
       const pr = await prBranches(root, number);
       if (!pr) return json({ ok: false, conflicts: [], clean: false, error: "could not read that pull request's branches" });
@@ -7032,7 +7048,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
        about an AUTHOR and this question is about a branch. */
     if (pathname === "/prs/for-branch") {
       const asked = url.searchParams.get("root") ?? "";
-      const root = asked && inScopeReal(asked) ? asked : (workspaceRoot() ?? process.cwd());
+      const root = prRouteRoot(asked);
       return json(await prsForBranch(root, url.searchParams.get("branch") ?? ""));
     }
     /*
@@ -7095,7 +7111,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     }
     if (pathname === "/prs/behind") {
       const asked = url.searchParams.get("root") ?? "";
-      const root = asked && inScopeReal(asked) ? asked : (workspaceRoot() ?? process.cwd());
+      const root = prRouteRoot(asked);
       return json(await branchBehind(root, Number(url.searchParams.get("number") ?? 0), url.searchParams.get("force") === "1"));
     }
     /* What this project's agents have spent, by branch and by checkout — the
@@ -7105,7 +7121,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
        on a repository the cockpit is not showing. See spend.ts. */
     if (pathname === "/prs/spend") {
       const asked = url.searchParams.get("root") ?? "";
-      const root = asked && inScopeReal(asked) ? asked : (workspaceRoot() ?? process.cwd());
+      const root = prRouteRoot(asked);
       return json(await repoSpend(root));
     }
     /* Where this app keeps things, and for how long — read by Settings →
