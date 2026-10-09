@@ -14,6 +14,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { CHECK_RUN_TIMEOUT_S, CHECK_RUNS, commandProblem, planBlock, tally, type CheckOnBasePlan, type CheckOnBaseResult, type CheckOnBaseStatus, type Sandbox } from "../../shared/checkOnBase.ts";
+import { inScopeReal } from "./config.ts";
 import { repoRootOf, safeAbs } from "./git.ts";
 import { gh, repoIdFor } from "./prs.ts";
 import { commitIsLocal, runCheckOnBase, sandboxKind, SHA } from "./checkOnBase.ts";
@@ -32,6 +33,9 @@ export async function planCheckOnBase(rootIn: unknown, numberIn: unknown, deps: 
   const abs = safeAbs(rootIn);
   const gitRoot = abs && repoRootOf(abs);
   if (!gitRoot) return { ok: false, error: "this pull request has no checkout on this machine" };
+  // Held to the open project, as every git read that names a repository is:
+  // the plan runs git in it and a start exports and runs its trees.
+  if (!inScopeReal(gitRoot)) return { ok: false, error: "outside the open project" };
   const repo = await repoIdFor(rootIn);
   if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
   const number = Number(numberIn);

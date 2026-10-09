@@ -16,11 +16,23 @@ process.env.XDG_DATA_HOME = dir;
 process.env.XDG_CACHE_HOME = dir;
 process.env.AGENTGLASS_STATE_DIR = dir;
 process.env.AGENTGLASS_DB = join(dir, "p.db");
+// The open project holds every checkout below, apart from the app's own state
+// folders (a path inside those is never in scope). Restored after, since tests
+// share a process.
+const work = mkdtempSync(join(tmpdir(), "agx-cob-work-"));
+const ROOT0 = process.env.AGENTGLASS_ROOT;
+process.env.AGENTGLASS_ROOT = work;
+const outside = mkdtempSync(join(tmpdir(), "agx-cob-outside-"));
 const { planCheckOnBase, startCheckOnBase, checkOnBaseStatus, cancelCheckOnBase } = await import("../src/checkOnBasePr.ts");
 const { sandboxKind } = await import("../src/checkOnBase.ts");
 type Deps = import("../src/checkOnBasePr.ts").GhDeps;
 
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
+afterAll(() => {
+  rmSync(dir, { recursive: true, force: true });
+  rmSync(outside, { recursive: true, force: true });
+  rmSync(work, { recursive: true, force: true });
+  if (ROOT0 === undefined) delete process.env.AGENTGLASS_ROOT; else process.env.AGENTGLASS_ROOT = ROOT0;
+});
 
 function git(root: string, ...args: string[]): string {
   const r = Bun.spawnSync(["git", "-C", root, "-c", "user.name=Orbit Test", "-c", "user.email=test@orbit.invalid", ...args], { env: { PATH: process.env.PATH ?? "", HOME: root, GIT_CONFIG_NOSYSTEM: "1" } });
@@ -28,7 +40,7 @@ function git(root: string, ...args: string[]): string {
   return r.stdout.toString().trim();
 }
 
-const root = join(dir, "orbit");
+const root = join(work, "orbit");
 Bun.spawnSync(["mkdir", "-p", root]);
 git(root, "init", "-q", "-b", "main");
 git(root, "remote", "add", "upstream", "https://github.com/acme/orbit.git");
@@ -86,6 +98,17 @@ describe("the plan", () => {
     expect(await planCheckOnBase(root, "7; rm", g)).toEqual({ ok: false, error: "invalid pull request number" });
     expect(g.asked).toEqual([]);
   });
+
+  test("a checkout outside the open project is neither planned nor run", async () => {
+    // Same repository, another folder: an archive unpacked in Downloads, say.
+    const other = outside;
+    git(other, "init", "-q", "-b", "main");
+    git(other, "remote", "add", "upstream", "https://github.com/acme/orbit.git");
+    const g = fakeGh();
+    expect(await planCheckOnBase(other, 7, g)).toEqual({ ok: false, error: "outside the open project" });
+    expect(await startCheckOnBase(other, 7, "true", CONFIRM, g)).toEqual({ ok: false, error: "outside the open project" });
+    expect(g.asked).toEqual([]);
+  });
 });
 
 describe("a run", () => {
@@ -141,7 +164,7 @@ describe("what runs is what was confirmed", () => {
 
   test("at most two checks run at once, across repositories", async () => {
     const repos = [0, 1, 2].map((n) => {
-      const r = join(dir, `extra-${n}`);
+      const r = join(work, `extra-${n}`);
       Bun.spawnSync(["mkdir", "-p", r]);
       git(r, "init", "-q", "-b", "main");
       git(r, "remote", "add", "upstream", "https://github.com/acme/orbit.git");
