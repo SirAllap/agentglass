@@ -82,3 +82,39 @@ export function setMdWidth(w: MdWidth): MdWidth {
 /** What to call a measure in a button. The number of characters is the honest
  *  label for the first three; the last one is not a measure at all. */
 export const widthLabel = (w: MdWidth): string => (w === 0 ? "Full" : String(w));
+
+/*
+ * The finder's code face has its own pair, because code is not prose: it is
+ * read narrower and smaller, at a measure set by how wide the lines are rather
+ * than by how many characters make a comfortable sentence. Sharing the
+ * markdown pair meant that making a report bigger made every source file bigger
+ * too.
+ */
+const CODE_SIZE_KEY = "agentglass.finder.code.size";
+const CODE_WIDTH_KEY = "agentglass.finder.code.width";
+export const CODE_SIZE_DEFAULT = 13;
+export const CODE_WIDTH_DEFAULT: MdWidth = 100;
+
+export function codeSize(): number {
+  try {
+    const n = Number(localStorage.getItem(CODE_SIZE_KEY));
+    return Number.isFinite(n) && n > 0 ? clamp(Math.round(n), SIZE_MIN, SIZE_MAX) : CODE_SIZE_DEFAULT;
+  } catch { return CODE_SIZE_DEFAULT; }
+}
+export function setCodeSize(px: number): number {
+  const n = clamp(Math.round(px), SIZE_MIN, SIZE_MAX);
+  try { localStorage.setItem(CODE_SIZE_KEY, String(n)); } catch { /* private mode */ }
+  return n;
+}
+export function codeWidth(): MdWidth {
+  try {
+    const raw = localStorage.getItem(CODE_WIDTH_KEY);
+    if (raw === null) return CODE_WIDTH_DEFAULT;
+    const n = Number(raw);
+    return (WIDTHS as readonly number[]).includes(n) ? (n as MdWidth) : CODE_WIDTH_DEFAULT;
+  } catch { return CODE_WIDTH_DEFAULT; }
+}
+export function setCodeWidth(w: MdWidth): MdWidth {
+  try { localStorage.setItem(CODE_WIDTH_KEY, String(w)); } catch { /* private mode */ }
+  return w;
+}

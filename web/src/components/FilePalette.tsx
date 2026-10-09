@@ -15,9 +15,15 @@
 // questions with three different answers, and a single field would have to pick
 // one of them for you.
 //
-// Opening a result raises the viewer that already exists — markdown, the editor
-// toggle, the reading width — and this stays on top of it, so the next result
-// is one keystroke away rather than another search.
+// It is a workspace, not a menu: a drawer of results on the left, the selected
+// file read in the middle whatever it is (markdown as a document, code with
+// its numbers and colour, a picture, a PDF), and its facts, git state and
+// outline on the right. Selecting a result IS looking at it, so the next result
+// is one arrow key away, and the bench is a button rather than the destination.
+//
+// It keeps where it was. Closing it with the chord is not leaving it: the tab,
+// query, selected result, open file, scroll and drawer come back exactly, also
+// after a restart (finderState.ts).
 import { HIT, ICON } from "../lib/iconSize.ts";
 import { ClockIcon, CodeFileIcon, FileIcon, FolderIcon, HomeIcon, ImageFileIcon, NoteIcon, SearchIcon } from "../lib/glyphIcons.tsx";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -26,14 +32,21 @@ import { Portal } from "./Portal.tsx";
 import { api, SERVER, withToken } from "../lib/api.ts";
 import { requestFilesReveal } from "../lib/filesReveal.ts";
 import { recents, remember, forget, subscribeRecents, ago } from "../lib/fileRecents.ts";
+import { reduceSelection } from "../lib/finderSelection.ts";
 import { completion, looksLikePath, parseQuery, passesFilters, readPath, scoreMatch } from "../lib/finderQuery.ts";
-import { Preview } from "./finder/Preview.tsx";
+import { FileView, type Jump } from "./finder/FileView.tsx";
+import { InfoRail } from "./finder/InfoRail.tsx";
+import { useFileSource, type FileSource } from "./finder/useFileSource.ts";
+import { extChips, chipLabel, hasGlob, matchGlob, passesExts, toggleExt } from "../lib/finderFilters.ts";
+import { outline as outlineOf, viewerActions, type OutlineItem } from "../lib/finderViewer.ts";
+import { DRAWER_MAX, DRAWER_MIN, RAIL_W, clampDrawer, indexOfSel, restore, resumeLine, scrollFor, type FinderSnapshot, type TabView } from "../lib/finderState.ts";
+import type { FileGitFacts } from "../../../shared/types.ts";
 import { RevealButton } from "./finder/RevealButton.tsx";
 import type { BrowseReport } from "../../../shared/types.ts";
 import { appChordFor, chordLabel } from "../lib/keybindings.ts";
 import { LAYER } from "../lib/layers.ts";
 import { shortPath } from "../lib/shortPath.ts";
-import { afterJump, dirsFirst, pageUrl, fileKind, focusSelection, pathBar, pathInputText, placeSections, shortenHome, switchTab, type BrowseState, type PlaceRow } from "../lib/paletteModel.ts";
+import { afterJump, dirsFirst, humanBytes, pageUrl, fileKind, focusSelection, pathBar, pathInputText, placeSections, shortenHome, switchTab, type BrowseState, type PlaceRow } from "../lib/paletteModel.ts";
 import type { DiskPlace, FsEntry, GitRepoRef, GrepHit } from "../../../shared/types.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { FileViewer } from "./CardFiles.tsx";
@@ -75,15 +88,7 @@ type Row =
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 
-/** Bytes as a listing says them. Rounded hard: a file list is scanned. */
-export function humanBytes(bytes: number): string {
-  if (bytes < 1000) return `${bytes} B`;
-  const units = ["KB", "MB", "GB"];
-  let n = bytes / 1000;
-  let i = 0;
-  while (n >= 1000 && i < units.length - 1) { n /= 1000; i++; }
-  return `${n >= 100 ? Math.round(n) : n.toFixed(1)} ${units[i]}`;
-}
+export { humanBytes };
 
 /*
  * A menu of this palette's lives in a Portal, and two things go wrong there.
@@ -160,6 +165,9 @@ const rememberPlace = (p: string): string[] => {
 const VIEWABLE = /\.(png|jpe?g|webp|gif|svg)$/i;
 
 const REF_KEY = "agentglass.files.paletteRef";
+const SNAP_KEY = "agentglass.files.finderState";
+const readSnap = (): unknown => { try { return JSON.parse(localStorage.getItem(SNAP_KEY) || "null"); } catch { return null; } };
+const writeSnap = (s: FinderSnapshot) => { try { localStorage.setItem(SNAP_KEY, JSON.stringify(s)); } catch { /* non-fatal */ } };
 const readRoot = (): string => { try { return localStorage.getItem(ROOT_KEY) ?? ""; } catch { return ""; } };
 const saveRoot = (r: string) => { try { localStorage.setItem(ROOT_KEY, r); } catch { /* non-fatal */ } };
 /*
@@ -190,38 +198,47 @@ const saveRef = (root: string, ref: string) => {
 };
 
 export function FilePalette({
-  open, onClose, onOpenFile, onRevealDir, onOpenBrowser, docOpen, onHeight, target,
+  open, onClose, onOpenFile, onBench, onRevealDir, onOpenBrowser, target,
 }: {
   open: boolean;
   /** Somewhere to be when it opens: a path clicked in a terminal. Each new `n`
    *  is a new request, so the same path asked for twice still goes there. */
   target?: FinderTarget | null;
   onClose: () => void;
-  /** Raise the viewer on this file. The palette stays put — see the note above. */
+  /** Put a file on the bench, which is now something you ask for: the finder
+   *  shows every file itself. For a file found on another branch this is the
+   *  old route, which writes that ref's copy out first. */
   onOpenFile: (root: string, rel: string, branch: string, ref?: string) => void | Promise<void>;
+  /** A file on disk, on the bench. */
+  onBench: (root: string, abs: string) => void;
   /** A folder is a place: go to Files and walk the tree there. */
   onRevealDir: (root: string, dir: string) => void;
   /** Show an address in the app's own browser. Absent where there is none, and
    *  the system's default opener takes the file instead. */
   onOpenBrowser?: (url: string) => void;
-  /**
-   * A document is open underneath.
-   *
-   * Staying open on top of it was the design and covering it was not: the
-   * palette landed on the first lines of the file it had just opened, which is
-   * the part you opened it to read. So when there is something to share the
-   * screen with it moves to the top edge and stops at a few results — enough to
-   * step to the next one, not enough to be a second window.
-   */
-  docOpen?: boolean;
-  /** Its rendered height, so whatever is underneath can start below it rather
-   *  than be covered by it. 0 when it is closed. */
-  onHeight?: (px: number) => void;
 }) {
-  const [tab, setTab] = useState<PaletteTab>("names");
-  const [q, setQ] = useState("");
+  /*
+   * Where the finder was, read once. Closing it is not leaving it: the tab, each
+   * tab's query and folder, the result you were on, its chips, the file's
+   * scroll and the drawer come back — also after a restart, hence storage and
+   * not only component state. See finderState.ts.
+   */
+  const [saved] = useState<FinderSnapshot>(() => restore(readSnap()));
+  const [tab, setTab] = useState<PaletteTab>(saved.tab);
+  const [q, setQ] = useState(saved.tabs[saved.tab]?.q ?? "");
   /* What the tabs that are not showing were looking at — see `switchTab`. */
-  const stash = useRef<Partial<Record<PaletteTab, BrowseState>>>({});
+  const stash = useRef<Partial<Record<PaletteTab, BrowseState>>>(
+    Object.fromEntries((Object.entries(saved.tabs) as [PaletteTab, TabView][]).map(([t, v]) => [t, { q: v.q, browsePath: v.browsePath }])));
+  /* The other half of what a tab remembers: its selection and chips. */
+  const viewStash = useRef<Partial<Record<PaletteTab, { sel: string | null; exts: string[] }>>>(
+    Object.fromEntries((Object.entries(saved.tabs) as [PaletteTab, TabView][]).map(([t, v]) => [t, { sel: v.sel, exts: v.exts }])));
+  /** The saved selection, waiting for its results to arrive. */
+  const pendingSel = useRef<string | null>(saved.tabs[saved.tab]?.sel ?? null);
+  const [exts, setExts] = useState<string[]>(saved.tabs[saved.tab]?.exts ?? []);
+  const [drawerW, setDrawerW] = useState(saved.drawerW);
+  const [collapsed, setCollapsed] = useState(saved.collapsed);
+  const [showInfo, setShowInfo] = useState(true);
+  const snap = useRef<FinderSnapshot>(saved);
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [root, setRoot] = useState(readRoot);
   const [pickOpen, setPickOpen] = useState(false);
@@ -261,7 +278,7 @@ export function FilePalette({
    * the list is a FOLDER rather than a result set — for every tab, so the four
    * of them stop behaving differently depending on which backend answers.
    */
-  const [browsePath, setBrowsePath] = useState<string | null>(null);
+  const [browsePath, setBrowsePath] = useState<string | null>(saved.tabs[saved.tab]?.browsePath ?? null);
   const [browsed, setBrowsed] = useState<BrowseReport | null>(null);
   const [showHidden, setShowHidden] = useState(readHidden);
   const [cursor, setCursor] = useState(0);
@@ -269,8 +286,14 @@ export function FilePalette({
   const goTab = useCallback((to: PaletteTab) => {
     const r = switchTab(stash.current, tab, { q, browsePath }, to);
     stash.current = r.stash;
+    viewStash.current = { ...viewStash.current, [tab]: { sel: selAbsRef.current, exts } };
+    const v = viewStash.current[to];
+    pendingSel.current = v?.sel ?? null;
+    setExts(v?.exts ?? []);
     setTab(to); setQ(r.next.q); setBrowsePath(r.next.browsePath);
-  }, [tab, q, browsePath]);
+  }, [tab, q, browsePath, exts]);
+  /** The selected file's path, for the places that must not depend on render order. */
+  const selAbsRef = useRef<string | null>(null);
   /** Which picture the in-app viewer is on, by index into `viewFiles`. Null is closed. */
   const [viewAt, setViewAt] = useState<number | null>(null);
   /** A file to land the cursor on once its folder has loaded. */
@@ -279,24 +302,6 @@ export function FilePalette({
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-
-  /*
-   * Its height, measured rather than assumed.
-   *
-   * It changes with the number of results, the tab and the window, so a
-   * constant here would be wrong the moment anybody typed. A ResizeObserver on
-   * the element is the only source that cannot drift from what is drawn.
-   */
-  useEffect(() => {
-    if (!onHeight) return;
-    if (!open) { onHeight(0); return; }
-    const el = panelRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => onHeight(el.getBoundingClientRect().height));
-    ro.observe(el);
-    onHeight(el.getBoundingClientRect().height);
-    return () => { ro.disconnect(); onHeight(0); };
-  }, [open, onHeight]);
 
   const repo = repos.find((r) => r.root === root) ?? null;
   const branch = repo?.branch ?? "";
@@ -340,6 +345,7 @@ export function FilePalette({
   useEffect(() => {
     if (!open || !target || handledTarget.current === target.n) return;
     handledTarget.current = target.n;
+    pendingSel.current = null;   // the link decides the selection, not the last session
     const cut = target.path.lastIndexOf("/");
     const dir = target.kind === "dir" ? target.path.replace(/\/+$/, "") || "/" : target.path.slice(0, cut) || "/";
     /* Machine gets the folder, and the tab it came from keeps what it had. The
@@ -361,7 +367,7 @@ export function FilePalette({
   }, [open, target]);
   const [pathText, setPathText] = useState<string | null>(null);
   useEffect(() => {
-    if (pathText && homeDir) { setQ(pathInputText(pathText, homeDir)); setPathText(null); }
+    if (pathText && homeDir) { keepSel.current = true; setQ(pathInputText(pathText, homeDir)); setPathText(null); }
   }, [pathText, homeDir]);
 
   /*
@@ -394,10 +400,18 @@ export function FilePalette({
     return () => clearTimeout(t);
   }, [open]);
 
+  /* A glob is not a name to search for: `*.png` finds nothing on a server that
+     matches names, and the list is the folder's own, narrowed on this side. It
+     is the last segment of what was typed, so a typed path counts too. */
+  const globAsked = useMemo(() => {
+    const t = q.trim();
+    const tail = looksLikePath(t) ? t.slice(t.lastIndexOf("/") + 1) : t;
+    return hasGlob(tail);
+  }, [q]);
   const found = useSearch(
     () => (tab === "names" ? api.filesFind(root, q, ref || undefined) : null),
     [tab === "names", root, q.trim(), ref],
-    !!root && tab === "names" && q.trim().length > 0,
+    !!root && tab === "names" && q.trim().length > 0 && !globAsked,
   );
   const grepped = useSearch(
     () => (tab === "contents" ? api.filesGrep(root, q, ref || undefined) : null),
@@ -411,7 +425,7 @@ export function FilePalette({
   const onDisk = useSearch(
     () => (tab === "machine" ? api.diskFind(place, q) : null),
     [tab === "machine", place, q.trim()],
-    !!place && tab === "machine" && q.trim().length >= 2,
+    !!place && tab === "machine" && q.trim().length >= 2 && !globAsked,
   );
 
   /* The third argument is the server snapshot, and without it this component
@@ -471,11 +485,11 @@ export function FilePalette({
   const at = useMemo(() => {
     if (typedPath) return typedPath.dir;
     if (browsePath) return browsePath;
-    if (asked.text.trim()) return null;
+    if (asked.text.trim() && !(globAsked && tab !== "contents")) return null;
     if (tab === "machine") return place || null;
     if (tab === "names") return root || null;
     return null;
-  }, [typedPath, browsePath, asked.text, tab, place, root]);
+  }, [typedPath, browsePath, asked.text, tab, place, root, globAsked]);
 
   /** Go to a folder from the bar or a row. The box follows only when it was
    *  already holding a path (see `afterJump`). */
@@ -540,7 +554,7 @@ export function FilePalette({
     const needle = q.trim().toLowerCase();
     return recent
       .filter((r) => (root ? r.root === root : true))
-      .filter((r) => !needle || r.rel.toLowerCase().includes(needle))
+      .filter((r) => !needle || (hasGlob(needle) ? matchGlob(needle, r.rel) : r.rel.toLowerCase().includes(needle)))
       .map((r): Row => ({ kind: "recent", rel: r.rel, at: r.at, root: r.root, gone: gone.has(`${r.root}\u0000${r.rel}`), abs: `${r.root}/${r.rel}` }));
   }, [tab, at, browsed, found.data, grepped.data, onDisk.data, recent, q, root, gone]);
 
@@ -566,7 +580,7 @@ export function FilePalette({
    * browsing, where nothing has filtered anything yet, and that is what makes
    * `/` inside a folder work.
    */
-  const shown: Row[] = useMemo(() => {
+  const matched: Row[] = useMemo(() => {
     const { text, exact, filters } = asked;
     const filtered = rows.filter((r) => {
       const abs = absOf(r) ?? r.rel;
@@ -574,18 +588,44 @@ export function FilePalette({
     });
     const needle = typedPath ? typedPath.tail : text;
     if (!at || !needle) return filtered;
+    /* A pattern keeps what it matches, in the order the folder had. Scoring it
+       as a fuzzy name is what answered "Nothing in here matches" to `*.png`. */
+    if (hasGlob(needle) && tab !== "contents") return filtered.filter((r) => matchGlob(needle, r.rel));
     return filtered
       .map((r) => ({ r, score: scoreMatch(r.rel, needle, exact) }))
       .filter((x) => x.score >= 0)
       .sort((a, b) => b.score - a.score)
       .map((x) => x.r);
-  }, [rows, asked, at, typedPath, absOf]);
+  }, [rows, asked, at, typedPath, absOf, tab]);
+
+  /* The kinds present, counted BEFORE the chips are applied — so turning one on
+     does not make the others vanish and a second one cannot be added. */
+  const chips = useMemo(() => extChips(matched.filter((r) => r.kind !== "dir").map((r) => r.rel)), [matched]);
+  /* A chip that is not in this list filters nothing, so a selection carried from
+     another folder cannot leave the list quietly emptied. */
+  const activeExts = useMemo(() => exts.filter((e) => chips.some((c) => c.ext === e)), [exts, chips]);
+  const shown: Row[] = useMemo(
+    () => (activeExts.length ? matched.filter((r) => r.kind === "dir" || passesExts(r.rel, activeExts)) : matched),
+    [matched, activeExts]);
 
   // The cursor is an index into a list that changes under it on every keystroke.
   // Reset on anything that rebuilds the list, or ↑↓ starts from wherever the
   // previous, longer list had left it.
-  useEffect(() => { setCursor(0); }, [tab, q, root, place, browsePath]);
-  useEffect(() => { setCursor((c) => (c >= shown.length ? 0 : c)); }, [shown.length]);
+  /* Keyed by the scope of the tab that is showing, not by both: the checkout
+     list loading in the background (a repository picked for you on open) is not
+     a new question for the Machine tab, and resetting there threw away the
+     result you had been on. */
+  /* Except the once the box was only rewritten to say the path a terminal link
+     asked for: that is not a new question, and resetting here put the selection
+     back on row 0 after the file had been found. */
+  const keepSel = useRef(false);
+  useEffect(() => {
+    if (keepSel.current) { keepSel.current = false; return; }
+    setCursor((c) => reduceSelection(c, { type: "reset" }, shown.length));
+    // `shown.length` is the size of the list at this moment, not a trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, q, tab === "machine" ? place : root, browsePath]);
+  useEffect(() => { setCursor((c) => reduceSelection(c, { type: "hover", index: c }, shown.length)); }, [shown.length]);
 
   // Keep the cursor on screen. `block: "nearest"` rather than "center" so
   // holding ↓ walks the list instead of jumping it around under the eye.
@@ -593,62 +633,6 @@ export function FilePalette({
     listRef.current?.querySelector<HTMLElement>(`[data-row="${cursor}"]`)
       ?.scrollIntoView({ block: "nearest" });
   }, [cursor, shown.length]);
-
-  /**
-   * Three rows, and the rest on the scrollbar — only with a document open.
-   *
-   * Alone, this list is the thing you are looking at and it may have the screen.
-   * Over a document it is a strip you glance at while reading something else,
-   * and thirteen rows of it took most of the window to say what three rows say:
-   * the top of the answer, and that there is more.
-   *
-   * Measured off a row rather than written down as a number, because the row's
-   * height is its font's, and this app's reading size is a preference. It keeps
-   * the last measurement it managed to take: while the list is showing a note —
-   * "Searching…", "Type to search" — there is no row to measure, and falling
-   * back to zero would uncap the list for exactly as long as it takes to type.
-   */
-  const [rowH, setRowH] = useState(0);
-  useEffect(() => {
-    if (!docOpen) return;
-    const h = listRef.current?.querySelector<HTMLElement>('[data-row="0"]')?.offsetHeight;
-    if (h) setRowH(h);
-  }, [docOpen, rows, tab]);
-  /** The list's own vertical padding (py-2), so three rows are three rows and
-   *  not three rows minus the padding they sit in. It matches the row's own
-   *  py-2: any less and the first row sits tighter to the edge than to its
-   *  neighbour, which reads as the list being cut off. */
-  const LIST_PAD = 16;
-  const listCap = docOpen && rowH && rows.length > 3 ? rowH * 3 + LIST_PAD : undefined;
-
-  /**
-   * When the list shrinks to three rows, the row you chose has to be one of them.
-   *
-   * Opening a file caps this list, and the scroll position it had in the tall
-   * box stays exactly where it was — so the row that produced the document you
-   * are now reading ends up below the window, and the three rows on screen are
-   * whichever ones happened to be at that offset. It reads as having lost your
-   * place in a list you never scrolled.
-   *
-   * Put at the TOP rather than merely brought into view, because the two rows
-   * worth seeing beside your choice are the ones after it.
-   *
-   * By hand rather than with `scrollIntoView`: that scrolls every scrollable
-   * ancestor too, and this list lives inside a fixed panel over a document.
-   * Measured from rectangles rather than `offsetTop`, which is relative to
-   * whichever ancestor happens to be positioned.
-   */
-  useEffect(() => {
-    const list = listRef.current;
-    if (!listCap || !list) return;
-    const row = list.querySelector<HTMLElement>(`[data-row="${cursor}"]`);
-    if (!row) return;
-    list.scrollTop += row.getBoundingClientRect().top - list.getBoundingClientRect().top - LIST_PAD / 2;
-    // `cursor` deliberately absent: this is for the moment the box changes size,
-    // and re-running it per keystroke would fight the `block: "nearest"` walk
-    // that lets ↓ move one row at a time instead of jumping the list.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [listCap, docOpen]);
 
   /*
    * The pictures in this list, as the viewer wants them.
@@ -698,7 +682,12 @@ export function FilePalette({
     // only a listing OF the wanted folder can answer.
     if (!wantFile || browsed?.path.replace(/\/+$/, "") !== wantFile.dir) return;
     const i = shown.findIndex((r) => r.rel === wantFile.name);
-    if (i >= 0) setCursor(i);
+    if (i >= 0) {
+      setCursor((c) => reduceSelection(c, { type: "focus", index: i }, shown.length));
+      /* Centred, once the row is drawn: the file a link named is the reason the
+         finder opened, and "nearest" left it at the bottom edge of a long folder. */
+      requestAnimationFrame(() => listRef.current?.querySelector<HTMLElement>(`[data-row="${i}"]`)?.scrollIntoView({ block: "center" }));
+    }
     setWantFile(null);   // found, or listed and not there: stop waiting
   }, [wantFile, shown, browsed]);
 
@@ -716,6 +705,24 @@ export function FilePalette({
    * (⌘⏎), because refusing outright is its own kind of wrong.
    */
   const IMAGEY = /\.(png|jpe?g|jfif|gif|webp|avif|bmp|ico|cur|svg|apng|tiff?|heic|heif|psd|xcf|jp2|jxl|exr|hdr|tga|pcx|ppm|pgm|pbm|cr2|cr3|nef|arw|dng|orf|raf|rw2|sr2|pdf|mp4|webm|mkv|mov|m4v|mp3|wav|ogg|flac|m4a|opus)$/i;
+
+  /* The finder shows every file itself, so the bench is something you ask for.
+     A picture or a PDF has no editor to go to, and sending one there is the
+     floating-nvim-on-a-binary report all over again. */
+  const benchRow = useCallback((row: Row | undefined) => {
+    if (!row || row.kind === "dir" || IMAGEY.test(row.rel) || (row.kind === "recent" && row.gone)) return;
+    const abs = absOf(row);
+    if (!abs) return;
+    if (ref && tab === "names" && !at && row.kind !== "recent") { void onOpenFile(root, row.rel, branch, ref); onClose(); return; }
+    const from = row.kind === "recent" ? row.root : at || tab === "machine" ? abs.slice(0, abs.lastIndexOf("/")) : root;
+    onBench(from, abs);
+    onClose();
+  }, [absOf, ref, tab, at, root, branch, onOpenFile, onBench, onClose]);
+
+  /** Enter on a file: the caret goes to the reader, so the arrows scroll it. */
+  const focusViewer = useCallback(() => {
+    requestAnimationFrame(() => panelRef.current?.querySelector<HTMLElement>("[data-finder-viewer]")?.focus());
+  }, []);
 
   const openRow = useCallback((row: Row | undefined, secondary = false, click = false) => {
     if (!row || (row.kind !== "recent" && row.locked)) return;
@@ -735,11 +742,8 @@ export function FilePalette({
         jump(abs);
         return;
       }
-      // An image, a video, a PDF: the pane beside the list is already showing
-      // it. Pressing ⏎ on one should not throw it at an editor.
-      if (IMAGEY.test(row.rel) && !secondary) return;
-      const cut = abs.lastIndexOf("/");
-      onOpenFile(abs.slice(0, cut), abs.slice(cut + 1), "");
+      if (secondary) { benchRow(row); return; }
+      if (!click) focusViewer();
       return;
     }
     /*
@@ -767,8 +771,8 @@ export function FilePalette({
       }
       // No branch and no ref: a document on disk has exactly one version.
       if (row.kind === "file") {
-        if (IMAGEY.test(row.rel) && !secondary) return;   // the pane is showing it
-        onOpenFile(place, row.rel, "");
+        if (secondary) { benchRow(row); return; }
+        if (!click) focusViewer();
       }
       return;
     }
@@ -786,25 +790,32 @@ export function FilePalette({
     if (row.kind === "recent") {
       if (row.gone) { forget(row.root, row.rel); return; }
       remember(row.root, row.rel);
-      onOpenFile(row.root, row.rel, repos.find((r) => r.root === row.root)?.branch ?? "");
+      if (secondary) { benchRow(row); return; }
+      if (!click) focusViewer();
       return;
     }
     // A file found on a branch is opened AS THAT BRANCH HAS IT. Opening the
     // working tree's copy of the same path would be a different file wearing
     // the right name — or nothing at all, for one that only exists upstream.
-    if (IMAGEY.test(row.rel) && !secondary && !ref) return;   // the pane is showing it
     if (!ref) remember(root, row.rel);
-    onOpenFile(root, row.rel, branch, ref || undefined);
-  }, [tab, at, place, root, branch, ref, repos, onOpenFile, onRevealDir, onClose, viewRows, viewImage, jump]);
+    if (secondary) { benchRow(row); return; }
+    if (!click) focusViewer();
+  }, [tab, at, place, root, ref, onRevealDir, onClose, viewRows, viewImage, jump, benchRow, focusViewer]);
 
   const onKey = (e: React.KeyboardEvent) => {
     // The viewer owns the keys while it is up — it listens on window, first.
     if (viewAt !== null) return;
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+      const k = e.key.toLowerCase();
+      if (k === "f") { e.preventDefault(); e.stopPropagation(); setFindSignal((n) => n + 1); return; }
+      if (k === "b") { e.preventDefault(); setCollapsed((c) => !c); return; }
+      if (k === "i") { e.preventDefault(); setShowInfo((v) => !v); return; }
+    }
     if (e.key === "ArrowDown" || (e.key === "n" && e.ctrlKey)) {
-      e.preventDefault(); setCursor((c) => (shown.length ? (c + 1) % shown.length : 0)); return;
+      e.preventDefault(); setCursor((c) => reduceSelection(c, { type: "key", dir: 1 }, shown.length)); return;
     }
     if (e.key === "ArrowUp" || (e.key === "p" && e.ctrlKey)) {
-      e.preventDefault(); setCursor((c) => (shown.length ? (c - 1 + shown.length) % shown.length : 0)); return;
+      e.preventDefault(); setCursor((c) => reduceSelection(c, { type: "key", dir: -1 }, shown.length)); return;
     }
     /* ← goes up a folder and → goes into one: the two keys a file browser is
        driven with. Only while browsing, and only with the box empty, so they
@@ -856,31 +867,127 @@ export function FilePalette({
     }
   };
 
-  /* What the pane is looking at: the row under the cursor, wherever it came
-     from. Null while nothing is selected, which the pane draws as such. */
-  const preview = useMemo(() => {
-    const row = shown[cursor];
-    return row ? absOf(row) : null;
-  }, [shown, cursor, absOf]);
-
   /*
-   * Room for the pane, or not.
-   *
-   * A 300px column is worth having on a desk and is most of a phone. Measured
-   * against the window rather than a media query so it also does the right
-   * thing in a narrow desktop window, which is where somebody actually notices.
+   * The centre and the right rail look at ONE thing: the row under the cursor,
+   * wherever it came from. Null while nothing is selected, or while the finder
+   * is closed — a closed finder holds no file and no picture in memory.
    */
-  const [wide, setWide] = useState(() => (typeof window === "undefined" ? true : window.innerWidth >= 900));
+  const selRow = shown[cursor];
+  const selAbs = selRow ? absOf(selRow) : null;
+  selAbsRef.current = selAbs;
+  const source: FileSource | null = useMemo(() => {
+    if (!open || !selRow || !selAbs) return null;
+    if (selRow.kind === "recent" && selRow.gone) return null;
+    const onRef = !!ref && tab === "names" && !at && selRow.kind !== "recent";
+    if (onRef) return selRow.kind === "dir" ? null : { abs: null, root, rel: selRow.rel, ref };
+    const rootOf = selRow.kind === "recent" ? selRow.root : at || tab === "machine" ? selAbs.slice(0, selAbs.lastIndexOf("/")) : root;
+    return { abs: selAbs, root: rootOf, rel: selAbs.slice(selAbs.lastIndexOf("/") + 1) };
+    // A row is a new object per render; its path is what identifies it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, selAbs, selRow?.kind, ref, tab, at, root]);
+  const file = useFileSource(source);
+
+  /* What git says about it. Held back like the bytes are: holding ↓ through a
+     folder must not start four git processes per row it passes. */
+  const [git, setGit] = useState<FileGitFacts | null>(null);
+  useEffect(() => {
+    setGit(null);
+    const abs = source?.abs;
+    if (!abs || source?.ref) return;
+    let live = true;
+    const t = setTimeout(() => { void api.previewGit(abs).then((g) => { if (live) setGit(g); }).catch(() => { /* no git block, then */ }); }, 220);
+    return () => { live = false; clearTimeout(t); };
+  }, [source?.abs, source?.ref]);
+
+  /* What it is made of, and where the reader last jumped to. */
+  const outline: OutlineItem[] = useMemo(
+    () => (file.text !== null && file.kind ? outlineOf(file.text, file.kind, file.name) : []),
+    [file.text, file.kind, file.name]);
+  const [viewJump, setViewJump] = useState<Jump | null>(null);
+  const [outlineAt, setOutlineAt] = useState(-1);
+  const jumps = useRef(0);
+  useEffect(() => { setViewJump(null); setOutlineAt(-1); }, [selAbs]);
+  const jumpTo = useCallback((item: OutlineItem, nth: number) => {
+    const n = ++jumps.current;
+    setViewJump(file.kind === "markdown" ? { kind: "heading", label: item.label, nth, n } : { kind: "line", line: item.line, n });
+    setOutlineAt(outline.indexOf(item));
+  }, [file.kind, outline]);
+  const [findSignal, setFindSignal] = useState(0);
+
+  /* Where the file was scrolled, kept for reopening — see finderState.scrollFor. */
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flushSnap = useCallback(() => {
+    saveTimer.current = null;
+    const tabs: FinderSnapshot["tabs"] = {};
+    for (const t of TABS) {
+      const b = stash.current[t.id]; const v = viewStash.current[t.id];
+      if (t.id !== tab && (b || v)) tabs[t.id] = { q: b?.q ?? "", browsePath: b?.browsePath ?? null, sel: v?.sel ?? null, exts: v?.exts ?? [] };
+    }
+    tabs[tab] = { q, browsePath, sel: selAbsRef.current, exts };
+    snap.current = { ...snap.current, v: 1, tab, tabs, drawerW, collapsed };
+    writeSnap(snap.current);
+  }, [tab, q, browsePath, exts, drawerW, collapsed]);
+  const schedule = useCallback(() => {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(flushSnap, 250);
+  }, [flushSnap]);
+  useEffect(() => { schedule(); }, [schedule, selAbs]);
+  const onTop = useCallback((top: number) => {
+    if (!selAbsRef.current) return;
+    snap.current = { ...snap.current, scroll: { path: selAbsRef.current, top: Math.round(top) } };
+    schedule();
+  }, [schedule]);
+  /* Written out the moment it closes, not 250ms later: a restart right after
+     Ctrl+Shift+P must not lose the last thing you did. */
+  useEffect(() => { if (!open && saveTimer.current) { clearTimeout(saveTimer.current); flushSnap(); } }, [open, flushSnap]);
+
+  /* The saved selection, once its results are here. */
+  useEffect(() => {
+    if (!pendingSel.current || !shown.length) return;
+    const i = indexOfSel(shown.map((r) => absOf(r)), pendingSel.current);
+    pendingSel.current = null;
+    if (i >= 0) {
+      setCursor((c) => reduceSelection(c, { type: "focus", index: i }, shown.length));
+      requestAnimationFrame(() => listRef.current?.querySelector<HTMLElement>(`[data-row="${i}"]`)?.scrollIntoView({ block: "center" }));
+    }
+  }, [shown, absOf]);
+
+  /* The drawer's width, dragged. Held to its bounds while the pointer is still
+     down, so what is drawn is what will be restored. */
+  const dragDrawer = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const x0 = e.clientX; const w0 = drawerW;
+    const move = (m: PointerEvent) => setDrawerW(clampDrawer(w0 + m.clientX - x0));
+    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  /* Room for the info rail, or not: 290px of it is most of a small window. */
+  const [wide, setWide] = useState(() => (typeof window === "undefined" ? true : window.innerWidth >= 1100));
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const on = () => setWide(window.innerWidth >= 900);
+    const on = () => setWide(window.innerWidth >= 1100);
     window.addEventListener("resize", on);
     return () => window.removeEventListener("resize", on);
   }, []);
-  const showPreview = wide && open;
+
+  /* Show it in the app's own browser, or hand it to the system's opener. */
+  const openInBrowser = (p: string) => {
+    /* The same allowlist as every other read: the page route
+       judges the path, and the fallback is the opener that
+       already does. */
+    if (onOpenBrowser) { onOpenBrowser(withToken(pageUrl(SERVER, p))); onClose(); }
+    else void api.previewOpen(p);
+  };
 
   const active = TABS.find((t) => t.id === tab)!;
   const status = tab === "names" ? found : tab === "contents" ? grepped : tab === "machine" ? onDisk : null;
+
+  const unit = at ? (shown.length === 1 ? "item" : "items") : (shown.length === 1 ? "result" : "results");
+  const sectionAt = outlineAt >= 0 ? outline[outlineAt]?.label ?? null : null;
+  const canStep = shown.length > 0;
+  const step = (dir: 1 | -1) => setCursor((c) => reduceSelection(c, { type: "key", dir }, shown.length));
 
   return (
     <>
@@ -893,56 +1000,27 @@ export function FilePalette({
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             transition={{ duration: 0.12 }}
             className="fixed inset-0"
-            /*
-             * With a document open this is neither seen nor felt.
-             *
-             * Not dimmed, because the viewer draws its own backdrop and two
-             * stacked made the file harder to read through the thing that had
-             * just opened it. And not clickable, which is the bug that was
-             * reported: an invisible full-screen catcher sat over the document,
-             * so clicking anywhere in the markdown you had just opened closed
-             * the search that opened it. The two are peers on screen; a click
-             * on one is not a dismissal of the other.
-             *
-             * Click-to-dismiss stays for the case it is unambiguous in — no
-             * document, nothing underneath but the app — and the × in the tab
-             * row is the mouse's way out of the other case.
-             */
-            style={{
-              zIndex: 1,
-              background: docOpen ? "transparent" : "color-mix(in srgb, var(--bg) 55%, transparent)",
-              pointerEvents: docOpen ? "none" : "auto",
-            }}
+            style={{ zIndex: 1, background: "color-mix(in srgb, var(--bg) 55%, transparent)" }}
             onClick={onClose} />
+          {/* Centred by the layout, NOT by a transform.
+              motion animates the panel's `transform` (y and scale), so a
+              translateX(-50%) written on it is overwritten the moment the open
+              animation runs — measured: the palette sat with its left edge on the
+              centre line. A flex parent has no such fight, and it is also what
+              lets the panel be as tall as its content and no taller: it centres
+              at any height instead of being pinned to a top offset. */}
+          <div className="fixed inset-0 flex items-center justify-center pointer-events-none" style={{ zIndex: 2, padding: 20 }}>
           <motion.div
             initial={{ opacity: 0, y: -8, scale: 0.985 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -8, scale: 0.985 }}
             transition={{ duration: 0.14, ease: [0.16, 1, 0.3, 1] }}
-            /* Centred by the layout, NOT by a transform.
-             *
-             * motion animates this element's `transform` (y and scale), so a
-             * translateX(-50%) written in `style` is overwritten the moment the
-             * open animation runs — measured: the palette sat with its left edge
-             * on the centre line, a third of it off toward the right. A flex
-             * parent has no such fight. */
             ref={panelRef}
-            className={`fixed flex flex-col overflow-hidden rounded-xl${docOpen ? "" : " inset-x-0 mx-auto"}`}
+            className="flex flex-col overflow-hidden rounded-xl pointer-events-auto"
             style={{
-              zIndex: 2,
-              // Up against the top edge once there is a document to leave room
-              // for, and short enough that it is a way to the next result
-              // rather than a second window over the first.
-              top: docOpen ? 10 : "8vh",
-              /*
-               * Squared up with the viewer's own margins when one is open, so
-               * the two read as one column of two panes rather than a small
-               * window floating over a big one. 8vw is PeekFile's inset; a
-               * narrower palette above a wider document looked like an
-               * accident, because it was one.
-               */
-              ...(docOpen ? { left: "8vw", right: "8vw" } : { width: showPreview ? "min(1040px, 96vw)" : "min(720px, 92vw)" }),
-              maxHeight: docOpen ? "38vh" : "72vh",
+              width: "min(1480px, 100%)",
+              maxHeight: "100%",
+              minHeight: "min(440px, 100%)",
               background: "var(--surface-card)",
               border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)",
               boxShadow: "0 30px 70px -20px #000",
@@ -950,81 +1028,85 @@ export function FilePalette({
             onKeyDown={onKey}
             role="dialog" aria-modal="true" aria-label="Find a file">
 
-            {/* the three questions */}
-            <div className="flex items-center gap-1 px-3 pt-2.5 shrink-0"
-              style={{ background: "color-mix(in srgb, var(--text) 4%, var(--bg2))" }}>
-              {TABS.map((t) => (
-                <button key={t.id} onClick={() => { goTab(t.id); inputRef.current?.focus(); }}
-                  className="text-[11px] px-3 py-1.5 rounded-t-md"
-                  style={t.id === tab
-                    ? { background: "var(--surface-card)", border: EDGE, borderBottom: "none", color: "var(--primary-ink)" }
-                    : { border: "1px solid transparent", color: "var(--text3)" }}>
-                  {t.label}
-                </button>
-              ))}
-              <span className="ml-auto text-[10.5px] px-2 py-1 rounded" style={{ color: "var(--text4)" }}>⇥ switches</span>
-              {/* The mouse's way out. Only with a document open, where clicking
-                  away no longer closes this — without one the scrim is still
-                  the obvious target and a second control would be clutter. */}
-              {docOpen && (
-                <CloseButton onClick={onClose} title="Close the search (esc)" size={ICON.sm} />
-              )}
-            </div>
-
-            {/* the field, and which place it is asking
+            {/* the top bar: the question, where it is asked, how many answers,
+                which of the four questions, and the way through them.
              *
-             * Two boxes, and the outer one is the whole reason for it. A field
-             * that declares itself bare hands its focus ring to whatever wraps
-             * it (index.css), and what wrapped it was a full-bleed row — so
+             * Two boxes for the field, and the outer one is the whole reason. A
+             * field that declares itself bare hands its focus ring to whatever
+             * wraps it (index.css), and what wrapped it was a full-bleed row — so
              * focusing drew a violet rectangle a pixel inside the panel's own
-             * violet border. Two lines that close, which reads as a rendering
-             * fault rather than as focus. The frame is inset now and the ring
-             * lands on a box with room around it.
+             * border. The frame is inset and the ring lands on a box with room
+             * around it.
              *
              * `rounded-md` and not `rounded-lg`: that same rule sets a 6px
              * radius on whatever it rings, and a box that rounds itself
              * differently would square up by 2px the moment you typed. */}
-            <div className="px-2.5 py-2.5 shrink-0" style={{ borderTop: LINE, borderBottom: LINE }}>
-            <div className="flex items-center gap-2.5 px-2.5 py-2 rounded-md"
-              style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: EDGE }}>
-              <span className="flex" style={{ color: "var(--primary-ink)" }}><SearchIcon size={ICON.xs} /></span>
-              <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)}
-                spellCheck={false} autoComplete="off" placeholder={active.placeholder}
-                className="flex-1 min-w-0 bg-transparent outline-none text-[12.5px]" style={{ color: "var(--text)" }} />
-              {/* One control, not two.
-                  Two chips meant two decisions for one question, and the
-                  question does not divide that way: reading a branch is the
-                  same answer from any checkout of the repository, because they
-                  share the object store. What actually varies is a single
-                  thing — what am I searching — so it is asked once. */}
-              {tab === "machine" && (
-                <PlaceChip
-                  place={place} places={places} recents={placeRecents} error={placeErr} homeDir={homeDir}
-                  openState={[pickOpen, setPickOpen]}
-                  onPick={(p) => {
-                    setPlaceRecents(rememberPlace(p));
-                    setPlace(p); setBrowsePath(null); setQ("");
-                    setPickOpen(false); inputRef.current?.focus();
-                  }} />
-              )}
-              {tab !== "recent" && tab !== "machine" && (
-                <ScopeChip
-                  repo={repo} repos={repos} ref_={ref} refs={refs}
-                  openState={[pickOpen, setPickOpen]}
-                  onPickRoot={(r) => {
-                    // Choosing a copy means "what is on that disk", so it also
-                    // answers the version — which is what made the two-control
-                    // version feel like it was asking twice.
-                    setRoot(r); setRef(""); saveRef(r, ""); setBrowsePath(null);
-                    setPickOpen(false); inputRef.current?.focus();
-                  }}
-                  onPickRef={(r) => { setRef(r); setPickOpen(false); inputRef.current?.focus(); }} />
-              )}
-              {tab === "recent" && (
-                <RepoChip repo={repo} repos={repos} openState={[pickOpen, setPickOpen]}
-                  onPick={(r) => { setRoot(r); setPickOpen(false); inputRef.current?.focus(); }} />
-              )}
-            </div>
+            <div className="flex items-center gap-3 px-3.5 py-3 shrink-0" style={{ borderBottom: LINE }}>
+              <div className="flex items-center gap-2.5 flex-1 min-w-0 px-3 py-2 rounded-md"
+                style={{ background: "var(--bg)", border: "1.5px solid color-mix(in srgb, var(--text) 80%, transparent)" }}>
+                <span className="flex" style={{ color: "var(--text3)" }}><SearchIcon size={ICON.xs} /></span>
+                <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)}
+                  spellCheck={false} autoComplete="off" placeholder={active.placeholder}
+                  className="flex-1 min-w-0 bg-transparent outline-none text-[13px]" style={{ color: "var(--text)" }} />
+                {/* One control, not two.
+                    Two chips meant two decisions for one question, and the
+                    question does not divide that way: reading a branch is the
+                    same answer from any checkout of the repository, because they
+                    share the object store. What actually varies is a single
+                    thing — what am I searching — so it is asked once. */}
+                {tab === "machine" && (
+                  <PlaceChip
+                    place={place} places={places} recents={placeRecents} error={placeErr} homeDir={homeDir}
+                    openState={[pickOpen, setPickOpen]}
+                    onPick={(p) => {
+                      setPlaceRecents(rememberPlace(p));
+                      setPlace(p); setBrowsePath(null); setQ("");
+                      setPickOpen(false); inputRef.current?.focus();
+                    }} />
+                )}
+                {tab !== "recent" && tab !== "machine" && (
+                  <ScopeChip
+                    repo={repo} repos={repos} ref_={ref} refs={refs}
+                    openState={[pickOpen, setPickOpen]}
+                    onPickRoot={(r) => {
+                      // Choosing a copy means "what is on that disk", so it also
+                      // answers the version — which is what made the two-control
+                      // version feel like it was asking twice.
+                      setRoot(r); setRef(""); saveRef(r, ""); setBrowsePath(null);
+                      setPickOpen(false); inputRef.current?.focus();
+                    }}
+                    onPickRef={(r) => { setRef(r); setPickOpen(false); inputRef.current?.focus(); }} />
+                )}
+                {tab === "recent" && (
+                  <RepoChip repo={repo} repos={repos} openState={[pickOpen, setPickOpen]}
+                    onPick={(r) => { setRoot(r); setPickOpen(false); inputRef.current?.focus(); }} />
+                )}
+                <span className="shrink-0 text-[10.5px] px-2 py-0.5 rounded-full tabular-nums" aria-live="polite"
+                  style={{ background: "color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text2)", fontWeight: 600 }}>
+                  {shown.length} {unit}
+                </span>
+              </div>
+
+              <div className="flex items-center rounded-md overflow-hidden shrink-0" role="tablist" aria-label="What to search"
+                style={{ border: EDGE, background: "var(--bg)" }}>
+                {TABS.map((t) => (
+                  <button key={t.id} role="tab" aria-selected={t.id === tab}
+                    onClick={() => { goTab(t.id); inputRef.current?.focus(); }}
+                    className="text-[11.5px] px-3 py-1.5"
+                    style={t.id === tab ? { background: "var(--text)", color: "var(--bg)", fontWeight: 500 } : { color: "var(--text3)" }}>
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-1.5 shrink-0 text-[11px]" style={{ color: "var(--text3)" }}>
+                <span className="tabular-nums whitespace-nowrap">{canStep ? `${cursor + 1} of ${shown.length}` : "0 of 0"}</span>
+                <button onClick={() => step(-1)} disabled={!canStep} title="Previous result (↑)" aria-label="Previous result"
+                  className="agx-btn rounded-md grid place-items-center disabled:opacity-40" style={{ width: HIT, height: HIT, border: EDGE, color: "var(--text2)" }}>{"↑"}</button>
+                <button onClick={() => step(1)} disabled={!canStep} title="Next result (↓)" aria-label="Next result"
+                  className="agx-btn rounded-md grid place-items-center disabled:opacity-40" style={{ width: HIT, height: HIT, border: EDGE, color: "var(--text2)" }}>{"↓"}</button>
+              </div>
+              <CloseButton onClick={onClose} title="Close the finder (esc)" size={ICON.sm} />
             </div>
 
             {/* Where you are, when you are somewhere rather than searching: one
@@ -1033,7 +1115,7 @@ export function FilePalette({
                 switch and the file-manager button sit on the same line because
                 both are about THIS folder. */}
             {at && (
-              <div className="flex items-center gap-2 px-3 py-1.5 shrink-0" style={{ borderTop: LINE }}>
+              <div className="flex items-center gap-2 px-3 py-1.5 shrink-0" style={{ borderBottom: LINE }}>
                 <PathBar at={at} home={homeDir} onGo={jump} />
                 <span className="ml-auto flex items-center gap-1.5 shrink-0">
                   {browsed?.hiddenSkipped || showHidden ? (
@@ -1054,48 +1136,122 @@ export function FilePalette({
               </div>
             )}
 
-            {/* the answers, and what the one under the cursor is */}
+            {/* the drawer, the reader and the rail */}
             <div className="flex-1 min-h-0 flex">
-              <div ref={listRef} className="flex-1 min-w-0 agx-scroll overflow-y-auto overflow-x-hidden py-2"
-                /* A cap, not a height: three results stay three rows tall rather
-                   than being stretched to a box sized for more. */
-                style={listCap ? { maxHeight: listCap } : undefined}>
-                <Answers tab={tab} q={q} root={root} place={place} placeErr={placeErr} rows={shown} cursor={cursor}
-                  status={status} onHover={setCursor} onPick={(r) => openRow(r, false, true)}
-                  onDouble={(r) => { if (viewRows.includes(r)) viewImage(r); else openRow(r); }} browsing={!!at}
-                  browseError={browsed && !browsed.ok ? browsed.error ?? null : null} />
-              </div>
-              {/* The pane that answers "is this the one I mean" without opening
-                  anything. Hidden on a narrow window, where the list is already
-                  the whole width. */}
-              {showPreview && (
-                <div className="shrink-0 border-l flex flex-col" style={{ width: 300, borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
-                  <Preview path={preview} compact={docOpen}
-                    onOpen={(_p, facts) => openRow(shown[cursor], facts.kind !== "dir")}
-                    onCopyPath={(p) => { void navigator.clipboard?.writeText(p); }}
-                    onOpenBrowser={(p) => {
-                      /* The same allowlist as every other read: the page route
-                         judges the path, and the fallback is the opener that
-                         already does. */
-                      if (onOpenBrowser) { onOpenBrowser(withToken(pageUrl(SERVER, p))); onClose(); }
-                      else void api.previewOpen(p);
-                    }} />
+              <div className="shrink-0 flex flex-col min-h-0 relative"
+                style={{ width: collapsed ? RAIL_W : drawerW, borderRight: LINE, background: "var(--surface-card)" }}>
+                <div className={`flex items-center shrink-0 ${collapsed ? "justify-center py-2.5" : "justify-between px-4 pt-3.5 pb-2"}`}>
+                  {!collapsed && (
+                    <span className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)", fontWeight: 600 }}>
+                      {at ? "Folder" : "Results"} · {shown.length}
+                    </span>
+                  )}
+                  <button onClick={() => setCollapsed((c) => !c)} title={collapsed ? "Show the results drawer (Ctrl+B)" : "Collapse to an icon rail (Ctrl+B)"}
+                    aria-expanded={!collapsed} aria-label={collapsed ? "Show the results drawer" : "Collapse the results drawer"}
+                    className="agx-btn rounded-md text-[10px] uppercase tracking-wider px-1.5" style={{ minHeight: HIT, color: "var(--text3)" }}>
+                    {collapsed ? "»" : "« Icon rail"}
+                  </button>
                 </div>
+
+                {/* The kinds in this list, with how many. Clicking one narrows to
+                    it; several are an OR. Counted before they are applied. */}
+                {!collapsed && chips.length > 1 && (
+                  <div className="flex flex-wrap gap-1.5 px-4 pb-2.5 shrink-0" role="group" aria-label="File types">
+                    {chips.slice(0, 10).map((c) => {
+                      const on = activeExts.includes(c.ext);
+                      return (
+                        <button key={c.ext || "none"} aria-pressed={on} onClick={() => { setExts((x) => toggleExt(x, c.ext)); inputRef.current?.focus(); }}
+                          title={on ? `Stop showing only ${chipLabel(c)}` : `Show only ${chipLabel(c)}`}
+                          className="agx-btn text-[10.5px] px-2 py-0.5 rounded-full tabular-nums"
+                          style={on
+                            ? { background: "var(--text)", color: "var(--bg)", border: "1px solid var(--text)" }
+                            : { color: "var(--text2)", border: EDGE }}>
+                          {chipLabel(c)} <span style={{ opacity: on ? 0.75 : 0.6 }}>{c.count}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <div ref={listRef} className="flex-1 min-h-0 agx-scroll overflow-y-auto overflow-x-hidden pb-2">
+                  {collapsed ? (
+                    <div className="flex flex-col items-center gap-1 py-1">
+                      {shown.slice(0, 200).map((row, i) => {
+                        const name = row.rel.slice(row.rel.lastIndexOf("/") + 1);
+                        const kind = fileKind(name, row.kind === "dir");
+                        const on = i === cursor;
+                        return (
+                          <button key={`${row.kind}:${row.rel}:${i}`} data-row={i} title={row.rel} aria-current={on ? "true" : undefined}
+                            onClick={() => { setCursor((c) => reduceSelection(c, { type: "click", index: i }, shown.length)); openRow(row, false, true); }}
+                            className="agx-pal-hit grid place-items-center rounded-lg"
+                            style={{ width: 34, height: 34, color: KIND_INK[kind],
+                              ...(on ? { background: "color-mix(in srgb, var(--text) 12%, transparent)", boxShadow: `inset 0 0 0 1px ${"color-mix(in srgb, var(--text) 22%, transparent)"}` } : null) }}>
+                            <KindIcon kind={kind} />
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <Answers tab={tab} q={q} root={root} place={place} placeErr={placeErr} rows={shown} cursor={cursor}
+                      status={status} onPick={(r, i) => { setCursor((c) => reduceSelection(c, { type: "click", index: i }, shown.length)); openRow(r, false, true); }}
+                      onDouble={(r) => { if (viewRows.includes(r)) viewImage(r); else openRow(r); }} browsing={!!at}
+                      browseError={browsed && !browsed.ok ? browsed.error ?? null : null}
+                      needle={globAsked ? "" : (typedPath ? typedPath.tail : asked.text).trim()} />
+                  )}
+                </div>
+
+                {!collapsed && (
+                  <div role="separator" aria-orientation="vertical" aria-label="Resize the results drawer" aria-valuemin={DRAWER_MIN} aria-valuemax={DRAWER_MAX} aria-valuenow={drawerW}
+                    tabIndex={0} onPointerDown={dragDrawer}
+                    onKeyDown={(e) => {
+                      if (e.key === "ArrowLeft") { e.preventDefault(); e.stopPropagation(); setDrawerW((w) => clampDrawer(w - 16)); }
+                      if (e.key === "ArrowRight") { e.preventDefault(); e.stopPropagation(); setDrawerW((w) => clampDrawer(w + 16)); }
+                    }}
+                    className="absolute top-0 bottom-0 cursor-col-resize"
+                    style={{ right: -3, width: 6, zIndex: 3 }}
+                    title="Drag to resize" />
+                )}
+              </div>
+
+              {/* Escape from the reader goes back to the box, and every other key
+                  stays in the reader: an arrow there scrolls, and must not also
+                  walk the list behind it. */}
+              <div className="flex-1 min-w-0 min-h-0 flex"
+                onKeyDown={(e) => {
+                  if (e.target instanceof HTMLInputElement) return;
+                  e.stopPropagation();
+                  if (e.key === "Escape") { e.preventDefault(); inputRef.current?.focus(); return; }
+                  if (e.key === "/" && !e.ctrlKey && !e.metaKey) { e.preventDefault(); setFindSignal((n) => n + 1); return; }
+                  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "f") { e.preventDefault(); setFindSignal((n) => n + 1); return; }
+                  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); benchRow(selRow); }
+                }}>
+                <FileView file={file} branch={git?.repo ? git.branch : undefined} jump={viewJump}
+                  initialTop={scrollFor(snap.current, selAbs)} onTop={onTop}
+                  onBench={() => benchRow(selRow)} canBrowser={!!file.kind && viewerActions(file.kind).browser && !!source?.abs}
+                  onOpenBrowser={() => { if (source?.abs) openInBrowser(source.abs); }} findSignal={findSignal} />
+              </div>
+
+              {wide && showInfo && (
+                <InfoRail file={file} git={git} outline={outline} current={outlineAt} home={homeDir}
+                  onJump={jumpTo} onBench={() => benchRow(selRow)}
+                  onCopyPath={(p) => { void navigator.clipboard?.writeText(p); }}
+                  onOpenBrowser={openInBrowser} />
               )}
             </div>
 
-            <div className="flex items-center gap-4 px-3 py-2 shrink-0 text-[10.5px]"
+            <div className="flex items-center gap-4 px-4 py-2 shrink-0 text-[10.5px]"
               style={{ borderTop: LINE, color: "var(--text4)" }}>
-              <span>↑↓ move</span>
-              <span>⏎ open</span>
-              {/* What Enter does to a folder is not the same question on both
-                  tabs, and saying the wrong one is worse than saying nothing. */}
-              <span>{at ? "← up · → into · ⇥ completes a path" : "⏎ enters a folder · ⌘⏎ opens it in Files"}</span>
-              {/* The gesture nobody discovers by looking: the box takes a path. */}
-              <span className="hidden sm:inline">type ~/ or ../ to move around</span>
-              <span className="ml-auto">esc closes this · {chordLabel(appChordFor("files.palette"))} reopens</span>
+              <span>↑↓ next result</span>
+              <span>⏎ {at ? "enter a folder" : "focus viewer"}</span>
+              <span className="hidden md:inline">Ctrl+B drawer</span>
+              <span className="hidden md:inline">Ctrl+I info</span>
+              <span className="hidden lg:inline">{at ? "← up · ⇥ completes a path" : "type ~/ or ../ to move around"}</span>
+              <span className="ml-auto truncate" aria-live="off">
+                {chordLabel(appChordFor("files.palette"))} hides · {resumeLine({ file: file.name || null, section: sectionAt, tab: active.label, q })}
+              </span>
             </div>
           </motion.div>
+          </div>
         </Portal>
       )}
     </AnimatePresence>
@@ -1111,16 +1267,18 @@ export function FilePalette({
 
 /* --------------------------------------------------------------- the list */
 
-function Answers({ tab, q, root, place, placeErr, rows, cursor, status, onHover, onPick, onDouble, browsing, browseError }: {
+function Answers({ tab, q, root, place, placeErr, rows, cursor, status, onPick, onDouble, browsing, browseError, needle }: {
   tab: PaletteTab; q: string; root: string; place: string; placeErr: string | null; rows: Row[]; cursor: number;
   status: { pending: boolean; error: string | null; data: { ok: boolean; error?: string; via?: string; truncated?: boolean } | null } | null;
-  onHover: (i: number) => void; onPick: (row: Row, secondary?: boolean) => void;
+  onPick: (row: Row, i: number) => void;
   /** A picture opens in the viewer on a double-click; nothing else does. */
   onDouble: (row: Row) => void;
   /** Looking at a folder rather than at results: the empty state, the floors
    *  and the "no checkout" note are all different questions there. */
   browsing?: boolean;
   browseError?: string | null;
+  /** What the name is being matched against, drawn as a highlight in each row. */
+  needle?: string;
 }) {
   if (browsing) {
     if (browseError) return <Note tint="var(--warning)">{browseError}</Note>;
@@ -1131,7 +1289,7 @@ function Answers({ tab, q, root, place, placeErr, rows, cursor, status, onHover,
       <>
         {rows.map((row, i) => (
           <RowView key={`${row.kind}:${row.rel}:${i}`} row={row} i={i} on={i === cursor}
-            onHover={onHover} onPick={onPick} onDouble={onDouble} />
+            onPick={onPick} onDouble={onDouble} needle={needle} />
         ))}
       </>
     );
@@ -1161,14 +1319,16 @@ function Answers({ tab, q, root, place, placeErr, rows, cursor, status, onHover,
 
   return (
     <>
-      {status?.data?.via && (
-        <div className="px-3 py-1.5 text-[10.5px]" style={{ color: "var(--text4)" }}>
-          {rows.length} result{rows.length === 1 ? "" : "s"} · via {status.data.via}{status.data.truncated ? " · truncated" : ""}
+      {/* The count is in the drawer's header; what is worth a line here is the
+          answer being incomplete. */}
+      {status?.data?.truncated && (
+        <div className="px-4 py-1.5 text-[10.5px]" style={{ color: "var(--warning-ink)" }}>
+          Truncated — more matches than are listed. Narrow the search.
         </div>
       )}
       {rows.map((row, i) => (
         <RowView key={`${row.kind}:${row.rel}:${i}`} row={row} i={i} on={i === cursor}
-          onHover={onHover} onPick={onPick} onDouble={onDouble} />
+          onPick={onPick} onDouble={onDouble} needle={needle} />
       ))}
     </>
   );
@@ -1212,61 +1372,72 @@ function PathBar({ at, home, onGo }: { at: string; home: string; onGo: (abs: str
   );
 }
 
-function RowView({ row, i, on, onHover, onPick, onDouble }: {
-  row: Row; i: number; on: boolean; onHover: (i: number) => void; onPick: (row: Row) => void; onDouble: (row: Row) => void;
+function RowView({ row, i, on, onPick, onDouble, needle }: {
+  row: Row; i: number; on: boolean; onPick: (row: Row, i: number) => void; onDouble: (row: Row) => void; needle?: string;
 }) {
   const cut = row.rel.lastIndexOf("/");
   const name = row.rel.slice(cut + 1);
+  const dir = cut >= 0 ? row.rel.slice(0, cut + 1) : "";
   const kind = fileKind(name, row.kind === "dir");
+  /* The second line, in the order a file is told apart by: where it is, how big,
+     how old. What a row does not know is left out rather than drawn as a dash. */
+  const facts: string[] = [];
+  if (dir) facts.push(dir);
+  if (row.kind === "file" && row.bytes != null) facts.push(humanBytes(row.bytes));
+  if (row.kind === "dir" && row.items != null) facts.push(`${row.items} item${row.items === 1 ? "" : "s"}`);
+  if (row.kind === "dir" && row.items == null && !dir) facts.push("folder");
+  const when = row.kind === "recent" ? row.at : row.mtime;
+  if (when) facts.push(ago(when));
+  /* The part of the name that matched, marked — the highlight is how a list of
+     near-identical names says why each one is here. */
+  const at = needle ? name.toLowerCase().indexOf(needle.toLowerCase()) : -1;
+  /* No onMouseEnter: a pointer resting on a row is not a choice, so hover is
+     only the CSS tint of agx-pal-hit and the selection is the click or the
+     keys. See finderSelection.ts. */
   return (
-    <button data-row={i} onMouseEnter={() => onHover(i)} onClick={() => onPick(row)} onDoubleClick={() => onDouble(row)}
-      className="agx-pal-hit text-left px-3 py-2 rounded-lg" title={row.kind !== "recent" && row.locked ? `${row.rel} — ${row.why ?? "listed, but kept closed: it holds credentials or is off-limits from here"}` : row.rel}
+    <button data-row={i} onClick={() => onPick(row, i)} onDoubleClick={() => onDouble(row)}
+      className="agx-pal-hit text-left px-3 py-2 rounded-lg block" title={row.kind !== "recent" && row.locked ? `${row.rel} — ${row.why ?? "listed, but kept closed: it holds credentials or is off-limits from here"}` : row.rel}
       aria-current={on ? "true" : undefined}
       style={{
         /* Inset from the list's edges so the selection is a pill, not a band. */
-        width: "calc(100% - 12px)", margin: "0 6px", minHeight: 34,
-        ...(on ? { background: "color-mix(in srgb, var(--primary) 16%, transparent)", boxShadow: "inset 0 0 0 1px color-mix(in srgb, var(--primary) 40%, transparent)" } : null),
+        width: "calc(100% - 16px)", margin: "0 8px 2px", minHeight: 48,
+        ...(on ? { background: "color-mix(in srgb, var(--text) 10%, transparent)", boxShadow: "inset 0 0 0 1px color-mix(in srgb, var(--text) 16%, transparent)" } : null),
         ...((row.kind === "recent" && row.gone) || (row.kind !== "recent" && row.locked) ? { opacity: 0.55 } : null),
       }}>
-      <div className="flex items-center gap-2 text-[12px]">
+      <div className="flex items-center gap-3 text-[12.5px]">
         {/* The icon may carry a kind's colour; the NAME never does. A language
             tint chosen for a dark editor is close to invisible on a light
             theme (measured: the markdown grey came to 1.2:1), and a list of
             names nobody can read is a list of nothing. */}
         <span className="shrink-0 flex" style={{ color: KIND_INK[kind] }}><KindIcon kind={kind} /></span>
-        {cut >= 0 && <span className="truncate" style={{ color: on ? NAME_INK.metaOnCursor : NAME_INK.prefix }}>{row.rel.slice(0, cut + 1)}</span>}
-        <span className="shrink-0" style={{ color: NAME_INK.name, fontWeight: 500 }}>{name}{row.kind === "dir" ? "/" : ""}</span>
-        {/* Size and date, when the row knows them — a listing does, a search
-            result does not, and inventing a dash for the ones that do not is
-            noise in a column people scan. */}
-        {(row.kind === "file" && row.bytes != null) || (row.kind === "dir" && row.items != null) ? (
-          <span className="ml-auto shrink-0 flex items-baseline gap-3 text-[10.5px] tabular-nums" style={{ color: on ? NAME_INK.metaOnCursor : NAME_INK.meta }}>
-            <span>{row.kind === "dir" ? `${row.items} item${row.items === 1 ? "" : "s"}` : humanBytes(row.bytes!)}</span>
-            {row.mtime ? <span>{ago(row.mtime)}</span> : null}
-          </span>
-        ) : row.kind === "dir" ? (
-          <span className="ml-auto shrink-0 text-[10px] px-1.5 rounded"
-            style={{ color: "var(--info-ink)", border: "1px solid color-mix(in srgb, var(--info) 30%, transparent)" }}>folder</span>
-        ) : null}
-        {row.kind === "recent" && (
-          <span className="ml-auto shrink-0 flex items-baseline gap-2">
-            {/* Named, not merely greyed: "not on this branch" is the fact, and
-                it is the difference between a broken app and a checkout that
-                moved under you. Pressing it forgets the entry. */}
-            {row.gone && (
-              <span className="text-[9px] px-1.5 rounded" style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 32%, transparent)" }}>
-                not here now · ⏎ forgets
-              </span>
-            )}
-            <span className="text-[10.5px] tabular-nums" style={{ color: on ? NAME_INK.metaOnCursor : NAME_INK.meta }}>{ago(row.at)}</span>
+        <span className="min-w-0 truncate" style={{ color: NAME_INK.name, fontWeight: 500 }}>
+          {at >= 0 ? (
+            <>
+              {name.slice(0, at)}
+              <mark style={{ background: "color-mix(in srgb, var(--warning) 34%, transparent)", color: "inherit", borderRadius: 2, padding: "0 1px" }}>{name.slice(at, at + needle!.length)}</mark>
+              {name.slice(at + needle!.length)}
+            </>
+          ) : name}{row.kind === "dir" ? "/" : ""}
+        </span>
+        {row.kind === "recent" && row.gone && (
+          /* Named, not merely greyed: "not on this branch" is the fact, and
+             it is the difference between a broken app and a checkout that
+             moved under you. Pressing it forgets the entry. */
+          <span className="ml-auto shrink-0 text-[9px] px-1.5 rounded" style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 32%, transparent)" }}>
+            not here now · ⏎ forgets
           </span>
         )}
       </div>
+      {facts.length > 0 && (
+        <div className="mt-0.5 pl-7 truncate text-[10.5px] tabular-nums" style={{ color: on ? NAME_INK.metaOnCursor : NAME_INK.meta }}>
+          {facts.join(" · ")}
+        </div>
+      )}
       {row.kind === "file" && row.hits && (
         <div className="mt-1 flex flex-col gap-px">
           {row.hits.slice(0, 4).map((h, n) => (
             <div key={n} className="flex items-baseline gap-2 text-[11px]">
-              <span className="shrink-0 tabular-nums w-[42px] text-right" style={{ color: "var(--info-ink)", opacity: 0.75 }}>{h.line}</span>
+              <span className="shrink-0 tabular-nums w-8 text-right" style={{ color: "var(--info-ink)", opacity: 0.75 }}>{h.line}</span>
               <span className="flex-1 min-w-0 truncate" style={{ color: "var(--text2)" }}>
                 {h.len > 0 ? (
                   <>
@@ -1281,7 +1452,7 @@ function RowView({ row, i, on, onHover, onPick, onDouble }: {
             </div>
           ))}
           {row.hits.length > 4 && (
-            <div className="text-[9.5px] pl-[50px]" style={{ color: "var(--text4)" }}>
+            <div className="text-[9.5px] pl-10" style={{ color: "var(--text4)" }}>
               +{row.hits.length - 4} more in this file
             </div>
           )}

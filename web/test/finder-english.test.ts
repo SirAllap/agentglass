@@ -13,12 +13,14 @@ const code = (src: string) => src.split("\n").filter((l) => !/^\s*(\/\/|\/\*|\*)
 
 const palette = code(await Bun.file(new URL("../src/components/FilePalette.tsx", import.meta.url)).text());
 const reveal = code(await Bun.file(new URL("../src/components/finder/RevealButton.tsx", import.meta.url)).text());
-const preview = code(await Bun.file(new URL("../src/components/finder/Preview.tsx", import.meta.url)).text());
+const preview = code(await Bun.file(new URL("../src/components/finder/InfoRail.tsx", import.meta.url)).text())
+  + code(await Bun.file(new URL("../src/components/finder/FileView.tsx", import.meta.url)).text());
 
 describe("the finder speaks English", () => {
-  test("the labels are Open, Copy path and Open in Files", () => {
-    expect(preview).toMatch(/^\s*Open$/m);
+  test("the labels are To the bench, Copy path and Show in folder", () => {
+    expect(preview).toContain("To the bench");
     expect(preview).toContain('copyLabel("Copy path"');
+    expect(preview).toContain('label="Show in folder"');
     expect(reveal).toContain("Open in Files");
     expect(palette).not.toContain(">Back</IconLabel>");
   });

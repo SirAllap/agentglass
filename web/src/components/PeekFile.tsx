@@ -882,7 +882,7 @@ export function PeekFile({ peek, onClose, topPx }: {
  * The count says "3 / 17" rather than "17 matches": which one you are standing
  * on is the part that tells you whether to keep pressing.
  */
-function FindBar({ inputRef, value, onValue, hit, hits, onStep, onClose }: {
+export function FindBar({ inputRef, value, onValue, hit, hits, onStep, onClose }: {
   inputRef: React.RefObject<HTMLInputElement>;
   value: string;
   onValue: (v: string) => void;

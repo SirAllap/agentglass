@@ -45,12 +45,12 @@ const AXIS = String.raw`(?:p|px|py|pt|pb|pl|pr|m|mx|my|mt|mb|ml|mr|gap|gap-x|gap
  * Arbitrary pixel values that are allowed to stay, each because a step cannot
  * express it.
  *
- * All five are horizontal indents that align text under something specific — a
+ * All three are horizontal indents that align text under something specific — a
  * glyph, a checkbox, an avatar — so the number is a measurement of that thing
  * and not a rhythm. Rounding them to the scale would misalign the very column
  * they exist to line up with.
  */
-const ALLOWED_ARBITRARY = new Set(["pl-[18px]", "pl-[30px]", "pl-[50px]", "ml-[60px]"]);
+const ALLOWED_ARBITRARY = new Set(["pl-[18px]", "pl-[30px]", "ml-[60px]"]);
 
 describe("spacing goes through the scale", () => {
   test("no arbitrary pixel spacing except the indents that align to a glyph", () => {

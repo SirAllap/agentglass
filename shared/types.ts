@@ -4458,6 +4458,21 @@ export interface FileFacts {
   converter?: string | null;
   error?: string;
 }
+/** What git knows about one file the finder has selected. Mirrors server/src/fileGit.ts. */
+export type FileGitStatus = "clean" | "modified" | "added" | "deleted" | "renamed" | "untracked" | "ignored" | "conflict";
+export interface FileGitFacts {
+  ok: boolean;
+  /** False for a file that is not inside a repository. */
+  repo: boolean;
+  status?: FileGitStatus;
+  /** The path as the repository names it: the checkout's folder name, then the path inside it. */
+  path?: string;
+  added?: number;
+  removed?: number;
+  branch?: string;
+  commit?: { hash: string; subject: string; at: number };
+  error?: string;
+}
 export interface GrepHit { rel: string; line: number; text: string; at: number; len: number }
 export interface GrepReport { ok: boolean; hits: GrepHit[]; files: number; truncated: boolean; via: string; error?: string }
 

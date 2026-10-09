@@ -10,7 +10,9 @@ import { describe, expect, test } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { humanBytes, FilePalette } from "../src/components/FilePalette.tsx";
-import { Preview } from "../src/components/finder/Preview.tsx";
+import { InfoRail } from "../src/components/finder/InfoRail.tsx";
+import { FileView } from "../src/components/finder/FileView.tsx";
+import type { LoadedFile } from "../src/components/finder/useFileSource.ts";
 
 describe("sizes in a listing", () => {
   test("scanned, not audited", () => {
@@ -20,16 +22,28 @@ describe("sizes in a listing", () => {
   });
 });
 
-describe("the pane that shows what a row is", () => {
+/* A file as the panes get it, before anything has arrived. */
+const loaded = (over: Partial<LoadedFile> = {}): LoadedFile => ({
+  source: null, name: "", kind: null, facts: null, text: null, truncated: false, error: null, media: null, mediaError: null, loading: false, ...over,
+});
+const noop = () => {};
+
+describe("the panes that show what a row is", () => {
   test("nothing selected says so instead of drawing an empty box", () => {
-    const html = renderToStaticMarkup(React.createElement(Preview, { path: null }));
-    expect(html).toContain("Nothing selected");
+    const rail = renderToStaticMarkup(React.createElement(InfoRail, {
+      file: loaded(), git: null, outline: [], current: -1, home: "", onJump: noop, onBench: noop, onCopyPath: noop }));
+    expect(rail).toContain("Nothing selected");
+    const view = renderToStaticMarkup(React.createElement(FileView, {
+      file: loaded(), jump: null, initialTop: 0, onTop: noop, onBench: noop, canBrowser: false, findSignal: 0 }));
+    expect(view).toContain("Nothing selected");
   });
 
-  test("a path with no facts yet is a spinner, not a blank", () => {
+  test("a file with no facts yet is a spinner, not a blank", () => {
     // First paint, before the engine has answered. There is no DOM here so the
     // effect never runs, which is exactly the state this asserts.
-    const html = renderToStaticMarkup(React.createElement(Preview, { path: "/home/dev/Documents/a.png" }));
+    const file = loaded({ source: { abs: "/home/dev/Documents/a.png", root: "/home/dev/Documents", rel: "a.png" }, name: "a.png", kind: "image", loading: true });
+    const html = renderToStaticMarkup(React.createElement(FileView, {
+      file, jump: null, initialTop: 0, onTop: noop, onBench: noop, canBrowser: true, findSignal: 0 }));
     expect(html).toContain("agx-spin");
   });
 });
@@ -39,10 +53,10 @@ describe("the palette still draws", () => {
     // The finder grew a browse mode, a preview pane and a query parser in one
     // pass; this is the assertion that the component still renders at all.
     expect(() => renderToStaticMarkup(React.createElement(FilePalette, {
-      open: false, onClose: () => {}, onOpenFile: () => {}, onRevealDir: () => {},
+      open: false, onClose: () => {}, onOpenFile: () => {}, onBench: () => {}, onRevealDir: () => {},
     }))).not.toThrow();
     expect(() => renderToStaticMarkup(React.createElement(FilePalette, {
-      open: true, onClose: () => {}, onOpenFile: () => {}, onRevealDir: () => {},
+      open: true, onClose: () => {}, onOpenFile: () => {}, onBench: () => {}, onRevealDir: () => {},
     }))).not.toThrow();
   });
 });

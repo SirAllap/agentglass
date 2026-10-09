@@ -162,9 +162,6 @@ export default function App() {
     const t = setTimeout(() => setOpenErr(null), 4000);
     return () => clearTimeout(t);
   }, [openErr]);
-  /** The palette's measured height, so a document it opens starts below it
-   *  instead of underneath it. 0 when the palette is shut. */
-  const [paletteH, setPaletteH] = useState(0);
   const [helpOpen, setHelpOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
@@ -1265,8 +1262,7 @@ export default function App() {
         open={filesOpen}
         onClose={() => setFilesOpen(false)}
         target={finderTarget}
-        docOpen={peek !== null}
-        onHeight={setPaletteH}
+        onBench={(root, abs) => showFile(root, abs, { title: abs.split("/").pop() })}
         onOpenFile={async (root, rel, branch, ref) => {
           /*
            * On this checkout, the division the bench exists for.
@@ -1312,8 +1308,7 @@ export default function App() {
           purpose, so the document starts below its measured bottom edge — 10px
           of top margin plus a 12px gap. */}
       {peek && (
-        <PeekFile peek={peek} onClose={() => setPeek(null)}
-          topPx={filesOpen && paletteH > 0 ? Math.round(paletteH) + 22 : undefined} />
+        <PeekFile peek={peek} onClose={() => setPeek(null)} />
       )}
       {/* Where the document is about to be, so the answer appears where the eye
           already went. Both of these are one line and neither takes the focus:
@@ -1322,7 +1317,7 @@ export default function App() {
       {(opening || openErr) && !peek && (
         <div className="fixed left-1/2 -translate-x-1/2 z-[60] px-3 py-1.5 rounded-lg text-[11.5px] flex items-center gap-2"
           style={{
-            top: filesOpen && paletteH > 0 ? Math.round(paletteH) + 34 : "12vh",
+            top: "12vh",
             background: "var(--surface-card)", border: EDGE,
             color: openErr ? "var(--error)" : "var(--text2)",
           }}>

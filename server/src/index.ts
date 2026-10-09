@@ -127,6 +127,7 @@ import {
 import { fileText, fileToTemp, fileTree, findFiles, grepFiles, listRefs, filesExist, heldBackFrom, heldBackTest, HELD_BACK, filesReach, gitReadRefusal, gitReadTest } from "./files.ts";
 import { diskFind, diskGrep, diskPlaces } from "./disk.ts";
 import { browseDir, fileBytes, fileFacts, openInDesktop, pagePolicy, revealInFileManager } from "./browse.ts";
+import { fileGitFacts } from "./fileGit.ts";
 import { benchEdit, benchEnd, benchLive, readNote, writeNote } from "./bench.ts";
 import {
   overview as dockerOverview, stats as dockerStats, logs as dockerLogs, inspect as dockerInspect, top as dockerTop,
@@ -6635,6 +6636,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       }
       if (pathname === "/browse") return json(browseDir(url.searchParams.get("path") || "", url.searchParams.get("hidden") === "1", localBrowse));
       if (pathname === "/preview/facts") return json(fileFacts(url.searchParams.get("path") || "", localBrowse));
+      if (pathname === "/preview/git") return json(fileGitFacts(url.searchParams.get("path") || "", localBrowse));
       if (pathname === "/preview/raw" || pathname === "/preview/page") {
         const r = await fileBytes(url.searchParams.get("path") || "", localBrowse);
         if (!r.ok) return json({ error: r.error }, 404);

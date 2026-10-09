@@ -201,3 +201,16 @@ export const canOpenInBrowser = (name: string): boolean => BROWSABLE.test(name);
 /** The address a browser tab loads for a file: the engine's own page route,
  *  which judges the path like every other read. `origin` is the engine's. */
 export const pageUrl = (origin: string, abs: string): string => `${origin}/preview/page?path=${encodeURIComponent(abs)}`;
+
+/* ------------------------------------------------------------------- sizes */
+
+/** Bytes as a listing says them. Rounded hard: a file list is scanned. */
+export function humanBytes(bytes: number): string {
+  if (bytes < 1000) return `${bytes} B`;
+  const units = ["KB", "MB", "GB"];
+  let n = bytes / 1000;
+  let i = 0;
+  while (n >= 1000 && i < units.length - 1) { n /= 1000; i++; }
+  return `${n >= 100 ? Math.round(n) : n.toFixed(1)} ${units[i]}`;
+}
+

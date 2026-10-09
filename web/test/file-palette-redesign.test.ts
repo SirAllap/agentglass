@@ -10,7 +10,7 @@
 import { describe, expect, test } from "bun:test";
 
 const palette = await Bun.file(new URL("../src/components/FilePalette.tsx", import.meta.url)).text();
-const preview = await Bun.file(new URL("../src/components/finder/Preview.tsx", import.meta.url)).text();
+const preview = await Bun.file(new URL("../src/components/finder/InfoRail.tsx", import.meta.url)).text();
 
 const bodyOf = (src: string, head: string): string => {
   const at = src.indexOf(head);
@@ -104,7 +104,7 @@ describe("the where menu", () => {
 
 describe("open in browser", () => {
   test("the pane offers it, the palette falls back to the system opener, and Enter is untouched", () => {
-    expect(code(preview)).toContain("canOpenInBrowser(facts.name)");
+    expect(code(preview)).toContain("viewerActions(");
     expect(code(palette)).toContain("onOpenBrowser(withToken(pageUrl(SERVER, p)))");
     expect(code(palette)).toContain("api.previewOpen(p)");
     const open = code(bodyOf(palette, "const openRow = useCallback("));
