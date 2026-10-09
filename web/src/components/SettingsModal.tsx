@@ -306,7 +306,7 @@ function Choice<T extends string>({ label, hint, value, options, onPick, disable
               aria-pressed={value === o.v}
               className="text-[12px] px-2 py-1 rounded-md transition-colors disabled:cursor-not-allowed whitespace-nowrap"
               style={value === o.v
-                ? { background: "color-mix(in srgb, var(--primary) 55%, transparent)", color: "var(--text)" }
+                ? { background: "var(--primary)", color: "var(--on-primary)" }
                 : { color: "var(--text3)" }}>
               {o.label}
             </button>
@@ -810,7 +810,7 @@ function PacePane() {
                 onClick={() => setPaceConfig({ workDays: cfg.workDays.map((x, j) => (j === i ? !x : x)) })}
                 className="text-[11px] px-1.5 py-1 rounded-md disabled:cursor-not-allowed"
                 style={cfg.workDays[i]
-                  ? { background: "color-mix(in srgb, var(--primary) 55%, transparent)", color: "var(--text)" }
+                  ? { background: "var(--primary)", color: "var(--on-primary)" }
                   : { color: "var(--text3)" }}>
                 {d}
               </button>
