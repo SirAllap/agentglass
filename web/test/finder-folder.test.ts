@@ -10,7 +10,8 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import type { BrowseEntry } from "../../shared/types.ts";
-import { FOLDER_HINT, PREVIEW_ROWS, benchOpen, folderPreview, primaryAction, shellQuote } from "../src/lib/finderFolder.ts";
+import { FOLDER_HINT, PREVIEW_ROWS, benchOpen, folderPreview, goTo, previewChild, primaryAction, shellQuote } from "../src/lib/finderFolder.ts";
+import { pathBar } from "../src/lib/paletteModel.ts";
 
 const NOW = Date.UTC(2026, 8, 30, 12);
 const day = 86_400_000;
@@ -97,5 +98,24 @@ describe("what the bench is asked to open", () => {
     const o = benchOpen("terminal", "/home/u/Documents/it's mine", "/home/u/code/orbit");
     expect(o).toEqual({ tab: "term", root: "/home/u/code/orbit", title: "it's mine", type: "cd '/home/u/Documents/it'\\''s mine'\r" });
     expect(shellQuote("a b")).toBe("'a b'");
+  });
+});
+
+describe("a click in the centre goes by the file-manager model", () => {
+  test("an entry of a folder's preview lists that folder and selects the entry", () => {
+    expect(goTo(previewChild("/home/u/brain", "notes"))).toEqual({ browsePath: "/home/u/brain", name: "notes" });
+    expect(goTo(previewChild("/home/u/brain/", "a.md"))).toEqual({ browsePath: "/home/u/brain", name: "a.md" });
+  });
+  test("a top-level entry lists the root", () => {
+    expect(goTo("/etc")).toEqual({ browsePath: "/", name: "etc" });
+  });
+  test("the header crumbs are the path bar's: Home-based, never the account name", () => {
+    const segs = pathBar("/home/ada/notes/orbit", "/home/ada");
+    expect(segs.map((s) => s.label)).toEqual(["Home", "notes", "orbit"]);
+    expect(segs.at(-1)!.last).toBe(true);
+  });
+  test("a crumb click selects that crumb inside its parent, agreeing with the bar", () => {
+    const segs = pathBar("/home/ada/notes/orbit", "/home/ada");
+    expect(goTo(segs[1]!.path)).toEqual({ browsePath: "/home/ada", name: "notes" });
   });
 });

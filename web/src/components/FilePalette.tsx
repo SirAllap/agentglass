@@ -39,7 +39,7 @@ import { InfoRail } from "./finder/InfoRail.tsx";
 import { useFileSource, type FileSource } from "./finder/useFileSource.ts";
 import { extChips, chipLabel, hasGlob, matchGlob, passesExts, toggleExt } from "../lib/finderFilters.ts";
 import { outline as outlineOf, viewerActions, type OutlineItem } from "../lib/finderViewer.ts";
-import { benchOpen, type BenchOpen } from "../lib/finderFolder.ts";
+import { benchOpen, goTo as goToPath, type BenchOpen } from "../lib/finderFolder.ts";
 import { DRAWER_MAX, DRAWER_MIN, RAIL_W, clampDrawer, indexOfSel, restore, resumeLine, scrollFor, type FinderSnapshot, type TabView } from "../lib/finderState.ts";
 import type { FileGitFacts } from "../../../shared/types.ts";
 import { RevealButton } from "./finder/RevealButton.tsx";
@@ -491,6 +491,17 @@ export function FilePalette({
     if (tab === "names") return root || null;
     return null;
   }, [typedPath, browsePath, asked.text, tab, place, root, globAsked]);
+
+  /** A click in the centre (a preview row, a header crumb): the drawer lists the
+   *  folder the item is in and the item is selected — see finderFolder.goTo. */
+  const goTo = useCallback((abs: string) => {
+    const t = goToPath(abs);
+    const j = afterJump(t.browsePath, homeDir, !!typedPath);
+    setPlaceRecents(rememberPlace(t.browsePath));
+    setPlace(t.browsePath);
+    setBrowsePath(j.browsePath); setQ(j.q);
+    setWantFile({ dir: t.browsePath, name: t.name });
+  }, [homeDir, typedPath]);
 
   /** Go to a folder from the bar or a row. The box follows only when it was
    *  already holding a path (see `afterJump`). */
@@ -1232,7 +1243,8 @@ export function FilePalette({
                 <FileView file={file} branch={git?.repo ? git.branch : undefined} jump={viewJump}
                   initialTop={scrollFor(snap.current, selAbs)} onTop={onTop}
                   onBench={() => benchRow(selRow)} canBrowser={!!file.kind && viewerActions(file.kind).browser && !!source?.abs}
-                  onOpenBrowser={() => { if (source?.abs) openInBrowser(source.abs); }} findSignal={findSignal} />
+                  onOpenBrowser={() => { if (source?.abs) openInBrowser(source.abs); }} findSignal={findSignal}
+                  home={homeDir} onGoTo={goTo} />
               </div>
 
               {wide && showInfo && (

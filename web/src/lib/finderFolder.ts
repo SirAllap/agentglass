@@ -68,6 +68,25 @@ export function folderPreview(name: string, entries: BrowseEntry[], mtime: numbe
   };
 }
 
+/* -------------------------------------------------------------- navigation */
+
+/**
+ * Where a click on a path (a row of the folder preview, a crumb of the centre
+ * header) takes the finder, by the file-manager model: the drawer lists the
+ * FOLDER THE ITEM IS IN and the item is the selection. Clicking `notes` in the
+ * preview of `~/brain` lists `~/brain` and selects `~/brain/notes`, so the path
+ * bar, the input, the count, the stepper and the saved state all follow from
+ * the two values and cannot disagree with the centre.
+ */
+export function goTo(abs: string): { browsePath: string; name: string } {
+  const clean = abs.replace(/\/+$/, "") || "/";
+  const cut = clean.lastIndexOf("/");
+  return { browsePath: clean.slice(0, cut) || "/", name: clean.slice(cut + 1) };
+}
+
+/** The absolute path of a preview row. */
+export const previewChild = (folder: string, name: string): string => `${folder.replace(/\/+$/, "")}/${name}`;
+
 /* ----------------------------------------------------------------- actions */
 
 export interface PrimaryAction {

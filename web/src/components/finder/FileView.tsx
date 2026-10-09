@@ -32,7 +32,8 @@ import { findRanges, paint as paintFind, clear as clearFind, step as stepFind, r
 import type { LoadedFile } from "./useFileSource.ts";
 import type { BrowseReport } from "../../../../shared/types.ts";
 import { api } from "../../lib/api.ts";
-import { folderPreview } from "../../lib/finderFolder.ts";
+import { pathBar } from "../../lib/paletteModel.ts";
+import { folderPreview, previewChild } from "../../lib/finderFolder.ts";
 import { chipLabel } from "../../lib/finderFilters.ts";
 import { CodeFileIcon, FileIcon, FolderIcon, ImageFileIcon, NoteIcon } from "../../lib/glyphIcons.tsx";
 
@@ -47,7 +48,7 @@ const segStyle = (on: boolean) => on
   ? { background: "color-mix(in srgb, var(--primary) 22%, transparent)", color: "var(--text)" }
   : { color: "var(--text3)" };
 
-export function FileView({ file, branch, jump, initialTop, onTop, onBench, onOpenBrowser, canBrowser, findSignal }: {
+export function FileView({ file, branch, jump, initialTop, onTop, onBench, onOpenBrowser, canBrowser, findSignal, home, onGoTo }: {
   file: LoadedFile;
   branch?: string;
   jump: Jump | null;
@@ -59,6 +60,10 @@ export function FileView({ file, branch, jump, initialTop, onTop, onBench, onOpe
   canBrowser: boolean;
   /** Bumped by the parent to open the find bar (the chord lives up there). */
   findSignal: number;
+  /** Home, so the header's path reads `Home / brain` like the bar above it. */
+  home: string;
+  /** A click on a crumb or a preview row: see finderFolder.goTo. */
+  onGoTo?: (abs: string) => void;
 }) {
   const { kind, text } = file;
   const isText = kind === "markdown" || kind === "code" || kind === "html";
@@ -157,17 +162,18 @@ export function FileView({ file, branch, jump, initialTop, onTop, onBench, onOpe
   };
 
   /* -------------------------------------------------------------- header */
-  const segs = (file.source?.abs ?? file.source?.rel ?? "").split("/").filter(Boolean);
-  const crumb = segs.slice(-3);
+  const crumb = file.source?.abs ? pathBar(file.source.abs, home) : [];
   const disabled = text === null;
 
   const toolbar = (
     <div className="flex items-center gap-2 px-4 shrink-0 text-[11px]" style={{ minHeight: 42, borderBottom: LINE, color: "var(--text3)" }}>
       <span className="min-w-0 truncate" title={file.source?.abs ?? file.source?.rel}>
-        {crumb.map((s, i) => (
-          <span key={i}>
+        {crumb.map((c, i) => (
+          <span key={c.path}>
             {i > 0 && <span style={{ color: "var(--text4)" }}> / </span>}
-            <span style={i === crumb.length - 1 ? { color: "var(--text)", fontWeight: 600 } : undefined}>{s}</span>
+            <button type="button" className="agx-pal-hit rounded px-0.5" onClick={() => onGoTo?.(c.path)} disabled={c.last || !onGoTo}
+              aria-current={c.last ? "location" : undefined} title={c.path}
+              style={c.last ? { color: "var(--text)", fontWeight: 600 } : { color: "inherit" }}>{c.label}</button>
           </span>
         ))}
         {branch && <span style={{ color: "var(--text4)" }}> · {branch}</span>}
@@ -285,7 +291,7 @@ export function FileView({ file, branch, jump, initialTop, onTop, onBench, onOpe
   } else if (kind === "audio") {
     content = file.media ? <div className="p-6"><audio src={file.media.url} controls style={{ width: "100%" }} /></div> : <div className="p-10 grid place-items-center"><span className="agx-spin" aria-hidden="true" /></div>;
   } else if (kind === "dir") {
-    content = <FolderPane file={file} />;
+    content = <FolderPane file={file} onGoTo={onGoTo} />;
   } else {
     content = <Centered>No preview for this kind of file. The facts on the right still say which one it is.</Centered>;
   }
@@ -332,7 +338,7 @@ function FolderGlyph({ kind }: { kind: string }) {
 /** A folder, shown by what is in it: its name and size, the first entries in
  *  the drawer's row style, the kinds it holds, and one line of keys. Text is
  *  laid out as text — never one flex child per word. */
-function FolderPane({ file }: { file: LoadedFile }) {
+function FolderPane({ file, onGoTo }: { file: LoadedFile; onGoTo?: (abs: string) => void }) {
   const abs = file.source?.abs ?? null;
   const [listing, setListing] = useState<BrowseReport | null>(null);
   useEffect(() => {
@@ -369,10 +375,13 @@ function FolderPane({ file }: { file: LoadedFile }) {
       </div>
       <ul className="m-0 p-0 list-none py-2">
         {p.rows.map((r) => (
-          <li key={r.name} className="flex items-center gap-3 px-5 text-[12.5px]" style={{ minHeight: 34, opacity: r.locked ? 0.55 : 1 }}>
-            <span className="shrink-0 flex" style={{ color: FOLDER_INK[r.kind] }}><FolderGlyph kind={r.kind} /></span>
-            <span className="min-w-0 flex-1 truncate" style={{ color: "var(--text)", fontWeight: 500 }}>{r.name}{r.isDir ? "/" : ""}</span>
-            <span className="shrink-0 text-[11px] tabular-nums" style={{ color: "var(--text3)" }}>{r.meta}</span>
+          <li key={r.name} style={{ opacity: r.locked ? 0.55 : 1 }}>
+            <button type="button" className="agx-pal-hit w-full flex items-center gap-3 px-5 text-[12.5px] text-left" style={{ minHeight: 34 }}
+              onClick={() => abs && onGoTo?.(previewChild(abs, r.name))} title={r.isDir ? "Go into it" : "Open it"}>
+              <span className="shrink-0 flex" style={{ color: FOLDER_INK[r.kind] }}><FolderGlyph kind={r.kind} /></span>
+              <span className="min-w-0 flex-1 truncate" style={{ color: "var(--text)", fontWeight: 500 }}>{r.name}{r.isDir ? "/" : ""}</span>
+              <span className="shrink-0 text-[11px] tabular-nums" style={{ color: "var(--text3)" }}>{r.meta}</span>
+            </button>
           </li>
         ))}
         {p.more > 0 && <li className="px-5 py-1.5 text-[11px]" style={{ color: "var(--text3)" }}>and {p.more} more</li>}
