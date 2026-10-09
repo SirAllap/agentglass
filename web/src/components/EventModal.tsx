@@ -31,7 +31,7 @@ export function EventModal({ event, onClose }: { event: WatchEvent | null; onClo
             <motion.div
               initial={{ opacity: 0, scale: 0.94, y: 16 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 10 }}
               transition={{ type: "spring", stiffness: 320, damping: 30 }}
-              className="w-[min(680px,92vw)] max-h-[82vh] rounded-2xl flex flex-col pointer-events-auto"
+              className="w-[min(680px,92vw)] max-h-[82vh] rounded-xl flex flex-col pointer-events-auto"
               style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
             >
               <div className="flex items-center justify-between px-5 py-3 border-b" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>

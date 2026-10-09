@@ -196,7 +196,7 @@ export function SearchModal({
               <motion.div
                 initial={{ opacity: 0, scale: 0.97, y: -10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.98, y: -6 }}
                 transition={{ type: "spring", stiffness: 340, damping: 30 }}
-                className="w-[min(820px,94vw)] max-h-[80vh] rounded-2xl flex flex-col overflow-hidden pointer-events-auto"
+                className="w-[min(820px,94vw)] max-h-[80vh] rounded-xl flex flex-col overflow-hidden pointer-events-auto"
                 style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
               >
                 <div className="flex items-center gap-2 px-4 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>

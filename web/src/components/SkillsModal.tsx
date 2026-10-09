@@ -222,7 +222,7 @@ export function SkillsModal({ open, onClose }: { open: boolean; onClose: () => v
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 8 }}
               transition={{ type: "spring", stiffness: 330, damping: 30 }}
-              className="w-[min(1320px,96vw)] h-[min(960px,92vh)] rounded-2xl flex flex-col pointer-events-auto"
+              className="w-[min(1320px,96vw)] h-[min(960px,92vh)] rounded-xl flex flex-col pointer-events-auto"
               style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
             >
               <div className="flex items-center justify-between px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>

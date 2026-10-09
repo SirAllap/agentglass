@@ -219,7 +219,7 @@ export function ViewRail({
           setTimeout(() => setLifted(true), 0);
         }}
         onDragEnd={endDrag}
-        className={`${dragging ? "" : "agw-tip "}relative h-11 w-full grid place-items-center rounded-[10px] transition-colors`}
+        className={`${dragging ? "" : "agw-tip "}relative h-11 w-full grid place-items-center rounded-lg transition-colors`}
         // The modifier binding, not the bare letter. Inside the workspace the
         // letters no longer navigate — they belong to whatever has focus,
         // usually a shell — and a tooltip advertising a key that does nothing
@@ -256,7 +256,7 @@ export function ViewRail({
     if (!v) return null;
     const Icon = v.icon;
     return (
-      <div key="ghost" aria-hidden className="h-10 w-full grid place-items-center rounded-[10px] pointer-events-none"
+      <div key="ghost" aria-hidden className="h-10 w-full grid place-items-center rounded-lg pointer-events-none"
         style={{
           border: "1px dashed color-mix(in srgb, var(--primary) 55%, transparent)",
           background: "color-mix(in srgb, var(--primary) 10%, transparent)",
@@ -404,7 +404,7 @@ export function ViewRail({
             data-tip={dragging
               ? "Drop to take it off the rail — it comes back from here"
               : `Hidden views · ${hiddenViews.length} put away`}
-            className="agw-tip relative h-10 min-h-[30px] shrink w-full grid place-items-center rounded-[10px] transition-colors"
+            className="agw-tip relative h-10 min-h-[30px] shrink w-full grid place-items-center rounded-lg transition-colors"
             style={{
               color: aimingHidden ? "var(--error)" : restoreAt ? "var(--primary-hover)" : "var(--text4)",
               // Only while something is in the air. A dashed outline the rest of
@@ -430,7 +430,7 @@ export function ViewRail({
           onClick={() => onMachine("ports")}
           aria-label="Ports"
           data-tip="Ports · what is listening, and from which checkout"
-          className="agw-tip relative h-10 min-h-[30px] shrink w-full grid place-items-center rounded-[10px] transition-colors"
+          className="agw-tip relative h-10 min-h-[30px] shrink w-full grid place-items-center rounded-lg transition-colors"
           style={{ color: "var(--text4)" }}
         >
           <PortsIcon size={ICON.rail} />
@@ -439,7 +439,7 @@ export function ViewRail({
           onClick={() => onMachine("resources")}
           aria-label="Resources"
           data-tip="Resources · CPU, memory and disk, by checkout"
-          className="agw-tip relative h-10 min-h-[30px] shrink w-full grid place-items-center rounded-[10px] transition-colors"
+          className="agw-tip relative h-10 min-h-[30px] shrink w-full grid place-items-center rounded-lg transition-colors"
           style={{ color: "var(--text4)" }}
         >
           <ResourcesIcon size={ICON.rail} />
@@ -448,7 +448,7 @@ export function ViewRail({
           onClick={onSettings}
           aria-label="Settings"
           data-tip="Settings · preferences, exports, shortcuts"
-          className="agw-tip relative h-10 min-h-[30px] shrink w-full grid place-items-center rounded-[10px] transition-colors"
+          className="agw-tip relative h-10 min-h-[30px] shrink w-full grid place-items-center rounded-lg transition-colors"
           style={{ color: "var(--text4)" }}
         >
           <RailGear size={ICON.rail} />
@@ -460,7 +460,7 @@ export function ViewRail({
           onClick={onSkills}
           aria-label="Skills catalog"
           data-tip="Skills catalog · what this fleet can do"
-          className="agw-tip relative h-10 min-h-[30px] shrink w-full grid place-items-center rounded-[10px] transition-colors"
+          className="agw-tip relative h-10 min-h-[30px] shrink w-full grid place-items-center rounded-lg transition-colors"
           style={{ color: "var(--text4)" }}
         >
           <SkillsIcon size={ICON.rail} />

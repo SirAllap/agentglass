@@ -175,7 +175,7 @@ function TidyView({ report, root, busy }: { report: TidyReport | null; root: str
           // and both of its buttons were simply cut off, with no scrollbar and
           // nothing to suggest anything was missing. Measured: 343px of
           // content in a 269px box.
-          <div key={f.id} className="rounded-[10px] overflow-hidden shrink-0" style={{ border: "1px solid color-mix(in srgb, var(--text) 8%, transparent)", background: "color-mix(in srgb, var(--bg3) 34%, transparent)" }}>
+          <div key={f.id} className="rounded-lg overflow-hidden shrink-0" style={{ border: "1px solid color-mix(in srgb, var(--text) 8%, transparent)", background: "color-mix(in srgb, var(--bg3) 34%, transparent)" }}>
             <div className="flex items-start gap-3 px-3 py-2">
               <span className="min-w-0 flex-1">
                 <span className="flex items-baseline gap-2">

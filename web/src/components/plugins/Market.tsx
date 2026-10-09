@@ -330,7 +330,7 @@ export function Offer({ entry, owner, onInstalled, mode, was = null }: {
       {/* Its initial, not the same puzzle eight times: a list of things to
           pick from needs its rows to be told apart at a glance, and the one
           piece of identity a catalogue entry carries is its name. */}
-      <span className="agx-market-tile shrink-0 grid place-items-center rounded-[10px] text-[15px] font-semibold" style={{
+      <span className="agx-market-tile shrink-0 grid place-items-center rounded-lg text-[15px] font-semibold" style={{
         width: 36, height: 36, color: tint,
         background: `color-mix(in srgb, ${tint} 15%, transparent)`,
         border: `1px solid color-mix(in srgb, ${tint} 32%, transparent)`,
@@ -419,11 +419,11 @@ function Details({ entry, owner, tint, repo, open, busy, onClose, onInstall }: {
       <div className="fixed inset-0 agx-scrim" onClick={onClose} />
       <div className="fixed inset-0 flex items-center justify-center p-4 pointer-events-none">
         <div role="dialog" aria-modal="true" aria-label={entry.title || entry.id}
-          className="w-[620px] max-w-[95vw] rounded-2xl flex flex-col pointer-events-auto overflow-hidden"
+          className="w-[620px] max-w-[95vw] rounded-xl flex flex-col pointer-events-auto overflow-hidden"
           style={{ maxHeight: "min(78vh, 620px)", background: "var(--bg2)", border: "1px solid var(--surface-line)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
 
           <div className="flex items-center gap-3 px-5 py-4 border-b shrink-0" style={{ borderColor: "var(--surface-line)" }}>
-            <span className="shrink-0 grid place-items-center rounded-[10px] text-[15px] font-semibold" style={{
+            <span className="shrink-0 grid place-items-center rounded-lg text-[15px] font-semibold" style={{
               width: 36, height: 36, color: tint,
               background: `color-mix(in srgb, ${tint} 15%, transparent)`,
               border: `1px solid color-mix(in srgb, ${tint} 32%, transparent)`,

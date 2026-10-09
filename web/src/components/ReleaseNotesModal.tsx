@@ -58,7 +58,7 @@ export function ReleaseNotesModal({ open, tag, notes, title = "What's new", load
                 role="dialog" aria-modal="true" aria-label={tag ? `${title} in ${tag}` : title}
                 initial={{ opacity: 0, scale: 0.96, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.97, y: 8 }}
                 transition={{ type: "spring", stiffness: 340, damping: 30 }}
-                className="w-[720px] max-w-[95vw] rounded-2xl flex flex-col pointer-events-auto overflow-hidden"
+                className="w-[720px] max-w-[95vw] rounded-xl flex flex-col pointer-events-auto overflow-hidden"
                 style={{ maxHeight: "min(78vh, 640px)", background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
 
                 <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>

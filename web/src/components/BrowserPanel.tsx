@@ -156,7 +156,7 @@ function Favicon({ src }: { src: string | null }) {
   useEffect(() => { setBad(false); }, [src]);
   if (!src || bad) return <span className="shrink-0 opacity-40 flex items-center"><GlobeIcon size={13} /></span>;
   return <img src={src} alt="" onError={() => setBad(true)}
-    className="shrink-0 rounded-[2px]" style={{ width: 14, height: 14, objectFit: "contain" }} />;
+    className="shrink-0 rounded-sm" style={{ width: 14, height: 14, objectFit: "contain" }} />;
 }
 
 /* -------------------------------------------------------------------- view */

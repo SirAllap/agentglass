@@ -128,7 +128,7 @@ export function CommandPalette({
             <motion.div
               initial={{ opacity: 0, scale: 0.96, y: -12 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.97, y: -8 }}
               transition={{ type: "spring", stiffness: 360, damping: 30 }}
-              className="w-[min(560px,92vw)] rounded-2xl overflow-hidden pointer-events-auto"
+              className="w-[min(560px,92vw)] rounded-xl overflow-hidden pointer-events-auto"
               style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
             >
               <input

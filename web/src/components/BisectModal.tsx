@@ -66,7 +66,7 @@ export function BisectModal({ root, onClose, onReset, onOpenCommit, onChanged }:
       <AnimatePresence>
         <motion.div className="fixed inset-0 z-[90] flex items-center justify-center p-4" style={{ background: "color-mix(in srgb, #000 45%, transparent)" }} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
           <motion.div
-            className="relative w-full max-w-lg rounded-2xl p-5"
+            className="relative w-full max-w-lg rounded-xl p-5"
             style={{ background: "var(--bg2)", border: "1px solid var(--border)", boxShadow: "0 24px 80px rgba(0,0,0,.5)" }}
             initial={{ opacity: 0, scale: .97, y: 8 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: .97, y: 8 }}
             onClick={(e) => e.stopPropagation()}>

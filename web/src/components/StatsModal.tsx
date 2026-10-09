@@ -42,7 +42,7 @@ function Heatmap({ data }: { data: number[] }) {
                 <div
                   key={`${d}-${h}`}
                   title={`${day} ${h}:00 — ${n} events`}
-                  className="rounded-[3px]"
+                  className="rounded-sm"
                   style={{ aspectRatio: "1", background: n ? `color-mix(in srgb, var(--primary) ${Math.round(intensity * 100)}%, transparent)` : "color-mix(in srgb, var(--border) 16%, transparent)" }}
                 />
               );
@@ -95,7 +95,7 @@ function SpendHistory({ history }: { history: UsageHistory | null }) {
               title={`${d.day} · ${fmtUsd(d.cost_usd)} · ${d.events.toLocaleString()} events · ${d.sessions} session${d.sessions === 1 ? "" : "s"}${summarised ? " (day summary)" : ""}`}
             >
               <div
-                className="w-full rounded-[2px]"
+                className="w-full rounded-sm"
                 style={{
                   height: `${h}%`,
                   // Same hue either side — this is one series, not two — with
@@ -118,11 +118,11 @@ function SpendHistory({ history }: { history: UsageHistory | null }) {
         {showSeam && (
           <span className="flex items-center gap-3">
             <span className="flex items-center gap-1">
-              <span className="h-2 w-2 rounded-[2px]" style={{ background: "color-mix(in srgb, var(--primary) 38%, transparent)" }} />
+              <span className="h-2 w-2 rounded-sm" style={{ background: "color-mix(in srgb, var(--primary) 38%, transparent)" }} />
               day summaries
             </span>
             <span className="flex items-center gap-1">
-              <span className="h-2 w-2 rounded-[2px]" style={{ background: "var(--primary)" }} />
+              <span className="h-2 w-2 rounded-sm" style={{ background: "var(--primary)" }} />
               full events {history.retention_days ? `(last ${history.retention_days}d)` : ""}
             </span>
           </span>
@@ -243,7 +243,7 @@ function Widget({ title, i, full = false, children }: { title: string; i: number
         <motion.div
           whileHover={{ y: -7, scale: 1.02 }}
           transition={{ type: "spring", stiffness: 220, damping: 26, mass: 0.6 }}
-          className="rounded-[20px] p-5 cursor-default"
+          className="rounded-xl p-5 cursor-default"
           style={{
             background: "linear-gradient(135deg, rgba(255,255,255,.08), rgba(255,255,255,.015) 46%, transparent), color-mix(in srgb, var(--bg3) 80%, transparent)",
             border: "1px solid color-mix(in srgb, white 11%, transparent)",
@@ -360,7 +360,7 @@ export function StatsModal({ open, onClose, stats, windowMs }: { open: boolean; 
                                     <div
                                       key={i}
                                       title={n ? `${n} run${n > 1 ? "s" : ""}` : ""}
-                                      className="h-4 flex-1 rounded-[3px]"
+                                      className="h-4 flex-1 rounded-sm"
                                       style={{
                                         // Sequential single hue: intensity carries magnitude.
                                         background: n

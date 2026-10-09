@@ -33,7 +33,7 @@ export function HelpLegend({ open, onClose }: { open: boolean; onClose: () => vo
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96 }}
               transition={{ type: "spring", stiffness: 340, damping: 30 }}
-              className="w-[min(460px,92vw)] rounded-2xl p-5 pointer-events-auto"
+              className="w-[min(460px,92vw)] rounded-xl p-5 pointer-events-auto"
               style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
             >
               <div className="flex items-center justify-between mb-3">

@@ -84,7 +84,7 @@ export function InsightsModal({ root, onClose }: { root: string; onClose: () => 
       <AnimatePresence>
         <motion.div className="fixed inset-0 z-[90] flex items-center justify-center p-4" style={{ background: "color-mix(in srgb, #000 45%, transparent)" }} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
           <motion.div
-            className="agx-scroll relative w-full max-w-2xl max-h-[85vh] overflow-y-auto rounded-2xl p-5"
+            className="agx-scroll relative w-full max-w-2xl max-h-[85vh] overflow-y-auto rounded-xl p-5"
             style={{ background: "var(--bg2)", border: "1px solid var(--border)", boxShadow: "0 24px 80px rgba(0,0,0,.5)" }}
             initial={{ opacity: 0, scale: .97, y: 8 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: .97, y: 8 }}
             onClick={(e) => e.stopPropagation()}
