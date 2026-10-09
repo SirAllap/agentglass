@@ -18,7 +18,7 @@ import {
   closeSync, cpSync, existsSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync,
   renameSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { mintPluginToken, revokePluginToken } from "./auth.ts";
 import { dropCanvases } from "./plugin-canvas.ts";
@@ -1396,8 +1396,11 @@ async function finishInstall(
   // The old folder is put aside, not deleted, until the record is saved: new
   // bytes under the old approval are what a failed save would otherwise leave.
   // The ceiling: a crash between the rename and the save leaves the old folder
-  // under `.old-<pid>` and nothing at the name; a reinstall puts it right.
-  const aside = `${installDir}.old-${process.pid}`;
+  // under `.aside-<pid>-<name>` and nothing at the name; a reinstall puts it
+  // right. The aside starts with a dot because no plugin name may: a suffix on
+  // the name (`<name>.old-<pid>`) was itself a valid name, and updating one
+  // plugin deleted another's folder.
+  const aside = join(dirname(installDir), `.aside-${process.pid}-${basename(installDir)}`);
   rmSync(aside, { recursive: true, force: true });
   if (existsSync(installDir)) renameSync(installDir, aside);
   const putBack = (): void => {
