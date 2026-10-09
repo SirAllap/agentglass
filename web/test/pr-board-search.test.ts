@@ -521,7 +521,7 @@ describe("feedback on a request in flight", () => {
      */
     expect(src).toContain("pending?: boolean;");
     expect(src).toContain("setBusyWhat(label);");
-    expect(src).toContain('finally { setBusy(false); setBusyWhat(""); }');
+    expect(src).toContain('finally { actLock.current = false; setBusy(false); setBusyWhat(""); }');
     for (const label of ["Update branch", "Re-run checks", "Review"]) {
       expect(src, label).toContain(`pending={busyWhat === "${label}"}`);
     }

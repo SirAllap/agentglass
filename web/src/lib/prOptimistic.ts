@@ -190,3 +190,13 @@ export const draftPatch = (number: number, isDraft: boolean) => (d: PrDetail): P
 
 export const titlePatch = (number: number, title: string) => (d: PrDetail): PrDetail =>
   d.number === number ? { ...d, title } : d;
+
+/* Close, reopen and auto-merge: outcomes the request itself decides, so they are
+   drawn on the press like a label and taken back if GitHub refuses. The lists
+   read the state off the detail, so a closed pull request leaves the open board
+   in the same tick. */
+export const statePatch = (number: number, state: "OPEN" | "CLOSED", at: string) => (d: PrDetail): PrDetail =>
+  d.number === number ? { ...d, state, closedAt: state === "CLOSED" ? at : null, autoMerge: state === "CLOSED" ? null : d.autoMerge } : d;
+
+export const autoMergePatch = (number: number, armed: PrDetail["autoMerge"]) => (d: PrDetail): PrDetail =>
+  d.number === number ? { ...d, autoMerge: armed } : d;

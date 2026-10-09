@@ -67,7 +67,7 @@ import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
 import { keepLoadedChecks } from "../lib/prMerge.ts";
 import { askingBehind, behindAnswer, forgetBehind, forgetOneBehind, onBehind, refreshBehind } from "../lib/prBehindStore.ts";
 import { refreshRollup } from "../lib/prRollupStore.ts";
-import { overlayDetail, holdEdits, refreshPlan, rowPatch, type EditLog } from "../lib/prRefresh.ts";
+import { overlayDetail, holdEdits, refreshPlan, rowPatch, landedDetail, dropLanded, staleOpen, once, type EditLog, type Landed } from "../lib/prRefresh.ts";
 import {
   anchorId, bootstrapSince, clearSeen, foldedIdx, markAllSeen, newKeys, newSince, onSeenChange, readSeen,
   reviewSpeaks, writeSeen, type NewAtom,
@@ -113,7 +113,7 @@ import { pins, isPinned, togglePin, subscribePins, type Pin } from "../lib/prPin
 import { TriageBoard } from "./TriageBoard.tsx";
 import { Inbox } from "./prs/Inbox.tsx";
 import { FileRail } from "./FileRail.tsx";
-import { Optimistic, type Sent, reactionPatch, bodyPatch, resolvedPatch, labelsPatch, assigneesPatch, reviewersPatch, milestonePatch, draftPatch, titlePatch } from "../lib/prOptimistic.ts";
+import { Optimistic, type Sent, reactionPatch, bodyPatch, resolvedPatch, labelsPatch, assigneesPatch, reviewersPatch, milestonePatch, draftPatch, titlePatch, statePatch, autoMergePatch } from "../lib/prOptimistic.ts";
 import { prTimeline } from "../lib/prTimeline.ts";
 
 /**
@@ -1814,7 +1814,7 @@ function PrRow({ p, active, onSelect, onReview, pinned, onTogglePin, q, unread, 
             * The arrow is there so it reads as a destination and not as one
             * more label.
             */}
-          <span className="truncate shrink-0 flex items-center gap-0.5" style={{ maxWidth: 190 }}
+          <span className="shrink-0 whitespace-nowrap flex items-center gap-0.5"
             title={`Merges into ${p.baseRefName}`}>
             <span style={{ color: "var(--text4)" }}>→</span>
             <span style={isTrunk(p.baseRefName)
@@ -2587,18 +2587,27 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    *  detail then drew it — so a list read before the edit cannot undo it. */
   const editedAt = useRef(new Map<number, number>());
   const editLog = useRef<EditLog>(new Map());
+  /** Resolves the board's own read for the refresh button, which spins until it does. */
+  const boardSettle = useRef<(() => void) | null>(null);
+  const refreshLock = useRef(false);
+  const [refreshing, setRefreshing] = useState(false);
+  /** Merges this session saw land, so neither view waits for a poll to know. */
+  const landedRef = useRef<Landed>(new Map());
+  /** The open lists never carry a pull request whose merge we just saw land,
+   *  even when a read that began before it comes back still listing it. */
+  const openLists = (rows: PrSummary[]) => (stateSel === "open" ? dropLanded(rows, landedRef.current) : rows);
 
   const loadList = useCallback((force = false) => {
     if (!root) return;
     const req = ++listReq.current;
     const want = filter;
-    api.prList(root, filter, stateSel, force, cursor, serverQuery).then((r) => {
+    return api.prList(root, filter, stateSel, force, cursor, serverQuery).then((r) => {
       if (req !== listReq.current) return; // a newer request already won
       setRepo(r.repo);
       // Same rule as the board: a refresh may add and correct, but it may not
       // un-know. Every fetch starts at the fast pass, so without this a list
       // that had its check states dropped back to "not in yet" on every poll.
-      setPrs((cur) => holdEdits(keepLoadedChecks(cur, r.prs), editLog.current, r.fetchedAt));
+      setPrs((cur) => openLists(holdEdits(keepLoadedChecks(cur, r.prs), editLog.current, r.fetchedAt)));
       setListState({ fetchedAt: r.fetchedAt, loading: r.loading, checksPending: r.checksPending, error: r.error, needsAuth: r.needsAuth, total: r.total, hasNext: r.hasNext, cursor: r.cursor ?? null, pageSize: r.pageSize });
       // The keyboard cursor, never the open pull request. This lands on every
       // poll and on every scope switch, and when the list was a column beside a
@@ -2736,13 +2745,16 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     if (staleTimer.current) clearTimeout(staleTimer.current);
     setDetailErr("");
     const ticket = layers.readStarted();
-    api.prDetail(root, n, force).then((r) => {
+    const read = api.prDetail(root, n, force).then((r) => {
       if (req !== detailReq.current) return; // a later selection already won
       if (r.ok && r.detail) layers.readLanded(ticket, { stale: !!r.stale });
       // Disarmed by any load, so a later, ordinary open of that number is ordinary.
       const trying = tryAsPr.current?.number === n ? tryAsPr.current : null;
       tryAsPr.current = null;
       if (r.ok && r.detail) {
+        /* A read that began before our own merge answered says OPEN. The merge
+           response is newer; the next read confirms. */
+        if (staleOpen(r.detail, landedRef.current)) return;
         rememberDetail(root, n, r.detail); setDetail(r.detail); setDetailStale(false);
         /*
          * The server handed back what it had rather than making us wait, and
@@ -2777,6 +2789,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     api.prConflictFiles(root, n)
       .then((r) => { if (req === detailReq.current) setConflictFiles(r.ok ? { files: r.conflicts, stale: !!r.stale, resolvedLocally: r.resolvedLocally } : null); })
       .catch(() => { if (req === detailReq.current) setConflictFiles(null); });
+    /* The read itself, so a caller can say "still asking" for exactly as long as
+       it is. The conflict-files call above is not part of it: it is a second
+       question about the same pull request, and it answers on its own. */
+    return read;
   }, [root]);
 
   /*
@@ -2814,9 +2830,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
        conflict a base move caused reached the detail first and a poll already
        in flight brought the board's older row back over it. */
     if (!detailStale) editLog.current.set(detail.number, { at: Date.now(), patch: rowPatch(detail) });
-    setPrs((cur) => overlayDetail(cur, detail));
-    setBoardMine((cur) => overlayDetail(cur, detail));
-    setBoardReview((cur) => overlayDetail(cur, detail));
+    setPrs((cur) => openLists(overlayDetail(cur, detail)));
+    setBoardMine((cur) => openLists(overlayDetail(cur, detail)));
+    setBoardReview((cur) => openLists(overlayDetail(cur, detail)));
   }, [detail, away, detailStale]);
 
   useEffect(() => {
@@ -3285,15 +3301,19 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     void Promise.allSettled([
       api.prList(root, "mine", stateSel, force).then((r) => {
         if (!live) return;
-        setBoardMine((cur) => holdEdits(keepLoadedChecks(cur, r.prs ?? []), editLog.current, r.fetchedAt));
+        setBoardMine((cur) => openLists(holdEdits(keepLoadedChecks(cur, r.prs ?? []), editLog.current, r.fetchedAt)));
         if (typeof r.total === "number") setViewCounts((c) => ({ ...c, mine: r.total! }));
       }),
       api.prList(root, "review", stateSel, force).then((r) => {
         if (!live) return;
-        setBoardReview((cur) => holdEdits(keepLoadedChecks(cur, r.prs ?? []), editLog.current, r.fetchedAt));
+        setBoardReview((cur) => openLists(holdEdits(keepLoadedChecks(cur, r.prs ?? []), editLog.current, r.fetchedAt)));
         if (typeof r.total === "number") setViewCounts((c) => ({ ...c, review: r.total! }));
       }),
-    ]).then(() => { if (live) setBoardLoading(false); });
+    ]).then(() => {
+      if (live) setBoardLoading(false);
+      /* A refresh pressed on the board is waiting on exactly this read. */
+      boardSettle.current?.(); boardSettle.current = null;
+    });
     return () => { live = false; };
   }, [root, stateSel, listState.fetchedAt, boardTick]);
 
@@ -3505,8 +3525,12 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const [refusedUpdate, setRefusedUpdate] = useState<{ number: number; updatedAt: string } | null>(null);
   const AWAIT_CHECKS_MS = 4 * 60_000;
 
+  /* `busy` is state: two presses in the same tick both read false. The ref is
+     what makes the second one a no-op, the disabled attribute only what shows it. */
+  const actLock = useRef(false);
   const act = useCallback(async (label: string, fn: () => Promise<{ ok: boolean; error?: string; detail?: string }>) => {
-    if (busy) return false;
+    if (busy || actLock.current) return false;
+    actLock.current = true;
     setBusy(true);
     /* WHICH one is running, not just that something is. Every one of these is a
        round trip through `gh`; a row of buttons all going grey says the app is
@@ -3526,7 +3550,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       if (selected != null) loadDetail(selected, true);
       return r.ok;
     } catch (e) { flash(false, String(e)); return false; }
-    finally { setBusy(false); setBusyWhat(""); }
+    finally { actLock.current = false; setBusy(false); setBusyWhat(""); }
   }, [busy, flash, loadList, selected, loadDetail]);
 
   // One picker for the masthead's "＋" and the sidebar's ✎ both — lifted here
@@ -3911,7 +3935,20 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * and is treated like one: only after the merge actually landed, and a
    * refusal from ClickUp never reports the merge as failed — see mergeNote.
    */
-  const doMerge = async (method: MergeMethod) => {
+  const merging = useRef(false);
+  /** The merge response, written to every view that shows the pull request. */
+  const markLanded = (n: number, by?: string) => {
+    landedRef.current.set(n, Date.now());
+    const at = new Date().toISOString();
+    setDetail((cur) => (cur && cur.number === n ? landedDetail(cur, at, by) : cur));
+    const gone = (rows: PrSummary[]) => (stateSel === "open" ? dropLanded(rows, landedRef.current) : rows);
+    setPrs(gone); setBoardMine(gone); setBoardReview(gone);
+  };
+  /* One merge at a time, from the press to the settled answer — the dialog
+     included. `mergeWork` only greys the button after a re-render; this is what
+     makes a second press in the same tick send nothing. */
+  const doMerge = (method: MergeMethod) => once(merging, () => runMerge(method));
+  const runMerge = async (method: MergeMethod) => {
     if (!detail) return;
     const head = detail.commits[detail.commits.length - 1]?.oid;
     const choice = await askMerge({
@@ -3947,10 +3984,14 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
      */
     try {
       setMergeWork("Merging…");
-      const merged = await act("Merge", () => api.prMerge(root, detail.number, method, {
-        deleteBranch: choice.deleteBranch, headSha: head,
-        subject: choice.subject, body: choice.body,
-      }));
+      const merged = await act("Merge", async () => {
+        const res = await api.prMerge(root, detail.number, method, {
+          deleteBranch: choice.deleteBranch, headSha: head,
+          subject: choice.subject, body: choice.body,
+        });
+        if (res.ok) markLanded(detail.number, res.mergedBy);
+        return res;
+      });
       const move = choice.card;
       if (!merged || !move) return;
       setMergeWork(MOVING_CARD);
@@ -3959,6 +4000,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       // than quietly winning.
       const r = await api.clickupStatus(move.id, move.to, move.updated)
         .catch((e) => ({ ok: false, error: String(e) }));
+      // The chip and the board's row read the status from the store: hand it the
+      // write's own answer rather than wait out its minute.
+      const query = mergeCardRef(detail, clickup)?.query;
+      if (r.ok && query) putCard(query, "task" in r ? r.task : undefined);
       flash(r.ok, mergeNote(true, {
         asked: true, ok: r.ok, to: move.to,
         unauthorised: "unauthorised" in r ? r.unauthorised : undefined,
@@ -3980,9 +4025,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    */
   const doAutoMerge = () => {
     if (!detail) return;
-    act("Auto-merge", () => api.prMerge(root, detail.number, mergeMethod, {
-      auto: true, deleteBranch: !detail.mergePolicy?.deletesBranch,
-    }));
+    void field(autoMergePatch(detail.number, { enabledBy: "you", method: mergeMethod }),
+      () => api.prMerge(root, detail.number, mergeMethod, { auto: true, deleteBranch: !detail.mergePolicy?.deletesBranch }),
+      "Auto-merge did not arm", "auto");
   };
 
   /**
@@ -4004,7 +4049,13 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       confirmLabel: reopen ? "Reopen pull request" : "Close pull request", danger: !reopen,
     });
     if (!ok) return;
-    await act(reopen ? "Reopen" : "Close", () => api.prClose(root, detail.number, reopen));
+    /* Drawn on the press: the detail says Closed and the board card leaves in
+       the same tick, and a refusal takes both back. */
+    const ok2 = await field(statePatch(detail.number, reopen ? "OPEN" : "CLOSED", new Date().toISOString()),
+      () => api.prClose(root, detail.number, reopen), reopen ? "Reopen failed" : "Close failed", "state");
+    if (ok2) flash(true, reopen ? "Reopen — done" : "Close — done");
+    // A reopened pull request is not in the lists it left; only a read brings it back.
+    if (ok2 && reopen) loadList(true);
   };
 
   /**
@@ -4458,6 +4509,13 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             * re-read everything around a diff that stayed as it was.
             */}
           <RefreshButton onRefresh={() => {
+            /* Spins for exactly as long as the reads this press started are out,
+               and a second press while they are is nothing: one refresh, one
+               set of requests. */
+            if (!root || refreshLock.current) return;
+            refreshLock.current = true; setRefreshing(true);
+            const reads: Promise<unknown>[] = [];
+            const settled = () => { void Promise.allSettled(reads).finally(() => { refreshLock.current = false; setRefreshing(false); }); };
             const plan = refreshPlan(selected);
             if (plan.pr != null) {
               /* One pull request open: refresh that one. The lists, and the
@@ -4465,7 +4523,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                  are, so going back to the board does not reload every card. */
               refreshBehind(root, plan.pr);
               refreshRollup(root, plan.pr);
-              loadDetail(plan.pr, true);
+              reads.push(Promise.resolve(loadDetail(plan.pr, true)));
               diffFresh.current = true;
               setDiffErr("");
               /* Everything per-pull-request re-asks off this: the diff, and the
@@ -4473,6 +4531,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                  pressing Refresh must not make the page you are reading
                  disappear for a second. */
               setDetailTick((n) => n + 1);
+              settled();
               return;
             }
             forgetBehind();
@@ -4491,10 +4550,12 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             if (boardShown) {
               boardForce.current = true;
               setBoardTick((n) => n + 1);
+              reads.push(new Promise<void>((r) => { boardSettle.current = r; }));
             }
             const tableIsQueue = stateSel === "open" && (filter === "mine" || filter === "review") && !cursor && !serverQuery;
-            loadList(!boardShown || tableIsQueue);
-          }} busy={busy}
+            reads.push(Promise.resolve(loadList(!boardShown || tableIsQueue)));
+            settled();
+          }} busy={busy} spinning={refreshing}
             title={selected != null ? "Refresh this pull request" : "Refresh the list"} />
         </div>
       </div>
@@ -4690,7 +4751,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                   if (what === "merge") {
                     if (!p.headSha) { flash(false, "Merge — still reading this one's checks"); return; }
                     setActingOn(p.number);
-                    void act("Merge", () => api.prMerge(root, p.number, mergeMethod, { headSha: p.headSha }))
+                    void act("Merge", async () => {
+                      const res = await api.prMerge(root, p.number, mergeMethod, { headSha: p.headSha });
+                      if (res.ok) markLanded(p.number, res.mergedBy);
+                      return res;
+                    })
                       .finally(() => setActingOn(null));
                   }
                   else if (what === "rerun") {
@@ -4817,7 +4882,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                   it lands on a click handler, and a bare reference would hand
                   the MouseEvent in as the pull request number. */}
               <Masthead
-                d={d} busy={busy} local={local} onShowLocal={showLocal}
+                d={d} busy={busy || !!mergeWork} local={local} onShowLocal={showLocal}
                 onEditTitle={doEditTitle} onDraft={() => { void field(draftPatch(d.number, !d.isDraft), () => api.prDraft(root, d.number, !d.isDraft), d.isDraft ? "Mark ready failed" : "Convert to draft failed", "draft"); }}
                 onClose={doClose} onLocalReview={(recipe) => doLocalReview(undefined, recipe)}
                 onReviewInTerminal={onReviewInTerminal && d ? (recipe) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "") : undefined}
@@ -4944,7 +5009,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                     <div className="min-w-0 flex-1">
                       {tab === "overview" ? (
                         <Overview
-                          d={d} root={root} busy={busy} local={local} onShowLocal={showLocal}
+                          d={d} root={root} busy={busy || !!mergeWork} local={local} onShowLocal={showLocal}
                           mergeWork={mergeWork} openThreads={openThreads.length}
                           conversationCount={d.comments.length + d.reviews.length + d.threads.length}
                           behind={behind} behindAsking={behindAsking} localHead={localHead} busyWhat={busyWhat}
@@ -4974,7 +5039,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                           }}
                           onRerun={() => act("Re-run checks", () => api.prRerun(root, d.number))}
                           onAutoMerge={doAutoMerge}
-                          onCancelAutoMerge={() => act("Auto-merge cancelled", () => api.prMerge(root, d.number, mergeMethod, { disableAuto: true }))}
+                          onCancelAutoMerge={() => { void field(autoMergePatch(d.number, null), () => api.prMerge(root, d.number, mergeMethod, { disableAuto: true }), "Auto-merge was not cancelled", "auto"); }}
                           onDraft={() => { void field(draftPatch(d.number, !d.isDraft), () => api.prDraft(root, d.number, !d.isDraft), d.isDraft ? "Mark ready failed" : "Convert to draft failed", "draft"); }}
                           onGoThreads={() => setTab("conversation")}
                           /*
@@ -5865,6 +5930,7 @@ const v = p2Verdict(d.humanReview, reviewerRoster(d), d.reviewDecision, d.gate);
                 onChange={(v: string) => onMethod(v as MergeMethod)}
                 options={methods.map((m) => ({ value: m, ...MERGE_OPTION[m] }))}
                 title="Merge method"
+                disabled={busy || !!mergeWork}
                 align="right"
                 className="text-[10.5px] px-1.5 py-1 outline-none"
                 style={{ background: "var(--primary)", color: "var(--bg)", borderLeft: "1px solid color-mix(in srgb, var(--bg) 35%, transparent)" }}
@@ -6547,7 +6613,8 @@ function Field({ label, title, max, children }: {
   /** The whole cell's tooltip — a value that is truncated still has to be
    *  readable somehow. */
   title?: string;
-  max?: number;
+  /** Pixels, or a CSS length ("62%") for a cell that should grow with the row. */
+  max?: number | string;
   children: React.ReactNode;
 }) {
   return (
@@ -8206,7 +8273,10 @@ function Masthead({ d, busy, local, onShowLocal, onEditTitle, onDraft, onClose, 
           background: "color-mix(in srgb, var(--border) 14%, transparent)",
         }}>
         <Field label="Author"><Avatar login={d.author} size={14} />{d.author}</Field>
-        <Field label="Branch" max={460} title={`${d.headRefName} → ${d.baseRefName}`}>
+        {/* 62% of the row rather than 460px: a long branch name truncated at
+            460 with most of the strip still empty to its right, and it took the
+            destination with it ("→ ma…"). The worktree cell still fits beside it. */}
+        <Field label="Branch" max="62%" title={`${d.headRefName} → ${d.baseRefName}`}>
           {/* The branch name is a thing you paste into a shell — `git checkout`,
               a worktree, a comment — and it was selectable text you had to drag
               across, truncated, in a chip. One click copies it. A button rather
@@ -8215,7 +8285,7 @@ function Masthead({ d, busy, local, onShowLocal, onEditTitle, onDraft, onClose, 
           <button
             onClick={() => { void navigator.clipboard?.writeText(d.headRefName); setCopiedBranch(true); setTimeout(() => setCopiedBranch(false), 1400); }}
             title={`${d.headRefName}\n\nClick to copy`}
-            className="px-1 py-0.5 rounded text-[10.5px] truncate max-w-full hover:opacity-80 cursor-pointer"
+            className="px-1 py-0.5 rounded text-[10.5px] truncate min-w-0 hover:opacity-80 cursor-pointer"
             /* The NAME stays put and the chip tints for a moment. Swapping the
                label for the word "copied" collapsed a forty-character chip to
                six, so the row jumped and "→ master" slid across the header to
@@ -8235,8 +8305,15 @@ function Masthead({ d, busy, local, onShowLocal, onEditTitle, onDraft, onClose, 
               about a destination worth a colour — this lands on somebody's
               stack, not on main — and it is the rule the list rows already
               use, so the header and the list say it the same way. */}
-          <span style={{ color: "var(--text4)" }}>→</span>
-          <span className="truncate" style={{ color: isTrunk(d.baseRefName) ? "var(--text3)" : "var(--warning)" }}>{d.baseRefName}</span>
+          <span className="shrink-0" style={{ color: "var(--text4)" }}>→</span>
+          {/* Its own chip, in the head chip's own surface, and it never gives
+              way: only the branch on the left truncates. */}
+          <span data-base-chip className="px-1 py-0.5 rounded text-[10.5px] shrink-0 whitespace-nowrap"
+            style={{
+              ...CODE_FONT_STYLE,
+              color: isTrunk(d.baseRefName) ? "var(--text3)" : "var(--warning)",
+              background: "color-mix(in srgb, var(--primary) 12%, transparent)",
+            }}>{d.baseRefName}</span>
         </Field>
         {/*
           * Where this branch lives on this machine.

@@ -1286,6 +1286,12 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 @media (prefers-reduced-motion: reduce) {
   .agx-spin { animation: agx-breathe 1.6s ease-in-out infinite; }
 }
+/* An icon that turns while its request is out (the header refresh button). The
+   same reduced-motion answer as the ring: it breathes instead of rotating. */
+.agx-turn { animation: agx-spin 0.8s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .agx-turn { animation: agx-breathe 1.6s ease-in-out infinite; }
+}
 
 /* The notification list behind the top bar's bell.
    These were written for the notch, which was carved out of true black and so

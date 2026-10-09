@@ -1434,12 +1434,12 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
         <span style={{ color: "var(--text4)" }}>→</span>
         {/* Where it lands, tinted when it is not the trunk — a stacked pull
             request read as a trunk one is a mistake you make once. */}
-        {/* Truncated at 90px, so the one that matters — a stacked branch with a
-            long ticket in its name — is exactly the one you cannot read. The
-            full thing is on hover, both sides of the arrow, because "into
-            what" is only half the question. */}
-        <span className="truncate" title={`${p.headRefName} → ${p.baseRefName}`}
-          style={{ maxWidth: 90, color: TRUNKS.has(p.baseRefName) ? "var(--text4)" : "var(--warning)" }}>{p.baseRefName}</span>
+        {/* Never truncated: at 90px the one that matters — a stacked branch with
+            a long ticket in its name — was exactly the one you could not read.
+            The full pair is on hover, because "into what" is only half the
+            question. */}
+        <span className="shrink-0 whitespace-nowrap" title={`${p.headRefName} → ${p.baseRefName}`}
+          style={{ color: TRUNKS.has(p.baseRefName) ? "var(--text4)" : "var(--warning)" }}>{p.baseRefName}</span>
         {/*
           * How far behind the base, when somebody has found out.
           *

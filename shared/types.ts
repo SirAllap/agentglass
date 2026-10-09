@@ -3755,6 +3755,9 @@ export interface PrListResponse {
 
 export interface PrActionResult {
   ok: boolean; error?: string; detail?: string;
+  /** A merge that landed: who pressed it, so the screen can say so before the
+   *  next read does. */
+  mergedBy?: string;
   /** Update branch only: GitHub refused because base and head conflict — the
    *  one refusal the panel can offer to resolve. */
   conflict?: boolean;

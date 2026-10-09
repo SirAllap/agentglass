@@ -80,3 +80,50 @@ export function holdEdits(rows: PrSummary[], log: EditLog, fetchedAt: number, no
   }
   return out;
 }
+
+/*
+ * A merge that landed, told to both views at once.
+ *
+ * Measured on the board: after merging in the detail the card stayed in "ready
+ * to land" for as long as the board's own poll took (about a minute), and the
+ * detail itself read "Open / Ready to merge" for 3-4 s until its re-read came
+ * back. The merge response is the freshest thing either view knows, so it is
+ * written to both, and a read that started before it (still saying OPEN) does
+ * not get to undo it. GitHub's answer after LANDED_HOLD_MS is its own again.
+ */
+export const LANDED_HOLD_MS = 2 * 60_000;
+
+/** Pull request number -> when its merge response arrived. */
+export type Landed = Map<number, number>;
+
+export function landedDetail(d: PrDetail, at: string, by?: string): PrDetail {
+  return { ...d, state: "MERGED", mergedAt: at, mergedBy: by || d.mergedBy || null, updatedAt: at, autoMerge: null };
+}
+
+/** What an OPEN list may show: nothing that has stopped being open (a close or
+ *  a merge written from the detail), and nothing whose merge we just saw land
+ *  even when a read that began before it still lists it. */
+export function dropLanded(rows: PrSummary[], landed: Landed, now = Date.now()): PrSummary[] {
+  for (const [n, at] of landed) if (now - at > LANDED_HOLD_MS) landed.delete(n);
+  return rows.some((r) => r.state !== "OPEN" || landed.has(r.number))
+    ? rows.filter((r) => r.state === "OPEN" && !landed.has(r.number))
+    : rows;
+}
+
+/** A detail read that says OPEN for a pull request whose merge we just saw land. */
+export function staleOpen(d: PrDetail, landed: Landed, now = Date.now()): boolean {
+  const at = landed.get(d.number);
+  return at !== undefined && now - at <= LANDED_HOLD_MS && d.state === "OPEN";
+}
+
+/**
+ * Run `fn` unless one is already running under this lock, and release the lock
+ * whether it resolved or threw. A React state flag cannot be this: two presses
+ * in the same tick both read it false. The lock is a ref (`{ current }`), read
+ * and set synchronously before the first await.
+ */
+export async function once<T>(lock: { current: boolean }, fn: () => Promise<T>): Promise<T | undefined> {
+  if (lock.current) return undefined;
+  lock.current = true;
+  try { return await fn(); } finally { lock.current = false; }
+}

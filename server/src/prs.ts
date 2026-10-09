@@ -4568,6 +4568,9 @@ export async function mergePr(rootIn: unknown, number: unknown, method: unknown,
     const hint = autoMergeHint(res.error || "");
     if (hint) return { ...res, error: hint };
   }
+  // Who pressed it, off the login already cached for the list: a merge that
+  // landed is the one answer that says something about the pull request itself.
+  if (res.ok && !auto) return { ...res, mergedBy: ghCapabilityCached()?.login || undefined };
   return res;
 }
 
