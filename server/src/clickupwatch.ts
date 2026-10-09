@@ -306,7 +306,15 @@ export async function pollCards(now = Date.now()): Promise<CardNote[]> {
   const told = new Set(s.told ?? []);
   const mine = myId();
   const read = comments ?? commentsOn;
-  for (const t of [...look.values()].slice(0, MAX_COMMENT_READS)) {
+  /*
+   * The very first look reads no comments at all. It is silent by design (a
+   * fresh install must not announce a day of history), so what it read was only
+   * ever thrown away: measured against a stand-in workspace, the first look
+   * cost 12 comment reads of a total of 15 requests and 697 KB. The next look's
+   * window starts at this one's high-water mark, so nothing older is announced
+   * later either.
+   */
+  for (const t of first ? [] : [...look.values()].slice(0, MAX_COMMENT_READS)) {
     const cs = await read(t.id);
     if (!cs.ok || !cs.data) continue;
     for (const c of cs.data.comments) {

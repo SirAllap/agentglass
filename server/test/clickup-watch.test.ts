@@ -84,6 +84,19 @@ describe("the first look after connecting", () => {
     expect(asked[0]).toBe(now - 24 * 3600_000);
   });
 
+  it("opens no comments: it is silent, so what it read was thrown away", async () => {
+    // Measured: the first look was 12 comment reads out of 15 requests.
+    const read: string[] = [];
+    W.__setCommentReader(async (id) => { read.push(id); return { ok: true, data: { comments: [] } }; });
+    answer = { ok: true, data: { tasks: [card("a", "in progress"), card("b", "done")] } };
+    await W.pollCards();
+    expect(read).toEqual([]);
+    // ...and the look after it does read the cards that moved.
+    answer = { ok: true, data: { tasks: [card("a", "in review")] } };
+    await W.pollCards();
+    expect(read).toEqual(["a"]);
+  });
+
   it("remembers what it saw, so the next look can compare", async () => {
     answer = { ok: true, data: { tasks: [card("a", "in progress")] } };
     await W.pollCards();

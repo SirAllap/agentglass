@@ -35,6 +35,7 @@ import { Composer, COMPOSER_MIN } from "./tasks/Composer.tsx";
 import { readState } from "../lib/boardStaleness.ts";
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
 import { useDismiss } from "../lib/useDismiss.ts";
+import { usePoll } from "../lib/usePoll.ts";
 import { Portal } from "./Portal.tsx";
 import { PeoplePick } from "./PeoplePick.tsx";
 import { Markdown, MarkdownImages } from "../lib/markdown.tsx";
@@ -305,13 +306,11 @@ function IssuesBody({ root, active, jump }: { root: string; active: boolean; jum
     api.issuesWork().then((r) => setWork(r.work)).catch(() => {});
   }, [root, state, q, mine]);
 
-  useEffect(() => {
-    if (!active) return;
-    load();
-    // Slow: an issue list is not a live feed, and every poll is a `gh` spawn.
-    const id = setInterval(load, 60_000);
-    return () => clearInterval(id);
-  }, [active, load]);
+  useEffect(() => { if (active) load(); }, [active, load]);
+  // Slow: an issue list is not a live feed, and every poll is a `gh` spawn. Only
+  // while somebody is looking: an unfocused window kept asking (measured 0.5 to
+  // 1 a minute for a bundle that came back identical every time).
+  usePoll(active, load, 60_000);
 
   /*
    * Serve a "show me this issue" from the pull-request panel.
@@ -813,12 +812,10 @@ function useLocalTasks(active: boolean) {
   }, []);
   // Re-read when a reminder is set or answered, so the row agrees with the
   // click that just happened rather than waiting out the poll.
-  useEffect(() => {
-    if (!active) return;
-    load();
-    const t = setInterval(load, 15_000);
-    return () => clearInterval(t);
-  }, [active, load]);
+  useEffect(() => { if (active) load(); }, [active, load]);
+  // Focus-gated like the other panels' polls: measured 3.5 requests a minute
+  // from a window nobody was looking at, every answer identical.
+  usePoll(active, load, 15_000);
   return { data, reload: load };
 }
 
@@ -1683,6 +1680,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
   /** The one write path. `Pending` is still the shape — it carries what to say
    *  when it lands — with the key of the control that is saving. */
   const apply = (t: ProviderTask, key: string, p: Pending) => {
+    if (key === "sprint") moved.current = true;
     if (p.optimistic) guess(t, p.optimistic);
     void queue.run({
       id: t.id, key, readAt: t.updated, done: p.done,
@@ -1691,17 +1689,23 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
   };
 
   /*
-   * The board is re-read when the writes stop, not after each one.
+   * The board is re-read when the writes stop, and only for a card that MOVED.
    *
-   * Each write already answers with the card it changed, so the row on screen is
-   * right without asking again — and asking after every one of them would put a
-   * full board fetch behind every keystroke of a triage session. This is the
-   * catch-up for everything a write touches indirectly: a status that moved the
-   * card into another list's group, an automation that fired on it.
+   * Each write already answers with the card it changed, the server folds that
+   * answer into its own copy of every board holding the card, and the row on
+   * screen is right without asking again. A status change or a card Refresh used
+   * to be followed by a forced read of the whole board anyway: measured against
+   * a stand-in workspace, one extra board page (92 KB) and two to three upstream
+   * requests per status change, and the same per Refresh press, because
+   * Refresh's own answer landed in `over` and looked like a write. What a write
+   * touches indirectly (an automation that fired on it) shows at the next read,
+   * which the poll and the Refresh at the top of the board already do.
+   * A card sent to another sprint is the exception: it left this board's list,
+   * and only a read says so.
    */
+  const moved = useRef(false);
   useEffect(() => {
-    if (queue.pending > 0) return;
-    if (!Object.keys(over).length) return;
+    if (queue.pending > 0 || !moved.current) return;
     const timer = setTimeout(() => { void load(data?.view?.id, true); }, 1200);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1709,7 +1713,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
 
   /** Writes that are still to come must not be sent against a stamp from before
    *  a fresh read. */
-  useEffect(() => { queue.reset(); setOver({}); }, [data, queue]);
+  useEffect(() => { queue.reset(); setOver({}); moved.current = false; }, [data, queue]);
 
 
 

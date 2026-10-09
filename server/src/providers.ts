@@ -665,8 +665,7 @@ async function doRefresh(view: SavedView, token: string, force: boolean): Promis
     // on the NEXT read rather than the next refresh. Without this the first
     // sweep only seeds the map and a board on a five-minute timer takes ten
     // minutes to show a column it already knows the contents of.
-    void refreshA(a.data.tasks, token)
-      .then(() => recount(view.id))
+    void refreshA(a.data.tasks, token, { board: view.id, run: () => recount(view.id) })
       .catch(() => { /* a count is not worth a log line */ });
     const withUrl = { ...view, url: myWorkUrl(a.data.tasks, workspaceId) };
     putCache({ view: withUrl, tasks: applyA(a.data.tasks), statuses: a.data.statuses, fields: [], at: Date.now(), truncated: a.data.truncated });
@@ -706,8 +705,8 @@ async function doRefresh(view: SavedView, token: string, force: boolean): Promis
   }
 
   const r = view.id.startsWith("list:")
-    ? await listTasksOf(token, view.listId!, me)
-    : await viewTasks(token, view.id, me);
+    ? await listTasksOf(token, view.listId!, me, force)
+    : await viewTasks(token, view.id, me, force);
 
   if (!r.ok || !r.data) return { ok: false, error: r.error, unauthorised: r.unauthorised };
   /*
@@ -725,8 +724,7 @@ async function doRefresh(view: SavedView, token: string, force: boolean): Promis
    */
   const { applyCommentCounts, refreshCommentCounts } = await import("./clickup.ts");
   const tasks = applyCommentCounts(r.data.tasks);
-  void refreshCommentCounts(r.data.tasks, token)
-    .then(() => recount(view.id))
+  void refreshCommentCounts(r.data.tasks, token, { board: view.id, run: () => recount(view.id) })
     .catch(() => { /* a count is not worth a log line */ });
   putCache({ view, tasks, statuses, fields, place, description, at: Date.now(), truncated: r.data.truncated });
   return { ok: true };
@@ -770,11 +768,11 @@ function myWorkUrl(tasks: { url?: string }[], workspaceId: string): string {
  * (a permission, an older workspace) — where the old behaviour is still better
  * than nothing.
  */
-async function listTasksOf(token: string, listId: string, me?: string) {
+async function listTasksOf(token: string, listId: string, me?: string, fresh = false) {
   const { rawListTasks, defaultViewOf, viewTasks } = await import("./clickup.ts");
   const viewId = await defaultViewOf(token, listId);
   if (viewId) {
-    const r = await viewTasks(token, viewId, me);
+    const r = await viewTasks(token, viewId, me, fresh);
     /*
      * An EMPTY view is not the same as an empty list, and this is measured
      * rather than guessed: on one list the default view answers 105 tasks, and
@@ -809,7 +807,7 @@ async function listTasksOf(token: string, listId: string, me?: string) {
      * One extra call per board read. That is the price of the answer being
      * right, and it is paid once per read rather than per card.
      */
-    const raw = await rawListTasks(token, listId, me);
+    const raw = await rawListTasks(token, listId, me, fresh);
     const merged = mergeById(r.data?.tasks, raw.data?.tasks);
     if (merged.length) {
       return {
@@ -827,7 +825,7 @@ async function listTasksOf(token: string, listId: string, me?: string) {
     if (r.ok) return r;
     return raw;
   }
-  return rawListTasks(token, listId, me);
+  return rawListTasks(token, listId, me, fresh);
 }
 
 /**
