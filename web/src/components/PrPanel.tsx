@@ -683,6 +683,20 @@ export function Btn({ children, onClick, disabled, danger, primary, ok, warn, ti
  * descendants — a heading inside a comment, a cell inside a table — which
  * inline styles cannot reach. `.agx-md` scopes every one of them.
  */
+/* The conversation's geometry, GitHub's: a big avatar outside the card, a rail
+   running a little way into the card column with the small events sitting on
+   it, and air between entries. Named once because the CSS below and the rows
+   in Conversation both lean on them. */
+const TL_AVATAR = 40;
+/** Avatar to card. */
+const TL_GAP = 12;
+/** The card's left edge to the rail. */
+const TL_RAIL = 16;
+/** Between two entries. */
+const TL_SPACE = 16;
+/** A small event's text, and a review's threads, start past the rail. */
+const TL_INDENT = TL_RAIL * 2 + 4;
+
 export const MD_CSS = `
 /* Feedback, so a press is legible before the work behind it finishes.
    :active answers within one frame; :focus-visible keeps the keyboard
@@ -699,18 +713,25 @@ export const MD_CSS = `
    empty beside text that stopped in mid-air. GitHub caps nothing here either,
    so the same pull request read narrower in the app than on the page it came
    from. Reading comfort on a wide display is what the panel width is for. */
-/* One timeline, one rail. The node says what kind of thing happened; the
-   rail says they happened in an order. */
-.agx-tl{position:relative;padding-left:26px}
-.agx-tl::before{content:"";position:absolute;left:9px;top:6px;bottom:6px;width:2px;border-radius:2px;background:color-mix(in srgb,var(--border) 42%,transparent)}
-.agx-ev{position:relative;margin-bottom:10px}
+/* One timeline, one rail, laid out the way github.com lays it out, so who said
+   what reads at a glance: the speaker's face in a column of its own, their
+   remark in a card beside it, and the rail running behind the cards with the
+   small events sitting on it. The card's own surface hides the rail where a
+   card is; between cards, the rail is what says these happened in an order. */
+.agx-tl{position:relative;padding-left:${TL_AVATAR + TL_GAP}px}
+.agx-tl::before{content:"";position:absolute;left:${TL_AVATAR + TL_GAP + TL_RAIL - 1}px;top:0;bottom:0;width:2px;background:var(--surface-line)}
+.agx-ev{position:relative;margin-bottom:${TL_SPACE}px}
 .agx-ev:last-child{margin-bottom:0}
-.agx-node{position:absolute;left:-26px;top:6px;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:9px;background:var(--bg);border:2px solid color-mix(in srgb,var(--text) 24%,transparent)}
-/* A small event — opened, force-pushed, review requested. It sits on the same
-   rail as the comments but weighs a fraction of one, because it is context
-   rather than something anybody said. */
-.agx-tiny{position:relative;display:flex;align-items:center;gap:7px;font-size:10.5px;color:var(--text3);padding:3px 0;margin-bottom:10px}
-.agx-tiny .agx-node{top:1px;width:18px;height:18px;left:-26px}
+.agx-tl>.agx-tiny{margin-bottom:${TL_SPACE}px}
+.agx-av{position:absolute;left:-${TL_AVATAR + TL_GAP}px;top:0;display:flex}
+.agx-card{position:relative;background:var(--surface-card)}
+.agx-nest{margin:8px 0 0 ${TL_INDENT}px}
+.agx-node{position:absolute;left:${TL_RAIL - 10}px;top:3px;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:9px;background:var(--bg);border:2px solid var(--surface-line);z-index:1}
+/* A small event — opened, force-pushed, review requested. It sits ON the rail
+   and weighs a fraction of a remark, because it is context rather than
+   something anybody said. */
+.agx-tiny{position:relative;display:flex;align-items:center;gap:7px;font-size:10.5px;color:var(--text3);padding:4px 0 4px ${TL_INDENT}px;min-height:26px}
+.agx-tiny .agx-node{top:3px}
 .agx-tiny b{color:var(--text2);font-weight:500}
 /* menus — .agx-menu itself now lives in index.css: it was defined HERE, in a
    <style> this component injects, so a menu in any other panel had no
@@ -10525,11 +10546,12 @@ function Card({ who, chip, when, tone, url, edited, assoc, nodeId, reactions, on
        key is positional inside a FILTERED lane, so it changes when the Humans
        / Bots segment changes and cannot be used to find a row. A node id is the
        same string the rail already holds. */
-    <div data-node={nodeId || undefined} className="rounded-md overflow-hidden mb-2"
+    /* No avatar of its own: the timeline hangs the author's face beside the
+       card, as GitHub does, and one face per remark is the point of it. */
+    <div data-node={nodeId || undefined} className="agx-card rounded-md overflow-hidden"
       style={{ border: `1px solid color-mix(in srgb, ${edge} ${tone ? 40 : 28}%, transparent)` }}>
-      <div className="flex items-center gap-2 px-2.5 py-1.5 text-[11px]"
+      <div className="flex items-center gap-2 px-3 py-2 text-[11px]"
         style={{ background: `color-mix(in srgb, ${edge} ${tone ? 10 : 14}%, transparent)`, borderBottom: LINE }}>
-        <Avatar login={who} size={17} />
         <b style={{ color: "var(--text)", fontWeight: 500 }}>{who}</b>
         <AssocChip a={assoc} />
         {chip}
@@ -10925,6 +10947,7 @@ function TimelineEvent({ e }: { e: PrEvent }) {
   const inner = <span>{said} <span style={{ color: "var(--text3)" }}>· {ago(e.at)}</span></span>;
   return (
     <div className="agx-tiny">
+      {e.actor && <Avatar login={e.actor} size={ICON.md} />}
       {e.url ? <a href={externalUrl(e.url)} target="_blank" rel="noreferrer noopener" style={{ color: "inherit" }}>{inner}</a> : inner}
     </div>
   );
@@ -10937,7 +10960,7 @@ function CommitsEvent({ commits }: { commits: PrCommit[] }) {
   if (!first) return null;
   return (
     <div className="agx-tiny" style={{ alignItems: "flex-start", flexDirection: "column", gap: 2 }}>
-      <span><b>{first.author || "somebody"}</b> added {commits.length} commit{commits.length === 1 ? "" : "s"}
+      <span className="flex items-center gap-1.5">{first.author && <Avatar login={first.author} size={ICON.md} />}<b>{first.author || "somebody"}</b> added {commits.length} commit{commits.length === 1 ? "" : "s"}
         {first.committedAt && <span style={{ color: "var(--text3)" }}> · {ago(first.committedAt)}</span>}</span>
       {commits.map((c) => (
         <span key={c.oid} className="flex gap-2 min-w-0 w-full">
@@ -11177,7 +11200,9 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
      for a thread standing alone, whoever raised it. Absent on events, which
      nobody said. `ms` is where the row sits, and it is GitHub's slot for it —
      see prTimeline for why a reply or a resolve never moves one. */
-  type Entry = { ms: number; key: string; lane: Lane; author?: string; hot?: number; node: React.ReactNode; body: React.ReactNode };
+  /* `face` is whose avatar hangs beside the row, for a remark; an event has
+     none and shows its `node` on the rail instead. */
+  type Entry = { ms: number; key: string; lane: Lane; author?: string; face?: string; hot?: number; node: React.ReactNode; body: React.ReactNode };
   const entries: Entry[] = [];
   /** How many of the things said since your last visit are inside this one. */
   const hotOf = (keys: string[]) => keys.filter((k) => newSet.has(k)).length;
@@ -11186,6 +11211,9 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
     <span style={{ color: t.isResolved ? "var(--success)" : "var(--warning)" }}>{t.isResolved ? <DoneIcon size={ICON.xs} /> : <CircleIcon size={ICON.xs} />}</span>;
   const threadRow = (t: PrThread) =>
     <Thread key={t.id} t={t} onResolve={onResolve} onReply={onReply} onApply={onApply} busy={busy} newSet={newSet} />;
+  /** GitHub's badges beside a name: whose pull request it is, and a bot. */
+  const badge = (who: string, isBot: boolean) => isBot ? <Chip text="bot" tint="var(--info)" />
+    : who === d.author ? <Chip text="author" tint="var(--text3)" title="Opened this pull request" /> : undefined;
 
   for (const x of timeline) {
     if (x.kind === "review") {
@@ -11194,58 +11222,55 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
       const tone = r.isBot ? "bot" : r.state === "CHANGES_REQUESTED" ? "chg" : r.state === "APPROVED" ? "appr" : undefined;
       const verdict = r.state === "CHANGES_REQUESTED" ? <Chip text="requested changes" tint="var(--error)" />
         : r.state === "APPROVED" ? <Chip text="approved" tint="var(--success)" /> : undefined;
+      const node = <span style={{ color: tone === "chg" ? "var(--error)" : tone === "appr" ? "var(--success)" : "var(--text3)" }}>
+        {r.state === "CHANGES_REQUESTED" ? <CrossIcon size={ICON.xs} /> : r.state === "APPROVED" ? <DoneIcon size={ICON.xs} /> : <EyeIcon size={ICON.xs} />}</span>;
       entries.push({
-        ms: x.ms, key: anchor, lane: x.lane, author: r.author,
+        ms: x.ms, key: anchor, lane: x.lane, author: r.author, face: r.author, node,
         hot: hotOf([anchor]) + x.threads.reduce((n, t) => n + threadHot(t), 0),
-        node: r.isBot ? <span style={{ color: "var(--info-ink)" }}><AgentIcon size={ICON.xs} /></span>
-          : <span style={{ color: tone === "chg" ? "var(--error)" : tone === "appr" ? "var(--success)" : "var(--text3)" }}>
-            {r.state === "CHANGES_REQUESTED" ? <CrossIcon size={ICON.xs} /> : r.state === "APPROVED" ? <DoneIcon size={ICON.xs} /> : <CommentIcon size={ICON.xs} />}</span>,
+        /* GitHub's shape for a review: a line on the rail saying who reviewed
+           and with what verdict, the note under it as a card when there is
+           one, and the threads it opened nested under that. */
         body: (
           <>
             <span id={anchorId(anchor)} />
-            {/* A review with no note of its own is a line, as on GitHub: the
-                threads under it are what it said. */}
-            {r.body.trim() ? (
+            <div className="agx-tiny">
+              <span className="agx-node">{node}</span>
+              <span><b>{r.author}</b> {badge(r.author, r.isBot)} {r.state === "APPROVED" ? "approved these changes" : r.state === "CHANGES_REQUESTED" ? "requested changes" : "reviewed"} <span style={{ color: "var(--text3)" }}>· {ago(r.submittedAt)}</span></span>
+            </div>
+            {r.body.trim() && (
               <Card who={r.author} when={ago(r.submittedAt)} url={r.url} tone={tone}
                 fresh={newSet.has(anchor)}
                 edited={r.editedAt} assoc={r.association} nodeId={r.nodeId} reactions={r.reactions} onReact={onReact}
                 {...(r.isBot ? {} : acts({ author: r.author, nodeId: r.nodeId, body: r.body, kind: "issue" }))}
-                chip={r.isBot ? <Chip text="automation" tint="var(--info)" /> : verdict}>
+                chip={<>{badge(r.author, r.isBot)}{verdict}</>}>
                 <Md body={r.body} />
               </Card>
-            ) : (
-              <div className="agx-tiny">
-                <span><b>{r.author}</b> {r.state === "APPROVED" ? "approved these changes" : r.state === "CHANGES_REQUESTED" ? "requested changes" : "reviewed"} <span style={{ color: "var(--text3)" }}>· {ago(r.submittedAt)}</span></span>
-              </div>
             )}
-            {x.threads.length > 0 && (
-              <div className="pl-3 ml-2" style={{ borderLeft: "2px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
-                {x.threads.map(threadRow)}
-              </div>
-            )}
+            {x.threads.length > 0 && <div className="agx-nest">{x.threads.map(threadRow)}</div>}
           </>
         ),
       });
     } else if (x.kind === "thread") {
       const t = x.thread;
-      entries.push({ ms: x.ms, key: `t${t.id}`, lane: x.lane, author: t.comments[0]?.author, hot: threadHot(t), node: threadNode(t), body: threadRow(t) });
+      entries.push({ ms: x.ms, key: `t${t.id}`, lane: x.lane, author: t.comments[0]?.author, face: t.comments[0]?.author, hot: threadHot(t), node: threadNode(t),
+        body: <div className="agx-card rounded-md">{threadRow(t)}</div> });
     } else if (x.kind === "comment" && !x.comment.isBot) {
       const c = x.comment;
       entries.push({
-        ms: x.ms, key: `c${c.id}`, lane: "human", author: c.author, hot: hotOf([`c${c.id}`]),
+        ms: x.ms, key: `c${c.id}`, lane: "human", author: c.author, face: c.author, hot: hotOf([`c${c.id}`]),
         node: <span style={{ color: "var(--text3)" }}><CommentIcon size={ICON.xs} /></span>,
         body: <><span id={anchorId(`c${c.id}`)} />
-          <Card who={c.author} when={ago(c.createdAt)} url={c.url} fresh={newSet.has(`c${c.id}`)}
+          <Card who={c.author} when={ago(c.createdAt)} url={c.url} fresh={newSet.has(`c${c.id}`)} chip={badge(c.author, false)}
             edited={c.editedAt} assoc={c.association} nodeId={c.nodeId} reactions={c.reactions} onReact={onReact}
             {...acts({ author: c.author, nodeId: c.nodeId, body: c.body, kind: "issue" })}><Md body={c.body} /></Card></>,
       });
     } else if (x.kind === "comment") {
       const c = x.comment;
       entries.push({
-        ms: x.ms, key: `b${c.id}`, lane: "bot", author: c.author, hot: hotOf([`c${c.id}`]),
+        ms: x.ms, key: `b${c.id}`, lane: "bot", author: c.author, face: c.author, hot: hotOf([`c${c.id}`]),
         node: <span style={{ color: "var(--info-ink)" }}><AgentIcon size={ICON.xs} /></span>,
         body: (
-          <Card who={c.author} when={ago(c.createdAt)} url={c.url} tone="bot" chip={<Chip text="automation" tint="var(--info)" />}
+          <Card who={c.author} when={ago(c.createdAt)} url={c.url} tone="bot" chip={badge(c.author, true)}
             nodeId={c.nodeId} reactions={c.reactions} onReact={onReact}>
             {/* Rendered, not dumped. In full these used to be a <pre> of the raw
                 source, so a coverage report arrived as `<!-- Pytest Coverage
@@ -11541,7 +11566,9 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
           {newest && forced}
           {shown.map((e) => (
             <div key={e.key} className="agx-ev" data-hot={e.hot ? "1" : undefined}>
-              <span className="agx-node">{e.node}</span>
+              {e.face
+                ? <span className="agx-av"><Avatar login={e.face} size={TL_AVATAR} /></span>
+                : <span className="agx-node">{e.node}</span>}
               {e.body}
             </div>
           ))}

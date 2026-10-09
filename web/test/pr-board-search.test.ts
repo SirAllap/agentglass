@@ -289,6 +289,18 @@ describe("a thread sits where GitHub puts it", () => {
   });
 });
 
+describe("who said what, at a glance", () => {
+  it("hangs the speaker's face beside the card, not inside it", () => {
+    expect(src).toContain("<span className=\"agx-av\"><Avatar login={e.face} size={TL_AVATAR} /></span>");
+    // One face per remark: the card header no longer draws its own.
+    expect(src).not.toContain("<Avatar login={who} size={17} />");
+  });
+
+  it("puts a review's threads under it, past the rail", () => {
+    expect(src).toContain("<div className=\"agx-nest\">{x.threads.map(threadRow)}</div>");
+  });
+});
+
 describe("the bar that walks you through what is new", () => {
   it("is pinned to the top of the scroller, because it is a control", () => {
     /* Reported the moment it worked: "Next" sends you three screens down and
