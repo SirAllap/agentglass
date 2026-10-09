@@ -126,7 +126,7 @@ import {
 } from "./reminders.ts";
 import { fileText, fileToTemp, fileTree, findFiles, grepFiles, listRefs, filesExist, heldBackFrom, heldBackTest, HELD_BACK, filesReach, gitReadRefusal, gitReadTest } from "./files.ts";
 import { diskFind, diskGrep, diskPlaces } from "./disk.ts";
-import { browseDir, fileBytes, fileFacts, openInDesktop } from "./browse.ts";
+import { browseDir, fileBytes, fileFacts, openInDesktop, revealInFileManager } from "./browse.ts";
 import { benchEdit, benchEnd, benchLive, readNote, writeNote } from "./bench.ts";
 import {
   overview as dockerOverview, stats as dockerStats, logs as dockerLogs, inspect as dockerInspect, top as dockerTop,
@@ -6624,6 +6624,13 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         let b: { path?: unknown } = {};
         try { b = (await req.json()) as { path?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
         const r = openInDesktop(b?.path, localBrowse);
+        return json(r, r.ok ? 200 : 400);
+      }
+      if (pathname === "/preview/reveal" && req.method === "POST") {
+        if (!trustedCaller(req, from)) return csrfBlocked();
+        let b: { path?: unknown } = {};
+        try { b = (await req.json()) as { path?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+        const r = revealInFileManager(b?.path, localBrowse);
         return json(r, r.ok ? 200 : 400);
       }
       if (pathname === "/browse") return json(browseDir(url.searchParams.get("path") || "", url.searchParams.get("hidden") === "1", localBrowse));

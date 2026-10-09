@@ -616,3 +616,47 @@ export function openInDesktop(pathIn: unknown, local = false): { ok: boolean; wi
     return { ok: false, error: failed("preview/open", e, "the desktop could not open that file") };
   }
 }
+
+/**
+ * The folder a "show in file manager" would open, judged first.
+ *
+ * A folder is shown as itself and a file as the folder that holds it. Both the
+ * path asked for and the folder it lands on go through `browseReal`, the gate
+ * every read here goes through: a file the palette may read but whose folder it
+ * may not would otherwise hand the file manager a listing of siblings the
+ * palette itself refuses to show.
+ */
+export function revealTarget(pathIn: unknown, local = false): { ok: true; dir: string } | { ok: false; error: string } {
+  const abs = browseReal(pathIn, local);
+  if (!abs) return { ok: false, error: refusal(safeAbs(pathIn) ?? "") };
+  let isDir: boolean;
+  try { isDir = statSync(abs).isDirectory(); } catch { return { ok: false, error: "no such file" }; }
+  if (isDir) return { ok: true, dir: abs };
+  const dir = browseReal(dirname(abs), local);
+  return dir ? { ok: true, dir } : { ok: false, error: refusal(dirname(abs)) };
+}
+
+/** The argv that shows a folder, or null where nothing on this machine can.
+ *  An array and never a string: the path is a single argument, so a name with
+ *  spaces, quotes or `;` in it is a name and nothing else. */
+export function revealArgv(platform: string, which: (bin: string) => string | null, dir: string): string[] | null {
+  if (platform === "darwin") { const o = which("open"); return o ? [o, dir] : null; }
+  const x = which("xdg-open");
+  if (x) return [x, dir];
+  const g = which("gio");
+  return g ? [g, "open", dir] : null;
+}
+
+/** Show a file or folder in the desktop's file manager. */
+export function revealInFileManager(pathIn: unknown, local = false): { ok: boolean; with?: string; error?: string } {
+  const t = revealTarget(pathIn, local);
+  if (!t.ok) return t;
+  const argv = revealArgv(process.platform, (b) => Bun.which(b, { PATH: process.env.PATH ?? "" }), t.dir);
+  if (!argv) return { ok: false, error: "no file manager opener on this machine (xdg-open or gio)" };
+  try {
+    Bun.spawn(argv, { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
+    return { ok: true, with: basename(argv[0]!) };
+  } catch (e) {
+    return { ok: false, error: failed("preview/reveal", e, "the file manager could not be opened") };
+  }
+}

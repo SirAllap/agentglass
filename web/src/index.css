@@ -496,6 +496,11 @@
 }
 .agx-market-row { transition: background-color 120ms ease; }
 .agx-market-row:hover { background: color-mix(in srgb, var(--text) 3.5%, transparent); }
+/* A row or segment in the file palette that is a button: the same 6% text tint
+   the app's other hovers use, and nothing else moves. */
+.agx-pal-hit { transition: background-color 120ms ease; }
+.agx-pal-hit:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
+@media (prefers-reduced-motion: reduce) { .agx-pal-hit { transition: none; } }
 .agx-market-tile { transition: transform 120ms ease, box-shadow 120ms ease; }
 .agx-market-row:hover .agx-market-tile { transform: translateY(-1px); box-shadow: var(--surface-lift); }
 @media (prefers-reduced-motion: reduce) {

@@ -18,21 +18,22 @@
 // Opening a result raises the viewer that already exists — markdown, the editor
 // toggle, the reading width — and this stays on top of it, so the next result
 // is one keystroke away rather than another search.
-import { ICON } from "../lib/iconSize.ts";
-import { IconLabel, SearchIcon, UndoIcon } from "../lib/glyphIcons.tsx";
+import { HIT, ICON } from "../lib/iconSize.ts";
+import { ClockIcon, CodeFileIcon, FileIcon, FolderIcon, HomeIcon, ImageFileIcon, NoteIcon, SearchIcon } from "../lib/glyphIcons.tsx";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { api, SERVER, withToken } from "../lib/api.ts";
-import { iconFor } from "../lib/fileIcons.ts";
 import { requestFilesReveal } from "../lib/filesReveal.ts";
 import { recents, remember, forget, subscribeRecents, ago } from "../lib/fileRecents.ts";
 import { completion, looksLikePath, parseQuery, passesFilters, readPath, scoreMatch } from "../lib/finderQuery.ts";
 import { Preview } from "./finder/Preview.tsx";
+import { RevealButton } from "./finder/RevealButton.tsx";
 import type { BrowseReport } from "../../../shared/types.ts";
 import { appChordFor, chordLabel } from "../lib/keybindings.ts";
 import { LAYER } from "../lib/layers.ts";
 import { shortPath } from "../lib/shortPath.ts";
+import { afterJump, dirsFirst, fileKind, focusSelection, pathBar, pathInputText, placeSections, shortenHome, switchTab, type BrowseState, type PlaceRow } from "../lib/paletteModel.ts";
 import type { DiskPlace, FsEntry, GitRepoRef, GrepHit } from "../../../shared/types.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { FileViewer } from "./CardFiles.tsx";
@@ -74,13 +75,6 @@ type Row =
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 
-/**
- * A path as the pieces it is made of, each one somewhere to jump to.
- *
- * Home is folded back into `~` because that is what it is called on screen
- * everywhere else in this app, and the first crumb of every path being
- * `/home/<somebody>` is four wasted characters and a name nobody needs to read.
- */
 /** Bytes as a listing says them. Rounded hard: a file list is scanned. */
 export function humanBytes(bytes: number): string {
   if (bytes < 1000) return `${bytes} B`;
@@ -89,26 +83,6 @@ export function humanBytes(bytes: number): string {
   let i = 0;
   while (n >= 1000 && i < units.length - 1) { n /= 1000; i++; }
   return `${n >= 100 ? Math.round(n) : n.toFixed(1)} ${units[i]}`;
-}
-
-/** A path with home written as `~`, which is how the box shows one and how
- *  anybody types one. */
-export function shortenHome(abs: string, home: string): string {
-  if (home && (abs === home || abs.startsWith(`${home}/`))) return `~${abs.slice(home.length)}`;
-  return abs;
-}
-
-export function crumbs(abs: string, home = ""): { label: string; path: string; last: boolean }[] {
-  const parts = abs.replace(/\/+$/, "").split("/").filter(Boolean);
-  const out: { label: string; path: string; last: boolean }[] = [];
-  let at = "";
-  for (const part of parts) {
-    at += `/${part}`;
-    out.push({ label: part, path: at, last: false });
-    if (home && at === home) { out.length = 0; out.push({ label: "~", path: at, last: false }); }
-  }
-  if (out.length) out[out.length - 1]!.last = true;
-  return out;
 }
 
 /*
@@ -243,6 +217,8 @@ export function FilePalette({
 }) {
   const [tab, setTab] = useState<PaletteTab>("names");
   const [q, setQ] = useState("");
+  /* What the tabs that are not showing were looking at — see `switchTab`. */
+  const stash = useRef<Partial<Record<PaletteTab, BrowseState>>>({});
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [root, setRoot] = useState(readRoot);
   const [pickOpen, setPickOpen] = useState(false);
@@ -286,6 +262,12 @@ export function FilePalette({
   const [browsed, setBrowsed] = useState<BrowseReport | null>(null);
   const [showHidden, setShowHidden] = useState(readHidden);
   const [cursor, setCursor] = useState(0);
+  /** Change tab and take that tab's own folder and box with it. */
+  const goTab = useCallback((to: PaletteTab) => {
+    const r = switchTab(stash.current, tab, { q, browsePath }, to);
+    stash.current = r.stash;
+    setTab(to); setQ(r.next.q); setBrowsePath(r.next.browsePath);
+  }, [tab, q, browsePath]);
   /** Which picture the in-app viewer is on, by index into `viewFiles`. Null is closed. */
   const [viewAt, setViewAt] = useState<number | null>(null);
   /** A file to land the cursor on once its folder has loaded. */
@@ -357,14 +339,27 @@ export function FilePalette({
     handledTarget.current = target.n;
     const cut = target.path.lastIndexOf("/");
     const dir = target.kind === "dir" ? target.path.replace(/\/+$/, "") || "/" : target.path.slice(0, cut) || "/";
+    /* Machine gets the folder, and the tab it came from keeps what it had. The
+       box says the path — an empty box under a placeholder left nothing on
+       screen to say where this was. Home may not be known yet on a cold start,
+       so the text is settled by the effect below once it is. */
+    stash.current = switchTab(stash.current, tab, { q, browsePath }, "machine").stash;
     setTab("machine");
-    setQ("");
     setViewAt(null);
     setPlace(dir);
     setPlaceRecents(rememberPlace(dir));
     setBrowsePath(dir);
+    setQ(pathInputText(dir, homeDir));
+    setPathText(homeDir ? null : dir);
     setWantFile(target.kind === "file" ? { dir, name: target.path.slice(cut + 1) } : null);
+    // Only a new request runs this; the tab, box and home it reads are the
+    // moment's, and `handledTarget` keeps a re-render from replaying it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, target]);
+  const [pathText, setPathText] = useState<string | null>(null);
+  useEffect(() => {
+    if (pathText && homeDir) { setQ(pathInputText(pathText, homeDir)); setPathText(null); }
+  }, [pathText, homeDir]);
 
   /*
    * A branch belongs to a checkout, so moving to another one loads THAT
@@ -386,7 +381,13 @@ export function FilePalette({
   // you type replaces it rather than appending to it.
   useEffect(() => {
     if (!open) return;
-    const t = setTimeout(() => { inputRef.current?.focus(); inputRef.current?.select(); }, 20);
+    const t = setTimeout(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      if (focusSelection(el.value) === "end") el.setSelectionRange(el.value.length, el.value.length);
+      else el.select();
+    }, 20);
     return () => clearTimeout(t);
   }, [open]);
 
@@ -473,6 +474,14 @@ export function FilePalette({
     return null;
   }, [typedPath, browsePath, asked.text, tab, place, root]);
 
+  /** Go to a folder from the bar or a row. The box follows only when it was
+   *  already holding a path (see `afterJump`). */
+  const jump = useCallback((abs: string) => {
+    const j = afterJump(abs, homeDir, !!typedPath);
+    setBrowsePath(j.browsePath); setQ(j.q);
+    inputRef.current?.focus();
+  }, [homeDir, typedPath]);
+
   // The folder under the cursor, fetched when it changes. Errors land in the
   // report itself — "no permission to read this folder" is an answer, and the
   // list says it rather than showing an empty folder that looks like a bug.
@@ -489,9 +498,9 @@ export function FilePalette({
       const d = browsed;
       if (!d?.ok) return [];
       const base = at.replace(/\/+$/, "");
-      return d.entries.map((e): Row => e.kind === "dir"
+      return dirsFirst(d.entries.map((e): Row => e.kind === "dir"
         ? { kind: "dir", rel: e.name, abs: `${base}/${e.name}`, items: e.items, mtime: e.mtime, locked: e.locked, why: e.why }
-        : { kind: "file", rel: e.name, abs: `${base}/${e.name}`, bytes: e.bytes, mtime: e.mtime, locked: e.locked, why: e.why });
+        : { kind: "file", rel: e.name, abs: `${base}/${e.name}`, bytes: e.bytes, mtime: e.mtime, locked: e.locked, why: e.why }));
     }
     if (tab === "machine") {
       const d = onDisk.data;
@@ -720,9 +729,7 @@ export function FilePalette({
       if (row.kind === "dir") {
         // The box follows you when you were typing a path, the way a shell's
         // line does — so the next `../` or `foo/` is typed onto what is there.
-        setBrowsePath(abs);
-        setQ(typedPath ? `${shortenHome(abs, homeDir)}/` : "");
-        inputRef.current?.focus();
+        jump(abs);
         return;
       }
       // An image, a video, a PDF: the pane beside the list is already showing
@@ -785,7 +792,7 @@ export function FilePalette({
     if (IMAGEY.test(row.rel) && !secondary && !ref) return;   // the pane is showing it
     if (!ref) remember(root, row.rel);
     onOpenFile(root, row.rel, branch, ref || undefined);
-  }, [tab, at, place, root, branch, ref, repos, onOpenFile, onRevealDir, onClose, viewRows, viewImage]);
+  }, [tab, at, place, root, branch, ref, repos, onOpenFile, onRevealDir, onClose, viewRows, viewImage, jump]);
 
   const onKey = (e: React.KeyboardEvent) => {
     // The viewer owns the keys while it is up — it listens on window, first.
@@ -827,7 +834,7 @@ export function FilePalette({
       // field and one list, so there is nothing else for it to move between.
       e.preventDefault();
       const i = TABS.findIndex((t) => t.id === tab);
-      setTab(TABS[(i + (e.shiftKey ? TABS.length - 1 : 1)) % TABS.length]!.id);
+      goTab(TABS[(i + (e.shiftKey ? TABS.length - 1 : 1)) % TABS.length]!.id);
       return;
     }
     // ⌘⏎ / ctrl+⏎ is the second thing a row can do: the editor for a picture,
@@ -944,7 +951,7 @@ export function FilePalette({
             <div className="flex items-center gap-1 px-3 pt-2.5 shrink-0"
               style={{ background: "color-mix(in srgb, var(--text) 4%, var(--bg2))" }}>
               {TABS.map((t) => (
-                <button key={t.id} onClick={() => { setTab(t.id); inputRef.current?.focus(); }}
+                <button key={t.id} onClick={() => { goTab(t.id); inputRef.current?.focus(); }}
                   className="text-[11px] px-3 py-1.5 rounded-t-md"
                   style={t.id === tab
                     ? { background: "var(--surface-card)", border: EDGE, borderBottom: "none", color: "var(--primary-ink)" }
@@ -989,11 +996,12 @@ export function FilePalette({
                   thing — what am I searching — so it is asked once. */}
               {tab === "machine" && (
                 <PlaceChip
-                  place={place} places={places} recents={placeRecents} error={placeErr}
+                  place={place} places={places} recents={placeRecents} error={placeErr} homeDir={homeDir}
                   openState={[pickOpen, setPickOpen]}
                   onPick={(p) => {
                     setPlaceRecents(rememberPlace(p));
-                    setPlace(p); setPickOpen(false); inputRef.current?.focus();
+                    setPlace(p); setBrowsePath(null); setQ("");
+                    setPickOpen(false); inputRef.current?.focus();
                   }} />
               )}
               {tab !== "recent" && tab !== "machine" && (
@@ -1004,7 +1012,7 @@ export function FilePalette({
                     // Choosing a copy means "what is on that disk", so it also
                     // answers the version — which is what made the two-control
                     // version feel like it was asking twice.
-                    setRoot(r); setRef(""); saveRef(r, "");
+                    setRoot(r); setRef(""); saveRef(r, ""); setBrowsePath(null);
                     setPickOpen(false); inputRef.current?.focus();
                   }}
                   onPickRef={(r) => { setRef(r); setPickOpen(false); inputRef.current?.focus(); }} />
@@ -1016,37 +1024,30 @@ export function FilePalette({
             </div>
             </div>
 
-            {/* Where you are, when you are somewhere rather than searching. Each
-                crumb is a jump, which is the whole reason a path is drawn as
-                pieces instead of as a string. */}
+            {/* Where you are, when you are somewhere rather than searching: one
+                rounded bar, Home first, every segment a button that goes there
+                and the last one bold because it is where you are. The hidden
+                switch and the file-manager button sit on the same line because
+                both are about THIS folder. */}
             {at && (
-              <div className="flex items-center gap-1 px-3 py-1.5 shrink-0 flex-wrap text-[10.5px]"
-                style={{ borderTop: LINE, color: "var(--text4)" }}>
-                {browsePath && (
-                  <>
-                    <button onClick={() => setBrowsePath(null)} title="Back to the place you picked"
-                      className="px-1.5 py-0.5 rounded min-h-[20px]" style={{ color: "var(--primary-hover)" }}><IconLabel icon={<UndoIcon size={ICON.xs} />}>Back</IconLabel></button>
-                    <span>·</span>
-                  </>
-                )}
-                {crumbs(at, homeDir).map((c) => (
-                  <button key={c.path} onClick={() => setBrowsePath(c.path)}
-                    className="px-1 py-0.5 rounded min-h-[20px] truncate max-w-[180px]"
-                    style={{ color: c.last ? "var(--text)" : "var(--text3)" }}>{c.label}</button>
-                ))}
-                {browsed?.hiddenSkipped || showHidden ? (
-                  /* Said, and one click from undone: a folder that shows less
-                     than it holds without saying so is a browser you stop
-                     trusting, and the count is the switch that fixes it. */
-                  <button className="ml-auto px-1.5 py-0.5 rounded min-h-[20px]" aria-pressed={showHidden}
-                    style={{ color: showHidden ? "var(--text)" : "var(--primary-hover)" }}
-                    title={showHidden ? "Hidden files and folders are listed. Click to leave them out again" : "Click to list hidden files and folders"}
-                    onClick={() => { const on = !showHidden; setShowHidden(on); saveHidden(on); inputRef.current?.focus(); }}>
-                    {showHidden
-                      ? "Showing hidden · hide"
-                      : `${browsed!.hiddenSkipped} hidden ${browsed!.hiddenSkipped === 1 ? "item" : "items"} left out · show`}
-                  </button>
-                ) : null}
+              <div className="flex items-center gap-2 px-3 py-1.5 shrink-0" style={{ borderTop: LINE }}>
+                <PathBar at={at} home={homeDir} onGo={jump} />
+                <span className="ml-auto flex items-center gap-1.5 shrink-0">
+                  {browsed?.hiddenSkipped || showHidden ? (
+                    /* Said, and one click from undone: a folder that shows less
+                       than it holds without saying so is a browser you stop
+                       trusting, and the count is the switch that fixes it. */
+                    <button className="px-2 rounded-md text-[10.5px]" aria-pressed={showHidden}
+                      style={{ minHeight: HIT, color: showHidden ? "var(--text)" : "var(--primary-ink)", border: EDGE }}
+                      title={showHidden ? "Hidden files and folders are listed. Click to leave them out again" : "Click to list hidden files and folders"}
+                      onClick={() => { const on = !showHidden; setShowHidden(on); saveHidden(on); inputRef.current?.focus(); }}>
+                      {showHidden
+                        ? "Showing hidden · hide"
+                        : `${browsed!.hiddenSkipped} hidden ${browsed!.hiddenSkipped === 1 ? "item" : "items"} left out · show`}
+                    </button>
+                  ) : null}
+                  <RevealButton path={at} what="folder" />
+                </span>
               </div>
             )}
 
@@ -1163,33 +1164,78 @@ function Answers({ tab, q, root, place, placeErr, rows, cursor, status, onHover,
   );
 }
 
+/** The three inks of a list row. Only size and age recede; the name is the
+ *  text colour, whatever the file's icon says. */
+/** The colour of each kind's icon: the state inks the app already guarantees
+ *  against every theme, so a picture is warm and a note is cool on both grounds. */
+const KIND_INK: Record<ReturnType<typeof fileKind>, string> = {
+  dir: "var(--primary-ink)", markdown: "var(--info-ink)", code: "var(--success-ink)",
+  image: "var(--warning-ink)", data: "var(--text2)", file: "var(--text3)",
+};
+function KindIcon({ kind }: { kind: ReturnType<typeof fileKind> }) {
+  const size = ICON.md;
+  return kind === "dir" ? <FolderIcon size={size} /> : kind === "markdown" ? <NoteIcon size={size} />
+    : kind === "code" ? <CodeFileIcon size={size} /> : kind === "image" ? <ImageFileIcon size={size} /> : <FileIcon size={size} />;
+}
+
+export const NAME_INK = { name: "var(--text)", prefix: "var(--text3)", meta: "var(--text3)", metaOnCursor: "var(--text2)" } as const;
+
+/** Where you are, as one bar: Home, then each folder a button, the last bold. */
+function PathBar({ at, home, onGo }: { at: string; home: string; onGo: (abs: string) => void }) {
+  const segs = pathBar(at, home);
+  return (
+    <nav aria-label="Folder path" className="flex items-center min-w-0 flex-1 rounded-md px-1 overflow-hidden"
+      style={{ minHeight: HIT, background: "var(--surface-inset)", border: EDGE }}>
+      {segs.map((c, i) => (
+        <span key={c.path} className={`flex items-center ${c.last || c.home ? "shrink-0" : "min-w-0 shrink"}`}>
+          {i > 0 && <span aria-hidden="true" className="px-0.5 text-[11px]" style={{ color: "var(--text3)" }}>/</span>}
+          <button onClick={() => onGo(c.path)} aria-current={c.last ? "location" : undefined}
+            className="agx-pal-hit inline-flex items-center gap-1 px-1.5 rounded min-w-0 text-[11px]"
+            style={{ minHeight: HIT - 6, color: c.last ? "var(--text)" : "var(--text2)", fontWeight: c.last ? 650 : 400 }}
+            title={c.path}>
+            {c.home && <HomeIcon size={ICON.sm} />}
+            <span className="truncate">{c.label}</span>
+          </button>
+        </span>
+      ))}
+    </nav>
+  );
+}
+
 function RowView({ row, i, on, onHover, onPick, onDouble }: {
   row: Row; i: number; on: boolean; onHover: (i: number) => void; onPick: (row: Row) => void; onDouble: (row: Row) => void;
 }) {
   const cut = row.rel.lastIndexOf("/");
   const name = row.rel.slice(cut + 1);
-  const icon = iconFor(name, row.kind === "dir");
+  const kind = fileKind(name, row.kind === "dir");
   return (
     <button data-row={i} onMouseEnter={() => onHover(i)} onClick={() => onPick(row)} onDoubleClick={() => onDouble(row)}
-      className="w-full text-left px-3 py-2" title={row.kind !== "recent" && row.locked ? `${row.rel} — ${row.why ?? "listed, but kept closed: it holds credentials or is off-limits from here"}` : row.rel}
+      className="agx-pal-hit text-left px-3 py-2 rounded-lg" title={row.kind !== "recent" && row.locked ? `${row.rel} — ${row.why ?? "listed, but kept closed: it holds credentials or is off-limits from here"}` : row.rel}
+      aria-current={on ? "true" : undefined}
       style={{
-        ...(on ? { background: "color-mix(in srgb, var(--primary) 16%, transparent)" } : null),
+        /* Inset from the list's edges so the selection is a pill, not a band. */
+        width: "calc(100% - 12px)", margin: "0 6px", minHeight: 34,
+        ...(on ? { background: "color-mix(in srgb, var(--primary) 16%, transparent)", boxShadow: "inset 0 0 0 1px color-mix(in srgb, var(--primary) 40%, transparent)" } : null),
         ...((row.kind === "recent" && row.gone) || (row.kind !== "recent" && row.locked) ? { opacity: 0.55 } : null),
       }}>
-      <div className="flex items-baseline gap-1.5 text-[12px]">
-        <span className="shrink-0" style={{ color: icon.tint }}>{icon.glyph}</span>
-        {cut >= 0 && <span className="truncate" style={{ color: "var(--text4)" }}>{row.rel.slice(0, cut + 1)}</span>}
-        <span className="shrink-0" style={{ color: icon.tint, fontWeight: 500 }}>{name}{row.kind === "dir" ? "/" : ""}</span>
+      <div className="flex items-center gap-2 text-[12px]">
+        {/* The icon may carry a kind's colour; the NAME never does. A language
+            tint chosen for a dark editor is close to invisible on a light
+            theme (measured: the markdown grey came to 1.2:1), and a list of
+            names nobody can read is a list of nothing. */}
+        <span className="shrink-0 flex" style={{ color: KIND_INK[kind] }}><KindIcon kind={kind} /></span>
+        {cut >= 0 && <span className="truncate" style={{ color: on ? NAME_INK.metaOnCursor : NAME_INK.prefix }}>{row.rel.slice(0, cut + 1)}</span>}
+        <span className="shrink-0" style={{ color: NAME_INK.name, fontWeight: 500 }}>{name}{row.kind === "dir" ? "/" : ""}</span>
         {/* Size and date, when the row knows them — a listing does, a search
             result does not, and inventing a dash for the ones that do not is
             noise in a column people scan. */}
         {(row.kind === "file" && row.bytes != null) || (row.kind === "dir" && row.items != null) ? (
-          <span className="ml-auto shrink-0 flex items-baseline gap-3 text-[9.5px] tabular-nums" style={{ color: "var(--text4)" }}>
+          <span className="ml-auto shrink-0 flex items-baseline gap-3 text-[10.5px] tabular-nums" style={{ color: on ? NAME_INK.metaOnCursor : NAME_INK.meta }}>
             <span>{row.kind === "dir" ? `${row.items} item${row.items === 1 ? "" : "s"}` : humanBytes(row.bytes!)}</span>
             {row.mtime ? <span>{ago(row.mtime)}</span> : null}
           </span>
         ) : row.kind === "dir" ? (
-          <span className="ml-auto shrink-0 text-[9px] px-1.5 rounded"
+          <span className="ml-auto shrink-0 text-[10px] px-1.5 rounded"
             style={{ color: "var(--info-ink)", border: "1px solid color-mix(in srgb, var(--info) 30%, transparent)" }}>folder</span>
         ) : null}
         {row.kind === "recent" && (
@@ -1202,7 +1248,7 @@ function RowView({ row, i, on, onHover, onPick, onDouble }: {
                 not here now · ⏎ forgets
               </span>
             )}
-            <span className="text-[9.5px] tabular-nums" style={{ color: "var(--text4)" }}>{ago(row.at)}</span>
+            <span className="text-[10.5px] tabular-nums" style={{ color: on ? NAME_INK.metaOnCursor : NAME_INK.meta }}>{ago(row.at)}</span>
           </span>
         )}
       </div>
@@ -1372,8 +1418,8 @@ function RepoChip({ repo, repos, openState, onPick }: {
  * The list is in a Portal for the same reason RepoChip's is — the palette
  * clips its children, so a menu drawn inside it loses its left half.
  */
-function PlaceChip({ place, places, recents, error, openState, onPick }: {
-  place: string; places: DiskPlace[]; recents: string[]; error: string | null;
+function PlaceChip({ place, places, recents, error, homeDir, openState, onPick }: {
+  place: string; places: DiskPlace[]; recents: string[]; error: string | null; homeDir: string;
   openState: [boolean, (v: boolean) => void]; onPick: (path: string) => void;
 }) {
   const [open, setOpen] = openState;
@@ -1412,19 +1458,54 @@ function PlaceChip({ place, places, recents, error, openState, onPick }: {
   const label = places.find((p) => p.path === place)?.label
     ?? (place ? place.split("/").filter(Boolean).pop() ?? place : "Pick a folder");
 
-  const needle = typed.trim().toLowerCase();
-  const listed = isPath(typed.trim()) ? [] : places.filter((p) => !needle || `${p.label} ${p.path}`.toLowerCase().includes(needle));
-  const past = isPath(typed.trim())
-    ? []
-    : recents.filter((r) => r !== place && !places.some((p) => p.path === r) && (!needle || r.toLowerCase().includes(needle)));
+  const typedIsPath = isPath(typed.trim());
+  /* Two sections like a file manager's sidebar — see `placeSections`. A typed
+     path replaces them with what the disk completes it to. */
+  const sections = placeSections(typedIsPath ? [] : places, typedIsPath ? [] : recents, place, typed, homeDir);
+  const completions: PlaceRow[] = sugg.map((e) => ({ path: e.path, name: e.name, sub: shortenHome(e.path, homeDir), home: false, recent: false }));
+  const flat = typedIsPath ? completions : sections.flat;
+  /* One cursor over both sections. A typed path starts with none, so ⏎ means
+     "go where I typed" until an arrow key picks a row. */
+  const [cur, setCur] = useState(0);
+  useEffect(() => { setCur(typedIsPath ? -1 : 0); }, [typed, typedIsPath, open]);
+  useEffect(() => {
+    listEl.current?.querySelector<HTMLElement>(`[data-place="${cur}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [cur]);
+  const listEl = useRef<HTMLDivElement>(null);
 
-  const Row = ({ path, primary, secondary }: { path: string; primary: string; secondary?: string }) => (
-    <button key={path} onClick={() => onPick(path)}
-      className="w-full text-left px-3 py-1.5 flex flex-col gap-0.5"
-      style={{ background: path === place ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent" }}>
-      <span className="truncate" style={{ color: "var(--text)" }}>{primary}</span>
-      {secondary && <span className="text-[9.5px] truncate" style={{ color: "var(--text4)" }}>{secondary}</span>}
+  const Item = ({ r, i }: { r: PlaceRow; i: number }) => (
+    <button key={`${r.recent ? "r" : "p"}:${r.path}`} data-place={i} onClick={() => onPick(r.path)} onMouseEnter={() => setCur(i)}
+      role="option" aria-selected={i === cur}
+      className="agx-pal-hit text-left px-2.5 flex items-center gap-2 rounded-md"
+      style={{
+        width: "calc(100% - 12px)", margin: "0 6px", minHeight: HIT,
+        ...(i === cur ? { background: "color-mix(in srgb, var(--primary) 16%, transparent)", boxShadow: "inset 0 0 0 1px color-mix(in srgb, var(--primary) 40%, transparent)" }
+          : r.path === place ? { background: "color-mix(in srgb, var(--text) 6%, transparent)" } : null),
+      }}>
+      <span className="shrink-0 flex" style={{ color: "var(--text2)" }}>
+        {r.home ? <HomeIcon size={ICON.md} /> : r.recent ? <ClockIcon size={ICON.md} /> : <FolderIcon size={ICON.md} />}
+      </span>
+      <span className="shrink-0 max-w-[45%] truncate" style={{ color: "var(--text)", fontWeight: r.recent ? 600 : 500 }}>{r.name}</span>
+      <span className="ml-auto min-w-0 truncate text-[10.5px]" style={{ color: "var(--text3)" }} title={r.path}>{r.sub}</span>
     </button>
+  );
+  const onFieldKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    // Escape is the menu's, one level up — see menuKeys.
+    // Tab takes the first completion, Enter takes what you typed —
+    // the two things those keys mean in a shell.
+    if (e.key === "ArrowDown" || (e.key === "n" && e.ctrlKey)) { e.preventDefault(); setCur((c) => (flat.length ? (c + 1) % flat.length : -1)); return; }
+    if (e.key === "ArrowUp" || (e.key === "p" && e.ctrlKey)) { e.preventDefault(); setCur((c) => (flat.length ? (c <= 0 ? flat.length - 1 : c - 1) : -1)); return; }
+    if (e.key === "Tab") { e.preventDefault(); if (sugg.length) setTyped(`${sugg[0]!.path}/`); return; }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const row = flat[cur];
+      if (row) onPick(row.path);
+      else if (typedIsPath) onPick(typed.trim().replace(/\/+$/, ""));
+    }
+  };
+
+  const heading = (text: string) => (
+    <div className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider" style={{ color: "var(--text2)" }}>{text}</div>
   );
 
   return (
@@ -1447,32 +1528,25 @@ function PlaceChip({ place, places, recents, error, openState, onPick }: {
             }}
             onKeyDown={menuKeys(() => setOpen(false))}>
             <div className="px-3 pt-2 pb-1.5 shrink-0 flex flex-col gap-1" style={{ borderBottom: LINE }}>
-              <div className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text2)" }}>Where on this machine</div>
-              <div className="text-[10px]" style={{ color: "var(--text4)" }}>your home folder and what is under it — hidden folders are never searched</div>
+              <div className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text2)" }}>Where on this machine</div>
+              <div className="text-[10.5px]" style={{ color: "var(--text3)" }}>your home folder and what is under it — hidden folders are never searched</div>
             </div>
             <input ref={field} value={typed} onChange={(e) => setTyped(e.target.value)}
               placeholder="Filter, or type a path like ~/Documents…" spellCheck={false} autoComplete="off"
-              onKeyDown={(e) => {
-                // Escape is the menu's, one level up — see menuKeys.
-                // Tab takes the first completion, Enter takes what you typed —
-                // the two things those keys mean in a shell.
-                if (e.key === "Tab") { e.preventDefault(); if (sugg.length) setTyped(`${sugg[0]!.path}/`); return; }
-                if (e.key === "Enter" && isPath(typed.trim())) { e.preventDefault(); onPick(typed.trim().replace(/\/+$/, "")); }
-              }}
+              onKeyDown={onFieldKey}
               className={`m-1.5 shrink-0 ${INPUT}`}
               style={INPUT_STYLE} />
-            <div className="agx-scroll overflow-y-auto overflow-x-hidden py-1.5" style={{ minHeight: 0 }}>
+            <div ref={listEl} role="listbox" aria-label="Places on this machine" className="agx-scroll overflow-y-auto overflow-x-hidden pb-1.5" style={{ minHeight: 0 }}>
               {error && <div className="px-3 py-2" style={{ color: "var(--error-ink)" }}>{error}</div>}
-              {sugg.map((e) => <Row key={e.path} path={e.path} primary={e.name} secondary={e.path} />)}
-              {isPath(typed.trim()) && !sugg.length && (
+              {typedIsPath && completions.map((r, i) => <Item key={r.path} r={r} i={i} />)}
+              {typedIsPath && !sugg.length && (
                 <div className="px-3 py-2" style={{ color: "var(--text3)" }}>Nothing under that path yet — ⏎ searches it anyway.</div>
               )}
-              {listed.map((p) => <Row key={p.path} path={p.path} primary={p.label} secondary={shortPath(p.path)} />)}
-              {past.length > 0 && (
-                <div className="px-3 pt-2 pb-1 text-[9px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>Lately</div>
-              )}
-              {past.map((r) => <Row key={r} path={r} primary={shortPath(r)} />)}
-              {!error && !sugg.length && !listed.length && !past.length && !isPath(typed.trim()) && (
+              {!typedIsPath && sections.places.length > 0 && heading("Places")}
+              {!typedIsPath && sections.places.map((r, i) => <Item key={r.path} r={r} i={i} />)}
+              {!typedIsPath && sections.recent.length > 0 && heading("Recent")}
+              {!typedIsPath && sections.recent.map((r, i) => <Item key={r.path} r={r} i={sections.places.length + i} />)}
+              {!error && !flat.length && !typedIsPath && (
                 <div className="px-3 py-2" style={{ color: "var(--text3)" }}>No folder matches “{typed.trim()}”. Type a path to go straight there.</div>
               )}
             </div>

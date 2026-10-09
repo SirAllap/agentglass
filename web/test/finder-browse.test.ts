@@ -9,42 +9,8 @@
 import { describe, expect, test } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { crumbs, humanBytes, FilePalette } from "../src/components/FilePalette.tsx";
+import { humanBytes, FilePalette } from "../src/components/FilePalette.tsx";
 import { Preview } from "../src/components/finder/Preview.tsx";
-
-describe("a path, as pieces", () => {
-  test("every crumb is somewhere to jump to", () => {
-    expect(crumbs("/home/dev/Documents/projects")).toEqual([
-      { label: "home", path: "/home", last: false },
-      { label: "dev", path: "/home/dev", last: false },
-      { label: "Documents", path: "/home/dev/Documents", last: false },
-      { label: "projects", path: "/home/dev/Documents/projects", last: true },
-    ]);
-  });
-
-  /* `/home/somebody` is four wasted characters and a name nobody needs to read
-     — and this app calls it `~` everywhere else. */
-  test("home folds into ~", () => {
-    expect(crumbs("/home/dev/Documents/projects", "/home/dev").map((c) => c.label))
-      .toEqual(["~", "Documents", "projects"]);
-    expect(crumbs("/home/dev/Documents", "/home/dev")[0]).toMatchObject({ label: "~", path: "/home/dev" });
-  });
-
-  test("the last crumb is where you are", () => {
-    const c = crumbs("/home/dev/Documents", "/home/dev");
-    expect(c[c.length - 1]!.last).toBe(true);
-    expect(c.filter((x) => x.last)).toHaveLength(1);
-  });
-
-  test("a trailing slash is not an empty crumb", () => {
-    expect(crumbs("/home/dev/Documents/", "/home/dev").map((c) => c.label)).toEqual(["~", "Documents"]);
-  });
-
-  test("and nothing at all is no crumbs rather than a crash", () => {
-    expect(crumbs("")).toEqual([]);
-    expect(crumbs("/")).toEqual([]);
-  });
-});
 
 describe("sizes in a listing", () => {
   test("scanned, not audited", () => {

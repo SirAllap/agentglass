@@ -22,6 +22,10 @@ import type { FileFacts } from "../../../../shared/types.ts";
 import { api } from "../../lib/api.ts";
 import { CODE_FONT_STYLE } from "../diff/DiffLines.tsx";
 import { EDGE } from "../workspace/Chrome.tsx";
+import { HIT, ICON } from "../../lib/iconSize.ts";
+import { CopyIcon, DoneIcon } from "../../lib/glyphIcons.tsx";
+import { copyLabel, flash } from "../../lib/paletteModel.ts";
+import { RevealButton } from "./RevealButton.tsx";
 
 /** How long the cursor has to stay on a row before its bytes are fetched.
  *  Long enough that holding ↓ through forty rows fetches nothing. */
@@ -63,6 +67,12 @@ export function Preview({ path, onOpen, onCopyPath, compact }: {
   /** Why the desktop would not take it — said next to the button that asked. */
   const [openErr, setOpenErr] = useState<string | null>(null);
   const urlRef = useRef<string | null>(null);
+  /** "Copied ✓" for a moment: a button that does something invisible reads as
+   *  a button that did nothing, and gets pressed again. */
+  const [copied, setCopied] = useState(false);
+  const copyFlash = useRef<ReturnType<typeof flash> | null>(null);
+  copyFlash.current ??= flash(setCopied);
+  useEffect(() => () => copyFlash.current?.cancel(), []);
 
   /** Drop whatever object URL is held. Called on every change and on unmount:
    *  a blob URL lives until it is revoked, whatever happens to the element. */
@@ -75,6 +85,8 @@ export function Preview({ path, onOpen, onCopyPath, compact }: {
     dropMedia();
     setMediaErr(null);
     setOpenErr(null);
+    setCopied(false);
+    copyFlash.current?.cancel();
     setFacts(null);
     if (!path) return;
     let live = true;
@@ -134,7 +146,7 @@ export function Preview({ path, onOpen, onCopyPath, compact }: {
           {facts.kind !== "dir" && <span>{human(facts.bytes)}</span>}
           <span>{ago(facts.mtime)}</span>
         </div>
-        <div className="flex items-center gap-1.5 mt-1.5">
+        <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
           {/*
             * "Open" is not one action.
             *
@@ -146,27 +158,29 @@ export function Preview({ path, onOpen, onCopyPath, compact }: {
           {facts.kind === "text" || facts.kind === "binary" ? (
             onOpen && (
               <button onClick={() => onOpen(path, facts)}
-                className="text-[10px] px-2 py-0.5 rounded-md min-h-[20px]"
-                style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}>
+                className="px-2 rounded-md text-[11px]"
+                style={{ minHeight: HIT, color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}>
                 Edit
               </button>
             )
           ) : facts.kind !== "dir" ? (
             <button onClick={() => { setOpenErr(null); void api.previewOpen(path).then((r) => { if (!r.ok) setOpenErr(r.error ?? "could not open"); }); }}
-              className="text-[10px] px-2 py-0.5 rounded-md min-h-[20px]"
-              style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}
+              className="px-2 rounded-md text-[11px]"
+              style={{ minHeight: HIT, color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}
               title="Open with the desktop application">
               Open
             </button>
           ) : null}
           {openErr && <span className="text-[9.5px]" style={{ color: "var(--warning-ink)" }}>{openErr}</span>}
           {onCopyPath && (
-            <button onClick={() => onCopyPath(path)}
-              className="text-[10px] px-2 py-0.5 rounded-md min-h-[20px]"
-              style={{ color: "var(--text3)", border: EDGE }}>
-              Copy path
+            <button onClick={() => { onCopyPath(path); copyFlash.current?.fire(); }}
+              className="inline-flex items-center gap-1.5 px-2 rounded-md text-[11px]"
+              style={{ minHeight: HIT, color: copied ? "var(--success-ink)" : "var(--text2)", border: EDGE }}
+              aria-live="polite">
+              {copied ? <DoneIcon size={ICON.sm} /> : <CopyIcon size={ICON.sm} />}{copyLabel("Copy path", copied)}
             </button>
           )}
+          <RevealButton path={path} what={facts.kind === "dir" ? "folder" : "file"} />
         </div>
       </div>
 

@@ -10,7 +10,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { browseDir, browseReal, fileBytes, fileFacts, imageSize, kindOf, openInDesktop } from "../src/browse.ts";
+import { browseDir, browseReal, fileBytes, fileFacts, imageSize, kindOf, openInDesktop, revealArgv, revealTarget } from "../src/browse.ts";
 
 const made: string[] = [];
 const wasRoots = process.env.AGENTGLASS_DISK_ROOTS;
@@ -394,4 +394,33 @@ describe("handing a file to the desktop", () => {
     expect(openInDesktop(join(d, "nope.png"))).toMatchObject({ ok: false, error: "no such file" });
   });
 });
+describe("showing a place in the file manager", () => {
+  test("a folder is shown as itself and a file as the folder that holds it", () => {
+    const d = tmp();
+    writeFileSync(join(d, "notes.txt"), "x");
+    const folder = revealTarget(d);
+    const file = revealTarget(join(d, "notes.txt"));
+    expect(folder.ok && file.ok).toBe(true);
+    if (folder.ok && file.ok) expect(file.dir).toBe(folder.dir);
+  });
+
+  test("outside the boundary, or missing, nothing is opened", () => {
+    noRootsForOpen();
+    expect(revealTarget("/etc")).toMatchObject({ ok: false });
+    expect(revealTarget("/etc/passwd")).toMatchObject({ ok: false });
+    expect(revealTarget(null)).toMatchObject({ ok: false });
+    const d = tmp();
+    expect(revealTarget(join(d, "nope"))).toMatchObject({ ok: false, error: "no such file" });
+  });
+
+  test("the path is one argument, never part of a string a shell would read", () => {
+    const evil = "/home/u/a b; rm -rf ~ $(x)";
+    const which = (b: string) => (b === "xdg-open" ? "/usr/bin/xdg-open" : null);
+    expect(revealArgv("linux", which, evil)).toEqual(["/usr/bin/xdg-open", evil]);
+    expect(revealArgv("linux", (b) => (b === "gio" ? "/usr/bin/gio" : null), evil)).toEqual(["/usr/bin/gio", "open", evil]);
+    expect(revealArgv("darwin", (b) => (b === "open" ? "/usr/bin/open" : null), evil)).toEqual(["/usr/bin/open", evil]);
+    expect(revealArgv("linux", () => null, evil)).toBeNull();
+  });
+});
+
 function noRootsForOpen() { delete process.env.AGENTGLASS_DISK_ROOTS; }

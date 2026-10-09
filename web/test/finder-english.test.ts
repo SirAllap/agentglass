@@ -12,13 +12,15 @@ import { describe, expect, test } from "bun:test";
 const code = (src: string) => src.split("\n").filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l)).join("\n");
 
 const palette = code(await Bun.file(new URL("../src/components/FilePalette.tsx", import.meta.url)).text());
+const reveal = code(await Bun.file(new URL("../src/components/finder/RevealButton.tsx", import.meta.url)).text());
 const preview = code(await Bun.file(new URL("../src/components/finder/Preview.tsx", import.meta.url)).text());
 
 describe("the finder speaks English", () => {
-  test("the three labels are Open, Copy path and Back", () => {
+  test("the labels are Open, Copy path and Open in Files", () => {
     expect(preview).toMatch(/^\s*Open$/m);
-    expect(preview).toMatch(/^\s*Copy path$/m);
-    expect(palette).toContain(">Back</IconLabel>");
+    expect(preview).toContain('copyLabel("Copy path"');
+    expect(reveal).toContain("Open in Files");
+    expect(palette).not.toContain(">Back</IconLabel>");
   });
 
   test("none of the old Spanish is left in what it draws", () => {

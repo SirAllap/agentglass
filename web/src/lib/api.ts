@@ -1285,6 +1285,7 @@ const realApi = {
   /** Hand a file to the desktop's own viewer — a picture belongs to the picture
    *  viewer, not to the editor the text files open in. */
   previewOpen: (path: string) => post<{ ok: boolean; with?: string; error?: string }>("/preview/open", { path }),
+  previewReveal: (path: string) => post<{ ok: boolean; with?: string; error?: string }>("/preview/reveal", { path }),
   diskGrep: (root: string, q: string) => get<GrepReport>(`/disk/grep?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}`),
 
   dockerLogs: (id: string, tail = 400) => get<{ ok: boolean; text: string; error?: string }>(`/docker/logs?id=${encodeURIComponent(id)}&tail=${tail}`),
@@ -2417,6 +2418,7 @@ const demoApi: typeof realApi = {
   previewFacts: (path: string) => D({ ok: false, path, name: "", kind: "binary", mime: "", bytes: 0, mtime: 0, error: "the demo has no filesystem" } as FileFacts),
   previewBlob: async () => ({ ok: false as const, error: "the demo has no filesystem" }),
   previewOpen: () => D({ ok: false, error: "the demo has no filesystem" }),
+  previewReveal: () => D({ ok: false, error: "the demo has no filesystem" }),
   diskGrep: () => D({ ok: false, hits: [], files: 0, truncated: false, via: "", error: "the demo has no filesystem" } as GrepReport),
   dockerLogs: (id: string, _tail?: number) => D(demo.dockerLogs(id)),
   dockerDisk: () => D({ images: 0, containers: 0, volumes: 0, buildCache: 0, reclaimable: 0, orphans: [], volumes_: [], at: Date.now() } as DockerDisk),

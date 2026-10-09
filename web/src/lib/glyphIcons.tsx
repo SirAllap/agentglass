@@ -295,6 +295,16 @@ export function FileIcon({ size = ICON.sm, className }: P) {
   return <svg {...svg(size, className)}><path d="M3.4 1.8h4.7l2.5 2.5v7a1 1 0 0 1-1 1H3.4a1 1 0 0 1-1-1V2.8a1 1 0 0 1 1-1z" /><path d="M8 1.8v2.6h2.6" /></svg>;
 }
 
+/** 🖼 — a picture: a file with a horizon in it. */
+export function ImageFileIcon({ size = ICON.sm, className }: P) {
+  return <svg {...svg(size, className)}><rect x="1.8" y="2.4" width="10.4" height="9.2" rx="1.2" /><circle cx="5" cy="5.6" r="1" /><path d="M2.2 10.6l3.2-2.8 2.4 2 1.8-1.4 2.4 2" /></svg>;
+}
+
+/** </> — source: a file that is code. */
+export function CodeFileIcon({ size = ICON.sm, className }: P) {
+  return <svg {...svg(size, className)}><rect x="1.8" y="2.4" width="10.4" height="9.2" rx="1.2" /><path d="M5.4 5.4L3.8 7l1.6 1.6M8.6 5.4L10.2 7 8.6 8.6" /></svg>;
+}
+
 /** ☰ ⊟ ▣ — put away: a stash, a drawer. */
 export function StashIcon({ size = ICON.sm, className }: P) {
   return <svg {...svg(size, className)}><path d="M2 5.2l1.4-2.6h7.2L12 5.2" /><rect x="2" y="5.2" width="10" height="6.4" rx="1" /><path d="M5.4 7.8h3.2" /></svg>;
