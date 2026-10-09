@@ -7071,7 +7071,14 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                   the comment is hovered — a row of four buttons under every
                   paragraph turns a conversation into a control panel. */}
               {writable && editing !== c.id && (
-                <div className="agx-hover-show flex flex-wrap items-center gap-1 mt-2">
+                /* Out of the flow. In the flow this row was opacity:0 and
+                   still took its ~22px plus mt-2 under every comment, so a
+                   one-line remark sat in a card with a 43px blank band below
+                   it (measured 13px once the row is gone). Now it straddles
+                   the card's bottom edge like a hover toolbar: the card hugs
+                   its text, and hovering the card still reveals it. */
+                <div className="agx-hover-show absolute right-3 bottom-0 translate-y-1/2 z-[6] flex flex-nowrap whitespace-nowrap items-center gap-1 rounded-lg p-0.5"
+                  style={{ background: "var(--surface-card)" }}>
                   {/* Controls, not a sentence.
                       These were four words in a row under the paragraph and read
                       as text somebody forgot to delete. An icon, a label, a
