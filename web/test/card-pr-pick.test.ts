@@ -59,6 +59,22 @@ describe("pickCardPr", () => {
     expect(r.primary).toBe(c);
     expect(r.rest).toEqual([b, a]);
   });
+
+  it("puts your own pull request ahead of a newer one by somebody else in the same state", () => {
+    const theirs = pr({ number: 9, state: "OPEN", author: "octo-dev" });
+    const yours = pr({ number: 4, state: "OPEN", author: "orbit-me", mine: true });
+    const r = pickCardPr([theirs, yours]);
+    if (r.kind !== "many") throw new Error("expected many");
+    expect(r.primary).toBe(yours);
+  });
+
+  it("never lets authorship beat state: somebody else's open one outranks your merged one", () => {
+    const theirs = pr({ number: 2, state: "OPEN", author: "octo-dev" });
+    const yours = pr({ number: 8, state: "MERGED", author: "orbit-me", mine: true });
+    const r = pickCardPr([yours, theirs]);
+    if (r.kind !== "many") throw new Error("expected many");
+    expect(r.primary).toBe(theirs);
+  });
 });
 
 describe("cardPrTint", () => {

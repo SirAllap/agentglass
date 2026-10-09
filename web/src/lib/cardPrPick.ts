@@ -20,6 +20,8 @@ export interface CardPr {
   state: string;
   draft?: boolean;
   url: string;
+  author?: string;
+  mine?: boolean;
 }
 
 function rank(p: CardPr): number {
@@ -30,10 +32,10 @@ function rank(p: CardPr): number {
 }
 
 /** Every pull request the card has, in the order the chip and its popover
- *  read them: open first, then draft, then merged, then closed, newest
- *  number first within each. */
+ *  read them: open first, then draft, then merged, then closed; within each,
+ *  your own before anyone else's, then newest number first. */
 export function sortedCardPrs(prs: readonly CardPr[]): CardPr[] {
-  return [...prs].sort((a, b) => rank(a) - rank(b) || b.number - a.number);
+  return [...prs].sort((a, b) => rank(a) - rank(b) || Number(!!b.mine) - Number(!!a.mine) || b.number - a.number);
 }
 
 export type CardPrPick =

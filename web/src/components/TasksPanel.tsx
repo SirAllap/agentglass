@@ -4749,7 +4749,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
                 border: `1px solid color-mix(in srgb, ${tint} 40%, transparent)`,
                 outlineColor: tint,
               }}
-              title={`${label} pull request #${shown.number}${restCount ? ` (+${restCount} more)` : ""} — ${shown.title}`}>
+              title={`${label} pull request #${shown.number}${shown.author ? (shown.mine ? ", yours" : ` by @${shown.author}`) : ""}${restCount ? ` (+${restCount} more)` : ""} — ${shown.title}`}>
               <PullRequestIcon size={ICON.xs} />
               <span className="text-[10.5px] tabular-nums font-mono leading-none">#{shown.number}</span>
               {restCount > 0 && <span className="text-[9.5px] leading-none" style={{ opacity: 0.85 }}>+{restCount}</span>}
@@ -4760,10 +4760,16 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
           <ContextMenu x={prMenu.x} y={prMenu.y} onClose={() => setPrMenu(null)}>
             {sortedCardPrs([prPick.primary, ...prPick.rest]).map((p) => (
               <MenuItem key={p.number} onClick={() => { setPrMenu(null); openCardPr(p); }}>
-                <span className="flex items-center gap-1.5 min-w-0">
+                <span className="flex items-center gap-1.5 min-w-0 w-full">
                   <span className="shrink-0" style={{ width: 7, height: 7, borderRadius: 999, background: cardPrTint(p) }} />
                   <span className="tabular-nums font-mono shrink-0">#{p.number}</span>
                   <span className="truncate" style={{ color: "var(--text3)" }}>{p.title}</span>
+                  {p.author && (
+                    <span className="shrink-0 ml-auto pl-3 font-mono text-[10.5px]"
+                      style={{ color: p.mine ? "var(--primary)" : "var(--text4)" }}>
+                      {p.mine ? "you" : `@${p.author}`}
+                    </span>
+                  )}
                 </span>
               </MenuItem>
             ))}

@@ -3013,6 +3013,16 @@ export function mentionsCard(cardId: string, pr: { title?: string; body?: string
   return re.test(`${pr.headRefName ?? ""} ${pr.title ?? ""} ${pr.body ?? ""}`);
 }
 
+// Who `gh` is signed in as, asked once per process: it does not change under a
+// running server, and asking per card would double every lookup.
+let ghLogin: Promise<string> | null = null;
+function viewerLogin(gh: (args: string[], cwd?: string) => Promise<{ code: number; stdout: string }>, root: string): Promise<string> {
+  ghLogin ??= gh(["api", "user", "--jq", ".login"], root)
+    .then((r) => (r.code === 0 ? r.stdout.trim().toLowerCase() : ""))
+    .then((login) => { if (!login) ghLogin = null; return login; });
+  return ghLogin;
+}
+
 export async function cardPullRequests(
   cardId: string, fieldUrl: string | undefined, root: string,
 ): Promise<{ ok: boolean; prs: CardPr[]; error?: string }> {
@@ -3032,7 +3042,7 @@ export async function cardPullRequests(
       // `body` and `headRefName` are not decoration: they are what the rows are
       // CHECKED against below. Without them the search's own idea of a match is
       // the final answer, and that idea is wrong — see the filter.
-      "--json", "number,title,state,isDraft,url,body,headRefName"],
+      "--json", "number,title,state,isDraft,url,body,headRefName,author"],
     root,
   );
   if (r.code !== 0) {
@@ -3041,7 +3051,8 @@ export async function cardPullRequests(
     return { ok: false, prs: [...out.values()], error: r.stderr.trim().slice(0, 160) || "could not search GitHub" };
   }
   try {
-    const rows = JSON.parse(r.stdout) as { number: number; title: string; state: string; isDraft?: boolean; url: string; body?: string; headRefName?: string }[];
+    const rows = JSON.parse(r.stdout) as { number: number; title: string; state: string; isDraft?: boolean; url: string; body?: string; headRefName?: string; author?: { login?: string } }[];
+    const me = await viewerLogin(gh, root);
     for (const p of rows) {
       // Every row is checked. GitHub's search does not answer the question we
       // asked it — see `mentionsCard`.
@@ -3049,7 +3060,8 @@ export async function cardPullRequests(
       const had = out.get(p.number);
       out.set(p.number, {
         number: p.number, title: p.title, state: p.state, draft: p.isDraft, url: p.url,
-        stated: had?.stated,
+        stated: had?.stated, author: p.author?.login,
+        mine: !!me && p.author?.login?.toLowerCase() === me,
       });
     }
   } catch { /* a search that answered nothing usable is a search with no rows */ }

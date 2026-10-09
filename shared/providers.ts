@@ -741,6 +741,10 @@ export interface CardPr {
   url: string;
   /** True when it came from the card's own field rather than from a search. */
   stated?: boolean;
+  /** GitHub login of the author, when the search returned it. */
+  author?: string;
+  /** Authored by the account `gh` is signed in as. */
+  mine?: boolean;
 }
 
 /** One reply in a comment thread. */
