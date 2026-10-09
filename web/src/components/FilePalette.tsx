@@ -33,7 +33,7 @@ import type { BrowseReport } from "../../../shared/types.ts";
 import { appChordFor, chordLabel } from "../lib/keybindings.ts";
 import { LAYER } from "../lib/layers.ts";
 import { shortPath } from "../lib/shortPath.ts";
-import { afterJump, dirsFirst, fileKind, focusSelection, pathBar, pathInputText, placeSections, shortenHome, switchTab, type BrowseState, type PlaceRow } from "../lib/paletteModel.ts";
+import { afterJump, dirsFirst, pageUrl, fileKind, focusSelection, pathBar, pathInputText, placeSections, shortenHome, switchTab, type BrowseState, type PlaceRow } from "../lib/paletteModel.ts";
 import type { DiskPlace, FsEntry, GitRepoRef, GrepHit } from "../../../shared/types.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { FileViewer } from "./CardFiles.tsx";
@@ -190,7 +190,7 @@ const saveRef = (root: string, ref: string) => {
 };
 
 export function FilePalette({
-  open, onClose, onOpenFile, onRevealDir, docOpen, onHeight, target,
+  open, onClose, onOpenFile, onRevealDir, onOpenBrowser, docOpen, onHeight, target,
 }: {
   open: boolean;
   /** Somewhere to be when it opens: a path clicked in a terminal. Each new `n`
@@ -201,6 +201,9 @@ export function FilePalette({
   onOpenFile: (root: string, rel: string, branch: string, ref?: string) => void | Promise<void>;
   /** A folder is a place: go to Files and walk the tree there. */
   onRevealDir: (root: string, dir: string) => void;
+  /** Show an address in the app's own browser. Absent where there is none, and
+   *  the system's default opener takes the file instead. */
+  onOpenBrowser?: (url: string) => void;
   /**
    * A document is open underneath.
    *
@@ -1069,7 +1072,14 @@ export function FilePalette({
                 <div className="shrink-0 border-l flex flex-col" style={{ width: 300, borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                   <Preview path={preview} compact={docOpen}
                     onOpen={(_p, facts) => openRow(shown[cursor], facts.kind !== "dir")}
-                    onCopyPath={(p) => { void navigator.clipboard?.writeText(p); }} />
+                    onCopyPath={(p) => { void navigator.clipboard?.writeText(p); }}
+                    onOpenBrowser={(p) => {
+                      /* The same allowlist as every other read: the page route
+                         judges the path, and the fallback is the opener that
+                         already does. */
+                      if (onOpenBrowser) { onOpenBrowser(withToken(pageUrl(SERVER, p))); onClose(); }
+                      else void api.previewOpen(p);
+                    }} />
                 </div>
               )}
             </div>

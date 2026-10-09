@@ -126,7 +126,7 @@ import {
 } from "./reminders.ts";
 import { fileText, fileToTemp, fileTree, findFiles, grepFiles, listRefs, filesExist, heldBackFrom, heldBackTest, HELD_BACK, filesReach, gitReadRefusal, gitReadTest } from "./files.ts";
 import { diskFind, diskGrep, diskPlaces } from "./disk.ts";
-import { browseDir, fileBytes, fileFacts, openInDesktop, revealInFileManager } from "./browse.ts";
+import { browseDir, fileBytes, fileFacts, openInDesktop, pagePolicy, revealInFileManager } from "./browse.ts";
 import { benchEdit, benchEnd, benchLive, readNote, writeNote } from "./bench.ts";
 import {
   overview as dockerOverview, stats as dockerStats, logs as dockerLogs, inspect as dockerInspect, top as dockerTop,
@@ -6635,9 +6635,12 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       }
       if (pathname === "/browse") return json(browseDir(url.searchParams.get("path") || "", url.searchParams.get("hidden") === "1", localBrowse));
       if (pathname === "/preview/facts") return json(fileFacts(url.searchParams.get("path") || "", localBrowse));
-      if (pathname === "/preview/raw") {
+      if (pathname === "/preview/raw" || pathname === "/preview/page") {
         const r = await fileBytes(url.searchParams.get("path") || "", localBrowse);
         if (!r.ok) return json({ error: r.error }, 404);
+        /* `page` is for a browser tab rather than an <img>: an .html file is
+           served as a page, inert (see pagePolicy), where `raw` calls it text. */
+        const page = pathname === "/preview/page" ? pagePolicy(url.searchParams.get("path") || "") : null;
         return new Response(r.body, {
           headers: {
             /*
@@ -6651,13 +6654,13 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
              * cross-origin response, reported to the page as nothing at all.
              */
             ...cors,
-            "content-type": r.mime,
+            "content-type": page?.mime ?? r.mime,
             // A preview is a picture of a file on this machine at this moment;
             // caching it is how a screenshot you just retook shows the old one.
             "cache-control": "no-store",
             // It is a file the user pointed at, and it is served as bytes to be
             // drawn — never as a document with a script in it.
-            "content-security-policy": "default-src 'none'; img-src 'self' data: blob:; style-src 'unsafe-inline'",
+            "content-security-policy": page?.csp ?? "default-src 'none'; img-src 'self' data: blob:; style-src 'unsafe-inline'",
             "x-content-type-options": "nosniff",
           },
         });

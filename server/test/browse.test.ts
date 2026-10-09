@@ -10,6 +10,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { pagePolicy } from "../src/browse.ts";
+import { viewableFile } from "../src/terminal.ts";
 import { browseDir, browseReal, fileBytes, fileFacts, imageSize, kindOf, openInDesktop, revealArgv, revealTarget } from "../src/browse.ts";
 
 const made: string[] = [];
@@ -394,6 +396,45 @@ describe("handing a file to the desktop", () => {
     expect(openInDesktop(join(d, "nope.png"))).toMatchObject({ ok: false, error: "no such file" });
   });
 });
+describe("the bench editor door follows the finder's", () => {
+  /* A workspace that is NOT where the file is: the installed cockpit has one,
+     and an empty scope answers "everywhere", which hides the bug. */
+  const wasRoot = process.env.AGENTGLASS_ROOT;
+  const project = mkdtempSync(join(tmpdir(), "agx-project-"));
+  made.push(project);
+  afterEach(() => { if (wasRoot === undefined) delete process.env.AGENTGLASS_ROOT; else process.env.AGENTGLASS_ROOT = wasRoot; });
+
+  test("a file the finder may read opens in the editor even outside any project", () => {
+    const d = tmp();
+    process.env.AGENTGLASS_ROOT = project;
+    writeFileSync(join(d, "sheet.html"), "<p>x</p>");
+    expect(viewableFile(join(d, "sheet.html"), false)).toBe(true);
+  });
+
+  test("a file it may not read is still refused, and nothing is nothing", () => {
+    process.env.AGENTGLASS_ROOT = project;
+    delete process.env.AGENTGLASS_DISK_ROOTS;
+    expect(viewableFile("/etc/passwd", false)).toBe(false);
+    expect(viewableFile(null, false)).toBe(false);
+  });
+});
+
+describe("a page from disk, in a browser tab", () => {
+  test("html is a page with no scripts and no network", () => {
+    const p = pagePolicy("/home/u/Documents/sheet.HTML");
+    expect(p?.mime).toContain("text/html");
+    expect(p?.csp).toContain("sandbox");
+    expect(p?.csp).toContain("default-src 'none'");
+    expect(p?.csp.includes("script-src")).toBe(false);
+  });
+
+  test("anything else keeps the preview policy", () => {
+    expect(pagePolicy("/home/u/shot.png")).toBeNull();
+    expect(pagePolicy("/home/u/notes.txt")).toBeNull();
+    expect(pagePolicy("/home/u/htmlnotes")).toBeNull();
+  });
+});
+
 describe("showing a place in the file manager", () => {
   test("a folder is shown as itself and a file as the folder that holds it", () => {
     const d = tmp();

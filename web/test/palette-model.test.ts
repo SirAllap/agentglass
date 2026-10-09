@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-  afterJump, copyLabel, dirsFirst, fileKind, flash, focusSelection, NO_BROWSE, pathBar, pathInputText, placeSections, recentRow, switchTab, type BrowseState,
+  afterJump, canOpenInBrowser, copyLabel, dirsFirst, fileKind, flash, focusSelection, NO_BROWSE, pathBar, pathInputText, pageUrl, placeSections, recentRow, switchTab, type BrowseState,
 } from "../src/lib/paletteModel.ts";
 
 const HOME = "/home/dev";
@@ -183,5 +183,17 @@ describe("what a row looks like", () => {
     ];
     expect(dirsFirst(rows).map((r) => r.rel)).toEqual(["web", "docs", "a.md", "b.md"]);
     expect(rows[0]!.rel).toBe("a.md");
+  });
+});
+
+describe("open in browser", () => {
+  test("pages, pictures and pdfs get it; code and folders do not", () => {
+    for (const n of ["sheet.html", "a.HTM", "shot.png", "photo.JPEG", "logo.svg", "paper.pdf"]) expect(canOpenInBrowser(n)).toBe(true);
+    for (const n of ["main.ts", "notes.md", "Makefile", "htmlnotes", "x.html.bak"]) expect(canOpenInBrowser(n)).toBe(false);
+  });
+
+  test("the address carries the path as one encoded value", () => {
+    expect(pageUrl("http://127.0.0.1:4000", "/home/u/a b&c/sheet.html"))
+      .toBe("http://127.0.0.1:4000/preview/page?path=%2Fhome%2Fu%2Fa%20b%26c%2Fsheet.html");
   });
 });

@@ -27,7 +27,8 @@ import { AlarmCard } from "./components/AlarmCard.tsx";
 import { currentScale } from "./lib/uiScale.ts";
 import { zoomAtPointer, type ZoomResult } from "./lib/zoomTarget.ts";
 import { zoomTaken } from "./lib/zoomOwner.ts";
-import { toggleFullscreen, followDeepLinks } from "./lib/desktop.ts";
+import { toggleFullscreen, followDeepLinks, HAS_BROWSER } from "./lib/desktop.ts";
+import { requestBrowserNav } from "./lib/browserNav.ts";
 import { useAlertSound } from "./lib/useSound.ts";
 import { TopBar } from "./components/TopBar.tsx";
 /*
@@ -1305,6 +1306,7 @@ export default function App() {
           } finally { setOpening(null); }
         }}
         onRevealDir={(root, dir) => { requestFilesReveal(root, dir); goView("files"); }}
+        onOpenBrowser={HAS_BROWSER ? (url) => { requestBrowserNav(url); goView("browser"); } : undefined}
       />
       {/* The two share the screen rather than stack: the palette stays open on
           purpose, so the document starts below its measured bottom edge — 10px

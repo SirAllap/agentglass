@@ -31,6 +31,7 @@ import { noteNvimArgv } from "./bench.ts";
 import { engineAttachArgv, engineBenchArgv, engineConsoleArgv, engineWindowRunning, engineSplitRunning, engineSessionName } from "./tmuxpane.ts";
 import { confHealth, ensureConf } from "./tmuxconf.ts";
 import { readerSocketPath } from "./bench.ts";
+import { browseReal } from "./browse.ts";
 import { SKIP_DIRS } from "./gitwork.ts";
 
 // The PTY backend is POSIX-only: every strategy below needs a real
@@ -683,6 +684,19 @@ export function chooseRun(o: {
   return { run, ownShell: run === o.shellArgv };
 }
 
+/**
+ * May the bench open this file in an editor?
+ *
+ * The workspace, a copy this server wrote, or anything the finder is allowed
+ * to read. The last one is the regression: the palette's Machine tab lists
+ * ~/Documents and offers the file, but this door only knew the workspace, so
+ * the bench tab opened on a plain shell prompt and nvim never started. One
+ * door per question: if the palette may read it, the editor may show it.
+ */
+export function viewableFile(wanted: string | null, tempCopy: boolean): boolean {
+  return !!wanted && (inScopeReal(wanted) || tempCopy || browseReal(wanted) !== null);
+}
+
 export function ptyOpen(ws: PtyWs) {
   const d = ws.data as PtyWsData;
   if (!TERMINAL_ENABLED) {
@@ -743,7 +757,7 @@ export function ptyOpen(ws: PtyWs) {
   // In scope, or a copy this server itself wrote: a pull request's file is
   // fetched to a temp path precisely because it is not in the workspace, and
   // the check has to admit that without admitting /tmp in general.
-  const viewable = !!wanted && (inScopeReal(wanted) || tempCopy);
+  const viewable = viewableFile(wanted, tempCopy);
   const editor = viewable && existsSync(wanted!) ? editorFor() : null;
   /*
    * Read-only unless the caller asked for an editor, and never for a copy.

@@ -188,3 +188,16 @@ export function fileKind(name: string, isDir: boolean): FileKind {
 export function dirsFirst<T extends { kind: string }>(rows: T[]): T[] {
   return [...rows.filter((r) => r.kind === "dir"), ...rows.filter((r) => r.kind !== "dir")];
 }
+
+/* -------------------------------------------------------- open in a browser */
+
+const BROWSABLE = /\.(html?|png|jpe?g|gif|webp|svg|avif|pdf)$/i;
+
+/** Which files get an "Open in browser" button: pages, pictures and PDFs, the
+ *  things a browser draws better than an editor does. Enter still opens the
+ *  editor for them. */
+export const canOpenInBrowser = (name: string): boolean => BROWSABLE.test(name);
+
+/** The address a browser tab loads for a file: the engine's own page route,
+ *  which judges the path like every other read. `origin` is the engine's. */
+export const pageUrl = (origin: string, abs: string): string => `${origin}/preview/page?path=${encodeURIComponent(abs)}`;

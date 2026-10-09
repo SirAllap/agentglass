@@ -660,3 +660,18 @@ export function revealInFileManager(pathIn: unknown, local = false): { ok: boole
     return { ok: false, error: failed("preview/reveal", e, "the file manager could not be opened") };
   }
 }
+
+/**
+ * How a file is served to a browser TAB, as opposed to a preview pane.
+ *
+ * An .html file is a page, so it is served as one, but a page from disk must
+ * not run: `sandbox` with no allowances gives it an opaque origin, and the rest
+ * of the policy leaves it no scripts and no network, so what opens is what the
+ * file says in markup and inline style, never something that can read this
+ * server's answers. Anything else keeps the preview policy (null).
+ */
+export function pagePolicy(pathIn: string): { mime: string; csp: string } | null {
+  return /\.html?$/i.test(pathIn)
+    ? { mime: "text/html; charset=utf-8", csp: "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:" }
+    : null;
+}

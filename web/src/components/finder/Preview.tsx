@@ -23,8 +23,8 @@ import { api } from "../../lib/api.ts";
 import { CODE_FONT_STYLE } from "../diff/DiffLines.tsx";
 import { EDGE } from "../workspace/Chrome.tsx";
 import { HIT, ICON } from "../../lib/iconSize.ts";
-import { CopyIcon, DoneIcon } from "../../lib/glyphIcons.tsx";
-import { copyLabel, flash } from "../../lib/paletteModel.ts";
+import { CopyIcon, DoneIcon, LinkIcon } from "../../lib/glyphIcons.tsx";
+import { canOpenInBrowser, copyLabel, flash } from "../../lib/paletteModel.ts";
 import { RevealButton } from "./RevealButton.tsx";
 
 /** How long the cursor has to stay on a row before its bytes are fetched.
@@ -51,12 +51,15 @@ const ago = (ms: number): string => {
   return d < 14 ? `${d} d ago` : `${Math.round(d / 7)} wk ago`;
 };
 
-export function Preview({ path, onOpen, onCopyPath, compact }: {
+export function Preview({ path, onOpen, onCopyPath, onOpenBrowser, compact }: {
   /** Absolute path of the row under the cursor, or null for nothing selected. */
   path: string | null;
   /** Open it properly — the editor for text, the desktop for the rest. */
   onOpen?: (path: string, facts: FileFacts) => void;
   onCopyPath?: (path: string) => void;
+  /** Show it in a browser: the built-in one where there is one. Offered only
+   *  for what a browser draws — see canOpenInBrowser. */
+  onOpenBrowser?: (path: string) => void;
   /** Half the height, for when the palette is sharing the screen with a
    *  document underneath it. */
   compact?: boolean;
@@ -178,6 +181,14 @@ export function Preview({ path, onOpen, onCopyPath, compact }: {
               style={{ minHeight: HIT, color: copied ? "var(--success-ink)" : "var(--text2)", border: EDGE }}
               aria-live="polite">
               {copied ? <DoneIcon size={ICON.sm} /> : <CopyIcon size={ICON.sm} />}{copyLabel("Copy path", copied)}
+            </button>
+          )}
+          {onOpenBrowser && facts.kind !== "dir" && canOpenInBrowser(facts.name) && (
+            <button onClick={() => onOpenBrowser(path)}
+              className="inline-flex items-center gap-1.5 px-2 rounded-md text-[11px]"
+              style={{ minHeight: HIT, color: "var(--text2)", border: EDGE }}
+              title="Open in the browser (Enter still opens the editor)">
+              <LinkIcon size={ICON.sm} />Open in browser
             </button>
           )}
           <RevealButton path={path} what={facts.kind === "dir" ? "folder" : "file"} />
