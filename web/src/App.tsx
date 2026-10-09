@@ -62,7 +62,7 @@ import { FilePalette } from "./components/FilePalette.tsx";
 import { onFinderAt, type FinderTarget } from "./lib/finderTarget.ts";
 import { WindowSwitcher } from "./components/terminal/WindowSwitcher.tsx";
 import { FloatingBench } from "./components/bench/FloatingBench.tsx";
-import { benchTakesBoard, toggleBench, showFile } from "./lib/benchStore.ts";
+import { benchTakesBoard, toggleBench, showFile, addTab } from "./lib/benchStore.ts";
 import type { BoardKind } from "./lib/boardHost.ts";
 import { PeekFile, isRenderable, type Peek } from "./components/PeekFile.tsx";
 import { clearPeek, peekRequest, subscribePeek } from "./lib/openPeek.ts";
@@ -1262,7 +1262,10 @@ export default function App() {
         open={filesOpen}
         onClose={() => setFilesOpen(false)}
         target={finderTarget}
-        onBench={(root, abs) => showFile(root, abs, { title: abs.split("/").pop() })}
+        onBench={(o) => {
+          if (o.tab === "file") showFile(o.root, o.path, { title: o.title });
+          else addTab(o.root, { kind: "term", title: o.title, type: o.type });
+        }}
         onOpenFile={async (root, rel, branch, ref) => {
           /*
            * On this checkout, the division the bench exists for.

@@ -117,6 +117,11 @@ export function EditIcon({ size = ICON.sm, className }: P) {
   return <svg {...svg(size, className)}><path d="M9.5 2.5l2 2L5 11l-2.6.6L3 9z" /><path d="M8.3 3.7l2 2" /></svg>;
 }
 
+/** A prompt in a window: what "a shell here" looks like. */
+export function TerminalIcon({ size = ICON.sm, className }: P) {
+  return <svg {...svg(size, className)}><rect x="1.6" y="2.4" width="10.8" height="9.2" rx="1.4" /><path d="M4 5.6l2 1.6-2 1.6M7.4 9h2.6" /></svg>;
+}
+
 /** ⚠ */
 export function WarningIcon({ size = ICON.sm, className }: P) {
   return <svg {...svg(size, className)}><path d="M7 1.9l5.4 9.6H1.6z" /><path d="M7 5.6v2.6M7 9.9v.1" /></svg>;

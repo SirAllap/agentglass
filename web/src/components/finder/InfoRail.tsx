@@ -9,17 +9,19 @@
  * document by its headings, a program by its definitions — and the jump is one
  * click into the pane beside it.
  *
- * The primary action is "To the bench": opening a file for editing is the one
+ * The primary action goes to the bench and says what it does there (see
+ * primaryAction): opening a file for editing is the one
  * thing the finder no longer does by itself.
  */
 import { useEffect, useRef, useState } from "react";
 import type { FileGitFacts } from "../../../../shared/types.ts";
-import { CopyIcon, DoneIcon, LinkIcon } from "../../lib/glyphIcons.tsx";
+import { CopyIcon, DoneIcon, EditIcon, LinkIcon, TerminalIcon } from "../../lib/glyphIcons.tsx";
 import { HIT, ICON } from "../../lib/iconSize.ts";
 import { ago } from "../../lib/fileRecents.ts";
 import { copyLabel, flash, humanBytes, shortenHome } from "../../lib/paletteModel.ts";
 import { typeLabel, viewerActions, type OutlineItem } from "../../lib/finderViewer.ts";
 import { EDGE, LINE } from "../workspace/Chrome.tsx";
+import { primaryAction } from "../../lib/finderFolder.ts";
 import { RevealButton } from "./RevealButton.tsx";
 import type { LoadedFile } from "./useFileSource.ts";
 
@@ -58,6 +60,7 @@ export function InfoRail({ file, git, outline, current, home, onJump, onBench, o
   const { source, facts, text, kind } = file;
   const abs = source?.abs ?? null;
   const acts = kind ? viewerActions(kind) : { bench: false, browser: false };
+  const primary = primaryAction(kind);
 
   /* "Copied ✓" for a moment: a button that does something invisible reads as a
      button that did nothing, and gets pressed again. */
@@ -143,11 +146,13 @@ export function InfoRail({ file, git, outline, current, home, onJump, onBench, o
       <section className="px-4 py-4">
         <Head>Actions</Head>
         <div className="flex flex-col gap-2">
-          {acts.bench && (
+          {primary && (
             <button onClick={onBench} className="flex items-center justify-between rounded-md px-3 text-[11.5px]"
-              style={{ minHeight: ACTION_H, background: "var(--text)", color: "var(--bg)", fontWeight: 500 }}
-              title="Open this file on the bench — it stays open there when you leave the finder">
-              <span>To the bench</span><span className="text-[10px] opacity-70">{"⌘⏎"}</span>
+              style={{ minHeight: ACTION_H, background: "var(--text)", color: "var(--bg)", fontWeight: 500 }} title={primary.title}>
+              <span className="inline-flex items-center gap-1.5">
+                {primary.id === "edit" ? <EditIcon size={ICON.sm} /> : <TerminalIcon size={ICON.sm} />}{primary.label}
+              </span>
+              <span className="text-[10px] opacity-70">{"⌘⏎"}</span>
             </button>
           )}
           {abs && (

@@ -697,6 +697,28 @@ export function viewableFile(wanted: string | null, tempCopy: boolean): boolean 
   return !!wanted && (inScopeReal(wanted) || tempCopy || browseReal(wanted) !== null);
 }
 
+/**
+ * The command that shows one file in an editor: the editor as configured, then
+ * its own flags, then the file as ONE argv element. Pulled out of `ptyOpen` so
+ * the claim "the bench tab runs nvim on that exact file" is a value a test can
+ * hold, not a sentence in a comment.
+ *
+ * - `listen`: a socket, when the editor is neovim. It is the only way anything
+ *   outside the pty can ask where the cursor is, and what makes the bench an
+ *   editor the next file can reach. Ours because we start it.
+ * - `line`: `+N` puts the cursor on the line the caller came for. Clamped and
+ *   integral: it is a number from a URL.
+ */
+export function editorRunArgv(o: { editor: string; listen: string | null; readonlyFlags: string[]; line?: number; file: string }): string[] {
+  return [
+    ...o.editor.split(/\s+/),
+    ...(o.listen ? ["--listen", o.listen] : []),
+    ...o.readonlyFlags,
+    ...(o.line && o.line > 1 ? [`+${Math.floor(o.line)}`] : []),
+    o.file,
+  ];
+}
+
 export function ptyOpen(ws: PtyWs) {
   const d = ws.data as PtyWsData;
   if (!TERMINAL_ENABLED) {
@@ -906,22 +928,7 @@ export function ptyOpen(ws: PtyWs) {
      the whole promise of the bench: close the window, the work is still there
      when it opens again. */
   const editorArgv = editor
-    ? [
-      ...editor.split(/\s+/),
-      /* A socket, when the editor is neovim: it is the only way anything
-         outside the pty can ask where the cursor is, which is what makes the
-         pane's rail a map rather than a menu. Ours because we start it — the
-         client is given an opaque id and never the path. See editorwhere.ts. */
-      ...(editorSock ? ["--listen", editorSock.path] : []),
-      ...readonlyFlags,
-      /* `+N` puts the cursor on the line the caller came for. Every editor this
-         picks takes it — nvim, vim, view, less — and it is the difference
-         between opening a 900-line file at the change you were reading and
-         opening it at the top. Clamped and integral: it is a number from a
-         URL. */
-      ...(d.line && d.line > 1 ? [`+${Math.floor(d.line)}`] : []),
-      wanted!,
-    ]
+    ? editorRunArgv({ editor, listen: editorSock?.path ?? null, readonlyFlags, line: d.line, file: wanted! })
     : null;
   /* The note's editor, on a bench socket only. Null without nvim, which leaves
      a plain shell: the client asked /bench/note first and only sends this when

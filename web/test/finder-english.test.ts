@@ -13,12 +13,15 @@ const code = (src: string) => src.split("\n").filter((l) => !/^\s*(\/\/|\/\*|\*)
 
 const palette = code(await Bun.file(new URL("../src/components/FilePalette.tsx", import.meta.url)).text());
 const reveal = code(await Bun.file(new URL("../src/components/finder/RevealButton.tsx", import.meta.url)).text());
+const folder = code(await Bun.file(new URL("../src/lib/finderFolder.ts", import.meta.url)).text());
 const preview = code(await Bun.file(new URL("../src/components/finder/InfoRail.tsx", import.meta.url)).text())
   + code(await Bun.file(new URL("../src/components/finder/FileView.tsx", import.meta.url)).text());
 
 describe("the finder speaks English", () => {
-  test("the labels are To the bench, Copy path and Show in folder", () => {
-    expect(preview).toContain("To the bench");
+  test("the labels are Edit in nvim, Terminal here, Copy path and Show in folder", () => {
+    expect(preview).toContain("primary.label");
+    expect(folder).toContain('"Edit in nvim"');
+    expect(folder).toContain('"Terminal here"');
     expect(preview).toContain('copyLabel("Copy path"');
     expect(preview).toContain('label="Show in folder"');
     expect(reveal).toContain("Open in Files");

@@ -39,6 +39,7 @@ import { InfoRail } from "./finder/InfoRail.tsx";
 import { useFileSource, type FileSource } from "./finder/useFileSource.ts";
 import { extChips, chipLabel, hasGlob, matchGlob, passesExts, toggleExt } from "../lib/finderFilters.ts";
 import { outline as outlineOf, viewerActions, type OutlineItem } from "../lib/finderViewer.ts";
+import { benchOpen, type BenchOpen } from "../lib/finderFolder.ts";
 import { DRAWER_MAX, DRAWER_MIN, RAIL_W, clampDrawer, indexOfSel, restore, resumeLine, scrollFor, type FinderSnapshot, type TabView } from "../lib/finderState.ts";
 import type { FileGitFacts } from "../../../shared/types.ts";
 import { RevealButton } from "./finder/RevealButton.tsx";
@@ -210,7 +211,7 @@ export function FilePalette({
    *  old route, which writes that ref's copy out first. */
   onOpenFile: (root: string, rel: string, branch: string, ref?: string) => void | Promise<void>;
   /** A file on disk, on the bench. */
-  onBench: (root: string, abs: string) => void;
+  onBench: (open: BenchOpen) => void;
   /** A folder is a place: go to Files and walk the tree there. */
   onRevealDir: (root: string, dir: string) => void;
   /** Show an address in the app's own browser. Absent where there is none, and
@@ -710,12 +711,15 @@ export function FilePalette({
      A picture or a PDF has no editor to go to, and sending one there is the
      floating-nvim-on-a-binary report all over again. */
   const benchRow = useCallback((row: Row | undefined) => {
-    if (!row || row.kind === "dir" || IMAGEY.test(row.rel) || (row.kind === "recent" && row.gone)) return;
+    if (!row || (row.kind === "recent" && row.gone)) return;
     const abs = absOf(row);
     if (!abs) return;
+    const project = row.kind === "recent" ? row.root : root;
+    /* A folder's bench action is a shell in it; a file's is the editor. */
+    if (row.kind === "dir") { onBench(benchOpen("terminal", abs, project)); onClose(); return; }
+    if (IMAGEY.test(row.rel)) return;
     if (ref && tab === "names" && !at && row.kind !== "recent") { void onOpenFile(root, row.rel, branch, ref); onClose(); return; }
-    const from = row.kind === "recent" ? row.root : at || tab === "machine" ? abs.slice(0, abs.lastIndexOf("/")) : root;
-    onBench(from, abs);
+    onBench(benchOpen("edit", abs, project));
     onClose();
   }, [absOf, ref, tab, at, root, branch, onOpenFile, onBench, onClose]);
 

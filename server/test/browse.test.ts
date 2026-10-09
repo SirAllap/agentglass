@@ -7,11 +7,11 @@
  * to read `~/.ssh/id_rsa` from a browser tab.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pagePolicy } from "../src/browse.ts";
-import { viewableFile } from "../src/terminal.ts";
+import { editorRunArgv, viewableFile } from "../src/terminal.ts";
 import { browseDir, browseReal, fileBytes, fileFacts, imageSize, kindOf, openInDesktop, revealArgv, revealTarget } from "../src/browse.ts";
 
 const made: string[] = [];
@@ -416,6 +416,30 @@ describe("the bench editor door follows the finder's", () => {
     delete process.env.AGENTGLASS_DISK_ROOTS;
     expect(viewableFile("/etc/passwd", false)).toBe(false);
     expect(viewableFile(null, false)).toBe(false);
+  });
+});
+
+describe("the bench editor command carries the file", () => {
+  test("nvim, its socket, the line and the exact path as one element", () => {
+    const argv = editorRunArgv({ editor: "nvim", listen: "/run/x.sock", readonlyFlags: [], line: 12.9, file: "/home/u/Documents/my notes.md" });
+    expect(argv).toEqual(["nvim", "--listen", "/run/x.sock", "+12", "/home/u/Documents/my notes.md"]);
+  });
+
+  test("a read-only ask keeps -R -M ahead of the file, and no editor flag is dropped", () => {
+    const argv = editorRunArgv({ editor: "nvim -u NONE", listen: null, readonlyFlags: ["-R", "-M"], file: "/a/b.ts" });
+    expect(argv).toEqual(["nvim", "-u", "NONE", "-R", "-M", "/a/b.ts"]);
+  });
+
+  /* The command is not only shaped right: run as built, nvim has that file. */
+  test.skipIf(!Bun.which("nvim"))("nvim started from it has the file open", async () => {
+    const d = tmp();
+    const file = join(d, "sheet notes.md");
+    const out = join(d, "buffer.txt");
+    writeFileSync(file, "# hi\n");
+    const [bin, ...rest] = editorRunArgv({ editor: "nvim", listen: null, readonlyFlags: [], file });
+    const proc = Bun.spawn([bin!, "--headless", "--clean", ...rest, "-c", `call writefile([expand('%:p')], '${out}')`, "-c", "qa!"], { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
+    expect(await proc.exited).toBe(0);
+    expect(readFileSync(out, "utf8").trim()).toBe(file);
   });
 });
 

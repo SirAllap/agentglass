@@ -39,7 +39,8 @@ describe("opening a file no longer leaves the finder", () => {
     expect(code(palette)).toContain("onBench={() => benchRow(selRow)}");
   });
   test("App puts a bench request on the bench, and nothing in the finder raises the old document viewer", () => {
-    expect(code(app)).toContain("onBench={(root, abs) => showFile(root, abs");
+    expect(code(app)).toContain("onBench={(o) => {");
+    expect(code(app)).toContain("showFile(o.root, o.path");
     expect(code(palette)).not.toContain("setPeek");
   });
 });

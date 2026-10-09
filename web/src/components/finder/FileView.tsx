@@ -30,6 +30,11 @@ import {
 } from "../../lib/mdPrefs.ts";
 import { findRanges, paint as paintFind, clear as clearFind, step as stepFind, reveal as revealFind } from "../../lib/mdFind.ts";
 import type { LoadedFile } from "./useFileSource.ts";
+import type { BrowseReport } from "../../../../shared/types.ts";
+import { api } from "../../lib/api.ts";
+import { folderPreview } from "../../lib/finderFolder.ts";
+import { chipLabel } from "../../lib/finderFilters.ts";
+import { CodeFileIcon, FileIcon, FolderIcon, ImageFileIcon, NoteIcon } from "../../lib/glyphIcons.tsx";
 
 /** Past this many lines the colour is skipped: tokenising a 30,000-line file
  *  blocks the frame the selection changed in, and a file that long is being
@@ -172,7 +177,7 @@ export function FileView({ file, branch, jump, initialTop, onTop, onBench, onOpe
           <span className="flex items-center rounded-md overflow-hidden" style={{ border: EDGE }} role="group" aria-label="Face">
             <button className="agx-btn px-2.5 py-1 text-[10.5px]" style={segStyle(true)} aria-pressed title="Read it here">Reading</button>
             <button className="agx-btn px-2.5 py-1 text-[10.5px]" style={segStyle(false)} onClick={onBench}
-              title="Edit it on the bench — the finder does not edit">Editing</button>
+              title="Edit in nvim on the bench — the finder does not edit">Editing</button>
           </span>
           <span className="flex items-center gap-1">
             <span className="text-[9.5px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>Text</span>
@@ -280,7 +285,7 @@ export function FileView({ file, branch, jump, initialTop, onTop, onBench, onOpe
   } else if (kind === "audio") {
     content = file.media ? <div className="p-6"><audio src={file.media.url} controls style={{ width: "100%" }} /></div> : <div className="p-10 grid place-items-center"><span className="agx-spin" aria-hidden="true" /></div>;
   } else if (kind === "dir") {
-    content = <Centered>A folder — <span style={{ color: "var(--text2)" }}>⏎</span> to go in</Centered>;
+    content = <FolderPane file={file} />;
   } else {
     content = <Centered>No preview for this kind of file. The facts on the right still say which one it is.</Centered>;
   }
@@ -307,6 +312,72 @@ const Centered = ({ children, tint }: { children: React.ReactNode; tint?: string
 
 const Truncated = () => (
   <div className="mt-4 mx-3 text-[11.5px]" style={{ color: "var(--warning-ink)" }}>
-    This file is longer than the finder reads and is shown up to there. To the bench for the rest.
+    This file is longer than the finder reads and is shown up to there. Edit it in nvim for the rest.
   </div>
 );
+
+/* ------------------------------------------------------------------ folder */
+
+/** The colour of each kind's icon, the same inks the results drawer uses. */
+const FOLDER_INK: Record<string, string> = {
+  dir: "var(--primary-ink)", markdown: "var(--info-ink)", code: "var(--success-ink)",
+  image: "var(--warning-ink)", data: "var(--text2)", file: "var(--text3)",
+};
+function FolderGlyph({ kind }: { kind: string }) {
+  const size = ICON.md;
+  return kind === "dir" ? <FolderIcon size={size} /> : kind === "markdown" ? <NoteIcon size={size} />
+    : kind === "code" ? <CodeFileIcon size={size} /> : kind === "image" ? <ImageFileIcon size={size} /> : <FileIcon size={size} />;
+}
+
+/** A folder, shown by what is in it: its name and size, the first entries in
+ *  the drawer's row style, the kinds it holds, and one line of keys. Text is
+ *  laid out as text — never one flex child per word. */
+function FolderPane({ file }: { file: LoadedFile }) {
+  const abs = file.source?.abs ?? null;
+  const [listing, setListing] = useState<BrowseReport | null>(null);
+  useEffect(() => {
+    setListing(null);
+    if (!abs) return;
+    let live = true;
+    void api.browse(abs).then((r) => { if (live) setListing(r); }).catch(() => { if (live) setListing({ ok: false, path: abs, parent: null, entries: [], more: 0, hiddenSkipped: 0, error: "Could not list this folder" }); });
+    return () => { live = false; };
+  }, [abs]);
+
+  if (!listing) return <div className="p-10 grid place-items-center"><span className="agx-spin" aria-hidden="true" /></div>;
+  if (!listing.ok) return <Centered tint="var(--warning-ink)">{listing.error ?? "Could not list this folder"}</Centered>;
+  const p = folderPreview(file.name, listing.entries, file.facts?.ok ? file.facts.mtime : null, listing.more);
+  if (p.empty) return <Centered>Empty folder</Centered>;
+  return (
+    <div className="flex flex-col min-h-full">
+      <div className="px-5 pt-5 pb-3 shrink-0" style={{ borderBottom: LINE }}>
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="shrink-0 flex" style={{ color: "var(--primary-ink)" }}><FolderIcon size={ICON.md} /></span>
+          <span className="min-w-0 truncate text-[14px]" style={{ color: "var(--text)", fontWeight: 600 }} title={abs ?? undefined}>{p.name}</span>
+        </div>
+        <div className="mt-1 text-[11px]" style={{ color: "var(--text3)" }}>
+          {p.count}{p.modified ? ` · modified ${p.modified}` : ""}
+        </div>
+        {p.chips.length > 0 && (
+          <div className="mt-2.5 flex flex-wrap gap-1.5">
+            {p.chips.slice(0, 8).map((c) => (
+              <span key={c.ext} className="rounded-md px-2 py-0.5 text-[10.5px] tabular-nums" style={{ color: "var(--text2)", border: EDGE }}>
+                {chipLabel(c)} <span style={{ color: "var(--text4)" }}>{c.count}</span>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+      <ul className="m-0 p-0 list-none py-2">
+        {p.rows.map((r) => (
+          <li key={r.name} className="flex items-center gap-3 px-5 text-[12.5px]" style={{ minHeight: 34, opacity: r.locked ? 0.55 : 1 }}>
+            <span className="shrink-0 flex" style={{ color: FOLDER_INK[r.kind] }}><FolderGlyph kind={r.kind} /></span>
+            <span className="min-w-0 flex-1 truncate" style={{ color: "var(--text)", fontWeight: 500 }}>{r.name}{r.isDir ? "/" : ""}</span>
+            <span className="shrink-0 text-[11px] tabular-nums" style={{ color: "var(--text3)" }}>{r.meta}</span>
+          </li>
+        ))}
+        {p.more > 0 && <li className="px-5 py-1.5 text-[11px]" style={{ color: "var(--text3)" }}>and {p.more} more</li>}
+      </ul>
+      <div className="mt-auto px-5 py-3 text-[11px] shrink-0" style={{ color: "var(--text4)", borderTop: LINE }}>{p.hint}</div>
+    </div>
+  );
+}
