@@ -44,10 +44,14 @@ describe("the ClickUp table", () => {
   });
 
   it("gives heading and rows one grid, one gap and one right inset", () => {
-    expect(head).toContain("gridTemplateColumns: grid, gap: 16");
-    expect(row).toContain("gridTemplateColumns: grid, gap: 16");
-    expect(src).toContain("`pr-4 ${EYEBROW} sticky top-0");
-    expect(row).toMatch(/className="agx-row [^"]*\bpr-4\b/);
+    // One table grid with the 16px gap and a trailing 0px track for the right
+    // inset; the heading and every row are subgrids of it (see
+    // tasks-pr-column-fit.test.ts), so they cannot disagree.
+    expect(src).toContain("gridTemplateColumns: `${grid} 0px`, columnGap: 16");
+    expect(head).toContain("...SUBGRID");
+    expect(row).toContain("...SUBGRID");
+    expect(src).toContain("`${EYEBROW} sticky top-0");
+    expect(row).not.toMatch(/className="agx-row [^"]*\bp[rx]-4\b/);
     // the rows carry no vertical padding of their own: the cells do, so a
     // rule stretches the full height of the row
     expect(row.match(/className="agx-row [^"]*"/)![0]).not.toMatch(/\bpy-/);

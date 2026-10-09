@@ -3116,10 +3116,16 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
               moment something does: two boxes scrolled independently put the
               heading over the wrong column. */}
           <div className="agx-scroll flex-1 min-w-0 overflow-auto">
-            <div className={`pr-4 ${EYEBROW} sticky top-0 z-10`}
-                style={{ display: "grid", gridTemplateColumns: grid, gap: 16, color: "var(--text4)",
+            {/* One grid for the whole table; the heading, every group and every row
+                are subgrids of it (SUBGRID), so a column that sizes to its content
+                sizes to the widest cell in ANY of them. The extra 0px track is the
+                16px of right padding the rows used to carry, kept inside the
+                rows' reach so a hover wash still runs to the edge. */}
+            <div style={{ display: "grid", gridTemplateColumns: `${grid} 0px`, columnGap: 16, minWidth: TABLE_MIN_W }}>
+            <div className={`${EYEBROW} sticky top-0 z-10`}
+                style={{ ...SUBGRID, color: "var(--text4)",
                   alignItems: "center", height: HEAD_H,
-                  minWidth: TABLE_MIN_W, background: "var(--bg)",
+                  background: "var(--bg)",
                   borderBottom: LINE }}>
               <span className="agx-stick-head">Task</span>
               {/* Centred over the columns they label, because those columns hold
@@ -3147,7 +3153,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
             {!onLooked && looksLikeId && !rows.some((t) => (t.customId ?? "").endsWith(q.trim())) && (
               <button onClick={() => void reveal()} disabled={finding}
                 className="w-full text-left px-5 py-3 hover:bg-white/5"
-                style={{ borderBottom: LINE }}>
+                style={{ borderBottom: LINE, gridColumn: "1 / -1" }}>
                 <span className="text-[11.5px]" style={{ color: "var(--primary-ink)" }}>
                   {finding ? `Looking for ${q.trim()}…` : `Fetch card ${q.trim()} from ClickUp →`}
                 </span>
@@ -3168,7 +3174,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
               * back to somewhere.
               */}
             {onLooked && lookedGroups.map((g, gi) => (
-              <div key={g.place} style={{ marginTop: gi ? 18 : 4 }}>
+              <div key={g.place} style={{ ...SUBGRID, marginTop: gi ? 18 : 4 }}>
                 <div className="px-5 py-2 flex items-center gap-2.5" style={{ borderTop: gi ? LINE : undefined }}>
                   <span className={`${EYEBROW}`} style={{ color: "var(--text4)" }}>
                     {g.place}
@@ -3179,17 +3185,17 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
                   // One card at a time, because a history you can only throw
                   // away whole is one nobody prunes.
                   <ClickUpRow key={t.id} t={t} today={today} on={t.id === sel} onPick={() => setSel(t.id)}
-                    grid={grid} showWho={anyWho} showSquad={!!squadLabel} showSprint={anySprint} showEst={anyEst} blocked={[]} onHand={handCard}
+                    showWho={anyWho} showSquad={!!squadLabel} showSprint={anySprint} showEst={anyEst} blocked={[]} onHand={handCard}
                     repos={repos} here={here}
                     onForget={() => { setLooked((cur) => { const left = cur.filter((x) => x.id !== t.id); if (!left.length) setOnLooked(false); return left; }); if (sel === t.id) setSel(null); }} />
                 ))}
               </div>
             ))}
             {onLooked && !lookedGroups.length && (
-              <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>Nothing matches that.</div>
+              <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)", gridColumn: "1 / -1" }}>Nothing matches that.</div>
             )}
             {!onLooked && !rows.length && !looksLikeId && (
-              <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>
+              <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)", gridColumn: "1 / -1" }}>
                 {data?.error ? "Nothing to show — the last read did not get through."
                   : q || tag || mineOnly || statusPick.length ? "Nothing matches that."
                   /*
@@ -3219,7 +3225,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
                 foldable with its count — the shape ClickUp itself uses, and the
                 one that answers "what is in review" without a filter. */}
             {!onLooked && groups.map((g, gi) => (
-              <div key={g.status} style={{ marginTop: gi ? 18 : 4 }}>
+              <div key={g.status} style={{ ...SUBGRID, marginTop: gi ? 18 : 4 }}>
                 {/* The whole heading is the control, not a glyph beside it. A
                     nine-pixel triangle is a target you aim at; a row you can hit
                     anywhere is one you use. */}
@@ -3227,7 +3233,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
                   aria-expanded={!folded[g.status]}
                   title={folded[g.status] ? "Show these" : "Hide these"}
                   className="agx-group-head w-full flex items-center py-2 text-left hover:bg-white/5"
-                  style={{ borderTop: gi ? LINE : undefined }}>
+                  style={{ borderTop: gi ? LINE : undefined, gridColumn: "1 / -1" }}>
                   <span className="agx-stick-group flex items-center gap-2">
                   {/* A drawn chevron, not a text glyph. `▸` at a readable size
                       renders as a speck in this font — it was still a speck
@@ -3254,11 +3260,12 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
                 </button>
                 {!folded[g.status] && g.rows.map((t) => (
                   <ClickUpRow key={t.id} t={t} today={today} on={t.id === sel} onPick={() => setSel(t.id)}
-                    grid={grid} showWho={anyWho} showSquad={!!squadLabel} showSprint={anySprint} showEst={anyEst} blocked={blockedBy(t)} onHand={handCard}
+                    showWho={anyWho} showSquad={!!squadLabel} showSprint={anySprint} showEst={anyEst} blocked={blockedBy(t)} onHand={handCard}
                     repos={repos} here={here} />
                 ))}
               </div>
             ))}
+            </div>
           </div>
           {veiled && (
             <div className="agx-veil absolute inset-0 flex items-center justify-center px-8"
@@ -4443,6 +4450,32 @@ const COL_RULE: CSSProperties = {
  */
 const HEAD_H = 34;
 
+/**
+ * The PR and Who tracks of `cuGrid` hold something whose width depends on the
+ * data: a pull request chip ("#19406 +1" and a link glyph) and a stack of faces
+ * with its "+N". At a fixed 92px / 50px the longest chip was cut mid-glyph at the
+ * column's edge and a stack of four or more people ran under the next column's
+ * rule. `minmax(floor, max-content)` is the floor today's cell was drawn for,
+ * plus the widest cell actually rendered: the column grows to fit and no
+ * further, and it never shrinks below the floor, so an empty board, or chips
+ * still loading, do not move anything.
+ *
+ * It only works because the rows are SUBGRIDS of one table grid (see the
+ * wrapper in the board): each row used to be its own grid, and a max-content
+ * track in a hundred separate grids is a hundred different widths. No
+ * spaces inside `minmax(...)`: the guards split the template on spaces.
+ *
+ * Ceiling: the cap is `CELL_MAX_W` on the cell, not on the track, because a
+ * track cannot be both "at least 92px" and "at most N". Only the PR chip
+ * ellipsises past it (CardPrChip); the faces are three plus a count, which
+ * never gets near it. The sprint, comments, estimate and points columns stay
+ * fixed: they hold a truncating name or a short number.
+ */
+const CELL_MAX_W = 168;
+
+/** The row-shaped boxes of the table take the table's columns instead of their own. */
+const SUBGRID: CSSProperties = { display: "grid", gridColumn: "1 / -1", gridTemplateColumns: "subgrid" };
+
 const cuGrid = (who: boolean, squad: boolean, sprint: boolean, est: boolean, forget: boolean) =>
   // The comments column is unconditional, unlike Who and Sprint. Those come and
   // go because a board where nobody is assigned has nothing to put in them; a
@@ -4465,9 +4498,9 @@ const cuGrid = (who: boolean, squad: boolean, sprint: boolean, est: boolean, for
   // PR sits right after the title, its own track rather than a layer on top of
   // it. Fixed width and always present — like
   // Cmts and Pts, a card with none draws an empty cell rather than shifting
-  // its neighbours. 92px holds the widest chip, "#NNNNN +N"; at 58 it ran
-  // into the avatars.
-  ["1fr", "92px", who ? "50px" : "", squad ? "36px" : "", sprint ? "88px" : "", "34px", "72px", est ? "38px" : "", "30px", forget ? "30px" : ""].filter(Boolean).join(" ");
+  // its neighbours. The PR and Who tracks are a floor plus whatever the widest
+  // cell in view needs: see the block above `CELL_MAX_W`.
+  ["1fr", "minmax(92px,max-content)", who ? "minmax(50px,max-content)" : "", squad ? "36px" : "", sprint ? "88px" : "", "34px", "72px", est ? "38px" : "", "30px", forget ? "30px" : ""].filter(Boolean).join(" ");
 
 /**
  * The one custom field worth a column of its own: a coloured drop-down.
@@ -4745,9 +4778,9 @@ function PriorityPick({ t, writable, busy, onApply }: {
   );
 }
 
-function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint, showEst, blocked, onHand, onForget, repos, here }: {
+function ClickUpRow({ t, today, on, onPick, showWho, showSquad, showSprint, showEst, blocked, onHand, onForget, repos, here }: {
   t: ProviderTask; today: string; on: boolean; onPick: () => void;
-  grid: string; showWho: boolean; showSquad: boolean; showSprint: boolean; showEst: boolean;
+  showWho: boolean; showSquad: boolean; showSprint: boolean; showEst: boolean;
   /** Unfinished cards this one is waiting on. Empty means it can be started. */
   blocked: ProviderTask[];
   /** Hand this card over without opening it. Absent where there is no checkout
@@ -4805,16 +4838,18 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
     <div role="row" tabIndex={0} aria-current={on ? "true" : undefined} onClick={onPick}
       onKeyDown={(e) => { if (e.key === "Enter") onPick(); }}
       onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY }); }}
-      className="agx-row w-full text-left pr-4 hover:bg-white/5 cursor-pointer items-center"
+      className="agx-row w-full text-left hover:bg-white/5 cursor-pointer items-center"
       style={{
         /* 8px of gap put a two-character number a hair from the next one, and
            with everything right-aligned the columns read as one ragged block.
            16 plus the hairlines below is what separates them; the numbers are
            centred in their own track rather than crowded against its edge. */
-        display: "grid", gridTemplateColumns: grid, gap: 16, borderBottom: LINE, position: "relative",
-        /* Matches the heading above it. Without it the row squeezes while the
-           heading scrolls, and the two stop lining up. */
-        minWidth: TABLE_MIN_W,
+        ...SUBGRID, borderBottom: LINE, position: "relative",
+        /* A subgrid cannot be size- or layout-contained, which is what
+           `.agx-row`'s `content-visibility: auto` is: it would turn the row
+           back into a grid of its own. The cost is that rows off screen are
+           laid out too, which at a board's hundred rows is nothing. */
+        contentVisibility: "visible",
         background: on ? "color-mix(in srgb, var(--primary) 13%, transparent)" : undefined,
         boxShadow: on ? "inset 2px 0 0 0 var(--primary)" : undefined,
       }}>
@@ -4888,11 +4923,11 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
       </div>
       {/* The pull request, own track beside the title. Empty when there is
           none — like Cmts and Pts — rather than shifting its neighbours. */}
-      <span className="flex items-center min-w-0 overflow-hidden" style={{ ...COL_RULE, display: "flex" }}>
+      <span className="flex items-center min-w-0 overflow-hidden" style={{ ...COL_RULE, display: "flex", maxWidth: CELL_MAX_W }}>
         <CardPrChip pick={prPick} onOpen={openCardPr} />
       </span>
       {showWho && (
-        <span className="flex items-center agx-colrule" style={{ ...COL_RULE, display: "flex" }}>
+        <span className="flex items-center agx-colrule" style={{ ...COL_RULE, display: "flex", maxWidth: CELL_MAX_W }}>
           {(t.people ?? []).slice(0, 3).map((p, n) => <Face key={n} p={p} n={n} />)}
           {(t.people?.length ?? 0) > 3 && (
             <span className="text-[8.5px] ml-1" style={{ color: "var(--text4)" }}>+{(t.people!.length) - 3}</span>
