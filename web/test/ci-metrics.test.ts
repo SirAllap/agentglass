@@ -5,18 +5,22 @@
  * seconds and never does. Durations in seconds through `s()` for readability.
  */
 import { describe, expect, it } from "bun:test";
-import { barScale, barTop, chipCounts, drift, matches, nextSort, sortRows, inChip, sparkPaths, span, toRow, verdictWords, DEFAULT_SORT } from "../src/lib/ciMetrics.ts";
-import type { CheckAggregate, CheckMetric } from "../../shared/checkBaseline.ts";
+import { barScale, barTop, chipCounts, drift, flakyWhy, matches, nextSort, sortRows, inChip, sparkPaths, span, toRow, verdictWords, DEFAULT_SORT } from "../src/lib/ciMetrics.ts";
+import type { CheckAggregate, CheckMetric, Flakiness } from "../../shared/checkBaseline.ts";
 
 const s = (n: number) => n * 1000;
 const day = (i: number) => `2026-09-${String(i + 1).padStart(2, "0")}`;
 const flat = (m: number | null, n = 14) => Array.from({ length: n }, (_, i) => ({ day: day(i), runs: m == null ? 0 : 3, median: m }));
 
+/** Nothing flipped, 12 runs judged: a check that never disagreed with itself. */
+const steady: Flakiness = { flips: 0, judged: 12, unknown: 0, days: 14 };
+const flipped = (flips: number, o: Partial<Flakiness> = {}): Flakiness => ({ ...steady, flips, ...o });
+
 const metric = (name: string, o: Partial<CheckAggregate> & { workflow?: string } = {}): CheckMetric => {
   const { workflow = "CI", ...agg } = o;
   return {
     key: `${workflow}\u0001${name}\u0001pull_request`, workflow, name, event: "pull_request",
-    aggregate: { runs: 40, successes: 38, latest: { ms: s(600), conclusion: "success", completedAt: 0 }, median: s(600), p90: s(700), failureRate: 0.02, trend: flat(s(600)), ...agg },
+    aggregate: { runs: 40, successes: 38, latest: { ms: s(600), conclusion: "success", completedAt: 0 }, median: s(600), p90: s(700), failureRate: 0.02, trend: flat(s(600)), flakiness: steady, ...agg },
   };
 };
 
@@ -62,13 +66,26 @@ describe("drift", () => {
 
 describe("chips", () => {
   const rows = [
-    toRow(metric("e2e", { failureRate: 0.14, latest: { ms: s(1350), conclusion: "success", completedAt: 0 } })),
+    toRow(metric("e2e", { failureRate: 0.14, flakiness: flipped(3), latest: { ms: s(1350), conclusion: "success", completedAt: 0 } })),
     toRow(metric("docker", { trend: [...flat(s(600), 7), ...flat(s(800), 7)] })),
     toRow(metric("lint", { median: s(41), p90: s(49), latest: { ms: s(40), conclusion: "success", completedAt: 0 }, trend: flat(s(41)) })),
-    toRow(metric("brand-new", { runs: 3, successes: 3, failureRate: 0.33 })),
+    toRow(metric("brand-new", { runs: 3, successes: 3, failureRate: 0.33, flakiness: flipped(1, { judged: 3 }) })),
   ];
   it("counts slow, flaky and drifting", () => {
     expect(chipCounts(rows)).toEqual({ all: 4, slow: 1, flaky: 1, drifting: 1 });
+  });
+  it("a high failure rate alone is not flaky: it has to have flipped on one commit", () => {
+    // Fails 1 run in 3 on every commit it sees: broken, and the old 1-in-20 rule called it flaky.
+    expect(toRow(metric("broken", { failureRate: 0.33, flakiness: steady })).flaky).toBe(false);
+    expect(toRow(metric("flippy", { failureRate: 0.01, flakiness: flipped(2) })).flaky).toBe(true);
+  });
+  it("says why, in the check's own numbers", () => {
+    expect(flakyWhy(flipped(3))).toBe("Failed, then passed, on the same commit 3 times in 14 days");
+    expect(flakyWhy(flipped(1))).toBe("Failed, then passed, on the same commit once in 14 days");
+  });
+  it("says what it could not judge instead of leaving a check unmarked in silence", () => {
+    expect(flakyWhy(flipped(0, { judged: 0, unknown: 9 }))).toBe("9 runs have no commit recorded, so they cannot be judged for flakiness");
+    expect(flakyWhy(steady)).toBe("");
   });
   it("does not call a check with 3 runs flaky", () => {
     expect(rows[3]!.flaky).toBe(false);

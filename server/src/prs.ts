@@ -354,7 +354,7 @@ export async function prRollup(rootIn: unknown, numberIn: unknown, fresh = false
   const repo = await repoIdFor(rootIn);
   if (!repo || !Number.isFinite(number)) return { ok: false, error: "no GitHub remote here" };
   const q = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){`
-    + `state commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){totalCount ${SEL_CHECKS}}}}}}`
+    + `state commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100){totalCount ${SEL_CHECKS}}}}}}`
     + `}}}`;
   /* Held for ROLLUP_TTL_MS and shared between callers: a card asks whenever it
      scrolls into view, and 100% of the repeats measured came back identical.
@@ -372,7 +372,8 @@ export async function prRollup(rootIn: unknown, numberIn: unknown, fresh = false
     if (!raw) return { ok: false, error: "GitHub would not list its checks" };
     const normalised = raw.map(withWorkflow);
     const r2 = rollupChecks(normalised);
-    learnFromRead(repo.key, number, knownHeadSha(repo.key, number), r2.all);
+    // The commit named in this same response, not the cached one: a push since the list read would file these runs under the old commit.
+    learnFromRead(repo.key, number, pr?.commits?.nodes?.[0]?.commit?.oid ?? "", r2.all);
     if (Number(ctxs?.totalCount ?? 0) <= raw.length) projectChecks(repo, number, r2.rollup, r2.all, began);
     return { ok: true, checks: r2.rollup, all: r2.all, state: typeof pr?.state === "string" ? pr.state : undefined, truncated: Number(ctxs?.totalCount ?? 0) > raw.length };
   }, { fresh, keep: (v) => v.ok });
@@ -2773,7 +2774,7 @@ async function fillChecks(p: any, repo: PrRepoId, number: number): Promise<void>
   if (!conn?.pageInfo?.hasNextPage) return;
   const query = `query($owner:String!,$name:String!,$number:Int!,$cursor:String!){`
     + `repository(owner:$owner,name:$name){pullRequest(number:$number){`
-    + `commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100, after:$cursor){pageInfo{hasNextPage endCursor} ${SEL_CHECKS}}}}}}`
+    + `commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100, after:$cursor){pageInfo{hasNextPage endCursor} ${SEL_CHECKS}}}}}}`
     + `}}}`;
   let cursor: string | null = conn.pageInfo.endCursor;
   for (let page = 0; page < 3 && cursor; page++) {
@@ -2782,7 +2783,10 @@ async function fillChecks(p: any, repo: PrRepoId, number: number): Promise<void>
       "-F", `owner=${repo.owner}`, "-F", `name=${repo.name}`, "-F", `number=${number}`,
       "-f", `cursor=${cursor}`,
     ]);
-    const got: any = r?.data?.repository?.pullRequest?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts;
+    const node: any = r?.data?.repository?.pullRequest?.commits?.nodes?.[0]?.commit;
+    // A push between two pages: the next page belongs to another commit, and its checks would be filed under the first one's.
+    if (node?.oid !== p.statusCheckRollup.nodes[0].commit.oid) break;
+    const got: any = node?.statusCheckRollup?.contexts;
     if (!got?.nodes?.length) break;
     conn.nodes = [...(conn.nodes || []), ...got.nodes];
     cursor = got.pageInfo?.hasNextPage ? got.pageInfo.endCursor : null;
@@ -2930,7 +2934,7 @@ export const DETAIL_QUERY = `query($owner:String!,$name:String!,$number:Int!){
     files(first:100){pageInfo{hasNextPage endCursor hasPreviousPage startCursor} ${SEL_FILES}}
     reviewThreads(first:80){pageInfo{hasNextPage endCursor hasPreviousPage startCursor} ${SEL_THREADS}}
     timelineItems(last:80, itemTypes:${TIMELINE_TYPES}){pageInfo{hasNextPage endCursor hasPreviousPage startCursor} ${SEL_TIMELINE}}
-    statusCheckRollup:commits(last:1){nodes{commit{committedDate statusCheckRollup{contexts(first:100){pageInfo{hasNextPage endCursor hasPreviousPage startCursor} ${SEL_CHECKS}}}}}}
+    statusCheckRollup:commits(last:1){nodes{commit{oid committedDate statusCheckRollup{contexts(first:100){pageInfo{hasNextPage endCursor hasPreviousPage startCursor} ${SEL_CHECKS}}}}}}
   } } }`;
 
 /** The reaction tallies, "edited", standing and ownership that ride on
@@ -3398,7 +3402,7 @@ async function readDetail(rootIn: unknown, number: number, repo: PrRepoId, key: 
     // `rollup.failing` holds these same objects, so it is marked too.
     for (const c of all) c.required = required.has(checkKey(c.workflow, c.name));
   }
-  learnFromRead(repo.key, number, knownHeadSha(repo.key, number), all);
+  learnFromRead(repo.key, number, p.statusCheckRollup?.nodes?.[0]?.commit?.oid ?? "", all);
 
   const reviews: PrReview[] = (p.reviews?.nodes || []).map((r: any) => ({
     author: r.author?.login || "",

@@ -67,7 +67,61 @@ export function durationVerdict(ms: number | null, usual: CheckUsual | undefined
 // Aggregates over every stored run, for the metrics view to come.
 // ---------------------------------------------------------------------------
 
-export interface StoredRun { conclusion: "success" | "failure" | "cancelled"; ms: number; completedAt: number }
+/**
+ * `sha` is the commit the run was for; empty or absent when the run was stored
+ * before the commit was kept. `pr` is the pull request it was read on: one
+ * commit can sit in two pull requests with different bases, and a red run and a
+ * green one there ran different merge code, which is not a flake.
+ */
+export interface StoredRun { conclusion: "success" | "failure" | "cancelled"; ms: number; completedAt: number; sha?: string; pr?: number | null }
+
+const DAY_MS = 86_400_000;
+
+/** Flaky is judged over this many days, the window CircleCI and Datadog use for the same rule. */
+export const FLAKY_DAYS = 14;
+
+/**
+ * Same-commit evidence for one check. A commit "flipped" when it has both a
+ * failed and a passed run of the check: nothing about the code changed between
+ * them, so the check disagreed with itself.
+ */
+export interface Flakiness {
+  /** Commits that both failed and passed. */
+  flips: number;
+  /** Runs that count: passed or failed (never cancelled) with a known commit. */
+  judged: number;
+  /** Runs in the window stored without a commit: they cannot be judged either way. */
+  unknown: number;
+  days: number;
+}
+
+/**
+ * Pure: the rows of ONE check. Cancelled runs are dropped, a failure that is
+ * the same on every commit is not a flip (that is a broken check), and a
+ * failure followed by a pass on the NEXT commit is a fix, not a flake.
+ * Ceiling: it only sees a flake somebody re-ran, or that two reads of the same
+ * commit caught; a check that flakes once in a thousand and is never re-run
+ * stays invisible, and there is no per-test detail without JUnit artifacts.
+ * A run GitHub holds for approval (ACTION_REQUIRED) is mapped to a failure
+ * upstream, so approving it and passing would read as a flip; not measured.
+ */
+export function flakiness(rows: StoredRun[], now: number, days = FLAKY_DAYS): Flakiness {
+  const since = now - days * DAY_MS;
+  const seen = new Map<string, { failed: boolean; passed: boolean }>();
+  let judged = 0, unknown = 0;
+  for (const r of rows) {
+    if (r.conclusion === "cancelled" || r.completedAt < since) continue;
+    if (!r.sha) { unknown++; continue; }
+    judged++;
+    const id = `${r.sha}\u0000${r.pr ?? ""}`;
+    const c = seen.get(id) ?? seen.set(id, { failed: false, passed: false }).get(id)!;
+    if (r.conclusion === "failure") c.failed = true; else c.passed = true;
+  }
+  return { flips: [...seen.values()].filter((c) => c.failed && c.passed).length, judged, unknown, days };
+}
+
+/** Flaky needs at least one flipped commit, and enough judged runs that it is not one lucky pair. */
+export const isFlaky = (f: Flakiness): boolean => f.flips >= 1 && f.judged >= MIN_SAMPLES;
 
 export interface CheckAggregate {
   runs: number;
@@ -82,18 +136,19 @@ export interface CheckAggregate {
   failureRate: number | null;
   /** One bucket per day over the last `days`, oldest first; `median` is null on a day with no success. */
   trend: { day: string; runs: number; median: number | null }[];
+  /** Whether the check disagreed with itself on one commit; the only thing "Flaky" means. */
+  flakiness: Flakiness;
 }
 
 export function aggregateRuns(rows: StoredRun[], now: number, days = 14): CheckAggregate {
   const ok = rows.filter((r) => r.conclusion === "success").map((r) => r.ms);
   const bad = rows.filter((r) => r.conclusion === "failure").length;
-  const dayMs = 86_400_000;
-  const today = Math.floor(now / dayMs);
+  const today = Math.floor(now / DAY_MS);
   const trend = Array.from({ length: days }, (_, i) => {
     const d = today - (days - 1 - i);
-    const inDay = rows.filter((r) => Math.floor(r.completedAt / dayMs) === d);
+    const inDay = rows.filter((r) => Math.floor(r.completedAt / DAY_MS) === d);
     const s = inDay.filter((r) => r.conclusion === "success").map((r) => r.ms);
-    return { day: new Date(d * dayMs).toISOString().slice(0, 10), runs: inDay.length, median: s.length ? median(s) : null };
+    return { day: new Date(d * DAY_MS).toISOString().slice(0, 10), runs: inDay.length, median: s.length ? median(s) : null };
   });
   const newest = rows.filter((r) => r.conclusion !== "cancelled").reduce<StoredRun | null>((a, r) => (!a || r.completedAt > a.completedAt ? r : a), null);
   return {
@@ -104,6 +159,7 @@ export function aggregateRuns(rows: StoredRun[], now: number, days = 14): CheckA
     p90: ok.length ? percentile(ok, 0.9) : null,
     failureRate: ok.length + bad ? bad / (ok.length + bad) : null,
     trend,
+    flakiness: flakiness(rows, now),
   };
 }
 

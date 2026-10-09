@@ -6,9 +6,9 @@
 // the check reads the app already makes, so it costs no GitHub request; the
 // ceiling is that a repo only learns from pull requests somebody opened here.
 //
-// Every conclusion is stored (a later CI-metrics view wants the failure rate),
-// the baseline reads successes only. Retention: RUN_DAYS or RUNS_PER_KEY runs,
-// whichever bites first.
+// Every conclusion is stored (the CI metrics view wants the failure rate and
+// which runs share a commit), the baseline reads successes only. Retention:
+// RUN_DAYS or RUNS_PER_KEY runs, whichever bites first.
 import { db } from "./db.ts";
 import type { PrCheck } from "../../shared/types.ts";
 import { runKey, baselineStats, aggregateRuns, BASELINE_RUNS, type CheckMetric, type StoredRun } from "../../shared/checkBaseline.ts";
@@ -32,6 +32,12 @@ CREATE TABLE IF NOT EXISTS check_runs (
 );
 CREATE INDEX IF NOT EXISTS check_runs_by_key ON check_runs (repo, key, completed_at DESC);
 `);
+// The commit the run was for, read in the same response as the run itself. `sha`
+// above is the older column and is no longer written: it came from the list
+// cache, which can be a push behind, so a run of the new commit could be filed
+// under the old one. Rows written before this column stay '' and are shown as
+// "not judged", never guessed.
+try { db.exec("ALTER TABLE check_runs ADD COLUMN head_sha TEXT NOT NULL DEFAULT ''"); } catch { /* already present */ }
 
 const keyOf = (c: PrCheck) => runKey(c.workflow, c.name, c.event);
 /** The job's own URL is unique per run; a rerun is a new job. Without one, the finish time tells runs apart. */
@@ -50,13 +56,17 @@ export function storable(c: PrCheck): { conclusion: StoredRun["conclusion"]; sta
 }
 
 /**
- * Store what this read shows and prune the keys it touched. `sha` may be empty
- * (the checks-only read does not carry it).
+ * Store what this read shows and prune the keys it touched. `sha` is the head
+ * commit the GitHub response itself named for these checks; empty when it did
+ * not, and those runs are not judged for flakiness. A run already stored
+ * without a commit gets it from a later read of the same job, and that counts
+ * in the number returned like a new one.
  */
 export function recordRuns(repo: string, pr: number | null, sha: string, all: PrCheck[], now = Date.now()): number {
   const rows = all.map((c) => ({ c, s: storable(c) })).filter((x): x is { c: PrCheck; s: NonNullable<ReturnType<typeof storable>> } => !!x.s);
   if (!rows.length) return 0;
-  const ins = db.prepare(`INSERT OR IGNORE INTO check_runs (repo, key, run_id, pr, sha, conclusion, started_at, completed_at, ms, attempt) VALUES (?,?,?,?,?,?,?,?,?,?)`);
+  const ins = db.prepare(`INSERT INTO check_runs (repo, key, run_id, pr, head_sha, conclusion, started_at, completed_at, ms, attempt) VALUES (?,?,?,?,?,?,?,?,?,?)
+    ON CONFLICT (repo, key, run_id) DO UPDATE SET head_sha = excluded.head_sha WHERE check_runs.head_sha = '' AND excluded.head_sha <> ''`);
   const prune = db.prepare(`DELETE FROM check_runs WHERE repo = ? AND key = ? AND (completed_at < ? OR run_id NOT IN (SELECT run_id FROM check_runs WHERE repo = ? AND key = ? ORDER BY completed_at DESC LIMIT ?))`);
   let added = 0;
   db.transaction(() => {
@@ -100,11 +110,11 @@ export function learnFromRead(repo: string, pr: number | null, sha: string, all:
   } catch { /* a history that cannot be written must never break a checks read */ }
 }
 
-/** Per check key: count, median, p90, failure rate, 14-day trend. For the metrics view to come. */
+/** Per check key: count, median, p90, failure rate, 14-day trend, same-commit flakiness. */
 export function repoMetrics(repo: string, now = Date.now()): CheckMetric[] {
-  const rows = db.prepare(`SELECT key, conclusion, ms, completed_at FROM check_runs WHERE repo = ? ORDER BY key`).all(repo) as { key: string; conclusion: StoredRun["conclusion"]; ms: number; completed_at: number }[];
+  const rows = db.prepare(`SELECT key, conclusion, ms, completed_at, head_sha, pr FROM check_runs WHERE repo = ? ORDER BY key`).all(repo) as { key: string; conclusion: StoredRun["conclusion"]; ms: number; completed_at: number; head_sha: string; pr: number | null }[];
   const by = new Map<string, StoredRun[]>();
-  for (const r of rows) (by.get(r.key) ?? by.set(r.key, []).get(r.key)!).push({ conclusion: r.conclusion, ms: r.ms, completedAt: r.completed_at });
+  for (const r of rows) (by.get(r.key) ?? by.set(r.key, []).get(r.key)!).push({ conclusion: r.conclusion, ms: r.ms, completedAt: r.completed_at, sha: r.head_sha, pr: r.pr });
   return [...by.entries()].map(([key, rs]) => {
     const [workflow, name, event] = key.split("\u0001");
     return { key, workflow, name, event, aggregate: aggregateRuns(rs, now) };

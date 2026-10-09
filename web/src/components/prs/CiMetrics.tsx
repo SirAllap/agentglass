@@ -3,7 +3,7 @@
  *
  * The Checks tab answers "is this pull request's job normal" for one run. This
  * is the same question over all of them, so a job that has crept up a quarter
- * in a week, or one that fails one run in seven, shows itself without anybody
+ * in a week, or one that failed and passed on the same commit, shows itself without anybody
  * opening forty pull requests. Never an absolute threshold: an eval suite that
  * always takes 15 minutes is fine at 15 and slow at 40.
  *
@@ -14,17 +14,17 @@
  * The decisions (verdict, chips, sort) live in lib/ciMetrics.ts.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CheckMetric } from "../../../../shared/checkBaseline.ts";
+import { FLAKY_DAYS, MIN_SAMPLES, type CheckMetric } from "../../../../shared/checkBaseline.ts";
 import { api } from "../../lib/api.ts";
 import { usePoll } from "../../lib/usePoll.ts";
-import { barScale, barTop, chipCounts, CHIPS, DEFAULT_SORT, inChip, isSlow, matches, nextSort, sortRows, sparkPaths, span, toRow, verdictWords, type Chip, type Row, type Sort, type SortKey } from "../../lib/ciMetrics.ts";
+import { barScale, barTop, chipCounts, CHIPS, DEFAULT_SORT, flakyWhy, inChip, isSlow, matches, nextSort, sortRows, sparkPaths, span, toRow, verdictWords, type Chip, type Row, type Sort, type SortKey } from "../../lib/ciMetrics.ts";
 import { FilterField, LINE, RefreshButton, Segmented } from "../workspace/Chrome.tsx";
 import { Spinner } from "../Spinner.tsx";
 
 const CHIP_TEXT: Record<Chip, { label: string; title: string }> = {
   all: { label: "All", title: "Every check that has run on this repository" },
   slow: { label: "Slow", title: "The newest run is slower than the check's own slowest 1 in 10" },
-  flaky: { label: "Flaky", title: "Fails one run in 20 or more" },
+  flaky: { label: "Flaky", title: `Failed and passed on the same commit in the last ${FLAKY_DAYS} days, over at least ${MIN_SAMPLES} judged runs. A check that fails on every commit is broken, not flaky` },
   drifting: { label: "Drifting", title: "The last 7 days took 15% longer than the 7 before" },
 };
 
@@ -88,6 +88,12 @@ function Line({ r, top }: { r: Row; top: number }) {
       <div role="cell" className="flex items-center gap-2 min-w-0">
         <span className="truncate text-[11px]" style={{ color: "var(--text)" }} title={r.workflow ? `${r.workflow} / ${r.name}` : r.name}>{r.name}</span>
         {r.workflow && <span className="text-[10px] shrink-0" style={{ color: "var(--text3)" }}>{r.workflow}</span>}
+        {r.flaky && (
+          <span className="text-[10px] px-1.5 rounded shrink-0" title={flakyWhy(r.flakiness)}
+            style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 16%, transparent)" }}>
+            Flaky
+          </span>
+        )}
         {week != null && (
           <span className="text-[10px] px-1.5 rounded shrink-0" title="The last 7 days took longer than the 7 before"
             style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 16%, transparent)" }}>
@@ -98,7 +104,7 @@ function Line({ r, top }: { r: Row; top: number }) {
       <div role="cell"><Spark r={r} /></div>
       <div role="cell" className="text-right text-[11px] tabular-nums" style={{ color: "var(--text)" }}>{r.usual != null ? span(r.usual) : "—"}</div>
       <div role="cell" className="text-right text-[11px] tabular-nums" style={{ color: "var(--text2)" }}>{r.slowEnd != null ? span(r.slowEnd) : "—"}</div>
-      <div role="cell" className="text-right text-[11px] tabular-nums" style={{ color: r.flaky ? "var(--warning-ink)" : "var(--text3)" }}>
+      <div role="cell" className="text-right text-[11px] tabular-nums" title={flakyWhy(r.flakiness) || undefined} style={{ color: "var(--text3)" }}>
         {r.failRate != null ? `${Math.round(r.failRate * 100)}%` : "—"}
       </div>
       <div role="cell" className="flex items-center gap-3 min-w-0">

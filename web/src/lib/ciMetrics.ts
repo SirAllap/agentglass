@@ -10,11 +10,14 @@
 // does not do: judge a check with fewer than MIN_SAMPLES successes, and see
 // inside a day (the trend is one median per day, so a 14-day drift is the
 // finest thing it can call).
+//
+// "Flaky" is not a failure rate. Measured on the old rule (1 failure in 20 runs)
+// a check that failed because the code was broken, and one cancelled by a newer
+// push, both came out flaky. It is `isFlaky` (shared/checkBaseline.ts): the same
+// commit both failed and passed the check.
 
-import { durationVerdict, MIN_SAMPLES, NOISE_MS, type CheckAggregate, type CheckMetric, type DurationVerdict } from "../../../shared/checkBaseline.ts";
+import { durationVerdict, isFlaky, MIN_SAMPLES, NOISE_MS, type CheckAggregate, type CheckMetric, type DurationVerdict, type Flakiness } from "../../../shared/checkBaseline.ts";
 
-/** A failure rate at or over this is flaky. Under MIN_SAMPLES runs there is no rate worth calling. */
-const FLAKY_RATE = 0.05;
 /** The last week's median against the week before it. */
 const DRIFT_RATIO = 1.15;
 const WEEK = 7;
@@ -58,7 +61,19 @@ export interface Row {
   failed: boolean;
   verdict: DurationVerdict;
   flaky: boolean;
+  flakiness: Flakiness;
   drift: number | null;
+}
+
+/**
+ * The hover for a flaky check: what was seen, in its own numbers. For a check
+ * that is not flaky it says only what could not be judged (runs with no commit
+ * recorded: stored before it was kept, or read from a response without one),
+ * and is empty when there is nothing to say.
+ */
+export function flakyWhy(f: Flakiness): string {
+  if (f.flips > 0) return `Failed, then passed, on the same commit ${f.flips === 1 ? "once" : `${f.flips} times`} in ${f.days} days`;
+  return f.unknown > 0 ? `${f.unknown} run${f.unknown === 1 ? " has" : "s have"} no commit recorded, so ${f.unknown === 1 ? "it" : "they"} cannot be judged for flakiness` : "";
 }
 
 export function toRow(m: CheckMetric): Row {
@@ -74,7 +89,8 @@ export function toRow(m: CheckMetric): Row {
     failed,
     // A failed run stops early, so "faster" would be a lie: shared/checkBaseline.ts refuses it too.
     verdict: failed ? "unknown" : durationVerdict(a.latest?.ms ?? null, usual),
-    flaky: a.runs >= MIN_SAMPLES && a.failureRate != null && a.failureRate >= FLAKY_RATE,
+    flaky: isFlaky(a.flakiness),
+    flakiness: a.flakiness,
     drift: drift(a.trend),
   };
 }
