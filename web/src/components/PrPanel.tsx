@@ -7671,6 +7671,42 @@ function CardPeoplePick({ task, query, onSaid }: { task: ProviderTask; query: st
     </>
   );
 }
+/** What the hand-off will do, drawn inside the confirm: the card, the status
+ *  it leaves and enters, and who comes off it. A bare "are you sure" asked
+ *  people to trust a sentence about a write they could not see. */
+export function ReadyForQaSummary({ task, target, targetColor }: { task: ProviderTask; target: string; targetColor?: string }) {
+  const people = task.people ?? [];
+  const key = { color: "var(--text3)", fontSize: 10.5, textTransform: "uppercase" as const, letterSpacing: "0.04em" };
+  return (
+    <div className="mt-3 text-[11.5px]" style={{ color: "var(--text2)" }}>
+      <div className="rounded-lg px-3 py-2.5" style={{ border: EDGE }}>
+        <span className="inline-flex items-center gap-1 rounded px-1.5 text-[10.5px]" style={{ border: EDGE }}>
+          <FlagIcon size={ICON.xs} />{task.customId || task.id}
+        </span>
+        <div className="mt-1.5 text-[12.5px] leading-snug" style={{ color: "var(--text)" }}>{task.title}</div>
+      </div>
+      <div className="mt-3 grid items-center gap-y-2" style={{ gridTemplateColumns: "84px 1fr" }}>
+        <div style={key}>Status</div>
+        <div className="flex items-center gap-1.5 min-w-0">
+          <StatusPill status={task.status} color={task.statusColor} />
+          <span style={{ color: "var(--text3)" }}>→</span>
+          <StatusPill status={target} color={targetColor} />
+        </div>
+        <div style={key}>Unassign</div>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          {people.length
+            ? people.map((p, n) => (
+                <span key={p.id ?? n} className="inline-flex items-center gap-1.5 line-through">{memberFace(p)}{p.name}</span>
+              ))
+            : <span style={{ color: "var(--text3)" }}>nobody assigned</span>}
+        </div>
+      </div>
+      <div className="mt-3 text-[11px] leading-relaxed" style={{ color: "var(--text3)" }}>
+        One write to ClickUp. Nobody stays on the card until QA picks it up.
+      </div>
+    </div>
+  );
+}
 /**
  * One press: send the card to the list's own "ready for QA" status and clear
  * every assignee, because handing off work and staying on the card is the
@@ -7684,7 +7720,7 @@ function CardPeoplePick({ task, query, onSaid }: { task: ProviderTask; query: st
  */
 function CardReadyForQaButton({ task, query, onSaid, ask }: {
   task: ProviderTask; query: string; onSaid: (s: string) => void;
-  ask: (spec: { title: string; body?: string; confirmLabel?: string; danger?: boolean }) => Promise<boolean>;
+  ask: (spec: { title: string; body?: string; node?: React.ReactNode; confirmLabel?: string; danger?: boolean }) => Promise<boolean>;
 }) {
   const [statuses, setStatuses] = useState<CuStatus[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -7703,7 +7739,8 @@ function CardReadyForQaButton({ task, query, onSaid, ask }: {
   const move = async () => {
     if (busy) return;
     const said = await ask({
-      title: `Move ${query} to Ready for QA and unassign everyone?`,
+      title: "Hand off to QA?",
+      node: <ReadyForQaSummary task={task} target={target} targetColor={statusColor(statuses ?? [], target)} />,
       confirmLabel: "Move to Ready for QA",
     });
     if (!said) return;
