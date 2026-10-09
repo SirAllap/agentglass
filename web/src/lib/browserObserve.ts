@@ -1,10 +1,10 @@
 /*
  * ONE CALL THAT SAYS WHAT IS GOING ON.
  *
- * Reported by an agent driving this browser all day, and it is the right
- * complaint: "what I need is a call that returns the whole state, not six
- * verbs I poll in turn. Today every read/text/shot is a new process and I
- * write for i in $(seq 1 20) — that is where the time goes, not the network."
+ * Driving this browser all day took six verbs polled in turn, every
+ * read/text/shot a new process inside a shell loop, and that is where the time
+ * went, not the network. What was needed is one call that returns the whole
+ * state.
  *
  * So `observe` answers in one round trip what used to take six: where the page
  * is, whether it is even VISIBLE (a hidden panel changes how a page behaves,

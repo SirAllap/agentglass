@@ -839,9 +839,9 @@ export async function workOne(p: {
 /**
  * Keep going until there is nothing left, or the shift says stop.
  *
- * THIS IS THE SENTENCE HE ACTUALLY SAID: "if we run out of work, look for more
- * where we usually look for it". Until now the loop did exactly one task per
- * request, which is a task runner with a loop's name on it.
+ * THE BRIEF IS: when the work runs out, look for more where work usually
+ * comes from. Until now the loop did exactly one task per request, which is a
+ * task runner with a loop's name on it.
  *
  * WHAT ENDS IT, and every one of these is a hard stop rather than a preference:
  *

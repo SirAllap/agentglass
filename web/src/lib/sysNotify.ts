@@ -485,7 +485,7 @@ const historyListeners = new Set<() => void>();
  * THE ONES THAT WERE ALREADY ON SCREEN.
  *
  * Filing a ClickUp notification against its card started existing today, and
- * the notifications that made him ask for it were sitting in this list with
+ * the notifications that needed it were sitting in this list with
  * their card chip already attached — which is exactly the path that returns
  * early on arrival. So the list is walked once, at startup, and every note
  * that already knows its card is filed. Idempotent by the notification's own

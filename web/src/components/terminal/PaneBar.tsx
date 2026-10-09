@@ -11,18 +11,18 @@ import { EDGE } from "../workspace/Chrome.tsx";
  * WHICH pull request or WHICH card they open, and a pane in a fleet of six is
  * exactly where that question gets asked. Everything tried to fix it inside the
  * block — a line under the icons, a label on hover, a panel above it — made the
- * corner of a terminal into a paragraph, and he said so: "what a shitty piece of
- * UI this is".
+ * corner of a terminal into a paragraph, and a corner that has become a
+ * paragraph is not a corner any more.
  *
- * So the block is gone and the bar is the whole thing: "we no longer need the
- * drawer, only the bar". It is the strip that used to sit above the terminal —
+ * So the block is gone and the bar is the whole thing, with no drawer beside
+ * it. It is the strip that used to sit above the terminal —
  * worktree badge, branch, copy, changed count, pull request, card — except that
  * it belongs to ONE pane, is drawn on that pane, and is not there until you ask
  * for it.
  *
  * The asking is a hover, and the affordance is a seam: a 4px line across the
- * pane's foot, tinted by the four things behind it, which is his own idea and
- * the reason it is not a chevron — "es sencillo y claro". Point at the seam and
+ * pane's foot, tinted by the four things behind it, which is the reason it
+ * is not a chevron: a line is simple and clear. Point at the seam and
  * the bar rises out of the edge; take the pointer away and it drops back, after
  * a grace period, because leaving by accident must not cost you the bar.
  *

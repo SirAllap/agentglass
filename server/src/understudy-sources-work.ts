@@ -224,7 +224,7 @@ addSource({
         /* The file this task owes, when it owes a file rather than a commit —
            see the note on the column in db.ts. */
         deliverable: r.deliverable || undefined,
-        // Above everything else, always. He asked for this one by hand; a card
+        // Above everything else, always. This one was queued by hand; a card
         // the tracker happens to rank urgent does not outrank that.
         weight: 20,
       }));

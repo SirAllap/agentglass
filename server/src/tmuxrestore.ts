@@ -226,10 +226,10 @@ const NOT_REPLAYED = new Set(["--resume", "--session-id", "-p", "--print"]);
  * THE FLAGS ARE PART OF THE DESK. This user opens every session with
  * `--dangerously-skip-permissions`; a restore that rebuilds them as a plain
  * `claude --resume <id>` hands back twelve panes that all behave differently
- * from the twelve he had, and he has to notice and fix each one. Worse, a desk
- * where some panes were started that way and some were not comes back with the
- * distinction flattened — the app decided something it was never asked to
- * decide. His words: it does not even consider it.
+ * from the twelve there were, and each one has to be noticed and fixed. Worse, a
+ * desk where some panes were started that way and some were not comes back with
+ * the distinction flattened — the app decided something it was never asked to
+ * decide.
  *
  * Kept verbatim rather than filtered through an allow-list. A flag this does
  * not recognise is a flag the person chose, and dropping it silently is the

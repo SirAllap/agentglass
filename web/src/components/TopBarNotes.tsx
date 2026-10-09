@@ -450,7 +450,7 @@ function HistoryRow({ n, onGone, onGoto, onMute }: {
    * and whose branch has been deleted — which is most of them, an hour later —
    * that is a panel saying "No pull requests match this filter" over an empty
    * list, which reads as the pull request being gone rather than as the search
-   * being the wrong question. Reported from a screenshot of exactly that.
+   * being the wrong question. Seen exactly that way.
    *
    * So it asks which pull request the branch HAS, and opens that one by number.
    * `prsForBranch` answers for merged and closed ones too, because it looks up
@@ -486,8 +486,8 @@ function HistoryRow({ n, onGone, onGoto, onMute }: {
    * with a destination the click that reached it had already navigated away.
    *
    * Going somewhere is now always a named button, which is the rule the git and
-   * card rows were already following and the reason those were the two nobody
-   * complained about.
+   * card rows were already following and the reason those were the two that never
+   * misled.
    */
   const act = expandable ? () => setOpen((v) => !v) : null;
   return (

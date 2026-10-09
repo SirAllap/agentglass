@@ -44,9 +44,8 @@ import type { PrSummary } from "../../../shared/types.ts";
  * A row arrives twice: the bare row first, the rest a moment later. This is
  * what gets carried across so a refresh does not blank a card back to its first
  * pass — and a field added to the second pass but forgotten HERE disappears on
- * every refresh and comes back a second later, which is precisely what he saw:
- * "the cards stay like that… and when I hit refresh they stay like that again
- * until they load".
+ * every refresh and comes back a second later: cards stay in their first-pass
+ * shape after a refresh until the second pass loads.
  *
  * `humanReview` and `card` were exactly that: shipped in the second pass, never
  * added to this list, so the board lost its verdict header and its tracker line

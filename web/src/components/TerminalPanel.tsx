@@ -1159,8 +1159,8 @@ function FindBar({ sess, onClose }: { sess: Sess | undefined; onClose: () => voi
    */
   /* The same two colours the rest of the app finds with — `--find-hit` and
      `--find-on`, the amber and the loud magenta of `::highlight()` in
-     index.css. His words about the terminal's old pair: it should be "a louder
-     shade, a loud pink", and the app already had that colour. One search
+     index.css. The terminal's old pair was quieter than the rest of the app and
+     the app already had the louder colour. One search
      that looks the same everywhere beats two that each have to be learned.
 
      Alpha on the fills because xterm draws these as a layer and the shell's own
@@ -2986,9 +2986,8 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
    * branch, Diff, PR, card — and every one of those is now a door in the pane's
    * own block, drawn on the pane it describes. That is the difference that made
    * the row a duplicate rather than a summary: with four panes on screen it
-   * named exactly one of them, and never the one you were reading. His words,
-   * twice: "this line is no use any more, it is duplicating", then "this row has
-   * to go, only Commands and Sessions stay".
+   * named exactly one of them, and never the one you were reading, so the row
+   * goes and only Commands and Sessions stay.
    *
    * So the survivors ride the tabs row instead, pinned to its right and OUTSIDE
    * its scroller — a right-hand group inside `overflow-x-auto` scrolls away the
@@ -3028,7 +3027,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
             )}
             {/* Commands, in the background and on this side.
                 It is used from the Docker console far more than from
-                here — his words — and the pinned slot in this bar sat
+                here, and the pinned slot in this bar sat
                 empty offering "Pin a command" to nobody. So the console
                 keeps the full control, the terminal gets the quiet one
                 (no count, no colour, no pinned strip), and it sits with

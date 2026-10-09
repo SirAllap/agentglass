@@ -153,7 +153,7 @@ export interface BenchLive {
  * that is the feature, a shell or an agent that survives the window. The
  * Lantern's chat is the one tab where that is wrong — an observer nobody is
  * looking at is a Claude sitting in tmux, invisible, showing on the very
- * board it was opened to read ("But I had closed that session"). So its
+ * board it was opened to read, long after the session was closed. So its
  * close ends the session, and this is the verb.
  */
 export async function benchEnd(rootIn: unknown, slotIn: unknown): Promise<{ ok: boolean; error?: string; ended?: boolean }> {

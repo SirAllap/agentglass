@@ -3126,8 +3126,8 @@ const WINDOW_SIZE_VALUE = /^(largest|smallest|manual|latest)$/;
  * record was gone, and the fit that ran a millisecond later pinned that window
  * with nothing on it to say who by — so if that server is then SIGKILLed the
  * window stays `manual` for the life of the tmux server. That is precisely the
- * bug the whole feature exists to fix, reachable through the feature itself. He
- * runs about ten of these servers, so "two booting at once" is a Tuesday.
+ * bug the whole feature exists to fix, reachable through the feature itself. A
+ * desk can run about ten of these servers, so "two booting at once" is a Tuesday.
  *
  * So ownership stops being an assumption and becomes a fact on the window: the
  * pid that took the mark, and that process's start time from /proc so a reused

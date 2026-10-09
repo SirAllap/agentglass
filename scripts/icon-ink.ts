@@ -31,8 +31,8 @@ import { join } from "node:path";
 import { connect, findChrome, key, until } from "./cdp.ts";
 
 /** The fraction of its box a glyph should cover, on its longest side. It is
- *  where the healthy majority already sat — the ones nobody had complained
- *  about — rather than a number chosen in the abstract. */
+ *  where the healthy majority already sat — the ones that already read
+ *  correctly — rather than a number chosen in the abstract. */
 const TARGET = 0.83;
 /** How far off TARGET is worth reporting. Under this the difference is not
  *  visible beside a neighbour, and chasing it would be churn. */

@@ -3696,8 +3696,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
    * NO PAGE PER PLUGIN IN THIS NAV, and that is the fix rather than the gap.
    *
    * There was one, added at run time from the same `/plugins` read the Plugins
-   * page makes. Two things were wrong with it and both were reported by
-   * somebody using it: removing a plugin left its page in the sidebar until
+   * page makes. Two things were wrong with it and both showed up in
+   * use: removing a plugin left its page in the sidebar until
    * Settings was closed and opened again — the list is read once, and nothing
    * told it the plugin had gone — and a person with a hundred plugins would
    * have a hundred entries in a nav that has nineteen of its own.

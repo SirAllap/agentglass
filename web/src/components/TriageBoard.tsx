@@ -366,10 +366,10 @@ export function TriageBoard({
   /*
    * FOLDED LANES, and the arithmetic that made it worth doing.
    *
-   * The board demands `5 × 268 + 4 × 10 + 32 = 1412` CSS pixels. His screen at
-   * 175% leaves 1170, which is why the cards in his screenshot wrap and the
+   * The board demands `5 × 268 + 4 × 10 + 32 = 1412` CSS pixels. A screen at
+   * 175% leaves 1170, which is why the cards wrap and the
    * last one is cut off. A lane folded from 268 to 44 gives back 224 plus its
-   * gap, so TWO folded lanes bring the minimum under 1000 — below his real
+   * gap, so TWO folded lanes bring the minimum under 1000 — below that
    * width, without a breakpoint and without anything moving on its own.
    *
    * FOLDING IS NOT FILTERING, and the board already refused that twice in
@@ -600,7 +600,7 @@ export function TriageBoard({
           * it leaves the board for a table of every pull request in the
           * repository. This is the other question — "which of THESE twelve" —
           * and the honest answer to it is not a shorter board. A card that
-          * stops being drawn takes its lane'"'"'s shape with it, and the counts
+          * stops being drawn takes its lane's shape with it, and the counts
           * above would start disagreeing with what is under them.
           *
           * So nothing is removed: the ones that match keep their colour and the
@@ -1020,7 +1020,7 @@ function cardVerdict(p: PrSummary): {
    *
    * This shipped reading `v.who.slice(...)` straight off the wire, and the view
    * died with "Cannot read properties of undefined (reading 'slice')" —
-   * `Pull requests stopped drawing`, the whole page gone, on his screen.
+   * `Pull requests stopped drawing`, the whole page gone.
    *
    * `humanReview` had just changed from a bare string to an object, and a row
    * can reach this render with the OLD shape: a page held open across an

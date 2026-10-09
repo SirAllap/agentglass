@@ -1530,7 +1530,7 @@ export function refileBank(tag: string, classes: string[]): number {
      * re-read today can classify differently from the full line classify()
      * saw when it was banked. Measured on the real bank: re-filing everything
      * moved 3,343 rows and sent 796 of them to `general` — retrievability
-     * lost, for classes nobody had complained about. Restricted to the three
+     * lost, for classes that were not wrong. Restricted to the three
      * that changed, it moves what it is for and leaves the rest alone.
      */
     const rows = db.query<{ id: number; class: string; his_words: string; source: string; source_ref: string }, [...string[]]>(

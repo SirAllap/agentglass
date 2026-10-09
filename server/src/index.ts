@@ -4467,10 +4467,9 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
          * THE PROJECTS THIS MACHINE HAS ACTUALLY SEEN, so the fence stops being
          * a bare text field.
          *
-         * Asked, meeting that field: "what a crap way to pick another
-         * project" — you typed a name with no list of what was valid, no
-         * sense of what existed, and a name matching everything was refused by
-         * a rule you could not see.
+         * Meeting that field, you typed a name with no list of what was valid,
+         * no sense of what existed, and a name matching everything was refused
+         * by a rule you could not see.
          *
          * Derived from the checkouts discovery already found: the last path
          * segment of each root, minus its worktree suffixes, deduplicated. Not

@@ -131,7 +131,7 @@ export function forgetOneBehind(root: string, number: number): void {
  *
  * The count is cached for five minutes because it costs a comparison over the
  * network — right for a board of twelve, wrong for the pull request in front of
- * you. Measured while he was looking at it: the server said 0 behind and GitHub
+ * you. Measured with the pull request open: the server said 0 behind and GitHub
  * agreed, and the page went on showing 936 because this store was still inside
  * its own five minutes.
  */

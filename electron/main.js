@@ -2764,7 +2764,7 @@ function registerIpc(win) {
           /*
            * On EVERY load, and once more a beat later.
            *
-           * `once("dom-ready")` was not enough and he noticed: the DevTools
+           * `once("dom-ready")` was not enough: the DevTools
            * front-end is a page that reloads itself as panels come up, and each
            * load resets the zoom to 1 — so the level came back only if you were
            * quick. `on` rather than `once` covers the reloads; the delayed
@@ -3827,7 +3827,7 @@ function guardWebviews(win, opts = {}) {
      * For a SIGN-IN it is fatal. Google's, Microsoft's and every SSO flow open
      * a popup and then talk back to it: `window.opener`, `postMessage`, and a
      * handle they hold on to. Denying the open hands the page a null, and what
-     * you get is exactly what he saw — six of "[GSI_LOGGER] Failed to open
+     * you get is six of "[GSI_LOGGER] Failed to open
      * popup window on url… Maybe blocked by the browser?" and two stray tabs
      * called "Login" that could never finish anything.
      *
@@ -3903,7 +3903,7 @@ function guardWebviews(win, opts = {}) {
          * worth one more thing that behaves unlike every other browser.
          */
         /* TRUE. A sign-in window that dies because the page underneath it
-           navigated is exactly the symptom he described — the verification-code
+           navigated is exactly the symptom seen — the verification-code
            page appearing for a moment and vanishing — and the page underneath a
            sign-in navigates as a matter of course, because that is what a
            sign-in does to it. */

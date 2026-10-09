@@ -1041,8 +1041,7 @@ export function BrowserView({ active: viewOn, scope }: {
    * believes no window can answer, and an agent whose call lands there is told
    * "the browser view is not open in this window" — which the CLI fixes by
    * OPENING the browser view. That is the app yanking somebody out of the
-   * terminal mid-sentence because an agent took a screenshot, and it is
-   * exactly what he described.
+   * terminal mid-sentence because an agent took a screenshot.
    *
    * Mount and unmount, nothing else. The handler above can be re-registered as
    * often as it likes; the registration is not the handler.
@@ -1140,8 +1139,7 @@ export function BrowserView({ active: viewOn, scope }: {
      *
      * `saveZoom` has always clamped on write and `setZoom` never did, so an
      * impossible reading reached the chip and the toast and stayed there until
-     * a restart re-read the clamped value from disk. That is exactly what he
-     * saw: `Page 524%` on a scale whose ceiling is 358% (`1.2 ** ZOOM_MAX`),
+     * a restart re-read the clamped value from disk. Seen as `Page 524%` on a scale whose ceiling is 358% (`1.2 ** ZOOM_MAX`),
      * gone after closing and opening the app.
      *
      * The clamp is not the fix — the reading should not be impossible in the
@@ -1756,8 +1754,8 @@ export function BrowserView({ active: viewOn, scope }: {
    *
    * Four doors lead here — the chord, the shell's copy of the chord, the
    * address chip, the menu — and seeding the field at each of them means three
-   * of them are one edit away from opening it empty. Measured, twice, by
-   * somebody who then had to type an address he was already looking at.
+   * of them are one edit away from opening it empty. Measured, twice: the
+   * address already on screen had to be typed again.
    */
   useEffect(() => {
     if (!omni) return;
@@ -1893,7 +1891,7 @@ export function BrowserView({ active: viewOn, scope }: {
         /*
          * `.catch`, NOT try/catch. `loadURL` returns a promise and a
          * synchronous try cannot catch its rejection — so every interrupted
-         * navigation escaped as an unhandled rejection. Seen in his own
+         * navigation escaped as an unhandled rejection. Seen in the app's own
          * DevTools: seventy-nine of "Uncaught (in promise) …
          * GUEST_VIEW_MANAGER_CALL … ERR_ABORTED (-3)", next to a browser view
          * that had come up blank.
@@ -2306,7 +2304,7 @@ export function BrowserView({ active: viewOn, scope }: {
             the row that says which of the two it is. */}
         {live && <span aria-hidden title="loaded" className="shrink-0 rounded-full" style={{ width: 5, height: 5, background: "var(--success)" }} />}
         {/* Off the shelf, and DOWN — not gone.
-            His words: the × should move it to the ordinary tabs below. A page
+            The × moves it to the ordinary tabs below. A page
             you un-keep is a page you are still reading; closing it would be a
             different button, and that one is middle-click. The tab is marked
             deliberately un-kept so no other entry with the same address adopts
@@ -3507,7 +3505,7 @@ export function BrowserView({ active: viewOn, scope }: {
                 </>
               );
             }
-            /* The order and the wording are Zen's, from his own screenshot:
+            /* The order and the wording are Zen's:
                make a space, make a folder, open a tab. Ours adds the two that
                are about the page in front of you, under a rule. */
             const row = (icon: React.ReactNode, label: string) => (

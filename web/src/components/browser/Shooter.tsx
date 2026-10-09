@@ -313,7 +313,7 @@ export function Shooter({ view, onNote, onDone }: {
         *
         * Everything in this overlay is a drag surface, buttons included: the
         * press on Copy started a NEW selection, the release ended it, and the
-        * click never arrived. Measured — he pressed Copy and watched the
+        * click never arrived. Measured: pressing Copy made the
         * selection grow to the whole window instead.
         */}
       <div className="absolute flex items-center gap-1.5"

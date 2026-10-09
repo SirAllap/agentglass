@@ -160,9 +160,9 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
    *
    * The effect below is keyed on what a connection IS — host, pane, root, fit —
    * and none of those change when a socket merely dies, so nothing reopened it:
-   * the screen said "Disconnected" and stayed there. Reported from the phone as
-   * "I minimise the app, come back, and the terminal is frozen; I have to tap
-   * another tab" — and tapping another tab is exactly a remount, which is why
+   * the screen said "Disconnected" and stayed there. On the phone: minimise the
+   * app, come back, and the terminal is frozen until another tab is tapped —
+   * and tapping another tab is exactly a remount, which is why
    * that worked and nothing else did.
    */
   const [attempt, setAttempt] = useState(0);

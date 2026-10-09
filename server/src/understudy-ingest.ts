@@ -410,12 +410,9 @@ function humanTurn(line: string): { text: string; at: number } | null {
  * the class filter below dropped another 15%, so a gigabyte of transcripts
  * yielded a tenth of what the person actually said.
  *
- * What it threw away was not noise. A sample of the rejected turns:
- *
- *     "The rest is rubbish I don't care about"
- *     "Simple and humbler and more in my own words"
- *     "explain it to me like I was 5"
- *     "Don't comment on the product thing, don't drag it out any longer"
+ * What it threw away was not noise. The rejected turns were short style
+ * corrections and scope instructions: keep it simpler, explain it plainly,
+ * leave one topic out, stop dragging it out.
  *
  * Every one of those is the thing this feature exists to learn — how somebody
  * decides and how they talk — and none of them contains the word yes or no. A

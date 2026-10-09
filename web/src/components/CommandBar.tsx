@@ -308,7 +308,7 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
    * In the background: no count, no colour, no pinned strip.
    *
    * The terminal's bar wears this one. Commands is used from the Docker console
-   * far more than from the terminal — his words — and the count it carried
+   * far more than from the terminal, and the count it carried
    * ("(331)", or "(none)") is the number that helps least when choosing: the
    * dropdown has a filter for exactly that. The pinned strip goes with it,
    * because an empty one sat there inviting a pin nobody wanted.

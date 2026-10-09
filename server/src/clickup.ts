@@ -2229,14 +2229,14 @@ export async function listMembers(listId: string): Promise<CallResult<{ members:
    * The list AND the workspace, because the list alone is wrong here.
    *
    * The comment above was the theory. Measured against a real board: both of
-   * his lists answered with the same twenty people — Alex Koh, Brett Carpenter,
-   * Canny, Chuck Williams — and not one of the six ClickUp'"'"'s own picker offers
+   * his lists answered with the same twenty people — Ada, Bjorn, a bot account,
+   * Carol — and not one of the six ClickUp's own picker offers
    * for those very cards. Whatever `/list/{id}/member` is reporting, it is not
    * the team that works the board, and it was leaving the people he actually
    * assigns out of the picker entirely.
    *
    * So both sources, de-duplicated: nobody who can be assigned is missing, and
-   * the client puts the ones already on this board'"'"'s cards at the top — which
+   * the client puts the ones already on this board's cards at the top — which
    * is what ClickUp does with its own "Assignees" group.
    */
   const me2 = me ? redacted("clickup") : null;

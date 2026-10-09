@@ -2023,7 +2023,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
        *
        * This used `clickupWhere`, which only answers "is this card already on
        * a board you have" — so the prefixed form was instant (it was cached)
-       * and a bare number came back empty and left him watching a spinner.
+       * and a bare number came back empty and left a spinner running.
        * `find` is the one that normalises a bare number against the
        * workspace's own id shape and then goes and gets the card. Measured on
        * a real id: `/clickup/where?id=1042` answers {ok:false} while
@@ -2559,9 +2559,9 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
              *
              * Twice wrong before this. First the reddish CLOSE box with a
              * negative margin, which ate the field's padding and sat on the
-             * border — "to feo, to pisado". Then a quiet circle floating
-             * inside, which is what he pointed at and said: make it part of
-             * the input, like the button welded to the right end of a
+             * border. Then a quiet circle floating
+             * inside, which still read as a separate object: it should be part
+             * of the input, like the button welded to the right end of a
              * subscribe field.
              *
              * So it is a segment: full height of the box, flush against its
@@ -4373,7 +4373,7 @@ const LOOKED_MAX = 12;
  * The old treatment was the accent at 18% behind a normal-weight label, which
  * beside five identical outlined chips reads as "slightly warmer", not as "this
  * one is doing something". Reported as not being able to tell what was picked.
- * Filled, in the accent'"'"'s own colour, with the panel'"'"'s background for the text —
+ * Filled, in the accent's own colour, with the panel's background for the text —
  * the same way the app marks a pressed control everywhere else.
  */
 const ON_CHIP = {

@@ -207,8 +207,8 @@ export default function PairScreen(): React.ReactNode {
    * `/pair/info` takes no credential — it cannot, it is the step before there
    * is one — and answers with the ticket's own deadline. Without it the form
    * happily takes an address, twelve characters and six digits and only then
-   * says the thing expired ninety seconds ago, which is one of the two ways he
-   * lost this race today.
+   * says the thing expired ninety seconds ago, which is one of the two ways this race
+   * was lost.
    *
    * Only asked once the ticket is a whole one. The server mints ids as
    * base64url of nine bytes, so every real one is twelve characters; anything

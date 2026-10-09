@@ -510,7 +510,7 @@ export function brief(
       /*
        * THE VIEWS, in the only form something without a screen can use them.
        *
-       * He asked for the clone to have the views as well — the pull request
+       * The clone gets the views as well — the pull request
        * panel, the diff, the branch list. A view is pixels and a layout, which
        * means nothing to an agent; what a view IS underneath is a route. So it
        * gets the routes, and it gets told which view each one is, because
@@ -727,9 +727,10 @@ export function brief(
      *
      * The only thing this brief said about disagreement was "where their rules
      * and yours disagree, follow theirs" — which is right about STYLE and
-     * wrong about the task. He argues constantly: "I don't understand the ledger",
-     * "that is no use to me", "this is not what I asked for". An understudy that never
-     * pushes back is not standing in for him, it is impersonating a yes-man.
+     * wrong about the task. The person argues constantly: a request that does not
+     * make sense to them, a result that is no use to them, an answer that is
+     * not what they asked for. An understudy that never pushes back is not
+     * standing in for them, it is impersonating a yes-man.
      *
      * The measured case: a run spent forty-five minutes on a task whose
      * framing was wrong and delivered nothing. Saying so in minute three would

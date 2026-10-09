@@ -372,8 +372,8 @@ export async function applyGuestZoom(
    * There was nothing between the call above and this read, so it described
    * the page as it was BEFORE the override was cleared — the previous zoom's
    * width, standing in for the natural one. The factor came out inflated, the
-   * inflated level was fed back into the next press, and it compounded: he
-   * ended up looking at `Page 524%` on a scale whose ceiling is 358%.
+   * inflated level was fed back into the next press, and it compounded, and
+   * the chip read `Page 524%` on a scale whose ceiling is 358%.
    *
    * Two frames is the idiom for "after style and layout have run": the first
    * fires before the next paint, the second after the one that includes it.
@@ -398,7 +398,7 @@ export async function applyGuestZoom(
      *
      * This used to ask for `natW * dpr / factor` on the belief that the
      * override is given in the embedder's pixels and divided again by the
-     * window's scale. It is not, and the cost was exact: on his window at
+     * window's scale. It is not, and the cost was exact: on a window at
      * 125%, `zoom 1.2` laid the page out at 2790 x 1.25 / 1.2 = 2906 CSS
      * pixels — WIDER than the 2790 it started at, so asking to zoom in made
      * the page smaller. The verb reported it honestly, which is the only

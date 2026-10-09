@@ -6,7 +6,7 @@
  * first, because a `<webview>` does not exist in a plain tab. So the shell's
  * bridge is stubbed before the app's script runs, and everything except the
  * guest itself renders: the tab strip, the toolbar, the menu, the empty state.
- * Which is exactly what was being complained about.
+ * Which is exactly the defect this script exists to catch.
  *
  * This deliberately does NOT start a second Electron beside the one that may
  * already be running on :4000.
