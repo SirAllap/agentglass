@@ -9,6 +9,7 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { askCached, forgetCachedAsks } from "../src/lib/api.ts";
 
+const providerSrc = await Bun.file(new URL("../src/state/host-context.tsx", import.meta.url)).text();
 const host = { origin: "http://desk.local:4000", token: "t" } as never;
 const realFetch = globalThis.fetch;
 let calls: string[] = [];
@@ -71,5 +72,25 @@ describe("askCached", () => {
     await askCached(host, "/git/repos", 1000);
     await askCached({ origin: "http://other.local:4000", token: "t" } as never, "/git/repos", 1000);
     expect(calls.length).toBe(2);
+  });
+});
+
+describe("the provider forgets what it cached when the computer changes", () => {
+  // Same origin, other computer (an address a router handed out again): a 120 s
+  // answer from the first would show under the second one's token.
+  const body = (from: string, to: string) => {
+    const a = providerSrc.indexOf(from);
+    const b = providerSrc.indexOf(to, a);
+    expect(a).toBeGreaterThan(-1);
+    expect(b).toBeGreaterThan(a);
+    return providerSrc.slice(a, b);
+  };
+  test("pairing a computer clears the cache after saving it", () => {
+    const pair = body("pair: async (next: Host)", "forget: async");
+    expect(pair).toContain("forgetCachedAsks();");
+    expect(pair.indexOf("saveHost(next)")).toBeLessThan(pair.indexOf("forgetCachedAsks();"));
+  });
+  test("forgetting the computer clears it too", () => {
+    expect(body("forget: async (): Promise<void>", "}), [host, ready")).toContain("forgetCachedAsks();");
   });
 });
