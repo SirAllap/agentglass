@@ -5118,7 +5118,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         const ok = await removePlugin(b.name, { dropSettings: b.dropSettings === true });
         return json({ ok }, ok ? 200 : 404);
       } catch (e) {
-        return json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 500);
+        return json({ ok: false, error: failed("plugins/remove", e, "the plugin was not removed: its key could not be revoked, try again") }, 500);
       }
     }
 
