@@ -1329,8 +1329,8 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, cursor, onOpen, onPin,
           {/* Beside the number, before the title: the title is what a card IS
               and this is what it WANTS. */}
           {unread && <UnreadBadge u={unread} />}
-          <span className="truncate" style={{ maxWidth: 160 }}>{p.author}</span>
-          <span aria-hidden style={{ color: "var(--text4)" }}>·</span>
+          {/* No author name: the author is the first face bottom right, and a
+              name here said the same thing in more width. */}
           <span className="tabular-nums shrink-0">{ago(p.updatedAt)}</span>
           {/* Everything that is only sometimes true, after what is always true. */}
           {(p.isCurrentBranch || p.isDraft) && (

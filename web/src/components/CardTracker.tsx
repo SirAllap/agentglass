@@ -20,7 +20,7 @@
  */
 import { useState } from "react";
 import { ICON, HIT } from "../lib/iconSize.ts";
-import { CopyIcon, DoneIcon, ListIcon, TrackerGlyph } from "../lib/glyphIcons.tsx";
+import { CopyIcon, DoneIcon, ListIcon } from "../lib/glyphIcons.tsx";
 import { CardChip, CardFace, CHIP_H } from "../lib/priority.tsx";
 import { StatusPill } from "./StatusPill.tsx";
 import { openCard } from "../lib/openCard.ts";
@@ -31,7 +31,6 @@ import type { PrSummary } from "../../../shared/types.ts";
 /** How long "Copied" stays on a copy button. */
 const COPIED_MS = 1500;
 
-const ACCENT = "var(--accent, var(--primary))";
 
 export function CardTracker({ block, card, task, prOpen }: {
   block: TrackerBlock;
@@ -50,9 +49,6 @@ export function CardTracker({ block, card, task, prOpen }: {
   const quiet = block === "hint";
   return (
     <div className="agx-trk" data-quiet={quiet ? "1" : undefined} data-block={block}>
-      <span aria-hidden className="flex shrink-0" style={{ color: ACCENT, opacity: quiet ? 0.55 : 1 }}>
-        <TrackerGlyph size={ICON.sm} />
-      </span>
       {block === "card" && card && (() => {
         const id = card.customId ?? card.id;
         const who = card.people ?? [];

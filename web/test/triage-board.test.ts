@@ -781,3 +781,12 @@ describe("card assignees on a board card", () => {
     expect(tracker).not.toContain("who[0]!.name");
   });
 });
+
+describe("the identity line of a board card", () => {
+  const line = board.slice(board.indexOf("Beside the number, before the title"), board.indexOf("Everything that is only sometimes true"));
+
+  it("does not print the author's name: the first face bottom right is the author", () => {
+    expect(line).toContain("ago(p.updatedAt)");
+    expect(line).not.toContain("{p.author}");
+  });
+});
