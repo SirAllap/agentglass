@@ -94,3 +94,20 @@ describe("markdown table detection", () => {
     expect(isTableStart("plain text", "|---|---|")).toBe(false);
   });
 });
+
+describe("markdown images", () => {
+  // An image whose address is not http(s) is named, never given to <img>.
+  test("a javascript: or data: source draws no <img>, only its alt text", async () => {
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { createElement } = await import("react");
+    const { Markdown } = await import("../src/lib/markdown.tsx");
+    const html = (text: string) => renderToStaticMarkup(createElement(Markdown, { text }));
+    for (const src of ["javascript:alert(1)", "data:image/svg+xml,x", "file:///etc/passwd"]) {
+      const out = html(`![shot](${src})`);
+      expect(out, src).not.toContain("<img");
+      expect(out, src).not.toContain(src);
+      expect(out, src).toContain("[image: shot]");
+    }
+    expect(html("![shot](https://example.test/a.png)")).toContain("https://example.test/a.png");
+  });
+});
