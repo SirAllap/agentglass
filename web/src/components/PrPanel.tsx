@@ -756,7 +756,7 @@ export const MD_CSS = `
    was set in --text2 — a grey chosen for labels, against a dark panel. The
    dimmer tiers still exist and still recede; they are for eyebrows, timestamps
    and hints, which is what "secondary" was supposed to mean. */
-.agx-md{margin:0;line-height:1.7;font-size:12.5px;color:var(--text)}
+.agx-md{margin:0;line-height:1.7;font-size:12.5px;color:var(--text);font-family:var(--font-prose)}
 .agx-md>*:first-child{margin-top:0}
 .agx-md>*:last-child{margin-bottom:0}
 .agx-md p{margin:0 0 .85em}
@@ -10508,8 +10508,8 @@ function AssocChip({ a }: { a?: PrAuthorAssociation }) {
   return <Chip text={label} tint={tint} title={`GitHub says this author is ${label}`} />;
 }
 
-function Card({ who, chip, when, tone, url, edited, assoc, nodeId, reactions, onReact, fresh, body, mine, minimized, onQuote, onEdit, onHide, editor, children }: {
-  who: string; chip?: React.ReactNode; when?: string; tone?: "chg" | "appr" | "bot"; url?: string;
+function Card({ who, chip, when, url, edited, assoc, nodeId, reactions, onReact, fresh, body, mine, minimized, onQuote, onEdit, onHide, editor, children }: {
+  who: string; chip?: React.ReactNode; when?: string; url?: string;
   edited?: string | null; assoc?: PrAuthorAssociation;
   nodeId?: string; reactions?: PrReaction[]; onReact?: (nodeId: string, content: string, on: boolean) => void;
   /**
@@ -10539,8 +10539,13 @@ function Card({ who, chip, when, tone, url, edited, assoc, nodeId, reactions, on
   fresh?: boolean;
   children: React.ReactNode;
 }) {
-  const edge = fresh ? "var(--warning)"
-    : tone === "chg" ? "var(--error)" : tone === "appr" ? "var(--success)" : tone === "bot" ? "var(--info)" : "var(--border)";
+  /* GitHub draws a verdict card the same neutral surface as any other card —
+     the small icon on the rail beside it (and the "requested changes" /
+     "approved" chip in the header) is what carries the colour. A card that is
+     ALSO a red box reads as an error, which a two-day-old review that has
+     since been addressed is not. `fresh` still gets its own edge: that one is
+     not a verdict, it is "this showed up since you last looked". */
+  const edge = fresh ? "var(--warning)" : "var(--border)";
   return (
     /* `data-node` is the address the rail jumps to. The timeline's own entry
        key is positional inside a FILTERED lane, so it changes when the Humans
@@ -10549,9 +10554,9 @@ function Card({ who, chip, when, tone, url, edited, assoc, nodeId, reactions, on
     /* No avatar of its own: the timeline hangs the author's face beside the
        card, as GitHub does, and one face per remark is the point of it. */
     <div data-node={nodeId || undefined} className="agx-card rounded-md overflow-hidden"
-      style={{ border: `1px solid color-mix(in srgb, ${edge} ${tone ? 40 : 28}%, transparent)` }}>
+      style={{ border: `1px solid color-mix(in srgb, ${edge} ${fresh ? 40 : 28}%, transparent)` }}>
       <div className="flex items-center gap-2 px-3 py-2 text-[11px]"
-        style={{ background: `color-mix(in srgb, ${edge} ${tone ? 10 : 14}%, transparent)`, borderBottom: LINE }}>
+        style={{ background: `color-mix(in srgb, ${edge} ${fresh ? 10 : 14}%, transparent)`, borderBottom: LINE }}>
         <b style={{ color: "var(--text)", fontWeight: 500 }}>{who}</b>
         <AssocChip a={assoc} />
         {chip}
@@ -10818,15 +10823,20 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline, newSet }: {
                 background: "color-mix(in srgb, var(--primary) 32%, transparent)" }} />
           )}
           <div className="flex items-center gap-1.5 mb-1.5 text-[10px]">
-            <Avatar login={c.author} size={15} />
+            {/* 20px, not the 40px the top-level timeline gives a remark — a
+                reply inside a thread is a smaller unit of "who said this",
+                the same way GitHub's own reply avatars shrink beside the
+                thread's opening comment. */}
+            <Avatar login={c.author} size={20} />
             <b style={{ color: "var(--text)", fontWeight: 500 }}>{c.author}</b>
+            <AssocChip a={c.association} />
             {newSet?.has(`${t.id}:${c.id}`) && (
               <span className="text-[9px] px-1.5 rounded-full"
                 style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 16%, transparent)" }}>
                 new
               </span>
             )}
-            {c.isBot && <Chip text="automation" tint="var(--info)" />}
+            {c.isBot && <Chip text="bot" tint="var(--info)" />}
             <span className="ml-auto flex items-center gap-1.5" style={{ color: "var(--text3)" }}>
               {ago(c.createdAt)}
               {c.url && <GhLink href={c.url} title="Open this comment on GitHub" />}
@@ -10838,24 +10848,34 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline, newSet }: {
       <div className="flex flex-col gap-2 px-3 py-2.5" style={{ borderTop: LINE }}>
         {/* Reply with the full markdown composer — Write/Preview, mentions, the
             lot — the same box GitHub gives you, not a one-line prompt. Collapsed
-            to a slim affordance until you mean it. */}
-        {canReply && (replying ? (
-          <Composer
-            onSend={async (b) => { const ok = await onReply(t, b); if (ok) setReplying(false); return ok; }}
-            busy={busy} placeholder="Reply — markdown works here" sendLabel="Reply" autoFocus
-            stash={`reply|${t.id}`}
-          />
+            to a slim affordance until you mean it, and Resolve sits beside it
+            rather than stacked under it — a quiet button in the footer, the
+            way GitHub draws it, not a second full-width row every thread pays
+            for whether or not anybody is about to reply. */}
+        {canReply && replying ? (
+          <>
+            <Composer
+              onSend={async (b) => { const ok = await onReply(t, b); if (ok) setReplying(false); return ok; }}
+              busy={busy} placeholder="Reply — markdown works here" sendLabel="Reply" autoFocus
+              stash={`reply|${t.id}`}
+            />
+            <div className="flex gap-1.5">
+              <Btn onClick={() => setReplying(false)} small>Cancel</Btn>
+              <Btn onClick={() => onResolve(t)} disabled={busy} small>{t.isResolved ? "Unresolve" : "Resolve conversation"}</Btn>
+            </div>
+          </>
         ) : (
-          <button onClick={() => setReplying(true)}
-            className="agx-btn w-full text-left px-3 py-1.5 rounded-lg text-[11px]"
-            style={{ color: "var(--text3)", border: EDGE, background: "color-mix(in srgb, var(--border) 8%, transparent)" }}>
-            Reply…
-          </button>
-        ))}
-        <div className="flex gap-1.5">
-          {replying && <Btn onClick={() => setReplying(false)} small>Cancel</Btn>}
-          <Btn onClick={() => onResolve(t)} disabled={busy} ok={!t.isResolved} small>{t.isResolved ? "Unresolve" : "Resolve conversation"}</Btn>
-        </div>
+          <div className="flex items-center gap-1.5">
+            {canReply && (
+              <button onClick={() => setReplying(true)}
+                className="agx-btn flex-1 min-w-0 text-left px-3 py-1.5 rounded-lg text-[11px]"
+                style={{ color: "var(--text3)", border: EDGE, background: "color-mix(in srgb, var(--border) 8%, transparent)" }}>
+                Reply…
+              </button>
+            )}
+            <Btn onClick={() => onResolve(t)} disabled={busy} small>{t.isResolved ? "Unresolve" : "Resolve conversation"}</Btn>
+          </div>
+        )}
       </div>
       </>}
     </div>
@@ -11238,7 +11258,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
               <span><b>{r.author}</b> {badge(r.author, r.isBot)} {r.state === "APPROVED" ? "approved these changes" : r.state === "CHANGES_REQUESTED" ? "requested changes" : "reviewed"} <span style={{ color: "var(--text3)" }}>· {ago(r.submittedAt)}</span></span>
             </div>
             {r.body.trim() && (
-              <Card who={r.author} when={ago(r.submittedAt)} url={r.url} tone={tone}
+              <Card who={r.author} when={ago(r.submittedAt)} url={r.url}
                 fresh={newSet.has(anchor)}
                 edited={r.editedAt} assoc={r.association} nodeId={r.nodeId} reactions={r.reactions} onReact={onReact}
                 {...(r.isBot ? {} : acts({ author: r.author, nodeId: r.nodeId, body: r.body, kind: "issue" }))}
@@ -11270,7 +11290,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
         ms: x.ms, key: `b${c.id}`, lane: "bot", author: c.author, face: c.author, hot: hotOf([`c${c.id}`]),
         node: <span style={{ color: "var(--info-ink)" }}><AgentIcon size={ICON.xs} /></span>,
         body: (
-          <Card who={c.author} when={ago(c.createdAt)} url={c.url} tone="bot" chip={badge(c.author, true)}
+          <Card who={c.author} when={ago(c.createdAt)} url={c.url} chip={badge(c.author, true)}
             nodeId={c.nodeId} reactions={c.reactions} onReact={onReact}>
             {/* Rendered, not dumped. In full these used to be a <pre> of the raw
                 source, so a coverage report arrived as `<!-- Pytest Coverage
