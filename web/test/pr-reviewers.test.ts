@@ -298,11 +298,12 @@ describe("the reviewer picker leads with past reviewers", () => {
  * field existed.
  */
 import { readFileSync as readSrc } from "node:fs";
+import { mergePath, type MergePathInput } from "../../shared/mergePath.ts";
 describe("the Overview and the board agree", () => {
   const panel = readSrc(new URL("../src/components/PrPanel.tsx", import.meta.url), "utf8");
 
-  test("the Overview's band reads `humanReview`, the same field the card does", () => {
-    expect(panel).toContain("p2Verdict(d.humanReview");
+  test("the merge box reads `humanReview`, the same field the card does", () => {
+    expect(panel).toContain("humanReview: d.humanReview");
   });
 
   test("and no longer builds its own verdict from the roster alone", () => {
@@ -311,40 +312,29 @@ describe("the Overview and the board agree", () => {
     expect(panel).not.toContain("const v = reviewVerdict(reviewerRoster(d));");
   });
 
-  test("all four states get the band, not just approved", () => {
+  test("all four verdicts reach the Review stage, not just approved", () => {
     /* "Changes requested" was a grey line with a cross while an approval was a
        coloured band. Same kind of fact — a person decided — drawn as neither. */
-    const fn = panel.slice(panel.indexOf("function p2Verdict("), panel.indexOf("function ReviewChip("));
-    for (const kind of ["approved", "changes", "awaiting"]) {
-      expect(fn, `${kind} has no band`).toContain(`v.kind === "${kind}"`);
-    }
-    expect(fn, "and the fourth is the fallthrough").toContain("Reviewed, no verdict");
+    const run = (over: Partial<MergePathInput>) => mergePath({
+      state: "OPEN", mergeState: "BLOCKED", baseRefName: "main", now: Date.parse("2026-09-30T12:00:00Z"), ...over,
+    }).stages[0]!;
+    expect(run({ reviewDecision: "APPROVED", humanReview: { kind: "approved", who: ["alice"] } }))
+      .toMatchObject({ status: "done", sub: "approved by alice" });
+    expect(run({ reviewDecision: "CHANGES_REQUESTED", viewerDidAuthor: true, humanReview: { kind: "changes", who: ["alice"] } }).status).toBe("blocked");
+    expect(run({ reviewDecision: "REVIEW_REQUIRED", reviewers: [{ login: "alice" }], humanReview: { kind: "awaiting", who: ["alice"] } }).status).toBe("wait");
+    expect(run({ reviewDecision: null, humanReview: { kind: "commented", who: ["alice"] } }).sub).toContain("reviewed, no verdict");
   });
 
-  test("a fully re-asked changes verdict draws amber, not red, and keeps no Go to it of its own", () => {
+  test("a fully re-asked changes verdict is the reviewer's move, not the author's", () => {
     // Screenshot 24's shape: "Waiting on review by X — Changes applied, asked
     // to look again", amber, not the still-blocking red row (screenshot 22).
-    const fn = panel.slice(panel.indexOf("function p2Verdict("), panel.indexOf("function ReviewChip("));
-    expect(fn).toContain("if (v.cleared)");
-    expect(fn).toContain("Changes applied, asked to look again.");
-    // The changes branch's own Go to it moved into the review history below.
-    expect(fn.match(/noGoTo: true/g)?.length).toBe(2);
-  });
-
-  test("the merge box's verdict band matches the reason rows' own size, not its own", () => {
-    // Reported alongside the Go to it removal: the band sat at 12px/py-2 while
-    // every row below it (Reason, ReviewHistory) reads at 11.5px/py-1.5 — one
-    // taller line in a stack that is otherwise even.
-    const band = panel.slice(panel.indexOf("const v = p2Verdict(d.humanReview"), panel.indexOf("<ReviewHistory reviews={d.reviews}"));
-    expect(band).toContain('px-3 py-1.5 text-[11.5px]');
-  });
-
-  test("the merge box's own verdict band carries no Go to it any more", () => {
-    // Review history right below it already has a go-to per round, including
-    // this one — a second button beside the band pointed at the same place.
-    const band = panel.slice(panel.indexOf("const v = p2Verdict(d.humanReview"), panel.indexOf("<ReviewHistory reviews={d.reviews}"));
-    expect(band).not.toContain(">Go to it<");
-    expect(band).not.toContain("onGoReview(node, v.url");
+    const p = mergePath({
+      state: "OPEN", mergeState: "BLOCKED", baseRefName: "main", reviewDecision: "CHANGES_REQUESTED", viewerDidAuthor: true,
+      humanReview: { kind: "changes", who: ["alice"], askedAgain: true, cleared: true },
+    });
+    expect(p.stages[0]!.status).toBe("wait");
+    expect(p.rows[0]).toMatchObject({ kind: "changes", mover: "reviewer" });
+    expect(p.hero.tone).toBe("wait");
   });
 
   test("the review history lists past rounds and is gated on a changes or commented one", () => {
@@ -397,24 +387,15 @@ describe("the Overview and the board agree", () => {
     expect(fn).toContain("CTRL_H.compact");
   });
 
-  test("a stale approval's note says whose move it is once asked again", () => {
-    /*
-     * The band used to say "Commits landed after that review — it does not
-     * cover what is here now." even after the author had already
-     * re-requested that reviewer's look — reading as a move still left for
-     * the author when the ball had already gone back to the reviewer.
-     */
-    const fn = panel.slice(panel.indexOf("function p2Verdict("), panel.indexOf("function ReviewChip("));
-    expect(fn).toContain("it is with them now");
-    expect(fn).toContain("it is with you now");
-  });
-
-  test("a stale approval GitHub still counts is green, not amber — amber is for a re-request", () => {
+  test("a stale approval GitHub still counts is done, not amber — amber is for a re-request", () => {
     // Reported beside the board card reading the identical fact amber: one
     // truth ("GitHub still counts it"), two colours.
-    const fn = panel.slice(panel.indexOf("function p2Verdict("), panel.indexOf("function ReviewChip("));
-    expect(fn).toContain("const amber = v.askedAgain || !s.counts;");
-    expect(fn).toContain('tint: amber ? "var(--warning)" : "var(--success)"');
+    const at = (over: Partial<MergePathInput>) => mergePath({
+      state: "OPEN", mergeState: "CLEAN", baseRefName: "main", reviewDecision: "APPROVED", ...over,
+    }).stages[0]!;
+    const stale = { kind: "approved" as const, who: ["alice"], stale: true };
+    expect(at({ humanReview: stale })).toMatchObject({ status: "done", sub: "approved by alice — still counts" });
+    expect(at({ humanReview: { ...stale, askedAgain: true } }).status).toBe("wait");
   });
 });
 

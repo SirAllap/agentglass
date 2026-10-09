@@ -29,6 +29,8 @@ import { onAppBack } from "../lib/desktop.ts";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { diffSplit, diffWrap, diffNoWhitespace, setDiffNoWhitespace } from "../lib/diffPrefs.ts";
 import { Portal } from "./Portal.tsx";
+import { MergeBox } from "./MergeBox.tsx";
+import { mergePath, type PathAction } from "../../../shared/mergePath.ts";
 import { subscribePrJump, prJump, clearPrJump } from "../lib/prJump.ts";
 import { findMention, selectorFor } from "../lib/prMention.ts";
 import { fileSection } from "../lib/patchLines.ts";
@@ -86,8 +88,8 @@ import { EMPTY as EMPTY_RULES, readFilterSet, type FilterSet } from "./tasks/fil
 import { Avatar } from "./Avatar.tsx";
 import { StatusPill } from "./StatusPill.tsx";
 import { PeekFile, type Peek } from "./PeekFile.tsx";
-import { MERGE_WHY, mergeBlockedWhy, checksLine, checksStanding, standingLine, checksShort, mergeVerdict, githubWillMerge } from "../../../shared/mergeReason.ts";
-import { mergeBlockers, mergeRefusal, autoMergeRefusal, staleApproval, type MergeBlocker } from "../../../shared/mergeBlockers.ts";
+import { mergeBlockedWhy, checksLine, checksStanding, checksShort, githubWillMerge } from "../../../shared/mergeReason.ts";
+import { mergeBlockers, mergeRefusal, autoMergeRefusal, staleApproval } from "../../../shared/mergeBlockers.ts";
 import { pagerShown, pageRanOut } from "../lib/prPager.ts";
 import { parseQuery, applyFilters, applyRulesKeepUnread, peopleMatched, buildFacets, activeCount, readPrField, builderFields, queryToRules, type RepoFacets } from "../lib/prFilter.ts";
 import { CodeBlock as MdCodeBlock } from "../lib/mdCode.tsx";
@@ -401,117 +403,12 @@ function PrCardChip({ pr, card }: {
 /* `humanReview`, not `reviewDecision` — the fourth surface with the same bug.
    GitHub counts the auto-review bot, so this chip called a pull request
    approved that no person had read. See `humanReview` on PrSummary. */
-/**
- * The Overview's verdict band, from the SAME field the board's card uses.
- *
- * The two disagreed on one screen — the card said "Waiting on bjorn",
- * this box said "Reviewed, no verdict by the author" — because they asked
- * different questions of different data. `humanReview` is the answer: computed
- * on the server, where the author's login and the outstanding requests are both
- * known, neither of which the browser's roster can see.
- *
- * The roster stays as the fallback for a detail fetched before the field
- * existed, so an old cached pull request still says something rather than
- * nothing.
- */
-function p2Verdict(hv: PrSummary["humanReview"], rows: ReviewerRow[], decision?: string | null, gate?: PrDetail["gate"]): {
-  tint: string; glyph: React.ReactNode; head: string; who?: string; note?: string; url?: string;
-  /** A changes-requested verdict's own Go to it moved into the review
-   *  history below, which lists every round rather than only this one. */
-  noGoTo?: boolean;
-} | null {
-  const named = (list: string[]) =>
-    list.slice(0, 2).join(" and ") + (list.length > 2 ? ` +${list.length - 2}` : "");
-
-  const v = hv && typeof hv === "object" && hv.kind
-    ? hv
-    : (() => {
-      const r = reviewVerdict(rows);
-      return r.kind === "none" ? null
-        : { kind: r.kind, who: r.who, mine: false, askedAgain: r.askedAgain, cleared: r.cleared } as NonNullable<PrSummary["humanReview"]>;
-    })();
-  if (!v) return null;
-  const who = named(Array.isArray(v.who) ? v.who : []);
-
-  if (v.kind === "approved") {
-    if (v.stale) {
-      /*
-       * ASKED AGAIN, ON TOP OF STALE — the same `askedAgain` the
-       * changes-requested branch below already reads. The approval genuinely
-       * does not cover the code any more, but once the author has
-       * re-requested that reviewer's look, "it does not cover what is here
-       * now" reads as a move still left for the author, when the ball has
-       * already gone back to the reviewer.
-       */
-      /* Whether it still COUNTS is GitHub's answer — see staleApproval. Where
-         GitHub still counts it, amber would say "gone" about an approval the
-         merge box on github.com lists as valid — commits on top of it are a
-         quiet note, not a colour change. AMBER IS FOR A RE-REQUEST, not for
-         time passing: reported side by side with the board card, which drew
-         this exact stale-but-counted approval amber with nothing re-asked —
-         a fact this row got right and that one did not. */
-      const s = staleApproval(decision, v.mine ? "You approved" : who ? `Approved by ${who}` : "Approved", gate);
-      const amber = v.askedAgain || !s.counts;
-      return { tint: amber ? "var(--warning)" : "var(--success)",
-        glyph: amber ? <RefreshIcon size={ICON.xs} /> : <DoneIcon size={ICON.xs} />, url: v.url,
-        // The reviewer is inside the sentence: "… — still counts by ada" was
-        // the one order the trailing " by" could not read in.
-        head: s.head, who: undefined,
-        note: v.askedAgain
-          ? (v.mine ? "You were asked to look again — it is with you now." : `You asked ${who} to look again — it is with them now.`)
-          : s.note };
-    }
-    return { tint: "var(--success)", glyph: <DoneIcon size={ICON.xs} />, url: v.url,
-      head: v.mine ? "You approved" : "Approved", who: v.mine ? undefined : who,
-      note: "Whatever is listed below, the review is done" };
-  }
-  if (v.kind === "changes") {
-    /*
-     * CLEARED: every one of them has been re-asked, so nobody named here is
-     * still the one holding up the merge — draw it like GitHub's own pending
-     * arrow (amber), not the still-standing red. `v.who` still names them:
-     * the merge is waiting on their SECOND look, not on a stranger.
-     */
-    if (v.cleared) {
-      return { tint: "var(--warning)", glyph: <CircleIcon size={ICON.xs} />, url: v.url, noGoTo: true,
-        head: v.mine ? "Waiting on you" : "Waiting on review",
-        who: v.mine ? undefined : who,
-        note: v.mine ? "You were asked to look again." : "Changes applied, asked to look again." };
-    }
-    /* A band, not a line among the obstacles. It is the same kind of fact as an
-       approval — a person decided — and it was drawn as neither. */
-    return { tint: "var(--error)", glyph: <CrossIcon size={ICON.xs} />, url: v.url, noGoTo: true,
-      head: v.mine ? "You asked for changes" : "Changes requested",
-      who: v.mine ? undefined : who,
-      /*
-       * The review still blocks the merge, exactly as GitHub shows it — a
-       * re-request does not withdraw it. What was missing is the OTHER half
-       * of GitHub's page: the small ↻ that says a follow-up round has
-       * already been asked for, so the reader is not left thinking their
-       * threads are still the ones to answer when they already answered
-       * them and asked again.
-       */
-      note: v.askedAgain
-        ? (v.mine ? "You were asked to look again." : "Applied, and asked to look again — their move now.")
-        : "Their threads are the ones to answer." };
-  }
-  if (v.kind === "awaiting") {
-    return { tint: "var(--warning)", glyph: <CircleIcon size={ICON.xs} />,
-      head: v.mine ? "Waiting on you" : "Waiting on review", who: v.mine ? undefined : who,
-      note: "Asked for, and not answered yet." };
-  }
-  return { tint: "var(--text3)", glyph: <CommentIcon size={ICON.xs} />, url: v.url,
-    head: "Reviewed, no verdict", who,
-    note: "Somebody wrote, without approving or asking for changes." };
-}
-
 function ReviewChip({ v, decision }: { v: PrSummary["humanReview"]; decision?: string | null }) {
   if (!v) return null;
   /* Capitalised, like GitHub's own — "approved" all lower case beside
      "APPROVED" on the same screen was the inconsistency reported. */
   if (v.kind === "approved") {
-    /* Amber for a RE-REQUEST, not for time passing — see p2Verdict's own
-       note. An approval GitHub still counts is green here too, even with
+    /* Amber for a RE-REQUEST, not for time passing — see staleApproval. An approval GitHub still counts is green here too, even with
        commits on top of it; this chip has no room for the quiet note, so it
        drops the "moved" word rather than say something the merge box, right
        below it on the same pull request, does not. */
@@ -562,7 +459,11 @@ const REVIEW_ROUND: Record<string, { word: string; tint: string; glyph: React.Re
  * re-request went out: `reviewRequests` says who is outstanding, never since
  * when, so the ↻ here is a fact ("asked again"), not a time.
  */
-function ReviewHistory({ reviews, pending, author, onGoReview }: {
+function ReviewHistory({ reviews, pending, author, onGoReview, forceOpen }: {
+  /** Drawn open with no disclosure of its own — the merge box's "Review history"
+   *  button is the disclosure, and a second one inside it would be a toggle
+   *  that opens a toggle. */
+  forceOpen?: boolean;
   reviews?: PrReview[];
   pending?: PrReviewer[];
   /** The pull request's own author — their replies are not a reviewer's
@@ -573,7 +474,8 @@ function ReviewHistory({ reviews, pending, author, onGoReview }: {
   /* Closed by default — most pull requests never need it, and open by
      default would out-grow the box on anything reviewed more than a couple
      of times. */
-  const [open, setOpen] = useState(false);
+  const [openOwn, setOpen] = useState(false);
+  const open = forceOpen || openOwn;
   const authorLc = (author || "").toLowerCase();
   const rounds = (reviews ?? [])
     .filter((r) => !r.isBot && r.author?.toLowerCase() !== authorLc && REVIEW_ROUND[r.state])
@@ -593,7 +495,7 @@ function ReviewHistory({ reviews, pending, author, onGoReview }: {
        * glyph beside it, and the chevron is a drawn triangle that rotates
        * rather than a text arrow disappearing into this font at 11px.
        */}
-      <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open}
+      {!forceOpen && <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open}
         title={open ? "Hide past rounds" : "Show past rounds"}
         className="agx-btn w-full flex items-center gap-2 px-3 py-1.5 text-[11.5px] text-left hover:bg-white/5"
         style={{ color: "var(--text2)" }}>
@@ -605,7 +507,7 @@ function ReviewHistory({ reviews, pending, author, onGoReview }: {
         </span>
         <span className="text-[11px] font-medium">Review history</span>
         <span className="text-[10px] tabular-nums px-1.5 rounded-full" style={{ ...CHIP_SURFACE, color: "var(--text3)" }}>{rounds.length}</span>
-      </button>
+      </button>}
       {open && (
         <div className="flex flex-col pb-1">
           {rounds.map((r, i) => {
@@ -5493,7 +5395,7 @@ function ConflictActions({ root, number, branch, base, repo, title, disabled }: 
   );
 }
 
-function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, openThreads, conversationCount, behind, behindAsking, localHead, conflictFiles, updateRefused, method, onMethod, onLocalReview, onReviewInTerminal, onMerge, onClose, onUpdateBranch, onRerun, onAutoMerge, onCancelAutoMerge, onDraft, onGoThreads, onGoReview, onGoMoved, movedSince, onEditRequest, onToggleTask, awaitingChecks }: {
+export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, openThreads, conversationCount, behind, behindAsking, localHead, conflictFiles, updateRefused, method, onMethod, onLocalReview, onReviewInTerminal, onMerge, onClose, onUpdateBranch, onRerun, onAutoMerge, onCancelAutoMerge, onDraft, onGoThreads, onGoReview, onGoMoved, movedSince, onEditRequest, onToggleTask, awaitingChecks }: {
   d: PrDetail;
   /** The checkout this pull request is being read from — where a conflict would
    *  be prepared. */
@@ -5578,10 +5480,6 @@ function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, open
    * disagree hardest. See mergeReason.ts.
    */
   const standing = checksStanding(c, awaitingChecks);
-  // Green only when the checks say so too. GitHub calls a pull request CLEAN
-  // the moment nothing is blocking it, including before any run exists.
-  const allClear = canMerge && standing === "green";
-  const verdict = mergeVerdict(d.mergeState, c, awaitingChecks);
   const [confirmBehind, setConfirmBehind] = useState(false);
   // Any change to which pull request is on screen closes the question, so a
   // "yes" can never be answered for a different one than it was asked about.
@@ -5644,279 +5542,46 @@ function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, open
     [d, openThreads, conflicted, awaitingChecks]);
   const refusal = mergeRefusal(blockers, d.mergeState);
   const autoRefusal = autoMergeRefusal(blockers);
-  const headBlocker = blockers.find((b) => b.weight === "blocks") ?? null;
-  const shownBlocked = verdict.blocked || !!refusal;
 
+  /*
+   * The whole box is one decision, made in shared/mergePath.ts and drawn by
+   * MergeBox: who moves next, the four stages, and what stands in the way with
+   * who moves each row. What stays here is what only this panel can do — the
+   * merge button and its state, the conflict resolver, the branch actions —
+   * handed in as nodes so each exists once.
+   */
+  const path = mergePath({
+    state: d.state, mergeState: d.mergeState, mergeable: d.mergeable, isDraft: d.isDraft,
+    reviewDecision: d.reviewDecision, humanReview: d.humanReview, reviewers: d.reviewers, reviews: d.reviews,
+    author: d.author, viewerDidAuthor: d.viewerDidAuthor, viewerRequested: d.viewerRequested,
+    checks: c, checksAll: d.checksAll, gate: d.gate, baseRefName: d.baseRefName, openThreads,
+    conflicted, conflictFiles: conflictFiles?.files.length, behind, awaitingChecks, autoArmed: !!d.autoMerge,
+  });
+  const heroHas = (id: PathAction["id"]) => path.hero.primary?.id === id || path.hero.secondary?.id === id;
+  const onPathAction = (a: PathAction) => {
+    switch (a.id) {
+      case "open-log": openExternal(a.url); break;
+      case "rerun": onRerun(); break;
+      case "go-thread": onGoThreads(); break;
+      case "go-review": onGoReview(a.nodeId, a.url ?? d.url); break;
+      case "mark-ready": onDraft(); break;
+      case "open-github": openExternal(d.url); break;
+      case "update-branch": onUpdateBranch(updateMove.syncLocal); break;
+      case "arm-auto": onAutoMerge(); break;
+      default: break;
+    }
+  };
+  const actionDisabled: Partial<Record<PathAction["id"], string>> = {
+    ...(awaitingChecks ? { rerun: "A new run is already starting from the update", "update-branch": "The branch was just updated — waiting for the checks to start. Pushing again would restart them." } : null),
+    ...(!canUpdate ? { "update-branch": "Nothing to update, or you cannot push to this branch" } : null),
+    ...(autoRefusal || autoOff ? { "arm-auto": autoRefusal ?? "Auto-merge is off for this repository — Settings › General › Pull requests › Allow auto-merge" } : null),
+  };
+  const pendingAction: PathAction["id"] | undefined =
+    busyWhat === "Re-run checks" ? "rerun" : busyWhat === "Update branch" ? "update-branch"
+    : busyWhat === "Auto-merge" ? "arm-auto" : busyWhat === "Mark ready" ? "mark-ready" : undefined;
 
-  return (
-    <div className="flex flex-col gap-3">
-      {/*
-        * "Three of these forty files moved since you reviewed them."
-        *
-        * The number that decides how a second pass starts, and it was only reachable
-        * by opening the Files tab and noticing a chip. Here it is a sentence with the
-        * trip attached: pressing it opens Files with the filter already on, which is
-        * the whole errand.
-        */}
-      {movedSince > 0 && (
-        <Reason tint="var(--warning)" glyph={<RefreshIcon size={ICON.xs} />}
-          action={<button onClick={onGoMoved} style={{ color: "var(--primary-ink)" }}>Show them</button>}>
-          <b style={{ color: "var(--warning-ink)" }}>{movedSince}</b>
-          {movedSince === 1 ? " file has" : " files have"} changed since your review
-        </Reason>
-      )}
-
-      {d.forcePushedSinceReview && (
-        <div className="text-[10.5px] px-2.5 py-2 rounded" style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>
-          The author force-pushed after the last review — that review was for code that is no longer here.
-        </div>
-      )}
-
-      {/* Merged and closed pull requests are history: there is nothing to merge,
-          no branch to update, and no draft to go back to. Offering those buttons
-          was not just clutter, it was a lie — "Merging is blocked, GitHub has
-          not finished working it out" on a pull request that merged an hour ago.
-          What is left is what GitHub leaves: what happened, and reopen. */}
-      {d.state !== "OPEN" ? (
-        <section className="rounded-lg overflow-hidden" style={{ border: EDGE }}>
-          <div className="flex gap-2.5 items-start p-3">
-            <span className="shrink-0 rounded-full flex items-center justify-center text-[13px]"
-              style={{ width: 26, height: 26, background: d.state === "MERGED" ? "var(--primary)" : "color-mix(in srgb, var(--text3) 60%, transparent)", color: "var(--bg)" }}>
-              {d.state === "MERGED" ? <MergeIcon size={ICON.sm} /> : <BlockedIcon size={ICON.sm} />}
-            </span>
-            <span className="min-w-0">
-              <span className="block text-[13px] font-semibold leading-tight" style={{ color: "var(--text)" }}>
-                {d.state === "MERGED" ? "Merged" : "Closed without merging"}
-              </span>
-              <span className="block text-[11px] mt-1.5" style={{ color: "var(--text3)" }}>
-                {d.state === "MERGED"
-                  ? `${d.mergedBy ? `${d.mergedBy} merged ` : "Merged "}into ${d.baseRefName}${d.mergedAt ? ` ${ago(d.mergedAt)}` : ""}`
-                  : `This branch was never merged into ${d.baseRefName}${d.closedAt ? ` · closed ${ago(d.closedAt)}` : ""}`}
-              </span>
-            </span>
-          </div>
-          <div className="flex items-center gap-1.5 flex-wrap px-3 py-2.5"
-            style={{ borderTop: LINE, background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
-            {d.state === "CLOSED" && <Btn onClick={onClose} disabled={busy} pending={busyWhat === "Reopen"} title="Put it back to open, with its comments and reviews intact"><UndoIcon size={ICON.xs} />Reopen</Btn>}
-            <a href={externalUrl(d.url)} target="_blank" rel="noreferrer noopener" className="text-[10.5px] px-2.5 py-1 rounded"
-              style={{ color: "var(--text2)", border: EDGE }}>Open on GitHub ↗</a>
-          </div>
-        </section>
-      ) : (
-      <section className="rounded-lg overflow-hidden" style={{ border: EDGE }}>
-        <div className="flex gap-2.5 items-start p-3">
-          <span className="shrink-0 rounded-full flex items-center justify-center text-[13px]"
-            style={{ width: 26, height: 26,
-              background: refusal ? "var(--error)"
-                : allClear ? "var(--success)"
-                : canMerge && standing === "awaiting" ? "var(--warning)"
-                : canMerge ? "var(--text3)"
-                : isBehind ? "var(--warning)" : "var(--error)",
-              color: "var(--bg)" }}>
-            {refusal ? "!" : allClear ? <DoneIcon size={ICON.xs} /> : canMerge && standing === "awaiting" ? <CircleIcon size={ICON.xs} /> : canMerge ? "·" : "!"}
-          </span>
-          <span className="min-w-0">
-            <span className="block text-[13px] font-semibold leading-tight" style={{ color: "var(--text)" }}>
-              {/* The shared ladder, so this box and the rail beside the diff
-                  cannot reach different verdicts about the same rollup — they
-                  did, on two of three cases. The blocked arms keep Overview's
-                  own short headlines: there is room for a reason underneath
-                  here and there is not in a 320px column. */}
-              {shownBlocked
-                ? (isBehind && !refusal ? "Behind the base branch" : "Merging is blocked")
-                : verdict.line}
-            </span>
-            <span className="block text-[11px] mt-1.5" style={{ color: "var(--text3)" }}>
-              {refusal ? refusal.title
-                : allClear ? "Nothing is standing in the way"
-                : canMerge ? standingLine(standing, undefined)
-                : isBehind ? `You can merge anyway — ${mergeBlockedWhy(d.mergeState, c).replace(/^The base branch has moved — /, "")}`
-                : headBlocker?.title ?? mergeBlockedWhy(d.mergeState, c)}
-            </span>
-          </span>
-        </div>
-
-        <div style={{ borderTop: LINE }}>
-          {/*
-            * WHAT THE REVIEWER DECIDED, first, and drawn even when something
-            * else is blocking.
-            *
-            * This box used to list only obstacles, and a pull request approved
-            * sixteen hours earlier read as unapproved: "has this PR of mine been
-            * approved... because in the overview it looks like it hasn't". It had been. A
-            * failing check and five open threads were on screen; the approval
-            * was not, anywhere.
-            *
-            * Blocked and approved are different facts and both were true — the
-            * reviewer decided, CI had not caught up. Showing only the blocking
-            * one answers "can I merge" and drops "has anybody looked", which is
-            * the question asked first and the only one a person has to answer.
-            *
-            * FIRST in the list because it is the fact with a human behind it.
-            * The rest of these rows are things a machine noticed.
-            */}
-          {(() => {
-            /*
-             * ONE SOURCE, and the reason this had to change.
-             *
-             * The board said "Waiting on bjorn" and this box said
-             * "Reviewed, no verdict by the author" about the same pull request,
-             * because they asked two different things: the card reads
-             * `humanReview`, computed on the server from the reviews, and this
-             * read `reviewVerdict` over the roster in the browser. Both were
-             * defensible and they disagreed, which makes the app the thing you
-             * cannot trust — "it makes no sense".
-             *
-             * `humanReview` wins because it knows what the browser cannot: who
-             * the AUTHOR is (their own comments are not a review), and who is
-             * still outstanding (a request GitHub drops the moment it is
-             * answered). Both facts are what made the board's answer the right
-             * one.
-             *
-             * ALL FOUR STATES GET THE BAND. Approved was a band and changes
-             * requested was a grey line with a cross — same weight for the same
-             * kind of fact, which is what was asked for and what makes the two
-             * screens finally read alike.
-             */
-const v = p2Verdict(d.humanReview, reviewerRoster(d), d.reviewDecision, d.gate);
-            if (!v) return null;
-            return (
-              <div className="flex gap-2.5 items-center px-3 py-1.5 text-[11.5px]"
-                style={{
-                  background: `color-mix(in srgb, ${v.tint} 10%, transparent)`,
-                  borderLeft: `2px solid ${v.tint}`,
-                }}>
-                <span className="shrink-0 grid place-items-center rounded-full text-[12px]"
-                  style={{ width: 22, height: 22, background: v.tint, color: "var(--bg)" }}>
-                  {v.glyph}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <b style={{ color: "var(--text)", fontWeight: 600 }}>{v.head}</b>
-                  {v.who && <span style={{ color: "var(--text2)" }}>{" by "}{v.who}</span>}
-                  {v.note && (
-                    <span className="block text-[11px] mt-0.5" style={{ color: "var(--text3)" }}>{v.note}</span>
-                  )}
-                </span>
-                {/* No "Go to it" here any more — the Review history right below
-                    this band already carries a go-to per round, including this
-                    one, and a second button beside it pointed at the same place. */}
-              </div>
-            );
-          })()}
-          <ReviewHistory reviews={d.reviews} pending={d.reviewers} author={d.author} onGoReview={onGoReview} />
-          {openThreads > 0 && (
-            <Reason tint={blockers.some((b) => b.kind === "threads") ? "var(--error)" : "var(--warning)"} glyph={<CircleIcon size={ICON.xs} />} action={<button onClick={onGoThreads} style={{ color: "var(--primary-ink)" }}>Go to thread</button>}>
-              {openThreads} review thread{openThreads === 1 ? "" : "s"} still open — <span style={{ color: "var(--text3)" }}>
-                {blockers.some((b) => b.kind === "threads") ? "this branch requires them resolved before merging" : "a reply is not a resolve"}
-              </span>
-            </Reason>
-          )}
-          {/*
-            * The rest of the reasons, one row each, in the order they would
-            * stop you. This used to be one red line of the first two failing
-            * names, which on the pull request that prompted this list hid the
-            * one REQUIRED check behind "+1 more" and said nothing about the
-            * base branch being locked.
-            *
-            * The kinds left out already have a row of their own in this box:
-            * conflicts (with the files), threads (above), behind (the header
-            * and its button) and running checks (the checks line).
-            */}
-          {blockers.filter((b) => BLOCKER_ROW.has(b.kind)).map((b) => <BlockerRow key={b.kind} b={b} />)}
-          {/* Not "N checks passed" while some are still going. That line sat
-              directly under a header saying merging was blocked, and the two
-              disagreed inside one box — see mergeReason.ts. */}
-          {/* Said in the box as well as on the button, because the button is
-              where you decide and this is where you find out what you are
-              deciding. Only while the question is being asked — before that it
-              is a warning about something nobody has proposed. */}
-          {isBehind && confirmBehind && (
-            <Reason tint="var(--warning)" glyph="!"
-              action={<button onClick={() => setConfirmBehind(false)} style={{ color: "var(--text3)" }}>Cancel</button>}>
-              <b style={{ color: "var(--text)", fontWeight: 500 }}>Merging behind {d.baseRefName}</b>
-              {behind ? ` by ${behind} commit${behind === 1 ? "" : "s"}` : ""} — the checks that passed ran against
-              the old base, so this exact combination is untested. Press again to go ahead.
-            </Reason>
-          )}
-          {/* "No conflicts with <base>" only while the panel agrees: after a
-              refused update, or with git naming the files, GitHub's MERGEABLE
-              is the stale one, and the line sat right above Resolve conflicts. */}
-          {checksLine(c, d.mergeable === "MERGEABLE" && !conflicted ? d.baseRefName : undefined) && (
-            <Reason tint={c.pending > 0 ? "var(--warning)" : "var(--success)"} glyph={c.pending > 0 ? <CircleIcon size={ICON.xs} /> : <DoneIcon size={ICON.xs} />}>
-              {checksLine(c, d.mergeable === "MERGEABLE" && !conflicted ? d.baseRefName : undefined)}
-            </Reason>
-          )}
-          {/* WHICH files, not just that there are some. GitHub says a pull
-              request conflicts and never says where, which leaves you opening
-              a worktree to find out whether it is one lockfile or half the
-              codebase — a different afternoon either way. Five, because a
-              summary that scrolls is not one; the rest is one click. */}
-          {/*
-            * You have already settled this, here, and not pushed it.
-            *
-            * GitHub is not stale when it says the pull request conflicts — the
-            * merge commit is on this disk and nowhere else, so its answer is
-            * correct and useless. What was missing is that the app is looking
-            * at the same disk: it can see the base is already merged into the
-            * local branch, and it was repeating GitHub's verdict instead of
-            * saying so. "Merging is blocked" is true of GitHub and false of
-            * you, and the difference is one push.
-            */}
-          {conflictFiles?.resolvedLocally && conflictFiles.resolvedLocally.ahead > 0 && (
-            <Reason tint="var(--success)" glyph={<DoneIcon size={ICON.xs} />}>
-              <b style={{ color: "var(--text)", fontWeight: 500 }}>Resolved here, not pushed</b>
-              {" — "}
-              <span className="font-mono">{conflictFiles.resolvedLocally.branch}</span> already has
-              {" "}{d.baseRefName} merged into it, {conflictFiles.resolvedLocally.ahead} commit
-              {conflictFiles.resolvedLocally.ahead === 1 ? "" : "s"} ahead of what GitHub has.
-              <span className="block mt-1" style={{ color: "var(--text3)" }}>
-                Push that branch and everything below clears on its own. Until then GitHub is right:
-                the merge it would attempt is the one that conflicted.
-              </span>
-            </Reason>
-          )}
-
-          {/* Pushed, and GitHub has simply not recomputed. Said plainly rather
-              than left as a red banner nobody can act on: there is nothing to
-              do here but wait, and a warning you cannot act on is one you learn
-              to scroll past. */}
-          {/* Not after GitHub refused an update over the conflict: that is
-              GitHub trying the merge just now, and "nothing to do" beside the
-              buttons it brings would be the panel contradicting itself. */}
-          {d.mergeable === "CONFLICTING" && gitSaysClean && !updateRefused && (
-            <Reason tint="var(--success)" glyph={<DoneIcon size={ICON.xs} />}>
-              <b style={{ color: "var(--text)", fontWeight: 500 }}>Already resolved</b> — git merged
-              {" "}{d.headRefName} into {d.baseRefName} just now and found nothing to settle.
-              <span className="block mt-1" style={{ color: "var(--text3)" }}>
-                GitHub still says it conflicts; it works that out lazily and keeps the old answer for
-                a minute or two after a push. Nothing to do.
-              </span>
-            </Reason>
-          )}
-
-          {conflictFiles && conflictFiles.files.length > 0 && (
-            <Reason tint={conflictFiles.resolvedLocally ? "var(--text3)" : "var(--error)"}
-              glyph={conflictFiles.resolvedLocally ? "·" : "!"}
-              action={conflictFiles.files.length > 5
-                ? <button onClick={() => setAllFiles((v) => !v)} style={{ color: "var(--primary-ink)" }}>
-                    {allFiles ? "Show less" : `+${conflictFiles.files.length - 5} more`}
-                  </button>
-                : undefined}>
-              <b style={{ color: "var(--text)", fontWeight: 500 }}>
-                {conflictFiles.files.length} file{conflictFiles.files.length === 1 ? "" : "s"}
-              </b> conflict with {d.baseRefName}
-              {conflictFiles.stale && <span style={{ color: "var(--text3)" }}> (from your last fetch — GitHub could not be reached)</span>}
-              <span className="block mt-1 font-mono text-[10.5px]" style={{ color: "var(--text2)" }}>
-                {(allFiles ? conflictFiles.files : conflictFiles.files.slice(0, 5)).map((f) => (
-                  <span key={f} className="block truncate" title={f}>{f}</span>
-                ))}
-              </span>
-            </Reason>
-          )}
-        </div>
-
-        <div className="flex items-center gap-1.5 flex-wrap px-3 py-2.5"
-          style={{ borderTop: LINE, background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
+  const mergeNode = (
+    <>
           {/* The methods this repository allows, opening on the one GitHub's
               own button opens on. It used to be all three regardless and it
               always opened on squash — which is both the method a repository
@@ -5995,6 +5660,10 @@ const v = p2Verdict(d.humanReview, reviewerRoster(d), d.reviewDecision, d.gate);
             )}
           </span>
           )}
+    </>
+  );
+  const autoNode = (
+    <>
           {/* Auto-merge stays only to be CANCELLED: something armed before the
               conflict appeared is still armed, and taking the button away
               would leave it armed with no way to disarm it. Arming a new one
@@ -6019,6 +5688,13 @@ const v = p2Verdict(d.humanReview, reviewerRoster(d), d.reviewDecision, d.gate);
                 Merge when green
               </Btn>
             )}
+    </>
+  );
+  const conflictNode = (
+            <ConflictActions root={root} number={d.number} branch={d.headRefName} base={d.baseRefName} repo={/github\.com\/([^/]+\/[^/]+)\//.exec(d.url)?.[1] ?? ""} title={d.title} disabled={busy} />
+  );
+  const extraNode = (
+    <>
           {/*
             * Only when the branch is genuinely behind — and "behind" is a
             * COUNT, not a merge state.
@@ -6055,9 +5731,7 @@ const v = p2Verdict(d.humanReview, reviewerRoster(d), d.reviewDecision, d.gate);
             */}
           {/* `conflicted` as well: git naming the files, or GitHub refusing the
               update over them, is a conflict GitHub has not caught up with. */}
-          {(d.mergeable === "CONFLICTING" || conflicted) && (
-            <ConflictActions root={root} number={d.number} branch={d.headRefName} base={d.baseRefName} repo={/github\.com\/([^/]+\/[^/]+)\//.exec(d.url)?.[1] ?? ""} title={d.title} disabled={busy} />
-          )}
+      {(d.mergeable === "CONFLICTING" || conflicted) && !heroHas("resolve-conflicts") && conflictNode}
           {/*
             * The space the answer will fill, while it is being fetched.
             *
@@ -6073,7 +5747,7 @@ const v = p2Verdict(d.humanReview, reviewerRoster(d), d.reviewDecision, d.gate);
               Checking the base…
             </span>
           )}
-          {canUpdate && (
+          {canUpdate && !heroHas("update-branch") && (
             /*
              * Not while the last push is still landing.
              *
@@ -6094,7 +5768,7 @@ const v = p2Verdict(d.humanReview, reviewerRoster(d), d.reviewDecision, d.gate);
           )}
           {/* Only with something to re-run. `failure > 0` already implies the
               rollup is populated, so this cannot appear over an empty one. */}
-          {c.failure > 0 && <Btn onClick={onRerun} disabled={busy || !!awaitingChecks} pending={busyWhat === "Re-run checks"}
+          {c.failure > 0 && !heroHas("rerun") && <Btn onClick={onRerun} disabled={busy || !!awaitingChecks} pending={busyWhat === "Re-run checks"}
             title={awaitingChecks ? "A new run is already starting from the update" : "Run the failed checks again"}>
             Re-run failed</Btn>}
           <span className="ml-auto flex gap-1.5">
@@ -6110,8 +5784,155 @@ const v = p2Verdict(d.humanReview, reviewerRoster(d), d.reviewDecision, d.gate);
               {updateMove.note}
             </span>
           )}
+    </>
+  );
+  const hasNotes = (isBehind && confirmBehind) || !!(conflictFiles?.resolvedLocally && conflictFiles.resolvedLocally.ahead > 0)
+    || (d.mergeable === "CONFLICTING" && gitSaysClean && !updateRefused) || !!(conflictFiles && conflictFiles.files.length > 0);
+  const notesNode = (
+    <>
+          {/* Said in the box as well as on the button, because the button is
+              where you decide and this is where you find out what you are
+              deciding. Only while the question is being asked — before that it
+              is a warning about something nobody has proposed. */}
+          {isBehind && confirmBehind && (
+            <Reason tint="var(--warning)" glyph="!"
+              action={<button onClick={() => setConfirmBehind(false)} style={{ color: "var(--text3)" }}>Cancel</button>}>
+              <b style={{ color: "var(--text)", fontWeight: 500 }}>Merging behind {d.baseRefName}</b>
+              {behind ? ` by ${behind} commit${behind === 1 ? "" : "s"}` : ""} — the checks that passed ran against
+              the old base, so this exact combination is untested. Press again to go ahead.
+            </Reason>
+          )}
+          {/* WHICH files, not just that there are some. GitHub says a pull
+              request conflicts and never says where, which leaves you opening
+              a worktree to find out whether it is one lockfile or half the
+              codebase — a different afternoon either way. Five, because a
+              summary that scrolls is not one; the rest is one click. */}
+          {/*
+            * You have already settled this, here, and not pushed it.
+            *
+            * GitHub is not stale when it says the pull request conflicts — the
+            * merge commit is on this disk and nowhere else, so its answer is
+            * correct and useless. What was missing is that the app is looking
+            * at the same disk: it can see the base is already merged into the
+            * local branch, and it was repeating GitHub's verdict instead of
+            * saying so. "Merging is blocked" is true of GitHub and false of
+            * you, and the difference is one push.
+            */}
+          {conflictFiles?.resolvedLocally && conflictFiles.resolvedLocally.ahead > 0 && (
+            <Reason tint="var(--success)" glyph={<DoneIcon size={ICON.xs} />}>
+              <b style={{ color: "var(--text)", fontWeight: 500 }}>Resolved here, not pushed</b>
+              {" — "}
+              <span className="font-mono">{conflictFiles.resolvedLocally.branch}</span> already has
+              {" "}{d.baseRefName} merged into it, {conflictFiles.resolvedLocally.ahead} commit
+              {conflictFiles.resolvedLocally.ahead === 1 ? "" : "s"} ahead of what GitHub has.
+              <span className="block mt-1" style={{ color: "var(--text3)" }}>
+                Push that branch and everything below clears on its own. Until then GitHub is right:
+                the merge it would attempt is the one that conflicted.
+              </span>
+            </Reason>
+          )}
+
+          {/* Pushed, and GitHub has simply not recomputed. Said plainly rather
+              than left as a red banner nobody can act on: there is nothing to
+              do here but wait, and a warning you cannot act on is one you learn
+              to scroll past. */}
+          {/* Not after GitHub refused an update over the conflict: that is
+              GitHub trying the merge just now, and "nothing to do" beside the
+              buttons it brings would be the panel contradicting itself. */}
+          {d.mergeable === "CONFLICTING" && gitSaysClean && !updateRefused && (
+            <Reason tint="var(--success)" glyph={<DoneIcon size={ICON.xs} />}>
+              <b style={{ color: "var(--text)", fontWeight: 500 }}>Already resolved</b> — git merged
+              {" "}{d.headRefName} into {d.baseRefName} just now and found nothing to settle.
+              <span className="block mt-1" style={{ color: "var(--text3)" }}>
+                GitHub still says it conflicts; it works that out lazily and keeps the old answer for
+                a minute or two after a push. Nothing to do.
+              </span>
+            </Reason>
+          )}
+
+          {conflictFiles && conflictFiles.files.length > 0 && (
+            <Reason tint={conflictFiles.resolvedLocally ? "var(--text3)" : "var(--error)"}
+              glyph={conflictFiles.resolvedLocally ? "·" : "!"}
+              action={conflictFiles.files.length > 5
+                ? <button onClick={() => setAllFiles((v) => !v)} style={{ color: "var(--primary-ink)" }}>
+                    {allFiles ? "Show less" : `+${conflictFiles.files.length - 5} more`}
+                  </button>
+                : undefined}>
+              <b style={{ color: "var(--text)", fontWeight: 500 }}>
+                {conflictFiles.files.length} file{conflictFiles.files.length === 1 ? "" : "s"}
+              </b> conflict with {d.baseRefName}
+              {conflictFiles.stale && <span style={{ color: "var(--text3)" }}> (from your last fetch — GitHub could not be reached)</span>}
+              <span className="block mt-1 font-mono text-[10.5px]" style={{ color: "var(--text2)" }}>
+                {(allFiles ? conflictFiles.files : conflictFiles.files.slice(0, 5)).map((f) => (
+                  <span key={f} className="block truncate" title={f}>{f}</span>
+                ))}
+              </span>
+            </Reason>
+          )}
+    </>
+  );
+
+
+  return (
+    <div className="flex flex-col gap-3">
+      {/*
+        * "Three of these forty files moved since you reviewed them."
+        *
+        * The number that decides how a second pass starts, and it was only reachable
+        * by opening the Files tab and noticing a chip. Here it is a sentence with the
+        * trip attached: pressing it opens Files with the filter already on, which is
+        * the whole errand.
+        */}
+      {movedSince > 0 && (
+        <Reason tint="var(--warning)" glyph={<RefreshIcon size={ICON.xs} />}
+          action={<button onClick={onGoMoved} style={{ color: "var(--primary-ink)" }}>Show them</button>}>
+          <b style={{ color: "var(--warning-ink)" }}>{movedSince}</b>
+          {movedSince === 1 ? " file has" : " files have"} changed since your review
+        </Reason>
+      )}
+
+      {d.forcePushedSinceReview && (
+        <div className="text-[10.5px] px-2.5 py-2 rounded" style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>
+          The author force-pushed after the last review — that review was for code that is no longer here.
         </div>
-      </section>
+      )}
+
+      {/* Merged and closed pull requests are history: there is nothing to merge,
+          no branch to update, and no draft to go back to. Offering those buttons
+          was not just clutter, it was a lie — "Merging is blocked, GitHub has
+          not finished working it out" on a pull request that merged an hour ago.
+          What is left is what GitHub leaves: what happened, and reopen. */}
+      {d.state !== "OPEN" ? (
+        <section className="rounded-lg overflow-hidden" style={{ border: EDGE }}>
+          <div className="flex gap-2.5 items-start p-3">
+            <span className="shrink-0 rounded-full flex items-center justify-center text-[13px]"
+              style={{ width: 26, height: 26, background: d.state === "MERGED" ? "var(--primary)" : "color-mix(in srgb, var(--text3) 60%, transparent)", color: "var(--bg)" }}>
+              {d.state === "MERGED" ? <MergeIcon size={ICON.sm} /> : <BlockedIcon size={ICON.sm} />}
+            </span>
+            <span className="min-w-0">
+              <span className="block text-[13px] font-semibold leading-tight" style={{ color: "var(--text)" }}>
+                {d.state === "MERGED" ? "Merged" : "Closed without merging"}
+              </span>
+              <span className="block text-[11px] mt-1.5" style={{ color: "var(--text3)" }}>
+                {d.state === "MERGED"
+                  ? `${d.mergedBy ? `${d.mergedBy} merged ` : "Merged "}into ${d.baseRefName}${d.mergedAt ? ` ${ago(d.mergedAt)}` : ""}`
+                  : `This branch was never merged into ${d.baseRefName}${d.closedAt ? ` · closed ${ago(d.closedAt)}` : ""}`}
+              </span>
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5 flex-wrap px-3 py-2.5"
+            style={{ borderTop: LINE, background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
+            {d.state === "CLOSED" && <Btn onClick={onClose} disabled={busy} pending={busyWhat === "Reopen"} title="Put it back to open, with its comments and reviews intact"><UndoIcon size={ICON.xs} />Reopen</Btn>}
+            <a href={externalUrl(d.url)} target="_blank" rel="noreferrer noopener" className="text-[10.5px] px-2.5 py-1 rounded"
+              style={{ color: "var(--text2)", border: EDGE }}>Open on GitHub ↗</a>
+          </div>
+        </section>
+      ) : (
+        <MergeBox path={path} busy={busy} onAction={onPathAction}
+          mergeNode={mergeNode} conflictNode={conflictNode} autoNode={autoNode} extraNode={extraNode}
+          notes={hasNotes ? notesNode : undefined}
+          actionDisabled={actionDisabled} pendingAction={pendingAction} showMergeRow={!conflicted || !!d.autoMerge}
+          history={<ReviewHistory reviews={d.reviews} pending={d.reviewers} author={d.author} onGoReview={onGoReview} forceOpen />} />
       )}
 
       <LocalStrip local={local} onShow={onShowLocal} />
@@ -8473,29 +8294,6 @@ function Masthead({ root, repo, d, busy, local, onShowLocal, onEditTitle, onDraf
       </div>
       )}
     </div>
-  );
-}
-
-/** The reasons the merge box draws as rows of their own — see the note where
- *  they are drawn for the kinds that already have one. */
-const BLOCKER_ROW = new Set<MergeBlocker["kind"]>([
-  "draft", "locked", "no-permission", "restricted", "merge-queue", "required-failing", "required-missing",
-  "review-required", "unexplained", "computing", "awaiting", "required-pending", "optional-failing", "hooks", "unseen",
-]);
-
-/** One reason it will not merge: what it is, in the weight it carries, and
- *  underneath it what to do. */
-function BlockerRow({ b }: { b: MergeBlocker }) {
-  const tint = b.weight === "blocks" ? "var(--error)" : b.weight === "waits" ? "var(--warning)" : "var(--text3)";
-  const glyph = b.kind === "locked" || b.kind === "no-permission" || b.kind === "restricted" ? <BlockedIcon size={ICON.xs} />
-    : b.checks && b.weight !== "waits" ? <CrossIcon size={ICON.xs} />
-    : b.weight === "waits" ? <CircleIcon size={ICON.xs} />
-    : b.weight === "blocks" ? "!" : "·";
-  return (
-    <Reason tint={tint} glyph={glyph}>
-      <b style={{ color: "var(--text)", fontWeight: 500 }}>{b.title}</b>
-      <span className="block mt-0.5" style={{ color: "var(--text3)" }}>{b.detail}</span>
-    </Reason>
   );
 }
 
