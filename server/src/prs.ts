@@ -32,6 +32,7 @@ import type {
   PrTalk, PrTalkNote,
   PrAuthored, PrReaction, PrEvent, PrCheckJob, PrReviewer, PrMergePolicy, PrMergeGate, PrMergeMethod, PrLocalHead,
 } from "../../shared/types.ts";
+import { CARD_PEOPLE_MAX } from "../../shared/cardPeople.ts";
 
 /** Same escape hatch the git writes use, so one variable disables both. */
 const WRITE_ENABLED = process.env.AGENTGLASS_GIT_WRITE_DISABLED !== "1";
@@ -1406,7 +1407,7 @@ function cardFor(branch: unknown, title: unknown): PrSummary["card"] | undefined
     /* The people, with their pictures and their colours — the same shape the
        tasks view draws. `assignees` is a list of names and a name is not a
        portrait. */
-    people: Array.isArray(t.people) ? t.people.slice(0, 3) : undefined,
+    people: Array.isArray(t.people) ? t.people.slice(0, CARD_PEOPLE_MAX) : undefined,
     at: held.at || undefined,
   };
 }

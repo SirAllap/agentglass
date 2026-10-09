@@ -27,6 +27,15 @@ const el = (name: string, showing = true) => ({
   checkVisibility: () => showing,
 } as unknown as HTMLElement);
 
+/** A box inside a view the workspace hid with `visibility: hidden`: it has a
+ *  display and children, so only a caller that asks about the visibility
+ *  property can tell it is not on screen — which is how the real one behaves. */
+const hiddenView = (name: string) => ({
+  name,
+  childElementCount: 1,
+  checkVisibility: (o?: { visibilityProperty?: boolean }) => !o?.visibilityProperty,
+} as unknown as HTMLElement);
+
 /** An engine that answers with a fixed number of matches and remembers what it
  *  was told to do. */
 function fake(total: number, label?: string) {
@@ -45,6 +54,16 @@ function fake(total: number, label?: string) {
 const offs: (() => void)[] = [];
 const keep = (off: () => void) => { offs.push(off); return off; };
 afterEach(() => { closeFind(); while (offs.length) offs.pop()!(); });
+
+describe("a dialog in a view that is not on screen", () => {
+  it("is not a scope, whatever its rank: the board behind it is what the bar searches", () => {
+    const board = el("board");
+    keep(pushScope(board, 0));
+    // A card dialog left open in the Tasks view, which the workspace has hidden.
+    keep(pushScope(hiddenView("tasks-card-dialog"), 1));
+    expect((topScope() as unknown as { name: string }).name).toBe("board");
+  });
+});
 
 describe("which element the bar searches", () => {
   it("is the view when only a view is open", () => {

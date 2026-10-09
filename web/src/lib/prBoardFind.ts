@@ -25,6 +25,9 @@ export interface FindableCard {
   labels?: { name: string }[];
   assignees?: string[];
   reviewers?: { login: string }[];
+  /** The work item hanging from it, as the card draws it: its id on the chip, its
+   *  status beside it, and the people on it behind the faces. */
+  card?: { id: string; customId?: string; status: string; people?: { name: string }[] };
 }
 
 /** Everything one card can be found by, as one lowercase string. */
@@ -36,6 +39,11 @@ export function haystack(p: FindableCard): string {
     // somebody looking for their own name.
     ...(p.assignees ?? []),
     ...(p.reviewers ?? []).map((r) => r.login),
+    // The work item, because the board draws it: its id is on the card, its
+    // status is the word beside it, and "where is Ada's card" is the same
+    // question as "where is Ada's pull request". Not the card's TITLE: nothing
+    // on the board draws it, and a match the eye cannot find is a lie.
+    ...(p.card ? [p.card.customId ?? p.card.id, p.card.status, ...(p.card.people ?? []).map((x) => x.name)] : []),
   ].join(" ").toLowerCase();
 }
 

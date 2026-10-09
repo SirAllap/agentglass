@@ -769,15 +769,15 @@ describe("the card header strip, cleared", () => {
 });
 
 describe("card assignees on a board card", () => {
-  const fn = board.slice(board.indexOf("Card assigned to"), board.indexOf("WHAT HAPPENED LAST"));
+  const tracker = readFileSync(new URL("../src/components/CardTracker.tsx", import.meta.url), "utf8");
 
   it("draws up to five faces and says the rest as +N", () => {
-    expect(board).toContain("const ASSIGNEE_FACES = 5;");
-    expect(fn).toContain("who.slice(0, ASSIGNEE_FACES)");
-    expect(fn).toContain("who.length - ASSIGNEE_FACES");
+    expect(tracker).toContain("peopleShown(who.length)");
+    expect(tracker).toContain("who.slice(0, faces)");
+    expect(tracker).toContain("+{more}");
   });
 
   it("does not repeat the first assignee's name next to the faces", () => {
-    expect(fn).not.toContain("who[0]!.name");
+    expect(tracker).not.toContain("who[0]!.name");
   });
 });

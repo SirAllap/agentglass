@@ -186,19 +186,30 @@ where the next view will find it, and adds its row to the table above.
 
 ### The pull-request card on the triage board
 
-A tracker bar over one panel, joined by an elbow (dashed when no card is
-linked). The bar is `42px` whatever it holds, tinted from the app's accent; the
-panel's header is `38px` and carries the forge's mark, the number that copies
-itself, the link and the star at `HIT`. Under it three zones split by `LINE`:
-what it is (title cut after three lines), where it stands (a word, the base, the
-diff, a 3px bar; colour only on the checks) and what happened last. One footer:
-Open at the left, who is on the pull request at the right, in the same place in
-every state. Up to five faces, then `+N`.
+One surface. The identity line carries the forge's mark, the number that copies
+itself, the author and age, and, at its end, a 28px tracker block: the work
+item's mark, its id as a button that opens it inside the app, its status in the
+shared `StatusPill` (never truncated, dimmed with its age when stale) and up to
+five faces, then `+N`. The block is drawn per repository: a repository that
+links no work items gets the plain pull-request card, with nothing reserved and
+no hint; one that does, and a pull request without a card, gets the same box
+with a quiet "No card linked". When the line cannot hold the block it takes a
+line of its own, right aligned; in a lane narrower than the block it wraps onto
+a second row rather than overflow.
+
+The two copy buttons (card id, card name) live in a 56px box inside the block
+and replace the faces on pointer-over or focus-within, so nothing moves; with no
+hover (coarse pointer) they take an inline slot. Under them: the title (cut
+after three lines, two when wide) with the link and the star at `HIT`; where it
+stands (a word, the base, the label and the diff on one wrapping line, a 3px bar;
+colour only on the checks); what happened last. One footer: Open at the left,
+who is on the pull request at the right, in the same place in every state.
 
 The card measures itself (`container-type: inline-size`, `.agx-prc`): from 760px
-the standing zone becomes a 380px right column and the footer spans both; under
-400px the panel header drops its word, under 340px the bar drops the tracker's
-name. The wording of each zone lives in `lib/prCardZones.ts`, with tests.
+the standing zone and the footer become a 352px right column and the link and
+star move up to the identity line. Which block a card gets, and the per-repository
+rule, live in `lib/prCardBlock.ts`; the wording of each zone in
+`lib/prCardZones.ts`; both with tests.
 
 ## A plugin's live canvas
 

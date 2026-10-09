@@ -16,7 +16,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
 const read = (p: string) => readFileSync(new URL("../" + p, import.meta.url), "utf8");
-const SURFACES = ["src/components/TriageBoard.tsx", "src/components/PrPanel.tsx"];
+const SURFACES = ["src/components/CardTracker.tsx", "src/components/PrPanel.tsx"];
 
 describe("the tracker card's chip", () => {
   test("has one definition, in the shared module", () => {
@@ -85,13 +85,14 @@ describe("the tracker card's chip", () => {
  *               the tasks view, from the same workspace colour.
  */
 describe("the card's people and status", () => {
-  const board = read("src/components/TriageBoard.tsx");
+  /* The block lives in its own component now: the card's identity line only
+     places it. */
+  const board = read("src/components/CardTracker.tsx");
 
   test("the face comes from the tracker, not from GitHub", () => {
     expect(board, "the tracker hands over the photo, the initials and the colour")
       .toContain("<CardFace ");
-    const line = board.slice(board.indexOf("const who = p.card.people"), board.indexOf("The sentence that put it"));
-    expect(line, "a GitHub avatar cannot draw a ClickUp person").not.toContain("<Avatar login=");
+    expect(board, "a GitHub avatar cannot draw a tracker person").not.toContain("<Avatar login=");
   });
 
   test("and it is the shared one, so a third surface cannot invent a fourth", () => {
@@ -102,7 +103,7 @@ describe("the card's people and status", () => {
     /* `StatusPill` is where that shape already lives — the tasks view has used
        it all along. */
     expect(board, "the board draws the status through the app's own chip")
-      .toMatch(/<StatusPill status=\{(shown|p\.card)\.status\}/);
+      .toMatch(/<StatusPill status=\{(shown|card|p\.card)\.status\}/);
   });
 
   test("and it dims rather than lying when the reading is old", () => {

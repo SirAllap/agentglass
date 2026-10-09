@@ -15,6 +15,7 @@ import { api } from "./api.ts";
 import { taskLink } from "./taskLink.ts";
 import type { ProviderTask } from "../../../shared/providers.ts";
 import type { PrSummary } from "../../../shared/types.ts";
+import { CARD_PEOPLE_MAX } from "../../../shared/cardPeople.ts";
 
 /** Long enough that moving between tabs does not re-ask, short enough that a
  *  card somebody moved on the board stops claiming its old status. */
@@ -191,7 +192,7 @@ export function withCard<T extends PrSummary>(p: T, hasTaskProvider: boolean): T
       id: k.id, customId: k.customId, title: k.title, url: k.url,
       status: k.status, statusColor: k.statusColor, statusKind: k.statusKind,
       priority: k.priority,
-      people: k.people?.slice(0, 3),
+      people: k.people?.slice(0, CARD_PEOPLE_MAX),
       /* Read just now, by definition: this path IS the fresh read. */
       at: hit.at,
     },

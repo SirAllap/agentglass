@@ -73,18 +73,24 @@ describe("the card's zones and the wide layout agree", () => {
   const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
   const wide = css.slice(css.indexOf("@container agx-prc (min-width: 760px)"));
   const wideBlock = wide.slice(0, wide.indexOf("\n}\n"));
+  const narrow = css.slice(css.indexOf(".agx-prc-main {")).split("}")[0]!;
+  const areas = (block: string) => block.match(/grid-template-areas:\s*([^;]+);/)?.[1] ?? "";
 
-  for (const zone of ["ident", "stand", "event", "foot"]) {
-    test(`${zone}: drawn by the card and placed by the wide layout`, () => {
-      expect(board).toContain(`agx-prc-${zone} `);
-      expect(wideBlock).toContain(`.agx-prc-${zone} {`);
+  // [class the card draws, the area the layout places it in]
+  for (const [zone, area] of [["id", "id"], ["title", "tt"], ["ac", "ac"], ["stand", "st"], ["event", "ev"], ["foot", "ft"]] as const) {
+    test(`${zone}: drawn by the card, given its area, and placed by both layouts`, () => {
+      expect(board).toContain(`agx-prc-${zone}`);
+      expect(css).toMatch(new RegExp(`\\.agx-prc-${zone} \\{[^}]*grid-area: ${area};`));
+      expect(areas(narrow), "the narrow layout names it").toMatch(new RegExp(`\\b${area}\\b`));
+      expect(areas(wideBlock), "the wide layout names it").toMatch(new RegExp(`\\b${area}\\b`));
     });
   }
   test("the card is its own container, so the lane's width is what decides", () => {
     expect(board).toContain("agx-prc overflow-hidden");
     expect(css).toContain(".agx-prc { container-type: inline-size; container-name: agx-prc; }");
   });
-  test("the tracker bar is one fixed height whatever it holds", () => {
-    expect(board.split("height: 42,").length - 1).toBe(1);
+  test("the card is ONE surface: no tracker bar over a nested panel", () => {
+    expect(board.split("height: 42,").length - 1).toBe(0);
+    expect(board).not.toContain("agx-prc-body");
   });
 });

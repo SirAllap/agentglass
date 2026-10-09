@@ -24,6 +24,31 @@ const card = {
   reviewers: [{ login: "javidoe" }],
 };
 
+describe("what the card's work item answers to", () => {
+  const linked = { ...card, card: { id: "8ab12cd34", customId: "ORBIT-1042", status: "code review", title: "Hang-up eval", people: [{ name: "Ada Lin" }] } };
+  test("its id, as the chip draws it", () => {
+    expect(prMatches(linked, "ORBIT-1042")).toBe(true);
+    expect(prMatches(linked, "orbit-1042")).toBe(true);
+  });
+  test("the tracker's own id when there is no human one, because that is what the chip says then", () => {
+    expect(prMatches({ ...card, card: { id: "8ab12cd34", status: "x" } }, "8ab12cd34")).toBe(true);
+    expect(prMatches(linked, "8ab12cd34")).toBe(false);
+  });
+  test("its status", () => {
+    expect(prMatches(linked, "code review")).toBe(true);
+  });
+  test("the people on it by name, which the faces only show as initials", () => {
+    expect(prMatches(linked, "ada lin")).toBe(true);
+  });
+  test("but not its title, which the board does not draw", () => {
+    expect(prMatches(linked, "hang-up")).toBe(false);
+  });
+  test("a pull request without a card answers to none of it", () => {
+    expect(prMatches(card, "code review")).toBe(false);
+    expect(prMatches(card, "ORBIT-9999")).toBe(false);
+  });
+});
+
 describe("what a card answers to", () => {
   test("the things it shows", () => {
     expect(prMatches(card, "break")).toBe(true);
