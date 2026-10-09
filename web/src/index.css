@@ -33,11 +33,19 @@
   --info: #58a6ff;
   /* ClickUp's own four priority colours, fixed on purpose: a theme that retints
      --info or --warning turned Normal orange, and a flag that says Normal in
-     the colour of High is worse than no colour. */
+     the colour of High is worse than no colour. The -ink forms are what text
+     and flags use: the pure hue pulled toward the theme's own text colour, so
+     amber stays readable on Porcelain (1.8:1 pure, 4.8:1 mixed) and the mix
+     stays above 4.2:1 on the dark bases. Measured on github-light and
+     github-dark. */
   --prio-urgent: #f27171;
   --prio-high: #f5b82e;
   --prio-normal: #4d6bf0;
   --prio-low: #8a8f99;
+  --prio-urgent-ink: color-mix(in srgb, var(--prio-urgent) 62%, var(--text));
+  --prio-high-ink: color-mix(in srgb, var(--prio-high) 50%, var(--text));
+  --prio-normal-ink: color-mix(in srgb, var(--prio-normal) 62%, var(--text));
+  --prio-low-ink: color-mix(in srgb, var(--prio-low) 62%, var(--text));
   /* Somebody is looking at this from their phone.
      Its own colour on purpose, and not one of the four above: those are states
      of the work — good, careful, broken, worth reading — and a second person

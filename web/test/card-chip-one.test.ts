@@ -56,12 +56,13 @@ describe("the tracker card's chip", () => {
     expect(fn).toContain("priority ? look.c :");
   });
 
-  test("but an unranked card keeps the accent", () => {
-    // A card nobody has ranked is not "low", and painting it grey would say
-    // something the card does not.
+  test("and an unranked card is neutral grey, never the theme's accent", () => {
+    // The accent is whatever a theme says (orange on some), and an orange chip
+    // beside a grey outline flag read as a priority nobody had set.
     const lib = read("src/lib/priority.tsx");
     const fn = lib.slice(lib.indexOf("export function CardChip("));
-    expect(fn).toContain('"var(--accent, var(--primary))"');
+    expect(fn).toContain('priority ? look.c : "var(--text3)"');
+    expect(fn).not.toContain("var(--accent");
   });
 
   test("the priority menu lists all five, ticks the current one and calls the empty one Clear", async () => {
