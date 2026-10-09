@@ -118,7 +118,7 @@ import { failed } from "./refused.ts";
 import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, addClickupFolder, refreshFoldersIfStale, replaceViewUrl, readView } from "./providers.ts";
 import { clickupPrefs, setClickupPrefs, settleFirstRun } from "./clickupPrefs.ts";
 import { savedViews, savedFolders, currentView, setCurrent, removeView, removeFolder, knownCardPrefix, knownNoCustomIds, boardHolding, setWritesAllowed, patchCachedTask } from "./clickupviews.ts";
-import { assignSelf, setAssignee, setCard, listMembers, setStatus, setPriority, setField, clearField, sprintLists, searchTasks, searchTasksStream, warmBodySweep, taskDetail, tagsForTask, findCard, cardPullRequests, clickupWriteEnabled, commentOn, updateTask, setTag, moveToList, createTask, addChecklist, addChecklistItem, setChecklistItem, editComment as editClickupComment, replyToComment, resolveComment, deleteComment as deleteClickupComment } from "./clickup.ts";
+import { assignSelf, setAssignee, setCard, listMembers, workspaceMembers, setStatus, setPriority, setField, clearField, sprintLists, searchTasks, searchTasksStream, warmBodySweep, taskDetail, tagsForTask, findCard, cardPullRequests, clickupWriteEnabled, commentOn, updateTask, setTag, moveToList, createTask, addChecklist, addChecklistItem, setChecklistItem, editComment as editClickupComment, replyToComment, resolveComment, deleteComment as deleteClickupComment } from "./clickup.ts";
 import { clickupTasks, dropAssignedCache } from "./clickup.ts";
 import type { ProviderId } from "../../shared/providers.ts";
 import { listTasks, taskCapability, setTaskChangeHook, startTaskSweep, addTask, completeTask, reopenTask, deleteTask, cyclePriority, editTask, addTags, replaceNote, bulkApply, TASK_WRITE_ENABLED, type BulkAction } from "./tasks.ts";
@@ -6533,7 +6533,8 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // Who can be put on a card. Scoped to the LIST the card lives in: a
       // workspace here holds the whole company, and a picker offering all of
       // them to assign one backend card is a picker nobody uses twice.
-      const r = await listMembers(url.searchParams.get("list") ?? "");
+      /* No list: the workspace's people, for a setting that names one before a card is open. */
+      const r = url.searchParams.has("workspace") ? await workspaceMembers() : await listMembers(url.searchParams.get("list") ?? "");
       return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error });
     }
     /* Whether the agent here can post to Slack. A route rather than a build-time
@@ -6667,6 +6668,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
             add: Array.isArray(b.add) ? (b.add as unknown[]).map(Number) : undefined,
             rem: Array.isArray(b.rem) ? (b.rem as unknown[]).map(Number) : undefined,
             status: b.status != null ? String(b.status) : undefined,
+            addMe: b.addMe === true,
           }, seen)
         : pathname === "/clickup/status" ? await setStatus(id, String(b.status ?? ""), seen)
         // The flag, ClickUp's own field. `null` clears it, which is why the

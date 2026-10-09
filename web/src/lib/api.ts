@@ -1497,8 +1497,8 @@ const realApi = {
     get<{ ok: boolean; error?: string; name?: string; statuses?: ListStatus[]; fields?: ListField[]; place?: ListPlace }>(
       `/clickup/list?id=${encodeURIComponent(id)}`),
   /** Who can be put on a card, from the list it lives in. */
-  clickupMembers: (list: string) =>
-    get<{ ok: boolean; error?: string; members?: ListMember[] }>(`/clickup/members?list=${encodeURIComponent(list)}`),
+  clickupMembers: (list: string, workspace = false) =>
+    get<{ ok: boolean; error?: string; members?: ListMember[] }>(workspace ? "/clickup/members?workspace=1" : `/clickup/members?list=${encodeURIComponent(list)}`),
   clickupPrs: (card: string, field: string, root: string, task = "") =>
     get<{ ok: boolean; prs: CardPr[]; error?: string }>(
       `/clickup/prs?${new URLSearchParams({ card, field, root, task })}`),
@@ -1627,7 +1627,7 @@ const realApi = {
    * moves it, and the second and third were refused as "somebody changed this
    * card while you had it open" — by us.
    */
-  clickupCard: (id: string, changes: { add?: number[]; rem?: number[]; status?: string }, updated?: number) =>
+  clickupCard: (id: string, changes: { add?: number[]; rem?: number[]; status?: string; addMe?: boolean }, updated?: number) =>
     post<ClickUpWrite>("/clickup/card", { id, updated, ...changes }),
   /** ClickUp's own flag. `null` takes it off, which is a value the picker offers. */
   clickupPriority: (id: string, priority: string | null, updated?: number) =>
@@ -2776,9 +2776,9 @@ const demoApi: typeof realApi = {
   clickupSearch: (_q: string, _f?: boolean, _s?: AbortSignal) => D({ ok: false, error: "not available in the demo" }),
   clickupTask: (_i: string) => D({ ok: false, error: "not available in the demo" }),
   clickupAssign: (_i: string, _o: boolean, _u?: number, _w?: number) => D({ ok: false, error: "not available in the demo" }),
-  clickupMembers: (_l: string) => D({ ok: false, error: "not available in the demo" }),
+  clickupMembers: (_l: string, _w?: boolean) => D({ ok: false, error: "not available in the demo" }),
   clickupStatus: (_i: string, _s: string, _u?: number) => D({ ok: false, error: "not available in the demo" }),
-  clickupCard: (_i: string, _c: { add?: number[]; rem?: number[]; status?: string }, _u?: number) => D({ ok: false, error: "not available in the demo" }),
+  clickupCard: (_i: string, _c: { add?: number[]; rem?: number[]; status?: string; addMe?: boolean }, _u?: number) => D({ ok: false, error: "not available in the demo" }),
   clickupPriority: (_i: string, _p: string | null, _u?: number) => D({ ok: false, error: "not available in the demo" }),
   clickupField: (_i: string, _f: string, _v: string, _k?: string) => D({ ok: false, error: "not available in the demo" }),
   clickupFieldClear: (_i: string, _f: string) => D({ ok: false, error: "not available in the demo" }),

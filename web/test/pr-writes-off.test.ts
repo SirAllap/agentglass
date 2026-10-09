@@ -43,8 +43,9 @@ describe("every ClickUp write in PrPanel", () => {
   const calls = [...src.matchAll(/api\.clickup(?:Card|Status|Comment)\(/g)].map((m) => m.index!);
 
   it("finds the call sites it is supposed to guard", () => {
-    // Merge-with-card, review menu, status, people, hand-off, note.
-    expect(calls.length).toBe(6);
+    // Merge-with-card (a status write, or the card write when it also assigns),
+    // review menu, status, people, hand-off, note.
+    expect(calls.length).toBe(7);
   });
 
   it("sits in a component that reads writeBlock, bar the merge", () => {

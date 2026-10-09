@@ -549,12 +549,27 @@ export interface ListStatus {
  */
 export type HandoffUnassign = "none" | "me" | "all";
 
+/**
+ * Who a step that moves a card also makes sure is on it. `none` touches no one,
+ * `me` is whoever presses the control, `author` is the pull request's author as
+ * the tracker knows them, `person` is one member chosen in settings. Ensured, not
+ * replaced: the person is added when missing and everybody else stays.
+ */
+export type AssignWho = "none" | "me" | "author" | "person";
+export interface StepAssign {
+  who: AssignWho;
+  /** Only with `who: "person"`: the member's tracker id, and the name it had when chosen. */
+  person?: { id: number; name: string };
+}
+
 export interface HandoffConfig {
   /** Off until a workspace says it has a QA column. */
   enabled: boolean;
   /** Status names to look for, in order; the first one the card's list has wins. */
   statusNames: string[];
   unassign: HandoffUnassign;
+  /** Who is made sure to be on the card after the move (after `unassign` has run). */
+  assign: StepAssign;
 }
 
 /** The kinds of note the card bell can raise. */
@@ -586,10 +601,12 @@ export interface ClickUpPrefs {
     /** Status names the review menu moves a card to; empty falls back to /review/i, then leaves it alone. */
     statusNames: string[];
     assignReviewer: boolean;
+    /** Who the move item also makes sure is on the card. */
+    assign: StepAssign;
   };
   /** The card choice in the merge dialog. Off until a workspace adds it; the first of
    *  `statusNames` the card's list has is preselected, none means "Leave it there". */
-  merge: { enabled: boolean; statusNames: string[] };
+  merge: { enabled: boolean; statusNames: string[]; assign: StepAssign };
   flows: { noteOnCard: boolean };
   /** Custom field that holds a PR link; empty means the guess (a name containing "github"). */
   prLinkField: string;

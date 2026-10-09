@@ -13,8 +13,8 @@ const stubGlobal = globalStubs();
 let sent: { url: string; body?: unknown }[] = [];
 let refuse = false;
 const prefs = (counted: string[]): ClickUpPrefs => ({
-  handoff: { enabled: false, statusNames: [], unassign: "none" }, review: { enabled: false, statusNames: [], assignReviewer: false },
-  merge: { enabled: false, statusNames: [] }, flows: { noteOnCard: false }, prLinkField: "", swatchField: "", cardSkillPattern: "",
+  handoff: { enabled: false, statusNames: [], unassign: "none", assign: { who: "none" } }, review: { enabled: false, statusNames: [], assignReviewer: false, assign: { who: "none" } },
+  merge: { enabled: false, statusNames: [], assign: { who: "none" } }, flows: { noteOnCard: false }, prLinkField: "", swatchField: "", cardSkillPattern: "",
   assigned: { includeSubtasks: false }, sprintListPattern: "", readOnlyFieldPattern: "", bell: { kinds: [] }, statusSpaces: { counted },
 });
 stubGlobal("location", { origin: "http://127.0.0.1:1", hostname: "127.0.0.1", search: "", href: "http://127.0.0.1:1/" });

@@ -24,7 +24,7 @@ const SALES = U("4", "Sales pipeline", [st("lead", "open"), st("won", "done")]);
 const BRAND = U("5", "Brand assets", [st("idea", "open"), st("approved", "done")]);
 const ALL = [SPRINT, BUGS, SUPPORT, SALES, BRAND];
 const M = moments(CLICKUP.nouns);
-const step = (kind: Step["kind"], status: string | null): Step => ({ kind, status, also: [], unassign: "none" });
+const step = (kind: Step["kind"], status: string | null): Step => ({ kind, status, also: [], unassign: "none", assign: { who: "none" } });
 const m = (s: Step) => M[s.kind];
 
 /** The data layer's answer: an ignored unit says `counted: false`; absent counts. */

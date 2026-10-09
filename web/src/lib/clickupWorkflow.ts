@@ -10,6 +10,7 @@
 import type { ClickUpPrefs } from "../../../shared/providers.ts";
 import type { TrackerAdapter, Step, StepKind, Unassign } from "./workflowMap.ts";
 import { STEP_ORDER } from "./workflowMap.ts";
+import { NO_ASSIGN, type Assign } from "./stepAssign.ts";
 
 export const CLICKUP: TrackerAdapter = {
   nouns: { name: "ClickUp", workspace: "workspace", space: "space", spaces: "spaces", list: "list", lists: "lists", item: "card", items: "cards", move: "Move to", verb: "Move" },
@@ -39,11 +40,11 @@ const named = (names: string[]) => ({ status: names[0] ?? null, also: names.slic
 export function clickupSteps(p: ClickUpPrefs): Step[] {
   const out: Step[] = [];
   const un = p.handoff.unassign;
-  if (p.handoff.enabled) out.push({ kind: "move", ...named(p.handoff.statusNames), unassign: un });
-  if (p.review.enabled) out.push({ kind: "menu", ...named(p.review.statusNames), unassign: "none" });
-  if (p.merge.enabled) out.push({ kind: "merge", status: p.merge.statusNames[0] ?? null, also: p.merge.statusNames.slice(1), unassign: "none" });
-  if (p.review.assignReviewer) out.push({ kind: "people", status: null, also: [], unassign: "none" });
-  if (p.flows.noteOnCard) out.push({ kind: "note", status: null, also: [], unassign: "none" });
+  if (p.handoff.enabled) out.push({ kind: "move", ...named(p.handoff.statusNames), unassign: un, assign: p.handoff.assign ?? NO_ASSIGN });
+  if (p.review.enabled) out.push({ kind: "menu", ...named(p.review.statusNames), unassign: "none", assign: p.review.assign ?? NO_ASSIGN });
+  if (p.merge.enabled) out.push({ kind: "merge", status: p.merge.statusNames[0] ?? null, also: p.merge.statusNames.slice(1), unassign: "none", assign: p.merge.assign ?? NO_ASSIGN });
+  if (p.review.assignReviewer) out.push({ kind: "people", status: null, also: [], unassign: "none", assign: NO_ASSIGN });
+  if (p.flows.noteOnCard) out.push({ kind: "note", status: null, also: [], unassign: "none", assign: NO_ASSIGN });
   return out;
 }
 
@@ -74,11 +75,21 @@ export function clickupSetStatus(kind: StepKind, status: string | null): PrefsPa
 /** Take a step away, and whatever it had chosen with it. */
 export function clickupRemove(kind: StepKind): PrefsPatch {
   switch (kind) {
-    case "move": return { handoff: { enabled: false, statusNames: [], unassign: "none" } };
-    case "menu": return { review: { enabled: false, statusNames: [] } };
-    case "merge": return { merge: { enabled: false, statusNames: [] } };
+    case "move": return { handoff: { enabled: false, statusNames: [], unassign: "none", assign: NO_ASSIGN } };
+    case "menu": return { review: { enabled: false, statusNames: [], assign: NO_ASSIGN } };
+    case "merge": return { merge: { enabled: false, statusNames: [], assign: NO_ASSIGN } };
     case "people": return { review: { assignReviewer: false } };
     case "note": return { flows: { noteOnCard: false } };
+  }
+}
+
+/** Set a step's "also assign". The row exists on the steps that move a status, and only on those. */
+export function clickupAssign(kind: StepKind, a: Assign): PrefsPatch {
+  switch (kind) {
+    case "move": return { handoff: { assign: a } };
+    case "menu": return { review: { assign: a } };
+    case "merge": return { merge: { assign: a } };
+    default: return {};
   }
 }
 

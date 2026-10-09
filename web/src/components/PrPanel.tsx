@@ -61,7 +61,8 @@ import { depSpec } from "../../../shared/deps.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { confirmMergeGuard } from "../lib/mergeGuard.ts";
 import { useMergeDialog } from "./MergeDialog.tsx";
-import { mergeCardRef, mergeNote, statusColor, readyForQaStatus, handoffRemovals, handoffChanges, reviewStatus, cardNoteText, whoToTell } from "../lib/cardMove.ts";
+import { authorOf, assignedNote, ensureId, pressSentence, resolveEnsure, stepChanges, type Ensure, type PrAuthor } from "../lib/stepAssign.ts";
+import { mergeCardRef, mergeNote, statusColor, readyForQaStatus, reviewStatus, cardNoteText, whoToTell } from "../lib/cardMove.ts";
 import { useClickupPrefs, clickupPrefs } from "../lib/clickupPrefs.ts";
 import { cardPlan, cardPlanNote } from "../lib/cardPlan.ts";
 import { cardOf, askingCard, onCard, putCard, forgetCards, cardVersion, withCard } from "../lib/prCardStore.ts";
@@ -4068,6 +4069,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       humanApproved: detail.reviews.some((r) => !r.isBot && r.state === "APPROVED"),
       botApproved: detail.reviews.some((r) => r.isBot && r.state === "APPROVED"),
       card: mergeCardRef(detail, clickup),
+      author: authorOf(detail),
     });
     if (!choice) return;
     /*
@@ -4102,14 +4104,16 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       // `updated` is the precondition, not decoration: somebody else moving the
       // card while the merge form was open should come back as a conflict rather
       // than quietly winning.
-      const r = await api.clickupStatus(move.id, move.to, move.updated)
+      /* Without "Also assign" this is the status write it always was; with it, the same single
+         write carries the person too (one card, one request), never a second call racing `updated`. */
+      const r = await (move.write ? api.clickupCard(move.id, move.write, move.updated) : api.clickupStatus(move.id, move.to, move.updated))
         .catch((e) => ({ ok: false, error: String(e) }));
       // The chip and the board's row read the status from the store: hand it the
       // write's own answer rather than wait out its minute.
       const query = mergeCardRef(detail, clickup)?.query;
       if (r.ok && query) putCard(query, "task" in r ? r.task : undefined);
       flash(r.ok, mergeNote(true, {
-        asked: true, ok: r.ok, to: move.to,
+        asked: true, ok: r.ok, to: move.to, extra: move.note,
         unauthorised: "unauthorised" in r ? r.unauthorised : undefined,
         error: r.ok ? undefined : ("conflict" in r && r.conflict ? "somebody moved it while this was open" : r.error),
       }));
@@ -7259,14 +7263,30 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
    * and leaving yourself on it is not an assignment. With none of them this half
    * is silent and the press is a GitHub assignment, which is exactly what it is.
    */
+  /*
+   * "Also assign" on the move item: whoever it names is on the card once the
+   * card moves. Worked out from the people this menu already read, so it costs
+   * no request; with the status left where it is, it adds nobody.
+   */
+  const assignPref = reviewPrefs?.assign;
+  const author = useMemo(() => authorOf(d), [d.author, d.authorName, d.authorEmail]);
+  const ensure = useMemo<Ensure>(
+    () => (members === null ? { kind: "none" } : resolveEnsure(assignPref, { author, members })),
+    [assignPref, author, members],
+  );
+  const movesStatus = !!pick && pick !== (card?.status ?? "");
+  const ensured = moveOn && movesStatus ? ensureId(ensure, members) : null;
+  const base = assignReviewer ? on : was;
+  const effective = useMemo(() => (ensured != null && !base.has(ensured) ? new Set([...base, ensured]) : base), [base, ensured]);
   const wanted = useMemo(
-    () => cardPlan({ label, pick, statusNow: card?.status, on: assignReviewer ? on : was, was, nameOf }),
-    [label, pick, card?.status, on, was, nameOf, assignReviewer],
+    () => cardPlan({ label, pick, statusNow: card?.status, on: effective, was, nameOf }),
+    [label, pick, card?.status, effective, was, nameOf],
   );
   const plan = useMemo(
     () => blocked ? cardPlan({ label, pick: "", statusNow: card?.status, on: was, was, nameOf }) : wanted,
     [blocked, wanted, label, card?.status, was, nameOf],
   );
+  const unmappedNote = moveOn && movesStatus && ensure.kind === "unmapped" ? ensure.why : "";
 
   const run = useCallback(async () => {
     if (folded || !card || !plan.lines.length) return true;
@@ -7287,7 +7307,7 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
     ).catch(() => ({ ok: false, error: "Could not reach the server", task: undefined }));
     note(r.ok, r.ok ? cardPlanNote(plan, label) : (r.error || `${label} did not move`));
     if (r.ok) {
-      setWas(new Set(on));
+      setWas(new Set(effective));
       setPick("");
       const moved = plan.status;
       setCard((c) => c ? { ...c, status: moved || c.status, updated: r.task?.updated ?? c.updated } : c);
@@ -7298,7 +7318,7 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
       putCard(query, r.task);
     }
     return r.ok;
-  }, [folded, card, plan, on, label, note, query]);
+  }, [folded, card, plan, effective, label, note, query]);
 
   /* Folded means "not this time": the plan it publishes is empty, so the button
      downstairs goes back to plain Done. It was still announcing its changes
@@ -7319,7 +7339,7 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
 
   const people = (members ?? []).filter((m) => m.name && (!q.trim() || m.name.toLowerCase().includes(q.trim().toLowerCase())))
     .sort((a, b) => {
-      const ah = on.has(a.id) ? 0 : 1, bh = on.has(b.id) ? 0 : 1;
+      const ah = effective.has(a.id) ? 0 : 1, bh = effective.has(b.id) ? 0 : 1;
       if (ah !== bh) return ah - bh;
       if (a.me !== b.me) return a.me ? -1 : 1;
       return a.name.localeCompare(b.name);
@@ -7398,6 +7418,7 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
               ]}
             />
             {blocked && <div className="mt-1 text-[9.5px]" style={{ color: "var(--text3)" }}>{blocked}</div>}
+            {unmappedNote && <div className="mt-1 text-[9.5px]" role="status" style={{ color: "var(--warning-ink)" }}>{unmappedNote}</div>}
             {(blocked || !pick) && (
               <div className="mt-1 text-[9.5px] flex items-center gap-2" style={{ color: "var(--text4)" }}>
                 <span>now</span>
@@ -7418,7 +7439,7 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
             {members === null && <div className="px-3 py-2 text-[11px]" style={{ color: "var(--text3)" }}>Reading the team…</div>}
             {people.map((m) => (
               <button key={m.id} onClick={() => setOn((cur) => { const n = new Set(cur); if (n.has(m.id)) n.delete(m.id); else n.add(m.id); return n; })}
-                disabled={!!blocked} title={blocked ?? undefined}
+                disabled={!!blocked || m.id === ensured} title={blocked ?? (m.id === ensured ? "Put on the card by the move item’s “Also assign” setting" : undefined)}
                 className="agx-mi w-full text-left flex items-center gap-2 px-2.5 py-1.5 text-[11px] disabled:opacity-60 disabled:cursor-default" style={{ color: "var(--text2)" }}>
                 {/* The face, as everywhere else people are drawn in this app.
                     Two initials is a puzzle in a workspace of five hundred. */}
@@ -7429,10 +7450,10 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
                       style={{ width: 16, height: 16, background: m.color || "var(--bg4)", color: "#fff", fontSize: 8 }}>
                       {m.initials}
                     </span>}
-                <span className="truncate" style={{ color: on.has(m.id) ? "var(--success)" : "var(--text2)" }}>
+                <span className="truncate" style={{ color: effective.has(m.id) ? "var(--success)" : "var(--text2)" }}>
                   {m.name}{m.me ? " · you" : ""}
                 </span>
-                {on.has(m.id) && <span className="ml-auto flex" style={{ color: "var(--success-ink)" }}><DoneIcon size={ICON.xs} /></span>}
+                {effective.has(m.id) && <span className="ml-auto flex" style={{ color: "var(--success-ink)" }}><DoneIcon size={ICON.xs} /></span>}
               </button>
             ))}
           </div>
@@ -7759,13 +7780,17 @@ function CardPeoplePick({ task, query, onSaid }: { task: ProviderTask; query: st
 /** What the hand-off will do, drawn inside the confirm: the card, the status
  *  it leaves and enters, and who comes off it. A bare "are you sure" asked
  *  people to trust a sentence about a write they could not see. */
-export function ReadyForQaSummary({ task, target, targetColor, unassign = "all" }: {
+export function ReadyForQaSummary({ task, target, targetColor, unassign = "all", ensure = { kind: "none" } }: {
   task: ProviderTask; target: string; targetColor?: string;
   /** Who the workspace's hand-off setting takes off; everybody when not said. */
   unassign?: HandoffUnassign;
+  /** Who "Also assign" makes sure is on the card afterwards. */
+  ensure?: Ensure;
 }) {
   const people = task.people ?? [];
-  const off = new Set(handoffRemovals(people, unassign));
+  /* The same decision the press makes: whoever is ensured never comes off. */
+  const plan = stepChanges({ status: target, people, unassign, ensure });
+  const off = new Set(plan.write.rem ?? []);
   const comesOff = people.filter((p) => p.id != null && off.has(p.id));
   const stays = people.filter((p) => !(p.id != null && off.has(p.id)));
   const key = { color: "var(--text3)", fontSize: 10.5, textTransform: "uppercase" as const, letterSpacing: "0.04em" };
@@ -7792,6 +7817,17 @@ export function ReadyForQaSummary({ task, target, targetColor, unassign = "all" 
               ))
             : <span style={{ color: "var(--text3)" }}>{people.length ? "nobody comes off" : "nobody assigned"}</span>}
         </div>
+        {ensure.kind !== "none" && (
+          <>
+            <div style={key}>Assign</div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              {ensure.kind === "unmapped"
+                ? <span style={{ color: "var(--warning-ink)" }}>{ensure.why}</span>
+                : plan.named ? <span>{plan.named === "you" ? "you" : plan.named}</span>
+                : <span style={{ color: "var(--text3)" }}>already on the card</span>}
+            </div>
+          </>
+        )}
         {stays.length > 0 && (
           <>
             <div style={key}>Stays on</div>
@@ -7805,7 +7841,9 @@ export function ReadyForQaSummary({ task, target, targetColor, unassign = "all" 
       </div>
       <div className="mt-3 text-[11px] leading-relaxed" style={{ color: "var(--text3)" }}>
         One write to ClickUp.{" "}
-        {unassign === "all" ? "Nobody stays on the card until QA picks it up."
+        {plan.named ? `${plan.named === "you" ? "You are" : `${plan.named} is`} put on the card${unassign === "none" ? "; everyone else stays." : "."}`
+          : unassign === "all" && ensure.kind !== "none" ? "Everyone else comes off the card."
+          : unassign === "all" ? "Nobody stays on the card until QA picks it up."
           : unassign === "me" ? "Only you come off the card."
           : "Everyone assigned stays on the card."}
       </div>
@@ -7824,8 +7862,10 @@ export function ReadyForQaSummary({ task, target, targetColor, unassign = "all" 
  * picker's is: hover cannot decide whether to show a button at all. One extra
  * read per card the sidebar already opened for.
  */
-function CardReadyForQaButton({ task, query, onSaid, ask }: {
+function CardReadyForQaButton({ task, query, onSaid, ask, author }: {
   task: ProviderTask; query: string; onSaid: (s: string) => void;
+  /** The pull request's author, for "Also assign: the pull request's author". */
+  author: PrAuthor | null;
   ask: (spec: { title: string; body?: string; node?: React.ReactNode; confirmLabel?: string; danger?: boolean }) => Promise<boolean>;
 }) {
   const blocked = writeBlock(useClickupSetup());
@@ -7847,9 +7887,17 @@ function CardReadyForQaButton({ task, query, onSaid, ask }: {
 
   const move = async () => {
     if (busy || blocked) return;
+    /* Who "Also assign" means. Only the author needs the team read (the member
+       list the server already holds for this list: no request when it is warm);
+       "me" is answered by the server from the connected account, a named person
+       is already an id. */
+    const members = handoff.assign.who === "author" && task.listId
+      ? await api.clickupMembers(task.listId).then((r) => (r?.ok ? (r.members ?? []) : null)).catch(() => null)
+      : null;
+    const ensure = resolveEnsure(handoff.assign, { author, members });
     const said = await ask({
       title: `Move to ${target}?`,
-      node: <ReadyForQaSummary task={task} target={target} targetColor={statusColor(statuses ?? [], target)} unassign={handoff.unassign} />,
+      node: <ReadyForQaSummary task={task} target={target} targetColor={statusColor(statuses ?? [], target)} unassign={handoff.unassign} ensure={ensure} />,
       confirmLabel: `Move to ${target}`,
     });
     if (!said) return;
@@ -7858,18 +7906,18 @@ function CardReadyForQaButton({ task, query, onSaid, ask }: {
     // One request: the same write the status picker and the people picker each
     // make half of — see cardMove's note on the three-call version racing its
     // own `updated` stamp.
-    const changes = handoffChanges(target, task.people, handoff.unassign);
-    const r = await api.clickupCard(task.id, changes, task.updated)
+    const { write, named } = stepChanges({ status: target, people: task.people, unassign: handoff.unassign, ensure });
+    const r = await api.clickupCard(task.id, write, task.updated)
       .catch(() => ({ ok: false, error: "Could not reach the server", task: undefined }));
     setBusy(false);
-    onSaid(r.ok ? `now ${target}${changes.rem ? " · unassigned" : ""}` : `!${r.error || "ClickUp refused that"}`);
+    onSaid(r.ok ? `now ${target}${write.rem ? " · unassigned" : ""}${assignedNote(named)}${ensure.kind === "unmapped" ? ` · ${ensure.why}` : ""}` : `!${r.error || "ClickUp refused that"}`);
     if (r.ok) putCard(query, r.task);
   };
 
   return (
     <button onClick={() => { void move(); }} disabled={busy || !!blocked}
       className="agx-btn text-[10.5px] px-2 py-0.5 rounded disabled:opacity-50"
-      title={blocked ?? `Move to ${target}${handoff.unassign === "all" ? " and unassign everyone" : handoff.unassign === "me" ? " and take yourself off" : ""}`}
+      title={blocked ?? pressSentence({ lead: "This button", status: target, item: "card", unassign: handoff.unassign, assign: handoff.assign })}
       style={{ color: "var(--text2)", border: EDGE }}>
       Move to {target}
     </button>
@@ -7955,7 +8003,7 @@ function CardFacts({ d }: { d: PrDetail }) {
                   Note on card
                 </button>
               )}
-              <CardReadyForQaButton task={task} query={query} onSaid={setSaid} ask={ask} />
+              <CardReadyForQaButton task={task} query={query} onSaid={setSaid} ask={ask} author={authorOf(d)} />
               {said && <span className="text-[10px]" style={{ color: said.startsWith("!") ? "var(--warning)" : "var(--success)" }}>{said.replace(/^!/, "")}</span>}
             </div>
             {blocked && <div className="text-[10px]" style={{ color: "var(--text3)" }}>{blocked}</div>}

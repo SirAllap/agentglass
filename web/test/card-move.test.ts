@@ -194,7 +194,7 @@ describe("finding the list's own ready-for-QA status", () => {
 });
 
 describe("the hand-off, as the workspace configured it", () => {
-  const on = (over: Partial<HandoffConfig> = {}): HandoffConfig => ({ enabled: true, statusNames: [], unassign: "all", ...over });
+  const on = (over: Partial<HandoffConfig> = {}): HandoffConfig => ({ enabled: true, statusNames: [], unassign: "all", assign: { who: "none" }, ...over });
   const board = [s("To Do", 0), s("Ready for QA", 1), s("TESTING", 2), s("Done", 3, "done")];
 
   it("offers nothing while the setting is off, however well the board matches", () => {
@@ -276,7 +276,7 @@ describe("the hand-off control in the panel", () => {
   it("keeps the one write: a single clickupCard call with the built changes", () => {
     const body = fn(PANEL, "function CardReadyForQaButton(");
     expect(body.match(/api\.clickupCard\(/g)?.length).toBe(1);
-    expect(body).toContain("handoffChanges(target, task.people, handoff.unassign)");
+    expect(body).toContain("stepChanges({ status: target, people: task.people, unassign: handoff.unassign, ensure })");
   });
 
   it("shows the ClickUp page in Settings only for a connected ClickUp", () => {

@@ -21,9 +21,9 @@ beforeAll(async () => {
 });
 
 const prefs = (includeSubtasks: boolean): ClickUpPrefs => ({
-  handoff: { enabled: false, statusNames: [], unassign: "none" },
-  review: { enabled: false, statusNames: [], assignReviewer: false },
-  merge: { enabled: false, statusNames: [] },
+  handoff: { enabled: false, statusNames: [], unassign: "none", assign: { who: "none" } },
+  review: { enabled: false, statusNames: [], assignReviewer: false, assign: { who: "none" } },
+  merge: { enabled: false, statusNames: [], assign: { who: "none" } },
   flows: { noteOnCard: false },
   prLinkField: "", swatchField: "", cardSkillPattern: "", assigned: { includeSubtasks },
   sprintListPattern: "", readOnlyFieldPattern: "", bell: { kinds: ["assigned", "status", "mention", "comment"] }, statusSpaces: { counted: [] },

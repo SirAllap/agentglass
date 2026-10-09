@@ -4,10 +4,11 @@ import { clickupPrefs, clickupPrefsSaved } from "../lib/clickupPrefs.ts";
 import { __forgetClickupSetup, clickupSetup } from "../lib/clickupSetup.ts";
 import { __forgetClickupSpaces, useClickupSpaces } from "../lib/clickupSpaces.ts";
 import { __forgetClickupPrefs } from "../lib/clickupPrefs.ts";
-import { CLICKUP, addTurnsWritesOn, clickupAdd, clickupRemove, clickupSetStatus, clickupSteps, clickupUnassign, type PrefsPatch } from "../lib/clickupWorkflow.ts";
+import { CLICKUP, addTurnsWritesOn, clickupAdd, clickupAssign, clickupRemove, clickupSetStatus, clickupSteps, clickupUnassign, type PrefsPatch } from "../lib/clickupWorkflow.ts";
 import { allStatuses, countedIds, isActive, moments, resolveImplicit, withCounted, type MapSpace, type StepKind } from "../lib/workflowMap.ts";
 import { pageState, partitionUnits, type Partition } from "../lib/workflowLayout.ts";
 import { openSettings } from "../lib/openSettings.ts";
+import { assignWords, pressSentence } from "../lib/stepAssign.ts";
 import { setting } from "../lib/settingsRegistry.ts";
 import { DEFAULT_SPRINT_LIST_PATTERN, DEFAULT_READ_ONLY_FIELD_PATTERN, type ClickUpPrefs, type ProviderStatus } from "../../../shared/providers.ts";
 import { DEFAULT_CARD_SKILL_PATTERN } from "../../../shared/cardSkills.ts";
@@ -256,6 +257,11 @@ export function ClickUpPane() {
   /* The pick goes through its def, the one write path a row and an agent share. It saves through the same
      /clickup/prefs and re-answers from the spaces the server holds: no ClickUp request. An empty list is the default. */
   const count = useCallback((ids: string[]) => { setting("clickup.statusSpaces.counted").set(ids.join(",")); }, []);
+  /* The workspace's people for "a person…", read when that list opens: the answer the member picker already holds. */
+  const readPeople = useCallback(async () => {
+    const r = await api.clickupMembers("", true).catch(() => null);
+    return r?.ok ? (r.members ?? []).map((m) => ({ id: m.id, name: m.name, ...(m.me ? { sub: "you" } : m.email ? { sub: m.email } : null) })) : null;
+  }, []);
   const setChanges = useCallback(async (on: boolean) => {
     await api.clickupSetWrites(on).catch(() => null);
     __forgetClickupSetup();
@@ -378,6 +384,8 @@ export function ClickUpPane() {
         onStatus={(kind, status) => { void send(clickupSetStatus(kind, status)); }}
         onRemove={(kind) => { void send(clickupRemove(kind)); }}
         onUnassign={(v) => { void send(clickupUnassign(v)); }}
+        onAssign={(kind, a) => { void send(clickupAssign(kind, a)); }}
+        people={readPeople}
         onCountAgain={(u) => { const ids = withCounted(units, u.fromList && u.spaceId ? u.spaceId : u.id, true); if (ids) count(ids); }}
         onRetry={reread} />
       {note && <div role="alert" className="text-[11px] -mt-4" style={{ color: "var(--error-ink)" }}>{note}</div>}
@@ -457,13 +465,14 @@ function PrView({ steps, all, writes, hover, linked }: { steps: ReturnType<typeo
             {nt && <Chip2 cls={lit(hover, "note")}><NoteIcon size={ICON.xs} /> Note</Chip2>}
             {!mv?.status && !nt && hint("No control from a step here.")}
           </Mini>
+          {mv?.status && <div className={lit(hover, "move")} data-preview="move">{hint(pressSentence({ lead: "Press the button:", status: mv.status, item: n.item, unassign: mv.unassign, assign: mv.assign }))}</div>}
           <Menu>
             <div className="px-3 py-2 text-[13px]">Request changes</div>
             <Item>Approve</Item>
-            {mn?.status && <Item cls={lit(hover, "menu")}><span style={{ color: "var(--primary)", fontWeight: 700 }}>{n.move} {mn.status}</span></Item>}
+            {mn?.status && <Item cls={lit(hover, "menu")}><span style={{ color: "var(--primary)", fontWeight: 700 }}>{n.move} {mn.status}</span>{assignWords(mn.assign) && hint(`and assigns ${assignWords(mn.assign)}`)}</Item>}
             {pp && <Item cls={lit(hover, "people")}><UserIcon size={ICON.xs} />Assigned · {sm.who}, {sm.others}</Item>}
           </Menu>
-          {hint(mg && writes ? <>Merge dialog: <span className={lit(hover, "merge")} style={{ fontWeight: 700, color: "var(--text)" }}>{n.move} {sm.id} to {mg.status ?? "Leave it there"}</span></> : "Merge dialog: no extra option.")}
+          {hint(mg && writes ? <>Merge dialog: <span className={lit(hover, "merge")} style={{ fontWeight: 700, color: "var(--text)" }}>{n.move} {sm.id} to {mg.status ?? "Leave it there"}</span>{mg.status && assignWords(mg.assign) && <> and assigns {assignWords(mg.assign)}</>}</> : "Merge dialog: no extra option.")}
         </>
       ) : (
         <>

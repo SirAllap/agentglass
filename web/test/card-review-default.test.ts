@@ -76,7 +76,7 @@ describe("the sidebar gates on the settings", () => {
   test("putting people on the card needs assignReviewer, and unknown reads as off", () => {
     const body = slice("function ClickUpSide(", "\ntype Facets");
     expect(body).toContain("reviewPrefs?.assignReviewer === true");
-    expect(body).toContain("on: assignReviewer ? on : was");
+    expect(body).toContain("const base = assignReviewer ? on : was;");
     expect(body).toContain("{assignReviewer && <>");
   });
   test("the note button needs noteOnCard, and unknown reads as off", () => {

@@ -134,7 +134,7 @@ describe("the person chooses which spaces count", () => {
   test("a step whose status lives only in an ignored space says so, and is not 'absent' or silently fine", () => {
     const sp = statusSpaces(SPACES, cards, ["5"]).spaces;
     const { yours, other } = splitSpaces(sp);
-    const step: Step = { kind: "move", status: "ready for qa", also: [], unassign: "none" };
+    const step: Step = { kind: "move", status: "ready for qa", also: [], unassign: "none", assign: { who: "none" } };
     const m = moments(CLICKUP.nouns)[step.kind];
     expect(reachOf(yours, step, m, other)).toEqual({ kind: "ignored", where: ["Orbit"] });
     // Counted again, the same step is plain coverage.

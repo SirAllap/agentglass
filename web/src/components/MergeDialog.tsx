@@ -7,6 +7,7 @@ import { Spinner } from "./Spinner.tsx";
 import { MERGE_OPTION, mergeBody, mergeSubject, type MergeMethod, type MergeCommit } from "../../../shared/mergeMethod.ts";
 import { LEAVE_ALONE, mergePreselect, movesCard, statusColor, statusOptions, type CardMove } from "../lib/cardMove.ts";
 import { useClickupPrefs } from "../lib/clickupPrefs.ts";
+import { resolveEnsure, stepChanges, type CardWrite, type Ensure, type PrAuthor } from "../lib/stepAssign.ts";
 import { api } from "../lib/api.ts";
 import { __forgetClickupSetup } from "../lib/clickupSetup.ts";
 import { MOD_KEY } from "../lib/format.ts";
@@ -54,6 +55,8 @@ export type MergeSpec = {
    *  dialog resolves it against ClickUp itself, because the panel should not
    *  pay a round trip before it can open. */
   card?: { label: string; query: string } | null;
+  /** Who opened the pull request, for the merge option's "Also assign: the pull request's author". */
+  author?: PrAuthor | null;
   /**
    * Who was asked for a review and has not answered.
    *
@@ -85,7 +88,13 @@ export type MergeChoice = {
   deleteBranch: boolean;
   /** Set only when a status other than the card's own was picked. Absent means
    *  "leave the board alone", which is what the dialog opens on. */
-  card?: { id: string; label: string; to: string; updated: number };
+  card?: {
+    id: string; label: string; to: string; updated: number;
+    /** What "Also assign" adds to the status write. Absent: the status alone is sent, as before. */
+    write?: CardWrite;
+    /** Said after the write: who was put on, and why nobody was when the author could not be told. */
+    note?: string;
+  };
 };
 
 type Pending = MergeSpec & { resolve: (v: MergeChoice | null) => void };
@@ -117,6 +126,10 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
   const mergePrefs = useClickupPrefs()?.merge;
   const mergeOn = mergePrefs?.enabled === true;
   const mergeNames = mergePrefs?.statusNames.join("\u0000") ?? "";
+  const mergeAssign = mergePrefs?.assign;
+  const assignKey = JSON.stringify(mergeAssign ?? null);
+  /* Who "Also assign" means for this card, worked out while the form opens so the press itself is one write. */
+  const [ensure, setEnsure] = useState<Ensure>({ kind: "none" });
   const subjectRef = useRef<HTMLInputElement>(null);
   const rebase = pending?.method === "rebase";
 
@@ -159,12 +172,19 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
       if (!alive()) return;
       const task = found?.ok ? found.task : undefined;
       if (!task) { setCard({ kind: "failed", why: found?.error || "ClickUp could not find it" }); return; }
-      const meta = task.listId ? await api.clickupList(task.listId).catch(() => null) : null;
+      /* The team is read only for the author choice, and from the list the server already
+         holds members for; "me" and a named person need no read at all. */
+      const [meta, team] = await Promise.all([
+        task.listId ? api.clickupList(task.listId).catch(() => null) : null,
+        mergeAssign?.who === "author" && task.listId ? api.clickupMembers(task.listId).catch(() => null) : null,
+      ]);
       if (!alive()) return;
+      setEnsure(resolveEnsure(mergeAssign, { author: pending?.author, members: team?.ok ? (team.members ?? []) : null }));
       const move: CardMove = {
         id: task.id, label: ref.label, title: task.title,
         status: task.status, statusColor: task.statusColor, updated: task.updated,
         statuses: meta?.ok ? (meta.statuses ?? []) : [],
+        people: task.people ?? [],
       };
       setStatus(mergePreselect(move.statuses, move.status, mergeNames ? mergeNames.split("\u0000") : []));
       // Read-only is not a failure and not a thing to hide: the card and where
@@ -182,7 +202,7 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
     void lookUp(ref, () => live);
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pending, mergeOn, mergeNames]);
+  }, [pending, mergeOn, mergeNames, assignKey]);
 
   /**
    * Turn ClickUp writes on from here.
@@ -206,12 +226,20 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
    *  The card travels only when the pick actually moves it — see movesCard. */
   const answer = (): MergeChoice => {
     const on = card.kind === "ready" ? card.card : null;
+    const moves = !!on && movesCard(on.status, status);
+    /* Only when the card actually moves: the assignment rides on the move, never on its own. */
+    const plan = moves ? stepChanges({ status, people: on.people, unassign: "none", ensure }) : null;
+    const note = plan?.named ? `assigned ${plan.named}` : ensure.kind === "unmapped" ? ensure.why : undefined;
     return {
       subject: rebase ? undefined : subject.trim() || undefined,
       body: rebase ? undefined : body.trim() || undefined,
       deleteBranch,
-      card: on && movesCard(on.status, status)
-        ? { id: on.id, label: on.label, to: status, updated: on.updated }
+      card: on && moves
+        ? {
+          id: on.id, label: on.label, to: status, updated: on.updated,
+          ...(plan?.named ? { write: plan.write } : null),
+          ...(note ? { note } : null),
+        }
         : undefined,
     };
   };
@@ -233,7 +261,7 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
     // too and a dialog owns the keyboard until it is answered.
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [pending, subject, body, deleteBranch, rebase, card, status]);
+  }, [pending, subject, body, deleteBranch, rebase, card, status, ensure]);
 
   const how = pending ? MERGE_OPTION[pending.method] : null;
 
@@ -421,6 +449,12 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
                             ]}
                           />
                         )}
+                        {card.kind === "ready" && movesCard(card.card.status, status) && ensure.kind !== "none" && (
+                          <span className="basis-full text-[10.5px]" data-merge-assign="" role="status"
+                            style={{ color: ensure.kind === "unmapped" ? "var(--warning-ink)" : "var(--text3)" }}>
+                            {ensure.kind === "unmapped" ? ensure.why : assignLine(ensure, card.card.people)}
+                          </span>
+                        )}
                       </div>
                     )}
                   </div>
@@ -446,6 +480,13 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
       )}
     </AnimatePresence>
   );
+}
+
+/** What the move will do about "Also assign", said before it is pressed. */
+function assignLine(e: Ensure, people: { id?: number | null; me?: boolean }[] | undefined): string {
+  if (e.kind === "me") return people?.some((p) => p.me) ? "You are already on the card." : "and puts you on the card.";
+  if (e.kind === "person") return people?.some((p) => p.id === e.id) ? `${e.name} is already on the card.` : `and puts ${e.name} on the card.`;
+  return "";
 }
 
 /** A branch name, set in the code face so it cannot be mistaken for prose —

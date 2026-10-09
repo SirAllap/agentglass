@@ -20,7 +20,7 @@ import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { CLICKUP_BELL_KINDS, DEFAULT_SPRINT_LIST_PATTERN, DEFAULT_READ_ONLY_FIELD_PATTERN } from "../../shared/providers.ts";
 import { DEFAULT_CARD_SKILL_PATTERN } from "../../shared/cardSkills.ts";
-import type { ClickUpPrefs, ClickUpBellKind, HandoffUnassign } from "../../shared/providers.ts";
+import type { ClickUpPrefs, ClickUpBellKind, HandoffUnassign, StepAssign } from "../../shared/providers.ts";
 
 const FILE = join(
   process.env.XDG_CONFIG_HOME || join(homedir(), ".config"),
@@ -85,9 +85,9 @@ export function prefPattern(src: string, fallback: string): RegExp {
 
 export function defaultPrefs(): ClickUpPrefs {
   return {
-    handoff: { enabled: false, statusNames: [], unassign: "none" },
-    review: { enabled: false, statusNames: [], assignReviewer: false },
-    merge: { enabled: false, statusNames: [] },
+    handoff: { enabled: false, statusNames: [], unassign: "none", assign: { who: "none" } },
+    review: { enabled: false, statusNames: [], assignReviewer: false, assign: { who: "none" } },
+    merge: { enabled: false, statusNames: [], assign: { who: "none" } },
     flows: { noteOnCard: false },
     prLinkField: "",
     swatchField: "",
@@ -137,6 +137,26 @@ function pattern(name: string, v: unknown, fallback: string): Res<string> {
   return { ok: true, value: t.value };
 }
 
+/** One step's "also assign": replaced whole, never merged field by field, so a
+ *  person left over from an earlier choice cannot survive a switch to `me`. */
+function assign(name: string, v: unknown): Res<StepAssign> {
+  if (!isObj(v)) return bad(`${name} must be an object like {"who":"me"}`);
+  for (const k of Object.keys(v)) if (k !== "who" && k !== "person") return bad(`${name}.${k} is not a setting`);
+  const w = v.who;
+  if (w !== "none" && w !== "me" && w !== "author" && w !== "person") return bad(`${name}.who must be none, me, author or person`);
+  if (w !== "person") {
+    return "person" in v && v.person != null ? bad(`${name}.person is only for who: "person"`) : { ok: true, value: { who: w } };
+  }
+  const p = v.person;
+  if (!isObj(p)) return bad(`${name}.person must be {"id": <member id>, "name": "<name>"} when who is person`);
+  for (const k of Object.keys(p)) if (k !== "id" && k !== "name") return bad(`${name}.person.${k} is not a setting`);
+  if (typeof p.id !== "number" || !Number.isSafeInteger(p.id) || p.id <= 0) return bad(`${name}.person.id must be a member id`);
+  const n = text(`${name}.person.name`, p.name);
+  if (!n.ok) return n;
+  if (!n.value) return bad(`${name}.person.name must be the member's name`);
+  return { ok: true, value: { who: "person", person: { id: p.id, name: n.value } } };
+}
+
 /**
  * Apply a partial update on top of `base`. Unknown keys are refused rather than
  * ignored: a typo that is silently dropped looks exactly like a setting that
@@ -156,7 +176,7 @@ export function applyPrefs(base: ClickUpPrefs, input: unknown): Res<ClickUpPrefs
   for (const k of Object.keys(input)) if (!top.includes(k)) return bad(`${k} is not a setting`);
 
   if ("handoff" in input) {
-    const g = groupOf("handoff", ["enabled", "statusNames", "unassign"]);
+    const g = groupOf("handoff", ["enabled", "statusNames", "unassign", "assign"]);
     if (!g.ok) return g;
     if ("enabled" in g.value) { const r = bool("handoff.enabled", g.value.enabled); if (!r.ok) return r; out.handoff.enabled = r.value; }
     if ("statusNames" in g.value) { const r = names("handoff.statusNames", g.value.statusNames); if (!r.ok) return r; out.handoff.statusNames = r.value; }
@@ -165,19 +185,22 @@ export function applyPrefs(base: ClickUpPrefs, input: unknown): Res<ClickUpPrefs
       if (u !== "none" && u !== "me" && u !== "all") return bad("handoff.unassign must be none, me or all");
       out.handoff.unassign = u as HandoffUnassign;
     }
+    if ("assign" in g.value) { const r = assign("handoff.assign", g.value.assign); if (!r.ok) return r; out.handoff.assign = r.value; }
   }
   if ("review" in input) {
-    const g = groupOf("review", ["enabled", "statusNames", "assignReviewer"]);
+    const g = groupOf("review", ["enabled", "statusNames", "assignReviewer", "assign"]);
     if (!g.ok) return g;
     if ("enabled" in g.value) { const r = bool("review.enabled", g.value.enabled); if (!r.ok) return r; out.review.enabled = r.value; }
     if ("statusNames" in g.value) { const r = names("review.statusNames", g.value.statusNames); if (!r.ok) return r; out.review.statusNames = r.value; }
     if ("assignReviewer" in g.value) { const r = bool("review.assignReviewer", g.value.assignReviewer); if (!r.ok) return r; out.review.assignReviewer = r.value; }
+    if ("assign" in g.value) { const r = assign("review.assign", g.value.assign); if (!r.ok) return r; out.review.assign = r.value; }
   }
   if ("merge" in input) {
-    const g = groupOf("merge", ["enabled", "statusNames"]);
+    const g = groupOf("merge", ["enabled", "statusNames", "assign"]);
     if (!g.ok) return g;
     if ("enabled" in g.value) { const r = bool("merge.enabled", g.value.enabled); if (!r.ok) return r; out.merge.enabled = r.value; }
     if ("statusNames" in g.value) { const r = names("merge.statusNames", g.value.statusNames); if (!r.ok) return r; out.merge.statusNames = r.value; }
+    if ("assign" in g.value) { const r = assign("merge.assign", g.value.assign); if (!r.ok) return r; out.merge.assign = r.value; }
   }
   if ("flows" in input) {
     const g = groupOf("flows", ["noteOnCard"]);

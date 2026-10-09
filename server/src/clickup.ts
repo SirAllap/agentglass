@@ -2271,6 +2271,26 @@ export async function listMembers(listId: string): Promise<CallResult<{ members:
 }
 
 /**
+ * Everybody in the workspace who can be put on a card, for a setting that names
+ * a person before any card is open. The workspace answer is the one the member
+ * picker already asks for and holds, so this is no new kind of request: zero
+ * when it is warm, one when it is not.
+ */
+export async function workspaceMembers(): Promise<CallResult<{ members: ListMember[] }>> {
+  const token = secretFor("clickup");
+  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  const me = redacted("clickup");
+  const team = await teamOnce(token);
+  if (!team.ok) return { ok: false, error: team.error, unauthorised: team.unauthorised };
+  const raw = (team.data?.teams ?? [])
+    .filter((t) => !me?.workspaceId || String(t.id) === me.workspaceId)
+    .flatMap((t) => (t.members ?? []).map((m) => m.user).filter((u): u is NonNullable<typeof u> => !!u));
+  const members = mergeMembers(raw, me?.accountId);
+  members.sort((a, b) => Number(!!b.me) - Number(!!a.me) || a.name.localeCompare(b.name));
+  return { ok: true, data: { members } };
+}
+
+/**
  * Put somebody on a card, or take them off.
  *
  * `assignSelf` did this for one person — you — because that was the whole
@@ -2314,13 +2334,21 @@ export async function setAssignee(taskId: string, userId: number, on: boolean, e
  */
 export async function setCard(
   taskId: string,
-  changes: { add?: number[]; rem?: number[]; status?: string },
+  changes: { add?: number[]; rem?: number[]; status?: string; addMe?: boolean },
   expectUpdated?: number,
 ): Promise<WriteOutcome> {
   const token = secretFor("clickup");
   if (!token) return { ok: false, error: "ClickUp is not connected" };
   if (!clickupWriteEnabled()) return { ok: false, error: "Writing to ClickUp is switched off" };
   const add = (changes.add ?? []).filter((n) => Number.isFinite(n));
+  /* "Whoever is pressing", answered here from the connected account: the page
+     would otherwise have to read the member list (up to three requests) only to
+     learn an id this side already holds. */
+  if (changes.addMe) {
+    const mine = Number(redacted("clickup")?.accountId);
+    if (!Number.isFinite(mine)) return { ok: false, error: "This ClickUp account has no id to assign" };
+    if (!add.includes(mine)) add.push(mine);
+  }
   const rem = (changes.rem ?? []).filter((n) => Number.isFinite(n));
   const status = (changes.status ?? "").trim();
   // A no-op is a mistake upstream, not a write: sending one dates somebody

@@ -102,6 +102,8 @@ export interface Step {
   /** Further names the setting also tries when the first is absent from a list. */
   also: string[];
   unassign: Unassign;
+  /** Who the step also makes sure is on the item. Only the steps that move a status have the row. */
+  assign: { who: "none" | "me" | "author" | "person"; person?: { id: number; name: string } };
   /** The status shown is the built-in default, not one the person chose. */
   implicit?: boolean;
 }

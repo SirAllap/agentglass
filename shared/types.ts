@@ -3904,6 +3904,10 @@ export interface PrMergeGate {
 }
 
 export interface PrDetail extends PrSummary {
+  /** The author's profile name and public email, when GitHub has them: what a
+   *  tracker member is matched against. Absent for a bot or a private profile. */
+  authorName?: string;
+  authorEmail?: string;
   body: string;
   mergeState: PrMergeState;
   /** Parsed out of the body — unchecked boxes are a merge signal on repos

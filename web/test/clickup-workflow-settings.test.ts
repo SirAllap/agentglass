@@ -22,9 +22,9 @@ const SPACES: MapSpace[] = [
   { id: "2", name: "Support", statuses: [st("open", "open"), st("solved", "closed")] },
 ];
 const prefs = (over: Partial<ClickUpPrefs> = {}): ClickUpPrefs => ({
-  handoff: { enabled: false, statusNames: [], unassign: "none" },
-  review: { enabled: false, statusNames: [], assignReviewer: false },
-  merge: { enabled: false, statusNames: [] },
+  handoff: { enabled: false, statusNames: [], unassign: "none", assign: { who: "none" } },
+  review: { enabled: false, statusNames: [], assignReviewer: false, assign: { who: "none" } },
+  merge: { enabled: false, statusNames: [], assign: { who: "none" } },
   flows: { noteOnCard: false },
   prLinkField: "", swatchField: "", cardSkillPattern: "", assigned: { includeSubtasks: false },
   sprintListPattern: "", readOnlyFieldPattern: "", bell: { kinds: [] }, statusSpaces: { counted: [] },
@@ -34,7 +34,7 @@ const prefs = (over: Partial<ClickUpPrefs> = {}): ClickUpPrefs => ({
 const bare = (html: string) => html.replace(/<style>[\s\S]*?<\/style>/g, "");
 const draw = (p: ClickUpPrefs, over: Partial<MapProps> = {}) => bare(renderToStaticMarkup(React.createElement(WorkflowMap, {
   adapter: CLICKUP, part: partitionUnits(SPACES), panel: { kind: "ok" }, steps: clickupSteps(p), changesOn: true,
-  onAdd: () => {}, onStatus: () => {}, onRemove: () => {}, onUnassign: () => {}, onRetry: () => {}, ...over,
+  onAdd: () => {}, onStatus: () => {}, onRemove: () => {}, onUnassign: () => {}, onAssign: () => {}, onRetry: () => {}, ...over,
 })));
 
 describe("a workspace that set nothing", () => {
@@ -53,9 +53,9 @@ describe("a workspace that set nothing", () => {
 
 describe("steps", () => {
   const p = prefs({
-    handoff: { enabled: true, statusNames: ["Ready for QA"], unassign: "me" },
-    review: { enabled: true, statusNames: ["code review"], assignReviewer: true },
-    merge: { enabled: true, statusNames: ["done"] },
+    handoff: { enabled: true, statusNames: ["Ready for QA"], unassign: "me", assign: { who: "none" } },
+    review: { enabled: true, statusNames: ["code review"], assignReviewer: true, assign: { who: "none" } },
+    merge: { enabled: true, statusNames: ["done"], assign: { who: "none" } },
     flows: { noteOnCard: true },
   });
   const html = draw(p);
@@ -86,7 +86,7 @@ describe("steps", () => {
     expect(html).toContain("Platform");
     expect(html).toMatch(/data-status="ready for qa"[^>]*data-tg=""/);
     expect(html).toMatch(/title="Step 1">1</);
-    const gap = draw(prefs({ merge: { enabled: true, statusNames: ["solved"] } }));
+    const gap = draw(prefs({ merge: { enabled: true, statusNames: ["solved"], assign: { who: "none" } } }));
     expect(gap).toContain("Not in Engineering");
     expect(gap).toContain("point at a status this list does not have.");
   });
@@ -103,13 +103,13 @@ describe("steps", () => {
 
 describe("a step with nothing to point at, and one switched off", () => {
   test("a review item that finds no review status anywhere says it needs one and is not active", () => {
-    const html = draw(prefs({ review: { enabled: true, statusNames: [], assignReviewer: false } }), { steps: clickupSteps(prefs({ review: { enabled: true, statusNames: [], assignReviewer: false } })) });
+    const html = draw(prefs({ review: { enabled: true, statusNames: [], assignReviewer: false, assign: { who: "none" } } }), { steps: clickupSteps(prefs({ review: { enabled: true, statusNames: [], assignReviewer: false, assign: { who: "none" } } })) });
     expect(html).toContain("Needs a status");
     expect(html).toContain("Pick a status");
     expect(html).not.toContain("wfm-cov");
   });
   test("a migrated hand-off on the built-in default says so instead of claiming it is off", () => {
-    const p = prefs({ handoff: { enabled: true, statusNames: [], unassign: "none" } });
+    const p = prefs({ handoff: { enabled: true, statusNames: [], unassign: "none", assign: { who: "none" } } });
     const html = draw(p, { steps: resolveImplicit(CLICKUP, clickupSteps(p), allStatuses(SPACES)) });
     expect(html).not.toContain("Needs a status");
     expect(html).toContain("The built-in default, until you choose one.");
@@ -130,7 +130,7 @@ describe("a step with nothing to point at, and one switched off", () => {
     expect(html).toContain("No lists to show.");
   });
   test("a status only an ignored list has is said so, and the way back is one press", () => {
-    const p = prefs({ handoff: { enabled: true, statusNames: ["lead"], unassign: "none" } });
+    const p = prefs({ handoff: { enabled: true, statusNames: ["lead"], unassign: "none", assign: { who: "none" } } });
     const sales: MapSpace = { id: "9", name: "Sales pipeline", statuses: [st("lead", "open"), st("won", "done")] };
     const html = draw(p, { part: partitionUnits([...SPACES, { ...sales, counted: false }]), onCountAgain: () => {} });
     expect(html).toContain("Only in ignored lists");
@@ -140,7 +140,7 @@ describe("a step with nothing to point at, and one switched off", () => {
     expect(html).not.toContain("No list has it");
   });
   test("a status no list has says so and does not blame an ignored one", () => {
-    const html = draw(prefs({ handoff: { enabled: true, statusNames: ["qa passed"], unassign: "none" } }));
+    const html = draw(prefs({ handoff: { enabled: true, statusNames: ["qa passed"], unassign: "none", assign: { who: "none" } } }));
     expect(html).toContain("No list has it");
     expect(html).toContain("It may have been renamed.");
     expect(html).not.toContain("Count ");

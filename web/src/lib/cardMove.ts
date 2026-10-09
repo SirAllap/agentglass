@@ -67,6 +67,8 @@ export type CardMove = {
    *  this read and the merge should be a conflict, not a silent overwrite. */
   updated: number;
   statuses: ListStatus[];
+  /** Who is on the card now: what "Also assign" is decided against. */
+  people?: { id?: number | null; me?: boolean; name?: string }[];
 };
 
 /**
@@ -227,11 +229,11 @@ export function statusColor(statuses: ListStatus[], status: string): string | un
  */
 export function mergeNote(
   merged: boolean,
-  move: { asked: boolean; ok?: boolean; to?: string; error?: string; unauthorised?: boolean },
+  move: { asked: boolean; ok?: boolean; to?: string; error?: string; unauthorised?: boolean; extra?: string },
 ): string {
   if (!merged) return "Merge failed";
   if (!move.asked) return "Merged";
-  if (move.ok) return `Merged · card moved to ${move.to}`;
+  if (move.ok) return `Merged · card moved to ${move.to}${move.extra ? ` · ${move.extra}` : ""}`;
   /*
    * A refused token is the one failure here that pressing the button again
    * cannot fix, and the sentence has to say so — otherwise "ClickUp refused

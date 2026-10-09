@@ -3076,7 +3076,7 @@ export const DETAIL_QUERY = `query($owner:String!,$name:String!,$number:Int!){
     baseRefName headRefName body
     headRepositoryOwner{login}
     mergeable mergeStateStatus reviewDecision viewerDidAuthor viewerCanUpdate
-    author{login}
+    author{login ... on User{name email}}
     mergedBy{login}
     reactionGroups{content viewerHasReacted users{totalCount}}
     labels(first:50){nodes{name color}}
@@ -3673,6 +3673,8 @@ async function readDetail(rootIn: unknown, number: number, repo: PrRepoId, key: 
     number: p.number,
     title: p.title || "",
     author: p.author?.login || "",
+    ...(p.author?.name ? { authorName: String(p.author.name) } : null),
+    ...(p.author?.email ? { authorEmail: String(p.author.email) } : null),
     state: p.state,
     isDraft: !!p.isDraft,
     headRefName: p.headRefName || "",
