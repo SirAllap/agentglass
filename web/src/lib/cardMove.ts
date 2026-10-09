@@ -151,6 +151,17 @@ export function reviewStatus(statuses: ListStatus[], current: string, names: str
   return hit && !eqStatus(hit.status, current) ? hit.status : "";
 }
 
+/**
+ * Who the note is for: somebody else on the card. Falls back to nobody rather
+ * than to the connected account, who is the one opening the pull request —
+ * telling yourself your own branch is ready is the one message that is never
+ * useful. With two others on the card the first is chosen; a picker is the
+ * next thing after this and is not here.
+ */
+export function whoToTell<P extends { id?: number; name: string; me?: boolean }>(task: { people?: P[] } | null): P | null {
+  return task?.people?.find((p) => !p.me) ?? null;
+}
+
 /** The note the card gets when the "Note on card" box opens, from the
  *  `note-on-card` wording in the prompt catalogue. `fallback` is the shipped
  *  wording, for the seconds before the catalogue arrives and for somebody who

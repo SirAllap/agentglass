@@ -21,6 +21,12 @@ import { hasCredential } from "./credentials.ts";
 import { proposeScope } from "./understudy.ts";
 import { addSource, alreadyTaken, MAX_ATTEMPTS, type WorkItem } from "./understudy-work.ts";
 
+/** How urgent a card is to the queue, from the priority ClickUp gave it. One
+ *  scale for every workspace: ClickUp's four priorities are fixed names, so
+ *  this is not a naming habit. What it cannot do is let a team say "high is
+ *  routine for us" — a weight setting is the next step and is not here. */
+const CARD_WEIGHT: Record<string, number> = { urgent: 9, high: 7, other: 5 };
+
 /* Re-exported rather than re-declared: `alreadyTaken` now applies this same
    ceiling to an abandoned run's own ceiling, and one number for "how many
    unattended goes before a person is asked" is the point — see the
@@ -351,7 +357,7 @@ addSource({
           repo: "",
           // Urgency from the card's own priority, so his triage carries over
           // rather than being re-decided here.
-          weight: t.priority === "urgent" ? 9 : t.priority === "high" ? 7 : 5,
+          weight: CARD_WEIGHT[t.priority as string] ?? CARD_WEIGHT.other,
           url: t.url,
         });
       }

@@ -76,8 +76,8 @@ export function Row({ rail, title, chips, facts, action, selected, current, onCl
    *
    * Outside because the graph is one continuous drawing down the page, and a
    * card is a boundary: inside it, every lane line was cut by a border and 4px
-   * of gap, five hundred times. Reported as "¿puede ser fuera de la card?
-   * tenemos ancho suficiente" — both halves of which were right.
+   * of gap, five hundred times. There was room to draw it outside the card, so
+   * it is.
    */
   gutter?: ReactNode;
   /**

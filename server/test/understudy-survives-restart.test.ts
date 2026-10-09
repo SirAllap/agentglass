@@ -634,7 +634,7 @@ test("answering \"your work is still queued\" re-arms the telling", () => {
  * nothing was lost and nothing was queued again". Nothing had been committed:
  * the branch was level with its base because the agent had not written a line
  * yet. The task was never queued again and the queue simply emptied — the exact
- * shape of "el clon no funciona" from outside.
+ * shape of a broken clone, seen from outside.
  *
  * Commits ahead cannot tell "merged" from "never started". The reflog can.
  */

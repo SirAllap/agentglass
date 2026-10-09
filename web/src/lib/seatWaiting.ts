@@ -35,7 +35,7 @@ export interface Waiting {
    *
    * The one kind here that disappears if nothing says it: the work stopped and
    * its owner left, so nobody is coming back for it. Asked for by the seat
-   * reading its own screen — "eso es trabajo huérfano".
+   * reading its own screen, which called it orphaned work.
    */
   orphaned: SeatReportRow[];
   /** A queued task that has already defeated two agents. A third go is not the

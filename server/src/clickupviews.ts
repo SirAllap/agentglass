@@ -364,8 +364,10 @@ export function forgetCached(o: { boards?: boolean } = {}): void {
     cache = undefined;
     return;
   }
+  /* The write switch goes with the credential. It was a deliberate act for the
+     account that was connected; the next one starts read-only like any other. */
   const s = load();
-  save({ ...s, cache: {} });
+  save({ ...s, cache: {}, writes: false });
 }
 
 export function putCache(entry: CachedView): void {

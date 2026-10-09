@@ -31,7 +31,7 @@ import { hasCredential, redacted } from "./credentials.ts";
 import { savedViews } from "./clickupviews.ts";
 import { clickupPrefs } from "./clickupPrefs.ts";
 import type { CardNote } from "../../shared/types.ts";
-import type { ProviderTask } from "../../shared/providers.ts";
+import { CARD_WATCH_MS, type ProviderTask } from "../../shared/providers.ts";
 
 /**
  * Where the cards come from — a seam, not a mock.
@@ -384,7 +384,7 @@ export async function pollCards(now = Date.now()): Promise<CardNote[]> {
  * six is still inside the window where somebody is on the same thought, and
  * opening the Tasks panel or pressing Refresh reads the boards at once anyway.
  */
-export const WATCH_MS = 6 * 60_000;
+export const WATCH_MS = CARD_WATCH_MS;
 
 let timer: ReturnType<typeof setInterval> | null = null;
 

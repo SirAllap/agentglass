@@ -7,6 +7,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { checkedLine, FRESH_MS } from "../src/lib/providerFreshness.ts";
+import { CARD_WATCH_MS } from "../../shared/providers.ts";
 
 // Fixed, because a clock time is asserted below and a test that reads the real
 // clock passes at 14:32 and fails at midnight.
@@ -25,9 +26,15 @@ describe("checkedLine", () => {
   });
 
   test("speaks the moment the answer is past the window", () => {
-    // Exactly at the boundary, so the time named is the window ago — 14:30,
-    // not the 14:32 it is now. Which is the whole point of the line.
-    expect(checkedLine(NOW - FRESH_MS, NOW)).toBe("Checked at 14:30");
+    // Exactly at the boundary, so the time named is the window ago — 14:25 for
+    // a seven-minute window, not the 14:32 it is now. Which is the whole point.
+    expect(checkedLine(NOW - FRESH_MS, NOW)).toBe("Checked at 14:25");
+  });
+
+  test("a watcher that ran one period ago is healthy and says nothing", () => {
+    // The card watch runs every six minutes; a window under that would put a
+    // working watcher in the "worth mentioning" bucket most of the time.
+    expect(checkedLine(NOW - CARD_WATCH_MS, NOW)).toBe("");
   });
 
   test("gives the clock time the answer was taken, not the time now", () => {

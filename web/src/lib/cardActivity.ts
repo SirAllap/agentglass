@@ -164,6 +164,11 @@ export const NO_AUTHOR_NOTE =
  * Split on the verb rather than on the first word: names have two and three
  * parts ("A B C assigned this task to you"), and a first-word rule would put
  * the first of them beside a face belonging to somebody else.
+ *
+ * The ceiling: these are the verbs of ClickUp's ENGLISH notifications. A
+ * workspace whose desktop app speaks another language gets no face on the row
+ * and the sentence shown whole, which is the honest fallback; it is not an
+ * error, and a `seenVerbs` setting is the next thing after this and is not here.
  */
 const SEEN_VERBS = [
   "assigned", "unassigned", "set", "moved", "commented", "mentioned", "added",

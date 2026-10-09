@@ -10,9 +10,15 @@
  * Null is "not known yet", which callers must treat as OFF: the settings that
  * gate a write start off, and a control that flashes on and disappears once the
  * answer arrives is worse than one that appears a beat late.
+ *
+ * Null is also "no ClickUp here": nothing is requested until the setup read
+ * says a token exists, so a machine that never connected makes no ClickUp-shaped
+ * call for a setting nobody can use. The setup read is local and already shared
+ * with the pull-request masthead.
  */
 import { useEffect, useState } from "react";
 import { api } from "./api.ts";
+import { clickupSetup } from "./clickupSetup.ts";
 import type { ClickUpPrefs } from "../../../shared/providers.ts";
 
 const TTL = 60_000;
@@ -27,7 +33,8 @@ export function clickupPrefs(): Promise<ClickUpPrefs | null> {
   if (now) return Promise.resolve(now);
   // A failure is not cached: a server down for a moment should not hide the
   // control for the next minute. It answers null, which reads as off.
-  inflight ??= api.clickupPrefs()
+  inflight ??= clickupSetup()
+    .then((s) => (s.connected ? api.clickupPrefs() : null))
     .then((r) => {
       if (!r?.ok || !r.prefs) return null;
       held = { at: Date.now(), value: r.prefs };
@@ -37,6 +44,9 @@ export function clickupPrefs(): Promise<ClickUpPrefs | null> {
     .finally(() => { inflight = null; });
   return inflight;
 }
+
+/** For the moment the credential changes: what was read under the old one goes. */
+export function __forgetClickupPrefs(): void { held = null; }
 
 /** A save landed: everyone watching sees the saved settings at once. */
 export function clickupPrefsSaved(p: ClickUpPrefs): void {

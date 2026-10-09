@@ -348,12 +348,16 @@ describe("the box's argv", () => {
 
 describe("the routes", () => {
   const index = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
-  test("what starts or stops a run is a POST from a trusted caller; the plan and the status only read", () => {
-    for (const route of ['pathname === "/prs/check-on-base" && req.method === "POST"', 'pathname === "/prs/check-on-base/cancel" && req.method === "POST"']) {
-      const at = index.indexOf(route);
-      expect(at).toBeGreaterThan(-1);
-      expect(index.slice(at, at + 160)).toContain("trustedCaller(req, from)");
-    }
+  test("starting a run is a POST from the desktop shell alone, stopping one from a trusted caller; the plan and the status only read", () => {
+    // Starting runs a command on a pull request's head, the class of route that is desktopOnly.
+    const start = index.indexOf('pathname === "/prs/check-on-base" && req.method === "POST"');
+    expect(start).toBeGreaterThan(-1);
+    const gate = index.slice(start, index.indexOf("let b:", start));
+    expect(gate).toContain("desktopOnly(req)");
+    expect(gate).not.toContain("trustedCaller(req, from)");
+    const cancel = index.indexOf('pathname === "/prs/check-on-base/cancel" && req.method === "POST"');
+    expect(cancel).toBeGreaterThan(-1);
+    expect(index.slice(cancel, cancel + 160)).toContain("trustedCaller(req, from)");
     // Starting one is an auditable action, like starting an agent from here.
     const at = index.indexOf('pathname === "/prs/check-on-base" && req.method === "POST"');
     expect(index.slice(at, at + 1400)).toContain('noteAction(clientIp, "/prs/check-on-base"');

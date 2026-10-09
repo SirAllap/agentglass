@@ -223,7 +223,7 @@ export function linkPath(link: GraphLink, cap: number): string {
    * A row is thirty pixels tall and eleven wide per lane, so a bezier drawn
    * corner to corner is a line at nine degrees off vertical: on a screen with
    * ten of them it is impossible to say which lane a line left and which it
-   * arrived in, which is the "difícil la triangulación" this is answering. A
+   * arrived in, which is the difficulty this answers. A
    * lane that runs vertically and STEPS across in the middle third reads as one
    * line changing column, which is what it is — and it is how every graph that
    * is pleasant to read draws it.

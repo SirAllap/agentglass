@@ -115,7 +115,7 @@ import {
 import { currentRuns, runById, runActivity, startRun, adoptPane, finishRun } from "./runs.ts";
 import { failed } from "./refused.ts";
 import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, addClickupFolder, refreshFoldersIfStale, replaceViewUrl, readView } from "./providers.ts";
-import { clickupPrefs, setClickupPrefs } from "./clickupPrefs.ts";
+import { clickupPrefs, setClickupPrefs, settleFirstRun } from "./clickupPrefs.ts";
 import { savedViews, savedFolders, currentView, setCurrent, removeView, removeFolder, knownCardPrefix, boardHolding, setWritesAllowed, patchCachedTask } from "./clickupviews.ts";
 import { assignSelf, setAssignee, setCard, listMembers, setStatus, setPriority, setField, clearField, sprintLists, searchTasks, searchTasksStream, warmBodySweep, taskDetail, tagsForTask, findCard, cardPullRequests, clickupWriteEnabled, commentOn, updateTask, setTag, moveToList, createTask, addChecklist, addChecklistItem, setChecklistItem, editComment as editClickupComment, replyToComment, resolveComment, deleteComment as deleteClickupComment } from "./clickup.ts";
 import { clickupTasks, dropAssignedCache } from "./clickup.ts";
@@ -6377,8 +6377,8 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     /*
      * The same search, streamed as it goes.
      *
-     * "at least show me what it finds as it goes, no?" — the sweep is
-     * three sequential pages of a workspace with thousands of cards, and
+     * A search that answers only at the end made a person watch a spinner.
+     * The sweep is three sequential pages of a workspace with thousands of cards, and
      * answering only at the end is a spinner where a filling list should be.
      * One JSON object per line: the rows found so far, then a last line with
      * what was scanned. A reader that cannot parse a line ignores it; a client
@@ -7280,7 +7280,13 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     }
     if (pathname === "/prs/check-on-base/status") return json(checkOnBaseStatus(url.searchParams.get("id") || ""));
     if (pathname === "/prs/check-on-base" && req.method === "POST") {
-      if (!trustedCaller(req, from)) return csrfBlocked();
+      /* Runs a typed command on a pull request's head, which may be a fork's
+         code: the same class as the routes that build and run code, so the
+         desktop shell only. The one caller is the PR panel's button; a paired
+         phone or a LAN browser can read the plan and the status and cancel a
+         run, and is told why it cannot start one. Cancel stays on
+         trustedCaller: it stops a process this app started and runs nothing. */
+      if (!desktopOnly(req)) return json({ ok: false, error: "Check on base runs code from the pull request, so only the desktop app can start it" }, 403);
       let b: { root?: unknown; number?: unknown; command?: unknown; baseSha?: unknown; headSha?: unknown; sandbox?: unknown; allowNoSandbox?: unknown };
       try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const started = await startCheckOnBase(b.root, b.number, b.command, b);
@@ -9738,6 +9744,9 @@ subscribeNotifications((n) => {
   } catch { /* a note that cannot be filed is not worth an error */ }
 });
 
+/* Before anything reads the settings: who had ClickUp before they existed keeps
+   what they had, and who did not starts from the defaults. See settleFirstRun. */
+settleFirstRun(hasCredential("clickup"));
 startCardWatch((n) => broadcast({ type: "card", data: n }));
 /* Re-asks the open pull request lists a real client has looked at, on a timer,
    so a comment posted while nobody is on the PRs tab still reaches `noteTalk`

@@ -102,6 +102,7 @@ describe("disconnecting ClickUp", () => {
     const src = dialogSource;
     const at = src.indexOf("api.providerDisconnect(spec.id, { forgetBoards })");
     expect(at, "the confirmed disconnect moved").toBeGreaterThan(-1);
-    expect(src.slice(at, src.indexOf("onChanged()", at))).toContain("__forgetClickupSetup(); forgetCards();");
+    const gone = src.slice(at, src.indexOf("onChanged()", at));
+    expect(gone).toContain("__forgetClickupSetup(); __forgetClickupPrefs(); forgetCards();");
   });
 });

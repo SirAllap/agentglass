@@ -1399,6 +1399,11 @@ export const CLASS_WORDS: [string, RegExp][] = [
   ["C7", /\b(install|instal|build|deploy|reinstall)\b/i],
   ["C8", /\b(agent|subagent|worker|fan.?out)\b/i],
   ["C10", /\b(review|lgtm|approve|verdict|comment)\b/i],
+  /* C11 is the vocabulary of one team's reporting habit (a daily, a worklog, a
+     scrum note), written for whoever this was first measured on. It is not
+     behind a setting: a team that calls the same chores something else lands
+     them in `general`, which is a miss and not an error. Making the words a
+     setting is the next step after this and is not here. */
   ["C11", /\b(pr body|scrum|worklog|gherkin|testing criteria|daily)\b/i],
   ["C12", /\b(clickup|card|sprint)\b/i],
   ["C13", /\b(next|priority|what to work|triage)\b/i],

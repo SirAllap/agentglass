@@ -1748,10 +1748,10 @@ db.run(`CREATE INDEX IF NOT EXISTS seat_report_root ON seat_report (root, read_a
  * A report is a worker saying what it needs. This is the seat saying what IT
  * needs, and the two are not the same list: one is work asking to be
  * unblocked, the other is a decision asking to be made. The orchestrator here
- * named the gap after a day of it living nowhere but a chat: "pusheado,
- * re-sube gif-4", "bot limpio, pide revisor", "3 ramas sin conflicto, ¿push?"
- * — every one of them something ready, waiting on one action only a person can
- * take.
+ * named the gap after a day of it living nowhere but a chat: a branch pushed
+ * and waiting on a re-upload, a bot-clean PR waiting on a reviewer, three
+ * conflict-free branches waiting on a push — every one of them something ready,
+ * waiting on one action only a person can take.
  *
  * Four fields and every one of them earns its place. `cost` and `recommend`
  * because a decision handed over without what it costs and what the seat would
@@ -1799,7 +1799,7 @@ try { db.exec("ALTER TABLE seat ADD COLUMN adopted_pane TEXT NOT NULL DEFAULT ''
  * The registry held only what `startAgent` opened, so a person's own tmux tab
  * running an agent did not exist as far as `broadcast`, `prompt` or `stop`
  * were concerned — measured by the orchestrator here, whose whole fleet is
- * tabs it opened by hand: "`list` da 0 con 2 tabs vivas". Enlisting one writes
+ * tabs it opened by hand, where `list` showed 0 with 2 tabs alive. Enlisting one writes
  * the same row, and this column is what keeps `stop` honest afterwards: a
  * window somebody opened is not this app's to kill.
  */

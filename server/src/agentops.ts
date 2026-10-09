@@ -707,7 +707,7 @@ export async function stopAgent(a: NamedAgent, now = Date.now(), kill = !a.adopt
  * The registry held only what `startAgent` opened, so a person's own tmux tab
  * running an agent did not exist for `broadcast`, `prompt` or `read` —
  * measured by the orchestrator whose whole fleet is tabs it opened by hand:
- * "`list` da 0 con 2 tabs vivas, broadcast no encuentra a nadie". Its first
+ * `list` showing 0 with 2 tabs alive and `broadcast` finding nobody. Its first
  * ask was one message to N agents, and the N was zero.
  *
  * The pane is found by its id, or by the window name a person gave it, which

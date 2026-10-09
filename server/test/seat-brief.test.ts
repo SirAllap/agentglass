@@ -214,8 +214,9 @@ describe("an adopted seat's powers are a claim, not a credential", () => {
    * like any other session, and nothing here can take that away from a process
    * that already exists.
    *
-   * "¿mi orquestador actual seguro que está en speak?" — no, and the view now
-   * says so rather than drawing a badge that implies otherwise.
+   * Whether a running orchestrator is in speak mode is not something adopting
+   * can promise, and the view now says so rather than drawing a badge that
+   * implies otherwise.
    */
   step("adopting does not mint a seat token", async () => {
     const { seatTokenCount } = await import("../src/auth.ts");

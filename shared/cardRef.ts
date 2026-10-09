@@ -29,6 +29,12 @@ export function looksLikeCardId(q: string, o: { minDigits?: number } = {}): bool
  * looks like. Two digits at least: `utf-8` and `gpt-4` are version strings,
  * not cards, and they were the two this used to take for one. A match that is
  * not on a board is dropped by the caller anyway, so this errs toward finding.
+ *
+ * It is NOT `HUMAN_ID` in `taskref.ts`, on purpose. That one decides whether a
+ * branch earns a chip at all, for any tracker with nothing to check against, so
+ * it needs capitals and a two-letter prefix to keep `release/v2-1409` out. This
+ * one is asked about a card the workspace may hold, and the lookup is what
+ * rejects a wrong guess; the cost of the looser shape is one dropped miss.
  */
 export function cardIdIn(text: string, o: { minDigits?: number } = {}): string | null {
   const min = Math.max(1, o.minDigits ?? 2);

@@ -606,9 +606,8 @@ export function merged(p: {
      * EVERY pane of it, not the one pane this row landed on. A session that
      * has been through a reboot has a sighting per pane it ever ran in, and
      * deleting one left the rest on the board under whatever `names` called
-     * them — which is where "Ayudame a instalar…" and "que son estos??" came
-     * from: the same session as a named card, drawn a second time titled with
-     * the first thing its person had typed into it.
+     * them — a card headed with the first thing its person had typed: the same
+     * session as a named card, drawn a second time under that title.
      */
     for (const dead of session ? seenBySession.get(session) ?? [] : []) rows.delete(dead);
     if (paneId) rows.delete(paneId);

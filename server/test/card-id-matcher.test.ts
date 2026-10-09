@@ -8,6 +8,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import { cardIdIn, looksLikeCardId } from "../../shared/cardRef.ts";
+import { readTaskRef } from "../../shared/taskref.ts";
 
 describe("looksLikeCardId with a digit floor", () => {
   it("keeps three digits as the default", () => {
@@ -39,5 +40,14 @@ describe("the id inside a branch or a title", () => {
       expect(looksLikeCardId(id, { minDigits: 2 }), id).toBe(true);
       expect(cardIdIn(id), id).toBe(id);
     }
+  });
+});
+
+describe("the two matchers differ on purpose", () => {
+  it("a lower-case or digit-led prefix is a lookup candidate here and no chip there", () => {
+    // `release/v2-1409` is not worth a chip on any tracker, but this one is only
+    // ever followed by a board lookup, which rejects it.
+    expect(cardIdIn("release/v2-1409")).toBe("v2-1409");
+    expect(readTaskRef({ headRefName: "release/v2-1409" })).toBeNull();
   });
 });

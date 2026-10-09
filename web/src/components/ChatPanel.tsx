@@ -628,7 +628,7 @@ function ResumeRow({ s, openChatId, onPick }: { s: SessionRollup; openChatId?: s
  * failing on the first turn.
  *
  * Running sessions are listed rather than hidden: their absence would read as
- * a bug ("I just used that one, where is it?"), where a greyed row that says
+ * a bug (a session just used, nowhere to be found), where a greyed row that says
  * "running" answers the question.
  */
 function ResumePicker({ onPick, onClose }: { onPick: (s: SessionRollup) => void; onClose: () => void }) {

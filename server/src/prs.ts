@@ -1360,8 +1360,8 @@ export function humanVerdict(
    *
    * A pull request with a review requested and nobody having answered is
    * waiting on a person, whatever else was said in the meantime. Reporting it
-   * as "commented" describes the noise and hides the fact — "when what I am
-   * actually waiting for is a human review??".
+   * as "commented" describes the noise and hides the fact: a person
+   * waiting for a human review is told the PR was commented.
    */
   const pending = o.pending ?? [];
   if (pending.length) {

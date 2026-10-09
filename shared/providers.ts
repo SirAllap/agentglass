@@ -553,6 +553,10 @@ export interface HandoffConfig {
 export type ClickUpBellKind = "assigned" | "status" | "mention" | "comment";
 export const CLICKUP_BELL_KINDS: readonly ClickUpBellKind[] = ["assigned", "status", "mention", "comment"];
 
+/** How often the card watch asks ClickUp. One number for the timer, and for the
+ *  age at which a provider row starts to say when it was last checked. */
+export const CARD_WATCH_MS = 6 * 60_000;
+
 /** What each name guess was before it was a setting; an empty setting means these. */
 export const DEFAULT_SPRINT_LIST_PATTERN = "^sprint\\b";
 export const DEFAULT_READ_ONLY_FIELD_PATTERN = "do not edit";

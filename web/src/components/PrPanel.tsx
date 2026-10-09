@@ -61,7 +61,7 @@ import { depSpec } from "../../../shared/deps.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { confirmMergeGuard } from "../lib/mergeGuard.ts";
 import { useMergeDialog } from "./MergeDialog.tsx";
-import { mergeCardRef, mergeNote, statusColor, readyForQaStatus, handoffRemovals, handoffChanges, reviewStatus, cardNoteText } from "../lib/cardMove.ts";
+import { mergeCardRef, mergeNote, statusColor, readyForQaStatus, handoffRemovals, handoffChanges, reviewStatus, cardNoteText, whoToTell } from "../lib/cardMove.ts";
 import { useClickupPrefs, clickupPrefs } from "../lib/clickupPrefs.ts";
 import { cardPlan, cardPlanNote } from "../lib/cardPlan.ts";
 import { cardOf, askingCard, onCard, putCard, forgetCards, cardVersion, withCard } from "../lib/prCardStore.ts";
@@ -7933,13 +7933,6 @@ function CardFacts({ d }: { d: PrDetail }) {
       {dialog}
     </SidebarSection>
   );
-}
-
-/** Who the note is for: whoever is on the card. Falls back to nobody rather
- *  than to the pull request's author — telling somebody their own branch is
- *  ready is the one message that is never useful. */
-function whoToTell(task: { people?: { id?: number; name: string }[] } | null): { id?: number; name: string } | null {
-  return task?.people?.[0] ?? null;
 }
 
 /** The note's wording in the prompt catalogue, and what stands in for it before

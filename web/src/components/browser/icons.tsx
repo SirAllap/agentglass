@@ -8,7 +8,7 @@
  * are drawn at roughly half the height of an arrow at the same point size, `✎`
  * hangs below the baseline, `▤` is a filled block among outlines. Sizing them
  * one at a time fixes the SIZE and leaves them sitting at different heights,
- * which is exactly what "unos más altos otros más bajos" describes.
+ * which is how a row of icons ends up with some taller and some lower.
  *
  * So: one 24×24 grid, one stroke width, one cap style, every shape centred in
  * its box. The same conventions the workspace rail already uses, because a

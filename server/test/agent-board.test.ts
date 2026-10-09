@@ -712,14 +712,14 @@ describe("one card per agent", () => {
      * A session gets a `pane_agent` row per pane it has ever run in — a
      * reboot is enough. Deleting the one pane the named row landed on left
      * the rest on the board titled with whatever `names` called them, which
-     * is where a card headed "que son estos?? [Image #1]" came from: the same
+     * is where a card headed with a person's first message came from: the same
      * session as a named card, drawn again under its person's first message.
      */
     const hooks = [hook("%3", "s-me", "/code/app", AT), hook("%44", "s-me", "/code/app", AT - 1000)];
     Board.saidBy({ name: "lantern-dedupe", doing: "the fix", worktree: "/code/app", session: "s-me", at: AT });
     const rows = Board.merged({
       said: Board.board(), hooks, panes: hooks.map((h) => pane(h.paneId, h.cwd)),
-      names: new Map([["s-me", "que son estos?? [Image #1]"]]), now: AT,
+      names: new Map([["s-me", "what are these? [Image #1]"]]), now: AT,
     });
     expect(rows).toHaveLength(1);
     expect(rows[0]!.name).toBe("lantern-dedupe");

@@ -655,9 +655,8 @@ export function FloatingBench() {
                 * The bar: what is open, where it opens, and the two controls.
                 *
                 * Every target in here is at least 28×28 with a hover that shows
-                * where it starts and stops — "a veces fallo al darle y es
-                * molesto", which is what a row of 22px glyphs with no hover
-                * state does. The gaps between the targets are the bar's drag
+                * where it starts and stops. A row of 22px glyphs with no hover
+                * state is missed now and then, and a miss is annoying. The gaps between the targets are the bar's drag
                 * area, so a miss moves the window instead of doing nothing,
                 * and that is the least surprising thing a miss can do.
                 */}

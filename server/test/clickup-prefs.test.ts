@@ -130,6 +130,77 @@ describe("the store", () => {
     expect(readdirSync(dirname(file)).filter((f) => f.endsWith(".tmp"))).toEqual([]);
     expect(JSON.parse(readFileSync(file, "utf8")).flows.noteOnCard).toBe(true);
   });
+
+  /*
+   * The settings arrived after people were already using ClickUp. Their
+   * reviewer list, Note on card and hand-off must not switch off with the
+   * update; somebody who connects next week must not inherit them.
+   */
+  test("first start with a token: the three flows they had stay on, and the file is written", () => {
+    expect(P.settleFirstRun(true)).toBe("seeded");
+    const p = P.clickupPrefs();
+    expect(p.review.assignReviewer).toBe(true);
+    expect(p.flows.noteOnCard).toBe(true);
+    expect(p.handoff).toEqual({ enabled: true, statusNames: [], unassign: "all" });
+    expect(p.sprintListPattern).toBe("^sprint\\b");
+    expect(JSON.parse(readFileSync(file, "utf8")).flows.noteOnCard).toBe(true);
+  });
+
+  test("first start without one: defaults, and connecting later does not seed", () => {
+    expect(P.settleFirstRun(false)).toBe("defaults");
+    expect(P.clickupPrefs()).toEqual(P.defaultPrefs());
+    // The next start, with a token now: the file is already there, so it is theirs.
+    expect(P.settleFirstRun(true)).toBe("kept");
+    expect(P.clickupPrefs().flows.noteOnCard).toBe(false);
+  });
+
+  test("the server settles it at start, before the card watch reads anything", () => {
+    const index = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
+    const settle = index.indexOf('settleFirstRun(hasCredential("clickup"))');
+    expect(settle).toBeGreaterThan(-1);
+    expect(settle).toBeLessThan(index.indexOf("startCardWatch((n) =>"));
+  });
+
+  test("a saved file is never touched, even with a token", () => {
+    P.setClickupPrefs({ flows: { noteOnCard: false }, review: { assignReviewer: false } });
+    expect(P.settleFirstRun(true)).toBe("kept");
+    expect(P.clickupPrefs().review.assignReviewer).toBe(false);
+  });
+
+  /*
+   * A pattern the server tests against names anyone in the workspace can type.
+   * `^(a|a)+$` against "a" x 24 + "b" took 143 ms and doubled per character,
+   * on the one thread the whole app runs on. It compiled, so it was saved.
+   */
+  test("a pattern that backtracks without limit is refused at save", () => {
+    for (const bad of ["^(a|a)+$", "(x+)+y", "^(\\w+\\s?)*$", "(a)\\1", "(?:a|aa)*b"]) {
+      const r = P.applyPrefs(P.defaultPrefs(), { sprintListPattern: bad });
+      expect(r.ok, bad).toBe(false);
+      expect((r as { error: string }).error).toContain("can hang the app");
+    }
+  });
+
+  test("the patterns people actually write still save", () => {
+    for (const ok of ["^sprint\\b", "^(sprint|iteration) \\d+", "clickup|\\bcu-|-cu\\b", "do not edit", "(q[1-4])\\s*plan"]) {
+      expect(P.applyPrefs(P.defaultPrefs(), { readOnlyFieldPattern: ok }).ok, ok).toBe(true);
+    }
+  });
+
+  test("a hand-edited unsafe pattern falls back to the default and answers at once", () => {
+    writeFileSync(file, JSON.stringify({ sprintListPattern: "^(a|a)+$" }));
+    P.__setPrefsPath(file);
+    const src = P.clickupPrefs().sprintListPattern;
+    const t = performance.now();
+    const hit = P.matchPref(src, "^sprint\\b", "a".repeat(40) + "b");
+    expect(hit).toBe(false);
+    expect(performance.now() - t).toBeLessThan(50);
+  });
+
+  test("a name is cut to 200 characters before a pattern sees it", () => {
+    // Bounded, so a slow pattern the heuristic cannot see still costs 200 characters at most.
+    expect(P.matchPref("^x.*y$", "^sprint\\b", "x" + "z".repeat(500) + "y")).toBe(false);
+    expect(P.matchPref("^x.*z$", "^sprint\\b", "x" + "z".repeat(500))).toBe(true);
+  });
 });
 
 describe("the route", () => {

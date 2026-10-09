@@ -453,8 +453,8 @@ export function buildFacets(prs: PrSummary[], f: FilterState, repo?: RepoFacets 
         // dozen faster than reading down it does.
         ...(facet.key === "authors" || facet.key === "assignees" ? { avatar: v } : {}),
         /* The tracker's own colour for the status, so the option reads as the
-           chip it stands for. "Esa lista debe verse así" — the same pills the
-           card shows, not a column of grey words. */
+           chip it stands for: the same pills the card shows, not a column of
+           grey words. */
         ...(facet.key === "cardStatus"
           ? { tint: repo?.cardStatuses?.find((x) => x.status.toLowerCase() === v.toLowerCase())?.color }
           : {}),

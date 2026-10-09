@@ -73,6 +73,7 @@ const hits = (re: RegExp): string[] =>
 const SPANISH = /\b(?:la|el|los|las|un|una|que|de|del|en|es|no|si|al|lo|se|con|por|para|más|pero|como|esto|esta|este|sigue|roto|rota|puedo|puedes|hay|está|estoy|tengo|quiero|cuando|porque|entonces|donde|nada|todo|muy|bien|mal|vale|gracias|movil|móvil|pantalla|boton|botón|aqui|aquí|abajo|arriba|deberia|debería|solo|sólo|ni|ve|otra|hacer|desde|sin|sobre|entre|hasta)\b/gi;
 const COMMENT = /\/\*[\s\S]*?\*\/|\/\/[^\n]*/g;
 const QUOTED = /["“«]([^"”»]{8,260})["”»]/g;
+const QUOTED_SHORT = /["“«]([^"”»]{4,260})["”»]/g;
 
 /* Accented strings that are somebody's PRODUCT, not somebody. Named here rather
    than guessed at, because the alternative is a rule that fires on every theme
@@ -134,6 +135,50 @@ describe("nothing private is in the tree", () => {
       quoted,
       "a comment is quoting somebody's own words. Say what the defect WAS — "
       + "who mentioned it, and in which language, is not documentation.",
+    ).toEqual([]);
+  });
+
+  /*
+   * THE SHORT QUOTE.
+   *
+   * The three-word rule above misses what a person actually types, which is
+   * short: "que son estos??" has two function words, "por cultura, no por
+   * herramienta" has two distinct ones, and an English one — "show me what it
+   * finds as it goes, no?" — has none. All of them sat in comments on the
+   * public branch after the rule above was declared enough. So a quoted run is
+   * also flagged when it
+   *
+   *   has two distinct Spanish function words, or
+   *   carries a character English never uses (an accent, an inverted mark) in
+   *     three words or more — "Menú" alone is a test of accent folding, not a
+   *     message —, or
+   *   ends the way a chat message does: a doubled question mark, or a tag
+   *     question after a comma.
+   *
+   * A heuristic with a known price: a comment that must quote Spanish on
+   * purpose (a test of the detector itself) goes in the one file this skips.
+   */
+  test("a comment does not quote even a short message", () => {
+    const short = scanned.flatMap(({ path, text }) => {
+      const found: string[] = [];
+      for (const comment of text.match(COMMENT) ?? []) {
+        const flat = comment.replace(/\s*\n\s*\*?\s*/g, " ");
+        for (const [, run] of flat.matchAll(QUOTED_SHORT)) {
+          const words = new Set((run.match(SPANISH) ?? []).map((w) => w.toLowerCase()));
+          // Code that happens to sit between two quote marks (`a ?? "x"`, a URL's
+          // `//` read as a comment start) is not a message.
+          if (/[;(){}=]/.test(run)) continue;
+          const chat = /\w\?\?$|,\s*no\?$/.test(run.trim());
+          const accented = /[¿¡áéíóúñÁÉÍÓÚÑ]/.test(run) && run.trim().split(/\s+/).length >= 3;
+          if (words.size >= 2 || accented || chat) found.push(`${path}: ${run.slice(0, 60)}`);
+        }
+      }
+      return found;
+    });
+    expect(
+      short,
+      "a comment is quoting a short message. Say what the defect WAS, in your "
+      + "own words, and keep the measurement.",
     ).toEqual([]);
   });
 

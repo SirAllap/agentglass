@@ -25,7 +25,7 @@ import { browserPlaces, CAN_IMPORT_COOKIES, cookieSources, importCookies, forget
 import { loadProfiles } from "../lib/browserProfiles.ts";
 import { addVisible, allSites, bestSource, dropVisible, lockedWhy, reachable, siteView } from "../lib/cookiePick.ts";
 import { PROVIDERS, DEFAULT_SPRINT_LIST_PATTERN, DEFAULT_READ_ONLY_FIELD_PATTERN, type ProviderSpec, type ProviderStatus, type ProviderState, type ClickUpPrefs, type HandoffUnassign } from "../../../shared/providers.ts";
-import { clickupPrefs, clickupPrefsSaved } from "../lib/clickupPrefs.ts";
+import { clickupPrefs, clickupPrefsSaved, __forgetClickupPrefs } from "../lib/clickupPrefs.ts";
 import { __forgetClickupSetup } from "../lib/clickupSetup.ts";
 import { forgetCards } from "../lib/prCardStore.ts";
 import { DEFAULT_CARD_SKILL_PATTERN } from "../../../shared/cardSkills.ts";
@@ -3143,7 +3143,7 @@ function ProviderCard({ spec, status, checking, onChanged }: {
     // Cleared on success and only on success: a refused token is usually one
     // that was pasted short, and retyping it is a chore nobody needs.
     setToken(""); setNote(null);
-    if (spec.id === "clickup") __forgetClickupSetup();
+    if (spec.id === "clickup") { __forgetClickupSetup(); __forgetClickupPrefs(); }
     await onChanged();
   };
 
@@ -3182,7 +3182,7 @@ function ProviderCard({ spec, status, checking, onChanged }: {
             <span className="block mt-0.5 text-[11px]" style={{ color: "var(--text3)" }}>{checked}</span>
           )}
           {/* Half of a provider can be down while the other half looks fine —
-              the ClickUp card bell fails on its own three-minute timer and
+              the ClickUp card bell fails on its own six-minute timer and
               used to do it in total silence (T27). Warning-coloured rather
               than error-coloured and UNDER the detail, because it qualifies
               the verdict instead of being it: a connected row with a broken
@@ -3243,7 +3243,7 @@ function ProviderCard({ spec, status, checking, onChanged }: {
             onClick={async () => {
               setBusy(true); await api.providerDisconnect(spec.id, { forgetBoards }); setBusy(false);
               // The sidebar's copies of "connected" and of each card are held for a minute.
-              __forgetClickupSetup(); forgetCards();
+              __forgetClickupSetup(); __forgetClickupPrefs(); forgetCards();
               setConfirming(false); setForgetBoards(false); setSpaces(null); await onChanged();
             }}
             className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"

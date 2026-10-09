@@ -405,7 +405,7 @@ function GraphCell({ row, width, selected }: { row?: GraphRow; width: number; se
           if (l.from > cap && l.to > cap) return null;
           /* THIS row's own line is drawn full strength and a touch thicker;
              every other branch passing through is dimmed to less than half.
-             That is the answer to "es difícil la triangulación": on a screen
+             That answers how hard it is to follow a line to its commit: on a screen
              with ten lanes, all of them the same weight, there is nothing
              joining a line to the commit it belongs to. */
           const mine = l.from === dotLane || l.to === dotLane;

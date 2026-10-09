@@ -3,8 +3,8 @@
  *
  * ClickUp has no text search, so this reads the workspace itself: three
  * sequential pages of a workspace with thousands of cards. Answering only at
- * the end is a spinner where a filling list should be — "besides, it takes
- * FOREVER… at least show me what it's finding as it goes, no?".
+ * the end is a spinner where a filling list should be: a slow search that
+ * shows nothing until it is finished.
  *
  * The transport is one JSON object per line. What this pins is the reading of
  * it, because that is where the mistakes live: a chunk that splits a line in

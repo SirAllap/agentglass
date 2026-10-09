@@ -40,6 +40,33 @@ export { DEFAULT_CARD_SKILL_PATTERN, DEFAULT_SPRINT_LIST_PATTERN, DEFAULT_READ_O
 const MAX_TEXT = 200;
 const MAX_ITEMS = 20;
 
+/**
+ * A pattern that can take exponential time on a name it does not match. Measured
+ * with Bun: `^(a|a)+$` against "a" x 24 + "b" takes 143 ms and doubles with each
+ * further character; the names it is tested against are typed by anyone in the
+ * workspace, and the test runs on the server's only thread.
+ *
+ * A heuristic, not a proof. It refuses what that blow-up needs: a group that
+ * holds an alternation or a quantifier and is itself repeated without a bound,
+ * and a backreference. Nested bounded repeats (`(a{1,3}){1,3}`) and overlapping
+ * adjacent quantifiers (`a*a*a*b`) are polynomial and are not caught here; the
+ * length cap in `matchPref` is what bounds those.
+ */
+export function patternProblem(src: string): string | null {
+  if (/\\[1-9]|\\k</.test(src)) return "uses a backreference";
+  for (const m of src.matchAll(/\(((?:[^()\\]|\\.)*)\)\s*(?:[+*]|\{\d+,\d*\})/g)) {
+    if (/[+*|]|\{\d+,/.test(m[1]!.replace(/\\./g, ""))) return "repeats a group that already repeats or branches";
+  }
+  return null;
+}
+
+/** The longest name a saved pattern is tested against. Names are a few words. */
+const MAX_TESTED = 200;
+/** Test a saved pattern against a name typed by somebody else. */
+export function matchPref(src: string, fallback: string, name: string): boolean {
+  return prefPattern(src, fallback).test(name.slice(0, MAX_TESTED));
+}
+
 /** A saved pattern, compiled once per source. Falls back to `fallback` when it
  *  does not compile: a hand-edited file must not break the board it applies to. */
 const compiled = new Map<string, RegExp>();
@@ -47,7 +74,10 @@ export function prefPattern(src: string, fallback: string): RegExp {
   const key = `${src}\u0000${fallback}`;
   let re = compiled.get(key);
   if (!re) {
-    try { re = new RegExp(src || fallback, "i"); } catch { re = new RegExp(fallback, "i"); }
+    try {
+      if (src && patternProblem(src)) throw new Error("unsafe");
+      re = new RegExp(src || fallback, "i");
+    } catch { re = new RegExp(fallback, "i"); }
     compiled.set(key, re);
   }
   return re;
@@ -100,6 +130,8 @@ function pattern(name: string, v: unknown, fallback: string): Res<string> {
   try { new RegExp(t.value, "i"); } catch (e) {
     return bad(`${name} is not a valid pattern: ${(e as Error).message}`);
   }
+  const problem = patternProblem(t.value);
+  if (problem) return bad(`${name} ${problem}, which can hang the app on a long name`);
   return { ok: true, value: t.value };
 }
 
@@ -187,6 +219,43 @@ export function clickupPrefs(): ClickUpPrefs {
   } catch { /* unreadable file: the defaults are the app as it was */ }
   cache = prefs;
   return prefs;
+}
+
+/**
+ * The first start after the settings existed, decided once.
+ *
+ * A person who already had ClickUp connected had the reviewer list, the Note on
+ * card and the hand-off to the QA column; the defaults above switch all three
+ * off, so an update would take them away until Settings was opened. So when
+ * there is no file and a token exists, the file is written with those three on
+ * — the hand-off clearing every assignee, as it always did — and every other
+ * key at its default.
+ *
+ * Everyone else gets the defaults written as a marker, and that is the point of
+ * writing anything at all: without it the first start with no token and the
+ * first start after connecting look the same, and somebody who connected today
+ * would be handed another team's habits. The file is read by nothing but this
+ * app, and a fresh machine sees no difference.
+ *
+ * The ceiling: it runs once per start, so a file deleted by hand while a token
+ * exists is seeded again on the next start.
+ */
+export function settleFirstRun(connected: boolean): "seeded" | "defaults" | "kept" {
+  const p = path();
+  if (existsSync(p)) return "kept";
+  const first = defaultPrefs();
+  if (connected) {
+    first.handoff.enabled = true;
+    first.handoff.unassign = "all";
+    first.review.assignReviewer = true;
+    first.flows.noteOnCard = true;
+  }
+  try {
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, JSON.stringify(first, null, 2) + "\n");
+  } catch { return "kept"; /* unwritable: the defaults stand, and the next start asks again */ }
+  cache = undefined;
+  return connected ? "seeded" : "defaults";
 }
 
 /** Validate, merge and write. Nothing is written when anything is refused. */

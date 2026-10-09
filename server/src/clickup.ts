@@ -21,7 +21,7 @@ import { cardIdDigits, mentionsCardId } from "../../shared/cardRef.ts";
 import { matchesQuery, mergeRequestNumber } from "../../shared/taskref.ts";
 import * as Index from "./clickupindex.ts";
 import { writesAllowed } from "./clickupviews.ts";
-import { clickupPrefs, prefPattern, DEFAULT_SPRINT_LIST_PATTERN, DEFAULT_READ_ONLY_FIELD_PATTERN } from "./clickupPrefs.ts";
+import { clickupPrefs, matchPref, DEFAULT_SPRINT_LIST_PATTERN, DEFAULT_READ_ONLY_FIELD_PATTERN } from "./clickupPrefs.ts";
 import { secretFor, annotate, redacted, fingerprint } from "./credentials.ts";
 import { markdownToDelta, type MentionPerson } from "./clickupDelta.ts";
 import type {
@@ -329,7 +329,7 @@ const SPRINT_DATED = /\(\s*\d{1,4}[/\-.]\d{1,2}[^)]*[–—-][^)]*\)\s*$/;
  */
 export const looksLikeSprint = (name: string): boolean => {
   const n = name.trim();
-  return !!n && (prefPattern(clickupPrefs().sprintListPattern, DEFAULT_SPRINT_LIST_PATTERN).test(n) || SPRINT_DATED.test(n));
+  return !!n && (matchPref(clickupPrefs().sprintListPattern, DEFAULT_SPRINT_LIST_PATTERN, n) || SPRINT_DATED.test(n));
 };
 
 /** The sprint a card is in, or nothing. Its own list counts: a card can live
@@ -768,6 +768,7 @@ async function sweepWorkspace(
 ): Promise<CallResult<SweptTask[]> & { partial?: boolean; reach?: Reach }> {
   const token = secretFor("clickup");
   if (!token) return { ok: false, error: "ClickUp is not connected" };
+  const gen = credGen;
   const me = redacted("clickup");
   if (!me?.workspaceId) return { ok: false, error: "No ClickUp workspace chosen yet" };
   const held = withBodies ? sweepBodies : sweep;
@@ -833,6 +834,8 @@ async function sweepWorkspace(
   // A page that fails when others worked is still an answer: better a partial
   // search that says so than a minute and an error.
   if (pages.every((r) => !r.ok)) return { ...pages[0]!, data: undefined };
+  // Disconnected while the pages were in flight: nothing of them is written down.
+  if (gen !== credGen) return { ok: false, error: "ClickUp is not connected" };
   /* "That says so" — and until now nothing did. A sweep missing a page came
      back looking exactly like a complete one, was stored in the cache as
      complete, and answered every question for the next ten minutes from a
@@ -916,8 +919,8 @@ export function matchesText(t: Pick<ProviderTask, "title" | "customId" | "id" | 
 /**
  * The same search, reported as it goes.
  *
- * "at least show me what it finds as it goes, no?" — and the sweep is
- * three sequential pages of a workspace with thousands of cards, so the
+ * A search that answers only at the end made a person watch a spinner. The
+ * sweep is three sequential pages of a workspace with thousands of cards, so the
  * difference between answering per page and answering at the end is the
  * difference between a list that fills and a spinner. Matching runs on each
  * page as it lands; the caller decides what to do with a partial answer.
@@ -1183,6 +1186,30 @@ const TTL_MS = 60_000;
 
 export function __reset(): void { snap = null; budget = null; }
 
+/**
+ * Bumped by `forgetAll`. A read that started under one credential and lands
+ * after a disconnect compares the number it started with and drops its result,
+ * so nothing it fetched is written back into a machine that has just forgotten.
+ */
+let credGen = 0;
+export function credentialGeneration(): number { return credGen; }
+
+/**
+ * Everything read with the credential, from memory. Disconnect and connect both
+ * call it: after a disconnect `findCard` would otherwise answer from its minute
+ * of cache, and a reconnect to another account would search the previous
+ * workspace's cards and mention its people for up to an hour.
+ */
+export function forgetAll(): void {
+  credGen++; findGen++;
+  __reset();
+  __clearSearchCache();
+  __clearFindCache();
+  __resetCounts();
+  people = null;
+  listViewCache.clear(); spaceTagCache.clear(); taskSpaceCache.clear();
+}
+
 /** The assigned-to-me answer was read under other settings; read it again next time. */
 export function dropAssignedCache(): void { snap = null; }
 const reset = __reset;
@@ -1231,7 +1258,10 @@ export async function clickupTasks(force = false): Promise<ClickUpSnapshot> {
       };
       return snap;
     }
+    const gen = credGen;
     const r = await fetchTasks(token, workspaceId, userId);
+    // Disconnected while this was in flight: hand back nothing and keep nothing.
+    if (gen !== credGen) return { at: Date.now(), tasks: [], more: false, error: "ClickUp is not connected" };
     if (!r.ok) {
       // Keep what we had. See ClickUpSnapshot.error.
       snap = {
@@ -1784,7 +1814,7 @@ export async function listMeta(
         options: (x.type_config?.options ?? []).map((o) => ({ id: o.id, name: o.name ?? o.label ?? "", ...(o.color ? { color: o.color } : {}) })).filter((o) => o.name),
         // Somebody wrote the warning into the field's own name because the API
         // has nowhere else to put it. Reading it is the least we can do.
-        readOnly: prefPattern(clickupPrefs().readOnlyFieldPattern, DEFAULT_READ_ONLY_FIELD_PATTERN).test(x.name),
+        readOnly: matchPref(clickupPrefs().readOnlyFieldPattern, DEFAULT_READ_ONLY_FIELD_PATTERN, x.name),
       })),
     },
   };
@@ -2712,6 +2742,7 @@ async function roster(): Promise<MentionPerson[]> {
 async function workspacePeople(token: string): Promise<MentionPerson[]> {
   if (people && Date.now() - people.at < PEOPLE_TTL_MS) return people.who;
   const me = redacted("clickup");
+  const gen = credGen;
   const r = await teamOnce(token);
   if (!r.ok) return people?.who ?? [];
   const who = (r.data?.teams ?? [])
@@ -2719,6 +2750,7 @@ async function workspacePeople(token: string): Promise<MentionPerson[]> {
     .flatMap((t) => (t.members ?? []).map((m) => m.user).filter(Boolean))
     .filter((u) => u!.id != null && (u!.username ?? "").trim())
     .map((u) => ({ id: Number(u!.id), name: String(u!.username).trim(), email: u!.email || undefined, initials: u!.initials || undefined }));
+  if (gen !== credGen) return [];
   people = { at: Date.now(), who };
   return who;
 }
@@ -3068,7 +3100,7 @@ export async function rawListTasks(
 /**
  * A card you know the number of, which is not the same as a board you work from.
  *
- * "What was 20542 again?" is a question with no board attached: the card is on
+ * "What was ORBIT-1042 again?" is a question with no board attached: the card is on
  * some other list, in a project you are not in, and adding that whole board to
  * look at one row is absurd. So one card can be fetched on its own.
  *
@@ -3478,6 +3510,7 @@ export async function tagsForTask(taskId: string): Promise<CallResult<string[]>>
   const hit = spaceTagCache.get(space);
   if (hit && Date.now() - hit.at < SPACE_TAG_TTL_MS) return { ok: true, data: hit.tags };
 
+  const gen = credGen;
   const r = await call<{ tags?: { name?: string }[] }>(`/space/${encodeURIComponent(space)}/tag`, token);
   if (!r.ok) return { ...r, data: undefined };
   const tags = (r.data?.tags ?? [])
@@ -3486,6 +3519,6 @@ export async function tagsForTask(taskId: string): Promise<CallResult<string[]>>
     .sort((a, b) => a.localeCompare(b));
   // Only a real answer is cached: a failure must not become "this space has no
   // tags" for the next half hour.
-  spaceTagCache.set(space, { at: Date.now(), tags });
+  if (gen === credGen) spaceTagCache.set(space, { at: Date.now(), tags });
   return { ok: true, data: tags };
 }

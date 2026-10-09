@@ -321,8 +321,8 @@ export function TriageBoard({
    *
    * The cap keeps the board a glance, and the four it left over used to be a
    * button that sent you to the TABLE — a different surface, sorted
-   * differently, with the lane you were reading nowhere in it. "What is the point
-   * of having the cards, then?" is the right question: the rest of a lane
+   * differently, with the lane you were reading nowhere in it. A board that
+   * sends you elsewhere for the rest of a lane defeats the cards: the rest of a lane
    * belongs in the lane. The board already holds those rows; only the slice was
    * hiding them.
    */

@@ -11,7 +11,7 @@
  *      height the row turns out to be — inside a parent with no width. An
  *      absolutely positioned child gives its parent no width, so the column
  *      collapsed to nothing and the graph drew straight over the commit
- *      subjects. Reported in three words: "encima del texto no".
+ *      subjects: a graph on top of the text.
  *
  * Both are visible in the markup, so they are held here rather than by looking
  * at it again. No DOM: `renderToStaticMarkup` is enough to see a style

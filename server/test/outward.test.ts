@@ -3,9 +3,8 @@
  *
  * The rule every arrangement of agents here runs by is that anything a
  * colleague can see belongs to the person. It was held by each agent
- * remembering it, which worked — the orchestrator running a real project said
- * so, and then said the quiet part: "por cultura, no por herramienta". These
- * are the tests for the tool.
+ * remembering it, which worked — and was a rule held by habit, not by a tool.
+ * These are the tests for the tool.
  *
  * Two failure modes, and they pull against each other. Miss a real push and
  * the gate is decoration. Flag a `gh pr view` and the gate becomes a dialog
