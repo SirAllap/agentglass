@@ -45,7 +45,7 @@ import { flashElement } from "../lib/flash.ts";
 import { shaFromHref } from "../lib/commitLink.ts";
 import { isShortRef, openInApp, wantsExternal } from "../lib/linkRouter.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
-import { Button, FilterField, RefreshButton, ScopeChip, Segmented, Tabs, CTRL_H, EDGE, CHIP_SURFACE, INPUT, INPUT_STYLE, LINE, TL_AVATAR, TL_CSS } from "./workspace/Chrome.tsx";
+import { Button, FilterField, RefreshButton, ScopeChip, Segmented, Tabs, CHIP, CTRL_H, EDGE, CHIP_SURFACE, tintEdge, INPUT, INPUT_STYLE, LINE, TL_AVATAR, TL_CSS } from "./workspace/Chrome.tsx";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import type {
   PrSummary, PrDetail, PrRepoId, PrThread, PrComment, PrReview, PrReviewer, PrCheck, GitRepoRef, FileChange,
@@ -125,7 +125,8 @@ import { useClickupSetup } from "../lib/clickupSetup.ts";
 import { writeBlock } from "../lib/cardWrites.ts";
 import type { ListStatus as CuStatus, ListMember as CuMember, ProviderTask, HandoffUnassign } from "../../../shared/providers.ts";
 import { CloseButton, CloseIcon } from "./CloseButton.tsx";
-import { HIT, ICON } from "../lib/iconSize.ts";
+import { HIT, ICON, MIN_BOX } from "../lib/iconSize.ts";
+import { EDGE_FADE_PX, edgeMask, stepX, useTabStripScroll } from "../lib/tabStrip.ts";
 import { isTrunkBranch, type Stack } from "../lib/prStack.ts";
 import { usePrStacks } from "../lib/usePrStacks.ts";
 import { factsReader, laneMap, rungReader } from "../lib/prStackFacts.ts";
@@ -1491,14 +1492,10 @@ function PinnedCapsule({ pinned, pinState, selected, current, onOpen }: {
   return (
     <div className="absolute left-1/2 -translate-x-1/2 flex items-center pointer-events-none"
       style={{ maxWidth: "40%" }}>
-      <div className="flex items-center gap-1.5 rounded-full pl-2.5 pr-1 py-0.5 min-w-0 overflow-x-auto agx-scroll pointer-events-auto"
-        style={{
-          background: "color-mix(in srgb, var(--bg3) 85%, transparent)",
-          border: EDGE,
-        }}>
+      <div className="flex items-center gap-1.5 min-w-0 pointer-events-auto">
         {/* The tack is the label: it says "pinned" without taking the width a
             word would, and it is the same glyph as the button that put the
-            pull request here. */}
+            pull request here. It stays put while the chips scroll. */}
         {pinned.length === 0
           ? <span className="text-[10px] shrink-0 inline-flex items-center gap-1" style={{ color: "var(--text4)" }}><PinIcon size={ICON.xs} />nothing pinned</span>
           : (
@@ -1506,6 +1503,84 @@ function PinnedCapsule({ pinned, pinState, selected, current, onOpen }: {
               <PinIcon size={ICON.xs} filled />
             </span>
           )}
+        {pinned.length > 0 && (
+          <PinScroller pinned={pinned} pinState={pinState} selected={selected} onOpen={onOpen} />
+        )}
+        {/* The control sits IN the bar it feeds, so pressing it explains the bar
+            the first time — a pin button somewhere else and a strip of numbers
+            up here are two features until you happen to press one and watch the
+            other change. Outside the scroller: it is the one chip that must not
+            slide away with the others. */}
+        {current && (
+          <button
+            onClick={() => togglePin(current.repo, current.number, current.title)}
+            title={currentPinned
+              ? `#${current.number} is on the bar — click to take it off`
+              : `Keep #${current.number} on this bar, one click away from anywhere in this panel`}
+            className={`${CHIP} shrink-0`}
+            style={currentPinned
+              ? { color: "var(--primary-hover)", border: tintEdge("var(--primary)", 45) }
+              : { color: "var(--warning-ink)", border: tintEdge("var(--warning)", 32), background: "color-mix(in srgb, var(--warning) 8%, transparent)" }}>
+            <PinIcon size={ICON.xs} filled={currentPinned} />{currentPinned ? "Pinned" : `Pin #${current.number}`}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Room an arrow takes at an edge of the pin strip, and the fade after it. */
+const PIN_ARROW_W = CTRL_H.compact;
+
+/**
+ * The pinned chips, in a row that scrolls without showing it.
+ *
+ * The native bar drew a thick track inside a header that is 48px tall, and
+ * nothing in the row said what it was for. Here it is hidden (`agw-noscrollbar`,
+ * the terminal tab strip's way) and the three things it did are done by hand:
+ * the wheel moves the row sideways, a lit chip is kept on screen, and a side
+ * with chips past it fades out and shows an arrow that pages that way. The
+ * arrow is drawn over the faded edge, in a zone the mask holds fully
+ * transparent, so it covers no chip and takes no width: the strip is the same
+ * size with or without it, and a chip is never in two places. Both arrows are
+ * always mounted; an edge with nothing hidden only disables its arrow.
+ *
+ * A chip is a `rounded-lg` control at `CTRL_H.regular`, the shape `CHIP` and
+ * `ScopeChip` give the rest of this header. The strip has no box of its own,
+ * as `Segmented` has none: a second outline around chips that already have one
+ * was the capsule.
+ */
+function PinScroller({ pinned, pinState, selected, onOpen }: {
+  pinned: Pin[];
+  pinState: Map<number, PrSummary>;
+  selected: number | null;
+  onOpen: (n: number) => void;
+}) {
+  const hold = PIN_ARROW_W;
+  const strip = useTabStripScroll(selected == null ? null : String(selected), pinned.map((p) => p.number).join(","), hold + EDGE_FADE_PX);
+  const mask = edgeMask(strip.edges, hold);
+  const page = (dir: -1 | 1) => {
+    const el = strip.el;
+    if (!el) return;
+    const to = stepX(el, dir);
+    if (to !== null) el.scrollTo({ left: to, behavior: "smooth" });
+  };
+  const arrow = (dir: -1 | 1) => {
+    const shown = dir < 0 ? strip.edges.start : strip.edges.end;
+    return (
+      <button type="button" onClick={() => page(dir)} disabled={!shown} tabIndex={shown ? 0 : -1} aria-hidden={!shown}
+        aria-label={dir < 0 ? "Show earlier pinned pull requests" : "Show later pinned pull requests"}
+        title={dir < 0 ? "Earlier" : "Later"}
+        className={`absolute top-1/2 -translate-y-1/2 grid place-items-center rounded-lg transition-opacity ${shown ? "opacity-100 agx-chip" : "opacity-0 pointer-events-none"}`}
+        style={{ [dir < 0 ? "left" : "right"]: 0, width: PIN_ARROW_W, height: CTRL_H.compact, color: "var(--text2)" }}>
+        <span style={{ display: "grid", transform: `rotate(${dir < 0 ? 90 : -90}deg)` }}><CaretIcon size={ICON.xs} /></span>
+      </button>
+    );
+  };
+  return (
+    <div className="relative min-w-0 flex">
+      <div ref={strip.ref} className="min-w-0 flex items-center gap-1.5 overflow-x-auto agw-noscrollbar"
+        style={{ maskImage: mask, WebkitMaskImage: mask }}>
         {/*
          * Two actions on one chip: the body opens it, the × takes it off.
          * Taking a pin off used to mean opening the pull request first, which
@@ -1516,61 +1591,46 @@ function PinnedCapsule({ pinned, pinState, selected, current, onOpen }: {
          * one stops receiving clicks in some engines.
          *
          * The title is cut at 96px and only drawn from 1024px up (`lg`): a chip is
-         * number-first, and the bar is 40% of the header, so with six pins it
-         * scrolls sideways (the bar is the scroller) rather than wrapping or
-         * reaching the refresh button.
+         * number-first, and the bar is 40% of the header, so with six pins the
+         * row scrolls sideways rather than wrapping or reaching the refresh
+         * button.
          */}
         {pinned.map((p) => {
           const open = p.number === selected;
           const sum = pinState.get(p.number);
           return (
-            <span key={p.number}
-              className="group flex items-center rounded-full shrink-0"
-              style={open
-                ? { background: "color-mix(in srgb, var(--primary) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }
-                : { border: EDGE }}>
+            <span key={p.number} data-window={String(p.number)}
+              className={`group flex items-center rounded-lg shrink-0 ${open ? "" : "agx-chip"}`}
+              style={{ minHeight: CTRL_H.regular, ...(open
+                ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: tintEdge("var(--primary)", 45) }
+                : { background: CHIP_SURFACE.background, border: EDGE }) }}>
               <button onClick={() => onOpen(p.number)}
                 title={`#${p.number} — ${p.title}`}
                 aria-current={open ? "page" : undefined}
-                className="flex items-center gap-1 min-w-0 rounded-full pl-1.5 pr-1 py-px text-[10px]"
-                style={{ color: open ? "var(--text)" : "var(--text2)" }}>
+                className="flex items-center gap-1.5 min-w-0 rounded-lg pl-2 pr-1 text-[11px] self-stretch"
+                style={{ color: open ? "var(--primary-ink)" : "var(--text2)", fontWeight: open ? 700 : undefined }}>
                 {/* A dot, not a coloured number. Colour alone cannot say "green" to
                     somebody who cannot see green, and the same dot is what the rows
                     in the list use — so the bar and the list agree rather than
                     being two vocabularies. */}
                 {sum && <Dot tint={stateTint(sum)} title={`#${p.number} — ${checksSentence(sum)}`} />}
                 <span className="tabular-nums shrink-0">#{p.number}</span>
-                <span className="hidden lg:inline truncate" style={{ maxWidth: 96, color: "var(--text3)" }}>{p.title}</span>
+                <span className="hidden lg:inline truncate" style={{ maxWidth: 96, color: "var(--text3)", fontWeight: 400 }}>{p.title}</span>
               </button>
               <button
                 onClick={(e) => { e.stopPropagation(); togglePin(p.repo, p.number, p.title); }}
                 title={`Unpin #${p.number}`}
                 aria-label={`Unpin #${p.number}`}
-                className={`leading-none grid place-items-center shrink-0 rounded-full ${open ? "" : "opacity-0 group-hover:opacity-100 focus:opacity-100"}`}
-                style={{ color: "var(--text3)", width: 18, height: 18 }}>
+                className={`leading-none grid place-items-center shrink-0 rounded-md mr-1 ${open ? "" : "opacity-0 group-hover:opacity-100 focus:opacity-100"}`}
+                style={{ color: "var(--text3)", width: MIN_BOX, height: MIN_BOX }}>
                 <CloseIcon size={ICON.xs} />
               </button>
             </span>
           );
         })}
-        {/* The control sits IN the bar it feeds, so pressing it explains the bar
-            the first time — a pin button somewhere else and a strip of numbers
-            up here are two features until you happen to press one and watch the
-            other change. */}
-        {current && (
-          <button
-            onClick={() => togglePin(current.repo, current.number, current.title)}
-            title={currentPinned
-              ? `#${current.number} is on the bar — click to take it off`
-              : `Keep #${current.number} on this bar, one click away from anywhere in this panel`}
-            className="text-[10px] px-2 py-px rounded-full shrink-0 inline-flex items-center gap-1"
-            style={currentPinned
-              ? { color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }
-              : { color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 32%, transparent)", background: "color-mix(in srgb, var(--warning) 8%, transparent)" }}>
-            <PinIcon size={ICON.xs} filled={currentPinned} />{currentPinned ? "Pinned" : `Pin #${current.number}`}
-          </button>
-        )}
       </div>
+      {arrow(-1)}
+      {arrow(1)}
     </div>
   );
 }
