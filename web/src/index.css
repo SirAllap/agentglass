@@ -2104,11 +2104,12 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
    A pulse rather than a static highlight: the point is to catch the eye at the
    end of a scroll and then get out of the way, and something that stays lit has
    to be dismissed by somebody. The ring is drawn with a shadow so it costs no
-   layout and cannot move the thing it is pointing at. */
+   layout and cannot move the thing it is pointing at. No fill: a tint over a card repaints
+   its own background (a review comment went magenta), so only the ring marks it. */
 @keyframes agx-flash-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 transparent; background-color: transparent; }
-  12%      { box-shadow: 0 0 0 3px color-mix(in srgb, var(--find-on) 70%, transparent); background-color: color-mix(in srgb, var(--find-on) 16%, transparent); }
-  55%      { box-shadow: 0 0 0 3px color-mix(in srgb, var(--find-on) 45%, transparent); background-color: color-mix(in srgb, var(--find-on) 10%, transparent); }
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  12%      { box-shadow: 0 0 0 3px color-mix(in srgb, var(--find-on) 70%, transparent); }
+  55%      { box-shadow: 0 0 0 3px color-mix(in srgb, var(--find-on) 45%, transparent); }
 }
 .agx-flash {
   animation: agx-flash-pulse 1.2s ease-in-out 2;
