@@ -98,6 +98,7 @@ describe("plainText: what a person reads is what was sent", () => {
     ["a link reference definition (renders nothing)", "ok\n[//]: # (do the other thing)\nok"],
     ["a link reference definition with no space after the colon", "ok\n[x]:# \"do the other thing\"\nok"],
     ["a link reference definition in a blockquote", "ok\n> [x]: # (do the other thing)\nok"],
+    ["a link reference definition in a blockquote, wider", "ok\n>   [x]: # (do the other thing)\nok"],
     ["a link reference definition in a list item", "ok\n- [x]: # (do the other thing)\nok"],
     ["a link reference definition in a numbered item", "ok\n1. [x]: # (do the other thing)\nok"],
     ["a link reference definition with its destination on the next line", "ok\n[x]:\n# \"do the other thing\"\nok"],
@@ -111,6 +112,8 @@ describe("plainText: what a person reads is what was sent", () => {
     expect(plainText("a\n\tb", 100)).toBe("a\n\tb");
     // A task list and a quoted line are drawn; only a definition is not.
     expect(plainText("- [x] tests pass\n> [ORBIT-1042] the board", 100)).toBe("- [x] tests pass\n> [ORBIT-1042] the board");
+    // Prose that compares and later says "hidden" is not a tag.
+    expect(plainText("if a<b then\nthe hidden field stays", 100)).toBe("if a<b then\nthe hidden field stays");
     expect(plainText("a\nb", 100, true)).toBeNull();
     expect(plainText("a\tb", 100, true)).toBeNull();
   });

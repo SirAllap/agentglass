@@ -524,7 +524,7 @@ const MAX_EMOJI_GLUE = 16;
  * destination on the next line, so the line is matched from its container
  * prefixes to the colon and no further; `hidden` on any tag hides the element.
  */
-const HIDDEN_MARKUP = /<!--|<details\b|<[a-z][^>]*\bhidden\b|^[ \t]{0,3}(?:>[ \t]?|[-*+][ \t]+|\d+[.)][ \t]+)*\[[^\]\n]*\]:/mi;
+const HIDDEN_MARKUP = /<!--|<details\b|<[a-z][^>\n]*\shidden\b|^[ \t]{0,3}(?:>[ \t]*|[-*+][ \t]+|\d+[.)][ \t]+)*\[[^\]\n]*\]:/mi;
 
 /** `owner/name`, or null. */
 export function repoName(raw: unknown): string | null {
