@@ -77,10 +77,10 @@ Read the sentence and do what it says; do not retry the same call.
    one through this channel: a level 3 door only **stages**, opening the dialog
    with its fields filled in, and the person's own click is the effect. There is
    no grant that makes it automatic. It is offered only when the owner has allowed level 3. If the task needs one and no door
-   stages it, say so and let the person do it. The one that exists is `pr.unstick` (level 3): it opens the Unstick dialog on a pull request and
+   stages it, say so and let the person do it. Five exist, all on a pull request. `pr.unstick` (level 3) opens the Unstick dialog and
    nothing else; never offer it on a pull request that is merely slow, the dialog refuses one that is not stuck.
 
-   The stage doors are `pr.merge.stage` (repo, number, method, optional subject
+   The other four are the stage doors: `pr.merge.stage` (repo, number, method, optional subject
    and body), `pr.comment.stage` (repo, number, body), `pr.review.stage` (repo,
    number, verdict `approve`/`request_changes`/`comment`, body: required unless
    approving) and `card.move.stage` (repo, number, status: one the card's list

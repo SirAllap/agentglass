@@ -1059,12 +1059,13 @@ value; only an unset variable is the default. What each level means:
 - **Level 3 only stages.** An entry at level 3 may open a dialog with its fields
   filled in; it may not call a route that writes. The person's click is the
   effect. There are no automatic grants, so `AGENTGLASS_CONTROL_LEVEL=3` lets an
-  agent prepare something and never perform it. Four doors ship, all on one pull
+  agent prepare something and never perform it. Five doors ship, all on one pull
   request: `pr.merge.stage` (method, commit subject and body), `pr.comment.stage`
-  (the text), `pr.review.stage` (verdict and text) and `card.move.stage` (the new
-  status of the card the pull request carries). Each opens the dialog the screen
-  already has, filled in, and nothing more: the merge, the comment, the review and
-  the move happen when the person presses that dialog's own button. What arrived
+  (the text), `pr.review.stage` (verdict and text), `card.move.stage` (the new
+  status of the card the pull request carries) and `pr.unstick` (opens the Unstick
+  dialog and does not run it). Each opens the dialog the screen already has,
+  filled in, and nothing more: the merge, the comment, the review, the move and
+  the unstick happen when the person presses that dialog's own button. What arrived
   is shown as written by the caller (`as` is a label the caller picks, so it is
   quoted, never trusted), in a field the person can edit, under a line saying
   nothing is sent until they press; the confirm button, `Enter` and the chord
