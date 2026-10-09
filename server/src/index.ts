@@ -55,7 +55,8 @@ import { refreshCodexUsage } from "./codexusage.ts";
 import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, onGateChange, typedReason, GATE_MAX_MS, gateFailClosed, denyByRule, allowByRule, validGateId } from "./gate.ts";
 import { budgetHoldFor } from "./budget.ts";
 import { gateCwd, gateRuleFor } from "./gaterules.ts";
-import { parseControlCmd, controlId } from "./control.ts";
+import { parseControlCmd, controlId, awaitControl, settleControl, parseReply, nextControlRid, callerRequestId, CONTROL_TIMEOUT_ERROR } from "./control.ts";
+import { isReadAction } from "../../shared/uiActions.ts";
 import { outwardAction, outwardLine } from "./outward.ts";
 import { listLanes } from "./lanes.ts";
 import { gateLane, dropBrowserTarget, askBrowser, browserReadyCount, exportAudit, noteBrowserManager, noteBrowserReady, parseAsk, setBrowserSink, settleBrowser, type BrowserOp, runSteps, waitForEvents, recordFrames, traceRecording, auditAsScript, downloadFile, runLanes, withObservation, parseScrape, runScrape } from "./browserdrive.ts";
@@ -2191,7 +2192,7 @@ const UNDERSTUDY_MACHINE = new Set([
   "/ingest", "/browser/ready", "/statusline", "/v1/traces", "/otlp/v1/traces", "/v1/logs", "/otlp/v1/logs",
   "/desk/claim",
 ]);
-const UNDERSTUDY_BLIND = new Set(["/control", "/providers", "/pair", ...UNDERSTUDY_MACHINE]);
+const UNDERSTUDY_BLIND = new Set(["/control", "/control/result", "/providers", "/pair", ...UNDERSTUDY_MACHINE]);
 function understudyBlind(pathname: string): boolean {
   return UNDERSTUDY_BLIND.has(pathname) || UNDERSTUDY_BLIND_PREFIXES.some((p) => pathname.startsWith(p));
 }
@@ -3715,9 +3716,43 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         audit(false, "no window");
         return json({ ok: false, error: "no window" }, 503);
       }
-      broadcast({ type: "control", data: cmd });
-      audit(true);
-      return json({ ok: true, windows: clients.size });
+      /*
+       * A command that carries an `id`, and every read (a read with no answer is
+       * nothing), is held until a window says what it did: {ok, applied, value?,
+       * error?}, `ok` = a window took it, `applied` = it ran. Without either, the
+       * old fire-and-forget answer is unchanged. The request id the windows echo
+       * is minted by the server, not the caller's: the caller's `id` is only a
+       * label handed back to it. The audit line is written when the window
+       * answers (or the wait runs out), so it carries the verdict.
+       */
+      const label = callerRequestId((b as { id?: unknown }).id);
+      const asks = label !== null || (cmd.cmd === "ui" && isReadAction(cmd.do));
+      if (!asks) {
+        broadcast({ type: "control", data: cmd });
+        audit(true);
+        return json({ ok: true, windows: clients.size });
+      }
+      const rid = nextControlRid();
+      const reply = await awaitControl(rid, () => broadcast({ type: "control", data: cmd, rid }));
+      audit(reply.ok && reply.applied, reply.error);
+      return json({ ...reply, ...(label ? { id: label } : {}) }, reply.error === CONTROL_TIMEOUT_ERROR ? 504 : 200);
+    }
+
+    /*
+     * A window answering a command it was handed (see POST /control). NOT an
+     * agent-facing route: it is the window's call, behind the same trustedCaller
+     * gate as /browser/result, and what keeps one caller from answering another's
+     * ask is the request id, which only travels on the window sockets. The first
+     * answer wins; a second, a late one and an unknown id are all `known: false`,
+     * which is ordinary (two windows were open, or the wait ran out).
+     */
+    if (pathname === "/control/result" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: unknown = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const reply = parseReply(b);
+      if (!reply) return json({ ok: false, error: "not a reply" }, 400);
+      return json({ ok: true, known: settleControl((b as { rid?: unknown }).rid, reply) });
     }
 
     /*

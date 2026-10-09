@@ -1969,8 +1969,10 @@ export type WsFrame =
    *  the OS on macOS and Windows too, not just Linux. */
   | { type: "alert"; data: AlertNote }
   /** A UI-navigation command from POST /control, rebroadcast to every client.
-   *  It changes what is *shown*, never the fleet. */
-  | { type: "control"; data: ControlCmd }
+   *  It changes what is *shown*, never the fleet. `rid` is present when the
+   *  sender is waiting for an answer: the window replies with POST
+   *  /control/result carrying the same id. */
+  | { type: "control"; data: ControlCmd; rid?: string }
   /** The understudy scorecard, recomputed and pushed whole. It reports what
    *  the understudy WOULD have done and how often that matched; it commands
    *  nothing, which is why it rides the same read-only socket. */

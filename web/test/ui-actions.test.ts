@@ -7,9 +7,11 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { globalStubs } from "./stubGlobal.ts";
-import { UI_ACTIONS } from "../../shared/uiActions.ts";
+import { UI_ACTIONS, READ_PANELS } from "../../shared/uiActions.ts";
+import { DEFAULT_NOTIFY_PREFS } from "../../shared/notifyPrefs.ts";
+import type { Sources, AppSlice } from "../src/lib/uiSnapshots.ts";
 import type { ControlCmd } from "../../shared/types.ts";
-import { runControl, nextThemeId, UI_HANDLERS, type UiCtx } from "../src/lib/uiActions.ts";
+import { runControl, controlReply, nextThemeId, UI_HANDLERS, type UiCtx } from "../src/lib/uiActions.ts";
 import { onOpenSettings } from "../src/lib/openSettings.ts";
 import { onFinderAt, type FinderTarget } from "../src/lib/finderTarget.ts";
 import { peekChatIntent, takeChatIntent } from "../src/lib/chatIntent.ts";
@@ -169,5 +171,75 @@ describe("nextThemeId", () => {
 describe("the table", () => {
   it("has a function for every door", () => {
     for (const id of Object.keys(UI_ACTIONS)) expect(typeof (UI_HANDLERS as Record<string, unknown>)[id], id).toBe("function");
+  });
+});
+
+/* ── reads ───────────────────────────────────────────────────────────────── */
+
+const slice: AppSlice = {
+  view: "chat", theme: "graphite", scale: 1, workspace: null, windowMs: 1, filter: { app: "", type: "", provider: "" },
+  modals: { settings: false, palette: false, help: false, stats: false, skills: false, search: false, finder: false, windows: false, projectPicker: false, machine: null },
+  selectedEvent: null, session: null, peek: null, finderPath: null,
+};
+const fixture: Sources = {
+  app: () => slice, chats: () => ({ list: [], activeId: "" }), bench: () => benchState(), gates: () => [],
+  diff: () => ({ split: true, wrap: false, noWhitespace: false, theme: "auto" }),
+  terminal: () => ({ font: "", size: 13, cursor: "block", lineHeight: 1, scrollback: 4000, wordSeparators: " ", copyOnSelect: true, noteEditor: "builtin" }),
+  browser: () => ({ home: "https://duckduckgo.com", engine: "duckduckgo", zoomLevel: 0, importHistory: true, importBookmarks: true }),
+  notify: () => DEFAULT_NOTIFY_PREFS,
+};
+
+describe("controlReply — what the window answers", () => {
+  it("ui.state and every ui.read panel answer a snapshot, and call nothing App owns", () => {
+    const k = ctx();
+    k.c.sources = fixture;
+    for (const cmd of [ui("ui.state"), ...READ_PANELS.map((panel) => ui("ui.read", { panel }))]) {
+      const r = controlReply(cmd, k.c);
+      expect(r.ok, JSON.stringify(cmd)).toBe(true);
+      expect(r.applied).toBe(true);
+      expect(Object.keys((r.value ?? {}) as object)).toEqual(expect.arrayContaining(["state", "untrusted"]));
+    }
+    expect(k.calls).toEqual([]);
+  });
+
+  it("a read raises nothing: no setting is opened, no view changes, no chat or git intent is latched, the bench stays shut", () => {
+    const k = ctx();
+    k.c.sources = fixture;
+    let opened = 0;
+    onOpenSettings(() => { opened++; });
+    for (const panel of READ_PANELS) controlReply(ui("ui.read", { panel }), k.c);
+    controlReply(ui("ui.state"), k.c);
+    expect(opened).toBe(0);
+    expect(k.calls).toEqual([]);
+    expect(benchState().open).toBe(false);
+    expect(takeChatIntent()).toBeNull();
+    expect(takeGitModal()).toBeNull();
+    expect(peekRequest()).toBeNull();
+  });
+
+  it("an open answers applied with no value", () => {
+    const k = ctx();
+    expect(controlReply(ui("machine.open", { tab: "ports" }), k.c)).toEqual({ ok: true, applied: true });
+    expect(k.calls).toEqual([["setMachine", "ports"]]);
+  });
+
+  it("a frame that names no door, or fails the second look, answers not-applied with a reason", () => {
+    const k = ctx();
+    expect(controlReply({ cmd: "ui", do: "settings.set", args: {} } as unknown as ControlCmd, k.c)).toMatchObject({ ok: false, applied: false });
+    expect(controlReply(ui("ui.read", { panel: "../x" }), k.c)).toMatchObject({ ok: false, applied: false });
+  });
+
+  it("a window that cannot describe itself says so, and a throwing handler is an error and not a crash", () => {
+    const k = ctx();
+    expect(controlReply(ui("ui.state"), k.c)).toEqual({ ok: false, applied: false, error: "this window cannot describe itself" });
+    k.c.sources = { ...fixture, chats: () => { throw new Error("store exploded"); } };
+    expect(controlReply(ui("ui.read", { panel: "chat" }), k.c)).toEqual({ ok: false, applied: false, error: "store exploded" });
+  });
+
+  it("the reply survives the wire: JSON in, the same JSON out", () => {
+    const k = ctx();
+    k.c.sources = fixture;
+    const r = controlReply(ui("ui.state"), k.c);
+    expect(JSON.parse(JSON.stringify(r))).toEqual(r);
   });
 });

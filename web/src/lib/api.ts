@@ -8,6 +8,7 @@ import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, Di
 import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr } from "../../../shared/providers.ts";
 import { DEFAULT_NOTIFY_PREFS, type NotifyPrefs } from "../../../shared/notifyPrefs.ts";
 import type { CheckMetric } from "../../../shared/checkBaseline.ts";
+import type { UiReply } from "../../../shared/uiActions.ts";
 
 /** A partial update: any group may name just the keys it changes. */
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? Partial<T[K]> : T[K] };
@@ -1046,6 +1047,9 @@ const realApi = {
    *  holding that agent's request open until this lands — see browserdrive.ts. */
   browserResult: (r: { client?: string; id: string; ok: boolean; value?: unknown; error?: string; diagnosis?: unknown }) =>
     post<{ ok: boolean; known: boolean }>("/browser/result", r),
+  /** Answer a command the server is holding open (POST /control with an `id`, or a
+   *  read). Not an agent-facing call: the window makes it, under its own credentials. */
+  controlResult: (r: { rid: string } & UiReply) => post<{ ok: boolean; known: boolean }>("/control/result", r),
   /** Stop offering a project in the picker, or offer it again. Nothing on disk
    *  is touched — see config.ts. */
   hideProject: (path: string, hidden: boolean) => post<{ ok: boolean; hidden: string[]; persisted: boolean; error?: string }>("/projects/hidden", { path, hidden }),
@@ -2361,6 +2365,7 @@ const demoApi: typeof realApi = {
   browserLanes: () => D({ ok: true, lanes: [] as LaneRow[] }),
   browserReady: (_client: string, _on: boolean, _lanes?: string[]) => D({ ok: true }),
   browserResult: (_r: { client?: string; id: string; ok: boolean; value?: unknown; error?: string; diagnosis?: unknown }) => D({ ok: true, known: false }),
+  controlResult: (_r: { rid: string } & UiReply) => D({ ok: true, known: false }),
   hideProject: (_path: string, _hidden: boolean) => D({ ok: false, hidden: [] as string[], persisted: false, error: "unavailable in the demo" }),
   gitTree: (root: string) => D(demo.gitTree(root)),
   // There is no git behind a demo build, so the Diff view lands on its own

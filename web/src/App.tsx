@@ -18,7 +18,10 @@ import { usePoll } from "./lib/usePoll.ts";
 import { refusalFinal, useCoverHold } from "./lib/cover.ts";
 import { initialTheme, applyTheme, THEMES } from "./lib/themes.ts";
 import { subscribeControl } from "./lib/controlBus.ts";
-import { runControl, type UiCtx } from "./lib/uiActions.ts";
+import { controlReply, type UiCtx } from "./lib/uiActions.ts";
+import { answerControl } from "./lib/controlAnswer.ts";
+import { liveSources } from "./lib/uiSnapshotSources.ts";
+import type { AppSlice } from "./lib/uiSnapshots.ts";
 import { actionFor } from "./lib/keybindings.ts";
 import { claimFind, findChordIsOursToTake, openFind, scopeHolding } from "./lib/findScope.ts";
 import { FindBar } from "./components/FindBar.tsx";
@@ -1020,6 +1023,22 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // What the window shows right now, for the agent's reads (lib/uiSnapshots.ts).
+  // Plain data, rebuilt on render and read only when asked: no state of its own,
+  // no effect, nothing subscribed.
+  const appSliceRef = useRef<AppSlice>(null as unknown as AppSlice);
+  appSliceRef.current = {
+    view: wsView, theme, scale, workspace: workspace ?? null, windowMs, filter,
+    modals: {
+      settings: settingsOpen, palette: paletteOpen, help: helpOpen, stats: statsOpen, skills: skillsOpen, search: searchOpen,
+      finder: filesOpen, windows: windowsOpen, projectPicker: projectOpen, machine,
+    },
+    selectedEvent: selected ? { id: String(selected.id), type: selected.hook_event_type, app: selected.source_app } : null,
+    session: sessionView,
+    peek: peek ? { path: peek.path } : null,
+    finderPath: finderTarget?.path ?? null,
+  };
+
   // External control (a Stream Deck, a phone): the live socket relays a command
   // from POST /control and we run it here — through the very setters the keyboard
   // handler above uses, so there is one navigation path, not two. Subscribes once
@@ -1061,8 +1080,15 @@ export default function App() {
       setMachine,
       setProjectOpen,
       setWindowsOpen,
+      // What ui.state / ui.read describe. Read through the ref App refreshes on
+      // every render, because this effect runs once and would otherwise answer
+      // with the first render's state.
+      sources: liveSources(() => appSliceRef.current),
     };
-    return subscribeControl((cmd) => { runControl(cmd, ctx); });
+    return subscribeControl((cmd, rid) => {
+      const reply = controlReply(cmd, ctx);
+      answerControl(rid, reply, api.controlResult, document.visibilityState === "hidden");
+    });
   }, []);
 
   // /stats carries the server's process start; fall back to page mount for

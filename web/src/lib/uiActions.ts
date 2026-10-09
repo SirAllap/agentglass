@@ -13,7 +13,7 @@
  * phone, a tab with another project): every seam here is a no-op with nothing
  * listening, which is why none of these throws.
  */
-import { UI_ACTIONS, parseArgs, uiOf, type UiActionId, type UiArgs } from "../../../shared/uiActions.ts";
+import { UI_ACTIONS, parseArgs, uiOf, type UiActionId, type UiArgs, type UiReply } from "../../../shared/uiActions.ts";
 import type { ControlCmd, ViewId } from "../../../shared/types.ts";
 import { openSettings } from "./openSettings.ts";
 import { openFinderAt } from "./finderTarget.ts";
@@ -23,6 +23,7 @@ import { toggleBench, showFile, showBoard } from "./benchStore.ts";
 import { openPeek } from "./openPeek.ts";
 import { THEMES } from "./themes.ts";
 import type { MachineTab } from "../components/MachinePanel.tsx";
+import { PROVIDERS, uiState, type Sources } from "./uiSnapshots.ts";
 
 export interface UiCtx {
   goView(v: ViewId): void;
@@ -36,9 +37,19 @@ export interface UiCtx {
   setMachine(tab: MachineTab): void;
   setProjectOpen(open: boolean): void;
   setWindowsOpen(open: boolean): void;
+  /** Where the reads gather their data (uiSnapshotSources.ts in the window; a
+   *  fixture in a test). Absent in a window that cannot describe itself. */
+  sources?: Sources;
 }
 
-type Handler<Id extends UiActionId> = (a: UiArgs<Id>, ctx: UiCtx) => void;
+/** A handler of an `open` entry returns nothing; a handler of a `read` entry
+ *  returns the snapshot it read, which is what the window answers with. */
+type Handler<Id extends UiActionId> = (a: UiArgs<Id>, ctx: UiCtx) => unknown;
+
+function sourcesOf(ctx: UiCtx): Sources {
+  if (!ctx.sources) throw new Error("this window cannot describe itself");
+  return ctx.sources;
+}
 
 /**
  * The next palette. A name pins one (an unknown name leaves the current one,
@@ -75,14 +86,18 @@ export const UI_HANDLERS: { [Id in UiActionId]: Handler<Id> } = {
   "git.modal": (a, c) => { latchGitModal({ which: a.which }); c.goView("git"); },
   "git.compare": (a, c) => { latchGitModal({ which: "compare", base: a.base }); c.goView("git"); },
   "git.blame": (a, c) => { latchGitModal({ which: "blame", path: a.path }); c.goView("git"); },
+  // Reads: stores and pref modules only, nothing is shown, raised or focused.
+  "ui.state": (_a, c) => uiState(sourcesOf(c)),
+  "ui.read": (a, c) => PROVIDERS[a.panel](sourcesOf(c)),
 };
 
 /**
  * Run one control frame in this window. Either spelling (`ui`, or the old
- * `view`/`open`/… bodies) lands on the same handler. Returns the id it ran, or
- * null for a frame that names no door, so a caller can tell a miss from a run.
+ * `view`/`open`/… bodies) lands on the same handler. Returns the id it ran and
+ * what the handler returned, or null for a frame that names no door, so a caller
+ * can tell a miss from a run.
  */
-export function runControl(cmd: ControlCmd, ctx: UiCtx): UiActionId | null {
+export function execControl(cmd: ControlCmd, ctx: UiCtx): { id: UiActionId; value: unknown } | null {
   const u = uiOf(cmd as { cmd: string } & Record<string, unknown>);
   if (!u) return null;
   // A frame is data off a socket, not something this window wrote: the server
@@ -91,6 +106,22 @@ export function runControl(cmd: ControlCmd, ctx: UiCtx): UiActionId | null {
   // not know is refused by uiOf above rather than calling undefined.
   const args = parseArgs(UI_ACTIONS[u.do], u.args);
   if (!args) return null;
-  (UI_HANDLERS[u.do] as (a: unknown, c: UiCtx) => void)(args, ctx);
-  return u.do;
+  return { id: u.do, value: (UI_HANDLERS[u.do] as (a: unknown, c: UiCtx) => unknown)(args, ctx) };
+}
+
+export const runControl = (cmd: ControlCmd, ctx: UiCtx): UiActionId | null => execControl(cmd, ctx)?.id ?? null;
+
+/**
+ * The answer to POST /control/result for one command: what this window did.
+ * `applied` means the handler ran without throwing; a seam with nothing
+ * listening is a no-op by design (see above), so it cannot say more than that.
+ */
+export function controlReply(cmd: ControlCmd, ctx: UiCtx): UiReply {
+  try {
+    const r = execControl(cmd, ctx);
+    if (!r) return { ok: false, applied: false, error: "this window does not know that door" };
+    return { ok: true, applied: true, ...(r.value === undefined ? {} : { value: r.value }) };
+  } catch (e) {
+    return { ok: false, applied: false, error: e instanceof Error ? e.message : "the handler failed" };
+  }
 }

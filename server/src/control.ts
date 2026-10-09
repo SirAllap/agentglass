@@ -48,3 +48,110 @@ export function parseControlCmd(body: unknown): ControlCmd | null {
 export function controlId(cmd: ControlCmd): UiActionId | null {
   return cmd.cmd === "ui" ? cmd.do : idOfLegacy(cmd as { cmd: string } & Record<string, unknown>);
 }
+
+// ── replies ─────────────────────────────────────────────────────────────────
+//
+// A command that carries an `id` (and every read, which is pointless without
+// one) is parked here until a window answers it. The pattern is settleBrowser's
+// in browserdrive.ts: a pending map keyed by an unguessable id, a timeout, the
+// first answer wins and a later one is dropped, and a window that goes away
+// settles what it was holding. What differs is the audience. A browser ask is
+// addressed to ONE window; a control frame goes to every window, because /control
+// has always been a broadcast, so any window may answer and the first to do so
+// settles it. A second window's answer finds nothing parked and is ignored.
+//
+// POST /control/result is how a window answers. It is NOT an agent-facing route:
+// it sits behind the same trustedCaller gate as the window's other calls
+// (/browser/result), and what stops one caller answering another's ask is the
+// request id, which is minted here, travels only on the sockets the windows hold,
+// and is never given to the caller of /control. A caller that has the machine
+// token can already do anything this route can be made to do by ringing /control
+// itself, so the route widens nothing; it is documented so nobody builds an agent
+// feature on it.
+
+import { stripSecrets } from "../../shared/scrub.ts";
+import { UI_REPLY_MAX_BYTES, type UiReply } from "../../shared/uiActions.ts";
+
+/** How long a command waits for a window. A read is a few store lookups, an open
+ *  is one setState; five seconds is a window that is gone or frozen. */
+export const CONTROL_REPLY_MS = 5_000;
+export const CONTROL_TIMEOUT_ERROR = "no window answered in time";
+
+interface Parked { resolve: (r: UiReply) => void; timer: ReturnType<typeof setTimeout> }
+const parked = new Map<string, Parked>();
+let seq = 0;
+
+/** Unguessable, like the browser relay's: a caller that can POST /control/result
+ *  must not be able to answer an ask it was never sent by counting. */
+export const nextControlRid = (): string => `c${++seq}-${crypto.randomUUID()}`;
+
+/**
+ * Park a request and hand the caller its eventual reply. `send` puts the frame on
+ * the sockets; it runs after the request is parked, so an answer that races it
+ * still finds its entry. A timeout settles `{ok:false, applied:false}`.
+ */
+export function awaitControl(rid: string, send: () => void, timeoutMs = CONTROL_REPLY_MS): Promise<UiReply> {
+  return new Promise<UiReply>((resolve) => {
+    const timer = setTimeout(() => {
+      parked.delete(rid);
+      resolve({ ok: false, applied: false, error: CONTROL_TIMEOUT_ERROR });
+    }, timeoutMs);
+    parked.set(rid, { resolve, timer });
+    try { send(); } catch {
+      parked.delete(rid);
+      clearTimeout(timer);
+      resolve({ ok: false, applied: false, error: "could not reach a window" });
+    }
+  });
+}
+
+/** Strings in a reply are scrubbed for token-shaped text before the agent sees
+ *  them: the window redacts by construction, this is the second look. */
+function scrub(v: unknown, depth = 0): unknown {
+  if (typeof v === "string") return stripSecrets(v);
+  if (depth > 12 || v === null || typeof v !== "object") return v;
+  if (Array.isArray(v)) return v.map((x) => scrub(x, depth + 1));
+  const o: Record<string, unknown> = {};
+  for (const [k, x] of Object.entries(v as Record<string, unknown>)) o[k] = scrub(x, depth + 1);
+  return o;
+}
+
+/** What a window posted, as a reply: a closed shape, bounded, scrubbed. */
+export function parseReply(b: unknown): UiReply | null {
+  if (!b || typeof b !== "object" || Array.isArray(b)) return null;
+  const r = b as Record<string, unknown>;
+  const reply: UiReply = { ok: r.ok === true, applied: r.applied === true };
+  if (typeof r.error === "string") reply.error = stripSecrets(r.error).slice(0, 300);
+  if (r.value !== undefined) {
+    let size = 0;
+    try { size = JSON.stringify(r.value)?.length ?? 0; } catch { return { ok: false, applied: false, error: "reply was not plain data" }; }
+    if (size > UI_REPLY_MAX_BYTES) return { ok: false, applied: false, error: `reply over ${UI_REPLY_MAX_BYTES / 1024} KB was refused` };
+    reply.value = scrub(r.value);
+  }
+  return reply;
+}
+
+/** A window answering. True when it settled something; false for an unknown id,
+ *  one already settled, or one that timed out (all ordinary, none an error). */
+export function settleControl(rid: unknown, reply: UiReply): boolean {
+  if (typeof rid !== "string") return false;
+  const p = parked.get(rid);
+  if (!p) return false;
+  parked.delete(rid);
+  clearTimeout(p.timer);
+  p.resolve(reply);
+  return true;
+}
+
+/** For tests, and for a shutdown that should not leave timers behind. */
+export function resetControl(): void {
+  for (const [, p] of parked) { clearTimeout(p.timer); p.resolve({ ok: false, applied: false, error: "cancelled" }); }
+  parked.clear();
+  seq = 0;
+}
+export const pendingControlCount = (): number => parked.size;
+
+/** A caller's own label for a request, echoed back: a slug, so it can be logged. */
+export function callerRequestId(raw: unknown): string | null {
+  return typeof raw === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/.test(raw) ? raw : null;
+}

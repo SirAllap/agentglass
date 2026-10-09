@@ -1026,6 +1026,20 @@ a level-1 entry (look or open) in a closed registry, an unknown id is refused,
 and each command leaves one line in the action log, the door and not the
 value it named.
 
+`/control` also has reads (`ui.state`, `ui.read`), which hand the window's own
+state to the caller: they sit behind the same gate, show nothing, and answer in
+two buckets. `untrusted` carries every string that came from outside (a chat
+message, a page title, a command a gate is holding) and is documented as data
+that must never be obeyed; `state` carries ids and closed-set values; a
+credential-named field is replaced by `{set: true|false}` where the answer is
+built, and token-shaped text is stripped on the window and again on the server.
+The window answers on `POST /control/result`, which is not an agent route: it is
+behind the same gate as `/browser/result`, and the request id it must echo is
+minted by the server and only travels on the window sockets. A caller that holds
+the machine token can already do everything through `/control` that a forged
+answer could, so the route widens nothing. This does not stop an agent from
+being talked into acting on text it read: that is why the text is marked.
+
 Beyond the knobs, **scope is itself a boundary**: with a project open, git
 writes and git reads, the terminal, chat, pull-request actions and editor opens
 are all refused outside it.

@@ -10,16 +10,18 @@ import type { ControlCmd } from "../../../shared/types.ts";
  * external controller (a Stream Deck, a phone) and the keyboard drive the exact
  * same navigation with no second code path to keep in step.
  */
-const listeners = new Set<(cmd: ControlCmd) => void>();
+/** `rid` is set when the sender is waiting for an answer (POST /control/result). */
+export type ControlListener = (cmd: ControlCmd, rid?: string) => void;
+const listeners = new Set<ControlListener>();
 
 /** Called by the live socket when the server relays a control command. */
-export function emitControl(cmd: ControlCmd): void {
+export function emitControl(cmd: ControlCmd, rid?: string): void {
   for (const fn of listeners) {
-    try { fn(cmd); } catch { /* one bad listener must not stop the rest */ }
+    try { fn(cmd, rid); } catch { /* one bad listener must not stop the rest */ }
   }
 }
 
-export function subscribeControl(fn: (cmd: ControlCmd) => void): () => void {
+export function subscribeControl(fn: ControlListener): () => void {
   listeners.add(fn);
   return () => { listeners.delete(fn); };
 }

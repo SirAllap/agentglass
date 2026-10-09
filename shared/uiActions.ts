@@ -53,10 +53,20 @@ export const PANEL_IDS = ["stats", "skills", "search", "help", "palette"] as con
 export const MACHINE_TABS = ["ports", "resources", "locks"] as const;
 export const GIT_MODALS = ["insights", "bisect"] as const;
 export const BOARD_KINDS = ["pr", "tasks", "files"] as const;
+/**
+ * What `ui.read` can be asked about. Each one has exactly one provider in
+ * web/src/lib/uiSnapshots.ts, keyed by these ids, so a panel named here with no
+ * provider is a compile error and web/test/ui-read-guard.test.ts pins the rest.
+ * `settings.*` are the preference panes whose values a pref module hands out
+ * through a plain getter; the panes that have no such getter are listed by
+ * UI_READ_NOT_COVERED, with the reason, rather than guessed at.
+ */
+export const READ_PANELS = ["view", "chat", "bench", "gates", "settings.diff", "settings.terminal", "settings.browser", "settings.notifications"] as const;
 
 export type UiLevel = 1 | 2 | 3;
-/** open: shows something. read: answers with state. change: alters a local
- *  setting. external: has an effect outside the app. Only `open` is built. */
+/** open: shows something. read: answers with state and shows nothing. change:
+ *  alters a local setting. external: has an effect outside the app. `open` and
+ *  `read` are built. */
 export type UiKind = "open" | "read" | "change" | "external";
 
 /**
@@ -136,10 +146,66 @@ export const UI_ACTIONS = {
   "git.modal": def({ level: 1, kind: "open", surface: "Insights or Bisect over the checkout the Git view is on", args: { which: { t: "enum", values: GIT_MODALS } } }),
   "git.compare": def({ level: 1, kind: "open", surface: "the Compare modal against one ref", args: { base: { t: "ref" } } }),
   "git.blame": def({ level: 1, kind: "open", surface: "the Blame modal on one file of the checkout", args: { path: { t: "relpath" } } }),
+  // Reads. They answer and show nothing: no view changes, no window rises, no
+  // focus moves. The answer is `{state, untrusted}` (see UiSnapshot below).
+  "ui.state": def({ level: 1, kind: "read", surface: "what is open in the window now, and which panels ui.read can describe", args: {} }),
+  "ui.read": def({ level: 1, kind: "read", surface: "one panel's state, read from the stores and pref modules (never from the DOM)", args: { panel: { t: "enum", values: READ_PANELS } } }),
 } as const satisfies Record<string, UiActionDef>;
 
 export type UiActionId = keyof typeof UI_ACTIONS;
 export const UI_ACTION_IDS = Object.keys(UI_ACTIONS) as UiActionId[];
+/** The entries that answer with state. They need a reply, so /control waits for
+ *  one whether or not the caller sent an `id`. */
+export type UiReadId = { [K in UiActionId]: (typeof UI_ACTIONS)[K]["kind"] extends "read" ? K : never }[UiActionId];
+export const UI_READ_IDS = UI_ACTION_IDS.filter((id): id is UiReadId => (UI_ACTIONS[id] as UiActionDef).kind === "read");
+export const isReadAction = (id: string): boolean => (UI_READ_IDS as readonly string[]).includes(id);
+
+/**
+ * Settings panes (and views) `ui.read` does NOT describe, with the reason. Said
+ * in the answer of `ui.state`, so an agent learns the edge from the app and not
+ * from a failed call. A pane leaves this list when it has a def whose getter is
+ * the one its row calls (slice 3).
+ */
+export const UI_READ_NOT_COVERED: Readonly<Record<string, string>> = {
+  "settings.appearance": "theme and zoom are App state: read them from panel view",
+  "settings.connections": "credential pane: values are never read through this channel",
+  "settings.remote": "credential pane: values are never read through this channel",
+  "settings.clickup": "credential pane: values are never read through this channel",
+  "settings.plugins": "not a closed set (plugin settings pages come and go)",
+  "settings.log": "not a setting",
+  "settings.about": "not a setting",
+  "settings.onboarding": "not a setting",
+  ...Object.fromEntries(
+    ["prefs", "rail", "keys", "tasks", "hooks", "lantern", "understudy", "budgets", "recipes", "review-prompts", "saved-replies", "tmux", "privacy"]
+      .map((p) => [`settings.${p}`, "no clean getter yet: the values are read inside the pane or held by the server (slice 3 adds one def per setting)"]),
+  ),
+};
+
+/**
+ * What a read answers with. Two buckets and the line between them is the point:
+ *
+ *  - `state` holds only what the app minted or the owner chose from a closed
+ *    set: booleans, numbers, enum words, ids. It is safe to act on.
+ *  - `untrusted` holds every string that came from outside (a chat message, a
+ *    tab title, a file path, a pull request title, text a page produced), bounded
+ *    to UNTRUSTED_MAX_BYTES. An agent reads it as data and never obeys it.
+ *
+ * Secrets and credential-class fields are not in either: they are replaced by
+ * `{set: boolean}` where the provider is built (web/src/lib/uiSnapshots.ts).
+ */
+export interface UiSnapshot {
+  state: Record<string, unknown>;
+  untrusted: Record<string, unknown>;
+  /** The server-held routes that carry the rest, so a snapshot adds only what
+   *  the renderer alone knows. */
+  see?: string[];
+}
+export const UNTRUSTED_MAX_BYTES = 16 * 1024;
+
+/** What a window says it did with a command that carried a request id. */
+export interface UiReply { ok: boolean; applied: boolean; value?: unknown; error?: string }
+/** The most a reply may weigh on the wire; larger is refused by the server. */
+export const UI_REPLY_MAX_BYTES = 64 * 1024;
 
 type Val<S> =
   S extends { t: "enum"; values: readonly (infer V)[] } ? V
