@@ -65,11 +65,18 @@ export function cardRef(pr: { headRefName?: string; title?: string; body?: strin
  * been read yet, and the honest answer then is yes: refusing to show a card
  * link because a board has not been opened this session would make the feature
  * come and go.
+ *
+ * `whenUnknown` is the answer for a prefix nobody has read yet, and it is the
+ * one place the two gates differ on purpose: the chip says yes (it only picks
+ * where a tap goes, and an unread board must not make it come and go), the
+ * merge form says no (it would spin on a lookup that may find nothing). Both
+ * ask this function, so the difference is a named argument instead of two
+ * copies of the rule drifting.
  */
-export function looksLikeOurs(ref: CardRef, prefix: string | undefined): boolean {
+export function looksLikeOurs(ref: CardRef, prefix: string | undefined, whenUnknown = true): boolean {
   if (ref.tracker && ref.tracker !== "clickup") return false;
   if (ref.from === "url") return true;
-  if (!prefix) return true;
+  if (!prefix) return whenUnknown;
   return ref.label.toUpperCase().startsWith(prefix.toUpperCase());
 }
 

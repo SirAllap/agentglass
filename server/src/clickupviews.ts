@@ -17,7 +17,7 @@
  * again and the panel opens empty; on disk, it opens with what you last saw and
  * corrects itself a second later. Stale by a few minutes beats blank.
  */
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { ASSIGNED_VIEW_ID, ASSIGNED_VIEW_NAME } from "../../shared/providers.ts";
@@ -263,9 +263,11 @@ export const cachedFor = (id: string): CachedView | undefined => load().cache[id
  * list's own statuses beside its tasks, so this is a read of a file the app
  * keeps anyway rather than a call to anybody.
  *
- * In workflow order and deduplicated by name across boards, because that is
- * how a person reads them — To do, then Shaping, then Ready for design — and
- * two boards sharing a status share its place in the line.
+ * In workflow order and deduplicated by name and type across boards, because
+ * that is how a person reads them — Backlog, then Planned, then In progress
+ * — and two boards sharing a status share its place in the line. The type is
+ * part of the key: a "Review" that is open on one list and done on another is
+ * two statuses to whatever filters on them.
  */
 export function knownStatuses(): ListStatus[] {
   const s = load();
@@ -273,8 +275,11 @@ export function knownStatuses(): ListStatus[] {
   const seen = new Set<string>();
   for (const v of savedViews()) {
     for (const st of s.cache[v.id]?.statuses ?? []) {
-      const key = st.status.trim().toLowerCase();
-      if (!key || seen.has(key)) continue;
+      const name = st.status.trim().toLowerCase();
+      /* Name AND type: two lists can both have a "Review", one open and one
+         done, and the first board's type must not stand in for the other's. */
+      const key = `${name}\u0000${st.type}`;
+      if (!name || seen.has(key)) continue;
       seen.add(key);
       out.push(st);
     }
@@ -318,8 +323,8 @@ export function boardHolding(cardId: string, o: { freshMs?: number } = {}): { vi
   /*
    * HOW OLD THE ANSWER IS, because a stale one is worse than none.
    *
-   * A cached board said a card was "in development" and assigned to him while
-   * ClickUp had it in "code review" on somebody else — it had simply not been
+   * A cached board said a card was "in progress" and assigned to Ada while
+   * ClickUp had it in "in review" on somebody else — it had simply not been
    * re-read since. Drawn on a pull request row that is glanced at, a wrong
    * status is not a smaller version of no status; it is a different fact.
    *
@@ -342,6 +347,25 @@ export function boardHolding(cardId: string, o: { freshMs?: number } = {}): { vi
   if (!best) return null;
   if (o.freshMs && Date.now() - best.at > o.freshMs) return null;
   return best;
+}
+
+/**
+ * Disconnect: what was read with the credential goes with it.
+ *
+ * The boards you saved are an address book and stay unless `boards` says
+ * otherwise; the tasks cached under them were READ with a token that is gone,
+ * and the card line on a pull request would go on drawing them for a day.
+ * `boards: true` is the whole file: the list, the folders, the write switch and
+ * the one on screen, so a machine handed to someone else holds nothing.
+ */
+export function forgetCached(o: { boards?: boolean } = {}): void {
+  if (o.boards) {
+    try { rmSync(path(), { force: true }); } catch { /* unwritable: nothing more to drop */ }
+    cache = undefined;
+    return;
+  }
+  const s = load();
+  save({ ...s, cache: {} });
 }
 
 export function putCache(entry: CachedView): void {

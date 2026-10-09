@@ -157,7 +157,7 @@ export const NO_AUTHOR_NOTE =
  * WHO A "SEEN HERE" LINE IS ABOUT.
  *
  * ClickUp writes its notifications as a sentence that starts with the person:
- * "Grace assigned this task to: ada", "ada set the status to: READY FOR QA".
+ * "Grace assigned this task to: ada", "ada set the status to: IN REVIEW".
  * The API never says who did anything, so this sentence is the only place a
  * name appears — and a name deserves the same face the creation row gets.
  *

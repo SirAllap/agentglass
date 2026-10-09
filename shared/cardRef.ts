@@ -15,8 +15,25 @@
  * for a card. An optional prefix, because a workspace's custom ids carry one
  * and people type it about half the time.
  */
-export const looksLikeCardId = (q: string): boolean =>
-  /^\s*([A-Za-z][\w]*-)?\d{3,}\s*$/.test(q);
+export function looksLikeCardId(q: string, o: { minDigits?: number } = {}): boolean {
+  const min = Math.max(1, o.minDigits ?? 3);
+  return new RegExp(`^\\s*([A-Za-z][\\w]*-)?\\d{${min},}\\s*$`).test(q);
+}
+
+/**
+ * The first card id said anywhere inside a line of text, such as a branch name
+ * or a title. `null` when there is none.
+ *
+ * The same shape as `looksLikeCardId` with a prefix required, so the server's
+ * pull-request decorator and the panel's jump cannot disagree about what an id
+ * looks like. Two digits at least: `utf-8` and `gpt-4` are version strings,
+ * not cards, and they were the two this used to take for one. A match that is
+ * not on a board is dropped by the caller anyway, so this errs toward finding.
+ */
+export function cardIdIn(text: string, o: { minDigits?: number } = {}): string | null {
+  const min = Math.max(1, o.minDigits ?? 2);
+  return new RegExp(`\\b([A-Za-z][A-Za-z0-9]{1,9}-\\d{${min},7})\\b`).exec(text)?.[1] ?? null;
+}
 
 /** The digits of a card id, with any prefix and spaces taken off. `null` when
  *  the text is not one. */

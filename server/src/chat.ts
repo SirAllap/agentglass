@@ -291,7 +291,7 @@ export type TurnPlan =
  *
  * in the workspace root, which the same device reads off `/projects` with the
  * `read` half of its scope. On the machine this was found on, that directory
- * was the owner's employer's repository. `/terminal/pty` is carefully held at
+ * was the owner's company's repository. `/terminal/pty` is carefully held at
  * `full` by FULL_GET so a phone cannot open a shell; this walked around it with
  * an agent that needs no shell of its own.
  *

@@ -35,6 +35,8 @@ import type {
   PrAuthored, PrReaction, PrEvent, PrCheckJob, PrReviewer, PrMergePolicy, PrMergeGate, PrMergeMethod, PrLocalHead, FailingTests,
 } from "../../shared/types.ts";
 import { CARD_PEOPLE_MAX } from "../../shared/cardPeople.ts";
+import { cardIdIn } from "../../shared/cardRef.ts";
+import { hasCredential } from "./credentials.ts";
 
 /** Same escape hatch the git writes use, so one variable disables both. */
 const WRITE_ENABLED = process.env.AGENTGLASS_GIT_WRITE_DISABLED !== "1";
@@ -1393,9 +1395,13 @@ export function humanVerdict(
  * nothing. That is the shape of bug this repository keeps paying for, and the
  * reason to check the SCREEN and not the bundle after an install.
  */
-function cardFor(branch: unknown, title: unknown): PrSummary["card"] | undefined {
+export function cardFor(branch: unknown, title: unknown): PrSummary["card"] | undefined {
+  /* No credential, no card. The cache outlives a disconnect unless the
+     disconnect cleared it, and a line drawn from a board nobody is signed in to
+     is the one thing a disconnect must not leave behind. */
+  if (!hasCredential("clickup")) return undefined;
   const text = `${typeof branch === "string" ? branch : ""} ${typeof title === "string" ? title : ""}`;
-  const ref = /\b([A-Za-z][A-Za-z0-9]{1,9}-\d{1,7})\b/.exec(text)?.[1];
+  const ref = cardIdIn(text);
   if (!ref) return undefined;
   let held: ReturnType<typeof boardHolding> = null;
   /* A DAY, and the age travels with it. Hiding a reading from this morning

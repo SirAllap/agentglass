@@ -718,7 +718,7 @@ describe("the brief was corrected by reading the runs it produced", () => {
      * 2026-08-22, nineteen of the forty were HTTP API guidance out of a
      * third-party skill — idempotency keys and cursor pagination, in a task
      * about naming a git branch — while the rule forbidding a worktree in his
-     * employer's repository sat at index 727 and went nowhere.
+     * company's repository sat at index 727 and went nowhere.
      */
     const { policyDir } = await import("../src/understudy-ingest.ts");
     const decoys = Array.from({ length: 40 }, (_, i) => ({
@@ -864,12 +864,12 @@ describe("a task it cannot place is never placed anyway", () => {
    *
    * The route said `repo: item.repo || repos[0]` — take whatever is first if
    * the task does not say where it belongs. On a real machine the top task was
-   * a card from his employer's tracker, and a card carries no checkout. With
+   * a card from his company's tracker, and a card carries no checkout. With
    * one open-project repository present, that fallback would have cut a
    * worktree in agentglass and set an agent to work on somebody else's ticket
    * inside it.
    *
-   * Nothing would have reached the employer's repository, so not a leak — just
+   * Nothing would have reached the company's repository, so not a leak — just
    * a confident, wrong, completely wasted run. That erodes trust faster than an
    * outright failure, because a failure at least looks like one.
    */
@@ -1093,17 +1093,17 @@ describe("it keeps going until there is nothing left", () => {
   });
 });
 
-describe("his employer's work is never even selected", () => {
+describe("his company's work is never even selected", () => {
   /*
    * His own sentence, in substance: as long as nothing of the closed side is
    * touched, he is calm.
    *
    * Measured live, and that is why this fence sits in the SOURCE rather than in
    * the route. The first call made with an open-project checkout available
-   * picked a card from his employer's tracker as the next task. The route would
+   * picked a card from his company's tracker as the next task. The route would
    * have refused it — a card carries no repository — so nothing would have run.
    *
-   * But a loop whose SELECTION lands on his employer's work is not one anybody
+   * But a loop whose SELECTION lands on his company's work is not one anybody
    * should have to trust the next fence to catch. And the day somebody teaches
    * cards to carry a repository, that last fence stops applying while the
    * selection stays exactly as wrong.
@@ -1142,7 +1142,7 @@ describe("his employer's work is never even selected", () => {
   step("the loop's own checkout counts, so it is not blind to itself", async () => {
     /*
      * Discovery works from telemetry — work done THROUGH the app — and from
-     * projects opened in it. On this machine both are the employer's
+     * projects opened in it. On this machine both are the company's
      * repositories, because the open project gets worked on from a terminal. So
      * the loop had nowhere to work and declined everything, while running
      * inside the very checkout it was looking for.

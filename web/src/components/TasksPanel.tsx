@@ -18,6 +18,9 @@ import { pickCardPr, cardPrTint, cardPrInk, mergedInk, sortedCardPrs, type CardP
 import { cardPrsOf, onCardPrs, cardPrVersion } from "../lib/cardPrStore.ts";
 import { paintThenRevalidate, PRS_TTL_MS, swr, THREAD_TTL_MS } from "../lib/cardTabCache.ts";
 import { api } from "../lib/api.ts";
+import { __forgetClickupSetup } from "../lib/clickupSetup.ts";
+import { useClickupPrefs, clickupPrefs, clickupPrefsSaved } from "../lib/clickupPrefs.ts";
+import { prLinkValue, swatchField } from "../lib/clickupFields.ts";
 import { Optimistic, commentResolvedPatch } from "../lib/taskOptimistic.ts";
 import { FilterBuilder } from "./tasks/FilterBuilder.tsx";
 import { EMPTY, apply as applyFilters, fieldsOf, liveCount as builtCount, type FilterSet } from "./tasks/filters.ts";
@@ -855,7 +858,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
   /** "Show me this card" — from the pull-request masthead. See lib/openCard.ts. */
   jump?: CardJump | null;
 }) {
-  const [boards, setBoards] = useState<{ views: SavedView[]; folders?: SavedFolder[]; current?: string; writeEnabled: boolean; writeForced?: boolean } | null>(null);
+  const [boards, setBoards] = useState<{ views: SavedView[]; folders?: SavedFolder[]; current?: string; writeEnabled: boolean; writeForced?: boolean; connected?: boolean } | null>(null);
   const [data, setData] = useState<ViewTasksResponse | null>(null);
   const [busy, setBusy] = useState(false);
   /** The board somebody just clicked, before its answer arrives. See `load`. */
@@ -1381,7 +1384,11 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
   // rows filtered down to a handful.
   useEffect(() => {
     if (!active) return;
-    void api.skills().then((r) => setSkills(cardSkills(r.skills ?? []))).catch(() => setSkills([]));
+    // The pattern is the workspace's own naming habit; not known yet reads as
+    // the shipped one, which is what the menu was before it was a setting.
+    void Promise.all([api.skills(), clickupPrefs()])
+      .then(([r, p]) => { setSkills(cardSkills(r.skills ?? [], p?.cardSkillPattern)); })
+      .catch(() => setSkills([]));
   }, [active]);
 
   const loadBoards = useCallback(async () => {
@@ -1796,7 +1803,11 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
    * when it opens. Once per mount, never awaited, and the server does nothing
    * when its sweep is still warm.
    */
-  useEffect(() => { void api.clickupWarm(); }, []);
+  const clickupHere = boards?.connected === true;
+  // Waits for the answer to "is there a ClickUp here": the sweep is a no-op
+  // server-side without a token, and a request that can only be refused is
+  // still a request.
+  useEffect(() => { if (clickupHere) void api.clickupWarm(); }, [clickupHere]);
   const [foundBySearch, setFoundBySearch] = useState<Set<string>>(new Set());
   const exempt = useCallback((t: ProviderTask) => foundBySearch.has(t.id), [foundBySearch]);
 
@@ -1826,18 +1837,18 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
   /*
    * THE SWATCH COLUMN, as a filter.
    *
-   * "I need more filters, to filter only by the cards of one squad." The tags
-   * along the top are ClickUp's TAGS; a squad is a custom field, which is why
-   * it had a column and no chip — the board could show you which squad every
-   * card belonged to and could not show you one squad's cards.
+   * The tags along the top are ClickUp's TAGS; a team is a custom field, which
+   * is why it had a column and no chip — the board could show you which team
+   * every card belonged to and could not show you one team's cards.
    *
-   * Not hardcoded to the word "squad": `swatch` already finds whichever
-   * coloured field this board has (squad, team, pod, tribe, or the first
-   * coloured one there is), and the chips take their name and their colour
-   * from it. A board with no such field gets no chips at all, which is the
-   * right amount of chrome for a board that has nothing to filter by.
+   * Not hardcoded to a word: `swatch` already finds the coloured field this
+   * board has (the one named in Settings, else a field called team, squad,
+   * pod or tribe, else the first coloured one), and the chips take their name
+   * and their colour from it. A board with no such field gets no chips at all,
+   * which is the right amount of chrome for a board that has nothing to
+   * filter by.
    *
-   * Counted over open cards, like the tag chips beside them: a squad whose
+   * Counted over open cards, like the tag chips beside them: a team whose
    * every card is done is not a filter anybody wants offered.
    */
   /*
@@ -2259,11 +2270,12 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
   const anyWho = tasks.some((t) => t.assignees.length);
   const anySprint = tasks.some((t) => t.sprint);
   const anyEst = tasks.some((t) => t.estimateHours);
-  /* The swatch column names itself after the field it is showing — "Squad" on
+  /* The swatch column names itself after the field it is showing — "Team" on
      one board, "Pod" on the next — so the heading is the board's word rather
      than ours. Taken from the first row that has one; they are all the same
      field, since `swatch` picks by name across every card. */
-  const squadLabel = tasks.map(swatch).find(Boolean)?.name ?? "";
+  const cuPrefs = useClickupPrefs();
+  const squadLabel = tasks.map((t) => swatch(t, cuPrefs?.swatchField)).find(Boolean)?.name ?? "";
   const grid = cuGrid(anyWho, !!squadLabel, anySprint, anyEst, onLooked);
 
   /* The looked-up cards, by where each one lives. The search box filters these
@@ -2573,6 +2585,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
             if (on && !confirmWrite) { setConfirmWrite(true); return; }
             setConfirmWrite(false);
             await api.clickupSetWrites(on);
+            // The pull request sidebar reads this switch from a copy it holds for a minute.
+            __forgetClickupSetup();
             await loadBoards();
             setNote({ ok: true, text: on ? "Changes to ClickUp are now allowed" : "Back to read-only" });
           }}
@@ -2704,7 +2718,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
             </div>
           </div>
           <span className="flex-1" />
-          <button onClick={async () => { setConfirmWrite(false); await api.clickupSetWrites(true); await loadBoards(); }}
+          <button onClick={async () => { setConfirmWrite(false); await api.clickupSetWrites(true); __forgetClickupSetup(); await loadBoards(); }}
             className="text-[11px] px-3 py-1 rounded-lg"
             style={{ background: "color-mix(in srgb, var(--warning) 22%, transparent)",
               border: "1px solid color-mix(in srgb, var(--warning) 50%, transparent)", color: "var(--text)" }}>
@@ -2836,7 +2850,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
         ))}
         <StatusFilter statuses={data?.statuses ?? []} tasks={tasks}
           picked={statusPick} onPick={setStatusPick} />
-        {/* The chips are the shortcuts; this is everything else. A squad, an
+        {/* The chips are the shortcuts; this is everything else. A team, an
             impacted application, an assignee, any custom field this workspace
             invented — none of which could be a chip, because which fields
             exist is the board's business and not ours. */}
@@ -3192,6 +3206,12 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
                     </>
                   )
                   : "This board has nothing open."}
+                {/* Only on the built-in board, and only while it is true. ClickUp's
+                    assignee filter leaves subtasks out, so for a team that works in
+                    them this empty board is the setting, not the work. */}
+                {data?.view?.builtin && !data?.error && !q && !tag && !mineOnly && !statusPick.length && (
+                  <SubtasksNote onChanged={() => { void load(data?.view?.id, true); }} />
+                )}
               </div>
             )}
             {/* Grouped by status, in the board's own workflow order, each group
@@ -4451,7 +4471,7 @@ const cuGrid = (who: boolean, squad: boolean, sprint: boolean, est: boolean, for
 /**
  * The one custom field worth a column of its own: a coloured drop-down.
  *
- * A squad, a pod, a team — whatever the board calls it, it is the field people
+ * A team, a pod, a tribe — whatever the board calls it, it is the field people
  * scan a board BY, and ClickUp itself renders it as a block of colour rather
  * than as a word. Picked by name first, so a board with several coloured
  * drop-downs shows the one that means "whose work is this"; otherwise the first
@@ -4461,9 +4481,8 @@ const cuGrid = (who: boolean, squad: boolean, sprint: boolean, est: boolean, for
  * Null for a field nobody coloured: a grey dot in a colour column is a value
  * pretending to be a category, and the card still spells the value out.
  */
-function swatch(t: ProviderTask): { name: string; value: string; color: string } | null {
-  const coloured = (t.custom ?? []).filter((c) => c.color);
-  const hit = coloured.find((c) => /squad|team|pod|tribe/i.test(c.name)) ?? coloured[0];
+function swatch(t: ProviderTask, field?: string): { name: string; value: string; color: string } | null {
+  const hit = swatchField(t.custom, field);
   // The "(DO NOT EDIT!!!)" kind of parenthesis is a note to whoever edits the
   // field, not part of its name, and the card already strips it. A heading is
   // three characters wide here — it cannot carry an aside as well.
@@ -4604,10 +4623,10 @@ const EYEBROW = "text-[8.5px] uppercase tracking-[0.18em]";
 /**
  * A chip on a BOARD ROW, which is a rung below the one on a card.
  *
- * A row is 26 pixels of vertical space carrying a title, faces, a squad, a sprint and
+ * A row is 26 pixels of vertical space carrying a title, faces, a team, a sprint and
  * four numbers; a card chip at 10.5px in it pushes the row taller than the line it is
  * part of. There were three sizes and three radii in one row — a tag at 9.5px and
- * fully round, a squad at 10.5px and `rounded-lg`, a blocker at 8.5px and `rounded` —
+ * fully round, a team at 10.5px and `rounded-lg`, a blocker at 8.5px and `rounded` —
  * which is what made a row of them look assembled rather than designed.
  */
 const ROW_CHIP = "text-[9.5px] px-1.5 py-0.5 rounded-md whitespace-nowrap";
@@ -4761,7 +4780,8 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
   const late = !!t.due && t.due < today;
   const now = t.due === today;
   const done = t.statusKind === "done";
-  const sq = showSquad ? swatch(t) : null;
+  const cuPrefs = useClickupPrefs();
+  const sq = showSquad ? swatch(t, cuPrefs?.swatchField) : null;
 
   /*
    * The card's pull requests, read through the shared cache rather than
@@ -4770,7 +4790,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
    * moment the cache's answer lands, without the board re-fetching anything.
    */
   useSyncExternalStore(onCardPrs, cardPrVersion, cardPrVersion);
-  const prField = t.custom?.find((c) => /github/i.test(c.name))?.value ?? "";
+  const prField = prLinkValue(t.custom, cuPrefs?.prLinkField);
   const prCwd = rootForTask(t.list, repos, here) ?? here;
   const prEntry = cardPrsOf(t.id, t.customId || "", prField, prCwd);
   const prPick = pickCardPr(prEntry?.prs);
@@ -4919,8 +4939,8 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
           )}
         </span>
       )}
-      {/* The squad as the board paints it, at the size of a face.
-          Colour is how a multi-squad board is read — ClickUp itself gives that
+      {/* The team as the board paints it, at the size of a face.
+          Colour is how a multi-team board is read — ClickUp itself gives that
           field a solid block of it — and the word was one click deep, on the
           card. A dot the size of an avatar sits on the same optical line as the
           faces beside it, so the two columns read as one glance. The name and
@@ -5877,7 +5897,8 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
   });
   useEffect(() => { try { localStorage.setItem(YOLO_KEY, yolo ? "1" : "0"); } catch { /* private mode */ } }, [yolo]);
 
-  const prField = t.custom?.find((c) => /github/i.test(c.name))?.value ?? "";
+  const cuPrefs = useClickupPrefs();
+  const prField = prLinkValue(t.custom, cuPrefs?.prLinkField);
   const prCwd = rootForTask(t.list, repos, here) ?? here;
   const prKey = [t.id, t.customId || "", prField, prCwd].join("\n");
   const [prs, setPrs] = useState<PrsRead["prs"]>(() => prsCache.peek(prKey)?.prs ?? []);
@@ -6121,7 +6142,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                     // One heading between the ones named for it and the rest,
                     // rather than a filter that would have to be right about
                     // which of the others take a card. See namedForIt.
-                    const firstOther = !namedForIt(sk) && (i === 0 || namedForIt(shown[i - 1]!));
+                    const firstOther = !namedForIt(sk, cuPrefs?.cardSkillPattern) && (i === 0 || namedForIt(shown[i - 1]!, cuPrefs?.cardSkillPattern));
                     const modes = skillModes(sk.argument_hint);
                     const run = (mode?: string) => {
                       setAskOpen(false);
@@ -6652,7 +6673,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
              Every list this card is in, not only the one it was filed under.
              ClickUp lets a card live in several, and on a team that uses it the
              home list is routinely not the one you are looking at — the card
-             said "Bugs" while you were reading it on a squad's board, which is
+             said "Bugs" while you were reading it on a team's board, which is
              true and useless. The home first, in the brighter colour, and the
              others after it.
            */
@@ -7397,6 +7418,29 @@ const HANDOFFS: { id: string; label: string; hint: string; build: (t: ProviderTa
       body ? `\n${body}` : "",
     ].filter(Boolean).join("\n") },
 ];
+
+/**
+ * Says that subtasks are not on this board and offers them, when they are not.
+ * Reading them roughly doubled the time of the whole-workspace question and
+ * returned no extra card where it was measured, which is why they are off; the
+ * button is for the workspace that is not that one.
+ */
+export function SubtasksNote({ onChanged }: { onChanged: () => void }) {
+  const prefs = useClickupPrefs();
+  const [busy, setBusy] = useState(false);
+  if (!prefs || prefs.assigned.includeSubtasks) return null;
+  return (
+    <div className="mt-1.5">
+      Subtasks are not included.{" "}
+      <button disabled={busy} style={{ color: "var(--primary-ink)" }} onClick={async () => {
+        setBusy(true);
+        const r = await api.clickupSetPrefs({ assigned: { includeSubtasks: true } });
+        setBusy(false);
+        if (r.ok && r.prefs) { clickupPrefsSaved(r.prefs); onChanged(); }
+      }}>Include them</button>
+    </div>
+  );
+}
 
 function LocalEmpty({ cap, done }: { cap: TaskCapability; done: number }) {
   const box = (title: string, body: React.ReactNode) => (
@@ -8615,10 +8659,9 @@ function SearchHits({ asked, rows, looking, onAsk, onPick, onClose }: {
    *  arrive, so without this it opened saying "0 cards" over an empty box and
    *  looked like an answer rather than a wait. */
   looking: boolean;
-  /** Search again for what is typed HERE. The box moved into this list —
-   *  "I need to have the input inside the modal, the way ClickUp does" — so the list is
-   *  the whole search surface once it is open, and the board's own box goes on
-   *  filtering the board. */
+  /** Search again for what is typed HERE. The box moved into this list,
+   *  the way ClickUp's own search does, so the list is the whole search surface
+   *  once it is open, and the board's own box goes on filtering the board. */
   onAsk: (text: string) => void;
   onPick: (t: ProviderTask) => void; onClose: () => void;
 }) {

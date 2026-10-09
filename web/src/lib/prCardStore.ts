@@ -25,8 +25,8 @@ const TTL_MS = 60_000;
  *
  * The server's copy comes off a board cached on disk and is accepted up to a
  * day old, which is far too generous for a field people move several times a
- * morning: measured on a row 24 minutes old, the board drew "in development"
- * on him while the tracker had it in "code review" on somebody else, and no
+ * morning: measured on a row 24 minutes old, the board drew "in progress"
+ * on Ada while the tracker had it in "in review" on somebody else, and no
  * amount of pressing Refresh changed it — Refresh re-reads the pull requests,
  * not the tracker.
  *

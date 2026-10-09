@@ -10,7 +10,7 @@
  * Consent is per source and defaults to no. These paths are not alike — one is
  * a page of conventions somebody wrote on purpose, another is two gigabytes of
  * everything they have said to a machine for a year, most of it about an
- * employer's private work. One checkbox over both would be the worst mistake
+ * company's private work. One checkbox over both would be the worst mistake
  * this feature could make.
  *
  * Nothing is read until a button is pressed. Listing shows names, counts and

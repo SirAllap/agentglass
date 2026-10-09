@@ -151,3 +151,21 @@ describe("a folder on the sidebar", () => {
     expect(V.savedViews()[0]!.id).toBe(ASSIGNED_VIEW_ID);
   });
 });
+
+describe("the statuses a filter can offer", () => {
+  const st = (status: string, type: string, orderindex: number) => ({ status, type, orderindex });
+  const cached = (id: string, statuses: ReturnType<typeof st>[]) => V.putCache({
+    view: board(id), tasks: [], statuses, fields: [], at: 1,
+  } as never);
+
+  it("keeps a status two lists share by name only when they agree on its type", () => {
+    cached("list:1", [st("To do", "open", 0), st("Review", "custom", 1)]);
+    cached("list:2", [st("Review", "done", 0), st("review", "custom", 1)]);
+    V.addView(board("list:1"));
+    V.addView(board("list:2"));
+    const got = V.knownStatuses().map((x) => `${x.status}/${x.type}`);
+    expect(got, "the done-typed Review was folded into the open one").toContain("Review/done");
+    expect(got.filter((x) => x.toLowerCase() === "review/custom"), "same name and type is still one").toHaveLength(1);
+    expect(got).toContain("To do/open");
+  });
+});

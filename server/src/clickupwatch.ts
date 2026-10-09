@@ -23,12 +23,13 @@
  * ignore it. And the first run after connecting is SILENT for the same reason:
  * it records where things stand and says nothing.
  */
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { changedForMe, changedOnLists, commentsOn, type CardComment } from "./clickup.ts";
 import { hasCredential, redacted } from "./credentials.ts";
 import { savedViews } from "./clickupviews.ts";
+import { clickupPrefs } from "./clickupPrefs.ts";
 import type { CardNote } from "../../shared/types.ts";
 import type { ProviderTask } from "../../shared/providers.ts";
 
@@ -121,7 +122,7 @@ interface Watched {
    * Comments already announced, newest last.
    *
    * The window carries a minute of overlap on purpose, so the same comment can
-   * come back twice; a notification that repeats every three minutes is worse
+   * come back twice; a notification that repeats every six minutes is worse
    * than one that is late. Capped — this is a de-duplicator, not a history.
    */
   told?: string[];
@@ -143,6 +144,12 @@ function load(): Watched {
   return state!;
 }
 
+/** Disconnect: the last-seen map belongs to the token that read it. */
+export function forgetWatch(): void {
+  try { rmSync(path(), { force: true }); } catch { /* unwritable: nothing more to drop */ }
+  state = undefined;
+}
+
 function save(s: Watched): void {
   state = s;
   try {
@@ -161,7 +168,7 @@ function save(s: Watched): void {
  * `pollCards` still returns `[]` on a bad read and still leaves the high-water
  * mark where it was — that part was right: nothing is LOST. What was wrong is
  * that nothing was SAID. A 401 from a rotated personal token failed silently
- * every three minutes for as long as the server ran, the Tasks panel kept
+ * every look for as long as the server ran, the Tasks panel kept
  * showing its last read, and the feature was indistinguishable from a quiet
  * week. This is the difference between "no cards moved" and "we cannot ask".
  *
@@ -192,7 +199,7 @@ export function cardWatchTrouble(): WatchTrouble | null { return trouble; }
  *
  * The same treatment alerts.ts gives a missing `notify-send`, and for the same
  * reason: the cause of a 401 is just as true the next four hundred times, and a
- * log line every three minutes is a log nobody skims. Keyed on WHAT went wrong,
+ * log line every six minutes is a log nobody skims. Keyed on WHAT went wrong,
  * so a token failure that turns into a network failure is still said — the two
  * need different actions.
  */
@@ -381,11 +388,16 @@ export const WATCH_MS = 6 * 60_000;
 
 let timer: ReturnType<typeof setInterval> | null = null;
 
+/** The `bell.kinds` setting, applied where a note leaves for the bell and not
+ *  where it is found: the last-seen map still moves on, so a kind switched
+ *  back on later does not replay what it skipped. */
+export const wantedOnBell = (n: CardNote): boolean => clickupPrefs().bell.kinds.includes(n.kind);
+
 /** Start watching, if there is anything to watch. Safe to call twice. */
 export function startCardWatch(emit: (n: CardNote) => void): void {
   if (timer) return;
   const tick = async () => {
-    try { for (const n of await pollCards()) emit(n); }
+    try { for (const n of await pollCards()) if (wantedOnBell(n)) emit(n); }
     catch (e) {
       // A poll that throws is still a poll skipped, not a server down — but it
       // is no longer a poll that vanishes. This catch was the second of two
@@ -413,7 +425,7 @@ export function stopCardWatch(): void {
 /**
  * ClickUp's own desktop notification, matched back to a card.
  *
- * The desktop app posts "<somebody> set the status to: READY FOR QA" with the
+ * The desktop app posts "<somebody> set the status to: IN REVIEW" with the
  * task's TITLE as the summary and nothing else — no id, no url, and a D-Bus
  * monitor cannot invoke the notification's own action to find out. So the row
  * behind the bell had nowhere to go but ClickUp's website, which is the one

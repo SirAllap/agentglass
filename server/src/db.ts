@@ -1360,7 +1360,7 @@ CREATE INDEX IF NOT EXISTS idx_understudy_snap_at ON understudy_snapshots(at);
  * Why something was refused — and only why.
  *
  * The quarantine exists because the understudy reads material that can carry a
- * name it must never write down: an employer, a ticket id, a customer. When a
+ * name it must never write down: a company, a ticket id, a customer. When a
  * term like that is found, the honest record is that a refusal happened and
  * where it happened, so a person can go and look at the source themselves.
  * What must not be here is the text that was refused or the term that matched

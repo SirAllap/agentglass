@@ -323,7 +323,7 @@ export function merged(p: {
    *
    * Keyed by branch and not a flat list because the answer is per REPOSITORY.
    * The first version asked one repository — the configured workspace root —
-   * for every row, and on this machine that root is the employer's checkout,
+   * for every row, and on this machine that root is the company's checkout,
    * whose HEAD is a `master` none of these branches has ever been near. Every
    * row read "not in master", which is true, meaningless, and the exact shape
    * of an answer that sends somebody looking.

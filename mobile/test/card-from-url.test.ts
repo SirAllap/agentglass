@@ -17,9 +17,15 @@ describe("cardIdFromUrl", () => {
   test("a trailing slash, query or fragment is not part of the id", () => {
     expect(cardIdFromUrl("https://app.clickup.com/t/86abc12xy/?a=1#b")).toBe("86abc12xy");
   });
-  test("a team-qualified custom id is not a card id the phone can ask for", () => {
+  test("a team-qualified custom id is a card id; the other team-first shape is not one", () => {
     expect(cardIdFromUrl("https://app.clickup.com/9012345/t/ORBIT-1042")).toBeNull();
-    expect(cardIdFromUrl("https://app.clickup.com/t/9012345/ORBIT-1042")).toBeNull();
+    // Changed with B18: this was null while the phone's reader knew one shape;
+    // it now reads the table the desk reads, which takes the LAST segment.
+    expect(cardIdFromUrl("https://app.clickup.com/t/9012345/ORBIT-1042")).toBe("ORBIT-1042");
+  });
+  test("it reads the shared address table: an address inside another link, or another tracker, is not a card", () => {
+    expect(cardIdFromUrl("https://example.com/go?u=https://app.clickup.com/t/86abc12xy")).toBeNull();
+    expect(cardIdFromUrl("https://acme.atlassian.net/browse/ORBIT-1042")).toBeNull();
   });
   test("another host, another scheme or nothing at all is not one", () => {
     expect(cardIdFromUrl("https://example.com/t/86abc12xy")).toBeNull();

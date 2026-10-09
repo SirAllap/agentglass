@@ -17,6 +17,7 @@ import { db } from "./db.ts";
 import { raiseHand } from "./understudy-help.ts";
 import { listPrs } from "./prs.ts";
 import { changedForMe } from "./clickup.ts";
+import { hasCredential } from "./credentials.ts";
 import { proposeScope } from "./understudy.ts";
 import { addSource, alreadyTaken, MAX_ATTEMPTS, type WorkItem } from "./understudy-work.ts";
 
@@ -282,6 +283,7 @@ addSource({
 addSource({
   id: "clickup",
   label: "Your cards (read only)",
+  connected: () => hasCredential("clickup"),
   async find({ repos }) {
     /*
      * OFFERS NOTHING WHILE IT CANNOT PLACE A CARD, and this is a correctness
@@ -289,10 +291,10 @@ addSource({
      *
      * A card says what to do and never says which checkout it belongs in. Run
      * live on a real machine, the top task this returned was a ticket from his
-     * employer's tracker — and with one open-project repository available, the
+     * company's tracker — and with one open-project repository available, the
      * loop's fallback would have cut a worktree in agentglass and set an agent
      * to work on that ticket inside it. Nothing would have reached the
-     * employer's repository, so not a leak: just a confident, wrong, wasted
+     * company's repository, so not a leak: just a confident, wrong, wasted
      * run, which erodes trust faster than an outright failure does.
      *
      * Until something can map a card to a checkout, this source stays quiet
@@ -313,9 +315,9 @@ addSource({
      *
      * Measured, and that is why this is here rather than left to the route: the
      * first live call with an open-project checkout available picked a card
-     * from his employer's tracker as the next task. The route would have
+     * from his company's tracker as the next task. The route would have
      * refused it for having no repository, so nothing would have run. But a
-     * loop whose SELECTION lands on his employer's work is one nobody should
+     * loop whose SELECTION lands on his company's work is one nobody should
      * have to trust the next fence to catch, and the day somebody teaches cards
      * to carry a repository that last fence stops applying.
      */

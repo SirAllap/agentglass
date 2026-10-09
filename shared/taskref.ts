@@ -208,6 +208,28 @@ function issueUrl(prUrl: string | undefined, repo: string | undefined, number: s
   return undefined;
 }
 
+/** The number in a GitLab merge-request address, and nothing from any other
+ *  address. GitLab is the one host here that spells a pull request differently,
+ *  so a place that reads `/pull/N` alone drops every merge request silently. */
+export function mergeRequestNumber(url: string | undefined): number | null {
+  const m = /^https?:\/\/[^/]*gitlab\.[^/]+\/[\w./-]+?\/-\/merge_requests\/(\d+)/i.exec(url ?? "");
+  const n = m ? Number(m[1]) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/** The tracker item an address names, when the WHOLE string is that address
+ *  (a query or fragment after it is fine). `ADDRESSES` is shaped to find links
+ *  inside prose, so an address buried in the middle of something else — a
+ *  redirect parameter, say — must not count here. Null for anything else. */
+export function itemFromUrl(url: string | null | undefined): { tracker: TrackerId; id: string } | null {
+  const u = (url ?? "").trim();
+  for (const { tracker, re, pick } of ADDRESSES) {
+    const m = re.exec(u);
+    if (m && m.index === 0) return { tracker, id: pick ? pick(m) : m[1]! };
+  }
+  return null;
+}
+
 function hostOf(prUrl: string | undefined): TrackerId | null {
   if (!prUrl) return null;
   if (/github\./i.test(prUrl)) return "github";

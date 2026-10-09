@@ -5,9 +5,12 @@ import type { PrWatchFire, PrWatchRule, PrWatchState } from "../../../shared/typ
 import type { AskedAlert } from "../../../shared/notifyPayload.ts";
 import type { CheckOnBasePlan, CheckOnBaseStatus } from "../../../shared/checkOnBase.ts";
 import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest } from "../../../shared/types.ts";
-import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember } from "../../../shared/providers.ts";
+import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs } from "../../../shared/providers.ts";
 import { DEFAULT_NOTIFY_PREFS, type NotifyPrefs } from "../../../shared/notifyPrefs.ts";
 import type { CheckMetric } from "../../../shared/checkBaseline.ts";
+
+/** A partial update: any group may name just the keys it changes. */
+type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? Partial<T[K]> : T[K] };
 
 /** What every ClickUp write answers with: the card as it now stands, or why not. */
 /* `conflict` and `unauthorised` are the two failures with a remedy the app can
@@ -1359,13 +1362,13 @@ const realApi = {
      and nothing here ever receives one back — the responses carry a status. */
   providers: () => get<ProvidersResponse>("/providers"),
   /** Where this app keeps things, and for how long. Paths, never contents. */
-  privacy: () => get<{ db: string; config: string; credentials: string; retentionDays: number; pairedDevices: number }>("/privacy"),
+  privacy: () => get<{ db: string; config: string; credentials: string; retentionDays: number; pairedDevices: number; clickup: boolean }>("/privacy"),
   /** What is left of GitHub's hourly budget — this app is made of `gh` calls. */
   ghRateLimit: () => get<{ ok: boolean; error?: string; budgets?: { id: string; label: string; limit: number; remaining: number; reset: number }[] }>("/prs/rate-limit"),
   providerConnect: (id: string, token: string) =>
     post<{ ok: boolean; error?: string; status?: ProviderStatus }>("/providers/connect", { id, token }),
-  providerDisconnect: (id: string) =>
-    post<{ ok: boolean; error?: string; status?: ProviderStatus }>("/providers/disconnect", { id }),
+  providerDisconnect: (id: string, o: { forgetBoards?: boolean } = {}) =>
+    post<{ ok: boolean; error?: string; status?: ProviderStatus }>("/providers/disconnect", o.forgetBoards ? { id, forgetBoards: true } : { id }),
   providerWorkspaces: (id: string) =>
     get<{ ok: boolean; workspaces?: { id: string; name: string }[]; error?: string }>(`/providers/workspaces?id=${encodeURIComponent(id)}`),
   providerWorkspace: (id: string, workspaceId: string, name: string) =>
@@ -1445,6 +1448,11 @@ const realApi = {
   clickupFileNote: (n: { id: string; cardId: string; label: string; text: string; at: number }) =>
     post<{ ok: boolean }>("/clickup/card-note", n).catch(() => ({ ok: false })),
   clickupSetWrites: (on: boolean) => post<{ ok: boolean }>("/clickup/writes", { on }),
+  /** How this workspace uses ClickUp (hand-off, review, field names, patterns). */
+  clickupPrefs: () => get<{ ok: boolean; prefs?: ClickUpPrefs }>("/clickup/prefs"),
+  /** A partial update; a refusal comes back as `error`, with nothing saved. */
+  clickupSetPrefs: (patch: DeepPartial<ClickUpPrefs>) =>
+    post<{ ok: boolean; error?: string; prefs?: ClickUpPrefs }>("/clickup/prefs", patch),
   clickupView: (id?: string, force = false) =>
     get<ViewTasksResponse>(`/clickup/view?${new URLSearchParams({ ...(id ? { id } : {}), ...(force ? { force: "1" } : {}) })}`),
   clickupAddView: (url: string) =>
@@ -2670,9 +2678,9 @@ const demoApi: typeof realApi = {
   taskBulk: (_u: string[], _a: string, _v: string | null, _f?: string) => D({ ok: false, error: "not available in the demo" }),
   providers: () => D({ providers: [] }),
   ghRateLimit: () => D({ ok: false, error: "not available in the demo" }),
-  privacy: () => D({ db: "", config: "", credentials: "", retentionDays: 0, pairedDevices: 0 }),
+  privacy: () => D({ db: "", config: "", credentials: "", retentionDays: 0, pairedDevices: 0, clickup: false }),
   providerConnect: (_i: string, _t: string) => D({ ok: false, error: "not available in the demo" }),
-  providerDisconnect: (_i: string) => D({ ok: false, error: "not available in the demo" }),
+  providerDisconnect: (_i: string, _o?: { forgetBoards?: boolean }) => D({ ok: false, error: "not available in the demo" }),
   providerWorkspaces: (_i: string) => D({ ok: false, error: "not available in the demo" }),
   providerWorkspace: (_i: string, _w: string, _n: string) => D({ ok: false, error: "not available in the demo" }),
   providerTasks: (_f?: boolean) => D({ tasks: [], more: false, at: 0 }),
@@ -2708,6 +2716,8 @@ const demoApi: typeof realApi = {
   clickupCardForNote: () => D({ card: null }),
   clickupFileNote: () => D({ ok: false }),
   clickupSetWrites: (_o: boolean) => D({ ok: false }),
+  clickupPrefs: () => D<{ ok: boolean; prefs?: ClickUpPrefs }>({ ok: false }),
+  clickupSetPrefs: (_p: DeepPartial<ClickUpPrefs>) => D<{ ok: boolean; error?: string; prefs?: ClickUpPrefs }>({ ok: false, error: "the demo is read-only" }),
   clickupView: (_i?: string, _f?: boolean) => D({ tasks: [], statuses: [], fields: [], at: 0 }),
   clickupAddView: (_u: string) => D({ ok: false, error: "not available in the demo" }),
   clickupRemoveView: (_i: string) => D({ ok: true }),

@@ -12,12 +12,13 @@
  * provider had a secret we hold.
  */
 import { PROVIDERS, ASSIGNED_VIEW_ID, type ProviderId, type ProviderStatus, type ProviderState, type SavedView, type SavedFolder, type ViewTasksResponse } from "../../shared/providers.ts";
-import { savedViews, addView, removeView, cachedFor, putCache, setCurrent as setCurrentView, addFolder, savedFolders } from "./clickupviews.ts";
+import { savedViews, addView, removeView, cachedFor, putCache, setCurrent as setCurrentView, addFolder, savedFolders, forgetCached } from "./clickupviews.ts";
 import { ghCapability } from "./prs.ts";
 import { taskCapability } from "./tasks.ts";
 import { hasCredential, redacted, setCredential, clearCredential } from "./credentials.ts";
 import { whoAmI, workspaces, clickupTasks, clickupCached, __reset, applyCommentCounts as applyCounts, seedCommentCounts as seedCounts } from "./clickup.ts";
-import { cardWatchTrouble } from "./clickupwatch.ts";
+import { cardWatchTrouble, forgetWatch } from "./clickupwatch.ts";
+import { forget as forgetClickupIndex } from "./clickupindex.ts";
 
 const found = (bin: string): boolean => !!Bun.which(bin);
 
@@ -74,7 +75,7 @@ async function statusOf(id: ProviderId): Promise<ProviderStatus> {
        * private.
        *
        * ClickUp is two features behind one token: the task LIST, cached below,
-       * and the card BELL, polled every three minutes by clickupwatch.ts. They
+       * and the card BELL, polled every six minutes by clickupwatch.ts. They
        * fail independently and the list is the one with a cache in front of it,
        * so the row could — and did — read "Connected · 13 tasks assigned to
        * you" from a snapshot taken before the token was rotated, while every
@@ -182,11 +183,20 @@ export async function connectProvider(id: ProviderId, token: string): Promise<Co
   return { ok: true, status: await statusOf(id) };
 }
 
-export async function disconnectProvider(id: ProviderId): Promise<ConnectResult> {
+export async function disconnectProvider(id: ProviderId, o: { forgetBoards?: boolean } = {}): Promise<ConnectResult> {
   clearCredential(id);
   // The cached list goes too. Leaving it would show somebody else's tasks after
   // a disconnect, which is the one thing a disconnect must not do.
-  if (id === "clickup") __reset();
+  if (id === "clickup") {
+    __reset();
+    /* The in-memory list was only half of it. Tasks cached on disk, the last-
+       seen map of the card watch and the two search tables were all read with
+       this token, and the pull request list drew a card from them for a day
+       after. Saved boards are the person's own list and stay unless asked. */
+    forgetCached({ boards: !!o.forgetBoards });
+    forgetWatch();
+    forgetClickupIndex();
+  }
   return { ok: true, status: await statusOf(id) };
 }
 

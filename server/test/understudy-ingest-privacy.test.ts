@@ -11,8 +11,8 @@
  * 2. Provenance is a KIND, never a path.
  *    The second run had a working gate and still leaked, because the leak was
  *    not in the text of a rule: it was in the label beside it. Rules carried
- *    `~/.claude/projects/-home-you-code-<employer>/memory/x.md`, and 151
- *    copies of an employer's name went into a generated file. The gate runs
+ *    `~/.claude/projects/-home-you-code-<company>/memory/x.md`, and 151
+ *    copies of a company's name went into a generated file. The gate runs
  *    over rule text and could never have caught it.
  *
  * Both tests use a jail with its own terms file, so the suite never reads the

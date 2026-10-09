@@ -13,7 +13,9 @@
  * per-list: one board's "Code Review" is another's "In review" and a third's
  * "PR up". Nothing here may branch on the words.
  */
-import type { ListStatus } from "../../../shared/providers.ts";
+import type { HandoffConfig, HandoffUnassign, ListStatus } from "../../../shared/providers.ts";
+import type { ReviewRecipeContext } from "../../../shared/types.ts";
+import { expandRecipe } from "../../../shared/recipeText.ts";
 import { cardRef, looksLikeOurs } from "./cardRef.ts";
 
 /**
@@ -44,7 +46,7 @@ export function mergeCardRef(
   const ref = cardRef(pr);
   if (!ref) return null;
   if (ref.from === "url") return { label: ref.label, query: ref.query };
-  if (!setup?.prefix || !looksLikeOurs(ref, setup.prefix)) return null;
+  if (!looksLikeOurs(ref, setup?.prefix, false)) return null;
   return { label: ref.label, query: ref.query };
 }
 
@@ -104,15 +106,83 @@ export function movesCard(current: string, pick: string): boolean {
 const eqStatus = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 
 /**
- * The list's own name for "ready for QA", found by matching rather than
- * assumed — one workspace spells it "Ready for QA", another "ready for qa",
- * and the word is theirs, not this app's. Undefined when the list has no such
- * status, or the card is already sitting in it: either way there is nothing
- * for a "move to Ready for QA" control to offer.
+ * The list's own name for the QA hand-off status, found by matching rather
+ * than assumed — one workspace spells it "Ready for QA", another "ready for
+ * qa", a third "Testing", and the word is theirs, not this app's. Undefined
+ * when the hand-off is off, when the list has none of the names, or when the
+ * card is already sitting in the one it would move to: in each case there is
+ * nothing for a "move" control to offer.
+ *
+ * `cfg` is the workspace's hand-off setting. Names are tried in the order they
+ * were written and the first one the list HAS wins, compared without regard to
+ * case; an empty list means the one name this app shipped with. Without a
+ * `cfg` the answer is that shipped behaviour, which is what callers that have
+ * not read the settings yet get.
  */
-export function readyForQaStatus(statuses: ListStatus[], current: string): string | undefined {
-  const hit = statuses.find((s) => s.status.trim().toLowerCase() === "ready for qa");
-  return hit && !eqStatus(hit.status, current) ? hit.status : undefined;
+export function readyForQaStatus(statuses: ListStatus[], current: string, cfg?: HandoffConfig): string | undefined {
+  if (cfg && !cfg.enabled) return undefined;
+  const names = cfg?.statusNames.length ? cfg.statusNames : ["ready for qa"];
+  for (const name of names) {
+    const hit = statuses.find((s) => eqStatus(s.status, name));
+    if (hit) return eqStatus(hit.status, current) ? undefined : hit.status;
+  }
+  return undefined;
+}
+
+/**
+ * The status the review menu offers to move the card to, or "" to leave it
+ * where it is. Found by asking the list, never by assuming a word: one board's
+ * "Code Review" is another's "In review" and a third's "PR up".
+ *
+ * `names` is the workspace's own spelling, tried in the order written, compared
+ * without regard to case; the first one the list HAS wins. With none written,
+ * the guess is any status with "review" in it. With some written and none
+ * present the answer is to leave the card alone, not to guess past what the
+ * workspace said. A status that closes the card is never the answer to "put it
+ * in review", whatever it is called ("Reviewed" is done, not in review), and
+ * neither is the one the card is already in.
+ */
+export function reviewStatus(statuses: ListStatus[], current: string, names: string[]): string {
+  const open = statuses.filter((s) => s.type !== "done" && s.type !== "closed");
+  let hit: ListStatus | undefined;
+  if (names.length) {
+    for (const n of names) { hit = open.find((s) => eqStatus(s.status, n)); if (hit) break; }
+  } else hit = open.find((s) => /review/i.test(s.status));
+  return hit && !eqStatus(hit.status, current) ? hit.status : "";
+}
+
+/** The note the card gets when the "Note on card" box opens, from the
+ *  `note-on-card` wording in the prompt catalogue. `fallback` is the shipped
+ *  wording, for the seconds before the catalogue arrives and for somebody who
+ *  deleted the entry. `{who}` is the mention, so an empty one leaves no gap. */
+export function cardNoteText(body: string | undefined, fallback: string, ctx: ReviewRecipeContext): string {
+  return expandRecipe((body || "").trim() || fallback, ctx).trim();
+}
+
+/**
+ * Who the hand-off takes off the card: nobody, only the connected account, or
+ * everybody. The ids go in the same single write as the status.
+ */
+export function handoffRemovals(people: { id?: number | null; me?: boolean }[] | undefined, unassign: HandoffUnassign): number[] {
+  if (unassign === "none") return [];
+  return (people ?? [])
+    .filter((p) => unassign === "all" || p.me === true)
+    .map((p) => p.id)
+    .filter((n): n is number => n != null);
+}
+
+/**
+ * The one write the hand-off makes: the new status and, when the setting takes
+ * anybody off, their ids. `none` sends no `rem` at all rather than an empty
+ * one, so the request carries exactly what will change.
+ */
+export function handoffChanges(
+  target: string,
+  people: { id?: number | null; me?: boolean }[] | undefined,
+  unassign: HandoffUnassign,
+): { status: string; rem?: number[] } {
+  const rem = handoffRemovals(people, unassign);
+  return rem.length ? { status: target, rem } : { status: target };
 }
 
 /** The colour a board gave a status, or nothing — never an invented one. A

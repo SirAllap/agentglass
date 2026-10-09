@@ -152,7 +152,7 @@ const KEY_NAMES = new Set(["token", "credentials.json", "devices.json"]);
 const OPEN_FILES = new Set([
   "theme.json", "theme.lua", "theme.tmux.conf", "config.json", "commands.json", "review-prompts.json",
   "picker.json", "window.json", "usage-last.json", "tmux-last.json", "merge-sessions.json", "understudy.json",
-  "remote.json", "clickup-views.json", "clickup-watch.json", "tmux-override.backup.conf", "git-allowed-signers",
+  "remote.json", "clickup-views.json", "clickup-prefs.json", "clickup-watch.json", "tmux-override.backup.conf", "git-allowed-signers",
 ]);
 const OPEN_DIRS = new Set(["policy", "resurrect", "nvim-plugin"]);
 /** plugins/ opens as far as each plugin's manifest and no further. */

@@ -10,8 +10,11 @@
  */
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
-import { LEAVE_ALONE, mergeCardRef, movesCard, mergeNote, statusColor, statusOptions, readyForQaStatus } from "../src/lib/cardMove.ts";
-import type { ListStatus } from "../../shared/providers.ts";
+import { LEAVE_ALONE, mergeCardRef, movesCard, mergeNote, statusColor, statusOptions, readyForQaStatus, handoffChanges, handoffRemovals } from "../src/lib/cardMove.ts";
+import type { HandoffConfig, ListStatus } from "../../shared/providers.ts";
+import { globalStubs } from "./stubGlobal.ts";
+
+const stubGlobal = globalStubs();
 
 describe("which card is worth offering to move", () => {
   // Stricter than the chip that merely links to the card: this one writes to
@@ -187,6 +190,97 @@ describe("finding the list's own ready-for-QA status", () => {
     // nobody meant — silence is the honest answer here, not a guess.
     const board = [s("To Do", 0), s("QA", 1), s("Ready", 2)];
     expect(readyForQaStatus(board, "To Do")).toBeUndefined();
+  });
+});
+
+describe("the hand-off, as the workspace configured it", () => {
+  const on = (over: Partial<HandoffConfig> = {}): HandoffConfig => ({ enabled: true, statusNames: [], unassign: "all", ...over });
+  const board = [s("To Do", 0), s("Ready for QA", 1), s("TESTING", 2), s("Done", 3, "done")];
+
+  it("offers nothing while the setting is off, however well the board matches", () => {
+    // Off is the shipped default: "Ready for QA" is one team's column.
+    expect(readyForQaStatus(board, "To Do", on({ enabled: false }))).toBeUndefined();
+    expect(readyForQaStatus(board, "To Do", on({ enabled: false, statusNames: ["Testing"] }))).toBeUndefined();
+  });
+
+  it("matches the configured name without regard to case, and returns the list's spelling", () => {
+    expect(readyForQaStatus(board, "To Do", on({ statusNames: ["Testing"] }))).toBe("TESTING");
+  });
+
+  it("tries the names in the order written and takes the first the list has", () => {
+    expect(readyForQaStatus(board, "To Do", on({ statusNames: ["Handover", "testing", "ready for qa"] }))).toBe("TESTING");
+    expect(readyForQaStatus(board, "To Do", on({ statusNames: ["ready for qa", "testing"] }))).toBe("Ready for QA");
+  });
+
+  it("falls back to the shipped name when enabled with no names", () => {
+    expect(readyForQaStatus(board, "To Do", on())).toBe("Ready for QA");
+  });
+
+  it("offers nothing when none of the names exist, or the card is already there", () => {
+    expect(readyForQaStatus(board, "To Do", on({ statusNames: ["Handover"] }))).toBeUndefined();
+    expect(readyForQaStatus(board, "testing", on({ statusNames: ["Testing"] }))).toBeUndefined();
+  });
+
+  const people = [{ id: 1, me: true }, { id: 2 }, { id: 3 }];
+
+  it("none sends no rem at all, me sends only the connected account, all sends everybody", () => {
+    expect(handoffRemovals(people, "none")).toEqual([]);
+    expect(handoffRemovals(people, "me")).toEqual([1]);
+    expect(handoffRemovals(people, "all")).toEqual([1, 2, 3]);
+    expect(handoffRemovals([{ id: 2 }], "me")).toEqual([]);
+    expect(handoffRemovals(undefined, "all")).toEqual([]);
+  });
+
+  it("builds today's exact payload for everyone, and a bare status for nobody", () => {
+    expect(JSON.stringify(handoffChanges("Ready for QA", people, "all"))).toBe('{"status":"Ready for QA","rem":[1,2,3]}');
+    expect(JSON.stringify(handoffChanges("Ready for QA", people, "none"))).toBe('{"status":"Ready for QA"}');
+    expect(JSON.stringify(handoffChanges("Ready for QA", people, "me"))).toBe('{"status":"Ready for QA","rem":[1]}');
+    // Nobody on the card: no empty rem either, the same as before the setting.
+    expect(JSON.stringify(handoffChanges("Ready for QA", [], "all"))).toBe('{"status":"Ready for QA"}');
+  });
+
+  it("goes over the wire as one POST whose body carries exactly those changes", async () => {
+    const { api } = await import("../src/lib/api.ts");
+    const seen: { url: string; body: unknown }[] = [];
+    stubGlobal("fetch", async (url: string, init?: { body?: string }) => {
+      seen.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : null });
+      return new Response(JSON.stringify({ ok: true }));
+    });
+    await api.clickupCard("86abc", handoffChanges("Ready for QA", people, "all"), 1700);
+    await api.clickupCard("86abc", handoffChanges("Ready for QA", people, "none"), 1700);
+    const posts = seen.filter((x) => x.url.endsWith("/clickup/card"));
+    expect(posts.length).toBe(2);
+    expect(posts[0]!.body).toEqual({ id: "86abc", updated: 1700, status: "Ready for QA", rem: [1, 2, 3] });
+    expect(posts[1]!.body).toEqual({ id: "86abc", updated: 1700, status: "Ready for QA" });
+  });
+});
+
+describe("the hand-off control in the panel", () => {
+  const PANEL = readFileSync(new URL("../src/components/PrPanel.tsx", import.meta.url).pathname, "utf8");
+  const SETTINGS = readFileSync(new URL("../src/components/SettingsModal.tsx", import.meta.url).pathname, "utf8");
+  const fn = (src: string, head: string) => {
+    const at = src.indexOf(head);
+    expect(at).toBeGreaterThan(-1);
+    const next = src.indexOf("\nfunction ", at + head.length);
+    return src.slice(at, next < 0 ? undefined : next);
+  };
+
+  it("reads the workspace's setting and names no status of its own", () => {
+    const body = fn(PANEL, "function CardReadyForQaButton(");
+    expect(body).toContain("useClickupPrefs()");
+    expect(body).toContain("readyForQaStatus(statuses, task.status, handoff)");
+    const code = body.split("\n").filter((l) => !l.trim().startsWith("*") && !l.trim().startsWith("//")).join("\n");
+    expect(code).not.toMatch(/Ready for QA/);
+  });
+
+  it("keeps the one write: a single clickupCard call with the built changes", () => {
+    const body = fn(PANEL, "function CardReadyForQaButton(");
+    expect(body.match(/api\.clickupCard\(/g)?.length).toBe(1);
+    expect(body).toContain("handoffChanges(target, task.people, handoff.unassign)");
+  });
+
+  it("shows the Workflow block in Settings only for a connected ClickUp", () => {
+    expect(SETTINGS).toContain('spec.id === "clickup" && connected && <ClickUpWorkflow />');
   });
 });
 

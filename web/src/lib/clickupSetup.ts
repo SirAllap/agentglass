@@ -34,6 +34,11 @@ export interface ClickUpSetup {
   connected: boolean;
   /** `ORBIT-`, when a board has been read. Undefined is "unknown", never "none". */
   prefix?: string;
+  /**
+   * May this app change cards at all — the switch in Tasks, or the environment.
+   * Undefined is "unknown", never "off": see `writeBlock`.
+   */
+  writeEnabled?: boolean;
 }
 
 const TTL = 60_000;
@@ -54,7 +59,7 @@ export function clickupSetup(): Promise<ClickUpSetup> {
   // link for the next minute.
   inflight ??= api.clickupViews()
     .then((r) => {
-      const value: ClickUpSetup = { connected: r.connected === true, prefix: r.prefix || undefined };
+      const value: ClickUpSetup = { connected: r.connected === true, prefix: r.prefix || undefined, writeEnabled: r.writeEnabled === true };
       held = { at: Date.now(), value };
       return value;
     })

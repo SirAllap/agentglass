@@ -192,8 +192,8 @@ export interface ProviderTask {
    *
    * ClickUp lets one card live in several ("Tasks in Multiple Lists"), and on a
    * team that uses it the home list is often not the one you were looking at:
-   * a bug filed in `Defects` and pulled into a squad's list is worked from the
-   * squad's list and belongs to both. The card had no way to say so — it named
+   * a bug filed in `Defects` and pulled into a team's list is worked from the
+   * team's list and belongs to both. The card had no way to say so — it named
    * one list, which read as "this is where it is" and was half the answer.
    */
   alsoIn?: { id: string; name: string }[];
@@ -533,6 +533,58 @@ export interface ListStatus {
   type: string;
   orderindex: number;
   color?: string;
+}
+
+/**
+ * Who comes off a card when it is handed to QA. `none` leaves the assignees
+ * alone, `me` removes only the connected account, `all` removes everybody.
+ */
+export type HandoffUnassign = "none" | "me" | "all";
+
+export interface HandoffConfig {
+  /** Off until a workspace says it has a QA column. */
+  enabled: boolean;
+  /** Status names to look for, in order; the first one the card's list has wins. */
+  statusNames: string[];
+  unassign: HandoffUnassign;
+}
+
+/** The kinds of note the card bell can raise. */
+export type ClickUpBellKind = "assigned" | "status" | "mention" | "comment";
+export const CLICKUP_BELL_KINDS: readonly ClickUpBellKind[] = ["assigned", "status", "mention", "comment"];
+
+/** What each name guess was before it was a setting; an empty setting means these. */
+export const DEFAULT_SPRINT_LIST_PATTERN = "^sprint\\b";
+export const DEFAULT_READ_ONLY_FIELD_PATTERN = "do not edit";
+
+/**
+ * How one workspace uses ClickUp, as opposed to how ClickUp works. Every
+ * default is what the app did before these settings existed, except the
+ * hand-off, the note on the card and putting the reviewer on the card, which
+ * are one team's habit and start off.
+ * The three patterns are regular-expression sources, matched without regard to
+ * case; an empty string means "the default".
+ */
+export interface ClickUpPrefs {
+  handoff: HandoffConfig;
+  review: {
+    /** Status names the review menu moves a card to; empty falls back to /review/i, then leaves it alone. */
+    statusNames: string[];
+    assignReviewer: boolean;
+  };
+  flows: { noteOnCard: boolean };
+  /** Custom field that holds a PR link; empty means the guess (a name containing "github"). */
+  prLinkField: string;
+  /** Custom field drawn as a colour swatch; empty means the guess (a team-like name, else the first coloured one). */
+  swatchField: string;
+  /** Which skills count as knowing what a card is. */
+  cardSkillPattern: string;
+  assigned: { includeSubtasks: boolean };
+  /** Which list names are sprints. */
+  sprintListPattern: string;
+  /** Which custom fields are shown but never written. */
+  readOnlyFieldPattern: string;
+  bell: { kinds: ClickUpBellKind[] };
 }
 
 /** Somebody who can be put on a card: the members of the list it lives in.

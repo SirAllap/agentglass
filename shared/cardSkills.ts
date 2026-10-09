@@ -24,15 +24,29 @@ import type { SkillInfo } from "./types.ts";
 
 /** `cu` on its own is a word in too many places; as a hyphenated part of a
  *  skill's name it is unambiguous, and that is how the ones here spell it. */
-const MENTIONS = /clickup|\bcu-|-cu\b/i;
+export const DEFAULT_CARD_SKILL_PATTERN = "clickup|\\bcu-|-cu\\b";
+const MENTIONS = new RegExp(DEFAULT_CARD_SKILL_PATTERN, "i");
 
-export function cardSkills(all: SkillInfo[]): SkillInfo[] {
+/**
+ * The pattern a workspace chose, or the shipped one. A habit of naming (`acme-card`)
+ * is a person's, so it is a setting; an empty or uncompilable source is the
+ * default rather than a menu that matches nothing, because the server refuses to
+ * save one but a hand-edited file can still carry it.
+ */
+function mentions(pattern?: string): RegExp {
+  const src = (pattern ?? "").trim();
+  if (!src || src === DEFAULT_CARD_SKILL_PATTERN) return MENTIONS;
+  try { return new RegExp(src, "i"); } catch { return MENTIONS; }
+}
+
+export function cardSkills(all: SkillInfo[], pattern?: string): SkillInfo[] {
+  const re = mentions(pattern);
   return all
-    .filter((s) => MENTIONS.test(s.name) || MENTIONS.test(s.description ?? ""))
+    .filter((s) => re.test(s.name) || re.test(s.description ?? ""))
     .sort((a, b) => {
       // The ones named for it first — they are the ones being looked for — then
       // alphabetically, so the list does not reshuffle between openings.
-      const an = namedForIt(a) ? 0 : 1, bn = namedForIt(b) ? 0 : 1;
+      const an = namedForIt(a, pattern) ? 0 : 1, bn = namedForIt(b, pattern) ? 0 : 1;
       return an - bn || a.name.localeCompare(b.name);
     });
 }
@@ -51,8 +65,12 @@ export function cardSkills(all: SkillInfo[]): SkillInfo[] {
  * menu has a search box. A wrong guess hides a skill somebody needs; a group
  * heading costs a line.
  */
-export function namedForIt(s: SkillInfo): boolean {
-  return /^(clickup|cu)-/i.test(s.name);
+export function namedForIt(s: SkillInfo, pattern?: string): boolean {
+  const re = mentions(pattern);
+  // Only the shipped pattern has a spelling of "named for it" narrower than
+  // "mentions it"; a custom one is the person's own word for it, so the name
+  // matching it is the whole claim.
+  return re === MENTIONS ? /^(clickup|cu)-/i.test(s.name) : re.test(s.name);
 }
 
 /**

@@ -4,6 +4,7 @@ import { getNotifyPrefs } from "./notifyPrefsStore.ts";
 import { alertPayload, watchPayload, type NotifyPayload, type NotifyTarget } from "../../../shared/notifyPayload.ts";
 import { raiseWindow } from "./desktop.ts";
 import { gotoOfTarget } from "./notifyRoute.ts";
+import { clickupSetup, type ClickUpSetup } from "./clickupSetup.ts";
 
 /**
  * Desktop notifications, mirrored onto the notch.
@@ -1070,12 +1071,31 @@ function scheduleReopen() {
  */
 const cardLookups = new Map<string, { id: string; label: string } | null>();
 
+/**
+ * Is this note worth asking the server about at all.
+ *
+ * Nothing is asked on a machine with no ClickUp token: the empty app name that
+ * ClickUp's daemon posts with is also what every other app's notification looks
+ * like when the bus does not name it, so without this gate each of their titles
+ * crossed the local API to be answered "no card" (one request per distinct title,
+ * each answered from nothing). `setup` is the gate
+ * read the PR panel already makes, held for a minute, so this adds no request
+ * of its own. A server that could not be asked reads as not connected.
+ */
+export function shouldLookUpNote(app: string, setup: ClickUpSetup | null | undefined): boolean {
+  if (setup?.connected !== true) return false;
+  const a = app.trim().toLowerCase();
+  return !a || a.includes("clickup");
+}
+
 async function attachCard(n: SystemNote): Promise<void> {
+  // The cheap half first, so another app's note never costs the gate read.
   const app = n.app.trim().toLowerCase();
   if (app && !app.includes("clickup")) return;
   if (n.url) return;
   const title = n.summary?.trim();
   if (!title || title.length < 8) return;
+  if (!shouldLookUpNote(app, await clickupSetup())) return;
 
   // One question per distinct title. A card typically produces several
   // notifications in a row — assigned, then moved, then commented on — and they

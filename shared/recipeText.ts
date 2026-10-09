@@ -35,6 +35,18 @@ import type { ReviewRecipeContext } from "./types.ts";
  * wording is worse than showing it.
  */
 export function expandRecipe(body: string, ctx: ReviewRecipeContext): string {
+  /* A line that is only about the card — its placeholders are `{card}` and
+     `{cardUrl}` and nothing else — goes when there is no card. Left in, the
+     shipped frame's `card   {card} {cardUrl}` row reached the agent as the
+     bare word "card" and a gap, on every pull request without a tracker id.
+     Lines that mix the card with anything else are the person's sentence and
+     stay as written. With a card nothing here runs. */
+  if (!ctx.card && !ctx.cardUrl) {
+    body = body.split("\n").filter((line) => {
+      const ph = line.match(/\{\w+\}/g);
+      return !(ph && ph.every((p) => p === "{card}" || p === "{cardUrl}"));
+    }).join("\n");
+  }
   return body.replace(/\{(number|repo|head|branch|title|author|url|since|card|cardUrl|who|note|base|files|worktree)\}/g, (whole, key: string) => {
     const v = {
       number: ctx.number ? String(ctx.number) : "",

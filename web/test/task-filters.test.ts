@@ -3,9 +3,9 @@
  *
  * The chips along the top are the tags the loaded cards carry, plus `mine`,
  * plus a status picker. That answers "show me the cards tagged X" and cannot
- * answer "show me one squad's cards" — a squad is a custom field, so it had a
- * column and no chip: the board could say which squad every card belonged to
- * and could not show you one squad's.
+ * answer "show me one team's cards" — a team is a custom field, so it had a
+ * column and no chip: the board could say which team every card belonged to
+ * and could not show you one team's.
  */
 import { describe, expect, test } from "bun:test";
 import { apply, fieldsOf, liveCount, takesValues, valuesOf, EMPTY, type FilterSet } from "../src/components/tasks/filters.ts";
@@ -79,7 +79,7 @@ describe("a rule keeps or drops a card", () => {
 });
 
 describe("is set / is not set — the ones the other two cannot answer", () => {
-  /* Which cards have nobody assigned, which have no squad, which never got a
+  /* Which cards have nobody assigned, which have no team, which never got a
      due date. On a board being triaged that is most of the work, and with only
      is/is-not the closest you could get was picking every value and inverting
      — which stops being true the moment somebody adds a value. */
