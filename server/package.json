@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "AGENTGLASS_DIE_WITH_PARENT=1 bun --watch run src/index.ts",
-    "start": "bun run src/index.ts",
+    "dev": "AGENTGLASS_DIE_WITH_PARENT=1 bun --no-env-file --watch run src/index.ts",
+    "start": "bun --no-env-file run src/index.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

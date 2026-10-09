@@ -1067,6 +1067,13 @@ the log's address and device columns say who really asked. The MCP endpoint
 over HTTP has a token of its own (`AGENTGLASS_UI_MCP_TOKEN`), refused if it
 equals the browser's, the cockpit's or the app's.
 
+**The server does not read a `.env` file.** Its settings are its environment and
+its own settings file. The desktop sidecar is compiled with `.env` and
+`bunfig.toml` autoload off, and the dev server starts with `--no-env-file`, so a
+file that appears in the directory agentglass was launched from changes
+nothing. A server started by hand with a bare `bun run src/index.ts` is still
+bun's default and reads one; the supported starts do not.
+
 Beyond the knobs, **scope is itself a boundary**: with a project open, git
 writes and git reads, the terminal, chat, pull-request actions and editor opens
 are all refused outside it.
