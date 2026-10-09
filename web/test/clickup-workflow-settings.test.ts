@@ -76,7 +76,7 @@ describe("steps", () => {
   });
   test("each step is a card with a number, a title, where it shows and a one-line purpose", () => {
     expect(html).toContain('aria-label="Step 1: Button on a pull request"');
-    expect(html).toContain("Shows on pull request › card block");
+    expect(html).toContain("The button in a pull request’s card block, when the pull request names a card, its list has “Ready for QA” and the card is not in it already");
     expect(html).toContain("Move the card to");
     expect(html).toContain("Take people off the card");
     expect(html).toContain("Preselect");

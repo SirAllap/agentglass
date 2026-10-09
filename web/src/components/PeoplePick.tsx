@@ -46,6 +46,8 @@ export interface PeoplePickProps {
   face: (m: ListMember) => ReactNode;
   /** A heading to draw before this row, when it opens a group ("Suggested", "Everyone"). */
   groupBefore?: (m: ListMember, prev: ListMember | undefined) => string | undefined;
+  /** A row that cannot be changed from here, and why (the person is put on by another setting): drawn as it is, disabled. */
+  locked?: (m: ListMember) => string | undefined;
   /** A few words after a name, for why somebody is up the list ("pull request author · on the card"). */
   note?: (m: ListMember) => string | undefined;
   /** After the list, outside the scroll: a choice that is not a person ("Nobody"). */
@@ -104,7 +106,7 @@ export function PeoplePick(p: PeoplePickProps) {
               {divide && <div className="my-1" style={{ borderTop: LINE }} />}
               {heading && <div className="px-2 pt-1.5 pb-0.5 text-[9.5px] uppercase tracking-[0.1em]" style={{ color: "var(--text4)" }}>{heading}</div>}
               <button className="w-full text-left px-2 py-1.5 hover:bg-white/5 flex items-center gap-2 disabled:opacity-70"
-                disabled={saving} onClick={() => p.onPick(m)}>
+                disabled={saving || !!p.locked?.(m)} title={p.locked?.(m)} onClick={() => p.onPick(m)}>
                 {p.face(m)}
                 <span className="flex-1 min-w-0 truncate text-[11.5px]" title={m.name}
                   style={{ color: on ? "var(--success)" : "var(--text2)" }}>

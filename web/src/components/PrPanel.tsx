@@ -7548,7 +7548,8 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
   const [on, setOn] = useState<Set<number>>(new Set());
   const [was, setWas] = useState<Set<number>>(new Set());
   const [pick, setPick] = useState<string>("");
-  const [q, setQ] = useState("");
+  const peopleBtn = useRef<HTMLButtonElement>(null);
+  const [peopleOpen, setPeopleOpen] = useState(false);
   /* Folded away, and it comes back.
      This is the optional half of the errand and most presses of this menu are
      only about the reviewer — so it can be put away to a strip, which leaves
@@ -7700,7 +7701,8 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
   if (!ref || (!stepOn && !assignReviewer)) return null;
 
   /* The app's one ordering (lib/peopleOrder): who is ticked, then you, then everyone by name. */
-  const people = orderMembers(members, effective, q);
+  const people = orderMembers(members, effective);
+  const onPeople = people.filter((m) => effective.has(m.id));
   if (folded) {
     return (
       <button onClick={() => onFold(false)} title={`Also move ${ref.label} in ClickUp`}
@@ -7802,36 +7804,34 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
               {unmappedNote && <div className="mt-1 text-[9.5px]" role="status" style={{ color: "var(--warning-ink)" }}>{unmappedNote}</div>}
             </div>
           )}
-          {assignReviewer && <>
-          <div className="px-2 pt-2 shrink-0">
-            <div className="text-[9px] uppercase tracking-[0.16em] mb-1" style={{ color: "var(--text4)" }}>Assigned</div>
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter people…" spellCheck={false}
-              className={`w-full ${INPUT}`}
-              style={INPUT_STYLE} />
-          </div>
-          <div className="overflow-y-auto agx-scroll flex-1 min-h-0 py-1">
-            {members === null && <div className="px-3 py-2 text-[11px]" style={{ color: "var(--text3)" }}>Reading the team…</div>}
-            {people.map((m) => (
-              <button key={m.id} onClick={() => setOn((cur) => { const n = new Set(cur); if (n.has(m.id)) n.delete(m.id); else n.add(m.id); return n; })}
-                disabled={!!blocked || ensuredIds.includes(m.id)} title={blocked ?? (ensuredIds.includes(m.id) ? "Put on the card by the move item’s “Also assign” setting" : undefined)}
-                className="agx-mi w-full text-left flex items-center gap-2 px-2.5 py-1.5 text-[11px] disabled:opacity-60 disabled:cursor-default" style={{ color: "var(--text2)" }}>
-                {/* The face, as everywhere else people are drawn in this app.
-                    Two initials is a puzzle in a workspace of five hundred. */}
-                {m.avatar
-                  ? <img src={m.avatar} alt="" loading="lazy" referrerPolicy="no-referrer"
-                      style={{ width: 16, height: 16, borderRadius: 999, objectFit: "cover", flexShrink: 0 }} />
-                  : <span className="shrink-0 rounded-full inline-flex items-center justify-center"
-                      style={{ width: 16, height: 16, background: m.color || "var(--bg4)", color: "#fff", fontSize: 8 }}>
-                      {m.initials}
-                    </span>}
-                <span className="truncate" style={{ color: effective.has(m.id) ? "var(--success)" : "var(--text2)" }}>
-                  {m.name}{m.me ? " · you" : ""}
+          {assignReviewer && (
+            <div className="px-2 pt-2 pb-2 shrink-0" data-menu-people="">
+              <div className="text-[9px] uppercase tracking-[0.16em] mb-1" style={{ color: "var(--text4)" }}>Assigned</div>
+              {/* The app's one people picker (components/PeoplePick), opened from a trigger that says who is on:
+                  the same control the card's Assigned select is, with the filter box, the ticks and the ordering. */}
+              <button ref={peopleBtn} onClick={() => setPeopleOpen((v) => !v)} disabled={!!blocked}
+                className="agx-btn w-full text-left rounded px-1.5 py-1 text-[11px] flex items-center gap-1.5 min-w-0 hover:bg-white/5 disabled:opacity-60 disabled:cursor-default" style={{ border: EDGE }}>
+                {!!onPeople.length && (
+                  <span className="inline-flex items-center shrink-0">
+                    {onPeople.slice(0, 4).map((m, n) => <span key={m.id} className="inline-flex rounded-full" style={{ marginLeft: n ? -4 : 0, boxShadow: "0 0 0 1.5px var(--surface-card)" }}>{memberFace(m)}</span>)}
+                  </span>
+                )}
+                <span className="min-w-0 truncate" style={{ color: onPeople.length ? "var(--text2)" : "var(--text4)" }}>
+                  {members === null ? "Reading the team…" : onPeople.map((m) => (m.me ? "you" : m.name)).join(", ") || "nobody"}
                 </span>
-                {effective.has(m.id) && <span className="ml-auto flex" style={{ color: "var(--success-ink)" }}><DoneIcon size={ICON.xs} /></span>}
+                <span className="ml-auto shrink-0" style={{ color: "var(--text4)" }}><CaretIcon size={ICON.xs} /></span>
               </button>
-            ))}
-          </div>
-          </>}
+              {peopleOpen && !blocked && (
+                <PeoplePick anchor={peopleBtn} members={people} busy={members === null}
+                  isOn={(m) => effective.has(m.id)}
+                  locked={(m) => (ensuredIds.includes(m.id) ? "Put on the card by the move item’s “Also assign” setting" : undefined)}
+                  dividerBefore={(m, prev) => effective.has(m.id) !== effective.has(prev.id)}
+                  onPick={(m) => setOn((cur) => { const n = new Set(cur); if (n.has(m.id)) n.delete(m.id); else n.add(m.id); return n; })}
+                  onClose={() => setPeopleOpen(false)}
+                  face={memberFace} />
+              )}
+            </div>
+          )}
         </>
       )}
     </div>

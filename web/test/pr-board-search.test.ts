@@ -746,8 +746,11 @@ describe("the ClickUp half, as its own controls", () => {
   });
 
   it("draws people as faces, with their own colour when there is no picture", () => {
-    expect(src).toContain("referrerPolicy=\"no-referrer\"");
-    expect(src).toContain("background: m.color || \"var(--bg4)\"");
+    /* One face for the whole app (AssignPicker's Face, which the panel's memberFace draws). */
+    const face = require("node:fs").readFileSync(new URL("../src/components/AssignPicker.tsx", import.meta.url), "utf8") as string;
+    expect(face).toContain("referrerPolicy=\"no-referrer\"");
+    expect(face).toContain("background: m.color || \"var(--bg4)\"");
+    expect(src).toContain("return <Face m={p} />;");
   });
 
   it("stacks under the people rather than widening the menu", () => {

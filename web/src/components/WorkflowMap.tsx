@@ -9,7 +9,7 @@ import type { StepBlock } from "../../../shared/providers.ts";
 import { blocksSentence, blockNeedsValue, stepIsEmpty, triggerOf } from "../lib/stepBlocksView.ts";
 import { HIT, ICON } from "../lib/iconSize.ts";
 import {
-  STEP_ORDER, allStatuses, isActive, moments, needsStatus, suggestStatus,
+  STEP_ORDER, allStatuses, isActive, moments, needsStatus, suggestStatus, whereWhen,
   type MapSpace, type Moment, type Nouns, type Step, type StepKind, type TrackerAdapter,
 } from "../lib/workflowMap.ts";
 import {
@@ -329,6 +329,7 @@ export function WorkflowMap(p: MapProps) {
     const bad = !!pill && (pill.tone === "none" || pill.tone === "ignored");
     const open = openCov.has(st.kind);
     const Icon = GLYPH[st.kind];
+    const wh = whereWhen(st, n);
     const trig = triggerOf(st.kind);
     const empty = !!trig && stepIsEmpty(trig, st.blocks ?? []);
     const moveBlock = st.blocks?.find((x): x is Extract<StepBlock, { type: "move" }> => x.type === "move");
@@ -345,7 +346,7 @@ export function WorkflowMap(p: MapProps) {
           <span className="wfm-pin" data-lg="" aria-hidden>{num}</span>
           <div className="flex flex-col gap-0.5 min-w-0">
             <h3 className="m-0 text-[13px] font-bold">{m.title}</h3>
-            <span className="inline-flex gap-1 items-center text-[11px]" style={{ color: "var(--text3)" }}><Icon size={ICON.xs} /> Shows on {m.shows}</span>
+            <span className="inline-flex gap-1 items-center text-[11px]" style={{ color: "var(--text3)" }}><Icon size={ICON.xs} /> {wh.where}, when {wh.when}</span>
           </div>
           <div className="wfm-acts">
             {dormant ? <Badge>Not active · changes off</Badge> : empty ? <Badge tone="warn">Needs a block</Badge> : awaiting ? <Badge tone="warn">Needs a status</Badge> : null}

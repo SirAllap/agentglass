@@ -128,17 +128,15 @@ export interface Moment {
   /** The status is optional: no status is a real answer ("Leave it there"). */
   optional: boolean;
   blurb: string;
-  /** Where it shows, for the line under the preview. */
-  shows: string;
 }
 
 export function moments(n: Nouns): Record<StepKind, Moment> {
   return {
-    move: { title: "Button on a pull request", needs: true, optional: false, blurb: `A button in the pull request’s ${n.item} block. What it does is the blocks below, top to bottom.`, shows: `pull request › ${n.item} block` },
-    menu: { title: "Item in the review menu", needs: true, optional: false, blurb: "An item in the review menu. What it does is the blocks below, top to bottom.", shows: "pull request › review menu" },
-    merge: { title: "Option in the merge dialog", needs: true, optional: true, blurb: "A choice at merge time. The blocks run when the merge is confirmed; with no move it reads “Leave it there”.", shows: "pull request › merge dialog" },
-    people: { title: "Assigned list in the review menu", needs: false, optional: false, blurb: `The ${n.item}’s members, to put on or take off.`, shows: "pull request › review menu" },
-    note: { title: "Note button on a pull request", needs: false, optional: false, blurb: `Writes a comment on the ${n.item}.`, shows: `pull request › ${n.item} block, and the ${n.item}` },
+    move: { title: "Button on a pull request", needs: true, optional: false, blurb: `A button in the pull request’s ${n.item} block. What it does is the blocks below, top to bottom.` },
+    menu: { title: "Item in the review menu", needs: true, optional: false, blurb: "An item in the review menu. What it does is the blocks below, top to bottom." },
+    merge: { title: "Option in the merge dialog", needs: true, optional: true, blurb: "A choice at merge time. The blocks run when the merge is confirmed; with no move it reads “Leave it there”." },
+    people: { title: "Assigned list in the review menu", needs: false, optional: false, blurb: `The ${n.item}’s members, to put on or take off.` },
+    note: { title: "Note button on a pull request", needs: false, optional: false, blurb: `Writes a comment on the ${n.item}.` },
   };
 }
 
@@ -146,6 +144,28 @@ const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLow
 
 /** A step that needs a status and has none: it does nothing yet, and the map says so. */
 export const needsStatus = (s: Step, m: Moment): boolean => m.needs && !m.optional && !movesNothing(s) && !s.status;
+
+/**
+ * Where a step shows and when, in plain words: the place in agentglass, then the real condition the
+ * place checks before it draws the control. Every place draws only for a pull request that names a card
+ * (the card is "linked"); the hand-off button also needs the card's list to have the status it moves to,
+ * and the card not to be in it already (see readyForQaStatus), unless the status is asked when it runs.
+ */
+export function whereWhen(s: Step, n: Pick<Nouns, "item">): { where: string; when: string } {
+  const linked = `the pull request names a ${n.item}`;
+  switch (s.kind) {
+    case "move": {
+      const move = s.blocks?.find((b) => b.type === "move");
+      const when = movesNothing(s) ? `${linked}` : move?.ask ? `${linked}; you pick the status when you press it`
+        : s.status ? `${linked}, its list has “${s.status}” and the ${n.item} is not in it already` : `${linked} and its list has the status to move to`;
+      return { where: `The button in a pull request’s ${n.item} block`, when };
+    }
+    case "menu": return { where: "The item in a pull request’s Review menu", when: linked };
+    case "merge": return { where: "The option in the merge dialog", when: linked };
+    case "people": return { where: "The Assigned list in a pull request’s Review menu", when: linked };
+    case "note": return { where: `The Note button in a pull request’s ${n.item} block`, when: linked };
+  }
+}
 
 /** A step does something once it has what it needs. One with blocks and none of them a move does something when it has any block. */
 export const isActive = (s: Step, m: Moment): boolean => !m.needs || m.optional || (movesNothing(s) ? s.blocks!.length > 0 : !!s.status);
