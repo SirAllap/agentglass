@@ -43,7 +43,7 @@ describe("the window route's idea of a session name", () => {
   it("only a window that starts somewhere needs a directory", () => {
     // Closing one whose checkout was deleted must still work.
     expect(route).toContain('b.op === "new" || b.op === "split"');
-    expect(route).toContain("needsCwd && (");
+    expect(route).toContain("starts && (");
   });
 
   it("a name that tmux would read as a window target is still refused", () => {
