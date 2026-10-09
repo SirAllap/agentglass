@@ -197,4 +197,13 @@ describe("a level 2 write against a server started at each level", () => {
     expect(r.status).toBe(400);
     expect(((await r.json()) as { error: string }).error).toBe("unknown control command");
   }, SERVER_BOOT_MS);
+
+  test("a real door with a wrong argument says which argument and what it takes, at the level it is allowed", async () => {
+    const s = await boot({ AGENTGLASS_CONTROL_LEVEL: "1" });
+    for (const body of [{ cmd: "ui", do: "panel.open", args: { what: "stat" } }, { cmd: "open", what: "stat" }]) {
+      const r = await post(s, body);
+      expect(r.status).toBe(400);
+      expect(((await r.json()) as { error: string }).error).toContain('does not take that "what"; accepted: one of ');
+    }
+  }, SERVER_BOOT_MS);
 });

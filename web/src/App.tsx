@@ -84,6 +84,8 @@ import { MachinePanel, type MachineTab } from "./components/MachinePanel.tsx";
 import { ZoomToast } from "./components/ZoomToast.tsx";
 import { UpdateToast } from "./components/UpdateToast.tsx";
 import { AgentChangeChip } from "./components/AgentChangeChip.tsx";
+import { uiOf } from "../../shared/uiActions.ts";
+import { back, VIEW_SWITCHERS } from "./lib/agentBack.ts";
 import { subscribeSettings } from "./lib/settingsRegistry.ts";
 import { NoteToasts } from "./components/NoteToasts.tsx";
 import { AskedBanners } from "./components/AskedBanners.tsx";
@@ -333,6 +335,8 @@ export default function App() {
   machineOpenRef.current = machine != null;
   const wsViewRef = useRef(wsView);
   wsViewRef.current = wsView;
+  // An agent's view switch leaves a "back to where you were" chip (lib/agentBack.ts).
+  useEffect(() => { back.noteView(wsView); }, [wsView]);
   // The catalog is the one panel that can open *over* the workspace, from the
   // rail. Escape has to be able to tell the two apart, or one keystroke closes
   // both and you lose the shell you were looking at to read a description.
@@ -1114,7 +1118,13 @@ export default function App() {
     };
     return subscribeControl((cmd, rid, meta) => {
       const hidden = document.visibilityState === "hidden";
-      const run = () => controlReplyLater(cmd, { ...ctx, serverLevel: meta?.level });
+      // A door that can replace the whole view leaves a way back (lib/agentBack.ts),
+      // armed here, when it actually runs: a held open runs later than it arrived.
+      const run = () => {
+        const door = uiOf(cmd as { cmd: string } & Record<string, unknown>)?.do;
+        if (door && VIEW_SWITCHERS.includes(door)) back.arm(wsViewRef.current, meta?.as);
+        return controlReplyLater(cmd, { ...ctx, serverLevel: meta?.level, as: meta?.as });
+      };
       // A command off the server's socket says how to show it; one without
       // (a window's own button) is the person's own doing, so it is now.
       const go = routeControl(cmd, meta?.present ?? "now", focusKindOf(document.activeElement), sinceInputMs());
@@ -1408,7 +1418,7 @@ export default function App() {
       <AskedBanners />
       <ZoomToast zoom={zoomed} />
       <UpdateToast />
-      <AgentChangeChip />
+      <AgentChangeChip onBack={goView} />
       <SettingsModal
         open={settingsOpen}
         jump={settingsJump}

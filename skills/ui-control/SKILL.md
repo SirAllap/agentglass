@@ -60,7 +60,10 @@ Read the sentence and do what it says; do not retry the same call.
    pull-request notices, the search engine, what Tasks shows, single-key
    shortcuts). Not notification kinds, channels or voices, the home page, tokens,
    remote access, plugin trust or the gate: those are the person's. The
-   person gets an "An agent changed X" chip with Undo. The palette and the zoom are in this level too, because they persist. The
+   person gets a "<your --as name> changed X" chip with Undo, on screen for a minute (so
+   keep the name: without one it says "An agent"). A refused value says what IS
+   accepted ("accepted: one of split, inline"): correct it from that sentence in
+   one step, do not probe. The palette and the zoom are in this level too, because they persist. The
    owner can limit the server to level 1: then none of these is offered, and
    asking anyway is refused with a sentence that says the limit is theirs.
 3. **An effect outside the app** (merge, push, send, anything touching a token,
@@ -93,6 +96,19 @@ naming a level is the answer, not a puzzle. Ask the person.
   person has just asked you, in this conversation, to show them something ("show
   me the diff settings"): that runs at once, even over their typing. A call that
   carries no name (`--as`) is `now` too, so keep the name.
+- **Show me without taking the chat away.** `view.open`, `pane.open`,
+  `workspace.toggle` (and the doors that land on a view: `chat.new`, `git.*`,
+  `lantern.schedule`, `terminal.resume`) replace the whole window, and the person
+  loses the conversation where you are talking to them. For "show me" prefer what
+  floats over the current view and leaves the chat where it is: `panel.open`,
+  `machine.open`, `peek.file`, the bench (`bench.toggle`, `bench.file`,
+  `bench.board`), `settings.open`. (`git.modal` is not one of these: it lands on
+  the Git view first.) Use a view switch only when what they asked to see is that
+  view. Then say in chat, BEFORE you switch, what you are about to show and where
+  you are putting them; and when you have shown it, switch back with `view.open`
+  to where they were (`agentglass-ui read view` tells you). The window also leaves
+  them a "Back to <view> · <your name>" chip for a minute, one click, so keep
+  the name on the call.
 - **Do not change a setting you were not asked to.** A setting is the person's
   taste, and "this would look better" is not a request.
 - **Undo a change** by setting the value back to `prev`, which the answer

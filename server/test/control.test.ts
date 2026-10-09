@@ -3,7 +3,7 @@
 // null and never reach a client. These pin the closed sets it accepts.
 import { describe, expect, test } from "bun:test";
 import { parseControlCmd, controlId, UI_MAX_LEVEL } from "../src/control.ts";
-import { UI_ACTIONS, parseUi } from "../../shared/uiActions.ts";
+import { UI_ACTIONS, parseUi, parseArgs, argsRefusal } from "../../shared/uiActions.ts";
 
 describe("parseControlCmd — view", () => {
   test("accepts every real view id", () => {
@@ -300,5 +300,30 @@ describe("parseControlCmd — the old spellings are registry entries", () => {
     expect(parseControlCmd({ cmd: "theme", name: "github-dark-dimmed" })).not.toBeNull();
     expect(parseControlCmd({ cmd: "theme", name: "x y" })).toBeNull();
     expect(parseControlCmd({ cmd: "theme", name: "x".repeat(65) })).toBeNull();
+  });
+});
+
+// Measured: a real door with a wrong argument answered the bare "unknown control
+// command", so a caller could not tell a typo in the door from a typo in a value.
+describe("argsRefusal — a wrong argument names itself and what the door takes", () => {
+  test("a wrong enum lists the values, a missing one says it is needed", () => {
+    const d = UI_ACTIONS["panel.open"];
+    expect(argsRefusal("panel.open", d, { what: "stat" })).toMatch(/^panel\.open does not take that "what"; accepted: one of .*stats/);
+    expect(argsRefusal("panel.open", d, {})).toMatch(/^panel\.open needs "what": one of /);
+    expect(argsRefusal("panel.open", d, [])).toBe("panel.open takes its arguments as an object");
+  });
+
+  test("every door: whatever parseArgs refuses for a wrong value gets a sentence, and a good one gets null", () => {
+    for (const [id, d] of Object.entries(UI_ACTIONS)) {
+      for (const [k, spec] of Object.entries(d.args)) {
+        if (spec.t === "pathKind") continue;
+        const bad = argsRefusal(id, d, { [k]: { nested: true } });
+        // Either this argument is the culprit, or another required one is missing first.
+        expect(bad, `${id}.${k}`).toMatch(/needs "|does not take that "/);
+        expect(bad).toContain(id);
+      }
+    }
+    expect(argsRefusal("panel.open", UI_ACTIONS["panel.open"], { what: "stats" })).toBeNull();
+    expect(parseArgs(UI_ACTIONS["panel.open"], { what: "stats" })).not.toBeNull();
   });
 });

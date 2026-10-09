@@ -56,7 +56,7 @@ import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, onGateCh
 import { budgetHoldFor } from "./budget.ts";
 import { gateCwd, gateRuleFor } from "./gaterules.ts";
 import { parseControlCmd, controlId, awaitControl, settleControl, parseReply, nextControlRid, callerRequestId, CONTROL_TIMEOUT_ERROR, changedSetting, makeWriteLimiter, makeRefusalThrottle, controlSwitch, controlRefusal } from "./control.ts";
-import { isReadAction, isWriteKind, describeUiActions, presentOf, UI_ACTIONS } from "../../shared/uiActions.ts";
+import { isReadAction, isWriteKind, describeUiActions, presentOf, argsRefusal, entryOfBody, levelAllows, UI_ACTIONS } from "../../shared/uiActions.ts";
 import { outwardAction, outwardLine } from "./outward.ts";
 import { listLanes } from "./lanes.ts";
 import { gateLane, dropBrowserTarget, askBrowser, browserReadyCount, exportAudit, noteBrowserManager, noteBrowserReady, parseAsk, setBrowserSink, settleBrowser, type BrowserOp, runSteps, waitForEvents, recordFrames, traceRecording, auditAsScript, downloadFile, runLanes, withObservation, parseScrape, runScrape } from "./browserdrive.ts";
@@ -3745,7 +3745,12 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
          * stays the bare 400: it must not list what exists above its level.
          */
         const no = controlRefusal(b, CONTROL);
-        if (!no) return json({ ok: false, error: "unknown control command" }, 400);
+        if (!no) {
+          // A door this server would run, with arguments it will not: say which argument and what it takes.
+          const e = entryOfBody(b as Record<string, unknown>);
+          const bad = e && levelAllows(e.def, CONTROL.level) ? argsRefusal(e.id, e.def, (b as { cmd?: unknown }).cmd === "ui" ? (b as { args?: unknown }).args : b) : null;
+          return json({ ok: false, error: bad ?? "unknown control command" }, 400);
+        }
         const refusedFrom = req.headers.get("origin");
         const refusedAs = callerRequestId((b as { as?: unknown }).as);
         const refusedWho = caller ? { ...asActor(caller)!, fromPage: !!refusedFrom && vouchedOrigin(refusedFrom) } : caller;

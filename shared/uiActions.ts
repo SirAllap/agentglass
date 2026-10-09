@@ -478,6 +478,46 @@ export function parseArgs(d: UiActionDef, raw: unknown): Record<string, unknown>
   return d.refine ? d.refine(out) : out;
 }
 
+/** What one argument takes, as a sentence fragment: the part of a refusal that
+ *  lets the caller correct itself instead of guessing. */
+export function specAccepts(spec: ArgSpec): string {
+  switch (spec.t) {
+    case "enum": return `one of ${spec.values.join(", ")}`;
+    case "num": return `one of ${spec.values.join(", ")}`;
+    case "bool": return "true or false";
+    case "slug": return `a name of letters, digits and . _ : - (at most ${spec.max})`;
+    case "ref": return "a git ref";
+    case "int": return `a whole number from 0 to ${spec.max}`;
+    case "abspath": return "an absolute path without . or .. segments";
+    case "relpath": return "a relative path without . or .. segments";
+    case "pathKind": return "file or dir";
+    case "scalar": return "a string, number or boolean";
+  }
+}
+
+/**
+ * Why `parseArgs` said no, in a sentence: the first argument that is missing or
+ * wrong, and what it takes. Measured: the bare "unknown control command" for a
+ * door that exists (`panel.open` with `what: "stat"`) gave the caller nothing to
+ * correct. Only ever called for a door the server would run, so it lists nothing
+ * above the level. Null when the arguments are fine (a `refine` refusal is then
+ * the cause, and says so).
+ */
+export function argsRefusal(id: string, d: UiActionDef, raw: unknown): string | null {
+  if (raw !== undefined && (raw === null || typeof raw !== "object" || Array.isArray(raw))) return `${id} takes its arguments as an object`;
+  const b = (raw ?? {}) as Record<string, unknown>;
+  for (const [k, spec] of Object.entries(d.args)) {
+    if (spec.t === "pathKind") continue;
+    const optional = "optional" in spec && spec.optional;
+    if (b[k] === undefined) {
+      if (!optional) return `${id} needs "${k}": ${specAccepts(spec)}`;
+      continue;
+    }
+    if (one(spec, b[k]) === undefined) return `${id} does not take that "${k}"; accepted: ${specAccepts(spec)}`;
+  }
+  return parseArgs(d, raw) ? null : `${id} refused that combination of arguments`;
+}
+
 /**
  * A `ui` command from an id and untrusted args, or null. Deny by default: an id
  * that is not in `registry` is refused, and so is an entry above `maxLevel`.

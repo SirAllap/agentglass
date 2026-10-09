@@ -52,6 +52,9 @@ export interface UiCtx {
   /** The level the server holds (it tells the window with each command), so
    *  `settings.list` says what is writable HERE. Absent: the window's own cap. */
   serverLevel?: 1 | 2 | 3;
+  /** The name the caller stamped on the call (`--as`), so a setting change can
+   *  say who made it on its chip. */
+  as?: string;
 }
 
 /** A handler of an `open` entry returns nothing; a handler of a `read` entry
@@ -94,9 +97,9 @@ export const UI_HANDLERS: { [Id in UiActionId]: Handler<Id> } = {
   // Through the appearance.theme setting, as the Settings row does, so a palette
   // change from an agent is validated the same way, leaves the undo chip, and the
   // window repaints itself on the setting's own announcement.
-  "theme.set": (a) => {
+  "theme.set": (a, c) => {
     const cur = answered(settings.get("appearance.theme")) as { value?: unknown };
-    return answered(settings.set("appearance.theme", nextThemeId(String(cur.value ?? ""), a, THEMES.map((t) => t.id))));
+    return answered(settings.set("appearance.theme", nextThemeId(String(cur.value ?? ""), a, THEMES.map((t) => t.id)), c.as));
   },
   "zoom.step": (a, c) => c.zoom(a.dir),
   "settings.open": (a) => openSettings(a.page, a.row),
@@ -107,7 +110,7 @@ export const UI_HANDLERS: { [Id in UiActionId]: Handler<Id> } = {
   // instead of an ok whose value says it did not happen.
   "settings.get": (a) => answered(settings.get(a.id)),
   "settings.list": (_a, c) => settings.list(c.serverLevel),
-  "settings.set": (a) => answered(settings.set(a.id, a.value)),
+  "settings.set": (a, c) => answered(settings.set(a.id, a.value, c.as)),
   "machine.open": (a, c) => c.setMachine(a.tab),
   "project.picker": (_a, c) => c.setProjectOpen(true),
   "windows.switcher": (_a, c) => c.setWindowsOpen(true),

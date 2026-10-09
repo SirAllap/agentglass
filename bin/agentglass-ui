@@ -236,6 +236,9 @@ def explain(status, body, id=None):
         return {"ok": False, "error": err}
     if status in (401, 403):
         return {"ok": False, "error": "the server did not accept this token; open a new pane from agentglass, which hands it the current one"}
+    if status == 400 and isinstance(err, str) and err != "unknown control command":
+        # The server named the argument and what it takes: that sentence is the answer.
+        return {"ok": False, "error": err}
     if status == 400:
         return {"ok": False, "error": f"agentglass refused {id or 'the command'}: an unknown door, a level this server does not allow, or an argument outside its set"}
     if status >= 400 or not body:

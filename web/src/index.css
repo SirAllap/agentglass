@@ -826,6 +826,17 @@
   to { opacity: 1; transform: translate(-50%, 0); }
 }
 
+/* The agent chips' entrance (AgentOffers.tsx). Only on the way in, and short:
+   the corner is shared and a chip that is replaced must not leave an old one
+   sliding out beside the new. */
+@keyframes agx-chip-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  @keyframes agx-chip-in { from { opacity: 0; } to { opacity: 1; } }
+}
+
 /* The phone mark in the tmux tab strip.
  *
  * Opacity and not scale or colour: the mark is 9px in a row of 10px text, and

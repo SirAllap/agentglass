@@ -79,10 +79,29 @@ export function idleDueAt(lastInputAt: number | null, heldAt: number): number {
   return Math.max(lastInputAt ?? 0, heldAt) + IDLE_APPLY_MS;
 }
 
+// ── how long the chips stay ─────────────────────────────────────────────────
+
+/** A minute, on screen until Undo or the cross. 20 s went by unseen while the
+ *  person was reading the terminal the chip sits over; a change to their own
+ *  preferences is worth a minute of a corner, and the cross is one click. */
+export const CHIP_MS = 60_000;
+
+/** How far the chip column sits above the bottom edge. The Git view's shortcut
+ *  bar is 22 px tall and the terminal's last rows sit right on the edge: measured
+ *  in the rendered app, a chip at 16 px covered the shortcuts it was drawn over.
+ *  22 for the bar, 18 of air. */
+export const CHIP_BOTTOM = 40;
+
 // ── the chip's words ────────────────────────────────────────────────────────
 
+/** Who an agent's chip says did it: the name the caller stamped with `--as`, else "An agent". */
+export const agentName = (as: string | undefined): string => as || "An agent";
+
 /** The chip's sentence: who wants to show what. `as` is a label the caller chose. */
-export const offerText = (as: string | undefined, label: string): string => `${as || "An agent"} wants to show you: ${label}`;
+export const offerText = (as: string | undefined, label: string): string => `${agentName(as)} wants to show you: ${label}`;
+
+/** The change chip's title: who changed which setting. */
+export const changeText = (as: string | undefined, label: string): string => `${agentName(as)} changed ${label}`;
 
 // ── the input clock ─────────────────────────────────────────────────────────
 

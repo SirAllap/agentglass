@@ -11,7 +11,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { UI_ACTIONS, UI_ACTION_IDS, type UiActionDef } from "../../shared/uiActions.ts";
 import {
-  decidePresent, focusKindOf, idleDueAt, offerText, noteInput, sinceInputMs, resetInputClock, lastInputAt,
+  decidePresent, focusKindOf, idleDueAt, offerText, changeText, noteInput, sinceInputMs, resetInputClock, lastInputAt,
   TYPING_MS, IDLE_APPLY_MS, MAX_OFFERS, type PresentInput,
 } from "../src/lib/quietPresent.ts";
 import { OFFER_LABELS, labelOf } from "../src/lib/offerLabels.ts";
@@ -102,6 +102,14 @@ describe("the chip's words", () => {
   test("the sentence names who and what, and falls back to 'An agent'", () => {
     expect(offerText("claude-1", "Settings > Notifications")).toBe("claude-1 wants to show you: Settings > Notifications");
     expect(offerText(undefined, "the git view")).toBe("An agent wants to show you: the git view");
+  });
+  // Measured: the setting chip said "An agent changed Default view" for a call
+  // stamped --as orchestrator-agx, so the person could not tell which of several
+  // agents had touched their preferences.
+  test("the change chip names the caller stamped with --as, and falls back to 'An agent'", () => {
+    expect(changeText("orchestrator-agx", "Default view")).toBe("orchestrator-agx changed Default view");
+    expect(changeText(undefined, "Default view")).toBe("An agent changed Default view");
+    expect(changeText("", "Default view")).toBe("An agent changed Default view");
   });
   test("a row and a file come through the label", () => {
     expect(labelOf({ cmd: "ui", do: "settings.open", args: { page: "diff", row: "wrap" } } as ControlCmd)).toBe("Settings > Diff > Wrap");
@@ -201,6 +209,14 @@ describe("the window is wired to it", async () => {
   const app = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
   const sub = app.slice(app.indexOf("return subscribeControl("));
   const body = sub.slice(0, sub.indexOf("\n  }, []);"));
+  test("the caller's name reaches the setting it changes, and the chip says it", async () => {
+    expect(body).toContain("as: meta?.as");
+    const handlers = await Bun.file(new URL("../src/lib/uiActions.ts", import.meta.url)).text();
+    expect(handlers).toContain("settings.set(a.id, a.value, c.as)");
+    expect(handlers).toMatch(/settings\.set\("appearance\.theme",[^\n]*, c\.as\)/);
+    const chip = await Bun.file(new URL("../src/components/AgentChangeChip.tsx", import.meta.url)).text();
+    expect(chip).toContain("changeText(c.as, c.label)");
+  });
   test("a command off the socket is routed with its present mode; one without is now", () => {
     expect(body).toContain('meta?.present ?? "now"');
     expect(body).toContain("routeControl(");

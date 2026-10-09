@@ -167,6 +167,11 @@ describe.skipIf(!HAVE_PY)("what the server said, as one sentence", () => {
     expect(String(r.error)).toContain("refused view.open");
   });
 
+  test("a 400 that carries the server's own sentence keeps it", () => {
+    const e = 'panel.open does not take that "what"; accepted: one of stats, skills';
+    expect(explain(400, { ok: false, error: e }, "panel.open")).toEqual({ ok: false, error: e });
+  });
+
   test("a window that said no keeps its own words; one that said yes keeps its value", () => {
     expect(explain(200, { ok: false, applied: false, error: "not exposed", id: "cli" }))
       .toEqual({ ok: false, applied: false, error: "not exposed" });

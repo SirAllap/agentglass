@@ -101,7 +101,7 @@ interface DefSpec {
   level?: 1 | 2 | 3; secret?: true;
   default: SettingValue;
   read(): SettingValue;
-  validate(raw: unknown): SettingValue | null;
+  validate: Validator;
   /** Apply it. A returned string is the pref module refusing, in its own words
    *  (a key already bound, the last task source): nothing was stored, and the
    *  sentence reaches the row and the agent alike. */
@@ -135,7 +135,7 @@ function defineSetting(s: DefSpec): SettingDef {
     validate: s.validate,
     set(raw) {
       const v = s.validate(raw);
-      if (v === null) return { ok: false, error: `not a valid value for ${s.id}` };
+      if (v === null) return { ok: false, error: refusal(s.id, s.validate) };
       const prev = get();
       const token = s.capture ? s.capture() : prev;
       const refused = s.write(v);
@@ -153,15 +153,32 @@ function defineSetting(s: DefSpec): SettingDef {
   return def;
 }
 
-const oneOf = <T extends string>(values: readonly T[]) => (raw: unknown): T | null =>
-  typeof raw === "string" && (values as readonly string[]).includes(raw) ? (raw as T) : null;
+/** A validator that can say what it takes, so a refusal names the way out. */
+export type Validator = ((raw: unknown) => SettingValue | null) & { accepts?: string | (() => string) };
+
+const accepting = <F extends (raw: unknown) => SettingValue | null>(fn: F, accepts: string | (() => string)): F & { accepts: string | (() => string) } =>
+  Object.assign(fn, { accepts });
+
+/** What a refused write says: the setting and what IS accepted, so an agent can
+ *  correct itself in one step instead of probing. Measured: the bare "not a
+ *  valid value for diff.split" left the caller guessing between "unified",
+ *  "side-by-side" and "inline". */
+export function refusal(id: string, validate: Validator): string {
+  const a = typeof validate.accepts === "function" ? validate.accepts() : validate.accepts;
+  return a ? `not a valid value for ${id}; accepted: ${a}` : `not a valid value for ${id}`;
+}
+
+const oneOf = <T extends string>(values: readonly T[]) => accepting((raw: unknown): T | null =>
+  typeof raw === "string" && (values as readonly string[]).includes(raw) ? (raw as T) : null,
+  `one of ${values.map((v) => (v === "" ? '"" (the default)' : v)).join(", ")}`);
 
 /** A whole number in range; a number outside it is refused, not clamped, so an
  *  agent that asks for 400px hears about it instead of getting 22. */
-const intIn = (min: number, max: number) => (raw: unknown): number | null =>
-  typeof raw === "number" && Number.isInteger(raw) && raw >= min && raw <= max ? raw : null;
+const intIn = (min: number, max: number) => accepting((raw: unknown): number | null =>
+  typeof raw === "number" && Number.isInteger(raw) && raw >= min && raw <= max ? raw : null,
+  `a whole number from ${min} to ${max}`);
 
-const bool = (raw: unknown): boolean | null => (typeof raw === "boolean" ? raw : null);
+const bool = accepting((raw: unknown): boolean | null => (typeof raw === "boolean" ? raw : null), "true or false");
 
 // ── appearance ──────────────────────────────────────────────────────────────
 
@@ -183,7 +200,8 @@ const appearance: SettingDef[] = [
     id: "appearance.mode", page: "appearance", section: "", label: "Mode", level: 2, default: "system",
     read: () => themeMode(),
     // `desktop` is on offer only where the desktop publishes a palette, like the row.
-    validate: (raw) => (raw === "desktop" ? (desktopPaletteName() ? "desktop" : null) : oneOf(MODE_VALUES)(raw)),
+    validate: accepting((raw) => (raw === "desktop" ? (desktopPaletteName() ? "desktop" : null) : oneOf(MODE_VALUES)(raw)),
+      () => `one of ${[...MODE_VALUES, ...(desktopPaletteName() ? ["desktop"] : [])].join(", ")}`),
     write: (v) => { applyThemeMode(v as ThemeMode); },
     capture: captureTheme, restore: restoreTheme,
   }),
@@ -241,7 +259,8 @@ const terminal: SettingDef[] = [
   defineSetting({
     id: "terminal.font", page: "terminal", section: DRAWS, label: "Font", level: 2, default: "",
     read: () => currentTermFont(),
-    validate: (raw) => { const v = oneOf(FONT_IDS)(raw); return v !== null && fontOffered(v) ? v : null; },
+    validate: accepting((raw) => { const v = oneOf(FONT_IDS)(raw); return v !== null && fontOffered(v) ? v : null; },
+      () => `one of ${FONT_IDS.filter(fontOffered).map((v) => (v === "" ? '"" (the default)' : v)).join(", ")}`),
     write: (v) => setTermFont(v as string),
   }),
   defineSetting({
@@ -252,7 +271,8 @@ const terminal: SettingDef[] = [
     id: "terminal.lineHeight", page: "terminal", section: DRAWS, label: "Line height", level: 2, default: DEFAULT_LINE_HEIGHT,
     read: () => currentTermLineHeight(),
     // Hundredths, the way the stepper moves it; the pref module clamps on read as well.
-    validate: (raw) => (typeof raw === "number" && Number.isFinite(raw) && raw >= LINE_HEIGHT_MIN && raw <= LINE_HEIGHT_MAX ? Math.round(raw * 100) / 100 : null),
+    validate: accepting((raw) => (typeof raw === "number" && Number.isFinite(raw) && raw >= LINE_HEIGHT_MIN && raw <= LINE_HEIGHT_MAX ? Math.round(raw * 100) / 100 : null),
+      `a number from ${LINE_HEIGHT_MIN} to ${LINE_HEIGHT_MAX}`),
     write: (v) => setTermLineHeight(v as number),
   }),
   defineSetting({
@@ -291,7 +311,7 @@ const TABS = "Tab groups";
 const HISTORY = "History and selection";
 /** The longest free text one of these may be (rules and separators, not prose). */
 const MAX_TEXT = 200;
-const text = (raw: unknown): string | null => (typeof raw === "string" && raw.length <= MAX_TEXT ? raw : null);
+const text = accepting((raw: unknown): string | null => (typeof raw === "string" && raw.length <= MAX_TEXT ? raw : null), `a string of at most ${MAX_TEXT} characters`);
 
 const terminalMore: SettingDef[] = [
   defineSetting({
@@ -320,13 +340,14 @@ const terminalMore: SettingDef[] = [
     read: () => tabGroupRulesText(),
     // Text the module trims to nothing is stored as nothing; say that up front so
     // the value reported back is the value the next read gives.
-    validate: (raw) => { const t = text(raw); return t === null ? null : t.trim() === "" ? "" : t; },
+    validate: accepting((raw) => { const t = text(raw); return t === null ? null : t.trim() === "" ? "" : t; }, text.accepts),
     write: (v) => setTabGroupRulesText(v as string),
   }),
   defineSetting({
     id: "terminal.scrollback", page: "terminal", section: HISTORY, label: "Scrollback", level: 2, default: DEFAULT_SCROLLBACK,
     read: () => currentScrollback(),
-    validate: (raw) => (typeof raw === "number" && (SCROLLBACK_SIZES as readonly number[]).includes(raw) ? raw : null),
+    validate: accepting((raw) => (typeof raw === "number" && (SCROLLBACK_SIZES as readonly number[]).includes(raw) ? raw : null),
+      `one of ${SCROLLBACK_SIZES.join(", ")} (lines)`),
     write: (v) => setScrollback(v as number),
   }),
   defineSetting({
@@ -395,7 +416,7 @@ const keys: SettingDef[] = (Object.keys(KEY_LABELS) as ActionId[]).map((a) => de
   id: `keys.binding.${a}`, page: "keys", section: "Keys", label: KEY_LABELS[a].label, level: 2, default: DEFAULT_BINDINGS[a],
   read: () => bindings()[a],
   // Length is the module's to judge ("pick a single character"), in its own words.
-  validate: (raw) => (typeof raw === "string" && raw.length >= 1 && raw.length <= 16 ? raw : null),
+  validate: accepting((raw) => (typeof raw === "string" && raw.length >= 1 && raw.length <= 16 ? raw : null), "a key, 1 to 16 characters"),
   // The module refuses a reserved key and one another action holds, in words.
   write: (v) => { const r = rebind(a, v as string); if (!r.ok) return r.error; },
 }));
@@ -468,6 +489,8 @@ export interface AgentChange {
   prev: SettingValue;
   value: SettingValue;
   at: number;
+  /** The name the caller stamped on the call (`--as`), if it gave one. */
+  as?: string;
   /** Still offered on the chip. Cleared by undo, dismissal and expiry; the
    *  record stays so the handle keeps meaning something. */
   shown: boolean;
@@ -482,7 +505,7 @@ export const AGENT_CHANGES_KEPT = KEPT;
 export interface SettingsApi {
   list(serverLevel?: number): { id: string; page: string; section: string; label: string; writable: boolean; secret: boolean; value?: SettingValue }[];
   get(id: unknown): AgentGetResult;
-  set(id: unknown, value: unknown): AgentSetResult;
+  set(id: unknown, value: unknown, as?: string): AgentSetResult;
   undo(handle: string): boolean;
   dismiss(handle: string): void;
   changes(): readonly AgentChange[];
@@ -519,7 +542,7 @@ export function makeSettings(defs: readonly SettingDef[], now: () => number = Da
       if (d.secret) return { ok: true, id: d.id, set: !!d.get() };
       return { ok: true, id: d.id, value: d.get() };
     },
-    set(id, value) {
+    set(id, value, as) {
       const d = find(id);
       if (!d) return { ok: false, error: "not exposed" };
       if (d.secret) return { ok: false, error: "secret: not writable through this channel" };
@@ -534,7 +557,7 @@ export function makeSettings(defs: readonly SettingDef[], now: () => number = Da
       // without it that window offered an "x → x" chip whose Undo did nothing.
       if (r.prev === r.value) return { ok: true, id: d.id, prev: r.prev, value: r.value, undo: "", unchanged: true };
       const handle = `u${++seq}`;
-      log = [...log, { handle, id: d.id, label: d.label, prev: r.prev, value: r.value, at: now(), shown: true, undone: false, revert: r.revert }].slice(-KEPT);
+      log = [...log, { handle, id: d.id, label: d.label, prev: r.prev, value: r.value, at: now(), ...(as ? { as } : {}), shown: true, undone: false, revert: r.revert }].slice(-KEPT);
       touch();
       return { ok: true, id: d.id, prev: r.prev, value: r.value, undo: handle };
     },

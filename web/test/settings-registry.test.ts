@@ -104,6 +104,23 @@ describe("a value that is not valid is refused and stores nothing", () => {
     });
   }
 
+  // Measured: "not a valid value for diff.split" alone left an agent guessing
+  // between "unified", "side-by-side" and "inline". A refusal names what is accepted.
+  it("a refusal names what IS accepted", () => {
+    const say = (id: string, v: unknown) => { const r = def(id).set(v); return r.ok ? "" : r.error; };
+    expect(say("diff.split", "unified")).toBe("not a valid value for diff.split; accepted: one of split, inline");
+    expect(say("diff.wrap", "yes")).toBe("not a valid value for diff.wrap; accepted: true or false");
+    expect(say("terminal.fontSize", 400)).toMatch(/accepted: a whole number from \d+ to \d+$/);
+    expect(say("terminal.lineHeight", 9)).toMatch(/accepted: a number from [\d.]+ to [\d.]+$/);
+    expect(say("appearance.mode", "sepia")).toBe("not a valid value for appearance.mode; accepted: one of system, dark, light");
+  });
+
+  it("every def's validator says what it accepts, so a new setting cannot forget", () => {
+    for (const d of R.SETTING_DEFS) {
+      expect(R.refusal(d.id, d.validate), d.id).toContain("accepted: ");
+    }
+  });
+
   it("the desktop mode is only valid where a desktop palette exists", () => {
     expect(def("appearance.mode").set("desktop").ok).toBe(false);
   });
@@ -135,6 +152,15 @@ describe("the agent's side", () => {
     expect(s.set("notifications.sound", true)).toEqual({ ok: false, error: "not exposed" });
     expect(s.get(42)).toEqual({ ok: false, error: "not exposed" });
     expect(s.set("__proto__", 1)).toEqual({ ok: false, error: "not exposed" });
+  });
+
+  it("a write remembers the name the caller gave, for the chip to say", () => {
+    const s = api();
+    s.set("diff.wrap", true, "orchestrator-agx");
+    s.set("diff.split", "inline");
+    const [a, b] = s.changes();
+    expect(a!.as).toBe("orchestrator-agx");
+    expect(b!.as).toBeUndefined();
   });
 
   it("a write returns what it replaced and a handle that puts it back", () => {
