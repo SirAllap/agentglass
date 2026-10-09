@@ -58,6 +58,22 @@ export function mix(a: string, b: string, t: number): string {
   return `#${c.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
 }
 
+/**
+ * Dark or light. The palette's own `mode` when it says one; otherwise the
+ * background decides. A palette Omarchy derives from a theme's terminal config
+ * has no `mode` line at all (measured: a cream light theme arrived with only
+ * accent, selection, background, foreground and color0-15), and reading a
+ * missing line as "dark" painted its shadow and hover mix for the wrong end of
+ * the scale.
+ */
+function isDarkPalette(mode: string | undefined, bg: string): boolean {
+  const m = (mode ?? "").trim().toLowerCase();
+  if (m === "light") return false;
+  if (m === "dark") return true;
+  const [r, g, b] = rgb(bg)!;
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b < 128;
+}
+
 const pick = (c: Record<string, string>, ...keys: string[]): string | undefined => {
   for (const k of keys) {
     const v = c[k];
@@ -80,7 +96,7 @@ export function desktopTheme(c: Record<string, string>, name: string): DesktopTh
   const bg = pick(c, "background");
   const fg = pick(c, "foreground");
   if (!bg || !fg) return null;
-  const dark = (c.mode ?? "").toLowerCase() !== "light";
+  const dark = isDarkPalette(c.mode, bg);
   const accent = pick(c, "accent", "blue", "cyan") ?? fg;
   const bg2 = pick(c, "lighter_background") ?? mix(bg, fg, 0.06);
   const bg3 = pick(c, "selection") ?? mix(bg, fg, 0.12);
