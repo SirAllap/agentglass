@@ -19,8 +19,9 @@ import { CrossIcon, DoneIcon } from "../lib/glyphIcons.tsx";
 import { WarningIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import type { Hero, Mover, MergePath, PathAction, PathRow, Stage } from "../../../shared/mergePath.ts";
-import type { ReviewerState } from "../../../shared/reviewRoster.ts";
 import { Button, CTRL_H, EDGE, LINE } from "./workspace/Chrome.tsx";
+import { ReviewBar, ReviewFace } from "./ReviewFace.tsx";
+import { wash } from "../lib/reviewBar.ts";
 
 export const MERGEBOX_CSS = `
 .agx-mb{container:agx-mb / inline-size}
@@ -54,7 +55,6 @@ const TONE = {
 } as const;
 
 const heroTone = (t: Hero["tone"]) => (t === "ready" ? TONE.ok : t === "wait" ? TONE.wait : TONE.you);
-const wash = (tint: string, pct: number) => `color-mix(in srgb, ${tint} ${pct}%, transparent)`;
 
 const moverTone = (m: Mover) => (m === "you" || m === "author" || m === "other" ? TONE.you : m === "fyi" || m === "done" ? TONE.idle : TONE.wait);
 
@@ -114,42 +114,6 @@ function Who({ row }: { row: Pick<PathRow, "mover" | "moverLabel"> }) {
   );
 }
 
-/** Where a reviewer is, as a colour: the tally's segment and the row's avatar say it the same way. */
-const PERSON_TINT: Record<ReviewerState, string> = {
-  approved: "var(--success)",
-  "approved-old": "color-mix(in srgb, var(--success) 62%, var(--surface-card))",
-  "approved-void": "color-mix(in srgb, var(--text) 32%, transparent)",
-  changes: "var(--error)",
-  "changes-again": "var(--warning)",
-  commented: "color-mix(in srgb, var(--text) 40%, transparent)",
-  requested: "color-mix(in srgb, var(--text) 20%, transparent)",
-  team: "color-mix(in srgb, var(--text) 20%, transparent)",
-  dismissed: "color-mix(in srgb, var(--text) 14%, transparent)",
-};
-
-/** One segment per reviewer: 2 of 3 approvals reads off the bar before it is read in words. */
-function Tally({ tally }: { tally: NonNullable<Stage["tally"]> }) {
-  return (
-    <div className="flex gap-0.5 mt-2" role="img" aria-label={tally.map((t) => t.label).join(", ")}>
-      {tally.map((t) => (
-        <span key={`${t.login}:${t.key}`} title={t.label} className="h-1.5 rounded-full flex-1 min-w-[10px] max-w-[64px]"
-          style={{ background: PERSON_TINT[t.key], boxShadow: t.key === "requested" || t.key === "team" ? `inset 0 0 0 1px ${wash("var(--text)", 30)}` : undefined }} />
-      ))}
-    </div>
-  );
-}
-
-/** A reviewer's initial in the colour of where they are; an approval is a tick. */
-function Avatar({ login, state }: { login: string; state: ReviewerState }) {
-  const approved = state === "approved" || state === "approved-old";
-  return (
-    <span aria-hidden className="shrink-0 grid place-items-center rounded-full text-[10.5px] font-semibold uppercase"
-      style={{ width: 22, height: 22, background: PERSON_TINT[state], color: state === "requested" || state === "team" || state === "dismissed" ? "var(--text2)" : "var(--bg)" }}>
-      {approved ? <DoneIcon size={ICON.xs} /> : state === "team" ? "#" : login.charAt(0)}
-    </span>
-  );
-}
-
 function StageCell({ s, first }: { s: Stage; first: boolean }) {
   const tone = s.status === "done" ? TONE.ok : s.status === "blocked" ? TONE.you : s.status === "wait" ? TONE.wait : TONE.idle;
   const filled = s.status === "done" || (s.status === "blocked" && s.current);
@@ -166,7 +130,7 @@ function StageCell({ s, first }: { s: Stage; first: boolean }) {
           {s.label}{s.need && <span style={{ fontWeight: 500 }}> · {s.need}</span>}
         </span>
       </div>
-      {s.tally && <Tally tally={s.tally} />}
+      {s.tally && <ReviewBar tally={s.tally} />}
       {s.big && <div className="text-[16px] font-semibold mt-1.5 tabular-nums" style={{ color: tone.ink }}>{s.big}</div>}
       <div className={`text-[10.5px] leading-snug ${s.big ? "mt-1" : "mt-1.5"}`} style={{ color: "var(--text3)" }}>{s.sub}</div>
     </div>
@@ -254,7 +218,7 @@ export function MergeBox({
             return (
               <div key={r.id} className="agx-mb-row px-4 py-3" style={{ borderBottom: LINE, background: onPerson && r.counted ? wash(TONE.you.tint, 7) : undefined }}>
                 <span className="pt-0.5">
-                  {r.person ? <Avatar login={r.person.login} state={r.person.state} />
+                  {r.person ? <ReviewFace login={r.person.login} state={r.person.state} badge />
                     : r.mover === "done" ? <span aria-hidden className="grid place-items-center rounded-full" style={{ width: 22, height: 22, color: "var(--text3)" }}><DoneIcon size={ICON.sm} /></span>
                     : !r.counted ? <span aria-hidden className="grid place-items-center rounded-full" style={{ width: 22, height: 22, color: "var(--text3)" }}><WarningIcon size={ICON.sm} /></span>
                     : r.mover === "ci" || r.mover === "wait" ? <Ring mode={r.ring?.mode ?? "queued"} fraction={r.ring?.fraction} tint={TONE.wait.tint} />

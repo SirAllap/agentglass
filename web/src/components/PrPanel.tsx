@@ -493,6 +493,8 @@ function ReviewHistory({ reviews, timeline, pending, author, you, onGoReview }: 
   onGoReview: (nodeId: string | undefined, url: string) => void;
 }) {
   const now = Date.now();
+  // Who "you" is, for the face beside a request the viewer made.
+  const viewerLogin = useContext(ViewerCtx) || you;
   const groups = useMemo(
     () => buildReviewStory({ reviews, timeline, author, you, pending: (pending ?? []).filter((p) => !p.isTeam).map((p) => p.login) }, now),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `now` is read once per render on purpose
@@ -524,6 +526,8 @@ function ReviewHistory({ reviews, timeline, pending, author, you, onGoReview }: 
                 const isAsk = e.kind === "ask";
                 const past = e.kind === "review" && !!e.replaced;
                 const tint = isAsk ? "var(--warning)" : REVIEW_ROUND[e.state].tint;
+                // Whose face this row wears; none only for the viewer's own request before their login is known.
+                const who = e.kind !== "ask" ? g.login : e.actor === "you" ? viewerLogin : e.actor;
                 const dot = isAsk
                   ? { border: `2px solid ${tint}`, background: "transparent" }
                   : { background: past ? "var(--text3)" : tint, opacity: past ? 0.6 : 1 };
@@ -541,16 +545,16 @@ function ReviewHistory({ reviews, timeline, pending, author, you, onGoReview }: 
                     </span>
                     {/* Wraps: wide, the sentence sits beside the chip as drawn in the mock; in the side panel it drops under it. */}
                     <div className="flex flex-1 min-w-0 flex-wrap items-start gap-x-3 gap-y-0.5">
-                      {anyAsk && (
-                        <span className="flex items-center gap-1 min-w-0 shrink-0" style={{ height: 18, width: 56, color: "var(--text2)" }}>
-                          {e.kind === "ask" && (
-                            e.actor === "you"
-                              ? <span aria-hidden className="inline-flex items-center justify-center rounded-full text-[8px] font-semibold shrink-0"
-                                  style={{ width: ICON.sm, height: ICON.sm, ...CHIP_SURFACE, color: "var(--text2)" }}>Y</span>
-                              : <Avatar login={e.actor} size={ICON.sm} />)}
-                          {e.kind === "ask" && <span className="truncate">{e.actor}</span>}
-                        </span>
-                      )}
+                      {/* Every row names a person, so every row has a face: the reviewer's own on
+                          a verdict, whoever asked on a request ("you" is the signed-in user). The
+                          name stays beside it where somebody other than the reviewer acted. */}
+                      <span className="flex items-center gap-1 min-w-0 shrink-0" style={{ height: 18, width: anyAsk ? 56 : ICON.sm, color: "var(--text2)" }}>
+                        {who
+                          ? <Avatar login={who} size={ICON.sm} />
+                          : <span aria-hidden className="inline-flex items-center justify-center rounded-full text-[8px] font-semibold shrink-0"
+                              style={{ width: ICON.sm, height: ICON.sm, ...CHIP_SURFACE, color: "var(--text2)" }}>Y</span>}
+                        {e.kind === "ask" && <span className="truncate">{e.actor}</span>}
+                      </span>
                       <span className="flex flex-col gap-0.5 shrink-0" style={{ width: 150 }}>
                         <span className="flex items-center" style={{ height: 18 }}>
                           {e.kind === "ask"
@@ -6044,7 +6048,8 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
               <span className="block text-[13px] font-semibold leading-tight" style={{ color: "var(--text)" }}>
                 {d.state === "MERGED" ? "Merged" : "Closed without merging"}
               </span>
-              <span className="block text-[11px] mt-1.5" style={{ color: "var(--text3)" }}>
+              <span className="flex items-center gap-1.5 text-[11px] mt-1.5" style={{ color: "var(--text3)" }}>
+                {d.state === "MERGED" && d.mergedBy && <Avatar login={d.mergedBy} size={ICON.sm} />}
                 {d.state === "MERGED"
                   ? `${d.mergedBy ? `${d.mergedBy} merged ` : "Merged "}into ${d.baseRefName}${d.mergedAt ? ` ${ago(d.mergedAt)}` : ""}`
                   : `This branch was never merged into ${d.baseRefName}${d.closedAt ? ` · closed ${ago(d.closedAt)}` : ""}`}
