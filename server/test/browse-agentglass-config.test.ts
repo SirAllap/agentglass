@@ -40,6 +40,14 @@ beforeAll(() => {
   chmodSync(join(ag, "plugin-data", "notes.txt"), 0o644);
   symlinkSync(join(ag, "token"), join(other, "innocent.txt"));
   symlinkSync(join(ag, "token"), join(ag, "alias.txt"));
+  // A world-readable file nobody vouched for, and the folders that are open.
+  put("later-secret.json", 0o644);
+  put("commands.json", 0o644);
+  mkdirSync(join(ag, "policy"));
+  writeFileSync(join(ag, "policy", "rules.json"), "{}");
+  mkdirSync(join(ag, "plugins", "acme"), { recursive: true });
+  writeFileSync(join(ag, "plugins", "acme", "plugin.json"), "{}");
+  writeFileSync(join(ag, "plugins", "acme", "ledger.py"), "x");
   // Mode drift on a name that is on the list.
   writeFileSync(join(ag, "Devices.JSON"), "x");
 });
@@ -121,6 +129,24 @@ describe("a caller on this machine", () => {
     mkdirSync(data, { recursive: true });
     process.env.XDG_DATA_HOME = join(root, "data");
     try { expect(browseDir(data, false, true).ok).toBe(false); } finally { delete process.env.XDG_DATA_HOME; }
+  });
+});
+
+describe("reads are an allowlist, not a mode", () => {
+  test("a file agentglass does not vouch for is closed however readable", () => {
+    expect(fileFacts(join(ag, "later-secret.json"), true).ok).toBe(false);
+    expect(browseDir(ag, false, true).entries.find((e) => e.name === "later-secret.json")!.locked).toBe(true);
+  });
+  test("the named files and folders open; plugins only to the manifest", () => {
+    for (const f of ["commands.json", "policy/rules.json", "plugins/acme/plugin.json"]) expect(fileFacts(join(ag, f), true).ok).toBe(true);
+    expect(fileFacts(join(ag, "plugins", "acme", "ledger.py"), true).ok).toBe(false);
+  });
+  test("the browse routes ask 'local' the way the tokenless sinks do: another OS user is not local", async () => {
+    const src = await Bun.file(new URL("../src/index.ts", import.meta.url)).text();
+    const i = src.indexOf('if (pathname === "/browse" || pathname.startsWith("/preview/")) {');
+    const blk = src.slice(i, src.indexOf("\n    }\n", i));
+    expect(blk).toContain('sinkFrom === "loopback"');
+    expect(blk).not.toContain("isLoopback(clientIp)))");
   });
 });
 

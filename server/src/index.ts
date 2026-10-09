@@ -6609,6 +6609,12 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      * Behind the same switch as directory browsing: turning that off must not
      * leave a second door standing. */
     if (pathname === "/browse" || pathname.startsWith("/preview/")) {
+      /* "local" opens dotted folders and the agentglass config folder, so it is judged
+         like the tokenless sinks: a direct loopback socket AND not another OS
+         user on this box (sinkFrom). With a token every route here needs it, but
+         the zero-config server has none, and the token file's 0600 is then the
+         only thing that kept another account out. */
+      const localBrowse = peer.source === "socket" && !!clientIp && isLoopback(clientIp) && sinkFrom === "loopback";
       if (!FS_BROWSE_ENABLED) return json({ error: "directory browsing is disabled (AGENTGLASS_FS_BROWSE_DISABLED=1)" }, 403);
       if (req.method === "GET" && heldBackFrom(caller, [url.searchParams.get("path") || ""].filter(Boolean))) return json(HELD_BACK, 403);
       /* Handing a file to the desktop starts a process, so it takes the same
@@ -6617,13 +6623,13 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         if (!trustedCaller(req, from)) return csrfBlocked();
         let b: { path?: unknown } = {};
         try { b = (await req.json()) as { path?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
-        const r = openInDesktop(b?.path, (peer.source === "socket" && !!clientIp && isLoopback(clientIp)));
+        const r = openInDesktop(b?.path, localBrowse);
         return json(r, r.ok ? 200 : 400);
       }
-      if (pathname === "/browse") return json(browseDir(url.searchParams.get("path") || "", url.searchParams.get("hidden") === "1", (peer.source === "socket" && !!clientIp && isLoopback(clientIp))));
-      if (pathname === "/preview/facts") return json(fileFacts(url.searchParams.get("path") || "", (peer.source === "socket" && !!clientIp && isLoopback(clientIp))));
+      if (pathname === "/browse") return json(browseDir(url.searchParams.get("path") || "", url.searchParams.get("hidden") === "1", localBrowse));
+      if (pathname === "/preview/facts") return json(fileFacts(url.searchParams.get("path") || "", localBrowse));
       if (pathname === "/preview/raw") {
-        const r = await fileBytes(url.searchParams.get("path") || "", (peer.source === "socket" && !!clientIp && isLoopback(clientIp)));
+        const r = await fileBytes(url.searchParams.get("path") || "", localBrowse);
         if (!r.ok) return json({ error: r.error }, 404);
         return new Response(r.body, {
           headers: {

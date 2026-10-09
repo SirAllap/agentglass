@@ -142,6 +142,26 @@ function dottedAllows(abs: string, real: string): boolean {
  * Data, state, cache and the moved database are not opened by this.
  */
 const KEY_NAMES = new Set(["token", "credentials.json", "devices.json"]);
+/* What may be READ in there is an allowlist, not "whatever mode says readable":
+ * a plugin or a later version can write a secret with the default 0644. These
+ * are the files agentglass itself writes that hold no secret; config.json is
+ * among them because none of its writers (mergeConfig and the workspace,
+ * hidden-project and budget writers in config.ts) stores a key or token. The
+ * name and mode checks above stay as the second layer. Everything else is
+ * listed, greyed and closed. */
+const OPEN_FILES = new Set([
+  "theme.json", "theme.lua", "theme.tmux.conf", "config.json", "commands.json", "review-prompts.json",
+  "picker.json", "window.json", "usage-last.json", "tmux-last.json", "merge-sessions.json", "understudy.json",
+  "remote.json", "clickup-views.json", "clickup-watch.json", "tmux-override.backup.conf", "git-allowed-signers",
+]);
+const OPEN_DIRS = new Set(["policy", "resurrect", "nvim-plugin"]);
+/** plugins/ opens as far as each plugin's manifest and no further. */
+function readable(segs: string[]): boolean {
+  const [a, b, c] = segs.map((x) => x.toLowerCase());
+  if (segs.length === 1 && OPEN_FILES.has(a!)) return true;
+  if (OPEN_DIRS.has(a!)) return true;
+  return a === "plugins" && (segs.length <= 2 || (segs.length === 3 && c === "plugin.json" && !!b));
+}
 export const KEYS_WHY = "holds agentglass keys — closed";
 
 function configDoor(abs: string, real: string): boolean {
@@ -164,7 +184,7 @@ function configDoor(abs: string, real: string): boolean {
     try { st = statSync(at); } catch (e) { return (e as NodeJS.ErrnoException)?.code === "ENOENT"; }
     if (st.isDirectory() ? (st.mode & 0o055) === 0 : (st.mode & 0o044) === 0) return false;
   }
-  return !relative(rs, abs).split(sep).some((seg) => KEY_NAMES.has(seg.toLowerCase()));
+  return readable(rel.split(sep)) && !relative(rs, abs).split(sep).some((seg) => KEY_NAMES.has(seg.toLowerCase()));
 }
 
 /** What to tell somebody a path was refused for. */
