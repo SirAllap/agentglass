@@ -71,6 +71,7 @@ import { updateStanding, awaitingChecksOf, updateHeld, updateHeldTitle, stalledN
 import { updateBranchMove, branchNoticeJump, prConflicted, gitSaysClean as cleanMerge, type BranchNotice } from "../lib/updateBranch.ts";
 import { depSpec } from "../../../shared/deps.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
+import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { confirmMergeGuard } from "../lib/mergeGuard.ts";
 import { useMergeDialog } from "./MergeDialog.tsx";
 import { authorOf, assignedNote, ensureIds, resolveEnsure, stepChanges, type Ensure, type PrAuthor } from "../lib/stepAssign.ts";
@@ -7265,6 +7266,8 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
   const [q, setQ] = useState("");
   const selRef = useRef(sel); selRef.current = sel;
   const box = useRef<HTMLDivElement>(null);
+  // Abandons, like Escape: nothing is written on the way out.
+  useCloseWithOwner(onClose, { from: box });
   const filterInput = useRef<HTMLInputElement>(null);
 
   /*
@@ -9599,6 +9602,7 @@ function FilesFilterMenu({ facets, hiddenExts, onToggleExt, onClearExts, showVie
 }) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
+  useCloseWithOwner(() => setOpen(false), { open, from: btnRef });
   const [pos, setPos] = useState({ top: 0, left: 0 });
   useLayoutEffect(() => {
     if (open && btnRef.current) {
@@ -11355,6 +11359,7 @@ function Reactions({ nodeId, reactions, onReact }: {
 }) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
+  useCloseWithOwner(() => setOpen(false), { open, from: btnRef });
   const [pos, setPos] = useState({ top: 0, left: 0 });
   // Eight emoji at ~26px plus the padding; enough to keep the row on screen
   // when the button sits near the right edge.

@@ -11,6 +11,7 @@
 // second half is the half nobody builds, and it is the reason a machine ends up
 // with fourteen checkouts nobody can name.
 import { putCard } from "../lib/prCardStore.ts";
+import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import { Fragment, type CSSProperties, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { BlockedIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, DotIcon, IconLabel, KeyboardIcon, LockIcon, MonitorIcon, NoteIcon, PlusIcon, RefreshIcon, SearchIcon } from "../lib/glyphIcons.tsx";
@@ -3696,6 +3697,7 @@ function FieldPick({ t, f, spec, busy, onApply }: {
 }) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
+  useCloseWithOwner(() => setOpen(false), { open, from: box });
   useEffect(() => {
     if (!open) return;
     const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
@@ -4711,6 +4713,8 @@ function PriorityPick({ t, writable, busy, onApply }: {
   onApply: (key: string, p: Pending) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useCloseWithOwner(() => setOpen(false), { open, from: box });
   useEffect(() => { setOpen(false); }, [t.id]);
   const look = prioLook(t.priority);
   const choose = (id: string, label: string) => {
@@ -4722,7 +4726,7 @@ function PriorityPick({ t, writable, busy, onApply }: {
     });
   };
   return (
-    <div className="relative">
+    <div className="relative" ref={box}>
       <button onClick={() => writable && !busy && setOpen((o) => !o)}
         disabled={!writable || busy}
         title={busy ? "Moving the flag…" : writable ? "Set this card's priority" : undefined}
@@ -5331,6 +5335,7 @@ function SprintPick({ t, busy, onApply }: {
   const [why, setWhy] = useState("");
   const [loading, setLoading] = useState(false);
   const box = useRef<HTMLDivElement>(null);
+  useCloseWithOwner(() => setOpen(false), { open, from: box });
   useEffect(() => {
     if (!open) return;
     const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
@@ -5419,6 +5424,7 @@ function TagEdit({ t, busy, onApply, board }: {
   const [draft, setDraft] = useState("");
   const [hot, setHot] = useState(0);
   const box = useRef<HTMLDivElement>(null);
+  useCloseWithOwner(() => { setAdding(false); setDraft(""); }, { open: adding, from: box });
 
   useEffect(() => {
     if (!adding) return;
@@ -5548,6 +5554,7 @@ function TagEdit({ t, busy, onApply, board }: {
 function CardHop({ list, id, onGo }: { list: ProviderTask[]; id: string; onGo: (id: string) => void }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
+  useCloseWithOwner(() => { setOpen(false); setQ(""); }, { open });
   useEffect(() => { setOpen(false); setQ(""); }, [id]);
   const hop = useMemo(() => neighbours(list, id), [list, id]);
   const shown = useMemo(() => list.filter((t) => hopMatches(t, q)), [list, q]);
@@ -5718,6 +5725,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
    *  with five threaded comments would otherwise open as a wall. */
   const [openThreads, setOpenThreads] = useState<Set<string>>(new Set());
   const [statusOpen, setStatusOpen] = useState(false);
+  useCloseWithOwner(() => setStatusOpen(false), { open: statusOpen });
   /**
    * The assignee picker, and the people it offers.
    *

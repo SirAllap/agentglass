@@ -15,12 +15,14 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Portal } from "./Portal.tsx";
+import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { menuEventGuards } from "../lib/menuEvents.ts";
 import { EDGE } from "./workspace/Chrome.tsx";
 
 export function ContextMenu({ x, y, onClose, children }: { x: number; y: number; onClose: () => void; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ x, y });
+  useCloseWithOwner(onClose, { at: { x, y } });
 
   // Measured after the first paint, because "does this fall off the bottom of
   // the window" cannot be answered before it has a height.

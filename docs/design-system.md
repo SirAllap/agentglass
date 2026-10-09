@@ -433,6 +433,8 @@ Every one reads source as text; there is no renderer to mount a view.
   string or a fetch, when its motion file or the board's stylesheet animates
   anything but `transform` and `opacity`, or when a tone table is indexed by
   anything that did not go through `toneOf`.
+- `layer-owner.test.ts` — fails when a shared menu, picker or dialog stops
+  closing when the bench it was opened from is hidden.
 - `design-system-doc.test.ts` — fails when a name in the table above is not
   defined in the file it names, or a number there is not its value.
 
@@ -444,3 +446,6 @@ Every one reads source as text; there is no renderer to mount a view.
    on one can vanish on the other.
 3. Run the guards before committing — `make check` runs them all — and keep
    them green. A ratchet's ceiling only moves down.
+4. A menu, picker or dialog that floats calls `useCloseWithOwner` (a question
+   put to the person, `useOwnedQuestion`), so it closes with the bench it was
+   opened from. A dialog answers "no" then, never "yes".

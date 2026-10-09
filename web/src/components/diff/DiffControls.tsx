@@ -8,6 +8,7 @@
  */
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCloseWithOwner } from "../../lib/layerOwner.ts";
 import { THEMES } from "../../lib/highlight.ts";
 import { ICON, MIN_BOX } from "../../lib/iconSize.ts";
 import { WarningIcon } from "../../lib/glyphIcons.tsx";
@@ -24,6 +25,7 @@ import { EDGE } from "../workspace/Chrome.tsx";
 export function ThemePicker({ value, onChange, error }: { value: string; onChange: (v: string) => void; error?: string | null }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  useCloseWithOwner(() => setOpen(false), { open, from: ref });
 
   useEffect(() => {
     if (!open) return;

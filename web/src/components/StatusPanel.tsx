@@ -1,4 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { Portal } from "./Portal.tsx";
 import { Button, INPUT, INPUT_STYLE, LINE } from "./workspace/Chrome.tsx";
 import { CaretIcon, DoneIcon } from "../lib/glyphIcons.tsx";
@@ -164,6 +165,7 @@ export function StatusPanel({ nouns, part, view, current, leave, suggested, sour
 /** The same panel, floating under the control that opened it. Closes on a press outside; Esc hands focus back. */
 export function StatusPopover({ anchor, label, onClose, children }: { anchor: HTMLElement; label: string; onClose: (refocus: boolean) => void; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
+  useCloseWithOwner(() => onClose(false), { from: anchor });
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   /* Placed with the list's real height, against the trigger as it is NOW: a guess of the height put a short
      list ~400px above its button, and a position taken once went stale as soon as the Settings scroller moved.

@@ -18,6 +18,7 @@
  */
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Portal } from "./Portal.tsx";
+import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { LAYER } from "../lib/layers.ts";
 import { menuEventGuards } from "../lib/menuEvents.ts";
 import { placeMenu, type Placement } from "../lib/menuPlacement.ts";
@@ -38,6 +39,7 @@ export function AnchoredMenu({ anchor, align = "right", minWidth = 216, placeKey
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<Placement | null>(null);
+  useCloseWithOwner(onClose, { from: anchor });
 
   // After the portal is attached, and not in a layout effect: Portal appends its
   // container to the body in an effect, so in a layout effect the list is still

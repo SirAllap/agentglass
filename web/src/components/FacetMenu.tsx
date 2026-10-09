@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { Avatar } from "./Avatar.tsx";
@@ -52,6 +53,7 @@ export function FacetMenu({
   const [q, setQ] = useState("");
   const [cursor, setCursor] = useState(0);
   const btnRef = useRef<HTMLButtonElement>(null);
+  useCloseWithOwner(() => setOpen(false), { open, from: btnRef });
   const listRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const [pos, setPos] = useState({ top: 0, left: 0, right: 0, minWidth: 0 });

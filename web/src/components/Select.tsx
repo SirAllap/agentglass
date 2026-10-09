@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
+import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { LAYER } from "../lib/layers.ts";
 import { StatusPill } from "./StatusPill.tsx";
 import { EDGE } from "./workspace/Chrome.tsx";
@@ -136,6 +137,9 @@ export function Select({
   // user has to tab in from the top of the page again.
   const close = () => { setOpen(false); btnRef.current?.focus(); };
   const pick = (v: string) => { onChange(v); close(); };
+  /* No focus handed back: the trigger is in a window that is being hidden, and
+     a hidden window refuses focus. */
+  useCloseWithOwner(() => setOpen(false), { open, from: btnRef });
 
   return (
     <>

@@ -57,6 +57,7 @@ import { AgentIcon, ExpandIcon, FileIcon, NoteIcon, SearchIcon } from "../../lib
 import { BrowserIcon, FilesIcon, IssuesIcon, PrIcon, TerminalIcon } from "../workspace/icons.tsx";
 import { CloseIcon } from "../CloseButton.tsx";
 import { EDGE, LINE } from "../workspace/Chrome.tsx";
+import { OWNER_ATTR } from "../../lib/layerOwner.ts";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 
@@ -161,8 +162,9 @@ export function FloatingBench() {
    * The ceiling this buys: a closed bench keeps what its visited tabs run —
    * each terminal's socket and client, a board's element — for as long as the
    * app is open, exactly as a hidden tab of an open bench always has. And a
-   * menu a tab had open when the chord closed the window is not closed with
-   * it: only the window's own two are.
+   * menu a tab had open when the chord closed the window IS closed with
+   * it, by the owner's announcement (layerOwner.ts) rather than by this file
+   * knowing every menu: the window's own two close below.
    *
    * Hidden is opacity for the paint, the window put under the app once the
    * fade is over so clicks reach the view (UNDER_THE_APP), `aria-hidden` for
@@ -609,7 +611,7 @@ export function FloatingBench() {
           <Portal z={away ? UNDER_THE_APP : LAYER.bench}>
             <motion.div
               ref={winRef}
-              data-find-anchor=""
+              data-find-anchor="" {...{ [OWNER_ATTR]: "" }}
               initial={HIDDEN}
               animate={st.open ? SHOWN : HIDDEN}
               transition={{ duration: FADE_MS / 1000, ease: [0.16, 1, 0.3, 1] }}

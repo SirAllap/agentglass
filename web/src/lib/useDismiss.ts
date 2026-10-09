@@ -1,4 +1,5 @@
 import { useEffect, type RefObject } from "react";
+import { useCloseWithOwner } from "./layerOwner.ts";
 
 /**
  * Close an open menu the way every other menu on the machine closes.
@@ -21,6 +22,8 @@ export function useDismiss(
   ref: RefObject<HTMLElement | null>,
   close: () => void,
 ) {
+  // Gone with the bench it was opened from; see layerOwner.ts.
+  useCloseWithOwner(close, { open, from: ref });
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {

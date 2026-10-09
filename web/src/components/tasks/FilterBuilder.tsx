@@ -10,6 +10,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Portal } from "../Portal.tsx";
 import { ICON } from "../../lib/iconSize.ts";
+import { useCloseWithOwner } from "../../lib/layerOwner.ts";
 import { EMPTY, OPS, fieldsOf, liveCount, takesValues, type FieldSpec, type FilterSet, type Op, type Rule } from "./filters.ts";
 import type { ProviderTask } from "../../../../shared/providers.ts";
 
@@ -46,6 +47,7 @@ const newRule = (): Rule => ({ id: `r${++seq}`, field: "", op: "is", values: [] 
  *  and each was growing its own listener. */
 function useAway<T extends HTMLElement>(open: boolean, close: () => void, alsoInside?: string) {
   const ref = useRef<T | null>(null);
+  useCloseWithOwner(close, { open, from: ref });
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {

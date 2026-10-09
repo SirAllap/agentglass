@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 import { preparedLine, useStageHold } from "../lib/stageHold.ts";
+import { useOwnedQuestion } from "../lib/layerOwner.ts";
 
 /**
  * The app's own confirm/prompt, because the browser's belong to the browser.
@@ -149,9 +150,11 @@ export function useDialogs() {
      awaiting for ever (a merge that holds a lock until its guard question is
      answered never released it), and an answer nobody gave is a "no". */
   const open = useRef<Pending | null>(null);
+  const noteAsker = useOwnedQuestion(pending, () => open.current?.resolve(open.current.input ? null : false));
   const done = (resolve: (v: never) => void) => (v: never) => { open.current = null; setPending(null); resolve(v); };
   const put = (spec: ConfirmSpec, resolve: (v: never) => void) => {
     open.current?.resolve(open.current.input ? null : false);
+    noteAsker();
     const next = { ...spec, resolve: done(resolve) as never } as Pending;
     open.current = next;
     setPending(next);

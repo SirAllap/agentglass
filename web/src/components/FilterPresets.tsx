@@ -20,6 +20,7 @@
  * and a rename is an input of the chip's own height.
  */
 import { memo, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKey, type ReactNode } from "react";
+import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { Portal } from "./Portal.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { EDGE, INPUT, INPUT_STYLE, chipTone } from "./workspace/Chrome.tsx";
@@ -142,6 +143,7 @@ function PopMenu({ anchor, items, onClose, restoreTo, align = "left", minWidth =
   useSize(box, (w, h) => setPos(placeUnder(anchor, align, w, h)), [anchor, align]);
 
   const close = (focus: boolean) => { onClose(focus); if (focus) restoreTo?.focus(); };
+  useCloseWithOwner(() => close(false));
 
   useEffect(() => {
     const down = (e: MouseEvent) => {
@@ -285,6 +287,7 @@ function SavePopover({ anchor, initial, keeps, onSave, onCancel }: {
   // Once placed, not at mount: the input is not in the document before that.
   const placed = at !== null;
   useEffect(() => { if (placed) { input.current?.focus(); input.current?.select(); } }, [placed]);
+  useCloseWithOwner(onCancel);
   useEffect(() => {
     const down = (e: MouseEvent) => {
       if (box.current?.contains(e.target as Node) || (e.target as Element).closest?.(`[${MENU_ATTR}]`)) return;

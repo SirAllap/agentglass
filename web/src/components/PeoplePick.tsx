@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
 import { Portal } from "./Portal.tsx";
+import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { menuUnder, PICK_W, PICK_H } from "../lib/menuPos.ts";
 import type { ListMember } from "../../../shared/providers.ts";
 import { DoneIcon } from "../lib/glyphIcons.tsx";
@@ -58,6 +59,7 @@ export function PeoplePick(p: PeoplePickProps) {
   const [pos, setPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const [q, setQ] = useState("");
   const box = useRef<HTMLDivElement>(null);
+  useCloseWithOwner(p.onClose, { from: p.anchor });
   /* Measured on open AND when the window changes size: a position taken once is
      the one a resized window keeps, and it left the box hanging off the bottom
      right edge with its last rows out of reach. */

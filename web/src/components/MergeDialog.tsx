@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useOwnedQuestion } from "../lib/layerOwner.ts";
 import { preparedLine, useStageHold } from "../lib/stageHold.ts";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
@@ -570,10 +571,13 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 export function useMergeDialog() {
   const [pending, setPending] = useState<Pending | null>(null);
   const open = useRef<Pending | null>(null);
+  // Cancelled, never merged, when the bench it was asked from is hidden.
+  const noteAsker = useOwnedQuestion(pending, () => open.current?.resolve(null));
   const askMerge = (spec: MergeSpec): Promise<MergeChoice | null> =>
     new Promise<MergeChoice | null>((resolve) => {
       // A question on screen is answered "no" before another takes its place.
       open.current?.resolve(null);
+      noteAsker();
       const next: Pending = { ...spec, resolve: (v) => { open.current = null; setPending(null); resolve(v); } };
       open.current = next;
       setPending(next);
