@@ -27,6 +27,7 @@ import type { ProjectCommand, TerminalCommands, TerminalDisabledReason, TmuxWind
 import { safeAbs, repoRootOf, repoRootOfAsync } from "./git.ts";
 import { terminalActive } from "./loopwatch.ts";
 import { inScope, workspaceRoot, terminalDisabledSource, tmuxTerminal, tmuxPrefix, inScopeReal } from "./config.ts";
+import { noteNvimArgv } from "./bench.ts";
 import { engineAttachArgv, engineBenchArgv, engineConsoleArgv, engineWindowRunning, engineSplitRunning, engineSessionName } from "./tmuxpane.ts";
 import { confHealth, ensureConf } from "./tmuxconf.ts";
 import { readerSocketPath } from "./bench.ts";
@@ -193,7 +194,9 @@ export type PtyWsData = { kind: "pty"; root: string; cols: number; rows: number;
    * tab", and the server builds the session name, so a session on this engine
    * can never be picked by whatever a client puts in a query string.
    */
-  bench?: number };
+  bench?: number;
+  /** A bench tab that is the checkout's note, in Neovim. See noteNvimArgv. */
+  note?: boolean };
 type PtyWs = ServerWebSocket<unknown>;
 
 /**
@@ -906,7 +909,11 @@ export function ptyOpen(ws: PtyWs) {
       wanted!,
     ]
     : null;
-  const benchRuns = d.bench ? (agentRun.length ? agentRun : editorArgv) : null;
+  /* The note's editor, on a bench socket only. Null without nvim, which leaves
+     a plain shell: the client asked /bench/note first and only sends this when
+     it said yes. */
+  const noteRun = d.bench && d.note ? noteNvimArgv(cwd) : null;
+  const benchRuns = d.bench ? (agentRun.length ? agentRun : noteRun ?? editorArgv) : null;
   const engine = d.bench
     ? engineBenchArgv(startIn, d.bench, benchRuns, ticket?.role ? { AGENTGLASS_ROLE: ticket.role } : undefined)
     : d.console

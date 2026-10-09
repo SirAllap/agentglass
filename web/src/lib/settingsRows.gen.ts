@@ -78,6 +78,7 @@ export const SETTINGS_ROWS: SettingsRowRaw[] = [
   { pane: "remote", section: "", label: "Route", hint: "" },
   { pane: "remote", section: "", label: "What this exposes, and to whom", hint: "" },
   { pane: "tasks", section: "Opens on", label: "Tasks view opens on", hint: "" },
+  { pane: "terminal", section: "Bench note", label: "Note editor", hint: "Neovim opens the same note file in a terminal on the bench. Without nvim installed the built-in editor is used." },
   { pane: "terminal", section: "History and selection", label: "Scrollback", hint: "" },
   { pane: "terminal", section: "How it draws", label: "Cursor", hint: "The shape that marks where you're typing." },
   { pane: "terminal", section: "How it draws", label: "Font", hint: "" },

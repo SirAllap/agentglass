@@ -2846,6 +2846,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         // keeps; the server turns it into a session name, so no client ever
         // names a session on this engine. See engineBenchArgv.
         bench: Math.min(Math.max(Number(url.searchParams.get("bench")) || 0, 0), 99) || undefined,
+        note: url.searchParams.get("note") === "1",
         cols: Number(url.searchParams.get("cols") || 80),
         rows: Number(url.searchParams.get("rows") || 24),
         ip: clientIp ?? null,

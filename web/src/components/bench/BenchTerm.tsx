@@ -20,7 +20,7 @@ import { termOptions } from "../../lib/termPrefs.ts";
 import { isAppChord } from "../../lib/termKeys.ts";
 import { themeFromCss } from "../TerminalPanel.tsx";
 
-export function BenchTerm({ root, slot, view, line, edit, agent, type, active, onTitle }: {
+export function BenchTerm({ root, slot, view, line, edit, agent, type, note, active, onTitle, onEnd }: {
   root: string;
   /** Which bench session this tab is. See engineBenchArgv. */
   slot: number;
@@ -39,6 +39,8 @@ export function BenchTerm({ root, slot, view, line, edit, agent, type, active, o
    * into the middle of whatever is running.
    */
   type?: string;
+  /** This tab edits the checkout's note in Neovim; the server picks the file. */
+  note?: boolean;
   /**
    * Is this the tab on screen, in a window that is open?
    *
@@ -53,6 +55,8 @@ export function BenchTerm({ root, slot, view, line, edit, agent, type, active, o
   /** What the session turned out to be, when the server says so — so a tab can
    *  stop saying "starting…" without the window polling for it. */
   onTitle?: (title: string) => void;
+  /** The session ended (the editor quit), so the tab can offer to start it again. */
+  onEnd?: () => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   /** The live terminal, so the focus effect below can reach it without tearing
@@ -66,6 +70,8 @@ export function BenchTerm({ root, slot, view, line, edit, agent, type, active, o
    *  after the window closed must not pull the caret into it. */
   const activeRef = useRef(active);
   activeRef.current = active;
+  const onEndRef = useRef(onEnd);
+  onEndRef.current = onEnd;
   const [state, setState] = useState<"opening" | "live" | "gone">("opening");
   const [why, setWhy] = useState<string | null>(null);
 
@@ -111,7 +117,7 @@ export function BenchTerm({ root, slot, view, line, edit, agent, type, active, o
     termRef.current = term;
     try { fit.fit(); } catch { /* not laid out yet; the observer refits */ }
 
-    const ws = new WebSocket(ptyWsUrl(root, term.cols, term.rows, view, !!edit, agent, false, false, line ?? 0, slot));
+    const ws = new WebSocket(ptyWsUrl(root, term.cols, term.rows, view, !!edit, agent, false, false, line ?? 0, slot, !!note));
     ws.binaryType = "arraybuffer";
     /* Our own teardown is not a failure. React mounts, unmounts and mounts
        again in development, and the first socket's close used to be reported
@@ -155,6 +161,7 @@ export function BenchTerm({ root, slot, view, line, edit, agent, type, active, o
     ws.onclose = () => {
       if (disposed) return;
       setState((s) => (s === "live" ? "gone" : s));
+      onEndRef.current?.();
     };
 
     const off = term.onData(send);
@@ -196,7 +203,7 @@ export function BenchTerm({ root, slot, view, line, edit, agent, type, active, o
     // Re-runs only when the tab is pointed somewhere else. A resize must never
     // reach this list: it would tear down a live session mid-command.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [root, slot, view, line, edit, agent, type]);
+  }, [root, slot, view, line, edit, agent, type, note]);
 
   /*
    * The caret follows the tab you are looking at.

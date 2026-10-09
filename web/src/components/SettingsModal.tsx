@@ -69,7 +69,7 @@ import {
 import { taskLanding, setTaskLanding, type TaskLanding } from "../lib/taskLanding.ts";
 import {
   SCROLLBACK_SIZES, DEFAULT_SCROLLBACK, DEFAULT_WORD_SEPARATORS,
-  currentScrollback, currentWordSeparators, copyOnSelect, rightClickPaste,
+  currentScrollback, currentWordSeparators, copyOnSelect, rightClickPaste, currentNoteEditor, setNoteEditor, NOTE_EDITORS, type NoteEditor,
   setScrollback, setWordSeparators, setCopyOnSelect, setRightClickPaste,
 } from "../lib/termPrefs.ts";
 import { canZoomIn, canZoomOut, fmtScale, DEFAULT_SCALE } from "../lib/uiScale.ts";
@@ -3879,6 +3879,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
   const [wordSep, setWordSepState] = useState(() => currentWordSeparators());
   const [copySel, setCopySel] = useState(() => copyOnSelect());
   const [rcPaste, setRcPaste] = useState(() => rightClickPaste());
+  const [noteEd, setNoteEd] = useState<NoteEditor>(() => currentNoteEditor());
   const [dSplit, setDSplitState] = useState(() => diffSplit());
   const [dTheme, setDThemeState] = useState(() => diffThemePref());
   const [dWrap, setDWrapState] = useState(() => diffWrap());
@@ -4588,6 +4589,13 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                     <Toggle on={rcPaste} modified={rcPaste} onClick={() => { const v = !rcPaste; setRightClickPaste(v); setRcPaste(v); }}
                       label="Right-click to paste"
                       hint="Right-click pastes the clipboard into the shell instead of opening the menu. Ctrl+right-click still opens it." />
+                  </Section>
+
+                  <Section title="Bench note"
+                    desc="The note tab of the floating bench.">
+                    <Choice<NoteEditor> label="Note editor" value={noteEd} modified={noteEd !== "builtin"}
+                      hint="Neovim opens the same note file in a terminal on the bench. Without nvim installed the built-in editor is used."
+                      options={NOTE_EDITORS} onPick={(v) => { setNoteEditor(v); setNoteEd(v); }} />
                   </Section>
 
                   <Section title="Tab groups"

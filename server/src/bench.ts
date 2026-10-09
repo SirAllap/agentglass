@@ -71,12 +71,29 @@ export function notePath(root: string): string {
   return join(notesDir(), `${name}-${hash}.md`);
 }
 
-export interface NoteReport { ok: boolean; text: string; at?: number; error?: string }
+/** The command that edits this checkout's note in Neovim, or null with no
+ *  nvim on the PATH. The client never sends a path: it says "the note" and the
+ *  file is the one `writeNote` saves to, so both editors touch the same bytes.
+ *  The folder is made here because nvim will not create a missing directory
+ *  and a checkout nobody has written about has none yet. */
+export function noteNvimArgv(root: string): string[] | null {
+  const nvim = Bun.which("nvim");
+  if (!nvim) return null;
+  const file = notePath(root);
+  try { mkdirSync(dirname(file), { recursive: true, mode: 0o700 }); } catch { return null; }
+  return [nvim, file];
+}
+
+export interface NoteReport { ok: boolean; text: string; at?: number; error?: string; nvim?: boolean }
 
 export function readNote(rootIn: unknown): NoteReport {
   const at = checkout(rootIn);
   if ("error" in at) return { ok: false, text: "", error: at.error };
-  const file = notePath(at.root);
+  return { ...readNoteText(at.root), nvim: !!Bun.which("nvim") };
+}
+
+function readNoteText(root: string): NoteReport {
+  const file = notePath(root);
   try {
     const text = readFileSync(file, "utf8");
     return { ok: true, text: text.slice(0, MAX_NOTE), at: statSync(file).mtimeMs };

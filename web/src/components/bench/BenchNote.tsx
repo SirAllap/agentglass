@@ -18,15 +18,55 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api.ts";
-import { termOptions } from "../../lib/termPrefs.ts";
+import { currentNoteEditor, noteMode, termOptions } from "../../lib/termPrefs.ts";
+import { NOTE_SLOT } from "../../lib/benchStore.ts";
+import { BenchTerm } from "./BenchTerm.tsx";
 
 type Save = "clean" | "typing" | "saving" | "saved" | "failed";
 
-export function BenchNote({ root, active }: {
+/**
+ * The tab picks its editor from the setting. Neovim edits the very file the
+ * textarea saves (the server derives it, see noteNvimArgv), so switching back
+ * and forth is the same note. Without `nvim` it is the textarea with a line
+ * saying why, rather than a terminal that cannot start.
+ */
+export function BenchNote({ root, active }: { root: string; active: boolean }) {
+  const pref = currentNoteEditor();
+  const [nvim, setNvim] = useState<boolean | null>(null);
+  const [ended, setEnded] = useState(false);
+  const [gen, setGen] = useState(0);
+  useEffect(() => {
+    if (pref !== "nvim" || !active) return;
+    let live = true;
+    api.benchNote(root).then((r) => { if (live) setNvim(!!r.nvim); }).catch(() => { if (live) setNvim(false); });
+    return () => { live = false; };
+  }, [root, active, pref]);
+  const { mode, fellBack } = noteMode(pref, nvim);
+  if (mode === "wait") return <div className="w-full h-full" style={{ background: "var(--bg)" }} />;
+  if (mode === "builtin") return <BenchNoteText root={root} active={active} fellBack={fellBack} />;
+  return (
+    <div className="relative w-full h-full">
+      <BenchTerm key={gen} root={root} slot={NOTE_SLOT} note active={active && !ended} onEnd={() => setEnded(true)} />
+      {ended && (
+        <div className="absolute inset-0 flex items-center justify-center" style={{ background: "var(--bg)" }}>
+          <button onClick={() => { setEnded(false); setGen((g) => g + 1); }}
+            className="text-[12px] px-3 py-1.5 rounded-md"
+            style={{ background: "color-mix(in srgb, var(--primary) 55%, transparent)", color: "var(--text)" }}>
+            Reopen in Neovim
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BenchNoteText({ root, active, fellBack }: {
   root: string;
   /** Is this the tab on screen? Tabs stay mounted when they are not, so a note
    *  cannot take the caret on mount alone. */
   active: boolean;
+  /** Neovim was asked for and is not installed. */
+  fellBack: boolean;
 }) {
   const [text, setText] = useState("");
   const [state, setState] = useState<Save>("clean");
@@ -102,6 +142,7 @@ export function BenchNote({ root, active }: {
       <div className="flex items-center gap-3 px-3 py-1.5 text-[10px] shrink-0"
         style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 14%, transparent)", color: "var(--text4)" }}>
         <span>{root.split("/").filter(Boolean).pop()}</span>
+        {fellBack && <span>nvim not found, using the built-in editor</span>}
         <span className="ml-auto" style={{ color: state === "failed" ? "var(--error)" : undefined }}>
           {error ?? ({ clean: "", typing: "…", saving: "saving", saved: "saved", failed: "not saved" }[state])}
         </span>

@@ -47,6 +47,8 @@ export type BenchTabKind = "term" | "file" | "note" | "web" | "agent" | "pr" | "
  * See BENCH_READER_SLOT on the server; the two must agree.
  */
 export const READER_SLOT = 90;
+/** The note tab's session when it is Neovim: one per checkout, like the reader. */
+export const NOTE_SLOT = 91;
 
 export interface BenchTab {
   /** Stable for the life of the tab, and the React key. */
@@ -252,6 +254,7 @@ export function freeSlot(root: string): number {
   // Never the reader's: a shell handed that number would attach to the session
   // holding somebody's editor, and tmux would mirror the two.
   used.add(READER_SLOT);
+  used.add(NOTE_SLOT);
   for (let n = 1; n <= 99; n++) if (!used.has(n)) return n;
   return 99;
 }
