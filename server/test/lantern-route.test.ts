@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
 import { freePort } from "./freePort.ts";
+import { story } from "./story.ts";
 
 let dir: string, base: string, proc: ReturnType<typeof Bun.spawn> | null = null;
 
@@ -59,7 +60,9 @@ const prompt = (session_id: string) =>
   post("/ingest", { source_app: "orbit", session_id, hook_event_type: "UserPromptSubmit", payload: { prompt: "hi" } })
     .then((r) => r.json() as Promise<{ ok: boolean; remind?: string }>);
 
-test("a prompt is reminded once, and carries this session's own id", async () => {
+const step = story();
+
+step("a prompt is reminded once, and carries this session's own id", async () => {
   const first = await prompt("lantern-a");
   expect(first.ok).toBe(true);
   expect(first.remind, "the first prompt of a session is where the ask goes").toContain("/agents/status");
@@ -71,13 +74,13 @@ test("a prompt is reminded once, and carries this session's own id", async () =>
   expect(second.remind, "asked once per interval, not once per prompt").toBeUndefined();
 });
 
-test("a tool call is never reminded, whatever the clock says", async () => {
+step("a tool call is never reminded, whatever the clock says", async () => {
   const r = await post("/ingest", { source_app: "orbit", session_id: "lantern-tool", hook_event_type: "PreToolUse", payload: {} })
     .then((x) => x.json() as Promise<{ remind?: string }>);
   expect(r.remind).toBeUndefined();
 });
 
-test("a session that answered is on the board by its own name, and not reminded again", async () => {
+step("a session that answered is on the board by its own name, and not reminded again", async () => {
   await prompt("lantern-b"); // asked
   const said = await post("/agents/status", { name: "orbit-1042-migration", doing: "the migration", worktree: dir, session: "lantern-b" });
   expect(said.status).toBe(200);
@@ -92,7 +95,7 @@ test("a session that answered is on the board by its own name, and not reminded 
   expect(again.remind).toBeUndefined();
 });
 
-test("done clears the line — from the session that wrote it, and from nobody else", async () => {
+step("done clears the line — from the session that wrote it, and from nobody else", async () => {
   const names = async () => (await fetch(base + "/agents/board").then((r) => r.json() as Promise<{ agents: { name: string }[] }>)).agents.map((a) => a.name);
   /* No session: refused outright, the line stays. Another session: refused as
      "not yours", the line stays. This route is tokenless on loopback, so the
@@ -107,7 +110,7 @@ test("done clears the line — from the session that wrote it, and from nobody e
   expect(await names()).not.toContain("orbit-1042-migration");
 });
 
-test("a free-text field arrives at the table cut, not whole", async () => {
+step("a free-text field arrives at the table cut, not whole", async () => {
   const r = await post("/agents/status", { name: "wide", doing: "d".repeat(20_000), worktree: "/w/" + "a".repeat(20_000), branch: "b".repeat(20_000), session: "lantern-w" });
   expect(r.status).toBe(200);
   const board = await fetch(base + "/agents/board").then((r) => r.json() as Promise<{ agents: { name: string; doing?: string; worktree?: string; branch?: string }[] }>);
@@ -117,7 +120,7 @@ test("a free-text field arrives at the table cut, not whole", async () => {
   expect(row.doing!.length).toBeLessThanOrEqual(4096);
 });
 
-test("the setting is read, written, clamped, and switches the ask off and on", async () => {
+step("the setting is read, written, clamped, and switches the ask off and on", async () => {
   const before = await fetch(base + "/lantern/settings").then((r) => r.json() as Promise<{ nudge: boolean; minutes: number; min: number; max: number }>);
   expect(before).toMatchObject({ nudge: true, minutes: 20 });
   expect(before.min).toBeLessThan(before.max);
@@ -136,7 +139,7 @@ test("the setting is read, written, clamped, and switches the ask off and on", a
   expect((await prompt("lantern-d")).remind).toContain('"session":"lantern-d"');
 });
 
-test("the watch has its own switch and clock, read and written beside the reminder's", async () => {
+step("the watch has its own switch and clock, read and written beside the reminder's", async () => {
   const before = await fetch(base + "/lantern/settings").then((r) => r.json() as Promise<{ watch: boolean; watchMinutes: number; min: number }>);
   expect(before).toMatchObject({ watch: true, watchMinutes: 15 });
   const off = await post("/lantern/settings", { watch: false, watchMinutes: 1 }).then((r) => r.json() as Promise<{ ok: boolean; watch: boolean; watchMinutes: number; nudge: boolean }>);
@@ -152,7 +155,7 @@ test("the watch has its own switch and clock, read and written beside the remind
   expect((await post("/lantern/settings", { cacheTtlMinutes: "warm" })).status).toBe(400);
 });
 
-test("stopped on a permission shows on the board first, with why — and clears when the session moves", async () => {
+step("stopped on a permission shows on the board first, with why — and clears when the session moves", async () => {
   // The hook says the session stopped for a person. This is the only place
   // that fact exists for a session the scanner owns, and the board reads it.
   // Shaped like a real hook: send_event.py inherits the pane, and Claude Code
@@ -182,7 +185,7 @@ test("stopped on a permission shows on the board first, with why — and clears 
   expect(moved.state).toBe("working");
 });
 
-test("the Lantern's own chat is never 'needs you', and is never reminded — its hooks say what it is", async () => {
+step("the Lantern's own chat is never 'needs you', and is never reminded — its hooks say what it is", async () => {
   // "What sense does it make for the lantern itself to tell me it needs help?"
   // Its pane carries AGENTGLASS_ROLE=lantern (the bench passes it with -e);
   // send_event.py forwards it on every event. A wait-shaped Notification from
@@ -210,7 +213,7 @@ test("the Lantern's own chat is never 'needs you', and is never reminded — its
   expect(again.agents.find((a) => a.session === "lantern-other")!.needsYou).toBeDefined();
 });
 
-test("the Lantern is known by its own first prompt, with no role in the environment — and its status post is not a second agent", async () => {
+step("the Lantern is known by its own first prompt, with no role in the environment — and its status post is not a second agent", async () => {
   // "Why are there 2 lanterns, and who the hell ran them?" — one chat,
   // launched before the role existed, reminded to post its status, and the
   // board drew the post beside the pane. The prompt is ours, so it is the mark.
@@ -233,7 +236,7 @@ test("the Lantern is known by its own first prompt, with no role in the environm
   expect(mine[0]!.needsYou).toBeUndefined();
 });
 
-test("a ticket for the Lantern's chat: minted here, with the field as its first message, in a real checkout", async () => {
+step("a ticket for the Lantern's chat: minted here, with the field as its first message, in a real checkout", async () => {
   // The board has rows in `dir` (the hook sightings above), so the chat is
   // rooted there. The client sends nothing but an offer of a checkout.
   const r = await post("/lantern/ticket", { cwd: dir }).then((x) => x.json() as Promise<{ ok: boolean; ticket?: string; cwd?: string; error?: string }>);
@@ -242,7 +245,7 @@ test("a ticket for the Lantern's chat: minted here, with the field as its first 
   expect(r.cwd).toBe(dir);
 });
 
-test("a person can clear a line whoever posted it — through the authenticated route, not the tokenless done", async () => {
+step("a person can clear a line whoever posted it — through the authenticated route, not the tokenless done", async () => {
   await post("/agents/status", { name: "orbit-2001-migration", doing: "the migration", session: "lantern-c" });
   const names = async () => (await fetch(base + "/agents/board").then((r) => r.json() as Promise<{ agents: { name: string }[] }>)).agents.map((a) => a.name);
   expect(await names()).toContain("orbit-2001-migration");

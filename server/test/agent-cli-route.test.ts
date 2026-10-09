@@ -18,6 +18,7 @@ import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
 import { TMUX_ISOLATED } from "./tmuxIsolated.ts";
 import { freePort } from "./freePort.ts";
+import { story } from "./story.ts";
 
 const SOCKET = `agx-agentops-${process.pid}`;
 const CLI = new URL("../../bin/agentglass-agent", import.meta.url).pathname;
@@ -115,28 +116,30 @@ const panes = async () => {
 };
 
 const SLOW = 30_000;
+const step = story();
+
 describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
-  test("nothing is listed before anything is started, in the worker's shape", async () => {
+  step("nothing is listed before anything is started, in the worker's shape", async () => {
     const { code, out } = await cli("list");
     expect(code).toBe(0);
     expect(out.ok).toBe(true);
     expect(out.result?.agents).toEqual([]);
   }, SLOW);
 
-  test("a bad name is refused with exit 1", async () => {
+  step("a bad name is refused with exit 1", async () => {
     const { code, out } = await cli("start", "no good", "--cwd", wt);
     expect(code).toBe(1);
     expect(out.ok).toBe(false);
     expect(out.error).toContain("name");
   }, SLOW);
 
-  test("a checkout outside the open project is refused", async () => {
+  step("a checkout outside the open project is refused", async () => {
     const { code, out } = await cli("start", "w0", "--cwd", tmpdir());
     expect(code).toBe(1);
     expect(out.error).toContain("not in the open project");
   }, SLOW);
 
-  test("start seats the CLI in the checkout, in the agents session, and waits until its box is drawn", async () => {
+  step("start seats the CLI in the checkout, in the agents session, and waits until its box is drawn", async () => {
     const { code, out } = await cli("start", "w1", "--cwd", wt, "--yolo", "--remote-control", "w1", "--timeout", "20000", "--", "--model", "sonnet");
     expect(out.error).toBeUndefined();
     expect(code).toBe(0);
@@ -157,21 +160,21 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
     expect(argv.slice(argv.indexOf("--model"), argv.indexOf("--model") + 2)).toEqual(["--model", "sonnet"]);
   }, SLOW);
 
-  test("the same name again is refused while it runs, and the existing agent is in the answer", async () => {
+  step("the same name again is refused while it runs, and the existing agent is in the answer", async () => {
     const { code, out } = await cli("start", "w1", "--cwd", wt, "--timeout", "0");
     expect(code).toBe(1);
     expect(out.error).toContain("still running");
     expect((out.result?.agent as Record<string, string> | undefined)?.name).toBe("w1");
   }, SLOW);
 
-  test("the raw yolo flag after -- is refused even though bypass is on", async () => {
+  step("the raw yolo flag after -- is refused even though bypass is on", async () => {
     const { code, out } = await cli("start", "w2", "--cwd", wt, "--timeout", "0", "--", "--dangerously-skip-permissions");
     expect(code).toBe(1);
     expect(out.error).toContain("Settings");
     expect((await cli("list")).out.result?.agents?.map((a) => a.name)).toEqual(["w1"]);
   }, SLOW);
 
-  test("prompt pastes the text and presses Enter until the CLI takes it — the text reaches its stdin", async () => {
+  step("prompt pastes the text and presses Enter until the CLI takes it — the text reaches its stdin", async () => {
     const text = "Reproduce first: it's the failing test that decides, not the plan";
     const { code, out } = await cli("prompt", "w1", text);
     expect(out.error).toBeUndefined();
@@ -181,14 +184,14 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
     expect(readFileSync(`${log}.prompt`, "utf8")).toContain(text);
   }, SLOW);
 
-  test("wait --until working returns once the turn is in flight", async () => {
+  step("wait --until working returns once the turn is in flight", async () => {
     const { code, out } = await cli("wait", "w1", "--until", "working", "--timeout", "5000");
     expect(code).toBe(0);
     expect(out.result?.state).toBe("working");
     expect(out.result?.reached).toBe(true);
   }, SLOW);
 
-  test("read shows the screen, and --lines trims it", async () => {
+  step("read shows the screen, and --lines trims it", async () => {
     const { code, out } = await cli("read", "w1", "--lines", "3");
     expect(code).toBe(0);
     expect(out.result?.state).toBe("working");
@@ -196,14 +199,14 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
     expect(String(out.result?.text).split("\n").length).toBeLessThanOrEqual(3);
   }, SLOW);
 
-  test("send-keys presses one named key and refuses anything else", async () => {
+  step("send-keys presses one named key and refuses anything else", async () => {
     expect((await cli("send-keys", "w1", "enter")).code).toBe(0);
     const bad = await cli("send-keys", "w1", "C-d");
     expect(bad.code).toBe(1);
     expect(bad.out.error).toContain("enter");
   }, SLOW);
 
-  test("list carries the live agent with its pane; a name nobody started is 404", async () => {
+  step("list carries the live agent with its pane; a name nobody started is 404", async () => {
     const { out } = await cli("list");
     const w1 = out.result?.agents?.find((a) => a.name === "w1") as Record<string, unknown>;
     expect(w1).toBeDefined();
@@ -214,7 +217,7 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
     expect(none.error).toContain("no agent");
   }, SLOW);
 
-  test("stop kills the window; the name leaves the live list and is free to start again", async () => {
+  step("stop kills the window; the name leaves the live list and is free to start again", async () => {
     const { code } = await cli("stop", "w1");
     expect(code).toBe(0);
     for (let i = 0; i < 30 && (await panes()).some((r) => r.includes("\tagents\tw1")); i++) await Bun.sleep(100);
@@ -229,7 +232,7 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
     expect((await cli("list")).out.result?.agents?.map((a) => a.name)).toEqual(["w1"]);
   }, SLOW);
 
-  test("schedule writes a row for later, schedules lists it waiting, unschedule takes it back — through the CLI", async () => {
+  step("schedule writes a row for later, schedules lists it waiting, unschedule takes it back — through the CLI", async () => {
     const add = await cli("schedule", "night", "--cwd", wt, "--at", "+30m", "--prompt", "run the suite");
     expect(add.out.error).toBeUndefined();
     expect(add.code).toBe(0);
@@ -250,7 +253,7 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
     expect((await cli("unschedule", String(sched.id))).code, "cancelled once, not twice").toBe(1);
   }, SLOW);
 
-  test("a CLI that fails at launch leaves no corpse in the agents session", async () => {
+  step("a CLI that fails at launch leaves no corpse in the agents session", async () => {
     /*
      * The engine keeps a pane whose command failed (tmuxconf.ts), and the
      * window this app opens for a named agent is put back to closing itself
@@ -274,7 +277,7 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
     } finally { rmSync(`${log}.die`, { force: true }); }
   }, SLOW);
 
-  test("--keep: a one-shot that exits 0 leaves its tab to be read, and leaves the list", async () => {
+  step("--keep: a one-shot that exits 0 leaves its tab to be read, and leaves the list", async () => {
     /*
      * The orchestrator opened its one-shots with a bare `tmux new-window
      * "cli …"`: nothing kept the pane, so a CLI that finished — exit 0 —
@@ -315,7 +318,7 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
     } finally { rmSync(`${log}.oneshot`, { force: true }); }
   }, SLOW);
 
-  test("--keep: a CLI that fails at launch is refused, and its kept tab is read by name", async () => {
+  step("--keep: a CLI that fails at launch is refused, and its kept tab is read by name", async () => {
     /* The tab stays to say why, but the refusal came before the name was
        recorded, so the reason could be read only through raw tmux. */
     writeFileSync(`${log}.die`, "");
@@ -333,7 +336,7 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
     } finally { rmSync(`${log}.die`, { force: true }); }
   }, SLOW);
 
-  test("without --keep the tab goes with the CLI, as a watched agent's always has", async () => {
+  step("without --keep the tab goes with the CLI, as a watched agent's always has", async () => {
     writeFileSync(`${log}.oneshot`, "");
     try {
       await cli("start", "wgone", "--cwd", wt, "--timeout", "0");
@@ -342,7 +345,7 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
     } finally { rmSync(`${log}.oneshot`, { force: true }); }
   }, SLOW);
 
-  test("an agent whose CLI exits on its own is gone from the list without anybody stopping it", async () => {
+  step("an agent whose CLI exits on its own is gone from the list without anybody stopping it", async () => {
     const { out } = await cli("list");
     const w1 = out.result?.agents?.find((a) => a.name === "w1") as Record<string, string>;
     await Bun.spawn(["tmux", "-L", SOCKET, ...TMUX_ISOLATED, "kill-pane", "-t", w1.paneId], { env: { ...process.env, TMUX_TMPDIR: TMUX_TEST_TMPDIR }, stdout: "ignore", stderr: "ignore" }).exited;
@@ -362,7 +365,7 @@ describe.skipIf(!have)("bin/agentglass-agent against a live server", () => {
  * verbs — a seat whose whole job is noticing things could not write one down.
  */
 describe.skipIf(!have)("the queue through the CLI", () => {
-  test("a task can be added, listed and dropped without opening the view", async () => {
+  step("a task can be added, listed and dropped without opening the view", async () => {
     const root = process.env.AGENTGLASS_ROOT_FOR_TEST ?? dir;
     const added = await cli("task", "the retry drops the last page", "--proof", "a failing test named in the report", "--root", root);
     expect(added.out.ok, added.out.error).toBe(true);
@@ -399,7 +402,7 @@ describe.skipIf(!have)("enlisting a pane this app did not open", () => {
     stdout: "pipe", stderr: "pipe",
   });
 
-  test("a hand-made window becomes an agent the verbs can reach, and stop lets it go", async () => {
+  step("a hand-made window becomes an agent the verbs can reach, and stop lets it go", async () => {
     /* A window this app did not make, running the same stub every other test
        drives, named the way a person names a tab. */
     const mk = tmuxCmd("new-session", "-d", "-s", "mine", "-n", "by-hand", "-c", wt, "claude");
@@ -434,7 +437,7 @@ describe.skipIf(!have)("enlisting a pane this app did not open", () => {
     await tmuxCmd("kill-session", "-t", "=mine").exited;
   }, SLOW);
 
-  test("a worker role starts its CLI with the lock and the model Settings picked for it", async () => {
+  step("a worker role starts its CLI with the lock and the model Settings picked for it", async () => {
     // Nothing is saved in this server's config, so the scout is on its
     // default: Claude, haiku, read-only.
     const { code, out } = await cli("start", "r1", "--cwd", wt, "--role", "scout", "--timeout", "20000");
@@ -451,13 +454,13 @@ describe.skipIf(!have)("enlisting a pane this app did not open", () => {
     await cli("stop", "r1");
   }, SLOW);
 
-  test("a role with a different CLI named beside it is refused, so a role cannot come unlocked", async () => {
+  step("a role with a different CLI named beside it is refused, so a role cannot come unlocked", async () => {
     const { code, out } = await cli("start", "r2", "--cwd", wt, "--role", "scout", "--kind", "codex", "--timeout", "0");
     expect(code).toBe(1);
     expect(out.error).toContain("this role runs on claude");
   }, SLOW);
 
-  test("a plain shell is refused, because prompting one types into somebody's command line", async () => {
+  step("a plain shell is refused, because prompting one types into somebody's command line", async () => {
     const mk = tmuxCmd("new-session", "-d", "-s", "plain", "-n", "just-a-shell", "-c", wt);
     expect(await mk.exited).toBe(0);
     await Bun.sleep(400);

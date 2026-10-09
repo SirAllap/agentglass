@@ -19,6 +19,7 @@ import { describe, expect, test, beforeAll } from "bun:test";
 import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "agx-failrate-"));
 const ROOT = join(dir, "proj");
@@ -61,28 +62,30 @@ beforeAll(async () => {
   for (let i = 0; i < 6; i++) db.insertEvent(event("Turn complete", true, 50_000 + i) as any);
 });
 
+const step = story();
+
 describe("the two error counts answer different questions", () => {
-  test("errors still counts every errored event", () => {
+  step("errors still counts every errored event", () => {
     expect(db.statsSummary(3_600_000).totals.errors).toBe(6);
   });
 
-  test("tool_errors counts only tool failures — here, none", () => {
+  step("tool_errors counts only tool failures — here, none", () => {
     expect(db.statsSummary(3_600_000).totals.tool_errors).toBe(0);
   });
 
-  test("tool_errors can never exceed tool_calls, which is the whole point", () => {
+  step("tool_errors can never exceed tool_calls, which is the whole point", () => {
     const t = db.statsSummary(3_600_000).totals;
     expect(t.tool_errors!).toBeLessThanOrEqual(t.tool_calls);
   });
 });
 
 describe("insights does not report a failure rate for tools that did not fail", () => {
-  test("no high-failure-rate card when every tool call succeeded", () => {
+  step("no high-failure-rate card when every tool call succeeded", () => {
     const cards = getInsights().filter((i) => i.kind === "errors");
     expect(cards).toEqual([]);
   });
 
-  test("a real tool failure still raises one, and its rate is bounded", () => {
+  step("a real tool failure still raises one, and its rate is bounded", () => {
     // Three of five tool calls fail — 60%, genuinely worth a card.
     // Short id on purpose: insights keys a card by `${app}:${sid.slice(0, 8)}`.
     const s2 = "s-real";

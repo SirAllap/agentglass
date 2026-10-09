@@ -18,6 +18,7 @@ import { TMUX_ISOLATED } from "./tmuxIsolated.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 const SOCK = "agx-frame-prefix";
 const TMPDIR = mkdtempSync(join(tmpdir(), "agx-fp-"));
@@ -49,14 +50,16 @@ const ready = (() => {
 
 afterAll(() => { if (ready) run("kill-server"); });
 
+const step = story();
+
 describe("the frame carries the prefix", () => {
-  test("the argv says the marker the parser looks for", () => {
+  step("the argv says the marker the parser looks for", () => {
     expect(MARKER).not.toBe("");
     // One invocation: every command after the first is introduced by a `;`.
     expect(FRAME_ARGV.filter((a) => a === ";").length).toBe(5);
   });
 
-  test("one command list answers both, and the halves do not bleed", () => {
+  step("one command list answers both, and the halves do not bleed", () => {
     if (!ready) return;
     expect(ensure(), "the frame session is up").toBe(true);
     run("set-option", "-g", "prefix", "C-a");
@@ -70,7 +73,7 @@ describe("the frame carries the prefix", () => {
     expect(out.split("\n").some((l) => l.startsWith("w\t"))).toBe(true);
   });
 
-  test("an unset second prefix is dropped, not reported as None", () => {
+  step("an unset second prefix is dropped, not reported as None", () => {
     if (!ready) return;
     expect(ensure(), "the frame session is up").toBe(true);
     run("set-option", "-g", "prefix", "C-b");
@@ -78,7 +81,7 @@ describe("the frame carries the prefix", () => {
     expect(parsePrefix(run(...FRAME_ARGV))).toEqual(["C-b"]);
   });
 
-  test("a window named like the marker is still a window", () => {
+  step("a window named like the marker is still a window", () => {
     if (!ready) return;
     expect(ensure(), "the frame session is up").toBe(true);
     // The reason the prefix is asked for FIRST and ends at a marker: anything
@@ -90,7 +93,7 @@ describe("the frame carries the prefix", () => {
     run("rename-window", "-t", "frame:0", "frame");
   });
 
-  test("every client's session is collected, not just ours", () => {
+  step("every client's session is collected, not just ours", () => {
     // What replaced a `list-sessions` of its own: a session is attached if and
     // only if a client is on it, and this answer lists every client there is.
     const tty = "/dev/pts/999";
@@ -108,7 +111,7 @@ describe("the frame carries the prefix", () => {
     expect(f?.client).toEqual({ cols: 80, rows: 24 });
   });
 
-  test("parseFrame ignores the prefix block", () => {
+  step("parseFrame ignores the prefix block", () => {
     const tty = "/dev/pts/999";
     const out = [
       "C-a",

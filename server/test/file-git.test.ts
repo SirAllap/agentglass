@@ -8,6 +8,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileGitFacts, statusOf } from "../src/fileGit.ts";
+import { story } from "./story.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "agx-filegit-"));
 const wasRoots = process.env.AGENTGLASS_DISK_ROOTS;
@@ -26,8 +27,10 @@ writeFileSync(join(dir, "retry.py"), "a = 1\nb = 2\n");
 writeFileSync(join(dir, "-dash.md"), "x\n");
 sh("add", "."); sh("commit", "-q", "-m", "tune backoff for staging queue");
 
+const step = story();
+
 describe("fileGitFacts", () => {
-  test("a committed, untouched file is clean and carries its last commit", () => {
+  step("a committed, untouched file is clean and carries its last commit", () => {
     const r = fileGitFacts(join(dir, "retry.py"), true);
     expect(r).toMatchObject({ ok: true, repo: true, status: "clean", branch: "main" });
     // the path a person would say: the checkout's folder, then the path in it
@@ -35,27 +38,27 @@ describe("fileGitFacts", () => {
     expect(r.commit?.subject).toBe("tune backoff for staging queue");
     expect(r.commit?.hash).toMatch(/^[0-9a-f]{7,}$/);
   });
-  test("an edit is modified with its +/- against HEAD", () => {
+  step("an edit is modified with its +/- against HEAD", () => {
     writeFileSync(join(dir, "retry.py"), "a = 1\nb = 3\nc = 4\n");
     const r = fileGitFacts(join(dir, "retry.py"), true);
     expect(r.status).toBe("modified");
     expect([r.added, r.removed]).toEqual([2, 1]);
   });
-  test("a new file is untracked and has no commit", () => {
+  step("a new file is untracked and has no commit", () => {
     writeFileSync(join(dir, "new.txt"), "n\n");
     const r = fileGitFacts(join(dir, "new.txt"), true);
     expect(r.status).toBe("untracked");
     expect(r.commit).toBeUndefined();
   });
-  test("a name starting with a dash is a path, not an option", () => {
+  step("a name starting with a dash is a path, not an option", () => {
     expect(fileGitFacts(join(dir, "-dash.md"), true)).toMatchObject({ ok: true, repo: true, status: "clean" });
   });
-  test("outside the readable places it refuses, and says nothing about git", () => {
+  step("outside the readable places it refuses, and says nothing about git", () => {
     const r = fileGitFacts("/etc/passwd", false);
     expect(r.ok).toBe(false);
     expect(r.repo).toBe(false);
   });
-  test("statusOf maps porcelain codes", () => {
+  step("statusOf maps porcelain codes", () => {
     expect(["??", " M", "A ", "D ", "R ", "UU", "!!", "  "].map(statusOf))
       .toEqual(["untracked", "modified", "added", "deleted", "renamed", "conflict", "ignored", "clean"]);
   });

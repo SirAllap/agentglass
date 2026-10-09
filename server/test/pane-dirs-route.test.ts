@@ -114,12 +114,17 @@ describe("/terminal/pane-dirs", () => {
   });
 
   test.skipIf(!HAVE_TMUX)("and the worktree it is reaching into, once a hook says which transcript is its", async () => {
+    // A window of its own: the hook below ties the pane to a transcript for good,
+    // and the test above is about a pane nobody has heard from.
+    const hooked = new TextDecoder().decode(
+      tmux("new-window", "-d", "-P", "-F", "#{window_id}", "-c", dir, `${join(dir, "codex")} 300`).stdout,
+    ).trim();
     const transcript = join(dir, "session.jsonl");
     writeFileSync(transcript, JSON.stringify({
       type: "assistant",
       message: { content: [{ type: "tool_use", name: "Bash", input: { command: `git -C ${OUTSIDE} log && git -C ${WT} status` } }] },
     }) + "\n");
-    const pane = (await get(`/terminal/pane-dirs?window=${window}`)).pane as string;
+    const pane = (await get(`/terminal/pane-dirs?window=${hooked}`)).pane as string;
 
     // Exactly what hooks/send_event.py posts from inside that pane.
     const posted = await fetch(base + "/ingest", {
@@ -135,7 +140,7 @@ describe("/terminal/pane-dirs", () => {
     });
     expect(posted.ok).toBe(true);
 
-    const r = await get(`/terminal/pane-dirs?window=${window}`);
+    const r = await get(`/terminal/pane-dirs?window=${hooked}`);
     // The directory it stands in first, then the one it is actually working in
     // — which is the whole point, and is nowhere on that pane's screen.
     expect(r.dirs).toEqual([dir, WT]);

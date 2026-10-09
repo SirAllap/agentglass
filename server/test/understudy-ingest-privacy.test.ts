@@ -22,6 +22,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 let jail: string;
 let U: typeof import("../src/understudy.ts");
@@ -66,8 +67,10 @@ const writeTerms = (lines: string[]) => {
   U.__setPrivateTermsPath(join(jail, "config", "git", "private-terms.txt"));
 };
 
+const step = story();
+
 describe("the ingest refuses rather than guessing", () => {
-  test("termsStatus says whether it actually knows", () => {
+  step("termsStatus says whether it actually knows", () => {
     U.__setPrivateTermsPath(join(jail, "config", "git", "does-not-exist.txt"));
     const missing = U.termsStatus();
     expect(missing.ok).toBe(false);
@@ -79,7 +82,7 @@ describe("the ingest refuses rather than guessing", () => {
     expect(there.count).toBe(2);
   });
 
-  test("with no terms list, ingest throws instead of reading anything", () => {
+  step("with no terms list, ingest throws instead of reading anything", () => {
     U.__setPrivateTermsPath(join(jail, "config", "git", "does-not-exist.txt"));
     expect(() => ING.ingest()).toThrow();
     // And the refusal names the path so a person can fix it, while saying
@@ -91,7 +94,7 @@ describe("the ingest refuses rather than guessing", () => {
     }
   });
 
-  test("the override is explicit and has to be asked for", () => {
+  step("the override is explicit and has to be asked for", () => {
     U.__setPrivateTermsPath(join(jail, "config", "git", "does-not-exist.txt"));
     // Nothing is allowed, so this reads nothing either way — the point is that
     // it gets far enough to return a result rather than refusing.
@@ -102,7 +105,7 @@ describe("the ingest refuses rather than guessing", () => {
 });
 
 describe("provenance never carries a path", () => {
-  test("a rule from a private-looking directory keeps the term out of its label", () => {
+  step("a rule from a private-looking directory keeps the term out of its label", () => {
     writeTerms(["\\bacme\\b"]);
 
     // A memory directory whose PATH carries the private word, and whose rule
@@ -139,7 +142,7 @@ describe("provenance never carries a path", () => {
     expect(all).not.toMatch(/~\/\.claude/);
   });
 
-  test("the must-not-see list vetoes a path before the file is opened", () => {
+  step("the must-not-see list vetoes a path before the file is opened", () => {
     writeTerms(["\\bacme\\b"]);
     const secret = join(jail, "projects", "vault");
     mkdirSync(secret, { recursive: true });

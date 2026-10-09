@@ -26,6 +26,7 @@ import { describe, expect, test, beforeAll } from "bun:test";
 import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "agx-rollup-cache-"));
 const ROOT = join(dir, "proj");
@@ -55,33 +56,35 @@ beforeAll(async () => {
   db = await import("../src/db.ts");
 });
 
+const step = story();
+
 describe("the rollup's path set", () => {
-  test("an empty rollup answers empty, and does not pin that answer", () => {
+  step("an empty rollup answers empty, and does not pin that answer", () => {
     // The poisoning step, on purpose.
     expect(db.rollupDays()).toEqual([]);
   });
 
-  test("a day written after that read is visible", () => {
+  step("a day written after that read is visible", () => {
     fold("2026-07-27", PKG, 7);
     expect(db.rollupDays().map((d) => d.day)).toEqual(["2026-07-27"]);
     expect(db.rollupDays()[0]!.events).toBe(7);
   });
 
-  test("and so is a second one, written after the first was read", () => {
+  step("and so is a second one, written after the first was read", () => {
     // Two writes rather than one: a cache keyed on "have I ever answered" is
     // fixed by any re-read, and would pass with only the test above.
     fold("2026-07-28", PKG, 3);
     expect(db.rollupDays().map((d) => d.day)).toEqual(["2026-07-27", "2026-07-28"]);
   });
 
-  test("a row outside the scope is still excluded", () => {
+  step("a row outside the scope is still excluded", () => {
     // The fix makes the list current. It must not make it permissive.
     fold("2026-07-29", OTHER, 99);
     const days = db.rollupDays().map((d) => d.day);
     expect(days).toEqual(["2026-07-27", "2026-07-28"]);
   });
 
-  test("a delete that leaves the count alone is still noticed", () => {
+  step("a delete that leaves the count alone is still noticed", () => {
     /* The reason the stamp carries MAX(rowid) and not COUNT(*) alone: removing
        one row and adding another leaves the count identical, and a cache keyed
        on the count would keep answering with the path that is gone. */

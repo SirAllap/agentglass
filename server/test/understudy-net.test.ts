@@ -24,6 +24,7 @@
  * is what the row looks like to anything that is not this process.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { story } from "./story.ts";
 import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -115,8 +116,10 @@ function all(table: string): Record<string, unknown>[] {
 
 const ledgerFor = (route: string) => all("understudy_ledger").filter((r) => r.route === route);
 
+const step = story();
+
 describe("what the net records", () => {
-  test("an ordinary write leaves exactly one row, with the status the caller really saw", async () => {
+  step("an ordinary write leaves exactly one row, with the status the caller really saw", async () => {
     // `/notifications/open` is chosen for being dull: it is a POST, it is not on
     // the blind list, it spawns nothing, and it answers through the `json`
     // helper — which is the whole of what "the status is real" depends on.
@@ -133,7 +136,7 @@ describe("what the net records", () => {
     expect(rows[0]!.actor).toBe("local");
   });
 
-  test("a route that answers outside the json helper leaves the status NULL, and that is the record saying so", async () => {
+  step("a route that answers outside the json helper leaves the status NULL, and that is the record saying so", async () => {
     /*
      * `/chat/send` returns a Response built inside chat.ts — a stream on the
      * happy path, and on this one a refusal from `planTurn`, which never
@@ -153,7 +156,7 @@ describe("what the net records", () => {
     expect(rows[0]!.status).toBe(null);
   });
 
-  test("a read is not a write", async () => {
+  step("a read is not a write", async () => {
     // The net is POST-only. A ledger with the dashboard's own polling in it is
     // a ledger nobody ever scrolls to the bottom of.
     await fetch(base + "/health", { headers });
@@ -164,7 +167,7 @@ describe("what the net records", () => {
 });
 
 describe("what the net refuses to touch", () => {
-  test("a route whose body is a credential leaves no row at all", async () => {
+  step("a route whose body is a credential leaves no row at all", async () => {
     // Both shapes of the blind list: an exact path and a prefix.
     await post("/pair/claim", { code: CANARY, name: "Pixel 9" });
     await post("/providers/connect", { id: "clickup", token: CANARY });
@@ -175,7 +178,7 @@ describe("what the net refuses to touch", () => {
     expect(ledgerFor("/control")).toEqual([]);
   });
 
-  test("every column of every understudy table, for the secret that went through", () => {
+  step("every column of every understudy table, for the secret that went through", () => {
     /*
      * The grep the whole feature is judged by.
      *
@@ -193,7 +196,7 @@ describe("what the net refuses to touch", () => {
     }
   });
 
-  test("and the grep above was not searching an empty table", () => {
+  step("and the grep above was not searching an empty table", () => {
     // The failure mode of a negative assertion: it passes beautifully when
     // nothing was recorded at all. The rows from the tests above have to be
     // there, or "no canary anywhere" is a statement about an empty database.

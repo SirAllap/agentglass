@@ -20,6 +20,7 @@ import { describe, expect, test, beforeAll } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 const dir = realpathSync(mkdtempSync(join(tmpdir(), "agx-run-group-")));
 const REPO = join(dir, "repo");
@@ -110,8 +111,10 @@ beforeAll(async () => {
   run = runs.runById(started.run!.id)!;
 });
 
+const step = story();
+
 describe("grouping by the set of directories the legs ran in", () => {
-  test("finds work recorded before the run was ever created", () => {
+  step("finds work recorded before the run was ever created", () => {
     const legs = runs.runActivity(run);
     const a = legs.find((l) => l.worktree === OLD_A)!;
     const b = legs.find((l) => l.worktree === OLD_B)!;
@@ -124,7 +127,7 @@ describe("grouping by the set of directories the legs ran in", () => {
     expect(b.errors).toBe(1);
   });
 
-  test("carries the leg's own facts alongside the numbers", () => {
+  step("carries the leg's own facts alongside the numbers", () => {
     const legs = runs.runActivity(run);
     const a = legs.find((l) => l.worktree === OLD_A)!;
     expect(a.origin).toBe("adopted");
@@ -133,14 +136,14 @@ describe("grouping by the set of directories the legs ran in", () => {
     expect(a.lastSeen).toBeGreaterThan(0);
   });
 
-  test("a busy directory that is not a leg stays out of the totals", () => {
+  step("a busy directory that is not a leg stays out of the totals", () => {
     const legs = runs.runActivity(run);
     expect(legs.some((l) => l.worktree === STRANGER)).toBe(false);
     // 40 events sat next door the whole time; none of them are in this run.
     expect(legs.reduce((n, l) => n + l.events, 0)).toBe(13);
   });
 
-  test("a leg with no history reports zero rather than vanishing", () => {
+  step("a leg with no history reports zero rather than vanishing", () => {
     const legs = runs.runActivity(run);
     // The spawned leg was cut a moment ago and has produced nothing. A run that
     // silently dropped it would be a comparison missing an arm.
@@ -151,7 +154,7 @@ describe("grouping by the set of directories the legs ran in", () => {
     expect(legs).toHaveLength(3);
   });
 
-  test("the numbers keep arriving after adoption, from the same key", () => {
+  step("the numbers keep arriving after adoption, from the same key", () => {
     // Nothing was subscribed and nothing was tagged: the next event lands under
     // the same directory and the next read picks it up.
     db.insertEvent(turn("sess-a", OLD_A, 99) as any);
@@ -161,7 +164,7 @@ describe("grouping by the set of directories the legs ran in", () => {
 });
 
 describe("the column this leans on", () => {
-  test("is generated from the payload, not written by anything here", () => {
+  step("is generated from the payload, not written by anything here", () => {
     // Stated as a test because the whole retroactive property rests on it: no
     // code in runs.ts writes `cwd_path`, and no migration had to walk the table
     // to fill it in.

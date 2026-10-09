@@ -14,6 +14,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "agx-risk-"));
 const ROOT = join(dir, "orbit");
@@ -75,8 +76,10 @@ afterAll(() => {
   }
 });
 
+const step = story();
+
 describe("each change carries its own flags", () => {
-  test("the key names its line, the auth module its word, and a plain edit nothing", () => {
+  step("the key names its line, the auth module its word, and a plain edit nothing", () => {
     process.env.AGENTGLASS_ROOT = ROOT;
     const byFile = new Map(db.getChanges(50, "risk-s1").map((c) => [c.file_path.slice(ROOT.length + 1), c]));
     const cfg = byFile.get("config/settings.yml")!;
@@ -86,14 +89,14 @@ describe("each change carries its own flags", () => {
     expect(byFile.get("src/format.ts")!.risks).toBeUndefined();
   });
 
-  test("the session detail's changes are the same objects, so the diff panel gets them too", () => {
+  step("the session detail's changes are the same objects, so the diff panel gets them too", () => {
     const d = db.getSession("risk-s1");
     expect(d?.changes.some((c) => c.risks?.some((r) => r.kind === "secret"))).toBe(true);
   });
 });
 
 describe("the session row rolls them up", () => {
-  test("one entry per kind and file, and nothing on a session that edited nothing risky", () => {
+  step("one entry per kind and file, and nothing on a session that edited nothing risky", () => {
     const rows = bySession();
     const s1 = rows.get("risk-s1")!;
     expect(s1.risks?.map((r) => `${r.kind}:${r.file.slice(ROOT.length + 1)}`).sort())
@@ -102,19 +105,19 @@ describe("the session row rolls them up", () => {
     expect(rows.get("risk-s2")!.risks).toBeUndefined();
   });
 
-  test("an edit that lands after the first read is picked up on the next", () => {
+  step("an edit that lands after the first read is picked up on the next", () => {
     bySession();
     db.insertEvent(write("risk-s2", ".github/workflows/ci.yml", "on: push\n", T0 + 5_000) as any);
     expect(bySession().get("risk-s2")!.risks?.map((r) => r.kind)).toEqual(["ci"]);
   });
 
-  test("a backfilled edit older than everything already read is still counted", () => {
+  step("a backfilled edit older than everything already read is still counted", () => {
     bySession();
     db.insertEvent(write("risk-s1", "bun.lock", "{}\n", T0 - 60_000) as any);
     expect(bySession().get("risk-s1")!.risks?.map((r) => r.kind).sort()).toEqual(["auth", "deps", "secret"]);
   });
 
-  test("reading again with nothing new changes nothing", () => {
+  step("reading again with nothing new changes nothing", () => {
     const a = bySession().get("risk-s1")!.risks;
     const b = bySession().get("risk-s1")!.risks;
     expect(b).toEqual(a);
@@ -122,7 +125,7 @@ describe("the session row rolls them up", () => {
 });
 
 describe("what a first review found", () => {
-  test("a flagged edit older than the diff's window is still in the diff the card opens", () => {
+  step("a flagged edit older than the diff's window is still in the diff the card opens", () => {
     // The card rolls up the whole session; the detail lists only the newest
     // changes. A key written early and followed by a long session must not be
     // a red chip with no file behind it.
@@ -134,7 +137,7 @@ describe("what a first review found", () => {
     expect(d.changes.length).toBe(41);
   });
 
-  test("the directory the agent ran in is not read as part of the path", () => {
+  step("the directory the agent ran in is not read as part of the path", () => {
     const wt = join(dir, "orbit-sso-login");
     db.insertEvent(event({ session_id: "risk-wt", tool_name: "Edit", timestamp: T0 + 1_000,
       payload: { project_path: ROOT, cwd: wt, tool_input: { file_path: join(wt, "src/format.ts"), old_string: "a", new_string: "b" } } }) as any);
@@ -142,7 +145,7 @@ describe("what a first review found", () => {
     expect(db.getChanges(5, "risk-wt")[0].risks).toBeUndefined();
   });
 
-  test("an edit rebuilt from its strings gives no line number, because it does not know one", () => {
+  step("an edit rebuilt from its strings gives no line number, because it does not know one", () => {
     const GH = "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8";
     db.insertEvent(edit("risk-edit", "src/client.ts", "const t = null;", `const t = "${GH}";`, T0 + 1_000) as any);
     process.env.AGENTGLASS_ROOT = ROOT;
@@ -151,14 +154,14 @@ describe("what a first review found", () => {
     expect(r[0].line).toBeUndefined();
   });
 
-  test("callers that only want the paths do not pay for the rules", () => {
+  step("callers that only want the paths do not pay for the rules", () => {
     process.env.AGENTGLASS_ROOT = ROOT;
     expect(db.getChanges(50, "risk-s1", false).every((c) => c.risks === undefined)).toBe(true);
   });
 });
 
 describe("what a second review found", () => {
-  test("a flag read on an earlier poll still names its change after a newer flag lands", () => {
+  step("a flag read on an earlier poll still names its change after a newer flag lands", () => {
     // The roll-up re-ranks what it remembered together with what just arrived,
     // and the change id is what the diff uses to fetch a flagged edit older
     // than its window. Re-ranked without it, the early key was a red chip with
@@ -174,7 +177,7 @@ describe("what a second review found", () => {
     expect(d.changes.some((c) => c.file_path.endsWith("config/app.yml") && c.risks?.[0]?.kind === "secret")).toBe(true);
   });
 
-  test("the hourly prune forgets only the sessions whose edits it deleted", () => {
+  step("the hourly prune forgets only the sessions whose edits it deleted", () => {
     // It used to forget every session on every run, deleted or not, and the
     // next poll re-parsed the whole edit history of every listed session on
     // the event loop. The kept session's edit is rewritten under the roll-up
@@ -201,7 +204,7 @@ describe("what a second review found", () => {
     expect(bySession().get("risk-prune-keep")!.risks?.map((r) => r.kind)).toEqual(["secret"]);
   });
 
-  test("a long session whose oldest edits expire keeps its flags without a re-read", () => {
+  step("a long session whose oldest edits expire keeps its flags without a re-read", () => {
     // A session older than the retention window loses an edit on every run,
     // and forgetting it whole meant re-reading its full history every hour.
     // Only the flags whose own edit went are dropped; the rest stay, which the
@@ -217,7 +220,7 @@ describe("what a second review found", () => {
     expect(bySession().get("risk-straddle")!.risks?.map((r) => r.kind)).toEqual(["auth"]);
   });
 
-  test("the chip and the diff it opens count only edits inside the open project", () => {
+  step("the chip and the diff it opens count only edits inside the open project", () => {
     // The change list is scoped to the open project and the roll-up was not:
     // a session that also wrote in another checkout carried that checkout's
     // flag on its card, and the diff fetched a change the list itself hides.
@@ -233,7 +236,7 @@ describe("what a second review found", () => {
     expect(d.changes.map((c) => c.file_path)).toEqual([join(ROOT, "src/format.ts")]);
   });
 
-  test("a flagged edit in a worktree added a moment ago reaches the card once git lists it", async () => {
+  step("a flagged edit in a worktree added a moment ago reaches the card once git lists it", async () => {
     // The project's checkouts come from `git worktree list`, cached for five
     // seconds. When the roll-up filtered by scope as it READ, an edit in a
     // brand-new worktree was passed over while the list was stale and never
@@ -268,7 +271,7 @@ describe("what a second review found", () => {
 });
 
 const src = await Bun.file(new URL("../src/db.ts", import.meta.url)).text();
-test("the roll-up's first read of a session goes through the session index, not the event-type one", () => {
+step("the roll-up's first read of a session goes through the session index, not the event-type one", () => {
   // Measured: without the hint SQLite picks idx_events_type and a new session's
   // first read walks every PostToolUse row in the table (21 ms on 28k rows
   // against 1 ms).

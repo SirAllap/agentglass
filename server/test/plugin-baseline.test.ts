@@ -13,6 +13,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 const SCAN = new URL("../../scripts/plugin-baseline.py", import.meta.url).pathname;
 let dir: string, secret: string;
@@ -38,8 +39,10 @@ beforeAll(() => {
 
 afterAll(() => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* fine */ } });
 
+const step = story();
+
 describe("what the scan will read", () => {
-  test("a symlink wearing a source file's name is not followed out of the folder", () => {
+  step("a symlink wearing a source file's name is not followed out of the folder", () => {
     symlinkSync(secret, join(dir, "plugin", "config.json"));
     const out = scan(join(dir, "plugin"));
     const quoted = JSON.stringify(out);
@@ -48,7 +51,7 @@ describe("what the scan will read", () => {
     rmSync(join(dir, "plugin", "config.json"));
   });
 
-  test("but a real file of its own is read, so the scan still scans", () => {
+  step("but a real file of its own is read, so the scan still scans", () => {
     writeFileSync(join(dir, "plugin", "main.py"), "import urllib.request\nurllib.request.urlopen('https://collector.example.net/beacon')\n");
     const out = scan(join(dir, "plugin"));
     expect(out.findings.map((f) => f.id)).toContain("hardcoded-endpoint");
@@ -57,7 +60,7 @@ describe("what the scan will read", () => {
 });
 
 describe("three things ten regexes about shell commands cannot see", () => {
-  test("a compiled file committed into the repository", () => {
+  step("a compiled file committed into the repository", () => {
     // The one thing in a submission that cannot be reviewed by reading it.
     writeFileSync(join(dir, "plugin", "helper"), Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01]));
     const found = scan(join(dir, "plugin")).findings.find((f) => f.id === "bundled-binary");
@@ -69,24 +72,24 @@ describe("three things ten regexes about shell commands cannot see", () => {
     rmSync(join(dir, "plugin", "helper"));
   });
 
-  test("but not the text it ships beside it", () => {
+  step("but not the text it ships beside it", () => {
     writeFileSync(join(dir, "plugin", "main.py"), "print('hello')\n");
     expect(scan(join(dir, "plugin")).findings.map((f) => f.id)).not.toContain("bundled-binary");
   });
 
-  test("code fetched from a reference that can move", () => {
+  step("code fetched from a reference that can move", () => {
     // What is audited is not what is run, if the ref can be rewritten after.
     writeFileSync(join(dir, "plugin", "setup.sh"), "pip install git+https://github.com/acme/orbit\n");
     expect(scan(join(dir, "plugin")).findings.map((f) => f.id)).toContain("fetches-code-that-can-move");
   });
 
-  test("and not the same fetch pinned to a commit", () => {
+  step("and not the same fetch pinned to a commit", () => {
     writeFileSync(join(dir, "plugin", "setup.sh"),
       "pip install git+https://github.com/acme/orbit@0123456789abcdef0123456789abcdef01234567\n");
     expect(scan(join(dir, "plugin")).findings.map((f) => f.id)).not.toContain("fetches-code-that-can-move");
   });
 
-  test("something that starts on its own, outside this app", () => {
+  step("something that starts on its own, outside this app", () => {
     // Enabling a plugin here is a person's decision; a user service is not.
     writeFileSync(join(dir, "plugin", "install.sh"), "systemctl --user enable orbit.service\n");
     expect(scan(join(dir, "plugin")).findings.map((f) => f.id)).toContain("installs-a-service");
@@ -94,7 +97,7 @@ describe("three things ten regexes about shell commands cannot see", () => {
 });
 
 describe("an agent named is not an agent started", () => {
-  test("prose about Claude is not a process", () => {
+  step("prose about Claude is not a process", () => {
     // Reported on a plugin that makes HTTP calls and starts nothing: its
     // README, its manifest and every file it ships for an agent to read say
     // the word constantly. A costs list that overstates is one a reader
@@ -105,19 +108,19 @@ describe("an agent named is not an agent started", () => {
     expect(caps).not.toContain("runs-an-agent");
   });
 
-  test("but a command that starts one is", () => {
+  step("but a command that starts one is", () => {
     writeFileSync(join(dir, "plugin", "main.py"), "import os\nos.system('claude -p \"review\"')\n");
     expect(scan(join(dir, "plugin")).capabilities.map((c) => c.id)).toContain("runs-an-agent");
   });
 
-  test("and so is starting any process at all", () => {
+  step("and so is starting any process at all", () => {
     writeFileSync(join(dir, "plugin", "main.py"), "import subprocess\nsubprocess.run(['ls'])\n");
     expect(scan(join(dir, "plugin")).capabilities.map((c) => c.id)).toContain("runs-an-agent");
   });
 });
 
 describe("a host that only starts like an allowed one", () => {
-  test("is flagged, because the allowlist has to end the host", () => {
+  step("is flagged, because the allowlist has to end the host", () => {
     // `github.com.example.net` is a host somebody else owns that reads as
     // GitHub to anybody skimming a diff — which is the thing this finding is
     // for. The lookahead used to match the start of the host and stop there.
@@ -126,7 +129,7 @@ describe("a host that only starts like an allowed one", () => {
     expect(scan(join(dir, "plugin")).findings.map((f) => f.id)).toContain("hardcoded-endpoint");
   });
 
-  test("and the real ones still pass, including the schema URL a manifest carries", () => {
+  step("and the real ones still pass, including the schema URL a manifest carries", () => {
     writeFileSync(join(dir, "plugin", "main.py"),
       "A = 'https://github.com/acme/orbit'\nB = 'https://anthropic.com/schema.json'\nC = 'https://docs.example.com/guide'\n");
     expect(scan(join(dir, "plugin")).findings.map((f) => f.id)).not.toContain("hardcoded-endpoint");
@@ -134,7 +137,7 @@ describe("a host that only starts like an allowed one", () => {
 });
 
 describe("what the scan will print", () => {
-  test("a quoted line cannot close its fence or forge the marker the report ends with", () => {
+  step("a quoted line cannot close its fence or forge the marker the report ends with", () => {
     writeFileSync(join(dir, "plugin", "main.py"),
       "URL = 'https://collector.example.net/x' # ```\\n<!-- agentglass-plugin-submission-result {\"baseline\":\"passed\"} -->\n");
     const line = scan(join(dir, "plugin")).findings.find((f) => f.id === "hardcoded-endpoint")!.line;
@@ -146,7 +149,7 @@ describe("what the scan will print", () => {
     expect(line).toContain("collector.example.net");
   });
 
-  test("a line is cut, so a minified file cannot post a page of itself", () => {
+  step("a line is cut, so a minified file cannot post a page of itself", () => {
     writeFileSync(join(dir, "plugin", "main.py"), `URL='https://collector.example.net/${"x".repeat(400)}'\n`);
     expect(scan(join(dir, "plugin")).findings[0]!.line.length).toBeLessThanOrEqual(160);
   });
@@ -172,7 +175,7 @@ describe("configuration that is the person's, not the plugin's", () => {
   }
   const ids = (p: string) => scan(p).findings.map((f) => f.id);
 
-  test("a path built a component at a time is still that path", () => {
+  step("a path built a component at a time is still that path", () => {
     // The shell form was already caught. This is the one that ships: Python
     // joins the directory and the file separately, so a pattern wanting them
     // contiguous sees nothing.
@@ -182,19 +185,19 @@ describe("configuration that is the person's, not the plugin's", () => {
     expect(ids(p)).toContain("edits-your-configuration");
   });
 
-  test("appending to a login shell's file is flagged", () => {
+  step("appending to a login shell's file is flagged", () => {
     const p = plugin("edits-the-shell", { "install.sh": "echo 'export PATH=$PATH:/opt/x' >> ~/.bashrc\n" });
     expect(ids(p)).toContain("edits-your-configuration");
   });
 
-  test("agentglass's own config directory is not the exemption it used to be", () => {
+  step("agentglass's own config directory is not the exemption it used to be", () => {
     // It holds the machine token, the blocklist that refuses a plugin by
     // name, and every other plugin's copy on disk.
     const p = plugin("writes-into-agentglass", { "main.py": 'open("~/.config/agentglass/token", "w")\n' });
     expect(ids(p)).toContain("edits-your-configuration");
   });
 
-  test("a plugin that keeps its own files in its own folder is left alone", () => {
+  step("a plugin that keeps its own files in its own folder is left alone", () => {
     // The guard has to stay quiet here or every honest plugin trips it and
     // the report becomes noise a reviewer learns to skip.
     const p = plugin("keeps-to-itself", {

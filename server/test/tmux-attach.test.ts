@@ -21,6 +21,7 @@
  * Its own socket, never the developer's: this creates and kills a tmux server.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { story } from "./story.ts";
 import { mkdirSync, rmSync } from "node:fs";
 import { attachArgvFor, readFrame, runAction, restoreWindows, phoneWindows, type TmuxTarget } from "../src/tmuxctl.ts";
 import { TEST_TERM } from "./tmuxTerm.ts";
@@ -192,7 +193,8 @@ afterAll(() => {
 });
 
 describe.if(HAVE_TMUX)("attaching a phone to a pane that already exists", () => {
-  test("the fixture is a wide desk with something running in it", () => {
+  const step = story();
+  step("the fixture is a wide desk with something running in it", () => {
     expect(paneId).toMatch(/^%\d+$/);
     expect(sessionId).toMatch(/^\$\d+$/);
     // 200 columns, from this file's own `new-session -x 200`. When this read 80
@@ -204,7 +206,7 @@ describe.if(HAVE_TMUX)("attaching a phone to a pane that already exists", () => 
     expect(tmux("list-sessions", "-F", "#{session_name}").trim()).toBe("work");
   });
 
-  test("no command is built for anything that is not a live pane", () => {
+  step("no command is built for anything that is not a live pane", () => {
     // The id goes onto a command line, so this is the boundary that matters.
     // A caller can only ever name a pane the machine is really running.
     expect(attachArgvFor(OURS, "%99999")).toBeNull();
@@ -213,7 +215,7 @@ describe.if(HAVE_TMUX)("attaching a phone to a pane that already exists", () => 
     expect(attachArgvFor(OURS, "$0")).toBeNull();
   });
 
-  test("and the one it builds says exactly what it does", () => {
+  step("and the one it builds says exactly what it does", () => {
     const built = attachArgvFor(OURS, paneId, "fixed");
     expect(ours(built)).toBe(true);
     expect(built).not.toBeNull();
@@ -244,7 +246,7 @@ describe.if(HAVE_TMUX)("attaching a phone to a pane that already exists", () => 
     expect(argv).not.toContain("resize-window");
   });
 
-  test("a fit costs exactly the window that was opened", () => {
+  step("a fit costs exactly the window that was opened", () => {
     const built = attachArgvFor(OURS, paneId, "fixed", true, { cols: 80, rows: 24 })!;
     expect(ours(built)).toBe(true);
     const argv = built.argv;
@@ -271,7 +273,7 @@ describe.if(HAVE_TMUX)("attaching a phone to a pane that already exists", () => 
     expect(argv.filter((a) => a === "resize-window")).toHaveLength(1);
   });
 
-  test("an id two servers both claim opens neither", async () => {
+  step("an id two servers both claim opens neither", async () => {
     /*
      * The one that actually happened, and it reached somebody's real work.
      *
@@ -314,7 +316,7 @@ describe.if(HAVE_TMUX)("attaching a phone to a pane that already exists", () => 
     }
   }, 30_000);
 
-  test("and a fit with no size given leaves the window alone", () => {
+  step("and a fit with no size given leaves the window alone", () => {
     // Rather than guessing at one. A window resized to a number nobody sent is
     // worse than a window that was not resized.
     const built = attachArgvFor(OURS, paneId, "fixed", true)!;
@@ -322,7 +324,7 @@ describe.if(HAVE_TMUX)("attaching a phone to a pane that already exists", () => 
     expect(built.argv).not.toContain("latest");
   });
 
-  test("the phone sees the work, types into it, and leaves the desk alone", async () => {
+  step("the phone sees the work, types into it, and leaves the desk alone", async () => {
     const built = attachArgvFor(OURS, paneId)!;
     // The guard, and it is not ceremony. Everything below this line types into
     // whatever the command attached to. See `ours` above for what went wrong.
@@ -393,6 +395,7 @@ describe.if(HAVE_TMUX)("attaching a phone to a pane that already exists", () => 
  * independent tests would mean building the phone attach four times.
  */
 describe.if(HAVE_TMUX)("taking the width back from a phone", () => {
+  const step = story();
   let phone: ReturnType<typeof Bun.spawn> | null = null;
   let built: ReturnType<typeof attachArgvFor> = null;
   let win = "";
@@ -438,7 +441,7 @@ describe.if(HAVE_TMUX)("taking the width back from a phone", () => {
 
   afterAll(() => { phone?.kill(); });
 
-  test("the frame carries the client's size and every window's, in one read", () => {
+  step("the frame carries the client's size and every window's, in one read", () => {
     // Both halves of the comparison the desk makes, off the SAME
     // list-clients/list-windows the tab strip was already paying for. If this
     // ever costs a second tmux call it is being run twice a second, per client.
@@ -454,7 +457,7 @@ describe.if(HAVE_TMUX)("taking the width back from a phone", () => {
     expect(w!.rows).toBeLessThan(f!.client!.rows);
   });
 
-  test("a fitted phone is a window narrower than the terminal looking at it", async () => {
+  step("a fitted phone is a window narrower than the terminal looking at it", async () => {
     built = attachArgvFor(OURS, paneId, "over", true, { cols: 80, rows: 24 });
     expect(ours(built)).toBe(true);
     // Read before the command runs, because the command is what changes it.
@@ -487,7 +490,7 @@ describe.if(HAVE_TMUX)("taking the width back from a phone", () => {
     for (const o of others) expect(f.windows.find((x) => x.id === o)!.cols).toBeGreaterThan(100);
   }, 30_000);
 
-  test("take-over gives the desk its width back and leaves the phone attached", async () => {
+  step("take-over gives the desk its width back and leaves the phone attached", async () => {
     const before = others.map(geom);
     expect(runAction(target, "takeover", win)).toBe(true);
     await Bun.sleep(600);
@@ -507,7 +510,7 @@ describe.if(HAVE_TMUX)("taking the width back from a phone", () => {
     expect(others.map(geom)).toEqual(before);
   }, 30_000);
 
-  test("the closing socket's teardown does not undo it", async () => {
+  step("the closing socket's teardown does not undo it", async () => {
     /*
      * The ordering hazard, run rather than argued.
      *
@@ -524,7 +527,7 @@ describe.if(HAVE_TMUX)("taking the width back from a phone", () => {
     expect(opt(win)).toBe("largest");
   }, 30_000);
 
-  test("a phone that leaves puts every window back the way it found it", async () => {
+  step("a phone that leaves puts every window back the way it found it", async () => {
     phone!.kill();
     phone = null;
     // Long enough for `destroy-unattached on` to take our session with the
@@ -576,7 +579,7 @@ describe.if(HAVE_TMUX)("taking the width back from a phone", () => {
     for (const o of others) expect(opt(o)).toBe("");
   }, 40_000);
 
-  test("and the window follows a client's size again once it is back", async () => {
+  step("and the window follows a client's size again once it is back", async () => {
     // The proof that "unset" is not cosmetic: an unset window is `latest`, so
     // a client attaching at a new size takes the window with it. A window left
     // `manual` — what shipped — sits at its old size and ignores this.
@@ -590,7 +593,7 @@ describe.if(HAVE_TMUX)("taking the width back from a phone", () => {
     }
   }, 30_000);
 
-  test("and nothing but a window id on our own server can be taken over", () => {
+  step("and nothing but a window id on our own server can be taken over", () => {
     // Same envelope as `kill`: the id goes onto a command line, and the socket
     // is the one we resolved from our own client rather than anything a caller
     // named. The narrower "was it on the frame we sent" check lives at the
@@ -623,6 +626,7 @@ describe.if(HAVE_TMUX)("taking the width back from a phone", () => {
  * the next one expects it, because what is under test is a lifecycle.
  */
 describe.if(HAVE_TMUX)("zooming the pane the phone opened", () => {
+  const step = story();
   let phone: ReturnType<typeof Bun.spawn> | null = null;
   let zwin = "";
   let tapped = "";
@@ -663,7 +667,7 @@ describe.if(HAVE_TMUX)("zooming the pane the phone opened", () => {
 
   afterAll(() => { phone?.kill(); });
 
-  test("the fixture is a two-pane window with a wide desk beside it", () => {
+  step("the fixture is a two-pane window with a wide desk beside it", () => {
     expect(zwin).toMatch(/^@\d+$/);
     expect(tapped).toMatch(/^%\d+$/);
     expect(other).toMatch(/^%\d+$/);
@@ -675,7 +679,7 @@ describe.if(HAVE_TMUX)("zooming the pane the phone opened", () => {
     expect(Number(paneGeom(tapped).split("x")[0])).toBeLessThan(Number(geom(zwin).split("x")[0]));
   });
 
-  test("a window with one pane is not zoomed, because there is nothing to zoom", () => {
+  step("a window with one pane is not zoomed, because there is nothing to zoom", () => {
     // Not an optimisation. `resize-pane -Z` on a single-pane window is a no-op
     // on tmux 3.6a (measured: exit 0, flag still 0), so the reason to skip it is
     // not that tmux would mind — it is that recording "this window was not
@@ -687,7 +691,7 @@ describe.if(HAVE_TMUX)("zooming the pane the phone opened", () => {
     expect(built.argv).not.toContain("resize-pane");
   });
 
-  test("the command zooms the pane that was tapped, and says which one it owes back", () => {
+  step("the command zooms the pane that was tapped, and says which one it owes back", () => {
     const built = attachArgvFor(OURS, tapped, "zoom", true, { cols: 44, rows: 60 })!;
     expect(ours(built)).toBe(true);
     // The pane, not the window: tmux zooms whichever pane the target names, and
@@ -702,7 +706,7 @@ describe.if(HAVE_TMUX)("zooming the pane the phone opened", () => {
     expect(built.zoomed).toEqual({ windowId: zwin, paneId: tapped });
   });
 
-  test("and the phone gets one full-width pane while the desk's other windows never move", async () => {
+  step("and the phone gets one full-width pane while the desk's other windows never move", async () => {
     const before = [...elsewhere.map(geom), ...elsewhere.map(zoomed)];
     const built = attachArgvFor(OURS, tapped, "live", true, { cols: 44, rows: 60 })!;
     expect(ours(built)).toBe(true);
@@ -755,7 +759,7 @@ describe.if(HAVE_TMUX)("zooming the pane the phone opened", () => {
     }
   }, 30_000);
 
-  test("and the NEXT tab of the same window zooms onto its own pane", async () => {
+  step("and the NEXT tab of the same window zooms onto its own pane", async () => {
     /*
      * The bug the emulator found, and the reason "already zoomed → stand down"
      * is wrong.
@@ -805,7 +809,7 @@ describe.if(HAVE_TMUX)("zooming the pane the phone opened", () => {
     expect(zoomed(zwin)).toBe("1");
   }, 40_000);
 
-  test("a reconnection to the pane already zoomed sends nothing and still owes it", () => {
+  step("a reconnection to the pane already zoomed sends nothing and still owes it", () => {
     /*
      * The mirror of the case above, and the one that must send NOTHING: a
      * window already zoomed onto the pane being opened. `select-pane` on the
@@ -825,7 +829,7 @@ describe.if(HAVE_TMUX)("zooming the pane the phone opened", () => {
     expect(again.zoomed).toEqual({ windowId: zwin, paneId: tapped });
   });
 
-  test("the desk asking for its window back gets its panes as well as its width", async () => {
+  step("the desk asking for its window back gets its panes as well as its width", async () => {
     expect(runAction(target, "takeover", zwin)).toBe(true);
     await Bun.sleep(800);
     // Both halves. The width alone was what this button used to do, and on a
@@ -838,7 +842,7 @@ describe.if(HAVE_TMUX)("zooming the pane the phone opened", () => {
     expect(tmux("list-clients", "-F", "#{client_session}")).toContain("agx-phone-");
   }, 30_000);
 
-  test("and the phone reconnecting does not undo the click that caused it", () => {
+  step("and the phone reconnecting does not undo the click that caused it", () => {
     /*
      * The race this feature would have shipped with.
      *
@@ -867,7 +871,7 @@ describe.if(HAVE_TMUX)("zooming the pane the phone opened", () => {
     expect(asked.zoomed).toEqual({ windowId: zwin, paneId: tapped });
   });
 
-  test("and a phone that leaves takes its zoom with it", async () => {
+  step("and a phone that leaves takes its zoom with it", async () => {
     phone!.kill();
     phone = null;
     // Long enough for `destroy-unattached on` to take our session with the
@@ -904,7 +908,7 @@ describe.if(HAVE_TMUX)("zooming the pane the phone opened", () => {
     expect(opt(zwin)).toBe("");
   }, 40_000);
 
-  test("and the teardown never unzooms a zoom that is not ours", async () => {
+  step("and the teardown never unzooms a zoom that is not ours", async () => {
     /*
      * The desk zooming the OTHER pane, which is as close to "somebody else's
      * zoom" as tmux lets anything get: when a window is zoomed the zoomed pane

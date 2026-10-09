@@ -6,6 +6,7 @@
 // that from something a user reports as "laggy as hell" into a line with a
 // duration and a name on it.
 import { beforeAll, describe, expect, it } from "bun:test";
+import { story } from "./story.ts";
 
 let lw: typeof import("../src/loopwatch.ts");
 
@@ -26,8 +27,10 @@ function block(ms: number) {
   while (Date.now() < until) { /* exactly what Bun.spawnSync does to us */ }
 }
 
+const step = story();
+
 describe("loop watchdog", () => {
-  it("notices a block, and blames whatever entered last", async () => {
+  step("notices a block, and blames whatever entered last", async () => {
     // Let a heartbeat land first. Attribution is now "was this label entered
     // while the loop was blocked", so a tick that was already late — from
     // whatever the rest of the suite is doing — would make the block look like
@@ -49,7 +52,7 @@ describe("loop watchdog", () => {
     expect(worst.what).toBe("GET /git/repos");
   });
 
-  it("does not blame a request that finished long ago", async () => {
+  step("does not blame a request that finished long ago", async () => {
     // A stall arriving out of nowhere is a timer, a stream pump or GC, and
     // saying so beats pinning it on whichever endpoint happened to be last —
     // which is not hypothetical: `/gate/pending` reads an in-memory Map in
@@ -67,14 +70,14 @@ describe("loop watchdog", () => {
     expect(seen.at(-1)!.what).toContain("background");
   });
 
-  it("keeps running totals, so a session can be judged rather than a moment", () => {
+  step("keeps running totals, so a session can be judged rather than a moment", () => {
     const s = lw.stalls();
     expect(s.worstMs).toBeGreaterThanOrEqual(150);
     expect(s.totalMs).toBeGreaterThanOrEqual(s.worstMs);
     expect(s.sinceMs).toBeGreaterThan(0);
   });
 
-  it("is bounded — the thing that watches for growth must not grow", async () => {
+  step("is bounded — the thing that watches for growth must not grow", async () => {
     for (let i = 0; i < 8; i++) { lw.entered(`burst ${i}`); block(520); await Bun.sleep(300); }
     const s = lw.stalls();
     expect(s.stalls.length).toBeLessThanOrEqual(5);       // the ring trimmed
@@ -86,14 +89,14 @@ describe("load shedding", () => {
   // The terminal cannot ask for priority, so it is given some: while a human is
   // typing into a shell, the background sweeps hold their answers longer. The
   // multiplier is the whole mechanism — the caches it multiplies already exist.
-  it("is 1 when nothing is happening", async () => {
+  step("is 1 when nothing is happening", async () => {
     await Bun.sleep(4_100);            // let any earlier keystroke go cold
     expect(lw.terminalHot()).toBe(false);
     expect(lw.pressureMs()).toBe(0);
     expect(lw.backoff()).toBe(1);
   }, 10_000);
 
-  it("stands back while the loop is already stalling", async () => {
+  step("stands back while the loop is already stalling", async () => {
     // The second signal, and the one that covers whatever blocks the loop next:
     // if something took 500ms out of the last window, adding an eighteen-repo
     // `git status` sweep on top of it is the wrong instinct.
@@ -105,13 +108,13 @@ describe("load shedding", () => {
     expect(lw.backoff()).toBe(1);
   }, 10_000);
 
-  it("stands back while someone is typing", () => {
+  step("stands back while someone is typing", () => {
     lw.terminalActive();
     expect(lw.terminalHot()).toBe(true);
     expect(lw.backoff()).toBeGreaterThan(1);
   });
 
-  it("lets go on its own once the typing stops", async () => {
+  step("lets go on its own once the typing stops", async () => {
     lw.terminalActive();
     expect(lw.backoff()).toBeGreaterThan(1);
     await Bun.sleep(4_100);
@@ -126,7 +129,7 @@ describe("attribution across an await", () => {
   // that blocks is a *continuation* that resumes after its handler returned.
   // "The last thing to start" then names whichever poll arrived while we were
   // waiting — it named `/__ping__`, a route that does not exist, for 674ms.
-  it("does not blame a request that arrived after the block", async () => {
+  step("does not blame a request that arrived after the block", async () => {
     // A request that lands while the loop is held waits in the socket buffer,
     // and its handler runs as soon as the loop comes back — before the
     // heartbeat that measures the block. It entered last, inside the window,
@@ -146,7 +149,7 @@ describe("attribution across an await", () => {
     expect(worst.what).toBe("GET /the-real-culprit");
   });
 
-  it("does not blame a request that finished in less time than the stall", async () => {
+  step("does not blame a request that finished in less time than the stall", async () => {
     // Under steady load a request always lands between the last heartbeat and
     // a freeze, and it is inside the window. Stopped from outside at 20
     // requests a second, every stall still went to `/ingest` or `/health`.
@@ -170,7 +173,7 @@ describe("attribution across an await", () => {
     expect(lw.stalls(again).stalls.reduce((a, b) => (b.ms > a.ms ? b : a)).what).toBe("GET /slow");
   });
 
-  it("says whether the thread was computing or waiting", async () => {
+  step("says whether the thread was computing or waiting", async () => {
     // Burning CPU is this process's own code. Holding the thread without
     // burning it is a synchronous read, a child process, or the machine
     // itself (swap, a stopped process) — different fixes, so it says which.
@@ -191,7 +194,7 @@ describe("attribution across an await", () => {
     expect(worst.cpuMs).toBeLessThan(worst.ms / 2);
   });
 
-  it("blames the request that owns the continuation, not the poll that arrived meanwhile", async () => {
+  step("blames the request that owns the continuation, not the poll that arrived meanwhile", async () => {
     await Bun.sleep(120);
     const before = lw.stalls().stalls.at(-1)?.id ?? 0;
 

@@ -17,6 +17,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, rmSync, realpathSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 let dir: string, repo: string, gw: typeof import("../src/gitwork.ts"), wtm: typeof import("../src/worktree.ts");
 const wt = (name: string) => join(dir, `orbit-${name}`);
@@ -82,12 +83,14 @@ const order = async () => {
   return (await gw.discoverRepos([], [])).map((r) => r.name);
 };
 
+const step = story();
+
 describe("repo picker order", () => {
-  it("puts the project first and the rest newest-worked-in first", async () => {
+  step("puts the project first and the rest newest-worked-in first", async () => {
     expect(await order()).toEqual(["orbit", "orbit-WEB-2", "orbit-WEB-3", "orbit-WEB-1"]);
   });
 
-  it("keeps the project at the top even when it is the stalest thing there", async () => {
+  step("keeps the project at the top even when it is the stalest thing there", async () => {
     // The whole point of "position 0": it is the thing the others are worktrees
     // OF, and hunting for it in a list of seventeen is not a thing anyone
     // should have to do.
@@ -99,12 +102,12 @@ describe("repo picker order", () => {
     expect(repos[0].touchedAt).toBeLessThan(Math.min(...repos.slice(1).map((r) => r.touchedAt)));
   });
 
-  it("reorders when work lands in a checkout", async () => {
+  step("reorders when work lands in a checkout", async () => {
     commitAt(wt("WEB-1"), "more.txt", 0);
     expect((await order())[1]).toBe("orbit-WEB-1");
   });
 
-  it("gives every checkout a timestamp", async () => {
+  step("gives every checkout a timestamp", async () => {
     // 0 means "nothing could be read", and those sort last. A fixture where
     // they were all 0 would pass the ordering tests by accident.
     gw.invalidateRepos();
@@ -113,7 +116,7 @@ describe("repo picker order", () => {
     for (const r of repos) expect(r.touchedAt).toBeGreaterThan(0);
   });
 
-  it("survives the dirty-count sweep, which rewrites the index", async () => {
+  step("survives the dirty-count sweep, which rewrites the index", async () => {
     // The first version of this sorted on the index mtime. `git status` — which
     // discoverRepos runs against every checkout to count changed files —
     // refreshes the index and writes it back, so the timestamp became "when the
@@ -124,7 +127,7 @@ describe("repo picker order", () => {
     expect(await order()).toEqual(before);
   });
 
-  it("survives git's housekeeping rewriting the reflogs", async () => {
+  step("survives git's housekeeping rewriting the reflogs", async () => {
     // The second version sorted on `logs/HEAD`. Git's own `gc --auto` — which a
     // fetch triggers — expires every worktree's reflog in one pass, stamping
     // them all with the same millisecond. On the repo this was found on, that

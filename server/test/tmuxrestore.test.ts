@@ -6,6 +6,7 @@ import { test, expect, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 const SOCKET = `agx-restore-test-${process.pid}`;
 process.env.AGENTGLASS_TMUX_SOCKET = SOCKET;
@@ -47,7 +48,9 @@ afterAll(async () => {
   try { rmSync(process.env.AGENTGLASS_STATE_DIR!, { recursive: true, force: true }); } catch { /* never made */ }
 });
 
-test("captureLayout writes the tree of a live session", async () => {
+const step = story();
+
+step("captureLayout writes the tree of a live session", async () => {
   const mk = await pane.tmux(["new-session", "-d", "-s", SESSION, "-c", "/tmp"]);
   expect(mk.ok).toBe(true);
   // A second pane so the tree has a split to capture.
@@ -70,7 +73,7 @@ test("captureLayout writes the tree of a live session", async () => {
   expect(existsSync(join(process.env.AGENTGLASS_STATE_DIR!, "tmux", "restore", SESSION, `${s.windows[0].panes[0].id}.txt`))).toBe(false);
 });
 
-test("restoreLayout rebuilds a session that no longer exists and skips a live one", async () => {
+step("restoreLayout rebuilds a session that no longer exists and skips a live one", async () => {
   const killed = await pane.tmux(["kill-session", "-t", `=${SESSION}`]);
   expect(killed.ok).toBe(true);
 
@@ -90,14 +93,14 @@ test("restoreLayout rebuilds a session that no longer exists and skips a live on
   expect(panes.stdout.trim().split("\n").length).toBeGreaterThanOrEqual(2);
 });
 
-test("restoreLayout with no captured state says so instead of guessing", async () => {
+step("restoreLayout with no captured state says so instead of guessing", async () => {
   restore.clearRestoreState();
   const r = await restore.restoreLayout("lazy");
   expect(r.ok).toBe(false);
   expect(r.error).toContain("nothing captured");
 });
 
-test("the captured layout is readable back from disk without tmux", async () => {
+step("the captured layout is readable back from disk without tmux", async () => {
   await restore.captureLayout();
   const state = restore.readRestoreState();
   expect(state).not.toBeNull();

@@ -32,6 +32,7 @@ import { join } from "node:path";
 import { readFrame, setStatusLine, remountPhoneClient, isPhoneSession } from "../src/tmuxctl.ts";
 import type { TmuxClient, TmuxTarget } from "../src/tmuxctl.ts";
 import { TEST_TERM } from "./tmuxTerm.ts";
+import { story } from "./story.ts";
 
 // Own socket AND an empty config — see tmux-attach.test.ts for what each half
 // is for. Unique per run, or a leftover server from a previous one is what
@@ -111,13 +112,15 @@ const client = (): TmuxClient => ({ pid: 0, socket: SOCK, tty });
 const real = (): TmuxTarget => ({ pid: 0, socket: SOCK, session: "real", id: realId });
 const mirror = (): TmuxTarget => ({ pid: 0, socket: SOCK, session: currentMirror, id: currentMirrorId });
 
+const step = story();
+
 describe("the bar the panel repaints, kept off", () => {
   // The repo's tmux-test guard, per-file: `describe.if`/`test.if` print bogus
   // results on a machine with no tmux (see tmux-bar.test.ts), so the body
   // itself is what closes. `beforeAll` closes the same way.
   if (!has) return;
 
-  test("the frame reports the client's own session's status and claim", () => {
+  step("the frame reports the client's own session's status and claim", () => {
     // The two fields the sweep re-asserts from, answered per client: the
     // mirror's own `status off` comes back as such, and the claim is absent —
     // the attach leaves `status off`, not the claim; the sweep's first
@@ -128,7 +131,7 @@ describe("the bar the panel repaints, kept off", () => {
     expect(f.owned).toBe(false);
   });
 
-  test("`prefix :` flipping the option is visible to the same frame", () => {
+  step("`prefix :` flipping the option is visible to the same frame", () => {
     // The mechanism the user's keybinding uses: a bare `set status on` on the
     // session the client is on. The mirror is ours, so nothing else is on it
     // with us — the bar that comes back is tmux's own. The flip knows nothing
@@ -140,7 +143,7 @@ describe("the bar the panel repaints, kept off", () => {
     expect(f.owned).toBe(false);
   });
 
-  test("and re-asserting heals it within the sweep's own call", () => {
+  step("and re-asserting heals it within the sweep's own call", () => {
     /*
      * Exactly what the sweep does when it finds a mirror it does not own:
      * `setStatusLine` takes it again.
@@ -160,7 +163,7 @@ describe("the bar the panel repaints, kept off", () => {
     expect(out(["show-options", "-qv", "-t", currentMirror, "status-format[0]"])).toBe("");
   });
 
-  test("a config reload with `set -g status on` does not bring the bar back", () => {
+  step("a config reload with `set -g status on` does not bring the bar back", () => {
     // `prefix r` / tpm's `I` and `U` re-source the config, which re-applies
     // `set -g status on`. The mirror carries the panel's own session-local
     // options, which shadow the global — measured against a real client — so a
@@ -180,7 +183,7 @@ describe("the bar the panel repaints, kept off", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  test("a client moved to the user's own session reports ITS bar, not ours", () => {
+  step("a client moved to the user's own session reports ITS bar, not ours", () => {
     // `prefix s`, an `attach-session` typed into the pane, a continuum
     // restore — all of them switch the client onto a session that never had
     // `status off`. The mirror dies with the client (`destroy-unattached`),
@@ -195,7 +198,7 @@ describe("the bar the panel repaints, kept off", () => {
     expect(out(["list-sessions", "-F", "#{session_name}"]).split("\n")).not.toContain("agx-phone-1-abc");
   });
 
-  test("remounting puts the client back on a mirror, and never touches the desk's bar", () => {
+  step("remounting puts the client back on a mirror, and never touches the desk's bar", () => {
     // The moved-to session is the user's: hiding its bar would hide the
     // desk's too. The remount makes a fresh mirror of it and switches our
     // client back — the user session's options are read, not written.
@@ -217,13 +220,13 @@ describe("the bar the panel repaints, kept off", () => {
     expect(out(["show-options", "-t", currentMirror, "-v", "destroy-unattached"])).toBe("on");
   });
 
-  test("remounting refuses a session that is already a mirror", () => {
+  step("remounting refuses a session that is already a mirror", () => {
     const before = out(["list-sessions", "-F", "#{session_name}"]);
     expect(remountPhoneClient(client(), mirror())).toBe(false);
     expect(out(["list-sessions", "-F", "#{session_name}"])).toBe(before);
   });
 
-  test("taking the bar twice does not overwrite the way back", () => {
+  step("taking the bar twice does not overwrite the way back", () => {
     // The sweep re-asserts, and re-asserting must not clobber the recorded
     // original binding: release puts back what the user had, not our own
     // `if-shell` line. A second take on the same target is a no-op for the
@@ -253,7 +256,7 @@ describe("the bar the panel repaints, kept off", () => {
     expect(comma).not.toContain("@agx-ask");
   });
 
-  test("a config that runs without a bar still gets the claim and the prompt keys", () => {
+  step("a config that runs without a bar still gets the claim and the prompt keys", () => {
     // `status off` in the user's global config: there is no row to reclaim,
     // but the claim and the prompt takeover still go on — `prefix ,` and
     // `prefix .` draw over the top line with or without a bar, and the

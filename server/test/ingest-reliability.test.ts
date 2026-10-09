@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "agx-reliable-ingest-"));
 const root = join(dir, "project");
@@ -31,15 +32,17 @@ const body = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+const step = story();
+
 describe("external ingest extensions", () => {
-  test("accepts an opaque event id and a zero reported cost", () => {
+  step("accepts an opaque event id and a zero reported cost", () => {
     expect(ingest.externalIngestError(body({ event_id: "  opaque id  ", reported_cost_usd: 0 }) as any)).toBeNull();
     const normalized = ingest.normalize(body({ event_id: "  opaque id  ", reported_cost_usd: 0 }) as any);
     expect(normalized.event_id).toBe("  opaque id  ");
     expect(normalized.reported_cost_usd).toBe(0);
   });
 
-  test("rejects malformed ids and costs at the HTTP boundary", () => {
+  step("rejects malformed ids and costs at the HTTP boundary", () => {
     expect(ingest.externalIngestError(null)).toContain("object");
     expect(ingest.externalIngestError(body({ source_app: ["external-harness"] }) as any)).toContain("source_app");
     expect(ingest.externalIngestError(body({ session_id: "x".repeat(64 * 1024 + 1) }) as any)).toContain("session_id");
@@ -57,7 +60,7 @@ describe("external ingest extensions", () => {
 });
 
 describe("idempotent event writes", () => {
-  test("keeps the first write and returns it on retry without changing rollups or FTS", () => {
+  step("keeps the first write and returns it on retry without changing rollups or FTS", () => {
     const first = db.insertEvent(ingest.normalize(body({
       event_id: "retry-safe-1",
       reported_cost_usd: 0.1234,
@@ -90,7 +93,7 @@ describe("idempotent event writes", () => {
     expect((db.getSessions().find((s) => s.session_id === "reliable-session") as any).pricing_baseline_usd).toBeUndefined();
   });
 
-  test("scopes an event id to its source and session", () => {
+  step("scopes an event id to its source and session", () => {
     const sameId = "shared-id";
     const a = db.insertEvent(ingest.normalize(body({
       event_id: sameId,
@@ -112,7 +115,7 @@ describe("idempotent event writes", () => {
     expect([a.inserted, b.inserted, c.inserted]).toEqual([true, true, true]);
   });
 
-  test("keeps the existing append-only behavior when event_id is absent", () => {
+  step("keeps the existing append-only behavior when event_id is absent", () => {
     const first = db.insertEvent(ingest.normalize(body({ session_id: "append-only" }) as any));
     const second = db.insertEvent(ingest.normalize(body({ session_id: "append-only" }) as any));
     expect(first.inserted).toBe(true);
@@ -123,7 +126,7 @@ describe("idempotent event writes", () => {
 });
 
 describe("reported cost precedence", () => {
-  test("keeps pricing-table estimation when reported_cost_usd is absent", () => {
+  step("keeps pricing-table estimation when reported_cost_usd is absent", () => {
     const result = db.insertEvent(ingest.normalize(body({ session_id: "estimated-cost" }) as any));
     expect(result.event.cost_usd).toBeCloseTo(
       pricing.costUsd({ input_tokens: 1_000, output_tokens: 100 }, "gpt-5.1"),
@@ -131,7 +134,7 @@ describe("reported cost precedence", () => {
     );
   });
 
-  test("zero and non-zero reported costs override pricing while tokens still accumulate", () => {
+  step("zero and non-zero reported costs override pricing while tokens still accumulate", () => {
     const zero = db.insertEvent(ingest.normalize(body({
       event_id: "reported-zero",
       session_id: "reported-cost-session",
@@ -150,7 +153,7 @@ describe("reported cost precedence", () => {
     expect(exact.session.cost_usd).toBeCloseTo(0.456789, 10);
   });
 
-  test("keeps cumulative local pricing independent from earlier reported costs", () => {
+  step("keeps cumulative local pricing independent from earlier reported costs", () => {
     const firstBody = body({
       event_id: "mixed-cost-reported",
       session_id: "mixed-cost-session",

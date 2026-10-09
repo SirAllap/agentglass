@@ -209,11 +209,13 @@ describe.skipIf(!HAVE_PY)("the cockpit MCP server", () => {
   });
 
   test("cockpit_sessions lists sessions with spend, and filters by project", async () => {
-    const all = await call("cockpit_sessions", { limit: 10 });
+    // Wide enough for the thirty sessions the size-ceiling tests add to this
+    // server, which sort ahead of these two when they run first.
+    const all = await call("cockpit_sessions", { limit: 100 });
     const ids = (all.data.sessions as { session_id: string }[]).map((s) => s.session_id);
     expect(ids).toContain(S1);
     expect(ids).toContain(S2);
-    const orbit = await call("cockpit_sessions", { project: "orbit" });
+    const orbit = await call("cockpit_sessions", { project: "orbit", limit: 100 });
     const rows = orbit.data.sessions as { session_id: string; project_path: string; cost_usd: number; errors: number; input_tokens: number }[];
     expect(rows.map((s) => s.session_id)).not.toContain(S2);
     const s1 = rows.find((s) => s.session_id === S1)!;

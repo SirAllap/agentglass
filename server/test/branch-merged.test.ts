@@ -15,6 +15,7 @@ import { describe, expect, test, beforeAll, afterAll, setSystemTime } from "bun:
 import { mkdtempSync, mkdirSync, writeFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 const dir = realpathSync(mkdtempSync(join(tmpdir(), "agx-merged-")));
 const REPO = join(dir, "repo");
@@ -87,6 +88,8 @@ beforeAll(async () => {
   gw = await import("../src/gitwork.ts");
 });
 
+const step = story();
+
 describe("mergedIntoTrunk", () => {
   const of = async (name: string) => (await gw.branches(REPO)).branches.find((b) => b.name === name);
 
@@ -111,27 +114,27 @@ describe("mergedIntoTrunk", () => {
     }
   };
 
-  test("names the trunk it compared against", async () => {
+  step("names the trunk it compared against", async () => {
     expect((await gw.branches(REPO)).trunk).toBe("main");
   });
 
-  test("a squash-merged branch counts as merged, once the sweep has run", async () => {
+  step("a squash-merged branch counts as merged, once the sweep has run", async () => {
     expect(await settles("squashed", true)).toBe(true);
   });
 
-  test("a rebase-merged branch counts as merged, once the sweep has run", async () => {
+  step("a rebase-merged branch counts as merged, once the sweep has run", async () => {
     expect(await settles("rebased", true)).toBe(true);
   });
 
-  test("a normally merged branch still counts as merged", async () => {
+  step("a normally merged branch still counts as merged", async () => {
     expect((await of("merged"))?.mergedIntoTrunk).toBe(true);
   });
 
-  test("a branch with unlanded work does not", async () => {
+  step("a branch with unlanded work does not", async () => {
     expect((await of("open"))?.mergedIntoTrunk).toBe(false);
   });
 
-  test("an unrelated history does not", async () => {
+  step("an unrelated history does not", async () => {
     expect((await of("stranger"))?.mergedIntoTrunk).toBe(false);
   });
 
@@ -145,7 +148,7 @@ describe("mergedIntoTrunk", () => {
    * A minute is squarely inside that window. Nothing about the repo changed, so
    * nothing about the answer may either.
    */
-  test("verdicts survive the ancestry cache expiring under them", async () => {
+  step("verdicts survive the ancestry cache expiring under them", async () => {
     setSystemTime(new Date(Date.now() + 60_000));
     expect((await of("squashed"))?.mergedIntoTrunk).toBe(true);
     expect((await of("rebased"))?.mergedIntoTrunk).toBe(true);
@@ -156,7 +159,7 @@ describe("mergedIntoTrunk", () => {
    * that outlived its branch would be worse than the bug it fixes: the delete
    * behind this flag is `-D`, so it would throw away work nothing has checked.
    */
-  test("a remembered verdict is dropped when the branch moves", async () => {
+  step("a remembered verdict is dropped when the branch moves", async () => {
     git("checkout", "-q", "rebased");
     commit("rebase-c.txt", "c\n", "new work, after the merge");
     git("checkout", "-q", "main");
@@ -177,7 +180,7 @@ describe("mergedIntoTrunk", () => {
    * pins the property that broke: an invalidation with nothing new must not
    * cost a verdict that was already proved.
    */
-  test("a verdict still lands after the caches are wiped", async () => {
+  step("a verdict still lands after the caches are wiped", async () => {
     // Wiping is what the auto-fetch did every 60 seconds, unconditionally. On a
     // large repo the sweep takes about that long, so it was cancelled and
     // restarted forever: no squash verdict ever landed and the panel sat on
@@ -214,7 +217,7 @@ describe("a proved verdict reaches the panel", () => {
     return fired.length;
   };
 
-  test("the sweep announces the repo it proved something in", async () => {
+  step("the sweep announces the repo it proved something in", async () => {
     gw.setMergedVerdictHook((root) => { fired.push(root); });
     try {
       gw.invalidateMerged(REPO);
@@ -224,7 +227,7 @@ describe("a proved verdict reaches the panel", () => {
     } finally { gw.setMergedVerdictHook(null); }
   });
 
-  test("a sweep with nothing new to say stays quiet", async () => {
+  step("a sweep with nothing new to say stays quiet", async () => {
     gw.setMergedVerdictHook((root) => { fired.push(root); });
     try {
       fired.length = 0;
@@ -247,7 +250,7 @@ describe("a proved verdict reaches the panel", () => {
  * label had no end. Both properties are pinned here, in order.
  */
 describe("checking", () => {
-  test("is true while the sweep runs, and false once it has", async () => {
+  step("is true while the sweep runs, and false once it has", async () => {
     gw.invalidateMerged(REPO);
     expect((await gw.branches(REPO)).checking).toBe(true);
     const deadline = Date.now() + 5000;

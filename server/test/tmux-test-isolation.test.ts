@@ -84,6 +84,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { TMUX_ISOLATED } from "./tmuxIsolated.ts";
+import { story } from "./story.ts";
 
 /*
  * Short, for the 108-byte unix socket path limit — a pid is five or six of
@@ -257,7 +258,7 @@ afterAll(() => {
 });
 
 describe.if(HAVE_TMUX)("a suite with no TMUX_TMPDIR cannot reach the default socket", () => {
-  test("the fixture really is a window the sweep would take", () => {
+  step("the fixture really is a window the sweep would take", () => {
     // Not an assertion about the guard — an assertion that the bait is live.
     // Without it every expectation below would hold on a window the sweep was
     // never going to touch, and this file would pass with the guard deleted.
@@ -265,7 +266,7 @@ describe.if(HAVE_TMUX)("a suite with no TMUX_TMPDIR cannot reach the default soc
     expect(opt(window, "window-size")).toBe("manual");
   });
 
-  test("discovery finds nothing, so the sweep is handed nothing", () => {
+  step("discovery finds nothing, so the sweep is handed nothing", () => {
     // The socket is right there in the directory: `tmuxSockets` would list it.
     expect(readdirSync(join(STAND_IN, `tmux-${UID}`))).toContain("default");
     expect(ctl.tmuxSockets()).toEqual([]);
@@ -274,7 +275,7 @@ describe.if(HAVE_TMUX)("a suite with no TMUX_TMPDIR cannot reach the default soc
     expect(ctl.tmuxSockets(["-S", SOCKET])).toEqual([]);
   });
 
-  test("the boot sweep, run exactly as index.ts runs it, changes nothing", () => {
+  step("the boot sweep, run exactly as index.ts runs it, changes nothing", () => {
     expect(ctl.sweepPinnedWindows(ctl.tmuxSockets())).toBe(0);
     // And handed the socket directly, which is the `releaseStale` door that
     // discovery cannot close.
@@ -312,7 +313,7 @@ describe.if(HAVE_TMUX)("a suite with no TMUX_TMPDIR cannot reach the default soc
    * attempts — so the proof and the safety are separable, and the proof is the
    * one that lives in the repo.
    */
-  test("a command aimed at the default socket by /proc is refused", () => {
+  step("a command aimed at the default socket by /proc is refused", () => {
     expect(ctl.tmuxSocketAllowed([])).toBe(false);
     expect(ctl.tmuxSocketAllowed(["-L", "default"])).toBe(false);
     expect(ctl.tmuxSocketAllowed(["-S", join(socketDirNow(), "default")])).toBe(false);
@@ -350,7 +351,7 @@ describe.if(HAVE_TMUX)("a suite with no TMUX_TMPDIR cannot reach the default soc
    * `$TMUX` is set here rather than read, so this is the same test on his desk
    * and on a CI runner that is not inside tmux at all.
    */
-  test("a private TMUX_TMPDIR does not buy back the socket $TMUX names", () => {
+  step("a private TMUX_TMPDIR does not buy back the socket $TMUX names", () => {
     const PREV = process.env.TMUX;
     process.env.TMUX_TMPDIR = STAND_IN;
     process.env.TMUX = `${SOCKET},4242,0`;
@@ -367,7 +368,7 @@ describe.if(HAVE_TMUX)("a suite with no TMUX_TMPDIR cannot reach the default soc
     }
   });
 
-  test("and it is allowed again the moment a private TMUX_TMPDIR names one", () => {
+  step("and it is allowed again the moment a private TMUX_TMPDIR names one", () => {
     // `$TMUX` cleared, because this is the case of a machine that is NOT inside
     // tmux — the CI shape, and the one where TMUX_TMPDIR is the whole story.
     // Left set, the test above is what applies instead.
@@ -411,7 +412,7 @@ describe.if(HAVE_TMUX)("a suite with no TMUX_TMPDIR cannot reach the default soc
    * The directory is named and never created — `mkdtemp` would defeat the test
    * by making one. Under STAND_IN so nothing outside the fixture is touched.
    */
-  test("a TMUX_TMPDIR whose directory is not there refuses, it does not unlock", () => {
+  step("a TMUX_TMPDIR whose directory is not there refuses, it does not unlock", () => {
     const PREV = process.env.TMUX;
     const VANISHED = join(STAND_IN, "swept-away-by-something");
     process.env.TMUX_TMPDIR = VANISHED;
@@ -466,7 +467,7 @@ describe.if(HAVE_TMUX)("a suite with no TMUX_TMPDIR cannot reach the default soc
    * `-S` values arrive from `socketOf()` — the argv of whatever tmux client
    * happens to be in /proc — which is not a set this repo controls.
    */
-  test("the same socket spelt four other ways is the same socket", () => {
+  step("the same socket spelt four other ways is the same socket", () => {
     const PREV = process.env.TMUX;
     process.env.TMUX_TMPDIR = STAND_IN;
     delete process.env.TMUX;
@@ -497,7 +498,7 @@ describe.if(HAVE_TMUX)("a suite with no TMUX_TMPDIR cannot reach the default soc
    * TMUX_TMPDIR deliberately left UNSET so `socketDir()` is the stand-in and
    * refusal 3 is the one under test.
    */
-  test("a symlink to a banned socket is the banned socket", () => {
+  step("a symlink to a banned socket is the banned socket", () => {
     const PREV = process.env.TMUX;
     delete process.env.TMUX;
     const link = join(STAND_IN, "looks-innocent");
@@ -512,7 +513,7 @@ describe.if(HAVE_TMUX)("a suite with no TMUX_TMPDIR cannot reach the default soc
     }
   });
 
-  test("a private TMUX_TMPDIR and a record of pinning there unlock it — and then it sweeps", () => {
+  step("a private TMUX_TMPDIR and a record of pinning there unlock it — and then it sweeps", () => {
     // The half that gives the four above their meaning. Same process, same
     // fixture, same window: the only things that changed are the variable a
     // test is expected to set and the ledger entry a run that pinned this
@@ -581,13 +582,13 @@ describe.if(HAVE_TMUX)("a server that is not under `bun test` still cannot sweep
     out("show-options", "-qwv", "-t", outWindow, "window-size"),
   ];
 
-  test("the fixture really is a window a production sweep would take", () => {
+  step("the fixture really is a window a production sweep would take", () => {
     // The bait is live, asserted before anything is claimed about refusing it —
     // the same guard-on-the-fixture the describe above opens with.
     expect(bait()).toEqual(["latest", "manual"]);
   });
 
-  test("with no record of ever pinning there, the boot sweep issues nothing", () => {
+  step("with no record of ever pinning there, the boot sweep issues nothing", () => {
     asProduction(OUTSIDE_DIR, () => {
       ledger(OUTSIDE_DIR);
       // Both doors. `pinnedSockets()` is what index.ts hands the sweep, and it
@@ -606,7 +607,7 @@ describe.if(HAVE_TMUX)("a server that is not under `bun test` still cannot sweep
     });
   });
 
-  test("discovery is no longer what feeds it", () => {
+  step("discovery is no longer what feeds it", () => {
     asProduction(OUTSIDE_DIR, () => {
       ledger(OUTSIDE_DIR);
       // The distinction the fix turns on, stated as an assertion. `tmuxSockets`
@@ -620,7 +621,7 @@ describe.if(HAVE_TMUX)("a server that is not under `bun test` still cannot sweep
     });
   });
 
-  test("a socket outside the private TMUX_TMPDIR is refused even with a record", () => {
+  step("a socket outside the private TMUX_TMPDIR is refused even with a record", () => {
     // Everything says yes except confinement: NODE_ENV is production, the
     // ledger names this exact socket, and the window genuinely qualifies. Only
     // TMUX_TMPDIR points somewhere else.
@@ -637,7 +638,7 @@ describe.if(HAVE_TMUX)("a server that is not under `bun test` still cannot sweep
     });
   });
 
-  test("and the same socket IS swept once it is the directory in force", () => {
+  step("and the same socket IS swept once it is the directory in force", () => {
     // The half that stops all four above passing because the fixture is inert
     // or the sweep is broken. Same process, same server, same window, same
     // ledger entry, still NODE_ENV=production: only TMUX_TMPDIR moves.
@@ -695,6 +696,8 @@ describe.if(HAVE_TMUX)("a server that is not under `bun test` still cannot sweep
  * without consulting NODE_ENV. This lint is what keeps the cheap, explicit half
  * in place; those two are what hold when it is blind again.
  */
+const step = story();
+
 describe("nothing that spawns the server lets it find the developer's tmux", () => {
   const repo = join(import.meta.dir, "..", "..");
   /** Listed, not discovered: a new root is a decision, and a typo'd one that
@@ -730,7 +733,7 @@ describe("nothing that spawns the server lets it find the developer's tmux", () 
 
   const files = roots.flatMap((r) => lintFiles(repo, r).filter((f) => spawnsTheServer(f.src)));
 
-  test("every one of them passes TMUX_TMPDIR in the child's environment", () => {
+  step("every one of them passes TMUX_TMPDIR in the child's environment", () => {
     // `TMUX_TMPDIR:` with the colon: the object-literal key, in an env being
     // handed to a child. `process.env.TMUX_TMPDIR` — which several files read
     // to clean a socket up afterwards — is not that, and counting it would
@@ -740,7 +743,7 @@ describe("nothing that spawns the server lets it find the developer's tmux", () 
     expect(offenders, "these spawn server/src/index.ts, whose boot sweep and /panes route then walk the developer's own tmux socket directory; give the child TMUX_TMPDIR (server/test/tmuxTmp.ts for a test, scripts/tmuxTmp.ts for a script)").toEqual([]);
   });
 
-  test("and a script's is a directory something actually made", () => {
+  step("and a script's is a directory something actually made", () => {
     /*
      * The tighter half, for scripts only, and it encodes a measurement rather
      * than a preference: on tmux 3.6a a TMUX_TMPDIR whose directory is ABSENT
@@ -765,7 +768,7 @@ describe("nothing that spawns the server lets it find the developer's tmux", () 
     expect(offenders, "a script must take its TMUX_TMPDIR from privateTmuxDir(home) (scripts/tmuxTmp.ts), which creates the directory or throws — tmux falls back to /tmp/tmux-<uid> when TMUX_TMPDIR names one that is not there").toEqual([]);
   });
 
-  test("the lint is looking at the files it thinks it is", () => {
+  step("the lint is looking at the files it thinks it is", () => {
     // A guard on the guard: if the detector stopped matching — a spawn helper
     // renamed, the suite moved — `offenders` would be empty for the wrong
     // reason and this file would pass while protecting nothing.
@@ -890,12 +893,12 @@ describe("no test file runs tmux without isolating it", () => {
 
   const files = roots.flatMap((r) => lintFiles(repo, r).filter((f) => runsTmux(f.src)));
 
-  test("every one of them starts its tmux with an empty configuration", () => {
+  step("every one of them starts its tmux with an empty configuration", () => {
     const offenders = files.filter((f) => !readsNoConfig(f.src)).map((f) => f.rel);
     expect(offenders, "these can start a tmux with no `-f`, so it reads ~/.tmux.conf — on this machine that loads tpm, tmux-resurrect and tmux-continuum with @continuum-restore on. Spread TMUX_ISOLATED into the argv (see server/test/tmuxIsolated.ts); a file that only builds a `socket:` for tmuxctl puts it there, because tmuxctl cannot add one — in production that config is the user's and loading it is the point").toEqual([]);
   });
 
-  test("and the socket directory they name is their own, not shared", () => {
+  step("and the socket directory they name is their own, not shared", () => {
     // A FIXED private directory is not isolation from the run next door: both
     // runs get one server, and each one's `killServer` in `beforeAll` tears
     // down the other's fixture mid-assertion — measured at 3-8 tests apiece.
@@ -907,7 +910,7 @@ describe("no test file runs tmux without isolating it", () => {
     expect(offenders, "give the file a TMUX_TMPDIR carrying process.pid, and put the old value back in afterAll").toEqual([]);
   });
 
-  test("the lint is looking at the files it thinks it is", () => {
+  step("the lint is looking at the files it thinks it is", () => {
     // The same guard-on-the-guard as above, and it earns its place: both files
     // this was written for match `runsTmux` today, and a detector that silently
     // stopped matching would leave the two tests above green over nothing.
@@ -1020,14 +1023,14 @@ describe("no test file runs tmux without isolating it", () => {
     return false;
   };
 
-  test("and a client it fabricates says what kind of terminal it is", () => {
+  step("and a client it fabricates says what kind of terminal it is", () => {
     const offenders = clientFiles.flatMap((f) =>
       clientSpawns(f.src).filter((c) => !declaresTerm(c, f.src))
         .map((c) => `${f.rel} → ${c.slice(0, 70).replace(/\s+/g, " ")}…`));
     expect(offenders, "a terminal emulator sets TERM, and a test that builds its own pty IS one. Put `TERM: TEST_TERM` in that spawn's env (see server/test/tmuxTerm.ts) — inheriting it means the suite passes here and cannot attach a client on a runner, where TERM is `dumb` and tmux refuses it").toEqual([]);
   });
 
-  test("that lint is looking at the files it thinks it is", () => {
+  step("that lint is looking at the files it thinks it is", () => {
     // Same guard-on-the-guard as above, and it earns it twice over: the two
     // detectors are independent, so `clientSpawns` could silently match nothing
     // — which is exactly how a lint goes green over a defect it was written for.

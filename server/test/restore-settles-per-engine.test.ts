@@ -17,6 +17,7 @@ import { mkdirSync, rmSync, readFileSync } from "node:fs";
 import { LANTERN_PROMPT_MARK } from "../src/lanternmark.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 const SOCKET = `agx-settle-${process.pid}`;
 const TMPDIR = join(tmpdir(), `agx-settle-tmp-${process.pid}`);
@@ -58,7 +59,9 @@ afterAll(async () => {
   for (const d of [TMPDIR, STATE]) { try { rmSync(d, { recursive: true, force: true }); } catch { /* never made */ } }
 });
 
-test("with no server running when the desk was put back, the first server after is the desk's", async () => {
+const step = story();
+
+step("with no server running when the desk was put back, the first server after is the desk's", async () => {
   /* Nothing recorded, nothing running: the pass has nothing to build. */
   const r = await restore.restoreLayout("lazy");
   expect(r.ok).toBe(false);
@@ -76,7 +79,7 @@ test("with no server running when the desk was put back, the first server after 
   expect(windowsOf(P), "a window closed on a whole desk was kept").not.toContain("extra");
 }, 20_000);
 
-test("a server started since is put back once, and then it is the desk's", async () => {
+step("a server started since is put back once, and then it is the desk's", async () => {
   expect((await pane.tmux(["new-session", "-d", "-s", R, "-c", "/tmp", "sleep", "300"])).ok).toBe(true);
   await restore.captureLayout();
   expect(names()).toContain(R);
@@ -101,7 +104,7 @@ test("a server started since is put back once, and then it is the desk's", async
   expect(names()).not.toContain(R);
 }, 20_000);
 
-test("a session tmux still lists is kept, whatever a sweep could photograph of it", async () => {
+step("a session tmux still lists is kept, whatever a sweep could photograph of it", async () => {
   /*
    * Forgetting keys off the photograph, and a photograph can come back
    * without a live session in it: its windows could not be read in that
@@ -122,7 +125,7 @@ test("a session tmux still lists is kept, whatever a sweep could photograph of i
   expect(names()).not.toContain(T);
 }, 20_000);
 
-test("the photograph taken on the way out says which server it was taken on, like every other", async () => {
+step("the photograph taken on the way out says which server it was taken on, like every other", async () => {
   /* Without it, the first capture after an app restart — tmux survives one —
      had no previous photograph to go on, and a Claude that had crashed came
      back without its flags, and stayed that way. */

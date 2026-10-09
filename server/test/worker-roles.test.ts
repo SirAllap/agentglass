@@ -11,6 +11,7 @@
  * a test.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { story } from "./story.ts";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -39,7 +40,8 @@ const builder = workerRole("builder")!;
 const row = (id: string) => agentProvider(id)!;
 
 describe("the lock, as each CLI is told it", () => {
-  test("Claude Code: one --settings flag, every command as a prefix rule, and the model", () => {
+  const step = story();
+  step("Claude Code: one --settings flag, every command as a prefix rule, and the model", () => {
     const l = roleLaunch(row("claude"), scout, "haiku")!;
     expect(l.env).toEqual({});
     expect(l.file).toBeUndefined();
@@ -51,7 +53,7 @@ describe("the lock, as each CLI is told it", () => {
     expect(deny).toContain("Write");
   });
 
-  test("OpenCode: the rules in OPENCODE_CONFIG_CONTENT, on the build agent as well, which is pinned as the default", () => {
+  step("OpenCode: the rules in OPENCODE_CONFIG_CONTENT, on the build agent as well, which is pinned as the default", () => {
     // OpenCode takes the last matching rule and an agent's rules come after the
     // top-level ones, so a project allowing push on its own `build` agent, or
     // naming a permissive default agent, would undo a top-level-only lock.
@@ -70,7 +72,7 @@ describe("the lock, as each CLI is told it", () => {
     }
   });
 
-  test("Qwen Code: a system settings file with the rules, named by its variable", () => {
+  step("Qwen Code: a system settings file with the rules, named by its variable", () => {
     const l = roleLaunch(row("qwen"), builder, "qwen3-coder-plus")!;
     expect(l.args).toEqual(["--model", "qwen3-coder-plus"]);
     expect(l.file!.env).toBe("QWEN_CODE_SYSTEM_SETTINGS_PATH");
@@ -81,7 +83,7 @@ describe("the lock, as each CLI is told it", () => {
     }
   });
 
-  test("a builder may edit its worktree; a scout and a verifier may not", () => {
+  step("a builder may edit its worktree; a scout and a verifier may not", () => {
     const claudeDeny = (role: typeof scout) =>
       (JSON.parse(roleLaunch(row("claude"), role, "")!.args[1]!) as { permissions: { deny: string[] } }).permissions.deny;
     expect(claudeDeny(builder)).not.toContain("Edit");
@@ -90,7 +92,7 @@ describe("the lock, as each CLI is told it", () => {
     expect(oc.permission.edit).toBeUndefined();
   });
 
-  test("a CLI with no lock this app can apply has no launch at all", () => {
+  step("a CLI with no lock this app can apply has no launch at all", () => {
     // Codex has a sandbox but no per-command deny; the Gemini CLI has one that
     // has not been run here. Neither may take a role.
     expect(roleLaunch(row("codex"), scout, "")).toBeNull();
@@ -99,13 +101,14 @@ describe("the lock, as each CLI is told it", () => {
 });
 
 describe("starting a role", () => {
+  const step = story();
   const roles = (scoutOn: string) => ({
     scout: { provider: scoutOn, model: "" },
     builder: { provider: "claude", model: "sonnet" },
     verifier: { provider: "claude", model: "haiku" },
   });
 
-  test("Qwen Code's lock file is written owner-only, and its variable names it", () => {
+  step("Qwen Code's lock file is written owner-only, and its variable names it", () => {
     const dir = mkdtempSync(join(tmpdir(), "agx-locks-"));
     const r = ops.roleStart("scout", roles("qwen"), dir);
     expect(r.ok).toBe(true);
@@ -118,15 +121,15 @@ describe("starting a role", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  test("a role set to a CLI without a lock is refused, never started unlocked", () => {
+  step("a role set to a CLI without a lock is refused, never started unlocked", () => {
     expect(ops.roleStart("scout", roles("codex"), tmpdir())).toEqual({ ok: false, error: "no-lock" });
   });
 
-  test("an unknown role is refused", () => {
+  step("an unknown role is refused", () => {
     expect(ops.roleStart("reviewer", roles("claude"), tmpdir())).toEqual({ ok: false, error: "no-role" });
   });
 
-  test("the lock and the model ride ahead of the caller's flags, and the prompt stays last", () => {
+  step("the lock and the model ride ahead of the caller's flags, and the prompt stays last", () => {
     const r = ops.roleStart("scout", { ...roles("claude"), scout: { provider: "claude", model: "haiku" } }, tmpdir());
     expect(r.ok).toBe(true);
     if (!r.ok) return;
@@ -136,7 +139,7 @@ describe("starting a role", () => {
     expect(argv.slice(3)).toEqual(["--model", "haiku", "--verbose", "map it"]);
   });
 
-  test("a role refuses yolo, even when Settings allow it", async () => {
+  step("a role refuses yolo, even when Settings allow it", async () => {
     /* A locked worker gains nothing from skipping its prompts, and whether
        Claude still applies a --settings deny list under
        --dangerously-skip-permissions is not something this app has measured.
@@ -145,7 +148,7 @@ describe("starting a role", () => {
     expect(r).toEqual({ ok: false, error: "yolo-role" });
   });
 
-  test("a role refuses caller flags that would pick another model or another OpenCode agent", async () => {
+  step("a role refuses caller flags that would pick another model or another OpenCode agent", async () => {
     const base = { root: tmpdir(), cwd: tmpdir(), yoloAllowed: false, kind: "opencode", lockedRole: true } as const;
     for (const args of [["--agent", "loose"], ["--model", "opus"], ["-m", "opus"], ["--model=opus"]]) {
       expect(await ops.startAgent({ ...base, name: "w", args }), JSON.stringify(args))
@@ -155,16 +158,17 @@ describe("starting a role", () => {
 });
 
 describe("the setting", () => {
+  const step = story();
   const file = () => join(HOME, "agentglass", "config.json");
 
-  test("each role starts where context-diet's own agent files pin it", () => {
+  step("each role starts where context-diet's own agent files pin it", () => {
     process.env.XDG_CONFIG_HOME = HOME;
     rmSync(file(), { force: true });
     const r = cfg.workerRoles();
     for (const role of WORKER_ROLES) expect(r[role.id]).toEqual(role.default);
   });
 
-  test("saves a CLI with a lock and a model, and keeps the other roles", () => {
+  step("saves a CLI with a lock and a model, and keeps the other roles", () => {
     process.env.XDG_CONFIG_HOME = HOME;
     rmSync(file(), { force: true });
     expect(cfg.writeWorkerRole("scout", { provider: "opencode", model: "opencode/big-pickle" }).ok).toBe(true);
@@ -175,7 +179,7 @@ describe("the setting", () => {
     expect(r.builder).toEqual(builder.default);
   });
 
-  test("refuses a CLI with no lock, a model that is not one word, and a role that does not exist", () => {
+  step("refuses a CLI with no lock, a model that is not one word, and a role that does not exist", () => {
     process.env.XDG_CONFIG_HOME = HOME;
     expect(cfg.writeWorkerRole("scout", { provider: "codex", model: "" }).ok).toBe(false);
     expect(cfg.writeWorkerRole("scout", { provider: "claude", model: "haiku --dangerously-skip-permissions" }).ok).toBe(false);
@@ -183,7 +187,7 @@ describe("the setting", () => {
     expect(cfg.writeWorkerRole("reviewer", { provider: "claude", model: "" }).ok).toBe(false);
   });
 
-  test("a hand-edited role naming a CLI with no lock reads as the default", async () => {
+  step("a hand-edited role naming a CLI with no lock reads as the default", async () => {
     process.env.XDG_CONFIG_HOME = HOME;
     await Bun.write(file(), JSON.stringify({ workerRoles: { scout: { provider: "codex", model: "" }, builder: { provider: "qwen", model: "" } } }));
     cfg.writeSeatSettings({}); // a no-op write, to drop the cached read
@@ -193,6 +197,7 @@ describe("the setting", () => {
 });
 
 describe("the OpenCode lock, as OpenCode merged it", () => {
+  const step = story();
   /*
    * The lock is deep-merged over the project's opencode.json, and a merge keeps
    * a key where the project had it. With the project's `"git push *": "allow"`
@@ -210,11 +215,11 @@ describe("the OpenCode lock, as OpenCode merged it", () => {
   const DEFAULT: Rule = { permission: "*", pattern: "*", action: "allow" };
   const clean = (): Rule[] => [DEFAULT, ...lockRules(own())];
 
-  test("the lock's rules last, as written, hold", () => {
+  step("the lock's rules last, as written, hold", () => {
     expect(ops.lockLoosened(clean(), lock())).toBeNull();
   });
 
-  test("a project key the lock reuses leaves a broader allow after it, and that is caught", () => {
+  step("a project key the lock reuses leaves a broader allow after it, and that is caught", () => {
     const merged = lockRules({ "git push *": "deny", "git *": "allow", ...own() });
     const r = ops.lockLoosened([DEFAULT, ...merged], lock());
     expect(r).not.toBeNull();
@@ -222,7 +227,7 @@ describe("the OpenCode lock, as OpenCode merged it", () => {
     expect(r!.rule).toEqual({ permission: "bash", pattern: "git *", action: "allow" });
   });
 
-  test("any later rule that reaches a denied command: a wildcard permission, a narrower pattern, a glob, an ask", () => {
+  step("any later rule that reaches a denied command: a wildcard permission, a narrower pattern, a glob, an ask", () => {
     for (const late of [
       { permission: "*", pattern: "*", action: "allow" },
       { permission: "bash", pattern: "git push --force *", action: "allow" },
@@ -235,7 +240,7 @@ describe("the OpenCode lock, as OpenCode merged it", () => {
     }
   });
 
-  test("a later allow for what the lock never denied is left alone", () => {
+  step("a later allow for what the lock never denied is left alone", () => {
     const late = ["git status *", "git diff", "npm *", "bun test *", "gitk"].map((pattern) => ({ permission: "bash", pattern, action: "allow" }));
     expect(ops.lockLoosened([...clean(), ...late, { permission: "read", pattern: "*", action: "allow" }], lock())).toBeNull();
   });
@@ -247,6 +252,7 @@ describe("the OpenCode lock, as OpenCode merged it", () => {
  */
 const OPENCODE = Bun.which("opencode");
 describe.skipIf(!OPENCODE)("the OpenCode lock, checked by OpenCode itself when a worker starts", () => {
+  const step = story();
   const ROOT = join(tmpdir(), `agx-oc-lock-${process.pid}`);
   const scratch = {
     HOME: join(ROOT, "home"), XDG_CONFIG_HOME: join(ROOT, "cfg"), XDG_DATA_HOME: join(ROOT, "data"),
@@ -262,18 +268,18 @@ describe.skipIf(!OPENCODE)("the OpenCode lock, checked by OpenCode itself when a
   const env = () => ({ ...roleLaunch(row("opencode"), builder, "")!.env, ...scratch });
   afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
 
-  test("a project opencode.json that allows git push is found out", async () => {
+  step("a project opencode.json that allows git push is found out", async () => {
     const cwd = project("hostile", { permission: allowPush, agent: { build: { permission: allowPush } } });
     const why = await ops.openCodeLockLoosened(OPENCODE!, cwd, env());
     expect(why).not.toBeNull();
     expect(why!).toContain("git push");
   }, 30_000);
 
-  test("a project that allows push only at the top level does not loosen it: the lock's own build-agent rules come after", async () => {
+  step("a project that allows push only at the top level does not loosen it: the lock's own build-agent rules come after", async () => {
     expect(await ops.openCodeLockLoosened(OPENCODE!, project("top-only", { permission: allowPush }), env())).toBeNull();
   }, 30_000);
 
-  test("a config file named in the environment is one of the layers checked", async () => {
+  step("a config file named in the environment is one of the layers checked", async () => {
     const file = join(project("env-layer-file"), "elsewhere.json");
     writeFileSync(file, JSON.stringify({ permission: allowPush, agent: { build: { permission: allowPush } } }));
     const why = await ops.openCodeLockLoosened(OPENCODE!, project("env-layer"), { ...env(), OPENCODE_CONFIG: file });
@@ -281,11 +287,11 @@ describe.skipIf(!OPENCODE)("the OpenCode lock, checked by OpenCode itself when a
     expect(why!).toContain("git push");
   }, 30_000);
 
-  test("a project with no config of its own starts", async () => {
+  step("a project with no config of its own starts", async () => {
     expect(await ops.openCodeLockLoosened(OPENCODE!, project("plain"), env())).toBeNull();
   }, 30_000);
 
-  test("the role start refuses it before any window opens", async () => {
+  step("the role start refuses it before any window opens", async () => {
     const cwd = project("hostile-start", { permission: allowPush, agent: { build: { permission: allowPush } } });
     const r = await ops.startAgent({ root: cwd, cwd, kind: "opencode", name: "w", lockedRole: true, yoloAllowed: false, env: env() });
     expect(r.ok).toBe(false);

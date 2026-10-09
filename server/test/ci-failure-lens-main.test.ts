@@ -8,6 +8,7 @@ import { afterAll, describe, expect, it } from "bun:test";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "agx-lens-main-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -41,15 +42,17 @@ async function refresh() {
   return { got: JSON.parse(out.trim().split("\n").pop()!), lines: readFileSync(calls, "utf8").split("\n").filter(Boolean) };
 }
 
+const step = story();
+
 describe("refreshing the lens through gh", () => {
-  it("a red newest main push: the branch, the run, its jobs, then two requests per failed job", async () => {
+  step("a red newest main push: the branch, the run, its jobs, then two requests per failed job", async () => {
     const { got, lines } = await refresh();
     expect(lines).toHaveLength(1 + 1 + 1 + 2);
     expect(got.refresh).toMatchObject({ main: "red", read: 1, requests: 5, pending: 0 });
     expect(got.rows[0]).toMatchObject({ title: "orbit sync > gives its slot back", check: "build", verdict: { kind: "main" } });
   });
 
-  it("pressed again it costs ONE request: the run, and nothing it already has", async () => {
+  step("pressed again it costs ONE request: the run, and nothing it already has", async () => {
     const { got, lines } = await refresh();
     // the branch name and the run's jobs are kept: only the run itself is asked again
     expect(lines).toHaveLength(1);

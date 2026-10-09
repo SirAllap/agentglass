@@ -19,6 +19,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { closePopup, outerClientTty, runAction, type TmuxTarget } from "../src/tmuxctl.ts";
 import { TMUX_ISOLATED } from "./tmuxIsolated.ts";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
+import { story } from "./story.ts";
 
 /* A private socket directory, for this file's spawns, the attached `script`
    client and the code under test alike: a bare `-L` lands in /tmp/tmux-<uid>
@@ -83,8 +84,10 @@ afterAll(async () => {
   else process.env.TMUX_TMPDIR = REAL_TMPDIR;
 });
 
+const step = story();
+
 describe("a scratch popup on the same server", () => {
-  test("it is a second client, and the app can tell which one is the desk", async () => {
+  step("it is a second client, and the app can tell which one is the desk", async () => {
     await killServer();
     tmux("new-session", "-d", "-s", "desk", "sleep", "600");
     tmux("new-session", "-d", "-s", "scratch", "sleep", "600");
@@ -102,7 +105,7 @@ describe("a scratch popup on the same server", () => {
     expect(clients().map((c) => c.session).sort()).toEqual(["desk", "scratch"]);
   }, 20_000);
 
-  test("closing it takes the floating window and leaves the session running", async () => {
+  step("closing it takes the floating window and leaves the session running", async () => {
     const desk = clients().find((c) => c.session === "desk")!.tty;
     closePopup(SOCK, desk);
     await until(1);
@@ -115,7 +118,7 @@ describe("a scratch popup on the same server", () => {
     expect(tmux("list-sessions", "-F", "#{session_name}").split("\n")).toContain("scratch");
   }, 20_000);
 
-  test("without a client it does nothing, and says so by doing nothing", async () => {
+  step("without a client it does nothing, and says so by doing nothing", async () => {
     // Measured: `display-popup -C` with no `-c` resolves "the client" to the
     // popup itself and leaves both standing. A no-op is the honest response;
     // issuing a command that looks like it worked is not.
@@ -135,7 +138,7 @@ describe("a scratch popup on the same server", () => {
 });
 
 describe("opening a tab while the scratch is up", () => {
-  test("the popup goes, the tab is created, and the desk stays the desk", async () => {
+  step("the popup goes, the tab is created, and the desk stays the desk", async () => {
     await killServer();
     tmux("new-session", "-d", "-s", "desk", "sleep", "600");
     tmux("new-session", "-d", "-s", "scratch", "sleep", "600");
@@ -163,7 +166,7 @@ describe("opening a tab while the scratch is up", () => {
 });
 
 describe("which client the app aims at", () => {
-  test("a nested client is never mistaken for the desk", () => {
+  step("a nested client is never mistaken for the desk", () => {
     /* The rule the rest of this file already used for sessions: a client
        started inside another tmux reports a tmux TERM. `outerClientTty` returns
        null rather than guessing when every client looks nested — the caller

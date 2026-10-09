@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { freePort } from "./freePort.ts";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
+import { story } from "./story.ts";
 
 let dir: string, base: string, port: number, proc: ReturnType<typeof Bun.spawn> | null = null;
 
@@ -150,14 +151,16 @@ afterAll(async () => {
   try { rmSync(dir, { recursive: true, force: true }); } catch { /* fine */ }
 });
 
+const step = story();
+
 describe("a secret settings field", () => {
-  test("before a value is saved it reads as not set", async () => {
+  step("before a value is saved it reads as not set", async () => {
     const r = (await (await get("/plugins/settings?name=orbit-scorer")).json()) as Json;
     expect(r.values.apiKey).toBeNull();
     expect(r.set).toEqual([]);
   });
 
-  test("saving one answers with which are set and never the value", async () => {
+  step("saving one answers with which are set and never the value", async () => {
     const res = await post("/plugins/settings", { name: "orbit-scorer", values: { apiKey: KEY } });
     const text = await res.text();
     expect(res.status).toBe(200);
@@ -165,7 +168,7 @@ describe("a secret settings field", () => {
     expect(JSON.parse(text).set).toEqual(["apiKey"]);
   });
 
-  test("no read of the settings, the plugin list or the panels carries it", async () => {
+  step("no read of the settings, the plugin list or the panels carries it", async () => {
     for (const path of ["/plugins/settings?name=orbit-scorer", "/plugins", "/plugins/panels"]) {
       const text = await (await get(path)).text();
       expect(text, `${path} leaked the key`).not.toContain(KEY);
@@ -175,19 +178,19 @@ describe("a secret settings field", () => {
     expect(r.set).toEqual(["apiKey"]);
   });
 
-  test("it is kept in the secrets file, which only its owner can read, and not in the plugins file", () => {
+  step("it is kept in the secrets file, which only its owner can read, and not in the plugins file", () => {
     expect(readFileSync(secrets(), "utf8")).toContain(KEY);
     expect(statSync(secrets()).mode & 0o777).toBe(0o600);
     expect(readFileSync(plugins(), "utf8")).not.toContain(KEY);
   });
 
-  test("the plugin hears it in its settings event and reads it from its own self", async () => {
+  step("the plugin hears it in its settings event and reads it from its own self", async () => {
     const file = join(pluginDir(), "heard.json");
     await until(async () => existsSync(file), (x) => x);
     expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ event: KEY, self: KEY });
   });
 
-  test("saving another field leaves it alone; an empty string clears it", async () => {
+  step("saving another field leaves it alone; an empty string clears it", async () => {
     await post("/plugins/settings", { name: "orbit-scorer", values: { mode: "live" } });
     expect(((await (await get("/plugins/settings?name=orbit-scorer")).json()) as Json).set).toEqual(["apiKey"]);
     // The window sends null for a secret it never had the value of: no change.
@@ -199,13 +202,13 @@ describe("a secret settings field", () => {
 });
 
 describe("inbox annotations", () => {
-  test("a good post is kept; a long badge and a post of 501 are refused", async () => {
+  step("a good post is kept; a long badge and a post of 501 are refused", async () => {
     const file = join(pluginDir(), "posted.json");
     await until(async () => existsSync(file), (x) => x);
     expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ ok: 200, longBadge: 400, hugeList: 400 });
   });
 
-  test("the inbox carries them on the rows they are about, and every row is still there", async () => {
+  step("the inbox carries them on the rows they are about, and every row is still there", async () => {
     const r = (await (await get("/prs/inbox?force=1")).json()) as Json;
     expect(r.ok).toBe(true);
     expect(r.items.map((n: Json) => n.id).sort()).toEqual(["11", "12", "13", "14"]);
@@ -217,7 +220,7 @@ describe("inbox annotations", () => {
     expect(by("14").annotations).toBeUndefined();
   });
 
-  test("only a running plugin can post them: the window and a stranger get no self", async () => {
+  step("only a running plugin can post them: the window and a stranger get no self", async () => {
     const res = await post("/plugin/self/inbox/annotations", { items: [] });
     expect(res.status).toBe(403);
   });

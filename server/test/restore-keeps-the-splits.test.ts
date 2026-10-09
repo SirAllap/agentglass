@@ -18,6 +18,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TMUX_ISOLATED } from "./tmuxIsolated.ts";
+import { story } from "./story.ts";
 
 const SOCKET = `agx-splits-${process.pid}`;
 process.env.AGENTGLASS_TMUX_SOCKET = SOCKET;
@@ -71,8 +72,10 @@ afterAll(async () => {
   rmSync(process.env.AGENTGLASS_STATE_DIR!, { recursive: true, force: true });
 });
 
+const step = story();
+
 describe.skipIf(!have)("the splits", () => {
-  test("a side-by-side window is photographed with its layout and comes back side by side", async () => {
+  step("a side-by-side window is photographed with its layout and comes back side by side", async () => {
     restore.__resetRestoreState();
     const mk = await pane.tmux(["new-session", "-d", "-s", S, "-x", "200", "-y", "50", "-c", "/tmp", "sleep 60"]);
     expect(mk.ok, mk.stderr).toBe(true);
@@ -94,7 +97,7 @@ describe.skipIf(!have)("the splits", () => {
     expect(shape(after), `before ${before} · after ${after}`).toBe("P{P,P}");
   });
 
-  test("a stacked window comes back stacked, and a window of one pane is left alone", async () => {
+  step("a stacked window comes back stacked, and a window of one pane is left alone", async () => {
     await killAndWait();
     restore.__resetRestoreState();
     const mk = await pane.tmux(["new-session", "-d", "-s", S, "-x", "200", "-y", "50", "-c", "/tmp", "sleep 60"]);
@@ -113,7 +116,7 @@ describe.skipIf(!have)("the splits", () => {
     expect(shapes).toEqual(["P[P,P]", "P"]);
   });
 
-  test("a layout string is refused when the pane count does not match, and never reaches -t unvalidated", async () => {
+  step("a layout string is refused when the pane count does not match, and never reaches -t unvalidated", async () => {
     await killAndWait();
     await pane.tmux(["new-session", "-d", "-s", S, "-x", "200", "-y", "50", "-c", "/tmp", "sleep 60"]);
     const one = (await pane.tmux(["list-windows", "-t", `=${S}`, "-F", "#{window_id}"])).stdout.trim();

@@ -13,6 +13,7 @@ import { test, expect, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, chmodSync, statSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import { story } from "./story.ts";
 
 const SOCK = `agx-batch-${process.pid}`;
 const ROOT = mkdtempSync(join(tmpdir(), "agxb-"));
@@ -67,7 +68,9 @@ afterAll(() => {
   try { rmSync(ROOT, { recursive: true, force: true }); } catch { /* gone */ }
 });
 
-test("a tick costs a fixed handful of tmux calls, not one per session, window and pane", async () => {
+const step = story();
+
+step("a tick costs a fixed handful of tmux calls, not one per session, window and pane", async () => {
   await restore.captureLayout();                  // first tick: writes the file
   const before = calls();
   const t0 = performance.now();
@@ -83,7 +86,7 @@ test("a tick costs a fixed handful of tmux calls, not one per session, window an
   expect(d0.windows[2].panes[0].startCommand, "the born-with command still travels").toContain("sleep 600");
 });
 
-test("a tick that saw nothing new does not rewrite the file", async () => {
+step("a tick that saw nothing new does not rewrite the file", async () => {
   await restore.captureLayout();
   const ino = statSync(layoutFile()).ino;
   const mtime = statSync(layoutFile()).mtimeMs;
@@ -94,7 +97,7 @@ test("a tick that saw nothing new does not rewrite the file", async () => {
   expect(restore.lastCaptureAt(), "the settings page still shows the sweep as fresh").toBeGreaterThan(mtime - 1);
 });
 
-test("the batch photographs exactly what asking one session, window and pane at a time does", async () => {
+step("the batch photographs exactly what asking one session, window and pane at a time does", async () => {
   /* The layout file is what puts a desk back after a power cut, so the cheaper
      read must agree with the old one in every field a restore uses: window
      order, names, layouts, each pane's cwd, pid and born-with command. The
@@ -121,7 +124,7 @@ test("the batch photographs exactly what asking one session, window and pane at 
   expect(w5.panes.map((p) => p.path)).toEqual(["/usr", "/var"]);
 });
 
-test("a change is written at once", async () => {
+step("a change is written at once", async () => {
   sh(["new-window", "-d", "-t", "=desk1", "-n", "w4", "-c", "/tmp"]);
   await restore.captureLayout();
   const state = JSON.parse(readFileSync(layoutFile(), "utf8"));
@@ -129,7 +132,7 @@ test("a change is written at once", async () => {
   expect(d1.windows.map((w: { name: string }) => w.name)).toContain("w4");
 });
 
-test("a layout captured after the change puts the desk back as it was after a power cut", async () => {
+step("a layout captured after the change puts the desk back as it was after a power cut", async () => {
   await Bun.sleep(1500);                          // forked panes settle (see above)
   await restore.captureLayout();
   const list = (a: string[]) => sh(a).stdout.toString().trim().split("\n").filter(Boolean);

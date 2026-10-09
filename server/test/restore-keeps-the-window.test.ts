@@ -28,6 +28,7 @@ import { test, expect, beforeAll, afterAll, describe } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 const SOCKET = `agx-keepwin-${process.pid}`;
 process.env.AGENTGLASS_TMUX_SOCKET = SOCKET;
@@ -82,8 +83,10 @@ afterAll(async () => {
   try { rmSync(process.env.AGENTGLASS_STATE_DIR!, { recursive: true, force: true }); } catch { /* never made */ }
 });
 
+const step = story();
+
 describe("the desk comes back even when the commands do not", () => {
-  test("a window whose command exits is still a window, as a shell", async () => {
+  step("a window whose command exits is still a window, as a shell", async () => {
     const name = S("a");
     writeLayout([{ name, windows: [win("keeps", LIVES), win("dies", DIES), win("alsodies", DIES)] }]);
     const r = await restore.restoreLayout("all");
@@ -94,7 +97,7 @@ describe("the desk comes back even when the commands do not", () => {
     expect(r.restored).toBe(3);
   }, 20_000);
 
-  test("even when it is the FIRST window, which takes the session and the server with it", async () => {
+  step("even when it is the FIRST window, which takes the session and the server with it", async () => {
     const name = S("b");
     writeLayout([{ name, windows: [win("first", DIES), win("second", DIES), win("third", LIVES)] }]);
     const r = await restore.restoreLayout("all");
@@ -103,7 +106,7 @@ describe("the desk comes back even when the commands do not", () => {
     expect(back.sort(), `the desk came back as: ${back.join(", ")}`).toEqual(["first", "second", "third"]);
   }, 20_000);
 
-  test("a split whose command exits comes back as a split", async () => {
+  step("a split whose command exits comes back as a split", async () => {
     const name = S("c");
     writeLayout([{ name, windows: [win("two", LIVES, [DIES])] }]);
     await restore.restoreLayout("all");
@@ -112,7 +115,7 @@ describe("the desk comes back even when the commands do not", () => {
       "the second pane was lost with its command").toBe(2);
   }, 20_000);
 
-  test("a live session is never touched, whatever the photograph says", async () => {
+  step("a live session is never touched, whatever the photograph says", async () => {
     /* The guarantee this whole file rests on: restore only ever BUILDS what is
        missing. The owner's working desk is not an input to it. */
     const name = S("d");
@@ -122,7 +125,7 @@ describe("the desk comes back even when the commands do not", () => {
     expect(await windowsOf(name), "the restore rebuilt a session that was alive").toEqual(["mine"]);
   }, 20_000);
 
-  test("the flags a pane was started with reach the command that restores it", async () => {
+  step("the flags a pane was started with reach the command that restores it", async () => {
     /* The other half of the desk: `runArgs` builds `[bin, ...flags, --resume,
        id]`, so a pane the owner started with `--dangerously-skip-permissions`
        comes back that way and one he did not does not acquire it. Read off the
@@ -137,7 +140,7 @@ describe("the desk comes back even when the commands do not", () => {
     expect(flags, "the flags must go before the id, so nothing captured displaces it").toBeLessThan(id);
   });
 
-  test("in lazy mode nothing is started, so nothing can have died", async () => {
+  step("in lazy mode nothing is started, so nothing can have died", async () => {
     const name = S("e");
     writeLayout([{ name, windows: [win("one", DIES), win("two", DIES)] }]);
     const r = await restore.restoreLayout("lazy");

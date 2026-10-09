@@ -38,6 +38,7 @@ function endOfBlock(text: string, from: number): number {
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 let L: typeof import("../src/understudy-loop.ts");
 let W: typeof import("../src/understudy-work.ts");
@@ -78,8 +79,10 @@ function recordingGit() {
   };
 }
 
+const step = story();
+
 describe("nothing leaves this machine", () => {
-  test("a whole successful run never pushes", async () => {
+  step("a whole successful run never pushes", async () => {
     const g = recordingGit();
     const r = await L.workOne({
       item: { ...ITEM, id: "push-1" },
@@ -103,7 +106,7 @@ describe("nothing leaves this machine", () => {
     expect(r.says).toContain("nothing pushed");
   });
 
-  test("the brief tells the agent the same thing", () => {
+  step("the brief tells the agent the same thing", () => {
     // Belt and braces, and deliberately so: the harness cannot stop an agent
     // running `git push` through Bash, so the instruction has to be explicit
     // and has to say WHY — an instruction with a reason survives paraphrase.
@@ -115,7 +118,7 @@ describe("nothing leaves this machine", () => {
 });
 
 describe("the tests decide, not the agent", () => {
-  test("a confident agent with failing tests is a failed run", async () => {
+  step("a confident agent with failing tests is a failed run", async () => {
     /*
      * The agent reports success and the tests do not pass. His own words on
      * this are "compiling is not evidence", after a session that reported
@@ -135,7 +138,7 @@ describe("the tests decide, not the agent", () => {
     expect(r.says).toMatch(/tests do not pass/i);
   });
 
-  test("and it is recorded as failed, not merely reported", async () => {
+  step("and it is recorded as failed, not merely reported", async () => {
     const last = W.runs(1)[0]!;
     expect(last.state).toBe("failed");
     expect(last.outcome).toContain("tests failed");
@@ -157,7 +160,7 @@ describe("the tests decide, not the agent", () => {
  * would hang the test suite rather than time out cleanly.
  */
 describe("the installer cannot hang the run it runs inside", () => {
-  test("a hanging install is bounded by the timeout it is handed, and the run still finishes", async () => {
+  step("a hanging install is bounded by the timeout it is handed, and the run still finishes", async () => {
     const g = recordingGit();
     const start = Date.now();
     let receivedTimeout = -1;
@@ -208,7 +211,7 @@ describe("a turn that ends holding is not the same as a turn that finished", () 
    * `done` with nothing on the branch, and a row that reads as if the agent
    * had recorded its own work. Both halves are pinned below.
    */
-  test("green work the agent never committed is committed by the loop", async () => {
+  step("green work the agent never committed is committed by the loop", async () => {
     /* The stand-in tracks whether a commit has happened, because the checks
        after this one ask the branch what is on it — and answering "nothing"
        to that after the net has just committed would test a repository that
@@ -254,7 +257,7 @@ describe("a turn that ends holding is not the same as a turn that finished", () 
     expect(commit!.join(" ")).toContain("Committed by the run loop, not by the agent");
   });
 
-  test("and if that commit itself fails, nothing is called done", async () => {
+  step("and if that commit itself fails, nothing is called done", async () => {
     /*
      * The net is allowed to fail — a hook can reject the commit, a worktree can
      * be locked. What it may never do is report the work as recorded when it is
@@ -282,7 +285,7 @@ describe("a turn that ends holding is not the same as a turn that finished", () 
     expect(last.state).toBe("uncommitted");
   });
 
-  test("a clean tree after green tests is still recorded done, as before", async () => {
+  step("a clean tree after green tests is still recorded done, as before", async () => {
     const g = recordingGit();
     const r = await L.workOne({
       item: { ...ITEM, id: "holding-2", title: "Actually finished the turn" },
@@ -319,7 +322,7 @@ describe("a run can finish `done` having produced nothing", () => {
     };
   }
 
-  test("a clean tree, no commit, and thin words is `empty` — not `done`", async () => {
+  step("a clean tree, no commit, and thin words is `empty` — not `done`", async () => {
     const g = noCommitGit();
     const r = await L.workOne({
       item: { ...ITEM, id: "empty-1", title: "Judge something and report back" },
@@ -335,7 +338,7 @@ describe("a run can finish `done` having produced nothing", () => {
     expect(W.runs(1)[0]!.state).toBe("empty");
   });
 
-  test("seven sentences of waiting is still `empty` — length is not the tell", async () => {
+  step("seven sentences of waiting is still `empty` — length is not the tell", async () => {
     /*
      * MEASURED ON A REAL RUN (id 49): given an idle-CPU regression, the
      * agent kicked off a background bench and spent its entire turn reporting
@@ -366,7 +369,7 @@ describe("a run can finish `done` having produced nothing", () => {
     expect(W.runs(1)[0]!.state).toBe("empty");
   });
 
-  test("mentioning a background suite in passing does not sink real progress", async () => {
+  step("mentioning a background suite in passing does not sink real progress", async () => {
     // The other side of the same rule: a run that reports actual findings
     // and only touches on a background job as an aside must not lose its
     // argument because one sentence in it happens to say "waiting".
@@ -389,7 +392,7 @@ describe("a run can finish `done` having produced nothing", () => {
     expect(W.runs(1)[0]!.state).toBe("done");
   });
 
-  test("no commit but a real argument is still `done` — the honest exception", async () => {
+  step("no commit but a real argument is still `done` — the honest exception", async () => {
     const g = noCommitGit();
     const argument = "Read every call site of tabScore and the three tests that exercise it. " +
       "The function already rejects a partial-word match — it splits on non-word " +
@@ -431,7 +434,7 @@ describe("a branch name he can read, and git will accept", () => {
    */
   const ACCEPTABLE = /^feat\/[a-z0-9][a-z0-9-]*$/;
 
-  test("a title of mostly punctuation becomes one name rather than an unusable one", () => {
+  step("a title of mostly punctuation becomes one name rather than an unusable one", () => {
     const b = W.branchFor({ ...ITEM, title: "Fix: the `thing` — (again)!! #12 @you" });
     // The readable half is asserted whole, and the tag is asserted by shape.
     // Pinning the tag's value would only re-state how it is derived, and the
@@ -440,7 +443,7 @@ describe("a branch name he can read, and git will accept", () => {
     expect(b).toMatch(ACCEPTABLE);
   });
 
-  test("a long title is cut to a length rather than carried whole", () => {
+  step("a long title is cut to a length rather than carried whole", () => {
     // A ninety-character sentence makes a ninety-character directory sitting
     // next to the checkout. He works with several worktrees at a time and picks
     // them out by name, so the bound is for the person, not for the filesystem.
@@ -455,7 +458,7 @@ describe("a branch name he can read, and git will accept", () => {
     expect(b).toMatch(ACCEPTABLE);
   });
 
-  test("a title that reduces to nothing still names a branch", () => {
+  step("a title that reduces to nothing still names a branch", () => {
     /*
      * The one that would actually break. An empty slug gives `feat/`, which git
      * refuses outright — a ref may not end in a slash — and whose last path
@@ -469,7 +472,7 @@ describe("a branch name he can read, and git will accept", () => {
 });
 
 describe("a worktree is cut fresh and kept when it matters", () => {
-  test("it cuts a new branch off the tip, never reuses a directory", async () => {
+  step("it cuts a new branch off the tip, never reuses a directory", async () => {
     const g = recordingGit();
     await L.workOne({
       item: { ...ITEM, id: "cut-1", title: "Tidy the thing" },
@@ -487,7 +490,7 @@ describe("a worktree is cut fresh and kept when it matters", () => {
     expect(add![add!.length - 1]).toBe("HEAD");
   });
 
-  test("an existing directory stops the run rather than being reused", async () => {
+  step("an existing directory stops the run rather than being reused", async () => {
     /*
      * A leftover worktree holds the previous run's half-finished state, and
      * starting a new task on top of it is how two unrelated changes end up on
@@ -515,7 +518,7 @@ describe("a worktree is cut fresh and kept when it matters", () => {
     expect(g.calls).toEqual([]);
   });
 
-  test("a failed run leaves the worktree on disk and says where", async () => {
+  step("a failed run leaves the worktree on disk and says where", async () => {
     // The evidence of what went wrong. Tidying up automatically would mean the
     // one run somebody wanted to inspect is the one that is gone.
     const g = recordingGit();
@@ -545,7 +548,7 @@ describe("throwing a run away, once somebody has decided to", () => {
    * where the directory is still on disk trades a visible pile of worktrees for
    * an invisible one, and the invisible pile is the one nobody ever clears.
    */
-  test("it removes the worktree and reports it gone", async () => {
+  step("it removes the worktree and reports it gone", async () => {
     const wt = join(jail, "repo-f-discard");
     mkdirSync(wt, { recursive: true });
     writeFileSync(join(wt, "half-a-change.txt"), "what the agent left behind\n");
@@ -559,7 +562,7 @@ describe("throwing a run away, once somebody has decided to", () => {
     expect(g.calls[0]).toEqual(["worktree", "remove", "--force", wt]);
   });
 
-  test("a git it cannot run is reported as not gone, rather than as done", async () => {
+  step("a git it cannot run is reported as not gone, rather than as done", async () => {
     /*
      * Reachable from the route, not hypothetical: the body is passed straight
      * through as `String(wb.repo ?? "")`, so a run whose checkout has since been
@@ -576,7 +579,7 @@ describe("throwing a run away, once somebody has decided to", () => {
     expect(existsSync(wt), "it must not report a directory gone that it never touched").toBe(true);
   });
 
-  test("a worktree that has already gone is not reported as a failure", async () => {
+  step("a worktree that has already gone is not reported as a failure", async () => {
     // Two clicks on the same dismissed run, or a directory he removed by hand
     // yesterday. Neither is an error worth showing him: the answer is about the
     // state of the disk, not about whether this call is what changed it.
@@ -595,7 +598,7 @@ describe("two tasks that read alike still get their own branch", () => {
   const TWIN_A = { ...ITEM, id: "twin-a", title: "Rework the settings dialog so it remembers its width" };
   const TWIN_B = { ...ITEM, id: "twin-b", title: "Rework the settings dialog so it remembers its position" };
 
-  test("a shared truncated slug no longer means a shared branch", () => {
+  step("a shared truncated slug no longer means a shared branch", () => {
     const a = W.branchFor(TWIN_A);
     const b = W.branchFor(TWIN_B);
     // The part a person reads is the same — that is the point of the title.
@@ -606,13 +609,13 @@ describe("two tasks that read alike still get their own branch", () => {
     expect(a).toMatch(/^feat\/[a-z0-9-]+-[0-9a-f]{6}$/);
   });
 
-  test("the same item asked twice is the same branch", () => {
+  step("the same item asked twice is the same branch", () => {
     // The tag comes from the item, not from the clock: a card looked up in two
     // places must not disagree about where its work lives.
     expect(W.branchFor(TWIN_A)).toBe(W.branchFor({ ...TWIN_A }));
   });
 
-  test("the second of the pair is not refused as somebody else's worktree", async () => {
+  step("the second of the pair is not refused as somebody else's worktree", async () => {
     const repo = join(jail, "repo-twin");
     const first = await L.workOne({
       item: TWIN_A,
@@ -641,7 +644,7 @@ describe("two tasks that read alike still get their own branch", () => {
 });
 
 describe("the same task is not picked up twice", () => {
-  test("an item that has been run is not offered again", () => {
+  step("an item that has been run is not offered again", () => {
     // Across shifts, not only within one: coming back tomorrow and re-doing
     // yesterday's card is the most obvious way for a loop to waste a day.
     expect(W.alreadyTaken("test", "push-1")).toBe(true);
@@ -653,7 +656,7 @@ describe("an abandoned run must not hide its item for ever", () => {
   // A pull-request task has no queue of its own to clear `taken_at` on — the
   // run row IS the only record. Killed by a restart, it used to sit there in
   // state `abandoned` and block `nextTask` from ever offering the item again.
-  test("offered again after one abandonment, not a third time after two", async () => {
+  step("offered again after one abandonment, not a third time after two", async () => {
     const { openRequests } = await import("../src/understudy-help.ts");
     const item = {
       id: "acme/repo#42", source: "prs",
@@ -672,7 +675,7 @@ describe("an abandoned run must not hide its item for ever", () => {
 });
 
 describe("the brief is his, not a generic one", () => {
-  test("it carries his rules and tells the agent to prefer them", () => {
+  step("it carries his rules and tells the agent to prefer them", () => {
     /*
      * An agent given only the card writes what any competent engineer would
      * write. Given his rules and his past cases it writes something he
@@ -685,7 +688,7 @@ describe("the brief is his, not a generic one", () => {
     expect(text).toContain("HOW THEY WORK");
   });
 
-  test("it states the working method rather than hoping it is inferred", () => {
+  step("it states the working method rather than hoping it is inferred", () => {
     const text = W.brief(ITEM, "/tmp/wt");
     // One feature per branch, read before writing, tests green — the things he
     // has said in reviews, made explicit so they do not depend on the bank
@@ -694,7 +697,7 @@ describe("the brief is his, not a generic one", () => {
     expect(text).toContain("Compiling is not evidence");
   });
 
-  test("and it forbids half-finished work reported as done", () => {
+  step("and it forbids half-finished work reported as done", () => {
     const text = W.brief(ITEM, "/tmp/wt");
     expect(text).toMatch(/unforgivable/i);
   });
@@ -708,7 +711,7 @@ describe("the brief is his, not a generic one", () => {
  * working alone has, and each of these was paid for once already.
  */
 describe("the brief was corrected by reading the runs it produced", () => {
-  test("its rules are the ones this task uses, not the first in the file", async () => {
+  step("its rules are the ones this task uses, not the first in the file", async () => {
     /*
      * `compiledRules().slice(0, 40)` took compile order, which is the order the
      * sources happened to be walked in. On the brief a run was handed on
@@ -736,7 +739,7 @@ describe("the brief was corrected by reading the runs it produced", () => {
       .not.toContain("idempotency key");
   });
 
-  test("a turn out of a transcript is never offered as a thing they decided", async () => {
+  step("a turn out of a transcript is never offered as a thing they decided", async () => {
     /*
      * Everything retrieved used to arrive under "THINGS THEY DECIDED IN SIMILAR
      * SITUATIONS". The ten sent to the run of 2026-08-22 15:13 were all
@@ -768,7 +771,7 @@ describe("the brief was corrected by reading the runs it produced", () => {
     expect(text.indexOf("the reviewer chip is unreadable")).toBeGreaterThan(heading);
   });
 
-  test("it says how long there is before the ceiling stops the run", () => {
+  step("it says how long there is before the ceiling stops the run", () => {
     /*
      * An audit whose whole deliverable was findings written down was killed at
      * 45 minutes and 1 second with no commit and a clean worktree, having given
@@ -782,7 +785,7 @@ describe("the brief was corrected by reading the runs it produced", () => {
     expect(W.brief(ITEM, "/tmp/wt")).not.toContain("HOW LONG YOU HAVE");
   });
 
-  test("and the loop tells it the same ceiling it will enforce", async () => {
+  step("and the loop tells it the same ceiling it will enforce", async () => {
     let seen = "";
     const g = recordingGit();
     await L.workOne({
@@ -800,7 +803,7 @@ describe("the brief was corrected by reading the runs it produced", () => {
     expect(seen).toContain(`${mins} minutes`);
   });
 
-  test("it names the install a fresh worktree has not had", () => {
+  step("it names the install a fresh worktree has not had", () => {
     /*
      * Nothing links node_modules into a worktree, so the first suite an agent
      * runs cannot find a package. Four runs met that; the worst read it as its
@@ -811,7 +814,7 @@ describe("the brief was corrected by reading the runs it produced", () => {
     expect(W.brief(ITEM, "/tmp/wt")).toContain("bun install");
   });
 
-  test("the command it names is the command the verdict actually runs", async () => {
+  step("the command it names is the command the verdict actually runs", async () => {
     /*
      * "their tests, by the command they use" sent four runs grepping the
      * Makefile, both package.json files and a CLAUDE.md that does not exist —
@@ -870,7 +873,7 @@ describe("a task it cannot place is never placed anyway", () => {
    * a confident, wrong, completely wasted run. That erodes trust faster than an
    * outright failure, because a failure at least looks like one.
    */
-  test("the route refuses a task with no repository rather than picking one", async () => {
+  step("the route refuses a task with no repository rather than picking one", async () => {
     const src = await Bun.file(new URL("../src/index.ts", import.meta.url)).text();
     const from = src.indexOf('"/understudy/work/run"');
     const block = src.slice(from, endOfBlock(src, from));
@@ -881,13 +884,13 @@ describe("a task it cannot place is never placed anyway", () => {
     expect(block).toContain("guessing would be worse than waiting");
   });
 
-  test("and refuses one outside what it may work in today", async () => {
+  step("and refuses one outside what it may work in today", async () => {
     const src = await Bun.file(new URL("../src/index.ts", import.meta.url)).text();
     const from = src.indexOf('"/understudy/work/run"');
     expect(src.slice(from, endOfBlock(src, from))).toContain("repos.includes(item.repo)");
   });
 
-  test("the card source stays quiet when it cannot place anything", async () => {
+  step("the card source stays quiet when it cannot place anything", async () => {
     /*
      * The root of it. A source that offers work nobody can locate is an
      * invitation to locate it wrongly, so it says nothing instead — silence is
@@ -911,7 +914,7 @@ describe("work he hands it directly", () => {
    * decide whether to give it something bigger. Nobody should hand an hour of
    * autonomy to a machine they have not watched do ten minutes.
    */
-  test("a queued task always names a checkout", async () => {
+  step("a queued task always names a checkout", async () => {
     const S = await import("../src/understudy-sources-work.ts");
     const id = S.ask({ title: "Tidy the thing", repo: "/home/dev/code/agentglass" });
     expect(id).toBeGreaterThan(0);
@@ -921,7 +924,7 @@ describe("work he hands it directly", () => {
     expect(S.asked().some((r) => r.id === id)).toBe(false);
   });
 
-  test("the route refuses a checkout it may not work in — before queueing, not after", async () => {
+  step("the route refuses a checkout it may not work in — before queueing, not after", async () => {
     /*
      * Checked when the row is written rather than when it is picked up. A row
      * naming somewhere out of scope is a disappointment scheduled for later,
@@ -935,14 +938,14 @@ describe("work he hands it directly", () => {
     expect(block).toContain("it may only work in:");
   });
 
-  test("what he asked for outranks everything a tracker calls urgent", async () => {
+  step("what he asked for outranks everything a tracker calls urgent", async () => {
     // He asked for this one by hand. No card's own priority outranks that.
     const src = await Bun.file(new URL("../src/understudy-sources-work.ts", import.meta.url)).text();
     const from = src.indexOf('id: "asked"');
     expect(src.slice(from, endOfBlock(src, from))).toContain("weight: 20");
   });
 
-  test("a queued row outside today's scope is dropped rather than offered", async () => {
+  step("a queued row outside today's scope is dropped rather than offered", async () => {
     // A row added last week naming a checkout the loop may no longer touch is
     // not work — it is a stale instruction.
     const src = await Bun.file(new URL("../src/understudy-sources-work.ts", import.meta.url)).text();
@@ -962,7 +965,7 @@ describe("it keeps going until there is nothing left", () => {
    */
   const cap = { agent: async () => ({ ok: true, out: "" }), verify: async () => ({ ok: true, out: "" }) };
 
-  test("it works through several tasks and stops when they run out", async () => {
+  step("it works through several tasks and stops when they run out", async () => {
     const g = recordingGit();
     let n = 0;
     const r = await L.workUntilDone({
@@ -979,7 +982,7 @@ describe("it keeps going until there is nothing left", () => {
     expect(r.stopped).toBe("nothing left to work on");
   });
 
-  test("one failed run ends it, rather than starting the next on top", async () => {
+  step("one failed run ends it, rather than starting the next on top", async () => {
     /*
      * After a failure the machine is in a state nobody has looked at — a
      * worktree with half a change in it, or a red suite. Starting the next task
@@ -1001,7 +1004,7 @@ describe("it keeps going until there is nothing left", () => {
     expect(r.stopped).toMatch(/did not finish/i);
   });
 
-  test("the shift is asked FRESH each round, not captured once", async () => {
+  step("the shift is asked FRESH each round, not captured once", async () => {
     /*
      * A shift can be halted between two tasks. A loop that decided at the start
      * whether it was allowed to run would carry on through the stop — which is
@@ -1021,7 +1024,7 @@ describe("it keeps going until there is nothing left", () => {
     expect(r.stopped).toBe("you halted it");
   });
 
-  test("a task it cannot place is skipped, not fatal", async () => {
+  step("a task it cannot place is skipped, not fatal", async () => {
     // One unplaceable card should not end a shift — the next may well be
     // placeable, and stopping would waste the rest of the hour on a bad row.
     const g = recordingGit();
@@ -1043,7 +1046,7 @@ describe("it keeps going until there is nothing left", () => {
     expect(r.done[0]!.ok).toBe(true);
   });
 
-  test("there is a hard ceiling on rounds", async () => {
+  step("there is a hard ceiling on rounds", async () => {
     // A bug that makes `nextTask` return the same item for ever must not be
     // able to spend a night on it.
     const g = recordingGit();
@@ -1060,7 +1063,7 @@ describe("it keeps going until there is nothing left", () => {
     expect(r.stopped).toMatch(/limit of 3/);
   });
 
-  test("nothing loops without a shift — not the route, not the watchdog", async () => {
+  step("nothing loops without a shift — not the route, not the watchdog", async () => {
     /*
      * A loop with no shift has no limit on it at all: no wall, no budget, no
      * stop rules. That is not autonomy, it is an unbounded process.
@@ -1105,7 +1108,7 @@ describe("his employer's work is never even selected", () => {
    * cards to carry a repository, that last fence stops applying while the
    * selection stays exactly as wrong.
    */
-  test("the card source is silent unless the scope has been opened deliberately", async () => {
+  step("the card source is silent unless the scope has been opened deliberately", async () => {
     const src = await Bun.file(new URL("../src/understudy-sources-work.ts", import.meta.url)).text();
     const from = src.indexOf('id: "clickup"');
     const block = src.slice(from, endOfBlock(src, from));
@@ -1115,7 +1118,7 @@ describe("his employer's work is never even selected", () => {
     expect(block.indexOf("proposeScope()")).toBeLessThan(block.indexOf("changedForMe"));
   });
 
-  test("only the open project can be worked in, and which one is a setting", async () => {
+  step("only the open project can be worked in, and which one is a setting", async () => {
     /*
      * This test used to assert the project's NAME appeared here, which was
      * true and was the bug: one person's project baked into logic in a public
@@ -1136,7 +1139,7 @@ describe("his employer's work is never even selected", () => {
     expect(/return roots\.filter[^\n]*agentglass/i.test(block)).toBe(false);
   });
 
-  test("the loop's own checkout counts, so it is not blind to itself", async () => {
+  step("the loop's own checkout counts, so it is not blind to itself", async () => {
     /*
      * Discovery works from telemetry — work done THROUGH the app — and from
      * projects opened in it. On this machine both are the employer's
@@ -1171,7 +1174,7 @@ describe("no run without a shift, single or chained", () => {
    * is not a limit when the task is an agent with a shell and twenty-five
    * minutes in a repository.
    */
-  test("the single-task route requires a running shift", async () => {
+  step("the single-task route requires a running shift", async () => {
     const src = await Bun.file(new URL("../src/index.ts", import.meta.url)).text();
     const from = src.indexOf('"/understudy/work/run"');
     const block = src.slice(from, endOfBlock(src, from));
@@ -1179,7 +1182,7 @@ describe("no run without a shift, single or chained", () => {
     expect(block).toContain("hand over first");
   });
 
-  test("and it charges the budget before the work, not after", async () => {
+  step("and it charges the budget before the work, not after", async () => {
     /*
      * A run that never returns has still been paid for. Charging on completion
      * means a hung agent costs nothing and the next request starts another one
@@ -1191,7 +1194,7 @@ describe("no run without a shift, single or chained", () => {
     expect(block.indexOf("Shift.countAction")).toBeLessThan(block.indexOf("Loop.workOne"));
   });
 
-  test("a spent budget stops it as firmly as a missing shift", async () => {
+  step("a spent budget stops it as firmly as a missing shift", async () => {
     const src = await Bun.file(new URL("../src/index.ts", import.meta.url)).text();
     const from = src.indexOf('"/understudy/work/run"');
     expect(src.slice(from, endOfBlock(src, from))).toContain("shift.actionsLeft <= 0");
@@ -1212,7 +1215,7 @@ describe("the run record says what happened", () => {
   const BANNER = "bun test v1.3.9 (cf6cdbbb)\n[some subsystem] a log line nobody asked for\n";
   const SUITE = `${BANNER}${"ran a test\n".repeat(400)} 3806 pass\n 0 fail\nRan 3806 tests\n`;
 
-  test("a green run records the counts, not the banner", async () => {
+  step("a green run records the counts, not the banner", async () => {
     const g = recordingGit();
     await L.workOne({
       item: { ...ITEM, id: "verdict-green", title: "verdict green" },
@@ -1239,7 +1242,7 @@ describe("the run record says what happened", () => {
     expect(last.outcome).not.toContain("bun test v1.3.9");
   });
 
-  test("a red run records the end of the output, where the failures are", async () => {
+  step("a red run records the end of the output, where the failures are", async () => {
     const g = recordingGit();
     await L.workOne({
       item: { ...ITEM, id: "verdict-red", title: "verdict red" },
@@ -1258,7 +1261,7 @@ describe("the run record says what happened", () => {
     expect(last.outcome).toContain("expected 1 to be 2");
   });
 
-  test("an agent that gave up records why it stopped, not how it started", async () => {
+  step("an agent that gave up records why it stopped, not how it started", async () => {
     // No counts to hoist, so this is purely "the tail, not the head" — and the
     // reason an agent stopped is always the last thing it said.
     const g = recordingGit();
@@ -1286,7 +1289,7 @@ describe("a queue he fills by hand drains itself", () => {
    * Two lists disagreeing is worse than either being wrong, because the person
    * reading them has to guess which one is lying.
    */
-  test("a source is told the moment a run begins, not when it succeeds", async () => {
+  step("a source is told the moment a run begins, not when it succeeds", async () => {
     /*
      * At the START deliberately. Marking it on success leaves a failed item
      * pending, and the next round picks it up again into the worktree the
@@ -1312,7 +1315,7 @@ describe("a queue he fills by hand drains itself", () => {
     expect(told).toEqual(["told-1"]);
   });
 
-  test("a source that throws on being told does not lose the run", async () => {
+  step("a source that throws on being told does not lose the run", async () => {
     W.addSource({
       id: "brittle",
       label: "brittle",
@@ -1332,7 +1335,7 @@ describe("a queue he fills by hand drains itself", () => {
     expect(W.runs(1)[0]!.state).toBe("done");
   });
 
-  test("end to end: what he asked for stops being listed once it is taken", async () => {
+  step("end to end: what he asked for stops being listed once it is taken", async () => {
     const S = await import("../src/understudy-sources-work.ts");
     const repo = join(jail, "repo-t3");
     const id = S.ask({ title: "Do the thing he asked for", detail: "in his words", repo });
@@ -1350,7 +1353,7 @@ describe("a queue he fills by hand drains itself", () => {
     expect(S.asked().some((r) => r.id === id)).toBe(false);
   });
 
-  test("a row written before any of this still stops being listed", async () => {
+  step("a row written before any of this still stops being listed", async () => {
     /*
      * The rows already on his machine carry no mark, because nothing ever wrote
      * one. Repairing them means a hand-written UPDATE against a live database,
@@ -1383,7 +1386,7 @@ describe("how much of a shift is already behind it", () => {
    * table what it already did. Asserted as DELTAS, because every test above
    * this one has left rows of its own in the same database.
    */
-  test("a run that finished and one that broke land on their own side", async () => {
+  step("a run that finished and one that broke land on their own side", async () => {
     const before = W.runsSoFar();
     await L.workOne({
       item: { ...ITEM, id: "tally-ok", title: "Tally the good one" },
@@ -1406,7 +1409,7 @@ describe("how much of a shift is already behind it", () => {
     expect(after.failed - before.failed).toBe(1);
   });
 
-  test("a run still going counts for neither side yet", () => {
+  step("a run still going counts for neither side yet", () => {
     // Started and not ended is not a result. Counting it as one would let a
     // shift stop on work nobody has seen the end of.
     const before = W.runsSoFar();
@@ -1432,7 +1435,7 @@ describe("a run that could not finish, and whether it left anything", () => {
    *
    * Two different mornings, and the sentence has to tell them apart.
    */
-  test("work left behind is named, so somebody goes and looks", async () => {
+  step("work left behind is named, so somebody goes and looks", async () => {
     const g = {
       calls: [] as string[][],
       git: async (args: string[]) => {
@@ -1455,7 +1458,7 @@ describe("a run that could not finish, and whether it left anything", () => {
     expect(r.says).toContain(r.worktree);
   });
 
-  test("and an empty worktree says that instead, rather than the same sentence", async () => {
+  step("and an empty worktree says that instead, rather than the same sentence", async () => {
     const r = await L.workOne({
       item: { ...ITEM, id: "left-2", title: "Left nothing behind" },
       repo: join(jail, "repo-empty"),
@@ -1469,7 +1472,7 @@ describe("a run that could not finish, and whether it left anything", () => {
 });
 
 describe("a run stopped by the clock says so", () => {
-  test("the timeout is reported as a timeout, not as a blank failure", async () => {
+  step("the timeout is reported as a timeout, not as a blank failure", async () => {
     /*
      * `claude -p` writes to a pipe, and a pipe buffers until the process ends,
      * so killing it loses the whole transcript — the first real run recorded
@@ -1515,7 +1518,7 @@ describe("what the tests said, and only that", () => {
     " 1 fail",
   ].join("\n");
 
-  test("the app's own chatter does not reach the row", async () => {
+  step("the app's own chatter does not reach the row", async () => {
     const { runOutcomeFor } = await import("../src/understudy-loop.ts") as unknown as
       { runOutcomeFor?: (s: string, n: number) => string };
     // `verdict` is private, so this asserts through the only thing that shows
@@ -1526,7 +1529,7 @@ describe("what the tests said, and only that", () => {
     expect(seen).not.toContain("event loop blocked");
   });
 
-  test("the counts and the failing test survive the filtering", async () => {
+  step("the counts and the failing test survive the filtering", async () => {
     const src = await Bun.file(new URL("../src/understudy-loop.ts", import.meta.url)).text();
     const fn = src.slice(src.indexOf("const NOT_THE_VERDICT"), src.indexOf("\n}", src.indexOf("function verdict")));
     // The three shapes that are noise…
@@ -1541,7 +1544,7 @@ describe("what the tests said, and only that", () => {
 describe("the four ways a run used to leave the machine stuck", () => {
   const src = () => Bun.file(new URL("../src/understudy-loop.ts", import.meta.url)).text();
 
-  test("a run that throws still closes its row", async () => {
+  step("a run that throws still closes its row", async () => {
     /*
      * There was no `try` in the body of `workOne`, and every helper past
      * `beginRun` spawns with `cwd` set to the worktree — `Bun.spawn` throws
@@ -1566,13 +1569,13 @@ describe("the four ways a run used to leave the machine stuck", () => {
     expect(catchAt, "the catch must close the row through the ordinary path").toBeGreaterThan(-1);
   });
 
-  test("a refused cut costs an attempt instead of being offered for ever", async () => {
+  step("a refused cut costs an attempt instead of being offered for ever", async () => {
     const s = await src();
     const at = s.indexOf("if (!cut.ok) {");
     expect(s.slice(at, s.indexOf("\n  }", at))).toContain("noteUndelivered(");
   });
 
-  test("the shift pays for a run that started, not for a task that was chosen", async () => {
+  step("the shift pays for a run that started, not for a task that was chosen", async () => {
     const s = await src();
     const at = s.indexOf("const runId = beginRun(");
     /* Charged beside `beginRun`: before this it was spent at selection, so four
@@ -1581,7 +1584,7 @@ describe("the four ways a run used to leave the machine stuck", () => {
     expect(s.slice(at, s.indexOf("try {", at))).toContain("p.countAction?.()");
   });
 
-  test("and a discard takes the branch with it", async () => {
+  step("and a discard takes the branch with it", async () => {
     const s = await src();
     const at = s.indexOf("export async function discardRun(");
     const body = s.slice(at, endOfBlock(s, at));

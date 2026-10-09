@@ -13,6 +13,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { readFrameCached, type TmuxClient } from "../src/tmuxctl.ts";
 import { TEST_TERM } from "./tmuxTerm.ts";
+import { story } from "./story.ts";
 
 const src = await Bun.file(new URL("../src/terminal.ts", import.meta.url)).text();
 
@@ -65,10 +66,12 @@ afterAll(() => {
 
 const client = (): TmuxClient => ({ pid: 0, socket: ["-L", SOCK], tty });
 
+const step = story();
+
 describe("readFrameCached shares one spawn across a socket's clients", () => {
   if (!has) return;
 
-  test("a second call within the TTL sees what the first one saw, not what changed after it", () => {
+  step("a second call within the TTL sees what the first one saw, not what changed after it", () => {
     const before = readFrameCached(client(), 5000)!;
     expect(before.windows.some((w) => w.name === "one")).toBe(true);
 
@@ -81,13 +84,13 @@ describe("readFrameCached shares one spawn across a socket's clients", () => {
     expect(stillCached.windows.some((w) => w.name === "renamed")).toBe(false);
   });
 
-  test("a call past the TTL spawns fresh and sees the change", () => {
+  step("a call past the TTL spawns fresh and sees the change", () => {
     // ttlMs: 0 never reuses a cached answer, whatever its age.
     const fresh = readFrameCached(client(), 0)!;
     expect(fresh.windows.some((w) => w.name === "renamed")).toBe(true);
   });
 
-  test("parsed result is shared per session within TTL", () => {
+  step("parsed result is shared per session within TTL", () => {
     // Two calls from the same client within the TTL should reuse the parsed
     // result (windows/panes should be the same object reference).
     const frame1 = readFrameCached(client(), 5000)!;
@@ -109,7 +112,7 @@ describe("readFrameCached shares one spawn across a socket's clients", () => {
    * "tmux changed at this moment": older reads are refused, and the fresh read
    * must not be handed the parse of the stale one either.
    */
-  test("a read from before notBefore is refused, parse included, so a switch shows at once", () => {
+  step("a read from before notBefore is refused, parse included, so a switch shows at once", () => {
     raw(["new-window", "-d", "-t", "cache", "-n", "two", "sleep 600"]);
     const before = readFrameCached(client(), 5000, Date.now())!;
     const was = before.windows.find((w) => w.active)!.name;
@@ -134,7 +137,7 @@ describe("readFrameCached shares one spawn across a socket's clients", () => {
 describe("the sweeps that follow a change refuse a read from before it", () => {
   const code = (s: string) => s.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
 
-  test("the redraw nudge passes the moment its burst began", () => {
+  step("the redraw nudge passes the moment its burst began", () => {
     const start = src.indexOf("const nudgeTmux = () => {");
     expect(start).toBeGreaterThan(-1);
     const body = code(src.slice(start, src.indexOf("\n  };", start)));
@@ -142,7 +145,7 @@ describe("the sweeps that follow a change refuse a read from before it", () => {
     expect(body).not.toContain("sweep()");
   });
 
-  test("a sweep asked for after an action passes the moment it was asked", () => {
+  step("a sweep asked for after an action passes the moment it was asked", () => {
     expect(code(src)).toContain("session.tmuxSweep = () => sweep(Date.now());");
   });
 });
@@ -161,7 +164,7 @@ describe("the sweeps that follow a change refuse a read from before it", () => {
 describe("readFrameCached keeps each client's own fields", () => {
   if (!has) return;
 
-  test("two clients on one session, inside one TTL, each get their own size", async () => {
+  step("two clients on one session, inside one TTL, each get their own size", async () => {
     wide = clientOn("cache", 174, 47);
     let wideTty = "";
     for (let i = 0; i < 40 && !wideTty; i++) {

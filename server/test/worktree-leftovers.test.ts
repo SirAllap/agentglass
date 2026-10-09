@@ -14,6 +14,7 @@ import { describe, expect, test, beforeAll } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 const dir = realpathSync(mkdtempSync(join(tmpdir(), "agx-leftovers-")));
 const REPO = join(dir, "repo");
@@ -99,8 +100,10 @@ beforeAll(async () => {
   gw = await import("../src/gitwork.ts");
 });
 
+const step = story();
+
 describe("worktreeLeftovers", () => {
-  test("names the ignored files git reports as clean", async () => {
+  step("names the ignored files git reports as clean", async () => {
     // The premise. If this ever stops holding, the rest of this file is moot
     // and `git status` would be a fine guard on its own.
     expect(git(WT, "status", "--porcelain")).toBe("");
@@ -111,7 +114,7 @@ describe("worktreeLeftovers", () => {
     expect(paths(r)).toContain("notes-local.md");
   });
 
-  test("counts rebuildable output instead of listing it", async () => {
+  step("counts rebuildable output instead of listing it", async () => {
     const r = await gw.worktreeLeftovers(REPO, WT);
     // Four hundred `__pycache__/` lines would bury the one `.env` that matters,
     // and a dialog nobody reads to the end guards nothing.
@@ -120,7 +123,7 @@ describe("worktreeLeftovers", () => {
     expect(r.skipped).toBeGreaterThanOrEqual(2);
   });
 
-  test("opens a collapsed directory rather than reporting its name", async () => {
+  step("opens a collapsed directory rather than reporting its name", async () => {
     const r = await gw.worktreeLeftovers(REPO, WT);
     // git prints `cfg/` and stops, because nothing in it is tracked. Listing
     // that verbatim hides the env file and cries wolf about the cache; both
@@ -132,7 +135,7 @@ describe("worktreeLeftovers", () => {
     expect(paths(r).some((f: string) => f.startsWith("src"))).toBe(false);
   });
 
-  test("an empty answer means empty — only when it really is", async () => {
+  step("an empty answer means empty — only when it really is", async () => {
     const r = await gw.worktreeLeftovers(REPO, BARE);
     expect(r.error).toBeUndefined();
     expect(paths(r)).toEqual([]);
@@ -141,7 +144,7 @@ describe("worktreeLeftovers", () => {
     expect(r.skipped).toBeGreaterThan(0);
   });
 
-  test("a checkout it cannot read reports an error, not an empty list", async () => {
+  step("a checkout it cannot read reports an error, not an empty list", async () => {
     const r = await gw.worktreeLeftovers(REPO, GHOST);
     // "Couldn't look" and "nothing there" must never produce the same value:
     // the caller removes on the second and refuses on the first.
@@ -149,13 +152,13 @@ describe("worktreeLeftovers", () => {
     expect(paths(r)).toEqual([]);
   });
 
-  test("refuses a path that is not a worktree of this repo", async () => {
+  step("refuses a path that is not a worktree of this repo", async () => {
     const r = await gw.worktreeLeftovers(REPO, dir);
     expect(r.error).toBeTruthy();
     expect(paths(r)).toEqual([]);
   });
 
-  test("hides what the main checkout already has, byte for byte", async () => {
+  step("hides what the main checkout already has, byte for byte", async () => {
     const r = await gw.worktreeLeftovers(REPO, WT);
     // A worktree is a second copy of the repo, so most of what looks alarming
     // in it is a duplicate. Deleting a duplicate loses nothing, and listing it
@@ -164,7 +167,7 @@ describe("worktreeLeftovers", () => {
     expect(r.identical).toBeGreaterThanOrEqual(1);
   });
 
-  test("marks a path that exists in the main checkout but differs", async () => {
+  step("marks a path that exists in the main checkout but differs", async () => {
     const r = await gw.worktreeLeftovers(REPO, WT);
     const e = r.entries.find((x) => x.path === "drifted.env");
     // Offered — the worktree's copy may well be the newer one — but flagged,
@@ -173,7 +176,7 @@ describe("worktreeLeftovers", () => {
     expect(r.entries.find((x) => x.path === "secrets.env")?.vsMain).toBe("absent");
   });
 
-  test("breaks open a directory ignored as a whole directory", async () => {
+  step("breaks open a directory ignored as a whole directory", async () => {
     // The case that nearly cost the whole feature. When .gitignore names the
     // directory (`.specs/`), `git status --ignored=matching -- .specs/` answers
     // `.specs/` again and never descends — so the list would offer one
@@ -189,7 +192,7 @@ describe("worktreeLeftovers", () => {
     expect(r.entries.find((e) => e.path === ".specs/findings.md")?.vsMain).toBe("absent");
   });
 
-  test("sorts the safe ones first, smallest first", async () => {
+  step("sorts the safe ones first, smallest first", async () => {
     const r = await gw.worktreeLeftovers(REPO, WT);
     const firstDiffers = r.entries.findIndex((e) => e.vsMain === "differs");
     const lastAbsent = r.entries.map((e) => e.vsMain).lastIndexOf("absent");
@@ -206,19 +209,19 @@ describe("worktreeLeftovers", () => {
  *  and the first one starts failing for a reason that has nothing to do with
  *  it. */
 describe("foreignOwned", () => {
-  test("says nothing when every file is ours", () => {
+  step("says nothing when every file is ours", () => {
     // The normal case, and the one that must not cost anything: a false
     // positive here refuses a removal that would have worked fine.
     expect(gw.foreignOwned(WT)).toBeNull();
   });
 
-  test("a directory nobody can read is not a directory full of strangers", () => {
+  step("a directory nobody can read is not a directory full of strangers", () => {
     expect(gw.foreignOwned(join(dir, "does-not-exist"))).toBeNull();
   });
 });
 
 describe("fixWorktreeOwnership", () => {
-  test("refuses a path that is not a worktree of this repo", () => {
+  step("refuses a path that is not a worktree of this repo", () => {
     // This is the ONE call that reaches root. The path must come from git, not
     // from the request, or a crafted call points chown at anything.
     const r = gw.fixWorktreeOwnership(REPO, dir);
@@ -226,12 +229,12 @@ describe("fixWorktreeOwnership", () => {
     expect(r.error).toContain("not a worktree");
   });
 
-  test("refuses the main checkout", () => {
+  step("refuses the main checkout", () => {
     const r = gw.fixWorktreeOwnership(REPO, REPO);
     expect(r.ok).toBe(false);
   });
 
-  test("does nothing, and elevates nothing, when the files are already ours", () => {
+  step("does nothing, and elevates nothing, when the files are already ours", () => {
     // No pkexec, no dialog, no root: there is nothing to hand back. If this
     // ever starts prompting on a clean checkout, that is the bug.
     const r = gw.fixWorktreeOwnership(REPO, WT);
@@ -241,7 +244,7 @@ describe("fixWorktreeOwnership", () => {
 });
 
 describe("rescueLeftovers", () => {
-  test("copies into the main checkout at the same relative path", async () => {
+  step("copies into the main checkout at the same relative path", async () => {
     const r = await gw.rescueLeftovers(REPO, WT, ["notes-local.md"]);
     expect(r.ok).toBe(true);
     expect(r.copied).toEqual(["notes-local.md"]);
@@ -252,13 +255,13 @@ describe("rescueLeftovers", () => {
     expect(existsSync(join(WT, "notes-local.md"))).toBe(true);
   });
 
-  test("copies a directory whole", async () => {
+  step("copies a directory whole", async () => {
     const r = await gw.rescueLeftovers(REPO, WT, ["cfg/"]);
     expect(r.ok).toBe(true);
     expect(readFileSync(join(REPO, "cfg", "local.env"), "utf8")).toBe("DB=here\n");
   });
 
-  test("REFUSES to overwrite what the main checkout already has", async () => {
+  step("REFUSES to overwrite what the main checkout already has", async () => {
     // The whole safety property. `drifted.env` differs in the two checkouts, and
     // a "rescue" that clobbers the main copy with the dying worktree's version
     // is the exact accident this feature exists to prevent.
@@ -270,20 +273,20 @@ describe("rescueLeftovers", () => {
     expect(readFileSync(join(REPO, "drifted.env"), "utf8")).toBe(before);
   });
 
-  test("refuses to climb out of the worktree", async () => {
+  step("refuses to climb out of the worktree", async () => {
     const r = await gw.rescueLeftovers(REPO, WT, ["../../../etc/passwd", "../repo/README"]);
     expect(r.copied).toEqual([]);
     expect(r.skipped).toHaveLength(2);
     for (const s of r.skipped!) expect(s.why).toContain("outside");
   });
 
-  test("refuses a path that is not a worktree of this repo", async () => {
+  step("refuses a path that is not a worktree of this repo", async () => {
     const r = await gw.rescueLeftovers(REPO, dir, ["anything"]);
     expect(r.ok).toBe(false);
     expect(r.error).toBeTruthy();
   });
 
-  test("reports each failure rather than stopping at the first", async () => {
+  step("reports each failure rather than stopping at the first", async () => {
     const r = await gw.rescueLeftovers(REPO, WT, ["nope-does-not-exist", "secrets.env"]);
     expect(r.copied).toEqual(["secrets.env"]);
     expect(r.skipped?.[0]?.path).toBe("nope-does-not-exist");

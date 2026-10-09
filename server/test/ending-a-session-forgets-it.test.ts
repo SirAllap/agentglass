@@ -15,6 +15,7 @@ import { test, expect, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 const SOCK = `agx-forget-${process.pid}`;
 const STATE = mkdtempSync(join(tmpdir(), "agx-forget-"));
@@ -46,25 +47,27 @@ afterAll(() => {
   try { rmSync(STATE, { recursive: true, force: true }); } catch { /* gone */ }
 });
 
-test("all three are remembered to start with", () => {
+const step = story();
+
+step("all three are remembered to start with", () => {
   expect(layout()).toEqual(["alsoend", "endme", "keepme"]);
 });
 
-test("ending one takes it out of the restore state", async () => {
+step("ending one takes it out of the restore state", async () => {
   expect(ctl.killSessionByName(sock, "endme", "keepme")).toBe(true);
   restore.forgetSession("endme");
   expect(live(), "the session itself is gone").toEqual(["alsoend", "keepme"]);
   expect(layout(), "AND IT COMES BACK AT THE NEXT START without this").toEqual(["alsoend", "keepme"]);
 });
 
-test("and a capture running a moment later cannot put it back", async () => {
+step("and a capture running a moment later cannot put it back", async () => {
   /* The race this would otherwise have: the sweep captures every two seconds,
      and a session merely absent is deliberately KEPT by the merge. */
   await restore.captureLayout();
   expect(layout()).toEqual(["alsoend", "keepme"]);
 });
 
-test("a session that is merely not running is still kept", async () => {
+step("a session that is merely not running is still kept", async () => {
   /* The whole point of the file, and what must not be broken by the above. */
   ctl.killSessionByName(sock, "alsoend", "keepme");   // ended, but NOT forgotten
   await restore.captureLayout();

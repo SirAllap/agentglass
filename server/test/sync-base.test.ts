@@ -1,4 +1,5 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect } from "bun:test";
+import { story } from "./story.ts";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,6 +20,9 @@ let repo: string, wt: string, gw: typeof import("../src/gitwork.ts");
  */
 
 const run = (dir: string, ...args: string[]) => spawnSync("git", ["-C", dir, ...args], { encoding: "utf8" });
+
+// One story: the base branch is set, moved on and merged in the same repository in turn.
+const step = story();
 
 beforeAll(async () => {
   repo = mkdtempSync(join(tmpdir(), "agx-base-"));
@@ -49,16 +53,16 @@ afterAll(() => {
 });
 
 describe("base branch", () => {
-  it("falls back to the trunk when nothing is configured", async () => {
+  step("falls back to the trunk when nothing is configured", async () => {
     expect((await gw.baseOf(repo, "CARD-1"))).toBe("main");
   });
 
-  it("gives the trunk itself no base", async () => {
+  step("gives the trunk itself no base", async () => {
     // Otherwise the trunk offers to merge itself into itself.
     expect((await gw.baseOf(repo, "main"))).toBe(null);
   });
 
-  it("honours an explicit override, because not every branch is cut from trunk", async () => {
+  step("honours an explicit override, because not every branch is cut from trunk", async () => {
     run(repo, "branch", "release-9");
     gw.setBase(repo, "CARD-1", "release-9");
     expect((await gw.baseOf(repo, "CARD-1"))).toBe("release-9");
@@ -81,7 +85,7 @@ describe("base branch", () => {
    * ladder falls through to the trunk. Tracking is written down at checkout
    * time and stays true.
    */
-  it("takes what the branch tracks over a guess at the shape of history", async () => {
+  step("takes what the branch tracks over a guess at the shape of history", async () => {
     run(repo, "branch", "feature-lane");
     run(repo, "worktree", "add", "-q", "-b", "CARD-2", `${repo}-CARD-2`, "feature-lane");
     run(`${repo}-CARD-2`, "branch", "--set-upstream-to=feature-lane", "CARD-2");
@@ -95,7 +99,7 @@ describe("base branch", () => {
     run(repo, "worktree", "prune");
   });
 
-  it("does not call a branch its own base when tracking is just where it pushes", async () => {
+  step("does not call a branch its own base when tracking is just where it pushes", async () => {
     /* Every pushed branch tracks a copy of ITSELF. Read as a base that would
        measure a branch against itself and report zero for ever — and zero is
        exactly what a wrong base usually reports. */
@@ -104,7 +108,7 @@ describe("base branch", () => {
     expect(await gw.baseOf(repo, "CARD-3")).not.toBe("CARD-3");
   });
 
-  it("treats clearing an override that was never set as done, not as an error", async () => {
+  step("treats clearing an override that was never set as done, not as an error", async () => {
     // `git config --unset` exits 5 on a missing key. Taken literally, the
     // picker's "work it out for me" would fail on every branch that never had
     // an override — which is most of them — and report it as a broken action.
@@ -113,7 +117,7 @@ describe("base branch", () => {
     expect((await gw.baseOf(repo, "CARD-1"))).toBe("main");
   });
 
-  it("counts what the base has and the branch does not", async () => {
+  step("counts what the base has and the branch does not", async () => {
     expect(await gw.behindBase(repo, "CARD-1", "main")).toBe(2);
     expect(await gw.behindBase(repo, "main", "main")).toBe(0);
   });
@@ -132,7 +136,7 @@ describe("base branch", () => {
 let stack: string, originDir: string, stackWt: string;
 
 describe("a base that has moved on", () => {
-  beforeAll(() => {
+  step.setup(() => {
     originDir = mkdtempSync(join(tmpdir(), "agx-origin-"));
     run(originDir, "init", "-q", "--bare", "-b", "master");
 
@@ -180,12 +184,7 @@ describe("a base that has moved on", () => {
     run(stack, "worktree", "add", "-q", stackWt, "card");
   });
 
-  afterAll(() => {
-    gw.setPrBaseHook(null);
-    for (const d of [stackWt, stack, originDir]) { try { rmSync(d, { recursive: true, force: true }); } catch { /* fine */ } }
-  });
-
-  it("measures the base as it is on the remote, not the stale copy on this disk", async () => {
+  step("measures the base as it is on the remote, not the stale copy on this disk", async () => {
     // The regression this whole change exists for. Inference can only ever name
     // a copy of the base the branch is already level with, so measuring the ref
     // it returns reported zero and the panel drew nothing.
@@ -197,7 +196,7 @@ describe("a base that has moved on", () => {
     expect(await gw.behindBase(stack, "card", "feature-base")).toBe(0);
   });
 
-  it("does not mistake a leftover review ref for the branch's base", async () => {
+  step("does not mistake a leftover review ref for the branch's base", async () => {
     // `--merged` matches any ref that happens to be an ancestor, and a working
     // repo is full of them: the pr1042-review someone left after reading a
     // diff sits a commit back, wins the fewest-commits test, and becomes a
@@ -208,14 +207,14 @@ describe("a base that has moved on", () => {
     run(stack, "branch", "-qD", "pr9-review");
   });
 
-  it("takes the base a pull request declares over anything read off history", async () => {
+  step("takes the base a pull request declares over anything read off history", async () => {
     gw.setPrBaseHook(async () => "master");
     gw.invalidateMerged();
     expect(await gw.baseOf(stack, "card")).toBe("origin/master");
     gw.setPrBaseHook(null);
   });
 
-  it("ignores a declared base the remote does not have", async () => {
+  step("ignores a declared base the remote does not have", async () => {
     // A stale row naming a deleted branch must not leave the panel measuring
     // against nothing; it falls back to what history can still show.
     gw.setPrBaseHook(async () => "branch-that-was-deleted");
@@ -224,7 +223,7 @@ describe("a base that has moved on", () => {
     gw.setPrBaseHook(null);
   });
 
-  it("lets a written-down override outrank even the pull request", async () => {
+  step("lets a written-down override outrank even the pull request", async () => {
     run(stack, "config", "branch.card.agentglassbase", "master");
     gw.setPrBaseHook(async () => "feature-base");
     gw.invalidateMerged();
@@ -234,13 +233,17 @@ describe("a base that has moved on", () => {
     gw.setPrBaseHook(null);
     run(stack, "config", "--unset", "branch.card.agentglassbase");
   });
+  step.setup(() => {
+    gw.setPrBaseHook(null);
+    for (const d of [stackWt, stack, originDir]) { try { rmSync(d, { recursive: true, force: true }); } catch { /* fine */ } }
+  });
 });
 
 describe("a stack with no remote at all", () => {
   // The published-only filter must not leave a purely local repo with no base
   // to name: there, every branch is local and the distinction does not exist.
   let solo: string;
-  beforeAll(() => {
+  step.setup(() => {
     solo = mkdtempSync(join(tmpdir(), "agx-solo-"));
     run(solo, "init", "-q", "-b", "main");
     run(solo, "config", "user.email", "t@example.com");
@@ -256,28 +259,28 @@ describe("a stack with no remote at all", () => {
     run(solo, "checkout", "-q", "-b", "card");
     c("c.txt", "card work");
   });
-  afterAll(() => { try { rmSync(solo, { recursive: true, force: true }); } catch { /* fine */ } });
 
-  it("still infers the branch it was stacked on", async () => {
+  step("still infers the branch it was stacked on", async () => {
     gw.invalidateMerged();
     expect(await gw.baseOf(solo, "card")).toBe("epic");
   });
+  step.setup(() => { try { rmSync(solo, { recursive: true, force: true }); } catch { /* fine */ } });
 });
 
 describe("undo merge", () => {
-  it("offers nothing when the tip is an ordinary commit", async () => {
+  step("offers nothing when the tip is an ordinary commit", async () => {
     // Not a merge: there is no single "before" to return to.
     expect(await gw.undoableMerge(repo, 1, null)).toBe(false);
   });
 
-  it("offers nothing for work that has been pushed", async () => {
+  step("offers nothing for work that has been pushed", async () => {
     // ahead === 0 means the remote already has it, and rewriting published
     // history is a different, worse problem than undoing a local mistake.
     // Upstream present and nothing ahead of it: the remote already has this.
     expect(await gw.undoableMerge(repo, 0, "origin/main")).toBe(false);
   });
 
-  it("undoes an unpushed merge exactly, and refuses once there is nothing to undo", async () => {
+  step("undoes an unpushed merge exactly, and refuses once there is nothing to undo", async () => {
     // Two branches that genuinely diverge, or the merge is a no-op and there
     // is nothing to undo.
     run(repo, "checkout", "-q", "-b", "undo-side");
@@ -305,7 +308,7 @@ describe("undo merge", () => {
     run(repo, "checkout", "-q", "main");
   });
 
-  it("refuses while the tree is dirty, since the undo is a hard reset", async () => {
+  step("refuses while the tree is dirty, since the undo is a hard reset", async () => {
     run(repo, "checkout", "-q", "-b", "undo-dirty");
     run(repo, "merge", "--no-edit", "undo-side");
     writeFileSync(join(repo, "scratch.txt"), "work in progress\n");
@@ -317,7 +320,7 @@ describe("undo merge", () => {
 });
 
 describe("syncFromBase", () => {
-  it("refuses when the checkout has uncommitted work", async () => {
+  step("refuses when the checkout has uncommitted work", async () => {
     writeFileSync(join(wt, "scratch.txt"), "wip\n");
     const r = await gw.syncFromBase(wt);
     expect(r.ok).toBe(false);
@@ -325,7 +328,7 @@ describe("syncFromBase", () => {
     rmSync(join(wt, "scratch.txt"));
   });
 
-  it("merges the base into the worktree's branch and clears the gap", async () => {
+  step("merges the base into the worktree's branch and clears the gap", async () => {
     expect(await gw.behindBase(repo, "CARD-1", "main")).toBe(2);
     const r = await gw.syncFromBase(wt);
     expect(r.ok).toBe(true);
@@ -334,7 +337,7 @@ describe("syncFromBase", () => {
     expect(Number(after.stdout.trim())).toBe(0);
   });
 
-  it("refuses a checkout with no base rather than guessing one", async () => {
+  step("refuses a checkout with no base rather than guessing one", async () => {
     const r = await gw.syncFromBase(repo); // repo is on main, which has no base
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/no base/i);

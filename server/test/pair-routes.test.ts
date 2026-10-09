@@ -17,6 +17,7 @@ import { INFO } from "../src/pairing.ts";
 import { freePort } from "./freePort.ts";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
+import { story } from "./story.ts";
 
 const TOKEN = "test-machine-token-not-a-real-one";
 let dir: string, base: string, proc: ReturnType<typeof Bun.spawn> | null = null;
@@ -119,8 +120,10 @@ async function pair(scope: "read" | "answer" | "full", label = "iPhone") {
   return { token: p.open(got.wrapped, t.id), ticket: t, deviceId: acc.device.id as string };
 }
 
+const step = story();
+
 describe("starting an invitation", () => {
-  test("needs the machine's own credential — a paired phone cannot invite another", () => {
+  step("needs the machine's own credential — a paired phone cannot invite another", () => {
     // Otherwise the first device through the door can quietly add the rest,
     // and the confirmation step that makes this safe happens somewhere nobody
     // at the machine is looking.
@@ -130,7 +133,7 @@ describe("starting an invitation", () => {
     });
   });
 
-  test("the code and the ticket are different things", async () => {
+  step("the code and the ticket are different things", async () => {
     const t = await jsonOf(await post("/pair/ticket", {}, TOKEN));
     expect(t.ok).toBe(true);
     expect(t.code).toMatch(/^[0-9]{6}$/);
@@ -139,13 +142,13 @@ describe("starting an invitation", () => {
 });
 
 describe("the phone's side, with no credential at all", () => {
-  test("can ask whether an invitation is open, and be told when it is not", async () => {
+  step("can ask whether an invitation is open, and be told when it is not", async () => {
     const t = await jsonOf(await post("/pair/ticket", {}, TOKEN));
     expect((await jsonOf(await get(`/pair/info?ticket=${t.id}`))).ok).toBe(true);
     expect((await jsonOf(await get("/pair/info?ticket=made-up"))).ok).toBe(false);
   });
 
-  test("a wrong code is refused and counts against the five", async () => {
+  step("a wrong code is refused and counts against the five", async () => {
     const t = await jsonOf(await post("/pair/ticket", {}, TOKEN));
     const wrong = t.code === "000000" ? "111111" : "000000";
     const r = await post("/pair/claim", { ticket: t.id, code: wrong, label: "x", pub: phone().pub });
@@ -156,7 +159,7 @@ describe("the phone's side, with no credential at all", () => {
     expect(j.error).toContain("4 tries left");
   });
 
-  test("everything else about the surface is still shut to it", async () => {
+  step("everything else about the surface is still shut to it", async () => {
     // The exemption is the pairing prefix and nothing more. If it leaked, a
     // device would not need to pair at all.
     for (const path of ["/sessions", "/gate/pending", "/remote/status"]) {
@@ -166,7 +169,7 @@ describe("the phone's side, with no credential at all", () => {
 });
 
 describe("what a paired phone can do", () => {
-  test("an answering phone reads, decides gates, and cannot merge or open a shell", async () => {
+  step("an answering phone reads, decides gates, and cannot merge or open a shell", async () => {
     const { token } = await pair("answer", "iPhone");
 
     // It is a real credential: the gate accepts it where it accepted nothing.
@@ -191,7 +194,7 @@ describe("what a paired phone can do", () => {
     }
   });
 
-  test("a look-only phone cannot decide a gate either", async () => {
+  step("a look-only phone cannot decide a gate either", async () => {
     const { token } = await pair("read", "an old tablet");
     expect((await get("/sessions", token)).status).toBe(200);
     const r = await post("/gate/decide", { id: "x", decision: "allow" }, token);
@@ -199,7 +202,7 @@ describe("what a paired phone can do", () => {
     expect((await jsonOf(r)).needs).toBe("answer");
   });
 
-  test("a scope the server does not recognise lands on the narrow one", async () => {
+  step("a scope the server does not recognise lands on the narrow one", async () => {
     // A typo in a scope name must not be how a phone ends up with a terminal.
     const p = phone();
     const t = await jsonOf(await post("/pair/ticket", {}, TOKEN));
@@ -211,32 +214,32 @@ describe("what a paired phone can do", () => {
     expect((await post("/prs/merge", { root: dir, number: 1, method: "squash" }, token)).status).toBe(403);
   });
 
-  test("a full device is the machine", async () => {
+  step("a full device is the machine", async () => {
     const { token } = await pair("full", "my laptop");
     // Reaches the handler rather than the gate: what comes back is about the
     // pull request, not about the device.
     expect((await post("/prs/merge", { root: dir, number: 1, method: "squash" }, token)).status).not.toBe(403);
   });
 
-  test("it knows what it is, which is how it learns it was forgotten", async () => {
+  step("it knows what it is, which is how it learns it was forgotten", async () => {
     const { token, deviceId } = await pair("answer", "Pixel");
     const me = await jsonOf(await get("/pair/whoami", token));
     expect(me).toMatchObject({ paired: true, machine: false, scope: "answer", label: "Pixel", id: deviceId });
   });
 
-  test("and what it is talking to: the label names the phone, so the computer's name travels apart", async () => {
+  step("and what it is talking to: the label names the phone, so the computer's name travels apart", async () => {
     const { token } = await pair("read", "Pixel");
     const me = await jsonOf(await get("/pair/whoami", token)) as { label: string; computer: string };
     expect(me.computer).toBe(hostname());
     expect(me.computer).not.toBe(me.label);
   });
 
-  test("the computer's name is not handed to a caller with no credential", async () => {
+  step("the computer's name is not handed to a caller with no credential", async () => {
     const res = await fetch(base + "/health");
     expect(JSON.stringify(await res.json())).not.toContain(hostname());
   });
 
-  test("nor by the route that does carry it, asked without one", async () => {
+  step("nor by the route that does carry it, asked without one", async () => {
     // /health is the obvious leak and whoami the likely one: it is the route
     // the name was added to, so it is the one a refactor of its auth would
     // open up.
@@ -247,7 +250,7 @@ describe("what a paired phone can do", () => {
 });
 
 describe("taking one back", () => {
-  test("forgetting one device stops it, and leaves the others alone", async () => {
+  step("forgetting one device stops it, and leaves the others alone", async () => {
     const a = await pair("answer", "the lost phone");
     const b = await pair("answer", "the phone in my hand");
     expect((await get("/sessions", a.token)).status).toBe(200);
@@ -261,7 +264,7 @@ describe("taking one back", () => {
     expect((await get("/sessions", TOKEN)).status).toBe(200);
   });
 
-  test("only from the machine — a phone cannot disconnect the desk", async () => {
+  step("only from the machine — a phone cannot disconnect the desk", async () => {
     const { token, deviceId } = await pair("full", "a device with everything");
     // Even at `full`: this is not a scope, it is a place. The button lives on
     // the side of the desk the user is sitting at.
@@ -270,7 +273,7 @@ describe("taking one back", () => {
     expect((await get("/sessions", token)).status).toBe(200);
   });
 
-  test("the machine's own token is not something pairing can revoke", async () => {
+  step("the machine's own token is not something pairing can revoke", async () => {
     const r = await post("/pair/forget", { id: "anything-at-all" }, TOKEN);
     expect(r.status).toBe(404);
     expect((await get("/sessions", TOKEN)).status).toBe(200);
@@ -278,7 +281,7 @@ describe("taking one back", () => {
 });
 
 describe("what the machine sees", () => {
-  test("the pending list and the device list are for this machine only", async () => {
+  step("the pending list and the device list are for this machine only", async () => {
     // The pending list carries the code. Serving it to anything that merely
     // holds a device credential would hand a paired phone the six digits it is
     // supposed to have needed a person for.
@@ -287,7 +290,7 @@ describe("what the machine sees", () => {
     expect((await get("/pair/state?ticket=", TOKEN)).status).toBe(200);
   });
 
-  test("names what is paired, and what it may do", async () => {
+  step("names what is paired, and what it may do", async () => {
     const s = await jsonOf(await get("/pair/state?ticket=", TOKEN));
     const labels = s.devices.map((d: { label: string }) => d.label);
     expect(labels).toContain("the phone in my hand");
@@ -300,7 +303,7 @@ describe("what the machine sees", () => {
     }
   });
 
-  test("and does NOT name the credential hash", async () => {
+  step("and does NOT name the credential hash", async () => {
     // This route used to answer the stored row verbatim, hash and all. It is
     // not brute-forceable — 32 random bytes through SHA-256 — but it is the
     // reason devices.json is written 0600, and there is no reason for it to be
@@ -321,7 +324,7 @@ describe("what the machine sees", () => {
     expect(JSON.stringify(acc)).not.toContain("hash");
   });
 
-  test("a request waiting on a person shows who is asking and the same code", async () => {
+  step("a request waiting on a person shows who is asking and the same code", async () => {
     const t = await jsonOf(await post("/pair/ticket", {}, TOKEN));
     await post("/pair/claim", { ticket: t.id, code: t.code, label: "someone's phone", pub: phone().pub });
     const s = await jsonOf(await get(`/pair/state?ticket=${t.id}`, TOKEN));
@@ -333,7 +336,7 @@ describe("what the machine sees", () => {
 });
 
 describe("the status pane no longer serves a key", () => {
-  test("nothing in /remote/status is the token, for any caller", async () => {
+  step("nothing in /remote/status is the token, for any caller", async () => {
     // The QR used to be `?token=<the machine's secret>`, so this answer had to
     // carry it. Pairing replaced that, and a URL that grants a terminal is
     // exactly what ends up in a screenshot of this pane.
@@ -359,7 +362,7 @@ describe("the ceremony a machine token cannot complete on its own", () => {
    * What it removes is the accident: the helpful agent, and the injected one
    * following an instruction it read in a pull request.
    */
-  test("a bare machine token cannot accept a pairing ticket", async () => {
+  step("a bare machine token cannot accept a pairing ticket", async () => {
     const ph = phone();
     const t = await jsonOf(await post("/pair/ticket", {}, TOKEN, DESK));
     const claimed = await jsonOf(await post("/pair/claim", { ticket: t.id, code: t.code, label: "Not a phone", pub: ph.pub }));

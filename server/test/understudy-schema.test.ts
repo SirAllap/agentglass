@@ -24,6 +24,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { story } from "./story.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "agx-understudy-schema-"));
 const dbPath = join(dir, "understudy.db");
@@ -49,8 +50,10 @@ const objects = (type: string): string[] =>
     .filter((n) => /^(idx_)?understudy/.test(n) && !/_fts_(config|data|docsize|idx)$/.test(n))
     .sort();
 
+const step = story();
+
 describe("the tables a fresh database gets", () => {
-  test("all twelve, plus the full-text index over the precedents", () => {
+  step("all twelve, plus the full-text index over the precedents", () => {
     // Enumerated rather than counted, and it earns that every time the list
     // changes: `understudy_proposals` arrived with the queue and this test is
     // where a new table has to be acknowledged out loud rather than appearing.
@@ -84,7 +87,7 @@ describe("the tables a fresh database gets", () => {
     ]);
   });
 
-  test("the three indexes the scorecard reads through", () => {
+  step("the three indexes the scorecard reads through", () => {
     // A scorecard query is per class over a window, and the panel also asks
     // "what happened to this pull request" — which is the third one. Without
     // them the ledger is a full scan on every frame, and the frame is pushed
@@ -115,7 +118,7 @@ describe("the tables a fresh database gets", () => {
 });
 
 describe("the defaults the ledger leans on", () => {
-  test("a row written with only a kind and a seal is already complete", () => {
+  step("a row written with only a kind and a seal is already complete", () => {
     // Everything a stub does not know has to have an answer, because the
     // scorecard counts over these columns and a NULL in `provenance` or `mode`
     // would drop the row out of a comparison rather than fail it loudly.
@@ -137,7 +140,7 @@ describe("the defaults the ledger leans on", () => {
     expect(row.status).toBeNull();
   });
 
-  test("a snapshot is keyed by its hash, so the same seal cannot land twice", () => {
+  step("a snapshot is keyed by its hash, so the same seal cannot land twice", () => {
     DB.db.run("INSERT INTO understudy_snapshots (hash, at, body) VALUES ('deadbeef', 2000, '{}')");
     expect(() => DB.db.run(
       "INSERT INTO understudy_snapshots (hash, at, body) VALUES ('deadbeef', 3000, '{}')")).toThrow();
@@ -147,7 +150,7 @@ describe("the defaults the ledger leans on", () => {
     expect(row.partition).toBe("global");
   });
 
-  test("the quarantine can say a refusal happened without saying what it was", () => {
+  step("the quarantine can say a refusal happened without saying what it was", () => {
     // The whole point of the table: a row here means "we refused to keep
     // something from this source", and there is nowhere in it to put the text
     // or the term that triggered it.
@@ -159,7 +162,7 @@ describe("the defaults the ledger leans on", () => {
       "SELECT term_index FROM understudy_quarantine WHERE at = 4000").get()!.term_index).toBe(-1);
   });
 
-  test("a precedent cannot be ingested twice from the same source", () => {
+  step("a precedent cannot be ingested twice from the same source", () => {
     // UNIQUE(source, source_ref, class) is the constraint that would be
     // genuinely painful to add later, and the one that makes a re-ingest safe
     // to run rather than a second copy of everything.
@@ -176,7 +179,7 @@ describe("the defaults the ledger leans on", () => {
 });
 
 describe("the full-text index", () => {
-  test("takes a row by hand and matches it", () => {
+  step("takes a row by hand and matches it", () => {
     // External content plus no triggers means whatever writes the precedents
     // writes this beside it, exactly as recordEvent does for events_fts. This
     // is that write, and it is the only thing proving the virtual table was
@@ -225,7 +228,7 @@ describe("opening a database that already has all of this in it", () => {
     return child.stdout.toString();
   };
 
-  test("a second boot keeps every row and adds no table", () => {
+  step("a second boot keeps every row and adds no table", () => {
     boot(`
       db.run("INSERT INTO understudy_ledger (kind, class, sealed_at) VALUES ('decision', 'C1', 10)");
       db.run("INSERT INTO understudy_snapshots (hash, at, body) VALUES ('cafe', 10, '{}')");

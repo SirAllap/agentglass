@@ -48,6 +48,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { TMUX_ISOLATED } from "./tmuxIsolated.ts";
+import { story } from "./story.ts";
 
 // Short, for the 108-byte unix socket path limit.
 const TMPDIR = `/tmp/agx-tmux-stale-${process.pid}`;
@@ -103,8 +104,10 @@ const client = () => ({ pid: 0, socket: SOCK, tty: "/dev/null" });
 const keyLine = (key: string) => out(["list-keys", "-T", "prefix"]).split("\n")
   .find((l) => ctl.parseBinding(l)?.key === key) ?? "";
 
+const step = story();
+
 describe.if(has)("a run that was killed does not leave tmux broken", () => {
-  test("the takeover is what a crash would leave behind", () => {
+  step("the takeover is what a crash would leave behind", () => {
     const before = keyLine(",");
     expect(ctl.setStatusLine(target(), false)).toBe(true);
     // This is the state a SIGKILL freezes: the row kept and blanked (tmux needs
@@ -117,7 +120,7 @@ describe.if(has)("a run that was killed does not leave tmux broken", () => {
     expect(before).toContain("command-prompt");
   });
 
-  test("the next run gives it back, without having been told what it took", () => {
+  step("the next run gives it back, without having been told what it took", () => {
     // No in-memory state is handed over — releaseStale is given only a client,
     // exactly as a fresh process would have it.
     ctl.releaseStale(client());
@@ -130,7 +133,7 @@ describe.if(has)("a run that was killed does not leave tmux broken", () => {
     expect(back).toContain('command-prompt -I "#W"');
   });
 
-  test("it sweeps once per server, so it cannot fight a live panel", () => {
+  step("it sweeps once per server, so it cannot fight a live panel", () => {
     // Second call on the same socket must be a no-op: by then this process may
     // legitimately own a session, and a sweep that ran again would release a
     // status line out from under a panel that is still using it.
@@ -141,7 +144,7 @@ describe.if(has)("a run that was killed does not leave tmux broken", () => {
     ctl.setStatusLine(target(), true);
   });
 
-  test("a session the panel never touched is not touched by the sweep either", () => {
+  step("a session the panel never touched is not touched by the sweep either", () => {
     expect(opt(theirs, "@agx-owned")).toBe("");
     // `status` unset means "whatever your config says" — the sweep must not
     // turn it on, because forcing a value is its own kind of override.

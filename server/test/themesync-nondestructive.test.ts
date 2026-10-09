@@ -15,6 +15,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 const ENV0 = { ...process.env };
 const home = mkdtempSync(join(tmpdir(), "agx-238-home-"));
@@ -58,8 +59,10 @@ afterAll(() => {
   }
 });
 
+const step = story();
+
 describe("syncTheme never edits the user's own config", () => {
-  test("switching themes many times leaves ~/.tmux.conf and nvim config byte-for-byte unchanged", async () => {
+  step("switching themes many times leaves ~/.tmux.conf and nvim config byte-for-byte unchanged", async () => {
     for (const [bg, primary, name] of [
       ["#0d1117", "#a78bfa", "Forest"],
       ["#1a1333", "#c4b5fd", "Ember"],
@@ -80,7 +83,7 @@ describe("syncTheme never edits the user's own config", () => {
     expect(readFileSync(userNvim, "utf8")).toBe(userNvimBody);
   });
 
-  test("it does write its own theme files, under ~/.config/agentglass only", () => {
+  step("it does write its own theme files, under ~/.config/agentglass only", () => {
     const written = readdirSync(ts.themeDir()).sort();
     expect(written).toContain("theme.tmux.conf");
     expect(written).toContain("theme.lua");
@@ -103,7 +106,7 @@ describe("syncTheme never edits the user's own config", () => {
    * call, and a write outside the scratch directory is refused outright while
    * NODE_ENV=test.
    */
-  test("a test that forgot to redirect its home cannot write the real one", async () => {
+  step("a test that forgot to redirect its home cannot write the real one", async () => {
     const saved = process.env.XDG_CONFIG_HOME;
     // Deliberately outside os.tmpdir(): this stands in for a real home. Reading
     // the actual one is not an option here, since by this point in a full suite
@@ -122,11 +125,11 @@ describe("syncTheme never edits the user's own config", () => {
     }
   });
 
-  test("no live tmux is repainted from a test, whatever the file says", () => {
+  step("no live tmux is repainted from a test, whatever the file says", () => {
     expect(ts.applyThemeTo([])).toBe(false);
   });
 
-  test("live reload targets the AgentGlass engine socket, never the default socket", () => {
+  step("live reload targets the AgentGlass engine socket, never the default socket", () => {
     const saved = process.env.AGENTGLASS_TMUX_SOCKET;
     process.env.AGENTGLASS_TMUX_SOCKET = "agx-theme-test";
     try {
@@ -161,14 +164,14 @@ describe("syncTheme never edits the user's own config", () => {
       }
     };
 
-    test("the engine's own socket is repainted with no opt-in at all", () => {
+    step("the engine's own socket is repainted with no opt-in at all", () => {
       withConf(null, () => {
         expect(ts.themeEngineSocket(ts.themeTmuxTarget())).toBe(true);
         expect(ts.themeRepaintAllowed(ts.themeTmuxTarget())).toBe(true);
       });
     });
 
-    test("the user's own server is not — a bare socket is exactly what terminal.ts passes", () => {
+    step("the user's own server is not — a bare socket is exactly what terminal.ts passes", () => {
       withConf(null, () => {
         expect(ts.themeEngineSocket([])).toBe(false);
         expect(ts.themeRepaintAllowed([])).toBe(false);
@@ -176,7 +179,7 @@ describe("syncTheme never edits the user's own config", () => {
       });
     });
 
-    test("and is, once they have pasted the snippet into their own config", () => {
+    step("and is, once they have pasted the snippet into their own config", () => {
       withConf(`set -g mouse on\n${ts.SNIPPETS.tmux}\n`, () => {
         expect(ts.themeRepaintAllowed([])).toBe(true);
       });
@@ -194,17 +197,17 @@ describe("syncTheme never edits the user's own config", () => {
     const HEADLESS = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/141.0.0.0 Safari/537.36";
     const CHROME = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
 
-    test("headless Chrome — the exact User-Agent our own harnesses send", () => {
+    step("headless Chrome — the exact User-Agent our own harnesses send", () => {
       expect(ts.automatedThemeClient(HEADLESS)).toBe(true);
     });
 
-    test("the other automation stacks that announce themselves", () => {
+    step("the other automation stacks that announce themselves", () => {
       for (const ua of ["Playwright/1.4", "python-selenium/4", "WebDriver", "PhantomJS/2.1", "puppeteer"]) {
         expect(ts.automatedThemeClient(ua)).toBe(true);
       }
     });
 
-    test("a browser someone is sitting at is not refused", () => {
+    step("a browser someone is sitting at is not refused", () => {
       expect(ts.automatedThemeClient(CHROME)).toBe(false);
       expect(ts.automatedThemeClient("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Safari/605.1.15")).toBe(false);
       // Absent is not automated: a phone or a CLI may send nothing, and the
@@ -214,7 +217,7 @@ describe("syncTheme never edits the user's own config", () => {
     });
   });
 
-  test("snippetStatus reports opt-in state read-only, without editing anything", () => {
+  step("snippetStatus reports opt-in state read-only, without editing anything", () => {
     // os.homedir() ignores $HOME on POSIX, so tmuxConfPath() resolves against the
     // real home — which is exactly why the guarantee matters: snippetStatus only
     // ever reads. It reports booleans and paths and touches nothing.
@@ -231,7 +234,7 @@ describe("syncTheme never edits the user's own config", () => {
 
 // --- the status bar belongs to the user -------------------------------------
 
-test("the theme colours the status bar without deciding what is in it", async () => {
+step("the theme colours the status bar without deciding what is in it", async () => {
   const { tmuxTheme, normalizeVars } = await import("../src/themesync.ts");
   const conf = tmuxTheme(normalizeVars({}), "Midnight Purple");
   // Styles: ours to set. They theme whatever the user has there.

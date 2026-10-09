@@ -36,6 +36,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { TEST_TERM } from "./tmuxTerm.ts";
 import { freePort } from "./freePort.ts";
+import { story } from "./story.ts";
 
 /*
  * Short, for the 108-byte unix socket path limit — a pid is five or six of
@@ -203,8 +204,10 @@ function phoneSocket(): Promise<WebSocket> {
   });
 }
 
+const step = story();
+
 describe.if(HAVE_TMUX)("a server that is killed outright is repaired by the next one", () => {
-  test("the fixture is a two-pane window on a wide desk, carrying nothing of ours", () => {
+  step("the fixture is a two-pane window on a wide desk, carrying nothing of ours", () => {
     expect(paneId).toMatch(/^%\d+$/);
     expect(win).toMatch(/^@\d+$/);
     expect({ geom: geom(win), windowSize: sizeOpt(win), mark: mark(win) })
@@ -212,7 +215,7 @@ describe.if(HAVE_TMUX)("a server that is killed outright is repaired by the next
     expect(tmux("list-sessions", "-F", "#{session_name}").trim()).toBe("work");
   });
 
-  test("a fitted phone writes the way back onto the window itself", async () => {
+  step("a fitted phone writes the way back onto the window itself", async () => {
     await phoneSocket();
     await Bun.sleep(2500);
     /*
@@ -226,7 +229,7 @@ describe.if(HAVE_TMUX)("a server that is killed outright is repaired by the next
       .toEqual({ geom: "80x24", windowSize: "manual", mark: "none" });
   }, 60_000);
 
-  test("SIGKILL leaves the window pinned — that is the bug, and it must be real", async () => {
+  step("SIGKILL leaves the window pinned — that is the bug, and it must be real", async () => {
     server!.kill("SIGKILL");
     await server!.exited;
     /*
@@ -250,7 +253,7 @@ describe.if(HAVE_TMUX)("a server that is killed outright is repaired by the next
     expect(tmux("list-sessions", "-F", "#{session_name}").trim().split("\n")).toEqual(["work"]);
   }, 30_000);
 
-  test("the next server puts it back at boot, unprompted", async () => {
+  step("the next server puts it back at boot, unprompted", async () => {
     server = await startServer();
     // No client, no panel, no phone — just the boot. The sweep is synchronous
     // and runs before `/health` can be answered, so by the time `startServer`
@@ -276,7 +279,7 @@ describe.if(HAVE_TMUX)("a server that is killed outright is repaired by the next
     expect(tmux("list-panes", "-t", "work", "-F", "#{pane_id}").trim().split("\n")).toHaveLength(2);
   }, 60_000);
 
-  test("and the window follows a client's size again afterwards", async () => {
+  step("and the window follows a client's size again afterwards", async () => {
     /*
      * The proof that an unset option is not cosmetic. A window left `manual`
      * sits at its old size and ignores every client from then on — the part of
@@ -293,7 +296,7 @@ describe.if(HAVE_TMUX)("a server that is killed outright is repaired by the next
     }
   }, 30_000);
 
-  test("a window the app never marked is not touched, however it is set", async () => {
+  step("a window the app never marked is not touched, however it is set", async () => {
     /*
      * THE CONVERSE, and the thing that would make this whole change a bug
      * rather than a fix: a user may set `window-size manual` themselves, and a
@@ -318,7 +321,7 @@ describe.if(HAVE_TMUX)("a server that is killed outright is repaired by the next
     tmux("kill-window", "-t", mine);
   }, 90_000);
 
-  test("a mark INHERITED from a global option claims nothing", async () => {
+  step("a mark INHERITED from a global option claims nothing", async () => {
     /*
      * The way the ownership check could have been wrong, measured rather than
      * imagined: `#{@agx-had-size}` in a format reads the EFFECTIVE value, so

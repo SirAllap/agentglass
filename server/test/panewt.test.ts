@@ -344,14 +344,14 @@ describe("paneHeldSessions", () => {
   // its edits on disk. The pane is the evidence — but only while the agent the
   // note was written for is still the one running in it.
   test("the session in a pane whose agent still runs where the note says", () => {
-    notePaneAgent({ pane: "%9921", sessionId: "held", transcriptPath: "/t.jsonl", cwd: REPO });
-    expect(paneHeldSessions([{ paneId: "%9921", agentCwds: [REPO] }]).has("held")).toBe(true);
+    notePaneAgent({ pane: "%9931", sessionId: "held", transcriptPath: "/t.jsonl", cwd: REPO });
+    expect(paneHeldSessions([{ paneId: "%9931", agentCwds: [REPO] }]).has("held")).toBe(true);
   });
 
   test("a reused pane id with an agent somewhere else holds nobody", () => {
-    notePaneAgent({ pane: "%9922", sessionId: "yesterday", transcriptPath: "/t.jsonl", cwd: REPO });
-    expect(paneHeldSessions([{ paneId: "%9922", agentCwds: [WT] }]).has("yesterday")).toBe(false);
-    expect(paneHeldSessions([{ paneId: "%9922" }]).size).toBe(0);
+    notePaneAgent({ pane: "%9932", sessionId: "yesterday", transcriptPath: "/t.jsonl", cwd: REPO });
+    expect(paneHeldSessions([{ paneId: "%9932", agentCwds: [WT] }]).has("yesterday")).toBe(false);
+    expect(paneHeldSessions([{ paneId: "%9932" }]).size).toBe(0);
   });
 
   test("the same pane id on another tmux server is not this pane's session", () => {

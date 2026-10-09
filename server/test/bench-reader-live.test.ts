@@ -24,6 +24,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { freePort } from "./freePort.ts";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
+import { story } from "./story.ts";
 
 /* Short, because a unix socket path is 108 bytes — see tmux-shutdown-restore. */
 const TMPDIR = `/tmp/agx-rdr-${process.pid}`;
@@ -131,8 +132,10 @@ afterAll(() => {
   try { rmSync(TMPDIR, { recursive: true, force: true }); } catch { /* nothing there */ }
 });
 
+const step = story();
+
 describe.skipIf(!HAVE)("the bench reader runs nvim on the file asked for", () => {
-  test("a reader session left as a plain shell is replaced by nvim on that exact file", async () => {
+  step("a reader session left as a plain shell is replaced by nvim on that exact file", async () => {
     /* The state the button met: the checkout's reader session exists, and it
        is a shell (started with no command). */
     tmux("new-session", "-d", "-s", READER, "-c", project);
@@ -149,7 +152,7 @@ describe.skipIf(!HAVE)("the bench reader runs nvim on the file asked for", () =>
     expect(pane?.start).not.toContain(json);
   }, 20_000);
 
-  test("an editor already running is attached to, not restarted", async () => {
+  step("an editor already running is attached to, not restarted", async () => {
     const before = await until(reader, (p) => p?.current === "nvim");
     expect(before?.current).toBe("nvim");
     const { ws, frame } = await openReader(json);
@@ -161,7 +164,7 @@ describe.skipIf(!HAVE)("the bench reader runs nvim on the file asked for", () =>
     expect(reader()?.pid).toBe(before!.pid);
   }, 20_000);
 
-  test("with nothing to open, it says so instead of leaving a shell", async () => {
+  step("with nothing to open, it says so instead of leaving a shell", async () => {
     tmux("kill-session", "-t", `=${READER}`);
     const { ws, frame } = await openReader(join(home, "Documents", "evidence", "gone.md"));
     ws.close();

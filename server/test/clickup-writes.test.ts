@@ -34,7 +34,12 @@ const server = Bun.serve({
 const BASE = `http://127.0.0.1:${server.port}`;
 const ok = (body: unknown = {}) => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
 
-beforeEach(() => {
+/** The first comment a process sends also asks who is in the workspace (to turn
+ *  @names into mentions) and keeps the answer for an hour, so whichever test
+ *  commented first counted one request more than it sent. */
+let rosterRead = false;
+
+beforeEach(async () => {
   seen = [];
   reply = () => ok({ id: "t1", name: "a card" });
   C.__setCredentialsPath(join(dir, "credentials.json"));
@@ -43,6 +48,11 @@ beforeEach(() => {
   CV.__setViewsPath(join(dir, "views.json"));
   CV.setWritesAllowed(true);
   CU.__setClickUpBase(BASE);
+  if (!rosterRead) {
+    rosterRead = true;
+    await CU.commentOn("t1", "warm the roster");
+    seen = [];
+  }
 });
 afterEach(() => { CU.__reset(); });
 afterAll(() => {

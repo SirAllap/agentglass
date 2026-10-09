@@ -12,7 +12,13 @@ import * as Board from "../src/agentboard.ts";
 import * as Pane from "../src/panewt.ts";
 import { db } from "../src/db.ts";
 
-beforeEach(() => { db.query("DELETE FROM agent_status").run(); });
+beforeEach(() => {
+  db.query("DELETE FROM agent_status").run();
+  // board() sweeps by the REAL clock the first time it is read in a process, and
+  // these tests date their rows in 2023: whichever test read it first lost its
+  // rows to that sweep. Read it here, while the table is empty, so it is spent.
+  Board.board();
+});
 
 describe("what an agent says about itself", () => {
   test("is a status, not a log: saying it again replaces the line", () => {

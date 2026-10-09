@@ -20,6 +20,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 let repo: string, wt: string, home: string;
 let mod: typeof import("../src/agentsessions.ts");
@@ -71,13 +72,15 @@ afterAll(() => {
   for (const d of [wt, repo, home]) { try { rmSync(d, { recursive: true, force: true }); } catch { /* fine */ } }
 });
 
+const step = story();
+
 describe("sessions for a project", () => {
-  it("finds the ones that ran in a worktree, not only the main checkout", async () => {
+  step("finds the ones that ran in a worktree, not only the main checkout", async () => {
     const rows = await mod.sessionsForProject(repo);
     expect(rows.map((r) => r.cwd).sort()).toEqual([repo, wt].sort());
   });
 
-  it("names each one the way /resume does — the CLI's summary when there is one", async () => {
+  step("names each one the way /resume does — the CLI's summary when there is one", async () => {
     const rows = await mod.sessionsForProject(repo);
     const main = rows.find((r) => r.cwd === repo)!;
     expect(main.title).toBe("Rounding at the cart boundary");
@@ -86,7 +89,7 @@ describe("sessions for a project", () => {
     expect(main.opening).toBe("why is the total a cent low");
   });
 
-  it("falls back to the first real user message, skipping the plumbing", async () => {
+  step("falls back to the first real user message, skipping the plumbing", async () => {
     /* A slash command is not what the session was about. Titling forty sessions
        "/clear" is the failure this avoids. */
     const rows = await mod.sessionsForProject(repo);
@@ -94,12 +97,12 @@ describe("sessions for a project", () => {
     expect(card.title).toBe("port the runbook to the wiki");
   });
 
-  it("says where each one got to, which is what 'which one was I on' asks", async () => {
+  step("says where each one got to, which is what 'which one was I on' asks", async () => {
     const rows = await mod.sessionsForProject(repo);
     expect(rows.find((r) => r.cwd === wt)!.last).toBe("moved the last three sections");
   });
 
-  it("uses the name somebody gave it, over any guess", async () => {
+  step("uses the name somebody gave it, over any guess", async () => {
     /*
      * `/rename` APPENDS `{"type":"custom-title",…}` — it does not rewrite the
      * head — so a name has to be read from the tail, and the last one wins.
@@ -119,12 +122,12 @@ describe("sessions for a project", () => {
     expect(rows.find((r) => r.id.startsWith("33333333"))!.title).toBe("handover");
   });
 
-  it("hands back an id `--resume` can take", async () => {
+  step("hands back an id `--resume` can take", async () => {
     const rows = await mod.sessionsForProject(repo);
     expect(rows.every((r) => /^[0-9a-f-]{36}$/.test(r.id))).toBe(true);
   });
 
-  it("refuses a path outside the workspace rather than listing it", async () => {
+  step("refuses a path outside the workspace rather than listing it", async () => {
     // What comes back becomes a `-c` and a command line.
     expect(await mod.sessionsForProject("/etc")).toEqual([]);
   });

@@ -58,6 +58,9 @@ describe("the filter dropdowns", () => {
   });
 
   test("an event carrying a value they already list does not either", () => {
+    // Listed by this test itself: it used to count on the one above having
+    // ingested the app and model first.
+    ingest("probe-app", "PreToolUse", "probe-model");
     getFilterOptions();
     ingest("probe-app", "PreToolUse", "probe-model");
     const { queries } = countingDistincts(() => getFilterOptions());

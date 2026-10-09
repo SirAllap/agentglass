@@ -15,6 +15,7 @@ import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
 import { CANVAS_LIMITS, loopingIds, validateScene, type CanvasScene } from "../../shared/pluginCanvas.ts";
 import { FLUSH_MS } from "../src/plugin-canvas.ts";
+import { story } from "./story.ts";
 
 let dir: string, base: string, port: number, proc: ReturnType<typeof Bun.spawn> | null = null;
 type Json = Record<string, any>;
@@ -128,8 +129,10 @@ afterAll(async () => {
   try { rmSync(dir, { recursive: true, force: true }); } catch { /* fine */ }
 });
 
+const step = story();
+
 describe("the window sees what a plugin draws, live", () => {
-  test("a snapshot on subscribe, then the plugin's operations as they happen", async () => {
+  step("a snapshot on subscribe, then the plugin's operations as they happen", async () => {
     const w = await openWindow();
     w.ws.send(JSON.stringify({ type: "subscribe", plugin: "big", panel: "board" }));
     const snap = await w.next((f) => f.type === "snapshot" && f.plugin === "big");
@@ -143,7 +146,7 @@ describe("the window sees what a plugin draws, live", () => {
     w.ws.close();
   });
 
-  test("eight panels on one socket, and an ordinary request still answers at once", async () => {
+  step("eight panels on one socket, and an ordinary request still answers at once", async () => {
     const w = await openWindow();
     for (const p of PANELS) w.ws.send(JSON.stringify({ type: "subscribe", plugin: "big", panel: p.id }));
     for (const p of PANELS) await w.next((f) => f.type === "snapshot" && f.panel === p.id);
@@ -153,7 +156,7 @@ describe("the window sees what a plugin draws, live", () => {
     w.ws.close();
   });
 
-  test("a stopped plugin's panel is `gone`, and its scene does not outlive it", async () => {
+  step("a stopped plugin's panel is `gone`, and its scene does not outlive it", async () => {
     const w = await openWindow();
     w.ws.send(JSON.stringify({ type: "subscribe", plugin: "small", panel: "board" }));
     await w.next((f) => f.type === "snapshot" && f.plugin === "small");
@@ -169,11 +172,11 @@ describe("the window sees what a plugin draws, live", () => {
 });
 
 describe("a plugin cannot reach what is not its own", () => {
-  test("its token does not open the live socket, whatever scope it declared", async () => {
+  step("its token does not open the live socket, whatever scope it declared", async () => {
     for (const name of ["big", "small"]) expect(await refused({ Authorization: `Bearer ${tokenOf(name)}` }), name).toBe(true);
   });
 
-  test("nor read the drawn panels or settings of the others; the full-scope one is the case that used to pass", async () => {
+  step("nor read the drawn panels or settings of the others; the full-scope one is the case that used to pass", async () => {
     for (const name of ["big", "small"]) {
       for (const p of ["/plugins/panels", "/plugins/settings", "/plugins/panels/live"]) {
         const r = await fetch(base + p, { headers: { Authorization: `Bearer ${tokenOf(name)}` } });
@@ -183,7 +186,7 @@ describe("a plugin cannot reach what is not its own", () => {
     }
   });
 
-  test("the name comes from the token: `small` cannot draw on `big`'s panels, and a panel it did not declare as a canvas is refused", async () => {
+  step("the name comes from the token: `small` cannot draw on `big`'s panels, and a panel it did not declare as a canvas is refused", async () => {
     const t = tokenOf("small");
     expect((await ops(t, "extra1", [add("x")])).status).toBe(400);
     expect((await ops(t, "still", [add("x")])).status).toBe(400);
@@ -194,7 +197,7 @@ describe("a plugin cannot reach what is not its own", () => {
 });
 
 describe("a plugin that is stopped while it is still sending", () => {
-  test("the batch that finishes arriving afterwards is refused, and the next run starts on an empty board", async () => {
+  step("the batch that finishes arriving afterwards is refused, and the next run starts on an empty board", async () => {
     const t = tokenOf("small");
     const body = JSON.stringify({ ops: [add("ghost")] });
     let send!: (chunk: string) => void, end!: () => void;
@@ -219,7 +222,7 @@ describe("a plugin that is stopped while it is still sending", () => {
 });
 
 describe("exploit attempts against the scene", () => {
-  test("script, style, URLs, markdown, prototype tricks: every one refused, and the scene is untouched", async () => {
+  step("script, style, URLs, markdown, prototype tricks: every one refused, and the scene is untouched", async () => {
     const t = tokenOf("big");
     const before = await (async () => { const w = await openWindow(); w.ws.send(JSON.stringify({ type: "subscribe", plugin: "big", panel: "board" })); const s = await w.next((f) => f.type === "snapshot" && f.plugin === "big"); w.ws.close(); return JSON.stringify(s.scene); })();
     const attacks: unknown[][] = [
@@ -249,7 +252,7 @@ describe("exploit attempts against the scene", () => {
     expect(({} as Json).polluted).toBeUndefined();
   });
 
-  test("a body over the cap is 413 without the server parsing it, and the server is still answering", async () => {
+  step("a body over the cap is 413 without the server parsing it, and the server is still answering", async () => {
     const t = tokenOf("big");
     const huge = JSON.stringify({ ops: [add("h", { text: "x".repeat(70 * 1024) })] });
     const r = await post("/plugin/self/panel/board/ops", huge, t);
@@ -267,7 +270,7 @@ describe("exploit attempts against the scene", () => {
     expect((await fetch(base + "/health")).status).toBe(200);
   });
 
-  test("more operations than the budget is 429 with a wait, then the plugin may go on", async () => {
+  step("more operations than the budget is 429 with a wait, then the plugin may go on", async () => {
     const t = tokenOf("big");
     let status = 0, retry = 0;
     for (let i = 0; i < 12 && status !== 429; i++) {
@@ -281,7 +284,7 @@ describe("exploit attempts against the scene", () => {
     expect((await ops(t, "board", [{ op: "set", id: "hello", props: { text: "calm" } }])).status).toBe(200);
   });
 
-  test("an empty batch is not free: a loop of them is refused too", async () => {
+  step("an empty batch is not free: a loop of them is refused too", async () => {
     const t = tokenOf("small");
     let status = 0;
     for (let i = 0; i < 400 && status !== 429; i++) status = (await ops(t, "board", [])).status;
@@ -311,7 +314,7 @@ describe("the board vocabulary against the same real server", () => {
   const BOARD = { id: "line", type: "board", w: 1180, h: 560 };
   const part = (id: string, x: number) => ({ id, type: "part", parent: "line", x, y: 40, w: 300, h: 200 });
 
-  test("a machine is accepted: board, parts, a bay of tokens, a trace with points", async () => {
+  step("a machine is accepted: board, parts, a bay of tokens, a trace with points", async () => {
     expect(await fire([{ op: "clear" }, node(BOARD), node(part("inbox", 40)), node(part("queue", 500)),
       node({ id: "slots", type: "bay", parent: "queue", cols: 4, rows: 3 }), node({ id: "slots2", type: "bay", parent: "inbox", cols: 2, rows: 2 }),
       node({ id: "wire", type: "edge", parent: "line", from: "inbox", to: "queue", kind: "trace", points: [[340, 140], [420, 140], [420, 100], [500, 100]] }),
@@ -321,7 +324,7 @@ describe("the board vocabulary against the same real server", () => {
     expect(validateScene(s).ok).toBe(true);
   });
 
-  test("every attempt on the new types is 400, the scene is untouched and the server answers", async () => {
+  step("every attempt on the new types is 400, the scene is untouched and the server answers", async () => {
     const before = JSON.stringify(await scene());
     const pts = (points: unknown) => [node({ id: "e2", type: "edge", parent: "line", from: "inbox", to: "queue", points })];
     const attacks: unknown[][] = [];
@@ -351,7 +354,7 @@ describe("the board vocabulary against the same real server", () => {
     expect((await fetch(base + "/health")).status).toBe(200);
   });
 
-  test("a snapshot a window would replay with a label in a bay is refused by name", async () => {
+  step("a snapshot a window would replay with a label in a bay is refused by name", async () => {
     const s = await scene();
     expect(validateScene(s).ok).toBe(true);
     const r = validateScene([...s, { id: "stray", type: "label", text: "no", parent: "slots" }]);
@@ -361,7 +364,7 @@ describe("the board vocabulary against the same real server", () => {
     expect(r2.ok ? "" : r2.error).toContain("a part lives directly in a board");
   });
 
-  test("70 busy cores are accepted and the loop budget still caps what runs", async () => {
+  step("70 busy cores are accepted and the loop budget still caps what runs", async () => {
     const cores = Array.from({ length: 70 }, (_, i) => node({ id: `core${i}`, type: "core", parent: "queue", activity: "busy" }));
     expect(await fire(cores.slice(0, 35))).toBe(200);
     expect(await fire(cores.slice(35))).toBe(200);
@@ -374,7 +377,7 @@ describe("the board vocabulary against the same real server", () => {
     expect(await fire([{ op: "remove", id: "core0" }])).toBe(200);
   });
 
-  test("a batch of 100 rides on one edge is accepted and the scene does not grow", async () => {
+  step("a batch of 100 rides on one edge is accepted and the scene does not grow", async () => {
     const nodes = (await scene()).length;
     const rides = Array.from({ length: 100 }, (_, i) => ({ op: "move", id: "n1", parent: i % 2 ? "slots2" : "slots", via: "wire", ms: 2000, easing: "ease-in-out" }));
     expect(await fire(rides)).toBe(200);

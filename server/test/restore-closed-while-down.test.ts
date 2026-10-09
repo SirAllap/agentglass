@@ -17,6 +17,7 @@ import { mkdirSync, rmSync, readFileSync } from "node:fs";
 import { LANTERN_PROMPT_MARK } from "../src/lanternmark.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 const SOCKET = `agx-down-${process.pid}`;
 const TMPDIR = join(tmpdir(), `agx-down-tmp-${process.pid}`);
@@ -60,7 +61,9 @@ afterAll(async () => {
 
 const settle = async () => { for (let i = 0; i < 50 && restore.isRestoring(); i++) await Bun.sleep(100); };
 
-test("a window and a session closed while the app was down are not rebuilt at the next boot", async () => {
+const step = story();
+
+step("a window and a session closed while the app was down are not rebuilt at the next boot", async () => {
   /* A first boot: nothing recorded, nothing running, so whatever tmux starts
      next is the desk's. */
   await restore.restoreLayout("lazy");
@@ -86,7 +89,7 @@ test("a window and a session closed while the app was down are not rebuilt at th
   expect(names()).not.toContain(Q);
 }, 30_000);
 
-test("a window lost with the tmux server itself is still rebuilt", async () => {
+step("a window lost with the tmux server itself is still rebuilt", async () => {
   expect((await pane.tmux(["new-window", "-d", "-t", `=${P}:`, "-n", "extra", "-c", "/tmp", "sleep", "300"])).ok).toBe(true);
   await restore.captureLayout();
   expect(windowsOf(P)).toContain("extra");
