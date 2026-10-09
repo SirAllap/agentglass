@@ -5,7 +5,7 @@
  * control-levels-live.test.ts.
  */
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { controlRefusal, controlSwitch, makeRefusalThrottle, parseControlCmd, UI_MAX_LEVEL } from "../src/control.ts";
 import {
@@ -234,14 +234,17 @@ describe("what a refusal says", () => {
 // ── the switch cannot be moved from inside ───────────────────────────────────
 
 const ROOT = join(import.meta.dir, "..", "..");
-function walk(dir: string, out: string[] = []): string[] {
-  for (const n of readdirSync(dir)) {
-    if (n === "node_modules" || n === "dist" || n.startsWith(".")) continue;
-    const p = join(dir, n);
-    if (statSync(p).isDirectory()) walk(p, out);
-    else if (/\.(ts|tsx|js|mjs|cjs)$/.test(n) || !n.includes(".")) out.push(p);
-  }
-  return out;
+/*
+ * The source under `dir`, as git tracks it. Walking the disk instead read the
+ * compiled server an install leaves in electron/staging and electron/dist-app:
+ * a binary that carries control.ts inside it, so "only control.ts reads the
+ * variables" failed on every machine that had run `make desktop-install`.
+ */
+function walk(dir: string): string[] {
+  const r = Bun.spawnSync(["git", "ls-files", "-z", "--", relative(ROOT, dir)], { cwd: ROOT });
+  return r.stdout.toString().split("\0")
+    .filter((f) => { const n = f.split("/").pop() ?? ""; return /\.(ts|tsx|js|mjs|cjs)$/.test(n) || (n !== "" && !n.includes(".")); })
+    .map((f) => join(ROOT, f));
 }
 
 /** Comment lines out, so a sentence about the variable is not a use of it. */
