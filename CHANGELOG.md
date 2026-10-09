@@ -14,6 +14,13 @@ kept in one place.
 
 ## Released
 
+- **v0.23.0** — **Pull requests you can finish from one screen.** The merge box says who moves next and asks before skipping a human review; a failed check opens onto the failing test and can be re-run on the base; ClickUp settings become a workflow map built from your own statuses; agents get a gated door into the app's own window; the phone app grows up.
+  - **House UI pass.** One control height, two border weights, one Button, surface tokens, and tinted text that clears 4.5:1 in every theme, light ones included.
+  - **Pull requests.** A GitHub-like conversation timeline, a Checks tab with a verdict, CI metrics judged against each check's own history, a bell that watches CI or comments, stacked pull requests, Check on base and Unstick.
+  - **ClickUp.** Generic settings instead of one workspace's names, a workflow map of steps and action blocks, link recognition in any workspace, and far fewer requests while a board sits idle.
+  - **Plugins and agents.** Live canvas panels, secrets in a server-only store, per-plugin unboxed consent, and the UI control channel with levels the owner sets.
+  - **Elsewhere**, the finder becomes a workspace, pollers rest while the window is away, Hermes joins the chat providers, and a pre-release security and wording pass over the server, the web UI, the desktop shell and the phone.
+
 - **v0.22.0** — **The browser learns to script itself.** The in-app browser gets reusable page templates, scriptable page tools and an honest identity header; Settings gets a full reorganization; a plugin's sandbox is now enforced, and its network box holds under review; the phone gets on-device dictation and a camera attach.
   - **Browser page templates and page tools.** `newtab --from-template` opens a visible twin of a lane's ephemeral fork; new primitives let an agent read, click and fill a page over the CLI or MCP; shared-open no longer hangs.
   - **Settings redesigned.** Search finds the row you typed, one control column, four-card notifications, six nav groups, gear links from panels.
