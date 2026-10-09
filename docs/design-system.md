@@ -61,7 +61,7 @@ card; the remark in a neutral `--surface-card` card; the small events (opened,
 force-pushed, review requested) sitting on the rail at a fraction of a
 remark's weight. Status — approved, changes requested, pushed — goes on the
 rail's node icon, tinted with an ink, not on the card's border or fill. The
-geometry is the `TL_*` constants in `web/src/components/PrPanel.tsx`.
+geometry is the `TL_*` constants in `web/src/components/workspace/Chrome.tsx`.
 
 ## Tokens
 
@@ -143,8 +143,9 @@ Reach for these before writing a `<button>`, an `<input>` or a colour:
   `FilterField`.
 - Borders are `EDGE` or `LINE`; fills are `--surface-*`; tinted text is a
   `--*-ink`; a stacking order is a `LAYER` entry.
-- A conversation or history is the `agx-tl` timeline in `PrPanel.tsx`, not a
-  new list of bordered cards.
+- A conversation or history is the `agx-tl` timeline in `Chrome.tsx`, used by
+  `PrPanel.tsx`, `TasksPanel.tsx` and `ChatPanel.tsx`, not a new list of
+  bordered cards.
 
 A view that needs something these cannot express adds it to `Chrome.tsx`,
 where the next view will find it, and adds its row to the table above.

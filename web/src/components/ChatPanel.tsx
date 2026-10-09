@@ -50,7 +50,7 @@ import { CloseButton } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { inOpenProjects } from "../lib/projectPick.ts";
 import { BoltIcon, CopyIcon, IconLabel, PinIcon, RefreshIcon, StarIcon } from "../lib/glyphIcons.tsx";
-import { INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
+import { INPUT, INPUT_STYLE, EDGE, LINE, TL_AVATAR, TL_CSS } from "./workspace/Chrome.tsx";
 
 // Claude's list arrives from the server, like the other two agents'. It is data
 // there (shared/claude-models.json), filtered to the models whose shutdown date
@@ -142,27 +142,18 @@ const selStyle = { background: "color-mix(in srgb, var(--bg3) 50%, transparent)"
  *
  * Every other conversation this workspace shows — a pull request, a tracker
  * card — puts the speaker's face in a column of its own, outside a neutral
- * card, on a rail that runs behind the cards (`TL_*` in PrPanel.tsx). This was
+ * card, on a rail that runs behind the cards (`TL_*` / `TL_CSS` in
+ * workspace/Chrome.tsx, also used by PrPanel.tsx and TasksPanel.tsx). This was
  * the one view still doing it the messenger way: a filled bubble on the right
  * for you, a tinted one on the left for the model. Next to a panel that reads
  * like GitHub, that read like a different product.
  *
- * The four numbers below are literal copies of PrPanel's TL_AVATAR / TL_GAP /
- * TL_RAIL / TL_SPACE, not a second definition of that token — this batch's
- * scope is this file alone, and exporting them from PrPanel.tsx is the next
- * thing after this, not done here.
+ * This file used to carry its own literal copy of those numbers and rules
+ * under an `agx-chat-*` prefix — the same geometry, independently
+ * rediscovered. It now uses the shared `.agx-tl` / `.agx-ev` / `.agx-av`
+ * classes directly; a chat has no nested threads or small on-rail events, so
+ * it never needs `.agx-node` or `.agx-tiny` from that shared string.
  */
-const CHAT_TL_AVATAR = 40;
-const CHAT_TL_GAP = 12;
-const CHAT_TL_RAIL = 16;
-const CHAT_TL_SPACE = 16;
-const CHAT_TL_CSS = `
-.agx-chat-tl{position:relative;padding-left:${CHAT_TL_AVATAR + CHAT_TL_GAP}px}
-.agx-chat-tl::before{content:"";position:absolute;left:${CHAT_TL_AVATAR + CHAT_TL_GAP + CHAT_TL_RAIL - 1}px;top:0;bottom:0;width:2px;background:var(--surface-line)}
-.agx-chat-ev{position:relative;margin-bottom:${CHAT_TL_SPACE}px}
-.agx-chat-ev:last-child{margin-bottom:0}
-.agx-chat-av{position:absolute;left:-${CHAT_TL_AVATAR + CHAT_TL_GAP}px;top:0;display:flex}
-`;
 
 /** Who is speaking, on the rail. A chat role is not a GitHub login — there is
  *  no picture to fetch, only "you" or the agent — so this is initials on a
@@ -174,7 +165,7 @@ function RoleAvatar({ role, agent }: { role: "user" | "assistant"; agent: AgentK
   const tone = role === "user" ? "var(--primary)" : "var(--info)";
   return (
     <span className="shrink-0 rounded-full inline-flex items-center justify-center" aria-hidden
-      style={{ width: CHAT_TL_AVATAR, height: CHAT_TL_AVATAR, background: tone, color: "var(--bg)", fontSize: CHAT_TL_AVATAR * 0.36, fontWeight: 600 }}>
+      style={{ width: TL_AVATAR, height: TL_AVATAR, background: tone, color: "var(--bg)", fontSize: TL_AVATAR * 0.36, fontWeight: 600 }}>
       {initials}
     </span>
   );
@@ -1537,7 +1528,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                   <div ref={scrollRef} onScroll={onScroll}
                     className="agx-scroll flex-1 min-h-0 overflow-y-auto px-5 py-4">
                     <div ref={contentRef} className="min-h-full flex flex-col justify-end gap-3">
-                      {active && <style>{CHAT_TL_CSS}</style>}
+                      {active && <style>{TL_CSS}</style>}
                       {active && !active.messages.length && (
                         <div className="grid place-items-center text-center t-dim2 text-[12px] py-10">
                           {usable
@@ -1546,7 +1537,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                         </div>
                       )}
                       {!!active?.messages.length && (
-                        <div className="agx-chat-tl">
+                        <div className="agx-tl">
                           {active.messages.map((m, i) => (
                             <div key={i}>
                               {/* The seam between what was said before this panel
@@ -1566,8 +1557,8 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                                   speaker's face sits outside the card, on the rail;
                                   the card itself is the one neutral surface every
                                   remark gets, whoever sent it. */}
-                              <div className="agx-chat-ev">
-                                <span className="agx-chat-av"><RoleAvatar role={m.role} agent={active.agent} /></span>
+                              <div className="agx-ev">
+                                <span className="agx-av"><RoleAvatar role={m.role} agent={active.agent} /></span>
                                 <div className="min-w-0 rounded-xl px-3.5 py-2.5 text-[12px] leading-relaxed break-words"
                                   style={{ background: "var(--surface-card)", border: EDGE, color: "var(--text)" }}>
                                   <div className="text-[10px] uppercase tracking-wider mb-1 flex items-center gap-2"
