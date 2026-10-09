@@ -4,6 +4,7 @@ import { Portal } from "./Portal.tsx";
 import { friendly } from "../lib/labels.ts";
 import { fmtTime, fmtMs, fmtUsd, fmtTokens, fmtEq, eqTitle, agentKey, typeColor } from "../lib/format.ts";
 import { CloseButton } from "./CloseButton.tsx";
+import { EDGE } from "./workspace/Chrome.tsx";
 
 function Row({ k, v }: { k: string; v: React.ReactNode }) {
   return (
@@ -32,7 +33,7 @@ export function EventModal({ event, onClose }: { event: WatchEvent | null; onClo
               initial={{ opacity: 0, scale: 0.94, y: 16 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 10 }}
               transition={{ type: "spring", stiffness: 320, damping: 30 }}
               className="w-[min(680px,92vw)] max-h-[82vh] rounded-xl flex flex-col pointer-events-auto"
-              style={{ background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
+              style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
             >
               <div className="flex items-center justify-between px-5 py-3 border-b" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                 <div className="flex items-center gap-2.5">
@@ -64,7 +65,7 @@ export function EventModal({ event, onClose }: { event: WatchEvent | null; onClo
                 </div>
                 <div className="text-[10px] uppercase tracking-wider t-dim2 mb-1">payload</div>
                 <pre className="text-[10.5px] leading-relaxed rounded-lg p-3 overflow-auto max-h-[38vh]"
-                  style={{ background: "var(--bg)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", color: "var(--text3)" }}>
+                  style={{ background: "var(--bg)", border: EDGE, color: "var(--text3)" }}>
                   {JSON.stringify(event.payload, null, 2)}
                 </pre>
               </div>

@@ -18,7 +18,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Portal } from "./Portal.tsx";
 import { LAYER } from "../lib/layers.ts";
 import { matchPalette, paletteEntries, type GitKind, type GitRowState } from "../lib/gitActions.ts";
-import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { INPUT, INPUT_STYLE, LINE } from "./workspace/Chrome.tsx";
 
 export interface PaletteRow {
   kind: GitKind;
@@ -121,7 +121,7 @@ export function GitPalette({ rows, onClose }: { rows: PaletteRow[]; onClose: () 
           ))}
         </div>
         <div className="px-3 py-1.5 text-[9.5px] flex gap-3"
-          style={{ color: "var(--text3)", borderTop: "1px solid color-mix(in srgb, var(--text) 12%, transparent)" }}>
+          style={{ color: "var(--text3)", borderTop: LINE }}>
           <span>↑↓ move</span><span>↵ run</span><span>esc close</span>
           <span className="ml-auto">{hits.length} of {entries.length}</span>
         </div>

@@ -6,7 +6,7 @@ import { api } from "../lib/api.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { BranchIcon, DoneIcon, IconLabel } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
 
 // Commits the repo's LIVE working tree (not the telemetry snapshot): the agent's
 // changed-file list is only the entry point — we read `git status` fresh and
@@ -128,7 +128,7 @@ export function CommitModal({ open, onClose, paths }: { open: boolean; onClose: 
                 initial={{ opacity: 0, scale: 0.96, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.97, y: 8 }}
                 transition={{ type: "spring", stiffness: 340, damping: 30 }}
                 className="w-[min(760px,94vw)] max-h-[min(760px,92vh)] rounded-xl flex flex-col pointer-events-auto"
-                style={{ background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
+                style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
               >
                 {/* header */}
                 <div className="flex items-center gap-2.5 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
@@ -152,7 +152,7 @@ export function CommitModal({ open, onClose, paths }: { open: boolean; onClose: 
                         <span className="font-mono" style={{ color: "var(--primary-ink)" }}>{result.shortSha}</span> · {result.summary}
                       </div>
                       <div className="flex items-center gap-2 mt-2">
-                        <button onClick={load} className="px-3 py-1.5 rounded-lg text-[11px]" style={{ background: "color-mix(in srgb, var(--bg3) 45%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }}>Commit more</button>
+                        <button onClick={load} className="px-3 py-1.5 rounded-lg text-[11px]" style={{ background: "color-mix(in srgb, var(--bg3) 45%, transparent)", border: EDGE, color: "var(--text)" }}>Commit more</button>
                         <button onClick={onClose} className="px-3 py-1.5 rounded-lg text-[11px]" style={{ background: "var(--primary)", color: "var(--bg)" }}>Done</button>
                       </div>
                     </div>
@@ -177,7 +177,7 @@ export function CommitModal({ open, onClose, paths }: { open: boolean; onClose: 
                           <span className="text-[10px] t-dim2 uppercase tracking-wide">Files in this commit</span>
                           <button onClick={toggleAll} className="text-[10px] t-dim2 hover:opacity-80">{allOn ? "Select none" : "Select all"} · {selPaths.length}/{repo.files.length}</button>
                         </div>
-                        <div className="rounded-lg p-1 space-y-0.5 max-h-[220px] overflow-y-auto" style={{ background: "color-mix(in srgb, var(--bg3) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>
+                        <div className="rounded-lg p-1 space-y-0.5 max-h-[220px] overflow-y-auto" style={{ background: "color-mix(in srgb, var(--bg3) 22%, transparent)", border: EDGE }}>
                           {repo.files.length === 0 && <div className="t-dim2 text-center py-6 text-[11px]">Working tree clean — nothing to commit</div>}
                           {repo.files.map((f) => <FileRow key={f.path} f={f} on={sel.has(f.path)} onToggle={() => toggle(f.path)} />)}
                         </div>
@@ -199,7 +199,7 @@ export function CommitModal({ open, onClose, paths }: { open: boolean; onClose: 
                           value={body} onChange={(e) => setBody(e.target.value)}
                           placeholder="Extended description (optional)…" rows={3}
                           className="w-full px-3 py-1.5 rounded-lg text-[11.5px] outline-none resize-none"
-                          style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }}
+                          style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: EDGE, color: "var(--text)" }}
                         />
                       </div>
 
@@ -238,7 +238,7 @@ export function CommitModal({ open, onClose, paths }: { open: boolean; onClose: 
                     <div className="flex items-center gap-2">
                       {confirming ? (
                         <>
-                          <button onClick={() => setConfirming(false)} className="px-3 py-1.5 rounded-lg text-[11px]" style={{ background: "color-mix(in srgb, var(--bg3) 45%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text3)" }}>Cancel</button>
+                          <button onClick={() => setConfirming(false)} className="px-3 py-1.5 rounded-lg text-[11px]" style={{ background: "color-mix(in srgb, var(--bg3) 45%, transparent)", border: EDGE, color: "var(--text3)" }}>Cancel</button>
                           <button onClick={doCommit} disabled={busy} className="px-3 py-1.5 rounded-lg text-[11px] font-medium" style={{ background: amending ? "var(--warning)" : "var(--error)", color: "#fff", opacity: busy ? 0.6 : 1 }}>
                             {busy ? (amending ? "Amending…" : "Committing…") : amending ? `Yes, amend last commit` : `Yes, commit ${selPaths.length}`}
                           </button>

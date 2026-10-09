@@ -16,6 +16,7 @@ import { api } from "../lib/api.ts";
 import type { GitLogEntry } from "../../../shared/types.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { usePoll } from "../lib/usePoll.ts";
+import { EDGE } from "./workspace/Chrome.tsx";
 
 const time = (ms: number) => new Date(ms).toLocaleTimeString(undefined, { hour12: false });
 
@@ -56,7 +57,7 @@ export function CommandLog({ open, onClose }: { open: boolean; onClose: () => vo
         <button onClick={() => setWritesOnly((v) => !v)}
           title={writesOnly ? "Also show the read-only queries the panel runs while polling" : "Show only commands that can change the repository"}
           className="text-[10px] px-1.5 py-0.5 rounded"
-          style={{ color: writesOnly ? "var(--text)" : "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 28%, transparent)" }}>
+          style={{ color: writesOnly ? "var(--text)" : "var(--text3)", border: EDGE }}>
           {writesOnly ? "Writes only" : "Everything"}
         </button>
         <CloseButton onClick={onClose} title="Hide (@)" className="ml-auto" />

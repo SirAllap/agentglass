@@ -8,6 +8,7 @@ import { Spinner } from "../Spinner.tsx";
 import { PluginTree } from "./PluginTree.tsx";
 import { PanelGlyph } from "./panelGlyph.tsx";
 import { PluginMark } from "./PluginMark.tsx";
+import { EDGE, LINE } from "../workspace/Chrome.tsx";
 
 /**
  * The rail's home for plugins: every panel an enabled plugin declared, one
@@ -114,7 +115,7 @@ export function PluginsView({ active }: { active: boolean }) {
   return (
     <div className="flex flex-col h-full min-h-0">
       <header className="flex items-center gap-2 px-4 h-[44px] shrink-0 min-w-0"
-        style={{ borderBottom: "1px solid var(--surface-line)", background: "var(--surface-nav)" }}>
+        style={{ borderBottom: LINE, background: "var(--surface-nav)" }}>
         <div role="tablist" className="flex items-center gap-1 min-w-0 overflow-x-auto flex-1">
           {panels.map((p) => {
             const on = current && keyOf(p) === keyOf(current);
@@ -146,7 +147,7 @@ export function PluginsView({ active }: { active: boolean }) {
             <span className="truncate max-w-[18ch]" title={`Published by ${current.publisher} — not verified`}>{current.publisher}</span>
             <button type="button" onClick={() => openSettings(`plugin:${current.plugin}`)}
               className="agx-btn rounded inline-flex items-center leading-none text-[10.5px] px-2 h-[24px] ml-1"
-              style={{ color: "var(--text2)", border: "1px solid var(--surface-line)", background: "transparent" }}>
+              style={{ color: "var(--text2)", border: EDGE, background: "transparent" }}>
               Settings
             </button>
           </div>
@@ -169,7 +170,7 @@ export function PluginsView({ active }: { active: boolean }) {
                 </div>
                 <button type="button" onClick={() => openSettings("plugins")}
                   className="agx-btn rounded inline-flex items-center leading-none text-[11px] px-3 h-[28px] mt-1"
-                  style={{ color: "var(--text)", border: "1px solid var(--surface-line)", background: "transparent" }}>
+                  style={{ color: "var(--text)", border: EDGE, background: "transparent" }}>
                   Open plugin settings
                 </button>
               </div>

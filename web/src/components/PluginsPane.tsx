@@ -21,7 +21,7 @@ import { api } from "../lib/api.ts";
 import { fmtAgo } from "../lib/format.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import type { DeviceScope, InstallSource, PublicPlugin } from "../../../shared/types.ts";
-import { INPUT, INPUT_STYLE, RefreshButton } from "./workspace/Chrome.tsx";
+import { INPUT, INPUT_STYLE, RefreshButton, EDGE } from "./workspace/Chrome.tsx";
 
 /** The one-line "From …" a reviewer reads — a local path plainly, a git
  *  source with its ref if one was pinned, a market install naming the list
@@ -52,7 +52,7 @@ const SCOPE_WORD: Record<DeviceScope, string> = { read: "Read", answer: "Answer"
  *  somebody else made — name, publisher, description, a state, a decision —
  *  and that is what this shape is for everywhere else it appears. */
 const CARD_STYLE: React.CSSProperties = {
-  border: "1px solid var(--surface-line)",
+  border: EDGE,
   background: "var(--surface-card)",
   boxShadow: "var(--surface-lift)",
 };
@@ -106,7 +106,7 @@ function AddPluginCard({ onInstalled, open, setOpen, prefill }: {
           style={INPUT_STYLE} />
         <button onClick={install} disabled={busy || !source.trim()}
           className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80 disabled:opacity-50"
-          style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+          style={{ color: "var(--text)", border: EDGE }}>
           {busy ? "Installing…" : "Install"}
         </button>
         <button onClick={() => { setOpen(false); setError(null); }} disabled={busy}
@@ -548,7 +548,7 @@ function PluginCard({ plugin, masterOn, onChanged, onSettings }: {
             </button>
             <button onClick={() => { setConfirmRemove(false); setDropSettings(false); }} disabled={busy}
               className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80"
-              style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+              style={{ color: "var(--text2)", border: EDGE }}>
               Keep it
             </button>
           </span>
@@ -570,7 +570,7 @@ function PluginCard({ plugin, masterOn, onChanged, onSettings }: {
             {hasSettings && (
               <button onClick={onSettings}
                 className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80"
-                style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+                style={{ color: "var(--text)", border: EDGE }}>
                 Settings
               </button>
             )}
@@ -578,7 +578,7 @@ function PluginCard({ plugin, masterOn, onChanged, onSettings }: {
               <button onClick={update} disabled={busy || updating}
                 title="Re-fetch this plugin at its recorded source. A changed declaration will need review again before it can run."
                 className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80 disabled:opacity-50"
-                style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+                style={{ color: "var(--text2)", border: EDGE }}>
                 {updating ? "Updating…" : "Update"}
               </button>
             )}

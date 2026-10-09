@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { Portal } from "./Portal.tsx";
 import { Markdown } from "../lib/markdown.tsx";
 import { CloseButton } from "./CloseButton.tsx";
+import { EDGE } from "./workspace/Chrome.tsx";
 
 /**
  * The notes for one release, in a dialog.
@@ -59,7 +60,7 @@ export function ReleaseNotesModal({ open, tag, notes, title = "What's new", load
                 initial={{ opacity: 0, scale: 0.96, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.97, y: 8 }}
                 transition={{ type: "spring", stiffness: 340, damping: 30 }}
                 className="w-[720px] max-w-[95vw] rounded-xl flex flex-col pointer-events-auto overflow-hidden"
-                style={{ maxHeight: "min(78vh, 640px)", background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
+                style={{ maxHeight: "min(78vh, 640px)", background: "var(--surface-card)", border: EDGE, boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
 
                 <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                   <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>{title}</span>

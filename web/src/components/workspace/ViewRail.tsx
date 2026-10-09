@@ -9,6 +9,7 @@ import { PortsIcon, ResourcesIcon } from "../Header.tsx";
 import { ContextMenu as RailMenu, MenuItem } from "../ContextMenu.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { railActiveColor } from "../../lib/railAccent.ts";
+import { LINE } from "./Chrome.tsx";
 
 const EMPTY_CHORDS = {};
 const BY_ID = new Map(VIEWS.map((v) => [v.id, v] as const));
@@ -480,7 +481,7 @@ export function ViewRail({
           {/* Says what the move costs before you make it: a number is a
               property of the top group, not of the view. */}
           <div className="mt-1 pt-1.5 px-2 pb-0.5 text-[9.5px]"
-            style={{ color: "var(--text3)", borderTop: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+            style={{ color: "var(--text3)", borderTop: LINE }}>
             {chordFor(menu.id)
               ? `${chordLabel(chordFor(menu.id))} · drag to rearrange`
               : "no number outside the top group · drag to rearrange"}

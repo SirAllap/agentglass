@@ -12,11 +12,10 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api.ts";
 import { bumpSavedReplies } from "./PrPanel.tsx";
-import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
 
 interface Reply { id: string; title: string; text: string }
 
-const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 
 export function SavedRepliesPane({ open }: { open: boolean }) {
   const [replies, setReplies] = useState<Reply[] | null>(null);
@@ -83,7 +82,7 @@ export function SavedRepliesPane({ open }: { open: boolean }) {
       ) : (
         <div className="flex flex-col gap-1 px-3">
           {replies.map((r) => (
-            <div key={r.id} className="rounded-lg px-2.5 py-2 flex items-start gap-2" style={{ border: edge(14) }}>
+            <div key={r.id} className="rounded-lg px-2.5 py-2 flex items-start gap-2" style={{ border: EDGE }}>
               <div className="min-w-0 flex-1">
                 <div className="text-[11.5px]" style={{ color: "var(--text)" }}>{r.title}</div>
                 {/* Two lines of it, so a list of twelve is still a list. The whole
@@ -95,7 +94,7 @@ export function SavedRepliesPane({ open }: { open: boolean }) {
               </div>
               <button onClick={() => editRow(r)} disabled={busy}
                 className="agx-btn shrink-0 px-2 py-0.5 rounded text-[10.5px]"
-                style={{ color: "var(--text2)", border: edge(20) }}>Edit</button>
+                style={{ color: "var(--text2)", border: EDGE }}>Edit</button>
               <button onClick={() => void remove(r.id)} disabled={busy}
                 title="Delete this saved reply"
                 className="agx-btn shrink-0 px-2 py-0.5 rounded text-[10.5px]"
@@ -116,7 +115,7 @@ export function SavedRepliesPane({ open }: { open: boolean }) {
         <textarea value={text} onChange={(e) => setText(e.target.value)} rows={5}
           placeholder="What goes in the box. Markdown works here."
           className="px-2 py-1.5 rounded text-[11px] outline-none resize-y"
-          style={{ background: "var(--surface-inset)", color: "var(--text)", border: edge(16), fontFamily: "var(--diff-font, ui-monospace, monospace)" }} />
+          style={{ background: "var(--surface-inset)", color: "var(--text)", border: EDGE, fontFamily: "var(--diff-font, ui-monospace, monospace)" }} />
         {err && <div className="text-[10.5px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
         <div className="flex items-center gap-1.5">
           <button onClick={() => void save()} disabled={busy || !text.trim()}

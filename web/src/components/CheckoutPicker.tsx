@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CHIP, CHIP_SURFACE, CHIP_SURFACE_CLS, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { CHIP, CHIP_SURFACE, CHIP_SURFACE_CLS, INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import type { GitRepoRef, GitBranch } from "../../../shared/types.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
@@ -212,7 +212,7 @@ export function CheckoutPicker({
           onKeyDown={onKey}
           style={{
             zIndex: 30, background: "var(--surface-card)",
-            border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)",
+            border: EDGE,
             minWidth: 320, maxWidth: "min(86vw, 760px)", maxHeight: 420, overflow: "hidden",
           }}
         >
@@ -256,7 +256,7 @@ export function CheckoutPicker({
                   title={r.worktreeOf ? `worktree of ${r.worktreeOf}` : "main checkout"}
                   style={r.worktreeOf
                     ? { color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }
-                    : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
+                    : { color: "var(--text3)", border: EDGE }}
                 >{r.worktreeOf ? "WT" : "REPO"}</span>
                 {/* A worktree IS its branch — that's the whole point of one per
                     ticket — so the branch gets the wide column and the folder
@@ -281,7 +281,7 @@ export function CheckoutPicker({
               <>
                 {/* Under their own heading, and last. These are the only rows in
                     this menu that write to disk. */}
-                <div className="px-2.5 pt-2 pb-1 text-[10px] uppercase tracking-wider t-dim2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>Branches — checkout here</div>
+                <div className="px-2.5 pt-2 pb-1 text-[10px] uppercase tracking-wider t-dim2" style={{ borderTop: LINE }}>Branches — checkout here</div>
                 {shownBranches.map((b, i) => {
                   const at = shownRepos.length + i;
                   return (
@@ -296,7 +296,7 @@ export function CheckoutPicker({
                       className="w-full text-left px-2.5 py-1.5 flex items-center gap-2 disabled:opacity-50"
                       style={{ background: at === cursor ? "color-mix(in srgb, var(--primary) 9%, transparent)" : "transparent" }}
                     >
-                      <span className="shrink-0 text-[8.5px] leading-none px-1 py-0.5 rounded" title="local branch — checked out in the current directory" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>BR</span>
+                      <span className="shrink-0 text-[8.5px] leading-none px-1 py-0.5 rounded" title="local branch — checked out in the current directory" style={{ color: "var(--text3)", border: EDGE }}>BR</span>
                       <span className="min-w-0 flex-1 truncate font-medium" style={{ color: "var(--text)" }} title={b.name}>{b.name}</span>
                       {branches?.gone?.(b) && <span className="shrink-0 text-[10px] px-1 rounded" style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 12%, transparent)" }}>gone</span>}
                     </button>

@@ -21,6 +21,7 @@ import { api } from "../../lib/api.ts";
 import { currentNoteEditor, noteMode, termOptions } from "../../lib/termPrefs.ts";
 import { NOTE_SLOT } from "../../lib/benchStore.ts";
 import { BenchTerm } from "./BenchTerm.tsx";
+import { LINE } from "../workspace/Chrome.tsx";
 
 type Save = "clean" | "typing" | "saving" | "saved" | "failed";
 
@@ -140,7 +141,7 @@ function BenchNoteText({ root, active, fellBack }: {
         className="flex-1 min-h-0 w-full resize-none bg-transparent outline-none px-4 py-3"
         style={{ color: "var(--text)", fontFamily: tp.fontFamily, fontSize: tp.fontSize, lineHeight: 1.55 }} />
       <div className="flex items-center gap-3 px-3 py-1.5 text-[10px] shrink-0"
-        style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 14%, transparent)", color: "var(--text4)" }}>
+        style={{ borderTop: LINE, color: "var(--text4)" }}>
         <span>{root.split("/").filter(Boolean).pop()}</span>
         {fellBack && <span>nvim not found, using the built-in editor</span>}
         <span className="ml-auto" style={{ color: state === "failed" ? "var(--error)" : undefined }}>

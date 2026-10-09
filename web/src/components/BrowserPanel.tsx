@@ -66,7 +66,7 @@ import {
   SpinnerIcon, StopIcon, TargetIcon, FolderIcon, ContainerIcon, SpaceIcon, CameraIcon, PanelIcon, UpIcon, DownIcon, SplitIcon,
 } from "./browser/icons.tsx";
 import { CheckboxIcon, DoneIcon, SwapIcon } from "../lib/glyphIcons.tsx";
-import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 
 /** Electron's `<webview>` is not in React's JSX catalogue, and its methods are
  *  not on HTMLElement. Narrowed to the handful actually called here rather than
@@ -2363,7 +2363,7 @@ export function BrowserView({ active: viewOn, scope }: {
         */}
       {!f.open && f.items.filter((i) => liveFor(i)).map((i) => shelfRow(i, depth + 1))}
       {f.open && (
-        <div style={{ marginLeft: depth * 9 + 8, borderLeft: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", paddingLeft: 4 }}>
+        <div style={{ marginLeft: depth * 9 + 8, borderLeft: LINE, paddingLeft: 4 }}>
           {f.items.map((i, n) => (
             <div key={i.id}>{line("folder", f.id, n)}{shelfRow(i, 0, { to: "folder", id: f.id, index: n })}</div>
           ))}
@@ -2408,7 +2408,7 @@ export function BrowserView({ active: viewOn, scope }: {
     <Portal>
       <div className="fixed inset-0" style={{ zIndex: 40 }} onClick={() => setMenuOpen(false)} />
       <div className="fixed rounded-lg text-[11px] py-1 shadow-2xl"
-        style={{ top: menuAtXY.top, right: menuAtXY.right, zIndex: 41, width: Math.max(230, Math.min(320, sideW - 8)), background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }}>
+        style={{ top: menuAtXY.top, right: menuAtXY.right, zIndex: 41, width: Math.max(230, Math.min(320, sideW - 8)), background: "var(--surface-card)", border: EDGE }}>
         {[
           { key: "home", node: menuRow(<HomeIcon size={14} />, "Home"), hint: "", run: () => go(homePage()) },
           { key: "new", node: menuRow(<span style={{ fontSize: 13, lineHeight: 1 }}>+</span>, "New tab"), hint: "Ctrl+T", run: () => setOmni("new") },
@@ -2441,7 +2441,7 @@ export function BrowserView({ active: viewOn, scope }: {
           { key: "zoom", node: menuRow(null, "Zoom back to 100%"), hint: "Ctrl+0", run: () => applyZoom(0) },
           { key: "hide", node: menuRow(<PanelIcon size={14} />, "Hide this bar"), hint: "Ctrl+S", run: () => { setSideOpen(false); setSidebarOpen(false); } },
         ].map((it) => (it.sep ? (
-          <div key={it.key} className="my-1" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }} />
+          <div key={it.key} className="my-1" style={{ borderTop: LINE }} />
         ) : (
           <button key={it.key} onClick={() => { setMenuOpen(false); it.run?.(); }}
             className="w-full text-left px-3 py-1.5 flex items-center gap-3" style={{ color: "var(--text2)" }}>
@@ -2449,7 +2449,7 @@ export function BrowserView({ active: viewOn, scope }: {
             {it.hint && <span className="text-[9.5px] shrink-0" style={{ color: "var(--text4)" }}>{it.hint}</span>}
           </button>
         )))}
-        <div className="my-1" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }} />
+        <div className="my-1" style={{ borderTop: LINE }} />
         <div className="px-3 pt-1 pb-0.5 text-[9px] tracking-wider uppercase" style={{ color: "var(--text4)" }}>Viewport</div>
         {VIEWPORTS.map((v) => (
           <button key={v.name} onClick={() => { setMenuOpen(false); setViewport(v); }}
@@ -2460,7 +2460,7 @@ export function BrowserView({ active: viewOn, scope }: {
             {v.width ? <span className="text-[9.5px] tabular-nums" style={{ color: "var(--text4)" }}>{v.width}px</span> : null}
           </button>
         ))}
-        <div className="my-1" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }} />
+        <div className="my-1" style={{ borderTop: LINE }} />
         {[
           { label: "Import a sidebar from Zen…", run: () => { void bringSidebar(); } },
           { label: "Import logins from a browser…", run: () => openSettings("browser") },
@@ -2475,7 +2475,7 @@ export function BrowserView({ active: viewOn, scope }: {
 
   const sideBody = (
     <div className="flex flex-col h-full min-h-0"
-      style={{ background: "color-mix(in srgb, var(--bg2) 65%, var(--bg))", borderLeft: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
+      style={{ background: "color-mix(in srgb, var(--bg2) 65%, var(--bg))", borderLeft: LINE }}>
       {/*
         * The head of the bar, laid out the way Zen lays its own out: the menu
         * and the collapse on the left, the three navigation controls on the
@@ -2520,7 +2520,7 @@ export function BrowserView({ active: viewOn, scope }: {
           className="min-w-0 flex-1 flex items-center gap-1.5 px-2 rounded-lg text-left"
           style={{
             height: 26, background: "color-mix(in srgb, var(--bg3) 45%, transparent)",
-            border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)",
+            border: EDGE,
           }}>
           <span className="shrink-0 flex items-center" style={{ color: active?.url.startsWith("https://") ? "var(--success)" : "var(--text3)" }}>
             {active?.url.startsWith("https://") ? <LockIcon /> : <GlobeIcon />}
@@ -2603,7 +2603,7 @@ export function BrowserView({ active: viewOn, scope }: {
 
         {/* The folders of THIS space, and the pins that are not in one. */}
         {true && (
-          <div className="mt-1.5" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", paddingTop: 4 }}>
+          <div className="mt-1.5" style={{ borderTop: LINE, paddingTop: 4 }}>
             {shelfTree(shelf.folders, 0)}
             <div data-drop-to="loose" className="rounded-md" style={{ minHeight: carry ? 26 : 0, ...lit("loose") }}>
               {shelf.loose.map((i, n) => (
@@ -2618,7 +2618,7 @@ export function BrowserView({ active: viewOn, scope }: {
           </div>
         )}
 
-        <div className="mt-1" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }} />
+        <div className="mt-1" style={{ borderTop: LINE }} />
 
         {/* What is open and not kept. Everything on the shelf above is drawn
             there instead — one page, one row. */}
@@ -2776,7 +2776,7 @@ export function BrowserView({ active: viewOn, scope }: {
           list it adds to. Between the pages and the spaces, which is where a
           hand goes looking for "and one more". */}
       <div className="shrink-0 flex items-center gap-1 px-1.5 pt-1"
-        style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>
+        style={{ borderTop: LINE }}>
         <button onClick={() => setOmni("new")} title="New tab (Ctrl+T)"
           className="flex-1 min-w-0 flex items-center gap-1.5 px-1.5 py-1 rounded-md text-[10.5px]"
           style={{ color: "var(--text3)" }}>
@@ -2795,7 +2795,7 @@ export function BrowserView({ active: viewOn, scope }: {
           one still needs a box, and it appears only while you are naming. */}
       {naming !== null && (
         <div className="shrink-0 px-1.5 py-1.5"
-          style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+          style={{ borderTop: LINE }}>
           <input autoFocus value={naming} placeholder="Name the space, then Enter"
             onChange={(e) => setNaming(e.target.value)}
             onBlur={() => setNaming(null)}
@@ -2852,7 +2852,7 @@ export function BrowserView({ active: viewOn, scope }: {
           style={{
             bottom: 14, zIndex: 34, minWidth: 460, maxWidth: "min(680px, 92%)",
             background: "color-mix(in srgb, var(--bg2) 96%, black)",
-            border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)",
+            border: EDGE,
           }}>
           <div className="flex items-center gap-2">
             <input ref={findRef} value={find}
@@ -2931,8 +2931,8 @@ export function BrowserView({ active: viewOn, scope }: {
         {hover && (
           <div className="absolute bottom-0 left-0 max-w-[70%] truncate text-[10.5px] px-2 py-1 rounded-tr-md pointer-events-none"
             style={{ zIndex: 20, color: "var(--text2)", background: "var(--surface-card)",
-              borderTop: "1px solid color-mix(in srgb, var(--text) 12%, transparent)",
-              borderRight: "1px solid color-mix(in srgb, var(--text) 12%, transparent)" }}
+              borderTop: LINE,
+              borderRight: LINE }}
             title={hover}>{displayUrl(hover)}</div>
         )}
         {note && (
@@ -3040,9 +3040,9 @@ export function BrowserView({ active: viewOn, scope }: {
               <button onClick={() => { const other = splitId!; setSplitId(activeId); show(other); }}
                 title="Put the bar on this side" aria-label="Swap the sides"
                 className="grid place-items-center rounded-md"
-                style={{ width: 24, height: 24, background: "var(--surface-card)", color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }}><SwapIcon size={ICON.sm} /></button>
+                style={{ width: 24, height: 24, background: "var(--surface-card)", color: "var(--text3)", border: EDGE }}><SwapIcon size={ICON.sm} /></button>
               <CloseButton onClick={() => setSplitId(null)} title="Close the split" hit={24}
-                style={{ background: "var(--surface-card)", color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }} />
+                style={{ background: "var(--surface-card)", color: "var(--text3)", border: EDGE }} />
             </div>
           </>
         )}
@@ -3129,15 +3129,15 @@ export function BrowserView({ active: viewOn, scope }: {
             }}
             className="shrink-0"
             style={dtSide === "right"
-              ? { width: 5, marginRight: -2, cursor: "col-resize", borderLeft: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }
-              : { height: 5, marginBottom: -2, cursor: "row-resize", borderTop: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }} />
+              ? { width: 5, marginRight: -2, cursor: "col-resize", borderLeft: LINE }
+              : { height: 5, marginBottom: -2, cursor: "row-resize", borderTop: LINE }} />
           <div className="shrink-0 flex flex-col min-w-0"
             style={dtSide === "right" ? { width: dtSize } : { height: dtSize }}>
             {/* Ours, not Chrome's. DevTools' own dock buttons move a window it
                 does not have here, so the two that mean anything are drawn
                 where they work. */}
             <div className="flex items-center gap-1 px-1.5 shrink-0"
-              style={{ height: 24, background: "var(--surface-card)", borderBottom: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+              style={{ height: 24, background: "var(--surface-card)", borderBottom: LINE }}>
               <span className="text-[9.5px] tracking-[0.12em] uppercase mr-auto" style={{ color: "var(--text4)" }}>Inspector</span>
               {/* Its own zoom, and only its own. The gesture works inside the
                   pane too (Ctrl+wheel, Ctrl+plus) — these are here because a
@@ -3246,7 +3246,7 @@ export function BrowserView({ active: viewOn, scope }: {
             <div className="absolute rounded-xl shadow-2xl p-3 flex flex-col gap-2"
               style={{
                 zIndex: 49, left: "50%", top: 90, transform: "translateX(-50%)", width: 420,
-                background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)",
+                background: "var(--surface-card)", border: EDGE,
               }}>
               <div className="text-[12px]" style={{ color: "var(--text)" }}>Import from {bringing.label}</div>
               {sh.spaces.length > 1 && (
@@ -3328,7 +3328,7 @@ export function BrowserView({ active: viewOn, scope }: {
             onMouseEnter={() => setPeep(peep)} onMouseLeave={() => setPeep(null)}
             style={{
               top: peep.top, right: peep.right, width: 200, maxHeight: 320, overflowY: "auto", zIndex: 45,
-              background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)",
+              background: "var(--surface-card)", border: EDGE,
             }}>
             <div className="px-1.5 pt-0.5 pb-1 text-[9px] uppercase tracking-[0.12em] flex items-center gap-1.5" style={{ color: "var(--text4)" }}>
               <FolderIcon size={ICON.xs} /> {f.name} <span className="ml-auto tabular-nums">{folderCount(f)}</span>
@@ -3505,12 +3505,12 @@ export function BrowserView({ active: viewOn, scope }: {
                 <MenuItem onClick={shut(() => setOmni("new"))}>{row(<span style={{ fontSize: 13, lineHeight: 1 }}>+</span>, "New tab")}</MenuItem>
                 {!blank && activeId && (
                   <>
-                    <div className="my-1" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }} />
+                    <div className="my-1" style={{ borderTop: LINE }} />
                     <MenuItem onClick={shut(() => keep({ kind: "tab", id: activeId }, { to: "loose" }))}>Keep the page you are on</MenuItem>
                     <MenuItem onClick={shut(() => keep({ kind: "tab", id: activeId }, { to: "essentials" }))}>…and in the shortcuts</MenuItem>
                   </>
                 )}
-                <div className="my-1" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }} />
+                <div className="my-1" style={{ borderTop: LINE }} />
                 <MenuItem onClick={shut(() => { void bringSidebar(); })}>Import a sidebar from Zen…</MenuItem>
                 <MenuItem onClick={shut(() => { setSideOpen(false); setSidebarOpen(false); })}>Hide this bar — Ctrl+S</MenuItem>
               </>

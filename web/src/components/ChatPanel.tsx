@@ -50,7 +50,7 @@ import { CloseButton } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { inOpenProjects } from "../lib/projectPick.ts";
 import { BoltIcon, CopyIcon, IconLabel, PinIcon, RefreshIcon, StarIcon } from "../lib/glyphIcons.tsx";
-import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 
 // Claude's list arrives from the server, like the other two agents'. It is data
 // there (shared/claude-models.json), filtered to the models whose shutdown date
@@ -135,7 +135,7 @@ const ALLOW_KEY = "agentglass.chatAllowedTools";
 const repoName = (p: string) => p.split("/").pop() || p;
 
 const selCls = "text-[10.5px] px-2 py-1 rounded-md outline-none";
-const selStyle = { background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", color: "var(--text2)" };
+const selStyle = { background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: EDGE, color: "var(--text2)" };
 
 /** One row in the chat list. */
 /**
@@ -191,7 +191,7 @@ function Thinking({ text, streaming }: { text: string; streaming: boolean }) {
   const [open, setOpen] = useState(false);
   const lines = text.trim().split("\n");
   return (
-    <div className="mb-1.5 rounded-md overflow-hidden" style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 22%, transparent)" }}>
+    <div className="mb-1.5 rounded-md overflow-hidden" style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", border: EDGE }}>
       <button onClick={() => setOpen(!open)} aria-expanded={open}
         className="w-full flex items-center gap-1.5 px-2 py-1 text-left hover:opacity-80">
         <span className="text-[10px] t-dim2 transition-transform" style={{ transform: open ? "none" : "rotate(-90deg)" }}>▼</span>
@@ -388,7 +388,7 @@ function PanePrompt({ chat }: { chat: Chat }) {
   const Key = ({ label, k }: { label: string; k: string }) => (
     <button onClick={() => press(k)} title={`Send ${k} to the pane`}
       className="text-[10px] leading-none px-1.5 py-1 rounded"
-      style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>{label}</button>
+      style={{ color: "var(--text3)", border: EDGE }}>{label}</button>
   );
   return (
     <div className="mb-2 rounded-lg overflow-hidden"
@@ -406,7 +406,7 @@ function PanePrompt({ chat }: { chat: Chat }) {
       <pre className="agx-scroll px-2.5 py-2 overflow-x-auto whitespace-pre text-[11px] leading-[1.5] m-0"
         style={{ ...CODE_FONT_STYLE, background: "color-mix(in srgb, var(--bg3) 45%, transparent)", color: "var(--text2)", maxHeight: 260 }}>{screen}</pre>
       <div className="px-2.5 py-1 text-[9.5px] t-dim2 flex items-center gap-1.5"
-        style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+        style={{ borderTop: LINE }}>
         <span>Your arrow keys work here.</span>
         {chat.attachCommand && (
           <button onClick={() => navigator.clipboard?.writeText(chat.attachCommand!)}
@@ -441,7 +441,7 @@ function EffortDial({ chat }: { chat: Chat }) {
       <button onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-haspopup="listbox"
         title={"How hard the model thinks, sent as --effort.\n\nDefault leaves the CLI's own setting alone.\nChanging this restarts the chat's session, keeping the conversation."}
         className="flex items-center gap-1.5 text-[10px] px-2 py-1 rounded-md"
-        style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+        style={{ color: "var(--text3)", border: EDGE }}>
         <span className="flex items-end gap-0.5" aria-hidden>
           {CHAT_EFFORTS.map((_, i) => (
             <span key={i} style={{
@@ -454,7 +454,7 @@ function EffortDial({ chat }: { chat: Chat }) {
       </button>
       {open && (
         <div role="listbox" className="absolute z-20 mt-1 right-0 rounded-lg py-1 min-w-[150px]"
-          style={{ background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 8px 24px rgba(0,0,0,.35)" }}>
+          style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 8px 24px rgba(0,0,0,.35)" }}>
           <button onClick={() => pick(undefined)} role="option" aria-selected={!chat.effort}
             className="w-full text-left px-2.5 py-1 text-[11px] hover:bg-white/5"
             style={{ color: !chat.effort ? "var(--text)" : "var(--text3)" }}>Default</button>
@@ -496,7 +496,7 @@ function CopyButton({ label, title, text, disabled }: { label: string; title: st
       disabled={disabled}
       title={title}
       className="text-[10px] px-2 py-1 rounded-md shrink-0 disabled:opacity-40"
-      style={{ color: done ? "var(--ok, var(--text2))" : "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}
+      style={{ color: done ? "var(--ok, var(--text2))" : "var(--text3)", border: EDGE }}
     >{done ? "Copied" : label}</button>
   );
 }
@@ -646,7 +646,7 @@ function ResumePicker({ onPick, onClose }: { onPick: (s: SessionRollup) => void;
           zIndex: 21,
           maxHeight: "min(60vh, 460px)",
           background: "color-mix(in srgb, var(--bg2) 97%, black)",
-          border: "1px solid color-mix(in srgb, var(--border) 70%, transparent)",
+          border: EDGE,
           boxShadow: "0 24px 60px -18px rgba(0,0,0,0.7)",
         }}
       >
@@ -1309,9 +1309,9 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                     counting. */}
                 <ViewHeader label="Chats" actions={<>
                   <button onClick={() => setResumeOpen((v) => !v)} aria-expanded={resumeOpen} aria-haspopup="listbox"
-                    className="text-[11px] px-2.5 py-1 rounded-lg shrink-0" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}
+                    className="text-[11px] px-2.5 py-1 rounded-lg shrink-0" style={{ color: "var(--text2)", border: EDGE }}
                     title="Continue a session that already exists — e.g. one you started in a terminal">↩ Resume</button>
-                  <button onClick={() => add()} className="text-[11px] px-2.5 py-1 rounded-lg shrink-0" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }} title="New chat">+ New</button>
+                  <button onClick={() => add()} className="text-[11px] px-2.5 py-1 rounded-lg shrink-0" style={{ color: "var(--text2)", border: EDGE }} title="New chat">+ New</button>
                 </>} />
 
                 <div className="flex-1 min-h-0 flex overflow-hidden">
@@ -1421,7 +1421,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                             disabled={active.sending}
                             title="Open Claude Code's own settings in this chat's pane. They apply to every chat, not just this one."
                             className="text-[10px] px-2 py-1 rounded-md shrink-0 disabled:opacity-40 inline-flex items-center gap-1"
-                            style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}
+                            style={{ color: "var(--text3)", border: EDGE }}
                           ><GearIcon size={ICON.xs} />Config</button>
                         )}
                         {/* Keep this one, however long you are away.
@@ -1444,7 +1444,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                             className="text-[10px] px-2 py-1 rounded-md shrink-0"
                             style={active.panePinned
                               ? { color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }
-                              : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}
+                              : { color: "var(--text3)", border: EDGE }}
                           ><IconLabel icon={<PinIcon size={ICON.xs} />}>{active.panePinned ? "Pinned" : "Pin"}</IconLabel></button>
                         )}
                         {active.sessionId && <span className="text-[9.5px] t-dim2 tabular-nums" title="Resuming this session"><IconLabel icon={<RefreshIcon size={ICON.xs} />}>{active.sessionId.slice(0, 8)}</IconLabel></span>}
@@ -1543,7 +1543,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                               background: m.role === "user"
                                 ? "color-mix(in srgb, var(--primary) 50%, var(--bg2))"
                                 : "color-mix(in srgb, var(--bg3) 85%, var(--bg))",
-                              border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)",
+                              border: EDGE,
                               borderLeft: `3px solid ${m.role === "user" ? "var(--primary)" : "color-mix(in srgb, var(--info) 70%, transparent)"}`,
                               color: "var(--text)",
                             }}>
@@ -1581,7 +1581,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                                 {m.images.map((img, j) => (
                                   <img key={j} src={`data:${img.mediaType};base64,${img.data}`} alt="Attached image"
                                     className="block max-h-40 max-w-full rounded-lg"
-                                    style={{ border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }} />
+                                    style={{ border: EDGE }} />
                                 ))}
                               </div>
                             )}
@@ -1640,7 +1640,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                       <div className="flex flex-wrap gap-2 mb-2">
                         {active.attachments.map((a) => (
                           <div key={a.id} className="relative group rounded-lg overflow-hidden shrink-0"
-                            style={{ border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}
+                            style={{ border: EDGE }}
                             title={`${a.name} · ${(a.bytes / 1024).toFixed(0)}KB`}>
                             <img src={a.url} alt={a.name} className="block h-14 w-14 object-cover" />
                             <CloseButton onClick={() => dropAttachment(active.id, a.id)} aria-label={`Remove ${a.name}`} style={{ color: "var(--text)", background: "rgba(0,0,0,0.65)" }} className="absolute top-0.5 right-0.5 rounded" />
@@ -1660,7 +1660,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                           <button key={k.name} onClick={() => pickSkill(k.name)}
                             title={`${k.description}${k.calls ? `\n\nRun ${k.calls} time${k.calls === 1 ? "" : "s"}` : ""}`}
                             className="text-[10.5px] px-2 py-1 rounded-md shrink-0 flex items-center gap-1"
-                            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                            style={{ color: "var(--text2)", border: EDGE }}>
                             {pinnedNames.includes(k.name) && <span className="flex" style={{ color: "var(--primary-hover)" }}><StarIcon size={ICON.xs} filled /></span>}
                             /{k.name}
                           </button>
@@ -1685,7 +1685,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                             {active.setupNeeded.command}
                           </code>
                           <button onClick={() => { navigator.clipboard?.writeText(active.setupNeeded!.command); }}
-                            className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>Copy</button>
+                            className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: EDGE }}>Copy</button>
                           <button onClick={() => update(active.id, (c) => { c.setupNeeded = undefined; c.attention = "none"; })}
                             className="ml-auto text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)" }}>Dismiss</button>
                         </div>
@@ -1718,7 +1718,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                       // the panel's bottom edge, so a menu underneath would be
                       // off-screen.
                       <div className="mb-2 rounded-lg overflow-hidden"
-                        style={{ background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+                        style={{ background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: EDGE }}>
                         {slashMatches.map((k, i) => (
                           <div key={k.name} onMouseDown={(ev) => { ev.preventDefault(); pickSkill(k.name); }}
                             onMouseEnter={() => setSlashIdx(i)}
@@ -1738,7 +1738,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                             ><StarIcon size={ICON.xs} filled={pinnedNames.includes(k.name)} /></button>
                           </div>
                         ))}
-                        <div className="px-2.5 py-1 text-[9.5px] t-dim2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+                        <div className="px-2.5 py-1 text-[9.5px] t-dim2" style={{ borderTop: LINE }}>
                           ↑↓ Move · Tab or Enter to pick · keep typing to filter
                         </div>
                       </div>
@@ -1785,7 +1785,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                           : "Attach a file — images are sent as images, text files are quoted into the message"}
                         aria-label="Attach a file"
                         className="shrink-0 grid place-items-center rounded-lg px-3 self-stretch"
-                        style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text3)" }}>
+                        style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: EDGE, color: "var(--text3)" }}>
                         <ClipIcon />
                       </button>
                       {/* Enabled with no chat open, because typing is how you
@@ -1807,7 +1807,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                         onKeyDown={onKey}
                         onPaste={onPaste}
                         placeholder={!usable ? `${agentLabel(active?.agent ?? "claude")} chat unavailable — no local \`${cliName(active?.agent ?? "claude")}\` CLI` : active?.sending ? "Still replying — type anyway, Enter queues it for the next turn" : active?.sessionId ? "Reply… (Enter to send, Shift+Enter newline)" : "Message a new session… (Enter to send)"}
-                        className="agx-scroll flex-1 px-3 py-2 rounded-lg text-[12px] outline-none resize-none" style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }} />
+                        className="agx-scroll flex-1 px-3 py-2 rounded-lg text-[12px] outline-none resize-none" style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: EDGE, color: "var(--text)" }} />
                       {/* Stop stays reachable while a turn is queueing: the
                           two are different intents — "answer this next" and
                           "drop what you're doing" — and hiding either one

@@ -25,7 +25,7 @@ import { onCard, cardVersion, withCard } from "../lib/prCardStore.ts";
 import { openCard } from "../lib/openCard.ts";
 import { PriorityFlag, CardChip, CardFace, CHIP_H } from "../lib/priority.tsx";
 import { StatusPill } from "./StatusPill.tsx";
-import { CTRL_H, EDGE } from "./workspace/Chrome.tsx";
+import { CTRL_H, EDGE, LINE } from "./workspace/Chrome.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { askingBehind, behindOf, onBehind } from "../lib/prBehindStore.ts";
 import { onRollup, rollupOf } from "../lib/prRollupStore.ts";
@@ -37,7 +37,6 @@ import { matchIndex, prMatches, stepMatch } from "../lib/prBoardFind.ts";
 import { closeFind, openFind, registerEngine, topScope } from "../lib/findScope.ts";
 import { CloseIcon } from "./CloseButton.tsx";
 
-const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 const TRUNKS = new Set(["main", "master", "trunk", "develop", "development"]);
 
 /** How long nothing may happen before a pull request counts as quiet. */
@@ -609,7 +608,7 @@ export function TriageBoard({
               <button onClick={() => openFind()}
                 title="Find in these cards — number, title, author, branch, labels, assignees, reviewers"
                 className="agx-btn inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[10.5px]"
-                style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+                style={{ color: "var(--text3)", border: EDGE }}>
                 <SearchIcon size={ICON.xs} />Find in these<span style={{ color: "var(--text4)" }}>⌃F</span>
               </button>
             )}
@@ -673,7 +672,7 @@ export function TriageBoard({
             );
           })}
           <span className="inline-flex items-baseline rounded px-2 py-0.5 text-[10.5px] tabular-nums"
-            style={{ color: "var(--text4)", border: edge(16) }}>
+            style={{ color: "var(--text4)", border: EDGE }}>
             {totalKnown ? `${involved} / ${total}` : `${involved} on the board`}
           </span>
         </div>
@@ -694,7 +693,7 @@ export function TriageBoard({
                 are in — this is an answer, not a wait.
               </p>
               <button onClick={onShowTable} className="agx-btn mt-3 rounded px-2 py-1 text-[10.5px]"
-                style={{ color: "var(--text2)", border: edge(20) }}>
+                style={{ color: "var(--text2)", border: EDGE }}>
                 {tableLabel}
               </button>
               {/* An empty board is precisely when a pin is the only thing left
@@ -797,7 +796,7 @@ export function TriageBoard({
                         style={{ width: MIN_BOX, height: MIN_BOX, color: "var(--text4)" }}>
                         <InfoIcon size={ICON.xs} />
                       </span>
-                      <span className="ml-auto text-[9px] px-1 rounded shrink-0" style={{ color: "var(--text4)", border: edge(16) }}>{i + 1}</span>
+                      <span className="ml-auto text-[9px] px-1 rounded shrink-0" style={{ color: "var(--text4)", border: EDGE }}>{i + 1}</span>
                       {/*
                         * The fold lives HERE and not on the counts row above.
                         *
@@ -844,7 +843,7 @@ export function TriageBoard({
                       <div aria-hidden>
                         {[0, 1].map((k) => (
                           <div key={k} className="rounded-lg mb-2 animate-pulse"
-                            style={{ height: 74, background: "var(--surface-card)", border: edge(16), animationDelay: `${(i * 2 + k) * 0.08}s` }} />
+                            style={{ height: 74, background: "var(--surface-card)", border: EDGE, animationDelay: `${(i * 2 + k) * 0.08}s` }} />
                         ))}
                       </div>
                     ) : (
@@ -866,7 +865,7 @@ export function TriageBoard({
                           <button onClick={() => setOpenLanes((o) => ({ ...o, [l.id]: true }))}
                             title={`Show the other ${more} in this lane`}
                             className="w-full rounded-md py-1 mb-2 text-[10px]"
-                            style={{ color: "var(--text3)", border: edge(16) }}>
+                            style={{ color: "var(--text3)", border: EDGE }}>
                             +{more} more in this lane
                           </button>
                         )}
@@ -874,7 +873,7 @@ export function TriageBoard({
                           <button onClick={() => setOpenLanes((o) => ({ ...o, [l.id]: false }))}
                             title={`Back to the first ${LANE_CAP}`}
                             className="w-full rounded-md py-1 mb-2 text-[10px]"
-                            style={{ color: "var(--text4)", border: edge(12) }}>
+                            style={{ color: "var(--text4)", border: EDGE }}>
                             Show fewer
                           </button>
                         )}
@@ -913,7 +912,7 @@ export function TriageBoard({
         */}
       {!waiting && involved > 0 && (
         <div className="shrink-0 flex flex-wrap items-center gap-2.5 px-4 py-2 text-[10.5px]"
-          style={{ color: "var(--text3)", borderTop: edge(11) }}>
+          style={{ color: "var(--text3)", borderTop: LINE }}>
           {!totalKnown ? (
             <span>How many others are open is not a number this view can trust.</span>
           ) : rest > 0 ? (
@@ -928,7 +927,7 @@ export function TriageBoard({
               : <>everything here moved in the last {QUIET_DAYS} days</>}
           </span>
           <button onClick={onShowTable} className="agx-btn ml-auto rounded px-2 py-0.5"
-            style={{ color: "var(--text2)", border: edge(20) }}>
+            style={{ color: "var(--text2)", border: EDGE }}>
             {tableLabel}
           </button>
         </div>
@@ -1207,7 +1206,7 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
       data-dim={dim ? "1" : undefined}
       className="rounded-lg mb-2 cursor-pointer agx-btn overflow-hidden"
       style={{
-        border: cursor ? "1px solid color-mix(in srgb, var(--primary) 60%, transparent)" : edge(16),
+        border: cursor ? "1px solid color-mix(in srgb, var(--primary) 60%, transparent)" : EDGE,
         background: "var(--surface-card)",
         boxShadow: cursor ? "inset 2px 0 0 var(--primary)" : undefined,
         /* Saturation as well as opacity: these cards are read by colour — green
@@ -1760,7 +1759,7 @@ const K = ({ children }: { children: React.ReactNode }) => (
 function PinnedStrip({ list, onOpen }: { list?: { number: number; title: string }[]; onOpen: (n: number) => void }) {
   if (!list?.length) return null;
   return (
-    <div className="shrink-0 flex flex-col min-h-0 mt-2 pt-2" style={{ borderTop: edge(18), maxHeight: "40%" }}>
+    <div className="shrink-0 flex flex-col min-h-0 mt-2 pt-2" style={{ borderTop: LINE, maxHeight: "40%" }}>
       <h4 className="flex items-baseline gap-2 m-0 pb-1 px-0.5 text-[9px] uppercase tracking-wider shrink-0"
         style={{ color: "var(--text3)" }}>
         <span className="flex" style={{ color: "var(--primary-hover)" }}><StarIcon size={ICON.xs} filled /></span> Pinned
@@ -1770,7 +1769,7 @@ function PinnedStrip({ list, onOpen }: { list?: { number: number; title: string 
         {list.map((p) => (
           <button key={p.number} onClick={() => onOpen(p.number)} title={p.title}
             className="agx-btn w-full text-left rounded px-1.5 py-1 mb-1 flex items-baseline gap-1.5"
-            style={{ border: edge(14) }}>
+            style={{ border: EDGE }}>
             <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>#{p.number}</span>
             <span className="min-w-0 truncate text-[10.5px]" style={{ color: "var(--text2)" }}>{p.title}</span>
           </button>

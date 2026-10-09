@@ -21,6 +21,7 @@ import { useEffect, useRef, useState } from "react";
 import type { FileFacts } from "../../../../shared/types.ts";
 import { api } from "../../lib/api.ts";
 import { CODE_FONT_STYLE } from "../diff/DiffLines.tsx";
+import { EDGE } from "../workspace/Chrome.tsx";
 
 /** How long the cursor has to stay on a row before its bytes are fetched.
  *  Long enough that holding ↓ through forty rows fetches nothing. */
@@ -162,7 +163,7 @@ export function Preview({ path, onOpen, onCopyPath, compact }: {
           {onCopyPath && (
             <button onClick={() => onCopyPath(path)}
               className="text-[10px] px-2 py-0.5 rounded-md min-h-[20px]"
-              style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+              style={{ color: "var(--text3)", border: EDGE }}>
               Copy path
             </button>
           )}

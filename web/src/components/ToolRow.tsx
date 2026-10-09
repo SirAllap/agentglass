@@ -15,6 +15,7 @@ import type { TimelineEntry } from "../../../shared/types.ts";
 import { fmtTime } from "../lib/format.ts";
 import { CrossIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { LINE } from "./workspace/Chrome.tsx";
 
 // Children shown before the rest fold away, matching the CLI's own
 // `… +N tool uses`. Enough to see what a subagent set off doing, not enough to
@@ -22,7 +23,7 @@ import { ICON } from "../lib/iconSize.ts";
 const HEAD = 3;
 
 const MONO = { fontFamily: "var(--font-mono, ui-monospace, monospace)" };
-const RULE = "1px solid color-mix(in srgb, var(--border) 40%, transparent)";
+const RULE = LINE;
 
 /** Memoised: a session timeline is hundreds of these, and the panel around them
  *  re-renders every few seconds while the session is live. The entry objects

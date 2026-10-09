@@ -19,6 +19,7 @@ import type { GitRepoRef } from "../../../../shared/types.ts";
 import { CheckoutPicker } from "../CheckoutPicker.tsx";
 import { EditIcon, IconLabel } from "../../lib/glyphIcons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
+import { EDGE } from "../workspace/Chrome.tsx";
 
 type Guest = {
   executeJavaScript(code: string): Promise<unknown>;
@@ -190,7 +191,7 @@ export function PagePicker({ view, url, title, mode, onNote, onDone }: {
         style={{
           left, top, width: 360,
           background: "var(--surface-card)",
-          border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)",
+          border: EDGE,
         }}>
         <div className="flex items-baseline gap-2 min-w-0">
           <span className="text-[11px] font-semibold" style={{ color: "var(--text)" }}>

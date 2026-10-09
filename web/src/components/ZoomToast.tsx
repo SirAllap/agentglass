@@ -14,6 +14,7 @@ import type { ZoomResult } from "../lib/zoomTarget.ts";
 import { ExpandIcon } from "../lib/glyphIcons.tsx";
 import { TerminalIcon } from "./workspace/icons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { EDGE } from "./workspace/Chrome.tsx";
 
 /** Long enough to read at a glance, short enough that holding the key down
  *  reads as one continuous adjustment rather than a stack of toasts. */
@@ -39,7 +40,7 @@ export function ZoomToast({ zoom }: { zoom: (ZoomResult & { n: number }) | null 
         style={{
           bottom: "9vh",
           background: "color-mix(in srgb, var(--bg) 92%, transparent)",
-          border: "1px solid color-mix(in srgb, var(--text) 18%, transparent)",
+          border: EDGE,
           boxShadow: "0 18px 40px -18px var(--shadow)",
           animation: "agx-zoom-in .12s ease-out",
         }}

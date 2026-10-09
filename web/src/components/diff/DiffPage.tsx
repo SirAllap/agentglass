@@ -35,7 +35,7 @@ import { useSidebarWidth } from "../../lib/sidebarWidth.ts";
 import { SidebarGrip } from "../SidebarGrip.tsx";
 import { CloseButton } from "../CloseButton.tsx";
 import { ICON } from "../../lib/iconSize.ts";
-import { CHIP_ICON, Chip, FilterField, IconChip, Segmented } from "../workspace/Chrome.tsx";
+import { CHIP_ICON, Chip, FilterField, IconChip, Segmented, EDGE } from "../workspace/Chrome.tsx";
 import { viewHeaderClass, viewHeaderStyle } from "../workspace/ViewHeader.tsx";
 import { diffSplit, diffWrap, setDiffSplit, setDiffWrap, diffNoWhitespace, setDiffNoWhitespace } from "../../lib/diffPrefs.ts";
 import { subscribeWorktreeJump, worktreeJump, requestWorktreeJump } from "../../lib/worktreeJump.ts";
@@ -910,12 +910,12 @@ function Body({ row, state, split, wrap, noWs, mode, comments, staleIds, jumpTo,
             back to where you already were. */}
         <button onClick={openFile} title="Open it here, at its first change"
           className="ml-auto shrink-0 px-2 py-1 rounded-md text-[10.5px] flex items-center gap-1"
-          style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+          style={{ color: "var(--text3)", border: EDGE }}>
           <IconLabel icon={<FileIcon size={ICON.xs} />}>Open</IconLabel>
         </button>
         <button onClick={copy} title="Copy the full path"
           className="shrink-0 px-2 py-1 rounded-md text-[10.5px]"
-          style={{ color: copied ? "var(--success)" : "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+          style={{ color: copied ? "var(--success)" : "var(--text3)", border: EDGE }}>
           {copied ? "Copied" : "Copy path"}
         </button>
       </div>

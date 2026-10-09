@@ -38,7 +38,7 @@ import { CloseButton } from "./CloseButton.tsx";
 import { FileViewer } from "./CardFiles.tsx";
 import type { CardAttachment } from "../../../shared/providers.ts";
 import type { FinderTarget } from "../lib/finderTarget.ts";
-import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 
 export type PaletteTab = "names" | "contents" | "recent" | "machine";
 
@@ -940,7 +940,7 @@ export function FilePalette({
                 <button key={t.id} onClick={() => { setTab(t.id); inputRef.current?.focus(); }}
                   className="text-[11px] px-3 py-1.5 rounded-t-md"
                   style={t.id === tab
-                    ? { background: "var(--surface-card)", border: edge(18), borderBottom: "none", color: "var(--primary-ink)" }
+                    ? { background: "var(--surface-card)", border: EDGE, borderBottom: "none", color: "var(--primary-ink)" }
                     : { border: "1px solid transparent", color: "var(--text3)" }}>
                   {t.label}
                 </button>
@@ -967,9 +967,9 @@ export function FilePalette({
              * `rounded-md` and not `rounded-lg`: that same rule sets a 6px
              * radius on whatever it rings, and a box that rounds itself
              * differently would square up by 2px the moment you typed. */}
-            <div className="px-2.5 py-2.5 shrink-0" style={{ borderTop: edge(18), borderBottom: edge(18) }}>
+            <div className="px-2.5 py-2.5 shrink-0" style={{ borderTop: LINE, borderBottom: LINE }}>
             <div className="flex items-center gap-2.5 px-2.5 py-2 rounded-md"
-              style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: edge(14) }}>
+              style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: EDGE }}>
               <span className="flex" style={{ color: "var(--primary-ink)" }}><SearchIcon size={ICON.xs} /></span>
               <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)}
                 spellCheck={false} autoComplete="off" placeholder={active.placeholder}
@@ -1014,7 +1014,7 @@ export function FilePalette({
                 pieces instead of as a string. */}
             {at && (
               <div className="flex items-center gap-1 px-3 py-1.5 shrink-0 flex-wrap text-[10.5px]"
-                style={{ borderTop: edge(12), color: "var(--text4)" }}>
+                style={{ borderTop: LINE, color: "var(--text4)" }}>
                 {browsePath && (
                   <>
                     <button onClick={() => setBrowsePath(null)} title="Back to the place you picked"
@@ -1061,7 +1061,7 @@ export function FilePalette({
             </div>
 
             <div className="flex items-center gap-4 px-3 py-2 shrink-0 text-[10.5px]"
-              style={{ borderTop: edge(18), color: "var(--text4)" }}>
+              style={{ borderTop: LINE, color: "var(--text4)" }}>
               <span>↑↓ move</span>
               <span>⏎ open</span>
               {/* What Enter does to a folder is not the same question on both
@@ -1271,7 +1271,7 @@ function RepoChip({ repo, repos, openState, onPick }: {
     <>
       <button ref={btn} onClick={() => setOpen(!open)}
         className="flex items-center gap-1.5 text-[10.5px] px-2 py-1 rounded-md max-w-[220px] shrink-0"
-        style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: edge(20), color: "var(--text2)" }}
+        style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: EDGE, color: "var(--text2)" }}
         title={repo ? `${repo.name}\n${repo.branch}\n${repo.root}` : "Pick a checkout"}>
         <span className="truncate min-w-0">{repo ? (repo.worktreeOf ? repo.branch : repo.name) : "Pick a checkout"}</span>
         <span className="shrink-0" style={{ color: "var(--text3)" }}>▾</span>
@@ -1295,7 +1295,7 @@ function RepoChip({ repo, repos, openState, onPick }: {
             {/* Label and explanation are two different kinds of text, so they
                 get 6px: touching, the caption read as the first line of the
                 sentence under it. */}
-            <div className="px-3 pt-2 pb-1.5 shrink-0 flex flex-col gap-1" style={{ borderBottom: edge(12) }}>
+            <div className="px-3 pt-2 pb-1.5 shrink-0 flex flex-col gap-1" style={{ borderBottom: LINE }}>
               <div className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text2)" }}>Where</div>
               <div className="text-[10px]" style={{ color: "var(--text4)" }}>a copy on disk — each has its own branch and its own uncommitted work</div>
             </div>
@@ -1418,7 +1418,7 @@ function PlaceChip({ place, places, recents, error, openState, onPick }: {
     <>
       <button ref={btn} onClick={() => setOpen(!open)}
         className="flex items-center gap-1.5 text-[10.5px] px-2 py-1 rounded-md max-w-[220px] shrink-0"
-        style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: edge(20), color: "var(--text2)" }}
+        style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: EDGE, color: "var(--text2)" }}
         title={place ? `Searching ${place}` : "Pick a folder on this machine"}>
         <span className="truncate min-w-0">{label}</span>
         <span className="shrink-0" style={{ color: "var(--text3)" }}>▾</span>
@@ -1433,7 +1433,7 @@ function PlaceChip({ place, places, recents, error, openState, onPick }: {
               background: "var(--surface-card)", border: edge(30),
             }}
             onKeyDown={menuKeys(() => setOpen(false))}>
-            <div className="px-3 pt-2 pb-1.5 shrink-0 flex flex-col gap-1" style={{ borderBottom: edge(12) }}>
+            <div className="px-3 pt-2 pb-1.5 shrink-0 flex flex-col gap-1" style={{ borderBottom: LINE }}>
               <div className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text2)" }}>Where on this machine</div>
               <div className="text-[10px]" style={{ color: "var(--text4)" }}>your home folder and what is under it — hidden folders are never searched</div>
             </div>
@@ -1531,7 +1531,7 @@ function ScopeChip({ repo, repos, ref_, refs, openState, onPickRoot, onPickRef }
           : "Pick something to search"}
         style={ref_
           ? { background: "color-mix(in srgb, var(--info) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--info) 45%, transparent)", color: "var(--info-ink)" }
-          : { background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: edge(20), color: "var(--text2)" }}>
+          : { background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: EDGE, color: "var(--text2)" }}>
         {/* The folder always, and the version only when it is not the disk —
             a bare folder name is the ordinary case and needs no second word. */}
         <span className="truncate min-w-0">{here}{ref_ ? ` · ${ref_}` : ""}</span>
@@ -1546,7 +1546,7 @@ function ScopeChip({ repo, repos, ref_, refs, openState, onPickRoot, onPickRef }
               maxHeight: "min(460px, 66vh)", background: "var(--surface-card)", border: edge(30),
             }}
             onKeyDown={menuKeys(() => setOpen(false))}>
-            <div className="px-3 pt-2 pb-1.5 shrink-0 flex flex-col gap-1" style={{ borderBottom: edge(12) }}>
+            <div className="px-3 pt-2 pb-1.5 shrink-0 flex flex-col gap-1" style={{ borderBottom: LINE }}>
               <div className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text2)" }}>What to search</div>
               <div className="text-[10px]" style={{ color: "var(--text4)" }}>
                 a copy on disk, or any branch — reading a branch checks nothing out
@@ -1660,7 +1660,7 @@ function RefChip({ value, refs, openState, onPick }: {
           : "Searching this working tree. Pick a branch to search one you are not on."}
         style={on
           ? { background: "color-mix(in srgb, var(--info) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--info) 45%, transparent)", color: "var(--info-ink)" }
-          : { background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: edge(20), color: "var(--text3)" }}>
+          : { background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: EDGE, color: "var(--text3)" }}>
         <span className="truncate min-w-0">{on ? value : "working tree"}</span>
         <span className="shrink-0" style={{ color: on ? "var(--info)" : "var(--text3)" }}>▾</span>
       </button>
@@ -1676,7 +1676,7 @@ function RefChip({ value, refs, openState, onPick }: {
             {/* Only once there are enough to hunt through. Below that the list
                 IS the answer and a field in front of it is one more thing to
                 get past. */}
-            <div className="px-3 pt-2 pb-1.5 shrink-0 flex flex-col gap-1" style={{ borderBottom: edge(12) }}>
+            <div className="px-3 pt-2 pb-1.5 shrink-0 flex flex-col gap-1" style={{ borderBottom: LINE }}>
               <div className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text2)" }}>Which version</div>
               <div className="text-[10px]" style={{ color: "var(--text4)" }}>of the checkout on the left — nothing is checked out to look</div>
             </div>
@@ -1727,7 +1727,7 @@ function RefChip({ value, refs, openState, onPick }: {
                 reasonably fear about a control that names another branch — and
                 the whole reason it can offer a branch list safely at all. */}
             <div className="px-3 py-1.5 text-[9.5px] shrink-0"
-              style={{ borderTop: edge(18), color: "var(--text4)" }}>
+              style={{ borderTop: LINE, color: "var(--text4)" }}>
               Read from the object store. Nothing is checked out, fetched or moved — this
               only changes what the search answers.
             </div>
@@ -1751,8 +1751,8 @@ const Group = ({ children, hint, first }: { children: React.ReactNode; hint: str
   <div className="sticky top-0 z-[1] px-3 pt-3 pb-1 flex items-baseline gap-2"
     style={{
       background: "color-mix(in srgb, var(--text) 7%, var(--bg2))",
-      borderTop: first ? "none" : "1px solid color-mix(in srgb, var(--text) 22%, transparent)",
-      borderBottom: edge(12),
+      borderTop: first ? "none" : LINE,
+      borderBottom: LINE,
     }}>
     <span className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text2)" }}>{children}</span>
     <span className="text-[9px]" style={{ color: "var(--text4)" }}>{hint}</span>
@@ -1772,7 +1772,7 @@ function RefRow({ name, on, head, remote, onPick }: {
       <span className="shrink-0 text-[8px] w-[22px] text-center rounded"
         style={remote
           ? { color: "var(--info-ink)", border: "1px solid color-mix(in srgb, var(--info) 30%, transparent)" }
-          : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)" }}>
+          : { color: "var(--text3)", border: EDGE }}>
         {remote ? "RM" : "LO"}
       </span>
       <span className="truncate min-w-0" style={{ color: "var(--text)" }}>{name}</span>
@@ -1781,7 +1781,7 @@ function RefRow({ name, on, head, remote, onPick }: {
           that being a surprise. */}
       {head && (
         <span className="ml-auto shrink-0 text-[8.5px] px-1 rounded"
-          style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)" }}>
+          style={{ color: "var(--text3)", border: EDGE }}>
           checked out here
         </span>
       )}

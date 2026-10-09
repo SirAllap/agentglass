@@ -49,6 +49,7 @@ import { appLinkFor } from "../lib/appLink.ts";
 import { ICON, MIN_BOX } from "../lib/iconSize.ts";
 import { GearIcon } from "./workspace/icons.tsx";
 import { openSettings } from "../lib/openSettings.ts";
+import { EDGE, LINE } from "./workspace/Chrome.tsx";
 import {
   canMute, groupNotes, laneOf, mutedSources, setMuted, sourceLabel, sourceOf, subscribeMuted,
   type Lane,
@@ -775,11 +776,11 @@ export function NotifyBell({ noDrag, onGoto }: {
             style={{
               top: at.top, right: at.right, width: 360,
               background: "var(--surface-card)",
-              border: "1px solid var(--border)",
+              border: EDGE,
               boxShadow: "0 22px 48px -20px var(--shadow)",
             }}
           >
-            <div className="flex items-center gap-2 px-3 py-2.5" style={{ borderBottom: "1px solid var(--border)" }}>
+            <div className="flex items-center gap-2 px-3 py-2.5" style={{ borderBottom: LINE }}>
               <Cap>notifications</Cap>
               <Cap dim>{visible.length}</Cap>
               {/* Silencing without saying so is how you end up asking why you
@@ -808,7 +809,7 @@ export function NotifyBell({ noDrag, onGoto }: {
                 never hides a list you did not know was there. */}
             {laneChoices.length > 2 && (
               <div className="flex items-center gap-0.5 px-2 py-1.5 flex-wrap" role="tablist" aria-label="Show"
-                style={{ borderBottom: "1px solid var(--border)" }}>
+                style={{ borderBottom: LINE }}>
                 {laneChoices.map((l) => (
                   <button key={l.id} role="tab" aria-selected={lane === l.id}
                     className="agx-note-btn tabular-nums"
@@ -901,7 +902,7 @@ export function NotifyBell({ noDrag, onGoto }: {
                 back what was already collected. */}
             {mutedHere.length > 0 && (
               <div className="px-2.5 py-1.5 text-[10px] flex items-center gap-1 flex-wrap"
-                style={{ borderTop: "1px solid var(--border)", color: "var(--text4)" }}>
+                style={{ borderTop: LINE, color: "var(--text4)" }}>
                 <span className="mr-1">Muted</span>
                 {mutedHere.map((src) => (
                   <button key={src} className="agx-note-btn inline-flex items-center gap-1" onClick={() => setMuted(src, false)}
@@ -913,7 +914,7 @@ export function NotifyBell({ noDrag, onGoto }: {
             )}
             {hist.length > 0 && (!own || !mirroring) && (
               <div className="px-2.5 py-1.5 text-[9.5px] flex items-center gap-2"
-                style={{ borderTop: "1px solid var(--border)", color: "var(--text4)" }}>
+                style={{ borderTop: LINE, color: "var(--text4)" }}>
                 <span>
                   {!own && !mirroring ? "Both lanes are quiet — nothing interrupts, everything still collects here."
                     : !own ? "agentglass's own alerts are not interrupting — they still collect here."

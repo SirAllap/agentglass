@@ -37,7 +37,7 @@ import { flashElement } from "../lib/flash.ts";
 import { shaFromHref } from "../lib/commitLink.ts";
 import { isShortRef, openInApp, wantsExternal } from "../lib/linkRouter.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
-import { RefreshButton, ScopeChip, Tabs, CTRL_H, EDGE, CHIP_SURFACE, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { RefreshButton, ScopeChip, Tabs, CTRL_H, EDGE, CHIP_SURFACE, INPUT, INPUT_STYLE, LINE } from "./workspace/Chrome.tsx";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import type {
   PrSummary, PrDetail, PrRepoId, PrThread, PrComment, PrReview, PrReviewer, PrCheck, GitRepoRef, FileChange,
@@ -1294,7 +1294,7 @@ function ImageDiff({ root, number, path, status }: {
     <div className="flex-1 min-w-0 p-3 flex flex-col gap-1.5 items-start">
       <span className="text-[9.5px] uppercase tracking-wider" style={{ color: tint ?? "var(--text3)" }}>{label}</span>
       {src
-        ? <img src={src} alt="" className="max-w-full rounded" style={{ maxHeight: 320, border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", background: "repeating-conic-gradient(color-mix(in srgb, var(--border) 22%, transparent) 0% 25%, transparent 0% 50%) 50% / 16px 16px" }} />
+        ? <img src={src} alt="" className="max-w-full rounded" style={{ maxHeight: 320, border: EDGE, background: "repeating-conic-gradient(color-mix(in srgb, var(--border) 22%, transparent) 0% 25%, transparent 0% 50%) 50% / 16px 16px" }} />
         : <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>—</span>}
     </div>
   );
@@ -1595,7 +1595,7 @@ function PinnedCapsule({ pinned, pinState, selected, current, onOpen }: {
       <div className="flex items-center gap-1.5 rounded-full pl-2.5 pr-1 py-0.5 min-w-0 overflow-x-auto agx-scroll pointer-events-auto"
         style={{
           background: "color-mix(in srgb, var(--bg3) 85%, transparent)",
-          border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)",
+          border: EDGE,
         }}>
         {pinned.length === 0
           ? <span className="text-[10px] shrink-0 inline-flex items-center gap-1" style={{ color: "var(--text4)" }}><StarIcon size={ICON.xs} />nothing pinned</span>
@@ -1616,7 +1616,7 @@ function PinnedCapsule({ pinned, pinState, selected, current, onOpen }: {
             className="group flex items-center gap-1 rounded-full shrink-0 overflow-hidden pl-1.5"
             style={p.number === selected
               ? { background: "color-mix(in srgb, var(--primary) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }
-              : { border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+              : { border: EDGE }}>
             {/* A dot, not a coloured number. Colour alone cannot say "green" to
                 somebody who cannot see green, and the same dot is what the rows
                 in the list use — so the bar and the list agree rather than
@@ -1925,7 +1925,7 @@ function PrRow({ p, active, onSelect, onReview, pinned, onTogglePin, q, unread, 
       <button onClick={(e) => { e.stopPropagation(); onReview(); }}
         className="agx-btn text-[10px] px-2 py-1 rounded justify-self-end whitespace-nowrap"
         title="Hand this pull request to the chat for a local review"
-        style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", color: "var(--text2)" }}>
+        style={{ border: EDGE, color: "var(--text2)" }}>
         Review →
       </button>
     </div>
@@ -4560,7 +4560,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             )}
             {/* Open / Closed / All — the state axis. "Closed" holds merged +
                 closed, like GitHub's own Closed tab. */}
-            <div className="ml-auto flex rounded-full overflow-hidden shrink-0 self-center" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+            <div className="ml-auto flex rounded-full overflow-hidden shrink-0 self-center" style={{ border: EDGE }}>
               {STATES.map((s) => (
                 <button key={s.id} onClick={() => setStateSel(s.id)} title={`Show ${s.label.toLowerCase()} pull requests`}
                   className="agx-btn text-[10px] px-2 py-0.5"
@@ -4737,7 +4737,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               style={{ borderColor: "color-mix(in srgb, var(--text) 11%, transparent)", color: "var(--text3)" }}>
               <button onClick={() => setPages((p) => p.slice(0, -1))} disabled={pages.length === 0 || listState.loading}
                 className="agx-btn px-2 py-0.5 rounded disabled:opacity-35"
-                style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", color: "var(--text2)" }}>‹ Previous</button>
+                style={{ border: EDGE, color: "var(--text2)" }}>‹ Previous</button>
               <span className="tabular-nums">
                 Page {pages.length + 1}
                 {listState.total != null && listState.pageSize
@@ -4747,7 +4747,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               <button onClick={() => { if (listState.cursor) setPages((p) => [...p, listState.cursor!]); }}
                 disabled={!listState.hasNext || !listState.cursor || listState.loading}
                 className="agx-btn ml-auto px-2 py-0.5 rounded disabled:opacity-35"
-                style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", color: "var(--text2)" }}>Next ›</button>
+                style={{ border: EDGE, color: "var(--text2)" }}>Next ›</button>
             </div>
           )}
         </div>
@@ -4790,7 +4790,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 <span>{detailErr}</span>
                 <button onClick={() => { setDetailErr(""); if (selected != null) loadDetail(selected, true); }}
                   className="agx-btn px-2 py-0.5 rounded text-[10.5px]"
-                  style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)" }}>
+                  style={{ color: "var(--text2)", border: EDGE }}>
                   Try again
                 </button>
               </div>
@@ -5039,12 +5039,12 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                         {/* Grouped by the day they landed, as GitHub does — a
                             long branch reads as a history rather than a list. */}
                         <div className="text-[10px] uppercase tracking-wider mb-1 pl-1" style={{ color: "var(--text3)" }}>{day}</div>
-                        <div className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+                        <div className="rounded-lg overflow-hidden" style={{ border: EDGE }}>
                           {list.map((c, i) => (
                             <div key={c.oid} data-oid={c.oid}
                               ref={commitFocus === c.oid ? focusedCommitRef : undefined}
                               style={{
-                                ...(i ? { borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" } : {}),
+                                ...(i ? { borderTop: LINE } : {}),
                                 /* Only until you look at another one. A row that
                                    stays lit after you have moved on is telling
                                    you about a click you have forgotten. */
@@ -5073,7 +5073,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                                         title={openMsgs.has(c.oid) ? "Hide the full message" : "Show the full commit message"}
                                         aria-expanded={openMsgs.has(c.oid)}
                                         className="agx-btn ml-1.5 align-middle text-[10px] px-1.5 rounded leading-none"
-                                        style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)" }}>…</button>
+                                        style={{ color: "var(--text3)", border: EDGE }}>…</button>
                                     )}
                                   </span>
                                   {c.body?.trim() && openMsgs.has(c.oid) && (
@@ -5541,7 +5541,7 @@ function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, open
           not finished working it out" on a pull request that merged an hour ago.
           What is left is what GitHub leaves: what happened, and reopen. */}
       {d.state !== "OPEN" ? (
-        <section className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+        <section className="rounded-lg overflow-hidden" style={{ border: EDGE }}>
           <div className="flex gap-2.5 items-start p-3">
             <span className="shrink-0 rounded-full flex items-center justify-center text-[13px]"
               style={{ width: 26, height: 26, background: d.state === "MERGED" ? "var(--primary)" : "color-mix(in srgb, var(--text3) 60%, transparent)", color: "var(--bg)" }}>
@@ -5559,14 +5559,14 @@ function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, open
             </span>
           </div>
           <div className="flex items-center gap-1.5 flex-wrap px-3 py-2.5"
-            style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
+            style={{ borderTop: LINE, background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
             {d.state === "CLOSED" && <Btn onClick={onClose} disabled={busy} pending={busyWhat === "Reopen"} title="Put it back to open, with its comments and reviews intact"><UndoIcon size={ICON.xs} />Reopen</Btn>}
             <a href={externalUrl(d.url)} target="_blank" rel="noreferrer noopener" className="text-[10.5px] px-2.5 py-1 rounded"
-              style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)" }}>Open on GitHub ↗</a>
+              style={{ color: "var(--text2)", border: EDGE }}>Open on GitHub ↗</a>
           </div>
         </section>
       ) : (
-      <section className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+      <section className="rounded-lg overflow-hidden" style={{ border: EDGE }}>
         <div className="flex gap-2.5 items-start p-3">
           <span className="shrink-0 rounded-full flex items-center justify-center text-[13px]"
             style={{ width: 26, height: 26,
@@ -5599,7 +5599,7 @@ function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, open
           </span>
         </div>
 
-        <div style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+        <div style={{ borderTop: LINE }}>
           {/*
             * WHAT THE REVIEWER DECIDED, first, and drawn even when something
             * else is blocking.
@@ -5779,7 +5779,7 @@ const v = p2Verdict(d.humanReview, reviewerRoster(d), d.reviewDecision, d.gate);
         </div>
 
         <div className="flex items-center gap-1.5 flex-wrap px-3 py-2.5"
-          style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
+          style={{ borderTop: LINE, background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
           {/* The methods this repository allows, opening on the one GitHub's
               own button opens on. It used to be all three regardless and it
               always opened on squash — which is both the method a repository
@@ -6034,9 +6034,9 @@ function Description({ d, busy, onEdit, onToggleTask }: {
     /* `data-pr-body` is an address, like `data-node` on a timeline entry: a
        mention that lives in the description has to be scrollable-to as well.
        See the jump in the panel. */
-    <section data-pr-body className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+    <section data-pr-body className="rounded-lg overflow-hidden" style={{ border: EDGE }}>
       <div className="flex items-center gap-2 px-3 py-1.5"
-        style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
+        style={{ borderBottom: LINE, background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
         <span className="text-[9.5px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>description</span>
         {/* Opening the editor is the shell's to do — it takes the whole column,
             so the click has to leave this box entirely. */}
@@ -6178,7 +6178,7 @@ function BodyEditor({ prNumber, initial, busy, onSave, onCancel, onOpenGithub }:
       onDrop={(e) => { e.preventDefault(); void takeFiles([...e.dataTransfer.files]); }}
       onPaste={(e) => { const fs = [...e.clipboardData.files]; if (fs.length) { e.preventDefault(); void takeFiles(fs); } }}>
       <div className="flex items-center gap-2 px-3 py-2 shrink-0"
-        style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
+        style={{ borderBottom: LINE, background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
         <span className="text-[11px] font-semibold" style={{ color: "var(--text)" }}>Editing description</span>
         <span className="text-[10.5px] tabular-nums" style={{ color: "var(--text3)" }}>· #{prNumber}</span>
         {dirty && <span className="text-[8.5px] uppercase tracking-[.13em]" style={{ color: "var(--warning-ink)" }}>unsaved</span>}
@@ -6190,7 +6190,7 @@ function BodyEditor({ prNumber, initial, busy, onSave, onCancel, onOpenGithub }:
 
       {!preview && (
         <div className="flex items-center gap-0.5 px-2 py-1 shrink-0 flex-wrap"
-          style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+          style={{ borderBottom: LINE }}>
           <TB title="Heading" onClick={() => prefixLines(() => "### ")}>H</TB>
           <TB title="Bold" onClick={() => wrap("**")}><b>B</b></TB>
           <TB title="Italic" onClick={() => wrap("_")}><i>I</i></TB>
@@ -6210,7 +6210,7 @@ function BodyEditor({ prNumber, initial, busy, onSave, onCancel, onOpenGithub }:
 
       {attachNote && (
         <div className="flex items-center gap-2 px-3 py-1.5 text-[10.5px] shrink-0"
-          style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+          style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", borderBottom: LINE }}>
           <span className="min-w-0 truncate"><b>{attachNote}</b> can't be attached from here — GitHub has no public upload API for attachments.</span>
           <button onClick={onOpenGithub} className="agx-btn ml-auto shrink-0 px-2 py-0.5 rounded"
             style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>Attach on GitHub ↗</button>
@@ -6238,7 +6238,7 @@ function BodyEditor({ prNumber, initial, busy, onSave, onCancel, onOpenGithub }:
       )}
 
       <div className="flex items-center gap-1.5 px-3 py-2 shrink-0"
-        style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
+        style={{ borderTop: LINE, background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
         <span className="text-[10px]" style={{ color: "var(--text3)" }}>Markdown · ⌘↵ save · Esc cancel</span>
         <span className="ml-auto flex gap-1.5">
           <Btn onClick={onCancel} disabled={saving} small>Cancel</Btn>
@@ -6565,7 +6565,7 @@ function Field({ label, title, max, children }: {
  */
 function SidebarSection({ title, onEdit, children }: { title: string; onEdit?: (e: React.MouseEvent<HTMLButtonElement>) => void; children: React.ReactNode }) {
   return (
-    <div className="py-2.5" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+    <div className="py-2.5" style={{ borderBottom: LINE }}>
       <div className="flex items-center gap-2 mb-1.5">
         <span className="text-[9.5px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>{title}</span>
         {onEdit && (
@@ -6799,7 +6799,7 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
   return (
     <Portal>
       <div ref={box} className="fixed rounded-lg overflow-hidden flex flex-col"
-        style={{ left, top, width: W, maxHeight: maxH, border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", background: "color-mix(in srgb, var(--bg2) 98%, black)", boxShadow: "0 18px 44px -18px rgba(0,0,0,.8)" }}>
+        style={{ left, top, width: W, maxHeight: maxH, border: EDGE, background: "color-mix(in srgb, var(--bg2) 98%, black)", boxShadow: "0 18px 44px -18px rgba(0,0,0,.8)" }}>
         {/* `min-h-0`, and it is the whole bug: a flex child's default floor is
             its content, so the people list grew past the menu instead of
             scrolling inside it — taking the ClickUp half and Done off the
@@ -6809,7 +6809,7 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
             one. At px-3 the filter chips started 8px to the left of the repo
             chips they sit under — two left edges in one header, which is the
             kind of thing you notice without being able to name. */}
-        <div className="px-5 pt-2 pb-1.5 shrink-0" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+        <div className="px-5 pt-2 pb-1.5 shrink-0" style={{ borderBottom: LINE }}>
           <div className="text-[11px] font-semibold" style={{ color: "var(--text)" }}>{title}</div>
           <div className="text-[10px]" style={{ color: "var(--text3)" }}>{hint}</div>
         </div>
@@ -6841,7 +6841,7 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
         </div>
         {side?.({ folded: sideFolded, onFold: setSideFolded, onPlan: setPlan })}
         {multi && (
-          <div className="p-1.5 shrink-0 flex flex-col gap-1.5" style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+          <div className="p-1.5 shrink-0 flex flex-col gap-1.5" style={{ borderTop: LINE }}>
             {asking && (
               /* What is about to happen, in the order it will happen, and
                  nothing that is not a change. Read once and accepted, rather
@@ -6889,7 +6889,7 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
             <div className="flex items-center gap-2">
               {asking && (
                 <button onClick={() => setAsking(false)} className="agx-btn px-2 py-1 rounded text-[10.5px]"
-                  style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>Back</button>
+                  style={{ color: "var(--text3)", border: EDGE }}>Back</button>
               )}
               <button
                 onClick={async () => {
@@ -7104,7 +7104,7 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
     return (
       <button onClick={() => onFold(false)} title={`Also move ${ref.label} in ClickUp`}
         className="agx-btn shrink-0 w-full flex items-center gap-2 px-3 py-1.5 text-[10.5px]"
-        style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", color: "var(--text3)" }}>
+        style={{ borderTop: LINE, color: "var(--text3)" }}>
         <span aria-hidden>▴</span>
         <span className="truncate">Also move {ref.label} in ClickUp</span>
       </button>
@@ -7115,15 +7115,15 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
     /* Under the people, not beside them: the menu's height is what was going
        spare. Capped, so the list above it keeps most of the window and this
        never pushes Done off the bottom. */
-    <div className="flex flex-col min-w-0 shrink-0" style={{ maxHeight: 260, borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
-      <div className="px-4 pt-2 pb-1.5 shrink-0" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+    <div className="flex flex-col min-w-0 shrink-0" style={{ maxHeight: 260, borderTop: LINE }}>
+      <div className="px-4 pt-2 pb-1.5 shrink-0" style={{ borderBottom: LINE }}>
         <div className="flex items-center gap-2">
           <div className="text-[11px] font-semibold min-w-0 truncate" style={{ color: "var(--text)" }}>
             Also in ClickUp <span style={{ color: "var(--text4)", fontWeight: 400 }}>· optional</span>
           </div>
           <button onClick={() => onFold(true)} title="Leave the card alone — this folds away and comes back on the strip"
             className="agx-btn ml-auto shrink-0 px-1.5 py-0.5 rounded text-[10px]"
-            style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+            style={{ color: "var(--text3)", border: EDGE }}>
             Not now ▾
           </button>
         </div>
@@ -7546,7 +7546,7 @@ function CardRfqaButton({ task, query, onSaid, ask }: {
     <button onClick={() => { void move(); }} disabled={busy}
       className="agx-btn text-[10.5px] px-2 py-0.5 rounded disabled:opacity-50"
       title={`Move to ${target} and unassign everyone`}
-      style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)" }}>
+      style={{ color: "var(--text2)", border: EDGE }}>
       Move to RfQA
     </button>
   );
@@ -7645,14 +7645,14 @@ function CardFacts({ d, root }: { d: PrDetail; root: string }) {
                 <button onClick={() => { setSaid(""); setTell(tell === "slack" ? null : "slack"); setMsg(""); }}
                   className="agx-btn text-[10.5px] px-2 py-0.5 rounded"
                   title="Ask an agent to say it in Slack — it writes the message"
-                  style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)" }}>
+                  style={{ color: "var(--text2)", border: EDGE }}>
                   Ping Slack
                 </button>
               )}
               <button onClick={() => { setSaid(""); setTell(tell === "card" ? null : "card"); setMsg(defaultPing(d, whoToTell(task))); }}
                 className="agx-btn text-[10.5px] px-2 py-0.5 rounded"
                 title="Write a note on this card's activity"
-                style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)" }}>
+                style={{ color: "var(--text2)", border: EDGE }}>
                 Note on card
               </button>
               <CardRfqaButton task={task} query={query} onSaid={setSaid} ask={ask} />
@@ -7670,7 +7670,7 @@ function CardFacts({ d, root }: { d: PrDetail; root: string }) {
                 <textarea value={msg} onChange={(e) => setMsg(e.target.value)} rows={3} spellCheck={false}
                   placeholder={tell === "slack" ? "Anything to add — what to look at first, whether it is urgent. Optional." : ""}
                   className="w-full px-2 py-1 rounded text-[11px] outline-none resize-y"
-                  style={{ background: "color-mix(in srgb, var(--text) 8%, transparent)", color: "var(--text)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }} />
+                  style={{ background: "color-mix(in srgb, var(--text) 8%, transparent)", color: "var(--text)", border: EDGE }} />
                 <div className="flex items-center gap-1.5">
                   <span className="text-[10px] truncate min-w-0" style={{ color: "var(--text4)" }}>
                     {tell === "slack" ? `an agent writes it${whoToTell(task) ? ` to ${whoToTell(task)!.name}` : ""}, in the words that chat is written in` : `on ${whoToTell(task) ? `the card, to ${whoToTell(task)!.name}` : "the card"}`}
@@ -7820,7 +7820,7 @@ function PrSidebar({ d, root, spend, onEditField }: {
      * a long label wants truncating, never a second axis.
      */
     <aside className="sticky top-0 shrink-0 w-[248px] pl-4 hidden lg:block overflow-y-auto overflow-x-hidden agx-scroll overscroll-contain"
-      style={{ borderLeft: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", maxHeight: "calc(100vh - 6rem)" }}>
+      style={{ borderLeft: LINE, maxHeight: "calc(100vh - 6rem)" }}>
       <SidebarSection title="Reviewers" onEdit={(e) => onEditField("reviewers", e)}>
         {(() => {
           /*
@@ -8068,7 +8068,7 @@ function Masthead({ d, busy, local, onShowLocal, onEditTitle, onDraft, onClose, 
       .catch(() => { /* no clipboard permission */ });
   };
   return (
-    <div className="px-3 pt-2.5 pb-2 shrink-0" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+    <div className="px-3 pt-2.5 pb-2 shrink-0" style={{ borderBottom: LINE }}>
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <span className="text-[9.5px] px-1.5 py-0.5 rounded-full align-middle inline-flex items-center gap-1"
@@ -8177,7 +8177,7 @@ function Masthead({ d, busy, local, onShowLocal, onEditTitle, onDraft, onClose, 
       {!condensed && (
       <div className="flex flex-wrap items-start gap-x-5 gap-y-2 mt-2.5 -mx-3 -mb-2 px-3 py-2"
         style={{
-          borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)",
+          borderTop: LINE,
           background: "color-mix(in srgb, var(--border) 14%, transparent)",
         }}>
         <Field label="Author"><Avatar login={d.author} size={14} />{d.author}</Field>
@@ -8339,7 +8339,7 @@ function BlockerRow({ b }: { b: MergeBlocker }) {
 function Reason({ tint, glyph, children, action }: { tint: string; glyph: React.ReactNode; children: React.ReactNode; action?: React.ReactNode }) {
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 text-[11.5px]"
-      style={{ color: "var(--text)", borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+      style={{ color: "var(--text)", borderBottom: LINE }}>
       <span className="shrink-0 w-3.5 flex justify-center" style={{ color: tint }}>{glyph}</span>
       <span className="min-w-0">{children}</span>
       {action && <span className="ml-auto shrink-0 text-[10px]">{action}</span>}
@@ -8357,7 +8357,7 @@ function DiffToolbar({ path, add, del, split, wrap, onSplit, onWrap, right }: {
 }) {
   return (
     <div className="flex items-center gap-2 px-2.5 py-1.5 text-[10.5px] shrink-0"
-      style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 10%, transparent)" }}>
+      style={{ borderBottom: LINE, background: "color-mix(in srgb, var(--border) 10%, transparent)" }}>
       {path && <span className="truncate" style={{ color: "var(--text)" }}>{path}</span>}
       {add != null && <span className="tabular-nums shrink-0" style={{ color: "var(--success-ink)" }}>+{add}</span>}
       {del != null && <span className="tabular-nums shrink-0" style={{ color: "var(--error-ink)" }}>−{del}</span>}
@@ -8431,7 +8431,7 @@ function FileStack({ files, split, wrap, onSplit, onWrap, scope }: {
       }}>
       {files.map((f, i) => (
         <div key={f.file_path} data-diff-file={f.file_path} className="rounded overflow-hidden flex flex-col"
-          style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", maxHeight: 520 }}>
+          style={{ border: EDGE, maxHeight: 520 }}>
           <DiffToolbar path={f.file_path} add={f.additions} del={f.deletions}
             split={split} wrap={wrap} onSplit={i === 0 ? onSplit : onSplit} onWrap={onWrap} />
           <div className="flex-1 min-h-0 flex">
@@ -8524,7 +8524,7 @@ function PeekButton({ path, onPeek }: { path: string; onPeek: (p: string) => voi
       onClick={async () => { setBusy(true); try { await onPeek(path); } finally { setBusy(false); } }}
       title={busy ? "Fetching this file from GitHub at the pull request's head commit…" : "Open the whole file in an editor"}
       className="agx-btn shrink-0 flex items-center gap-1.5 text-[10px] px-1.5 py-0.5 rounded"
-      style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 18%, transparent)" }}>
+      style={{ color: "var(--text2)", border: EDGE }}>
       {busy ? <><span className="agx-spin" style={{ width: 9, height: 9 }} />Opening…</> : <><FileIcon size={ICON.xs} />Open</>}
     </button>
   );
@@ -8655,7 +8655,7 @@ function FilesFilterMenu({ facets, hiddenExts, onToggleExt, onClearExts, showVie
         <Portal>
           <div className="fixed inset-0" style={{ zIndex: 9998 }} onClick={() => setOpen(false)} />
           <div role="menu" className="fixed p-1.5 rounded-xl flex flex-col overflow-hidden text-[11px]"
-            style={{ top: pos.top, left: pos.left, minWidth: 216, maxHeight: "min(60vh, 420px)", zIndex: 9999, background: "color-mix(in srgb, var(--bg2) 97%, black)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", boxShadow: "0 24px 60px -18px rgba(0,0,0,0.7)", backdropFilter: "blur(18px)" }}>
+            style={{ top: pos.top, left: pos.left, minWidth: 216, maxHeight: "min(60vh, 420px)", zIndex: 9999, background: "color-mix(in srgb, var(--bg2) 97%, black)", border: EDGE, boxShadow: "0 24px 60px -18px rgba(0,0,0,0.7)", backdropFilter: "blur(18px)" }}>
             <div className="px-2 pt-1 pb-1 text-[9.5px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>File extensions</div>
             <div className="flex flex-col gap-0.5 overflow-y-auto agw-noscrollbar">
               {facets.map((f) => {
@@ -8672,7 +8672,7 @@ function FilesFilterMenu({ facets, hiddenExts, onToggleExt, onClearExts, showVie
             </div>
             <button role="menuitemcheckbox" aria-checked={showViewed} onClick={onToggleViewed}
               className="mt-1 px-2 py-1.5 rounded-lg text-left flex items-center gap-2 hover:bg-white/5"
-              style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+              style={{ borderTop: LINE }}>
               <span aria-hidden className="shrink-0 grid place-items-center text-[10px]" style={box(showViewed)}>{showViewed ? <DoneIcon size={ICON.xs} /> : null}</span>
               <span className="flex-1" style={{ color: "var(--text2)" }}>Viewed files</span>
               <span className="tabular-nums shrink-0 text-[10px]" style={{ color: "var(--text3)" }}>{viewedCount}</span>
@@ -8731,7 +8731,7 @@ function FindBar({ value, onChange, inputRef, listRef, hits, groups, at, onGo, o
   onGo: (i: number) => void; onClose: () => void;
   fileCount: number; loaded: boolean;
 }) {
-  const edge = "1px solid color-mix(in srgb, var(--text) 20%, transparent)";
+  const edge = EDGE;
   const typed = value.trim().length >= 2;
   // The index each group's first match sits at, so a row knows its own place in
   // the flat list without the render doing arithmetic per row.
@@ -8788,7 +8788,7 @@ function FindBar({ value, onChange, inputRef, listRef, hits, groups, at, onGo, o
               {numbered.map((g) => (
                 <div key={g.path}>
                   <div className="sticky top-0 z-[1] px-2.5 py-1 flex items-center gap-2"
-                    style={{ background: "color-mix(in srgb, var(--text) 7%, var(--bg))", borderBottom: "1px solid color-mix(in srgb, var(--text) 12%, transparent)" }}>
+                    style={{ background: "color-mix(in srgb, var(--text) 7%, var(--bg))", borderBottom: LINE }}>
                     <span className="truncate text-[10.5px]" style={{ ...CODE_FONT_STYLE, color: "var(--text)" }}>{g.path}</span>
                     <span className="ml-auto shrink-0 tabular-nums text-[10px]" style={{ color: "var(--text3)" }}>{g.matches.length}</span>
                   </div>
@@ -8865,7 +8865,7 @@ function DetailSkeleton({ number }: { number: number | null }) {
         <div className="flex gap-4">{["96px", "120px", "88px", "104px"].map((w, i) => bar(11, w, 0.05 * (i + 1)))}</div>
       </div>
       {/* the tab row */}
-      <div className="flex gap-3 pt-1" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+      <div className="flex gap-3 pt-1" style={{ borderBottom: LINE }}>
         {["64px", "92px", "70px", "58px", "62px"].map((w, i) => <div key={i} className="pb-2">{bar(11, w, 0.03 * i)}</div>)}
       </div>
       {/* the body: a wide column and the sidebar beside it, same as Overview */}
@@ -9693,10 +9693,10 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
           draws a scrollbar — one ran the whole width of the app. The column is
           flush now, so there is nothing to pull out of. */}
       <div ref={barRef} className="flex flex-col gap-1 sticky top-0 z-30 px-3 py-2"
-        style={{ background: "var(--surface-card)", borderBottom: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+        style={{ background: "var(--surface-card)", borderBottom: LINE }}>
       <div className="flex items-center gap-2 flex-wrap">
         <span className="flex items-center gap-1.5 px-2 py-1 rounded shrink-0"
-          style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+          style={{ border: EDGE }}>
           <span className="flex" style={{ color: "var(--text3)" }}><SearchIcon size={ICON.xs} /></span>
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter files…"
             className="bg-transparent outline-none text-[10.5px] w-28" style={{ color: "var(--text)" }} />
@@ -9788,7 +9788,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
       <div className="flex items-center gap-2 text-[10px]" style={{ color: "var(--text3)" }}>
         {/* Named for what it does to the middle column, not for a layout — you
             are choosing how much is in front of you. */}
-        <span className="inline-flex rounded overflow-hidden shrink-0" style={{ border: "1px solid color-mix(in srgb, var(--text) 18%, transparent)" }}>
+        <span className="inline-flex rounded overflow-hidden shrink-0" style={{ border: EDGE }}>
           {([[true, "One file"], [false, "All files"]] as const).map(([v, label]) => (
             <button key={label} onClick={() => setOne(v)} className="px-2 py-px"
               style={oneFile === v
@@ -9815,7 +9815,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
             other eight, so hiding it below five files would strand you. */}
         {(oneFile || shownFiles.length > 4) && (
           <aside ref={treeRef} className="shrink-0 agx-tree3 sticky top-[68px] z-10 agx-scroll hidden md:block pr-1"
-            style={{ borderRight: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+            style={{ borderRight: LINE }}>
             {/* `showing`, not `sel`.
                 
                 In one-file mode the first file is on screen before anybody has
@@ -9936,7 +9936,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
                 top: Math.max(0, barH - 10),
                 height: FILE_HEAD_H,
                 background: "color-mix(in srgb, var(--border) 12%, var(--bg))",
-                borderBottom: open ? "1px solid color-mix(in srgb, var(--border) 25%, transparent)" : undefined,
+                borderBottom: open ? LINE : undefined,
               }}>
               <button onClick={() => { onSel(f.path); toggleFold(f.path); }} className="flex-1 min-w-0 text-left flex items-center gap-2">
                 <span className="shrink-0" style={{ color: "var(--text3)" }}>{open ? "▾" : "▸"}</span>
@@ -10138,7 +10138,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
                                   // diff by a shadow the way every other
                                   // floating surface in this app is.
                                   background: "var(--surface-card)",
-                                  border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)",
+                                  border: EDGE,
                                   boxShadow: "0 12px 30px -14px var(--shadow)",
                                 }}>
                                   {/* The line's own actions live here, beside the
@@ -10148,7 +10148,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
                                       you, not before you have seen it. */}
                                   <div className="px-3 py-2 text-[11px] flex items-center gap-2" style={{
                                     background: "color-mix(in srgb, var(--border) 22%, transparent)",
-                                    borderBottom: "1px solid color-mix(in srgb, var(--text) 16%, transparent)",
+                                    borderBottom: LINE,
                                     color: "var(--text)",
                                   }}>
                                     <span className="min-w-0 truncate">
@@ -10156,11 +10156,11 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
                                     </span>
                                     <span className="ml-auto flex items-center gap-1 shrink-0">
                                       <button onClick={() => suggestHere(f, composing)} title="Prefill a suggestion block with this line"
-                                        className="agx-btn px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>± Suggest</button>
+                                        className="agx-btn px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: EDGE }}>± Suggest</button>
                                       <button onClick={() => { if (repoName && headSha) void navigator.clipboard?.writeText(`https://github.com/${repoName}/blob/${headSha}/${f.path}#L${composing.line}`); }}
                                         disabled={!repoName || !headSha}
                                         title="Copy a link to this line on GitHub"
-                                        className="agx-btn px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}><LinkIcon size={ICON.xs} /></button>
+                                        className="agx-btn px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: EDGE }}><LinkIcon size={ICON.xs} /></button>
                                     </span>
                                   </div>
                                   <div className="p-2.5 flex flex-col gap-2">
@@ -10192,7 +10192,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
                                           return ok;
                                         },
                                       }} />
-                                    <button onClick={cancelCompose} className="agx-btn self-start px-2 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)" }}>Cancel</button>
+                                    <button onClick={cancelCompose} className="agx-btn self-start px-2 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: EDGE }}>Cancel</button>
                                   </div>
                                 </div>
                               )}
@@ -10255,7 +10255,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
               </div>
             )}
             {open && belowNotes.length > 0 && (
-              <div className="px-2.5 py-2 flex flex-col gap-1.5" style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--primary) 4%, transparent)" }}>
+              <div className="px-2.5 py-2 flex flex-col gap-1.5" style={{ borderTop: LINE, background: "color-mix(in srgb, var(--primary) 4%, transparent)" }}>
                 <div className="flex items-center gap-2 text-[9.5px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>
                   <LocalMark />Notes on lines this diff does not show
                 </div>
@@ -10263,7 +10263,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
               </div>
             )}
             {open && belowThreads.length > 0 && (
-              <div className="px-2.5 py-2 flex flex-col gap-2" style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 6%, transparent)" }}>
+              <div className="px-2.5 py-2 flex flex-col gap-2" style={{ borderTop: LINE, background: "color-mix(in srgb, var(--border) 6%, transparent)" }}>
                 {/* Not anchored to a visible line — outdated threads, or ones on
                     context the diff does not reach — so they live under the file
                     rather than inline. */}
@@ -10321,7 +10321,7 @@ function GhLink({ href, title }: { href: string; title: string }) {
   }, [copied]);
   if (!safe) return null;
   const box = "shrink-0 inline-grid place-items-center rounded";
-  const style = { width: 20, height: 20, color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" };
+  const style = { width: 20, height: 20, color: "var(--text3)", border: EDGE };
   /* Two glyphs need more than the square the single-glyph button uses: at 20
      wide the mark and the arrow touched the border and each other. Same height,
      so the pair still reads as one row of controls. */
@@ -10401,7 +10401,7 @@ function Reactions({ nodeId, reactions, onReact }: {
     if (!has.length) return null;
     return (
       <div className="flex gap-1 flex-wrap mt-2">
-        {has.map((r) => <span key={r.content} className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", color: "var(--text2)" }}>{REACTION_EMOJI.find((e) => e.content === r.content)?.glyph ?? "•"} {r.count}</span>)}
+        {has.map((r) => <span key={r.content} className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ border: EDGE, color: "var(--text2)" }}>{REACTION_EMOJI.find((e) => e.content === r.content)?.glyph ?? "•"} {r.count}</span>)}
       </div>
     );
   }
@@ -10438,7 +10438,7 @@ function Reactions({ nodeId, reactions, onReact }: {
             style={{
               top: pos.top, left: pos.left, zIndex: 9999,
               background: "color-mix(in srgb, var(--bg2) 97%, black)",
-              border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)",
+              border: EDGE,
               boxShadow: "0 24px 60px -18px rgba(0,0,0,.7)",
               backdropFilter: "blur(18px)",
             }}>
@@ -10506,7 +10506,7 @@ function Card({ who, chip, when, tone, url, edited, assoc, nodeId, reactions, on
     <div data-node={nodeId || undefined} className="rounded-md overflow-hidden mb-2"
       style={{ border: `1px solid color-mix(in srgb, ${edge} ${tone ? 40 : 28}%, transparent)` }}>
       <div className="flex items-center gap-2 px-2.5 py-1.5 text-[11px]"
-        style={{ background: `color-mix(in srgb, ${edge} ${tone ? 10 : 14}%, transparent)`, borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+        style={{ background: `color-mix(in srgb, ${edge} ${tone ? 10 : 14}%, transparent)`, borderBottom: LINE }}>
         <Avatar login={who} size={17} />
         <b style={{ color: "var(--text)", fontWeight: 500 }}>{who}</b>
         <AssocChip a={assoc} />
@@ -10600,7 +10600,7 @@ function ThreadSnippet({ hunk, line }: { hunk?: string; line?: number | null }) 
 
   if (!hunk?.trim()) return null;
   return (
-    <div className="text-[10.5px]" style={{ ...CODE_FONT_STYLE, borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+    <div className="text-[10.5px]" style={{ ...CODE_FONT_STYLE, borderBottom: LINE }}>
       {rows.map((r, i) => (
         <div key={i} className="flex" style={{
           background: r.text.startsWith("+") ? "color-mix(in srgb, var(--success) 10%, transparent)"
@@ -10690,10 +10690,10 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline, newSet, cameFrom
   return (
     <SuggestCtx.Provider value={suggest}>
     <div data-thread={t.id} data-resolved={t.isResolved ? "1" : undefined}
-      className={`rounded-md overflow-hidden ${inline ? "" : "mb-2"}`} style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+      className={`rounded-md overflow-hidden ${inline ? "" : "mb-2"}`} style={{ border: EDGE }}>
       <div className="flex items-center gap-2 px-2.5 py-1.5 text-[10.5px]"
         style={{ background: "color-mix(in srgb, var(--border) 14%, transparent)",
-          borderBottom: open ? "1px solid color-mix(in srgb, var(--text) 11%, transparent)" : undefined }}>
+          borderBottom: open ? LINE : undefined }}>
         {t.isResolved && (
           <button onClick={() => setOpen((v) => !v)} aria-expanded={open}
             title={open ? "Hide this resolved thread" : "Show this resolved thread"}
@@ -10751,7 +10751,7 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline, newSet, cameFrom
         i > 0 && !hidden.has(i - 1) ? (
           <button key={c.id} onClick={() => setUnfolded(true)}
             className="agx-btn w-full text-left px-3 py-1.5 text-[10.5px]"
-            style={{ color: "var(--text3)", borderTop: "1px solid color-mix(in srgb, var(--text) 10%, transparent)",
+            style={{ color: "var(--text3)", borderTop: LINE,
               background: "color-mix(in srgb, var(--border) 9%, transparent)" }}>
             ▸ {hidden.size} earlier {hidden.size === 1 ? "reply" : "replies"}
           </button>
@@ -10800,7 +10800,7 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline, newSet, cameFrom
           <Md body={c.body} />
         </div>
       ))}
-      <div className="flex flex-col gap-2 px-3 py-2.5" style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+      <div className="flex flex-col gap-2 px-3 py-2.5" style={{ borderTop: LINE }}>
         {/* Reply with the full markdown composer — Write/Preview, mentions, the
             lot — the same box GitHub gives you, not a one-line prompt. Collapsed
             to a slim affordance until you mean it. */}
@@ -10813,7 +10813,7 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline, newSet, cameFrom
         ) : (
           <button onClick={() => setReplying(true)}
             className="agx-btn w-full text-left px-3 py-1.5 rounded-lg text-[11px]"
-            style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", background: "color-mix(in srgb, var(--border) 8%, transparent)" }}>
+            style={{ color: "var(--text3)", border: EDGE, background: "color-mix(in srgb, var(--border) 8%, transparent)" }}>
             Reply…
           </button>
         ))}
@@ -11442,7 +11442,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
           <span>Nothing new since you last looked.</span>
           <button onClick={onUnmarkRead} className="agx-btn px-1.5 py-0.5 rounded"
             title="Forget the mark and show everything said after your own last comment"
-            style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+            style={{ color: "var(--text3)", border: EDGE }}>
             Show the {sinceMine} since your last comment
           </button>
         </div>
@@ -11475,7 +11475,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
           a filter that is always there and usually empty teaches people not to
           press it. */}
       {(botCount > 0 || atoms.length > 0 || localCount > 0) && (
-        <div className="flex mb-3 rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+        <div className="flex mb-3 rounded-lg overflow-hidden" style={{ border: EDGE }}>
           {([
             ["all", "All", humanCount + botCount + localCount] as const,
             ...(botCount > 0 ? [["human", "Humans", humanCount] as const, ["bot", "Bots", botCount] as const] : []),
@@ -11528,10 +11528,10 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
                   THEY said" is the movement being asked for. */}
               <button onClick={() => step(-1)} title={`Previous remark by ${person}`}
                 className="agx-btn inline-grid place-items-center rounded"
-                style={{ width: 20, height: 20, color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>↑</button>
+                style={{ width: 20, height: 20, color: "var(--text3)", border: EDGE }}>↑</button>
               <button onClick={() => step(1)} title={`Next remark by ${person}`}
                 className="agx-btn inline-grid place-items-center rounded"
-                style={{ width: 20, height: 20, color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>↓</button>
+                style={{ width: 20, height: 20, color: "var(--text3)", border: EDGE }}>↓</button>
               <span className="text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>
                 {pCursor >= 0 ? `${pCursor + 1}/${shown.length}` : shown.length}
               </span>
@@ -11732,8 +11732,8 @@ function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOp
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => { e.preventDefault(); void takeFiles([...e.dataTransfer.files]); }}
       onPaste={(e) => { const fs = [...e.clipboardData.files]; if (fs.length) { e.preventDefault(); void takeFiles(fs); } }}
-      style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
-      <div className="flex items-center gap-1 px-2 py-1.5" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+      style={{ border: EDGE }}>
+      <div className="flex items-center gap-1 px-2 py-1.5" style={{ borderBottom: LINE }}>
         <Btn onClick={() => setPreview(false)} small primary={!preview}>Write</Btn>
         <Btn onClick={() => setPreview(true)} small primary={preview}>Preview</Btn>
         {/*
@@ -11765,7 +11765,7 @@ function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOp
       </div>
       {imageNote && (
         <div className="flex items-center gap-2 px-2.5 py-1.5 text-[10.5px]"
-          style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+          style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", borderBottom: LINE }}>
           <span className="min-w-0 truncate">
             <b>{imageNote}</b> can't be attached from here — GitHub has no public upload API for attachments.
           </span>
@@ -11778,7 +11778,7 @@ function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOp
       )}
       {restored && (
         <div className="flex items-center gap-2 px-2.5 py-1 text-[10px]"
-          style={{ color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 10%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+          style={{ color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 10%, transparent)", borderBottom: LINE }}>
           <span>Picked up where you left off — this was never sent.</span>
           <button onClick={() => setRestored(false)} className="agx-btn ml-auto shrink-0 grid place-items-center w-5 h-5 rounded" style={{ color: "var(--text3)" }} aria-label="Dismiss"><CloseIcon size={ICON.xs} /></button>
         </div>
@@ -11807,7 +11807,7 @@ function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOp
           />
           {ac && matches.length > 0 && (
             <div className="absolute left-3 bottom-2 z-20 rounded-lg overflow-hidden"
-              style={{ background: "color-mix(in srgb, var(--bg2) 97%, black)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", boxShadow: "0 14px 34px -16px rgba(0,0,0,.75)" }}>
+              style={{ background: "color-mix(in srgb, var(--bg2) 97%, black)", border: EDGE, boxShadow: "0 14px 34px -16px rgba(0,0,0,.75)" }}>
               {matches.map((m, i) => (
                 <button key={m.label} onMouseEnter={() => setAcIdx(i)} onClick={() => take(i)}
                   className="agx-btn w-full text-left flex items-center gap-2 px-2.5 py-1 text-[11px]"
@@ -11821,7 +11821,7 @@ function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOp
         </div>
       )}
       <div className="flex items-center gap-2 px-2.5 py-2"
-        style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
+        style={{ borderTop: LINE, background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
         {/* With two outcomes, "to send" stops being an answer. The shortcut goes to
             the reversible one on purpose: a queued comment can be dropped before
             the review is submitted, and a posted one has already notified
@@ -11926,18 +11926,18 @@ function JobLog({ root, name, jobs }: { root: string; name: string; jobs: PrChec
   return (
     <div className="px-2.5 pb-2">
       <button onClick={() => setOpen((v) => !v)} className="agx-btn text-[10px] px-2 py-0.5 rounded"
-        style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)" }}>
+        style={{ color: "var(--text2)", border: EDGE }}>
         {open ? "▾ Hide log" : "▸ Show log"}
       </button>
       {open && (
-        <div className="mt-1.5 rounded overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+        <div className="mt-1.5 rounded overflow-hidden" style={{ border: EDGE }}>
           {err ? <div className="p-2 text-[10.5px]" style={{ color: "var(--error-ink)" }}>{err}</div>
             : text === null ? <div className="p-2 text-[10.5px]" style={{ color: "var(--text3)" }}>Reading the log…</div>
             : steps.length === 0 ? <div className="p-2 text-[10.5px]" style={{ color: "var(--text3)" }}>The log is empty.</div>
             : steps.map((st, i) => {
               const on = openSteps.has(i);
               return (
-                <div key={i} style={i ? { borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" } : undefined}>
+                <div key={i} style={i ? { borderTop: LINE } : undefined}>
                   <button onClick={() => setOpenSteps((c) => { const n = new Set(c); if (n.has(i)) n.delete(i); else n.add(i); return n; })}
                     className="agx-btn w-full text-left flex items-center gap-2 px-2 py-1 text-[10.5px]"
                     style={{ background: st.failed ? "color-mix(in srgb, var(--error) 10%, transparent)" : "transparent" }}>
@@ -11984,7 +11984,7 @@ function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyWhat }: 
 
   return (
     <div className="text-[11px] flex flex-col gap-2">
-      <div className="flex items-center gap-3 p-3 rounded-lg" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+      <div className="flex items-center gap-3 p-3 rounded-lg" style={{ border: EDGE }}>
         <span className="shrink-0 rounded-full flex items-center justify-center text-[13px]"
           style={{ width: 26, height: 26, background: c.failure > 0 ? "var(--error)" : c.pending > 0 ? "var(--warning)" : "var(--success)", color: "var(--bg)" }}>
           {c.failure > 0 ? <CrossIcon size={ICON.sm} /> : c.pending > 0 ? <CircleIcon size={ICON.sm} /> : <DoneIcon size={ICON.sm} />}
@@ -12014,7 +12014,7 @@ function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyWhat }: 
         const bad = list.filter((k) => k.state === "failure").length;
         const good = list.filter((k) => k.state === "success").length;
         return (
-          <div key={name} className="rounded overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+          <div key={name} className="rounded overflow-hidden" style={{ border: EDGE }}>
             <button onClick={() => setOpenGroups((o) => ({ ...o, [name]: !isOpen }))}
               className="w-full text-left flex items-center gap-2 px-2.5 py-1.5"
               style={{ background: "color-mix(in srgb, var(--border) 14%, transparent)" }}>
@@ -12029,7 +12029,7 @@ function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyWhat }: 
               const id = `${name}::${k.name}::${i}`;
               const expanded = bad && openCheck === id;
               return (
-                <div key={id} style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: bad ? "color-mix(in srgb, var(--error) 7%, transparent)" : undefined }}>
+                <div key={id} style={{ borderTop: LINE, background: bad ? "color-mix(in srgb, var(--error) 7%, transparent)" : undefined }}>
                   {/* A failing check is the one row on this tab you came for, so
                       it is the one row that opens into somewhere to go next. */}
                   <button onClick={() => bad && setOpenCheck(expanded ? null : id)} disabled={!bad}
@@ -12050,7 +12050,7 @@ function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyWhat }: 
                       {onAsk && <Btn onClick={() => onAsk(k)} primary small title="Check the pull request out locally and hand the failure to Claude"><SparkleIcon size={ICON.xs} />Ask Claude why</Btn>}
                       {k.url && (
                         <a href={externalUrl(k.url)} target="_blank" rel="noreferrer noopener" className="agx-btn text-[10px] px-2 py-0.5 rounded"
-                          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)" }}>Open run ↗</a>
+                          style={{ color: "var(--text2)", border: EDGE }}>Open run ↗</a>
                       )}
                       <Btn onClick={onRerun} disabled={busy} small pending={busyWhat === "Re-run checks"} title="Re-run every failing check on this pull request"><RefreshIcon size={ICON.xs} />Re-run failed</Btn>
                       {/* GitHub offers all three, and "the whole run failed
@@ -12152,9 +12152,9 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
           ends of the desk. This one has nothing to spread: the chips fill a row
           and wrap, the verdict stays its own size, and the send goes to the far
           edge where the eye ends up anyway. */}
-      <div className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+      <div className="rounded-lg overflow-hidden" style={{ border: EDGE }}>
         <div className="flex items-center gap-2 px-3 py-1.5 text-[11px]"
-          style={{ background: "color-mix(in srgb, var(--border) 12%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+          style={{ background: "color-mix(in srgb, var(--border) 12%, transparent)", borderBottom: LINE }}>
           <b style={{ color: "var(--text)", fontWeight: 500 }}>Finish your review</b>
           <span style={{ color: "var(--text3)" }}>#{d.number}</span>
           <button onClick={onGoFiles} className="ml-auto tabular-nums text-[10px]" style={{ color: seen < d.files.length ? "var(--primary)" : "var(--text3)" }}>
@@ -12241,7 +12241,7 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
               </div>
               {held.map((c, i) => (
                 <div key={`${c.path}:${c.line}:${i}`} className="px-2.5 py-2"
-                  style={{ borderTop: i ? "1px solid color-mix(in srgb, var(--text) 10%, transparent)" : undefined }}>
+                  style={{ borderTop: i ? LINE : undefined }}>
                   <div className="text-[10px] tabular-nums flex items-center gap-2">
                     <span className="truncate" title={c.path}>{c.path}{c.line === null ? " · outdated" : `:${c.line}`}</span>
                     {/* The way to change it. Nothing in this app can: the API
@@ -12264,7 +12264,7 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
               are one choice; three stacked cards took six rows to say the same
               thing and pushed the button that ends the review off the fold. */}
           <div className="flex items-center gap-2 flex-wrap">
-            <div className="flex rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 18%, transparent)" }}>
+            <div className="flex rounded-lg overflow-hidden" style={{ border: EDGE }}>
               {([
                 ["approve", <><DoneIcon size={ICON.xs} />Approve</>, "Submit and mark the pull request approved.", "var(--success)"],
                 ["request_changes", <><CrossIcon size={ICON.xs} />Request changes</>, "Submit and block the merge until they land.", "var(--error)"],
@@ -12280,7 +12280,7 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
                       color: on ? tint : "var(--text2)",
                       fontWeight: on ? 650 : 400,
                       background: on ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent",
-                      borderLeft: n === 0 ? undefined : "1px solid color-mix(in srgb, var(--text) 14%, transparent)",
+                      borderLeft: n === 0 ? undefined : LINE,
                       boxShadow: on ? "inset 0 -2px 0 var(--primary)" : undefined,
                       opacity: off ? 0.4 : 1, cursor: off ? "not-allowed" : "pointer",
                     }}>{label}</button>
@@ -12315,7 +12315,7 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
               </span>
             </div>
             {preview ? (
-              <div className="rounded-md p-2.5 min-h-[56px]" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+              <div className="rounded-md p-2.5 min-h-[56px]" style={{ border: EDGE }}>
                 {body.trim() ? <Md body={body} /> : <span className="text-[11px]" style={{ color: "var(--text3)" }}>Nothing to preview.</span>}
               </div>
             ) : (

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { LaneRow } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
 import { usePoll } from "../lib/usePoll.ts";
+import { LINE } from "./workspace/Chrome.tsx";
 
 /**
  * What the row says about lanes, or null for none. Owners first, counted once
@@ -30,7 +31,7 @@ export function LanesRow() {
   if (!label) return null;
   return (
     <div className="shrink-0 px-2.5 py-1.5 text-[10.5px] truncate"
-      style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", color: "var(--text3)" }}
+      style={{ borderTop: LINE, color: "var(--text3)" }}
       title="Private browser windows agents are working in. They are not on your screen.">
       {label}
     </div>

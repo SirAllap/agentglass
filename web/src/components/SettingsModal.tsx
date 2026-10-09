@@ -118,7 +118,7 @@ import { emitControl } from "../lib/controlBus.ts";
 import { refreshUnderstudy } from "../lib/understudyStore.ts";
 import { mutedSources, setMuted, sourceLabel, subscribeMuted } from "../lib/notePolicy.ts";
 import { MuteGlyph } from "./TopBarNotes.tsx";
-import { RefreshButton, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { RefreshButton, INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 
 /** A heading inside a Section, for a pane that answers the same question about
  *  two different sources. Without it "Quiet" and "Alert sounds" sit in one flat
@@ -186,8 +186,8 @@ function SetupCard({ title, steps, note, error }: {
   const done = known.filter((s) => s.done).length;
   const all = known.length > 0 && done === known.length;
   return (
-    <div className="agx-inset mb-5 rounded-xl overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", background: "var(--surface-card)" }}>
-      <div className="flex items-center gap-3 px-4 py-2.5" style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
+    <div className="agx-inset mb-5 rounded-xl overflow-hidden" style={{ border: EDGE, background: "var(--surface-card)" }}>
+      <div className="flex items-center gap-3 px-4 py-2.5" style={{ borderBottom: LINE }}>
         <span className="text-[13.5px] font-medium" style={{ color: "var(--text)" }}>{title}</span>
         <span className="ml-auto text-[11.5px] tabular-nums px-2 py-0.5 rounded-full"
           style={all
@@ -199,7 +199,7 @@ function SetupCard({ title, steps, note, error }: {
       <ol className="flex flex-col">
         {steps.map((st, i) => (
           <li key={st.title} className="grid items-start gap-x-3 px-4 py-3"
-            style={{ gridTemplateColumns: "20px minmax(0,1fr) auto", borderTop: i === 0 ? undefined : "1px solid color-mix(in srgb, var(--border) 22%, transparent)" }}>
+            style={{ gridTemplateColumns: "20px minmax(0,1fr) auto", borderTop: i === 0 ? undefined : LINE }}>
             <span className="mt-px w-5 h-5 rounded-full grid place-items-center text-[10.5px] tabular-nums shrink-0"
               style={st.done === true
                 ? { color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 16%, transparent)" }
@@ -230,7 +230,7 @@ function SetupCard({ title, steps, note, error }: {
         ))}
       </ol>
       {(error || note) && (
-        <div className="px-4 py-2 text-[12px]" style={{ color: error ? "var(--error)" : "var(--text2)", borderTop: "1px solid color-mix(in srgb, var(--border) 22%, transparent)" }}>
+        <div className="px-4 py-2 text-[12px]" style={{ color: error ? "var(--error)" : "var(--text2)", borderTop: LINE }}>
           {error || note}
         </div>
       )}
@@ -349,7 +349,7 @@ function Stepper({ label, hint, value, onDec, onInc, canDec, canInc, modified }:
   modified?: boolean;
 }) {
   const btn = "w-7 h-7 rounded-md text-[14px] leading-none flex items-center justify-center disabled:opacity-30 enabled:hover:bg-white/10";
-  const border = "1px solid color-mix(in srgb, var(--border) 55%, transparent)";
+  const border = EDGE;
   return (
     <SettingRow label={label} hint={hint} modified={modified}
       control={
@@ -607,7 +607,7 @@ function BrowserPane() {
           />
           <button onClick={save}
             className="agx-btn text-[12px] px-2 py-1 rounded"
-            style={{ border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", color: "var(--text2)" }}>
+            style={{ border: EDGE, color: "var(--text2)" }}>
             {saved ? "Saved" : "Save"}
           </button>
         </span>}
@@ -758,7 +758,7 @@ function RailPane() {
         hint={<><b style={{ color: "var(--text2)" }}>Drag</b> an icon between the groups — a gap opens where it will land — or drop it on the dashed square at the bottom to put it away. <b style={{ color: "var(--text2)" }}>Right-click</b> any icon for the same moves, and <b style={{ color: "var(--text2)" }}>Alt+↑/↓</b> does it from the keyboard.</>}
         control={railCustomised()
           ? <button onClick={resetRail} className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-              style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+              style={{ color: "var(--text2)", border: EDGE }}>
               Reset the rail
             </button>
           : undefined}
@@ -1127,7 +1127,7 @@ function ActionLine({ a, times = 1 }: { a: ActionRecord; times?: number }) {
         {times > 1 && (
           <span className="ml-1.5 text-[10px] px-1.5 rounded-full tabular-nums"
             title={`${times} of these in a row, newest first`}
-            style={{ color: "var(--text4)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }}>
+            style={{ color: "var(--text4)", border: EDGE }}>
             ×{times}
           </span>
         )}
@@ -1772,7 +1772,7 @@ function CookieImport() {
   const Bulk = ({ label, onClick, off }: { label: string; onClick: () => void; off?: boolean }) => (
     <button onClick={onClick} disabled={off}
       className="agx-btn text-[10px] px-1.5 py-0.5 rounded disabled:opacity-30"
-      style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>{label}</button>
+      style={{ color: "var(--text2)", border: EDGE }}>{label}</button>
   );
 
   return (
@@ -1885,7 +1885,7 @@ function CookieImport() {
           </button>
           <button onClick={() => void run("forget")} disabled={busy || !chosen.size}
             className="agx-btn text-[11px] px-3 py-1.5 rounded-lg"
-            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: chosen.size ? 1 : 0.5 }}
+            style={{ color: "var(--text2)", border: EDGE, opacity: chosen.size ? 1 : 0.5 }}
             title="Remove these sites' cookies from agentglass's browser. Your own browser is untouched.">
             Forget them again
           </button>
@@ -1976,7 +1976,7 @@ function AgentBrowserPane({ open }: { open: boolean }) {
 
         <div className="flex items-center gap-2">
           <button onClick={load} disabled={busy} className="agx-btn text-[11px] px-3 py-1.5 rounded-lg"
-            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>Check again</button>
+            style={{ color: "var(--text2)", border: EDGE }}>Check again</button>
         </div>
 
         {/* Something to paste, because "it is installed" and "I know what to say
@@ -2353,7 +2353,7 @@ function VoicePicker({ voices, value, onPick, label }: {
         className="text-[11px] px-2 py-1 rounded-lg shrink-0"
         style={{
           color: voice.id === "none" ? "var(--text4)" : "var(--text3)",
-          border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)",
+          border: EDGE,
           opacity: voice.id === "none" ? 0.5 : 1,
         }}>Play</button>
     </span>
@@ -2570,7 +2570,7 @@ function DepGrid({ deps, muted }: { deps: DepReport[]; muted?: boolean }) {
       {deps.map((d) => (
         <span key={d.id} title={`${d.title} — ${d.what}`}
           className="flex items-center gap-2 px-2 py-1 rounded-lg min-w-0"
-          style={{ border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", background: "color-mix(in srgb, var(--bg2) 50%, transparent)" }}>
+          style={{ border: EDGE, background: "color-mix(in srgb, var(--bg2) 50%, transparent)" }}>
           <span className="shrink-0 rounded-full" aria-hidden style={{ width: 6, height: 6, background: statusColor(d) }} />
           <span className="t-mono text-[11px] truncate" style={{ color: "var(--text2)" }}>{d.bin}</span>
         </span>
@@ -2880,7 +2880,7 @@ function IntegrationsPane({ open }: { open: boolean }) {
         hint="Anything connected here shows up in the panel that uses it — a task provider becomes a tab in Tasks."
         control={<button onClick={() => void load()} disabled={busy}
           className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
+          style={{ color: "var(--text2)", border: EDGE, opacity: busy ? 0.5 : 1 }}>
           {busy ? "Checking…" : "Recheck"}
         </button>}
       />
@@ -2988,7 +2988,7 @@ function ProviderCard({ spec, status, checking, onChanged }: {
     : STATE_LOOK[status?.state ?? "needs-auth"];
   const connected = status?.state === "connected";
   const wantsToken = spec.auth === "token";
-  const line = "1px solid color-mix(in srgb, var(--border) 40%, transparent)";
+  const line = LINE;
   /* Empty while the check is still out: a row that has not answered yet has
      nothing to be stale about, and "Checked at 14:32" beside "Checking…" is a
      contradiction on one line. */
@@ -3215,7 +3215,7 @@ function RequirementsPane({ open }: { open: boolean }) {
         </>}
         control={<button onClick={() => void load(true)} disabled={busy}
           className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
+          style={{ color: "var(--text2)", border: EDGE, opacity: busy ? 0.5 : 1 }}>
           {busy ? "Checking…" : "Recheck"}
         </button>}
       />
@@ -3312,7 +3312,7 @@ function TerminalRunsOn({ open }: { open: boolean }) {
         hint={<>Where the Terminal view opens a shell. "The engine" gives it the pane engine — agentglass draws the tabs and splits, the prefix set under Pane engine (tmux) applies, and Restore there can bring it back after a reboot; one session per checkout. "This machine's tmux" resumes the session you left in your own tmux, with your own <span className="t-mono text-[11px]">~/.tmux.conf</span>. They are separate servers: switching moves nothing and loses nothing, and whichever you are not using keeps running.</>}
         control={<select value={terminal} onChange={(e) => saveTerminal(e.target.value)} disabled={busy}
           className="text-[12px] px-2 py-1 rounded-lg justify-self-end"
-          style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+          style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: EDGE }}>
           <option value="engine">The engine</option>
           <option value="desk">This machine's tmux</option>
         </select>}
@@ -3447,7 +3447,7 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
         </>}
         control={st ? <button onClick={resetAll} disabled={busy}
           className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
+          style={{ color: "var(--text2)", border: EDGE, opacity: busy ? 0.5 : 1 }}>
           Reset tmux to defaults
         </button> : undefined}
       />
@@ -3458,7 +3458,7 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
         control={<span className="flex items-center gap-2 justify-self-end">
           <select value={source} onChange={(e) => setSource(e.target.value)} disabled={busy}
             className="text-[12px] px-2 py-1 rounded-lg"
-            style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+            style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: EDGE }}>
             <option value="auto">Auto (bundled first)</option>
             <option value="bundled">Bundled</option>
             <option value="system">System</option>
@@ -3471,7 +3471,7 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
           )}
           <button onClick={saveSettings} disabled={busy}
             className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
+            style={{ color: "var(--text2)", border: EDGE, opacity: busy ? 0.5 : 1 }}>
             Save
           </button>
         </span>}
@@ -3485,7 +3485,7 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
         hint="Set under Terminal: on this engine, or on your own tmux."
         control={<button onClick={onGoTerminal}
           className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap justify-self-end"
-          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+          style={{ color: "var(--text2)", border: EDGE }}>
           Open Terminal settings
         </button>}
       />
@@ -3503,7 +3503,7 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
             onChange={(e) => { setPrefixCustom(e.target.value === "custom"); if (e.target.value !== "custom") setPrefix(e.target.value); }}
             disabled={busy}
             className="text-[12px] px-2 py-1 rounded-lg"
-            style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+            style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: EDGE }}>
             {PREFIXES.map((p) => <option key={p.value || "default"} value={p.value}>{p.label}</option>)}
             <option value="custom">Custom…</option>
           </select>
@@ -3514,7 +3514,7 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
           )}
           <button onClick={savePrefix} disabled={busy}
             className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
+            style={{ color: "var(--text2)", border: EDGE, opacity: busy ? 0.5 : 1 }}>
             {/* It reloads as well as saves, and a button that only says "Save"
                 over a change that lands immediately is a button people press
                 twice. */}
@@ -3533,7 +3533,7 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
           label="Mode"
           control={<select value={confMode} onChange={(e) => setConfMode(e.target.value)} disabled={busy}
             className="text-[12px] px-2 py-1 rounded-lg"
-            style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+            style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: EDGE }}>
             <option value="append">Append to base</option>
             <option value="replace">Replace everything</option>
           </select>}
@@ -3545,10 +3545,10 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
             <textarea value={override} onChange={(e) => setOverride(e.target.value)} spellCheck={false} rows={6} disabled={busy}
               placeholder={"set -g prefix C-b\nbind-key v split-window -h"}
               className="text-[11px] t-mono px-2 py-1.5 rounded-lg bg-transparent w-[320px] resize-y"
-              style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }} />
+              style={{ color: "var(--text2)", border: EDGE }} />
             <button onClick={saveConf} disabled={busy}
               className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap shrink-0"
-              style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
+              style={{ color: "var(--text2)", border: EDGE, opacity: busy ? 0.5 : 1 }}>
               Validate & apply
             </button>
           </span>}
@@ -3561,13 +3561,13 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
         control={<span className="flex items-center gap-2 justify-self-end">
           <select value={resume} onChange={(e) => setResume(e.target.value)} disabled={busy}
             className="text-[12px] px-2 py-1 rounded-lg"
-            style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: restore ? 1 : 0.4 }}>
+            style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: EDGE, opacity: restore ? 1 : 0.4 }}>
             <option value="lazy">Lazy resume</option>
             <option value="all">Resume all</option>
           </select>
           <button onClick={() => setRestore(!restore)} disabled={busy}
             className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-            style={{ color: restore ? "var(--success)" : "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+            style={{ color: restore ? "var(--success)" : "var(--text2)", border: EDGE }}>
             {restore ? "On" : "Off"}
           </button>
         </span>}
@@ -3579,17 +3579,17 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
           control={<span className="flex items-center gap-2 justify-self-end">
             <button onClick={() => restoreAction("capture")} disabled={busy}
               className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-              style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
+              style={{ color: "var(--text2)", border: EDGE, opacity: busy ? 0.5 : 1 }}>
               Capture now
             </button>
             <button onClick={() => restoreAction("restore")} disabled={busy}
               className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-              style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
+              style={{ color: "var(--text2)", border: EDGE, opacity: busy ? 0.5 : 1 }}>
               Restore now
             </button>
             <button onClick={() => restoreAction("clear")} disabled={busy}
               className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-              style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
+              style={{ color: "var(--text2)", border: EDGE, opacity: busy ? 0.5 : 1 }}>
               Clear
             </button>
           </span>}
@@ -4248,7 +4248,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                     className="w-full text-left px-2.5 py-1.5 mb-1.5 rounded-lg text-[13px] flex items-center gap-2"
                     style={pane === "onboarding"
                       ? { background: "color-mix(in srgb, var(--primary) 15%, transparent)", color: "var(--text)" }
-                      : { color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+                      : { color: "var(--text2)", border: EDGE }}>
                     <span className="min-w-0 truncate">Get started</span>
                     <span className="ml-auto shrink-0 text-[10.5px] tabular-nums" style={{ color: "var(--text4)" }}>
                       {[onboarding.hook, onboarding.provider, onboarding.paneEngine].filter(Boolean).length}/3
@@ -4519,7 +4519,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       <div className="rounded-lg px-3 py-2 whitespace-pre overflow-x-auto"
                         style={{
                           background: "color-mix(in srgb, var(--bg) 70%, transparent)",
-                          border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)",
+                          border: EDGE,
                           fontFamily: TERM_FONTS.find((f) => f.id === termFont)?.stack || undefined,
                           fontSize: `${termSize}px`, lineHeight: 1.35, color: "var(--text)",
                         }}>
@@ -4644,7 +4644,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                         <button onClick={() => { setWordSeparators(DEFAULT_WORD_SEPARATORS); setWordSepState(DEFAULT_WORD_SEPARATORS); }}
                           disabled={wordSep === DEFAULT_WORD_SEPARATORS}
                           className="shrink-0 text-[10.5px] px-2 py-0.5 rounded-lg"
-                          style={{ border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", color: "var(--text3)", opacity: wordSep === DEFAULT_WORD_SEPARATORS ? 0.4 : 1 }}>
+                          style={{ border: EDGE, color: "var(--text3)", opacity: wordSep === DEFAULT_WORD_SEPARATORS ? 0.4 : 1 }}>
                           Reset
                         </button>
                       </div>
@@ -4965,7 +4965,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                         hint="Puts every key and every chord back to the shipped one."
                         control={<button onClick={() => { resetBindings(); resetChords(); resetAppChords(); setKeyError(null); setAppKeyError(null); setCapturing(null); setCapturingChord(null); setCapturingApp(null); }}
                           className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-                          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                          style={{ color: "var(--text2)", border: EDGE }}>
                           Reset
                         </button>}
                       />
@@ -5075,7 +5075,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                went — so the first press says what the second one does, and
                says it where the eye already is when it wants out. */
             <div className="fixed bottom-6 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-lg text-[12.5px] pointer-events-none"
-              style={{ zIndex: 10002, background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", color: "var(--text2)", boxShadow: "0 10px 30px -12px rgba(0,0,0,0.7)" }}>
+              style={{ zIndex: 10002, background: "var(--surface-card)", border: EDGE, color: "var(--text2)", boxShadow: "0 10px 30px -12px rgba(0,0,0,0.7)" }}>
               Press Escape again to leave settings
             </div>
           )}

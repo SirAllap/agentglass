@@ -20,7 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../lib/api.ts";
 import { createLogFeed, filterLines, levelOf, type LogFeed, type LogLevel } from "../../lib/dockerLogFeed.ts";
 import { CODE_FONT_STYLE } from "../diff/DiffLines.tsx";
-import { INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
+import { INPUT, INPUT_STYLE, EDGE } from "../workspace/Chrome.tsx";
 
 /** How many lines are drawn. The feed keeps more; a browser asked to lay out
  *  five thousand elements while more arrive is a browser that stutters. */
@@ -137,7 +137,7 @@ export function LogView({ id, tail, running }: { id: string; tail: number; runni
         <span className="text-[9.5px] px-1.5 py-0.5 rounded-md shrink-0"
           title={ended ?? (running ? "following this container" : "the container is not running")}
           style={ended
-            ? { color: "var(--text4)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }
+            ? { color: "var(--text4)", border: EDGE }
             : { color: "var(--success-ink)", border: "1px solid color-mix(in srgb, var(--success) 40%, transparent)", background: "color-mix(in srgb, var(--success) 10%, transparent)" }}>
           {ended ? (snapshot !== null ? "snapshot" : "ended") : "live"}
         </span>
@@ -148,7 +148,7 @@ export function LogView({ id, tail, running }: { id: string; tail: number; runni
             title={l ? `Only ${l} and worse` : "Everything"}
             style={min === l
               ? { color: "var(--text)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }
-              : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
+              : { color: "var(--text3)", border: EDGE }}>
             {l ?? "all"}
           </button>
         ))}
@@ -171,7 +171,7 @@ export function LogView({ id, tail, running }: { id: string; tail: number; runni
             title={paused ? "Show what has arrived since" : "Hold the view still — the log keeps arriving"}
             style={paused
               ? { color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)", background: "color-mix(in srgb, var(--warning) 12%, transparent)" }
-              : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
+              : { color: "var(--text3)", border: EDGE }}>
             {paused ? (waiting ? `resume · ${waiting}` : "resume") : "pause"}
           </button>
         </div>

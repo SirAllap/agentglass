@@ -17,6 +17,7 @@ import { subscribeUpdate, updateState, updateAvailable } from "../lib/updateStor
 import { readProgress, fraction, elapsed, PHASES, CLOSES_AT, type Progress } from "../lib/updateProgress.ts";
 import { ReleaseNotesModal } from "./ReleaseNotesModal.tsx";
 import { CloseButton } from "./CloseButton.tsx";
+import { EDGE } from "./workspace/Chrome.tsx";
 
 /** Dismissed for this version only. A later release is a different piece of
  *  news and gets to knock again. */
@@ -28,7 +29,6 @@ const APPEAR_AFTER_MS = 20_000;
 /** The log is a file on disk being appended to; a second is plenty. */
 const POLL_MS = 1_000;
 
-const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 
 export function UpdateToast() {
   const st = useSyncExternalStore(subscribeUpdate, updateState, () => null);
@@ -98,7 +98,7 @@ export function UpdateToast() {
       <div className="fixed rounded-xl text-left"
         style={{
           right: 16, bottom: 16, width: 320, zIndex: 60,
-          background: "var(--surface-card)", border: edge(14), boxShadow: "0 12px 34px #000a",
+          background: "var(--surface-card)", border: EDGE, boxShadow: "0 12px 34px #000a",
           padding: "12px 14px",
         }}
         role="status" aria-live="polite">

@@ -28,8 +28,8 @@
  */
 import type { CSSProperties } from "react";
 import type { UnderstudyClassRow } from "../../../../shared/types.ts";
-import { Chip } from "../workspace/Chrome.tsx";
-import { edge, wash } from "../git/ui.tsx";
+import { Chip, EDGE, LINE } from "../workspace/Chrome.tsx";
+import { wash } from "../git/ui.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import {
   BEARDS, BODIES, BROWS, DEFAULT_COSMETIC, EARS, EYES, EYEWEAR, HAIRSTYLES, HEADWEAR, HORNS,
@@ -242,7 +242,7 @@ function Presets({ onPick }: { onPick: (c: Cosmetic) => void }) {
               title={p.label}
               onClick={() => onPick(cos)}
               className="flex flex-col items-center gap-1 rounded-lg p-1.5"
-              style={{ background: wash("--text", 4), border: edge(8), cursor: "pointer" }}
+              style={{ background: wash("--text", 4), border: EDGE, cursor: "pointer" }}
             >
               <Persona px={96} cos={cos} label={p.label} />
               <span className="text-[10px]" style={{ color: "var(--text3)" }}>{p.label}</span>
@@ -408,7 +408,7 @@ export function Appearance({ value, onChange, classes }: {
          * sentence four times in a column 300px wide. The reason is the
          * server's; how many times it is worth reading is ours.
          */
-        <div className="px-4 py-3 flex flex-col gap-2" style={{ borderTop: edge(8) }}>
+        <div className="px-4 py-3 flex flex-col gap-2" style={{ borderTop: LINE }}>
           {byReason.map(([why, names]) => (
             <div key={why} className="text-[10px] leading-relaxed" style={{ color: "var(--text3)" }}>
               <span style={{ color: "var(--text3)" }}>{names.join(", ")}</span>

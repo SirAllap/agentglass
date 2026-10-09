@@ -33,6 +33,7 @@ import { Select } from "./Select.tsx";
 import type { AgentCard, Alert } from "../lib/derive.ts";
 import { CrossIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { EDGE, LINE } from "./workspace/Chrome.tsx";
 
 /** "unknown" is a real bucket (a session whose model never resolved), and it
  *  reads as a value rather than as a gap when it is spelled out. */
@@ -96,7 +97,7 @@ export function DashboardView({
   const hasFilter = filter.app || filter.type || filter.provider;
   const selStyle = {
     background: "color-mix(in srgb, var(--bg3) 40%, transparent)",
-    border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)",
+    border: EDGE,
     color: "var(--text2)",
   };
 
@@ -105,7 +106,7 @@ export function DashboardView({
       {/* The controls that only mean something here, now that they live here.
           One row, the same height as every other view's header. */}
       <div className="flex items-center gap-2 px-3 shrink-0 overflow-x-auto agw-noscrollbar"
-        style={{ height: 40, borderBottom: "1px solid color-mix(in srgb, var(--text) 12%, transparent)" }}>
+        style={{ height: 40, borderBottom: LINE }}>
         <span className="text-[12.5px] font-semibold shrink-0" style={{ color: "var(--text)" }}>Dashboard</span>
         <span className="flex items-center gap-0.5 shrink-0 ml-1 p-0.5 rounded-lg"
           style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)" }}>

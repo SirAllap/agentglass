@@ -4,6 +4,7 @@ import { fmtAgo } from "../lib/format.ts";
 import { listChats } from "../lib/chatStore.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import type { ChatPane } from "../../../shared/types.ts";
+import { EDGE } from "./workspace/Chrome.tsx";
 
 /**
  * What is actually running, and what belongs to nothing.
@@ -124,7 +125,7 @@ export function RunningPanes({ open }: { open: boolean }) {
                 </button>
                 <button onClick={() => setConfirming(null)}
                   className="text-[10.5px] px-2 py-1 rounded-md hover:opacity-80"
-                  style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+                  style={{ color: "var(--text2)", border: EDGE }}>
                   Keep
                 </button>
               </div>
@@ -132,7 +133,7 @@ export function RunningPanes({ open }: { open: boolean }) {
               <button onClick={() => setConfirming(p.name)}
                 title="Kill this pane and free its memory. The chat it belongs to, if any, starts a fresh CLI on its next turn."
                 className="shrink-0 text-[10.5px] px-2 py-1 rounded-md hover:opacity-80"
-                style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+                style={{ color: "var(--text2)", border: EDGE }}>
                 End
               </button>
             )

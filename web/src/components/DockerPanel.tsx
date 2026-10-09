@@ -3,7 +3,7 @@
 // stop/restart/rm actions. Images / volumes / networks get their own tabs.
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { PlayIcon, RefreshIcon } from "../lib/glyphIcons.tsx";
-import { RefreshButton, CTRL_H, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { RefreshButton, CTRL_H, INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
 import type { DockerOverview, DockerContainer, DockerStat, DockerCapability } from "../../../shared/types.ts";
 import { depSpec } from "../../../shared/deps.ts";
@@ -649,7 +649,7 @@ export function DockerView({ active, onOpenBrowser }: {
                     <button onClick={() => { const next = groupBy === "stack" ? "worktree" : "stack"; setGroupBy(next); try { localStorage.setItem(GROUP_KEY, next); } catch { /* private mode */ } }}
                       title={groupBy === "stack" ? "Group by the checkout each container came from" : "Group by compose project"}
                       className="text-[10px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg"
-                      style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
+                      style={{ color: "var(--text3)", border: EDGE }}>
                       by {groupBy}
                     </button>
                     {!writeEnabled && ov?.available && <span className="text-[9.5px] t-dim2">Read-only</span>}
@@ -657,7 +657,7 @@ export function DockerView({ active, onOpenBrowser }: {
                       className="text-[10px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg"
                       style={dense
                         ? { color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }
-                        : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
+                        : { color: "var(--text3)", border: EDGE }}>
                       Dense
                     </button>
                     <RefreshButton onRefresh={() => { loadOverview(); loadStats(); }} title="Refresh" />
@@ -801,12 +801,12 @@ export function DockerView({ active, onOpenBrowser }: {
                           </thead>
                           <tbody className="tabular-nums">
                             {view === "images" && ov.images.map((i) => (
-                              <tr key={i.id} style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", opacity: i.dangling ? 0.55 : 1 }}>
+                              <tr key={i.id} style={{ borderTop: LINE, opacity: i.dangling ? 0.55 : 1 }}>
                                 <td className="py-1.5 pr-4" style={{ color: "var(--text)" }}>{i.repository}</td><td className="py-1.5 pr-4">{i.tag}</td><td className="py-1.5 pr-4">{i.id.slice(0, 12)}</td><td className="py-1.5 pr-4">{i.size}</td><td className="py-1.5 pr-4">{i.created}</td><td className="py-1.5 pr-4">{i.containers}</td>
                               </tr>
                             ))}
                             {view === "networks" && ov.networks.map((n) => (
-                              <tr key={n.id} style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}><td className="py-1.5 pr-4" style={{ color: "var(--text)" }}>{n.name}</td><td className="py-1.5 pr-4">{n.id}</td><td className="py-1.5 pr-4">{n.driver}</td><td className="py-1.5 pr-4">{n.scope}</td></tr>
+                              <tr key={n.id} style={{ borderTop: LINE }}><td className="py-1.5 pr-4" style={{ color: "var(--text)" }}>{n.name}</td><td className="py-1.5 pr-4">{n.id}</td><td className="py-1.5 pr-4">{n.driver}</td><td className="py-1.5 pr-4">{n.scope}</td></tr>
                             ))}
                           </tbody>
                         </table>

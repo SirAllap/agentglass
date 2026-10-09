@@ -12,6 +12,7 @@ import { Row, Chip, type Tone as RowTone } from "../git/ui.tsx";
 import { DoneIcon } from "../../lib/glyphIcons.tsx";
 import { CloseIcon } from "../CloseButton.tsx";
 import { ICON } from "../../lib/iconSize.ts";
+import { EDGE, LINE } from "../workspace/Chrome.tsx";
 
 /**
  * A plugin's screen, drawn with this app's own parts.
@@ -105,7 +106,7 @@ function Node({ node, ctx }: { node: UiNode; ctx: Ctx }): ReactNode {
       );
     case "section":
       return (
-        <section className="rounded-lg min-w-0" style={{ background: "var(--surface-card)", border: "1px solid var(--surface-line)", boxShadow: "var(--surface-lift)" }}>
+        <section className="rounded-lg min-w-0" style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "var(--surface-lift)" }}>
           <header className="flex items-center gap-3 px-3.5 pt-3 pb-2">
             <div className="min-w-0 flex-1">
               <div className="text-[12.5px] font-semibold truncate" style={{ color: "var(--text)" }}>{node.title}</div>
@@ -136,7 +137,7 @@ function Node({ node, ctx }: { node: UiNode; ctx: Ctx }): ReactNode {
     case "code":
       return (
         <pre className="t-mono text-[11.5px] rounded-md px-3 py-2 overflow-auto min-w-0 m-0"
-          style={{ background: "var(--surface-inset)", border: "1px solid var(--surface-line)", color: "var(--text2)", maxHeight: 420 }}>
+          style={{ background: "var(--surface-inset)", border: EDGE, color: "var(--text2)", maxHeight: 420 }}>
           {node.text}
         </pre>
       );
@@ -144,7 +145,7 @@ function Node({ node, ctx }: { node: UiNode; ctx: Ctx }): ReactNode {
       return <Badge text={node.text} tone={node.tone} />;
     case "stat":
       return (
-        <div className="rounded-lg px-3 py-2.5 min-w-[112px] self-stretch" style={{ background: "var(--surface-inset)", border: "1px solid var(--surface-line)" }}>
+        <div className="rounded-lg px-3 py-2.5 min-w-[112px] self-stretch" style={{ background: "var(--surface-inset)", border: EDGE }}>
           <div className="text-[10px] uppercase tracking-wide" style={{ color: "var(--text3)" }}>{node.label}</div>
           <div className="text-[20px] font-semibold tabular-nums leading-tight" style={{ color: TONE_COLOR[node.tone ?? "default"] }}>{node.value}</div>
           {node.hint && <div className="text-[10.5px] mt-0.5" style={{ color: "var(--text3)" }}>{node.hint}</div>}
@@ -270,7 +271,7 @@ function Tabs({ node, ctx }: { node: Extract<UiNode, { type: "tabs" }>; ctx: Ctx
   const cur = node.tabs.find((t) => t.id === sel) ?? node.tabs[0];
   return (
     <div className="flex flex-col gap-3 min-w-0">
-      <div role="tablist" className="flex items-center gap-1 min-w-0 overflow-x-auto" style={{ borderBottom: "1px solid var(--surface-line)" }}>
+      <div role="tablist" className="flex items-center gap-1 min-w-0 overflow-x-auto" style={{ borderBottom: LINE }}>
         {node.tabs.map((t) => {
           const on = t.id === cur?.id;
           return (
@@ -521,8 +522,8 @@ function MultiPick({ field, value, onChange }: { field: Field; value: string[]; 
       {options.length === 0 ? (
         <div className="text-[11.5px] t-dim">{field.placeholder ? `Loading… (for example ${field.placeholder})` : "Loading the list…"}</div>
       ) : (
-        <div className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
-          <input className="agx-input t-mono w-full" style={{ border: 0, borderRadius: 0, borderBottom: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}
+        <div className="rounded-lg overflow-hidden" style={{ border: EDGE }}>
+          <input className="agx-input t-mono w-full" style={{ border: 0, borderRadius: 0, borderBottom: LINE }}
             placeholder={`Search ${options.length} …`} value={q} onChange={(e) => setQ(e.target.value)} />
           <div className="max-h-[220px] overflow-y-auto py-1">
             {shown.length === 0 && <div className="px-3 py-2 text-[11.5px] t-dim">Nothing matches “{q.trim()}”.</div>}

@@ -20,6 +20,7 @@ import { LAYER } from "../lib/layers.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { ClockIcon, HandIcon } from "../lib/glyphIcons.tsx";
+import { EDGE } from "./workspace/Chrome.tsx";
 
 /** How long "later" is. Ten minutes is the snooze every clock on earth defaults
  *  to, and a number nobody has to think about is the right one here. */
@@ -117,7 +118,7 @@ export function AlarmCard(
               className="text-[11px] px-2 py-1 rounded-lg"
               style={{
                 background: "color-mix(in srgb, var(--bg3) 55%, transparent)",
-                border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)",
+                border: EDGE,
                 color: "var(--text3)",
               }}
             >Later</button>
@@ -140,7 +141,7 @@ export function AlarmCard(
             className="text-[11px] px-2 py-1 rounded-lg"
             style={{
               background: "color-mix(in srgb, var(--bg3) 55%, transparent)",
-              border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)",
+              border: EDGE,
               color: "var(--text3)",
             }}
           >Snooze {SNOOZE_MIN}m</button>

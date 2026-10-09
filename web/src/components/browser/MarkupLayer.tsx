@@ -15,6 +15,7 @@ import type { GitRepoRef } from "../../../../shared/types.ts";
 import { CheckoutPicker } from "../CheckoutPicker.tsx";
 import { ArrowIcon, BoxIcon, CircleIcon, EditIcon } from "../../lib/glyphIcons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
+import { EDGE } from "../workspace/Chrome.tsx";
 
 type Guest = { capturePage(): Promise<{ toDataURL(): string }> } | null;
 
@@ -202,7 +203,7 @@ export function MarkupLayer({ view, url, onNote, onDone }: {
       <div className="absolute left-1/2 -translate-x-1/2 bottom-4 flex flex-col items-center gap-1.5"
         style={{ pointerEvents: "auto" }}>
         <div className="flex items-center gap-1 px-1.5 py-1 rounded-xl shadow-2xl"
-          style={{ background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }}>
+          style={{ background: "var(--surface-card)", border: EDGE }}>
           {TOOLS.map((t) => (
             <button key={t.id} onClick={() => setTool(t.id)} title={t.label}
               className="agx-btn rounded-lg flex items-center justify-center"
@@ -239,7 +240,7 @@ export function MarkupLayer({ view, url, onNote, onDone }: {
         </div>
 
         <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-xl shadow-2xl"
-          style={{ background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }}>
+          style={{ background: "var(--surface-card)", border: EDGE }}>
           <span className="text-[10.5px] mr-1" style={{ color: "var(--text3)" }}>
             Draw on the page, then
           </span>
@@ -254,7 +255,7 @@ export function MarkupLayer({ view, url, onNote, onDone }: {
           </button>
           <button onClick={() => void copy()} disabled={busy || !state.shapes.length}
             className="agx-btn text-[11px] px-2 py-1 rounded-lg disabled:opacity-40"
-            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+            style={{ color: "var(--text2)", border: EDGE }}>
             Copy it
           </button>
           <button onClick={onDone} className="text-[10px] px-1" style={{ color: "var(--text3)" }}>Done</button>

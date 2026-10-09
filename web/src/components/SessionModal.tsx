@@ -18,6 +18,7 @@ import { CloseButton } from "./CloseButton.tsx";
 import { BranchIcon, CopyIcon, IconLabel } from "../lib/glyphIcons.tsx";
 import { agentsOf, subscribeAgents } from "../lib/fleetAgents.ts";
 import { branchesOf, subscribeBranches } from "../lib/repoBranches.ts";
+import { EDGE } from "./workspace/Chrome.tsx";
 import {
   SHARED_TREE_LABEL, SHARED_TREE_TOOLTIP,
   branchForCwd, isSharedCwd, liveSharedCwds, workingTreeOf,
@@ -44,7 +45,7 @@ function Stat({ k, v, color }: { k: string; v: string; color?: string }) {
 // literals rebuilt for every message on every poll, which is a fresh style
 // recalculation for a bubble whose colours have never once changed.
 const USER_BUBBLE = { background: "color-mix(in srgb, var(--primary) 26%, var(--bg2))", color: "var(--text)", border: "1px solid color-mix(in srgb, var(--primary) 55%, transparent)", borderLeft: "3px solid var(--primary)" };
-const AGENT_BUBBLE = { background: "color-mix(in srgb, var(--bg3) 85%, var(--bg))", color: "var(--text)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", borderLeft: "3px solid color-mix(in srgb, var(--info) 70%, transparent)" };
+const AGENT_BUBBLE = { background: "color-mix(in srgb, var(--bg3) 85%, var(--bg))", color: "var(--text)", border: EDGE, borderLeft: "3px solid color-mix(in srgb, var(--info) 70%, transparent)" };
 
 const Bubble = memo(function Bubble({ role, ts, text }: { role: string; ts: number; text: string }) {
   const user = role === "user";
@@ -167,7 +168,7 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                 initial={{ opacity: 0, scale: 0.95, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 8 }}
                 transition={{ type: "spring", stiffness: 330, damping: 30 }}
                 className="w-[95vw] h-[95vh] rounded-xl flex flex-col pointer-events-auto overflow-hidden"
-                style={{ background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
+                style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
               >
                 {/* header */}
                 <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>

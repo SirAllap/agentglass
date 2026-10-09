@@ -32,6 +32,7 @@ import type {
 } from "../../../shared/types.ts";
 import { CircleIcon, DoneIcon, DotIcon, IconLabel, MoreIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { EDGE } from "./workspace/Chrome.tsx";
 
 /** Unchanged lines kept either side of a conflict before the rest is folded.
  *  Twelve is about a function signature plus its opening lines — enough to
@@ -317,7 +318,7 @@ export function ConflictMode(p: ConflictModeProps) {
         <span className="text-[10px]" style={{ color: "var(--text3)" }}>← incoming</span>
         <span className="text-[11px] font-mono truncate" style={{ color: "var(--warning-ink)" }}>{labels.theirs}</span>
         {step && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
+          <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: EDGE }}
             title="A rebase replays your commits one at a time and stops on each one that conflicts. It is not over when this file is.">{step}</span>
         )}
         <span className="ml-auto text-[11px] tabular-nums" style={{ color: "var(--text2)" }}>
@@ -396,7 +397,7 @@ export function ConflictMode(p: ConflictModeProps) {
             )}
             {!fileErr && !file && sel && <div className="px-4 py-3 text-[11px]" style={{ color: "var(--text3)" }}>reading {sel}…</div>}
             {file && !blocks.length && (
-              <div className="m-3 px-3 py-2 rounded-lg text-[11px]" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+              <div className="m-3 px-3 py-2 rounded-lg text-[11px]" style={{ color: "var(--text2)", border: EDGE }}>
                 Nothing is conflicted in this file any more — something else resolved it.
                 <div className="mt-1.5">
                   <Btn tone="go" onClick={() => void p.act(() => api.gitResolve(root, [sel!], "ours"), `${sel} staged`)} disabled={busy}>Mark it resolved</Btn>

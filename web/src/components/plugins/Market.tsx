@@ -33,7 +33,7 @@ import { ExternalIcon } from "../browser/icons.tsx";
 import { Portal } from "../Portal.tsx";
 import { CloseButton } from "../CloseButton.tsx";
 import { LAYER } from "../../lib/layers.ts";
-import { INPUT, INPUT_STYLE, RefreshButton } from "../workspace/Chrome.tsx";
+import { INPUT, INPUT_STYLE, RefreshButton, EDGE } from "../workspace/Chrome.tsx";
 import type { Catalogue, InstallSource } from "../../../../shared/types.ts";
 
 /** The list this project publishes, on its own site, and the same document
@@ -225,7 +225,7 @@ export function Market({ installed, onInstalled }: {
             <span style={{ color: "var(--text2)" }}>The market did not answer: {state.error}</span>
             <button onClick={() => void load()}
               className="ml-auto text-[12px] px-2.5 py-1 rounded-lg hover:opacity-80"
-              style={{ color: "var(--text)", border: "1px solid var(--surface-line)" }}>Try again</button>
+              style={{ color: "var(--text)", border: EDGE }}>Try again</button>
           </div>
         )}
 
@@ -248,11 +248,11 @@ export function Market({ installed, onInstalled }: {
           <div className="agx-settings-gutter py-3 flex items-center justify-center gap-2 text-[11.5px]">
             <button onClick={() => setPage(here - 1)} disabled={here === 0}
               className="px-2 py-0.5 rounded-lg disabled:opacity-40 hover:opacity-80"
-              style={{ color: "var(--text2)", border: "1px solid var(--surface-line)" }}>Previous</button>
+              style={{ color: "var(--text2)", border: EDGE }}>Previous</button>
             <span className="t-dim tabular-nums">{here + 1} of {pages}</span>
             <button onClick={() => setPage(here + 1)} disabled={here >= pages - 1}
               className="px-2 py-0.5 rounded-lg disabled:opacity-40 hover:opacity-80"
-              style={{ color: "var(--text2)", border: "1px solid var(--surface-line)" }}>Next</button>
+              style={{ color: "var(--text2)", border: EDGE }}>Next</button>
           </div>
         )}
 
@@ -285,7 +285,7 @@ function TypeChip({ label, count, on, onClick }: { label: string; count: number;
       className="text-[11.5px] px-2.5 py-1 rounded-full whitespace-nowrap hover:opacity-80 flex items-center gap-1.5"
       style={on
         ? { color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }
-        : { color: "var(--text2)", background: "transparent", border: "1px solid var(--surface-line)" }}>
+        : { color: "var(--text2)", background: "transparent", border: EDGE }}>
       {label}
       <span className="tabular-nums" style={{ color: on ? "var(--primary)" : "var(--text4)" }}>{count}</span>
     </button>
@@ -369,7 +369,7 @@ export function Offer({ entry, owner, onInstalled, mode, was = null }: {
       <div className="shrink-0 flex items-center gap-2">
         <button onClick={() => setOpen(true)}
           className="text-[12px] px-3 py-1.5 rounded-lg whitespace-nowrap hover:opacity-80"
-          style={{ color: "var(--text2)", border: "1px solid var(--surface-line)" }}>
+          style={{ color: "var(--text2)", border: EDGE }}>
           Details
         </button>
         <button onClick={install} disabled={busy}
@@ -420,7 +420,7 @@ function Details({ entry, owner, tint, repo, open, busy, onClose, onInstall }: {
       <div className="fixed inset-0 flex items-center justify-center p-4 pointer-events-none">
         <div role="dialog" aria-modal="true" aria-label={entry.title || entry.id}
           className="w-[620px] max-w-[95vw] rounded-xl flex flex-col pointer-events-auto overflow-hidden"
-          style={{ maxHeight: "min(78vh, 620px)", background: "var(--surface-card)", border: "1px solid var(--surface-line)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
+          style={{ maxHeight: "min(78vh, 620px)", background: "var(--surface-card)", border: EDGE, boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
 
           <div className="flex items-center gap-3 px-5 py-4 border-b shrink-0" style={{ borderColor: "var(--surface-line)" }}>
             <span className="shrink-0 grid place-items-center rounded-lg text-[15px] font-semibold" style={{
@@ -476,7 +476,7 @@ function Details({ entry, owner, tint, repo, open, busy, onClose, onInstall }: {
             {repo && (
               <a href={repo} target="_blank" rel="noopener noreferrer" title={repo}
                 className="text-[12px] px-3 py-1.5 rounded-lg whitespace-nowrap hover:opacity-80 inline-flex items-center gap-1.5"
-                style={{ color: "var(--text2)", border: "1px solid var(--surface-line)" }}>
+                style={{ color: "var(--text2)", border: EDGE }}>
                 Repository <ExternalIcon size={ICON.xs} />
               </a>
             )}

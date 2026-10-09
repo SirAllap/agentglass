@@ -21,7 +21,7 @@ import { STATUS_WORDS } from "../../../../shared/windowStatus.ts";
 import { SearchIcon } from "../../lib/glyphIcons.tsx";
 import { Portal } from "../Portal.tsx";
 import { StatusMark, STATUS_COLOR } from "./StatusMark.tsx";
-import { INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
+import { INPUT, INPUT_STYLE, EDGE, LINE } from "../workspace/Chrome.tsx";
 
 /** While open, the list is re-read this often: a status is a live thing, and
  *  a row that says "working" after its agent asked a question is the one lie
@@ -154,9 +154,9 @@ export function WindowSwitcher({ open, onClose, onGone }: {
         }}
         onKeyDown={onKey}
         role="dialog" aria-modal="true" aria-label="Go to a window">
-        <div className="px-2.5 py-2.5 shrink-0" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 10%, transparent)" }}>
+        <div className="px-2.5 py-2.5 shrink-0" style={{ borderBottom: LINE }}>
           <div className="flex items-center gap-2.5 px-2.5 py-2 rounded-md"
-            style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 14%, transparent)" }}>
+            style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: EDGE }}>
             <span className="flex" style={{ color: "var(--primary-ink)" }}><SearchIcon size={ICON.xs} /></span>
             <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)}
               spellCheck={false} autoComplete="off"
@@ -221,7 +221,7 @@ export function WindowSwitcher({ open, onClose, onGone }: {
         </div>
 
         <div className="shrink-0 flex flex-wrap gap-x-3 gap-y-0.5 px-3 py-1.5 text-[10.5px]"
-          style={{ color: "var(--text4)", borderTop: "1px solid color-mix(in srgb, var(--text) 10%, transparent)" }}>
+          style={{ color: "var(--text4)", borderTop: LINE }}>
           <span>↑↓ choose</span><span>⏎ go</span><span>Alt+1–9 jump</span><span>{chord} next waiting</span><span>esc close</span>
         </div>
       </div>

@@ -5,7 +5,7 @@ import { menuUnder, PICK_W, PICK_H } from "../lib/menuPos.ts";
 import type { ListMember } from "../../../shared/providers.ts";
 import { DoneIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { INPUT, INPUT_STYLE, LINE } from "./workspace/Chrome.tsx";
 
 /*
  * The picker this app uses to put somebody on a card.
@@ -84,7 +84,7 @@ export function PeoplePick(p: PeoplePickProps) {
           const divide = i > 0 && !!p.dividerBefore?.(m, shown[i - 1]!);
           return (
             <div key={m.id}>
-              {divide && <div className="my-1" style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 14%, transparent)" }} />}
+              {divide && <div className="my-1" style={{ borderTop: LINE }} />}
               <button className="w-full text-left px-2 py-1.5 hover:bg-white/5 flex items-center gap-2 disabled:opacity-70"
                 disabled={saving} onClick={() => p.onPick(m)}>
                 {p.face(m)}

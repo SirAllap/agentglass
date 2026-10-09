@@ -32,7 +32,7 @@ import { SplitDiff, UnifiedDiff, SCROLLBAR_CSS, SPLIT_SEL_CSS } from "./DiffLine
 import { ThemePicker, Toggle, DiffSettingsLink } from "./DiffControls.tsx";
 import { WarningIcon } from "../../lib/glyphIcons.tsx";
 import { riskColor, riskTitle } from "../../lib/riskView.ts";
-import { INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
+import { INPUT, INPUT_STYLE, EDGE } from "../workspace/Chrome.tsx";
 
 export type PresetDiffProps = {
   open: boolean;
@@ -59,7 +59,7 @@ export function PresetDiff({ open, onClose, changes, title, path, onBack, backLa
                 initial={{ opacity: 0, scale: 0.95, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 8 }}
                 transition={{ type: "spring", stiffness: 330, damping: 30 }}
                 className="w-[95vw] h-[95vh] rounded-xl flex flex-col pointer-events-auto outline-none overflow-hidden"
-                style={{ background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
+                style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
               >
                 <Inner changes={changes} title={title} path={path} onBack={onBack} backLabel={backLabel} onClose={onClose} />
               </motion.div>
@@ -108,7 +108,7 @@ function Inner({ changes, title, path, onBack, backLabel, onClose }: Omit<Preset
         {onBack && (
           <button onClick={onBack} title={backLabel || "Back"}
             className="shrink-0 px-2.5 py-1 rounded-lg text-[11px] flex items-center gap-1.5"
-            style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg3) 45%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+            style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg3) 45%, transparent)", border: EDGE }}>
             <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none" aria-hidden>
               <path d="M7.5 2.5L4 6l3.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
             </svg>

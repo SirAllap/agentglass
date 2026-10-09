@@ -14,6 +14,7 @@ import { WorkspaceIcon } from "./workspace/icons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { sharedPhase } from "../lib/sharedPhase.ts";
 import { CrossIcon, HomeIcon, SparkleIcon } from "../lib/glyphIcons.tsx";
+import { EDGE, LINE } from "./workspace/Chrome.tsx";
 
 // Sessions whose model never resolved carry the "unknown" provider value; it
 // stays lowercase everywhere it is compared (server sentinel, providerOf), but
@@ -33,7 +34,7 @@ const WINDOWS = [
 ];
 
 // Shared by the header's pill-shaped controls (filters, search button).
-const selStyle = { background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text2)" };
+const selStyle = { background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: EDGE, color: "var(--text2)" };
 
 const svg = { width: 15, height: 15, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
 
@@ -44,7 +45,7 @@ function IconBtn({ title, active, onClick, children }: { title: string; active?:
       onClick={onClick}
       className="h-8 w-8 grid place-items-center rounded-lg transition-colors"
       style={{
-        border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)",
+        border: EDGE,
         background: active ? "color-mix(in srgb, var(--primary) 20%, transparent)" : "color-mix(in srgb, var(--bg3) 30%, transparent)",
         color: active ? "var(--primary-hover)" : "var(--text3)",
       }}
@@ -179,7 +180,7 @@ function MoreMenu({ onOpen }: { onOpen: () => void }) {
       onClick={onOpen}
       className="relative h-8 w-8 grid place-items-center rounded-lg"
       style={{
-        border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)",
+        border: EDGE,
         background: "color-mix(in srgb, var(--bg3) 30%, transparent)",
         color: "var(--text2)",
       }}>
@@ -237,7 +238,7 @@ export function Header({
 
   return (
     <header className="flex items-center gap-x-3 gap-y-2 px-3 sm:px-4 py-2.5 shrink-0 relative z-20 flex-wrap sm:flex-nowrap"
-      style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", background: "color-mix(in srgb, var(--bg2) 94%, var(--bg))", paddingLeft: IS_MAC_DESKTOP ? 76 : undefined }}>
+      style={{ borderBottom: LINE, background: "color-mix(in srgb, var(--bg2) 94%, var(--bg))", paddingLeft: IS_MAC_DESKTOP ? 76 : undefined }}>
       <div className="flex items-center gap-2.5 shrink-0">
         <motion.span initial={{ rotate: -20, opacity: 0 }} animate={{ rotate: 0, opacity: 1 }} transition={{ type: "spring", stiffness: 200 }} className="flex pointer-events-none">
           <Logo size={26} title="agentglass" />

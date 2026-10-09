@@ -10,6 +10,7 @@ import { Portal } from "./Portal.tsx";
 import { CloseButton } from "./CloseButton.tsx";
 import { api } from "../lib/api.ts";
 import type { RepoStats, Changelog, ChangelogEntry } from "../../../shared/types.ts";
+import { EDGE } from "./workspace/Chrome.tsx";
 
 const DAY_OPTS = [7, 30, 90];
 
@@ -32,7 +33,7 @@ function Spark({ values, color }: { values: number[]; color: string }) {
 
 function Stat({ k, v, sub }: { k: string; v: string | number; sub?: string }) {
   return (
-    <div className="min-w-0 rounded-lg p-3" style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+    <div className="min-w-0 rounded-lg p-3" style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: EDGE }}>
       <div className="text-[9.5px] uppercase tracking-wider t-dim2 truncate">{k}</div>
       <div className="text-[20px] font-semibold leading-none tabular-nums mt-1" style={{ color: "var(--text)" }}>{v}</div>
       {sub && <div className="text-[10px] t-dim2 mt-1 truncate">{sub}</div>}
@@ -85,7 +86,7 @@ export function InsightsModal({ root, onClose }: { root: string; onClose: () => 
         <motion.div className="fixed inset-0 z-[90] flex items-center justify-center p-4" style={{ background: "color-mix(in srgb, #000 45%, transparent)" }} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
           <motion.div
             className="agx-scroll relative w-full max-w-2xl max-h-[85vh] overflow-y-auto rounded-xl p-5"
-            style={{ background: "var(--surface-card)", border: "1px solid var(--border)", boxShadow: "0 24px 80px rgba(0,0,0,.5)" }}
+            style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 24px 80px rgba(0,0,0,.5)" }}
             initial={{ opacity: 0, scale: .97, y: 8 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: .97, y: 8 }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -93,7 +94,7 @@ export function InsightsModal({ root, onClose }: { root: string; onClose: () => 
               <h3 className="text-[13px] font-semibold" style={{ color: "var(--text)" }}>Repo insights</h3>
               <div className="flex items-center gap-1 ml-1">
                 {DAY_OPTS.map((d) => (
-                  <button key={d} onClick={() => setDays(d)} className="text-[10px] px-2 py-0.5 rounded-md" style={d === days ? { background: "color-mix(in srgb, var(--primary) 25%, transparent)", color: "var(--text)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" } : { color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>{d}d</button>
+                  <button key={d} onClick={() => setDays(d)} className="text-[10px] px-2 py-0.5 rounded-md" style={d === days ? { background: "color-mix(in srgb, var(--primary) 25%, transparent)", color: "var(--text)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" } : { color: "var(--text2)", border: EDGE }}>{d}d</button>
                 ))}
               </div>
               <CloseButton onClick={onClose} />
@@ -113,7 +114,7 @@ export function InsightsModal({ root, onClose }: { root: string; onClose: () => 
                 </div>
 
                 {(stats?.churn.length ?? 0) > 1 && (
-                  <div className="flex items-center gap-4 rounded-lg p-3" style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+                  <div className="flex items-center gap-4 rounded-lg p-3" style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: EDGE }}>
                     <div className="min-w-0 flex-1">
                       <div className="text-[9.5px] uppercase tracking-wider t-dim2 mb-1">net line churn by day</div>
                       <div className="flex items-center gap-3">
@@ -159,7 +160,7 @@ export function InsightsModal({ root, onClose }: { root: string; onClose: () => 
                     <span className="text-[9.5px] uppercase tracking-wider t-dim2">changelog</span>
                     {changelog?.from && <span className="text-[10px] font-mono t-dim2">{changelog.from} → {changelog.to}</span>}
                     {markdown && (
-                      <button onClick={copy} className="ml-auto text-[10px] px-2 py-0.5 rounded" style={{ color: copied ? "var(--success)" : "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>{copied ? "copied" : "copy markdown"}</button>
+                      <button onClick={copy} className="ml-auto text-[10px] px-2 py-0.5 rounded" style={{ color: copied ? "var(--success)" : "var(--text2)", border: EDGE }}>{copied ? "copied" : "copy markdown"}</button>
                     )}
                   </div>
                   {changelog?.error ? (

@@ -32,6 +32,7 @@ import type { LegActivity, ProviderSpend, Run, RunLeg } from "../lib/api.ts";
 import { activityOf, refreshActivity, subscribeRuns, watchActivity } from "../lib/runStore.ts";
 import { fmtAgo, fmtUsd } from "../lib/format.ts";
 import { ICON } from "../lib/iconSize.ts";
+import { EDGE } from "./workspace/Chrome.tsx";
 
 /** "unknown" is a real bucket — an event whose model never resolved — and it
  *  reads as a value rather than as a gap when it is spelled with a capital.
@@ -306,7 +307,7 @@ export function RunLane({ run, cards, renderCard }: {
 
   return (
     <div className="space-y-1.5 rounded-xl p-1.5"
-      style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 8%, transparent)" }}>
+      style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", border: EDGE }}>
       <button
         onClick={() => setOpen((o) => !o)}
         className="w-full flex items-center gap-2 px-1 py-0.5 rounded-md text-left min-w-0"

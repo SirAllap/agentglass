@@ -4,6 +4,7 @@ import type { Field } from "../../lib/pluginTypes.ts";
 import { subscribePluginFrame } from "../../lib/pluginBus.ts";
 import { Spinner } from "../Spinner.tsx";
 import { FieldRow } from "./PluginTree.tsx";
+import { EDGE, LINE } from "../workspace/Chrome.tsx";
 
 /**
  * The fields under each heading, in the order they were declared.
@@ -31,13 +32,13 @@ function groupsOf(fields: Field[]): { name?: string; fields: Field[] }[] {
  *  with it shut is a page that looks like less work. */
 function Group({ name, count, children }: { name?: string; count: number; children: React.ReactNode }) {
   const [open, setOpen] = useState(!/^advanced$/i.test(name ?? ""));
-  const box = { background: "var(--surface-card)", border: "1px solid var(--surface-line)" };
+  const box = { background: "var(--surface-card)", border: EDGE };
   if (!name) return <div className="rounded-lg flex flex-col" style={box}>{children}</div>;
   return (
     <section className="rounded-lg flex flex-col" style={box}>
       <button onClick={() => setOpen((v) => !v)}
         className="flex items-center gap-2 px-4 py-2.5 text-left"
-        style={{ background: "transparent", border: 0, borderBottom: open ? "1px solid var(--surface-line)" : undefined }}>
+        style={{ background: "transparent", border: 0, borderBottom: open ? LINE : undefined }}>
         <span className="text-[10px] uppercase tracking-[.12em]" style={{ color: "var(--text3)" }}>{name}</span>
         <span className="text-[10px] tabular-nums t-dim">{count}</span>
         <span className="ml-auto text-[11px] t-dim">{open ? "−" : "+"}</span>
@@ -104,7 +105,7 @@ export function PluginSettingsPane({ name, open }: { name: string; open: boolean
       {groupsOf(fields).map((g) => (
         <Group key={g.name ?? ""} name={g.name} count={g.fields.length}>
           {g.fields.map((f, i) => (
-            <div key={f.key} className="px-4 py-3.5 flex flex-col gap-1" style={{ borderTop: i ? "1px solid var(--surface-line)" : undefined }}>
+            <div key={f.key} className="px-4 py-3.5 flex flex-col gap-1" style={{ borderTop: i ? LINE : undefined }}>
               <FieldRow field={f} value={values[f.key]}
                 onChange={(v) => setValues((s) => ({ ...s, [f.key]: v }))}
                 onCommit={(v) => { void commit(f.key, v); }} />

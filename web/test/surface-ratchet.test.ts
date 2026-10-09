@@ -76,6 +76,15 @@ export function bg2Fills(src: string): number[] {
   return at;
 }
 
+/**
+ * A border that is neither of the house pair: any `edge(n)` but the canonical
+ * `edge(14)`, and any `1px solid …` string spelled out at the call site. The
+ * tinted ones (a primary, warning or error edge that means something) are in
+ * this count too and are expected to stay; the ceiling is what keeps the
+ * NEUTRAL ones, which `EDGE` and `LINE` replaced, from coming back.
+ */
+export const BORDER_LITERAL = /\bedge\((?!14\))[^)]*\)|1px solid/g;
+
 describe("surface ratchet", () => {
   test("bg2 as a direct fill never grows, and its ceiling follows it down", () => {
     const ceiling = ceilings.get("bg2-fill");
@@ -87,6 +96,19 @@ describe("surface ratchet", () => {
     const n = where.length;
     if (n > ceiling!) throw new Error(`${n} direct var(--bg2) fills, ceiling ${ceiling}. Paint cards with var(--surface-card) and wells with var(--surface-inset):\n${where.join("\n")}`);
     if (n < ceiling!) throw new Error(`${n} direct var(--bg2) fills, below the ceiling of ${ceiling}: lower bg2-fill in web/test/ratchets.txt to ${n}.`);
+    expect(n).toBe(ceiling!);
+  });
+
+  test("border weights off the house pair never grow, and their ceiling follows them down", () => {
+    const ceiling = ceilings.get("border-literal");
+    expect(ceiling).toBeNumber();
+    const where: string[] = [];
+    for (const [f, src] of sources) {
+      for (const m of src.matchAll(BORDER_LITERAL)) where.push(`${f.slice(SRC.length + 1)}:${src.slice(0, m.index).split("\n").length}  ${m[0]}`);
+    }
+    const n = where.length;
+    if (n > ceiling!) throw new Error(`${n} border literals, ceiling ${ceiling}. Outline with EDGE, rule with LINE (workspace/Chrome.tsx); a tinted or emphasis border is the exception, not the default:\n${where.join("\n")}`);
+    if (n < ceiling!) throw new Error(`${n} border literals, below the ceiling of ${ceiling}: lower border-literal in web/test/ratchets.txt to ${n}.`);
     expect(n).toBe(ceiling!);
   });
 
@@ -102,5 +124,11 @@ describe("surface ratchet", () => {
     expect(hits(`background: "color-mix(in srgb, var(--bg2) 40%, transparent)"`)).toBe(0);
     expect(hits(`style={{ color: "var(--bg2)", background: "var(--primary)" }}`)).toBe(0);
     expect(hits(`style={{ background: "var(--primary)", color: "var(--bg2)" }}`)).toBe(0);
+    const borders = (s: string) => [...s.matchAll(BORDER_LITERAL)].length;
+    expect(borders(`border: edge(20)`)).toBe(1);
+    expect(borders(`border: edge(14)`)).toBe(0);
+    expect(borders(`border: edge(140)`)).toBe(1);
+    expect(borders(`borderTop: "1px solid var(--border)"`)).toBe(1);
+    expect(borders(`border: EDGE, borderTop: LINE`)).toBe(0);
   });
 });

@@ -24,6 +24,7 @@ import { mergeBlockedWhy, checksLine, checksStanding, standingLine, mergeVerdict
 import { mergeBlockers, mergeRefusal } from "../../../shared/mergeBlockers.ts";
 import { ICON } from "../lib/iconSize.ts";
 import { CircleIcon, CommentIcon, CrossIcon, DoneIcon, IconLabel } from "../lib/glyphIcons.tsx";
+import { EDGE, LINE } from "./workspace/Chrome.tsx";
 
 /** How your own last verdict reads back, and in what colour. Its own map so the
  *  three states are spelled once — the buttons above already spell them as
@@ -291,7 +292,7 @@ export function FileRail({
      * named breakpoint when the design names its own.
      */
     <aside className="agx-rail agx-col3 flex-col shrink-0 agx-scroll"
-      style={{ width: 320, borderLeft: edge(12) }}>
+      style={{ width: 320, borderLeft: LINE }}>
       {!path && (
         <Sec title="Nothing selected">
           <p className="m-0 text-[10.5px]" style={{ color: "var(--text4)" }}>
@@ -603,13 +604,13 @@ export function FileRail({
               <textarea value={body ?? ""} onChange={(e) => onBody(e.target.value)} rows={2}
                 placeholder="Summary — optional for an approval, markdown works"
                 className="w-full mt-1.5 rounded-md p-2 text-[10.5px] resize-y"
-                style={{ background: "var(--surface-inset)", color: "var(--text)", border: edge(18) }} />
+                style={{ background: "var(--surface-inset)", color: "var(--text)", border: EDGE }} />
             )}
             <p className="m-0 mt-1.5 text-[10px]" style={{ color: "var(--text4)" }}>{goesWith}</p>
             {onSubmit && (
               <button onClick={onSubmit} disabled={busyWhat === "Review"}
                 className="agx-btn w-full mt-1.5 rounded-md py-1 text-[10.5px] inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
-                style={{ background: "var(--primary)", color: "var(--bg)", border: edge(20) }}>
+                style={{ background: "var(--primary)", color: "var(--bg)", border: EDGE }}>
                 {busyWhat === "Review" && (
                   <span className="agx-spin" aria-hidden
                     style={{ width: 9, height: 9, borderWidth: 1.5, borderColor: "color-mix(in srgb, var(--bg) 55%, transparent)", borderTopColor: "transparent" }} />
@@ -644,7 +645,7 @@ export function FileRail({
         <button onClick={onMerge} disabled={!canMerge || !!refusal || busyWhat === "Merge"}
           title={refusal ? `${refusal.title} — ${refusal.detail}` : undefined}
           className="agx-btn w-full mt-2 rounded-md py-1 text-[10.5px] inline-flex items-center justify-center gap-1.5 disabled:opacity-40"
-          style={{ background: allClear ? "var(--primary)" : "transparent", color: allClear ? "var(--bg)" : "var(--text2)", border: edge(20) }}>
+          style={{ background: allClear ? "var(--primary)" : "transparent", color: allClear ? "var(--bg)" : "var(--text2)", border: EDGE }}>
           {/* "anyway" is a word about overriding something. With nothing to
               override it turned a plain press into a dare. */}
           {busyWhat === "Merge" && (
@@ -693,7 +694,7 @@ function Sec({ title, action, children }: {
   title: string; action?: { label: string; on: () => void }; children: React.ReactNode;
 }) {
   return (
-    <section className="px-2.5 py-2" style={{ borderBottom: edge(12) }}>
+    <section className="px-2.5 py-2" style={{ borderBottom: LINE }}>
       <div className="flex items-baseline gap-2 mb-1.5">
         <h4 className="m-0 text-[9px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>{title}</h4>
         {action && (

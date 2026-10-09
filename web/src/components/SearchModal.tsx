@@ -8,7 +8,7 @@ import { friendly } from "../lib/labels.ts";
 import { fmtTime, fmtUsd, fmtMs, agentKey } from "../lib/format.ts";
 import { SearchIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
 
 /** Render an FTS snippet, highlighting the \x01…\x02 matched spans. */
 function Snippet({ text }: { text: string }) {
@@ -197,7 +197,7 @@ export function SearchModal({
                 initial={{ opacity: 0, scale: 0.97, y: -10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.98, y: -6 }}
                 transition={{ type: "spring", stiffness: 340, damping: 30 }}
                 className="w-[min(820px,94vw)] max-h-[80vh] rounded-xl flex flex-col overflow-hidden pointer-events-auto"
-                style={{ background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
+                style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
               >
                 <div className="flex items-center gap-2 px-4 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                   <span className="t-dim2 flex"><SearchIcon size={ICON.sm} /></span>
@@ -209,7 +209,7 @@ export function SearchModal({
                   {mode !== "fleet" && (
                     <select value={repo} onChange={(e) => setRepo(e.target.value)}
                       className="shrink-0 max-w-[180px] text-[10.5px] px-2 py-1 rounded-md outline-none"
-                      style={{ background: "color-mix(in srgb, var(--bg3) 60%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text2)" }}>
+                      style={{ background: "color-mix(in srgb, var(--bg3) 60%, transparent)", border: EDGE, color: "var(--text2)" }}>
                       {repos.map((r) => <option key={r.root} value={r.root}>{r.root.split("/").pop() || r.root}</option>)}
                     </select>
                   )}

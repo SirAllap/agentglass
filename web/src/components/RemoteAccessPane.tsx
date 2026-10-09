@@ -8,6 +8,7 @@ import { pickIndex, readPick, writePick, type PickedAddress } from "../lib/remot
 import { PairPanel } from "./PairPanel.tsx";
 import { usePoll } from "../lib/usePoll.ts";
 import type { RemoteStatus, RemoteDevice } from "../../../shared/types.ts";
+import { EDGE } from "./workspace/Chrome.tsx";
 
 /**
  * Open the dashboard on your phone.
@@ -229,7 +230,7 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
               </span>
               <button onClick={() => copy(url)}
                 className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80"
-                style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+                style={{ color: "var(--text2)", border: EDGE }}>
                 {copied === url ? "Copied" : "Copy"}
               </button>
             </span>}
@@ -307,7 +308,7 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
               </p>
               <button onClick={() => copy(st.firewall!.command)}
                 className="t-mono text-[11px] text-left px-2.5 py-1.5 rounded-lg break-all hover:opacity-80 w-full"
-                style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}>
+                style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: EDGE }}>
                 {st.firewall.command}
               </button>
               <p className="m-0 mt-1.5 text-[11.5px] t-dim">
@@ -348,7 +349,7 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
               </button>
               <button onClick={() => setConfirming(false)} disabled={busy}
                 className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80"
-                style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+                style={{ color: "var(--text2)", border: EDGE }}>
                 Keep it
               </button>
             </span>
@@ -558,7 +559,7 @@ function Recipe({ port }: { port: number }) {
       </div>
       <div className="t-mono text-[11px] px-2.5 py-2 rounded-lg whitespace-pre-wrap" style={{
         color: "var(--text)", background: "color-mix(in srgb, var(--bg) 70%, transparent)",
-        border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)",
+        border: EDGE,
       }}>
         {`AGENTGLASS_BIND=0.0.0.0 \\\n  AGENTGLASS_TRUST_LAN=1 \\\n  AGENTGLASS_TOKEN=$(openssl rand -base64 24) \\\n  bun run server   # port ${port}`}
       </div>

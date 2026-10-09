@@ -86,6 +86,7 @@ import { requestPrJump } from "./lib/prJump.ts";
 import { requestPluginInstall } from "./lib/installPlugin.ts";
 import { subscribeGates, listGates } from "./lib/gateStore.ts";
 import { startMarksSync, syncMarks } from "./lib/marksSync.ts";
+import { EDGE } from "./components/workspace/Chrome.tsx";
 
 /** What the pointer is over. Ctrl+F searches the view under the pointer first:
  *  with the bench floating over another view, the one you are looking at is
@@ -1320,7 +1321,7 @@ export default function App() {
         <div className="fixed left-1/2 -translate-x-1/2 z-[60] px-3 py-1.5 rounded-lg text-[11.5px] flex items-center gap-2"
           style={{
             top: filesOpen && paletteH > 0 ? Math.round(paletteH) + 34 : "12vh",
-            background: "var(--surface-card)", border: "1px solid var(--border)",
+            background: "var(--surface-card)", border: EDGE,
             color: openErr ? "var(--error)" : "var(--text2)",
           }}>
           {/* Bare: `.agx-spin` carries its own size, border and accent, and the

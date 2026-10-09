@@ -17,6 +17,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { DockerDisk, DockerPeek, DockerVolume, DockerVolumeDetail } from "../../../../shared/types.ts";
 import { api } from "../../lib/api.ts";
 import { humanSize, sinceLabel } from "../../lib/dockerVolumeView.ts";
+import { LINE } from "../workspace/Chrome.tsx";
 
 function Chip({ text, tint, title }: { text: string; tint: string; title?: string }) {
   return (
@@ -82,7 +83,7 @@ export function Volumes({ volumes }: { volumes: DockerVolume[] }) {
               <tr key={v.name} onClick={() => open(v.name)}
                 className="cursor-pointer"
                 style={{
-                  borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)",
+                  borderTop: LINE,
                   background: sel === v.name ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent",
                 }}>
                 <td className="py-1.5 pr-4 break-all" style={{ color: "var(--text)" }}>{v.name}</td>

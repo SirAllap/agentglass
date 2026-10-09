@@ -15,7 +15,7 @@ import { BisectModal } from "./BisectModal.tsx";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
-import { CHIP, RefreshButton, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { CHIP, RefreshButton, INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { BlockedIcon, BranchIcon, ChartIcon, CommitIcon, CrossIcon, DoneIcon, FileIcon, IconLabel, ListIcon, MinusIcon, PlusIcon, RefreshIcon, SparkleIcon, StashIcon, TargetIcon, TreeIcon, UndoIcon } from "../lib/glyphIcons.tsx";
 import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, ConflictBlock, BlockChoice, MergeInfo, FileChange, WalkthroughResult, WalkthroughFile, TidyReport, TidyFinding, GitSubmodule } from "../../../shared/types.ts";
@@ -122,7 +122,7 @@ function TidyExplain({ f, onArm, onCancel }: { f: TidyFinding; onArm: () => void
         <code className="flex-1 min-w-0 truncate text-[11px] px-2 py-1 rounded" title={f.command ?? ""}
           style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg3) 50%, transparent)" }}>{f.command}</code>
         <button onClick={onCancel} className="shrink-0 text-[10.5px] px-2 py-1 rounded-lg"
-          style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>Cancel</button>
+          style={{ color: "var(--text3)", border: EDGE }}>Cancel</button>
         <button onClick={onArm} className="shrink-0 text-[10.5px] px-2.5 py-1 rounded-lg whitespace-nowrap"
           style={{ color: "var(--text)", background: "color-mix(in srgb, var(--primary) 20%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}>
           {"Type it into a shell →"}
@@ -175,7 +175,7 @@ function TidyView({ report, root, busy }: { report: TidyReport | null; root: str
           // and both of its buttons were simply cut off, with no scrollbar and
           // nothing to suggest anything was missing. Measured: 343px of
           // content in a 269px box.
-          <div key={f.id} className="rounded-lg overflow-hidden shrink-0" style={{ border: "1px solid color-mix(in srgb, var(--text) 8%, transparent)", background: "color-mix(in srgb, var(--bg3) 34%, transparent)" }}>
+          <div key={f.id} className="rounded-lg overflow-hidden shrink-0" style={{ border: EDGE, background: "color-mix(in srgb, var(--bg3) 34%, transparent)" }}>
             <div className="flex items-start gap-3 px-3 py-2">
               <span className="min-w-0 flex-1">
                 <span className="flex items-baseline gap-2">
@@ -469,7 +469,7 @@ function ListToolbar({ q, onQ, placeholder, sort, onSort, sorts, count, total, c
               className="text-[10px] px-2 py-1 rounded-lg transition-colors whitespace-nowrap font-medium"
               style={sort === s.key
                 ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 42%, transparent)", color: "var(--text)" }
-                : { background: "transparent", border: "1px solid color-mix(in srgb, var(--text) 10%, transparent)", color: "var(--text3)" }}>
+                : { background: "transparent", border: EDGE, color: "var(--text3)" }}>
               {s.label}
             </button>
           ))}
@@ -556,13 +556,13 @@ const GLOBAL_KEYS: [string, string][] = [
 function HelpSheet({ view, onClose }: { view: View; onClose: () => void }) {
   const rows = (keys: [string, string][]) => keys.map(([k, label]) => (
     <div key={k} className="flex items-baseline gap-3 py-0.5">
-      <kbd className="shrink-0 text-[10px] px-1.5 py-0.5 rounded font-mono" style={{ minWidth: 54, textAlign: "center", background: "color-mix(in srgb, var(--bg3) 60%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", color: "var(--text)" }}>{k}</kbd>
+      <kbd className="shrink-0 text-[10px] px-1.5 py-0.5 rounded font-mono" style={{ minWidth: 54, textAlign: "center", background: "color-mix(in srgb, var(--bg3) 60%, transparent)", border: EDGE, color: "var(--text)" }}>{k}</kbd>
       <span className="text-[11px]" style={{ color: "var(--text2)" }}>{label}</span>
     </div>
   ));
   return (
     <div onClick={onClose} className="absolute inset-0 grid place-items-center" style={{ zIndex: 50, background: "color-mix(in srgb, #000 55%, transparent)" }}>
-      <div onClick={(e) => e.stopPropagation()} className="rounded-xl px-5 py-4 shadow-2xl" style={{ minWidth: 420, background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }}>
+      <div onClick={(e) => e.stopPropagation()} className="rounded-xl px-5 py-4 shadow-2xl" style={{ minWidth: 420, background: "var(--surface-card)", border: EDGE }}>
         <div className="flex items-center gap-2 mb-3">
           <span className="text-[12px] font-semibold" style={{ color: "var(--text)" }}>Keys</span>
           <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "color-mix(in srgb, var(--primary) 14%, transparent)", color: "var(--primary-hover)" }}>{VIEW_LABEL[view]}</span>
@@ -611,7 +611,7 @@ function MoreRows({ shown, total, onAll }: { shown: number; total: number; onAll
   return (
     <div className="flex items-center gap-2 px-2.5 py-2 text-[10px] t-dim2">
       <span className="tabular-nums">showing {shown} of {total}</span>
-      <button onClick={onAll} className="px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>show all</button>
+      <button onClick={onAll} className="px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: EDGE }}>show all</button>
       <span className="t-dim2">· scroll for more</span>
     </div>
   );
@@ -719,7 +719,7 @@ function Section({ title, count, tint, action, onAll, children }: { title: strin
         <span className="w-1.5 h-1.5 rounded-full" style={{ background: tint }} />
         <span className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: "var(--text2)" }}>{title}</span>
         <span className="text-[9.5px] t-dim2 tabular-nums">{count}</span>
-        {action && count > 0 && onAll && <button onClick={onAll} className="ml-auto text-[9.5px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>{action}</button>}
+        {action && count > 0 && onAll && <button onClick={onAll} className="ml-auto text-[9.5px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: EDGE }}>{action}</button>}
       </div>
       <div className="px-1">{children}</div>
     </div>
@@ -764,7 +764,7 @@ function BlockResolver({ blocks, error, picks, onPick, onApply, busy }: {
   );
 
   return (
-    <div className="flex flex-col gap-2 pl-2 pb-1" style={{ borderLeft: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
+    <div className="flex flex-col gap-2 pl-2 pb-1" style={{ borderLeft: LINE }}>
       {blocks.map((b) => {
         const chosen = picks[b.index];
         const Opt = ({ id, label }: { id: BlockChoice; label: string }) => (
@@ -772,7 +772,7 @@ function BlockResolver({ blocks, error, picks, onPick, onApply, busy }: {
             className="px-1.5 py-0.5 rounded text-[9.5px] shrink-0"
             style={chosen === id
               ? { color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }
-              : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
+              : { color: "var(--text3)", border: EDGE }}>
             {label}
           </button>
         );
@@ -2479,7 +2479,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     act(() => api.gitApplyHunk(root, selected.file_path, selected.staged, action, selected.hunks[i]), `${action}d hunk`);
   };
   const hunkBtn = (label: ReactNode, tint: string, onClick: () => void) => (
-    <button onClick={onClick} className="text-[10px] px-1.5 py-0.5 rounded" style={{ fontFamily: "system-ui, sans-serif", color: tint, background: "color-mix(in srgb, var(--bg3) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>{label}</button>
+    <button onClick={onClick} className="text-[10px] px-1.5 py-0.5 rounded" style={{ fontFamily: "system-ui, sans-serif", color: tint, background: "color-mix(in srgb, var(--bg3) 70%, transparent)", border: EDGE }}>{label}</button>
   );
   const hunkActionFn = (writeEnabled && selected && selected.status === "modified" && !selected.binary)
     ? (i: number) => (
@@ -2821,7 +2821,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       onClick={() => setInsightsOpen(true)}
                       disabled={busy}
                       className="text-[11px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg whitespace-nowrap shrink-0 font-medium"
-                      style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--text) 4%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 9%, transparent)", opacity: busy ? 0.5 : 1 }}
+                      style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--text) 4%, transparent)", border: EDGE, opacity: busy ? 0.5 : 1 }}
                       title="Repo insights — commit pace, contributors, churn, changelog"
                     ><IconLabel icon={<ChartIcon size={ICON.xs} />}>insights</IconLabel></button>
                     {branch?.state === "bisecting" && (
@@ -2850,7 +2850,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         }}
                         disabled={!writeEnabled || busy}
                         className="text-[11px] px-2 py-1 rounded-lg whitespace-nowrap shrink-0"
-                    style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: busy ? 0.5 : 1 }}
+                    style={{ color: "var(--text2)", border: EDGE, opacity: busy ? 0.5 : 1 }}
                     title="Undo the last merge — the branch returns to exactly where it was. Offered only because it is unpushed and nothing sits on top of it.">
                     {pending === "undo" ? "undoing…" : <IconLabel icon={<UndoIcon size={ICON.xs} />}>undo merge</IconLabel>}
                       </button>
@@ -2922,7 +2922,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       <button
                         onClick={() => openPrs(currentBranchName)}
                         className="text-[11px] px-2.5 min-h-[28px] rounded-lg whitespace-nowrap flex items-center gap-1.5"
-                        style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}
+                        style={{ color: "var(--text2)", border: EDGE }}
                         title={`${prsOntoBranch.length} open pull request${prsOntoBranch.length === 1 ? "" : "s"} merge into ${currentBranchName}:\n${prsOntoBranch.slice(0, 6).map((p) => `#${p.number} ${p.title}`).join("\n")}`}>
                         <span style={{ color: "var(--text4)" }}>→</span>
                         {prsOntoBranch.length} PR{prsOntoBranch.length === 1 ? "" : "s"} land here
@@ -3066,13 +3066,13 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                             className="px-1.5 py-0.5 rounded shrink-0"
                             style={open
                               ? { color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }
-                              : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
+                              : { color: "var(--text3)", border: EDGE }}
                             title="Choose a side for each conflict in this file">{open ? "hide" : "one by one"}</button>
                           <button onClick={() => act(() => api.gitResolve(root, [relPath], "ours"), `kept ours for ${relPath}`)} disabled={busy}
-                            className="px-1.5 py-0.5 rounded shrink-0" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
+                            className="px-1.5 py-0.5 rounded shrink-0" style={{ color: "var(--text3)", border: EDGE }}
                             title="Keep this branch's version">ours</button>
                           <button onClick={() => act(() => api.gitResolve(root, [relPath], "theirs"), `took theirs for ${relPath}`)} disabled={busy}
-                            className="px-1.5 py-0.5 rounded shrink-0" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
+                            className="px-1.5 py-0.5 rounded shrink-0" style={{ color: "var(--text3)", border: EDGE }}
                             title="Take the incoming version">theirs</button>
                         </div>
                         {/* The resolver itself is in the MAIN pane — see
@@ -3112,7 +3112,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       )}
                       {!tree?.clean && (
                         <div className="shrink-0 flex items-center gap-1 px-2.5 py-1 border-b" style={{ borderColor: "color-mix(in srgb, var(--border) 25%, transparent)" }}>
-                          <button onClick={() => setTreeMode((v) => !v)} title="Toggle file tree / flat list (`)" className="text-[9.5px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>{treeMode ? <IconLabel icon={<TreeIcon size={ICON.xs} />}>tree</IconLabel> : <IconLabel icon={<ListIcon size={ICON.xs} />}>flat</IconLabel>}</button>
+                          <button onClick={() => setTreeMode((v) => !v)} title="Toggle file tree / flat list (`)" className="text-[9.5px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: EDGE }}>{treeMode ? <IconLabel icon={<TreeIcon size={ICON.xs} />}>tree</IconLabel> : <IconLabel icon={<ListIcon size={ICON.xs} />}>flat</IconLabel>}</button>
                           {treeMode && (
                             <>
                               <button onClick={() => setCollapsed(new Set(allDirPaths(buildFileTree(all, relOf))))} title="Collapse all (-)" className="text-[9.5px] px-1.5 py-0.5 rounded flex" style={{ color: "var(--text3)" }}><MinusIcon size={ICON.xs} /></button>
@@ -3187,7 +3187,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                           than a hairline and the panel's ground. */}
                       <div className="shrink-0 border-t p-3 space-y-2" style={{ borderColor: "color-mix(in srgb, var(--text) 8%, transparent)", background: "color-mix(in srgb, var(--bg3) 22%, transparent)" }}>
                         <input value={title} onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") doCommit(); }} placeholder="Summary of what changed…" disabled={!writeEnabled} className={`w-full ${INPUT}`} style={INPUT_STYLE} />
-                        <textarea value={body} onChange={(e) => setBody(e.target.value)} onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") doCommit(); }} placeholder="Why, if it needs saying (optional)…" rows={2} disabled={!writeEnabled} className="agx-scroll w-full px-2.5 py-1.5 rounded-lg text-[11px] outline-none resize-none" style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text)" }} />
+                        <textarea value={body} onChange={(e) => setBody(e.target.value)} onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") doCommit(); }} placeholder="Why, if it needs saying (optional)…" rows={2} disabled={!writeEnabled} className="agx-scroll w-full px-2.5 py-1.5 rounded-lg text-[11px] outline-none resize-none" style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)", border: EDGE, color: "var(--text)" }} />
                         <button onClick={doCommit} disabled={!writeEnabled || busy || !tree?.staged.length || !title.trim()} className="w-full py-1.5 rounded-lg text-[11.5px] font-semibold" style={{ background: "color-mix(in srgb, var(--primary) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)", opacity: (!writeEnabled || !tree?.staged.length || !title.trim()) ? 0.45 : 1 }}><IconLabel icon={<CommitIcon size={ICON.xs} />}>Commit {tree?.staged.length ? `${tree.staged.length} staged` : ""}</IconLabel></button>
                         {!writeEnabled && <div className="text-[9.5px] t-dim2 text-center">read-only (AGENTGLASS_GIT_WRITE_DISABLED)</div>}
                       </div>
@@ -3212,10 +3212,10 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                             <span className="text-[10.5px] shrink-0" style={{ color: "var(--warning-ink)" }}>in conflict</span>
                             <div className="ml-auto flex items-center gap-1.5 shrink-0">
                               <button onClick={() => act(() => api.gitResolve(root, [blockFile], "ours"), `kept ours for ${blockFile}`)} disabled={busy}
-                                className="text-[10.5px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
+                                className="text-[10.5px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: EDGE }}
                                 title="Keep this branch's version of the whole file">ours</button>
                               <button onClick={() => act(() => api.gitResolve(root, [blockFile], "theirs"), `took theirs for ${blockFile}`)} disabled={busy}
-                                className="text-[10.5px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
+                                className="text-[10.5px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: EDGE }}
                                 title="Take the incoming version of the whole file">theirs</button>
                               <CloseButton onClick={() => { setBlockFile(null); setBlocks(null); setPicks({}); }} style={{ color: "var(--text3)" }} title="Back to the changes" className="rounded" />
                             </div>
@@ -3373,14 +3373,14 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         </button>
                         <button onClick={() => void runCherryPick(true)} disabled={busy || !writeEnabled}
                           className="agx-btn text-[10.5px] px-2 py-1 rounded-md whitespace-nowrap"
-                          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", opacity: busy || !writeEnabled ? 0.5 : 1 }}
+                          style={{ color: "var(--text2)", border: EDGE, opacity: busy || !writeEnabled ? 0.5 : 1 }}
                           title="Cherry-pick without committing — the changes land staged, so you can review or amend them first">
                           stage only
                         </button>
                         {pickSet.size >= 2 && (
                           <button onClick={() => void squashPicked()} disabled={busy || !writeEnabled}
                             className="agx-btn text-[10.5px] px-2 py-1 rounded-md whitespace-nowrap"
-                            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", opacity: busy || !writeEnabled ? 0.5 : 1 }}
+                            style={{ color: "var(--text2)", border: EDGE, opacity: busy || !writeEnabled ? 0.5 : 1 }}
                             title="Fold the picked commits into one, tree preserved. Must be a consecutive run ending at the tip of this branch.">
                             squash {pickSet.size}
                           </button>
@@ -3552,7 +3552,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         )}
                         <button onClick={() => void navigator.clipboard?.writeText([...picked].join("\n")).catch(() => { /* no clipboard permission */ })}
                           className="text-[10.5px] px-2.5 py-1 rounded-lg"
-                          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                          style={{ color: "var(--text2)", border: EDGE }}>
                           Copy names
                         </button>
                         <button onClick={() => setPicked(new Set())} className="text-[10.5px] px-2.5 py-1 rounded-lg ml-auto"
@@ -3616,7 +3616,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     {writeEnabled && (
                       <div>
                         {partialOpen && (
-                          <div className="mt-2 rounded-lg p-2.5 max-w-lg" style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
+                          <div className="mt-2 rounded-lg p-2.5 max-w-lg" style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", border: EDGE }}>
                             <div className="text-[9.5px] uppercase tracking-wider t-dim2 mb-1">pick from the working tree</div>
                             <div className="space-y-1 max-h-48 overflow-y-auto mb-2">
                               {(tree?.unstaged ?? []).map((c) => {
@@ -3701,7 +3701,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                             {remoteQuery.trim() ? `${shownRemoteBranches.length} of ${remoteRows.length}` : `${remoteRows.length} branch${remoteRows.length === 1 ? "" : "es"}`}
                           </span>
                           {remoteQuery.trim() && (
-                            <button onClick={() => setRemoteQuery("")} className="shrink-0 text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>clear</button>
+                            <button onClick={() => setRemoteQuery("")} className="shrink-0 text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: EDGE }}>clear</button>
                           )}
                         </div>
                       )}

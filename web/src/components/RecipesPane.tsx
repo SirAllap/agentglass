@@ -22,7 +22,7 @@ import { SettingRow } from "./SettingRow.tsx";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import { IconLabel, PlusIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--border) ${pct}%, transparent)`;
 const PARAM_TYPES: RecipeParam["type"][] = ["text", "choice", "flag", "repo", "worktree", "branch"];
@@ -89,7 +89,7 @@ export function RecipesPane({ open }: { open: boolean }) {
             <button onClick={() => setRunning(r)} className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
               style={{ border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }}>Run…</button>
             <button onClick={() => setEditing(r)} className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-              style={{ border: edge(20), color: "var(--text2)" }}>Edit</button>
+              style={{ border: EDGE, color: "var(--text2)" }}>Edit</button>
           </span>}
         />
       ))}
@@ -139,7 +139,7 @@ function Editor({ r, repos, onChange, onSave, onDrop, onCancel }: {
    *  front rather than letting the save be the first to find out. */
   const cannotBoot = !!(r.params?.length) || !!r.confirm;
   const inp = "w-full text-[11.5px] px-2 py-1.5 rounded-lg outline-none";
-  const style = { background: "var(--surface-card)", border: edge(22), color: "var(--text)" };
+  const style = { background: "var(--surface-card)", border: EDGE, color: "var(--text)" };
   return (
     <div className="rounded-xl p-3 flex flex-col gap-2.5" style={{ border: edge(28), background: "color-mix(in srgb, var(--bg3) 25%, transparent)" }}>
       <div className="flex gap-2 flex-wrap">
@@ -225,7 +225,7 @@ function Editor({ r, repos, onChange, onSave, onDrop, onCancel }: {
           </div>
         ))}
         <button onClick={() => set({ boot: false, params: [...(r.params ?? []), { key: "", label: "", type: "text" }] })}
-          className="self-start text-[10.5px] px-2 py-0.5 rounded" style={{ border: edge(20), color: "var(--text3)" }}><IconLabel icon={<PlusIcon size={ICON.xs} />}>parameter</IconLabel></button>
+          className="self-start text-[10.5px] px-2 py-0.5 rounded" style={{ border: EDGE, color: "var(--text3)" }}><IconLabel icon={<PlusIcon size={ICON.xs} />}>parameter</IconLabel></button>
       </div>
 
       <div className="flex gap-2 flex-wrap pt-1">
@@ -384,7 +384,7 @@ export function RunDialog({ r, repos, onClose, onNote, onRunStep, targetInTmux }
     onClose();
   };
 
-  const style = { background: "var(--surface-card)", border: edge(22), color: "var(--text)" };
+  const style = { background: "var(--surface-card)", border: EDGE, color: "var(--text)" };
   return (
     <div className="rounded-xl p-3 flex flex-col gap-2.5" style={{ border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
       <div className="text-[12px] font-semibold" style={{ color: "var(--text)" }}>Run {r.name}</div>

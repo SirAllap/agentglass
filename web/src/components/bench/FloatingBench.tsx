@@ -56,6 +56,7 @@ import { ICON } from "../../lib/iconSize.ts";
 import { AgentIcon, ExpandIcon, FileIcon, NoteIcon, SearchIcon } from "../../lib/glyphIcons.tsx";
 import { BrowserIcon, FilesIcon, IssuesIcon, PrIcon, TerminalIcon } from "../workspace/icons.tsx";
 import { CloseIcon } from "../CloseButton.tsx";
+import { EDGE, LINE } from "../workspace/Chrome.tsx";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 
@@ -633,7 +634,7 @@ export function FloatingBench() {
                 */}
               <div
                 className="flex items-center gap-1.5 px-2 py-1.5 shrink-0 cursor-grab active:cursor-grabbing"
-                style={{ background: "color-mix(in srgb, var(--text) 5%, var(--bg2))", borderBottom: edge(16) }}
+                style={{ background: "color-mix(in srgb, var(--text) 5%, var(--bg2))", borderBottom: LINE }}
                 onPointerDown={onBarDown} onPointerMove={onBarMove} onPointerUp={onBarUp} onPointerCancel={onBarUp}>
 
                 <button
@@ -645,7 +646,7 @@ export function FloatingBench() {
                   style={{
                     width: 28, height: 28,
                     color: menuOpen ? "var(--primary)" : "var(--text2)",
-                    border: edge(18),
+                    border: EDGE,
                     background: menuOpen ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent",
                   }}>+</button>
 
@@ -656,8 +657,8 @@ export function FloatingBench() {
                     return (
                       <span key={t.id} className="shrink-0 flex items-center rounded-md overflow-hidden"
                         style={on
-                          ? { background: "var(--surface-card)", border: edge(18) }
-                          : { background: "color-mix(in srgb, var(--text) 4%, transparent)", border: edge(10) }}>
+                          ? { background: "var(--surface-card)", border: EDGE }
+                          : { background: "color-mix(in srgb, var(--text) 4%, transparent)", border: EDGE }}>
                         <button
                           onClick={() => activateTab(root, t.id)}
                           className="agx-bench-hit flex items-center gap-2 text-[11.5px] px-2.5 max-w-[200px]"
@@ -698,7 +699,7 @@ export function FloatingBench() {
                 {Math.round(st.zoom * 100) !== 100 && (
                   <button onClick={() => zoomBench(0)} title="Back to 100% (Ctrl+0 in here) — Ctrl+wheel or Ctrl+± zooms this window alone"
                     className="agx-bench-hit shrink-0 text-[10.5px] px-2 rounded-md tabular-nums flex items-center"
-                    style={{ height: 28, color: "var(--text2)", border: edge(20) }}>
+                    style={{ height: 28, color: "var(--text2)", border: EDGE }}>
                     {Math.round(st.zoom * 100)}%
                   </button>
                 )}
@@ -759,7 +760,7 @@ export function FloatingBench() {
               </div>
 
               {busy && (
-                <div className="px-3 py-1 text-[10.5px] shrink-0" style={{ color: "var(--text3)", borderTop: edge(14) }}>{busy}</div>
+                <div className="px-3 py-1 text-[10.5px] shrink-0" style={{ color: "var(--text3)", borderTop: LINE }}>{busy}</div>
               )}
 
               </div>
@@ -916,7 +917,7 @@ function Empty({ chord, onTerm, onNote, onWeb }: { chord: string; onTerm: () => 
     <div className="h-full flex flex-col items-center justify-center gap-2.5 text-[12px]">
       {rows.map(([label, hint, fn]) => (
         <button key={label} onClick={fn} className="w-[min(420px,80%)] flex items-baseline gap-3 px-3 py-2 rounded-lg text-left"
-          style={{ border: edge(14), color: "var(--text)" }}>
+          style={{ border: EDGE, color: "var(--text)" }}>
           <span>{label}</span>
           <span className="text-[10.5px]" style={{ color: "var(--text4)" }}>{hint}</span>
         </button>
@@ -971,7 +972,7 @@ function BenchMenu({ root, onClose, onTerm, onNote, onWeb, onAgent, onBoard }: {
           e.stopPropagation();
           if (e.key === "Escape") onClose();
         }}>
-        <div className="px-3 pt-2 pb-1.5 flex flex-col gap-1" style={{ borderBottom: edge(12) }}>
+        <div className="px-3 pt-2 pb-1.5 flex flex-col gap-1" style={{ borderBottom: LINE }}>
           <div className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text2)" }}>Open here</div>
           <div className="text-[10px]" style={{ color: "var(--text4)" }}>{root ? shortPath(root) : "no checkout picked"}</div>
         </div>
@@ -988,7 +989,7 @@ function BenchMenu({ root, onClose, onTerm, onNote, onWeb, onAgent, onBoard }: {
           <MenuRow glyph={GLYPH.tasks} label="Tasks" onClick={() => onBoard("tasks")} />
           <MenuRow glyph={GLYPH.files} label="Files" onClick={() => onBoard("files")} />
         </div>
-        <div className="px-3 py-2 text-[10px]" style={{ borderTop: edge(12), color: "var(--text4)" }}>
+        <div className="px-3 py-2 text-[10px]" style={{ borderTop: LINE, color: "var(--text4)" }}>
           A file gets here from the palette, a diff or a pull request — wherever you were reading it.
         </div>
       </div>
@@ -1058,7 +1059,7 @@ function BenchChip({ repo, repos, root, elsewhere, openState, onPick }: {
     <>
       <button ref={btn} onClick={() => setOpen(!open)}
         className="agx-bench-hit shrink-0 flex items-center gap-1.5 text-[10.5px] px-2.5 rounded-md max-w-[220px]"
-        style={{ height: 28, background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: edge(20), color: "var(--text2)" }}
+        style={{ height: 28, background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: EDGE, color: "var(--text2)" }}
         title={root ? `Opening things in ${root}` : "Pick a checkout"}>
         <span className="truncate min-w-0">{repo ? (repo.worktreeOf ? repo.branch : repo.name) : (root ? shortPath(root) : "Pick a checkout")}</span>
         <span style={{ color: "var(--text3)" }}>▾</span>
@@ -1071,7 +1072,7 @@ function BenchChip({ repo, repos, root, elsewhere, openState, onPick }: {
               background: "var(--surface-card)", border: edge(30), boxShadow: "0 22px 50px -16px #000",
             }}
             onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Escape") setOpen(false); }}>
-            <div className="px-3 pt-2 pb-1.5 flex flex-col gap-1" style={{ borderBottom: edge(12) }}>
+            <div className="px-3 pt-2 pb-1.5 flex flex-col gap-1" style={{ borderBottom: LINE }}>
               <div className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text2)" }}>Where this opens</div>
               <div className="text-[10px]" style={{ color: "var(--text4)" }}>each checkout keeps its own tabs — moving here closes nothing</div>
             </div>

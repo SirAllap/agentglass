@@ -71,7 +71,7 @@ import { sharedPhase } from "../lib/sharedPhase.ts";
 import { StatusMark, STATUS_COLOR } from "./terminal/StatusMark.tsx";
 import { STATUS_WORDS } from "../../../shared/windowStatus.ts";
 import { buildGroups, openGroups, parseRules, setOpenGroups, subscribeTabGroups, tabGroupRulesText, tabGroupsOn, tabGroupsVersion, worthGrouping, type TabGroup } from "../lib/tabGroups.ts";
-import { CTRL_H, EDGE, chipTone, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { CTRL_H, EDGE, chipTone, INPUT, INPUT_STYLE, LINE } from "./workspace/Chrome.tsx";
 
 const ROOT_KEY = "agentglass.terminalRoot";
 /** The repo the terminal view last used — what a docked console should open
@@ -1244,7 +1244,7 @@ function BlockedNotice({ cmd, onSend, onDismiss }: { cmd: string; onSend: () => 
       <span className="truncate" title={`Not sent: ${cmd}`}>
         A full-screen program is running — <b className="font-mono">{cmd}</b> was not typed
       </span>
-      <button onClick={onSend} className="shrink-0 px-1.5 py-0.5 rounded" style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>Send anyway</button>
+      <button onClick={onSend} className="shrink-0 px-1.5 py-0.5 rounded" style={{ color: "var(--text)", border: EDGE }}>Send anyway</button>
       <CloseButton onClick={onDismiss} title="Dismiss" className="shrink-0" />
     </div>
   );
@@ -1513,7 +1513,7 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
   const sess = sessions.get(sid);
   if (!open) return null;
   return (
-    <div className="shrink-0 flex flex-col" style={{ height: `${Math.round(height * 100)}%`, borderTop: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+    <div className="shrink-0 flex flex-col" style={{ height: `${Math.round(height * 100)}%`, borderTop: LINE }}>
       {/* Rendered, or the question it asks is a promise nobody ever answers. */}
       {dialog}
       {/* The strip's own toolbar. Everything in it stops the drag from
@@ -2986,14 +2986,14 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                 {status === "unauthorized" ? "Token needed" : "Reconnect"}
               </button>
             )}
-            {!tmuxActive && <button onClick={splitPane} disabled={!root || IS_DEMO || disabled || paneIds.length >= 4} title="Show another shell beside this one" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", opacity: paneIds.length >= 4 ? 0.45 : 1 }}><IconLabel icon={<GridIcon size={ICON.xs} />}>Split</IconLabel></button>}
+            {!tmuxActive && <button onClick={splitPane} disabled={!root || IS_DEMO || disabled || paneIds.length >= 4} title="Show another shell beside this one" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: EDGE, opacity: paneIds.length >= 4 ? 0.45 : 1 }}><IconLabel icon={<GridIcon size={ICON.xs} />}>Split</IconLabel></button>}
             {/* The way back, and it lives here because the way out
                 lives in the strip — which is the thing being hidden.
                 A toggle whose "off" state removes the button that
                 turns it on is a one-way door. Exactly one of the two
                 is on screen at any time. */}
             {tmuxActive && tmuxWindows.length > 0 && tmuxBar && (
-              <button onClick={() => setTmuxBar(false)} className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}
+              <button onClick={() => setTmuxBar(false)} className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: EDGE }}
                 title="Draw the window list here instead, and take tmux's row back for the shell">
                 Use agentglass bar
               </button>
@@ -3562,7 +3562,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                                 className="shrink-0 flex items-center gap-0.5 ml-1 pl-2 pr-0.5 text-[10px] rounded-sm"
                                 style={{
                                   color: "var(--text3)", minHeight: CTRL_H.regular,
-                                  borderLeft: "1px solid color-mix(in srgb, var(--border) 45%, transparent)",
+                                  borderLeft: LINE,
                                   background: dropLit(g) ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent",
                                 }}
                                 title={`${g.label} — the group you are in stays open. Drop a tab here to move it into ${g.label}.`}>
@@ -3576,7 +3576,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                                 className="shrink-0 flex items-center gap-0.5 ml-1 pl-2 pr-0.5 text-[10px] rounded-sm"
                                 style={{
                                   color: "var(--text4)", cursor: "pointer", minHeight: CTRL_H.regular,
-                                  borderLeft: "1px solid color-mix(in srgb, var(--border) 45%, transparent)",
+                                  borderLeft: LINE,
                                   background: dropLit(g) ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent",
                                 }}
                                 aria-expanded={true}
@@ -3615,7 +3615,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                               </span>
                             </MenuItem>
                           ))}
-                          <div className="my-0.5" style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 10%, transparent)" }} />
+                          <div className="my-0.5" style={{ borderTop: LINE }} />
                           <MenuItem onClick={() => { setGroupMenu(null); toggleKeptOpen(g.key); }}>
                             Keep {g.label} open in the strip
                           </MenuItem>
@@ -4032,7 +4032,7 @@ function MoreMenu({ children }: { children: React.ReactNode }) {
       </button>
       {open && (
         <div className="absolute right-0 top-full mt-1 rounded-lg p-1.5 flex flex-col gap-1 agx-menu"
-          style={{ zIndex: 60, background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", boxShadow: "0 12px 30px -10px #000" }}>
+          style={{ zIndex: 60, background: "var(--surface-card)", border: EDGE, boxShadow: "0 12px 30px -10px #000" }}>
           {children}
         </div>
       )}

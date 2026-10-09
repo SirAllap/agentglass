@@ -45,11 +45,10 @@ import { openSettings } from "../lib/openSettings.ts";
 import { appChordFor, chordLabel } from "../lib/keybindings.ts";
 import { FolderIcon, SearchIcon } from "../lib/glyphIcons.tsx";
 import { scopeLabel, scopeTitle } from "../lib/projectPick.ts";
-import { RefreshButton } from "./workspace/Chrome.tsx";
+import { RefreshButton, EDGE, LINE } from "./workspace/Chrome.tsx";
 
 export const TOP_BAR_H = 30;
 
-const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 
 /** The seven-day window's label, asked of the same function that made it rather
  *  than spelled out here, so the two cannot drift apart. */
@@ -310,10 +309,10 @@ function PlanPanel({ u, age, at, onClose, onRefresh, busy }: {
         style={{
           top: at.top, right: at.right, width: 300,
           background: "var(--surface-card)",
-          border: "1px solid var(--border)",
+          border: EDGE,
           boxShadow: "0 22px 48px -20px var(--shadow)",
         }}>
-        <div className="flex items-center gap-2 px-3 py-2.5" style={{ borderBottom: "1px solid var(--border)" }}>
+        <div className="flex items-center gap-2 px-3 py-2.5" style={{ borderBottom: LINE }}>
           <span className="text-[12.5px] font-semibold" style={{ color: "var(--text)" }}>{u.label}</span>
           {u.plan && <span className="chip text-[10px] t-dim">{u.plan}</span>}
           <span className="ml-auto text-[10px]" style={{ color: age ? "var(--warning)" : "var(--text4)" }}>
@@ -616,7 +615,7 @@ export function TopBar({
         // the same for the same reason; it is not a Mac tax on other platforms.
         paddingLeft: IS_MAC_DESKTOP ? 78 : undefined,
         background: alarm ? "color-mix(in srgb, var(--warning) 10%, var(--bg2))" : "var(--surface-card)",
-        borderBottom: alarm ? "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" : edge(13),
+        borderBottom: alarm ? "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" : LINE,
         transition: "background .18s, border-color .18s",
         // This strip IS the title bar: the window is frameless (see
         // electron/main.js), so dragging it is the only way to move the window.

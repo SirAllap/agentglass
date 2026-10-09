@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { DoneIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
 
 /**
  * Pick what a branch is measured and merged against.
@@ -120,7 +120,7 @@ export function BasePicker({
                   top: pos.top, bottom: pos.bottom, right: pos.right,
                   minWidth: 300, maxHeight: pos.maxHeight, overflow: "hidden", zIndex: 9999,
                   background: "color-mix(in srgb, var(--bg2) 97%, black)",
-                  border: "1px solid color-mix(in srgb, var(--border) 70%, transparent)",
+                  border: EDGE,
                   boxShadow: "0 24px 60px -18px rgba(0,0,0,0.7)",
                   backdropFilter: "blur(18px)",
                 }}>
@@ -156,7 +156,7 @@ export function BasePicker({
                     className="w-full text-left px-2.5 py-1.5 flex items-center gap-2"
                     style={{ color: "var(--text3)" }}
                     title="Forget the override and go back to the base this app works out on its own">
-                    <span className="shrink-0 text-[8.5px] px-1 py-px rounded" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>AUTO</span>
+                    <span className="shrink-0 text-[8.5px] px-1 py-px rounded" style={{ color: "var(--text3)", border: EDGE }}>AUTO</span>
                     <span className="min-w-0 flex-1 truncate">work it out for me</span>
                   </button>
                   {shown.slice(0, 200).map((b) => (
@@ -170,7 +170,7 @@ export function BasePicker({
                       <span className="shrink-0 text-[8.5px] px-1 py-px rounded"
                         style={b.remote
                           ? { color: "var(--info-ink)", border: "1px solid color-mix(in srgb, var(--info) 35%, transparent)" }
-                          : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                          : { color: "var(--text3)", border: EDGE }}>
                         {b.remote ? "REMOTE" : "LOCAL"}
                       </span>
                       <span className="min-w-0 flex-1 truncate">{b.name}</span>

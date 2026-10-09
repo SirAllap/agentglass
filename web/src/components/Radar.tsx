@@ -3,6 +3,7 @@ import { motion } from "motion/react";
 import { Panel } from "./Panel.tsx";
 import { fmtUsd, fmtTokens, fmtEq, eqTitle } from "../lib/format.ts";
 import type { AgentCard, AgentStatus } from "../lib/derive.ts";
+import { LINE } from "./workspace/Chrome.tsx";
 
 const STATUS_COLOR: Record<string, string> = {
   working: "var(--success)",
@@ -347,7 +348,7 @@ function Dossier({ b, wide, auto }: {
   if (!wide) {
     return (
       <div className="shrink-0 mt-1.5 pt-1.5 flex flex-col gap-1 text-[9.5px] t-dim2 min-w-0"
-        style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+        style={{ borderTop: LINE }}>
         <div className="flex items-baseline gap-2 min-w-0">
           <span className="text-[10.5px] font-medium truncate" style={{ color: "var(--text)" }}>{name}</span>
           {status}
@@ -364,7 +365,7 @@ function Dossier({ b, wide, auto }: {
   // Beside the dial: room for the id in full and for the numbers to line up.
   return (
     <div className="shrink-0 w-[176px] pl-3 flex flex-col gap-2 text-[9.5px] t-dim2 min-w-0"
-      style={{ borderLeft: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+      style={{ borderLeft: LINE }}>
       <div className="flex flex-col gap-1 min-w-0">
         <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>
           {auto ? "closest to compact" : "targeted"}

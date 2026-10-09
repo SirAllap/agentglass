@@ -5,7 +5,7 @@ import { THEMES, chooseTheme } from "../lib/themes.ts";
 import { IS_DESKTOP } from "../lib/desktop.ts";
 import { api } from "../lib/api.ts";
 import { openSettings } from "../lib/openSettings.ts";
-import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
 
 interface Cmd {
   id: string;
@@ -129,7 +129,7 @@ export function CommandPalette({
               initial={{ opacity: 0, scale: 0.96, y: -12 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.97, y: -8 }}
               transition={{ type: "spring", stiffness: 360, damping: 30 }}
               className="w-[min(560px,92vw)] rounded-xl overflow-hidden pointer-events-auto"
-              style={{ background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
+              style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
             >
               <input
                 autoFocus

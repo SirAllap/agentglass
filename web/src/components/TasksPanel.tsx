@@ -48,7 +48,7 @@ import { matchesQuery } from "../lib/boardSearch.ts";
 import { openCard, type CardJump } from "../lib/openCard.ts";
 import type { IssueJump } from "../lib/openIssue.ts";
 import { TASK_SOURCES, shownTaskSources, subscribeTaskSources, type TaskSourceId } from "../lib/taskSources.ts";
-import { CHIP, CTRL_H, EDGE, INPUT, INPUT_STYLE, RefreshButton } from "./workspace/Chrome.tsx";
+import { CHIP, CTRL_H, EDGE, INPUT, INPUT_STYLE, RefreshButton, LINE } from "./workspace/Chrome.tsx";
 import { useTaskConnected, visibleTaskSources } from "../lib/taskConnected.ts";
 import { landingSource, rememberTaskSource } from "../lib/taskLanding.ts";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
@@ -331,8 +331,8 @@ function IssuesBody({ root, active, jump }: { root: string; active: boolean; jum
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      <div className="flex items-center gap-2 px-4 py-2 shrink-0" style={{ borderBottom: edge(12) }}>
-        <span className="inline-flex rounded-md overflow-hidden" style={{ border: edge(20) }}>
+      <div className="flex items-center gap-2 px-4 py-2 shrink-0" style={{ borderBottom: LINE }}>
+        <span className="inline-flex rounded-md overflow-hidden" style={{ border: EDGE }}>
           {(["open", "closed", "all"] as const).map((s) => (
             <button key={s} onClick={() => setState(s)} className="text-[10.5px] px-2.5 py-1 capitalize"
               style={s === state
@@ -343,7 +343,7 @@ function IssuesBody({ root, active, jump }: { root: string; active: boolean; jum
         <button onClick={() => setMine((m) => !m)} className="text-[10.5px] px-2.5 py-1 rounded-md"
           style={mine
             ? { color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }
-            : { color: "var(--text3)", border: edge(20) }}>Assigned to me</button>
+            : { color: "var(--text3)", border: EDGE }}>Assigned to me</button>
         <span className="flex items-center gap-1.5 flex-1 min-w-0">
           <span className="flex" style={{ color: "var(--text3)" }}><SearchIcon size={ICON.xs} /></span>
           <input value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") load(); }}
@@ -356,7 +356,7 @@ function IssuesBody({ root, active, jump }: { root: string; active: boolean; jum
       {note && <NoteStrip note={note} onClose={() => setNote(null)} />}
 
       <div className="flex-1 min-h-0 flex">
-        <div className="flex flex-col min-w-0" style={{ width: "48%", borderRight: edge(12) }}>
+        <div className="flex flex-col min-w-0" style={{ width: "48%", borderRight: LINE }}>
           {error && <div className="p-4 text-[11.5px]" style={{ color: "var(--error-ink)" }}>{error}</div>}
           {!rows && !error && <div className="p-4"><Spinner label="Asking GitHub…" className="" /></div>}
           {rows?.length === 0 && <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>Nothing matches.</div>}
@@ -410,7 +410,7 @@ function Row({ i, on, work, onPick, onStart }: {
   return (
     <div className="w-full flex items-center gap-2.5 px-4 py-2 hover:bg-white/5"
       style={{
-        borderBottom: edge(7),
+        borderBottom: LINE,
         background: on ? "color-mix(in srgb, var(--primary) 12%, transparent)" : undefined,
         boxShadow: on ? "inset 2px 0 0 0 var(--primary)" : undefined,
       }}>
@@ -510,9 +510,9 @@ function Detail({ root, number, onSay, onChanged }: {
         <span className="text-[10px]" style={{ color: "var(--text3)" }}>{d.author} opened this · updated {fmtAgo(new Date(d.updatedAt).getTime())}</span>
         <span className="ml-auto flex items-center gap-1.5">
           <button disabled={busy} onClick={() => void act(() => api.issueClaim(root, number, "Picking this up."))}
-            className="agx-btn text-[10px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: edge(20) }}>Assign to me</button>
+            className="agx-btn text-[10px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: EDGE }}>Assign to me</button>
           <button disabled={busy} onClick={() => void act(() => api.issueState(root, number, d.state === "OPEN"))}
-            className="agx-btn text-[10px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: edge(20) }}>
+            className="agx-btn text-[10px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: EDGE }}>
             {d.state === "OPEN" ? "Close" : "Reopen"}
           </button>
         </span>
@@ -548,7 +548,7 @@ function Detail({ root, number, onSay, onChanged }: {
                 Throw them away and remove it
               </button>
               <button onClick={() => setConfirm(null)} className="agx-btn ml-1.5 px-2 py-0.5 rounded"
-                style={{ color: "var(--text3)", border: edge(20) }}>Keep it</button>
+                style={{ color: "var(--text3)", border: EDGE }}>Keep it</button>
             </div>
           )}
         </div>
@@ -580,7 +580,7 @@ function Detail({ root, number, onSay, onChanged }: {
           issue will close it, one that merely mentions it has promised
           nothing. */}
       {(!!prs.length || prsErr) && (
-        <div className="mb-4 pt-3" style={{ borderTop: edge(10) }}>
+        <div className="mb-4 pt-3" style={{ borderTop: LINE }}>
           <div className={`${EYEBROW} mb-1.5 flex items-center gap-2`} style={{ color: "var(--text4)" }}>
             Pull requests {!!prs.length && <span>{prs.length}</span>}
             {prsErr && <span style={{ color: "var(--warning-ink)" }}>· could not ask GitHub — this is not “none”</span>}
@@ -617,7 +617,7 @@ function Detail({ root, number, onSay, onChanged }: {
               </button>
               <a href={externalUrl(p.url)} target="_blank" rel="noreferrer noopener"
                 className="agx-btn text-[10px] px-1.5 py-0.5 rounded shrink-0"
-                style={{ color: "var(--text3)", border: edge(20) }} title="Open on GitHub">↗</a>
+                style={{ color: "var(--text3)", border: EDGE }} title="Open on GitHub">↗</a>
             </div>
           ))}
         </div>
@@ -697,7 +697,7 @@ function NowBand({ onChanged }: { onChanged: () => void }) {
   if (!live.length) return null;
   const act = async (fn: Promise<unknown>) => { await fn; await nudgeReminders(); onChanged(); };
   return (
-    <div className="shrink-0" style={{ borderBottom: edge(12), background: "color-mix(in srgb, var(--error) 8%, transparent)" }}>
+    <div className="shrink-0" style={{ borderBottom: LINE, background: "color-mix(in srgb, var(--error) 8%, transparent)" }}>
       <div className={`${EYEBROW} px-5 pt-2.5 pb-1`} style={{ color: "var(--error-ink)" }}>Now</div>
       {live.map((r) => (
         <div key={r.id} className="flex items-center gap-2.5 px-5 py-2">
@@ -711,9 +711,9 @@ function NowBand({ onChanged }: { onChanged: () => void }) {
             Done
           </button>
           <button onClick={() => void act(api.reminderSnooze(r.id, 15))}
-            className="shrink-0 text-[10px] px-2 py-0.5 rounded" style={{ border: edge(20), color: "var(--text2)" }}>15m</button>
+            className="shrink-0 text-[10px] px-2 py-0.5 rounded" style={{ border: EDGE, color: "var(--text2)" }}>15m</button>
           <button onClick={() => void act(api.reminderSnooze(r.id, 60))}
-            className="shrink-0 text-[10px] px-2 py-0.5 rounded" style={{ border: edge(20), color: "var(--text2)" }}>1h</button>
+            className="shrink-0 text-[10px] px-2 py-0.5 rounded" style={{ border: EDGE, color: "var(--text2)" }}>1h</button>
         </div>
       ))}
     </div>
@@ -769,12 +769,12 @@ function RemindPopover({ task, anchor, onClose, onSet }: {
           {p.label}
         </button>
       ))}
-      <div style={{ borderTop: edge(14), margin: "4px 0" }} />
+      <div style={{ borderTop: LINE, margin: "4px 0" }} />
       <input value={free} autoFocus onChange={(e) => setFree(e.target.value)}
         onKeyDown={(e) => { if (e.key === "Enter" && parsed) { e.preventDefault(); onSet(civilOf(parsed)); } }}
         placeholder="8:30" spellCheck={false}
         className="mx-1 mb-1 px-2 py-1 rounded text-[11px] outline-none"
-        style={{ background: "color-mix(in srgb, var(--bg3) 55%, transparent)", border: edge(14), color: "var(--text)" }} />
+        style={{ background: "color-mix(in srgb, var(--bg3) 55%, transparent)", border: EDGE, color: "var(--text)" }} />
       <div className="px-2 pb-1 text-[9.5px]" style={{ color: "var(--text4)", minHeight: 13 }}>
         {parsed ? `→ ${remindLabel(parsed.getTime())}` : free.trim() ? "a time like 8:30" : ""}
       </div>
@@ -2304,7 +2304,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
         <button onClick={() => { setAdding((o) => !o); if (adding) { setUrlText(""); setNote(null); } }}
           aria-expanded={adding}
           className="text-[11px] px-2 py-0.5 rounded-full"
-          style={{ border: edge(14), color: adding ? "var(--text2)" : "var(--text3)" }}
+          style={{ border: EDGE, color: adding ? "var(--text2)" : "var(--text3)" }}
           title={adding ? "Never mind" : "Add a board by pasting its address"}>
           {adding ? <CrossIcon size={ICON.sm} /> : <PlusIcon size={ICON.sm} />}
         </button>
@@ -2328,7 +2328,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           <button onClick={() => setAboutOpen(true)}
             title="What this list is for — the brief, the docs, the team"
             className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full agx-btn"
-            style={{ border: edge(14), color: "var(--text3)" }}>
+            style={{ border: EDGE, color: "var(--text3)" }}>
             About
           </button>
         )}
@@ -2340,7 +2340,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
         <div className="flex-1 flex justify-center min-w-0 px-3">
           <div className="w-full max-w-[560px]">
         <div className="flex items-center gap-2 w-full rounded-lg pl-2.5 py-1 overflow-hidden"
-          style={{ background: "var(--surface-card)", border: edge(14) }}>
+          style={{ background: "var(--surface-card)", border: EDGE }}>
           {/* The house floor for an icon-only glyph, which this was well under:
               a text ⌕ at 11px. */}
           <span className="shrink-0 grid place-items-center" style={{ width: 20, height: 20, color: "var(--text3)" }}>
@@ -2436,7 +2436,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
               className="agx-hover shrink-0 grid place-items-center self-stretch"
               style={{
                 width: 34, marginTop: -4, marginBottom: -4,
-                borderLeft: edge(14), color: "var(--text3)",
+                borderLeft: LINE, color: "var(--text3)",
                 background: "color-mix(in srgb, var(--text) 4%, transparent)",
               }}>
               <CloseIcon size={ICON.md} />
@@ -2462,7 +2462,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           className="text-[10px] px-2 py-0.5 rounded-full"
           style={boards.writeEnabled
             ? { color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }
-            : { color: "var(--text4)", border: edge(12) }}>
+            : { color: "var(--text4)", border: EDGE }}>
           read-only
         </button>}
         {/* When it was read AND how long that answer stands for. A timestamp on
@@ -2577,7 +2577,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
 
       {confirmWrite && (
         <div className="px-5 py-2 shrink-0 flex items-center gap-3 flex-wrap"
-          style={{ background: "color-mix(in srgb, var(--warning) 9%, transparent)", borderBottom: edge(10) }}>
+          style={{ background: "color-mix(in srgb, var(--warning) 9%, transparent)", borderBottom: LINE }}>
           <div className="text-[11.5px]" style={{ color: "var(--text2)" }}>
             <b style={{ color: "var(--warning-ink)" }}>Allow changes to this board?</b>
             <div className="text-[10.5px]" style={{ color: "var(--text3)" }}>
@@ -2670,7 +2670,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           <button onClick={() => void searchAll()} disabled={searching}
             title="ClickUp has no text search for this token, so this sweeps the most recently updated cards. The first one takes a moment."
             className="text-[11px] px-2.5 py-0.5 rounded-full whitespace-nowrap disabled:opacity-50"
-            style={{ border: edge(14), color: "var(--text2)" }}>
+            style={{ border: EDGE, color: "var(--text2)" }}>
             {searching ? "searching…" : "search the workspace ⏎"}
           </button>
         )}
@@ -2686,7 +2686,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           className="text-[11px] px-2.5 py-0.5 rounded-full whitespace-nowrap"
           style={readyOnly
             ? ON_CHIP
-            : { border: edge(14), color: "var(--text2)" }}>
+            : { border: EDGE, color: "var(--text2)" }}>
           {/* The count has to survive the fill: --text3 on the accent is a
               number you cannot read. */}
           ready <span style={{ color: readyOnly ? "var(--bg)" : "var(--text3)", opacity: readyOnly ? 0.75 : 1 }}>{counts.ready}</span>
@@ -2699,7 +2699,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
         <button onClick={() => setMineOnly((v) => !v)} aria-pressed={mineOnly}
           className="text-[11px] pr-2.5 py-0.5 rounded-full whitespace-nowrap inline-flex items-center gap-1.5"
           style={{
-            ...(mineOnly ? ON_CHIP_OK : { border: edge(14), color: "var(--text2)" }),
+            ...(mineOnly ? ON_CHIP_OK : { border: EDGE, color: "var(--text2)" }),
             paddingLeft: myFace ? 3 : 10,
           }}>
           {myFace && (
@@ -2714,7 +2714,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
             className="text-[11px] px-2.5 py-0.5 rounded-full"
             style={tag === t
               ? ON_CHIP
-              : { border: edge(14), color: "var(--text3)" }}>{t}</button>
+              : { border: EDGE, color: "var(--text3)" }}>{t}</button>
         ))}
         <StatusFilter statuses={data?.statuses ?? []} tasks={tasks}
           picked={statusPick} onPick={setStatusPick} />
@@ -2737,7 +2737,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           className={CHIP}
           style={showDone
             ? { border: EDGE, color: "var(--text3)" }
-            : { border: "1px solid color-mix(in srgb, var(--text) 22%, transparent)", color: "var(--text2)" }}>
+            : { border: EDGE, color: "var(--text2)" }}>
           {showDone ? "showing everything" : `show ${counts.done} done`}
         </button>
         </>}
@@ -2747,7 +2747,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
             <button onClick={() => { setLooked([]); setOnLooked(false); }}
               title="Forget every card you have looked up"
               className="text-[10.5px] px-2 py-0.5 rounded-lg"
-              style={{ border: edge(14), color: "var(--text3)" }}>
+              style={{ border: EDGE, color: "var(--text3)" }}>
               clear
             </button>
           </>
@@ -2854,14 +2854,14 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
          * shape ClickUp draws is the shape here.
          */}
         <nav aria-label="Lists" className="flex flex-col shrink-0 min-w-0"
-          style={{ width: railOpen ? 214 : 34, borderRight: edge(12), transition: "width 120ms ease" }}>
+          style={{ width: railOpen ? 214 : 34, borderRight: LINE, transition: "width 120ms ease" }}>
           <div className="flex items-center gap-1 px-1.5 shrink-0"
-            style={{ height: HEAD_H, borderBottom: edge(10) }}>
+            style={{ height: HEAD_H, borderBottom: LINE }}>
             <button onClick={() => setRailOpen((o) => !o)}
               aria-expanded={railOpen}
               title={railOpen ? "Fold the list menu" : "Show the lists"}
               className="shrink-0 grid place-items-center rounded"
-              style={{ width: 22, height: 22, border: edge(14), color: "var(--text3)" }}>
+              style={{ width: 22, height: 22, border: EDGE, color: "var(--text3)" }}>
               {/* Drawn rather than typed. `‹` is a text glyph and sits on a text
                   baseline, so centring the box still left it riding high inside
                   it — the alignment cannot be fixed by the box because the gap
@@ -3008,7 +3008,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                 style={{ display: "grid", gridTemplateColumns: grid, gap: 14, color: "var(--text4)",
                   alignItems: "center", height: HEAD_H,
                   minWidth: TABLE_MIN_W, background: "var(--bg)",
-                  borderBottom: edge(10) }}>
+                  borderBottom: LINE }}>
               <span className="agx-stick-head">Task</span>
               <span className="text-center">PR</span>
               {anyWho && <span className="text-center">Who</span>}
@@ -3024,12 +3024,12 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                   are meant to study; two of them just say "the numbers start
                   here" and "this one is not that one" — which is the whole
                   complaint, since a count and a point score are the same shape.
-                  `edge(6)` is the same weight as the row separators, so it reads
-                  as part of the table rather than as decoration. */}
-              <span className="text-center" style={{ borderLeft: edge(6), paddingLeft: 8, marginLeft: -8 }}>Cmts</span>
+                  `LINE` is the same rule as the row separators, so it reads as
+                  part of the table rather than as decoration. */}
+              <span className="text-center" style={{ borderLeft: LINE, paddingLeft: 8, marginLeft: -8 }}>Cmts</span>
               <span>Due</span>
               {anyEst && <span className="text-center">Est</span>}
-              <span className="text-center" style={{ borderLeft: edge(6), paddingLeft: 8, marginLeft: -8 }}>Pts</span>
+              <span className="text-center" style={{ borderLeft: LINE, paddingLeft: 8, marginLeft: -8 }}>Pts</span>
               <span />
               {onLooked && <span />}
             </div>
@@ -3040,7 +3040,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
             {!onLooked && looksLikeId && !rows.some((t) => (t.customId ?? "").endsWith(q.trim())) && (
               <button onClick={() => void reveal()} disabled={finding}
                 className="w-full text-left px-5 py-3 hover:bg-white/5"
-                style={{ borderBottom: edge(8) }}>
+                style={{ borderBottom: LINE }}>
                 <span className="text-[11.5px]" style={{ color: "var(--primary-ink)" }}>
                   {finding ? `Looking for ${q.trim()}…` : `Fetch card ${q.trim()} from ClickUp →`}
                 </span>
@@ -3062,7 +3062,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
               */}
             {onLooked && lookedGroups.map((g, gi) => (
               <div key={g.place} style={{ marginTop: gi ? 18 : 4 }}>
-                <div className="px-5 py-2 flex items-center gap-2.5" style={{ borderTop: gi ? edge(9) : undefined }}>
+                <div className="px-5 py-2 flex items-center gap-2.5" style={{ borderTop: gi ? LINE : undefined }}>
                   <span className={`${EYEBROW}`} style={{ color: "var(--text4)" }}>
                     {g.place}
                   </span>
@@ -3114,7 +3114,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                   aria-expanded={!folded[g.status]}
                   title={folded[g.status] ? "Show these" : "Hide these"}
                   className="agx-group-head w-full flex items-center py-2 text-left hover:bg-white/5"
-                  style={{ borderTop: gi ? edge(9) : undefined }}>
+                  style={{ borderTop: gi ? LINE : undefined }}>
                   <span className="agx-stick-group flex items-center gap-2">
                   {/* A drawn chevron, not a text glyph. `▸` at a readable size
                       renders as a speck in this font — it was still a speck
@@ -3157,7 +3157,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                   that looks like a rendering fault. The card settles it whatever
                   happens to be underneath. */}
               <div className="flex flex-col items-center gap-3 text-center rounded-xl px-6 py-5"
-                style={{ background: "var(--surface-card)", border: edge(20), boxShadow: "0 8px 30px rgba(0,0,0,0.28)" }}>
+                style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 8px 30px rgba(0,0,0,0.28)" }}>
                 <span className="agx-spin" aria-hidden style={{ width: 26, height: 26, borderWidth: 2.5 }} />
                 <div className="text-[12px]" style={{ color: "var(--text)" }}>
                   Reading {boards.views.find((v) => v.id === wanted)?.name ?? "that board"}…
@@ -3173,7 +3173,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           )}
           </div>
           <div className="flex items-center gap-3 px-5 py-1.5 shrink-0 text-[10.5px]"
-            style={{ borderTop: edge(10), color: "var(--text4)" }}>
+            style={{ borderTop: LINE, color: "var(--text4)" }}>
             {/* The provisional board counts itself, and says what it is: "9 of
                 9 · read just now" would be describing a board nobody is looking
                 at. */}
@@ -3249,7 +3249,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
             that width from the table you were reading to choose. */}
         {cardMode === "side" && picked && (
         <aside className="flex flex-col shrink-0 min-w-0"
-          style={{ width: cardW, borderLeft: edge(12) }}>
+          style={{ width: cardW, borderLeft: LINE }}>
           {/* No eyebrow over this pane. It said the word "Card" above a card,
               which was already earning its keep only by carrying the width
               button beside it — and the width is dragged from the edge now. A
@@ -3292,7 +3292,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                  below it and the reading area was the smaller half of a screen
                  that had already been given over to one card. */
               style={{ width: "min(1500px, 92vw)", height: "100%", maxHeight: "100%",
-                background: "var(--bg)", border: edge(22), boxShadow: "0 18px 50px rgba(0,0,0,0.45)" }}>
+                background: "var(--bg)", border: EDGE, boxShadow: "0 18px 50px rgba(0,0,0,0.45)" }}>
               <div className="agx-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 pb-0 text-[11.5px] flex flex-col">
               {cardBody}
           </div>
@@ -3420,7 +3420,7 @@ function EventRun({ events, open, onToggle, faceFor }: {
                 off a notification on this machine, not from the API. */}
             {e.kind === "seen" && (
               <span className="ml-1.5 px-1 rounded text-[9.5px]"
-                style={{ color: "var(--text4)", border: edge(14) }}>seen here</span>
+                style={{ color: "var(--text4)", border: EDGE }}>seen here</span>
             )}
             {e.kind === "status" && e.from && e.mins ? (
               <span className="ml-1.5" style={{ color: "var(--text4)" }}>
@@ -3565,7 +3565,7 @@ function FieldDate({ t, f, busy, onApply }: {
         });
       }}
       className="text-[11px] px-1.5 py-0.5 rounded outline-none"
-      style={{ background: "transparent", color: "var(--text2)", border: edge(16), colorScheme: "dark" }} />
+      style={{ background: "transparent", color: "var(--text2)", border: EDGE, colorScheme: "dark" }} />
   );
 }
 
@@ -3683,15 +3683,15 @@ function AboutList({ name, text, url, onClose }: {
         className="fixed left-1/2 top-1/2 flex flex-col min-h-0 rounded-xl overflow-hidden"
         style={{
           transform: "translate(-50%, -50%)", width: "min(760px, 92vw)", maxHeight: "82vh",
-          background: "var(--bg)", border: edge(22), boxShadow: "0 18px 50px rgba(0,0,0,0.45)",
+          background: "var(--bg)", border: EDGE, boxShadow: "0 18px 50px rgba(0,0,0,0.45)",
         }}>
-        <div className="flex items-center gap-2 px-4 py-2.5 shrink-0" style={{ borderBottom: edge(12) }}>
+        <div className="flex items-center gap-2 px-4 py-2.5 shrink-0" style={{ borderBottom: LINE }}>
           <span className="text-[12.5px]" style={{ color: "var(--text)" }}>{name}</span>
           <span className="text-[10px]" style={{ color: "var(--text4)" }}>what this list is for</span>
           <span className="flex-1" />
           {externalUrl(url ?? "") && (
             <button onClick={() => openExternal(url!)} className="text-[10.5px] px-2 py-0.5 rounded-lg"
-              style={{ border: edge(16), color: "var(--text3)" }}>Open in ClickUp ↗</button>
+              style={{ border: EDGE, color: "var(--text3)" }}>Open in ClickUp ↗</button>
           )}
           <CloseButton onClick={onClose} title="Close (Esc)" />
         </div>
@@ -3743,7 +3743,7 @@ function AboutBody({ text }: { text: string }) {
         /* No count: the empty rows are a mix of section headings (`Docs:`,
            `Team:`) and genuinely missing chips, and a number that lumps them
            together is a number that is wrong. */
-        <div className="mt-3 pt-2 text-[10.5px]" style={{ borderTop: edge(10), color: "var(--text4)" }}>
+        <div className="mt-3 pt-2 text-[10.5px]" style={{ borderTop: LINE, color: "var(--text4)" }}>
           The blanks are ClickUp's own cards — a Doc, a Figma file, a Slack channel. Its API publishes the words and keeps those to itself; open the list there to follow them.
         </div>
       )}
@@ -3962,7 +3962,7 @@ function FolderPicker({ folders, busy, onAdd, onAddList }: {
     <div className="flex flex-col gap-1.5">
       <select value={space} onChange={(e) => setSpace(e.target.value)}
         className="text-[11.5px] px-2 py-1.5 rounded-lg self-start min-w-[200px]"
-        style={{ background: "var(--surface-inset)", border: edge(18), color: "var(--text)" }}>
+        style={{ background: "var(--surface-inset)", border: EDGE, color: "var(--text)" }}>
         {spaces.map((sp) => <option key={sp.id} value={sp.id}>{sp.name}</option>)}
       </select>
       {!found ? (
@@ -3993,7 +3993,7 @@ function FolderPicker({ folders, busy, onAdd, onAddList }: {
                 title={`A list sitting directly in this space${typeof row.list.tasks === "number" ? ` — ${row.list.tasks} task${row.list.tasks === 1 ? "" : "s"}` : ""}. Open it to pick which of its views to add.`}
                 className="text-[11px] px-2 py-1 rounded-lg flex items-center gap-1.5"
                 style={{
-                  border: openList === row.list.id ? "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" : edge(18),
+                  border: openList === row.list.id ? "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" : EDGE,
                   color: openList === row.list.id ? "var(--text)" : "var(--text2)",
                   opacity: busy ? 0.5 : 1,
                 }}>
@@ -4054,7 +4054,7 @@ function ListViews({ listId, busy, onPick }: { listId: string; busy: boolean; on
   const shown = ql ? views.filter((v) => v.name.toLowerCase().includes(ql)) : views;
 
   return (
-    <div className="flex flex-col gap-1.5 mt-1 p-2 rounded-lg" style={{ border: edge(18), background: "var(--surface-card)" }}>
+    <div className="flex flex-col gap-1.5 mt-1 p-2 rounded-lg" style={{ border: EDGE, background: "var(--surface-card)" }}>
       <div className="flex items-center gap-2">
         <span className="text-[10px] uppercase tracking-[0.12em]" style={{ color: "var(--text4)" }}>views in this list</span>
         <span className="tabular-nums text-[10px]" style={{ color: "var(--text4)" }}>{views.length}</span>
@@ -4070,11 +4070,11 @@ function ListViews({ listId, busy, onPick }: { listId: string; busy: boolean; on
         <button disabled={busy} onClick={() => onPick(listId)}
           title="The list, on whichever view ClickUp treats as its default"
           className="text-[11px] px-2 py-1 rounded-lg"
-          style={{ border: edge(18), color: "var(--text3)", opacity: busy ? 0.5 : 1 }}>the list itself</button>
+          style={{ border: EDGE, color: "var(--text3)", opacity: busy ? 0.5 : 1 }}>the list itself</button>
         {shown.map((v) => (
           <button key={v.id} disabled={busy} onClick={() => onPick(v.id)}
             className="text-[11px] px-2 py-1 rounded-lg"
-            style={{ border: edge(18), color: "var(--text2)", opacity: busy ? 0.5 : 1 }}>
+            style={{ border: EDGE, color: "var(--text2)", opacity: busy ? 0.5 : 1 }}>
             <span className="truncate max-w-[190px] inline-block align-bottom">{v.name}</span>
           </button>
         ))}
@@ -4118,7 +4118,7 @@ function Folder({ f, on, busy, onAdd }: {
                 : `${f.lists.length} list${f.lists.length === 1 ? "" : "s"} — added whole, so new ones turn up on their own`}
               className="text-[11px] px-2 py-1 rounded-lg flex items-center gap-1.5"
               style={{
-                border: on ? "1px solid color-mix(in srgb, var(--success) 40%, transparent)" : edge(18),
+                border: on ? "1px solid color-mix(in srgb, var(--success) 40%, transparent)" : EDGE,
                 color: on ? "var(--success)" : "var(--text2)",
                 opacity: busy ? 0.5 : 1,
               }}>
@@ -4163,7 +4163,7 @@ function AddFirstBoard({ value, onValue, onAdd, busy, note, why }: {
       </div>
       {note && <div className="text-[11px]" style={{ color: note.ok ? "var(--success)" : "var(--error)" }}>{note.text}</div>}
       <button onClick={() => openSettings("connections")} className="text-[10.5px] px-2 py-1 rounded-lg mt-1"
-        style={{ border: edge(16), color: "var(--text3)" }}>ClickUp settings</button>
+        style={{ border: EDGE, color: "var(--text3)" }}>ClickUp settings</button>
     </div>
   );
 }
@@ -4498,16 +4498,16 @@ const ROW_CHIP = "text-[9.5px] px-1.5 py-0.5 rounded-md whitespace-nowrap";
  */
 const TAG_PILL = "text-[10px] px-1.5 py-0.5 rounded-md whitespace-nowrap leading-none";
 const TAG_FILL = "color-mix(in srgb, var(--text) 6%, transparent)";
-const TAG_EDGE = "1px solid color-mix(in srgb, var(--text) 13%, transparent)";
+const TAG_EDGE = EDGE;
 /** The id is a chip too, and a slightly cooler one, so the eye can still pick
  *  it out of a row of tags without it being a different KIND of thing. */
 const ID_FILL = "color-mix(in srgb, var(--primary) 9%, transparent)";
 
 /*
- * Two rules, and only two: `edge(10)` parts the SECTIONS of a card, `edge(14)` parts
- * the groups inside a menu. There were three, the third being an `edge(12)` in two
- * popovers that nobody chose — a hairline a shade darker than the identical one in the
- * menu beside it.
+ * One rule: `LINE` parts the sections of a card and the groups inside a menu alike.
+ * There were three weights for that one job (10, 12 and 14), the 12 in two popovers
+ * that nobody chose — a hairline a shade darker than the identical one in the menu
+ * beside it.
  */
 
 /**
@@ -4654,7 +4654,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
            with everything right-aligned the columns read as one ragged block.
            14 plus the hairlines below is what separates them; the numbers are
            centred in their own track rather than crowded against its edge. */
-        display: "grid", gridTemplateColumns: grid, gap: 14, borderBottom: edge(6), position: "relative",
+        display: "grid", gridTemplateColumns: grid, gap: 14, borderBottom: LINE, position: "relative",
         /* Matches the heading above it. Without it the row squeezes while the
            heading scrolls, and the two stop lining up. */
         minWidth: TABLE_MIN_W,
@@ -4819,7 +4819,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
         // The rule runs the height of the table because every row draws its own
         // segment; the heading draws the top one.
         style={{
-          borderLeft: edge(6), paddingLeft: 8, marginLeft: -8,
+          borderLeft: LINE, paddingLeft: 8, marginLeft: -8,
           color: t.comments ? "var(--text3)" : "var(--text4)", opacity: t.comments ? 1 : 0.55,
         }}>
         {t.comments ?? ""}
@@ -4836,12 +4836,12 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
         </span>
       )}
       <span className="text-[11px] tabular-nums text-center"
-        style={{ color: "var(--text4)", borderLeft: edge(6), paddingLeft: 8, marginLeft: -8 }}>{t.points ?? ""}</span>
+        style={{ color: "var(--text4)", borderLeft: LINE, paddingLeft: 8, marginLeft: -8 }}>{t.points ?? ""}</span>
       <span className="text-right">
         {t.url && (
           <a href={t.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
             className={`agx-onrow ${ROW_CHIP} inline-block`}
-            style={{ border: edge(16), color: "var(--text2)" }}>↗</a>
+            style={{ border: EDGE, color: "var(--text2)" }}>↗</a>
         )}
       </span>
       {/* Its own track, not a layer on top of the ↗ chip above: a row you can
@@ -4850,7 +4850,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
       {onForget && (
         <CloseButton onClick={(e) => { e.stopPropagation(); onForget(); }} title="Forget this one"
           className="agx-onrow justify-self-end"
-          style={{ color: "var(--text3)", background: "var(--surface-card)", border: edge(14) }} />
+          style={{ color: "var(--text3)", background: "var(--surface-card)", border: EDGE }} />
       )}
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
@@ -4940,7 +4940,7 @@ function StatusFilter({ statuses, tasks, picked, onPick }: {
     <div className="relative" ref={box}>
       <button onClick={() => setOpen((o) => !o)} aria-expanded={open}
         className="flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full whitespace-nowrap"
-        style={picked.length ? ON_CHIP : { border: edge(14), color: "var(--text2)" }}>
+        style={picked.length ? ON_CHIP : { border: EDGE, color: "var(--text2)" }}>
         {picked.length ? `${picked.length} selected` : "Status"}
         <span style={{ color: picked.length ? "var(--bg)" : "var(--text4)", opacity: picked.length ? 0.7 : 1 }}>▾</span>
       </button>
@@ -4956,7 +4956,7 @@ function StatusFilter({ statuses, tasks, picked, onPick }: {
           {working.map((s) => <Row key={s.status} s={s} />)}
           {!!finished.length && (
             <div className={`px-2.5 pt-2 pb-1 ${EYEBROW}`}
-              style={{ color: "var(--text4)", borderTop: edge(10) }}>Done</div>
+              style={{ color: "var(--text4)", borderTop: LINE }}>Done</div>
           )}
           {finished.map((s) => <Row key={s.status} s={s} />)}
         </div>
@@ -5039,7 +5039,7 @@ function CopyRow({ label, value, mono }: { label: string; value: string; mono?: 
       onClick={() => { void navigator.clipboard.writeText(value).then(() => setDone(true)).catch(() => setDone(false)); }}
       title={`Copy: ${value}`}
       className="agx-btn w-full text-left rounded-md px-2 py-1.5 flex items-start gap-2"
-      style={{ border: edge(12), background: "color-mix(in srgb, var(--text) 3%, transparent)" }}>
+      style={{ border: EDGE, background: "color-mix(in srgb, var(--text) 3%, transparent)" }}>
       <span className="min-w-0 flex-1">
         <span className="block text-[9.5px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>{label}</span>
         <span className={`block text-[11px] break-all ${mono ? "font-mono" : ""}`} style={{ color: "var(--text2)" }}>{value}</span>
@@ -5124,7 +5124,7 @@ function EditText({ value, empty, title, width, busy, parse, onSave }: {
           if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setDraft(value); setWhy(""); setEditing(false); }
         }}
         className="text-[11.5px] px-1.5 py-0.5 rounded outline-none"
-        style={{ background: "var(--bg)", color: "var(--text)", border: edge(22), width: width ?? 90 }} />
+        style={{ background: "var(--bg)", color: "var(--text)", border: EDGE, width: width ?? 90 }} />
       {why && <span className="text-[10px]" style={{ color: "var(--error-ink)" }}>{why}</span>}
     </span>
   );
@@ -5140,7 +5140,7 @@ function EditDay({ value, busy, title, onSave }: {
       <input type="date" value={msToDay(value)} disabled={busy} title={title}
         onChange={(e) => onSave(dayToMs(e.target.value))}
         className="text-[11px] px-1.5 py-0.5 rounded outline-none"
-        style={{ background: "transparent", color: "var(--text2)", border: edge(16), colorScheme: "dark" }} />
+        style={{ background: "transparent", color: "var(--text2)", border: EDGE, colorScheme: "dark" }} />
       {value != null && !busy && (
         <button className="agx-btn rounded text-[10px]" style={{ color: "var(--text4)" }}
           title="Clear this date" onClick={() => onSave(null)}>Clear</button>
@@ -5314,7 +5314,7 @@ function TagEdit({ t, busy, onApply, board }: {
     <span className="flex flex-wrap items-center gap-1">
       {t.tags.map((tag) => (
         <span key={tag} className="inline-flex items-center gap-1 text-[10.5px] px-1.5 py-0.5 rounded-md"
-          style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--text) 7%, transparent)", border: edge(14) }}>
+          style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--text) 7%, transparent)", border: EDGE }}>
           {tag}
           <button className="agx-btn rounded flex" title={`Remove ${tag}`} disabled={busy}
             style={{ color: "var(--text4)" }}
@@ -5344,7 +5344,7 @@ function TagEdit({ t, busy, onApply, board }: {
                 if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setDraft(""); setAdding(false); }
               }}
               className="text-[11px] px-1.5 py-0.5 rounded outline-none"
-              style={{ background: "var(--bg)", color: "var(--text)", border: edge(22), width: 170 }} />
+              style={{ background: "var(--bg)", color: "var(--text)", border: EDGE, width: 170 }} />
           : <button className="agx-btn rounded text-[10.5px]" style={{ color: "var(--text4)" }}
               title="Add a tag" disabled={busy} onClick={() => { setAdding(true); setHot(0); }}>+ tag</button>}
         {adding && (
@@ -5399,7 +5399,7 @@ function CardHop({ list, id, onGo }: { list: ProviderTask[]; id: string; onGo: (
         title={hop.prev ? `Previous: ${hop.prev.title}` : "This is the first card on the board"}>‹</button>
       <button
         className="max-w-[280px] flex items-center gap-1.5 rounded px-1.5 py-0.5 text-[10.5px] disabled:opacity-40 disabled:cursor-default hover:bg-white/10 disabled:hover:bg-transparent"
-        style={{ border: edge(14), color: "var(--text2)" }}
+        style={{ border: EDGE, color: "var(--text2)" }}
         disabled={!hop.next}
         onClick={() => hop.next && onGo(hop.next.id)}
         title={hop.next ? `Next: ${hop.next.title}` : "This is the last card on the board"}>
@@ -5410,7 +5410,7 @@ function CardHop({ list, id, onGo }: { list: ProviderTask[]; id: string; onGo: (
       <div className="relative">
         <button onClick={() => setOpen((o) => !o)}
           className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] tabular-nums hover:bg-white/10"
-          style={{ border: edge(14), color: "var(--text3)" }}
+          style={{ border: EDGE, color: "var(--text3)" }}
           title="Open another card of this board, without closing this one">
           {/* A card looked up by id is not in the board's list, and saying
               "0 of 29" would be a lie about where you are rather than a count. */}
@@ -5767,7 +5767,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
 
   const lab = { color: "var(--text4)", width: 62 };
   const val = "text-left rounded px-1.5 py-0.5 -mx-1.5 hover:bg-white/5 truncate max-w-full";
-  const line = edge(16);
+  const line = LINE;
 
   /* The statuses that are worth offering: this list's own, minus the one it is
      already in. Never a text box — an invalid status is a 400, and a status
@@ -5858,7 +5858,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
         {/* The card's actions live above its identity, not below its text: they
             are what you reach for after reading, and a long card put them a
             full scroll away. In the sticky band, so they follow the card. */}
-        <div className="flex items-center gap-1.5 flex-wrap pb-1.5 mb-1.5" style={{ borderBottom: edge(10) }}>
+        <div className="flex items-center gap-1.5 flex-wrap pb-1.5 mb-1.5" style={{ borderBottom: LINE }}>
         <div className="relative">
           <button onClick={() => setAskOpen((o) => !o)} className="text-[10.5px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg"
             style={{ border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)", color: "var(--warning-ink)" }}>
@@ -5880,7 +5880,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                     <input value={skillQ} onChange={(e) => setSkillQ(e.target.value)} placeholder="filter"
                       spellCheck={false} autoComplete="off"
                       className="text-[10px] px-1.5 py-0.5 rounded outline-none"
-                      style={{ background: "var(--bg3)", border: edge(16), color: "var(--text)", width: 92 }} />
+                      style={{ background: "var(--bg3)", border: EDGE, color: "var(--text)", width: 92 }} />
                   </div>
                   {shown.map((sk, i) => {
                     // One heading between the ones named for it and the rest,
@@ -5902,7 +5902,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                       <div key={sk.name}>
                       {firstOther && (
                         <div className={`px-2.5 pt-2 pb-1 ${EYEBROW}`}
-                          style={{ color: "var(--text4)", borderTop: edge(10) }}>Also mention ClickUp</div>
+                          style={{ color: "var(--text4)", borderTop: LINE }}>Also mention ClickUp</div>
                       )}
                       <div className="px-2.5 py-1.5 hover:bg-white/5">
                         <button className="text-left w-full" title={sk.description} onClick={() => run()}>
@@ -5921,7 +5921,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                             {modes.map((m) => (
                               <button key={m} onClick={() => run(m)}
                                 className="text-[9.5px] px-1.5 py-0.5 rounded-full"
-                                style={{ color: "var(--text3)", border: edge(16) }}>{m}</button>
+                                style={{ color: "var(--text3)", border: EDGE }}>{m}</button>
                             ))}
                           </div>
                         )}
@@ -5932,7 +5932,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                   {!shown.length && (
                     <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>No skill matches that.</div>
                   )}
-                  <div style={{ borderTop: edge(14) }} />
+                  <div style={{ borderTop: LINE }} />
                 </>
               )}
               <div className="px-2.5 pt-2 pb-1 flex items-center gap-2">
@@ -5949,7 +5949,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                     className="text-[10px] px-1.5 py-0.5 rounded"
                     style={to === d
                       ? { background: "color-mix(in srgb, var(--primary) 20%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }
-                      : { border: edge(14), color: "var(--text4)" }}>
+                      : { border: EDGE, color: "var(--text4)" }}>
                     {d === "chat" ? <IconLabel icon={<CommentIcon size={ICON.xs} />}>chat</IconLabel> : <IconLabel icon={<MonitorIcon size={ICON.xs} />}>pane</IconLabel>}
                   </button>
                 ))}
@@ -5978,7 +5978,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                   files without asking. */}
               {!!skills.length && (
                 <label className="flex items-start gap-2 px-2.5 py-2 cursor-pointer"
-                  style={{ borderTop: edge(14) }}>
+                  style={{ borderTop: LINE }}>
                   <input type="checkbox" checked={yolo} onChange={(e) => setYolo(e.target.checked)}
                     style={{ accentColor: "var(--error)", marginTop: 2 }} />
                   <span>
@@ -6053,7 +6053,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
               would otherwise get the same string twice. */}
           {t.customId && t.customId !== t.id && (
             <button onClick={() => void copyIt(t.id, "raw")} className={`${ID_CHIP} tabular-nums`}
-              style={{ color: "var(--text4)", border: edge(16) }}
+              style={{ color: "var(--text4)", border: EDGE }}
               title={`Copy ${t.id} — ClickUp's own id, the one its API and URLs take`}>
               {copied === "raw" ? <span className="inline-flex items-center gap-1">copied<DoneIcon size={ICON.xs} /></span> : t.id}
             </button>
@@ -6127,7 +6127,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
             it is a label — and a card with no conversation should look exactly
             the way it always did. */}
         {(!!rows.length || !!files.length) && (
-          <div className="flex items-center gap-1.5 mt-2.5" style={{ borderBottom: edge(12) }}>
+          <div className="flex items-center gap-1.5 mt-2.5" style={{ borderBottom: LINE }}>
             {([
               ["card", "Card"],
               ...(rows.length ? [["activity", nComments ? `Activity ${nComments}` : "Activity"] as const] : []),
@@ -6179,7 +6179,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
         * names here, because a workspace calls its fields whatever it likes.
         */}
       <div className="mb-3 rounded-lg px-3 py-2.5 flex flex-wrap items-start"
-        style={{ gap: "14px 20px", background: "color-mix(in srgb, var(--text) 4%, transparent)", border: edge(12) }}>
+        style={{ gap: "14px 20px", background: "color-mix(in srgb, var(--text) 4%, transparent)", border: EDGE }}>
         <div className="flex flex-col gap-1 min-w-0">
           <span className={`${EYEBROW}`} style={{ color: "var(--text4)" }}>status</span>
           <div className="relative">
@@ -6446,7 +6446,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           A dependency already finished is listed quietly rather than as a
           block: it is history, not an obstacle. */}
       {(!!waits.length || !!blocksThese.length) && (
-        <div className="mb-3 pt-2.5" style={{ borderTop: edge(10) }}>
+        <div className="mb-3 pt-2.5" style={{ borderTop: LINE }}>
           {!!waits.length && (
             <>
               <div className={`${EYEBROW} mb-1.5`} style={{ color: waitsOpen.length ? "var(--error)" : "var(--text4)" }}>
@@ -6484,7 +6484,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
       {/* No heading of ours: these cards open with their own "Description"
           heading, and stacking a label above it read as a stutter. */}
       {full?.description ? (
-        <div className="mb-3 pt-2.5 agx-cu-body" style={{ borderTop: edge(10) }}>
+        <div className="mb-3 pt-2.5 agx-cu-body" style={{ borderTop: LINE }}>
           <Markdown text={full.description} />
         </div>
       ) : null}
@@ -6499,7 +6499,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
         * a paragraph belongs. See cardLayout.ts for how the two are told apart.
         */}
       {!!shape.long.length && (
-        <div className="mb-3 pt-2.5 flex flex-col gap-3" style={{ borderTop: edge(10) }}>
+        <div className="mb-3 pt-2.5 flex flex-col gap-3" style={{ borderTop: LINE }}>
           {shape.long.map((c) => (
             <div key={c.id} className="flex flex-col gap-1">
               <span className={`${EYEBROW}`} style={{ color: "var(--text4)" }}>{fieldLabel(c.name)}</span>
@@ -6525,7 +6525,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
         * you came for the conversation.
         */}
       {!!shape.rows.length && (
-        <div className="mb-3 pt-2.5" style={{ borderTop: edge(10) }}>
+        <div className="mb-3 pt-2.5" style={{ borderTop: LINE }}>
           <button onClick={() => setFieldsOpen((v) => !v)}
             className={`agx-btn w-full text-left flex items-center gap-2 ${EYEBROW} pb-1.5`}
             style={{ color: "var(--text4)" }}>
@@ -6549,7 +6549,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                 const canDate = writable && !spec?.readOnly && spec?.type === "date";
                 return (
                   <div key={c.id} className="grid gap-3 py-1.5 items-baseline"
-                    style={{ gridTemplateColumns: wide ? "200px 1fr" : "minmax(110px, 42%) 1fr", borderBottom: edge(8) }}>
+                    style={{ gridTemplateColumns: wide ? "200px 1fr" : "minmax(110px, 42%) 1fr", borderBottom: LINE }}>
                     <span className="text-[10.5px] min-w-0 truncate flex items-center gap-1" style={{ color: "var(--text4)" }} title={spec?.readOnly ? `${c.name} — marked read-only by its own name` : c.name}>
                       <span className="truncate">{fieldLabel(c.name)}</span>
                       {spec?.readOnly && <span aria-hidden className="flex" title="Marked read-only by its own name"><LockIcon size={ICON.xs} /></span>}
@@ -6572,7 +6572,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
       )}
 
       {!!full?.subtasks?.length && (
-        <div className="mb-3 pt-2.5" style={{ borderTop: edge(10) }}>
+        <div className="mb-3 pt-2.5" style={{ borderTop: LINE }}>
           <div className={`${EYEBROW} mb-1.5`} style={{ color: "var(--text4)" }}>
             Subtasks {full.subtasks.length}
           </div>
@@ -6588,7 +6588,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
       )}
 
       {!!full?.checklists?.length && full.checklists.map((cl, i) => (
-        <div key={i} className="mb-3 pt-2.5" style={{ borderTop: edge(10) }}>
+        <div key={i} className="mb-3 pt-2.5" style={{ borderTop: LINE }}>
           <div className={`${EYEBROW} mb-1.5`} style={{ color: "var(--text4)" }}>{cl.name}</div>
           {cl.items.map((it, j) => (
             <div key={j} className="flex items-center gap-2 py-1 text-[11px]">
@@ -6619,8 +6619,8 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           * a branch named any other way stops being found by either side — see
           * cardBranch.ts.
           */}
-        <div className="mb-3 rounded-lg overflow-hidden" style={{ border: edge(14) }}>
-          <div className="px-3 py-2 text-[11px]" style={{ background: "color-mix(in srgb, var(--text) 4%, transparent)", borderBottom: edge(10), color: "var(--text2)" }}>
+        <div className="mb-3 rounded-lg overflow-hidden" style={{ border: EDGE }}>
+          <div className="px-3 py-2 text-[11px]" style={{ background: "color-mix(in srgb, var(--text) 4%, transparent)", borderBottom: LINE, color: "var(--text2)" }}>
             Quick start
             <div className="text-[10px] mt-0.5" style={{ color: "var(--text4)" }}>
               Put the card id in a branch, a commit or a pull request title and both sides link it by themselves.
@@ -6637,7 +6637,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           </div>
         </div>
       {(!!prs.length || prsErr) && (
-        <div className="mb-3 pt-2.5" style={{ borderTop: edge(10) }}>
+        <div className="mb-3 pt-2.5" style={{ borderTop: LINE }}>
           <div className={`${EYEBROW} mb-1.5 flex items-center gap-2`} style={{ color: "var(--text4)" }}>
             Pull requests {!!prs.length && <span>{prs.length}</span>}
             {prsErr && (
@@ -6672,7 +6672,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                 <div className="truncate text-[10.5px]" style={{ color: "var(--text3)" }}>{p.title || p.url}</div>
               </button>
               <a href={p.url} target="_blank" rel="noreferrer" className="text-[10px] px-1.5 py-0.5 rounded shrink-0"
-                style={{ border: edge(16), color: "var(--text3)" }}>↗</a>
+                style={{ border: EDGE, color: "var(--text3)" }}>↗</a>
             </div>
           ))}
         </div>
@@ -6735,7 +6735,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                was smaller than the gap between two lines inside one, so the
                eye had nothing to cut on and the column read as one block. */
             <div key={c.id} className="mb-3 rounded-lg px-3.5 py-3"
-              style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", border: edge(10) }}>
+              style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", border: EDGE }}>
               {/*
                 * Who wrote it, kept under the card's own band for as long as
                 * what they wrote — ClickUp's behaviour, and the reason it took
@@ -6805,7 +6805,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                   title="More for this comment"
                   aria-label="More for this comment"
                   className="agx-bench-hit ml-auto shrink-0 rounded-md text-[14px] leading-none flex items-center justify-center"
-                  style={{ width: 28, height: 26, color: "var(--text3)", border: edge(16) }}>…</button>
+                  style={{ width: 28, height: 26, color: "var(--text3)", border: EDGE }}>…</button>
               </div>
               {/* Through the markdown renderer, like the description: these
                   carry code spans and tables, and printing them raw is what
@@ -6884,7 +6884,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
               )}
 
               {replyTo === c.id && (
-                <div className="mt-2" style={{ marginLeft: 4, paddingLeft: 12, borderLeft: edge(18) }}>
+                <div className="mt-2" style={{ marginLeft: 4, paddingLeft: 12, borderLeft: LINE }}>
                   <Composer value={noteDraft} onChange={setNoteDraft} busy={busyComment === c.id} autoFocus
                     placeholder={`Answer ${c.who || "this"}`} sendLabel="Reply"
                     people={members} onNeedPeople={loadMembers}
@@ -6908,7 +6908,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                   exactly what a flat list of both would produce. */}
               {openThreads.has(c.id) && !!c.replyList?.length && (
                 <div className="mt-3 flex flex-col gap-3"
-                  style={{ marginLeft: 4, paddingLeft: 12, borderLeft: edge(18) }}>
+                  style={{ marginLeft: 4, paddingLeft: 12, borderLeft: LINE }}>
                   {c.replyList.map((r) => (
                     <div key={r.id}>
                       <div className="flex items-center gap-2 flex-wrap mb-1.5">
@@ -7032,7 +7032,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           unnecessary. Below the conversation on purpose: a box above it is a
           box you write in before reading what is already there. */}
       {writable && (
-        <div className="mb-3 pt-2" style={{ borderTop: rows.length ? edge(10) : undefined }}>
+        <div className="mb-3 pt-2" style={{ borderTop: rows.length ? LINE : undefined }}>
           <Composer value={say} onChange={(v) => { setSay(v); setSayErr(""); }} busy={saying}
             placeholder="Say something on this card. Markdown, and @ to call somebody."
             sendLabel="Comment"
@@ -7404,14 +7404,14 @@ function LocalBody({ active, repos, here, onOpenChatWith }: {
             style={bucket === b.id
               ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)",
                   border: "1px solid color-mix(in srgb, var(--primary) 50%, transparent)", color: "var(--text)" }
-              : { border: edge(14), color: "var(--text2)" }}>
+              : { border: EDGE, color: "var(--text2)" }}>
             {b.tone && <span aria-hidden style={{ width: 6, height: 6, borderRadius: 999, background: b.tone }} />}
             {b.label}
             <span style={{ color: "var(--text3)" }}>{counts[b.id]}</span>
           </button>
         ))}
         <span className="flex-1" />
-        <div className="flex rounded-lg overflow-hidden" style={{ border: edge(14) }}>
+        <div className="flex rounded-lg overflow-hidden" style={{ border: EDGE }}>
           {([false, true] as const).map((d) => (
             <button key={String(d)} onClick={() => setShowDone(d)} aria-pressed={showDone === d}
               className="text-[10.5px] px-2.5 py-0.5"
@@ -7426,7 +7426,7 @@ function LocalBody({ active, repos, here, onOpenChatWith }: {
 
       <div className="flex items-center gap-2 px-5 pb-1.5 shrink-0">
         <div className="flex items-center gap-2 flex-1 min-w-0 rounded-lg px-2.5 py-1"
-          style={{ background: "var(--surface-card)", border: edge(14) }}>
+          style={{ background: "var(--surface-card)", border: EDGE }}>
           <span className="shrink-0 flex" style={{ color: "var(--text3)" }}><SearchIcon size={ICON.xs} /></span>
           <input ref={barRef} value={input} onChange={(e) => setInput(e.target.value)}
             onKeyDown={async (e) => {
@@ -7491,7 +7491,7 @@ function LocalBody({ active, repos, here, onOpenChatWith }: {
             grid drives every row — see GRID. */}
         <div className={`px-5 py-1 ${EYEBROW} shrink-0`}
           style={{ display: "grid", gridTemplateColumns: GRID, gap: 10, color: "var(--text4)",
-            borderTop: edge(10), borderBottom: edge(10) }}>
+            borderTop: LINE, borderBottom: LINE }}>
           <span /><span>Task</span><span>Project</span><span>Due</span><span>Reminder</span><span />
         </div>
         <div className="agx-scroll flex-1 min-w-0 overflow-y-auto">
@@ -7513,7 +7513,7 @@ function LocalBody({ active, repos, here, onOpenChatWith }: {
         </div>
       </div>
       <aside className="agx-scroll overflow-y-auto overflow-x-hidden p-5 text-[11.5px] shrink-0"
-        style={{ width: 380, borderLeft: edge(12) }}>
+        style={{ width: 380, borderLeft: LINE }}>
         {picked ? <TaskDetail t={picked} today={today} reminder={byTask[picked.uuid] ?? null}
           writable={cap.configured}
           projects={picker.projects} tags={picker.tags}
@@ -7530,7 +7530,7 @@ function LocalBody({ active, repos, here, onOpenChatWith }: {
           they are just no longer the widest thing on screen, which is what made
           the panel read as a terminal. */}
       <div className="flex items-center gap-3 px-5 py-1.5 shrink-0 text-[10.5px]"
-        style={{ borderTop: edge(10), color: "var(--text4)" }}>
+        style={{ borderTop: LINE, color: "var(--text4)" }}>
         <span>{open.length} {open.length === 1 ? "task" : "tasks"}{counts.today ? ` · ${counts.today} today` : ""}</span>
         <span className="flex-1" />
         {keysOpen && (
@@ -7545,7 +7545,7 @@ function LocalBody({ active, repos, here, onOpenChatWith }: {
           </div>
         )}
         <button onClick={() => setKeysOpen((o) => !o)} aria-expanded={keysOpen}
-          className="shrink-0 px-2 py-0.5 rounded-lg" style={{ border: edge(14), color: "var(--text3)" }}>
+          className="shrink-0 px-2 py-0.5 rounded-lg" style={{ border: EDGE, color: "var(--text3)" }}>
           <IconLabel icon={<KeyboardIcon size={ICON.xs} />}>{keysOpen ? "Hide" : "Shortcuts"}</IconLabel>
         </button>
       </div>
@@ -7593,7 +7593,7 @@ function TaskRow({ t, today, on, onPick, marked, onMark, reminder, remindOpen, o
       className="agx-row w-full text-left px-5 py-1.5 hover:bg-white/5 cursor-pointer items-center"
       style={{
         display: "grid", gridTemplateColumns: GRID, gap: 10,
-        borderBottom: edge(6),
+        borderBottom: LINE,
         background: marked
           ? "color-mix(in srgb, var(--primary) 20%, transparent)"
           : on ? "color-mix(in srgb, var(--primary) 13%, transparent)" : undefined,
@@ -7695,7 +7695,7 @@ function TaskRow({ t, today, on, onPick, marked, onMark, reminder, remindOpen, o
       <span className="text-right">
         <button onClick={(e) => { e.stopPropagation(); onPick(); }}
           className="agx-onrow text-[10.5px] px-2 py-0.5 rounded-lg"
-          style={{ border: edge(16), color: "var(--text2)" }}>Open →</button>
+          style={{ border: EDGE, color: "var(--text2)" }}>Open →</button>
       </span>
     </div>
   );
@@ -7782,7 +7782,7 @@ function Drop({ label, value, options, onPick, onClear }: {
         style={on
           ? { background: "color-mix(in srgb, var(--primary) 14%, transparent)",
               border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }
-          : { border: edge(14), color: "var(--text2)" }}>
+          : { border: EDGE, color: "var(--text2)" }}>
         {label}{on && <span style={{ color: "var(--primary-ink)" }}>{value}</span>}
         <span style={{ color: "var(--text4)" }}>▾</span>
       </button>
@@ -7888,7 +7888,7 @@ function NewTask({ projects, tags, onAdd, onClose }: {
   return (
     <form id="agx-new" onSubmit={submit} onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } }}
       className="px-5 py-3 flex flex-col gap-2.5"
-      style={{ borderBottom: edge(12), background: "color-mix(in srgb, var(--primary) 6%, transparent)" }}>
+      style={{ borderBottom: LINE, background: "color-mix(in srgb, var(--primary) 6%, transparent)" }}>
       <div>
         <label className={label} style={{ color: "var(--text3)" }} htmlFor="nt-desc">What needs doing</label>
         <input id="nt-desc" ref={first} value={description} onChange={(e) => setDescription(e.target.value)}
@@ -7906,7 +7906,7 @@ function NewTask({ projects, tags, onAdd, onClose }: {
                 style={priority === p
                   ? { background: "color-mix(in srgb, var(--primary) 20%, transparent)",
                       border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }
-                  : { border: edge(18), color: "var(--text3)" }}>
+                  : { border: EDGE, color: "var(--text3)" }}>
                 {p === null ? "None" : p === "L" ? "Low" : p === "M" ? "Medium" : "High"}
               </button>
             ))}
@@ -7964,10 +7964,10 @@ function BulkBar({ n, tagging, tag, onTag, onTagging, onRun, onClear }: {
   onClear: () => void;
 }) {
   const btn = "text-[10.5px] px-2 py-1 rounded-lg whitespace-nowrap";
-  const quiet = { border: edge(18), color: "var(--text2)" };
+  const quiet = { border: EDGE, color: "var(--text2)" };
   return (
     <div className="flex items-center gap-1.5 px-4 py-2 flex-wrap"
-      style={{ borderBottom: edge(10), background: "color-mix(in srgb, var(--primary) 8%, transparent)" }}>
+      style={{ borderBottom: LINE, background: "color-mix(in srgb, var(--primary) 8%, transparent)" }}>
       <span className="text-[11px] font-medium mr-1" style={{ color: "var(--text)" }}>
         {n} selected
       </span>
@@ -8028,7 +8028,7 @@ function TaskFields({ t, today, projects, tags, onEdit }: {
   const [editingDue, setEditingDue] = useState(false);
 
   const lab = { color: "var(--text4)", width: 62 };
-  const field = { background: "var(--surface-card)", border: edge(18), color: "var(--text)" };
+  const field = { background: "var(--surface-card)", border: EDGE, color: "var(--text)" };
   /* A value you can change looks like one: quiet until the pointer is on it,
      then it shows its edge. A row of boxed inputs reads as a settings screen,
      which is what this pane looked like. */
@@ -8045,7 +8045,7 @@ function TaskFields({ t, today, projects, tags, onEdit }: {
               style={t.priority === p
                 ? { background: "color-mix(in srgb, var(--primary) 20%, transparent)",
                     border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }
-                : { border: edge(14), color: "var(--text3)" }}>
+                : { border: EDGE, color: "var(--text3)" }}>
               {p === null ? "None" : PRIO_NAME[p]}
             </button>
           ))}
@@ -8151,13 +8151,13 @@ function TaskDetail({ t, today, reminder, onCancel, writable, onToggleNote, onSh
         : (
           <div className="flex flex-wrap items-center gap-1.5 mb-2">
             {t.priority && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--warning-ink)", border: edge(16) }}>
+              <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--warning-ink)", border: EDGE }}>
                 {t.priority === "H" ? "High" : t.priority === "M" ? "Medium" : "Low"}
               </span>
             )}
-            {t.project && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--info-ink)", border: edge(16) }}>@{t.project}</span>}
+            {t.project && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--info-ink)", border: EDGE }}>@{t.project}</span>}
             {t.tags.map((tag) => (
-              <span key={tag} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: edge(16) }}>{tag}</span>
+              <span key={tag} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: EDGE }}>{tag}</span>
             ))}
           </div>
         )}
@@ -8173,7 +8173,7 @@ function TaskDetail({ t, today, reminder, onCancel, writable, onToggleNote, onSh
         <div className="flex items-center gap-2 mb-4 text-[11px]">
           <span style={{ color: reminder.firedAt ? "var(--error)" : "var(--primary)" }}><IconLabel icon={<ClockIcon size={ICON.xs} />}>{remindLabel(reminder.due)}</IconLabel></span>
           <span className="flex-1" />
-          <button onClick={onCancel} className="text-[10px] px-2 py-0.5 rounded" style={{ border: edge(20), color: "var(--text2)" }}>
+          <button onClick={onCancel} className="text-[10px] px-2 py-0.5 rounded" style={{ border: EDGE, color: "var(--text2)" }}>
             remove
           </button>
         </div>
@@ -8182,13 +8182,13 @@ function TaskDetail({ t, today, reminder, onCancel, writable, onToggleNote, onSh
         <div className="flex items-center gap-1.5 mb-4">
           {onShell && (
             <button onClick={onShell} className="text-[10.5px] px-2 py-1 rounded-lg"
-              style={{ border: edge(18), color: "var(--text2)" }} title="w">
+              style={{ border: EDGE, color: "var(--text2)" }} title="w">
               Shell here
             </button>
           )}
           {onChat && (
             <button onClick={onChat} className="text-[10.5px] px-2 py-1 rounded-lg"
-              style={{ border: edge(18), color: "var(--text2)" }} title="c — the prompt waits in the composer, unsent">
+              style={{ border: EDGE, color: "var(--text2)" }} title="c — the prompt waits in the composer, unsent">
               Ask Claude
             </button>
           )}
@@ -8241,7 +8241,7 @@ function LocalStrip({ active, onOpen }: { active: boolean; onOpen: () => void })
     Number(overdue(b, today)) - Number(overdue(a, today)) || (a.due ?? "9").localeCompare(b.due ?? "9"));
   const shown = sorted.slice(0, 5);
   return (
-    <div className="shrink-0" style={{ borderBottom: edge(12) }}>
+    <div className="shrink-0" style={{ borderBottom: LINE }}>
       <button onClick={onOpen}
         className={`w-full text-left ${EYEBROW} px-5 pt-3 pb-1 hover:bg-white/5`}
         style={{ color: "var(--text3)" }}>
@@ -8371,7 +8371,7 @@ function SearchHits({ asked, rows, looking, onAsk, onPick, onClose }: {
         style={{ background: "var(--surface-card)", border: edge(28) }}>
         {/* The box, at the top of the list, the way every command palette does
             it: what you typed is here, and typing again searches again. */}
-        <div className="px-3 pt-2.5 pb-2 flex items-center gap-2 shrink-0" style={{ borderBottom: edge(18) }}>
+        <div className="px-3 pt-2.5 pb-2 flex items-center gap-2 shrink-0" style={{ borderBottom: LINE }}>
           <span className="shrink-0 grid place-items-center" style={{ width: 20, height: 20, color: "var(--text3)" }}>
             <svg width={ICON.md} height={ICON.md} viewBox="0 0 24 24" fill="none" stroke="currentColor"
               strokeWidth={2.2} strokeLinecap="round" aria-hidden>
@@ -8386,7 +8386,7 @@ function SearchHits({ asked, rows, looking, onAsk, onPick, onClose }: {
           <CloseButton onClick={onClose} title="Close · Esc" size={ICON.sm} />
         </div>
         <div className="px-3 py-1.5 flex items-center gap-2 text-[10.5px] shrink-0"
-          style={{ color: "var(--text3)", borderBottom: edge(12) }}>
+          style={{ color: "var(--text3)", borderBottom: LINE }}>
           {looking && (
             <span className="agx-spin shrink-0" aria-label="Searching"
               style={{ width: 11, height: 11, borderWidth: 1.5, borderColor: "var(--text3)", borderTopColor: "transparent" }} />
@@ -8415,7 +8415,7 @@ function SearchHits({ asked, rows, looking, onAsk, onPick, onClose }: {
             className="text-left px-3 py-2 flex items-center gap-2 min-w-0"
             style={{ background: i === hot ? "color-mix(in srgb, var(--text) 8%, transparent)" : "transparent" }}>
             <span className="shrink-0 text-[9.5px] px-1 rounded tabular-nums"
-              style={{ color: "var(--primary-ink)", border: edge(22) }}>{t.customId ?? t.id}</span>
+              style={{ color: "var(--primary-ink)", border: EDGE }}>{t.customId ?? t.id}</span>
             <span className="min-w-0 flex-1 truncate text-[12px]" style={{ color: "var(--text)" }}>{t.title}</span>
             <span className="shrink-0 text-[10px] truncate" style={{ color: "var(--text4)", maxWidth: 160 }}>{t.list}</span>
             {/* The reason it is on this list, which is the thing a plain list of

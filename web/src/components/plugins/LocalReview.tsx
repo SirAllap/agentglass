@@ -6,6 +6,7 @@ import { Markdown } from "../../lib/markdown.tsx";
 import { ago } from "../../lib/fileRecents.ts";
 import { Spinner } from "../Spinner.tsx";
 import { ICON } from "../../lib/iconSize.ts";
+import { EDGE } from "../workspace/Chrome.tsx";
 
 /**
  * Notes plugins wrote on a pull request, drawn inside the pull request.
@@ -116,7 +117,7 @@ function copyNote(n: LocalNote): void {
 
 function StatusActions({ n, onStatus }: { n: LocalNote; onStatus: (s: NoteStatus) => void }) {
   const btn = "agx-btn rounded inline-flex items-center leading-none text-[10px] px-2 h-[22px] whitespace-nowrap";
-  const edge = "1px solid var(--surface-line)";
+  const edge = EDGE;
   return (
     <div className="flex items-center gap-1 shrink-0">
       {n.status === "open" ? (
@@ -150,7 +151,7 @@ export function NoteCard({ n, onStatus, onOpenFile, compact, md = plainMd }: {
   return (
     <div className="rounded-md min-w-0" style={{
       background: closed ? "transparent" : `color-mix(in srgb, ${c} 4%, var(--surface-card))`,
-      border: "1px solid var(--surface-line)", borderLeft: `3px solid ${closed ? "var(--surface-line)" : c}`,
+      border: EDGE, borderLeft: `3px solid ${closed ? "var(--surface-line)" : c}`,
     }}>
       {/* Wraps rather than clips: in a split diff the column is half the
           window, and a title plus four buttons does not fit on one line. The

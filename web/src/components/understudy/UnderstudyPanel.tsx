@@ -22,8 +22,8 @@ import type { UnderstudyClassRow, UnderstudyFrame, UnderstudyMode } from "../../
 import { SERVER, authHeaders } from "../../lib/api.ts";
 import { getUnderstudy, refreshUnderstudy, subscribeUnderstudy } from "../../lib/understudyStore.ts";
 import { ViewHeader } from "../workspace/ViewHeader.tsx";
-import { CHIP_ICON, Chip, IconChip, Segmented, Tabs } from "../workspace/Chrome.tsx";
-import { Empty, edge, wash } from "../git/ui.tsx";
+import { CHIP_ICON, Chip, IconChip, Segmented, Tabs, LINE } from "../workspace/Chrome.tsx";
+import { Empty, wash } from "../git/ui.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { Persona } from "./persona/Persona.tsx";
 import { Teach } from "./Teach.tsx";
@@ -346,7 +346,7 @@ function PanelHead({ eyebrow, title, right }: { eyebrow: string; title: string; 
  *  is not on the same screen is a number you have to take on trust. */
 function Note({ children }: { children: React.ReactNode }) {
   return (
-    <p className="m-0 px-4 py-3 text-[10px] leading-relaxed" style={{ color: "var(--text3)", borderTop: edge(8) }}>
+    <p className="m-0 px-4 py-3 text-[10px] leading-relaxed" style={{ color: "var(--text3)", borderTop: LINE }}>
       {children}
     </p>
   );
@@ -618,14 +618,14 @@ export function UnderstudyView({ active }: { active: boolean }) {
         // role="alert": this only ever appears because something you pressed
         // was refused, and it used to appear silently.
         <div role="alert" className="px-4 py-2 text-[11.5px] shrink-0"
-          style={{ color: "var(--error-ink)", background: wash("--error", 8), borderBottom: edge(8) }}>
+          style={{ color: "var(--error-ink)", background: wash("--error", 8), borderBottom: LINE }}>
           {problem}
         </div>
       )}
 
       {!frame.enabled && !frame.halted && (
         <div className="px-4 py-2 text-[11.5px] shrink-0 flex items-center gap-3 flex-wrap"
-          style={{ color: "var(--text2)", background: wash("--warning", 8), borderBottom: edge(8) }}>
+          style={{ color: "var(--text2)", background: wash("--warning", 8), borderBottom: LINE }}>
           <span>
             The clone is off. It is recording nothing, and the numbers below are the ones it had when it stopped.
           </span>
@@ -651,7 +651,7 @@ export function UnderstudyView({ active }: { active: boolean }) {
         It belongs beside the class it explains, which is the detail pane.
       */}
       <div className="flex-1 min-h-0 flex flex-col" id="understudy-body" role="tabpanel" aria-label="Scorecard">
-        <div className="shrink-0 flex items-center gap-6 flex-wrap px-4 py-3" style={{ borderBottom: edge(14) }}>
+        <div className="shrink-0 flex items-center gap-6 flex-wrap px-4 py-3" style={{ borderBottom: LINE }}>
           <div className="flex items-center gap-3 min-w-0">
             {/* 64, not 188. The largest element above the fold carried no live
                 information and pushed the counts and the seal discipline below

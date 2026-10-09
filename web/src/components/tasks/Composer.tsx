@@ -21,6 +21,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Markdown } from "../../lib/markdown.tsx";
 import { bold, bullet, checklist, code, fence, heading, italic, link, newline, ordered, quote, strike, table, type Sel } from "../../lib/mdEditor.ts";
 import { insertMention, matchPeople, mentionQuery, menuPlacement, MENU_MAX, type Mentionable } from "../../lib/mentions.ts";
+import { EDGE, LINE } from "../workspace/Chrome.tsx";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 
@@ -162,9 +163,9 @@ export function Composer({ value, onChange, onSend, onCancel, busy, placeholder,
   };
 
   return (
-    <div ref={shell} className="relative flex flex-col" style={{ borderRadius: 8, border: edge(16), background: "var(--bg)" }}>
+    <div ref={shell} className="relative flex flex-col" style={{ borderRadius: 8, border: EDGE, background: "var(--bg)" }}>
       <div className="flex items-center gap-0.5 flex-wrap px-1.5 py-1"
-        style={{ borderBottom: edge(12), background: "color-mix(in srgb, var(--text) 4%, transparent)" }}>
+        style={{ borderBottom: LINE, background: "color-mix(in srgb, var(--text) 4%, transparent)" }}>
         {GROUPS.map((group, gi) => (
           <span key={gi} className="flex items-center gap-0.5">
             {gi > 0 && <span aria-hidden className="mx-1 self-stretch my-1" style={{ width: 1, background: "color-mix(in srgb, var(--text) 12%, transparent)" }} />}
@@ -281,7 +282,7 @@ export function Composer({ value, onChange, onSend, onCancel, busy, placeholder,
         </div>
       )}
 
-      <div className="flex items-center gap-2 px-2 py-1.5" style={{ borderTop: edge(12) }}>
+      <div className="flex items-center gap-2 px-2 py-1.5" style={{ borderTop: LINE }}>
         <span className="text-[10px]" style={{ color: "var(--text4)" }}>
           Markdown · <span style={{ color: "var(--text3)" }}>@</span> mentions · Ctrl+Enter sends
         </span>

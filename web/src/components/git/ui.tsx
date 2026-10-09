@@ -35,7 +35,7 @@
  */
 import type { CSSProperties, ReactNode } from "react";
 import { HIT, ICON } from "../../lib/iconSize.ts";
-import { CHIP } from "../workspace/Chrome.tsx";
+import { CHIP, LINE } from "../workspace/Chrome.tsx";
 
 export const edge = (pct: number): string => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 export const wash = (token: string, pct: number): string => `color-mix(in srgb, var(${token}) ${pct}%, transparent)`;
@@ -346,7 +346,7 @@ export function GroupHead({ label, count, note, folded, onToggle }: {
 /** The bar over a list. */
 export function Toolbar({ children }: { children: ReactNode }) {
   return (
-    <div className="flex items-center gap-2 flex-wrap px-3 py-2.5" style={{ borderBottom: edge(8) }}>
+    <div className="flex items-center gap-2 flex-wrap px-3 py-2.5" style={{ borderBottom: LINE }}>
       {children}
     </div>
   );

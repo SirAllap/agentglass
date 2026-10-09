@@ -18,7 +18,7 @@ import { CODE_FONT_STYLE } from "../diff/DiffLines.tsx";
 import { Select } from "../Select.tsx";
 import { LogView } from "./LogView.tsx";
 import { healthLabel, healthTint, ownerTitle, portLabel, portUrl } from "../../lib/dockerRow.ts";
-import { INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
+import { INPUT, INPUT_STYLE, EDGE } from "../workspace/Chrome.tsx";
 
 export type DetailSection = "env" | "config" | "top" | "compare";
 
@@ -99,7 +99,7 @@ export function Detail({
             <span className="text-[9.5px] px-1.5 py-0.5 rounded-md shrink-0" title={ownerTitle(c.owner)}
               style={c.owner.foreign
                 ? { color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }
-                : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                : { color: "var(--text3)", border: EDGE }}>
               {c.owner.worktree}{c.owner.branch ? ` · ${c.owner.branch}` : ""}
             </span>
           )}
@@ -114,7 +114,7 @@ export function Detail({
             )}
             <Select value={String(tail)} onChange={(v) => onTail(Number(v))} align="right"
               className="text-[10px] px-2.5 min-h-[28px] rounded-lg outline-none"
-              style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}
+              style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", color: "var(--text2)", border: EDGE }}
               options={[100, 200, 400, 1000, 2000].map((n) => ({ value: String(n), label: `${n} lines` }))} />
           </div>
         </div>
@@ -146,7 +146,7 @@ export function Detail({
                   </button>
                 ) : (
                   <span key={i} className="text-[9.5px] px-1.5 py-0.5 rounded-md" title={p.host === null ? "Exposed by the image, not published to the host" : "Published, but not a web port"}
-                    style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                    style={{ color: "var(--text3)", border: EDGE }}>
                     {portLabel(p)}
                   </span>
                 );
@@ -247,7 +247,7 @@ function EnvCompare({ c, others }: { c: DockerContainer; others: DockerContainer
       <div className="flex items-center gap-2">
         <Select value={against} onChange={compare}
           className="text-[10px] px-1.5 py-0.5 rounded outline-none max-w-[240px]"
-          style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}
+          style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", color: "var(--text2)", border: EDGE }}
           options={[{ value: "", label: "compare with…" }, ...candidates.map((o) => ({
             value: o.id,
             // The worktree is the thing that makes two identically-named

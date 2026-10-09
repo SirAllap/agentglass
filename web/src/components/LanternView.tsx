@@ -5,13 +5,13 @@ import { subscribeLantern, lanternRows, lanternFailed, lanternWatch, lanternCach
 import { askLantern, hasLanternTab } from "../lib/lanternAsk.ts";
 import { subscribeBench } from "../lib/benchStore.ts";
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
-import { edge, wash } from "./git/ui.tsx";
+import { wash } from "./git/ui.tsx";
 import { modelLabelOf } from "../../../shared/models.ts";
 import { ScheduleDialog, ScheduledSection, type AgentSchedule } from "./LanternSchedule.tsx";
 import { handOff } from "../lib/lanternAsk.ts";
 import { api } from "../lib/api.ts";
 import { ClockIcon, IconLabel } from "../lib/glyphIcons.tsx";
-import { RefreshButton } from "./workspace/Chrome.tsx";
+import { RefreshButton, EDGE, LINE } from "./workspace/Chrome.tsx";
 import { ICON, MIN_BOX } from "../lib/iconSize.ts";
 import { GearIcon } from "./workspace/icons.tsx";
 import { openSettings } from "../lib/openSettings.ts";
@@ -344,7 +344,7 @@ export function AgentCard({ r, onJump, onClear, quiet, cacheTtlMs, kinds }: { r:
 
       {/* the strip: numbers, and Go in its own slot — only when either exists */}
       {(r.paneId || (f && (f.tools > 0 || f.turns > 0 || f.cost > 0))) && (
-      <div className="flex items-center gap-3 min-w-0 pt-1" style={{ borderTop: edge(8) }}>
+      <div className="flex items-center gap-3 min-w-0 pt-1" style={{ borderTop: LINE }}>
         <div className="flex-1 min-w-0 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10.5px]">
           {f && f.tools > 0 && <Fact n={count(f.tools)} word="calls" />}
           {f && f.turns > 0 && <Fact n={count(f.turns)} word={f.turns === 1 ? "turn" : "turns"} />}
@@ -446,7 +446,7 @@ export function LanternView({ active }: { active: boolean }) {
                 style={{ width: MIN_BOX, height: MIN_BOX, color: "var(--text3)" }}><GearIcon size={ICON.xs} /></button>
             {rows && (
               <button type="button" onClick={() => setScheduling(true)}
-                className="agx-btn text-[10.5px] px-2 py-0.5 rounded" style={{ color: "var(--text3)", border: edge(20) }}
+                className="agx-btn text-[10.5px] px-2 py-0.5 rounded" style={{ color: "var(--text3)", border: EDGE }}
                 title="Start an agent later: at a clock time, a date-time, or after a delay"><IconLabel icon={<ClockIcon size={ICON.xs} />}>Schedule…</IconLabel></button>
             )}
             {rows && (

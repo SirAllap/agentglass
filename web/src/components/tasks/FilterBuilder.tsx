@@ -15,7 +15,7 @@ import type { ProviderTask } from "../../../../shared/providers.ts";
 
 import { StatusPill } from "../StatusPill.tsx";
 import { DoneIcon } from "../../lib/glyphIcons.tsx";
-import { INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
+import { INPUT, INPUT_STYLE, EDGE } from "../workspace/Chrome.tsx";
 
 /** The panel's narrowest, shared by the box and by the clamp that keeps it on
  *  screen — two places that must not drift apart. */
@@ -80,7 +80,7 @@ function Pick({ label, muted, children, width, lead }: {
           /* Open reads as open: the border takes the accent and the caret
              turns over. Without it, three controls in a row give no sign of
              which one the menu below belongs to. */
-          border: open ? "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" : edge(22),
+          border: open ? "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" : EDGE,
           color: muted ? "var(--text4)" : "var(--text)",
           background: "var(--bg)", minWidth: width,
         }}>
@@ -96,7 +96,7 @@ function Pick({ label, muted, children, width, lead }: {
       </button>
       {open && (
         <span className="absolute z-10 top-full left-0 mt-1 rounded-lg overflow-hidden flex flex-col"
-          style={{ background: "var(--surface-card)", border: "1px solid var(--border)", boxShadow: "0 18px 40px -22px var(--shadow)", minWidth: 220 }}>
+          style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 18px 40px -22px var(--shadow)", minWidth: 220 }}>
           {children(() => setOpen(false))}
         </span>
       )}
@@ -186,7 +186,7 @@ function RuleRow({ fields, rule, onChange, onDrop }: {
        ground read as seven things; boxed, they read as one rule with parts —
        which matters at three rows, where the eye has to find where one ends. */
     <span className="flex items-center gap-1.5 flex-wrap flex-1 rounded-lg px-2 py-1.5"
-      style={{ background: "var(--bg)", border: edge(14) }}>
+      style={{ background: "var(--bg)", border: EDGE }}>
       <Pick label={spec?.label ?? "Select filter"} muted={!spec} width={132}>
         {(close) => (
           <Menu items={fields.map((f) => ({ value: f.key, label: f.label }))} current={rule.field}
@@ -294,7 +294,7 @@ export function FilterBuilder({ fields, value, onChange }: {
         title="Build a filter — field, is or is not, values"
         className="text-[11.5px] px-2 py-1 rounded-lg flex items-center gap-1.5 whitespace-nowrap"
         style={{
-          border: n ? "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" : edge(22),
+          border: n ? "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" : EDGE,
           color: n ? "var(--text)" : "var(--text3)",
           background: n ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent",
         }}>
@@ -312,7 +312,7 @@ export function FilterBuilder({ fields, value, onChange }: {
         <span data-agx-filters="" className="fixed rounded-xl p-3 flex flex-col gap-2"
           style={{
             top: at.top, left: at.left, minWidth: PANEL_MIN, maxWidth: "min(94vw, 720px)",
-            background: "var(--surface-card)", border: "1px solid var(--border)",
+            background: "var(--surface-card)", border: EDGE,
             boxShadow: "0 22px 48px -20px var(--shadow)",
           }}>
           {!fields.length ? (
@@ -349,7 +349,7 @@ export function FilterBuilder({ fields, value, onChange }: {
               <span className="flex items-center gap-2 pt-1">
                 <button onClick={() => set([...value.rules, newRule()])}
                   className="text-[11.5px] px-2 py-1 rounded-lg"
-                  style={{ border: edge(22), color: "var(--text2)" }}>+ Add filter</button>
+                  style={{ border: EDGE, color: "var(--text2)" }}>+ Add filter</button>
                 {value.rules.length > 0 && (
                   <button onClick={() => onChange(EMPTY)}
                     className="ml-auto text-[11.5px] px-2 py-1 rounded-lg"

@@ -35,7 +35,7 @@ import { useDismiss } from "../lib/useDismiss.ts";
 import { keepTermFocus } from "../lib/keepFocus.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { IconLabel, PlusIcon, StarIcon } from "../lib/glyphIcons.tsx";
-import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
 
 /**
  * The four git one-liners this row used to hardcode as always-visible chips.
@@ -537,7 +537,7 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
           title="Ready-to-run project commands: Makefile targets & package scripts, with what each one does. Pin the ones you use."
           className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg whitespace-nowrap"
           style={quiet
-            ? { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", opacity: root && !IS_DEMO ? 1 : 0.5 }
+            ? { color: "var(--text3)", border: EDGE, opacity: root && !IS_DEMO ? 1 : 0.5 }
             : { color: n ? "var(--primary-hover)" : "var(--text2)", background: "color-mix(in srgb, var(--primary) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)", fontWeight: 500, opacity: root && !IS_DEMO ? 1 : 0.5 }}>
           <GearIcon size={ICON.xs} />
           Commands{quiet ? "" : n ? ` (${n})` : cmds ? " (none)" : " …"}<span style={{ color: "var(--text4)" }}>▾</span>
@@ -548,7 +548,7 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
           // yours to type in while the menu is open). The input itself is
           // excluded by the handler, so it can still be clicked into.
           <div onMouseDown={keepTermFocus} className="absolute rounded-lg text-[11px] shadow-2xl flex flex-col"
-            style={{ zIndex: 40, background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", width: MENU_W, maxHeight: 420, overflow: "hidden", ...(side === "right" ? { right: 0 } : { left: 0 }), ...(dropUp ? { bottom: "calc(100% + 4px)" } : { top: "calc(100% + 4px)" }) }}>
+            style={{ zIndex: 40, background: "var(--surface-card)", border: EDGE, width: MENU_W, maxHeight: 420, overflow: "hidden", ...(side === "right" ? { right: 0 } : { left: 0 }), ...(dropUp ? { bottom: "calc(100% + 4px)" } : { top: "calc(100% + 4px)" }) }}>
             {/* A real project has more targets than fit on a screen — the repo
                 this was built against has 316 — so scrolling to find `migrate`
                 was the only way to run it. Matches the name and what the target
@@ -641,7 +641,7 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
       <div className="flex items-center gap-1 min-w-0 overflow-hidden" style={quiet ? { display: "none" } : undefined}>
         {pins.map((cmd) => (
           <span key={cmd} className="group flex items-center min-w-0 rounded-md"
-            style={{ border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+            style={{ border: EDGE }}>
             {/* onMouseDown keeps the shell focused; running the chip refocuses
                 it anyway through onRun, but unpinning does not, so both carry
                 the guard rather than only one. */}

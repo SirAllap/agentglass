@@ -5,7 +5,7 @@ import { fmtUsd } from "../lib/format.ts";
 import type { GitRepoRef } from "../../../shared/types.ts";
 import type { Budget, BudgetPeriod, BudgetStatus } from "../../../shared/types.ts";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
-import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
 
 /**
  * A number you chose, instead of one this app picked.
@@ -98,7 +98,7 @@ export function BudgetsPane({ open }: { open: boolean }) {
                 />
               </span>
               <select className="text-[11px] px-1.5 py-1 rounded-md"
-                style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}
+                style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: EDGE }}
                 value={b.period} onChange={(e) => patch(i, { period: e.target.value as BudgetPeriod })}>
                 <option value="day">a day</option>
                 <option value="week">a week</option>
@@ -111,7 +111,7 @@ export function BudgetsPane({ open }: { open: boolean }) {
                 onPick={(r) => patch(i, { root: r === b.root ? "" : r })}
                 placeholder="everything" triggerMaxWidth={160} />
               <select className="text-[11px] px-1.5 py-1 rounded-md min-w-0 max-w-[11rem]"
-                style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}
+                style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: EDGE }}
                 value={b.model} onChange={(e) => patch(i, { model: e.target.value })}>
                 <option value="">any model</option>
                 {models.map((m) => <option key={m} value={m}>{m}</option>)}
@@ -133,7 +133,7 @@ export function BudgetsPane({ open }: { open: boolean }) {
             ) : undefined}
             control={<button onClick={() => void save(rows.filter((_, n) => n !== i))}
               className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-              style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+              style={{ color: "var(--text3)", border: EDGE }}>
               Remove
             </button>}
           />
@@ -153,7 +153,7 @@ export function BudgetsPane({ open }: { open: boolean }) {
           onClick={() => setRows([...(rows ?? []), { root: "", model: "", limit: 0, period: "month" }])}
           disabled={busy}
           className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", opacity: busy ? 0.5 : 1 }}>
+          style={{ color: "var(--text2)", border: EDGE, opacity: busy ? 0.5 : 1 }}>
           Add
         </button>}
       />

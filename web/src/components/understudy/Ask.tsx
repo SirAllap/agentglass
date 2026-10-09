@@ -23,8 +23,8 @@
  */
 import { useCallback, useState } from "react";
 import { SERVER, authHeaders } from "../../lib/api.ts";
-import { Empty, wash, edge } from "../git/ui.tsx";
-import { Chip } from "../workspace/Chrome.tsx";
+import { Empty, wash } from "../git/ui.tsx";
+import { Chip, LINE } from "../workspace/Chrome.tsx";
 
 interface Rule { id: string; cls: string; text: string; src: string; backed: number }
 interface Precedent { id: number; cls: string; situation: string; decision: string; hisWords: string; at: number; weight: number; source: string }
@@ -382,7 +382,7 @@ export function Ask({ active }: { active: boolean }) {
             * first, which is the failure this whole panel is arranged against.
             */}
           {verdict && !verdict.declined && (
-            <div className="px-4 py-3" style={{ borderTop: edge(10), background: wash("--warning", 6) }}>
+            <div className="px-4 py-3" style={{ borderTop: LINE, background: wash("--warning", 6) }}>
               <div className="panel-eyebrow">Nothing of yours covered this — a reading of what you would do</div>
               <div style={{ fontSize: 12.5, color: "var(--text)" }}>{verdict.answer}</div>
               {verdict.why && (

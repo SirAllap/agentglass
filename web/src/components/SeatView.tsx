@@ -7,7 +7,7 @@ import { whatWaits } from "../lib/seatWaiting.ts";
 import { api, type SeatAnswer, type SeatTask, type SeatFieldRow, type SeatReportRow } from "../lib/api.ts";
 import { Persona } from "./understudy/persona/Persona.tsx";
 import { useCosmetic } from "./understudy/persona/cosmeticStore.ts";
-import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 
 /**
  * THE ORCHESTRATOR — who is minding this project, and what they have to go on.
@@ -231,7 +231,7 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
             )}
             {live
               ? <button type="button" disabled={!!busy} onClick={() => void act("closing", () => api.seatClose(root))}
-                  className="agx-btn text-[10.5px] px-2 py-0.5 rounded disabled:opacity-60" style={{ color: "var(--text3)", border: edge(20) }}
+                  className="agx-btn text-[10.5px] px-2 py-0.5 rounded disabled:opacity-60" style={{ color: "var(--text3)", border: EDGE }}
                   title="Empty the chair. Its rules and its settings are kept.">{busy === "closing" ? "Standing down…" : "Stand down"}</button>
               : <button type="button" disabled={!!busy || !root} onClick={() => void act("opening", () => api.seatOpen(root))}
                   className="agx-btn text-[11px] px-2.5 py-1 rounded font-medium disabled:opacity-60"
@@ -257,7 +257,7 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
       <div className="flex-1 min-h-0 overflow-hidden" style={{ background: "var(--bg)" }}>
         <div className="grid h-full" style={{ gridTemplateColumns: "minmax(0,1.7fr) minmax(0,1fr)" }}>
           {/* ── what it said, and the work ─────────────────────────── */}
-          <div className="flex flex-col gap-5 px-5 py-4 min-w-0 min-h-0 overflow-y-auto agx-scroll" style={{ borderRight: "1px solid var(--border)" }}>
+          <div className="flex flex-col gap-5 px-5 py-4 min-w-0 min-h-0 overflow-y-auto agx-scroll" style={{ borderRight: LINE }}>
             <div className="flex gap-3.5 items-start">
               <Dial live={live} wokenAt={data?.wokenAt ?? null} floorHours={data?.floorHours ?? 4} cos={cos} />
               <div className="flex flex-col gap-1.5 min-w-0 pt-0.5">
@@ -320,7 +320,7 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
                         <button type="button" disabled={!!busy}
                           onClick={() => void act("settled", () => api.seatNeedSettled(root, n.id))}
                           className="agx-btn text-[10px] rounded px-1.5 py-0.5 disabled:opacity-50"
-                          style={{ color: "var(--text4)", border: edge(12) }} title="Taken, or no longer matters">Done</button>
+                          style={{ color: "var(--text4)", border: EDGE }} title="Taken, or no longer matters">Done</button>
                       </span>
                     </li>
                   ))}
@@ -364,7 +364,7 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
                         {r.needsYou ? fmtAgo(r.needsYou.since) : ""}
                         {r.paneId && (
                           <button type="button" onClick={() => jumpToPane(r.paneId!)}
-                            className="agx-btn text-[10px] rounded px-1.5 py-0.5" style={{ color: "var(--primary-ink)", border: edge(14) }}>Go</button>
+                            className="agx-btn text-[10px] rounded px-1.5 py-0.5" style={{ color: "var(--primary-ink)", border: EDGE }}>Go</button>
                         )}
                       </span>
                     </li>
@@ -390,7 +390,7 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
                  off tmux on the same poll as everything else. Not a terminal:
                  you cannot type here, and the button beside it goes to the
                  real one. */
-              <section className="rounded-md overflow-hidden" style={{ border: edge(14), background: "var(--bg)" }}>
+              <section className="rounded-md overflow-hidden" style={{ border: EDGE, background: "var(--bg)" }}>
                 <div className="flex items-center gap-2 px-3 py-1.5 text-[10.5px]"
                   style={{ color: "var(--text3)", borderBottom: `1px solid var(--border)`, background: "var(--surface-card)" }}>
                   <span aria-hidden style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--success)" }} />
@@ -522,7 +522,7 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
                   style={{ ...INPUT_STYLE, flex: "0 1 42%", color: "var(--text3)" }} />
                 <button type="submit" disabled={!adding.trim() || !!busy || !root}
                   className="agx-btn shrink-0 text-[11px] px-2.5 py-1.5 rounded disabled:opacity-50"
-                  style={{ color: "var(--text2)", border: edge(20) }}>Add</button>
+                  style={{ color: "var(--text2)", border: EDGE }}>Add</button>
               </form>
 
               {tasks.length === 0 ? (
@@ -557,7 +557,7 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
                             : beaten ? <span style={{ color: "var(--warning-ink)" }}>needs you</span> : "waiting"}
                           <button type="button" disabled={!!busy} onClick={() => void act("drop", () => api.seatTaskDrop(root, t.id))}
                             className="agx-btn text-[10px] rounded px-1.5 py-0.5 disabled:opacity-50"
-                            style={{ color: "var(--text4)", border: edge(12) }} title="Take it off the list">Drop</button>
+                            style={{ color: "var(--text4)", border: EDGE }} title="Take it off the list">Drop</button>
                         </span>
                       </li>
                     );
@@ -585,12 +585,12 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
                 <span className="flex-1" />
                 {openRules && editing === null && (
                   <button type="button" disabled={!data} onClick={() => setEditing(data?.doctrineText ?? "")}
-                    className="agx-btn text-[10.5px] px-2 py-0.5 rounded" style={{ color: "var(--text3)", border: edge(20) }}>Edit</button>
+                    className="agx-btn text-[10.5px] px-2 py-0.5 rounded" style={{ color: "var(--text3)", border: EDGE }}>Edit</button>
                 )}
                 {editing !== null && (
                   <>
                     <button type="button" onClick={() => setEditing(null)}
-                      className="agx-btn text-[10.5px] px-2 py-0.5 rounded" style={{ color: "var(--text3)", border: edge(20) }}>Cancel</button>
+                      className="agx-btn text-[10.5px] px-2 py-0.5 rounded" style={{ color: "var(--text3)", border: EDGE }}>Cancel</button>
                     <button type="button" disabled={!!busy}
                       onClick={() => void act("doctrine", async () => {
                         const r = await api.seatDoctrineSave(root, editing ?? "");
@@ -611,7 +611,7 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
               {openRules && (editing === null
                 ? (
                   <pre className="rounded-md px-3 py-2.5 text-[11px] leading-relaxed whitespace-pre-wrap max-h-[52vh] overflow-y-auto agx-scroll"
-                    style={{ background: "var(--surface-inset)", border: edge(14), color: "var(--text3)" }}>
+                    style={{ background: "var(--surface-inset)", border: EDGE, color: "var(--text3)" }}>
                     {data?.doctrineText || "…"}
                   </pre>
                 )
@@ -673,7 +673,7 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
                     style={INPUT_STYLE} />
                   <button type="submit" disabled={!saying.trim() || !!busy}
                     className="agx-btn shrink-0 text-[11px] px-2.5 py-1.5 rounded disabled:opacity-50"
-                    style={{ color: "var(--text2)", border: edge(20) }}>
+                    style={{ color: "var(--text2)", border: EDGE }}>
                     {busy === "broadcast" ? "Sending…" : "Say to all"}
                   </button>
                 </form>
@@ -742,13 +742,13 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
           </div>
 
             <section className="flex flex-wrap items-center gap-2 text-[10.5px] px-5 py-3 shrink-0"
-              style={{ color: "var(--text3)", borderTop: "1px solid var(--border)", background: "var(--surface-card)" }}>
+              style={{ color: "var(--text3)", borderTop: LINE, background: "var(--surface-card)" }}>
               <span title={adopted
                 ? "This session was already running when it took the chair, so it holds the machine's credential like any other. These are its stated rules; what actually holds the line is the gate on anything that leaves the machine, and its own doctrine."
                 : "Enforced by the server: a seat set to Speaks is refused if it tries to prompt an agent."}>
                 {adopted ? "It says it" : "This chair"}
               </span>
-              <span className="inline-flex rounded overflow-hidden" style={{ border: edge(18) }}>
+              <span className="inline-flex rounded overflow-hidden" style={{ border: EDGE }}>
                 {POWERS.map((p, i) => (
                   <button key={p.id} type="button" disabled={!!busy || !root}
                     title={adopted ? `${p.what} (stated, not enforced: this seat was adopted)` : p.what}
@@ -757,14 +757,14 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
                     style={{
                       color: p.id === powers ? "var(--text)" : "var(--text3)",
                       background: p.id === powers ? wash("--primary", 16) : "transparent",
-                      borderRight: i < POWERS.length - 1 ? "1px solid var(--border)" : undefined,
+                      borderRight: i < POWERS.length - 1 ? LINE : undefined,
                     }}>{p.label}</button>
                 ))}
               </span>
               <select value={chosen} disabled={!!busy || !root}
                 onChange={(e) => void act("model", () => api.seatSettingsSave(root, { model: e.target.value }))}
                 className="rounded px-1.5 py-0.5 text-[10.5px]"
-                style={{ background: "var(--bg)", border: edge(18), color: "var(--text2)" }}
+                style={{ background: "var(--bg)", border: EDGE, color: "var(--text2)" }}
                 title="A seat reads a board and writes a sentence a few times an hour. It is not the model you sit in front of.">
                 {[...(chosen && !models.some((m) => m.id === chosen) ? [{ id: chosen, label: `${chosen} (not in this build's list)` }] : []), ...models]
                   .map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}

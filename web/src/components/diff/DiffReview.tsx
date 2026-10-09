@@ -10,10 +10,11 @@ import { useEffect, useRef, useState } from "react";
 import { anchorLabel, inReviewOrder, type Review, type ReviewComment, type StaleFile } from "../../lib/diffReview.ts";
 import { MOD_KEY } from "../../lib/format.ts";
 import { Btn } from "../PrPanel.tsx";
+import { EDGE } from "../workspace/Chrome.tsx";
 
 const CARD = {
   background: "var(--surface-card)",
-  border: "1px solid var(--surface-line)",
+  border: EDGE,
   fontFamily: "var(--font-sans, inherit)",
 } as const;
 
@@ -40,7 +41,7 @@ export function CommentBox({ label, initial = "", onText, onSave, onCancel, save
           else if (e.key === "Escape") { e.preventDefault(); onCancel(); }
         }}
         className="w-full resize-y rounded px-2 py-1.5 text-[11.5px] outline-none"
-        style={{ background: "var(--surface-inset)", color: "var(--text)", border: "1px solid var(--surface-line)" }} />
+        style={{ background: "var(--surface-inset)", color: "var(--text)", border: EDGE }} />
       <div className="mt-1.5 flex items-center gap-1.5">
         <span className="text-[10px]" style={{ color: "var(--text3)" }}>{MOD_KEY}↵ to add · Esc to cancel</span>
         <span className="ml-auto flex items-center gap-1.5">
@@ -121,7 +122,7 @@ export function ReviewTray({ where, review, staleIds, staleFiles, checking, targ
   const n = review.comments.length;
   const stale = review.comments.filter((c) => staleIds.has(c.id)).length;
   const field = "w-full resize-y rounded px-2 py-1.5 text-[11px] outline-none";
-  const fieldStyle = { background: "var(--surface-inset)", color: "var(--text)", border: "1px solid var(--surface-line)" } as const;
+  const fieldStyle = { background: "var(--surface-inset)", color: "var(--text)", border: EDGE } as const;
   return (
     <div className="shrink-0 border-t" style={{ borderColor: "var(--surface-line)", background: "var(--surface-nav)" }}>
       {open && (

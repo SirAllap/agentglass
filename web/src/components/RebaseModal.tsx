@@ -17,7 +17,7 @@ import { Portal } from "./Portal.tsx";
 import { CloseButton } from "./CloseButton.tsx";
 import { api } from "../lib/api.ts";
 import { ICON } from "../lib/iconSize.ts";
-import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
 
 export type RebaseStep = { action: "pick" | "squash" | "fixup" | "drop" | "reword" | "edit"; hash: string; subject: string; newMessage?: string };
 
@@ -93,7 +93,7 @@ export function RebaseModal({ root, base, branch, onClose, onDone }: {
             initial={{ opacity: 0, scale: 0.96, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.97, y: 8 }}
             transition={{ type: "spring", stiffness: 340, damping: 30 }}
             className="w-[min(640px,94vw)] max-h-[min(720px,92vh)] rounded-xl flex flex-col pointer-events-auto"
-            style={{ background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
+            style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
           >
             <div className="flex items-center gap-2.5 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
               <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>Rebase</span>
@@ -111,7 +111,7 @@ export function RebaseModal({ root, base, branch, onClose, onDone }: {
                 <div className="space-y-1">
                   {steps.map((s, i) => (
                     <div key={s.hash} className="flex items-center gap-2 px-2 py-1.5 rounded-lg"
-                      style={{ background: s.action === "drop" ? "color-mix(in srgb, var(--error) 7%, transparent)" : "color-mix(in srgb, var(--bg3) 30%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>
+                      style={{ background: s.action === "drop" ? "color-mix(in srgb, var(--error) 7%, transparent)" : "color-mix(in srgb, var(--bg3) 30%, transparent)", border: EDGE }}>
                       <span className="shrink-0 tabular-nums text-[9.5px] t-dim2 w-4 text-right">{i + 1}</span>
                       {/* Reorder. Up/down buttons rather than drag: the codebase
                           has no drag util, and for a list that is at most a few
@@ -122,7 +122,7 @@ export function RebaseModal({ root, base, branch, onClose, onDone }: {
                       </span>
                       <select value={s.action} onChange={(e) => setAction(i, e.target.value as RebaseStep["action"])} title={ACTION_HINT[s.action]}
                         className="shrink-0 text-[10px] px-1.5 py-0.5 rounded outline-none"
-                        style={{ background: "color-mix(in srgb, var(--bg2) 80%, black)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: s.action === "drop" ? "var(--error)" : s.action === "reword" ? "var(--primary-hover)" : "var(--text2)" }}>
+                        style={{ background: "color-mix(in srgb, var(--bg2) 80%, black)", border: EDGE, color: s.action === "drop" ? "var(--error)" : s.action === "reword" ? "var(--primary-hover)" : "var(--text2)" }}>
                         {ACTIONS.map((a) => <option key={a} value={a}>{a}</option>)}
                       </select>
                       <span className="min-w-0 flex-1">

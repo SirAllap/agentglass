@@ -7,6 +7,7 @@ import { fmtAgo } from "../lib/format.ts";
 import type { DeviceScope, PairedDevice, PairRequest, PairState } from "../../../shared/types.ts";
 import { CopyIcon, DoneIcon, IconLabel, PhoneIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { EDGE } from "./workspace/Chrome.tsx";
 
 /**
  * Adding a phone, from the machine's side.
@@ -140,7 +141,7 @@ export function PairPanel({ baseUrl, variant = "hero", onPaired }: {
   const cmdBlock = (cmd: string) => (
     <button key={cmd} onClick={() => copyCmd(cmd)} title="Click to copy"
       className="t-mono text-[10.5px] text-left px-2 py-1.5 rounded-lg break-all w-full hover:opacity-80 flex items-center gap-2"
-      style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}>
+      style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: EDGE }}>
       <span className="flex-1 min-w-0">{cmd}</span>
       <span className="shrink-0 text-[10px]" style={{ color: copiedCmd === cmd ? "var(--success)" : "var(--text3)" }}>{copiedCmd === cmd ? <IconLabel icon={<DoneIcon size={ICON.xs} />}>copied</IconLabel> : <IconLabel icon={<CopyIcon size={ICON.xs} />}>copy</IconLabel>}</span>
     </button>
@@ -206,7 +207,7 @@ export function PairPanel({ baseUrl, variant = "hero", onPaired }: {
           <span className="panel-eyebrow flex-1" style={{ paddingLeft: 0, paddingRight: 0 }}>Connect a phone</span>
           <button onClick={start} disabled={busy}
             className="text-[11px] px-2 py-0.5 rounded-lg hover:opacity-80"
-            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+            style={{ color: "var(--text2)", border: EDGE }}>
             New code
           </button>
         </div>
@@ -283,7 +284,7 @@ export function PairPanel({ baseUrl, variant = "hero", onPaired }: {
             {!hero && (
               <button onClick={start} disabled={busy}
                 className="self-start mt-1 text-[11px] px-2 py-0.5 rounded-lg hover:opacity-80"
-                style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+                style={{ color: "var(--text2)", border: EDGE }}>
                 New code
               </button>
             )}
@@ -416,14 +417,14 @@ function Paired({ devices, busy, onForget }: {
               </button>
               <button onClick={() => setConfirming(null)}
                 className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80"
-                style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+                style={{ color: "var(--text2)", border: EDGE }}>
                 Keep
               </button>
             </span>
           ) : (
             <button onClick={() => setConfirming(d.id)}
               className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80"
-              style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+              style={{ color: "var(--text3)", border: EDGE }}>
               Forget
             </button>
           )}

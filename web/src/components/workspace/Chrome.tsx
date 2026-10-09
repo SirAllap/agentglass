@@ -43,6 +43,19 @@ export const CTRL_H = { compact: 22, regular: 28, large: 32 } as const;
 export const EDGE = "1px solid color-mix(in srgb, var(--text) 14%, transparent)";
 
 /**
+ * The divider: a rule BETWEEN things (a row separator, a header's bottom
+ * edge, a column's side), as opposed to `EDGE`, which outlines a thing (a
+ * control, a card, a dialog).
+ *
+ * `--surface-line` already existed in index.css for exactly this and was
+ * spelled out as a raw `1px solid ...` string at each site that used it,
+ * next to 17 different `edge(n)` weights doing the same job. Two weights
+ * now: the outline and the rule. An emphasis border (`edge(28)` and up, or a
+ * tinted one) says something on purpose and stays what it is.
+ */
+export const LINE = "1px solid var(--surface-line)";
+
+/**
  * The one shape — and the class that gives it a body.
  *
  * Exported as a string as well, because a handful of call sites need to put it
@@ -74,7 +87,7 @@ export const CHIP = "agx-chip text-[11px] px-2.5 min-h-[28px] inline-flex items-
  */
 export const CHIP_SURFACE = {
   background: "color-mix(in srgb, var(--text) 5%, transparent)",
-  border: "1px solid color-mix(in srgb, var(--text) 10%, transparent)",
+  border: EDGE,
   color: "var(--text)",
 } as const;
 

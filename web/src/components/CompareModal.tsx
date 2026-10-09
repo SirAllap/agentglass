@@ -13,6 +13,7 @@ import { api } from "../lib/api.ts";
 import type { GitFileChange } from "../../../shared/types.ts";
 import { SwapIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { EDGE } from "./workspace/Chrome.tsx";
 
 type CompareResult = {
   ok: boolean;
@@ -82,7 +83,7 @@ export function CompareModal({ root, initialBase, onClose }: {
             initial={{ opacity: 0, scale: 0.96, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.97, y: 8 }}
             transition={{ type: "spring", stiffness: 340, damping: 30 }}
             className="w-[min(760px,94vw)] max-h-[min(80vh,640px)] rounded-xl flex flex-col pointer-events-auto"
-            style={{ background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
+            style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
             <div className="flex items-center gap-2 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
               <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>Compare</span>
               <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }}>read-only</span>
@@ -93,14 +94,14 @@ export function CompareModal({ root, initialBase, onClose }: {
               <div className="flex items-center gap-2">
                 <div className="flex-1">
                   <div className="text-[9.5px] uppercase tracking-wider t-dim2 mb-1">base</div>
-                  <select value={base} onChange={(e) => setBase(e.target.value)} className="w-full px-2 py-1.5 rounded-lg text-[11.5px] outline-none" style={{ background: "var(--bg3)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }}>
+                  <select value={base} onChange={(e) => setBase(e.target.value)} className="w-full px-2 py-1.5 rounded-lg text-[11.5px] outline-none" style={{ background: "var(--bg3)", border: EDGE, color: "var(--text)" }}>
                     {refs.map((n) => <option key={n} value={n}>{n}</option>)}
                   </select>
                 </div>
                 <button onClick={() => { setBase(other); setOther(base); }} title="Swap the two sides" className="mt-5 shrink-0 text-[13px] px-2 py-1.5 rounded-lg t-dim2 hover:brightness-125"><SwapIcon size={ICON.sm} /></button>
                 <div className="flex-1">
                   <div className="text-[9.5px] uppercase tracking-wider t-dim2 mb-1">other</div>
-                  <select value={other} onChange={(e) => setOther(e.target.value)} className="w-full px-2 py-1.5 rounded-lg text-[11.5px] outline-none" style={{ background: "var(--bg3)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }}>
+                  <select value={other} onChange={(e) => setOther(e.target.value)} className="w-full px-2 py-1.5 rounded-lg text-[11.5px] outline-none" style={{ background: "var(--bg3)", border: EDGE, color: "var(--text)" }}>
                     {refs.map((n) => <option key={n} value={n}>{n}</option>)}
                   </select>
                 </div>

@@ -12,7 +12,7 @@ import { api } from "../lib/api.ts";
 import type { GitBisectStatus } from "../../../shared/types.ts";
 import { CrossIcon, DoneIcon, IconLabel } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
 
 export function BisectModal({ root, onClose, onReset, onOpenCommit, onChanged }: {
   root: string;
@@ -67,7 +67,7 @@ export function BisectModal({ root, onClose, onReset, onOpenCommit, onChanged }:
         <motion.div className="fixed inset-0 z-[90] flex items-center justify-center p-4" style={{ background: "color-mix(in srgb, #000 45%, transparent)" }} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
           <motion.div
             className="relative w-full max-w-lg rounded-xl p-5"
-            style={{ background: "var(--surface-card)", border: "1px solid var(--border)", boxShadow: "0 24px 80px rgba(0,0,0,.5)" }}
+            style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 24px 80px rgba(0,0,0,.5)" }}
             initial={{ opacity: 0, scale: .97, y: 8 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: .97, y: 8 }}
             onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-3 mb-4">
@@ -84,10 +84,10 @@ export function BisectModal({ root, onClose, onReset, onOpenCommit, onChanged }:
                   {st.remaining != null && <span>{st.remaining} revision{st.remaining === 1 ? "" : "s"} left to test{st.steps != null ? <> · roughly {st.steps} step{st.steps === 1 ? "" : "s"}</> : ""}</span>}
                   <span className="ml-2"> — does the bug reproduce at this commit?</span>
                 </div>
-                <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg" style={{ background: "color-mix(in srgb, var(--bg3) 45%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+                <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg" style={{ background: "color-mix(in srgb, var(--bg3) 45%, transparent)", border: EDGE }}>
                   <span className="shrink-0 font-mono text-[10.5px]" style={{ color: "var(--info-ink)" }}>{st.current.sha.slice(0, 7)}</span>
                   <span className="min-w-0 flex-1 truncate text-[11.5px]" style={{ color: "var(--text)" }}>{st.current.subject}</span>
-                  <button onClick={() => onOpenCommit(st.current!.sha, st.current!.subject)} className="shrink-0 text-[10px] px-2 py-1 rounded-md" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>view</button>
+                  <button onClick={() => onOpenCommit(st.current!.sha, st.current!.subject)} className="shrink-0 text-[10px] px-2 py-1 rounded-md" style={{ color: "var(--text2)", border: EDGE }}>view</button>
                 </div>
                 <div className="flex gap-2">
                   <button onClick={() => void mark("good")} disabled={busy} className="flex-1 text-[11.5px] font-medium py-2 rounded-lg" style={{ background: "color-mix(in srgb, var(--success) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 45%, transparent)", color: "var(--success-ink)", opacity: busy ? .5 : 1 }}><IconLabel icon={<DoneIcon size={ICON.xs} />}>good — bug gone</IconLabel></button>
@@ -108,7 +108,7 @@ export function BisectModal({ root, onClose, onReset, onOpenCommit, onChanged }:
                 </div>
                 <div className="flex gap-2">
                   <button onClick={() => onOpenCommit(st.firstBad!.sha, st.firstBad!.subject)} className="flex-1 text-[11.5px] font-medium py-2 rounded-lg" style={{ background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)", color: "var(--text)" }}>view diff</button>
-                  <button onClick={() => void reset()} disabled={busy} className="flex-1 text-[11.5px] font-medium py-2 rounded-lg" style={{ border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text2)", opacity: busy ? .5 : 1 }}>finish (reset)</button>
+                  <button onClick={() => void reset()} disabled={busy} className="flex-1 text-[11.5px] font-medium py-2 rounded-lg" style={{ border: EDGE, color: "var(--text2)", opacity: busy ? .5 : 1 }}>finish (reset)</button>
                 </div>
               </div>
             )}

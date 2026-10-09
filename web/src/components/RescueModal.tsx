@@ -5,6 +5,7 @@ import { Portal } from "./Portal.tsx";
 import { preselected, fmtBytes, rescueKey, rescuePicks } from "../lib/goneCleanup.ts";
 import { DoneIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { EDGE, LINE } from "./workspace/Chrome.tsx";
 
 /**
  * The last thing between somebody's notes and `rm -rf`.
@@ -126,9 +127,9 @@ export function RescueModal({ reports, progress, onCancel, onConfirm }: {
           <motion.div
             initial={{ opacity: 0, scale: 0.98, y: 6 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.98 }}
             className="pointer-events-auto w-full max-w-[760px] max-h-[80vh] flex flex-col rounded-xl overflow-hidden"
-            style={{ background: "var(--surface-card)", border: "1px solid var(--border)", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}
+            style={{ background: "var(--surface-card)", border: EDGE, boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}
           >
-            <div className="px-4 py-3" style={{ borderBottom: "1px solid var(--border)" }}>
+            <div className="px-4 py-3" style={{ borderBottom: LINE }}>
               <div className="text-[13px] font-medium" style={{ color: "var(--text)" }}>
                 Keep anything before removing {reports.length} worktree{reports.length === 1 ? "" : "s"}?
               </div>
@@ -177,7 +178,7 @@ export function RescueModal({ reports, progress, onCancel, onConfirm }: {
               ))}
             </div>
 
-            <div className="px-4 py-2.5 flex items-center gap-3" style={{ borderTop: "1px solid var(--border)" }}>
+            <div className="px-4 py-2.5 flex items-center gap-3" style={{ borderTop: LINE }}>
               {working ? (
                 <>
                   <span className="inline-block w-3 h-3 rounded-full shrink-0" style={{ border: "2px solid color-mix(in srgb, var(--primary) 35%, transparent)", borderTopColor: "var(--primary)", animation: "agx-spin 0.7s linear infinite" }} />
@@ -194,7 +195,7 @@ export function RescueModal({ reports, progress, onCancel, onConfirm }: {
                 {totals.n} selected · {fmtBytes(totals.bytes)}
                 {totals.differs > 0 && ` · ${totals.differs} would overwrite`}
               </span>
-              <button onClick={onCancel} className="text-[11px] px-2.5 py-1 rounded" style={{ color: "var(--text2)", border: "1px solid var(--border)" }}>Cancel</button>
+              <button onClick={onCancel} className="text-[11px] px-2.5 py-1 rounded" style={{ color: "var(--text2)", border: EDGE }}>Cancel</button>
               <button onClick={submit} className="text-[11px] px-2.5 py-1 rounded font-medium" style={{ color: "var(--bg)", background: "var(--primary)" }}>
                 {totals.n ? `Keep ${totals.n} & remove` : "Remove, keep nothing"}
               </button>
