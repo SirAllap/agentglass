@@ -67,10 +67,41 @@ export const sameRule = (a: PrWatchRule, b: PrWatchRule): boolean =>
  * waiting is still being watched. A fired-only PR shows what happened last, so
  * the person who comes back sees "CI passed" rather than a bare bell.
  */
-export function bellState(ws: PrWatch[]): { kind: "off" | "on" | "fired"; waiting: number; last?: PrWatch } {
+export function bellState(ws: PrWatch[], seenAt = 0): { kind: "off" | "on" | "fired"; waiting: number; last?: PrWatch } {
   const waiting = ws.filter((w) => w.active).length;
   const last = ws.filter((w) => w.lastAt).sort((a, b) => (b.lastAt ?? 0) - (a.lastAt ?? 0))[0];
   if (waiting) return { kind: "on", waiting, ...(last ? { last } : null) };
-  if (last) return { kind: "fired", waiting: 0, last };
-  return { kind: "off", waiting: 0 };
+  // A fire says so until it has been looked at, then the button is a plain Notify again.
+  if (last && (last.lastAt ?? 0) > seenAt) return { kind: "fired", waiting: 0, last };
+  return { kind: "off", waiting: 0, ...(last ? { last } : null) };
+}
+
+export const firedOk = (w: PrWatch): boolean => !/fail/i.test(w.lastText ?? "");
+
+/** "CI passed · notified 10:42" — what the button says once a watch has fired; the tick or cross before it is drawn, not typed. */
+export function firedLabel(w: PrWatch): string {
+  const said = (w.lastText ?? "Notified").split(":")[0]!.trim();
+  const d = new Date(w.lastAt ?? 0);
+  const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  return `${said}${w.lastAt ? ` · notified ${hm}` : ""}`;
+}
+
+// Which fires have been looked at, per pull request. Kept in the browser: it is
+// a fact about this person's screen, not about the pull request.
+const SEEN_KEY = "agentglass.prWatch.seen";
+const seenSubs = new Set<() => void>();
+function readSeen(): Record<string, number> {
+  try { return JSON.parse(localStorage.getItem(SEEN_KEY) || "{}") || {}; } catch { return {}; }
+}
+export const fireSeenAt = (repo: string, number: number): number => readSeen()[`${repo}#${number}`] ?? 0;
+export function markFireSeen(repo: string, number: number, at: number): void {
+  try { localStorage.setItem(SEEN_KEY, JSON.stringify({ ...readSeen(), [`${repo}#${number}`]: at })); } catch { /* private mode: dismissed until reload */ }
+  for (const fn of seenSubs) fn();
+}
+/** Re-renders the button when a fire is dismissed, from any place that dismisses it. */
+export function useFireSeen(repo: string, number: number): number {
+  return useSyncExternalStore(
+    (fn) => { seenSubs.add(fn); return () => { seenSubs.delete(fn); }; },
+    () => fireSeenAt(repo, number),
+  );
 }

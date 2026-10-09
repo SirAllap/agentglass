@@ -87,7 +87,12 @@ export type Delivery = {
 
 export type PolicyState = { muted: ReadonlySet<string>; quiet: boolean };
 
-export function deliveryFor(n: Pick<SystemNote, "app" | "source" | "urgency">, s: PolicyState): Delivery {
+export function deliveryFor(n: Pick<SystemNote, "app" | "source" | "urgency"> & { asked?: boolean }, s: PolicyState): Delivery {
+  // Something the person armed by hand — "tell me when CI passes" — is what
+  // they asked to be interrupted by. Quiet and mutes are about what the app
+  // volunteers; a watch that fired into a Quiet machine and said nothing is the
+  // one failure this notification cannot have.
+  if (n.asked && n.urgency <= 1) return { keep: true, badge: true, interrupt: true };
   const src = sourceOf(n);
   const desktop = isDesktop(src);
   const level = desktop ? Math.min(n.urgency, 1) : n.urgency;

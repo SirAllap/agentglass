@@ -14,10 +14,12 @@ import { useRef, useState } from "react";
 import type { PrCheck, PrWatch, PrWatchRule } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
 import { ICON } from "../lib/iconSize.ts";
+import { suggestCheckNames } from "../lib/prWatchSuggest.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
-import { bellState, presetOf, ruleLabel, sameRule, usePrWatchState, watchesOf } from "../lib/prWatchStore.ts";
+import { bellState, firedLabel, firedOk, markFireSeen, useFireSeen, presetOf, ruleLabel, sameRule, usePrWatchState, watchesOf } from "../lib/prWatchStore.ts";
 import { Select } from "./Select.tsx";
 import { BellIcon } from "./settingsNavIcons.tsx";
+import { CrossIcon, DoneIcon } from "../lib/glyphIcons.tsx";
 import { Button, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 const FIXED: { rule: PrWatchRule; hint?: string }[] = [
@@ -43,7 +45,8 @@ export function PrWatchMenu({ root, repo, d }: {
 }) {
   const state = usePrWatchState();
   const mine = watchesOf(state, repo, d.number);
-  const bell = bellState(mine);
+  const seen = useFireSeen(repo, d.number);
+  const bell = bellState(mine, seen);
   const preset = presetOf(state, repo);
   const [open, setOpen] = useState(false);
   const [match, setMatch] = useState("");
@@ -66,19 +69,23 @@ export function PrWatchMenu({ root, repo, d }: {
     setMatch("");
   };
   const checkRules = live.filter((w) => w.rule.type === "check");
-  const names = [...new Set(d.checksAll.map((c) => c.name))].slice(0, 8);
+  const names = suggestCheckNames(d.checksAll, match);
   const current = live.map((w) => w.rule);
 
-  const label = bell.kind === "on" ? `Watching ${bell.waiting}` : bell.kind === "fired" ? (bell.last?.lastText?.split(":")[0] ?? "Notified") : "Notify";
+  const label = bell.kind === "on" ? `Watching ${bell.waiting}` : bell.kind === "fired" && bell.last ? firedLabel(bell.last) : "Notify";
   const tone = bell.kind === "on" ? "primary" : bell.kind === "fired" ? "ok" : "plain";
-  const title = bell.kind === "off" ? "Notify me when CI passes, fails, or someone comments"
+  const title = bell.kind === "off" && !bell.last?.lastText ? "Notify me when CI passes, fails, or someone comments"
     : bell.last?.lastText ? `Last: ${bell.last.lastText}` : "Watching this pull request";
 
   return (
     <div className="relative shrink-0 flex" ref={box}>
       <Button size="compact" tone={tone} title={title} aria-haspopup="menu" aria-expanded={open}
-        data-pr-watch={bell.kind} onClick={() => setOpen((v) => !v)}>
-        <BellIcon size={ICON.xs} />{label}
+        data-pr-watch={bell.kind} onClick={() => {
+          setOpen((v) => !v);
+          // Opening it is looking at it: the fire has been seen, the button goes back to Notify.
+          if (bell.kind === "fired" && bell.last?.lastAt) markFireSeen(repo, d.number, bell.last.lastAt);
+        }}>
+        {bell.kind === "fired" && bell.last ? (firedOk(bell.last) ? <DoneIcon size={ICON.xs} /> : <CrossIcon size={ICON.xs} />) : <BellIcon size={ICON.xs} />}{label}
       </Button>
       {open && (
         <div className="absolute z-50 top-full mt-1.5 right-0 rounded-lg agx-menu p-2 flex flex-col gap-1" style={{ minWidth: 268 }} data-pr-watch-menu>
@@ -103,7 +110,7 @@ export function PrWatchMenu({ root, repo, d }: {
           {names.length > 0 && (
             <div className="flex flex-wrap gap-1 px-1">
               {names.map((n) => (
-                <button key={n} className="agx-inline-add" onClick={() => setMatch(n)} title="Use this check's name">{n}</button>
+                <button key={n} className="agx-inline-add" onClick={() => setMatch(n)} title="A check on this pull request">{n}</button>
               ))}
             </div>
           )}

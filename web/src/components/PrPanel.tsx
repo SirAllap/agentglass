@@ -65,6 +65,7 @@ import { afterViewed, fileAtFloor, stepFileIndex, verticalScrollerOf } from "../
 import { buildFileTree, treeOrder, type TreeNode } from "../lib/prFileTree.ts";
 import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
 import { keepLoadedChecks } from "../lib/prMerge.ts";
+import { applyFilter, checkLabel, checkSpan, checkStatusLine, filterCounts, formatSpan, isSlow, sectionChecks, shortName, slowest, spanShare, verdictHero, workflowCards, type CheckFilter } from "../lib/prChecksList.ts";
 import { askingBehind, behindAnswer, forgetBehind, forgetOneBehind, onBehind, refreshBehind } from "../lib/prBehindStore.ts";
 import { refreshRollup } from "../lib/prRollupStore.ts";
 import { overlayDetail, reopenedRow, holdReopened, reopenKey, holdEdits, refreshPlan, rowPatch, landedDetail, dropLanded, staleOpen, once, type EditLog, type Landed, type Reopened } from "../lib/prRefresh.ts";
@@ -12108,7 +12109,7 @@ function JobLog({ root, name, jobs }: { root: string; name: string; jobs: PrChec
   );
 }
 
-function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyWhat }: { d: PrDetail; root: string; jobs: PrCheckJob[]; onRerun: () => void; onRerunJobs?: (what: "all" | "failed" | "job", id: string) => void; onAsk?: (check: PrCheck) => void; busy: boolean;
+export function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyWhat }: { d: PrDetail; root: string; jobs: PrCheckJob[]; onRerun: () => void; onRerunJobs?: (what: "all" | "failed" | "job", id: string) => void; onAsk?: (check: PrCheck) => void; busy: boolean;
   /** Which request is in flight, so the button that started it is the one that
    *  spins — see Btn `pending`. */
   busyWhat?: string }) {
@@ -12116,125 +12117,171 @@ function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyWhat }: 
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const [showSkipped, setShowSkipped] = useState(false);
   const [openCheck, setOpenCheck] = useState<string | null>(null);
+  const [filter, setFilter] = useState<CheckFilter>("all");
+  const [query, setQuery] = useState("");
 
-  const groups = useMemo(() => {
-    const m = new Map<string, PrCheck[]>();
-    for (const k of d.checksAll) {
-      if (!showSkipped && (k.state === "skipped" || k.state === "neutral")) continue;
-      const g = groupOf(k);
-      if (!m.has(g)) m.set(g, []);
-      m.get(g)!.push(k);
-    }
-    const rank = (list: PrCheck[]) => (list.some((k) => k.state === "failure") ? 0 : list.some((k) => k.state === "pending") ? 1 : 2);
-    return [...m.entries()].sort((a, b) => rank(a[1]) - rank(b[1]) || a[0].localeCompare(b[0]));
-  }, [d.checksAll, showSkipped]);
+  const hero = verdictHero(c, d.checksAll);
+  const counts = useMemo(() => filterCounts(d.checksAll), [d.checksAll]);
+  const shown = useMemo(() => applyFilter(d.checksAll, filter, query), [d.checksAll, filter, query]);
+  const sections = useMemo(() => sectionChecks(shown), [shown]);
+  const cards = useMemo(() => workflowCards(shown, groupOf), [shown]);
+  const slowMs = useMemo(() => checkSpan(slowest(d.checksAll) ?? ({} as PrCheck)) ?? 0, [d.checksAll]);
+  const slowName = slowest(d.checksAll);
+  const attention = [...sections.failing, ...sections.running];
+  const filtering = filter !== "all" || query.trim() !== "";
+  const heroTint = hero.tone === "bad" ? "var(--error)" : hero.tone === "warn" ? "var(--warning)" : "var(--success)";
+  // The ring is the strip bent round: the same shares, in the same order.
+  const share = (n: number) => (c.total ? (n / c.total) * 360 : 0);
+  const okEnd = share(c.success), badEnd = okEnd + share(c.failure), runEnd = badEnd + share(c.pending);
 
-  const skippedCount = d.checksAll.filter((k) => k.state === "skipped" || k.state === "neutral").length;
-  const pct = (n: number) => (c.total ? (n / c.total) * 100 : 0);
+  const row = (k: PrCheck, i: number, full: boolean) => {
+    const bad = k.state === "failure";
+    const id = `${checkLabel(k)}::${k.url ?? i}`;
+    const expanded = bad && openCheck === id;
+    const quiet = k.state === "skipped" || k.state === "neutral";
+    const share = spanShare(k, slowMs);
+    const span = checkSpan(k);
+    const slow = isSlow(k);
+    // Inside a workflow card the workflow is the header, so the row only says
+    // the job; pinned above the cards it has to say both.
+    const name = full ? `${k.workflow ? `${k.workflow} / ` : ""}${shortName(k)}` : shortName(k);
+    return (
+      <div key={id} style={{ borderTop: LINE, background: bad ? "color-mix(in srgb, var(--error) 7%, transparent)" : undefined }}>
+        <div className="flex items-center gap-2 px-2.5 py-1.5">
+          {/* A failing check is the one row on this tab you came for, so it is
+              the one row that opens into somewhere to go next. */}
+          <button onClick={() => bad && setOpenCheck(expanded ? null : id)} disabled={!bad}
+            className="flex-1 min-w-0 text-left flex items-center gap-2" style={{ cursor: bad ? "pointer" : "default" }}>
+            <span className="shrink-0 w-3 flex justify-center" style={{ color: CHECK_TINT[k.state] }}>{CHECK_GLYPH[k.state]}</span>
+            <span className="truncate min-w-0 shrink" title={checkLabel(k)} style={{ color: quiet ? "var(--text3)" : "var(--text)", maxWidth: "45%" }}>{name}</span>
+            {/* GitHub's own merge box tags these, and it is the only way to tell
+                the one red check that blocks from the three that do not. */}
+            {k.required && <Chip text="Required" tint="var(--text2)" title="GitHub will not merge until this one passes" />}
+            <span className="truncate min-w-0 flex-1" title={checkStatusLine(k)} style={{ color: bad ? "var(--error-ink)" : "var(--text3)" }}>
+              {k.title || (k.state === "success" ? "" : checkStatusLine(k))}
+            </span>
+            {bad && <span className="shrink-0" style={{ color: "var(--text3)" }}>{expanded ? "▾" : "▸"}</span>}
+          </button>
+          {/* Scaled to the slowest run on this pull request, so a job that
+              dominates the wall time is the one you see without reading a
+              number. Fixed width and always drawn: the columns stay put. */}
+          <span className="shrink-0 rounded-full overflow-hidden" style={{ width: 72, height: 4, background: "color-mix(in srgb, var(--border) 45%, transparent)" }} aria-hidden>
+            {share > 0 && <span className="block h-full rounded-full" style={{ width: `${share * 100}%`, background: slow ? "var(--warning)" : CHECK_TINT[k.state] }} />}
+          </span>
+          <span className="shrink-0 tabular-nums text-right" style={{ width: 44, color: slow ? "var(--warning-ink)" : "var(--text3)" }} title={checkStatusLine(k)}>
+            {span != null ? formatSpan(span) : k.state === "pending" ? "running" : quiet ? "skipped" : ""}
+          </span>
+          {k.url
+            ? <a href={externalUrl(k.url)} target="_blank" rel="noreferrer noopener" className="shrink-0 text-[10px]" style={{ color: "var(--text2)" }}
+                title="Open this run on GitHub">Details ↗</a>
+            : <span className="shrink-0 text-[10px] invisible" aria-hidden>Details ↗</span>}
+        </div>
+        {expanded && (
+          <div className="flex items-center gap-1.5 flex-wrap px-2.5 pb-2 pt-0.5">
+            {k.title && <span className="w-full" style={{ color: "var(--error-ink)" }}>{k.title}</span>}
+            {onAsk && <Btn onClick={() => onAsk(k)} primary small title="Check the pull request out locally and hand the failure to Claude"><SparkleIcon size={ICON.xs} />Ask Claude why</Btn>}
+            <Btn onClick={onRerun} disabled={busy} small pending={busyWhat === "Re-run checks"} title="Re-run every failing check on this pull request"><RefreshIcon size={ICON.xs} />Re-run failed</Btn>
+            {/* GitHub offers all three, and "the whole run failed again for one
+                flaky job" is exactly when you want the single-job one. */}
+            {(() => {
+              const job = jobs.find((j) => j.name === k.name) ?? jobs.find((j) => k.name.includes(j.name));
+              if (!job || !onRerunJobs) return null;
+              return (
+                <>
+                  <Btn onClick={() => onRerunJobs("job", job.id)} disabled={busy} small pending={busyWhat === "Re-run"} title={`Re-run only ${job.name}`}><RefreshIcon size={ICON.xs} />This job</Btn>
+                  <Btn onClick={() => onRerunJobs("all", job.runId)} disabled={busy} small pending={busyWhat === "Re-run"} title="Re-run every job in this run, passing ones included"><RefreshIcon size={ICON.xs} />All jobs</Btn>
+                </>
+              );
+            })()}
+          </div>
+        )}
+        {/* The log, here. It used to say "the log lives on GitHub" and send you
+            to a browser for the one thing you opened the check to read. */}
+        {expanded && <JobLog root={root} name={k.name} jobs={jobs} />}
+      </div>
+    );
+  };
+
+  const chips = ([["all", "All"], ["failed", "Failed"], ["running", "Running"], ["required", "Required"], ["slow", "Slow ≥5m"]] as const)
+    .filter(([f]) => f === "all" || counts[f] > 0)
+    .map(([f, label]) => ({ id: f as CheckFilter, label: `${label} ${counts[f]}` }));
 
   return (
     <div className="text-[11px] flex flex-col gap-2">
-      <div className="flex items-center gap-3 p-3 rounded-lg" style={{ border: EDGE }}>
-        <span className="shrink-0 rounded-full flex items-center justify-center text-[13px]"
-          style={{ width: 26, height: 26, background: c.failure > 0 ? "var(--error)" : c.pending > 0 ? "var(--warning)" : "var(--success)", color: "var(--bg)" }}>
-          {c.failure > 0 ? <CrossIcon size={ICON.sm} /> : c.pending > 0 ? <CircleIcon size={ICON.sm} /> : <DoneIcon size={ICON.sm} />}
-        </span>
-        <span className="min-w-0">
-          <span className="block text-[13px] font-semibold leading-tight" style={{ color: "var(--text)" }}>
-            {c.failure > 0 ? `${c.failure} check${c.failure === 1 ? "" : "s"} failing` : c.pending > 0 ? `${c.pending} still running` : "All checks have passed"}
-          </span>
-          <span className="block text-[11px] mt-1.5 tabular-nums" style={{ color: "var(--text3)" }}>
-            {c.skipped} skipped · {c.success} successful · {c.failure} failing
+      <div className="flex items-center gap-4 p-3.5 rounded-lg" style={{ border: EDGE, background: "var(--surface-card)" }}>
+        <span className="shrink-0 rounded-full flex items-center justify-center" aria-hidden
+          style={{ width: 56, height: 56, background: `conic-gradient(var(--success) 0 ${okEnd}deg, var(--error) 0 ${badEnd}deg, var(--warning) 0 ${runEnd}deg, color-mix(in srgb, var(--text4) 45%, transparent) 0)` }}>
+          <span className="rounded-full flex items-center justify-center" style={{ width: 42, height: 42, background: "var(--surface-card)", color: heroTint }}>
+            {hero.tone === "bad" ? <CrossIcon size={ICON.lg} /> : hero.tone === "warn" ? <CircleIcon size={ICON.lg} /> : <DoneIcon size={ICON.lg} />}
           </span>
         </span>
-        <span className="ml-auto shrink-0 flex items-center gap-2">
-          {c.failure > 0 && <Btn onClick={onRerun} disabled={busy} small pending={busyWhat === "Re-run checks"}>Re-run failed</Btn>}
+        <span className="min-w-0 flex-1">
+          <span className="block text-[14px] font-semibold leading-tight" style={{ color: "var(--text)" }}>{hero.title}</span>
+          <span className="block mt-1 tabular-nums" style={{ color: "var(--text2)" }}>{hero.tally.join(" · ")}</span>
+          <span className="block mt-0.5" style={{ color: "var(--text3)" }}>
+            {hero.required && <b style={{ fontWeight: 500, color: c.failure > 0 && d.checksAll.some((k) => k.required && k.state === "failure") ? "var(--error-ink)" : "var(--success-ink)" }}>{hero.required}</b>}
+            {hero.required && slowName && " · "}
+            {slowName && slowMs > 0 && `slowest: ${slowName.workflow ? `${slowName.workflow} / ` : ""}${shortName(slowName)} ${formatSpan(slowMs)}`}
+          </span>
+          {/* The strip is the ring unrolled: one segment per check, so two
+              hundred checks are two hundred ticks and a red one is findable. */}
+          <span className="flex mt-2.5 gap-px rounded-full overflow-hidden" style={{ height: 6 }} aria-hidden>
+            {[...sections.failing, ...sections.running, ...sections.passed, ...sections.skipped].map((k, i) => (
+              <span key={i} style={{ flex: k.state === "skipped" || k.state === "neutral" ? 0.4 : 1, background: k.state === "skipped" || k.state === "neutral" ? "color-mix(in srgb, var(--text3) 40%, transparent)" : CHECK_TINT[k.state] }} />
+            ))}
+          </span>
+        </span>
+        <span className="shrink-0 flex flex-col items-end gap-1.5">
+          {c.failure > 0 && <Btn onClick={onRerun} disabled={busy} primary small pending={busyWhat === "Re-run checks"}>Re-run failed</Btn>}
           <span className="text-[10px]" style={{ color: "var(--text3)" }}>{c.allDone ? "Notified once, not " + c.total : "You will be told once, at the end"}</span>
         </span>
       </div>
-      <Bar parts={[
-        { pct: pct(c.success), tint: "var(--success)" },
-        { pct: pct(c.failure), tint: "var(--error)" },
-        { pct: pct(c.pending), tint: "var(--warning)" },
-        { pct: pct(c.skipped), tint: "color-mix(in srgb, var(--text3) 40%, transparent)" },
-      ]} />
 
-      {groups.map(([name, list]) => {
-        const isOpen = openGroups[name] ?? list.some((k) => k.state === "failure" || k.state === "pending");
-        const bad = list.filter((k) => k.state === "failure").length;
-        const good = list.filter((k) => k.state === "success").length;
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <Segmented value={filter} options={chips} onChange={setFilter} label="Show checks" />
+        <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter checks…" aria-label="Filter checks"
+          className={`ml-auto min-w-0 ${INPUT}`} style={{ ...INPUT_STYLE, height: 24, width: 180 }} />
+      </div>
+
+      {attention.length > 0 && (
+        <div className="rounded-lg overflow-hidden" style={{ border: EDGE, background: `color-mix(in srgb, ${sections.failing.length ? "var(--error)" : "var(--warning)"} 5%, transparent)` }}>
+          <div className="px-2.5 py-1.5 flex items-center gap-2"><b style={{ fontWeight: 500, color: "var(--text)" }}>Needs attention</b><span className="tabular-nums" style={{ color: "var(--text3)" }}>{attention.length}</span></div>
+          {attention.map((k, i) => row(k, i, true))}
+        </div>
+      )}
+      {attention.length === 0 && !filtering && c.total > 0 && (
+        <div className="px-2.5 py-1.5 rounded-lg" style={{ border: EDGE, color: "var(--text3)" }}>Nothing needs you.</div>
+      )}
+
+      {cards.map((g) => {
+        const isOpen = filtering || (openGroups[g.name] ?? false);
         return (
-          <div key={name} className="rounded overflow-hidden" style={{ border: EDGE }}>
-            <button onClick={() => setOpenGroups((o) => ({ ...o, [name]: !isOpen }))}
-              className="w-full text-left flex items-center gap-2 px-2.5 py-1.5"
+          <div key={g.name} className="rounded-lg overflow-hidden" style={{ border: EDGE }}>
+            <button onClick={() => setOpenGroups((o) => ({ ...o, [g.name]: !isOpen }))} aria-expanded={isOpen}
+              className="w-full text-left flex items-center gap-2 px-2.5 py-2"
               style={{ background: "color-mix(in srgb, var(--border) 14%, transparent)" }}>
               <span style={{ color: "var(--text3)" }}>{isOpen ? "▾" : "▸"}</span>
-              <b style={{ color: "var(--text)", fontWeight: 500 }}>{name}</b>
-              {bad > 0 && <span className="inline-flex items-center gap-0.5" style={{ color: "var(--error-ink)" }}>{bad}<CrossIcon size={ICON.xs} /></span>}
-              {good > 0 && <span className="inline-flex items-center gap-0.5" style={{ color: "var(--success-ink)" }}>{good}<DoneIcon size={ICON.xs} /></span>}
-              <span className="ml-auto tabular-nums" style={{ color: "var(--text3)" }}>{list.length}</span>
+              <b style={{ color: "var(--text)", fontWeight: 500 }}>{g.name}</b>
+              <span className="inline-flex items-center gap-0.5 tabular-nums" style={{ color: "var(--success-ink)" }}>{g.passed}<DoneIcon size={ICON.xs} /></span>
+              <span className="ml-auto flex gap-0.5" aria-hidden>
+                {g.checks.slice(0, 12).map((k, i) => <span key={i} className="rounded-sm" style={{ width: 5, height: 12, background: isSlow(k) ? "var(--warning)" : "var(--success)" }} />)}
+              </span>
             </button>
-            {isOpen && list.map((k, i) => {
-              const bad = k.state === "failure";
-              const id = `${name}::${k.name}::${i}`;
-              const expanded = bad && openCheck === id;
-              return (
-                <div key={id} style={{ borderTop: LINE, background: bad ? "color-mix(in srgb, var(--error) 7%, transparent)" : undefined }}>
-                  {/* A failing check is the one row on this tab you came for, so
-                      it is the one row that opens into somewhere to go next. */}
-                  <button onClick={() => bad && setOpenCheck(expanded ? null : id)} disabled={!bad}
-                    className="w-full text-left flex items-center gap-2 px-2.5 py-1" style={{ cursor: bad ? "pointer" : "default" }}>
-                    <span className="shrink-0 w-3 flex justify-center" style={{ color: CHECK_TINT[k.state] }}>{CHECK_GLYPH[k.state]}</span>
-                    <span className="truncate" style={{ color: k.state === "skipped" || k.state === "neutral" ? "var(--text3)" : "var(--text2)" }}>
-                      {k.name.startsWith(name) ? k.name.slice(name.length).replace(/^\s*\/\s*/, "") || k.name : k.name}
-                    </span>
-                    {/* GitHub's own merge box tags these, and it is the only
-                        way to tell the one red check that blocks from the
-                        three that do not. */}
-                    {k.required && <Chip text="Required" tint="var(--text2)" title="GitHub will not merge until this one passes" />}
-                    <span className="ml-auto shrink-0 text-[9.5px] uppercase tracking-wide" style={{ color: CHECK_TINT[k.state] }}>{k.state}</span>
-                    {bad && <span className="shrink-0" style={{ color: "var(--text3)" }}>{expanded ? "▾" : "▸"}</span>}
-                  </button>
-                  {expanded && (
-                    <div className="flex items-center gap-1.5 flex-wrap px-2.5 pb-2 pt-0.5">
-                      {onAsk && <Btn onClick={() => onAsk(k)} primary small title="Check the pull request out locally and hand the failure to Claude"><SparkleIcon size={ICON.xs} />Ask Claude why</Btn>}
-                      {k.url && (
-                        <a href={externalUrl(k.url)} target="_blank" rel="noreferrer noopener" className="agx-btn text-[10px] px-2 py-0.5 rounded"
-                          style={{ color: "var(--text2)", border: EDGE }}>Open run ↗</a>
-                      )}
-                      <Btn onClick={onRerun} disabled={busy} small pending={busyWhat === "Re-run checks"} title="Re-run every failing check on this pull request"><RefreshIcon size={ICON.xs} />Re-run failed</Btn>
-                      {/* GitHub offers all three, and "the whole run failed
-                          again for one flaky job" is exactly when you want the
-                          single-job one. */}
-                      {(() => {
-                        const job = jobs.find((j) => j.name === k.name) ?? jobs.find((j) => k.name.includes(j.name));
-                        if (!job || !onRerunJobs) return null;
-                        return (
-                          <>
-                            <Btn onClick={() => onRerunJobs("job", job.id)} disabled={busy} small pending={busyWhat === "Re-run"} title={`Re-run only ${job.name}`}><RefreshIcon size={ICON.xs} />This job</Btn>
-                            <Btn onClick={() => onRerunJobs("all", job.runId)} disabled={busy} small pending={busyWhat === "Re-run"} title="Re-run every job in this run, passing ones included"><RefreshIcon size={ICON.xs} />All jobs</Btn>
-                          </>
-                        );
-                      })()}
-                    </div>
-                  )}
-                  {/* The log, here. It used to say "the log lives on GitHub" and
-                      send you to a browser for the one thing you opened the
-                      check to read. */}
-                  {expanded && <JobLog root={root} name={k.name} jobs={jobs} />}
-                </div>
-              );
-            })}
+            {isOpen && g.checks.map((k, i) => row(k, i, false))}
           </div>
         );
       })}
 
-      {skippedCount > 0 && (
-        <button onClick={() => setShowSkipped((v) => !v)} className="text-[10px] px-2.5 py-1.5 rounded self-start"
-          style={{ color: "var(--text2)", border: "1px dashed color-mix(in srgb, var(--text) 24%, transparent)" }}>
-          {showSkipped ? "Hide" : "Show"} {skippedCount} skipped
-        </button>
+      {sections.skipped.length > 0 && (
+        <div className="rounded-lg overflow-hidden" style={{ border: EDGE }}>
+          <button onClick={() => setShowSkipped((v) => !v)} aria-expanded={showSkipped} className="w-full text-left flex items-center gap-2 px-2.5 py-1.5" style={{ color: "var(--text2)" }}>
+            <span style={{ color: "var(--text3)" }}>{showSkipped || filtering ? "▾" : "▸"}</span>
+            {sections.skipped.length} skipped check{sections.skipped.length === 1 ? "" : "s"}
+          </button>
+          {(showSkipped || filtering) && sections.skipped.map((k, i) => row(k, i, true))}
+        </div>
       )}
+      {shown.length === 0 && d.checksAll.length > 0 && <div className="px-2.5 py-2" style={{ color: "var(--text3)" }}>No check matches.</div>}
     </div>
   );
 }

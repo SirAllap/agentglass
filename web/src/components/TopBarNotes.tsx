@@ -38,7 +38,7 @@ import {
   subscribeNotifyHistory, notifyHistory, notifyUnread,
   markNotifyRead, dismissNote, clearNotes, openNote, recordNote,
   notifyQuiet, setNotifyQuiet, subscribeNotifyQuiet,
-  appNotify, subscribeAppNotify, shouldInterrupt,
+  appNotify, subscribeAppNotify, shouldInterrupt, subscribeAskedFires,
   sysNotifyOn, setSysNotifyOn, subscribeSysNotifyMode, notifyCapability,
   type SystemNote, type NotifyCapability,
 } from "../lib/sysNotify.ts";
@@ -62,6 +62,8 @@ export type Note = {
   at: number;
   /** Something is blocked until you answer. Jumps the queue, never dropped. */
   urgent?: boolean;
+  /** The person armed what this reports (a PR watch), so Quiet does not hold it back. */
+  asked?: boolean;
 };
 
 /** How long one toast holds the middle of the bar. */
@@ -129,7 +131,7 @@ export function useAmbientNotes(): { note: Note | null; behind: number; ahead: n
    * bell's list through `recordNote`, which is deliberately outside this gate.
    */
   const push = (n: Omit<Note, "at">) => {
-    if (!shouldInterrupt(!!n.urgent)) return;
+    if (!shouldInterrupt(!!n.urgent || !!n.asked)) return;
     enqueue(queue.current, { ...n, at: Date.now() });
     if (!showing.current) advance();
   };
@@ -190,6 +192,12 @@ export function useAmbientNotes(): { note: Note | null; behind: number; ahead: n
       // still holding.
       urgent: true,
     });
+  }), []);
+
+  // A PR watch the person armed. It rides the same lane as everything else but
+  // is not held back by Quiet: it is the thing they asked to be told.
+  useEffect(() => subscribeAskedFires((f) => {
+    push({ id: f.id, kind: f.ok ? "done" : "blocked", color: f.ok ? "var(--success-ink)" : "var(--error-ink)", title: f.title, sub: f.sub, asked: true });
   }), []);
 
   // Desktop notifications used to be pushed into this lane too. They are not any
