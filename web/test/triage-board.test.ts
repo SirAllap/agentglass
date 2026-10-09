@@ -764,3 +764,17 @@ describe("the card header strip, cleared", () => {
     expect(fn).toContain("Changes applied, asked to look again.");
   });
 });
+
+describe("card assignees on a board card", () => {
+  const fn = board.slice(board.indexOf("Card assigned to"), board.indexOf("The sentence that put it in this lane"));
+
+  it("draws up to five faces and says the rest as +N", () => {
+    expect(board).toContain("const ASSIGNEE_FACES = 5;");
+    expect(fn).toContain("who.slice(0, ASSIGNEE_FACES)");
+    expect(fn).toContain("who.length - ASSIGNEE_FACES");
+  });
+
+  it("does not repeat the first assignee's name next to the faces", () => {
+    expect(fn).not.toContain("who[0]!.name");
+  });
+});

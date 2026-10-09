@@ -1628,11 +1628,13 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
               <span className="flex items-center gap-1.5 min-w-0"
                 title={`Card assigned to ${who.map((x) => x.name).join(", ")}`}>
                 <span className="flex items-center shrink-0">
-                  {who.slice(0, 2).map((person, n) => (
+                  {who.slice(0, ASSIGNEE_FACES).map((person, n) => (
                     <CardFace key={person.id ?? person.name} p={person} n={n} size={14} />
                   ))}
                 </span>
-                <span className="truncate" style={{ color: "var(--text4)" }}>{who[0]!.name}</span>
+                {who.length > ASSIGNEE_FACES && (
+                  <span className="shrink-0" style={{ color: "var(--text4)" }}>+{who.length - ASSIGNEE_FACES}</span>
+                )}
               </span>
             )}
           </div>
@@ -1728,6 +1730,9 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
     </div>
   );
 }
+
+/** Faces drawn for a card's assignees; the rest read as "+N" and the tooltip names everyone. */
+const ASSIGNEE_FACES = 5;
 
 const Tag = ({ children, tint, title }: { children: React.ReactNode; tint?: string; title?: string }) => (
   <span title={title} className="rounded px-1" style={{ color: tint ?? "var(--text3)", border: `1px solid color-mix(in srgb, ${tint ?? "var(--text)"} ${tint ? 34 : 16}%, transparent)` }}>
