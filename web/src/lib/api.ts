@@ -1065,6 +1065,8 @@ const realApi = {
   // always answers it (index.ts's /git/repos) — so the bell can tell "this
   // window's folders" from a whole-machine sweep. See gitNote.ts's
   // notesWorthyRepos.
+  /** One checkout's row, read now — not shared, not cached (see repoPulse.ts). */
+  gitRepo: (root: string) => get<{ repo: GitRepoRef | null }>(`/git/repo?root=${encodeURIComponent(root)}`),
   gitRepos: () => sharedRead("git/repos", REPOS_SHARE_MS, () => get<{ repos: GitRepoRef[]; roots?: string[] }>("/git/repos")),
   /** Put a PNG somewhere an agent can read it, and say where. A tmux window
    *  takes text; a megabyte of base64 in a prompt is not text. */
@@ -2302,6 +2304,7 @@ const demoApi: typeof realApi = {
   } as DepsResponse),
   logDigest: () => D({ since: 0, total: 0, groups: [], crashLoops: [], spikes: [], quiet: true } as LogDigest),
   gitRepos: () => D(demo.gitRepos()),
+  gitRepo: (_root: string) => D({ repo: null as GitRepoRef | null }),
   browserPlaces: () => D({ ok: true, places: [] as ImportedPlace[] }),
   browserPlaceCount: () => D({ ok: true, total: 0, bookmarks: 0, sources: [] as string[] }),
   saveBrowserPlaces: (_s: string, _p: ImportedPlace[]) => D({ ok: false, error: "not available in the demo" }),

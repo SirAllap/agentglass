@@ -276,6 +276,7 @@ Every route is behind the token and the origin/Host gates described in [Security
 | `GET /events/recent?limit=` · `/events/filter-options` | Latest events; distinct apps, event types and models. |
 | `GET /projects` · `POST /projects/{clone,new,hidden,roots}` | Known projects in scope plus the open ones (`workspaces`; `workspace` is the first); clone a URL into a folder, create a project, hide one from the picker, add or forget a folder the picker lists from (`{path, added}`). |
 | `POST /workspace` | Scope the cockpit at runtime: `{roots: [...]}` opens several projects together, all or nothing; `{root}` opens one; an empty list or `null` = whole machine. Persisted; what the project picker calls. |
+| `GET /git/repo?root=` | One checkout's row (branch, changed-files count, ahead/behind), read now and never cached — what the pill under a terminal pane polls. |
 | `GET /git/repos?all=1` | The picker's list: repos under the added folders (`roots` in the answer). `&scan=1` is its explicit "look for projects" — every repo agents have run in. |
 | `GET /sessions?limit=` · `/session?id=` · `/agent/sessions?root=` | Session rollups; one session in full; resumable agent sessions for a repo, joined with the live panes. |
 | `GET /stats?window=` · `/insights` · `/search?q=` | The analytics summary; derived warnings (loops, fast burn, failure rate); full-text search over prompts, commands, file paths, search patterns, notifications, final answers and errors (not tool output). |

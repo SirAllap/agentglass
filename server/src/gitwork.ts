@@ -446,6 +446,22 @@ async function repoRef(root: string): Promise<GitRepoRef | null> {
 }
 
 /**
+ * One checkout's row, read now and never from `repoCache`.
+ *
+ * The pill under a terminal pane names a branch and a changed-files count, and
+ * the list it used to read them from is held 15 s (45 while a shell is in use,
+ * see backoff()): measured, a rename or a new file took 13-15 s to show in an
+ * idle server, and the panel never re-asked. This is the one `git status` the
+ * focused pane's checkout costs, which is why asking it every few seconds is
+ * affordable where asking for the whole list is not. The ceiling: it knows one
+ * checkout, so a card elsewhere on the list is as old as that list is.
+ */
+export async function repoNow(rootIn: unknown): Promise<GitRepoRef | null> {
+  const top = repoRoot(rootIn);
+  return top ? repoRef(top) : null;
+}
+
+/**
  * When this checkout was last worked in — what the pickers sort on.
  *
  * `HEAD` and the reflog (`logs/HEAD`) inside the checkout's own git dir,

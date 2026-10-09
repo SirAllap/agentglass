@@ -6,6 +6,7 @@
 // running job — reopening reattaches to the live session, scrollback intact.
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { usePoll } from "../lib/usePoll.ts";
+import { PILL_POLL_MS, withFreshRepo } from "../lib/repoPulse.ts";
 import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
 import { subscribeTermReview, termReview, clearTermReview } from "../lib/termReview.ts";
 import { subscribeTermIssue, termIssue, clearTermIssue, type TermIssue } from "../lib/termIssue.ts";
@@ -2146,6 +2147,15 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const prRef = useRef<{ repo: string; pr: PrBranchSummary } | null>(null);
   useEffect(() => { prRef.current = chipPr; }, [chipPr]);
   const wtRef = useRef<GitRepoRef | null>(null);
+  /* The pill's own beat: the focused pane's checkout, re-read through the
+     single-row route so a rename or an edit shows in seconds. Same gate as the
+     poll above (the window is looked at); the list the row lives in is held by
+     the server for 15 s and was read once, on open. See repoPulse.ts. */
+  usePoll(open && !IS_DEMO, () => {
+    const at = wtRef.current?.root;
+    if (!at) return;
+    void api.gitRepo(at).then((r) => setRepos((cur) => withFreshRepo(cur, r.repo))).catch(() => { /* the next beat asks again */ });
+  }, PILL_POLL_MS);
   /** Not `cardRef` — that name is the lib function this file already uses to
    *  turn a branch into a card reference. */
   const cardGoRef = useRef<(() => void) | null>(null);

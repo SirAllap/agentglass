@@ -84,7 +84,7 @@ import {
   searchCommits, grepWorkingTree, searchHistory,
   createTag, deleteTag, pushTag, deleteRemoteTag,
   prepareConflictMerge,
-  worktrees as repoWorktrees,
+  worktrees as repoWorktrees, repoNow,
 } from "./gitwork.ts";
 import { sessionsForProject } from "./agentsessions.ts";
 import { changeRows, fileDiff } from "./changerows.ts";
@@ -5446,6 +5446,12 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     // `force=1` is the Recheck button, which is the only reason a caller would
     // want to pay for the probes again inside the cache window.
     if (pathname === "/dependencies") return json(await dependencyReport(url.searchParams.get("force") === "1"));
+    // The focused pane's checkout alone, fresh: the terminal's pill polls this
+    // instead of the list below, whose cache is why it trailed a change by 15 s.
+    if (pathname === "/git/repo") {
+      const root = url.searchParams.get("root") || "";
+      return body(await singleFlight(`repo:${root}`, async () => JSON.stringify({ repo: await repoNow(root) })));
+    }
     if (pathname === "/git/repos") {
       // `all=1` is the project picker: it needs to see past the open projects,
       // or there'd be no way out. It lists what is under the folders the person
