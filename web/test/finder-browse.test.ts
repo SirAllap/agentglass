@@ -34,7 +34,7 @@ describe("the panes that show what a row is", () => {
       file: loaded(), git: null, outline: [], current: -1, home: "", onJump: noop, onBench: noop, onCopyPath: noop }));
     expect(rail).toContain("Nothing selected");
     const view = renderToStaticMarkup(React.createElement(FileView, {
-      file: loaded(), jump: null, initialTop: 0, onTop: noop, onBench: noop, canBrowser: false, findSignal: 0 }));
+      file: loaded(), jump: null, initialTop: 0, onTop: noop, onBench: noop, canBrowser: false, findSignal: 0, home: "" }));
     expect(view).toContain("Nothing selected");
   });
 
@@ -43,7 +43,7 @@ describe("the panes that show what a row is", () => {
     // effect never runs, which is exactly the state this asserts.
     const file = loaded({ source: { abs: "/home/dev/Documents/a.png", root: "/home/dev/Documents", rel: "a.png" }, name: "a.png", kind: "image", loading: true });
     const html = renderToStaticMarkup(React.createElement(FileView, {
-      file, jump: null, initialTop: 0, onTop: noop, onBench: noop, canBrowser: true, findSignal: 0 }));
+      file, jump: null, initialTop: 0, onTop: noop, onBench: noop, canBrowser: true, findSignal: 0, home: "" }));
     expect(html).toContain("agx-spin");
   });
 });
