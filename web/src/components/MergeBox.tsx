@@ -282,10 +282,16 @@ export function MergeBox({
 
       {notes && <div style={{ borderTop: LINE }}>{notes}</div>}
 
-      {(callout || (!path.ready && showMergeRow)) && (
-        <div className="flex items-center gap-3 flex-wrap px-4 py-3" style={{ borderTop: LINE, background: wash("var(--border)", 12) }}>
+      {/* ONE footer row. It was two: the merge group on one line and the
+          secondary actions (update, draft, close) on a second, so the box
+          spent a row on buttons that are all "what else can be done". The
+          secondary group sits left, the merge group right, and the callout,
+          when there is one, above the row on a line of its own; when they do not fit, the groups wrap under each other
+          instead of squeezing. */}
+      {(callout || extraNode || (!path.ready && showMergeRow)) && (
+        <div className="flex items-center gap-x-3 gap-y-2 flex-wrap px-4 py-3" style={{ borderTop: LINE, background: wash("var(--border)", 12) }}>
           {callout && (
-            <span className="flex items-center gap-2 min-w-0 flex-1 basis-56 pl-3 text-[11.5px] font-semibold leading-snug"
+            <span className="flex items-center gap-2 min-w-0 basis-full pl-3 text-[11.5px] font-semibold leading-snug"
               style={{ color: "var(--text)", boxShadow: `inset 2px 0 0 ${callout.tone === "warn" ? TONE.wait.tint : TONE.ok.tint}` }}>
               <span aria-hidden className="shrink-0" style={{ color: callout.tone === "warn" ? TONE.wait.ink : TONE.ok.ink }}>
                 {callout.tone === "warn" ? <WarningIcon size={ICON.sm} /> : <DoneIcon size={ICON.sm} />}
@@ -293,11 +299,10 @@ export function MergeBox({
               {callout.text}
             </span>
           )}
+          {extraNode && <div className="flex items-center gap-1.5 flex-wrap min-w-0">{extraNode}</div>}
           {!path.ready && showMergeRow && <span className="flex items-center gap-1.5 ml-auto flex-wrap">{mergeNode}{hero.primary?.id !== "arm-auto" && autoNode}</span>}
         </div>
       )}
-
-      {extraNode && <div className="flex items-center gap-1.5 flex-wrap px-4 py-2.5" style={{ borderTop: LINE }}>{extraNode}</div>}
     </section>
   );
 }
