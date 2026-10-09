@@ -35,7 +35,7 @@ const W = await import("../src/clickupwatch.ts");
 const ME = "9527";
 /** A comment as the reader hands it over. */
 const said = (o: { id: string; who?: string; whoId?: string; text?: string; at?: number; mentions?: string[] }) =>
-  ({ id: o.id, who: o.who ?? "Alejandro", whoId: o.whoId ?? "111", text: o.text ?? "have a look", at: o.at ?? 5_000_000, mentions: o.mentions ?? [] });
+  ({ id: o.id, who: o.who ?? "Ada", whoId: o.whoId ?? "111", text: o.text ?? "have a look", at: o.at ?? 5_000_000, mentions: o.mentions ?? [] });
 
 const card = (id: string, status: string, customId?: string): ProviderTask =>
   ({ id, customId, title: `card ${id}`, url: "", status, statusKind: "open",
@@ -289,9 +289,9 @@ describe("comments and mentions", () => {
 
   it("somebody commenting on a card of mine is news, and it names them", async () => {
     await seedMine();
-    W.__setCommentReader(async () => ({ ok: true, data: { comments: [said({ id: "c1", who: "Alejandro", text: "ready for review" })] } }));
+    W.__setCommentReader(async () => ({ ok: true, data: { comments: [said({ id: "c1", who: "Ada", text: "ready for review" })] } }));
     const [n] = await W.pollCards(6_000_000);
-    expect(n).toMatchObject({ kind: "comment", id: "a", who: "Alejandro", said: "ready for review" });
+    expect(n).toMatchObject({ kind: "comment", id: "a", who: "Ada", said: "ready for review" });
   });
 
   it("a comment that names me is a mention, on anybody's card", async () => {

@@ -623,8 +623,8 @@ function countByClass(): Record<string, number> {
  * What a rule's provenance is allowed to say.
  *
  * A KIND, never a path — and this cost a leak to learn. The first version wrote
- * `~/.claude/projects/-home-you-code-<employer>/memory/foo.md` into the
- * compiled policy, and 151 copies of an employer's name went into a generated
+ * `~/.claude/projects/-home-you-code-<company>/memory/foo.md` into the
+ * compiled policy, and 151 copies of a company's name went into a generated
  * file. The private-terms gate did not catch it and could not have: the gate
  * runs over the TEXT of a rule, and this was the label beside it.
  *

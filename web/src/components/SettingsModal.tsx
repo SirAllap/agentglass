@@ -24,7 +24,11 @@ import { api } from "../lib/api.ts";
 import { browserPlaces, CAN_IMPORT_COOKIES, cookieSources, importCookies, forgetCookies, type CookieSource, type CookieImportReply } from "../lib/desktop.ts";
 import { loadProfiles } from "../lib/browserProfiles.ts";
 import { addVisible, allSites, bestSource, dropVisible, lockedWhy, reachable, siteView } from "../lib/cookiePick.ts";
-import { PROVIDERS, type ProviderSpec, type ProviderStatus, type ProviderState } from "../../../shared/providers.ts";
+import { PROVIDERS, DEFAULT_SPRINT_LIST_PATTERN, DEFAULT_READ_ONLY_FIELD_PATTERN, type ProviderSpec, type ProviderStatus, type ProviderState, type ClickUpPrefs, type HandoffUnassign } from "../../../shared/providers.ts";
+import { clickupPrefs, clickupPrefsSaved, __forgetClickupPrefs } from "../lib/clickupPrefs.ts";
+import { __forgetClickupSetup } from "../lib/clickupSetup.ts";
+import { forgetCards } from "../lib/prCardStore.ts";
+import { DEFAULT_CARD_SKILL_PATTERN } from "../../../shared/cardSkills.ts";
 import { checkedLine } from "../lib/providerFreshness.ts";
 import { fmtAgo, minutesAgo } from "../lib/format.ts";
 import { useClipped } from "./TopBarNotes.tsx";
@@ -108,6 +112,7 @@ import { CloseButton } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { CheckboxIcon, ClockIcon, CrossIcon, DoneIcon } from "../lib/glyphIcons.tsx";
 import { ciOnlyApproved, setCiOnlyApproved } from "../lib/ciNotifyPref.ts";
+import { AskedAlertLog } from "./AskedAlertLog.tsx";
 import { setTalkNotify, talkNotify, type TalkNotify } from "../lib/talkNotify.ts";
 import { RETENTION, setUnderstudyEnabled, useUnderstudy } from "./understudy/UnderstudyPanel.tsx";
 import { Appearance, closedCount } from "./understudy/Appearance.tsx";
@@ -2481,6 +2486,11 @@ function NotificationsSection(p: {
           onPick={p.onTalkMode} />
       </Section>
 
+      <Section title="Asked for, and what became of it"
+        desc="The notifications you armed, newest first. Quiet: nothing here interrupts.">
+        <AskedAlertLog />
+      </Section>
+
       <Section title="From other apps">
         <Toggle
           on={p.sysNotify !== "off"}
@@ -2758,7 +2768,7 @@ function GhBudget({ open }: { open: boolean }) {
  * turned off something that was never running would be theatre.
  */
 function PrivacyPane({ open }: { open: boolean }) {
-  const [d, setD] = useState<{ db: string; config: string; credentials: string; retentionDays: number; pairedDevices: number } | null>(null);
+  const [d, setD] = useState<{ db: string; config: string; credentials: string; retentionDays: number; pairedDevices: number; clickup: boolean } | null>(null);
   useEffect(() => {
     if (!open) return;
     void api.privacy().then(setD).catch(() => setD(null));
@@ -2814,7 +2824,7 @@ function PrivacyPane({ open }: { open: boolean }) {
             : "No device is paired, so nothing can reach this server from outside."}
         />
         <Fold label="Which calls, exactly">
-          GitHub through <code>gh</code>, ClickUp through its API, and whatever an agent you started
+          GitHub through <code>gh</code>, {d?.clickup ? "ClickUp through its API, " : ""}and whatever an agent you started
           decides to do. Avatars are fetched from GitHub. Nothing else leaves, and nothing at all is
           sent to us — there is no endpoint of ours for it to go to.
         </Fold>
@@ -2957,6 +2967,131 @@ function rememberHeight(id: string, px: number): void {
   try { localStorage.setItem(CARD_H_KEY, JSON.stringify({ ...all, [id]: h })); } catch { /* private mode */ }
 }
 
+const UNASSIGN_OPTIONS: { value: HandoffUnassign; label: string; hint: string }[] = [
+  { value: "none", label: "Nobody", hint: "Everyone assigned stays on the card." },
+  { value: "me", label: "Only me", hint: "Your account comes off; the others stay." },
+  { value: "all", label: "Everyone", hint: "Nobody stays on the card until QA picks it up." },
+];
+
+/**
+ * How this workspace hands a card to QA, under the ClickUp row and only once
+ * ClickUp is connected: before that there is no board for a status name to
+ * mean anything on. Off until asked for, because a column called "Ready for
+ * QA" is one team's habit and every other workspace should never see a button
+ * offering to write to it.
+ *
+ * The controls keep their place in every state. Switched off, the two below
+ * the switch go dim rather than away, so turning it on moves nothing. Each
+ * change is its own save of that one key; the server answers with the whole
+ * stored settings, and that answer, not the draft, is what the rows show.
+ */
+export function ClickUpWorkflow({ initial }: { initial?: ClickUpPrefs | null } = {}) {
+  const [prefs, setPrefs] = useState<ClickUpPrefs | null>(initial ?? null);
+  const [names, setNames] = useState<string | null>(null);
+  const [reviewNames, setReviewNames] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (initial) return;
+    let live = true;
+    void clickupPrefs().then((p) => { if (live && p) setPrefs(p); });
+    return () => { live = false; };
+  }, [initial]);
+  if (!prefs) return null;
+  const h = prefs.handoff;
+  const send = async (patch: Parameters<typeof api.clickupSetPrefs>[0]) => {
+    const r = await api.clickupSetPrefs(patch);
+    if (!r.ok || !r.prefs) { setNote(r.error ?? "That did not save"); return; }
+    setNote(null); setNames(null); setReviewNames(null); setDrafts({}); setPrefs(r.prefs); clickupPrefsSaved(r.prefs);
+  };
+  /* One name-or-pattern row. A pattern equal to the shipped one shows as empty,
+     so the placeholder says what applies and nothing has to be retyped to get
+     it back; a refused one stays in the box with the sentence under it. */
+  const text = (key: "prLinkField" | "swatchField" | "cardSkillPattern" | "sprintListPattern" | "readOnlyFieldPattern",
+    label: string, hint: string, placeholder: string, fallback = "") => {
+    const saved = prefs[key] === fallback ? "" : prefs[key];
+    const commitText = () => {
+      const d = drafts[key];
+      if (d === undefined) return;
+      if (d.trim() === saved) { setDrafts(({ [key]: _gone, ...rest }) => rest); return; }
+      void send({ [key]: d });
+    };
+    return (
+      <SettingRow label={label} hint={hint}
+        control={
+          <input value={drafts[key] ?? saved} onChange={(e) => setDrafts({ ...drafts, [key]: e.target.value })} onBlur={commitText}
+            onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+            aria-label={label} placeholder={placeholder} spellCheck={false} autoComplete="off"
+            className={`w-[220px] ${INPUT}`} style={INPUT_STYLE} />
+        } />
+    );
+  };
+  const save = (patch: Partial<ClickUpPrefs["handoff"]>) => send({ handoff: patch });
+  const rv = prefs.review;
+  /* A comma-separated row: the draft is text, the save is the list, and a draft
+     that parses to what is already stored saves nothing. */
+  const listOf = (draft: string) => draft.split(",").map((x) => x.trim()).filter(Boolean);
+  const commitList = (draft: string | null, stored: string[], clear: () => void, apply: (l: string[]) => void) => {
+    if (draft === null) return;
+    const l = listOf(draft);
+    if (l.join("\u0000") === stored.join("\u0000")) { clear(); return; }
+    apply(l);
+  };
+  const rvShown = reviewNames ?? rv.statusNames.join(", ");
+  const commitReview = () => commitList(reviewNames, rv.statusNames, () => setReviewNames(null), (l) => { void send({ review: { statusNames: l } }); });
+  const shown = names ?? h.statusNames.join(", ");
+  const commit = () => commitList(names, h.statusNames, () => setNames(null), (l) => { void save({ statusNames: l }); });
+  return (
+    <div className="mt-1 mb-2">
+      {/* 18px: the edge a row's label sits on (.agx-settings-row), so the heading and what it heads share it. */}
+      <div className="panel-eyebrow pb-0.5" style={{ paddingLeft: 18, paddingRight: 18 }}>Workflow</div>
+      <Toggle on={h.enabled} onClick={() => { void save({ enabled: !h.enabled }); }}
+        label="Hand off to QA"
+        hint="Adds a move-to-QA button on a pull request's card." />
+      <div style={{ opacity: h.enabled ? 1 : 0.5 }}>
+        <SettingRow label="QA status names"
+          hint="Comma separated, first match wins. Empty: Ready for QA."
+          control={
+            <input value={shown} onChange={(e) => setNames(e.target.value)} onBlur={commit}
+              onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+              disabled={!h.enabled} aria-label="QA status names" placeholder="Ready for QA" spellCheck={false} autoComplete="off"
+              className={`w-[220px] ${INPUT}`} style={INPUT_STYLE} />
+          } />
+        <SettingRow label="Take off the card" hint="Who is unassigned when the card is handed over."
+          control={
+            <Select value={h.unassign} onChange={(v) => { void save({ unassign: v as HandoffUnassign }); }}
+              disabled={!h.enabled} style={{ minWidth: 132 }}
+              options={UNASSIGN_OPTIONS} />
+          } />
+      </div>
+      <SettingRow label="Review status names"
+        hint="First match wins. Empty: any status with review."
+        control={
+          <input value={rvShown} onChange={(e) => setReviewNames(e.target.value)} onBlur={commitReview}
+            onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+            aria-label="Review status names" placeholder="Code Review" spellCheck={false} autoComplete="off"
+            className={`w-[220px] ${INPUT}`} style={INPUT_STYLE} />
+        } />
+      <Toggle on={rv.assignReviewer} onClick={() => { void send({ review: { assignReviewer: !rv.assignReviewer } }); }}
+        label="Put people on the card from the review menu"
+        hint="Adds an Assigned list to the ClickUp half of the menu." />
+      <Toggle on={prefs.flows.noteOnCard} onClick={() => { void send({ flows: { noteOnCard: !prefs.flows.noteOnCard } }); }}
+        label="Note on card"
+        hint="Adds a button that writes a note on the card." />
+      <div className="panel-eyebrow pb-0.5 pt-2" style={{ paddingLeft: 18, paddingRight: 18 }}>Names on your boards</div>
+      {text("prLinkField", "PR link field", "Holds the PR link. Empty: any field named github.", "GitHub URL")}
+      {text("swatchField", "Colour column field", "Drop-down shown as a swatch. Empty: guessed from the field names.", "Team")}
+      {text("cardSkillPattern", "Card skills pattern", "Regex on a skill's name or description.", "clickup|\\bcu-|-cu\\b", DEFAULT_CARD_SKILL_PATTERN)}
+      {text("sprintListPattern", "Sprint list pattern", "Regex for sprint lists. Dated ones always count.", "^sprint\\b", DEFAULT_SPRINT_LIST_PATTERN)}
+      {text("readOnlyFieldPattern", "Read-only fields pattern", "Regex for fields shown but never written.", "do not edit", DEFAULT_READ_ONLY_FIELD_PATTERN)}
+      <Toggle on={prefs.assigned.includeSubtasks} onClick={() => { void send({ assigned: { includeSubtasks: !prefs.assigned.includeSubtasks } }); }}
+        label="Subtasks on Assigned to me"
+        hint="Slower: the workspace read can take twice as long." />
+      {note && <div className="text-[11px] mt-1" style={{ color: "var(--error-ink)" }}>{note}</div>}
+    </div>
+  );
+}
+
 function ProviderCard({ spec, status, checking, onChanged }: {
   spec: ProviderSpec; status: ProviderStatus | null;
   /** Nothing is known about this one yet. Different from `status === null`
@@ -2969,6 +3104,11 @@ function ProviderCard({ spec, status, checking, onChanged }: {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [spaces, setSpaces] = useState<{ id: string; name: string }[] | null>(null);
+  /* Disconnecting ClickUp asks one question first: the saved boards are the
+     person's own list and survive by default. Other providers have nothing to
+     ask, so they go straight through as they always did. */
+  const [confirming, setConfirming] = useState(false);
+  const [forgetBoards, setForgetBoards] = useState(false);
   const box = useRef<HTMLDivElement | null>(null);
   const waiting = !!checking && !status;
   // Measured after the answer has landed and the card is its real size — never
@@ -3003,6 +3143,7 @@ function ProviderCard({ spec, status, checking, onChanged }: {
     // Cleared on success and only on success: a refused token is usually one
     // that was pasted short, and retyping it is a chore nobody needs.
     setToken(""); setNote(null);
+    if (spec.id === "clickup") { __forgetClickupSetup(); __forgetClickupPrefs(); }
     await onChanged();
   };
 
@@ -3041,7 +3182,7 @@ function ProviderCard({ spec, status, checking, onChanged }: {
             <span className="block mt-0.5 text-[11px]" style={{ color: "var(--text3)" }}>{checked}</span>
           )}
           {/* Half of a provider can be down while the other half looks fine —
-              the ClickUp card bell fails on its own three-minute timer and
+              the ClickUp card bell fails on its own six-minute timer and
               used to do it in total silence (T27). Warning-coloured rather
               than error-coloured and UNDER the detail, because it qualifies
               the verdict instead of being it: a connected row with a broken
@@ -3058,7 +3199,11 @@ function ProviderCard({ spec, status, checking, onChanged }: {
             {look.label}
           </span>
           {!waiting && connected && wantsToken && (
-            <button onClick={async () => { setBusy(true); await api.providerDisconnect(spec.id); setBusy(false); setSpaces(null); await onChanged(); }}
+            <button aria-expanded={spec.id === "clickup" ? confirming : undefined}
+              onClick={async () => {
+                if (spec.id === "clickup") { setConfirming((c) => !c); return; }
+                setBusy(true); await api.providerDisconnect(spec.id); setBusy(false); setSpaces(null); await onChanged();
+              }}
               className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
               style={{ border: "1px solid color-mix(in srgb, var(--error) 35%, transparent)", color: "var(--error-ink)" }}>
               Disconnect
@@ -3082,6 +3227,31 @@ function ProviderCard({ spec, status, checking, onChanged }: {
           </summary>
           <div className="mt-1" style={{ color: "var(--text3)" }}>{spec.note}</div>
         </details>
+      )}
+
+      {spec.id === "clickup" && connected && confirming && (
+        <div className="flex items-center gap-2 mt-2.5 flex-wrap text-[12px]" style={{ color: "var(--text2)" }}>
+          <SwitchButton on={forgetBoards} onClick={() => setForgetBoards((v) => !v)} label="Forget saved boards too" />
+          <span>Forget saved boards too</span>
+          <span className="flex-1" />
+          <button onClick={() => { setConfirming(false); setForgetBoards(false); }} disabled={busy}
+            className="text-[12px] px-2.5 py-1 rounded-lg"
+            style={{ border: EDGE, color: "var(--text2)" }}>
+            Cancel
+          </button>
+          <button disabled={busy}
+            onClick={async () => {
+              setBusy(true); await api.providerDisconnect(spec.id, { forgetBoards }); setBusy(false);
+              // The sidebar's copies of "connected" and of each card are held for a minute.
+              __forgetClickupSetup(); __forgetClickupPrefs(); forgetCards();
+              setConfirming(false); setForgetBoards(false); setSpaces(null); await onChanged();
+            }}
+            className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
+            style={{ border: EDGE, borderColor: "color-mix(in srgb, var(--error) 35%, transparent)",
+              background: "color-mix(in srgb, var(--error) 10%, transparent)", color: "var(--error-ink)", opacity: busy ? 0.5 : 1 }}>
+            Disconnect ClickUp
+          </button>
+        </div>
       )}
 
       {wantsToken && !connected && (
@@ -3124,6 +3294,8 @@ function ProviderCard({ spec, status, checking, onChanged }: {
       </div>
 
       </div>}
+
+      {spec.id === "clickup" && connected && <ClickUpWorkflow />}
 
       {spaces && (
         <div className="flex flex-col gap-0.5 mt-2.5 rounded-lg p-1" style={{ background: "var(--bg3)", border: line }}>

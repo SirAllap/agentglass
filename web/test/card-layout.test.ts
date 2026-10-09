@@ -4,7 +4,7 @@
  * Written against the three faults on screen in a real workspace: a bug form writing
  * "Steps to reproduce" into a custom field AND into the description word for word, so
  * the card drew both; a header grid of thirteen unrelated values with a paragraph in
- * one column; and the two or three fields a squad actually triages by buried among
+ * one column; and the two or three fields a team actually triages by buried among
  * them.
  */
 import { describe, expect, it } from "bun:test";

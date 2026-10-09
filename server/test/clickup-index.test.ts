@@ -67,7 +67,7 @@ describe("what the sweep wrote down", () => {
 /*
  * WHAT A NOTIFICATION SAID, ON THE CARD IT WAS ABOUT.
  *
- * He was told "Irra assigned this task to: javi" and the card's Activity
+ * A notification read "Grace assigned this task to: ada" and the card's Activity
  * showed nothing — because that sentence came from ClickUp's own desktop
  * notification, which this machine mirrors, while the Activity is built from
  * an API that reports no assignment at all.

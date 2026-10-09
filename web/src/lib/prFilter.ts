@@ -243,9 +243,9 @@ export function activeCount(s: FilterState): number {
  * What the box matches: the number, the title, and the PEOPLE.
  *
  * It was number, title and author, which answers "whose pull request is this"
- * and not the question actually asked of a board — "where is Javi on this".
+ * and not the question actually asked of a board — "where is Ada on this".
  * Typing a reviewer's name found nothing, while the card under the cursor said
- * "Waiting on javidoe" in as many words.
+ * "Waiting on adadoe" in as many words.
  *
  * Assignees and requested reviewers both, because on this board they are the
  * same question wearing two hats: the one is who owns it, the other is who is
@@ -260,7 +260,7 @@ export function activeCount(s: FilterState): number {
  * Who on this row the query names, when that is why it is here.
  *
  * A row that matched on its title explains itself; one that matched because a
- * person's login contains "javi" does not, and a list that answers a name with
+ * person's login contains "ada" does not, and a list that answers a name with
  * rows carrying somebody else's name in the author column reads as broken. The
  * caller draws this beside the row — see PrRow.
  *
@@ -453,8 +453,8 @@ export function buildFacets(prs: PrSummary[], f: FilterState, repo?: RepoFacets 
         // dozen faster than reading down it does.
         ...(facet.key === "authors" || facet.key === "assignees" ? { avatar: v } : {}),
         /* The tracker's own colour for the status, so the option reads as the
-           chip it stands for. "Esa lista debe verse así" — the same pills the
-           card shows, not a column of grey words. */
+           chip it stands for: the same pills the card shows, not a column of
+           grey words. */
         ...(facet.key === "cardStatus"
           ? { tint: repo?.cardStatuses?.find((x) => x.status.toLowerCase() === v.toLowerCase())?.color }
           : {}),

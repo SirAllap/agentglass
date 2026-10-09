@@ -27,26 +27,26 @@ const review = (at: string | null, login: string, state: string, lines = 0, over
 describe("mapTalk — who spoke, and what counts as speaking", () => {
   test("comments and reviews arrive as one list, oldest first", () => {
     const talk = prs.mapTalk(node({
-      comments: { nodes: [comment("2026-08-14T10:00:00Z", "javidoe")] },
+      comments: { nodes: [comment("2026-08-14T10:00:00Z", "adadoe")] },
       reviews: { nodes: [review("2026-08-14T09:00:00Z", "samlee", "APPROVED")] },
     }));
-    expect(talk.map((t) => `${t.who}:${t.kind}`)).toEqual(["samlee:review", "javidoe:comment"]);
+    expect(talk.map((t) => `${t.who}:${t.kind}`)).toEqual(["samlee:review", "adadoe:comment"]);
   });
 
   // The whole reason the count is worth having. On a live pull request the
   // machines outnumber the people two to one.
   test("a machine is not somebody speaking", () => {
     const talk = prs.mapTalk(node({
-      comments: { nodes: [comment("2026-08-14T10:00:00Z", "codecov[bot]"), comment("2026-08-14T11:00:00Z", "javidoe")] },
+      comments: { nodes: [comment("2026-08-14T10:00:00Z", "codecov[bot]"), comment("2026-08-14T11:00:00Z", "adadoe")] },
       reviews: { nodes: [review("2026-08-14T12:00:00Z", "dependabot[bot]", "COMMENTED", 3)] },
     }));
-    expect(talk.map((t) => t.who)).toEqual(["javidoe"]);
+    expect(talk.map((t) => t.who)).toEqual(["adadoe"]);
   });
 
   // A review being written is on its author's screen, not in the conversation.
   test("a review nobody has submitted is not in the conversation", () => {
     const talk = prs.mapTalk(node({
-      reviews: { nodes: [review(null, "javidoe", "PENDING", 2), review("2026-08-14T10:00:00Z", "javidoe", "APPROVED")] },
+      reviews: { nodes: [review(null, "adadoe", "PENDING", 2), review("2026-08-14T10:00:00Z", "adadoe", "APPROVED")] },
     }));
     expect(talk).toHaveLength(1);
     expect(talk[0]!.state).toBe("APPROVED");
@@ -56,7 +56,7 @@ describe("mapTalk — who spoke, and what counts as speaking", () => {
   // and the conversation panel's from disagreeing on screen.
   test("a batch of line comments counts its lines and not itself", () => {
     const [t] = prs.mapTalk(node({
-      reviews: { nodes: [review("2026-08-14T10:00:00Z", "javidoe", "COMMENTED", 3)] },
+      reviews: { nodes: [review("2026-08-14T10:00:00Z", "adadoe", "COMMENTED", 3)] },
     }));
     expect(t).toMatchObject({ kind: "review", state: "COMMENTED", lines: 3 });
     expect(t!.says).toBeUndefined();
@@ -64,14 +64,14 @@ describe("mapTalk — who spoke, and what counts as speaking", () => {
 
   test("a verdict speaks, whatever it is carrying", () => {
     const [t] = prs.mapTalk(node({
-      reviews: { nodes: [review("2026-08-14T10:00:00Z", "javidoe", "CHANGES_REQUESTED", 4)] },
+      reviews: { nodes: [review("2026-08-14T10:00:00Z", "adadoe", "CHANGES_REQUESTED", 4)] },
     }));
     expect(t).toMatchObject({ says: true, lines: 4, state: "CHANGES_REQUESTED" });
   });
 
   test("a review with no line comments at all has a body to read", () => {
     const [t] = prs.mapTalk(node({
-      reviews: { nodes: [review("2026-08-14T10:00:00Z", "javidoe", "COMMENTED", 0)] },
+      reviews: { nodes: [review("2026-08-14T10:00:00Z", "adadoe", "COMMENTED", 0)] },
     }));
     expect(t!.says).toBe(true);
   });
@@ -87,7 +87,7 @@ describe("mapTalk — who spoke, and what counts as speaking", () => {
 
   test("an unknown review state is reported as a plain comment rather than invented", () => {
     const [t] = prs.mapTalk(node({
-      reviews: { nodes: [review("2026-08-14T10:00:00Z", "javidoe", "SOMETHING_NEW")] },
+      reviews: { nodes: [review("2026-08-14T10:00:00Z", "adadoe", "SOMETHING_NEW")] },
     }));
     expect(t!.state).toBe("COMMENTED");
   });
@@ -140,7 +140,7 @@ describe("noteTalk — one message per pull request per poll", () => {
   test("the conversation as we found it is not news", () => {
     const seen: string[] = [];
     const off = prs.subscribeTalk((n) => seen.push(`${n.number}:${n.who}`));
-    prs.noteTalk(repo, pr(1, [said("2026-08-14T10:00:00Z", "javidoe")]));
+    prs.noteTalk(repo, pr(1, [said("2026-08-14T10:00:00Z", "adadoe")]));
     off();
     expect(seen).toEqual([]);
   });
@@ -148,8 +148,8 @@ describe("noteTalk — one message per pull request per poll", () => {
   test("what arrives after that IS news, once", () => {
     const seen: string[] = [];
     const off = prs.subscribeTalk((n) => seen.push(`${n.number}:${n.who}:${n.kind}`));
-    prs.noteTalk(repo, pr(1, [said("2026-08-14T10:00:00Z", "javidoe")]));
-    const after = [said("2026-08-14T10:00:00Z", "javidoe"), said("2026-08-14T11:00:00Z", "samlee")];
+    prs.noteTalk(repo, pr(1, [said("2026-08-14T10:00:00Z", "adadoe")]));
+    const after = [said("2026-08-14T10:00:00Z", "adadoe"), said("2026-08-14T11:00:00Z", "samlee")];
     prs.noteTalk(repo, pr(1, after));
     prs.noteTalk(repo, pr(1, after)); // the next poll, same answer
     off();
@@ -164,13 +164,13 @@ describe("noteTalk — one message per pull request per poll", () => {
     prs.noteTalk(repo, pr(2, [said("2026-08-14T09:00:00Z", "me", { mine: true })]));
     prs.noteTalk(repo, pr(2, [
       said("2026-08-14T09:00:00Z", "me", { mine: true }),
-      said("2026-08-14T10:00:00Z", "javidoe"),
-      said("2026-08-14T10:01:00Z", "javidoe", { kind: "review", state: "CHANGES_REQUESTED", lines: 2, says: true }),
+      said("2026-08-14T10:00:00Z", "adadoe"),
+      said("2026-08-14T10:01:00Z", "adadoe", { kind: "review", state: "CHANGES_REQUESTED", lines: 2, says: true }),
     ]));
     off();
     expect(notes).toHaveLength(1);
     expect(notes[0]).toMatchObject({
-      number: 2, who: "javidoe", kind: "review", state: "CHANGES_REQUESTED", lines: 2, more: 1,
+      number: 2, who: "adadoe", kind: "review", state: "CHANGES_REQUESTED", lines: 2, more: 1,
       repo: "o/r", url: "https://github.com/o/r/pull/2",
     });
   });
@@ -178,9 +178,9 @@ describe("noteTalk — one message per pull request per poll", () => {
   test("your own remark is not something to be told about", () => {
     const seen: string[] = [];
     const off = prs.subscribeTalk((n) => seen.push(n.who));
-    prs.noteTalk(repo, pr(3, [said("2026-08-14T10:00:00Z", "javidoe")]));
+    prs.noteTalk(repo, pr(3, [said("2026-08-14T10:00:00Z", "adadoe")]));
     prs.noteTalk(repo, pr(3, [
-      said("2026-08-14T10:00:00Z", "javidoe"),
+      said("2026-08-14T10:00:00Z", "adadoe"),
       said("2026-08-14T11:00:00Z", "me", { mine: true }),
     ]));
     off();
@@ -193,8 +193,8 @@ describe("noteTalk — one message per pull request per poll", () => {
   test("a remark that is deleted says nothing", () => {
     const seen: string[] = [];
     const off = prs.subscribeTalk((n) => seen.push(n.who));
-    prs.noteTalk(repo, pr(4, [said("2026-08-14T10:00:00Z", "javidoe"), said("2026-08-14T11:00:00Z", "samlee")]));
-    prs.noteTalk(repo, pr(4, [said("2026-08-14T10:00:00Z", "javidoe")]));
+    prs.noteTalk(repo, pr(4, [said("2026-08-14T10:00:00Z", "adadoe"), said("2026-08-14T11:00:00Z", "samlee")]));
+    prs.noteTalk(repo, pr(4, [said("2026-08-14T10:00:00Z", "adadoe")]));
     off();
     expect(seen).toEqual([]);
   });
@@ -205,9 +205,9 @@ describe("noteTalk — one message per pull request per poll", () => {
   test("a row without its second pass leaves the latch alone", () => {
     const seen: string[] = [];
     const off = prs.subscribeTalk((n) => seen.push(n.who));
-    prs.noteTalk(repo, pr(5, [said("2026-08-14T10:00:00Z", "javidoe")]));
+    prs.noteTalk(repo, pr(5, [said("2026-08-14T10:00:00Z", "adadoe")]));
     prs.noteTalk(repo, pr(5, undefined));
-    prs.noteTalk(repo, pr(5, [said("2026-08-14T10:00:00Z", "javidoe")]));
+    prs.noteTalk(repo, pr(5, [said("2026-08-14T10:00:00Z", "adadoe")]));
     off();
     expect(seen).toEqual([]);
   });

@@ -1,6 +1,10 @@
 import { SERVER, withToken, authHeaders, api, whenServerUp } from "./api.ts";
 import { notifies, type NotifyKind } from "../../../shared/notifyPrefs.ts";
 import { getNotifyPrefs } from "./notifyPrefsStore.ts";
+import { alertPayload, watchPayload, type NotifyPayload, type NotifyTarget } from "../../../shared/notifyPayload.ts";
+import { raiseWindow } from "./desktop.ts";
+import { gotoOfTarget } from "./notifyRoute.ts";
+import { clickupSetup, type ClickUpSetup } from "./clickupSetup.ts";
 
 /**
  * Desktop notifications, mirrored onto the notch.
@@ -97,7 +101,16 @@ export type SystemNote = {
      * update note read "Settings › About to install" — a sentence telling
      * somebody to do by hand what the row they are reading could have done.
      */
-    | { kind: "settings"; pane: string };
+    | { kind: "settings"; pane: string }
+    /**
+     * A file (or a folder) in a checkout, shown in Files.
+     *
+     * For the notes whose news is a document: a report that was written, an
+     * artifact an agent produced. `root` is the checkout the path lives in, which
+     * is what lets Files switch to it before revealing, rather than reveal a
+     * same-named path in whichever checkout it happened to be showing.
+     */
+    | { kind: "file"; root: string; path: string };
 };
 export type NotifyCapability = {
   supported: boolean;
@@ -619,7 +632,7 @@ export function fireDesktopAlert(a: {
   // Recorded above, drawn nowhere, unless the policy lets it interrupt — which
   // a quiet row never does and a normal one does only with Quiet off.
   if (!notifies(prefs, kind, "desktop")) return;
-  if (said.interrupt) popup(a);
+  if (said.interrupt) popupOf(a);
 }
 
 /**
@@ -635,7 +648,7 @@ export function fireDesktopAlert(a: {
 export function firePopupOnly(a: { title: string; body: string; urgency?: 0 | 1 | 2; pane?: string; notifyKind?: NotifyKind }) {
   const kind = a.notifyKind ?? "blocked";
   if (!notifies(getNotifyPrefs(), kind, "desktop")) return;
-  popup(a);
+  popupOf(a);
 }
 
 /**
@@ -650,14 +663,6 @@ export function firePopupOnly(a: { title: string; body: string; urgency?: 0 | 1 
  * opens the PR inside the app; the popup closes itself like every popup.
  */
 const shownFires = new Set<number>();
-type AskedFire = { id: string; ok: boolean; title: string; sub: string };
-const askedFireListeners = new Set<(f: AskedFire) => void>();
-/** The bar's toast lane listens here; a fired watch is shown even with Quiet on. */
-export function subscribeAskedFires(fn: (f: AskedFire) => void): () => void {
-  askedFireListeners.add(fn);
-  return () => { askedFireListeners.delete(fn); };
-}
-
 /** Whatever the server kept while no window was open: shown oldest first, each acknowledged so it is not sent again. */
 export async function deliverPendingWatchFires(): Promise<void> {
   try {
@@ -666,31 +671,59 @@ export async function deliverPendingWatchFires(): Promise<void> {
   } catch { /* the next connect asks again */ }
 }
 
-export function fireWatchAlert(f: { seq: number; repo: string; number: number; title: string; summary: string; detail: string; ok: boolean }) {
+/** The app's window has the person's attention right now. */
+const windowFocused = (): boolean => typeof document !== "undefined" && document.hasFocus();
+
+/**
+ * Go where a notification points, in this app.
+ *
+ * Only a `url` leaves it, because there is no view of a bare link; everything
+ * else lands in the same router the bell and the toast cards use, so one press
+ * from any surface ends up in the same place.
+ */
+export function openTarget(t: NotifyTarget): void {
+  const g = gotoOfTarget(t);
+  if (g) { goto?.(g); return; }
+  if (t.kind === "url") { try { window.open(t.url, "_blank", "noopener,noreferrer"); } catch { /* no window to open one from */ } }
+}
+
+export function fireWatchAlert(f: { seq: number; alertId?: string; payload?: NotifyPayload; repo: string; number: number; title: string; summary: string; detail: string; ok: boolean }) {
   // The live frame and the queue can both carry one fire, and so can a second window: one seq is one notification.
   if (shownFires.has(f.seq)) return;
   shownFires.add(f.seq);
   void api.prWatchAck(f.seq).catch(() => {});
-  const title = `${f.summary} — ${f.repo} #${f.number} ${f.title}`.trim();
-  const dest = { kind: "pr" as const, repo: f.repo, number: f.number };
+  const payload = f.payload ?? watchPayload(f);
+  const dest = payload.target ? gotoOfTarget(payload.target) ?? undefined : undefined;
   const prefs = getNotifyPrefs();
   if (!notifies(prefs, "reminders", "bell")) return;
-  // Urgency 1, never 2: a 2 is a toast that stays until dismissed and a strip
-  // that stays lit, which is the permanent notification this must not be. The
-  // row is the durable copy; the popup below is what he asked for, and it does
+  // Urgency 1 on the row, never 2: a 2 keeps the strip lit until it is
+  // answered, which is the permanent notification this must not be. The row is
+  // the durable copy; the banner below is what the person asked for, and it does
   // not depend on Quiet, which is about what agentglass volunteers.
-  recordNote({ app: OUR_APP, summary: title, body: f.detail, urgency: 1, source: "ci", goto: dest, asked: true });
-  // The in-app toast too: with Quiet on the row and the OS popup were all
-  // there was, and a person looking at agentglass saw nothing happen.
-  for (const fn of askedFireListeners) fn({ id: `watch-${f.seq}`, ok: f.ok, title: `${f.summary} — #${f.number}`, sub: f.title });
+  recordNote({ app: OUR_APP, summary: payload.title, body: payload.line, urgency: 1, source: "ci", asked: true,
+    ...(dest ? { goto: dest } : {}) });
+  // The in-app banner is the server's (an `askedalert` frame, kept until the person acts, Quiet or not): this
+  // fire is the bell row above and the OS popup below.
   if (!notifies(prefs, "reminders", "desktop")) return;
-  popup({ title, body: f.detail, urgency: 1, dest, tag: `pr-watch-${f.seq}` }); // the tag folds the same fire in two windows into one popup
+  // A person looking at agentglass has the banner; the OS popup is for the
+  // window nobody is looking at. Critical there, because it is something they
+  // asked for — it still closes itself (see popup), never pinned.
+  if (windowFocused()) return;
+  // The tag folds the same fire in two windows into one popup. A popup that cannot be shown says why to the server's log.
+  popup({ title: payload.title, body: payload.line, urgency: 2, dest, tag: `pr-watch-${f.seq}`,
+    onFail: (why) => { if (f.alertId) void api.askedOsFailed(f.alertId, why).catch(() => {}); } });
 }
 
-function popup(a: { title: string; body: string; urgency?: 0 | 1 | 2; pane?: string; dest?: NonNullable<SystemNote["goto"]>; tag?: string }) {
+/** An agent's alert as a popup: the payload words it (no body that only repeats the title) and its pane is where pressing it lands. */
+function popupOf(a: { title: string; body: string; urgency?: 0 | 1 | 2; pane?: string }) {
+  const p = alertPayload(a);
+  popup({ title: p.title, body: p.line, urgency: a.urgency, ...(p.target?.kind === "pane" ? { pane: p.target.pane } : {}) });
+}
+
+function popup(a: { title: string; body: string; urgency?: 0 | 1 | 2; pane?: string; dest?: NonNullable<SystemNote["goto"]>; tag?: string; onFail?: (why: string) => void }) {
   try {
-    if (typeof Notification === "undefined") return;
-    if (Notification.permission !== "granted") return;
+    if (typeof Notification === "undefined") { a.onFail?.("no Notification API in this window"); return; }
+    if (Notification.permission !== "granted") { a.onFail?.(`notification permission is ${Notification.permission}`); return; }
     const n = new Notification(a.title, { body: a.body, requireInteraction: a.urgency === 2, ...(a.tag ? { tag: a.tag } : null) });
     /*
      * Every popup closes itself.
@@ -704,23 +737,25 @@ function popup(a: { title: string; body: string; urgency?: 0 | 1 | 2; pane?: str
      */
     setTimeout(() => { try { n.close(); } catch { /* already gone */ } },
       a.urgency === 2 ? BLOCKING_POPUP_MS : POPUP_MS);
-    if (a.dest) {
-      const dest = a.dest;
+    /*
+     * Pressing the popup is its primary action, on every platform: Electron on
+     * Linux raises only `click` (action buttons render on macOS alone), so the
+     * click lands on the target itself. The window is raised through the shell
+     * first — `window.focus()` from a renderer does not lift a minimised or
+     * hidden window — then the router takes the destination.
+     */
+    const dest = a.dest ?? (a.pane ? { kind: "pane" as const, pane: a.pane } : null);
+    if (dest) {
       n.onclick = () => {
+        void raiseWindow();
         try { window.focus(); } catch { /* not a window we own */ }
         goto?.(dest);
         n.close();
       };
-    } else if (a.pane) {
-      const pane = a.pane;
-      n.onclick = () => {
-        try { window.focus(); } catch { /* not a window we own */ }
-        goto?.({ kind: "pane", pane });
-        n.close();
-      };
     }
-  } catch {
+  } catch (e) {
     /* a host without Notification support — the notch still has it */
+    a.onFail?.(e instanceof Error ? e.message : String(e));
   }
 }
 
@@ -1036,12 +1071,31 @@ function scheduleReopen() {
  */
 const cardLookups = new Map<string, { id: string; label: string } | null>();
 
+/**
+ * Is this note worth asking the server about at all.
+ *
+ * Nothing is asked on a machine with no ClickUp token: the empty app name that
+ * ClickUp's daemon posts with is also what every other app's notification looks
+ * like when the bus does not name it, so without this gate each of their titles
+ * crossed the local API to be answered "no card" (one request per distinct title,
+ * each answered from nothing). `setup` is the gate
+ * read the PR panel already makes, held for a minute, so this adds no request
+ * of its own. A server that could not be asked reads as not connected.
+ */
+export function shouldLookUpNote(app: string, setup: ClickUpSetup | null | undefined): boolean {
+  if (setup?.connected !== true) return false;
+  const a = app.trim().toLowerCase();
+  return !a || a.includes("clickup");
+}
+
 async function attachCard(n: SystemNote): Promise<void> {
+  // The cheap half first, so another app's note never costs the gate read.
   const app = n.app.trim().toLowerCase();
   if (app && !app.includes("clickup")) return;
   if (n.url) return;
   const title = n.summary?.trim();
   if (!title || title.length < 8) return;
+  if (!shouldLookUpNote(app, await clickupSetup())) return;
 
   // One question per distinct title. A card typically produces several
   // notifications in a row — assigned, then moved, then commented on — and they
@@ -1058,8 +1112,8 @@ async function attachCard(n: SystemNote): Promise<void> {
    * FILED AGAINST THE CARD, not only linked to it.
    *
    * ClickUp's API reports no assignment and no follower, so this sentence is
-   * the only record of it that will ever exist here — "Irra assigned this task
-   * to: javi" was on screen while the card's activity showed nothing. Sent
+   * the only record of it that will ever exist here — "Grace assigned this task
+   * to: ada" was on screen while the card's activity showed nothing. Sent
    * before the early return below, because a note that already carries its
    * chip is exactly the one that arrived before any of this existed.
    *

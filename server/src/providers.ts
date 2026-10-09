@@ -12,12 +12,13 @@
  * provider had a secret we hold.
  */
 import { PROVIDERS, ASSIGNED_VIEW_ID, type ProviderId, type ProviderStatus, type ProviderState, type SavedView, type SavedFolder, type ViewTasksResponse } from "../../shared/providers.ts";
-import { savedViews, addView, removeView, cachedFor, putCache, setCurrent as setCurrentView, addFolder, savedFolders } from "./clickupviews.ts";
+import { savedViews, addView, removeView, cachedFor, putCache, setCurrent as setCurrentView, addFolder, savedFolders, forgetCached } from "./clickupviews.ts";
 import { ghCapability } from "./prs.ts";
 import { taskCapability } from "./tasks.ts";
 import { hasCredential, redacted, setCredential, clearCredential } from "./credentials.ts";
-import { whoAmI, workspaces, clickupTasks, clickupCached, __reset, applyCommentCounts as applyCounts, seedCommentCounts as seedCounts } from "./clickup.ts";
-import { cardWatchTrouble } from "./clickupwatch.ts";
+import { whoAmI, workspaces, clickupTasks, clickupCached, forgetAll, credentialGeneration, applyCommentCounts as applyCounts, seedCommentCounts as seedCounts } from "./clickup.ts";
+import { cardWatchTrouble, forgetWatch } from "./clickupwatch.ts";
+import { forget as forgetClickupIndex } from "./clickupindex.ts";
 
 const found = (bin: string): boolean => !!Bun.which(bin);
 
@@ -74,7 +75,7 @@ async function statusOf(id: ProviderId): Promise<ProviderStatus> {
        * private.
        *
        * ClickUp is two features behind one token: the task LIST, cached below,
-       * and the card BELL, polled every three minutes by clickupwatch.ts. They
+       * and the card BELL, polled every six minutes by clickupwatch.ts. They
        * fail independently and the list is the one with a cache in front of it,
        * so the row could — and did — read "Connected · 13 tasks assigned to
        * you" from a snapshot taken before the token was rotated, while every
@@ -178,15 +179,26 @@ export async function connectProvider(id: ProviderId, token: string): Promise<Co
    * Disconnect already did this for the mirror-image reason. Connect needs it
    * more: the failure is silent and looks like a broken token.
    */
-  __reset();
+  forgetAll();
   return { ok: true, status: await statusOf(id) };
 }
 
-export async function disconnectProvider(id: ProviderId): Promise<ConnectResult> {
+export async function disconnectProvider(id: ProviderId, o: { forgetBoards?: boolean } = {}): Promise<ConnectResult> {
   clearCredential(id);
   // The cached list goes too. Leaving it would show somebody else's tasks after
   // a disconnect, which is the one thing a disconnect must not do.
-  if (id === "clickup") __reset();
+  if (id === "clickup") {
+    /* Memory first, and a new generation, so a read that is still in flight
+       drops what it fetched instead of writing it back after the forgetting. */
+    forgetAll();
+    /* The in-memory list was only half of it. Tasks cached on disk, the last-
+       seen map of the card watch and the two search tables were all read with
+       this token, and the pull request list drew a card from them for a day
+       after. Saved boards are the person's own list and stay unless asked. */
+    forgetCached({ boards: !!o.forgetBoards });
+    forgetWatch();
+    forgetClickupIndex();
+  }
   return { ok: true, status: await statusOf(id) };
 }
 
@@ -206,7 +218,7 @@ export async function chooseWorkspace(id: ProviderId, workspaceId: string, name:
   if (id !== "clickup") return { ok: false, error: "That provider has no workspaces" };
   const { annotate } = await import("./credentials.ts");
   annotate("clickup", { workspaceId, workspace: name });
-  __reset();
+  forgetAll();
   return { ok: true, status: await statusOf(id) };
 }
 
@@ -564,9 +576,9 @@ export async function readView(viewId: string, force = false): Promise<ViewTasks
  * A no-op if the board has moved on: whatever replaced it was fetched later and
  * has its own counts.
  */
-function recount(viewId: string): void {
+function recount(viewId: string, gen: number): void {
   const c = cachedFor(viewId);
-  if (!c) return;
+  if (!c || gen !== credentialGeneration()) return;
   putCache({ ...c, tasks: applyCounts(c.tasks) });
 }
 
@@ -618,6 +630,7 @@ async function doRefresh(view: SavedView, token: string, force: boolean): Promis
   const { redacted } = await import("./credentials.ts");
   const held = cachedFor(view.id);
   const me = redacted("clickup")?.accountId;
+  const gen = credentialGeneration();
   // What the last run counted, taken back off the board it wrote. Without this
   // the first sweep after a restart blanks a column that was already right.
   if (held?.tasks.length) seedCounts(held.tasks);
@@ -665,9 +678,10 @@ async function doRefresh(view: SavedView, token: string, force: boolean): Promis
     // on the NEXT read rather than the next refresh. Without this the first
     // sweep only seeds the map and a board on a five-minute timer takes ten
     // minutes to show a column it already knows the contents of.
-    void refreshA(a.data.tasks, token, { board: view.id, run: () => recount(view.id) })
+    void refreshA(a.data.tasks, token, { board: view.id, run: () => recount(view.id, gen) })
       .catch(() => { /* a count is not worth a log line */ });
     const withUrl = { ...view, url: myWorkUrl(a.data.tasks, workspaceId) };
+    if (gen !== credentialGeneration()) return { ok: false, error: "ClickUp was disconnected" };
     putCache({ view: withUrl, tasks: applyA(a.data.tasks), statuses: a.data.statuses, fields: [], at: Date.now(), truncated: a.data.truncated });
     return { ok: true };
   }
@@ -724,8 +738,9 @@ async function doRefresh(view: SavedView, token: string, force: boolean): Promis
    */
   const { applyCommentCounts, refreshCommentCounts } = await import("./clickup.ts");
   const tasks = applyCommentCounts(r.data.tasks);
-  void refreshCommentCounts(r.data.tasks, token, { board: view.id, run: () => recount(view.id) })
+  void refreshCommentCounts(r.data.tasks, token, { board: view.id, run: () => recount(view.id, gen) })
     .catch(() => { /* a count is not worth a log line */ });
+  if (gen !== credentialGeneration()) return { ok: false, error: "ClickUp was disconnected" };
   putCache({ view, tasks, statuses, fields, place, description, at: Date.now(), truncated: r.data.truncated });
   return { ok: true };
 }
@@ -793,11 +808,9 @@ async function listTasksOf(token: string, listId: string, me?: string, fresh = f
      * The view answers the question on screen and reaches cards whose home is
      * another list. What it also does is apply the view's own FILTER, and a
      * list's default view usually has one: measured on a real list, the view
-     * answered 105 cards across nine statuses while the list holds 252 across
-     * fourteen. Everything in TO DO, IN STAGING, IN PRODUCTION, WON'T FIX and
-     * COMPLETED was invisible — not collapsed, absent, with no way to ask for
-     * it. "I need every status to show up in the lists… otherwise, what is
-     * the point."
+     * answered fewer than half the cards and left out five whole statuses.
+     * Everything in those statuses was invisible — not collapsed, absent, with
+     * no way to ask for it. A status with cards must always show as a group.
      *
      * The raw list is the other half: it has no filter and it reaches the
      * closed ones, and it misses the cards this list only borrows. So both are

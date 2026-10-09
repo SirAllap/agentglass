@@ -115,9 +115,10 @@ import {
 import { currentRuns, runById, runActivity, startRun, adoptPane, finishRun } from "./runs.ts";
 import { failed } from "./refused.ts";
 import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, addClickupFolder, refreshFoldersIfStale, replaceViewUrl, readView } from "./providers.ts";
+import { clickupPrefs, setClickupPrefs, settleFirstRun } from "./clickupPrefs.ts";
 import { savedViews, savedFolders, currentView, setCurrent, removeView, removeFolder, knownCardPrefix, boardHolding, setWritesAllowed, patchCachedTask } from "./clickupviews.ts";
 import { assignSelf, setAssignee, setCard, listMembers, setStatus, setPriority, setField, clearField, sprintLists, searchTasks, searchTasksStream, warmBodySweep, taskDetail, tagsForTask, findCard, cardPullRequests, clickupWriteEnabled, commentOn, updateTask, setTag, moveToList, createTask, addChecklist, addChecklistItem, setChecklistItem, editComment as editClickupComment, replyToComment, resolveComment, deleteComment as deleteClickupComment } from "./clickup.ts";
-import { clickupTasks } from "./clickup.ts";
+import { clickupTasks, dropAssignedCache } from "./clickup.ts";
 import type { ProviderId } from "../../shared/providers.ts";
 import { listTasks, taskCapability, setTaskChangeHook, startTaskSweep, addTask, completeTask, reopenTask, deleteTask, cyclePriority, editTask, addTags, replaceNote, bulkApply, TASK_WRITE_ENABLED, type BulkAction } from "./tasks.ts";
 import {
@@ -144,6 +145,7 @@ import {
   listWatches, addWatch, removeWatch, setPreset, applyPreset, sawMine, onTalkSeen as watchOnTalkSeen, pendingFires, ackFire,
   subscribeWatchChange, subscribeWatchFire, subscribeWatchChecks, startPrNotifyWatch,
 } from "./prNotifyWatch.ts";
+import { subscribeAskedAlerts, handleAskedAlertRoute } from "./askedAlerts.ts";
 import { measureFile } from "./filemeasure.ts";
 import { editorCursor } from "./editorwhere.ts";
 import {
@@ -155,6 +157,7 @@ import {
   ghRateLimit,
   branchBehind, localHead, prRollup, repoIdFor as prRepoIdFor, subscribeTalkSeen,
   prBranches, prsForBranch, nodeIdOk, locateRepo, isForeignRoot } from "./prs.ts";
+import { planCheckOnBase, startCheckOnBase, checkOnBaseStatus, cancelCheckOnBase } from "./checkOnBasePr.ts";
 import { repoSpend } from "./spend.ts";
 import { repoMetrics } from "./checkRuns.ts";
 import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
@@ -270,7 +273,7 @@ async function openProjectRepos(): Promise<string[]> {
    *
    * `discoverRepos` works from telemetry — where work has recently happened
    * THROUGH the app — and from projects somebody has opened in it. On this
-   * machine both are the employer's repositories: the open project gets worked
+   * machine both are the company's repositories: the open project gets worked
    * on from a terminal, so the app has never seen it, so the loop concluded it
    * had nowhere to work and declined every task it found.
    *
@@ -284,7 +287,7 @@ async function openProjectRepos(): Promise<string[]> {
    * DELIBERATELY NOT `workspaceRoot()`.
    *
    * It looks like the right answer — the root somebody launched the app with —
-   * and on this machine it is the employer's repository, because that is what
+   * and on this machine it is the company's repository, because that is what
    * the application is pointed at. Adding it here put thirty of their
    * checkouts one `isOpenProjectPath` call away from being worked in; the only
    * thing that stopped them was the fence name, which is the thing that had
@@ -336,7 +339,7 @@ async function openProjectRepos(): Promise<string[]> {
    * So the projects this machine has actually worked in are consulted — and
    * ONLY the one the fence names. The name is matched before anything is
    * opened: a fence called `agentglass-understudy` looks inside `agentglass`
-   * and nowhere else, so the employer's repository next to it is never so much
+   * and nowhere else, so the company's repository next to it is never so much
    * as listed. Everything found still has to pass `isOpenProjectPath` below,
    * exactly as before. This makes it possible for a name to match something;
    * it never makes a name unnecessary.
@@ -3778,7 +3781,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      *
      * The screen was reported as confusing and it was: twenty rows of equal
      * weight, one holding eight kilobytes of somebody's own conventions and
-     * another four hundred megabytes of their employer's work, and a request to
+     * another four hundred megabytes of their company's work, and a request to
      * choose. This is the answer to "where do I start" — everything the person
      * wrote deliberately about how they work, plus their own project's record,
      * and no raw transcript of anybody else's.
@@ -3907,7 +3910,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      *
      * Deliberately its own route rather than a field on some larger settings
      * body: this is the switch that decides whether the understudy may draft a
-     * request against his employer's repository, and a setting like that should
+     * request against his company's repository, and a setting like that should
      * be a thing somebody did, not a field that rode along with something else.
      */
     /*
@@ -4106,10 +4109,10 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
        * first if the task does not say.
        *
        * Found by running it: the top task on a real machine was a card from his
-       * EMPLOYER'S tracker, and a card carries no checkout. With one open-project
+       * COMPANY'S tracker, and a card carries no checkout. With one open-project
        * repository present that fallback would have cut a worktree in agentglass
        * and set an agent to work on somebody else's ticket inside it. Not a
-       * leak — nothing would have reached the employer's repository — but a
+       * leak — nothing would have reached the company's repository — but a
        * confident, wrong, and completely wasted run, and the kind that erodes
        * trust faster than a failure does.
        *
@@ -4297,7 +4300,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
          *
          * `open-only` keeps the task-tracker sources silent; `everywhere` lets
          * them offer work. There was a route to SET it and none to ask, so the
-         * switch that decides whether the clone reaches somebody's employer
+         * switch that decides whether the clone reaches somebody's company
          * could not be seen in the application at all — only changed with curl.
          * A fence whose position is invisible is one nobody can trust, and this
          * is the position people most want to check before walking away.
@@ -6071,7 +6074,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const id = String(b.id ?? "") as ProviderId;
       const r = pathname === "/providers/connect"
           ? await connectProvider(id, String(b.token ?? ""))
-        : pathname === "/providers/disconnect" ? await disconnectProvider(id)
+        : pathname === "/providers/disconnect" ? await disconnectProvider(id, { forgetBoards: b.forgetBoards === true })
         : pathname === "/providers/workspace"
           ? await chooseWorkspace(id, String(b.workspaceId ?? ""), String(b.name ?? ""))
         : null;
@@ -6320,7 +6323,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const { listMeta } = await import("./clickup.ts");
       const token = secretFor("clickup");
       const listId = url.searchParams.get("id") ?? "";
-      if (!token) return json({ ok: false, error: "ClickUp is not connected" }, 400);
+      if (!token) return json({ ok: false, error: "ClickUp is not connected" });
       if (!listId) return json({ ok: false, error: "no list asked for" }, 400);
       const r = await listMeta(token, listId);
       return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error }, r.ok ? 200 : 400);
@@ -6374,8 +6377,8 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     /*
      * The same search, streamed as it goes.
      *
-     * "at least show me what it finds as it goes, no?" — the sweep is
-     * three sequential pages of a workspace with thousands of cards, and
+     * A search that answers only at the end made a person watch a spinner.
+     * The sweep is three sequential pages of a workspace with thousands of cards, and
      * answering only at the end is a spinner where a filling list should be.
      * One JSON object per line: the rows found so far, then a last line with
      * what was scanned. A reader that cannot parse a line ignores it; a client
@@ -6415,6 +6418,10 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       return new Response(stream, { headers: { "content-type": "application/x-ndjson", "cache-control": "no-store" } });
     }
     if (pathname === "/clickup/search") {
+      /* Not connected is an answer, not a failed request: 200 like every other
+         ClickUp read, so a client reads one status convention and devtools show
+         no red line for a machine that never connected. */
+      if (!hasCredential("clickup")) return json({ ok: false, error: "ClickUp is not connected" });
       const q = url.searchParams.get("q") ?? "";
       const force = url.searchParams.get("force") === "1";
       const r = await searchTasks(q, force);
@@ -6424,6 +6431,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     // the card's own id because a sprint is a list in the CARD's space — there
     // is no workspace-wide answer to ask for.
     if (pathname === "/clickup/sprints") {
+      if (!hasCredential("clickup")) return json({ ok: false, error: "ClickUp is not connected" });
       const r = await sprintLists(url.searchParams.get("id") ?? "");
       return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error, unauthorised: r.unauthorised }, r.ok ? 200 : 400);
     }
@@ -6443,6 +6451,18 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (pathname === "/clickup/tags") {
       const r = await tagsForTask(url.searchParams.get("id") ?? "");
       return json(r.ok ? { ok: true, tags: r.data ?? [] } : { ok: false, error: r.error });
+    }
+    // How this workspace uses ClickUp. A POST is a partial update, validated as a
+    // whole: anything refused writes nothing and says which setting and why.
+    if (pathname === "/clickup/prefs") {
+      if (req.method !== "POST") return json({ ok: true, prefs: clickupPrefs() });
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const before = clickupPrefs().assigned.includeSubtasks;
+      const r = setClickupPrefs(await req.json().catch(() => null));
+      // The cached board was read without (or with) subtasks; a stale answer
+      // under the new setting would look like the switch did nothing.
+      if (r.ok && r.prefs.assigned.includeSubtasks !== before) dropAssignedCache();
+      return json(r, r.ok ? 200 : 400);
     }
     if (pathname.startsWith("/clickup/") && req.method === "POST") {
       // Assign somebody, move a card, set a field, add or drop a board, and
@@ -7114,6 +7134,13 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
        cannot tell without asking. */
     /* "Tell me when this pull request's CI does X" — the rules and the repo
        defaults, kept server side so they outlive the window. See prNotifyWatch.ts. */
+    // The notifications they asked for: the ones still waiting, answering one, the audit. See askedAlerts.ts.
+    if (pathname.startsWith("/alerts/asked")) {
+      if (req.method === "POST" && !trustedCaller(req, from)) return csrfBlocked();
+      const b = req.method === "POST" ? await req.json().catch(() => ({})) as Record<string, unknown> : {};
+      const hit = handleAskedAlertRoute(req.method, pathname, b);
+      if (hit) return json(hit.data, hit.status);
+    }
     if (pathname === "/prs/notify-watch" && req.method === "GET") return json({ ok: true, ...listWatches() });
     // Fires decided while no client was there to hear them, oldest first — for the window on connect and for a phone.
     if (pathname === "/prs/notify-watch/pending" && req.method === "GET") return json({ ok: true, fires: pendingFires() });
@@ -7178,6 +7205,8 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         credentials: credentialsPath(),
         retentionDays: RETENTION_DAYS,
         pairedDevices: devices().length,
+        // So the page names only the services this machine actually talks to.
+        clickup: hasCredential("clickup"),
       });
     }
     if (pathname === "/prs/list") {
@@ -7243,6 +7272,35 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         { attempt: url.searchParams.get("attempt"), step: url.searchParams.get("step") },
         url.searchParams.get("force") === "1",
       ));
+    }
+    /* "Check on base": the plan is a read; starting runs repository code on this machine, so it is a POST from a trusted caller. */
+    if (pathname === "/prs/check-on-base/plan") {
+      const p = await planCheckOnBase(url.searchParams.get("root") || "", url.searchParams.get("number") || "");
+      return json(p.ok ? p.plan : p);
+    }
+    if (pathname === "/prs/check-on-base/status") return json(checkOnBaseStatus(url.searchParams.get("id") || ""));
+    if (pathname === "/prs/check-on-base" && req.method === "POST") {
+      /* Runs a typed command on a pull request's head, which may be a fork's
+         code: the same class as the routes that build and run code, so the
+         desktop shell only. The one caller is the PR panel's button; a paired
+         phone or a LAN browser can read the plan and the status and cancel a
+         run, and is told why it cannot start one. Cancel stays on
+         trustedCaller: it stops a process this app started and runs nothing. */
+      if (!desktopOnly(req)) return json({ ok: false, error: "Check on base runs code from the pull request, so only the desktop app can start it" }, 403);
+      let b: { root?: unknown; number?: unknown; command?: unknown; baseSha?: unknown; headSha?: unknown; sandbox?: unknown; allowNoSandbox?: unknown };
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const started = await startCheckOnBase(b.root, b.number, b.command, b);
+      // Running a command from a CI log on this machine is the auditable fact; the command itself is kept, cut short.
+      noteAction(clientIp, "/prs/check-on-base",
+        { root: b.root, number: b.number, command: typeof b.command === "string" ? b.command.slice(0, 200) : undefined, sandbox: b.sandbox },
+        started.ok ? { ok: true } : { ok: false, error: started.error }, asActor(caller));
+      return json(started);
+    }
+    if (pathname === "/prs/check-on-base/cancel" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: { id?: unknown };
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      return json(cancelCheckOnBase(b.id));
     }
     if (pathname === "/prs/check-jobs") {
       return json(await checkJobs(url.searchParams.get("root") || "", url.searchParams.get("number") || ""));
@@ -9623,13 +9681,15 @@ function noteMine(root: string, filter: string, state: string, r: { repo: { name
 subscribeTalkSeen(watchOnTalkSeen);
 subscribeWatchChange(() => broadcast({ type: "prwatch", data: listWatches() }));
 subscribeWatchFire((f) => broadcast({ type: "prwatchfire", data: f }));
+// What the person asked for stays until they act on it; closing it in one window takes it down in all of them.
+subscribeAskedAlerts((e) => broadcast(e));
 subscribeWatchChecks((c) => broadcast({ type: "prchecks", data: c }));
 const prNotifyKick = process.env.NODE_ENV === "test" ? () => {} : startPrNotifyWatch(async (root, number) => {
-  const r = await prRollup(root, number);
+  const r = await prRollup(root, number, true); // forced: the watch's own cadence is the budget, and a cached read would add its age to the wait
   if (!(r.ok && r.checks && r.all)) return null;
   // Past 100 contexts `all` is only the first page: never conclude "all done" from it.
   const complete = !r.truncated;
-  return { checks: complete ? r.checks : undefined, allDone: r.checks.allDone && complete, verdict: complete ? r.checks.verdict : null, all: r.all, state: r.state };
+  return { checks: complete ? r.checks : undefined, allDone: r.checks.allDone && complete, verdict: complete ? r.checks.verdict : null, all: r.all, state: r.state, sha: r.sha };
 }).kick;
 // A plugin drew something, or wrote notes on a pull request. The frame says
 // only where to look again; what was drawn is fetched over the token.
@@ -9684,6 +9744,9 @@ subscribeNotifications((n) => {
   } catch { /* a note that cannot be filed is not worth an error */ }
 });
 
+/* Before anything reads the settings: who had ClickUp before they existed keeps
+   what they had, and who did not starts from the defaults. See settleFirstRun. */
+settleFirstRun(hasCredential("clickup"));
 startCardWatch((n) => broadcast({ type: "card", data: n }));
 /* Re-asks the open pull request lists a real client has looked at, on a timer,
    so a comment posted while nobody is on the PRs tab still reaches `noteTalk`

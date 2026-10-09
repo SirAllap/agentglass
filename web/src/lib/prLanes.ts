@@ -41,8 +41,8 @@ export interface Lane {
    * only holds where the zero is news. `others` can only ever be fed by the two
    * lists the board is given, yours and the ones you were asked to look at, so
    * for it to have a card at all somebody must have asked you to review a draft
-   * or something conflicting. Reported after weeks of use: "0 waiting on
-   * someone else, nunca he visto una PR ahí". A column that is always empty is
+   * or something conflicting. Reported after weeks of use: the "waiting on
+   * someone else" count was zero and no card had ever been in it. A column that is always empty is
    * a column that teaches you to skip a fifth of the screen.
    */
   hideWhenEmpty?: boolean;

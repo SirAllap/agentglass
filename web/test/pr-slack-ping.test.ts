@@ -23,11 +23,11 @@ import { describe, expect, it } from "bun:test";
 
 const src = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();
 
-/** The Slack branch of the send button, from the `if` to its `return`. */
+/** What the "Hand to a tmux tab" button does, from the prompt it builds to the label. */
 const slackBranch = (() => {
-  const from = src.indexOf('if (tell === "slack") {');
+  const from = src.indexOf("const text = pingPrompt(recipes, {");
   expect(from, "the Slack branch of the send button moved").toBeGreaterThan(-1);
-  return src.slice(from, src.indexOf("return;", from));
+  return src.slice(from, src.indexOf("Hand to a tmux tab", from));
 })();
 
 /** The body of `pingPrompt`. */
@@ -78,7 +78,7 @@ describe("pinging somebody about a pull request", () => {
   it("does not prefill the box for Slack — that message is the agent's to write", () => {
     // On the card the box IS the note and keeps its default. Prefilling it for
     // Slack put this app's English into somebody's DM.
-    const btn = src.slice(src.indexOf('setTell(tell === "slack"'), src.indexOf("Ping Slack"));
+    const btn = src.slice(src.indexOf('setOpen(!open)'), src.indexOf("Ping in chat"));
     expect(btn).toContain('setMsg("")');
     expect(btn).not.toContain("defaultPing");
   });

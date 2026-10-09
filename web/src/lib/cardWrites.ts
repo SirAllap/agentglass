@@ -1,12 +1,12 @@
 // Changing a card the way ClickUp changes one: on the press, not on a confirmation.
 //
 // What this replaces is a strip across the top of the board — "Move this card · in
-// development → code review. Your team sees this. It is not undoable from here.
+// progress → in review. Your team sees this. It is not undoable from here.
 // [Do it] [Cancel]" — in front of every single field write. On a morning of triage
 // that is two presses and a read for something you already decided when you opened
 // the menu, and it made the panel feel slower than the website it exists to save
-// you from. Reported that way: "it is very annoying and slows me down… no
-// confirmation buttons that make everything slower and less fluid".
+// you from. A confirmation in front of every field write made the board slower
+// than the page it stands in for.
 //
 // Removing the confirmation leaves two problems, and they are the reason this is a
 // file rather than three lines in a click handler.
@@ -31,6 +31,29 @@
 // what happened.
 
 import type { ProviderTask } from "../../../shared/providers.ts";
+
+/** What a disabled write control says. One sentence, the same on every control. */
+export const WRITES_OFF = "Changes to ClickUp are off. Turn them on in Tasks.";
+
+/**
+ * Why a write control to ClickUp must not be pressed, or null when it may be.
+ *
+ * Writes are off until somebody turns them on (the switch in Tasks, or the
+ * environment), and the server refuses every write while they are: "Writing to
+ * ClickUp is switched off", after the press. The pull request sidebar drew
+ * its status, people, hand-off and note controls as live and let the refusal be
+ * the first anybody heard of it, so the controls now say it beforehand and keep
+ * their place.
+ *
+ * Only a stated "off" blocks. Unknown (the setup has not been read) is not a
+ * reason: the server still refuses, and a control that flashes disabled on
+ * every open of a machine with writes on is the worse trade. The ceiling: this
+ * reads a copy held for a minute, so a switch flipped in Tasks reaches here
+ * when Tasks forgets that copy, which it does on the press.
+ */
+export function writeBlock(setup: { writeEnabled?: boolean } | null | undefined): string | null {
+  return setup?.writeEnabled === false ? WRITES_OFF : null;
+}
 
 export interface WriteResult {
   ok: boolean;

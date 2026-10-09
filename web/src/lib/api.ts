@@ -2,10 +2,15 @@ import { forgetShared, sharedRead } from "./sharedRead.ts";
 import type { UiAction, Field, NoteStatus, PluginPanel, PluginPrNotes } from "./pluginTypes.ts";
 import type { ImportedPlace } from "./desktop.ts";
 import type { PrWatchFire, PrWatchRule, PrWatchState } from "../../../shared/types.ts";
+import type { AskedAlert } from "../../../shared/notifyPayload.ts";
+import type { CheckOnBasePlan, CheckOnBaseStatus } from "../../../shared/checkOnBase.ts";
 import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest } from "../../../shared/types.ts";
-import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember } from "../../../shared/providers.ts";
+import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs } from "../../../shared/providers.ts";
 import { DEFAULT_NOTIFY_PREFS, type NotifyPrefs } from "../../../shared/notifyPrefs.ts";
 import type { CheckMetric } from "../../../shared/checkBaseline.ts";
+
+/** A partial update: any group may name just the keys it changes. */
+type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? Partial<T[K]> : T[K] };
 
 /** What every ClickUp write answers with: the card as it now stands, or why not. */
 /* `conflict` and `unauthorised` are the two failures with a remedy the app can
@@ -1357,13 +1362,13 @@ const realApi = {
      and nothing here ever receives one back — the responses carry a status. */
   providers: () => get<ProvidersResponse>("/providers"),
   /** Where this app keeps things, and for how long. Paths, never contents. */
-  privacy: () => get<{ db: string; config: string; credentials: string; retentionDays: number; pairedDevices: number }>("/privacy"),
+  privacy: () => get<{ db: string; config: string; credentials: string; retentionDays: number; pairedDevices: number; clickup: boolean }>("/privacy"),
   /** What is left of GitHub's hourly budget — this app is made of `gh` calls. */
   ghRateLimit: () => get<{ ok: boolean; error?: string; budgets?: { id: string; label: string; limit: number; remaining: number; reset: number }[] }>("/prs/rate-limit"),
   providerConnect: (id: string, token: string) =>
     post<{ ok: boolean; error?: string; status?: ProviderStatus }>("/providers/connect", { id, token }),
-  providerDisconnect: (id: string) =>
-    post<{ ok: boolean; error?: string; status?: ProviderStatus }>("/providers/disconnect", { id }),
+  providerDisconnect: (id: string, o: { forgetBoards?: boolean } = {}) =>
+    post<{ ok: boolean; error?: string; status?: ProviderStatus }>("/providers/disconnect", o.forgetBoards ? { id, forgetBoards: true } : { id }),
   providerWorkspaces: (id: string) =>
     get<{ ok: boolean; workspaces?: { id: string; name: string }[]; error?: string }>(`/providers/workspaces?id=${encodeURIComponent(id)}`),
   providerWorkspace: (id: string, workspaceId: string, name: string) =>
@@ -1443,6 +1448,11 @@ const realApi = {
   clickupFileNote: (n: { id: string; cardId: string; label: string; text: string; at: number }) =>
     post<{ ok: boolean }>("/clickup/card-note", n).catch(() => ({ ok: false })),
   clickupSetWrites: (on: boolean) => post<{ ok: boolean }>("/clickup/writes", { on }),
+  /** How this workspace uses ClickUp (hand-off, review, field names, patterns). */
+  clickupPrefs: () => get<{ ok: boolean; prefs?: ClickUpPrefs }>("/clickup/prefs"),
+  /** A partial update; a refusal comes back as `error`, with nothing saved. */
+  clickupSetPrefs: (patch: DeepPartial<ClickUpPrefs>) =>
+    post<{ ok: boolean; error?: string; prefs?: ClickUpPrefs }>("/clickup/prefs", patch),
   clickupView: (id?: string, force = false) =>
     get<ViewTasksResponse>(`/clickup/view?${new URLSearchParams({ ...(id ? { id } : {}), ...(force ? { force: "1" } : {}) })}`),
   clickupAddView: (url: string) =>
@@ -2028,6 +2038,14 @@ const realApi = {
   prCheckFailuresCached: (root: string, jobs: string[]) =>
     get<{ ok: boolean; summaries?: Record<string, CheckFailureSummary>; error?: string }>(
       `/prs/check-failures-cached?root=${encodeURIComponent(root)}&jobs=${encodeURIComponent(jobs.join(","))}`),
+  /** "Check on base": which two commits, whether both are here, and how the command would be boxed. Reads only. */
+  prCheckOnBasePlan: (root: string, number: number) =>
+    get<CheckOnBasePlan | { ok: false; error: string }>(`/prs/check-on-base/plan?root=${encodeURIComponent(root)}&number=${number}`),
+  /** Run the command the person confirmed on the two commits and the sandbox they were shown; the server refuses anything else. */
+  prCheckOnBaseStart: (root: string, number: number, command: string, plan: CheckOnBasePlan, allowNoSandbox: boolean) =>
+    post<{ ok: true; id: string } | { ok: false; error: string }>("/prs/check-on-base", { root, number, command, baseSha: plan.base.sha, headSha: plan.head.sha, sandbox: plan.sandbox, allowNoSandbox }),
+  prCheckOnBaseStatus: (id: string) => get<CheckOnBaseStatus>(`/prs/check-on-base/status?id=${encodeURIComponent(id)}`),
+  prCheckOnBaseCancel: (id: string) => post<{ ok: boolean }>("/prs/check-on-base/cancel", { id }),
   /** Re-run everything, only the failures, or a single job. */
   prRerunJobs: (root: string, what: "all" | "failed" | "job", id: string) =>
     post<PrActionResult>("/prs/rerun-jobs", { root, what, id }),
@@ -2105,6 +2123,12 @@ const realApi = {
   prWatchPending: () => get<{ ok: boolean; fires: PrWatchFire[] }>("/prs/notify-watch/pending"),
   prWatchAck: (seq: number) => post<{ ok: boolean }>("/prs/notify-watch/ack", { seq }),
   prWatchRemove: (id: string) => post<{ ok: boolean }>("/prs/notify-watch/remove", { id }),
+  /** The notifications the person asked for: the ones still waiting, and the last few for the audit. */
+  askedAlerts: () => get<{ ok: boolean; open: AskedAlert[] }>("/alerts/asked"),
+  askedAudit: () => get<{ ok: boolean; audit: AskedAlert[] }>("/alerts/asked/audit"),
+  askedSeen: (id: string) => post<{ ok: boolean }>("/alerts/asked/seen", { id }),
+  askedClose: (id: string, acted: boolean) => post<{ ok: boolean }>("/alerts/asked/close", { id, acted }),
+  askedOsFailed: (id: string, reason: string) => post<{ ok: boolean }>("/alerts/asked/os-failed", { id, reason }),
   prWatchApply: (root: string, number: number, title: string) =>
     post<{ ok: boolean; applied: number; error?: string }>("/prs/notify-watch/apply", { root, number, title }),
   prWatchPreset: (root: string, rules: PrWatchRule[], auto: boolean) =>
@@ -2571,6 +2595,10 @@ const demoApi: typeof realApi = {
   prCheckFailures: () => D({ ok: false, kind: "error", error: "not available in the demo", requests: 0 } as CheckFailures),
   prFailingTests: () => D({ ok: false, error: "not available in the demo" } as FailingTests | { ok: false; error: string }),
   prCheckFailuresCached: () => D({ ok: false, error: "not available in the demo" } as { ok: boolean; summaries?: Record<string, CheckFailureSummary>; error?: string }),
+  prCheckOnBasePlan: () => D({ ok: false, error: "not available in the demo" } as { ok: false; error: string }),
+  prCheckOnBaseStart: () => D({ ok: false, error: "not available in the demo" } as { ok: false; error: string }),
+  prCheckOnBaseStatus: () => D({ ok: false, error: "not available in the demo" } as { ok: false; error: string }),
+  prCheckOnBaseCancel: () => D({ ok: false }),
   prRerunJobs: () => D(demoPrAction()),
   prCounts: (_r: string, _s: "open" | "closed" | "all") => D({ ok: false, error: "not available in the demo" } as { ok: boolean; counts?: { review: number; mine: number; failing: number; ready: number; all: number }; error?: string }),
   prCheckMetrics: (_r: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; repo?: string; checks?: CheckMetric[]; error?: string }),
@@ -2615,6 +2643,11 @@ const demoApi: typeof realApi = {
   prWatchPending: () => D({ ok: true, fires: [] as PrWatchFire[] }),
   prWatchAck: (_s: number) => D({ ok: true }),
   prWatchRemove: (_id: string) => D({ ok: true }),
+  askedAlerts: () => D({ ok: true, open: [] as AskedAlert[] }),
+  askedAudit: () => D({ ok: true, audit: [] as AskedAlert[] }),
+  askedSeen: (_id: string) => D({ ok: true }),
+  askedClose: (_id: string, _acted: boolean) => D({ ok: true }),
+  askedOsFailed: (_id: string, _reason: string) => D({ ok: true }),
   prWatchApply: (_r: string, _n: number, _t: string) => D({ ok: false, applied: 0, error: "not available in the demo" }),
   prWatchPreset: (_r: string, _rules: PrWatchRule[], _a: boolean) => D({ ok: false, error: "not available in the demo" }),
   prMerge: (_r: string, _n: number, _m: "squash" | "merge" | "rebase", _o: { deleteBranch?: boolean; auto?: boolean; headSha?: string; subject?: string; body?: string; disableAuto?: boolean }) => D(demoPrAction()),
@@ -2645,9 +2678,9 @@ const demoApi: typeof realApi = {
   taskBulk: (_u: string[], _a: string, _v: string | null, _f?: string) => D({ ok: false, error: "not available in the demo" }),
   providers: () => D({ providers: [] }),
   ghRateLimit: () => D({ ok: false, error: "not available in the demo" }),
-  privacy: () => D({ db: "", config: "", credentials: "", retentionDays: 0, pairedDevices: 0 }),
+  privacy: () => D({ db: "", config: "", credentials: "", retentionDays: 0, pairedDevices: 0, clickup: false }),
   providerConnect: (_i: string, _t: string) => D({ ok: false, error: "not available in the demo" }),
-  providerDisconnect: (_i: string) => D({ ok: false, error: "not available in the demo" }),
+  providerDisconnect: (_i: string, _o?: { forgetBoards?: boolean }) => D({ ok: false, error: "not available in the demo" }),
   providerWorkspaces: (_i: string) => D({ ok: false, error: "not available in the demo" }),
   providerWorkspace: (_i: string, _w: string, _n: string) => D({ ok: false, error: "not available in the demo" }),
   providerTasks: (_f?: boolean) => D({ tasks: [], more: false, at: 0 }),
@@ -2683,6 +2716,8 @@ const demoApi: typeof realApi = {
   clickupCardForNote: () => D({ card: null }),
   clickupFileNote: () => D({ ok: false }),
   clickupSetWrites: (_o: boolean) => D({ ok: false }),
+  clickupPrefs: () => D<{ ok: boolean; prefs?: ClickUpPrefs }>({ ok: false }),
+  clickupSetPrefs: (_p: DeepPartial<ClickUpPrefs>) => D<{ ok: boolean; error?: string; prefs?: ClickUpPrefs }>({ ok: false, error: "the demo is read-only" }),
   clickupView: (_i?: string, _f?: boolean) => D({ tasks: [], statuses: [], fields: [], at: 0 }),
   clickupAddView: (_u: string) => D({ ok: false, error: "not available in the demo" }),
   clickupRemoveView: (_i: string) => D({ ok: true }),

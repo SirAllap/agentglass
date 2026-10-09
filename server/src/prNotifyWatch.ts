@@ -11,9 +11,14 @@
  * case in `evalRule`.
  *
  * Requests. Nothing here polls on its own account except the CI tick, and the
- * CI tick reads through `prRollup` — the same one-GraphQL-call read (30 s TTL,
- * shared with the board's card) the detail already uses — once a minute per PR
- * that has a CI rule waiting, and NOT AT ALL when nothing is waiting. Comments
+ * CI tick reads through `prRollup` — one GraphQL call, forced past the 30 s TTL
+ * it shares with the board's card, because a cached answer would add its age to
+ * the wait — every 30 s per PR whose CI is RUNNING and every three minutes per
+ * PR with nothing running (a push or a re-run shows up as running on the next
+ * of those), and NOT AT ALL when nothing is waiting. The cadence follows the
+ * suite, not the age of the rule: measured, a rule armed for over half an hour
+ * was read every three minutes and a suite that went green was announced four
+ * to five minutes later, with the board's counts just as stale. Comments
  * cost nothing: they ride the talk note the list poll already derives
  * (`subscribeTalk` in prs.ts), so a `comment` rule only hears about a PR the
  * list poll reads (yours, or one you were asked to review).
@@ -36,6 +41,8 @@
  */
 import { randomUUID } from "node:crypto";
 import { db } from "./db.ts";
+import { raiseAsked } from "./askedAlerts.ts";
+import { askedAlertKey, watchPayload } from "../../shared/notifyPayload.ts";
 import { entered } from "./loopwatch.ts";
 import type { PrCheck, PrCheckRollup, PrChecksRead, PrTalk, PrWatch, PrWatchFire, PrWatchPreset, PrWatchRule } from "../../shared/types.ts";
 
@@ -78,7 +85,11 @@ CREATE TABLE IF NOT EXISTS pr_watch_seen (
 );
 `);
 
-export const CI_TICK_MS = 60_000;
+/** How often the timer looks at what is due; the reads themselves are spread by `readEveryMs`. */
+export const WATCH_POLL_MS = 10_000;
+/** A PR whose CI is running is re-read this often, however long the rule has waited. */
+export const RUNNING_READ_MS = 30_000;
+const IDLE_READ_MS = 3 * 60_000;
 export const CI_RULE_TTL_MS = 7 * 24 * 60 * 60_000;
 const KEEP_FIRED_MS = 14 * 24 * 60 * 60_000;
 
@@ -88,7 +99,7 @@ const MAX_RULES_PER_PR = 20;
 const MAX_READS_PER_TICK = 20;
 
 /** `state` is the PR's own state, when the read had it: a merged or closed PR ends every watch on it. */
-export interface Snapshot { checks?: PrCheckRollup; allDone: boolean; verdict: "green" | "red" | null; all: PrCheck[]; state?: string }
+export interface Snapshot { checks?: PrCheckRollup; allDone: boolean; verdict: "green" | "red" | null; all: PrCheck[]; state?: string; /** The head commit these checks were read at. */ sha?: string }
 export type ReadChecks = (root: string, number: number) => Promise<Snapshot | null>;
 export interface Outcome { summary: string; detail: string; ok: boolean }
 
@@ -298,8 +309,16 @@ export function sawMine(repo: string, root: string, prs: { number: number; title
 /** Decided, so kept: a fire is written down BEFORE anyone is told, and stays until a client acknowledges
  *  it. The window may be closed, the laptop asleep, the socket mid-reconnect: the next client to connect
  *  is handed everything unacknowledged, oldest first, for up to FIRE_TTL_MS (`pendingFires`, `ackFire`). */
-function deliver(r: Row, rule: PrWatchRule, o: Outcome, now = Date.now()): void {
+function deliver(r: Row, rule: PrWatchRule, o: Outcome, now = Date.now(), snap?: Snapshot, eventId = snap?.sha ?? String(now)): void {
+  /* One alert per event: the PR, the commit the checks were read at, and the verdict. The alert is what a window
+     draws and keeps until the person acts on it (askedAlerts.ts); the fire below is the bell row and the OS popup.
+     A fire for an event already raised says nothing more. */
   const f: Omit<PrWatchFire, "seq"> = { ruleId: r.id, rule: rule.type, repo: r.repo, number: r.number, title: r.title, summary: o.summary, detail: o.detail, ok: o.ok };
+  const alert = raiseAsked({ key: askedAlertKey({ repo: r.repo, number: r.number, sha: eventId, verdict: o.summary }), ok: o.ok,
+    payload: watchPayload(f, { root: r.root, checks: snap?.checks, all: snap?.all }), armedAt: r.created }, now);
+  if (!alert) return;
+  f.alertId = alert.id;
+  f.payload = alert.payload;
   const seq = Number(db.run(`INSERT INTO pr_watch_fire (payload, created) VALUES (?, ?)`, [JSON.stringify(f), now]).lastInsertRowid);
   for (const fn of fireListeners) { try { fn({ ...f, seq }); } catch { /* the row is kept: it is delivered at the next connect */ } }
 }
@@ -316,10 +335,10 @@ export function ackFire(seq: number): { ok: boolean } {
 }
 
 /** Claim first, deliver second. Returns whether THIS call won the claim. */
-function fireOnce(r: Row, rule: PrWatchRule, o: Outcome, now: number): boolean {
+function fireOnce(r: Row, rule: PrWatchRule, o: Outcome, now: number, snap?: Snapshot): boolean {
   const text = o.detail ? `${o.summary}: ${o.detail}` : o.summary;
   const won = db.run(`UPDATE pr_watch SET active = 0, last_at = ?, last_text = ? WHERE id = ? AND active = 1`, [now, text, r.id]).changes > 0;
-  if (won) { deliver(r, rule, o, now); changed(); }
+  if (won) { deliver(r, rule, o, now, snap); changed(); }
   return won;
 }
 
@@ -353,22 +372,23 @@ export function onTalkSeen(repo: string, number: number, title: string, talk: Pr
     const fresh = theirs.filter((t) => (Date.parse(t.at) || 0) > base);
     const text = remarkText(fresh[0]!, fresh.length - 1);
     db.run(`UPDATE pr_watch SET last_at = ?, last_text = ?, seen = ? WHERE id = ?`, [now, text, newest, r.id]);
-    deliver({ ...r, title: title || r.title }, rule, { summary: "New comment", detail: text, ok: true }, now);
+    deliver({ ...r, title: title || r.title }, rule, { summary: "New comment", detail: text, ok: true }, now, undefined, String(newest)); // a remark is its own event: told apart by when it was said
     fired++;
   }
   if (fired) changed();
   return fired;
 }
 
-/** When a PR is next worth reading. CI rules: every minute for the first half hour, every three after (a
- *  suite that has not moved in half an hour is not about to); comment-only PRs are read only to learn
- *  whether the PR is still open, every ten minutes. */
-export function readEveryMs(rows: Row[], now: number): number {
+/** When a PR is next worth reading. CI rules: every 30 s while its suite is running (`running`, from the last
+ *  read; unknown counts as running), every three minutes once nothing is; comment-only PRs are read only to
+ *  learn whether the PR is still open, every ten minutes. Ceiling: a suite that sits pending for hours
+ *  (a job waiting on an approval) is read every 30 s for as long as it does. */
+export function readEveryMs(rows: Row[], running = true): number {
   const ci = rows.some((r) => ruleOf(r)?.type !== "comment");
   if (!ci) return 10 * 60_000;
-  return now - Math.min(...rows.map((r) => r.created)) < 30 * 60_000 ? CI_TICK_MS : 3 * CI_TICK_MS;
+  return running ? RUNNING_READ_MS : IDLE_READ_MS;
 }
-const schedule = new Map<string, { next: number; wait: number }>();
+const schedule = new Map<string, { next: number; wait: number; running: boolean }>();
 export function __resetSchedule(): void { schedule.clear(); }
 
 /**
@@ -396,16 +416,17 @@ export async function checkWatches(read: ReadChecks, now = Date.now(), gate = fa
   for (const [k, rows] of due) {
     let snap: Snapshot | null = null;
     try { snap = await read(rows[0]!.root, rows[0]!.number); } catch { /* the next tick asks again */ }
-    const base = readEveryMs(rows, now);
+    const running = snap ? !snap.allDone || snap.all.some((c) => !c.done) : schedule.get(k)?.running ?? true;
+    const base = readEveryMs(rows, running);
     const wait = schedule.get(k)?.wait ?? base;
-    schedule.set(k, snap ? { next: now + base, wait: base } : { next: now + Math.min(wait * 2, 10 * 60_000), wait: Math.min(wait * 2, 10 * 60_000) });
+    schedule.set(k, snap ? { next: now + base, wait: base, running } : { next: now + Math.min(wait * 2, 10 * 60_000), wait: Math.min(wait * 2, 10 * 60_000), running });
     if (!snap) continue;
     shareChecks(rows[0]!.repo, rows[0]!.number, snap);
     if (snap.state && snap.state !== "OPEN") { endPr(rows[0]!.repo, rows[0]!.number, snap.state === "MERGED" ? "merged" : "closed", now); continue; }
     for (const { r, rule } of withRule(rows)) {
       if (rule.type === "comment") continue;
       const o = evalRule(rule, snap);
-      if (o && fireOnce(r, rule, o, now)) fired++;
+      if (o && fireOnce(r, rule, o, now, snap)) fired++;
     }
   }
   return fired;
@@ -421,7 +442,7 @@ export function startPrNotifyWatch(read: ReadChecks): { kick: () => void } {
     void checkWatches(read, Date.now(), gate).catch(() => {}).finally(() => { running = false; });
   };
   if (!timer) {
-    timer = setInterval(() => run(true), CI_TICK_MS);
+    timer = setInterval(() => run(true), WATCH_POLL_MS);
     (timer as unknown as { unref?: () => void }).unref?.();
     setTimeout(() => run(true), 5_000); // rules waiting when the server went down are read shortly after boot, off the startup path
   }

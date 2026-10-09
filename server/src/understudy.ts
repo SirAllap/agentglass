@@ -462,7 +462,7 @@ export function openProjectName(): string {
    *
    * That was the obvious fix — the root the app was launched with, set on
    * purpose, printed at startup as "Project →". Measured on this machine, it
-   * returns the EMPLOYER'S repository, because the application is pointed at
+   * returns the COMPANY'S repository, because the application is pointed at
    * the work being watched, and the fence would have taken its name from it.
    *
    * The fault this replaced opened the fence by accident. That one would have
@@ -491,7 +491,7 @@ export function openProjectName(): string {
    * checkout — so the open project became `you`, and the matcher below,
    * which is deliberately a segment test, matched `/home/you/anything`.
    * Every repository on the machine was inside the fence, including his
-   * employer's, which is the one thing this must never do.
+   * company's, which is the one thing this must never do.
    *
    * Measured on the running server rather than reasoned about: the fence
    * listed thirty checkouts of somebody's work.
@@ -572,7 +572,7 @@ function wouldMatchEverything(name: string, checkouts: string[] = []): boolean {
    * comes from the transcript table — which is empty on a fresh install, after
    * a reset, or simply before the first scan. On such a machine
    * `setOpenProject("code")` was accepted, and `code` is a segment of every
-   * repository path here: the fence would have admitted somebody's employer's
+   * repository path here: the fence would have admitted somebody's company's
    * checkout sitting two directories away.
    *
    * `$HOME/code` and its usual siblings are not project names on any machine,
@@ -1399,8 +1399,13 @@ export const CLASS_WORDS: [string, RegExp][] = [
   ["C7", /\b(install|instal|build|deploy|reinstall)\b/i],
   ["C8", /\b(agent|subagent|worker|fan.?out)\b/i],
   ["C10", /\b(review|lgtm|approve|verdict|comment)\b/i],
+  /* C11 is the vocabulary of one team's reporting habit (a daily, a worklog, a
+     scrum note), written for whoever this was first measured on. It is not
+     behind a setting: a team that calls the same chores something else lands
+     them in `general`, which is a miss and not an error. Making the words a
+     setting is the next step after this and is not here. */
   ["C11", /\b(pr body|scrum|worklog|gherkin|testing criteria|daily)\b/i],
-  ["C12", /\b(clickup|card|sprint|squad|scope)\b/i],
+  ["C12", /\b(clickup|card|sprint)\b/i],
   ["C13", /\b(next|priority|what to work|triage)\b/i],
 ];
 

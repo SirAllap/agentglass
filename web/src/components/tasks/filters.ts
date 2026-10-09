@@ -3,15 +3,15 @@
  *
  * The chips along the top of the board are the tags the loaded cards happen to
  * carry, plus `mine`, plus a status picker. That answers "show me the cards
- * tagged X" and cannot answer "show me the cards of one squad", which is what
- * was asked for — a squad is a CUSTOM FIELD, so it had a column and no chip:
- * the board could say which squad every card belonged to and could not show
- * you one squad's.
+ * tagged X" and cannot answer "show me the cards of one team", which is what
+ * was asked for — a team is a CUSTOM FIELD, so it had a column and no chip:
+ * the board could say which team every card belonged to and could not show
+ * you one team's.
  *
  * The general shape is the tracker's own, and it is the right one:
  *
- *     Where  [Status]  [is]      [READY FOR ENGINEERING]
- *     AND    [Squad]   [is not]  [Crimson, Olive]
+ *     Where  [Status]  [is]      [In review]
+ *     AND    [Team]    [is not]  [Crimson, Olive]
  *
  * One join for the whole set rather than per row, which is also what the
  * tracker does. Nested groups are the next thing after that and are not here:
@@ -21,8 +21,8 @@
  *
  * FIELDS ARE DISCOVERED, never listed. Which fields exist depends on the
  * board — a workspace's custom fields are its own — so they are derived from
- * the cards that are loaded, and a board with no squad field simply has no
- * squad row to offer. The alternative is a menu naming fields this board does
+ * the cards that are loaded, and a board with no team field simply has no
+ * team row to offer. The alternative is a menu naming fields this board does
  * not have.
  */
 import type { ProviderTask } from "../../../../shared/providers.ts";
@@ -31,7 +31,7 @@ import type { ProviderTask } from "../../../../shared/providers.ts";
  * FOUR OPERATORS, and the last two take no values.
  *
  * "is set" / "is not set" are the ones that answer a question the other two
- * cannot: which cards have nobody assigned, which have no squad, which never
+ * cannot: which cards have nobody assigned, which have no team, which never
  * got a due date. On a board being triaged that is most of the work, and with
  * only is/is-not the closest you could get was picking every value and
  * inverting — which stops being true the moment somebody adds a value.

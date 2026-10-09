@@ -323,7 +323,7 @@ export function merged(p: {
    *
    * Keyed by branch and not a flat list because the answer is per REPOSITORY.
    * The first version asked one repository — the configured workspace root —
-   * for every row, and on this machine that root is the employer's checkout,
+   * for every row, and on this machine that root is the company's checkout,
    * whose HEAD is a `master` none of these branches has ever been near. Every
    * row read "not in master", which is true, meaningless, and the exact shape
    * of an answer that sends somebody looking.
@@ -606,9 +606,8 @@ export function merged(p: {
      * EVERY pane of it, not the one pane this row landed on. A session that
      * has been through a reboot has a sighting per pane it ever ran in, and
      * deleting one left the rest on the board under whatever `names` called
-     * them — which is where "Ayudame a instalar…" and "que son estos??" came
-     * from: the same session as a named card, drawn a second time titled with
-     * the first thing its person had typed into it.
+     * them — a card headed with the first thing its person had typed: the same
+     * session as a named card, drawn a second time under that title.
      */
     for (const dead of session ? seenBySession.get(session) ?? [] : []) rows.delete(dead);
     if (paneId) rows.delete(paneId);

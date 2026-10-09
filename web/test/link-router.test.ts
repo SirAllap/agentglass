@@ -56,7 +56,7 @@ describe("a ClickUp card", () => {
   });
 
   it("inside parentheses, in a line that is not all ASCII", () => {
-    // What the terminal hands over for "asígnate ORBIT-1042 (https://…/t/86abc1xyz)":
+    // What the terminal hands over for "café ORBIT-1042 (https://…/t/86abc1xyz)":
     // the addon may or may not have stopped before the paren.
     for (const raw of ["https://app.clickup.com/t/86abc1xyz)", "https://app.clickup.com/t/86abc1xyz).", "https://app.clickup.com/t/86abc1xyz,"]) {
       expect(classifyLink(raw), raw).toMatchObject({ kind: "card", query: "86abc1xyz" });
@@ -259,7 +259,7 @@ describe("a bare URL in shared markdown is a link", () => {
   });
 
   it("and inside parentheses", () => {
-    expect(hrefs(html("asígnate ORBIT-1042 (https://app.clickup.com/t/86abc1xyz) y dime"))).toEqual(["https://app.clickup.com/t/86abc1xyz"]);
+    expect(hrefs(html("café ORBIT-1042 (https://app.clickup.com/t/86abc1xyz) and tell me"))).toEqual(["https://app.clickup.com/t/86abc1xyz"]);
   });
 
   it("but not inside a code span, and not twice inside a written link", () => {

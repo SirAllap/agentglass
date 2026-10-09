@@ -1,6 +1,7 @@
 // Shared event + analytics contract between server and web.
 // Keep this file dependency-free so both sides can import it.
 import type { NotifyKind, NotifyPrefs } from "./notifyPrefs.ts";
+import type { AskedAlert, NotifyPayload } from "./notifyPayload.ts";
 import type { CheckUsual } from "./checkBaseline.ts";
 import type { InboxAnnotation } from "./pluginUi.ts";
 
@@ -1936,6 +1937,10 @@ export type WsFrame =
   | { type: "prwatch"; data: PrWatchState }
   /** A notify watch fired. One frame per firing; the client raises the popup. */
   | { type: "prwatchfire"; data: PrWatchFire }
+  /** A notification the person asked for is waiting on them: every window draws its banner.
+   *  `askedclosed` is the same alert answered in one window, and every other takes it down. */
+  | { type: "askedalert"; data: AskedAlert }
+  | { type: "askedclosed"; data: { id: string } }
   /** The notify watch read a pull request's checks and they differ from the last
    *  read it sent. The open detail and the board take them as their own: the
    *  watch's answer must not be fresher than the screen it sits on. */
@@ -2101,6 +2106,11 @@ export interface PrWatch {
 }
 
 export interface PrWatchFire {
+  /** The alert the person will see for this fire (server/src/askedAlerts.ts): the window that shows its OS
+   *  popup reports a failure against it. */
+  alertId?: string;
+  /** What that alert says, so the bell row and the popup read exactly as the banner does. */
+  payload?: NotifyPayload;
   /** The queue position: acknowledge it (`/prs/notify-watch/ack`) once shown, and it is never sent again. */
   seq: number;
   /** Which rule fired, and what kind it is — generic on purpose, so another

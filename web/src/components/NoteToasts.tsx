@@ -49,6 +49,10 @@ const ago = (t: number) => {
   return m < 60 ? `${m}m ago` : `${Math.round(m / 60)}h ago`;
 };
 
+const GO_LABEL: Record<NonNullable<SystemNote["goto"]>["kind"], string> = {
+  pr: "Open PR", pane: "Open terminal", card: "Open card", chat: "Open chat", git: "Open Git", settings: "Open Settings", file: "Open file",
+};
+
 /** Just the host, so the button can say where it goes rather than showing a
  *  bare arrow that reads as "open Slack" — the one thing it cannot do. */
 const hostOf = (url: string): string => {
@@ -170,6 +174,12 @@ function Card({ n, onGone, onGoto }: {
       )}
 
       <span className="flex items-center gap-2 flex-wrap">
+        {/* The press the whole card already takes, said out loud: a card that is
+            a button and does not look like one is a feature nobody finds. Acting
+            takes the card down, so the next one is not left behind it. */}
+        {go && n.goto && (
+          <button className="agx-note-btn" onClick={(e) => { e.stopPropagation(); go(); }}>{GO_LABEL[n.goto.kind]}</button>
+        )}
         {n.url && (
           <button className="agx-note-link" title={n.url}
             onClick={(e) => { e.stopPropagation(); void openNote(n.id); }}>

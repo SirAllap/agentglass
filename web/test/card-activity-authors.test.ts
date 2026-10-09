@@ -53,16 +53,16 @@ describe("the name on a row", () => {
 /*
  * WHO A "SEEN HERE" LINE IS ABOUT.
  *
- * ClickUp writes its notifications starting with the person — "Irra assigned
- * this task to: javi" — and that sentence is the only place a name ever
+ * ClickUp writes its notifications starting with the person — "Grace assigned
+ * this task to: ada" — and that sentence is the only place a name ever
  * appears on this timeline apart from the creation, because the API reports no
  * actor for anything else. He asked for the same treatment the creation row
  * gets: the face, and the name in the same weight.
  */
 describe("the name a notification carries", () => {
   test("a one-word name is split off its verb", () => {
-    expect(seenActor("javi set the status to: READY FOR QA"))
-      .toEqual({ who: "javi", rest: "set the status to: READY FOR QA" });
+    expect(seenActor("ada set the status to: READY FOR QA"))
+      .toEqual({ who: "ada", rest: "set the status to: READY FOR QA" });
   });
 
   test("and a two- or three-word name is not cut in half", () => {

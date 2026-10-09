@@ -191,8 +191,8 @@ export async function wakeSeats(f: Finding[], deps: WakeDeps = {}): Promise<stri
  *
  * A report is not a state, it is an EVENT, and one that says an agent is
  * stopped. Measured from the other side by the seat itself: it sent a report
- * saying it was waiting on a person, and nothing arrived — "lo leí con
- * `inbox`", because the next sweep had not come round yet. Fifteen minutes of
+ * saying it was waiting on a person, and nothing arrived until it read
+ * its `inbox` by hand, because the next sweep had not come round yet. Fifteen minutes of
  * an agent sitting still is exactly what waking on events was meant to end.
  *
  * The fingerprint is updated here too, so the sweep that follows does not say

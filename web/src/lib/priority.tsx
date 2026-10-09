@@ -34,12 +34,12 @@ import { FlagIcon } from "./glyphIcons.tsx";
  */
 export const CHIP_H = 18;
 
-/** ClickUp's four, in its own order and this app's own colours. */
+/** ClickUp's four, in its own order and its own colours (fixed tokens, see index.css). */
 export const PRIOS = [
-  { id: "urgent", label: "Urgent", c: "var(--error)" },
-  { id: "high", label: "High", c: "var(--warning)" },
-  { id: "normal", label: "Normal", c: "var(--info)" },
-  { id: "low", label: "Low", c: "var(--text4)" },
+  { id: "urgent", label: "Urgent", c: "var(--prio-urgent-ink)" },
+  { id: "high", label: "High", c: "var(--prio-high-ink)" },
+  { id: "normal", label: "Normal", c: "var(--prio-normal-ink)" },
+  { id: "low", label: "Low", c: "var(--prio-low-ink)" },
 ] as const;
 
 /** Colour and label for a priority, including the one that is not set. */
@@ -99,11 +99,13 @@ export function CardChip({ id, priority, status, onOpen, title, className }: {
    * and amber on a high one — and that is what makes urgency readable across a
    * column without stopping on any single row.
    *
-   * No priority keeps the accent: a card nobody has ranked is not "low", and
-   * painting it grey would say something the card does not.
+   * No priority is neutral grey, the outline flag on a grey chip: it used to
+   * take the app's accent, which a theme can make orange, and an orange chip
+   * with a grey flag read as a priority nobody had set. Grey says "nothing
+   * ranked"; Low keeps its own flag colour beside it.
    */
   const look = prioLook(priority);
-  const tint = priority ? look.c : "var(--accent, var(--primary))";
+  const tint = priority ? look.c : "var(--text3)";
   const inner = (
     <>
       <PriorityFlag p={priority} size={12} />

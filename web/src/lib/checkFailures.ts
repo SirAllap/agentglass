@@ -24,6 +24,85 @@ export function failureRowText(s: { source: Read["source"]; framework?: CiFailur
   return null;
 }
 
+/**
+ * A final "summary" job that fails only because a job it waits on did: its whole log is that sentence and the
+ * exit-code line, so its step's tail says nothing a person can use. True only when EVERY line is one of the two;
+ * one more line and it is a step with something to show. The ceiling: the two sentences are GitHub's and the
+ * common workflow's ("One or more jobs failed or were cancelled"); a gate that words it differently is shown as
+ * the step it is, tail and all.
+ */
+export function isAggregator(f: CiFailure): boolean {
+  if (f.kind !== "step") return false;
+  const lines = f.excerpt.split("\n").map((l) => l.replace(/^##\[error\]/, "").trim()).filter(Boolean);
+  return lines.length > 0 && lines.every((l) => /^Process completed with exit code \d+\.?$/.test(l) || /^(one|some|a|the) (or more |required )?jobs? (has |have |was |were )?(failed|cancel+ed)/i.test(l));
+}
+
+/** The run a check belongs to, from its own link (`…/actions/runs/<run>/job/<job>`). */
+const runOf = (k: Pick<PrCheck, "url">): string | null => /\/actions\/runs\/(\d+)/.exec(k.url ?? "")?.[1] ?? null;
+
+/** The other failed checks of the same run as `check`: what an aggregator job is reporting. Never itself, never a cancelled one. */
+export function failedInRun(check: Pick<PrCheck, "url">, checks: PrCheck[]): PrCheck[] {
+  const run = runOf(check);
+  if (!run) return [];
+  return checks.filter((k) => k.state === "failure" && !k.cancelled && k.url !== check.url && runOf(k) === run);
+}
+
+/**
+ * What "Also failed on …" can offer to open. One known pull request and nothing unknown is a chip that opens it; any
+ * other count is a list; a verdict kept before the numbers were recorded names none, so it is only words.
+ */
+export function othersShape(v: { nums?: number[]; unknown?: number }): { kind: "plain" } | { kind: "one"; n: number } | { kind: "list"; nums: number[]; unknown: number } {
+  const nums = v.nums ?? [];
+  if (!nums.length) return { kind: "plain" };
+  if (nums.length === 1 && !v.unknown) return { kind: "one", n: nums[0]! };
+  return { kind: "list", nums, unknown: v.unknown ?? 0 };
+}
+
+/** The list's last line: runs of this failure whose pull request the app does not know, said rather than dropped. */
+export const unknownPrs = (n: number): string => `${n} more, ${n === 1 ? "PR" : "PRs"} unknown`;
+
+/**
+ * The test file a named failure was printed against, as the paths the log gives it (pytest's node id, a frame in a
+ * `*.test.ts`, a Django dotted module). Django names no file: its module `a.b.c` is `a/b/c.py`, and with the
+ * class and the method both unknown to us the module is the dotted name minus one or two parts, so both are offered.
+ * Empty when the log does not say, which is most steps, annotations and app-posted checks.
+ */
+export function testFiles(f: CiFailure): string[] {
+  if (f.kind === "pytest") {
+    const p = /^(?:FAILED|ERROR) (\S+?\.py)(?:::| |$)/m.exec(f.excerpt)?.[1] ?? /^(\S+\.py):\d+: /m.exec(f.excerpt)?.[1];
+    return p ? [p] : [];
+  }
+  if (f.kind === "bun" || f.kind === "jest") {
+    const p = /([^\s()]+\.(?:test|spec)\.[cm]?[jt]sx?)(?::\d+)?/.exec(f.excerpt)?.[1];
+    return p ? [p] : [];
+  }
+  if (f.kind === "django") {
+    const parts = /\(([\w.]+)\)\s*$/.exec(f.title)?.[1]?.split(".") ?? [];
+    return [2, 1].filter((cut) => parts.length > cut).map((cut) => `${parts.slice(0, -cut).join("/")}.py`);
+  }
+  return [];
+}
+
+/** The two paths name one file when one ends with the other at a folder boundary: a log prints a runner's absolute path, a diff a repository's. */
+const samePath = (a: string, b: string): boolean => a === b || a.endsWith(`/${b}`) || b.endsWith(`/${a}`);
+
+export type FileFact = { kind: "changed" | "untouched"; path: string };
+
+/**
+ * Whether this pull request's diff touches the failing test's file: a FACT about the diff, not a verdict about the
+ * failure, which can come from code this pull request changed in another file. "Not in the diff" is said only when
+ * the whole file list was loaded; "changed" is true whatever the cap. Null when the log names no test file.
+ */
+export function fileFact(f: CiFailure, changed: { paths: string[]; complete: boolean } | undefined): FileFact | null {
+  const files = testFiles(f);
+  if (!files.length || !changed) return null;
+  const hit = files.find((t) => changed.paths.some((c) => samePath(t, c)));
+  if (hit) return { kind: "changed", path: hit };
+  return changed.complete ? { kind: "untouched", path: files[0]! } : null;
+}
+
+export const fileFactLabel = (x: FileFact): string => (x.kind === "changed" ? "Test file changed in this PR" : "Test file not in this PR’s diff");
+
 /** The first thing a failure says, short enough for a chip beside its title. */
 export function failureGist(f: CiFailure, max = 44): string {
   const line = f.excerpt.split("\n").map((l) => l.trim()).find((l) => l && !/^[\^\d|\s]+$/.test(l) && !/^\d+ \|/.test(l)) ?? "";
@@ -109,7 +188,7 @@ export function jobFor(check: Pick<PrCheck, "name" | "url" | "startedAt" | "comp
   if (id) {
     const listed = jobs.find((j) => j.id === id);
     if (listed) return listed;
-    return { id, runId: /\/actions\/runs\/(\d+)/.exec(url)?.[1] ?? "", name: check.name, status: "completed", conclusion: "failure", startedAt: check.startedAt ?? null, completedAt: check.completedAt ?? null, url };
+    return { id, runId: runOf(check) ?? "", name: check.name, status: "completed", conclusion: "failure", startedAt: check.startedAt ?? null, completedAt: check.completedAt ?? null, url };
   }
   const byName = jobs.find((j) => j.name === check.name) ?? jobs.find((j) => check.name.includes(j.name));
   if (byName) return byName;

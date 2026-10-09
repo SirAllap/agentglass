@@ -24,16 +24,19 @@
  *    clock time is true whenever it is read.
  */
 
+import { CARD_WATCH_MS } from "../../../shared/providers.ts";
+
 /**
  * How fresh an answer has to be before its age is not worth mentioning.
  *
- * Two minutes, from the two things `at` can be: the ClickUp task snapshot,
- * whose cache TTL is 60s, and the card watcher, which runs on a three-minute
- * timer. One minute would put a healthy watcher permanently in the "worth
- * mentioning" bucket for no reason; two clears the snapshot's TTL and still
- * catches an answer that has genuinely stopped being refreshed.
+ * One watch period and a minute, from the two things `at` can be: the ClickUp
+ * task snapshot, whose cache TTL is 60s, and the card watcher, which runs every
+ * `CARD_WATCH_MS` (six minutes). A window shorter than the period would put a
+ * healthy watcher in the "worth mentioning" bucket most of the time for no
+ * reason; this clears it and still catches an answer that has genuinely
+ * stopped being refreshed.
  */
-export const FRESH_MS = 120_000;
+export const FRESH_MS = CARD_WATCH_MS + 60_000;
 
 /** `14:32`, in the reader's own clock. */
 function clock(at: number): string {

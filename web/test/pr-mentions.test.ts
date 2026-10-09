@@ -17,25 +17,25 @@ const md = (s: string, viewer?: string) => renderInline(s, "acme/orbit", viewer)
 
 describe("a mention", () => {
   it("is a link to the person", () => {
-    const html = md("thanks @javidoe");
-    expect(html).toContain('href="https://github.com/javidoe"');
-    expect(html).toContain(">@javidoe</a>");
+    const html = md("thanks @adadoe");
+    expect(html).toContain('href="https://github.com/adadoe"');
+    expect(html).toContain(">@adadoe</a>");
     expect(html).toContain('class="agx-mention"');
   });
 
   it("is marked when it is you, and only then", () => {
-    expect(md("thanks @javidoe", "javidoe")).toContain("agx-mention-you");
-    expect(md("thanks @javidoe", "samlee")).not.toContain("agx-mention-you");
+    expect(md("thanks @adadoe", "adadoe")).toContain("agx-mention-you");
+    expect(md("thanks @adadoe", "samlee")).not.toContain("agx-mention-you");
     // No viewer known yet: a link, and no claim about who it is for.
-    expect(md("thanks @javidoe")).not.toContain("agx-mention-you");
+    expect(md("thanks @adadoe")).not.toContain("agx-mention-you");
   });
 
   it("does not care what case somebody typed", () => {
-    expect(md("cc @JaviDoe", "javidoe")).toContain("agx-mention-you");
+    expect(md("cc @AdaDoe", "adadoe")).toContain("agx-mention-you");
   });
 
   it("keeps the sentence around it", () => {
-    const html = md("ok @javidoe, done.");
+    const html = md("ok @adadoe, done.");
     expect(html).toContain("ok ");
     expect(html).toContain(", done.");
   });
@@ -64,7 +64,7 @@ describe("what is not a mention", () => {
   });
 
   it("a handle inside a link's text or its href", () => {
-    const html = md("[see @javidoe](https://github.com/javidoe)");
+    const html = md("[see @adadoe](https://github.com/adadoe)");
     // The anchor the author wrote, and no mention anchor nested inside it.
     expect(html.match(/<a /g) ?? []).toHaveLength(1);
     expect(html).not.toContain("agx-mention");
@@ -84,7 +84,7 @@ describe("what is not a mention", () => {
   });
 
   it("and the text is still escaped on the way out", () => {
-    const html = md('@javidoe <img src=x onerror="alert(1)">');
+    const html = md('@adadoe <img src=x onerror="alert(1)">');
     expect(html).not.toContain("<img");
     expect(html).toContain("&lt;img");
   });

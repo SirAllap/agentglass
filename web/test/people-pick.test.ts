@@ -14,6 +14,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { menuUnder, PICK_W, PICK_H } from "../src/lib/menuPos.ts";
+import { orderMembers } from "../src/lib/peopleOrder.ts";
 
 const W = 1400, H = 900;
 const at = (o: Partial<{ top: number; bottom: number; left: number }>) =>
@@ -69,5 +70,25 @@ describe("one picker", () => {
     const pick = read("components/PeoplePick.tsx");
     expect(pick).not.toContain("onPick(m); p.onClose()");
     expect(pick).toContain("onClick={() => p.onPick(m)}");
+  });
+});
+
+describe("who comes first", () => {
+  const m = (id: number, name: string, me?: boolean) => ({ id, name, initials: name.slice(0, 1), me });
+  const team = [m(1, "Zoe Park"), m(2, "Ada Lin"), m(3, "Bo Tran", true), m(4, ""), m(5, "Cy Diaz")];
+
+  test("people on the card first, then you, then the rest by name", () => {
+    expect(orderMembers(team, new Set([1, 5])).map((x) => x.name)).toEqual(["Cy Diaz", "Zoe Park", "Bo Tran", "Ada Lin"]);
+  });
+
+  test("a nameless member is not offered, and the filter narrows by name", () => {
+    expect(orderMembers(team, new Set()).some((x) => !x.name)).toBe(false);
+    expect(orderMembers(team, new Set(), " ad ").map((x) => x.name)).toEqual(["Ada Lin"]);
+  });
+
+  test("both places order through the one helper", () => {
+    const read = (p: string) => readFileSync(new URL("../src/" + p, import.meta.url), "utf8");
+    expect(read("components/TasksPanel.tsx")).toContain("orderMembers(");
+    expect(read("components/PrPanel.tsx")).toContain("orderMembers(");
   });
 });

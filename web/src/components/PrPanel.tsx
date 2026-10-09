@@ -30,8 +30,9 @@ import { onAppBack } from "../lib/desktop.ts";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { diffSplit, diffWrap, diffNoWhitespace, setDiffNoWhitespace } from "../lib/diffPrefs.ts";
 import { Portal } from "./Portal.tsx";
-import { CheckFailuresPanel } from "./CheckFailures.tsx";
-import { failureRowText, jobFor } from "../lib/checkFailures.ts";
+import { CheckFailuresPanel, type PrRefs } from "./CheckFailures.tsx";
+import { CheckOnBase } from "./CheckOnBase.tsx";
+import { failedInRun, failureRowText, jobFor } from "../lib/checkFailures.ts";
 import { failureKey, loadCached, readOf, summaryOf, useFailureStore } from "../lib/checkFailuresStore.ts";
 import { MergeBox } from "./MergeBox.tsx";
 import { mergePath, type PathAction } from "../../../shared/mergePath.ts";
@@ -60,10 +61,13 @@ import { depSpec } from "../../../shared/deps.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { confirmMergeGuard } from "../lib/mergeGuard.ts";
 import { useMergeDialog } from "./MergeDialog.tsx";
-import { mergeCardRef, mergeNote, statusColor, rfqaStatus } from "../lib/cardMove.ts";
+import { mergeCardRef, mergeNote, statusColor, readyForQaStatus, handoffRemovals, handoffChanges, reviewStatus, cardNoteText, whoToTell } from "../lib/cardMove.ts";
+import { useClickupPrefs, clickupPrefs } from "../lib/clickupPrefs.ts";
 import { cardPlan, cardPlanNote } from "../lib/cardPlan.ts";
 import { cardOf, askingCard, onCard, putCard, forgetCards, cardVersion, withCard } from "../lib/prCardStore.ts";
+import { askInChatVisible, slackReach } from "../lib/askInChat.ts";
 import { PeoplePick } from "./PeoplePick.tsx";
+import { orderMembers } from "../lib/peopleOrder.ts";
 import { SCROLLBAR_CSS, LINEBTN_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, LineMenuCtx, type LinePick, type LineSel } from "./diff/DiffLines.tsx";
 import { Toggle } from "./diff/DiffControls.tsx";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
@@ -74,7 +78,7 @@ import { buildFileTree, treeOrder, type TreeNode } from "../lib/prFileTree.ts";
 import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
 import { BOARD_ASK_MS, listOutcome, type ListOutcome } from "../lib/boardFace.ts";
 import { keepLoadedChecks } from "../lib/prMerge.ts";
-import { applyFilter, checkLabel, checkSpan, checkStatusLine, checkVerdict, filterCounts, formatSpan, sectionChecks, shortName, slowest, spanShare, usualTick, usualTip, verdictHero, workflowCards, type CheckFilter } from "../lib/prChecksList.ts";
+import { applyFilter, checkLabel, checkRowId, checkSpan, checkStatusLine, checkVerdict, filterCounts, formatSpan, sectionChecks, shortName, slowest, spanShare, usualTick, usualTip, verdictHero, workflowCards, type CheckFilter } from "../lib/prChecksList.ts";
 import { askingBehind, behindAnswer, forgetBehind, forgetOneBehind, onBehind, refreshBehind } from "../lib/prBehindStore.ts";
 import { refreshRollup } from "../lib/prRollupStore.ts";
 import { detailWithChecks, rowWithChecks, overlayDetail, reopenedRow, holdReopened, reopenKey, holdEdits, refreshPlan, rowPatch, landedDetail, dropLanded, staleOpen, once, type EditLog, type Landed, type Reopened } from "../lib/prRefresh.ts";
@@ -117,10 +121,11 @@ import { conflictBriefing, conflictHandoff } from "../lib/conflictBrief.ts";
 import { openCard } from "../lib/openCard.ts";
 import { openIssue } from "../lib/openIssue.ts";
 import { useClickupSetup } from "../lib/clickupSetup.ts";
-import type { ListStatus as CuStatus, ListMember as CuMember, ProviderTask } from "../../../shared/providers.ts";
+import { writeBlock } from "../lib/cardWrites.ts";
+import type { ListStatus as CuStatus, ListMember as CuMember, ProviderTask, HandoffUnassign } from "../../../shared/providers.ts";
 import { CloseButton, CloseIcon } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { AgentIcon, ArrowIcon, AttachIcon, BlockedIcon, BoltIcon, BranchIcon, CaretIcon, ChartIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CommitIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, EditIcon, EyeIcon, FileIcon, FlagIcon, IconLabel, LinkIcon, MergeIcon, MoreIcon, PlusIcon, RefreshIcon, SearchIcon, SparkleIcon, StarIcon, TagIcon, UndoIcon, UserIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import { AgentIcon, ArrowIcon, AttachIcon, BlockedIcon, BoltIcon, BranchIcon, CaretIcon, ChartIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CommitIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, EditIcon, EyeIcon, FileIcon, FlagIcon, IconLabel, LinkIcon, MergeIcon, MoreIcon, PinIcon, PlusIcon, RefreshIcon, SearchIcon, SparkleIcon, TagIcon, UndoIcon, UserIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { PrIcon } from "./workspace/icons.tsx";
 import { PrWatchMenu } from "./PrWatchMenu.tsx";
 import { onChecksRead } from "../lib/prWatchStore.ts";
@@ -223,7 +228,7 @@ const METHOD_KEY = "agentglass.pr.method";
 /** The builder's rules, per repository — a filter names one tracker's
  *  statuses and people, so one repository's rows are not the next one's
  *  answer. Unpersisted, the builder forgot everything it was told on every
- *  restart: the row you built to watch one squad's cards was gone the next
+ *  restart: the row you built to watch one team's cards was gone the next
  *  time the app opened, and had to be built again from nothing. */
 const FILTERS_KEY = "agentglass.pr.filters";
 
@@ -310,6 +315,13 @@ function FoldCaret({ open }: { open: boolean }) {
     </span>
   );
 }
+
+/** What the dot on a pinned pull request means, in words. */
+const checksSentence = ({ checks: c }: PrSummary): string =>
+  c.pending > 0 ? `${c.pending} still running`
+  : c.verdict === "red" ? `${c.failure} failing`
+  : c.verdict === "green" ? "all checks passed"
+  : "nothing has reported";
 
 function Dot({ tint, title }: { tint: string; title?: string }) {
   return <span title={title} className="inline-block shrink-0 rounded-full" style={{ width: 6, height: 6, background: tint }} />;
@@ -1475,55 +1487,63 @@ function PinnedCapsule({ pinned, pinState, selected, current, onOpen }: {
           background: "color-mix(in srgb, var(--bg3) 85%, transparent)",
           border: EDGE,
         }}>
+        {/* The tack is the label: it says "pinned" without taking the width a
+            word would, and it is the same glyph as the button that put the
+            pull request here. */}
         {pinned.length === 0
-          ? <span className="text-[10px] shrink-0 inline-flex items-center gap-1" style={{ color: "var(--text4)" }}><StarIcon size={ICON.xs} />nothing pinned</span>
+          ? <span className="text-[10px] shrink-0 inline-flex items-center gap-1" style={{ color: "var(--text4)" }}><PinIcon size={ICON.xs} />nothing pinned</span>
           : (
-            <span className="text-[10px] uppercase tracking-wider shrink-0" style={{ color: "var(--text4)" }}>Pinned</span>
+            <span className="flex shrink-0" style={{ color: "var(--text4)" }} role="img" aria-label="Pinned" title="Pinned pull requests">
+              <PinIcon size={ICON.xs} filled />
+            </span>
           )}
         {/*
-         * Two actions on one chip: the number opens it, the × takes it off.
+         * Two actions on one chip: the body opens it, the × takes it off.
          * Taking a pin off used to mean opening the pull request first, which
-         * is the trip this bar exists to save. The × is revealed on hover and
-         * held open on the one you are reading, so at rest this is a row of
-         * numbers rather than a row of numbers and crosses. A span rather than
-         * a nested button: a button inside a button is invalid markup and the
-         * inner one stops receiving clicks in some engines.
+         * is the trip this bar exists to save. The × has a slot of its own at
+         * the end of the chip at every width, so showing it on hover or focus
+         * moves nothing; the one you are reading keeps it showing. Siblings,
+         * not nested: a button inside a button is invalid markup and the inner
+         * one stops receiving clicks in some engines.
+         *
+         * The title is cut at 96px and only drawn from 1024px up (`lg`): a chip is
+         * number-first, and the bar is 40% of the header, so with six pins it
+         * scrolls sideways (the bar is the scroller) rather than wrapping or
+         * reaching the refresh button.
          */}
-        {pinned.map((p) => (
-          <span key={p.number}
-            className="group flex items-center gap-1 rounded-full shrink-0 overflow-hidden pl-1.5"
-            style={p.number === selected
-              ? { background: "color-mix(in srgb, var(--primary) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }
-              : { border: EDGE }}>
-            {/* A dot, not a coloured number. Colour alone cannot say "green" to
-                somebody who cannot see green, and the same dot is what the rows
-                in the list use — so the bar and the list agree rather than
-                being two vocabularies. */}
-            {(() => {
-              const sum = pinState.get(p.number);
-              if (!sum) return null;
-              const c = sum.checks;
-              const what = c.pending > 0 ? `${c.pending} still running`
-                : c.verdict === "red" ? `${c.failure} failing`
-                : c.verdict === "green" ? "all checks passed"
-                : "nothing has reported";
-              return <Dot tint={stateTint(sum)} title={`#${p.number} — ${what}`} />;
-            })()}
-            <button onClick={() => onOpen(p.number)} title={p.title}
-              className="text-[10px] pr-1 py-px tabular-nums"
-              style={{ color: p.number === selected ? "var(--text)" : "var(--text2)" }}>
-              #{p.number}
-            </button>
-            <button
-              onClick={(e) => { e.stopPropagation(); togglePin(p.repo, p.number, p.title); }}
-              title={`Unpin #${p.number}`}
-              aria-label={`Unpin #${p.number}`}
-              className={`leading-none grid place-items-center ${p.number === selected ? "" : "opacity-0 group-hover:opacity-100 focus:opacity-100"}`}
-              style={{ color: "var(--text3)", width: 18, height: 18 }}>
-              <CloseIcon size={ICON.xs} />
-            </button>
-          </span>
-        ))}
+        {pinned.map((p) => {
+          const open = p.number === selected;
+          const sum = pinState.get(p.number);
+          return (
+            <span key={p.number}
+              className="group flex items-center rounded-full shrink-0"
+              style={open
+                ? { background: "color-mix(in srgb, var(--primary) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }
+                : { border: EDGE }}>
+              <button onClick={() => onOpen(p.number)}
+                title={`#${p.number} — ${p.title}`}
+                aria-current={open ? "page" : undefined}
+                className="flex items-center gap-1 min-w-0 rounded-full pl-1.5 pr-1 py-px text-[10px]"
+                style={{ color: open ? "var(--text)" : "var(--text2)" }}>
+                {/* A dot, not a coloured number. Colour alone cannot say "green" to
+                    somebody who cannot see green, and the same dot is what the rows
+                    in the list use — so the bar and the list agree rather than
+                    being two vocabularies. */}
+                {sum && <Dot tint={stateTint(sum)} title={`#${p.number} — ${checksSentence(sum)}`} />}
+                <span className="tabular-nums shrink-0">#{p.number}</span>
+                <span className="hidden lg:inline truncate" style={{ maxWidth: 96, color: "var(--text3)" }}>{p.title}</span>
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); togglePin(p.repo, p.number, p.title); }}
+                title={`Unpin #${p.number}`}
+                aria-label={`Unpin #${p.number}`}
+                className={`leading-none grid place-items-center shrink-0 rounded-full ${open ? "" : "opacity-0 group-hover:opacity-100 focus:opacity-100"}`}
+                style={{ color: "var(--text3)", width: 18, height: 18 }}>
+                <CloseIcon size={ICON.xs} />
+              </button>
+            </span>
+          );
+        })}
         {/* The control sits IN the bar it feeds, so pressing it explains the bar
             the first time — a pin button somewhere else and a strip of numbers
             up here are two features until you happen to press one and watch the
@@ -1538,7 +1558,7 @@ function PinnedCapsule({ pinned, pinState, selected, current, onOpen }: {
             style={currentPinned
               ? { color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }
               : { color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 32%, transparent)", background: "color-mix(in srgb, var(--warning) 8%, transparent)" }}>
-            <StarIcon size={ICON.xs} filled={currentPinned} />{currentPinned ? "Pinned" : `Pin #${current.number}`}
+            <PinIcon size={ICON.xs} filled={currentPinned} />{currentPinned ? "Pinned" : `Pin #${current.number}`}
           </button>
         )}
       </div>
@@ -1683,7 +1703,7 @@ function PrRow({ p, active, onSelect, onReview, pinned, onTogglePin, q, unread, 
    *  wear — see prUnread.ts. */
   unread?: Unread | null;
   /** What is in the filter box, so a row that is here because of a PERSON can
-   *  say which one. Without it a search for "javi" returns rows whose author
+   *  say which one. Without it a search for "ada" returns rows whose author
    *  column says somebody else, and the list looks like it ignored you. */
   q?: string;
   /** On the bar at the top. Undefined where there is no repository to pin it
@@ -1730,7 +1750,7 @@ function PrRow({ p, active, onSelect, onReview, pinned, onTogglePin, q, unread, 
               color: pinned ? "var(--primary-hover)" : "var(--text3)",
               fontSize: 15, width: 22, height: 22,
             }}>
-            <StarIcon size={ICON.sm} filled={pinned} />
+            <PinIcon size={ICON.sm} filled={pinned} />
           </button>
         )}
         <span title={st.title} style={{ color: st.tint }}>⇅</span>#{p.number}
@@ -4845,10 +4865,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                    builds for them. A different spelling of the same repository
                    would give every card a badge for ever. */
                 repoKey={repo.key}
-                /* Whoever opened them. A pinned pull request of a colleague's
-                   is in no lane on this board, which is exactly why the strip
-                   exists. */
-                pinnedList={pinned}
                 onAct={(p, what) => {
                   // Only what this app can really do. `merge` uses the method
                   // the panel already remembers, so the board never quietly
@@ -5442,6 +5458,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 {tab === "checks" && (
                   <Checks
                     d={d} root={root} jobs={jobs} busy={busy} busyWhat={busyWhat}
+                    prRefs={{ repo: repo?.nameWithOwner ?? "", titleOf: (n) => prs.find((p) => p.number === n)?.title, changed: { paths: d.files.map((f) => f.path), complete: !d.truncated?.files } }}
                     onRerun={() => act("Re-run checks", () => api.prRerun(root, d.number))}
                     onRerunJobs={(what, id) => act("Re-run", () => api.prRerunJobs(root, what, id))}
                     onAsk={onOpenChatWith ? (k) => askClaudeAboutCheck(k) : undefined}
@@ -7104,6 +7121,10 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
   onPlan: (plan: { lines: string[]; run: () => Promise<boolean> }) => void;
 }) {
   const setup = useClickupSetup();
+  /* Writes off: the controls stay where they are, disabled, and the plan below
+     is built from nothing picked, so it has no lines, the button downstairs is
+     plain Done and nothing is sent. */
+  const blocked = writeBlock(setup);
   /*
    * On the branch and the title, not on the object they arrived in.
    *
@@ -7132,6 +7153,9 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
      choice is not remembered on purpose: it is per errand, not a setting. */
 
   const [err, setErr] = useState("");
+  /* Putting people on the card is the team's choice, not a given: off until
+     Settings says so, and unknown reads as off. */
+  const assignReviewer = useClickupPrefs()?.review.assignReviewer === true;
 
   useEffect(() => {
     if (!query) return;
@@ -7146,20 +7170,21 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
       setCard({ id: t.id, title: t.title, status: t.status, updated: t.updated, listId: t.listId });
       setOn(people); setWas(new Set(people));
       if (!t.listId) return;
-      const [meta, mem] = await Promise.all([
+      const [meta, mem, prefs] = await Promise.all([
         api.clickupList(t.listId).catch(() => null),
         api.clickupMembers(t.listId).catch(() => null),
+        clickupPrefs(),
       ]);
       if (!live) return;
       const st = meta?.ok ? (meta.statuses ?? []) : [];
       setStatuses(st);
       setMembers(mem?.ok ? (mem.members ?? []) : []);
       /* Code review by default, found by asking the LIST rather than by
-         knowing the word: one board's "Code Review" is another's "In review".
-         The match is on the name because that is all a status has, and the
-         fallback is to leave it exactly where it is. */
-      const review = st.find((x) => /review/i.test(x.status) && x.type !== "done" && x.type !== "closed");
-      setPick(review && review.status !== t.status ? review.status : "");
+         knowing the word: the workspace's own names first (Settings), else any
+         open status with "review" in it, else leave it exactly where it is.
+         Prefs not known yet read as no names, which is the shipped guess. */
+      setPick(reviewStatus(st, t.status, prefs?.review.statusNames ?? []));
+      if (blocked) setPick("");
     })();
     return () => { live = false; };
   }, [query]);
@@ -7176,9 +7201,13 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
    * and leaving yourself on it is not an assignment. With none of them this half
    * is silent and the press is a GitHub assignment, which is exactly what it is.
    */
+  const wanted = useMemo(
+    () => cardPlan({ label, pick, statusNow: card?.status, on: assignReviewer ? on : was, was, nameOf }),
+    [label, pick, card?.status, on, was, nameOf, assignReviewer],
+  );
   const plan = useMemo(
-    () => cardPlan({ label, pick, statusNow: card?.status, on, was, nameOf }),
-    [label, pick, card?.status, on, was, nameOf],
+    () => blocked ? cardPlan({ label, pick: "", statusNow: card?.status, on: was, was, nameOf }) : wanted,
+    [blocked, wanted, label, card?.status, was, nameOf],
   );
 
   const run = useCallback(async () => {
@@ -7299,7 +7328,8 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
             <Select
               value={pick}
               onChange={setPick}
-              title="Status"
+              disabled={!!blocked}
+              title={blocked ?? "Status"}
               options={[
                 { value: "", label: "leave it where it is" },
                 ...statuses.filter((x) => x.status !== card.status).map((x) => ({
@@ -7308,7 +7338,8 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
                 })),
               ]}
             />
-            {!pick && (
+            {blocked && <div className="mt-1 text-[9.5px]" style={{ color: "var(--text3)" }}>{blocked}</div>}
+            {(blocked || !pick) && (
               <div className="mt-1 text-[9.5px] flex items-center gap-2" style={{ color: "var(--text4)" }}>
                 <span>now</span>
                 <StatusPill status={card.status} color={statusColor(statuses, card.status)} />
@@ -7316,6 +7347,7 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
               </div>
             )}
           </div>
+          {assignReviewer && <>
           <div className="px-2 pt-2 shrink-0">
             <div className="text-[9px] uppercase tracking-[0.16em] mb-1" style={{ color: "var(--text4)" }}>Assigned</div>
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter people…" spellCheck={false}
@@ -7326,7 +7358,8 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
             {members === null && <div className="px-3 py-2 text-[11px]" style={{ color: "var(--text3)" }}>Reading the team…</div>}
             {people.map((m) => (
               <button key={m.id} onClick={() => setOn((cur) => { const n = new Set(cur); if (n.has(m.id)) n.delete(m.id); else n.add(m.id); return n; })}
-                className="agx-mi w-full text-left flex items-center gap-2 px-2.5 py-1.5 text-[11px]" style={{ color: "var(--text2)" }}>
+                disabled={!!blocked} title={blocked ?? undefined}
+                className="agx-mi w-full text-left flex items-center gap-2 px-2.5 py-1.5 text-[11px] disabled:opacity-60 disabled:cursor-default" style={{ color: "var(--text2)" }}>
                 {/* The face, as everywhere else people are drawn in this app.
                     Two initials is a puzzle in a workspace of five hundred. */}
                 {m.avatar
@@ -7343,6 +7376,7 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
               </button>
             ))}
           </div>
+          </>}
         </>
       )}
     </div>
@@ -7545,6 +7579,7 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
  * from applying only its first — see the reviewer menu's note.
  */
 function CardStatusPick({ task, query, onSaid }: { task: ProviderTask; query: string; onSaid: (s: string) => void }) {
+  const blocked = writeBlock(useClickupSetup());
   const [statuses, setStatuses] = useState<CuStatus[] | null>(null);
   const [busy, setBusy] = useState(false);
   const load = useCallback(() => {
@@ -7555,7 +7590,7 @@ function CardStatusPick({ task, query, onSaid }: { task: ProviderTask; query: st
   }, [statuses, task.listId]);
 
   const move = async (status: string) => {
-    if (!status || status === task.status || busy) return;
+    if (!status || status === task.status || busy || blocked) return;
     setBusy(true);
     onSaid("moving…");
     const r = await api.clickupCard(task.id, { status }, task.updated)
@@ -7570,7 +7605,8 @@ function CardStatusPick({ task, query, onSaid }: { task: ProviderTask; query: st
       <Select
         value={task.status}
         onChange={(v) => { void move(v); }}
-        title="Status"
+        disabled={!!blocked}
+        title={blocked ?? "Status"}
         options={(statuses ?? [{ status: task.status, color: task.statusColor ?? "", type: task.statusKind ?? "" }])
           .map((x) => ({ value: x.status, label: x.status, tint: x.color, pill: true, dim: x.type === "done" || x.type === "closed" }))}
       />
@@ -7578,11 +7614,21 @@ function CardStatusPick({ task, query, onSaid }: { task: ProviderTask; query: st
   );
 }
 
+/** One person's face, the same 16px everywhere this section draws one. */
+function memberFace(p: { avatar?: string; color?: string; initials?: string }) {
+  return p.avatar
+    ? <img src={p.avatar} alt="" loading="lazy" referrerPolicy="no-referrer"
+        style={{ width: 16, height: 16, borderRadius: 999, objectFit: "cover", flexShrink: 0 }} />
+    : <span className="shrink-0 rounded-full inline-flex items-center justify-center"
+        style={{ width: 16, height: 16, background: p.color || "var(--bg4)", color: "#fff", fontSize: 8 }}>{p.initials}</span>;
+}
+
 /**
  * And who is on it. One press is one write: picking somebody already on the
  * card takes them off, which is what the tick beside their name means.
  */
 function CardPeoplePick({ task, query, onSaid }: { task: ProviderTask; query: string; onSaid: (s: string) => void }) {
+  const blocked = writeBlock(useClickupSetup());
   const [members, setMembers] = useState<CuMember[] | null>(null);
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState<number | null>(null);
@@ -7599,6 +7645,7 @@ function CardPeoplePick({ task, query, onSaid }: { task: ProviderTask; query: st
   }, [members, task.listId]);
 
   const toggle = async (m: CuMember) => {
+    if (blocked) return;
     const off = on.has(m.id);
     setSaving(m.id);
     const r = await api.clickupCard(task.id, off ? { rem: [m.id] } : { add: [m.id] }, task.updated)
@@ -7608,51 +7655,120 @@ function CardPeoplePick({ task, query, onSaid }: { task: ProviderTask; query: st
     if (r.ok) putCard(query, r.task);
   };
 
+  const ordered = useMemo(() => orderMembers(members, on), [members, on]);
+  const people = task.people ?? [];
+  const mine = people.some((p) => p.me);
   return (
     <>
       {/* The same control the card view uses — see components/PeoplePick. It
           was a plain dropdown of names here, which ran off the bottom right of
-          the window and looked nothing like the one two views away. */}
+          the window and looked nothing like the one two views away. The
+          faces and names are IN the control, as in the card view's Assigned
+          field, rather than a list above a line of grey text. */}
       <button ref={btn} onMouseEnter={load} onClick={() => { load(); setOpen((v) => !v); }}
-        className="agx-btn text-left rounded px-1 -mx-1 py-0.5 hover:bg-white/5 text-[11px] flex items-center gap-1.5"
-        style={{ color: "var(--text3)" }} title="Put somebody on this card, or take them off">
-        <span className="min-w-0 truncate">Assign or unassign…</span>
+        disabled={!!blocked}
+        className="agx-btn w-full text-left rounded px-1.5 py-1 text-[11px] flex items-center gap-1.5 min-w-0 hover:bg-white/5 focus-visible:outline-none focus-visible:ring-1 disabled:opacity-60 disabled:cursor-default"
+        style={{ color: mine ? "var(--success)" : "var(--text2)", border: EDGE }}
+        title={blocked ?? "Put somebody on this card, or take them off"}>
+        {!!people.length && (
+          <span className="inline-flex items-center shrink-0 pl-1">
+            {people.slice(0, 4).map((p, n) => (
+              <span key={p.id ?? n} className="inline-flex rounded-full" style={{ marginLeft: n ? -4 : 0, boxShadow: "0 0 0 1.5px var(--surface-card)" }}>{memberFace(p)}</span>
+            ))}
+          </span>
+        )}
+        <span className="min-w-0 truncate">{mine ? "you" : (people.map((p) => p.name).join(", ") || "nobody")}</span>
         <span className="ml-auto shrink-0" style={{ color: "var(--text4)" }}>▾</span>
       </button>
-      {open && (
+      {open && !blocked && (
         <PeoplePick
           anchor={btn}
-          members={members}
+          members={ordered}
           busy={members === null}
           isOn={(m) => on.has(m.id)}
+          dividerBefore={(m, prev) => on.has(m.id) !== on.has(prev.id)}
           isSaving={(m) => saving === m.id}
           onPick={(m) => { void toggle(m); }}
           onClose={() => setOpen(false)}
-          face={(m) => (m.avatar
-            ? <img src={m.avatar} alt="" loading="lazy" referrerPolicy="no-referrer"
-                style={{ width: 16, height: 16, borderRadius: 999, objectFit: "cover", flexShrink: 0 }} />
-            : <span className="shrink-0 rounded-full inline-flex items-center justify-center"
-                style={{ width: 16, height: 16, background: m.color || "var(--bg4)", color: "#fff", fontSize: 8 }}>{m.initials}</span>)}
+          face={memberFace}
         />
       )}
     </>
   );
 }
+/** What the hand-off will do, drawn inside the confirm: the card, the status
+ *  it leaves and enters, and who comes off it. A bare "are you sure" asked
+ *  people to trust a sentence about a write they could not see. */
+export function ReadyForQaSummary({ task, target, targetColor, unassign = "all" }: {
+  task: ProviderTask; target: string; targetColor?: string;
+  /** Who the workspace's hand-off setting takes off; everybody when not said. */
+  unassign?: HandoffUnassign;
+}) {
+  const people = task.people ?? [];
+  const off = new Set(handoffRemovals(people, unassign));
+  const comesOff = people.filter((p) => p.id != null && off.has(p.id));
+  const stays = people.filter((p) => !(p.id != null && off.has(p.id)));
+  const key = { color: "var(--text3)", fontSize: 10.5, textTransform: "uppercase" as const, letterSpacing: "0.04em" };
+  return (
+    <div className="mt-3 text-[11.5px]" style={{ color: "var(--text2)" }}>
+      <div className="rounded-lg px-3 py-2.5" style={{ border: EDGE }}>
+        <span className="inline-flex items-center gap-1 rounded px-1.5 text-[10.5px]" style={{ border: EDGE }}>
+          <FlagIcon size={ICON.xs} />{task.customId || task.id}
+        </span>
+        <div className="mt-1.5 text-[12.5px] leading-snug" style={{ color: "var(--text)" }}>{task.title}</div>
+      </div>
+      <div className="mt-3 grid items-center gap-y-2" style={{ gridTemplateColumns: "84px 1fr" }}>
+        <div style={key}>Status</div>
+        <div className="flex items-center gap-1.5 min-w-0">
+          <StatusPill status={task.status} color={task.statusColor} />
+          <span style={{ color: "var(--text3)" }}>→</span>
+          <StatusPill status={target} color={targetColor} />
+        </div>
+        <div style={key}>Unassign</div>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          {comesOff.length
+            ? comesOff.map((p, n) => (
+                <span key={p.id ?? n} className="inline-flex items-center gap-1.5 line-through">{memberFace(p)}{p.name}</span>
+              ))
+            : <span style={{ color: "var(--text3)" }}>{people.length ? "nobody comes off" : "nobody assigned"}</span>}
+        </div>
+        {stays.length > 0 && (
+          <>
+            <div style={key}>Stays on</div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              {stays.map((p, n) => (
+                <span key={p.id ?? n} className="inline-flex items-center gap-1.5">{memberFace(p)}{p.name}</span>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+      <div className="mt-3 text-[11px] leading-relaxed" style={{ color: "var(--text3)" }}>
+        One write to ClickUp.{" "}
+        {unassign === "all" ? "Nobody stays on the card until QA picks it up."
+          : unassign === "me" ? "Only you come off the card."
+          : "Everyone assigned stays on the card."}
+      </div>
+    </div>
+  );
+}
 /**
- * One press: send the card to the list's own "ready for QA" status and clear
- * every assignee, because handing off work and staying on the card is the
- * mistake this exists to stop. Hidden rather than disabled when the list has
- * no such status or the card is already in it — a control with nothing to do
- * is not a control, it is a question nobody asked.
+ * One press: send the card to the status the workspace named for the hand-off
+ * and take off whoever its setting says (everybody, only you, or nobody).
+ * Hidden rather than disabled when the setting is off, the list has no such
+ * status or the card is already in it — a control with nothing to do is not a
+ * control, it is a question nobody asked. Off is the default: a status called
+ * "Ready for QA" is one team's column, not every workspace's.
  *
  * The status list is fetched on mount rather than on hover the way the status
  * picker's is: hover cannot decide whether to show a button at all. One extra
  * read per card the sidebar already opened for.
  */
-function CardRfqaButton({ task, query, onSaid, ask }: {
+function CardReadyForQaButton({ task, query, onSaid, ask }: {
   task: ProviderTask; query: string; onSaid: (s: string) => void;
-  ask: (spec: { title: string; body?: string; confirmLabel?: string; danger?: boolean }) => Promise<boolean>;
+  ask: (spec: { title: string; body?: string; node?: React.ReactNode; confirmLabel?: string; danger?: boolean }) => Promise<boolean>;
 }) {
+  const blocked = writeBlock(useClickupSetup());
   const [statuses, setStatuses] = useState<CuStatus[] | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -7664,14 +7780,17 @@ function CardRfqaButton({ task, query, onSaid, ask }: {
     return () => { live = false; };
   }, [task.listId]);
 
-  const target = statuses ? rfqaStatus(statuses, task.status) : undefined;
-  if (!target) return null;
+  const handoff = useClickupPrefs()?.handoff;
+  // Unknown prefs read as off, so the button never flashes on and away.
+  const target = statuses && handoff ? readyForQaStatus(statuses, task.status, handoff) : undefined;
+  if (!target || !handoff) return null;
 
   const move = async () => {
-    if (busy) return;
+    if (busy || blocked) return;
     const said = await ask({
-      title: `Move ${query} to Ready for QA and unassign everyone?`,
-      confirmLabel: "Move to RfQA",
+      title: `Move to ${target}?`,
+      node: <ReadyForQaSummary task={task} target={target} targetColor={statusColor(statuses ?? [], target)} unassign={handoff.unassign} />,
+      confirmLabel: `Move to ${target}`,
     });
     if (!said) return;
     setBusy(true);
@@ -7679,45 +7798,42 @@ function CardRfqaButton({ task, query, onSaid, ask }: {
     // One request: the same write the status picker and the people picker each
     // make half of — see cardMove's note on the three-call version racing its
     // own `updated` stamp.
-    const rem = (task.people ?? []).map((p) => p.id).filter((n): n is number => n != null);
-    const r = await api.clickupCard(task.id, { status: target, rem }, task.updated)
+    const changes = handoffChanges(target, task.people, handoff.unassign);
+    const r = await api.clickupCard(task.id, changes, task.updated)
       .catch(() => ({ ok: false, error: "Could not reach the server", task: undefined }));
     setBusy(false);
-    onSaid(r.ok ? `now ${target} · unassigned` : `!${r.error || "ClickUp refused that"}`);
+    onSaid(r.ok ? `now ${target}${changes.rem ? " · unassigned" : ""}` : `!${r.error || "ClickUp refused that"}`);
     if (r.ok) putCard(query, r.task);
   };
 
   return (
-    <button onClick={() => { void move(); }} disabled={busy}
+    <button onClick={() => { void move(); }} disabled={busy || !!blocked}
       className="agx-btn text-[10.5px] px-2 py-0.5 rounded disabled:opacity-50"
-      title={`Move to ${target} and unassign everyone`}
+      title={blocked ?? `Move to ${target}${handoff.unassign === "all" ? " and unassign everyone" : handoff.unassign === "me" ? " and take yourself off" : ""}`}
       style={{ color: "var(--text2)", border: EDGE }}>
-      Move to RfQA
+      Move to {target}
     </button>
   );
 }
-function CardFacts({ d, root }: { d: PrDetail; root: string }) {
+function CardFacts({ d }: { d: PrDetail }) {
   const setup = useClickupSetup();
   const { ask, dialog } = useDialogs();
-  /* Whether the agent here can post to Slack — see server/src/slackreach.ts.
-     Asked once per mount rather than baked in: somebody connects the
-     integration without restarting agentglass, and a button that only appears
-     after the next launch reads as broken. */
-  const [slack, setSlack] = useState(false);
-  const [tell, setTell] = useState<"slack" | "card" | null>(null);
+  /* The note on the card is the only thing this section writes. Telling
+     somebody in chat is `AskInChat`, which does not need a card at all. */
+  const [tell, setTell] = useState<"card" | null>(null);
   const [msg, setMsg] = useState("");
   const [sending, setSending] = useState(false);
   const [said, setSaid] = useState("");
-  /* The wording the ping is sent with. The same catalogue the review menu
-     reads, because it is the same kind of thing: personal, edited in Settings,
-     stored in the user's own file and not in this repository. */
+  /* The note's wording, from the same catalogue the review menu reads: personal,
+     edited in Settings, stored in the user's own file. */
   const recipes = useReviewRecipes();
   const repoName = useContext(RepoCtx);
-  useEffect(() => {
-    let live = true;
-    api.notifyReach().then((r) => { if (live) setSlack(!!r?.slack); }).catch(() => { /* assume not */ });
-    return () => { live = false; };
-  }, []);
+  /* The note on the card is one team's habit, so it is off until Settings says
+     otherwise; unknown reads as off. */
+  const noteOnCard = useClickupPrefs()?.flows.noteOnCard === true;
+  /* Writes off: the status, people, hand-off and note controls below stay in
+     place, disabled; this line, once, says why. */
+  const blocked = writeBlock(setup);
   const ref = useMemo(() => mergeCardRef(d, setup), [d.headRefName, d.title, d.body, setup]);
   const query = ref?.query ?? "";
   /* The store tells everyone when an answer lands; this only has to redraw.
@@ -7754,118 +7870,59 @@ function CardFacts({ d, root }: { d: PrDetail; root: string }) {
           </span>
         ) : (
           <>
-            <CardStatusPick task={task} query={query} onSaid={setSaid} />
-            {task.people?.length
-              ? (
-                <div className="flex flex-col gap-1">
-                  {task.people.map((p, i) => (
-                    <span key={p.id ?? `${p.name}-${i}`} className="flex items-center gap-1.5 text-[11px] min-w-0" style={{ color: "var(--text2)" }}>
-                      {/* The face, as everywhere else people are drawn here.
-                          Two initials is a puzzle in a workspace of five
-                          hundred. */}
-                      {p.avatar
-                        ? <img src={p.avatar} alt="" loading="lazy" referrerPolicy="no-referrer"
-                            style={{ width: 16, height: 16, borderRadius: 999, objectFit: "cover", flexShrink: 0 }} />
-                        : <span className="shrink-0 rounded-full inline-flex items-center justify-center"
-                            style={{ width: 16, height: 16, background: p.color || "var(--bg4)", color: "#fff", fontSize: 8 }}>
-                            {p.initials}
-                          </span>}
-                      <span className="truncate">{p.name}{p.me ? " · you" : ""}</span>
-                    </span>
-                  ))}
-                </div>
-              )
-              : <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>No one assigned</span>}
-            <CardPeoplePick task={task} query={query} onSaid={setSaid} />
+            {/* Status and who is on it, as the card view lays them out: a
+                small-caps label over each control. */}
+            <div className="flex flex-col gap-1.5">
+              <div className="flex flex-col gap-1">
+                <span className="text-[8.5px] uppercase tracking-[0.18em]" style={{ color: "var(--text4)" }}>Status</span>
+                <CardStatusPick task={task} query={query} onSaid={setSaid} />
+              </div>
+              <div className="flex flex-col gap-1 min-w-0">
+                <span className="text-[8.5px] uppercase tracking-[0.18em]" style={{ color: "var(--text4)" }}>Assigned</span>
+                <CardPeoplePick task={task} query={query} onSaid={setSaid} />
+              </div>
+            </div>
 
-            {/* Telling somebody it is ready.
-                Two routes, and they are not the same kind of thing. The card is
-                ours to write on — agentglass holds a ClickUp token. Slack is
-                not: posting there means holding a workspace token to do what an
-                agent already does with its own, so that button gathers the
-                facts and opens a tmux tab with an agent on it. Which is also
-                why one of them can be missing and the other cannot. */}
+            {/* The card is ours to write on — agentglass holds a ClickUp token.
+                Telling somebody in chat is not (see `AskInChat`), and it lives
+                outside this section so a pull request with no card has it too. */}
             <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
-              {slack && (
-                <button onClick={() => { setSaid(""); setTell(tell === "slack" ? null : "slack"); setMsg(""); }}
-                  className="agx-btn text-[10.5px] px-2 py-0.5 rounded"
-                  title="Ask an agent to say it in Slack — it writes the message"
+              {noteOnCard && (
+                <button disabled={!!blocked} onClick={() => { setSaid(""); setTell(tell === "card" ? null : "card"); setMsg(defaultPing(d, whoToTell(task), recipes, repoName ?? "", ref.label, task?.url || "")); }}
+                  className="agx-btn text-[10.5px] px-2 py-0.5 rounded disabled:opacity-50"
+                  title={blocked ?? "Write a note on this card's activity"}
                   style={{ color: "var(--text2)", border: EDGE }}>
-                  Ping Slack
+                  Note on card
                 </button>
               )}
-              <button onClick={() => { setSaid(""); setTell(tell === "card" ? null : "card"); setMsg(defaultPing(d, whoToTell(task))); }}
-                className="agx-btn text-[10.5px] px-2 py-0.5 rounded"
-                title="Write a note on this card's activity"
-                style={{ color: "var(--text2)", border: EDGE }}>
-                Note on card
-              </button>
-              <CardRfqaButton task={task} query={query} onSaid={setSaid} ask={ask} />
+              <CardReadyForQaButton task={task} query={query} onSaid={setSaid} ask={ask} />
               {said && <span className="text-[10px]" style={{ color: said.startsWith("!") ? "var(--warning)" : "var(--success)" }}>{said.replace(/^!/, "")}</span>}
             </div>
+            {blocked && <div className="text-[10px]" style={{ color: "var(--text3)" }}>{blocked}</div>}
 
             {tell && (
               <div className="flex flex-col gap-1.5">
-                {/* Two different boxes wearing one control. On the card it is
-                    the note itself, prefilled with the sentence you were going
-                    to type, and posted as it stands. In Slack the message is
-                    the agent's to write, so this is only what you would have
-                    added by hand — empty is the common case, and prefilling it
-                    would put this app's English into somebody's DM. */}
+                {/* The note itself, prefilled with the sentence you were going
+                    to type, and posted as it stands. */}
                 <textarea value={msg} onChange={(e) => setMsg(e.target.value)} rows={3} spellCheck={false}
-                  placeholder={tell === "slack" ? "Anything to add — what to look at first, whether it is urgent. Optional." : ""}
                   className="w-full px-2 py-1 rounded text-[11px] outline-none resize-y"
                   style={{ background: "color-mix(in srgb, var(--text) 8%, transparent)", color: "var(--text)", border: EDGE }} />
                 <div className="flex items-center gap-1.5">
                   <span className="text-[10px] truncate min-w-0" style={{ color: "var(--text4)" }}>
-                    {tell === "slack" ? `an agent writes it${whoToTell(task) ? ` to ${whoToTell(task)!.name}` : ""}, in the words that chat is written in` : `on ${whoToTell(task) ? `the card, to ${whoToTell(task)!.name}` : "the card"}`}
+                    {`on ${whoToTell(task) ? `the card, to ${whoToTell(task)!.name}` : "the card"}`}
                   </span>
-                  <button disabled={sending || (tell === "card" && !msg.trim())} className="agx-btn ml-auto shrink-0 text-[10.5px] px-2 py-0.5 rounded disabled:opacity-40"
+                  <button disabled={sending || !msg.trim() || !!blocked} className="agx-btn ml-auto shrink-0 text-[10.5px] px-2 py-0.5 rounded disabled:opacity-40"
                     style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}
                     onClick={async () => {
                       const target = whoToTell(task);
-                      if (tell === "slack") {
-                        /* Handed over rather than sent, and handed to a tmux
-                           window rather than to the chat. Slack is not ours to
-                           post into — that takes an agent with its own
-                           connection — and a message into somebody else's
-                           workspace is not a fire-and-forget button: it is
-                           worth watching, attached, where you can take the
-                           keyboard off it before it says the wrong thing. */
-                        const text = pingPrompt(recipes, {
-                          number: d.number,
-                          repo: repoName ?? "",
-                          head: d.commits.length ? d.commits[d.commits.length - 1]!.oid : "",
-                          branch: d.headRefName,
-                          title: d.title,
-                          author: d.author,
-                          url: d.url,
-                          card: ref.label,
-                          // The address of the card actually resolved, not one
-                          // built from the id: a message carrying `ORBIT-1042`
-                          // and no link is the half that makes somebody search.
-                          // Empty until ClickUp answers, which is also when the
-                          // rest of this section is still a spinner.
-                          cardUrl: task?.url || "",
-                          who: target?.name ?? "",
-                          note: msg.trim(),
-                        });
-                        // The agent's window opens in a checkout; a read-only visit has none.
-                        if (root.startsWith("gh:")) setSaid("no agent can be started here — there is no checkout of this repository on this machine");
-                        else {
-                          requestTermIssue(root, `slack-${d.number}`, text, true, false, `Ping about #${d.number}`);
-                          setTell(null); setSaid(`an agent has it in a tmux tab — "slack-${d.number}"`);
-                        }
-                        return;
-                      }
-                      if (!task) return;
+                      if (!task || blocked) return;
                       setSending(true);
                       const r = await api.clickupComment(task.id, msg.trim(), target?.id ?? undefined).catch(() => null);
                       setSending(false);
                       if (r?.ok) { setTell(null); setSaid("written on the card"); }
                       else setSaid(`!${r?.error || "ClickUp refused it"}`);
                     }}>
-                    {sending ? "Sending…" : tell === "slack" ? "Hand to a tmux tab" : "Write it"}
+                    {sending ? "Sending…" : "Write it"}
                   </button>
                 </div>
               </div>
@@ -7878,17 +7935,18 @@ function CardFacts({ d, root }: { d: PrDetail; root: string }) {
   );
 }
 
-/** Who the note is for: whoever is on the card. Falls back to nobody rather
- *  than to the pull request's author — telling somebody their own branch is
- *  ready is the one message that is never useful. */
-function whoToTell(task: { people?: { id?: number; name: string }[] } | null): { id?: number; name: string } | null {
-  return task?.people?.[0] ?? null;
-}
+/** The note's wording in the prompt catalogue, and what stands in for it before
+ *  the catalogue arrives or after somebody deletes the entry. */
+const NOTE_RECIPE = "note-on-card";
+const FALLBACK_NOTE = "{who} PR ready to review — #{number} {title}\n{url}";
 
 /** The sentence, ready to send. The mention is always there, because a note
  *  that does not name anybody is a note nobody reads as theirs. */
-function defaultPing(d: PrDetail, who: { name: string } | null): string {
-  return `${who ? `@${who.name} ` : ""}PR ready to review — #${d.number} ${d.title}\n${d.url}`;
+function defaultPing(d: PrDetail, who: { name: string } | null, recipes: ReviewRecipe[], repo: string, card: string, cardUrl: string): string {
+  return cardNoteText(recipes.find((x) => x.id === NOTE_RECIPE)?.body, FALLBACK_NOTE, {
+    number: d.number, repo, head: d.commits.length ? d.commits[d.commits.length - 1]!.oid : "", branch: d.headRefName,
+    title: d.title, author: d.author, url: d.url, card, cardUrl, who: who ? `@${who.name}` : "",
+  });
 }
 
 /**
@@ -7928,6 +7986,118 @@ function pingPrompt(recipes: ReviewRecipe[], ctx: ReviewRecipeContext): string {
   const body = (r?.body || "").trim() || FALLBACK_PING;
   const skill = r?.skill ? expandRecipe(r.skill, ctx).trim() : "";
   return [skill, expandRecipe(body, ctx).trim()].filter(Boolean).join("\n\n");
+}
+
+/**
+ * "Ask for review": the chat ping, for everybody whose agent can post to one.
+ *
+ * Not part of the ClickUp section, and that is the point. The ping used to be
+ * a button on the card, behind `if (!ref) return null`, so a pull request with
+ * no card id, or a machine with no tracker, never saw it. Here the card is an
+ * optional fact: when there is one `{card}` and `{cardUrl}` carry it, and when
+ * there is not the shipped frame drops that line (see `expandRecipe`).
+ *
+ * Slack is not ours to post into. Posting there means holding a workspace
+ * token to do what an agent already does with its own, so this gathers the
+ * facts and opens a tmux tab with an agent on it, where the draft can be read
+ * and stopped before it is sent.
+ *
+ * Every hook runs before the early return, because `slack` and `setup` both
+ * arrive a render late and a component whose hook count changes takes the
+ * window with it.
+ */
+function AskInChat({ d, root }: { d: PrDetail; root: string }) {
+  const setup = useClickupSetup();
+  const recipes = useReviewRecipes();
+  const repoName = useContext(RepoCtx);
+  /* Whether the agent here can post to Slack — see server/src/slackreach.ts.
+     Asked once per mount (and kept a minute across mounts) rather than baked
+     in: somebody connects the integration without restarting agentglass, and
+     a button that only appears after the next launch reads as broken. */
+  const [slack, setSlack] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [said, setSaid] = useState("");
+  useEffect(() => {
+    let live = true;
+    void slackReach(() => api.notifyReach()).then((r) => { if (live) setSlack(r); });
+    return () => { live = false; };
+  }, []);
+  const ref = useMemo(() => mergeCardRef(d, setup), [d.headRefName, d.title, d.body, setup]);
+  const [, redraw] = useState(0);
+  useEffect(() => onCard(() => redraw((n) => n + 1)), []);
+  const task = ref ? cardOf(ref.query)?.task ?? null : null;
+  const target = whoToTell(task);
+
+  if (!askInChatVisible({ slack, card: !!ref })) return null;
+
+  return (
+    <SidebarSection title="Ask for review">
+      <div className="flex flex-col gap-1.5 min-w-0">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <button onClick={() => { setSaid(""); setOpen(!open); setMsg(""); }}
+            className="agx-btn text-[10.5px] px-2 py-0.5 rounded"
+            title="Ask an agent to say it in your chat — it writes the message"
+            style={{ color: "var(--text2)", border: EDGE }}>
+            Ping in chat
+          </button>
+          {said && <span className="text-[10px]" style={{ color: said.startsWith("!") ? "var(--warning)" : "var(--success)" }}>{said.replace(/^!/, "")}</span>}
+        </div>
+        {open && (
+          <div className="flex flex-col gap-1.5">
+            {/* The message is the agent's to write, so this is only what you
+                would have added by hand — empty is the common case, and
+                prefilling it would put this app's English into somebody's DM. */}
+            <textarea value={msg} onChange={(e) => setMsg(e.target.value)} rows={3} spellCheck={false}
+              placeholder="Anything to add — what to look at first, whether it is urgent. Optional."
+              className="w-full px-2 py-1 rounded text-[11px] outline-none resize-y"
+              style={{ background: "color-mix(in srgb, var(--text) 8%, transparent)", color: "var(--text)", border: EDGE }} />
+            {/* Its own line: beside the button it was cut to "an agent write…". */}
+            <span className="text-[10px]" style={{ color: "var(--text4)" }}>
+              {`an agent writes it${target ? ` to ${target.name}` : ""}, in the words that chat is written in`}
+            </span>
+            <div className="flex items-center gap-1.5">
+              <button className="agx-btn ml-auto shrink-0 text-[10.5px] px-2 py-0.5 rounded"
+                style={{ color: "var(--primary-ink)", border: EDGE, borderColor: "color-mix(in srgb, var(--primary) 45%, transparent)" }}
+                onClick={() => {
+                  /* Handed over rather than sent, and handed to a tmux
+                     window rather than to the chat. A message into somebody
+                     else's workspace is not a fire-and-forget button: it is
+                     worth watching, attached, where you can take the
+                     keyboard off it before it says the wrong thing. */
+                  const text = pingPrompt(recipes, {
+                    number: d.number,
+                    repo: repoName ?? "",
+                    head: d.commits.length ? d.commits[d.commits.length - 1]!.oid : "",
+                    branch: d.headRefName,
+                    title: d.title,
+                    author: d.author,
+                    url: d.url,
+                    card: ref?.label ?? "",
+                    // The address of the card actually resolved, not one
+                    // built from the id: a message carrying `ORBIT-1042`
+                    // and no link is the half that makes somebody search.
+                    // Empty until the tracker answers, and for good when
+                    // there is no card.
+                    cardUrl: task?.url || "",
+                    who: target?.name ?? "",
+                    note: msg.trim(),
+                  });
+                  // The agent's window opens in a checkout; a read-only visit has none.
+                  if (root.startsWith("gh:")) setSaid("no agent can be started here — there is no checkout of this repository on this machine");
+                  else {
+                    requestTermIssue(root, `slack-${d.number}`, text, true, false, `Ping about #${d.number}`);
+                    setOpen(false); setSaid(`an agent has it in a tmux tab — "slack-${d.number}"`);
+                  }
+                }}>
+                Hand to a tmux tab
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </SidebarSection>
+  );
 }
 
 function PrSidebar({ d, root, spend, onEditField, onRerequest }: {
@@ -8075,7 +8245,8 @@ function PrSidebar({ d, root, spend, onEditField, onRerequest }: {
       )}
       {/* Under the GitHub facts, where he asked for it: the pull request first,
           and then the card it came from. */}
-      <CardFacts d={d} root={root} />
+      <CardFacts d={d} />
+      <AskInChat d={d} root={root} />
       {d.autoMerge && (
         <SidebarSection title="Auto-merge">
           <span className="text-[10.5px]" style={{ color: "var(--warning-ink)" }}>
@@ -12155,7 +12326,7 @@ function durationTint(k: PrCheck, v: ReturnType<typeof checkVerdict>): string {
     : "color-mix(in srgb, var(--text3) 55%, transparent)";
 }
 
-export function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyWhat }: { d: PrDetail; root: string; jobs: PrCheckJob[]; onRerun: () => void; onRerunJobs?: (what: "all" | "failed" | "job", id: string) => void; onAsk?: (check: PrCheck) => void; busy: boolean;
+export function Checks({ d, root, jobs, prRefs, onRerun, onRerunJobs, onAsk, busy, busyWhat }: { d: PrDetail; root: string; jobs: PrCheckJob[]; prRefs?: PrRefs; onRerun: () => void; onRerunJobs?: (what: "all" | "failed" | "job", id: string) => void; onAsk?: (check: PrCheck) => void; busy: boolean;
   /** Which request is in flight, so the button that started it is the one that
    *  spins — see Btn `pending`. */
   busyWhat?: string }) {
@@ -12197,9 +12368,15 @@ export function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyW
     return s ? failureRowText(s) : null;
   };
 
+  // An aggregator job names the jobs it reports; pressing one opens that check's detail and brings its row into view.
+  const openSibling = (id: string) => {
+    setOpenCheck(id);
+    requestAnimationFrame(() => document.querySelector(`[data-check-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "nearest" }));
+  };
+
   const row = (k: PrCheck, i: number, full: boolean) => {
     const bad = k.state === "failure";
-    const id = `${checkLabel(k)}::${k.url ?? i}`;
+    const id = checkRowId(k, i);
     const expanded = bad && openCheck === id;
     const quiet = k.state === "skipped" || k.state === "neutral";
     const share = spanShare(k, slowMs);
@@ -12214,7 +12391,7 @@ export function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyW
     // the job; pinned above the cards it has to say both.
     const name = full ? `${k.workflow ? `${k.workflow} / ` : ""}${shortName(k)}` : shortName(k);
     return (
-      <div key={id} style={{ borderTop: LINE, background: bad ? "color-mix(in srgb, var(--error) 7%, transparent)" : undefined }}>
+      <div key={id} data-check-id={id} style={{ borderTop: LINE, background: bad ? "color-mix(in srgb, var(--error) 7%, transparent)" : undefined }}>
         <div className="flex items-center gap-2 px-2.5 py-1.5" style={{ minHeight: CTRL_H.regular }}>
           {/* A failing check is the one row on this tab you came for, so it is
               the one row that opens into somewhere to go next. */}
@@ -12267,7 +12444,9 @@ export function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyW
         )}
         {/* The log, here. It used to say "the log lives on GitHub" and send you
             to a browser for the one thing you opened the check to read. */}
-        {expanded && <CheckFailuresPanel root={root} check={k} job={jobFor(k, jobs)} />}
+        {expanded && <CheckFailuresPanel root={root} check={k} job={jobFor(k, jobs)}
+          sameRun={failedInRun(k, d.checksAll).map((o) => ({ label: shortName(o), open: () => openSibling(checkRowId(o)) }))} refs={prRefs}
+          rowAction={(f) => <CheckOnBase root={root} pr={d.number} failure={f} />} />}
         {expanded && <JobLog root={root} name={k.name} jobs={jobs} />}
       </div>
     );

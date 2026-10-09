@@ -123,9 +123,33 @@ function bunFailures(lines: string[]): CiFailure[] {
 }
 
 // ── pytest ────────────────────────────────────────────────────────────────
+/**
+ * `-rf --tb=no`, `--tb=line` and a log cut before the report print no FAILURES block, and the only place the
+ * test is named is the short summary: one `FAILED <node id> - <message>` line each (`ERROR` for a setup or
+ * collection error). Only that block is read: xdist's `[gw0] [ 41%] FAILED …` progress lines name the same test again.
+ * The ceiling: pytest cuts a long message to the terminal width, so a signature built here can differ from the
+ * one the FAILURES block gives the same test, and then the two are not recognised as one.
+ */
+function pytestSummaryFailures(lines: string[]): CiFailure[] {
+  const head = lines.findIndex((l) => /^=+ short test summary info =+$/.test(l));
+  if (head < 0) return [];
+  const out: CiFailure[] = [];
+  const seen = new Set<string>();
+  for (let i = head + 1; i < lines.length; i++) {
+    const l = lines[i]!;
+    if (l.startsWith("=") || l.startsWith("##[")) break;
+    const m = /^(?:FAILED|ERROR) (\S+?)(?: - (.*))?$/.exec(l);
+    if (!m || seen.has(m[1]!)) continue;
+    seen.add(m[1]!);
+    // `path::Class::test` is "Class.test" in a FAILURES header; a bare path (a collection error) stays as it is.
+    out.push(make("pytest", m[1]!.split("::").slice(1).join(".") || m[1]!, [l], m[2] ?? ""));
+  }
+  return out;
+}
+
 function pytestFailures(lines: string[]): CiFailure[] {
   const head = lines.findIndex((l) => /^=+ FAILURES =+$/.test(l));
-  if (head < 0) return [];
+  if (head < 0) return pytestSummaryFailures(lines);
   const stop = lines.findIndex((l, i) => i > head && /^=+ (short test summary info|warnings summary|.* in [\d.]+s.*) =+$/.test(l));
   const body = lines.slice(head + 1, stop < 0 ? undefined : stop);
   const out: CiFailure[] = [];
@@ -144,17 +168,20 @@ function pytestFailures(lines: string[]): CiFailure[] {
 }
 
 // ── django / unittest ─────────────────────────────────────────────────────
+/** `FAIL: test (mod.Class.test)`, and with timings on (`--timing`, verbosity 2) `FAIL [0.002s]: …`. */
+const DJANGO_HEAD = /^(FAIL|ERROR)(?: \[[\d.]+s\])?: (.+)$/;
+
 function djangoFailures(lines: string[]): CiFailure[] {
   const out: CiFailure[] = [];
   for (let i = 0; i < lines.length; i++) {
-    const m = /^(FAIL|ERROR): (.+)$/.exec(lines[i]!);
+    const m = DJANGO_HEAD.exec(lines[i]!);
     // `ERROR: chunk too large` from a build is not a unittest failure: unittest always draws the rule under the header.
     if (!m || !/^-{20,}$/.test(lines[i + 1] ?? "")) continue;
     const block: string[] = [];
     // A block ends at the next === rule, at the closing ---- before `Ran N tests`, or at the next FAIL/ERROR.
     for (let j = i + 2; j < lines.length; j++) {
       const l = lines[j]!;
-      if (/^={20,}$/.test(l) || /^(FAIL|ERROR): /.test(l) || /^Ran \d+ tests?/.test(l)) break;
+      if (/^={20,}$/.test(l) || DJANGO_HEAD.test(l) || /^Ran \d+ tests?/.test(l)) break;
       block.push(l);
     }
     while (block.length && (!block[block.length - 1]!.trim() || /^-{20,}$/.test(block[block.length - 1]!))) block.pop();

@@ -85,6 +85,22 @@ describe("asking how far behind", () => {
     expect(askingBehind("/repo", 4)).toBe(false);
   });
 
+  it("keeps no grey placeholder for an answer that has only aged", async () => {
+    // Up to date, read, and then five minutes go by: the card has nothing to
+    // draw and an answer is still held, so there is no space to keep for one.
+    answer = async () => ({ ok: true, behind: 0 });
+    behindOf("/repo", 5);
+    await settle();
+    const now = Date.now;
+    Date.now = () => now() + 6 * 60_000;
+    try {
+      expect(askingBehind("/repo", 5)).toBe(false);
+    } finally {
+      Date.now = now;
+      answer = async (n) => ({ ok: true, behind: n });
+    }
+  });
+
   it("does not ask without a checkout to ask about", () => {
     expect(behindOf("", 7)).toBeNull();
     expect(calls).toEqual([]);

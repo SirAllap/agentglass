@@ -188,7 +188,7 @@ const feed = async (bytes: string): Promise<void> => {
  * This used to be `await Bun.sleep(260)` and a read — 260ms being "longer than
  * the page's own 90ms settle". A fixed sleep is not a synchronisation
  * primitive, and on a GitHub runner the first report arrived later than that:
- * `Expected: "hola como vas bien" / Received: undefined`, one test red out of
+ * `Expected: "hello how are you" / Received: undefined`, one test red out of
  * 398 with the engine loaded and every later test in the same file green,
  * because by then there was an older message for the read to return. The same
  * race was live in every one of these assertions; the first one is simply the
@@ -350,14 +350,14 @@ describe.if(HAVE_CHROME)("what the page thinks is being typed", () => {
 
   test("an agent's prompt with a half-written line in it", async () => {
     // Clear, home, then exactly what `capture-pane` showed on a real pane.
-    await feed("[2J[H❯ hola como vas bien");
-    expect(await reported()).toBe("hola como vas bien");
+    await feed("[2J[H❯ hello how are you");
+    expect(await reported()).toBe("hello how are you");
   });
 
   test("typing more of it is reported as the whole line, not the tail", async () => {
     // The field is the line, so a partial answer would truncate what is in it.
-    await feed(" y tu");
-    expect(await reported()).toBe("hola como vas bien y tu");
+    await feed(" and me");
+    expect(await reported()).toBe("hello how are you and me");
   });
 
   test("erasing on the pane shrinks it here too", async () => {
@@ -366,10 +366,10 @@ describe.if(HAVE_CHROME)("what the page thinks is being typed", () => {
     //
     // The blank is the point. It PAINTS A SPACE, so those cells were written
     // and xterm's own trim keeps them — this first ran green-adjacent, reading
-    // "hola como vas bien y   ", which the field would have carried and then
+    // "hello how are you and   ", which the field would have carried and then
     // sent back on the next edit. See the trim in `lineNow`.
     await feed("\b \b\b \b\b \b");
-    expect(await reported()).toBe("hola como vas bien y");
+    expect(await reported()).toBe("hello how are you and");
   });
 
   test("an empty prompt is empty, which is not the same as unreadable", async () => {

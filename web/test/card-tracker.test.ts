@@ -42,10 +42,21 @@ describe("what the block draws, per mode", () => {
     expect(html).toContain("+2");
     expect(html).toContain("Gu Hale");
   });
-  it("offers both copy buttons, with the words the tooltips use", () => {
-    const html = draw({});
-    expect(html).toContain('aria-label="Copy card ID"');
-    expect(html).toContain('aria-label="Copy card name"');
+  it("offers the three copy buttons in order, with the words the tooltips use", () => {
+    const html = draw({ card: card({ url: "https://tracker.example/t/ORBIT-1042" }) });
+    const at = ["Copy card ID", "Copy card name", "Copy card link"].map((l) => html.indexOf(`aria-label="${l}"`));
+    expect(at.every((n) => n > 0)).toBe(true);
+    expect(at).toEqual([...at].sort((a, b) => a - b));
+    expect(html).toContain('data-k="link"');
+  });
+  it("has no copy-link button for a card with no address, and keeps the other two", () => {
+    for (const url of [undefined, "", "   ", "not a link", "javascript:alert(1)", "file:///etc/hosts"]) {
+      const html = draw({ card: card({ url }) });
+      expect(html).toContain('aria-label="Copy card ID"');
+      expect(html).toContain('aria-label="Copy card name"');
+      expect(html).not.toContain("Copy card link");
+      expect(html).not.toContain("data-wide");
+    }
   });
   it("has no copy-name button for a card without a title, and keeps the id one", () => {
     const html = draw({ card: card({ title: "" }) });
@@ -91,6 +102,13 @@ describe("the copy buttons", () => {
     expect(tracker).toContain("const COPIED_MS = 1500;");
     expect(tracker).toContain("openCard(card.customId || card.id, card.customId)");
   });
+  it("come in three kinds, each with its words and a glyph already in the set", () => {
+    expect(tracker).toContain('type CopyKind = "id" | "name" | "link";');
+    expect(tracker).toContain('kind="id" label="Copy card ID" done={`Copied ${id}`}');
+    expect(tracker).toContain('kind="name" label="Copy card name" done="Copied card name"');
+    expect(tracker).toContain('kind="link" label="Copy card link" done="Copied card link"');
+    expect(tracker).toContain("<LinkIcon size={ICON.xs} />");
+  });
   it("are the house 26px", () => {
     expect(tracker).toContain("style={{ width: HIT, height: HIT }}");
   });
@@ -103,6 +121,13 @@ describe("the copy buttons", () => {
 describe("the block's stylesheet", () => {
   it("reserves a box for the copy buttons, so reaching for one moves nothing", () => {
     expect(trkCss).toMatch(/\.agx-trk-fz \{[^}]*min-width: 56px/);
+  });
+  it("widens the box to three buttons only for a card that has the third", () => {
+    expect(trkCss).toContain(".agx-trk-fz[data-wide] { min-width: 78px; }");
+    expect(trkCss).toContain(".agx-trk-fz, .agx-trk-fz[data-wide] { min-width: 0; gap: 4px; }");
+  });
+  it("hangs the last button's tooltip from its right edge, whichever button is last", () => {
+    expect(trkCss).toContain(".agx-trk-cp:last-child .agx-trk-tip { left: auto; right: 0; transform: none; }");
   });
   it("swaps the faces for the buttons on pointer-over AND on focus-within", () => {
     expect(trkCss).toContain(".agx-trk:is(:hover, :focus-within) .agx-trk-faces { opacity: 0; }");

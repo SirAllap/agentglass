@@ -133,6 +133,31 @@ describe("which prompt is suggested", () => {
   });
 });
 
+/*
+ * The note written on the card is posted as it stands, so it is text and not a
+ * brief: it must read as a sentence with the facts and nothing left unfilled.
+ * `{who}` is the mention, and empty when nobody is on the card.
+ */
+describe("the note on the card", () => {
+  const note = () => C.BUILT_IN_RECIPES.find((r) => r.id === "note-on-card")!;
+
+  it("is in the catalogue and in the list the settings page edits, beside the chat message", () => {
+    expect(note()).toBeTruthy();
+    expect(note().group).toBe("telling");
+    expect(P.reviewRecipes().some((r) => r.id === "note-on-card")).toBe(true);
+  });
+
+  it("says what is ready and where, with every placeholder filled", () => {
+    const out = C.expandRecipe(note().body, { ...ctx, who: "@Alex Doe" }).trim();
+    expect(out).toBe(`@Alex Doe PR ready to review — #${ctx.number} ${ctx.title}\n${ctx.url}`);
+    expect(out).not.toContain("{");
+  });
+
+  it("with nobody on the card, leaves no gap once trimmed", () => {
+    expect(C.expandRecipe(note().body, { ...ctx, who: "" }).trim().startsWith("PR ready to review")).toBe(true);
+  });
+});
+
 describe("the menu", () => {
   it("is the catalogue when nothing has been edited", () => {
     const list = P.reviewRecipes();

@@ -2,11 +2,11 @@
  * What "find" means on the pull-request board.
  *
  * Not the text on the screen — the CARD. A board search is asked one of two
- * questions, "which of these mentions billing" and "where is javidoe on this
+ * questions, "which of these mentions billing" and "where is adadoe on this
  * board", and the second one is answered by fields the card only half shows:
  * the requested reviewers, the assignees, both branch names. Matching the
  * rendered text finds the first and misses the second, which is how typing a
- * name used to dim every card including the one that says "Waiting on javidoe"
+ * name used to dim every card including the one that says "Waiting on adadoe"
  * in as many words.
  *
  * Pulled out of the board so the app's own find bar can drive exactly the same

@@ -9,25 +9,77 @@
  * them. The decisions are in lib/checkFailures.ts; the requests in
  * lib/checkFailuresStore.ts; the cutting in server/src/ciFailures.ts.
  */
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import type { CiFailure, PrCheck, PrCheckJob } from "../../../shared/types.ts";
 import { verdictLabel, type TestVerdict } from "../../../shared/failureVerdict.ts";
 import { ArrowIcon, CaretIcon, ClockIcon, CopyIcon, DoneIcon, FileIcon, RefreshIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { externalUrl } from "../lib/externalUrl.ts";
 import { ICON } from "../lib/iconSize.ts";
-import { Button, EDGE, IconChip, LINE } from "./workspace/Chrome.tsx";
+import { Button, CTRL_H, EDGE, IconChip, LINE } from "./workspace/Chrome.tsx";
 import { CODE_FONT_STYLE } from "./diff/DiffLines.tsx";
 import { Spinner } from "./Spinner.tsx";
-import { failureGist, failureCopyText, failureView, formatBytes, logAgeDays, plural, readLine, resetClock, type FailureView } from "../lib/checkFailures.ts";
+import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
+import { openPr } from "../lib/openPrs.ts";
+import { failureGist, failureCopyText, failureView, fileFact, fileFactLabel, formatBytes, isAggregator, othersShape, unknownPrs, logAgeDays, plural, readLine, resetClock, type FailureView } from "../lib/checkFailures.ts";
 import { failureKey, isAsking, load, readOf, useFailureStore } from "../lib/checkFailuresStore.ts";
 
 /** A small word on a quiet tint: the shape of the mockup's "cached" and "Log expired". */
-function Tag({ children, tone = "plain", title }: { children: ReactNode; tone?: "plain" | "warn"; title?: string }) {
+function Tag({ children, tone = "plain", title, onClick, menu }: { children: ReactNode; tone?: "plain" | "warn"; title?: string; onClick?: (e: MouseEvent<HTMLButtonElement>) => void; menu?: boolean }) {
   const ink = tone === "warn" ? "var(--warning-ink)" : "var(--text2)";
   const hue = tone === "warn" ? "var(--warning)" : "var(--text)";
+  const style = { color: ink, background: `color-mix(in srgb, ${hue} ${tone === "warn" ? 12 : 8}%, transparent)` };
+  const cls = "shrink-0 inline-flex items-center gap-1 text-[10px] px-1.5 py-px rounded-full";
+  // A chip with somewhere to go is a button, and says so: the same chip, with the pointer and an underline on hover.
+  return onClick
+    ? <button onClick={onClick} title={title} aria-haspopup={menu ? "menu" : undefined} className={`${cls} hover:underline`} style={style}>{children}</button>
+    : <span title={title} className={cls} style={style}>{children}</span>;
+}
+
+/** The pull requests the app can open by number, and what it already knows of their titles (no request for one). */
+export interface PrRefs {
+  repo: string;
+  titleOf: (n: number) => string | undefined;
+  /** The paths this pull request changes, and whether the list is the whole diff (a huge one is cut). */
+  changed?: { paths: string[]; complete: boolean };
+}
+
+/**
+ * "Also failed on #1234": which pull request, opening inside the app. With several, a small list under the chip.
+ * Says what was SEEN: a run whose pull request is not known is counted in the list's last line, never dropped and never named.
+ */
+function OthersTag({ v, refs }: { v: Extract<TestVerdict, { kind: "others" }>; refs?: PrRefs }) {
+  const [at, setAt] = useState<{ x: number; y: number } | null>(null);
+  const shape = othersShape(v);
+  const dot = <span className="rounded-full" style={{ background: "var(--warning)", width: 6, height: 6 }} />;
+  if (!refs?.repo || shape.kind === "plain") return <Tag title="Counted from the failures this app has read">{dot}{verdictLabel(v)}</Tag>;
+  const named = (n: number) => { const t = refs.titleOf(n); return t ? `#${n} · ${t}` : `#${n}`; };
+  if (shape.kind === "one") return <Tag onClick={() => openPr(refs.repo, shape.n)} title={`${named(shape.n)} — open it here`}>{dot}{verdictLabel(v)}</Tag>;
+  const moveFocus = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    const items = [...e.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+    const i = items.indexOf(document.activeElement as HTMLElement);
+    e.preventDefault();
+    items[(i + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length]?.focus();
+  };
   return (
-    <span title={title} className="shrink-0 inline-flex items-center gap-1 text-[10px] px-1.5 py-px rounded-full"
-      style={{ color: ink, background: `color-mix(in srgb, ${hue} ${tone === "warn" ? 12 : 8}%, transparent)` }}>{children}</span>
+    <>
+      <Tag menu title="Counted from the failures this app has read; pick one to open it here"
+        onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setAt(at ? null : { x: r.left, y: r.bottom + 4 }); }}>
+        {dot}{verdictLabel(v)}<CaretIcon size={ICON.xs} />
+      </Tag>
+      {at && (
+        <ContextMenu x={at.x} y={at.y} onClose={() => setAt(null)}>
+          <div role="group" onKeyDown={moveFocus} className="flex flex-col" style={{ maxWidth: 360 }}>
+            {shape.nums.map((n, i) => (
+              <MenuItem key={n} onClick={() => { setAt(null); openPr(refs.repo, n); }} autoFocus={i === 0}>
+                <span className="block truncate">{named(n)}</span>
+              </MenuItem>
+            ))}
+            {shape.unknown > 0 && <div className="px-2 py-1 text-[10.5px]" style={{ color: "var(--text3)" }}>{unknownPrs(shape.unknown)}</div>}
+          </div>
+        </ContextMenu>
+      )}
+    </>
   );
 }
 
@@ -49,8 +101,9 @@ function Excerpt({ text }: { text: string }) {
 const notable = (v: TestVerdict | undefined): TestVerdict | undefined => (v && (v.kind === "main" || v.kind === "flaky" || v.kind === "others") ? v : undefined);
 
 /** One failure: its name, what it said in a few words, a copy button, and the excerpt when open. */
-function FailureRow({ f, verdict, open, onToggle, first }: { f: CiFailure; verdict?: TestVerdict; open: boolean; onToggle: () => void; first: boolean }) {
+function FailureRow({ f, verdict, open, onToggle, first, refs, action }: { f: CiFailure; verdict?: TestVerdict; open: boolean; onToggle: () => void; first: boolean; refs?: PrRefs; action?: ReactNode }) {
   const gist = failureGist(f);
+  const fact = fileFact(f, refs?.changed);
   return (
     <div style={first ? undefined : { borderTop: LINE }}>
       <div className="flex items-center gap-2 px-2.5 py-1.5">
@@ -59,10 +112,14 @@ function FailureRow({ f, verdict, open, onToggle, first }: { f: CiFailure; verdi
           <span className="truncate font-semibold min-w-0" title={f.title} style={{ ...CODE_FONT_STYLE, color: "var(--text)" }}>{f.title}</span>
           {!open && gist && !verdict && <Tag title={gist}><span className="truncate max-w-[16rem]">{gist}</span></Tag>}
         </button>
-        {verdict && <Tag tone={verdict.kind === "main" ? "warn" : "plain"} title="Counted from the failures this app has read"><span className="rounded-full" style={{ background: verdict.kind === "main" || verdict.kind === "others" ? "var(--warning)" : "var(--text3)", width: 6, height: 6 }} />{verdictLabel(verdict)}</Tag>}
+        {fact && <Tag title={`${fact.path} — compared by path with this pull request's changed files; a failure can still come from code this pull request changed elsewhere`}>{fileFactLabel(fact)}</Tag>}
+        {verdict?.kind === "others"
+          ? <OthersTag v={verdict} refs={refs} />
+          : verdict && <Tag tone={verdict.kind === "main" ? "warn" : "plain"} title="Counted from the failures this app has read"><span className="rounded-full" style={{ background: verdict.kind === "main" ? "var(--warning)" : "var(--text3)", width: 6, height: 6 }} />{verdictLabel(verdict)}</Tag>}
         <CopyFailure f={f} />
       </div>
       {open && <Excerpt text={f.excerpt} />}
+      {open && action}
     </div>
   );
 }
@@ -129,7 +186,7 @@ function StateBox({ tag, title, children }: { tag: ReactNode; title: string; chi
 }
 
 /** Whatever the row is, it says something: with no job to read, it says why and where to go. */
-export function CheckFailuresPanel({ root, check, job }: { root: string; check: PrCheck; job?: PrCheckJob }) {
+export function CheckFailuresPanel({ root, check, job, sameRun, refs, rowAction }: { root: string; check: PrCheck; job?: PrCheckJob; sameRun?: SameRun[]; refs?: PrRefs; rowAction?: (f: CiFailure) => ReactNode }) {
   if (!job) {
     return (
       <div className="mx-2.5 mb-2 rounded-xl overflow-hidden text-[11px]" style={{ border: EDGE, background: "var(--surface-card)" }}>
@@ -140,10 +197,13 @@ export function CheckFailuresPanel({ root, check, job }: { root: string; check: 
       </div>
     );
   }
-  return <JobFailures root={root} check={check} job={job} />;
+  return <JobFailures root={root} check={check} job={job} sameRun={sameRun ?? []} refs={refs} rowAction={rowAction} />;
 }
 
-function JobFailures({ root, check, job }: { root: string; check: PrCheck; job: PrCheckJob }) {
+/** A check that failed in the same run, and what opens its detail. */
+export interface SameRun { label: string; open: () => void }
+
+function JobFailures({ root, check, job, sameRun, refs, rowAction }: { root: string; check: PrCheck; job: PrCheckJob; sameRun: SameRun[]; refs?: PrRefs; rowAction?: (f: CiFailure) => ReactNode }) {
   useFailureStore();
   const key = failureKey(root, job.id);
   const hints = { attempt: job.attempt, step: job.failedStep };
@@ -151,6 +211,7 @@ function JobFailures({ root, check, job }: { root: string; check: PrCheck; job: 
   useEffect(() => { void load(root, job.id, hints); }, [root, job.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const view: FailureView = failureView(isAsking(key) && !readOf(key)?.ok ? undefined : readOf(key));
   const [openRows, setOpenRows] = useState<Set<number>>(new Set([0]));
+  const [tail, setTail] = useState(false);
   const toggle = (i: number) => setOpenRows((c) => { const n = new Set(c); if (n.has(i)) n.delete(i); else n.add(i); return n; });
   const retry = (force: boolean) => void load(root, job.id, hints, force);
   const age = logAgeDays(check.completedAt);
@@ -177,7 +238,7 @@ function JobFailures({ root, check, job }: { root: string; check: PrCheck; job: 
               {r.cached && <Tag title="Read earlier and kept: opening it again made no request">cached</Tag>}
             </span>
           </div>
-          {r.failures.map((f, i) => <FailureRow key={`${i}-${f.signature}`} f={f} verdict={notable(r.verdicts[i])} first={i === 0} open={openRows.has(i)} onToggle={() => toggle(i)} />)}
+          {r.failures.map((f, i) => <FailureRow key={`${i}-${f.signature}`} f={f} action={rowAction?.(f)} verdict={notable(r.verdicts[i])} refs={refs} first={i === 0} open={openRows.has(i)} onToggle={() => toggle(i)} />)}
           {r.more > 0 && <div className="px-2.5 py-1.5 text-[10.5px]" style={{ borderTop: LINE, color: "var(--text3)" }}>+{r.more} more not shown here. The full log has them.</div>}
         </>
       );
@@ -187,17 +248,42 @@ function JobFailures({ root, check, job }: { root: string; check: PrCheck; job: 
     case "no-test": {
       const f = view.read.failures[0]!;
       const lines = f.excerpt.split("\n").length;
-      body = (
+      // A job that only reports the others has nothing in its own log: what is useful is which jobs it reports.
+      const reports = isAggregator(f);
+      const end = (
+        <div className="rounded-lg overflow-hidden" style={{ border: EDGE }}>
+          <div className="flex items-center gap-2 px-2.5 py-1 text-[10px]" style={{ color: "var(--text3)", background: "var(--surface-inset)", ...CODE_FONT_STYLE }}>
+            <span className="truncate">Step “{f.title}” · last {plural(lines, "line")}</span>
+            <span className="ml-auto"><CopyFailure f={f} /></span>
+          </div>
+          <Excerpt text={f.excerpt} />
+        </div>
+      );
+      body = reports ? (
+        <div className="px-2.5 py-2.5 flex flex-col gap-1.5">
+          <div><Tag><FileIcon size={ICON.xs} />Reports the others</Tag></div>
+          <Heading>This job only reports the others</Heading>
+          {sameRun.length > 0 ? (
+            <>
+              <Body>Failed in this run:</Body>
+              <div className="flex flex-wrap gap-1.5">
+                {sameRun.map((k, i) => (
+                  <button key={i} onClick={k.open} title={`Open the detail of ${k.label}`} className="min-w-0 max-w-full inline-flex items-center px-2 rounded-full text-[10.5px] agx-hover"
+                    style={{ minHeight: CTRL_H.compact, border: EDGE, color: "var(--primary-ink)" }}><span className="truncate">{k.label}</span></button>
+                ))}
+              </div>
+            </>
+          ) : <Body>It failed because another job in this run did, and this panel does not know which: no other failed check of the run is listed.</Body>}
+          <button onClick={() => setTail((t) => !t)} aria-expanded={tail} className="self-start text-[10.5px] inline-flex items-center gap-1 hover:underline" style={{ color: "var(--text2)" }}>
+            <span aria-hidden className="flex" style={{ transform: tail ? undefined : "rotate(-90deg)" }}><CaretIcon size={ICON.xs} /></span>{tail ? "Hide the end of the step" : "Show the end of the step"}
+          </button>
+          {tail && end}
+        </div>
+      ) : (
         <div className="px-2.5 py-2.5 flex flex-col gap-1.5">
           <div><Tag tone="warn"><WarningIcon size={ICON.xs} />No test named</Tag></div>
           <Heading>The log names no failing test; here is the end of the step</Heading>
-          <div className="rounded-lg overflow-hidden" style={{ border: EDGE }}>
-            <div className="flex items-center gap-2 px-2.5 py-1 text-[10px]" style={{ color: "var(--text3)", background: "var(--surface-inset)", ...CODE_FONT_STYLE }}>
-              <span className="truncate">Step “{f.title}” · last {plural(lines, "line")}</span>
-              <span className="ml-auto"><CopyFailure f={f} /></span>
-            </div>
-            <Excerpt text={f.excerpt} />
-          </div>
+          {end}
         </div>
       );
       break;

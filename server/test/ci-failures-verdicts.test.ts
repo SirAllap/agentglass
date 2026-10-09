@@ -29,14 +29,14 @@ const read = (job: string, log: string) => readCheckFailures(REPO, job, {}, src(
 
 describe("verdicts from what was read", () => {
   test("the same failure on two other pull requests says so, counting pull requests", async () => {
-    const log = LOG("orbit sync > gives its slot back", "timeout after 20000ms");
+    const log = LOG("orbit verdicts > counts pull requests", "timeout after 20000ms");
     recordRuns(REPO, 475, "aaa", [run("201", "failure", T0)]);
     recordRuns(REPO, 471, "bbb", [run("202", "failure", T0 + 1_000_000)]);
     recordRuns(REPO, 482, "ccc", [run("203", "failure", T0 + 2_000_000)]);
     await read("201", log);
     await read("202", log);
     const mine = await read("203", log);
-    expect(mine.ok && mine.verdicts).toEqual([{ kind: "others", prs: 2 }]);
+    expect(mine.ok && mine.verdicts).toEqual([{ kind: "others", prs: 2, nums: [475, 471] }]);
   });
 
   test("a failure only this pull request has read is 'this PR', and says no more", async () => {
@@ -82,6 +82,6 @@ describe("verdicts from what was read", () => {
     expect(cachedSummaries(REPO, ["260"])["260"]!.verdicts).toEqual([{ kind: "this-pr" }]);
     recordRuns(REPO, 501, "kkk", [run("261", "failure", T0 + 1_000)]);
     await read("261", log);
-    expect(cachedSummaries(REPO, ["260"])["260"]!.verdicts).toEqual([{ kind: "others", prs: 1 }]);
+    expect(cachedSummaries(REPO, ["260"])["260"]!.verdicts).toEqual([{ kind: "others", prs: 1, nums: [501] }]);
   });
 });

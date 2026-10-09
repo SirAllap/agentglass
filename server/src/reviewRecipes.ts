@@ -390,6 +390,21 @@ export const BUILT_IN_RECIPES: ReviewRecipe[] = [
       "Read the diff first if you need it (`gh pr diff {number}`) — write about the change, not about its title. Show me the draft and where it will land, and wait: I will tell you to send it.",
     ),
   },
+  // The note written on the card itself, as opposed to the chat message above:
+  // this one is posted as it stands, with no agent in between, so it is the text
+  // and not a brief. Short and neutral on purpose; the wording a team says is
+  // theirs to put here. `{who}` is the mention (`@Name`, or nothing when nobody
+  // is on the card) so the line never opens with a gap.
+  {
+    id: "note-on-card",
+    title: "Note on the card: ready to review",
+    group: "telling",
+    when: "mine",
+    body: prompt(
+      "{who} PR ready to review — #{number} {title}",
+      "{url}",
+    ),
+  },
   // -------------------------------------------------------------- conflicts
   // Not a review either: what the "Hand to Claude in a terminal" button on a
   // blocked pull request says. The facts (which branch, which side is which,

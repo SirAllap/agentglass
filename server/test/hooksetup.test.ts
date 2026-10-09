@@ -246,8 +246,8 @@ describe("golden parity with install_hooks.py", () => {
  * The forwarder is telemetry and may never stop a tool call — that is what its
  * trailing `|| exit 0` buys. The gate holds one until a person decides, and an
  * outward one is held closed. The orchestrator running a real project on this
- * machine named the gap exactly: the rule was held "por cultura, no por
- * herramienta". The tool existed; there was no switch.
+ * machine named the gap exactly: the rule was held by habit, not by a
+ * tool. The tool existed; there was no switch.
  *
  * What has to stay true: turning one on never turns the other on, each undoes
  * itself and nobody else, and the Python installer and this one agree.

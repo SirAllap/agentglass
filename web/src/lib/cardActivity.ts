@@ -157,13 +157,18 @@ export const NO_AUTHOR_NOTE =
  * WHO A "SEEN HERE" LINE IS ABOUT.
  *
  * ClickUp writes its notifications as a sentence that starts with the person:
- * "Irra assigned this task to: javi", "javi set the status to: READY FOR QA".
+ * "Grace assigned this task to: ada", "ada set the status to: IN REVIEW".
  * The API never says who did anything, so this sentence is the only place a
  * name appears — and a name deserves the same face the creation row gets.
  *
  * Split on the verb rather than on the first word: names have two and three
  * parts ("A B C assigned this task to you"), and a first-word rule would put
  * the first of them beside a face belonging to somebody else.
+ *
+ * The ceiling: these are the verbs of ClickUp's ENGLISH notifications. A
+ * workspace whose desktop app speaks another language gets no face on the row
+ * and the sentence shown whole, which is the honest fallback; it is not an
+ * error, and a `seenVerbs` setting is the next thing after this and is not here.
  */
 const SEEN_VERBS = [
   "assigned", "unassigned", "set", "moved", "commented", "mentioned", "added",

@@ -38,7 +38,7 @@ import {
   subscribeNotifyHistory, notifyHistory, notifyUnread,
   markNotifyRead, dismissNote, clearNotes, openNote, recordNote,
   notifyQuiet, setNotifyQuiet, subscribeNotifyQuiet,
-  appNotify, subscribeAppNotify, shouldInterrupt, subscribeAskedFires,
+  appNotify, subscribeAppNotify, shouldInterrupt,
   sysNotifyOn, setSysNotifyOn, subscribeSysNotifyMode, notifyCapability,
   type SystemNote, type NotifyCapability,
 } from "../lib/sysNotify.ts";
@@ -62,8 +62,6 @@ export type Note = {
   at: number;
   /** Something is blocked until you answer. Jumps the queue, never dropped. */
   urgent?: boolean;
-  /** The person armed what this reports (a PR watch), so Quiet does not hold it back. */
-  asked?: boolean;
 };
 
 /** How long one toast holds the middle of the bar. */
@@ -131,7 +129,7 @@ export function useAmbientNotes(): { note: Note | null; behind: number; ahead: n
    * bell's list through `recordNote`, which is deliberately outside this gate.
    */
   const push = (n: Omit<Note, "at">) => {
-    if (!shouldInterrupt(!!n.urgent || !!n.asked)) return;
+    if (!shouldInterrupt(!!n.urgent)) return;
     enqueue(queue.current, { ...n, at: Date.now() });
     if (!showing.current) advance();
   };
@@ -194,11 +192,9 @@ export function useAmbientNotes(): { note: Note | null; behind: number; ahead: n
     });
   }), []);
 
-  // A PR watch the person armed. It rides the same lane as everything else but
-  // is not held back by Quiet: it is the thing they asked to be told.
-  useEffect(() => subscribeAskedFires((f) => {
-    push({ id: f.id, kind: f.ok ? "done" : "blocked", color: f.ok ? "var(--success-ink)" : "var(--error-ink)", title: f.title, sub: f.sub, asked: true });
-  }), []);
+  // A PR watch the person armed is not a caption here any more: it is a banner
+  // that waits for them (AskedBanners.tsx), because a caption that wipes away in
+  // five seconds, with nothing to press, was how "CI passed" went unseen.
 
   // Desktop notifications used to be pushed into this lane too. They are not any
   // more: they go to NoteToasts, which gives them a card. Two reasons, both of
@@ -440,6 +436,7 @@ function HistoryRow({ n, onGone, onGoto, onMute }: {
     if (g.kind === "pr") return { label: `${g.repo}#${g.number}`, title: `Open ${g.repo}#${g.number}` };
     if (g.kind === "pane") return { label: "The terminal", title: "Go to the pane this is about" };
     if (g.kind === "chat") return { label: "The chat", title: "Open the conversation this is about" };
+    if (g.kind === "file") return { label: "The file", title: `Open ${g.path} in Files` };
     return { label: "Settings", title: `Open Settings · ${g.pane}` };
   })();
   /*

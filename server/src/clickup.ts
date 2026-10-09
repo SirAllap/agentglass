@@ -18,9 +18,10 @@
  */
 import { singleFlight } from "./singleflight.ts";
 import { cardIdDigits, mentionsCardId } from "../../shared/cardRef.ts";
-import { matchesQuery } from "../../shared/taskref.ts";
+import { matchesQuery, mergeRequestNumber } from "../../shared/taskref.ts";
 import * as Index from "./clickupindex.ts";
 import { writesAllowed } from "./clickupviews.ts";
+import { clickupPrefs, matchPref, DEFAULT_SPRINT_LIST_PATTERN, DEFAULT_READ_ONLY_FIELD_PATTERN } from "./clickupPrefs.ts";
 import { secretFor, annotate, redacted, fingerprint } from "./credentials.ts";
 import { markdownToDelta, type MentionPerson } from "./clickupDelta.ts";
 import type {
@@ -284,7 +285,7 @@ const PRIORITY = new Set(["urgent", "high", "normal", "low"]);
 /**
  * A sprint's name, minus the dates nobody reads in a column.
  *
- * They arrive as `Sprint 137 (26/7/29 - 26/8/4)`. The number is the part that
+ * They arrive as `Sprint 12 (3/3 - 3/9)`. The number is the part that
  * identifies it in conversation; the range is thirty characters that push the
  * task title off the row. Kept whole when it does not match that shape, because
  * a workspace that names its sprints differently should still see its own name.
@@ -301,16 +302,16 @@ function shortSprint(name: string | undefined): string | null {
  * This has to be recognised rather than positioned, and that is the whole
  * lesson. A card in a sprint is a card in two or three lists at once, and they
  * arrive as one flat `locations` array whose order is not stable — measured on
- * a real workspace, the same card answers `['Miscellaneous', 'Sprint 138 …']`
- * from the workspace query and `['Sprint 138 …', 'Miscellaneous']` from its own
+ * a real workspace, the same card answers `['Misc', 'Sprint 12 …']`
+ * from the workspace query and `['Sprint 12 …', 'Misc']` from its own
  * endpoint. "The first one that is not the primary list" therefore picked
  * whichever happened to be first, and a column headed SPRINT spent its life
- * saying "Miscellaneous" and "Bugs".
+ * saying "Misc" and "Bugs".
  *
  * Two signatures, because ClickUp's own Sprint feature writes both and neither
  * is guaranteed: the name begins with "Sprint", or it ends in the parenthesised
  * date range ClickUp appends when a sprint has dates. Measured on the same
- * workspace: `Sprint 138 (26/8/5 - 26/8/11)` has both and `Sprint 118` has only
+ * workspace: `Sprint 12 (3/3 - 3/9)` has both and `Sprint 8` has only
  * the first, so requiring the range would have dropped a real sprint.
  *
  * Nothing matching means nothing shown. A list name under a heading that says
@@ -318,11 +319,17 @@ function shortSprint(name: string | undefined): string | null {
  * guessed is exactly what sent somebody to ClickUp to find out which sprint a
  * card was really in.
  */
-const SPRINT_NAMED = /^sprint\b/i;
 const SPRINT_DATED = /\(\s*\d{1,4}[/\-.]\d{1,2}[^)]*[–—-][^)]*\)\s*$/;
+/*
+ * The first signature is a naming habit, so it is a setting (`sprintListPattern`,
+ * default `^sprint\b`): a team that renamed its sprints to "Iteration 12" says
+ * so once. The dated one stays fixed, because that range is ClickUp's own and
+ * not anybody's habit. Ceiling: a custom pattern ADDS to the dated shape, it
+ * cannot switch it off.
+ */
 export const looksLikeSprint = (name: string): boolean => {
   const n = name.trim();
-  return !!n && (SPRINT_NAMED.test(n) || SPRINT_DATED.test(n));
+  return !!n && (matchPref(clickupPrefs().sprintListPattern, DEFAULT_SPRINT_LIST_PATTERN, n) || SPRINT_DATED.test(n));
 };
 
 /** The sprint a card is in, or nothing. Its own list counts: a card can live
@@ -432,7 +439,7 @@ export function toTask(raw: RawTask, myId?: string): ProviderTask {
  * ClickUp answers with raw storage, and the card was rendering it verbatim. Three
  * cells were wrong on every bug card in the workspace this was measured against:
  *
- *   drop_down   the INDEX of the option, so a squad printed "3" (already resolved).
+ *   drop_down   the INDEX of the option, so a team printed "3" (already resolved).
  *   labels      an array of option IDS, so an impacted application printed
  *               `cd6fb8c0-4ee8-…` — a UUID, in a cell whose whole job is a name.
  *   date        milliseconds, so a triage date printed 1783414800000.
@@ -590,6 +597,10 @@ export async function fetchTasks(
     order_by: "due_date",
     include_closed: "false",
   });
+  /* Off by default, for the measurement above. On, for a team whose work lives
+     in subtasks: ClickUp's filtered task endpoint leaves them out unless asked,
+     so for that team the board is empty and the cost is the price of seeing it. */
+  if (clickupPrefs().assigned.includeSubtasks) q.set("subtasks", "true");
   q.append("assignees[]", userId);
   const r = await call<{ tasks: RawTask[] }>(`/team/${encodeURIComponent(workspaceId)}/task?${q}`, token, LIST_TIMEOUT_MS);
   if (!r.ok) return { ...r, data: undefined };
@@ -757,6 +768,7 @@ async function sweepWorkspace(
 ): Promise<CallResult<SweptTask[]> & { partial?: boolean; reach?: Reach }> {
   const token = secretFor("clickup");
   if (!token) return { ok: false, error: "ClickUp is not connected" };
+  const gen = credGen;
   const me = redacted("clickup");
   if (!me?.workspaceId) return { ok: false, error: "No ClickUp workspace chosen yet" };
   const held = withBodies ? sweepBodies : sweep;
@@ -822,6 +834,8 @@ async function sweepWorkspace(
   // A page that fails when others worked is still an answer: better a partial
   // search that says so than a minute and an error.
   if (pages.every((r) => !r.ok)) return { ...pages[0]!, data: undefined };
+  // Disconnected while the pages were in flight: nothing of them is written down.
+  if (gen !== credGen) return { ok: false, error: "ClickUp is not connected" };
   /* "That says so" — and until now nothing did. A sweep missing a page came
      back looking exactly like a complete one, was stored in the cache as
      complete, and answered every question for the next ten minutes from a
@@ -905,8 +919,8 @@ export function matchesText(t: Pick<ProviderTask, "title" | "customId" | "id" | 
 /**
  * The same search, reported as it goes.
  *
- * "at least show me what it finds as it goes, no?" — and the sweep is
- * three sequential pages of a workspace with thousands of cards, so the
+ * A search that answers only at the end made a person watch a spinner. The
+ * sweep is three sequential pages of a workspace with thousands of cards, so the
  * difference between answering per page and answering at the end is the
  * difference between a list that fills and a spinner. Matching runs on each
  * page as it lands; the caller decides what to do with a partial answer.
@@ -1171,6 +1185,33 @@ let snap: ClickUpSnapshot | null = null;
 const TTL_MS = 60_000;
 
 export function __reset(): void { snap = null; budget = null; }
+
+/**
+ * Bumped by `forgetAll`. A read that started under one credential and lands
+ * after a disconnect compares the number it started with and drops its result,
+ * so nothing it fetched is written back into a machine that has just forgotten.
+ */
+let credGen = 0;
+export function credentialGeneration(): number { return credGen; }
+
+/**
+ * Everything read with the credential, from memory. Disconnect and connect both
+ * call it: after a disconnect `findCard` would otherwise answer from its minute
+ * of cache, and a reconnect to another account would search the previous
+ * workspace's cards and mention its people for up to an hour.
+ */
+export function forgetAll(): void {
+  credGen++; findGen++;
+  __reset();
+  __clearSearchCache();
+  __clearFindCache();
+  __resetCounts();
+  people = null;
+  listViewCache.clear(); spaceTagCache.clear(); taskSpaceCache.clear();
+}
+
+/** The assigned-to-me answer was read under other settings; read it again next time. */
+export function dropAssignedCache(): void { snap = null; }
 const reset = __reset;
 
 /**
@@ -1217,7 +1258,10 @@ export async function clickupTasks(force = false): Promise<ClickUpSnapshot> {
       };
       return snap;
     }
+    const gen = credGen;
     const r = await fetchTasks(token, workspaceId, userId);
+    // Disconnected while this was in flight: hand back nothing and keep nothing.
+    if (gen !== credGen) return { at: Date.now(), tasks: [], more: false, error: "ClickUp is not connected" };
     if (!r.ok) {
       // Keep what we had. See ClickUpSnapshot.error.
       snap = {
@@ -1770,7 +1814,7 @@ export async function listMeta(
         options: (x.type_config?.options ?? []).map((o) => ({ id: o.id, name: o.name ?? o.label ?? "", ...(o.color ? { color: o.color } : {}) })).filter((o) => o.name),
         // Somebody wrote the warning into the field's own name because the API
         // has nowhere else to put it. Reading it is the least we can do.
-        readOnly: /do not edit/i.test(x.name),
+        readOnly: matchPref(clickupPrefs().readOnlyFieldPattern, DEFAULT_READ_ONLY_FIELD_PATTERN, x.name),
       })),
     },
   };
@@ -2125,6 +2169,37 @@ export async function assignSelf(taskId: string, on: boolean, expectUpdated?: nu
  *  the caller offers those and never a free-text box, so this cannot be asked
  *  to invent one. */
 /**
+ * The same person arrives from two sources, and the first one to name an id used
+ * to win outright. The list endpoint answers some members with initials and no
+ * username; the workspace answers the same id with the username. Keeping the
+ * first meant a row with a letter in a grey circle and no name, and the real
+ * name further down under an id nothing looked up. So the two are merged per id,
+ * the filled field winning, and a member still without a name is dropped: a row
+ * nobody can read is not a choice.
+ */
+export function mergeMembers(raw: NonNullable<RawTask["assignees"]>[number][], me?: string): ListMember[] {
+  const byId = new Map<string, NonNullable<RawTask["assignees"]>[number]>();
+  for (const m of raw) {
+    if (m?.id == null) continue;
+    const key = String(m.id);
+    const prev = byId.get(key);
+    byId.set(key, prev ? {
+      ...prev, ...Object.fromEntries(Object.entries(m).filter(([, v]) => v)),
+    } as typeof prev : m);
+  }
+  return [...byId.values()]
+    .map((m) => ({
+      id: Number(m.id),
+      name: m.username ?? "",
+      initials: m.initials || initialsOf(m.username ?? ""),
+      color: m.color || undefined,
+      avatar: m.profilePicture || undefined,
+      me: me ? String(m.id) === me : undefined,
+    }))
+    .filter((m) => m.name);
+}
+
+/**
  * Who can be put on a card: the members of the list it lives in.
  *
  * The list rather than the workspace, and that is the whole point — a workspace
@@ -2161,20 +2236,7 @@ export async function listMembers(listId: string): Promise<CallResult<{ members:
   const workspace = (fromTeam.ok ? fromTeam.data?.teams ?? [] : [])
     .filter((t: any) => !me2?.workspaceId || String(t.id) === me2.workspaceId)
     .flatMap((t: any) => (t.members ?? []).map((m: any) => m.user).filter(Boolean));
-  const seenIds = new Set<string>();
-  const r = { ok: true as const, data: { members: [...(fromList.data?.members ?? []), ...workspace]
-    .filter((m: any) => m?.id != null && !seenIds.has(String(m.id)) && seenIds.add(String(m.id))) } };
-  const members: ListMember[] = (r.data?.members ?? [])
-    .filter((m) => m.id != null)
-    .map((m) => ({
-      id: Number(m.id),
-      name: m.username ?? "",
-      initials: m.initials || initialsOf(m.username ?? ""),
-      color: m.color || undefined,
-      avatar: m.profilePicture || undefined,
-      me: me ? String(m.id) === me : undefined,
-    }))
-    .filter((m) => m.name || m.initials);
+  const members = mergeMembers([...(fromList.data?.members ?? []), ...workspace], me);
   // You, even when the list does not name you.
   //
   // Measured against a real board: a nineteen-member list came back without the
@@ -2561,8 +2623,8 @@ export async function moveToList(taskId: string, listId: string, fromListId?: st
  *
  * There is no "sprints" endpoint, because a sprint is not a thing on this API:
  * it is a LIST, in a folder, in the card's space — measured on a real workspace,
- * where the card sat in a project list and carried "Sprint 140 (26/8/19 -
- * 26/8/25)" among its locations. So the folder is found by what its lists are
+ * where the card sat in a project list and carried "Sprint 14 (3/17 -
+ * 3/23)" among its locations. So the folder is found by what its lists are
  * called rather than by a name or a type: a workspace can call the folder
  * anything, and it is the lists inside it that have to look like sprints.
  *
@@ -2680,6 +2742,7 @@ async function roster(): Promise<MentionPerson[]> {
 async function workspacePeople(token: string): Promise<MentionPerson[]> {
   if (people && Date.now() - people.at < PEOPLE_TTL_MS) return people.who;
   const me = redacted("clickup");
+  const gen = credGen;
   const r = await teamOnce(token);
   if (!r.ok) return people?.who ?? [];
   const who = (r.data?.teams ?? [])
@@ -2687,6 +2750,7 @@ async function workspacePeople(token: string): Promise<MentionPerson[]> {
     .flatMap((t) => (t.members ?? []).map((m) => m.user).filter(Boolean))
     .filter((u) => u!.id != null && (u!.username ?? "").trim())
     .map((u) => ({ id: Number(u!.id), name: String(u!.username).trim(), email: u!.email || undefined, initials: u!.initials || undefined }));
+  if (gen !== credGen) return [];
   people = { at: Date.now(), who };
   return who;
 }
@@ -2821,9 +2885,21 @@ function withSeen(events: CardEvent[], id: string, customId: string): CardEvent[
     .sort((a, b) => a.at - b.at);
 }
 
-export async function taskDetail(taskId: string): Promise<CallResult<TaskDetail>> {
+export async function taskDetail(askedId: string): Promise<CallResult<TaskDetail>> {
   const token = secretFor("clickup");
   if (!token) return { ok: false, error: "ClickUp is not connected" };
+  /* A link on a workspace with custom ids names the card by its human id
+     (ORBIT-1042), and every call below takes the plain one — the comment and
+     time-in-status routes do not take the custom-id flag at all. One read
+     turns the first into the second; a plain id never pays for it. */
+  let taskId = askedId;
+  const workspace = redacted("clickup")?.workspaceId;
+  if (/-/.test(askedId) && workspace) {
+    const found = await call<RawTask>(
+      `/task/${encodeURIComponent(askedId)}?custom_task_ids=true&team_id=${encodeURIComponent(workspace)}`, token);
+    if (!found.ok) return { ...found, data: undefined };
+    taskId = found.data?.id ?? askedId;
+  }
   const r = await call<RawTask & {
     description?: string; markdown_description?: string;
     subtasks?: RawTask[];
@@ -3000,10 +3076,10 @@ export async function rawListTasks(
     const r = await call<{ tasks?: RawTask[]; last_page?: boolean }>(
       /*
        * `include_closed=true`, because a status of type `closed` is still a
-       * status a person groups by. It was false, so COMPLETED — 199 of the 252
+       * status a person groups by. It was false, so the closed status — 199 of the 252
        * cards on one real list — was not merely collapsed, it was never
        * fetched, and the board could not have shown that group however it was
-       * asked. "I need every status to show up in the lists."
+       * asked. Every status the list has must show up.
        *
        * Whether a done group is SHOWN is a separate decision the panel already
        * makes (see `showDone`); this is about whether it can be.
@@ -3024,7 +3100,7 @@ export async function rawListTasks(
 /**
  * A card you know the number of, which is not the same as a board you work from.
  *
- * "What was 20542 again?" is a question with no board attached: the card is on
+ * "What was ORBIT-1042 again?" is a question with no board attached: the card is on
  * some other list, in a project you are not in, and adding that whole board to
  * look at one row is absurd. So one card can be fetched on its own.
  *
@@ -3138,13 +3214,14 @@ async function findCardUncached(text: string, knownPrefix: string): Promise<Call
  */
 export type { CardPr };
 
-/** A pull-request number out of a GitHub URL, and nothing else out of anything
- *  else. A bare number in that field would be ambiguous — issue or PR — so it
- *  has to be a link that says `/pull/`. */
+/** A pull-request number out of a GitHub URL or a GitLab merge-request URL,
+ *  and nothing else out of anything else. A bare number in that field would be
+ *  ambiguous — issue or PR — so it has to be a link that says `/pull/` or
+ *  `/-/merge_requests/`. */
 export function prNumberFromUrl(url: string): number | null {
   const m = /github\.com\/[^/]+\/[^/]+\/pull\/(\d+)/i.exec(url || "");
   const n = m ? Number(m[1]) : NaN;
-  return Number.isFinite(n) && n > 0 ? n : null;
+  return Number.isFinite(n) && n > 0 ? n : mergeRequestNumber(url);
 }
 
 /** GitHub links on a card that are not pull requests; see shared/githubLinks.ts. */
@@ -3433,6 +3510,7 @@ export async function tagsForTask(taskId: string): Promise<CallResult<string[]>>
   const hit = spaceTagCache.get(space);
   if (hit && Date.now() - hit.at < SPACE_TAG_TTL_MS) return { ok: true, data: hit.tags };
 
+  const gen = credGen;
   const r = await call<{ tags?: { name?: string }[] }>(`/space/${encodeURIComponent(space)}/tag`, token);
   if (!r.ok) return { ...r, data: undefined };
   const tags = (r.data?.tags ?? [])
@@ -3441,6 +3519,6 @@ export async function tagsForTask(taskId: string): Promise<CallResult<string[]>>
     .sort((a, b) => a.localeCompare(b));
   // Only a real answer is cached: a failure must not become "this space has no
   // tags" for the next half hour.
-  spaceTagCache.set(space, { at: Date.now(), tags });
+  if (gen === credGen) spaceTagCache.set(space, { at: Date.now(), tags });
   return { ok: true, data: tags };
 }

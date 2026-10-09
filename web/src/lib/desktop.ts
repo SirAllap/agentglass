@@ -21,6 +21,8 @@ type DesktopBridge = {
   autostartEnabled: () => Promise<boolean>;
   setAutostart: (on: boolean) => Promise<boolean>;
   revealPath?: (p: string) => Promise<{ ok: boolean; error?: string }>;
+  /** Restore, show and focus the app's window. Absent on shells built before notifications led somewhere. */
+  raiseWindow?: () => Promise<boolean>;
   /** Absent on shells built before the machine could stay awake for an agent. */
   powerStatus?: () => Promise<PowerStatus>;
   setPowerMode?: (mode: PowerMode) => Promise<PowerStatus>;
@@ -883,3 +885,17 @@ export async function revealPath(p: string): Promise<{ ok: boolean; error?: stri
 /** Whether this shell can show a file in the file manager at all. Read at
  *  render time so a button is not offered where it would be dead. */
 export const canReveal = (): boolean => !!bridge()?.revealPath;
+
+/**
+ * Bring the app's window to the front.
+ *
+ * A notification press has to land somewhere the person can see. `window.focus()`
+ * from a renderer does not lift a minimised or hidden window, so the shell does
+ * it. False in a browser tab or on an older shell, where the caller falls back
+ * to `window.focus()` and the router still takes the destination.
+ */
+export async function raiseWindow(): Promise<boolean> {
+  const b = bridge();
+  if (!b?.raiseWindow) return false;
+  try { return await b.raiseWindow(); } catch { return false; }
+}

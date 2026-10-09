@@ -532,7 +532,7 @@ describe("what the status TYPE decides", () => {
   });
 
   it("carries the option's own colour, so the board can be read by colour", () => {
-    // The colour is the point of a field like a squad — ClickUp paints those
+    // The colour is the point of a field like a team — ClickUp paints those
     // cells — and it lives on the OPTION, next to the name.
     const t = CU.toTask({
       id: "x", name: "n",
@@ -807,6 +807,19 @@ describe("the pull requests a card produced", () => {
   });
 });
 
+describe("a merge request on a card's link field", () => {
+  const { prNumberFromUrl } = CU;
+
+  it("reads a GitLab merge request, on gitlab.com or a self-hosted gitlab host, and nothing near it", () => {
+    expect(prNumberFromUrl("https://gitlab.com/acme/widgets/-/merge_requests/58")).toBe(58);
+    expect(prNumberFromUrl("https://gitlab.acme.example/acme/team/widgets/-/merge_requests/58/diffs")).toBe(58);
+    for (const bad of ["https://gitlab.com/acme/widgets/-/issues/58", "https://example.invalid/acme/widgets/-/merge_requests/58",
+      "https://gitlab.com/acme/widgets/-/merge_requests/"]) {
+      expect(prNumberFromUrl(bad), bad).toBe(null);
+    }
+  });
+});
+
 describe("which of a card's lists is the sprint", () => {
   const { sprintOf, looksLikeSprint } = CU;
 
@@ -880,5 +893,18 @@ describe("an address somebody assembled by hand", () => {
       "https://example.clickup.com/9000001/v/l/li",
       "https://example.clickup.com/9000001/v/",
     ]) expect(parseViewUrl(bad), bad).toBe(null);
+  });
+});
+
+describe("mergeMembers", () => {
+  it("one person from two sources keeps the name, not the first answer", () => {
+    // The list endpoint knew this id only by initials; the workspace had the name.
+    const out = CU.mergeMembers([
+      { id: 7, initials: "AL" } as any,
+      { id: 7, username: "Ada Lin", color: "#123456" } as any,
+      { id: 8, initials: "ZZ" } as any,
+    ], "7");
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ id: 7, name: "Ada Lin", initials: "AL", color: "#123456", me: true });
   });
 });

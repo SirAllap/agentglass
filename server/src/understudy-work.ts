@@ -25,7 +25,7 @@
  * WHAT STILL BOUNDS IT. The shift — how long, how much, and stop on failure.
  * The halt, which now reaches the actuator. And the repository allow-list,
  * which starts at the open project because an error there costs a worktree and
- * an error in his employer's repository costs something else entirely.
+ * an error in his company's repository costs something else entirely.
  */
 import { createHash } from "node:crypto";
 import type { UnderstudyWorkItem, UnderstudyWorkRun } from "../../shared/types.ts";
@@ -68,6 +68,12 @@ export type WorkItem = UnderstudyWorkItem;
 export interface WorkSource {
   id: string;
   label: string;
+  /**
+   * Optional: false while the source has nothing to read from (a tracker with
+   * no token). It is then neither listed nor asked, so a machine that never
+   * connected one is not offered a source it cannot use.
+   */
+  connected?(): boolean;
   /** What this source can offer right now. Read-only, always. */
   find(opts: { repos: string[] }): Promise<WorkItem[]>;
   /**
@@ -100,7 +106,7 @@ export function addSource(s: WorkSource): void {
 }
 
 export function sources(): { id: string; label: string }[] {
-  return [...SOURCES.values()].map((s) => ({ id: s.id, label: s.label }));
+  return [...SOURCES.values()].filter((s) => s.connected?.() ?? true).map((s) => ({ id: s.id, label: s.label }));
 }
 
 /* ── what has been picked up already ────────────────────────────────────── */
@@ -323,6 +329,7 @@ export function resetTimeFrom(text: string, now = Date.now()): number {
 export async function nextTask(opts: { repos: string[] }): Promise<WorkItem | null> {
   const found: WorkItem[] = [];
   for (const s of SOURCES.values()) {
+    if (!(s.connected?.() ?? true)) continue;
     try {
       for (const item of await s.find(opts)) {
         if (!alreadyTaken(item.source, item.id)) found.push(item);
@@ -403,7 +410,7 @@ export function brief(
    * forty rules were HTTP API guidance out of a third-party skill — idempotency
    * keys, cursor pagination, a sacred duty to downstream consumers — in a task
    * about naming a git branch. The rule that says never to create a worktree
-   * or a branch in his employer's repository sits at index 727 of 1,239, so no
+   * or a branch in his company's repository sits at index 727 of 1,239, so no
    * run has ever been sent it.
    *
    * `ask` already does this properly for the panel: rules that share a word

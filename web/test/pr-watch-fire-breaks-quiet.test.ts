@@ -36,16 +36,19 @@ describe("Quiet does not hold back what was asked for", () => {
     expect(policy.deliveryFor({ app: "agentglass", urgency: 1, source: "ci", asked: true }, s)).toEqual({ keep: true, badge: true, interrupt: true });
   });
 
-  test("a fired watch shows a toast with Quiet on, and leaves an unread row", () => {
+  test("a fired watch leaves an unread row with Quiet on, titled verdict then object and pointing at the PR", () => {
     sys.setNotifyQuiet(true);
-    const toasts: any[] = [];
-    const off = sys.subscribeAskedFires((t) => toasts.push(t));
-    sys.fireWatchAlert({ seq: 901, repo: "acme/orbit", number: 1042, title: "Add thing", summary: "CI passed", detail: "71 checks", ok: true });
-    off();
-    expect(toasts).toHaveLength(1);
-    expect(toasts[0]).toMatchObject({ ok: true, title: "CI passed — #1042" });
+    sys.fireWatchAlert({ seq: 901, repo: "acme/orbit", number: 1042, title: "Add thing", summary: "CI passed", detail: "", ok: true });
     expect(sys.notifyUnread()).toBe(1);
-    expect(sys.notifyHistory()[0]).toMatchObject({ asked: true });
+    expect(sys.notifyHistory()[0]).toMatchObject({
+      asked: true, summary: "CI passed · acme/orbit #1042", body: "Add thing", goto: { kind: "pr", repo: "acme/orbit", number: 1042 },
+    });
+  });
+
+  // The banner is the server's frame (askedBanners.ts never consults Quiet), so what was asked for appears whatever Quiet says.
+  test("the banner store has no Quiet gate", async () => {
+    const src = await Bun.file(new URL("../src/lib/askedBanners.ts", import.meta.url)).text();
+    expect(src).not.toMatch(/notifyQuiet|shouldInterrupt/);
   });
 });
 

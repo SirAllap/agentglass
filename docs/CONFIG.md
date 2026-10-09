@@ -265,6 +265,30 @@ that nothing the code reads goes unnamed. None is required.
 
 ---
 
+## ClickUp workflow settings
+
+How ClickUp works is code. How one team uses it (a QA column, a field that holds the PR link, a sprint naming habit) is a preference, kept in `clickup-prefs.json` beside `clickup-views.json` in the config directory and edited under Settings → Integrations → ClickUp. `GET /clickup/prefs` reads them; a `POST` is a partial update that is validated as a whole, and anything refused writes nothing and says which setting and why. A hand-edited pattern that does not compile falls back to its default rather than breaking the board. The three patterns are regular-expression sources, matched without regard to case; an empty string means the default. With no file, the app does what it did before these settings existed, except that the two flows that were one team's habit start off.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `handoff.enabled` | `false` | Shows the "move to QA" action on a pull request's card. |
+| `handoff.statusNames` | `[]` | Status names to look for, in order; the first one the card's list has wins. Empty with the hand-off on means `Ready for QA`. |
+| `handoff.unassign` | `none` | Who comes off the card on hand-off: `none`, `me` (the connected account) or `all`. |
+| `review.statusNames` | `[]` | Status names the review menu moves a card to. Empty falls back to a status whose name contains `review`, then leaves the card alone. |
+| `review.assignReviewer` | `false` | Whether moving a card to review also puts the reviewer on it. |
+| `flows.noteOnCard` | `false` | Offers a "note on card" comment when you ask for a review. |
+| `prLinkField` | empty | Custom field that holds a PR link. Empty guesses a field whose name contains `github`; a name set here is matched exactly, with no guess. |
+| `swatchField` | empty | Custom field drawn as a colour swatch. Empty guesses a coloured drop-down named like `squad`, `team`, `pod` or `tribe`, else the first coloured one; a name set here is matched exactly. |
+| `cardSkillPattern` | `clickup\|\bcu-\|-cu\b` | Which skills count as knowing what a card is, matched against the skill name. |
+| `assigned.includeSubtasks` | `false` | Includes subtasks in "Assigned to me". Off because the request is slower and returned no extra rows on the workspace it was measured on; teams that work in subtasks turn it on. |
+| `sprintListPattern` | `^sprint\b` | Which list names are sprints. A name that ends in a date range is a sprint whatever this says. |
+| `readOnlyFieldPattern` | `do not edit` | Custom fields whose name matches are shown but never written. |
+| `bell.kinds` | `assigned`, `status`, `mention`, `comment` | Which kinds of change raise a note on the card bell. |
+
+Writing to a board at all is separate, and off: see `AGENTGLASS_CLICKUP_WRITE` above.
+
+---
+
 ## API
 
 Every route is behind the token and the origin/Host gates described in [Security model](#security-model); the exceptions are named on their row. **Gated** means refused by the named switch; a write outside the open project is refused by scope. Families are grouped by prefix; `{a,b}` lists the verbs under one.
@@ -303,6 +327,7 @@ Every route is behind the token and the origin/Host gates described in [Security
 | `GET /issues/{list,detail,work}` · `POST /issues/{start,finish,claim,comment,state}` | GitHub issues through `gh`; which ones this machine holds a worktree for. Start one as a worktree / branch / Claude window, finish, claim, comment, open or close — **gated** like PR writes. |
 | `GET /tasks/{list,provider,reminders}` · `POST /tasks/write/{add,bulk,delete,done,edit,note,priority,reopen,tags}` · `POST /tasks/{remind,reminder/*}` | Your Taskwarrior list (writes carry a fingerprint precondition → 409; off under `AGENTGLASS_TASK_WRITE_DISABLED`) and the app's own reminders. |
 | `GET /clickup/{views,spaces,folders,list-views,view,list,task,prs,find,where,members,sprints,search,search/stream,warm,file,…}` | ClickUp boards, lists, saved views and cards, read with the token from Settings → Integrations. `file` proxies an attachment from ClickUp's hosts only. |
+| `GET` · `POST /clickup/prefs` | How this workspace uses ClickUp: read, and partially updated. Settings and defaults: [ClickUp workflow settings](#clickup-workflow-settings). Saved on this machine only; never writes to ClickUp. |
 | `POST /clickup/{card,create,move,status,priority,assign,tag,field*,task,comment*,checklist*,views/*,folders/*,writes}` | Changing a card on a shared board — **off unless `AGENTGLASS_CLICKUP_WRITE=1`** (or the `writes` toggle); each write re-reads the card and refuses if it moved. |
 | `GET /providers` · `/providers/workspaces?id=` · `POST /providers/{connect,disconnect,workspace}` | Integration status and workspaces. `connect` is the only route that receives a service token, and no route returns one. |
 | `GET /files/{tree,find,grep,read,measure,temp,refs,exist}` | A checkout's tree one level at a time, filename and content search, one file at a ref, a ref's copy in a temp file for the editor. Scoped to the fleet's repos; the whole prefix is 403 under `AGENTGLASS_FS_BROWSE_DISABLED`. |

@@ -43,7 +43,7 @@ describe("the redesigned tab", () => {
   const at = (s: number, e: number) => ({ startedAt: new Date(Date.UTC(2026, 8, 30, 9, 0, s)).toISOString(), completedAt: new Date(Date.UTC(2026, 8, 30, 9, 0, e)).toISOString() });
   const all = [
     chk({ name: "unit", required: true, ...at(0, 312) }),
-    chk({ name: "e2e (chat-widget)", state: "failure", ...at(0, 505) }),
+    chk({ name: "e2e (checkout)", state: "failure", ...at(0, 505) }),
     chk({ name: "e2e (settings)", state: "pending", done: false }),
     chk({ name: "lint", workflow: "Security", ...at(0, 41) }),
     chk({ name: "claude", state: "skipped", event: "pull_request" }),
@@ -52,13 +52,13 @@ describe("the redesigned tab", () => {
     expect(filterCounts(all)).toEqual({ all: 5, failed: 1, running: 1, required: 1, slow: 0 });
   });
   it("filters by chip and by typed text", () => {
-    expect(applyFilter(all, "failed", "").map((k) => k.name)).toEqual(["e2e (chat-widget)"]);
+    expect(applyFilter(all, "failed", "").map((k) => k.name)).toEqual(["e2e (checkout)"]);
     expect(applyFilter(all, "all", "SETTINGS").map((k) => k.name)).toEqual(["e2e (settings)"]);
     expect(applyFilter(all, "slow", "unit")).toHaveLength(0);
   });
   it("shortens a matrix name and scales bars to the slowest run", () => {
-    expect(shortName(all[1]!)).toBe("e2e · chat-widget");
-    expect(slowest(all)!.name).toBe("e2e (chat-widget)");
+    expect(shortName(all[1]!)).toBe("e2e · checkout");
+    expect(slowest(all)!.name).toBe("e2e (checkout)");
     expect(spanShare(all[0]!, 505_000)).toBeCloseTo(312 / 505, 3);
     expect(spanShare(all[2]!, 505_000)).toBe(0);
   });

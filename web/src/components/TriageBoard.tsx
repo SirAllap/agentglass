@@ -12,10 +12,10 @@
 // Nothing is fetched for this. It reads the two lists the panel already loads
 // for the pill counts — see stakeFrom in prLanes.ts — so the board costs what
 // the pill row cost, and the numbers cannot disagree with their source.
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { HIT, ICON, MIN_BOX } from "../lib/iconSize.ts";
 import { InfoIcon } from "./settingsNavIcons.tsx";
-import { CircleIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, FlagIcon, LinkIcon, RefreshIcon, SearchIcon, StarIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import { CircleIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, FlagIcon, LinkIcon, PinIcon, RefreshIcon, SearchIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { FACES_MAX, eventLine, splitTitle, standing } from "../lib/prCardZones.ts";
 import { ALWAYS_OPEN, foldable, foldedLanes, setFoldedLanes, walkable } from "../lib/boardPrefs.ts";
 import type { PrSummary } from "../../../shared/types.ts";
@@ -74,7 +74,7 @@ type Card = PrSummary & { filed: Filed };
 
 export function TriageBoard({
   mine, review, total, hasTaskProvider, pinned,
-  onOpen, onTogglePin, onShowTable, onAct, busy, acting, loading, settling, failed, hidden, onRetry, pinnedList, root, repoKey,
+  onOpen, onTogglePin, onShowTable, onAct, busy, acting, loading, settling, failed, hidden, onRetry, root, repoKey,
   onlyUnread, onOnlyUnread,
 }: {
   /** The `mine` scope, as the panel already has it. */
@@ -98,19 +98,6 @@ export function TriageBoard({
   /** Which pull request that action is on. The board disables every card while
    *  one runs; the spinner belongs to the one you pressed. */
   acting?: number | null;
-  /**
-   * The ones you pinned, whoever opened them.
-   *
-   * Not a lane, and not for want of a column: a pin is a fact about YOU, and
-   * the lanes are facts about what a pull request needs. It also reaches
-   * further than they do — you can pin a colleague's, which no lane here will
-   * ever contain — so filing it in one would be wrong twice.
-   *
-   * It sits at the foot of the first column, in the same place every time. Two
-   * of these columns are usually empty and it is tempting to put it wherever
-   * the space happens to be; a thing that moves is a thing you hunt for.
-   */
-  pinnedList?: { number: number; title: string }[];
   /**
    * The two lists are still being fetched and nothing has arrived yet.
    *
@@ -334,8 +321,8 @@ export function TriageBoard({
    *
    * The cap keeps the board a glance, and the four it left over used to be a
    * button that sent you to the TABLE — a different surface, sorted
-   * differently, with the lane you were reading nowhere in it. "What is the point
-   * of having the cards, then?" is the right question: the rest of a lane
+   * differently, with the lane you were reading nowhere in it. A board that
+   * sends you elsewhere for the rest of a lane defeats the cards: the rest of a lane
    * belongs in the lane. The board already holds those rows; only the slice was
    * hiding them.
    */
@@ -739,9 +726,6 @@ export function TriageBoard({
                   Try again
                 </button>
               )}
-              <div className="mt-4 text-left">
-                <PinnedStrip list={pinnedList} onOpen={onOpen} />
-              </div>
             </div>
           </div>
         ) : face === "empty" ? (
@@ -759,12 +743,6 @@ export function TriageBoard({
                 style={{ color: "var(--text2)", border: EDGE }}>
                 {tableLabel}
               </button>
-              {/* An empty board is precisely when a pin is the only thing left
-                  on screen. Hiding it here would make the feature vanish at the
-                  moment it is the whole point. */}
-              <div className="mt-4 text-left">
-                <PinnedStrip list={pinnedList} onOpen={onOpen} />
-              </div>
             </div>
           </div>
         ) : (
@@ -946,11 +924,6 @@ export function TriageBoard({
                       </>
                     )}
                   </div>
-
-                  {/* Always the first column, never "wherever there is room".
-                      Its own scroller, so a long pin list cannot push the lane
-                      above it out of reach. */}
-                  {i === 0 && !waiting && <PinnedStrip list={pinnedList} onOpen={onOpen} />}
                   </>)}
                 </div>
               );
@@ -1186,6 +1159,10 @@ function cardVerdict(p: PrSummary): {
   };
 }
 
+/** The edge of the number chip, and of the link once it has copied: green after a copy. */
+const copyEdge = (done: boolean) =>
+  `1px solid color-mix(in srgb, ${done ? "var(--success) 50%" : "var(--border) 55%"}, transparent)`;
+
 function CardView({ p, hasTaskProvider, repoUses, pinned, cursor, onOpen, onPin, onAct, busy, acting, dim, root, unread }: {
   p: Card; hasTaskProvider: boolean;
   /** This repository links work items at all: see prCardBlock.ts. */
@@ -1386,19 +1363,50 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, cursor, onOpen, onPin,
             * swapped glyph of another width moved the row at the moment you
             * were looking at it.
             */}
+          {/* The number, the link and the pin are one group: the three things you
+              take away from a card, side by side and wrapping as one. The link and
+              the pin are as tall as the number chip so the row does not grow, and
+              HIT on a touch screen, where a 20px square is a target to aim at. The
+              whole square is the button rather than the glyph inside it: the pin
+              used to be a 22px glyph in a corner, a target you aim at rather than
+              one you hit. */}
+          <span className="agx-prc-grp flex items-center gap-1 shrink-0"
+            style={{ "--ib": `${CHIP_H + 2}px`, "--ib-hit": `${HIT}px` } as CSSProperties}>
           <button onClick={(e) => { e.stopPropagation(); copyNumber(p.number); }}
             aria-live="polite"
             title={copied === p.number ? "Copied!" : `Copy #${p.number}`}
-            className="agx-btn shrink-0 tabular-nums inline-flex items-center gap-1 px-1.5 rounded-md text-[10px]"
+            className="agx-btn agx-prc-cp shrink-0 tabular-nums inline-flex items-center gap-1 px-1.5 rounded-md text-[10px]"
             style={{
               height: CHIP_H + 2,
               color: copied === p.number ? "var(--success)" : "var(--text2)",
-              border: `1px solid color-mix(in srgb, ${copied === p.number ? "var(--success) 50%" : "var(--border) 55%"}, transparent)`,
+              border: copyEdge(copied === p.number),
               background: "var(--surface-inset)",
             }}>
             #{p.number}
             {copied === p.number ? <DoneIcon size={ICON.xs} /> : <CopyIcon size={ICON.xs} />}
           </button>
+          <button onClick={(e) => { e.stopPropagation(); copyLink(); }}
+            title={copiedLink ? "Copied!" : `Copy the link to #${p.number}`}
+            aria-label={`Copy the link to #${p.number}`}
+            className="agx-btn agx-prc-cp agx-prc-ib shrink-0 grid place-items-center rounded-md"
+            style={{ lineHeight: 1,
+              color: copiedLink ? "var(--success)" : "var(--text3)",
+              border: copiedLink ? copyEdge(true) : "none",
+              background: copiedLink ? "var(--surface-inset)" : "transparent" }}>
+            {copiedLink ? <DoneIcon size={ICON.xs} /> : <LinkIcon size={ICON.xs} />}
+          </button>
+          <button onClick={(e) => { e.stopPropagation(); onPin(); }}
+            title={pinned ? `Unpin #${p.number}` : `Pin #${p.number} to the bar at the top`}
+            aria-label={pinned ? `Unpin #${p.number}` : `Pin #${p.number}`}
+            aria-pressed={pinned}
+            className="agx-btn agx-prc-cp agx-prc-ib shrink-0 grid place-items-center rounded-md"
+            style={{ lineHeight: 1,
+              color: pinned ? "var(--primary-hover)" : "var(--text3)",
+              border: pinned ? "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" : "none",
+              background: pinned ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent" }}>
+            <PinIcon size={ICON.xs} filled={pinned} />
+          </button>
+          </span>
           {/* Beside the number, before the title: the title is what a card IS
               and this is what it WANTS. */}
           {unread && <UnreadBadge u={unread} />}
@@ -1425,33 +1433,6 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, cursor, onOpen, onPin,
           style={{ fontSize: 13, lineHeight: 1.4, color: "var(--text)", overflowWrap: "anywhere" }}>
           {pre && <span className="font-medium" style={{ color: "var(--text3)" }}>{pre} | </span>}{rest}
         </div>
-        {/* The link and the pin, on the title row on a narrow card and at the end
-            of the identity line on a wide one. The pin is 26px, in the one place
-            every card has in common, and the whole square is the button rather
-            than the star inside it: it used to be a 22px glyph in a corner, a
-            target you aim at rather than one you hit. */}
-        <div className="agx-prc-ac">
-          <button onClick={(e) => { e.stopPropagation(); copyLink(); }}
-            title={copiedLink ? "Copied!" : `Copy the link to #${p.number}`}
-            aria-label={`Copy the link to #${p.number}`}
-            className="agx-btn shrink-0 grid place-items-center rounded-md"
-            style={{ width: HIT, height: HIT, lineHeight: 1,
-              color: copiedLink ? "var(--success)" : "var(--text3)", background: "transparent" }}>
-            {copiedLink ? <DoneIcon size={ICON.md} /> : <LinkIcon size={ICON.md} />}
-          </button>
-          <button onClick={(e) => { e.stopPropagation(); onPin(); }}
-            title={pinned ? `Unpin #${p.number}` : `Pin #${p.number} to the bar at the top`}
-            aria-label={pinned ? `Unpin #${p.number}` : `Pin #${p.number}`}
-            aria-pressed={pinned}
-            className="agx-btn shrink-0 grid place-items-center rounded-md"
-            style={{ width: HIT, height: HIT, lineHeight: 1,
-              color: pinned ? "var(--primary-hover)" : "var(--text3)",
-              border: pinned ? "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" : "none",
-              background: pinned ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent" }}>
-            <StarIcon size={ICON.md} filled={pinned} />
-          </button>
-        </div>
-
         {/*
           * WHERE IT STANDS: the checks as a word and a bar, never as colour
           * alone — "red" has to be sayable to somebody who cannot see it.
@@ -1594,34 +1575,3 @@ function ago(iso: string): string {
 const K = ({ children }: { children: React.ReactNode }) => (
   <span className="rounded px-1 mx-px" style={{ border: `1px solid color-mix(in srgb, var(--text) 16%, transparent)` }}>{children}</span>
 );
-
-/**
- * The ones you pinned, drawn wherever there is a board to draw them on.
- *
- * Its own component because it appears in two places that are otherwise
- * unrelated — the foot of the first lane, and the empty state — and the second
- * one matters more than it looks: a board with no lanes is exactly when a pin
- * is the only thing left on screen.
- */
-function PinnedStrip({ list, onOpen }: { list?: { number: number; title: string }[]; onOpen: (n: number) => void }) {
-  if (!list?.length) return null;
-  return (
-    <div className="shrink-0 flex flex-col min-h-0 mt-2 pt-2" style={{ borderTop: LINE, maxHeight: "40%" }}>
-      <h4 className="flex items-baseline gap-2 m-0 pb-1 px-0.5 text-[9px] uppercase tracking-wider shrink-0"
-        style={{ color: "var(--text3)" }}>
-        <span className="flex" style={{ color: "var(--primary-hover)" }}><StarIcon size={ICON.xs} filled /></span> Pinned
-        <span className="tabular-nums" style={{ color: "var(--text4)" }}>{list.length}</span>
-      </h4>
-      <div className="flex-1 min-h-0 overflow-y-auto agx-scroll">
-        {list.map((p) => (
-          <button key={p.number} onClick={() => onOpen(p.number)} title={p.title}
-            className="agx-btn w-full text-left rounded px-1.5 py-1 mb-1 flex items-baseline gap-1.5"
-            style={{ border: EDGE }}>
-            <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>#{p.number}</span>
-            <span className="min-w-0 truncate text-[10.5px]" style={{ color: "var(--text2)" }}>{p.title}</span>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}

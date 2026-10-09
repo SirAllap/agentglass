@@ -2,7 +2,7 @@
  * Matching ClickUp's own desktop notification back to a card.
  *
  * Why this exists: ClickUp's app posts the task's TITLE and a sentence about
- * what happened to it — "Alejandro set the status to: READY FOR QA" — with no
+ * what happened to it — "Ada set the status to: IN REVIEW" — with no
  * id and no url, and a D-Bus monitor cannot invoke the notification's own action
  * to ask for one. So those rows behind the bell were the only ones that could
  * not be opened, and the desktop pop-up went to ClickUp's website: the single
@@ -78,7 +78,7 @@ describe("which card a notification is about", () => {
 
   it("says nothing about a notification from some other app", () => {
     watching(CARDS);
-    expect(cardForTitle("Alejandro sent a message in #engineering")).toBeNull();
+    expect(cardForTitle("Ada sent a message in #engineering")).toBeNull();
   });
 
   it("falls back to the ClickUp id when a card has no readable label", () => {

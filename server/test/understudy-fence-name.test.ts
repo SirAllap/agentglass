@@ -97,7 +97,7 @@ test("the folder projects live in is refused on a database that knows nothing", 
    * after a reset, or before the first scan. On such a machine
    * `setOpenProject("code")` was accepted, and `code` is a segment of every
    * repository path on this one: the fence would have admitted a checkout of
-   * somebody's employer two directories away.
+   * somebody's company two directories away.
    *
    * Refused without needing to be discovered. A real project called `src` is a
    * price worth paying against a fence that opens by accident.

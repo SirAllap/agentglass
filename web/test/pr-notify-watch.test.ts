@@ -102,21 +102,28 @@ describe("wiring", () => {
     expect(menu).toContain("ICON.xs");
     expect(menu).not.toMatch(/size=\{\d+\}/);
   });
-  it("a firing raises ONE popup that opens the PR inside the app, never the external browser", () => {
+  it("a firing raises ONE popup that opens the PR inside the app, never the external browser", async () => {
     const f = body(notify, "export function fireWatchAlert(");
-    expect(f).toContain('kind: "pr"');
+    expect(f).toContain("watchPayload(f)"); // the target travels in the payload: a PR, by repo and number
+    expect(await Bun.file(new URL("../../shared/notifyPayload.ts", import.meta.url)).text()).toContain('kind: "pr", repo: f.repo, number: f.number');
     expect(f).toContain("popup(");
     expect(f).toContain('"reminders"'); // the opt-in kind, not `idle`
     expect(f).not.toContain("openExternal");
     expect(f).not.toContain("window.open");
-    expect(f).not.toContain("urgency: 2"); // a 2 is a toast that stays: the permanent notification he does not want
+    // The ROW is urgency 1: a 2 there keeps the strip lit, the permanent notification he does not want.
+    expect(f).toMatch(/recordNote\(\{[^}]*urgency: 1/);
     expect(f).not.toContain("interrupt"); // and the popup is what he asked for, so Quiet does not gate it
     expect(body(notify, "function popup(")).toContain("goto?.(dest)");
   });
   it("the popup still closes itself: a watch notification is never sticky", () => {
     const p = body(notify, "function popup(");
     expect(p).toContain("setTimeout(");
-    expect(body(notify, "export function fireWatchAlert(")).toContain("urgency: 1, dest"); // not requireInteraction
+    // Critical only for the window nobody is looking at, and it still closes itself after BLOCKING_POPUP_MS.
+    const f = body(notify, "export function fireWatchAlert(");
+    expect(f.indexOf("windowFocused()")).toBeGreaterThan(-1);
+    expect(f.indexOf("windowFocused()")).toBeLessThan(f.indexOf("popup({"));
+    expect(f).toContain("urgency: 2");
+    expect(p).toContain("a.urgency === 2 ? BLOCKING_POPUP_MS : POPUP_MS");
   });
   it("both frames are handled, and the exception to the quiet default is written down", async () => {
     expect(live).toContain('frame.type === "prwatch"');

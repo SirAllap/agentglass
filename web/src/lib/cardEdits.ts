@@ -89,8 +89,8 @@ export function msToDay(ms: number | null | undefined): string {
 /**
  * A sprint's short name, for a picker that has thirty of them.
  *
- * Sprints are lists and their names carry the dates — "Sprint 42 (26/8/19 -
- * 26/8/25)" — which is the useful half when you are choosing and noise once you
+ * Sprints are lists and their names carry the dates — "Sprint 14 (3/17 -
+ * 3/23)" — which is the useful half when you are choosing and noise once you
  * have. The number is what people say out loud.
  */
 export function sprintShort(name: string): string {

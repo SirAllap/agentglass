@@ -214,7 +214,7 @@ step("the Lantern's own chat is never 'needs you', and is never reminded — its
 });
 
 step("the Lantern is known by its own first prompt, with no role in the environment — and its status post is not a second agent", async () => {
-  // "Why are there 2 lanterns, and who the hell ran them?" — one chat,
+  // Two lanterns on the board, one of them nobody started — one chat,
   // launched before the role existed, reminded to post its status, and the
   // board drew the post beside the pane. The prompt is ours, so it is the mark.
   const hook = (hook_event_type: string, extra: Record<string, unknown> = {}) =>

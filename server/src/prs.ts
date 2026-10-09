@@ -35,6 +35,8 @@ import type {
   PrAuthored, PrReaction, PrEvent, PrCheckJob, PrReviewer, PrMergePolicy, PrMergeGate, PrMergeMethod, PrLocalHead, FailingTests,
 } from "../../shared/types.ts";
 import { CARD_PEOPLE_MAX } from "../../shared/cardPeople.ts";
+import { cardIdIn } from "../../shared/cardRef.ts";
+import { hasCredential } from "./credentials.ts";
 
 /** Same escape hatch the git writes use, so one variable disables both. */
 const WRITE_ENABLED = process.env.AGENTGLASS_GIT_WRITE_DISABLED !== "1";
@@ -351,6 +353,8 @@ export async function prsForBranch(root: string, branchIn: unknown): Promise<{
 export async function prRollup(rootIn: unknown, numberIn: unknown, fresh = false): Promise<{ ok: boolean; checks?: PrCheckRollup; /** Every check by name — what the notify watches match against. */ all?: PrCheck[];
   /** OPEN, CLOSED or MERGED — a watch on a PR that is no longer open ends. */
   state?: string;
+  /** The commit these checks belong to: what makes two verdicts on one PR different events. */
+  sha?: string;
   /** More than the 100 contexts one page holds: `all` is not every check, so nothing may conclude "all done" from it. */
   truncated?: boolean; error?: string }> {
   const number = Number(numberIn);
@@ -378,7 +382,7 @@ export async function prRollup(rootIn: unknown, numberIn: unknown, fresh = false
     // The commit named in this same response, not the cached one: a push since the list read would file these runs under the old commit.
     learnFromRead(repo.key, number, pr?.commits?.nodes?.[0]?.commit?.oid ?? "", r2.all);
     if (Number(ctxs?.totalCount ?? 0) <= raw.length) projectChecks(repo, number, r2.rollup, r2.all, began);
-    return { ok: true, checks: r2.rollup, all: r2.all, state: typeof pr?.state === "string" ? pr.state : undefined, truncated: Number(ctxs?.totalCount ?? 0) > raw.length };
+    return { ok: true, checks: r2.rollup, all: r2.all, state: typeof pr?.state === "string" ? pr.state : undefined, sha: pr?.commits?.nodes?.[0]?.commit?.oid || undefined, truncated: Number(ctxs?.totalCount ?? 0) > raw.length };
   }, { fresh, keep: (v) => v.ok });
 }
 const ROLLUP_TTL_MS = 30_000;
@@ -1356,8 +1360,8 @@ export function humanVerdict(
    *
    * A pull request with a review requested and nobody having answered is
    * waiting on a person, whatever else was said in the meantime. Reporting it
-   * as "commented" describes the noise and hides the fact — "when what I am
-   * actually waiting for is a human review??".
+   * as "commented" describes the noise and hides the fact: a person
+   * waiting for a human review is told the PR was commented.
    */
   const pending = o.pending ?? [];
   if (pending.length) {
@@ -1391,9 +1395,13 @@ export function humanVerdict(
  * nothing. That is the shape of bug this repository keeps paying for, and the
  * reason to check the SCREEN and not the bundle after an install.
  */
-function cardFor(branch: unknown, title: unknown): PrSummary["card"] | undefined {
+export function cardFor(branch: unknown, title: unknown): PrSummary["card"] | undefined {
+  /* No credential, no card. The cache outlives a disconnect unless the
+     disconnect cleared it, and a line drawn from a board nobody is signed in to
+     is the one thing a disconnect must not leave behind. */
+  if (!hasCredential("clickup")) return undefined;
   const text = `${typeof branch === "string" ? branch : ""} ${typeof title === "string" ? title : ""}`;
-  const ref = /\b([A-Za-z][A-Za-z0-9]{1,9}-\d{1,7})\b/.exec(text)?.[1];
+  const ref = cardIdIn(text);
   if (!ref) return undefined;
   let held: ReturnType<typeof boardHolding> = null;
   /* A DAY, and the age travels with it. Hiding a reading from this morning

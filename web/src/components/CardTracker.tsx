@@ -11,7 +11,8 @@
  * (a card, a loading shape, a bare id, a hint, nothing) is `trackerBlock` in
  * prCardBlock.ts, where a test can reach it.
  *
- * THE COPY BUTTONS take the faces' place on pointer-over or focus-within, in
+ * THE COPY BUTTONS (id, name, link — the last two only when the card has a
+ * title and an address) take the faces' place on pointer-over or focus-within, in
  * the same box, so the block never changes width or height while you reach for
  * one. The faces are the least urgent fact in it. Where there is no hover (a
  * coarse pointer) the buttons take an inline slot of their own instead: a
@@ -20,13 +21,17 @@
  */
 import { useState } from "react";
 import { ICON, HIT } from "../lib/iconSize.ts";
-import { CopyIcon, DoneIcon, ListIcon } from "../lib/glyphIcons.tsx";
+import { CopyIcon, DoneIcon, LinkIcon, ListIcon } from "../lib/glyphIcons.tsx";
 import { CardChip, CardFace, CHIP_H } from "../lib/priority.tsx";
 import { StatusPill } from "./StatusPill.tsx";
 import { openCard } from "../lib/openCard.ts";
+import { externalUrl } from "../lib/externalUrl.ts";
 import { taskLinkTitle, type TaskLink } from "../lib/taskLink.ts";
 import { peopleShown, readingAge, type TrackerBlock } from "../lib/prCardBlock.ts";
 import type { PrSummary } from "../../../shared/types.ts";
+
+/** The three copy buttons, in the order they are drawn. */
+type CopyKind = "id" | "name" | "link";
 
 /** How long "Copied" stays on a copy button. */
 const COPIED_MS = 1500;
@@ -39,9 +44,9 @@ export function CardTracker({ block, card, task, prOpen }: {
   /** The pull request is still open: a card marked done under it gets the amber dot. */
   prOpen: boolean;
 }) {
-  const [copied, setCopied] = useState<"id" | "name" | null>(null);
+  const [copied, setCopied] = useState<CopyKind | null>(null);
   if (block === "none") return null;
-  const copy = (kind: "id" | "name", text: string) => {
+  const copy = (kind: CopyKind, text: string) => {
     void navigator.clipboard?.writeText(text).catch(() => {});
     setCopied(kind);
     setTimeout(() => setCopied(null), COPIED_MS);
@@ -53,6 +58,9 @@ export function CardTracker({ block, card, task, prOpen }: {
         const id = card.customId ?? card.id;
         const who = card.people ?? [];
         const { faces, more } = peopleShown(who.length);
+        /* No web address on the card (an older reading, a tracker that has none
+           to give): no button, rather than one that copies nothing. */
+        const link = externalUrl(card.url);
         const names = who.map((x) => x.name).join(", ");
         /* A card marked done under a pull request still open: the amber dot,
            with the reason in the tooltip. Not a warning colour on the status
@@ -80,7 +88,7 @@ export function CardTracker({ block, card, task, prOpen }: {
               <StatusPill status={card.status} color={card.statusColor} dim={stale} />
               {stale && <span style={{ color: "var(--text3)" }}>{said}</span>}
             </span>
-            <span className="agx-trk-fz">
+            <span className="agx-trk-fz" data-wide={link ? "1" : undefined}>
               {who.length > 0 && (
                 <span className="agx-trk-faces" role="img" style={{ isolation: "isolate" }}
                   aria-label={`Card assigned to ${names}`} title={`Card assigned to ${names}`}>
@@ -102,6 +110,10 @@ export function CardTracker({ block, card, task, prOpen }: {
                 {card.title && (
                   <CopyButton kind="name" label="Copy card name" done="Copied card name" copied={copied === "name"}
                     onCopy={() => copy("name", card.title)}><ListIcon size={ICON.xs} /></CopyButton>
+                )}
+                {link && (
+                  <CopyButton kind="link" label="Copy card link" done="Copied card link" copied={copied === "link"}
+                    onCopy={() => copy("link", link)}><LinkIcon size={ICON.xs} /></CopyButton>
                 )}
               </span>
             </span>
@@ -130,9 +142,9 @@ export function CardTracker({ block, card, task, prOpen }: {
   );
 }
 
-/** One of the two copy buttons: the glyph, and a tooltip that says "Copied …" for a moment. */
+/** One of the copy buttons: the glyph, and a tooltip that says "Copied …" for a moment. */
 function CopyButton({ kind, label, done, copied, onCopy, children }: {
-  kind: "id" | "name"; label: string; done: string; copied: boolean; onCopy: () => void; children: React.ReactNode;
+  kind: CopyKind; label: string; done: string; copied: boolean; onCopy: () => void; children: React.ReactNode;
 }) {
   return (
     /* `stopPropagation`: the card underneath opens on click, and this press

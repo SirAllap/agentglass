@@ -305,7 +305,7 @@ describe("the merged answer comes from the right repository", () => {
 
   test("two repositories can give different refs in the same board", () => {
     /*
-     * The whole reason this is keyed by branch. The employer's checkout is on
+     * The whole reason this is keyed by branch. The company's checkout is on
      * `master` and ours is on a working branch, and asking one repository
      * about the other's branches answered "not in master" for every row on
      * this machine — true, meaningless, and the shape of an answer that sends
@@ -331,7 +331,7 @@ describe("the route does not ask the configured workspace root", () => {
   test("it resolves each row's own checkout to its repository", async () => {
     /*
      * `workspaceRoot()` is whatever `config().root` says, and on this machine
-     * that is the employer's repository — read-only, on `master`, and not
+     * that is the company's repository — read-only, on `master`, and not
      * where any of this work lives. Reading it for this answer is how every
      * row came back "not in master".
      */
@@ -371,7 +371,7 @@ describe("the route does not ask the configured workspace root", () => {
 describe("an agent nobody asked to announce itself", () => {
   const MIN = 60_000;
   const now = 1_700_000_000_000;
-  /* A fictional checkout: the real ones name the employer, and this repository
+  /* A fictional checkout: the real ones name the company, and this repository
      is public. */
   const wt = "/home/somebody/code/orbit-feature";
   const trees = [{ path: wt, branch: "feat/orbit-1042" }];
@@ -712,14 +712,14 @@ describe("one card per agent", () => {
      * A session gets a `pane_agent` row per pane it has ever run in — a
      * reboot is enough. Deleting the one pane the named row landed on left
      * the rest on the board titled with whatever `names` called them, which
-     * is where a card headed "que son estos?? [Image #1]" came from: the same
+     * is where a card headed with a person's first message came from: the same
      * session as a named card, drawn again under its person's first message.
      */
     const hooks = [hook("%3", "s-me", "/code/app", AT), hook("%44", "s-me", "/code/app", AT - 1000)];
     Board.saidBy({ name: "lantern-dedupe", doing: "the fix", worktree: "/code/app", session: "s-me", at: AT });
     const rows = Board.merged({
       said: Board.board(), hooks, panes: hooks.map((h) => pane(h.paneId, h.cwd)),
-      names: new Map([["s-me", "que son estos?? [Image #1]"]]), now: AT,
+      names: new Map([["s-me", "what are these? [Image #1]"]]), now: AT,
     });
     expect(rows).toHaveLength(1);
     expect(rows[0]!.name).toBe("lantern-dedupe");

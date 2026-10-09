@@ -371,7 +371,7 @@ const leaf = (path: string) => path.split("/").filter(Boolean).pop() ?? path;
  *
  * `open-only` keeps the task-tracker sources silent; `everywhere` lets them
  * offer cards. It could be changed over HTTP and never read, so the switch
- * deciding whether the clone reaches somebody's employer was invisible in the
+ * deciding whether the clone reaches somebody's company was invisible in the
  * application — and it is the setting people most want to check before leaving
  * it running.
  *

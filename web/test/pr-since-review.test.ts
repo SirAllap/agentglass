@@ -11,7 +11,7 @@ import type { PrDetail, PrReview } from "../../shared/types.ts";
 import { myLastReview, sinceRange, sinceTitle } from "../src/lib/prSinceReview.ts";
 
 const review = (over: Partial<PrReview>): PrReview => ({
-  author: "javidoe", isBot: false, state: "COMMENTED", body: "", submittedAt: "2026-08-10T09:00:00Z",
+  author: "adadoe", isBot: false, state: "COMMENTED", body: "", submittedAt: "2026-08-10T09:00:00Z",
   url: "", nodeId: "", commit: "a".repeat(40), ...over,
 } as PrReview);
 

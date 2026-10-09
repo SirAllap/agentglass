@@ -2,12 +2,12 @@
  * What a visit to the card picker would actually change.
  *
  * Two rules, and they are the whole file. Only differences count — a card
- * already in Code Review being "moved" to Code Review is not a change, and
+ * already in In review being "moved" to In review is not a change, and
  * leaving yourself on it is not an assignment — and what is announced is what
  * is sent: the summary somebody accepts is built from the same object the write
  * is built from, so the two cannot drift.
  *
- * They did drift. The confirmation read "move it to Code Review, put Ana
+ * They did drift. The confirmation read "move it to In review, put Grace
  * on it, take you off it"; one write landed, the other two were refused, and
  * the app said it had gone well. Now there is one plan, and the writer takes
  * the plan.

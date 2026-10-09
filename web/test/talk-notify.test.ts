@@ -26,7 +26,7 @@ const {
 const note = (over: Partial<PrTalkNote> = {}): PrTalkNote => ({
   repo: "acme/orbit", number: 1042, title: "Remove the carryover from the upgrade",
   url: "https://github.com/acme/orbit/pull/1042",
-  who: "javidoe", kind: "review", at: "2026-08-14T10:00:00Z", ...over,
+  who: "adadoe", kind: "review", at: "2026-08-14T10:00:00Z", ...over,
 });
 
 describe("what it says", () => {
@@ -51,7 +51,7 @@ describe("what it says", () => {
 
   it("reads like the CI note beside it in the same bell", () => {
     expect(talkSummary(note({ state: "CHANGES_REQUESTED" })))
-      .toBe("acme/orbit#1042 — javidoe requested changes");
+      .toBe("acme/orbit#1042 — adadoe requested changes");
   });
 
   it("says how much came with it rather than saying it five times", () => {

@@ -4,7 +4,7 @@
  * TWO SEPARATE RULES, and they failed for different reasons.
  *
  * The first is the repository's own, older than this feature: a public codebase
- * must not carry the name of an employer, a private project or a real ticket.
+ * must not carry the name of a company, a private project or a real ticket.
  * There is a pre-commit hook for the terms somebody has already thought of, and
  * the hook only knows the names it was told — so the one that catches the FIRST
  * occurrence has to be a person or a test.
@@ -35,7 +35,7 @@ function understudyFiles(): { path: string; text: string }[] {
 }
 
 describe("nothing private is written down", () => {
-  test("no employer or ticket identifier appears anywhere in the feature", () => {
+  test("no company or ticket identifier appears anywhere in the feature", () => {
     /*
      * Shapes rather than a name list, because a list only catches what somebody
      * already thought of. A ticket identifier and a workspace host have a

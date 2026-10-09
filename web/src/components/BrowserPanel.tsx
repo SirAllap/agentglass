@@ -276,7 +276,7 @@ export function BrowserView({ active: viewOn, scope }: {
      * Restoring the current profile alone was right while a profile was a
      * place a person works in and only one of them existed at a time. It is
      * wrong now that agents each have one: an agent's tabs simply vanished at
-     * launch, so "I restart the application and they lose all their work" was
+     * launch, so restarting the application lost all their work, which was
      * literally true, and the agent's next call found nothing to address and
      * fell through to whatever was in front.
      *
@@ -756,7 +756,7 @@ export function BrowserView({ active: viewOn, scope }: {
        * Every `newtab`, and every `open` that minted, became the globally
        * active tab — so an agent's routine work moved what the person was
        * looking at, and re-aimed every other agent's un-addressed verb at it.
-       * "You have to work in the background, inside your container."
+       * An agent works in the background, inside its own container.
        *
        * The tab is still born AWAKE (see `addTab`: `newTab` sets no `asleep`),
        * and the render below draws every non-sleeping tab as a real `<webview>`

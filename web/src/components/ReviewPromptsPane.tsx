@@ -21,6 +21,7 @@
  */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api.ts";
+import { taskConnected } from "../lib/taskConnected.ts";
 import { CONFLICT_EFFORTS, CONFLICT_MODELS, type ConflictEffort, type ConflictModel } from "../../../shared/types.ts";
 import type { ReviewRecipe, ReviewRecipeGroup, ReviewRecipeWhen, SkillInfo } from "../../../shared/types.ts";
 import { SettingRow } from "./SettingRow.tsx";
@@ -102,6 +103,9 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [projects, setProjects] = useState<{ root: string; name: string }[]>([]);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  /* The note on the card is written to a ClickUp card, so it is offered only
+     where there is one. Unknown counts as connected: taskConnected fails open. */
+  const [hasCards, setHasCards] = useState(true);
 
   const load = useCallback(async () => {
     try { const r = await api.prPrompts(); setList(r.recipes ?? []); } catch { setList([]); }
@@ -109,6 +113,7 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
   useEffect(() => {
     if (!open) return;
     void load();
+    void taskConnected().then((c) => setHasCards(c.clickup));
     // Skills, for the picker. A failure here is not an error on this page: it
     // only means the skill field falls back to being a text box.
     api.skills().then((r) => setSkills(r.skills ?? [])).catch(() => {});
@@ -142,7 +147,8 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
 
   if (!list) return <Wrap><div className="py-3 text-[12.5px]" style={{ color: "var(--text3)" }}>Reading your prompts…</div></Wrap>;
 
-  const hidden = GROUPS.flatMap((g) => list.filter((r) => r.group === g.id)).length;
+  const offered = (r: ReviewRecipe) => hasCards || r.id !== "note-on-card";
+  const hidden = GROUPS.flatMap((g) => list.filter((r) => r.group === g.id && offered(r))).length;
 
   return (
     <>
@@ -166,7 +172,7 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
       )}
 
       {GROUPS.map((g) => {
-        const rows = list.filter((r) => r.group === g.id);
+        const rows = list.filter((r) => r.group === g.id && offered(r));
         return (
           <Wrap key={g.id} title={g.label} desc={g.what}>
             {rows.map((r) => (

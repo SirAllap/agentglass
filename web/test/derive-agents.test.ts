@@ -369,7 +369,7 @@ test("a question nobody answered stops interrupting after half an hour", () => {
    * The bug this closes. A permission prompt arrives in the middle of a tool
    * call, so the pair stays open — and the open call is what spares a card from
    * the idle clock, because a long build is silent while it works. The card sat
-   * on the amber strip for 22 hours: "esta notificación es infinita".
+   * on the amber strip for 22 hours, a notification that never ended.
    *
    * Fresh, it still interrupts. Stale, it is idle and `unanswered`, which is
    * the accurate word for it, and the Lantern still lists the session.

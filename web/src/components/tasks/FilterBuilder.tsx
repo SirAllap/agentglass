@@ -219,7 +219,7 @@ function RuleRow({ fields, rule, onChange, onDrop }: {
             : undefined}>
           {() => (spec
             ? (
-              /* Multi-select: the menu STAYS OPEN. Picking three squads through
+              /* Multi-select: the menu STAYS OPEN. Picking three teams through
                  three rounds of open-pick-reopen is what makes a filter builder
                  feel like paperwork. */
               <Menu items={spec.options} selected={rule.values}

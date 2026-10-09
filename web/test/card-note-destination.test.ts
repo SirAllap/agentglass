@@ -156,3 +156,24 @@ describe("news that replaces itself", () => {
     expect(s.notifyHistory()).toHaveLength(2);
   });
 });
+
+describe("who the note is for", () => {
+  const ada = { id: 1, name: "ada", me: true };
+  const grace = { id: 2, name: "grace" };
+  const linus = { id: 3, name: "linus" };
+  it("somebody else on the card, never the connected account", async () => {
+    const { whoToTell } = await import("../src/lib/cardMove.ts");
+    expect(whoToTell({ people: [ada, grace] })?.name).toBe("grace");
+    expect(whoToTell({ people: [grace, ada] })?.name).toBe("grace");
+  });
+  it("two others: the first, a picker is not built", async () => {
+    const { whoToTell } = await import("../src/lib/cardMove.ts");
+    expect(whoToTell({ people: [ada, grace, linus] })?.name).toBe("grace");
+  });
+  it("only yourself, or nobody, or no card: nobody", async () => {
+    const { whoToTell } = await import("../src/lib/cardMove.ts");
+    expect(whoToTell({ people: [ada] })).toBeNull();
+    expect(whoToTell({ people: [] })).toBeNull();
+    expect(whoToTell(null)).toBeNull();
+  });
+});

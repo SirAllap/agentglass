@@ -1,3 +1,3 @@
-server 7870
-web 6710
-mobile 1000
+server 7972
+web 6794
+mobile 1001

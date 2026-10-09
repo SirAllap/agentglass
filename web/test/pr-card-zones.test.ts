@@ -77,7 +77,7 @@ describe("the card's zones and the wide layout agree", () => {
   const areas = (block: string) => block.match(/grid-template-areas:\s*([^;]+);/)?.[1] ?? "";
 
   // [class the card draws, the area the layout places it in]
-  for (const [zone, area] of [["id", "id"], ["title", "tt"], ["ac", "ac"], ["stand", "st"], ["event", "ev"]] as const) {
+  for (const [zone, area] of [["id", "id"], ["title", "tt"], ["stand", "st"], ["event", "ev"]] as const) {
     test(`${zone}: drawn by the card, given its area, and placed by both layouts`, () => {
       expect(board).toContain(`agx-prc-${zone}`);
       expect(css).toMatch(new RegExp(`\\.agx-prc-${zone} \\{[^}]*grid-area: ${area};`));

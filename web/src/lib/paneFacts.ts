@@ -11,7 +11,7 @@
  * Measured on the developer's own machine, warm, twice each. So a first hover
  * on a pane costs about a second of network before the block can say anything
  * beyond the branch — and after a restart every pane pays it again, one at a
- * time, as the pointer reaches them. "Why does it take so long to read the panes?"
+ * time, as the pointer reaches them: reading the panes feels slow.
  *
  * Both answers change on the scale of a working day: a branch's pull request is
  * the same pull request tomorrow, and a card's priority changes when somebody

@@ -17,7 +17,7 @@ export function StatusPill({ status, color, dim }: { status: string; color?: str
   if (!status) return null;
   const c = color || "var(--text3)";
   // `color` is the tracker's own hex for this status — ClickUp's, not a theme
-  // token — painted on straight for years, which is why "READY FOR QA" reads
+  // token — painted on straight for years, which is why "IN REVIEW" reads
   // as faint pink on a light theme's cream: that pink was never checked
   // against anything but ClickUp's own dark board. Only the TEXT is lifted;
   // the fill and border stay the tracker's real colour.

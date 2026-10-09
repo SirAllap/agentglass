@@ -18,6 +18,9 @@ export function checkLabel(k: PrCheck): string {
   return k.event ? `${base} (${k.event})` : base;
 }
 
+/** One row's identity on the Checks tab: its label and its link, the index only for a check that has none. */
+export const checkRowId = (k: PrCheck, i = 0): string => `${checkLabel(k)}::${k.url ?? i}`;
+
 /** 42s, 5m, 1h 2m. Under a second is "1s": a check that took no time still ran. */
 export function formatSpan(ms: number): string {
   const s = Math.max(1, Math.round(ms / 1000));
@@ -123,7 +126,7 @@ export function applyFilter(all: PrCheck[], filter: CheckFilter, query: string):
   return all.filter((k) => matches(k, filter) && (!q || checkLabel(k).toLowerCase().includes(q)));
 }
 
-/** "E2E (chat-widget)" reads as "E2E · chat-widget": a matrix's arguments are the part that tells its jobs apart. */
+/** "E2E (checkout)" reads as "E2E · checkout": a matrix's arguments are the part that tells its jobs apart. */
 export function shortName(k: PrCheck): string {
   return k.name.replace(/\s*\(([^()]*)\)$/, " · $1").replace(/\s+/g, " ").trim();
 }

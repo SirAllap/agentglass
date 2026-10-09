@@ -7,6 +7,7 @@ import { Spinner } from "./Spinner.tsx";
 import { MERGE_OPTION, mergeBody, mergeSubject, type MergeMethod, type MergeCommit } from "../../../shared/mergeMethod.ts";
 import { LEAVE_ALONE, movesCard, statusColor, statusOptions, type CardMove } from "../lib/cardMove.ts";
 import { api } from "../lib/api.ts";
+import { __forgetClickupSetup } from "../lib/clickupSetup.ts";
 import { MOD_KEY } from "../lib/format.ts";
 import { WarningIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
@@ -191,6 +192,7 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
     if (!ref) return;
     setCard({ kind: "loading" });
     await api.clickupSetWrites(true).catch(() => null);
+    __forgetClickupSetup();
     await lookUp(ref, () => true);
   };
 
@@ -344,7 +346,7 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
                 {/* The card, where the deciding already is.
                     Merging here and then moving the card by hand on the board
                     is two places for one decision, and the second one is the
-                    one that gets forgotten — the card sits in Code Review for
+                    one that gets forgotten — the card sits in review for
                     days after the work shipped. The select opens on where the
                     card IS, so leaving it alone writes nothing at all; moving
                     it is a deliberate pick, made once, here. */}

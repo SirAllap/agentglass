@@ -476,7 +476,7 @@ function TerminalPane(): React.ReactNode {
    * The measurement, on a 30-column pane with 60 characters typed into it: the
    * pane held `abcdefghijklmnopqrstuvwxyz0123` while typing and then ran
    * `abcdefghijklmnopqrstuvwxyz0123abcdefghijklmnopqrstuvwxyz0123456789…` —
-   * the first 32 characters twice, which is exactly "se parte en cachos".
+   * the first 32 characters twice: a message that arrives in pieces.
    *
    * Once claimed, this field's own record is the truth: it knows what it has
    * sent, and it does not need to read it back off a screen that cannot show
@@ -2338,9 +2338,9 @@ function TerminalPane(): React.ReactNode {
             flexDirection: "row", alignItems: "center", gap: 2,
             /*
              * A field has an edge; a button has a face. That is the whole of
-             * the difference drawn here, and it was reported from a phone as
-             * "sigue pareciendo un input" — because it was one shape doing two
-             * jobs, with only a border colour between them.
+             * the difference drawn here. On a phone the button still read as an
+             * input, because it was one shape doing two jobs with only a border
+             * colour between them.
              *
              * `keys` is a BUTTON: filled, no border, a keyboard on it. Line
              * mode is a FIELD: a raised ground inside a hairline, which is what
