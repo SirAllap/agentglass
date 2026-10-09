@@ -31,6 +31,7 @@ import { diffSplit, diffWrap, diffNoWhitespace, setDiffNoWhitespace } from "../l
 import { Portal } from "./Portal.tsx";
 import { MergeBox } from "./MergeBox.tsx";
 import { mergePath, type PathAction } from "../../../shared/mergePath.ts";
+import { buildReviewStory, relative, stamp, type StoryVerdict } from "../../../shared/reviewStory.ts";
 import { subscribePrJump, prJump, clearPrJump } from "../lib/prJump.ts";
 import { findMention, selectorFor } from "../lib/prMention.ts";
 import { fileSection } from "../lib/patchLines.ts";
@@ -432,21 +433,31 @@ function ReviewChip({ v, decision }: { v: PrSummary["humanReview"]; decision?: s
   return <Chip text="Commented" tint="var(--text3)" />;
 }
 
-const REVIEW_ROUND: Record<string, { word: string; tint: string; glyph: React.ReactNode }> = {
-  APPROVED: { word: "Approved", tint: "var(--success)", glyph: <DoneIcon size={ICON.xs} /> },
-  CHANGES_REQUESTED: { word: "Changes requested", tint: "var(--error)", glyph: <CrossIcon size={ICON.xs} /> },
-  COMMENTED: { word: "Commented", tint: "var(--text3)", glyph: <CommentIcon size={ICON.xs} /> },
+const REVIEW_ROUND: Record<StoryVerdict, { word: string; tint: string }> = {
+  APPROVED: { word: "Approved", tint: "var(--success)" },
+  CHANGES_REQUESTED: { word: "Changes requested", tint: "var(--error)" },
+  COMMENTED: { word: "Commented", tint: "var(--text3)" },
 };
 
+/** Rail geometry: the dot sits on the chip's line, the connector runs through
+ *  the rows between two dots and stops at the first and the last. */
+const RAIL_DOT = 9;
+const RAIL_W = 25;
+const RAIL_DOT_Y = 12;
+
 /**
- * PAST ROUNDS, not just the newest verdict.
+ * THE REVIEW HISTORY, one group per reviewer.
  *
  * The merge box used to carry one review as a fact with a "Go to it" beside
- * it, and round one read exactly like round three once round three's
- * re-request went out — the box had already forgotten there had been a first
- * round at all. Collapsed by default: most pull requests never need it open,
- * and it would otherwise out-grow the box it sits in on anything reviewed
- * more than a couple of times.
+ * it, and then a flat list newest first, in which round one read exactly like
+ * round three and a re-request was a flag with no time on it. Each reviewer is
+ * a header (who, where they stand now, a plain line on the right) over a rail
+ * of their own rounds and the times somebody asked them again, oldest first.
+ * A round a later review replaced is drawn as past — grey dot, dim chip — and
+ * links to what replaced it. The story itself is `buildReviewStory`; this only
+ * draws it. Drawn open with no disclosure of its own: the merge box's "Review
+ * history" button is the disclosure, and a second one inside it would be a
+ * toggle that opens a toggle.
  *
  * THE AUTHOR'S OWN COMMENTS ARE NOT A ROUND. Answering your own threads
  * arrives as a COMMENTED review — see `humanVerdict`'s own reason for
@@ -457,104 +468,114 @@ const REVIEW_ROUND: Record<string, { word: string; tint: string; glyph: React.Re
  * No per-round thread or line-comment count: GitHub prices that as a nested
  * connection per review (see the note by `SEL_TALK` in prs.ts — sixty
  * reviews would each cost their own `comments(first:0)`), and a thread carries
- * no link back to the review it came from either, so there is nothing in what
- * this panel already fetches to count it from. The same is true of WHEN a
- * re-request went out: `reviewRequests` says who is outstanding, never since
- * when, so the ↻ here is a fact ("asked again"), not a time.
+ * no link back to the review it came from either. The time of a re-request
+ * costs nothing: it is the `review-requested` event of the timeline the detail
+ * already fetches.
  */
-function ReviewHistory({ reviews, pending, author, onGoReview, forceOpen }: {
-  /** Drawn open with no disclosure of its own — the merge box's "Review history"
-   *  button is the disclosure, and a second one inside it would be a toggle
-   *  that opens a toggle. */
-  forceOpen?: boolean;
+function ReviewHistory({ reviews, timeline, pending, author, you, onGoReview }: {
   reviews?: PrReview[];
+  timeline?: PrEvent[];
   pending?: PrReviewer[];
   /** The pull request's own author — their replies are not a reviewer's
    *  round, whatever state GitHub filed them under. */
   author?: string;
+  /** The author's login when the viewer opened the pull request: a re-request
+   *  they made reads "you". */
+  you?: string;
   onGoReview: (nodeId: string | undefined, url: string) => void;
 }) {
-  /* Closed by default — most pull requests never need it, and open by
-     default would out-grow the box on anything reviewed more than a couple
-     of times. */
-  const [openOwn, setOpen] = useState(false);
-  const open = forceOpen || openOwn;
-  const authorLc = (author || "").toLowerCase();
-  const rounds = (reviews ?? [])
-    .filter((r) => !r.isBot && r.author?.toLowerCase() !== authorLc && REVIEW_ROUND[r.state])
-    .sort((a, b) => (b.submittedAt || "").localeCompare(a.submittedAt || ""));
-  if (!rounds.length) return null;
-
-  const pendingLogins = new Set((pending ?? []).filter((p) => !p.isTeam).map((p) => p.login.toLowerCase()));
-  const seenAuthor = new Set<string>();
+  const now = Date.now();
+  const groups = useMemo(
+    () => buildReviewStory({ reviews, timeline, author, you, pending: (pending ?? []).filter((p) => !p.isTeam).map((p) => p.login) }, now),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `now` is read once per render on purpose
+    [reviews, timeline, pending, author, you],
+  );
+  if (!groups.length) return null;
+  // One column layout for every group, so the sentences line up down the box.
+  const anyAsk = groups.some((g) => g.entries.some((e) => e.kind === "ask"));
 
   return (
-    <div style={{ borderBottom: LINE }}>
-      {/*
-       * A REAL DISCLOSURE, copied from the board's own group headers
-       * (TasksPanel's status groups): the whole row is the control, not a
-       * glyph beside it, and the chevron is a drawn triangle that rotates
-       * rather than a text arrow disappearing into this font at 11px.
-       */}
-      {!forceOpen && <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open}
-        title={open ? "Hide past rounds" : "Show past rounds"}
-        className="agx-btn w-full flex items-center gap-2 px-3 py-1.5 text-[11.5px] text-left hover:bg-white/5"
-        style={{ color: "var(--text2)" }}>
-        <span aria-hidden className="inline-flex items-center justify-center shrink-0 w-3.5">
-          <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none"
-            style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform 120ms ease" }}>
-            <path d="M4 2.5 L8.5 6 L4 9.5" stroke="var(--text2)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </span>
-        <span className="text-[11px] font-medium">Review history</span>
-        <span className="text-[10px] tabular-nums px-1.5 rounded-full" style={{ ...CHIP_SURFACE, color: "var(--text3)" }}>{rounds.length}</span>
-      </button>}
-      {open && (
-        <div className="flex flex-col pb-1">
-          {rounds.map((r, i) => {
-            const kind = REVIEW_ROUND[r.state]!;
-            // Only the reviewer's OWN latest round can have been re-asked since —
-            // an earlier round of theirs was superseded before any re-request.
-            const isLatestForAuthor = !seenAuthor.has(r.author.toLowerCase());
-            seenAuthor.add(r.author.toLowerCase());
-            const again = isLatestForAuthor && pendingLogins.has(r.author.toLowerCase());
-            /*
-             * THE WHOLE ROW IS THE JUMP, not a button squeezed in beside the
-             * text — the same "the heading is the control" rule the
-             * disclosure above already follows. Disabled (no pointer, no
-             * hover) on the rare review GitHub gave no URL for.
-             */
-            return (
-              <button key={r.nodeId ?? `${r.author}-${r.submittedAt}-${i}`}
-                type="button" disabled={!r.url} onClick={() => r.url && onGoReview(r.nodeId, r.url)}
-                title={r.url ? "Go to this review in the conversation" : undefined}
-                className="agx-btn w-full flex items-center gap-1.5 pl-9 pr-3 py-1.5 text-[11px] text-left whitespace-nowrap hover:bg-white/5 disabled:hover:bg-transparent disabled:cursor-default">
-                <span aria-hidden className="flex shrink-0" style={{ color: kind.tint }}>{kind.glyph}</span>
-                <Avatar login={r.author} size={14} />
-                <b className="shrink-0 truncate max-w-[110px]" style={{ color: "var(--text2)", fontWeight: 500 }}>{r.author}</b>
-                <Chip text={kind.word} tint={kind.tint} />
-                <span className="shrink-0" style={{ color: "var(--text3)" }}
-                  title={r.submittedAt ? new Date(r.submittedAt).toLocaleString() : undefined}>
-                  {ago(r.submittedAt)}
-                </span>
-                {/* No per-round thread count: a thread carries no link back to
-                    the review it came from, so there is nothing in what this
-                    panel already fetches to count it from — see the note on
-                    this component. A chip that cannot be true for any round
-                    is worse than no chip. */}
-                {again && <Chip text="asked again" tint="var(--warning)" title="Re-requested since this round" />}
-                <span className="flex-1 min-w-0" />
-                {r.url && (
-                  <span aria-hidden className="shrink-0 inline-flex items-center gap-1"
-                    style={{ height: CTRL_H.compact, color: "var(--text3)" }}>
-                    Go to it<ArrowIcon size={ICON.xs} />
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-      )}
+    <div className="flex flex-col" style={{ borderBottom: LINE }}>
+      {groups.map((g, gi) => {
+        const head = g.standing === "ASKED_AGAIN"
+          ? { word: "Asked again", tint: "var(--warning)" }
+          : REVIEW_ROUND[g.standing];
+        return (
+          <section key={g.login} aria-label={`${g.login}'s reviews`} style={gi ? { borderTop: LINE } : undefined}>
+            <div className="flex items-center gap-x-2 gap-y-0.5 flex-wrap px-3 pt-2.5 pb-1 text-[11.5px]">
+              <Avatar login={g.login} size={ICON.md} />
+              <b className="truncate min-w-0 max-w-full" style={{ color: "var(--text)", fontWeight: 600 }}>{g.login}</b>
+              <Chip text={head.word} tint={head.tint} />
+              <span className="flex-1 min-w-0" />
+              <span className="text-[11px]" style={{ color: "var(--text3)" }}>{g.line}</span>
+            </div>
+            <ol className="flex flex-col pb-2 m-0 p-0 list-none">
+              {g.entries.map((e, ei) => {
+                const first = ei === 0;
+                const last = ei === g.entries.length - 1;
+                const isAsk = e.kind === "ask";
+                const past = e.kind === "review" && !!e.replaced;
+                const tint = isAsk ? "var(--warning)" : REVIEW_ROUND[e.state].tint;
+                const dot = isAsk
+                  ? { border: `2px solid ${tint}`, background: "transparent" }
+                  : { background: past ? "var(--text3)" : tint, opacity: past ? 0.6 : 1 };
+                return (
+                  <li key={`${e.kind}-${e.at}-${ei}`} className="relative flex items-start pr-3 py-1.5 text-[11px]" style={{ paddingLeft: 12 }}>
+                    {/* the rail: a connector through the rows between two dots, stopping at the first and the last */}
+                    {!(first && last) && (
+                      <span aria-hidden className="absolute" style={{
+                        left: 12 + RAIL_W / 2 - 0.5, width: 1, background: "var(--border)",
+                        top: first ? 6 + RAIL_DOT_Y : 0, bottom: last ? `calc(100% - ${6 + RAIL_DOT_Y}px)` : 0,
+                      }} />
+                    )}
+                    <span aria-hidden className="relative shrink-0 flex justify-center" style={{ width: RAIL_W }}>
+                      <span className="rounded-full box-border" style={{ width: RAIL_DOT, height: RAIL_DOT, marginTop: RAIL_DOT_Y - RAIL_DOT / 2, ...dot }} />
+                    </span>
+                    {/* Wraps: wide, the sentence sits beside the chip as drawn in the mock; in the side panel it drops under it. */}
+                    <div className="flex flex-1 min-w-0 flex-wrap items-start gap-x-3 gap-y-0.5">
+                      {anyAsk && (
+                        <span className="flex items-center gap-1 min-w-0 shrink-0" style={{ height: 18, width: 56, color: "var(--text2)" }}>
+                          {e.kind === "ask" && (
+                            e.actor === "you"
+                              ? <span aria-hidden className="inline-flex items-center justify-center rounded-full text-[8px] font-semibold shrink-0"
+                                  style={{ width: ICON.sm, height: ICON.sm, ...CHIP_SURFACE, color: "var(--text2)" }}>Y</span>
+                              : <Avatar login={e.actor} size={ICON.sm} />)}
+                          {e.kind === "ask" && <span className="truncate">{e.actor}</span>}
+                        </span>
+                      )}
+                      <span className="flex flex-col gap-0.5 shrink-0" style={{ width: 150 }}>
+                        <span className="flex items-center" style={{ height: 18 }}>
+                          {e.kind === "ask"
+                            ? <Chip text="Asked again" tint="var(--warning)" />
+                            : <Chip text={REVIEW_ROUND[e.state].word} tint={past ? "var(--text3)" : tint} />}
+                        </span>
+                        <span className="tabular-nums whitespace-nowrap" style={{ color: "var(--text3)" }}
+                          title={new Date(e.at).toLocaleString()}>
+                          {stamp(e.at)} · {relative(e.at, now)}
+                        </span>
+                      </span>
+                      <span className="flex-1 min-w-[160px]" style={{ minHeight: 18, lineHeight: "18px", color: past ? "var(--text3)" : "var(--text2)" }}>
+                        {e.kind === "review" && e.replaced?.url
+                          ? <button type="button" className="agx-btn text-left underline underline-offset-2 decoration-dotted"
+                              style={{ color: "inherit" }} title="Go to the review that replaced this one"
+                              onClick={() => onGoReview(e.replaced!.nodeId, e.replaced!.url!)}>{e.sentence}</button>
+                          : e.sentence}
+                      </span>
+                      {e.kind === "review" && e.url && (
+                        <button type="button" className="agx-btn inline-flex items-center gap-1 whitespace-nowrap hover:bg-white/5 rounded px-1 shrink-0"
+                          style={{ height: 18, color: "var(--text3)" }} title="Go to this review in the conversation"
+                          onClick={() => onGoReview(e.nodeId, e.url!)}>
+                          Go to it<ArrowIcon size={ICON.xs} />
+                        </button>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
+          </section>
+        );
+      })}
     </div>
   );
 }
@@ -5578,7 +5599,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
   for (const e of d.timeline ?? []) if (e.kind === "review-requested" && e.detail && (!askedAt[e.detail.toLowerCase()] || e.at > askedAt[e.detail.toLowerCase()])) askedAt[e.detail.toLowerCase()] = e.at;
   const path = mergePath({
     state: d.state, mergeState: d.mergeState, mergeable: d.mergeable, isDraft: d.isDraft,
-    reviewDecision: d.reviewDecision, humanReview: d.humanReview, reviewers: d.reviewers, reviews: d.reviews, askedAt,
+    reviewDecision: d.reviewDecision, humanReview: d.humanReview, reviewers: d.reviewers, reviews: d.reviews, askedAt, timeline: d.timeline,
     headSha: d.headSha ?? d.commits[d.commits.length - 1]?.oid,
     threadAuthors: d.threads.filter((t) => !t.isResolved).map((t) => t.comments[0]?.author ?? ""),
     author: d.author, viewerDidAuthor: d.viewerDidAuthor, viewerRequested: d.viewerRequested,
@@ -5969,7 +5990,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
           mergeNode={mergeNode} conflictNode={conflictNode} autoNode={autoNode} extraNode={extraNode} cornerNode={cornerNode}
           notes={hasNotes ? notesNode : undefined}
           actionDisabled={actionDisabled} pendingAction={pendingAction} showMergeRow={!conflicted || !!d.autoMerge}
-          history={<ReviewHistory reviews={d.reviews} pending={d.reviewers} author={d.author} onGoReview={onGoReview} forceOpen />} />
+          history={<ReviewHistory reviews={d.reviews} timeline={d.timeline} pending={d.reviewers} author={d.author} you={d.viewerDidAuthor ? d.author : undefined} onGoReview={onGoReview} />} />
       )}
 
       <LocalStrip local={local} onShow={onShowLocal} />

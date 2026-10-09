@@ -337,55 +337,46 @@ describe("the Overview and the board agree", () => {
     expect(p.hero.tone).toBe("wait");
   });
 
-  test("the review history lists past rounds and is shown for any human review", () => {
-    const fn = panel.slice(panel.indexOf("function ReviewHistory("), panel.indexOf("function Bar("));
-    expect(fn).toContain("if (!rounds.length) return null;");
-    expect(fn).not.toContain('r.state === "CHANGES_REQUESTED" || r.state === "COMMENTED"');
-    expect(fn).toContain("Review history</span>");
+  const historyFn = () => panel.slice(panel.indexOf("function ReviewHistory("), panel.indexOf("function Bar("));
+
+  test("the review history is one group per reviewer, drawn from the story and shown for any human review", () => {
+    const fn = historyFn();
+    expect(fn).toContain("buildReviewStory(");
+    expect(fn).toContain("if (!groups.length) return null;");
+    // The author's own COMMENTED replies filled the flat list eight deep before
+    // the one real round anybody needed: the story drops them, so the author
+    // has to be handed to it.
+    expect(fn).toContain("author, you,");
+    expect(fn).toContain("groups.map(");
   });
 
-  test("the review history drops the author's own replies — they are not a round", () => {
-    // The author's own COMMENTED replies filled the list eight deep
-    // before the one real round anybody needed.
-    const fn = panel.slice(panel.indexOf("function ReviewHistory("), panel.indexOf("function Bar("));
-    expect(fn).toContain("r.author?.toLowerCase() !== authorLc");
-  });
-
-  test("the review history is a real disclosure — a button, a rotating chevron, a count chip", () => {
-    // "Reads as loose text": the collapsed-by-default section used to be a
-    // native <details><summary>, which draws no hover state and no visible
-    // affordance that the heading is a control.
-    const fn = panel.slice(panel.indexOf("function ReviewHistory("), panel.indexOf("function Bar("));
+  test("the review history has no disclosure of its own — the merge box's button is the disclosure", () => {
+    const fn = historyFn();
     expect(fn).not.toContain("<details");
-    expect(fn).toContain("onClick={() => setOpen((o) => !o)}");
-    expect(fn).toContain("aria-expanded={open}");
-    expect(fn).toContain('transform: open ? "rotate(90deg)" : "none"');
+    expect(fn).not.toContain("aria-expanded");
+    expect(fn).not.toContain("setOpen");
   });
 
-  test("each round is one clickable row, not loose text beside a floating button", () => {
-    const fn = panel.slice(panel.indexOf("function ReviewHistory("), panel.indexOf("function Bar("));
-    // The whole row jumps — onClick on the row's own <button>, not on a
-    // separate control squeezed in at the far edge.
-    expect(fn).toContain("onClick={() => r.url && onGoReview(r.nodeId, r.url)}");
+  test("a round's jump and the jump to what replaced it are buttons, in the house chip", () => {
+    const fn = historyFn();
+    expect(fn).toContain("onGoReview(e.nodeId, e.url!)");
+    expect(fn).toContain("onGoReview(e.replaced!.nodeId, e.replaced!.url!)");
     expect(fn).toContain("hover:bg-white/5");
-    // House chip for the verdict and for "asked again", not ad hoc pills.
-    expect(fn).toContain("<Chip text={kind.word} tint={kind.tint} />");
-    expect(fn).toContain('<Chip text="asked again"');
+    expect(fn).toContain('<Chip text="Asked again"');
+    expect(fn).toContain("<Chip text={REVIEW_ROUND[e.state].word}");
   });
 
-  test("the review history is a flat section on the rows around it, each round on one un-wrapped line", () => {
-    const fn = panel.slice(panel.indexOf("function ReviewHistory("), panel.indexOf("function Bar("));
-    // A boxed, inset panel among full-width rows read as stuck on: the history
-    // takes the same row padding and rule as the Reason rows beside it and
-    // indents its rounds under the heading instead.
+  test("the review history is a flat section on the rows around it, and its rows wrap in a side panel", () => {
+    const fn = historyFn();
+    // A boxed, inset panel among full-width rows read as stuck on.
     expect(fn).not.toContain("var(--surface-inset)");
     expect(fn).not.toContain("rounded-lg");
     expect(fn).toContain("borderBottom: LINE");
-    expect(fn).toContain("pl-9");
-    expect(fn).toContain("whitespace-nowrap");
-    // The trailing "Go to it" affordance sits inside the row at CTRL_H, not a
-    // bare button floating at the far edge of a wide section.
-    expect(fn).toContain("CTRL_H.compact");
+    // A grid of fixed columns broke to one word per line at the panel's width.
+    expect(fn).toContain("flex-wrap");
+    expect(fn).not.toContain("gridTemplateColumns");
+    // The icons are the house sizes, not a number of their own.
+    expect(fn).toContain("ICON.");
   });
 
   test("a stale approval GitHub still counts is done, not amber — amber is for a re-request", () => {

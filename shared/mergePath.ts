@@ -30,7 +30,8 @@
 // number made up from nothing, and a run that has already outlived its own
 // earlier duration gets none either.
 
-import type { PrCheck, PrCheckRollup, PrMergeGate, PrReview, PrReviewer, PrSummary } from "./types.ts";
+import type { PrCheck, PrCheckRollup, PrEvent, PrMergeGate, PrReview, PrReviewer, PrSummary } from "./types.ts";
+import { buildReviewStory } from "./reviewStory.ts";
 import { MIN_SAMPLES, runKey } from "./checkBaseline.ts";
 import { mergeBlockers, staleApproval, type MergeBlocker } from "./mergeBlockers.ts";
 import { approvalsNeed, buildRoster, guardLines, mergeGuard, rosterCounts, type MergeGuard, type ReviewerState, type RosterEntry } from "./reviewRoster.ts";
@@ -169,6 +170,8 @@ export interface MergePathInput {
   /** When each still-asked reviewer was last asked (login lowercased → ISO),
    *  from the timeline's review-requested events. */
   askedAt?: Record<string, string>;
+  /** The conversation's events; the review history counts the re-requests in it. */
+  timeline?: PrEvent[];
   /** The commit at the tip of the branch: what an approval is compared with. */
   headSha?: string;
   /** First author of each open thread, so threads can be said per reviewer. */
@@ -351,7 +354,12 @@ export function mergePath(i: MergePathInput): MergePath {
   // Any human review is history worth opening, whatever the headline says: the
   // button once hid behind "still wants changes" and vanished when a thread
   // count took the headline over.
-  const historyCount = rounds.length;
+  // The count is what the opened history lists: the rounds and the re-requests
+  // between them, so the button and the list say the same number.
+  const historyCount = buildReviewStory({
+    reviews: i.reviews, timeline: i.timeline, author: i.author,
+    pending: (i.reviewers ?? []).filter((r) => !r.isTeam).map((r) => r.login),
+  }).reduce((n, g) => n + g.entries.length, 0) || rounds.length;
 
   const b = (kind: MergeBlocker["kind"]) => blockers.find((x) => x.kind === kind);
 
