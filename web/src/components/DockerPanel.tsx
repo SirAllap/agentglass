@@ -3,7 +3,7 @@
 // stop/restart/rm actions. Images / volumes / networks get their own tabs.
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { PlayIcon, RefreshIcon } from "../lib/glyphIcons.tsx";
-import { RefreshButton, CTRL_H, INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
+import { Button, RefreshButton, CTRL_H, INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
 import type { DockerOverview, DockerContainer, DockerStat, DockerCapability } from "../../../shared/types.ts";
 import { depSpec } from "../../../shared/deps.ts";
@@ -63,22 +63,16 @@ function Bar({ pct, tint }: { pct: number; tint: string }) {
    to components/docker/LogView.tsx when the log stopped being a string this
    panel polled and became a feed that view owns. */
 
-/** One container action. Sized and bordered like every other control in the
- *  app, so a row of them reads as a row of buttons. */
+/** One container action: a square `Button` at the `compact` rung in the
+ *  action's own colour, so a row of them reads as a row of buttons. */
 function DockerAction({ onClick, disabled, tint, title, children }: {
   onClick: () => void; disabled: boolean; tint: string; title: string; children: React.ReactNode;
 }) {
   return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      title={title}
-      aria-label={title}
-      className="w-[22px] h-[22px] grid place-items-center rounded-md text-[10px] leading-none transition-colors disabled:opacity-30"
-      style={{ color: tint, border: `1px solid color-mix(in srgb, ${tint} 32%, transparent)`, background: `color-mix(in srgb, ${tint} 8%, transparent)` }}
+    <Button onClick={onClick} disabled={disabled} label={title} size="compact" square tint={tint}
       onMouseEnter={(e) => { e.currentTarget.style.background = `color-mix(in srgb, ${tint} 24%, transparent)`; }}
       onMouseLeave={(e) => { e.currentTarget.style.background = `color-mix(in srgb, ${tint} 8%, transparent)`; }}
-    >{children}</button>
+    >{children}</Button>
   );
 }
 

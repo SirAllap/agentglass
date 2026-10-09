@@ -37,7 +37,7 @@ import { flashElement } from "../lib/flash.ts";
 import { shaFromHref } from "../lib/commitLink.ts";
 import { isShortRef, openInApp, wantsExternal } from "../lib/linkRouter.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
-import { RefreshButton, ScopeChip, Tabs, CTRL_H, EDGE, CHIP_SURFACE, INPUT, INPUT_STYLE, LINE } from "./workspace/Chrome.tsx";
+import { Button, RefreshButton, ScopeChip, Tabs, CTRL_H, EDGE, CHIP_SURFACE, INPUT, INPUT_STYLE, LINE } from "./workspace/Chrome.tsx";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import type {
   PrSummary, PrDetail, PrRepoId, PrThread, PrComment, PrReview, PrReviewer, PrCheck, GitRepoRef, FileChange,
@@ -653,87 +653,20 @@ function Bar({ parts }: { parts: { pct: number; tint: string }[] }) {
 }
 
 
+/** The panel's button: `Button` from Chrome.tsx under this file's old prop
+ *  names. `small` is the `compact` rung; the reasoning behind the fixed height
+ *  and the in-button spinner lives on `Button`. */
 export function Btn({ children, onClick, disabled, danger, primary, ok, warn, title, small, pending }: {
   children: React.ReactNode; onClick?: () => void; disabled?: boolean;
   danger?: boolean; primary?: boolean; ok?: boolean; warn?: boolean; title?: string; small?: boolean;
-  /**
-   * This button's own request is in flight.
-   *
-   * Every action in this panel is a round trip through `gh`, which is a second
-   * or two on a good day, and the only feedback was the button going grey — the
-   * same grey it wears when it is disabled for a reason that has nothing to do
-   * with you. An async request with no feedback of its own is the defect, on
-   * every button, every time.
-   *
-   * The spinner goes IN the button, before the label, and the label stays: a
-   * control that swaps its words for "Working…" moves everything beside it, and
-   * you can no longer tell which of three buttons you pressed.
-   */
   pending?: boolean;
 }) {
-  // `warn` is the amber "this mutates the branch" accent, matching the Source
-  // Control bar's sync/behind colour (--warning). Used for update-branch, which
-  // merges the base into this branch — a consequential action that should not
-  // read the same as its plain neighbours.
-  const edge = danger ? "var(--error)" : ok ? "var(--success)" : warn ? "var(--warning)" : primary ? "var(--primary)" : "var(--border)";
+  const tone = danger ? "danger" : ok ? "ok" : warn ? "warn" : primary ? "primary" : "plain";
   return (
-    <button onClick={onClick} disabled={disabled || pending} title={pending ? "Working…" : title}
-      aria-busy={pending || undefined}
-      /*
-       * `leading-none`, and it is not a nicety.
-       *
-       * Buttons with identical classes came out different heights, and the
-       * cause is the LABEL: `↗` and `⋯` are not in the UI font, so they arrive
-       * from a fallback whose line box is taller, and the button grows to hold
-       * it. Measured side by side at the same font-size and padding: 17px for a
-       * plain-text label against 21px for one carrying an arrow — a row of
-       * three controls at two heights, with nothing in the CSS to explain it.
-       *
-       * Pinning the line height makes the box the padding's business rather
-       * than the glyph's. Same measurement after: 16, 16, 16.
-       */
-      /*
-       * A FIXED height, and the contents centred in it.
-       *
-       * Two attempts at making these agree failed because both tried to make
-       * the box come out the same by accident: same classes, then same line
-       * height. It kept not working, because the height was still a function of
-       * the label — `↗` and `⋯` are not in the UI font and arrive from a
-       * fallback with its own metrics, and a fallback can differ per machine,
-       * per theme font setting, per glyph.
-       *
-       * So the height stops being derived at all. `inline-flex` + `items-center`
-       * + an explicit height means a row of these is the same row whatever is
-       * written on them, and the padding only decides the width.
-       */
-      className={`agx-btn rounded inline-flex items-center justify-center gap-1 whitespace-nowrap leading-none disabled:opacity-40 ${small ? "text-[10px] px-2 h-[24px]" : "text-[10.5px] px-2.5 h-[28px]"}`}
-      style={{
-        // A plain button's label was --text2, a tier meant for labels beside
-        // things — so "Comment" sat at the contrast of a caption next to the
-        // button it competes with. It is a control: it reads at full strength,
-        // and the border is what says it is the quieter of the two.
-        color: primary ? "var(--bg)" : danger ? "var(--error-ink)" : ok ? "var(--success-ink)" : warn ? "var(--warning-ink)" : "var(--text)",
-        background: primary ? "var(--primary)" : warn ? "color-mix(in srgb, var(--warning) 16%, transparent)"
-          // A quiet button still needs an edge you can find. Transparent on a
-          // panel, with a border mixed at half strength, was a label with a
-          // suggestion of a box — on the neutral themes, where --border is
-          // close to the surface it sits on, it vanished entirely.
-          : "color-mix(in srgb, var(--border) 30%, transparent)",
-        border: `1px solid color-mix(in srgb, ${edge} ${primary ? 100 : warn ? 55 : 85}%, transparent)`,
-        cursor: disabled ? "not-allowed" : "pointer",
-        // The filled one carries the weight. On a neutral theme --primary is a
-        // grey, so fill alone does not separate the two — the label has to say
-        // which is which as well.
-        fontWeight: primary ? 600 : warn ? 500 : 500,
-      }}>
-      {pending && (
-        <span className="agx-spin mr-1.5 shrink-0" aria-hidden
-          style={{ width: 9, height: 9, borderWidth: 1.5,
-            borderColor: primary ? "color-mix(in srgb, var(--bg) 55%, transparent)" : "currentColor",
-            borderTopColor: "transparent" }} />
-      )}
+    <Button onClick={onClick} disabled={disabled} pending={pending} title={title}
+      size={small ? "compact" : "regular"} tone={tone}>
       {children}
-    </button>
+    </Button>
   );
 }
 
@@ -8647,8 +8580,8 @@ function FilesFilterMenu({ facets, hiddenExts, onToggleExt, onClearExts, showVie
     <>
       <button ref={btnRef} onClick={() => setOpen((o) => !o)} title="Filter changed files"
         aria-label="Filter changed files" aria-haspopup="menu" aria-expanded={open}
-        className="agx-btn shrink-0 grid place-items-center rounded"
-        style={{ width: 24, height: 22, color: active ? "var(--primary)" : "var(--text3)", border: `1px solid color-mix(in srgb, ${active || open ? "var(--primary)" : "var(--border) 45%"}, transparent)` }}>
+        className="agx-btn shrink-0 grid place-items-center rounded-lg"
+        style={{ width: CTRL_H.compact, height: CTRL_H.compact, color: active ? "var(--primary)" : "var(--text3)", border: `1px solid color-mix(in srgb, ${active || open ? "var(--primary)" : "var(--border) 45%"}, transparent)` }}>
         <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3.5h12L9.3 9v4L6.7 14.3V9L2 3.5Z" /></svg>
       </button>
       {open && (
@@ -9695,8 +9628,10 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
       <div ref={barRef} className="flex flex-col gap-1 sticky top-0 z-30 px-3 py-2"
         style={{ background: "var(--surface-card)", borderBottom: LINE }}>
       <div className="flex items-center gap-2 flex-wrap">
-        <span className="flex items-center gap-1.5 px-2 py-1 rounded shrink-0"
-          style={{ border: EDGE }}>
+        {/* Every control in this row is at the `compact` rung, the height of
+            the `Btn small`s beside it, so the row is one line of controls. */}
+        <span className="flex items-center gap-1.5 px-2 rounded-lg shrink-0"
+          style={{ border: EDGE, height: CTRL_H.compact }}>
           <span className="flex" style={{ color: "var(--text3)" }}><SearchIcon size={ICON.xs} /></span>
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter files…"
             className="bg-transparent outline-none text-[10.5px] w-28" style={{ color: "var(--text)" }} />

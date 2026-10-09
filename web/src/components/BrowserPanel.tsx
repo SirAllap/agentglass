@@ -66,7 +66,7 @@ import {
   SpinnerIcon, StopIcon, TargetIcon, FolderIcon, ContainerIcon, SpaceIcon, CameraIcon, PanelIcon, UpIcon, DownIcon, SplitIcon,
 } from "./browser/icons.tsx";
 import { CheckboxIcon, DoneIcon, SwapIcon } from "../lib/glyphIcons.tsx";
-import { INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
+import { Button, INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 
 /** Electron's `<webview>` is not in React's JSX catalogue, and its methods are
  *  not on HTMLElement. Narrowed to the handful actually called here rather than
@@ -107,13 +107,8 @@ function SideTool({ on, label, onClick, disabled, children }: {
   label: string; onClick: () => void; disabled?: boolean; on?: boolean; children: React.ReactNode;
 }) {
   return (
-    <button onClick={onClick} disabled={disabled} title={label} aria-label={label}
-      className="agx-btn shrink-0 rounded-md flex items-center justify-center disabled:opacity-25"
-      style={{
-        width: 24, height: 24,
-        color: on ? "var(--primary-hover)" : "var(--text2)",
-        background: on ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent",
-      }}>{children}</button>
+    <Button onClick={onClick} disabled={disabled} label={label} size="compact" square on={!!on}
+      className="shrink-0">{children}</Button>
   );
 }
 

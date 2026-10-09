@@ -20,7 +20,7 @@
  * cannot express should add it HERE, where the next view will find it.
  */
 
-import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
+import type { ButtonHTMLAttributes, CSSProperties, KeyboardEvent, ReactNode } from "react";
 import { HIT, ICON } from "../../lib/iconSize.ts";
 import { DoneIcon, RefreshIcon } from "../../lib/glyphIcons.tsx";
 
@@ -431,6 +431,121 @@ export const CHIP_ICON = ICON.md;
  */
 export function IconButton(props: Omit<Parameters<typeof IconChip>[0], "size">) {
   return <IconChip {...props} size={CTRL_H.regular} />;
+}
+
+export type ButtonTone = "plain" | "primary" | "danger" | "ok" | "warn";
+
+const TONE_INK: Record<ButtonTone, string> = {
+  plain: "var(--text)", primary: "var(--bg)", danger: "var(--error-ink)", ok: "var(--success-ink)", warn: "var(--warning-ink)",
+};
+const TONE_HUE: Record<Exclude<ButtonTone, "plain">, string> = {
+  primary: "var(--primary)", danger: "var(--error)", ok: "var(--success)", warn: "var(--warning)",
+};
+
+/**
+ * The one push button: the `CHIP` shape at a `CTRL_H` rung, in one of five
+ * tones.
+ *
+ * Four of these had grown apart — the PR panel's `Btn` (4px corners, 24 and
+ * 28px), the git card's `RowAction` (`CHIP`, 28), Docker's row action (6px
+ * corners, 22) and the browser column's tool (6px, 24) — so the PR Files
+ * toolbar, a Docker row and a git card each drew "a button" at its own height
+ * and radius. They are thin wrappers over this now and keep their own prop
+ * names; the shape is decided here.
+ *
+ * `size`: `compact` (22) for a row, a card or a sub-toolbar, `regular` (28)
+ * for a view header, the same rung as `CHIP` and `RefreshButton`.
+ *
+ * `tone`: a plain button's label is `--text`, not `--text2` — `--text2` is the
+ * tier for labels BESIDE things, and a control read at the contrast of a
+ * caption next to the button it competes with. Its fill is `CHIP_SURFACE`'s,
+ * because a quiet button still needs an edge you can find: transparent with a
+ * half-strength border vanished on the neutral themes, where `--border` sits
+ * close to the surface. `warn` is the amber "this mutates the branch" accent
+ * (update-branch merges the base in), matching Source Control's sync colour.
+ * `primary` is filled and carries the weight: on a neutral theme `--primary`
+ * is a grey, so the label's weight says which is which as well. `tint` is an
+ * arbitrary colour for a caller whose tones are its own (Docker's start/stop).
+ *
+ * `on` makes it a toggle instead: transparent until pressed, `chipTone` when
+ * pressed, no border — the tint IS the state, as in `IconChip`.
+ *
+ * A FIXED height, contents centred, and `leading-none`. Buttons with identical
+ * classes came out different heights, and the cause was the LABEL: `↗` and `⋯`
+ * are not in the UI font, so they arrive from a fallback whose line box is
+ * taller — measured side by side, 17px for a plain label against 21px for one
+ * carrying an arrow. Pinning the line height alone got it to 16/16/16 on one
+ * machine, but a fallback differs per machine, per theme font and per glyph, so
+ * the height stops being derived from the label at all; padding only decides
+ * the width.
+ *
+ * `pending`: this button's own request is in flight. Every action in the PR
+ * panel is a round trip through `gh`, and the only feedback used to be the
+ * button going grey — the same grey it wears when disabled for an unrelated
+ * reason. The spinner goes IN the button, before the label, and the label
+ * stays: a control that swaps its words for "Working…" moves everything beside
+ * it, and you can no longer tell which of three buttons you pressed.
+ *
+ * Its ceiling: shape, size, edge and tone. Hover stays a brightness step, and a
+ * caller that needs more passes its own handlers through.
+ */
+export function Button({
+  size = "regular", tone = "plain", tint, on, square, pending, label,
+  children, disabled, title, className = "", style, ...rest
+}: Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children"> & {
+  size?: "compact" | "regular";
+  tone?: ButtonTone;
+  /** A colour of the caller's own, in place of a tone. */
+  tint?: string;
+  /** A toggle: transparent until on. */
+  on?: boolean;
+  /** Icon-only: as wide as it is tall. */
+  square?: boolean;
+  pending?: boolean;
+  /** The accessible name, for an icon-only button. Also the tooltip unless `title` says otherwise. */
+  label?: string;
+  children: ReactNode;
+}) {
+  const h = CTRL_H[size];
+  const hue = tint ?? (tone === "plain" ? undefined : TONE_HUE[tone]);
+  const skin: CSSProperties = on !== undefined
+    ? chipTone(on)
+    : tint
+      ? { color: tint, background: `color-mix(in srgb, ${tint} 8%, transparent)`, border: `1px solid color-mix(in srgb, ${tint} 32%, transparent)` }
+      : tone === "plain"
+        ? CHIP_SURFACE
+        : {
+          color: TONE_INK[tone],
+          background: tone === "primary" ? hue : `color-mix(in srgb, ${hue} ${tone === "warn" ? 16 : 8}%, transparent)`,
+          border: `1px solid color-mix(in srgb, ${hue} ${tone === "primary" ? 100 : tone === "warn" ? 55 : 85}%, transparent)`,
+        };
+  const text = size === "compact" ? "text-[10.5px]" : "text-[11px]";
+  const pad = square ? "" : size === "compact" ? "px-2" : "px-2.5";
+  return (
+    <button
+      {...rest}
+      disabled={disabled || pending}
+      title={pending ? "Working…" : title ?? label}
+      aria-label={label}
+      aria-busy={pending || undefined}
+      className={`agx-btn ${CHIP_SURFACE_CLS} inline-flex items-center justify-center gap-1 rounded-lg whitespace-nowrap leading-none disabled:opacity-40 ${text} ${pad} ${className}`}
+      style={{
+        height: h, minWidth: square ? h : undefined, width: square ? h : undefined,
+        ...skin,
+        cursor: disabled ? "not-allowed" : "pointer",
+        fontWeight: tone === "primary" ? 600 : 500,
+        ...style,
+      }}
+    >
+      {pending && (
+        <span className="agx-spin mr-0.5 shrink-0" aria-hidden
+          style={{ width: 9, height: 9, borderWidth: 1.5,
+            borderColor: tone === "primary" && !tint && on === undefined ? "color-mix(in srgb, var(--bg) 55%, transparent)" : "currentColor",
+            borderTopColor: "transparent" }} />
+      )}
+      {children}
+    </button>
+  );
 }
 
 /**

@@ -17,6 +17,7 @@
 import { describe, expect, it } from "bun:test";
 
 const src = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();
+const chrome = await Bun.file(new URL("../src/components/workspace/Chrome.tsx", import.meta.url)).text();
 
 describe("a search falls through to the table", () => {
   it("derives what is shown from the query, not only from the stored setting", () => {
@@ -505,8 +506,7 @@ describe("feedback on a request in flight", () => {
     /*
      * Every action here is a round trip through `gh`, and the only feedback was
      * the button going grey — the same grey it wears when it is disabled for a
-     * reason that has nothing to do with you. Reported as the worst thing about
-     * the app: "we have to give feedback on async requests, ALWAYS".
+     * reason that has nothing to do with you.
      */
     expect(src).toContain("pending?: boolean;");
     expect(src).toContain("setBusyWhat(label);");
@@ -518,8 +518,12 @@ describe("feedback on a request in flight", () => {
 
   it("keeps the label, so you can still tell the buttons apart", () => {
     // A control that swaps its words for "Working…" moves everything beside it.
-    expect(src).toContain('<span className="agx-spin mr-1.5 shrink-0" aria-hidden');
-    expect(src).toContain("{children}\n    </button>");
+    // `Btn` hands `pending` to the shared `Button`, which draws the spinner
+    // before the label and never replaces it.
+    expect(src).toContain("pending={pending}");
+    const button = chrome.slice(chrome.indexOf("export function Button("), chrome.indexOf("\n}\n", chrome.indexOf("export function Button(")));
+    expect(button).toContain('<span className="agx-spin mr-0.5 shrink-0" aria-hidden');
+    expect(button).toContain("{children}\n    </button>");
   });
 
   it("says the base is being checked instead of growing a button late", () => {
