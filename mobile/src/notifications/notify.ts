@@ -347,9 +347,35 @@ export async function askForAlerts(): Promise<Delivery> {
 }
 
 /**
+ * Call `onTap` with the data of the notification the person tapped: one that
+ * launched the app from closed (read once, the last response) and every one
+ * after (the listener). A response already handed over is not handed over
+ * again, so a re-subscription cannot replay an old tap. Returns the unsubscribe.
+ */
+const tapped = new Set<string>();
+export function watchAlertTaps(onTap: (data: unknown) => void): () => void {
+  const N = load();
+  if (!N) return () => {};
+  const hand = (r: { notification: { request: { identifier: string; content: { data?: unknown } } } } | null): void => {
+    if (!r) return;
+    const id = r.notification.request.identifier;
+    if (tapped.has(id)) return;
+    tapped.add(id);
+    onTap(r.notification.request.content.data);
+  };
+  try {
+    hand(N.getLastNotificationResponse?.() ?? null);
+    const sub = N.addNotificationResponseReceivedListener(hand);
+    return () => sub.remove();
+  } catch {
+    return () => {};
+  }
+}
+
+/**
  * Show one.
  *
- * `null` trigger means immediately. The data rides along so that tapping it
+ * A trigger with only a channel means immediately, on that channel. The data rides along so that tapping it
  * can land on the queue rather than just opening the app — a notification you
  * have to go and find the cause of is a notification that wasted the
  * interruption.
@@ -373,13 +399,16 @@ export async function raise(alert: AlertNote): Promise<Delivery> {
       content: {
         title: alert.title,
         body: alert.body,
-        data: { kind: "alert" },
+        data: alert.pane ? { kind: "alert", pane: alert.pane } : { kind: "alert" },
         priority: importanceOf(alert.urgency) === "max"
           ? N.AndroidNotificationPriority.MAX
           : N.AndroidNotificationPriority.HIGH,
-        ...(Platform.OS === "android" ? { channelId: CHANNEL } : {}),
       },
-      trigger: null,
+      // The channel rides in the TRIGGER: expo-notifications reads
+      // `content.channelId` nowhere, and a null trigger falls back to its own
+      // "Miscellaneous" channel, so the declared alerts channel (the one the
+      // person can tune or mute in system settings) was never used.
+      trigger: Platform.OS === "android" ? { channelId: CHANNEL } : null,
     });
   } catch (e) {
     // Still not worth taking the app down for — the alert is on screen in the

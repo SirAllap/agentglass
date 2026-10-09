@@ -182,7 +182,7 @@ import { chatSend, activeTurns, turnActive, sentTurnTo, turnSenderKey, CHAT_ENAB
 import { paneEngineCapability, attachCommand, validPaneName, screenNeedsYou } from "./chatpane.ts";
 import { tmuxBinStatus, tmuxSocket, engineSocketArgs } from "./tmuxbin.ts";
 import { applyTmuxConf, resetTmuxConf, confHealth, ensureConf, sweepStaleConfs } from "./tmuxconf.ts";
-import { captureLayout, restoreLayout, clearRestoreState, lastCaptureAt, startRestoreSweeper, noteLaunch, forgetSession, noteCrashLoop, crashLoopWarning, captureLayoutSync } from "./tmuxrestore.ts";
+import { captureLayout, restoreLayout, clearRestoreState, lastCaptureAt, startRestoreSweeper, noteLaunch, forgetSession, noteCrashLoop, crashLoopStatus, launchesPath, captureLayoutSync } from "./tmuxrestore.ts";
 import {
   windowTree, newWindow, splitPane, killWindow, killPane as killLayoutPane, selectWindow, selectPane,
   renameWindow, resizePane,
@@ -1446,7 +1446,7 @@ import { startLanternWatch, restartLanternWatch, lastLook } from "./lanternwatch
 import { installServerLog, readEntries } from "./serverlog.ts";
 import { digest as logDigest } from "./logdigest.ts";
 import { mintTicket, claimTicket, pending as pendingPairings, acceptTicket, rejectTicket, collect as collectPairing, dropTicket, getTicket, MAX_ATTEMPTS } from "./pairing.ts";
-import { updateStatus, viewerStatus, startUpdate, updateLog, releaseNotes } from "./selfupdate.ts";
+import { buildInfoPaths, updateStatus, viewerStatus, startUpdate, updateLog, releaseNotes } from "./selfupdate.ts";
 import { rateOk } from "./ratelimit.ts";
 import { noteClient, noteSocket, isLoopback, isSelf, isBlocked, blockDevice, remoteStatus, tailnetNames, refreshTailscale, TAILNET_OK_MS, proxiedByTailscaled, loopbackPeerIsOtherUser } from "./remote.ts";
 import { parseWindowMs } from "./params.ts";
@@ -2495,10 +2495,17 @@ function csvEscape(v: unknown): string {
 let stampCache: string | null = null;
 function buildStamp(): string {
   if (stampCache !== null) return stampCache;
-  try {
-    const here = new URL("../../build-info.json", import.meta.url).pathname;
-    stampCache = String(JSON.parse(fsRead(here, "utf8")).commit || "");
-  } catch { stampCache = ""; }
+  /* The compiled binary has no `../../build-info.json` next to its module; the
+     file sits beside the executable, where selfupdate looks. Measured: /health
+     answered build:"" on an installed app until this used the same list. */
+  stampCache = "";
+  /* The checkout's own file first: a stale staged copy must not win there. */
+  for (const p of [new URL("../../build-info.json", import.meta.url).pathname, ...buildInfoPaths()]) {
+    try {
+      const commit = String(JSON.parse(fsRead(p, "utf8")).commit || "");
+      if (commit) { stampCache = commit; break; }
+    } catch { /* not here — try the next place */ }
+  }
   return stampCache;
 }
 
@@ -8557,6 +8564,8 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         terminal: tmuxTerminal(),
         source: tmuxSource(),
         lastCaptureAt: lastCaptureAt(),
+        // Set when this boot declined to restore; null otherwise.
+        crashLoop: crashLoopStatus(),
       });
     }
 
@@ -9627,7 +9636,7 @@ if (tmuxRestoreEnabled()) {
        is what made this cost a day rather than a minute. */
     console.warn(`[tmux] ${launch.recent} launches in the last ten minutes — this looks like a crash loop.`);
     console.warn("[tmux] Not restoring or re-capturing: the saved session layout is left untouched.");
-    console.warn(`[tmux] Restore it by hand when the app is stable, from Settings, or delete ${"~/.local/state/agentglass/tmux/restore/launches.json"} to clear this.`);
+    console.warn(`[tmux] Restore it by hand when the app is stable, from Settings, or delete ${launchesPath()} to clear this.`);
     /* And where a person can SEE it, not only in a log they are not reading:
        the restore status endpoint carries it, so Settings can say why the
        layout was left alone instead of the person discovering it by finding

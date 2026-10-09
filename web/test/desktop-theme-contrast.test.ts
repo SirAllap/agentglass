@@ -12,7 +12,7 @@
 import { describe, expect, test } from "bun:test";
 import { desktopTheme } from "../../shared/desktopPalette.ts";
 import { ACCENTS } from "../src/lib/accent.ts";
-import { contrast, floorTiers, inkTints, onPrimaryInk, ON_PRIMARY, paintDesktop, parseColor } from "../src/lib/contrast.ts";
+import { chipInk, contrast, floorTiers, inkTints, onPrimaryInk, ON_PRIMARY, paintDesktop, parseColor } from "../src/lib/contrast.ts";
 import { THEMES } from "../src/lib/themes.ts";
 import { OMARCHY_PALETTES } from "./fixtures/omarchy-palettes.ts";
 
@@ -116,5 +116,36 @@ describe("desktop themes, as painted", () => {
       });
     }
     expect(bad).toEqual([]);
+  });
+  test("a selected segmented option is --on-primary on a solid --primary fill, in every theme", async () => {
+    // The old fill was --primary at 55% over the page with --text on it:
+    // 2.2 to 3.0:1 on the dark themes. A solid primary is the ground
+    // --on-primary is already held to 4.5:1 on, per theme, above.
+    const src = await Bun.file(new URL("../src/components/SettingsModal.tsx", import.meta.url)).text();
+    const selected = src.split("\n").filter((l) => /color-mix\(in srgb, var\(--primary\) 55%/.test(l) && /color:\s*"var\(--text\)"/.test(l));
+    expect(selected).toEqual([]);
+    expect((src.match(/background: "var\(--primary\)", color: "var\(--on-primary\)"/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    const bad: string[] = [];
+    for (const t of THEMES) {
+      const v = inkTints(floorTiers(t.vars as Record<string, string>), t.ansi);
+      const on = parseColor(v["--on-primary"] ?? ""), p = parseColor(v["--primary"] ?? "");
+      if (!on || !p || contrast(on, p) < ON_PRIMARY) bad.push(t.id);
+    }
+    expect(bad).toEqual([]);
+  });
+
+  test("assignee initials stay readable on a pale and on a dark chip", () => {
+    const fills = ["#f5e6a8", "#ffffff", "#ffd1dc", "#1d3557", "#2b2b2b", "#e63946", "#7aa2f7", "#00b894"];
+    const bad = fills.filter((f) => contrast(parseColor(chipInk(f))!, parseColor(f)!) < ON_PRIMARY);
+    expect(bad).toEqual([]);
+    // No colour: the chip sits on --bg4 and the ink is the theme's text.
+    expect(chipInk(undefined)).toBe("var(--text)");
+    expect(chipInk("not-a-colour")).toBe("#fff");
+  });
+
+  test("the chip sites ask chipInk, not a hard-coded white", async () => {
+    const src = await Bun.file(new URL("../src/components/TasksPanel.tsx", import.meta.url)).text();
+    expect(src).not.toMatch(/\.color \|\| "var\(--bg4\)", color: "#fff"/);
+    expect((src.match(/color: chipInk\(/g) ?? []).length).toBe(2);
   });
 });

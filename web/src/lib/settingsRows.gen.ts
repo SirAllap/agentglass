@@ -98,6 +98,7 @@ export const SETTINGS_ROWS: SettingsRowRaw[] = [
   { pane: "terminal", section: "Terminal runs on", label: "Terminal runs on", hint: "", agentNever: "which tmux a shell runs in, held by the server: it changes what runs a shell, so the owner chooses it" },
   { pane: "tmux", section: "Pane engine", label: "Engine config", hint: "" },
   { pane: "tmux", section: "Pane engine", label: "Last layout capture", hint: "" },
+  { pane: "tmux", section: "Pane engine", label: "Layout left alone", hint: "" },
   { pane: "tmux", section: "Pane engine", label: "Mode", hint: "" },
   { pane: "tmux", section: "Pane engine", label: "Override config", hint: "Plain tmux commands, one per line. Your ~/.tmux.conf is never read." },
   { pane: "tmux", section: "Pane engine", label: "Prefix key", hint: "" },

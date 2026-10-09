@@ -306,7 +306,7 @@ function Choice<T extends string>({ label, hint, value, options, onPick, disable
               aria-pressed={value === o.v}
               className="text-[12px] px-2 py-1 rounded-md transition-colors disabled:cursor-not-allowed whitespace-nowrap"
               style={value === o.v
-                ? { background: "color-mix(in srgb, var(--primary) 55%, transparent)", color: "var(--text)" }
+                ? { background: "var(--primary)", color: "var(--on-primary)" }
                 : { color: "var(--text3)" }}>
               {o.label}
             </button>
@@ -810,7 +810,7 @@ function PacePane() {
                 onClick={() => setPaceConfig({ workDays: cfg.workDays.map((x, j) => (j === i ? !x : x)) })}
                 className="text-[11px] px-1.5 py-1 rounded-md disabled:cursor-not-allowed"
                 style={cfg.workDays[i]
-                  ? { background: "color-mix(in srgb, var(--primary) 55%, transparent)", color: "var(--text)" }
+                  ? { background: "var(--primary)", color: "var(--on-primary)" }
                   : { color: "var(--text3)" }}>
                 {d}
               </button>
@@ -3613,6 +3613,13 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
           </button>
         </span>}
       />
+      {st?.crashLoop && (
+        <SettingRow
+          label="Layout left alone"
+          hint={`${st.crashLoop.launches} launches in ten minutes looked like a crash loop, so this start neither restored nor re-captured. Restore it by hand below once the app is stable, or delete ${st.crashLoop.file} to clear this.`}
+          control={<span />}
+        />
+      )}
       {st?.lastCaptureAt ? (
         <SettingRow
           label="Last layout capture"
@@ -3722,7 +3729,13 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
   // opening only — the next plain open still lands where you left it.
   useEffect(() => {
     const at = jump?.pane ? resolvePane(jump.pane) : null;
-    if (open && at && (TABS.some((t) => t.id === at) || at.startsWith("plugin:"))) setPane(at as Pane);
+    if (open && at && (TABS.some((t) => t.id === at) || at.startsWith("plugin:"))) {
+      setPane(at as Pane);
+      // A page that was asked for must be the page on screen: while the search
+      // box has text the results view replaces every page, so the jump moved
+      // only the sidebar highlight and the screen did not change.
+      setQ("");
+    }
   }, [open, jump]);
   const contentRef = useRef<HTMLDivElement | null>(null);
   /*

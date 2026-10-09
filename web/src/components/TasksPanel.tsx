@@ -81,6 +81,7 @@ import { RAIL_W_DEFAULT, RAIL_W_MAX, RAIL_W_MIN, clampRailW, railKey, railSplit 
 import { boardDue, BOARD_POLL_MS, BOARD_TICK_MS } from "../lib/boardPoll.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { PRIOS, prioLook, Flag } from "../lib/priority.tsx";
+import { chipInk } from "../lib/contrast.ts";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 
@@ -3514,7 +3515,7 @@ function EventRun({ events, open, onToggle, faceFor }: {
                     style={{ width: 14, height: 14, objectFit: "cover" }} />
                 : <span className="shrink-0 self-center rounded-full inline-flex items-center justify-center"
                     title={person.name}
-                    style={{ width: 14, height: 14, fontSize: 8, background: person.color || "var(--bg4)", color: "#fff" }}>
+                    style={{ width: 14, height: 14, fontSize: 8, background: person.color || "var(--bg4)", color: chipInk(person.color) }}>
                     {person.initials}
                   </span>;
             }
@@ -4581,7 +4582,7 @@ function Face({ p, n, size = 18 }: {
   return (
     <span title={p.me ? `${p.name} — you` : p.name}
       className="inline-flex items-center justify-center text-[10px] font-medium"
-      style={{ ...base, position: "relative", background: p.color || "var(--bg4)", color: "#fff", ...(size > 18 ? { fontSize: Math.round(size * 0.35) } : {}) }}>
+      style={{ ...base, position: "relative", background: p.color || "var(--bg4)", color: chipInk(p.color), ...(size > 18 ? { fontSize: Math.round(size * 0.35) } : {}) }}>
       {p.initials}
     </span>
   );

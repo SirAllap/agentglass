@@ -18,6 +18,8 @@ import { HostProvider, useAgentglass } from "../src/state/host-context.tsx";
 import { useDeskTheme, usePaletteTick } from "../src/state/use-palette.ts";
 import { UsageProvider } from "../src/state/use-usage.ts";
 import { C, T, currentLook } from "../src/theme.ts";
+import { watchAlertTaps } from "../src/notifications/notify.ts";
+import { alertRoute } from "../src/notifications/target.ts";
 
 void SplashScreen.preventAutoHideAsync();
 
@@ -40,6 +42,16 @@ function Gate(): React.ReactNode {
     if (!host && !onPairing) router.replace("/pair");
     if (host && onPairing) router.replace("/");
   }, [host, ready, segments, router]);
+
+  // A tapped alert opens what it is about, once there is a computer to show it
+  // from. The route comes from `alertRoute`, never straight from the data.
+  useEffect(() => {
+    if (!ready || !host) return;
+    return watchAlertTaps((data) => {
+      const to = alertRoute(data);
+      if (to) router.navigate(to);
+    });
+  }, [ready, host, router]);
 
   if (!ready) {
     return (

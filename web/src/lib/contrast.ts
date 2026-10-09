@@ -210,6 +210,19 @@ export function onPrimaryInk(primary: string, bg?: string, text?: string): strin
 }
 
 /**
+ * Initials on an assignee chip whose fill is a colour the tracker chose.
+ * White on a pale chip measured 1.2 to 1.9:1; the ink is whichever pole
+ * (near-black, near-white) is farther from the fill, which reaches 4.5:1 on
+ * any colour. A colour this cannot parse (hsl, a name) keeps the white it
+ * always had. No colour at all sits on the `--bg4`
+ * fallback, so the theme's own text colour is the ink there.
+ */
+export function chipInk(fill?: string | null): string {
+  if (!fill) return "var(--text)";
+  return onPrimaryInk(fill) ?? "#fff";
+}
+
+/**
  * `--success-ink` etc. alongside the tint they are read off — one pass per
  * theme rather than per screen, the same shape as `floorTiers`.
  *

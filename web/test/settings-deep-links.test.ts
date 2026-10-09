@@ -39,4 +39,14 @@ describe("panels link to their settings", () => {
   test("a Sidebar chord chip lands on that view's Shortcuts row", () => {
     expect(code(files.modal)).toContain('openSettings("keys", rowId(LABELS[`view.${v.id}`].label))');
   });
+  test("an asked-for page clears the search so the page shows", () => {
+    // With text in the search box the results view replaces every page; the
+    // jump effect used to move only the sidebar highlight.
+    const m = code(files.modal);
+    const at = m.indexOf("const at = jump?.pane ? resolvePane(jump.pane) : null;");
+    expect(at).toBeGreaterThan(0);
+    const body = m.slice(at, m.indexOf("}, [open, jump]);", at));
+    expect(body).toContain("setPane(at as Pane)");
+    expect(body).toContain('setQ("")');
+  });
 });

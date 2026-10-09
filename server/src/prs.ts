@@ -498,6 +498,18 @@ async function upstreamOf(root: string, branch: string): Promise<{ remote: strin
       : ref.slice(`refs/remotes/${remote}/`.length);
     return { remote, ref, remoteBranch };
   }
+  // Tracking configured but never fetched (`branch.X.remote`/`merge` set, no
+  // refs/remotes/<remote>/X yet): `@{upstream}` fails, yet the config still says
+  // where the branch lives. Guessing origin here read the wrong remote, found
+  // nothing, and let a failed read stand in for "the branch moved".
+  const cfgRemote = await gitAsync(root, ["config", "--get", `branch.${branch}.remote`]);
+  const cfgMerge = await gitAsync(root, ["config", "--get", `branch.${branch}.merge`]);
+  const configuredRemote = cfgRemote.code === 0 ? cfgRemote.stdout.trim() : "";
+  const configuredMerge = cfgMerge.code === 0 ? cfgMerge.stdout.trim() : "";
+  if (configuredRemote && configuredRemote !== "." && configuredMerge.startsWith("refs/heads/")) {
+    const remoteBranch = configuredMerge.slice("refs/heads/".length);
+    return { remote: configuredRemote, ref: `refs/remotes/${configuredRemote}/${remoteBranch}`, remoteBranch };
+  }
   // No upstream configured. A branch fetched by somebody else's tooling often
   // has none, and origin/<branch> is still the thing it is behind.
   const guess = await gitAsync(root, ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`]);
@@ -4751,6 +4763,11 @@ export async function updateBranch(rootIn: unknown, number: unknown, syncLocal?:
   }
   if (landed === "unmoved") {
     return { ...r, requested: true, detail: "Update requested — GitHub has not moved the branch yet. Your local copy was left as it is." };
+  }
+  /* A head that could not be read is not a head that moved. Only a sync the
+     person asked for claims anything, so only that path is held back. */
+  if (landed === "unknown" && wantLocal && root) {
+    return { ...r, requested: true, detail: "Update requested — the branch on GitHub could not be read to confirm it moved. Your local copy was left as it is." };
   }
   if (!wantLocal || !root) return r;
   /* "Synced" first, because what somebody wants to know is whether it worked;

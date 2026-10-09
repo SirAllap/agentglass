@@ -691,15 +691,23 @@ function TerminalPane(): React.ReactNode {
    * Kept while the strip does not have it yet — a window just opened on the
    * computer is on the next poll, not this one.
    */
-  const arriving = useLocalSearchParams<{ where?: string; window?: string }>();
+  const arriving = useLocalSearchParams<{ where?: string; window?: string; pane?: string }>();
   useEffect(() => {
+    // A tapped alert names the pane itself. Dropped once the strip is listed,
+    // found or not, so a pane that has since closed cannot pin the request.
+    if (arriving.pane && strip) {
+      const tab = strip.find((t) => t.paneId === arriving.pane);
+      if (tab) { setActive(tab.paneId); setWhy(null); }
+      router.setParams({ pane: undefined });
+      return;
+    }
     if (!arriving.where || !strip) return;
     const tab = paneFor(strip, arriving.where, arriving.window);
     if (!tab) return;
     setActive(tab.paneId);
     setWhy(null);
     router.setParams({ where: undefined, window: undefined });
-  }, [arriving.where, arriving.window, strip, router]);
+  }, [arriving.where, arriving.window, arriving.pane, strip, router]);
   const [past, setPast] = useState<AgentSessionRow[] | null>(null);
   useEffect(() => onTermPrefs(() => {
     setBar(keyLayout()); setColumns(termColumns()); setAssist(termAssist());
@@ -1545,8 +1553,6 @@ function TerminalPane(): React.ReactNode {
     commit(draft);
   }, [raw, onKey, commit, draft]);
 
-  if (!host) return null;
-
   const all = strip ?? [];
   const open = all.find((t) => t.paneId === active) ?? pendingTab(pendingOpen.current, active);
   const nameProblem = managing && newName !== managing.windowName ? titleProblem(newName) : null;
@@ -1735,6 +1741,12 @@ function TerminalPane(): React.ReactNode {
   // A retained route must not carry a pending focus across a navigation, and a
   // capture left focused behind another screen is a keyboard nobody asked for.
   useEffect(() => () => { clearFocusTimer(focusTimer); capture.current?.blur(); }, []);
+
+  /* Forgetting the computer nulls `host` while this tab is still mounted. The
+     bail-out sits after the LAST hook on purpose: returning before them drops
+     the hook count between two renders, and React kills the app with "Rendered
+     fewer hooks than expected". Every hook above does nothing without a host. */
+  if (!host) return null;
   /*
    * Whether this phone is the widest thing looking at the window — see `grid`.
    *

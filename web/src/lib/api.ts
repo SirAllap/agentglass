@@ -912,6 +912,8 @@ const realApi = {
     terminal: string;
     source: string;
     lastCaptureAt: number | null;
+    /** Set when this boot declined to restore because it looked like a crash loop. */
+    crashLoop: { at: number; launches: number; file: string } | null;
   }>("/terminal/tmux-status"),
   /** Save the conf override (validated server-side before it lands). */
   tmuxConfSave: (confMode: string, override: string) =>
@@ -2826,7 +2828,7 @@ const demoApi: typeof realApi = {
   issuePrs: (_r: string, _n: number) => D({ ok: true, prs: [] }),
   termAgentTicket: (_c: string, _p: string, _y: boolean, _t: string) =>
     D({ ok: false, error: "not available in the demo" }),
-  tmuxStatus: () => D({ ok: false, bin: { available: false, source: "none", path: "", version: null, reason: "demo" }, capability: { available: false, reason: "demo" }, confMode: "append", override: "", overrideActive: false, broken: false, brokenReason: "", restoreEnabled: false, resumeMode: "lazy", prefix: "", terminal: "engine", source: "auto", lastCaptureAt: null }),
+  tmuxStatus: () => D({ ok: false, bin: { available: false, source: "none", path: "", version: null, reason: "demo" }, capability: { available: false, reason: "demo" }, confMode: "append", override: "", overrideActive: false, broken: false, brokenReason: "", restoreEnabled: false, resumeMode: "lazy", prefix: "", terminal: "engine", source: "auto", lastCaptureAt: null, crashLoop: null }),
   tmuxConfSave: (_m: string, _o: string) => D({ ok: false, error: "not available in the demo" }),
   tmuxSettingsSave: (_f: object) => D({ ok: false, error: "not available in the demo" }),
   tmuxReset: () => D({ ok: false, error: "not available in the demo" }),

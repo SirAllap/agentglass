@@ -1182,10 +1182,15 @@ const printed = (r: { ok: boolean; stdout: string }): string => (r.ok ? r.stdout
 /** The panes of a window beyond its first, split into the window that exists
  *  now and given their scrollback back. */
 async function restorePanes(name: string, windowId: string, panes: CapturedPane[], mode: "lazy" | "all"): Promise<void> {
+  /* Each split targets the pane the previous one printed. Targeting the window
+     means its ACTIVE pane, the first, so every new pane landed right after it
+     and a window of four came back as [1, 4, 3, 2]. */
+  let after = `=${name}:${windowId}`;
   for (const p of panes) {
-    const r = await tmux(["split-window", "-d", "-v", "-P", "-F", "#{pane_id}", "-t", `=${name}:${windowId}`,
+    const r = await tmux(["split-window", "-d", "-v", "-P", "-F", "#{pane_id}", "-t", after,
       "-c", p.path || ".", ...runArgs(mode, p)]);
     const pid = printed(r);
+    if (pid) after = pid;
   }
 }
 
@@ -1219,7 +1224,7 @@ async function restorePanes(name: string, windowId: string, panes: CapturedPane[
 const LOOP_LAUNCHES = 4;
 const LOOP_WINDOW_MS = 10 * 60 * 1000;
 
-function launchesPath(): string { return join(restoreDir(), "launches.json"); }
+export function launchesPath(): string { return join(restoreDir(), "launches.json"); }
 
 /** Record this launch and say whether the app is in a crash-loop. Written
  *  atomically like everything else here: this file deciding whether to restore
@@ -1262,6 +1267,11 @@ export function noteCrashLoop(launches: number): void {
  */
 const capturingHalted = (): boolean => crashLoop !== null;
 export function crashLoopWarning(): { at: number; launches: number } | null { return crashLoop; }
+/** What `/terminal/tmux-status` carries: the warning plus the real file whose
+ *  removal clears it, wherever AGENTGLASS_STATE_DIR put it. */
+export function crashLoopStatus(): { at: number; launches: number; file: string } | null {
+  return crashLoop ? { ...crashLoop, file: launchesPath() } : null;
+}
 /** For tests: this flag halts every capture in the process, so a suite that
  *  sets it has to put it back. */
 export function __clearCrashLoop(): void { crashLoop = null; }

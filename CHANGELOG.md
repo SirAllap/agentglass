@@ -14,6 +14,14 @@ kept in one place.
 
 ## Released
 
+- **v0.23.1** — **Fixes from testing v0.23.0 by hand.**
+  - **tmux restore.** A window of three or more panes comes back with its panes in the order they were captured, each in its own slot, in both resume modes. When the crash-loop guard skips a restore, Settings now says so.
+  - **Pull requests.** Update branch no longer says "Synced" when it could not read the branch on GitHub to see whether it moved, and the "requested" hold survives a window reload.
+  - **Card links.** A pull request link is read strictly: https only, no port, no hidden character inside the number. A host that only borrows GitLab's name is refused.
+  - **Settings and agents.** An agent that opens a Settings page while the search box has text now gets that page instead of a reply that claims it opened. A selected option and an assignee's initials are readable in every theme.
+  - **Phone.** Forgetting the computer no longer crashes the app. Agent alerts are posted on the "Agent alerts" channel you can tune in Android settings, and tapping one opens the Terminal on that agent's pane.
+  - **Elsewhere**, a typed `~/` in the finder resolves straight away, the finder no longer offers to edit a file it was refused, and `/health` reports the build of an installed app.
+
 - **v0.23.0** — **Pull requests you can finish from one screen.** The merge box says who moves next and asks before skipping a human review; a failed check opens onto the failing test and can be re-run on the base; ClickUp settings become a workflow map built from your own statuses; agents get a gated door into the app's own window; the phone app grows up.
   - **House UI pass.** One control height, two border weights, one Button, surface tokens, and tinted text that clears 4.5:1 in every theme, light ones included.
   - **Pull requests.** A GitHub-like conversation timeline, a Checks tab with a verdict, CI metrics judged against each check's own history, a bell that watches CI or comments, stacked pull requests, Check on base and Unstick.

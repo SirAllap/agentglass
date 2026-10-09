@@ -48,7 +48,7 @@ import { appChordFor, chordLabel, isAppChord } from "../lib/keybindings.ts";
 import { LAYER } from "../lib/layers.ts";
 import { FINDER_BOX, FINDER_MARGIN } from "../lib/finderSize.ts";
 import { shortPath } from "../lib/shortPath.ts";
-import { afterJump, dirsFirst, humanBytes, pageUrl, fileKind, focusSelection, followBox, pathBar, pathInputText, placeSections, shortenHome, switchTab, type BrowseState, type PlaceRow } from "../lib/paletteModel.ts";
+import { afterJump, dirsFirst, humanBytes, pageUrl, fileKind, focusSelection, followBox, needsPlaces, pathBar, pathInputText, placeSections, shortenHome, switchTab, type BrowseState, type PlaceRow } from "../lib/paletteModel.ts";
 import type { DiskPlace, FsEntry, GitRepoRef, GrepHit } from "../../../shared/types.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { FileViewer } from "./CardFiles.tsx";
@@ -330,15 +330,16 @@ export function FilePalette({
   /* Asked the server rather than assumed: which folders exist is a fact about
      this machine, and the boundary the search is held to is one too — a menu
      built here out of guesses would offer rows that come back refused. */
+  const wantsPlaces = needsPlaces(tab, q, homeDir);
   useEffect(() => {
-    if (!open || tab !== "machine") return;
+    if (!open || !wantsPlaces) return;
     api.diskPlaces().then((r) => {
       setPlaces(r.places);
       setHomeDir(r.home || "");
       setPlaceErr(r.ok ? null : (r.error ?? "this machine cannot be searched"));
       setPlace((cur) => cur || r.home || "");
     }).catch(() => setPlaceErr("could not ask this machine where it keeps things"));
-  }, [open, tab]);
+  }, [open, wantsPlaces]);
 
   useEffect(() => { if (place) savePlace(place); }, [place]);
 

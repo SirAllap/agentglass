@@ -264,9 +264,18 @@ function issueUrl(prUrl: string | undefined, repo: string | undefined, number: s
  *  address. GitLab is the one host here that spells a pull request differently,
  *  so a place that reads `/pull/N` alone drops every merge request silently. */
 export function mergeRequestNumber(url: string | undefined): number | null {
-  const m = /^https?:\/\/[^/]*gitlab\.[^/]+\/[\w./-]+?\/-\/merge_requests\/(\d+)/i.exec(url ?? "");
+  let u: URL;
+  try { u = new URL((url ?? "").trim()); } catch { return null; }
+  // https only, no port or userinfo. A self-hosted `gitlab.<company>` (or
+  // `code.gitlab.<company>`) is kept; `gitlab.com.<anything>` is somebody
+  // else's domain wearing the name.
+  const host = u.hostname.toLowerCase();
+  const gitlabHost = host === "gitlab.com" || host.endsWith(".gitlab.com")
+    || (/(^|\.)gitlab\.[^.]/.test(host) && !/(^|\.)gitlab\.com\./.test(host));
+  if (u.protocol !== "https:" || u.port || u.username || u.password || !gitlabHost) return null;
+  const m = /^\/[\w./-]+?\/-\/merge_requests\/(\d+)(?:\/|$)/i.exec(u.pathname);
   const n = m ? Number(m[1]) : NaN;
-  return Number.isFinite(n) && n > 0 ? n : null;
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
 }
 
 /** The tracker item an address names, when the WHOLE string is that address
