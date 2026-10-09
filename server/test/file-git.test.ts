@@ -4,23 +4,31 @@
  * agree with whatever the parser assumed.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileGitFacts, statusOf } from "../src/fileGit.ts";
 import { story } from "./story.ts";
 
-const dir = mkdtempSync(join(tmpdir(), "agx-filegit-"));
+// The open project and, beside it, a checkout outside it; the finder may read both.
+const parent = mkdtempSync(join(tmpdir(), "agx-filegit-"));
+const dir = join(parent, "orbit");
+const elsewhere = join(parent, "elsewhere");
+mkdirSync(dir); mkdirSync(elsewhere);
 const wasRoots = process.env.AGENTGLASS_DISK_ROOTS;
-process.env.AGENTGLASS_DISK_ROOTS = dir;
+const wasRoot = process.env.AGENTGLASS_ROOT;
+process.env.AGENTGLASS_DISK_ROOTS = parent;
+process.env.AGENTGLASS_ROOT = dir;
 afterAll(() => {
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(parent, { recursive: true, force: true });
   if (wasRoots === undefined) delete process.env.AGENTGLASS_DISK_ROOTS; else process.env.AGENTGLASS_DISK_ROOTS = wasRoots;
+  if (wasRoot === undefined) delete process.env.AGENTGLASS_ROOT; else process.env.AGENTGLASS_ROOT = wasRoot;
 });
-const sh = (...a: string[]) => {
-  const r = Bun.spawnSync(["git", "-C", dir, "-c", "user.name=t", "-c", "user.email=t@example.com", ...a]);
+const gitIn = (cwd: string, ...a: string[]) => {
+  const r = Bun.spawnSync(["git", "-C", cwd, "-c", "user.name=t", "-c", "user.email=t@example.com", ...a]);
   if (r.exitCode !== 0) throw new Error(r.stderr.toString());
 };
+const sh = (...a: string[]) => gitIn(dir, ...a);
 
 sh("init", "-q", "-b", "main");
 writeFileSync(join(dir, "retry.py"), "a = 1\nb = 2\n");
@@ -57,6 +65,29 @@ describe("fileGitFacts", () => {
     const r = fileGitFacts("/etc/passwd", false);
     expect(r.ok).toBe(false);
     expect(r.repo).toBe(false);
+  });
+  step("a checkout outside the open project gets no git facts at all", () => {
+    gitIn(elsewhere, "init", "-q", "-b", "main");
+    writeFileSync(join(elsewhere, "notes.md"), "n\n");
+    gitIn(elsewhere, "add", "."); gitIn(elsewhere, "commit", "-q", "-m", "c");
+    expect(fileGitFacts(join(elsewhere, "notes.md"), true)).toEqual({ ok: true, repo: false });
+  });
+  step("a clean filter named by a repository's own config never runs, even inside the project", () => {
+    // An extracted archive: a .git/config that defines a filter and attributes
+    // that apply it, with stat data stale so status has to re-hash the file.
+    const demo = join(dir, "vendor", "demo");
+    mkdirSync(demo, { recursive: true });
+    gitIn(demo, "init", "-q", "-b", "main");
+    writeFileSync(join(demo, "README.md"), "hello\n");
+    gitIn(demo, "add", "."); gitIn(demo, "commit", "-q", "-m", "c");
+    const marker = join(parent, "filter-ran");
+    gitIn(demo, "config", "filter.x.clean", `sh -c 'echo ran >> ${marker}; cat'`);
+    gitIn(demo, "config", "filter.x.process", `sh -c 'echo ran >> ${marker}'`);
+    writeFileSync(join(demo, ".git", "info", "attributes"), "* filter=x\n");
+    utimesSync(join(demo, "README.md"), new Date(2001, 0, 1), new Date(2001, 0, 1));
+    const r = fileGitFacts(join(demo, "README.md"), true);
+    expect(r).toMatchObject({ ok: true, repo: true, status: "clean" });
+    expect(existsSync(marker)).toBe(false);
   });
   step("statusOf maps porcelain codes", () => {
     expect(["??", " M", "A ", "D ", "R ", "UU", "!!", "  "].map(statusOf))
