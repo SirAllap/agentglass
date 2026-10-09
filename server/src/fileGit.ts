@@ -24,7 +24,7 @@ import { statSync } from "node:fs";
 import { basename, dirname, relative } from "node:path";
 import { browseReal } from "./browse.ts";
 import { inScopeReal } from "./config.ts";
-import { git, repoRootOf } from "./git.ts";
+import { gitAsync, repoRootOfAsync } from "./git.ts";
 import type { FileGitFacts, FileGitStatus } from "../../shared/types.ts";
 
 export type { FileGitFacts, FileGitStatus };
@@ -50,10 +50,10 @@ export function statusOf(xy: string): FileGitStatus {
  * on `log`. Hooks and fsmonitor are already off in `git()`; diff's external
  * driver and textconv are refused by flag at the call. Exported for the test.
  */
-export function neutralised(root: string): string[] {
+export async function neutralised(root: string): Promise<string[]> {
   const out = ["-c", "log.showSignature=false"];
   // -z: a subsection may hold a newline, and one missed line is one filter left on.
-  const f = git(root, ["config", "--show-scope", "--includes", "--list", "--name-only", "-z"]).stdout.split("\0");
+  const f = (await gitAsync(root, ["config", "--show-scope", "--includes", "--list", "--name-only", "-z"])).stdout.split("\0");
   const seen = new Set<string>();
   for (let i = 0; i + 1 < f.length; i += 2) {
     const [scope, key] = [f[i], f[i + 1]];
@@ -67,32 +67,35 @@ export function neutralised(root: string): string[] {
   return out;
 }
 
-export function fileGitFacts(pathIn: unknown, local = false): FileGitFacts {
+export async function fileGitFacts(pathIn: unknown, local = false): Promise<FileGitFacts> {
   const abs = browseReal(pathIn, local);
   if (!abs) return { ok: false, repo: false, error: "outside the places the finder may read" };
   let isDir = false;
   try { isDir = statSync(abs).isDirectory(); } catch { return { ok: false, repo: false, error: "no such file" }; }
   if (isDir) return { ok: true, repo: false };
 
-  const root = repoRootOf(dirname(abs));
+  const root = await repoRootOfAsync(dirname(abs));
   if (!root || !inScopeReal(root)) return { ok: true, repo: false };
   const rel = relative(root, abs);
   if (!rel || rel.startsWith("..")) return { ok: true, repo: false };
 
   const out: FileGitFacts = { ok: true, repo: true, path: `${basename(root)}/${rel}` };
   // --no-optional-locks: a read never rewrites the index of somebody else's tree.
-  const safe = ["--no-optional-locks", ...neutralised(root)];
-  const st = git(root, [...safe, "status", "--porcelain=v1", "--ignored=matching", "--ignore-submodules=all", "--", rel]);
+  // --literal-pathspecs: a file named `:(exclude)x` is that file, not magic.
+  // Awaited, not spawnSync: five git calls on a large repository would hold
+  // every other route on the server's one thread for as long as they take.
+  const safe = ["--no-optional-locks", "--literal-pathspecs", ...(await neutralised(root))];
+  const st = await gitAsync(root, [...safe, "status", "--porcelain=v1", "--ignored=matching", "--ignore-submodules=all", "--", rel]);
   out.status = st.code === 0 ? statusOf(st.stdout.slice(0, 2)) : "clean";
 
-  const br = git(root, [...safe, "rev-parse", "--abbrev-ref", "HEAD"]);
+  const br = await gitAsync(root, [...safe, "rev-parse", "--abbrev-ref", "HEAD"]);
   if (br.code === 0) out.branch = br.stdout.trim();
 
   if (out.status !== "untracked" && out.status !== "ignored") {
-    const d = git(root, [...safe, "diff", "--no-ext-diff", "--no-textconv", "HEAD", "--numstat", "--", rel]);
+    const d = await gitAsync(root, [...safe, "diff", "--no-ext-diff", "--no-textconv", "HEAD", "--numstat", "--", rel]);
     const m = d.code === 0 ? /^(\d+)\t(\d+)\t/.exec(d.stdout) : null;
     if (m) { out.added = Number(m[1]); out.removed = Number(m[2]); }
-    const lg = git(root, [...safe, "log", "-1", "--format=%h%x1f%at%x1f%s", "--", rel]);
+    const lg = await gitAsync(root, [...safe, "log", "-1", "--format=%h%x1f%at%x1f%s", "--", rel]);
     const [hash, at, ...subject] = lg.code === 0 ? lg.stdout.trim().split("\x1f") : [];
     if (hash) out.commit = { hash, at: Number(at) * 1000 || 0, subject: subject.join("\x1f") };
   }

@@ -6901,7 +6901,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       }
       if (pathname === "/browse") return json(browseDir(url.searchParams.get("path") || "", url.searchParams.get("hidden") === "1", localBrowse));
       if (pathname === "/preview/facts") return json(fileFacts(url.searchParams.get("path") || "", localBrowse));
-      if (pathname === "/preview/git") return json(fileGitFacts(url.searchParams.get("path") || "", localBrowse));
+      if (pathname === "/preview/git") return json(await fileGitFacts(url.searchParams.get("path") || "", localBrowse));
       if (pathname === "/preview/raw" || pathname === "/preview/page") {
         const r = await fileBytes(url.searchParams.get("path") || "", localBrowse);
         if (!r.ok) return json({ error: r.error }, 404);
