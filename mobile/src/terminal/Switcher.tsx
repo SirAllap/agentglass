@@ -17,13 +17,17 @@ import { StatusDot } from "./StatusDot.tsx";
 import type { Tab } from "./tabs.ts";
 import { dotOf, groupKey, rowSub, statusOf, switcherGroups, worstOf } from "./windows.ts";
 
-export function WindowSwitcher({ open, onClose, all, active, gates, onPick, newLabel, onNew }: {
+export function WindowSwitcher({ open, onClose, all, active, gates, onPick, onManage, newLabel, onNew }: {
   open: boolean;
   onClose: () => void;
   all: readonly Tab[];
   active: string | null;
   gates: readonly PendingGate[];
   onPick: (tab: Tab) => void;
+  /** Rename or close this window on the computer. A button beside the row and
+   *  not inside it: the row is what you tap to go there, and a window is
+   *  renamed or closed far less often than it is opened. */
+  onManage?: (tab: Tab) => void;
   /** "New window in orbit", or null while nothing is open to say where. */
   newLabel: string | null;
   onNew: () => void;
@@ -108,29 +112,48 @@ export function WindowSwitcher({ open, onClose, all, active, gates, onPick, newL
                 const sub = rowSub(tab, status, detailOf(tab));
                 const here = tab.paneId === active;
                 return (
-                  <Pressable
+                  <View
                     key={tab.paneId}
-                    onPress={() => onPick(tab)}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: here }}
-                    accessibilityLabel={`${tab.name}, ${sub}`}
-                    style={({ pressed }) => ({
-                      minHeight: 60, flexDirection: "row", alignItems: "center", gap: SPACE.md,
-                      paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm,
+                    style={{
+                      flexDirection: "row", alignItems: "center",
                       borderTopWidth: i === 0 ? 0 : 1, borderTopColor: C.border,
-                      backgroundColor: pressed ? C.bg4 : here ? tint(C.primary, 0.12) : "transparent",
-                    })}
+                      backgroundColor: here ? tint(C.primary, 0.12) : "transparent",
+                    }}
                   >
-                    <StatusDot dot={dot} colors={C} />
-                    <View style={{ flex: 1, gap: 2 }}>
-                      <Text numberOfLines={1} style={{ color: C.text, fontSize: T.body, fontWeight: "700" }}>{tab.name}</Text>
-                      <Text numberOfLines={1} style={{ color: dot === "needs" ? C.warning : C.text3, fontSize: T.small, fontWeight: dot === "needs" ? "600" : "400" }}>
-                        {sub}
-                      </Text>
-                    </View>
-                    {tab.pinned ? <Glyph name="pin" color={C.text3} size={18} /> : null}
-                    {here ? <Glyph name="check" color={C.primary} size={20} /> : null}
-                  </Pressable>
+                    <Pressable
+                      onPress={() => onPick(tab)}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: here }}
+                      accessibilityLabel={`${tab.name}, ${sub}`}
+                      style={({ pressed }) => ({
+                        flex: 1, minHeight: 60, flexDirection: "row", alignItems: "center", gap: SPACE.md,
+                        paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm,
+                        backgroundColor: pressed ? C.bg4 : "transparent",
+                      })}
+                    >
+                      <StatusDot dot={dot} colors={C} />
+                      <View style={{ flex: 1, gap: 2 }}>
+                        <Text numberOfLines={1} style={{ color: C.text, fontSize: T.body, fontWeight: "700" }}>{tab.name}</Text>
+                        <Text numberOfLines={1} style={{ color: dot === "needs" ? C.warning : C.text3, fontSize: T.small, fontWeight: dot === "needs" ? "600" : "400" }}>
+                          {sub}
+                        </Text>
+                      </View>
+                      {tab.pinned ? <Glyph name="pin" color={C.text3} size={18} /> : null}
+                      {here ? <Glyph name="check" color={C.primary} size={20} /> : null}
+                    </Pressable>
+                    {onManage && tab.windowId ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`Rename or close ${tab.label}`}
+                        onPress={() => onManage(tab)}
+                        style={({ pressed }) => ({
+                          width: TAP, height: TAP, alignItems: "center", justifyContent: "center", opacity: pressed ? 0.6 : 1,
+                        })}
+                      >
+                        <Glyph name="more" color={C.text3} size={20} />
+                      </Pressable>
+                    ) : null}
+                  </View>
                 );
               })}
             </View>

@@ -69,9 +69,14 @@ describe("the request", () => {
 const screen = (await Bun.file(new URL("../app/(tabs)/terminal.tsx", import.meta.url)).text())
   .split("\n").filter((l) => !l.trim().startsWith("//") && !l.trim().startsWith("*") && !l.trim().startsWith("/*")).join("\n");
 
+const switcher = await Bun.file(new URL("../src/terminal/Switcher.tsx", import.meta.url)).text();
+
 describe("the Terminal screen", () => {
-  test("every window row has a way to rename or close it", () => {
-    expect(screen).toContain("Rename or close ${tab.label}");
+  test("every window row in the switcher has a way to rename or close it", () => {
+    expect(switcher).toContain("Rename or close ${tab.label}");
+    expect(switcher).toContain("onManage(tab)");
+    expect(screen).toContain("onManage={(tab) => {");
+    expect(screen).toContain("setManaging(tab)");
   });
 
   test("it sends the request the model builds, to the route the desk uses", () => {

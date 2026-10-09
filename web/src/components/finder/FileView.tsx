@@ -60,7 +60,7 @@ export function FileView({ file, branch, jump, initialTop, onTop, onBench, onOpe
   canBrowser: boolean;
   /** Bumped by the parent to open the find bar (the chord lives up there). */
   findSignal: number;
-  /** Home, so the header's path reads `Home / brain` like the bar above it. */
+  /** Home, so the header's path reads `Home / notes` like the bar above it. */
   home: string;
   /** A click on a crumb or a preview row: see finderFolder.goTo. */
   onGoTo?: (abs: string) => void;

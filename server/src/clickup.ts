@@ -1961,7 +1961,7 @@ export function applyCommentCounts(tasks: ProviderTask[]): ProviderTask[] {
  * Never awaited by one, and never a burst. It used to count every uncounted
  * card at once, five in flight: measured against a stand-in workspace, five
  * cold lists of 12 to 60 cards cost 157 requests in 4 s (117 of them counts)
- * against a budget of 100 a minute that the owner shares with his real work in
+ * against a budget of 100 a minute that the account shares with other work in
  * ClickUp. A count is a badge, not content, so it drains through one queue at
  * one call per COUNT_EVERY_MS, newest card of the latest board first, and stops
  * asking while the workspace says the budget is nearly used up (`call` refuses

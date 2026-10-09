@@ -74,7 +74,7 @@ export function folderPreview(name: string, entries: BrowseEntry[], mtime: numbe
  * Where a click on a path (a row of the folder preview, a crumb of the centre
  * header) takes the finder, by the file-manager model: the drawer lists the
  * FOLDER THE ITEM IS IN and the item is the selection. Clicking `notes` in the
- * preview of `~/brain` lists `~/brain` and selects `~/brain/notes`, so the path
+ * preview of `~/notes` lists `~/notes` and selects `~/notes/notes`, so the path
  * bar, the input, the count, the stepper and the saved state all follow from
  * the two values and cannot disagree with the centre.
  */
