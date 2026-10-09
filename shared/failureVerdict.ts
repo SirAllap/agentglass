@@ -32,7 +32,9 @@ export interface Subject {
 export type TestVerdict =
   | { kind: "main" }
   | { kind: "flaky" }
-  | { kind: "others"; prs: number }
+  /** `nums`: which pull requests, newest first, so the chip can name them. `unknown`: other runs of this failure whose
+   *  pull request the app does not know, counted apart so the claim is never wider than what was seen. Absent in a verdict kept before they existed. */
+  | { kind: "others"; prs: number; nums?: number[]; unknown?: number }
   /** The lens's own wording for a test seen on several pull requests and not on main: "Failed on N PRs". */
   | { kind: "prs"; prs: number }
   | { kind: "this-pr"; pr?: number }
@@ -51,7 +53,10 @@ export function testVerdict(signature: string, seen: Seen[], me: Subject): TestV
   if (elsewhere.some((s) => s.main)) return { kind: "main" };
   const prs = new Set<number>();
   for (const s of elsewhere) if (s.pr != null && s.pr !== me.pr) prs.add(s.pr);
-  if (prs.size) return { kind: "others", prs: prs.size };
+  if (prs.size) {
+    const unknown = new Set(elsewhere.filter((s) => s.pr == null).map((s) => s.job)).size;
+    return { kind: "others", prs: prs.size, nums: [...prs].sort((a, b) => b - a), ...(unknown ? { unknown } : {}) };
+  }
   return { kind: "this-pr" };
 }
 
@@ -60,7 +65,7 @@ export function verdictLabel(v: TestVerdict, pr?: number | null): string {
   switch (v.kind) {
     case "main": return "Red on main";
     case "flaky": return "Flaky test";
-    case "others": return `Also failed on ${v.prs} other ${v.prs === 1 ? "PR" : "PRs"}`;
+    case "others": return v.nums?.length === 1 && !v.unknown ? `Also failed on #${v.nums[0]}` : `Also failed on ${v.prs} other ${v.prs === 1 ? "PR" : "PRs"}`;
     case "prs": return `Failed on ${v.prs} PRs`;
     case "this-pr": { const n = v.pr ?? pr; return n ? `This PR only · #${n}` : "This PR only"; }
     case "once": return "Seen once";

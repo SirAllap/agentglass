@@ -12,7 +12,14 @@ describe("testVerdict", () => {
   });
   test("the same signature on other PRs counts distinct PRs, not runs", () => {
     const v = testVerdict(S, [seen({ job: "2", pr: 475 }), seen({ job: "3", pr: 475 }), seen({ job: "4", pr: 471 }), seen({ job: "1", pr: 482 })], me);
-    expect(v).toEqual({ kind: "others", prs: 2 });
+    expect(v).toEqual({ kind: "others", prs: 2, nums: [475, 471] });
+  });
+  test("it names the pull requests, newest first, and counts apart the runs whose pull request is not known", () => {
+    const v = testVerdict(S, [seen({ job: "2", pr: 475 }), seen({ job: "3", pr: null }), seen({ job: "4", pr: null }), seen({ job: "1", pr: 482 })], me);
+    expect(v).toEqual({ kind: "others", prs: 1, nums: [475], unknown: 2 });
+  });
+  test("runs whose pull request is unknown say nothing on their own: still this PR", () => {
+    expect(testVerdict(S, [seen({ job: "3", pr: null })], me)).toEqual({ kind: "this-pr" });
   });
   test("another test's failure on another PR is not this one's", () => {
     expect(testVerdict(S, [seen({ job: "2", pr: 475, signature: "orbit board > x :: y" })], me)).toEqual({ kind: "this-pr" });
@@ -37,6 +44,9 @@ describe("words", () => {
     expect(verdictLabel({ kind: "flaky" })).toBe("Flaky test");
     expect(verdictLabel({ kind: "others", prs: 3 })).toBe("Also failed on 3 other PRs");
     expect(verdictLabel({ kind: "others", prs: 1 })).toBe("Also failed on 1 other PR");
+    expect(verdictLabel({ kind: "others", prs: 1, nums: [475] })).toBe("Also failed on #475");
+    expect(verdictLabel({ kind: "others", prs: 1, nums: [475], unknown: 1 })).toBe("Also failed on 1 other PR");
+    expect(verdictLabel({ kind: "others", prs: 2, nums: [475, 471] })).toBe("Also failed on 2 other PRs");
     expect(verdictLabel({ kind: "this-pr" }, 482)).toBe("This PR only · #482");
     expect(verdictLabel({ kind: "once" })).toBe("Seen once");
   });

@@ -30,8 +30,8 @@ import { onAppBack } from "../lib/desktop.ts";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { diffSplit, diffWrap, diffNoWhitespace, setDiffNoWhitespace } from "../lib/diffPrefs.ts";
 import { Portal } from "./Portal.tsx";
-import { CheckFailuresPanel } from "./CheckFailures.tsx";
-import { failureRowText, jobFor } from "../lib/checkFailures.ts";
+import { CheckFailuresPanel, type PrRefs } from "./CheckFailures.tsx";
+import { failedInRun, failureRowText, jobFor } from "../lib/checkFailures.ts";
 import { failureKey, loadCached, readOf, summaryOf, useFailureStore } from "../lib/checkFailuresStore.ts";
 import { MergeBox } from "./MergeBox.tsx";
 import { mergePath, type PathAction } from "../../../shared/mergePath.ts";
@@ -75,7 +75,7 @@ import { buildFileTree, treeOrder, type TreeNode } from "../lib/prFileTree.ts";
 import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
 import { BOARD_ASK_MS, listOutcome, type ListOutcome } from "../lib/boardFace.ts";
 import { keepLoadedChecks } from "../lib/prMerge.ts";
-import { applyFilter, checkLabel, checkSpan, checkStatusLine, checkVerdict, filterCounts, formatSpan, sectionChecks, shortName, slowest, spanShare, usualTick, usualTip, verdictHero, workflowCards, type CheckFilter } from "../lib/prChecksList.ts";
+import { applyFilter, checkLabel, checkRowId, checkSpan, checkStatusLine, checkVerdict, filterCounts, formatSpan, sectionChecks, shortName, slowest, spanShare, usualTick, usualTip, verdictHero, workflowCards, type CheckFilter } from "../lib/prChecksList.ts";
 import { askingBehind, behindAnswer, forgetBehind, forgetOneBehind, onBehind, refreshBehind } from "../lib/prBehindStore.ts";
 import { refreshRollup } from "../lib/prRollupStore.ts";
 import { detailWithChecks, rowWithChecks, overlayDetail, reopenedRow, holdReopened, reopenKey, holdEdits, refreshPlan, rowPatch, landedDetail, dropLanded, staleOpen, once, type EditLog, type Landed, type Reopened } from "../lib/prRefresh.ts";
@@ -5443,6 +5443,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 {tab === "checks" && (
                   <Checks
                     d={d} root={root} jobs={jobs} busy={busy} busyWhat={busyWhat}
+                    prRefs={{ repo: repo?.nameWithOwner ?? "", titleOf: (n) => prs.find((p) => p.number === n)?.title, changed: { paths: d.files.map((f) => f.path), complete: !d.truncated?.files } }}
                     onRerun={() => act("Re-run checks", () => api.prRerun(root, d.number))}
                     onRerunJobs={(what, id) => act("Re-run", () => api.prRerunJobs(root, what, id))}
                     onAsk={onOpenChatWith ? (k) => askClaudeAboutCheck(k) : undefined}
@@ -12164,7 +12165,7 @@ function durationTint(k: PrCheck, v: ReturnType<typeof checkVerdict>): string {
     : "color-mix(in srgb, var(--text3) 55%, transparent)";
 }
 
-export function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyWhat }: { d: PrDetail; root: string; jobs: PrCheckJob[]; onRerun: () => void; onRerunJobs?: (what: "all" | "failed" | "job", id: string) => void; onAsk?: (check: PrCheck) => void; busy: boolean;
+export function Checks({ d, root, jobs, prRefs, onRerun, onRerunJobs, onAsk, busy, busyWhat }: { d: PrDetail; root: string; jobs: PrCheckJob[]; prRefs?: PrRefs; onRerun: () => void; onRerunJobs?: (what: "all" | "failed" | "job", id: string) => void; onAsk?: (check: PrCheck) => void; busy: boolean;
   /** Which request is in flight, so the button that started it is the one that
    *  spins — see Btn `pending`. */
   busyWhat?: string }) {
@@ -12206,9 +12207,15 @@ export function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyW
     return s ? failureRowText(s) : null;
   };
 
+  // An aggregator job names the jobs it reports; pressing one opens that check's detail and brings its row into view.
+  const openSibling = (id: string) => {
+    setOpenCheck(id);
+    requestAnimationFrame(() => document.querySelector(`[data-check-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "nearest" }));
+  };
+
   const row = (k: PrCheck, i: number, full: boolean) => {
     const bad = k.state === "failure";
-    const id = `${checkLabel(k)}::${k.url ?? i}`;
+    const id = checkRowId(k, i);
     const expanded = bad && openCheck === id;
     const quiet = k.state === "skipped" || k.state === "neutral";
     const share = spanShare(k, slowMs);
@@ -12223,7 +12230,7 @@ export function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyW
     // the job; pinned above the cards it has to say both.
     const name = full ? `${k.workflow ? `${k.workflow} / ` : ""}${shortName(k)}` : shortName(k);
     return (
-      <div key={id} style={{ borderTop: LINE, background: bad ? "color-mix(in srgb, var(--error) 7%, transparent)" : undefined }}>
+      <div key={id} data-check-id={id} style={{ borderTop: LINE, background: bad ? "color-mix(in srgb, var(--error) 7%, transparent)" : undefined }}>
         <div className="flex items-center gap-2 px-2.5 py-1.5" style={{ minHeight: CTRL_H.regular }}>
           {/* A failing check is the one row on this tab you came for, so it is
               the one row that opens into somewhere to go next. */}
@@ -12276,7 +12283,8 @@ export function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyW
         )}
         {/* The log, here. It used to say "the log lives on GitHub" and send you
             to a browser for the one thing you opened the check to read. */}
-        {expanded && <CheckFailuresPanel root={root} check={k} job={jobFor(k, jobs)} />}
+        {expanded && <CheckFailuresPanel root={root} check={k} job={jobFor(k, jobs)}
+          sameRun={failedInRun(k, d.checksAll).map((o) => ({ label: shortName(o), open: () => openSibling(checkRowId(o)) }))} refs={prRefs} />}
         {expanded && <JobLog root={root} name={k.name} jobs={jobs} />}
       </div>
     );

@@ -114,6 +114,50 @@ describe("pytest", () => {
   });
 });
 
+// The tail of a pytest-xdist run that printed no FAILURES block (-rf --tb=no): the only place the test is named is the
+// short summary, after warning noise and a `-- Docs:` line, and the verdict line has a single `=` each side.
+const PYTEST_SUMMARY_ONLY = stamp(`[gw0] [ 40%] PASSED evals/test_cards.py::CardEvals::test_lane_order
+[gw1] [ 41%] FAILED evals/test_cards.py::CardEvals::test_ranking_stays_stable
+[gw0] [ 42%] PASSED evals/test_cards.py::CardEvals::test_titles
+=============================== warnings summary ===============================
+evals/test_cards.py::CardEvals::test_titles
+  /app/.venv/lib/python3.12/site-packages/orbit/compat.py:12: DeprecationWarning: use lanes() instead
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED evals/test_cards.py::CardEvals::test_ranking_stays_stable - AssertionError: expected at least 0.8 of 12 cases to pass, got 0.58 (7 of 12) when the board was ranked by age and then by the number of comments left on it
+ERROR evals/test_boards.py - ImportError: cannot import name 'lanes'
+= 1 failed, 241 passed, 3 warnings in 412.33s (0:06:52) =
+##[error]Process completed with exit code 1.`);
+
+describe("pytest without a FAILURES block", () => {
+  const r = extractFailures(PYTEST_SUMMARY_ONLY, { step: "Run evals" });
+  test("the short summary names the test; the log is not treated as unnamed", () => {
+    expect(r.framework).toBe("pytest");
+    expect(r.failures.map((f) => f.title)).toEqual(["CardEvals.test_ranking_stays_stable", "evals/test_boards.py"]);
+  });
+  test("the xdist progress line is not a second copy of the failure", () => {
+    expect(r.failures).toHaveLength(2);
+  });
+  test("the excerpt is the whole summary line, path included", () => {
+    expect(r.failures[0]!.excerpt).toStartWith("FAILED evals/test_cards.py::CardEvals::test_ranking_stays_stable - AssertionError");
+    expect(r.failures[0]!.excerpt).toContain("number of comments");
+  });
+  test("the signature matches the one the FAILURES block gives the same test", () => {
+    const withBlock = extractFailures(stamp(`=== FAILURES ===
+___ CardEvals.test_ranking_stays_stable ___
+E       AssertionError: expected at least 0.8 of 12 cases to pass, got 0.58 (7 of 12) when the board was ranked by age
+=== short test summary info ===
+FAILED evals/test_cards.py::CardEvals::test_ranking_stays_stable - AssertionError: expected at least 0.8 of 12 cases to pass, got 0.58 (7 of 12) when the board was ranked by age
+= 1 failed in 1.00s =`));
+    expect(r.failures[0]!.signature.slice(0, 100)).toBe(withBlock.failures[0]!.signature.slice(0, 100));
+  });
+  test("an unterminated summary (a log cut short) still names what it has", () => {
+    const cut = extractFailures("=== short test summary info ===\nFAILED t/test_a.py::test_one - boom");
+    expect(cut.failures.map((f) => f.title)).toEqual(["test_one"]);
+  });
+});
+
 const DJANGO = stamp(`Found 12 test(s).
 ======================================================================
 FAIL: test_ordering (orbit.tests.test_cards.CardTests.test_ordering)
@@ -128,6 +172,52 @@ Ran 12 tests in 1.2s
 
 FAILED (failures=1)
 ##[error]Process completed with exit code 1.`);
+
+// Django's runner with timings (`--timing`/verbosity 2) writes `FAIL [0.002s]: …`, and a parallel run prefixes
+// each progress line with its database: the header's shape is what the parser keys on, so it must not need the bare form.
+const DJANGO_TIMED = stamp(`Found 4 test(s).
+[DB-test_orbit_db_4] test_lane_order (orbit.tests.test_cards.CardTests.test_lane_order) ... ok (0.191s)
+[DB-test_orbit_db_2] test_ordering (orbit.tests.test_cards.CardTests.test_ordering) ... FAIL (0.002s)
+[DB-test_orbit_db_3] test_sync (orbit.tests.test_sync.SyncTests.test_sync) ... ERROR (0.010s)
+
+======================================================================
+FAIL [0.002s]: test_ordering (orbit.tests.test_cards.CardTests.test_ordering)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/orbit/tests/test_cards.py", line 40, in test_ordering
+    self.assertEqual(cards, [1, 2])
+AssertionError: Lists differ: [2, 1] != [1, 2]
+
+======================================================================
+ERROR [0.010s]: test_sync (orbit.tests.test_sync.SyncTests.test_sync)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/orbit/tests/test_sync.py", line 12, in test_sync
+    raise TimeoutError("took 3.2s")
+TimeoutError: took 3.2s
+
+----------------------------------------------------------------------
+Ran 4 tests in 1.2s
+
+FAILED (failures=1, errors=1)
+##[error]Process completed with exit code 1.`);
+
+describe("django with timings", () => {
+  const r = extractFailures(DJANGO_TIMED);
+  test("FAIL [0.002s]: and ERROR [0.010s]: name their tests", () => {
+    expect(r.framework).toBe("django");
+    expect(r.failures.map((f) => f.title)).toEqual(["test_ordering (orbit.tests.test_cards.CardTests.test_ordering)", "test_sync (orbit.tests.test_sync.SyncTests.test_sync)"]);
+  });
+  test("each block is its own traceback, not the progress lines above it", () => {
+    expect(r.failures[0]!.excerpt).toContain("AssertionError: Lists differ");
+    expect(r.failures[0]!.excerpt).not.toContain("DB-test_orbit_db");
+    expect(r.failures[1]!.excerpt).toContain("TimeoutError: took 3.2s");
+  });
+  test("the timing is not part of the identity: the same failure with another time is the same signature", () => {
+    const again = extractFailures(DJANGO_TIMED.replace(/0\.002s/g, "0.250s"));
+    expect(again.failures[0]!.signature).toBe(r.failures[0]!.signature);
+  });
+});
 
 describe("django", () => {
   test("a FAIL block runs to the closing rule, not into 'Ran N tests'", () => {

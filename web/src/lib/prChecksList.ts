@@ -18,6 +18,9 @@ export function checkLabel(k: PrCheck): string {
   return k.event ? `${base} (${k.event})` : base;
 }
 
+/** One row's identity on the Checks tab: its label and its link, the index only for a check that has none. */
+export const checkRowId = (k: PrCheck, i = 0): string => `${checkLabel(k)}::${k.url ?? i}`;
+
 /** 42s, 5m, 1h 2m. Under a second is "1s": a check that took no time still ran. */
 export function formatSpan(ms: number): string {
   const s = Math.max(1, Math.round(ms / 1000));

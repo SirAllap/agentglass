@@ -65,9 +65,9 @@ export function ContextMenu({ x, y, onClose, children }: { x: number; y: number;
   );
 }
 
-export function MenuItem({ onClick, danger, children }: { onClick: () => void; danger?: boolean; children: ReactNode }) {
+export function MenuItem({ onClick, danger, autoFocus, children }: { onClick: () => void; danger?: boolean; autoFocus?: boolean; children: ReactNode }) {
   return (
-    <button role="menuitem" onClick={onClick}
+    <button role="menuitem" onClick={onClick} autoFocus={autoFocus}
       className="px-2 py-1.5 rounded-lg text-left hover:bg-white/5 transition-colors"
       style={{ color: danger ? "var(--error)" : "var(--text2)" }}>
       {children}

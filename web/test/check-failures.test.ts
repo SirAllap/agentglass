@@ -5,8 +5,8 @@
  * renderer in this project.
  */
 import { describe, expect, test } from "bun:test";
-import type { CheckFailures, CiFailure } from "../../shared/types.ts";
-import { failureGist, failureRowText, failureView, failureCopyText, formatBytes, jobFor, logAgeDays, plural, readLine, resetClock } from "../src/lib/checkFailures.ts";
+import type { CheckFailures, CiFailure, PrCheck } from "../../shared/types.ts";
+import { failedInRun, fileFact, fileFactLabel, isAggregator, testFiles, othersShape, unknownPrs, failureGist, failureRowText, failureView, failureCopyText, formatBytes, jobFor, logAgeDays, plural, readLine, resetClock } from "../src/lib/checkFailures.ts";
 import { makeFailureStore } from "../src/lib/checkFailuresStore.ts";
 
 const F = (title: string, excerpt: string, kind: CiFailure["kind"] = "bun"): CiFailure => ({ kind, title, excerpt, signature: `${title} :: x`, truncated: false });
@@ -187,8 +187,14 @@ describe("the screen, against its source", () => {
     expect(src).toMatch(/useEffect\(\(\) => \{ void load\(root, job\.id, hints\); \}, \[root, job\.id\]\)/);
   });
   test("the panel is mounted for every expanded failed check, with or without a job: it always says something", () => {
-    expect(prPanel).toContain("{expanded && <CheckFailuresPanel root={root} check={k} job={jobFor(k, jobs)} />}");
+    expect(prPanel).toMatch(/\{expanded && <CheckFailuresPanel root=\{root\} check=\{k\} job=\{jobFor\(k, jobs\)\}\s+sameRun=\{failedInRun\(k, d\.checksAll\)/);
     expect(src).toContain("This check does not say which job ran it");
+  });
+  test("an aggregator says what it is and names the failed jobs; the raw tail stays one click away", () => {
+    for (const w of ["This job only reports the others", "Failed in this run:", "Show the end of the step", "Reports the others"]) expect(src).toContain(w);
+    // the names open that check's detail, in this tab: the panel is handed the opener, it does not reach for the row itself
+    expect(src).toContain("onClick={k.open}");
+    expect(prPanel).toContain("openSibling(checkRowId(o))");
   });
   test("every state in the mockup has its words", () => {
     for (const w of ["GitHub holds no log for this job", "Nothing to read", "Open on GitHub", "Posted by an app", "This check has no log", "Log expired", "Too large", "No test named", "Budget spent", "Read it anyway", "Reading the log…", "GitHub no longer has this log", "GitHub’s hourly budget is used up", "The log names no failing test"]) expect(src).toContain(w);
@@ -197,5 +203,90 @@ describe("the screen, against its source", () => {
     expect(code(src)).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgb\(|var\(--bg2\)/);
     expect(src).toContain("var(--surface-card)");
     expect(src).toContain("var(--surface-inset)");
+  });
+});
+
+describe("a job that only reports the others", () => {
+  const sum = (excerpt: string) => F("summary", excerpt, "step");
+  test("the sentence and the exit code, and nothing else, is an aggregator", () => {
+    expect(isAggregator(sum("One or more jobs failed or were cancelled\n##[error]Process completed with exit code 1."))).toBe(true);
+    expect(isAggregator(sum("Some jobs were cancelled\nProcess completed with exit code 1."))).toBe(true);
+  });
+  test("one more line, or a named test, is not", () => {
+    expect(isAggregator(sum("One or more jobs failed or were cancelled\nlint: 3 problems\nProcess completed with exit code 1."))).toBe(false);
+    expect(isAggregator(sum("Process completed with exit code 1."))).toBe(true);
+    expect(isAggregator(F("t", "Process completed with exit code 1.", "bun"))).toBe(false);
+    expect(isAggregator(sum(""))).toBe(false);
+  });
+  const K = (name: string, run: string, job: string, state: PrCheck["state"] = "failure", more: Partial<PrCheck> = {}): PrCheck =>
+    ({ name, workflow: "ci", state, done: true, url: `https://github.com/acme/orbit/actions/runs/${run}/job/${job}`, ...more });
+  test("the failed checks of the same run, not itself, not another run, not a pass or a cancel", () => {
+    const me = K("summary", "10", "1");
+    const all = [me, K("server tests", "10", "2"), K("web tests", "10", "3"), K("lint", "10", "4", "success"), K("e2e", "11", "5"), K("smoke", "10", "6", "failure", { cancelled: true })];
+    expect(failedInRun(me, all).map((k) => k.name)).toEqual(["server tests", "web tests"]);
+  });
+  test("a check with no run in its link names none", () => {
+    expect(failedInRun({ url: "https://example.com/x" }, [K("a", "10", "2")])).toEqual([]);
+    expect(failedInRun({}, [K("a", "10", "2")])).toEqual([]);
+  });
+});
+
+describe("which pull request a failure also failed on", () => {
+  test("one known pull request is a chip that opens it; several, or one plus an unknown run, are a list", () => {
+    expect(othersShape({ nums: [475] })).toEqual({ kind: "one", n: 475 });
+    expect(othersShape({ nums: [475, 471] })).toEqual({ kind: "list", nums: [475, 471], unknown: 0 });
+    expect(othersShape({ nums: [475], unknown: 1 })).toEqual({ kind: "list", nums: [475], unknown: 1 });
+  });
+  test("a verdict kept before the numbers existed names none: words only, never a guess", () => {
+    expect(othersShape({})).toEqual({ kind: "plain" });
+    expect(othersShape({ nums: [], unknown: 2 })).toEqual({ kind: "plain" });
+  });
+  test("the unknown runs are said, singular and plural", () => {
+    expect(unknownPrs(1)).toBe("1 more, PR unknown");
+    expect(unknownPrs(3)).toBe("3 more, PRs unknown");
+  });
+  test("the screen opens a pull request inside the app, from the chip and from every row of the list", () => {
+    const code = (t: string) => t.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+    expect(code(src)).toContain("openPr(refs.repo, shape.n)");
+    expect(code(src)).toContain("openPr(refs.repo, n)");
+    expect(code(src)).not.toMatch(/window\.open|target="_blank"[^>]*pull/);
+    expect(prPanel).toContain("refs={prRefs}");
+  });
+});
+
+describe("is the failing test's file in this pull request's diff", () => {
+  const all = (...paths: string[]) => ({ paths, complete: true });
+  const py = F("TestBoard.test_lane_count", "FAILED tests/test_board.py::TestBoard::test_lane_count - assert 5 == 4", "pytest");
+  const pyBlock = F("TestBoard.test_lane_count", "E  assert 5 == 4\n\ntests/test_board.py:12: AssertionError", "pytest");
+  const bun = F("orbit board > keeps four lanes", "      at <anonymous> (/home/runner/work/orbit/orbit/server/test/board.test.ts:99:30)", "bun");
+  const dj = F("test_ordering (orbit.tests.test_cards.CardTests.test_ordering)", "AssertionError: Lists differ", "django");
+  test("where each runner puts the file", () => {
+    expect(testFiles(py)).toEqual(["tests/test_board.py"]);
+    expect(testFiles(pyBlock)).toEqual(["tests/test_board.py"]);
+    expect(testFiles(bun)).toEqual(["/home/runner/work/orbit/orbit/server/test/board.test.ts"]);
+    // class and method are unknown to us, so the module is the dotted name minus two parts, or minus one (a module-level test)
+    expect(testFiles(dj)).toEqual(["orbit/tests/test_cards.py", "orbit/tests/test_cards/CardTests.py"]);
+    expect(testFiles(F("Smoke", "Process completed with exit code 7.", "step"))).toEqual([]);
+  });
+  test("changed: a log's absolute path and the diff's relative one are the same file", () => {
+    expect(fileFact(bun, all("server/test/board.test.ts"))).toEqual({ kind: "changed", path: "/home/runner/work/orbit/orbit/server/test/board.test.ts" });
+    expect(fileFact(py, all("backend/tests/test_board.py"))).toEqual({ kind: "changed", path: "tests/test_board.py" });
+    expect(fileFact(dj, all("backend/orbit/tests/test_cards.py"))).toMatchObject({ kind: "changed" });
+  });
+  test("a name that merely ends alike is not the file", () => {
+    expect(fileFact(py, all("backend/xtests/test_board.py"))).toEqual({ kind: "untouched", path: "tests/test_board.py" });
+  });
+  test("not in the diff is said only when the whole diff was loaded", () => {
+    expect(fileFact(py, all("README.md"))).toEqual({ kind: "untouched", path: "tests/test_board.py" });
+    expect(fileFact(py, { paths: ["README.md"], complete: false })).toBeNull();
+    expect(fileFact(py, { paths: ["tests/test_board.py"], complete: false })).toMatchObject({ kind: "changed" });
+  });
+  test("no file named, or no diff to compare: no fact", () => {
+    expect(fileFact(F("Smoke", "Process completed with exit code 7.", "step"), all("a.py"))).toBeNull();
+    expect(fileFact(py, undefined)).toBeNull();
+  });
+  test("the words say what was seen", () => {
+    expect(fileFactLabel({ kind: "changed", path: "a" })).toBe("Test file changed in this PR");
+    expect(fileFactLabel({ kind: "untouched", path: "a" })).toBe("Test file not in this PR’s diff");
   });
 });
