@@ -321,9 +321,9 @@ addSource({
      *
      * Measured, and that is why this is here rather than left to the route: the
      * first live call with an open-project checkout available picked a card
-     * from his company's tracker as the next task. The route would have
+     * from a work tracker as the next task. The route would have
      * refused it for having no repository, so nothing would have run. But a
-     * loop whose SELECTION lands on his company's work is one nobody should
+     * loop whose SELECTION lands on work-account work is one nobody should
      * have to trust the next fence to catch, and the day somebody teaches cards
      * to carry a repository that last fence stops applying.
      */

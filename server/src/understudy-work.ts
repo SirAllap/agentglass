@@ -25,7 +25,7 @@
  * WHAT STILL BOUNDS IT. The shift — how long, how much, and stop on failure.
  * The halt, which now reaches the actuator. And the repository allow-list,
  * which starts at the open project because an error there costs a worktree and
- * an error in his company's repository costs something else entirely.
+ * an error in a work repository costs something else entirely.
  */
 import { createHash } from "node:crypto";
 import type { UnderstudyWorkItem, UnderstudyWorkRun } from "../../shared/types.ts";
@@ -410,7 +410,7 @@ export function brief(
    * forty rules were HTTP API guidance out of a third-party skill — idempotency
    * keys, cursor pagination, a sacred duty to downstream consumers — in a task
    * about naming a git branch. The rule that says never to create a worktree
-   * or a branch in his company's repository sits at index 727 of 1,239, so no
+   * or a branch in a work repository sits at index 727 of 1,239, so no
    * run has ever been sent it.
    *
    * `ask` already does this properly for the panel: rules that share a word

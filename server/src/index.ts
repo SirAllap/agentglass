@@ -4078,7 +4078,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      *
      * Deliberately its own route rather than a field on some larger settings
      * body: this is the switch that decides whether the understudy may draft a
-     * request against his company's repository, and a setting like that should
+     * request against a work repository, and a setting like that should
      * be a thing somebody did, not a field that rode along with something else.
      */
     /*

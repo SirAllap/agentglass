@@ -7,7 +7,7 @@
  * the user's own name, and `isOpenProjectPath` is a SEGMENT test: it then
  * matched `/home/you/anything`.
  *
- * The fence listed thirty checkouts of his company's work. Measured, not
+ * The fence listed thirty checkouts of work-account projects. Measured, not
  * imagined: `/understudy/work/ask` returned them.
  *
  * A fence that cannot tell where it is has one safe answer and it is not a
