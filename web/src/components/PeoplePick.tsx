@@ -43,6 +43,10 @@ export interface PeoplePickProps {
   /** Drawn for each row: the app's own face, whichever component that is where
    *  this is used. */
   face: (m: ListMember) => ReactNode;
+  /** A few words after a name, for why somebody is up the list ("pull request author · on the card"). */
+  note?: (m: ListMember) => string | undefined;
+  /** After the list, outside the scroll: a choice that is not a person ("Nobody"). */
+  footer?: ReactNode;
   /** Below this many names the filter box is noise. */
   filterOver?: number;
   empty?: string;
@@ -100,6 +104,7 @@ export function PeoplePick(p: PeoplePickProps) {
                   style={{ color: on ? "var(--success)" : "var(--text2)" }}>
                   {m.name}{m.me ? " · you" : ""}
                 </span>
+                {p.note?.(m) && <span className="shrink-0 text-[10px]" style={{ color: "var(--text3)" }}>{p.note(m)}</span>}
                 {saving
                   ? <span className="agx-spin shrink-0" aria-label="Applying" style={{ width: 10, height: 10, borderWidth: 1.5, borderColor: "var(--text3)", borderTopColor: "transparent" }} />
                   : on ? <span className="flex" style={{ color: "var(--success-ink)" }}><DoneIcon size={ICON.xs} /></span> : null}
@@ -110,6 +115,7 @@ export function PeoplePick(p: PeoplePickProps) {
         {!p.busy && !shown.length && all.length > 0 && (
           <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>Nobody matches that.</div>
         )}
+        {p.footer && <div className="mt-1 pt-1" style={{ borderTop: LINE }}>{p.footer}</div>}
       </div>
     </Portal>
   );

@@ -84,7 +84,7 @@ describe("the old shape still reads and still writes", () => {
   test("an old key saved on its own rewrites the blocks from it, so the two never disagree", () => {
     save({ handoff: { enabled: true, blocks: [{ type: "move", statusNames: ["qa"] }, { type: "assign", who: "me" }] } });
     save({ handoff: { unassign: "all" } });
-    expect(P.clickupPrefs().handoff.blocks).toEqual([{ type: "move", statusNames: ["qa"] }, { type: "unassign", who: "all" }, { type: "assign", who: "me" }]);
+    expect(P.clickupPrefs().handoff.blocks).toEqual([{ type: "move", statusNames: ["qa"] }, { type: "assign", who: "me" }, { type: "unassign", who: "all" }]); // the order the person gave stays, the new kind follows
   });
   test("old keys edited by hand to disagree with the blocks: the blocks win, the step is not lost", () => {
     save({ handoff: { enabled: true, blocks: [{ type: "move", statusNames: ["qa"] }, { type: "assign", who: "me" }] } });
@@ -105,5 +105,36 @@ describe("the old shape still reads and still writes", () => {
     expect(P.settleFirstRun(true)).toBe("seeded");
     P.__setPrefsPath(file);
     expect(P.clickupPrefs().handoff.blocks).toEqual([{ type: "move", statusNames: [], fallback: true }, { type: "unassign", who: "all" }]);
+  });
+});
+
+describe("a block that asks when it runs", () => {
+  test("is saved with its starting choice, and the old keys see no assignment", () => {
+    expect(save({ merge: { enabled: true, blocks: [{ type: "move", statusNames: ["done"] }, { type: "assign", ask: true, who: "author" }] } }).ok).toBe(true);
+    P.__setPrefsPath(file);
+    const g = P.clickupPrefs().merge;
+    expect(g.blocks).toEqual([{ type: "move", statusNames: ["done"] }, { type: "assign", ask: true, who: "author" }]);
+    expect(g).toMatchObject({ statusNames: ["done"], assign: { who: "none" } });
+  });
+  test("nobody is a starting choice only for a block that asks", () => {
+    expect(save({ handoff: { enabled: true, blocks: [{ type: "assign", ask: true, who: "none" }] } }).ok).toBe(true);
+    const r = save({ handoff: { blocks: [{ type: "assign", who: "none" }] } });
+    expect(r.ok).toBe(false);
+  });
+  test("a move can ask, and taking people off cannot yet", () => {
+    expect(save({ handoff: { enabled: true, blocks: [{ type: "move", statusNames: ["qa"], ask: true }] } }).ok).toBe(true);
+    P.__setPrefsPath(file);
+    expect(P.clickupPrefs().handoff.blocks).toEqual([{ type: "move", statusNames: ["qa"], ask: true }]);
+    const r = save({ handoff: { blocks: [{ type: "unassign", who: "me", ask: true }] } });
+    expect(r.ok).toBe(false);
+    expect((r as { error: string }).error).toMatch(/does not ask when it runs/);
+    expect(save({ handoff: { blocks: [{ type: "assign", ask: "yes", who: "me" }] } }).ok).toBe(false);
+  });
+  test("a save that only knows the old keys does not drop the question", () => {
+    save({ handoff: { enabled: true, blocks: [{ type: "move", statusNames: ["qa"], ask: true }, { type: "assign", ask: true, who: "me" }] } });
+    save({ handoff: { unassign: "all" } });
+    expect(P.clickupPrefs().handoff.blocks).toEqual([{ type: "move", statusNames: ["qa"], ask: true }, { type: "assign", ask: true, who: "me" }, { type: "unassign", who: "all" }]);
+    save({ handoff: { assign: { who: "author" } } });
+    expect(P.clickupPrefs().handoff.blocks!.filter((b) => b.type === "assign")).toEqual([{ type: "assign", who: "author" }]);
   });
 });

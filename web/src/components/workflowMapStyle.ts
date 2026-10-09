@@ -119,6 +119,10 @@ export const WFM_CSS = `
 .wfm-opt[data-add]{align-items:flex-start;padding:8px;gap:12px}.wfm-opt .n.wfm-blkopt{display:flex;flex-direction:column;gap:2px}
 .wfm-opt[aria-disabled=true]{cursor:not-allowed}.wfm-opt[aria-disabled=true]:hover{background:transparent}
 .wfm-opt[aria-disabled=true] .wfm-gl{color:var(--text3)}.wfm-opt[aria-disabled=true] .n>b{color:var(--text3)}
+.wfm-ask{align-self:flex-start;margin-top:4px;height:24px;padding:0 8px;border-radius:12px;border:0;background:transparent;box-shadow:inset 0 0 0 1px var(--w-edge);color:var(--text3);font-size:11px;font-weight:600;white-space:nowrap;cursor:pointer;transition:background .12s,color .12s,box-shadow .12s}
+.wfm-ask:hover{background:var(--w-wash);color:var(--text)}
+.wfm-ask[aria-pressed=true]{background:var(--w-wash2);color:var(--primary-ink);box-shadow:inset 0 0 0 1px var(--primary)}
+.wfm-ask:disabled{opacity:.5;cursor:not-allowed}
 .wfm-why{font-size:11px;color:var(--warning-ink)}
 .wfm-mom[aria-disabled=true]{opacity:.6;cursor:not-allowed}.wfm-mom[aria-disabled=true]:hover{border-color:var(--w-edge);background:var(--bg)}
 .wfm-hlx{background:var(--w-wash2)!important;box-shadow:0 0 0 2px var(--primary)!important;border-radius:6px}

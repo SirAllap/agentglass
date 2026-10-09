@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { Select } from "./Select.tsx";
+import { AssignPicker, useAskAssign } from "./AssignPicker.tsx";
+import { planOf } from "../../../shared/stepBlocks.ts";
 import { StatusPill } from "./StatusPill.tsx";
 import { Spinner } from "./Spinner.tsx";
 import { MERGE_OPTION, mergeBody, mergeSubject, type MergeMethod, type MergeCommit } from "../../../shared/mergeMethod.ts";
@@ -129,7 +131,12 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
   const mergeAssign = mergePrefs?.assign;
   const assignKey = JSON.stringify(mergeAssign ?? null);
   /* Who "Also assign" means for this card, worked out while the form opens so the press itself is one write. */
-  const [ensure, setEnsure] = useState<Ensure>({ kind: "none" });
+  const [fixedEnsure, setEnsure] = useState<Ensure>({ kind: "none" });
+  /* An assign block that asks when it runs: the picker starts where Settings says and the person chooses here. */
+  const askAssign = mergePrefs ? planOf("merge", mergePrefs).askAssign : null;
+  const readyCard = card.kind === "ready" ? card.card : null;
+  const asked = useAskAssign({ on: mergeOn && !!askAssign && !!readyCard, ...(readyCard?.listId ? { listId: readyCard.listId } : null), ...(askAssign ? { start: askAssign } : null), author: pending?.author ?? null, onCard: readyCard?.people });
+  const ensure: Ensure = askAssign ? asked.ensure : fixedEnsure;
   const subjectRef = useRef<HTMLInputElement>(null);
   const rebase = pending?.method === "rebase";
 
@@ -181,7 +188,7 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
       if (!alive()) return;
       setEnsure(resolveEnsure(mergeAssign, { author: pending?.author, members: team?.ok ? (team.members ?? []) : null }));
       const move: CardMove = {
-        id: task.id, label: ref.label, title: task.title,
+        id: task.id, label: ref.label, title: task.title, ...(task.listId ? { listId: task.listId } : null),
         status: task.status, statusColor: task.statusColor, updated: task.updated,
         statuses: meta?.ok ? (meta.statuses ?? []) : [],
         people: task.people ?? [],
@@ -448,6 +455,11 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
                               })),
                             ]}
                           />
+                        )}
+                        {card.kind === "ready" && movesCard(card.card.status, status) && askAssign && (
+                          <span className="basis-full flex items-center gap-2 text-[10.5px]" data-merge-ask="" style={{ color: "var(--text3)" }}>
+                            <span>Assign to</span><AssignPicker state={asked} label="Assign to" />
+                          </span>
                         )}
                         {card.kind === "ready" && movesCard(card.card.status, status) && ensure.kind !== "none" && (
                           <span className="basis-full text-[10.5px]" data-merge-assign="" role="status"

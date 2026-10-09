@@ -25,12 +25,14 @@ import { EDGE } from "./workspace/Chrome.tsx";
 
 const ITEMS = '[role="menuitem"]:not(:disabled)';
 
-export function AnchoredMenu({ anchor, align = "right", minWidth = 216, placeKey, onClose, children }: {
+export function AnchoredMenu({ anchor, align = "right", minWidth = 216, placeKey, focus, onClose, children }: {
   anchor: RefObject<HTMLElement | null>;
   align?: "left" | "right";
   minWidth?: number;
   /** Changes when the list's content (and so its height) does, so it is placed again against its trigger. */
   placeKey?: string | number;
+  /** What takes focus when it opens, when that is not the first item (a search box over the list). */
+  focus?: string;
   onClose: () => void;
   children: ReactNode;
 }) {
@@ -54,7 +56,9 @@ export function AnchoredMenu({ anchor, align = "right", minWidth = 216, placeKey
 
   // Visible now, so it can take focus; a hidden element cannot.
   useEffect(() => {
-    if (pos) ref.current?.querySelector<HTMLElement>(ITEMS)?.focus({ preventScroll: true });
+    if (!pos) return;
+    const first = (focus ? ref.current?.querySelector<HTMLElement>(focus) : null) ?? ref.current?.querySelector<HTMLElement>(ITEMS);
+    first?.focus({ preventScroll: true });
   }, [pos === null]);
 
   useEffect(() => {

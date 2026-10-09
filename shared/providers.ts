@@ -569,10 +569,17 @@ export interface StepAssign {
  * A step is sent to the tracker as one write whatever its blocks.
  */
 export type StepBlock =
-  /** Move the card. No names with `fallback` is the built-in guess; with neither, a status still to be picked. */
-  | { type: "move"; statusNames: string[]; fallback?: boolean }
+  /**
+   * Move the card. No names with `fallback` is the built-in guess; with neither, a status still to be picked.
+   * With `ask` the names are the starting choice, and the person picks the status when it runs.
+   */
+  | { type: "move"; statusNames: string[]; fallback?: boolean; ask?: true }
   | { type: "unassign"; who: HandoffUnassign }
-  | ({ type: "assign" } & StepAssign);
+  /**
+   * Assign the card. With `ask` the person is picked when it runs, and `who` is where the picker starts
+   * (`none` is "nobody"; without `ask` that is not a block, it is the absence of one).
+   */
+  | ({ type: "assign"; ask?: true } & StepAssign);
 
 export interface HandoffConfig {
   /** Off until a workspace says it has a QA column. */

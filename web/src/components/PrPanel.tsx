@@ -66,6 +66,7 @@ import { confirmMergeGuard } from "../lib/mergeGuard.ts";
 import { useMergeDialog } from "./MergeDialog.tsx";
 import { authorOf, assignedNote, ensureId, resolveEnsure, stepChanges, type Ensure, type PrAuthor } from "../lib/stepAssign.ts";
 import { blocksOf, planOf, touchesPeople } from "../../../shared/stepBlocks.ts";
+import { AssignPicker, useAskAssign } from "./AssignPicker.tsx";
 import { blocksSentence, peopleButtonLabel } from "../lib/stepBlocksView.ts";
 import { mergeCardRef, mergeNote, statusColor, readyForQaStatus, reviewStatus, cardNoteText, whoToTell } from "../lib/cardMove.ts";
 import { useClickupPrefs, clickupPrefs } from "../lib/clickupPrefs.ts";
@@ -7424,10 +7425,14 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
    */
   const assignPref = menuPlan?.assign;
   const author = useMemo(() => authorOf(d), [d.author, d.authorName, d.authorEmail]);
-  const ensure = useMemo<Ensure>(
+  const fixedEnsure = useMemo<Ensure>(
     () => (members === null ? { kind: "none" } : resolveEnsure(assignPref, { author, members })),
     [assignPref, author, members],
   );
+  /* An assign block that asks when it runs: the menu has the members already, so the picker reads nothing. */
+  const askAssign = stepOn ? (menuPlan?.askAssign ?? null) : null;
+  const asked = useAskAssign({ on: !!askAssign, members, ...(askAssign ? { start: askAssign } : null), author, onCard: [...was].map((id) => ({ id })) });
+  const ensure: Ensure = askAssign ? asked.ensure : fixedEnsure;
   const movesStatus = !!pick && pick !== (card?.status ?? "");
   /* A move block only assigns when the card moves; with no move block the assignment is the whole step. */
   const ensured = stepOn && (!moveOn || movesStatus) ? ensureId(ensure, members) : null;
@@ -7582,6 +7587,11 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
               </div>
             )}
           </div>
+          )}
+          {askAssign && (
+            <div className="px-3 pb-2 shrink-0 flex items-center gap-2 text-[10.5px]" data-menu-ask="" style={{ color: "var(--text3)" }}>
+              <span>Assign to</span><AssignPicker state={asked} label="Assign to" />
+            </div>
           )}
           {stepOn && !moveOn && reviewPrefs && (
             <div className="px-3 py-2 text-[10.5px] shrink-0" style={{ color: "var(--text3)" }} data-menu-assign="">
@@ -7941,6 +7951,50 @@ function CardPeoplePick({ task, query, onSaid }: { task: ProviderTask; query: st
 /** What the hand-off will do, drawn inside the confirm: the card, the status
  *  it leaves and enters, and who comes off it. A bare "are you sure" asked
  *  people to trust a sentence about a write they could not see. */
+/**
+ * What the hand-off dialog shows when its blocks ask when they run: the status to move to and/or the person
+ * to put on the card, each starting where Settings says, and the summary below reads the choice live.
+ * What was chosen goes back through `onChange` on every change, so the press that confirms writes exactly
+ * what the dialog shows.
+ */
+export function AskedHandoff({ task, statuses, start, author, askStatus, askAssign, fixed, unassign, onChange }: {
+  task: ProviderTask; statuses: CuStatus[];
+  /** The status the dialog starts at, or "" for leaving the card where it is. */
+  start: string;
+  author: PrAuthor | null;
+  askStatus: boolean;
+  /** Where the person picker starts; null when the assignment is fixed. */
+  askAssign: import("../../../shared/providers.ts").StepAssign | null;
+  /** The assignment when it is fixed. */
+  fixed: Ensure;
+  unassign: HandoffUnassign;
+  onChange: (c: { status: string; ensure: Ensure }) => void;
+}) {
+  const [status, setStatus] = useState(start);
+  const a = useAskAssign({ on: !!askAssign, ...(task.listId ? { listId: task.listId } : null), ...(askAssign ? { start: askAssign } : null), author, onCard: task.people });
+  const ensure = askAssign ? a.ensure : fixed;
+  useEffect(() => { onChange({ status, ensure }); }, [status, JSON.stringify(ensure)]);
+  const key = { color: "var(--text3)", fontSize: 10.5, textTransform: "uppercase" as const, letterSpacing: "0.04em" };
+  return (
+    <div className="flex flex-col gap-2">
+      {(askStatus || askAssign) && (
+        <div className="mt-3 grid items-center gap-y-2" style={{ gridTemplateColumns: "84px 1fr" }} data-asked="">
+          {askStatus && <>
+            <div style={key}>Move to</div>
+            <Select value={status} onChange={setStatus} align="left" title="Where the card goes"
+              options={[{ value: "", label: "leave it where it is" }, ...statuses.filter((x) => x.status !== task.status).map((x) => ({ value: x.status, label: x.status, tint: x.color, pill: true, dim: x.type === "done" || x.type === "closed" }))]} />
+          </>}
+          {askAssign && <>
+            <div style={key}>Assign to</div>
+            <AssignPicker state={a} />
+          </>}
+        </div>
+      )}
+      <ReadyForQaSummary task={task} {...(status ? { target: status, targetColor: statusColor(statuses, status) } : null)} unassign={unassign} ensure={ensure} />
+    </div>
+  );
+}
+
 export function ReadyForQaSummary({ task, target, targetColor, unassign = "all", ensure = { kind: "none" } }: {
   /** `target` is absent for a step with no move block: the status stays and only the people change. */
   task: ProviderTask; target?: string; targetColor?: string;
@@ -8047,20 +8101,56 @@ function CardReadyForQaButton({ task, query, onSaid, ask, author }: {
   const target = statuses && handoff ? readyForQaStatus(statuses, task.status, handoff) : undefined;
   /* A step with no move block keeps its button when it still changes who is on the card. */
   const peopleOnly = !!handoff?.enabled && !!plan && !plan.move && touchesPeople(plan);
-  if (!handoff || !plan || (!target && !peopleOnly)) return null;
-  const label = target ? `Move to ${target}` : peopleButtonLabel(plan);
+  /* A move that asks when it runs has its button even where the default status is not in this list: the person picks one. */
+  const askStatus = !!handoff?.enabled && plan?.move?.ask === true && !!statuses?.length;
+  const askAssign = plan?.askAssign ?? null;
+  if (!handoff || !plan || (!target && !peopleOnly && !askStatus)) return null;
+  const label = target ? `Move to ${target}` : askStatus ? "Move card…" : peopleButtonLabel(plan);
+
+  /* Who "Assign" means. Only the author needs the team read (the member list the server already holds for
+     this list: no request when it is warm); "me" is answered by the server from the connected account, a
+     named person is already an id. */
+  const readMembers = () => (plan.assign.who === "author" && task.listId
+    ? api.clickupMembers(task.listId).then((r) => (r?.ok ? (r.members ?? []) : null)).catch(() => null)
+    : Promise.resolve(null));
+
+  /* The one write, whichever way the choices were made. One request: the same write the status picker and the
+     people picker each make half of — see cardMove's note on the three-call version racing its own `updated` stamp. */
+  const send = async (to: string | undefined, ensure: Ensure) => {
+    const { write, named } = stepChanges({ ...(to ? { status: to } : null), people: task.people, unassign: plan.unassign, ensure });
+    /* A step whose answer is already true has nothing to send. */
+    if (!write.status && !write.add && !write.rem && !write.addMe) { onSaid(ensure.kind === "unmapped" ? `!${ensure.why}` : "nothing to change: the card is already as asked"); return; }
+    setBusy(true);
+    onSaid(to ? "moving…" : "updating…");
+    const r = await api.clickupCard(task.id, write, task.updated)
+      .catch(() => ({ ok: false, error: "Could not reach the server", task: undefined }));
+    setBusy(false);
+    onSaid(r.ok ? `${to ? `now ${to}` : "card updated"}${write.rem ? " · unassigned" : ""}${assignedNote(named)}${ensure.kind === "unmapped" ? ` · ${ensure.why}` : ""}` : `!${r.error || "ClickUp refused that"}`);
+    if (r.ok) putCard(query, r.task);
+  };
+
+  /* When a block asks when it runs, the dialog carries the question, starting where Settings says; what was
+     chosen is what is written. */
+  const runAsked = async () => {
+    const members = await readMembers();
+    const chosen = { current: { status: target ?? "", ensure: resolveEnsure(plan.assign, { author, members }) } };
+    const said = await ask({
+      title: `${label.replace("…", "")}?`,
+      node: <AskedHandoff task={task} statuses={statuses ?? []} start={target ?? ""} author={author} askStatus={askStatus} askAssign={askAssign}
+        fixed={chosen.current.ensure} unassign={plan.unassign} onChange={(c) => { chosen.current = c; }} />,
+      confirmLabel: "Confirm",
+    });
+    if (!said) return;
+    const { status, ensure } = chosen.current;
+    await send(status && status !== task.status ? status : undefined, ensure);
+  };
 
   const move = async () => {
     if (busy || blocked) return;
-    /* Who "Assign" means. Only the author needs the team read (the member
-       list the server already holds for this list: no request when it is warm);
-       "me" is answered by the server from the connected account, a named person
-       is already an id. */
-    const members = plan.assign.who === "author" && task.listId
-      ? await api.clickupMembers(task.listId).then((r) => (r?.ok ? (r.members ?? []) : null)).catch(() => null)
-      : null;
+    if (askStatus || askAssign) { await runAsked(); return; }
+    const members = await readMembers();
     const ensure = resolveEnsure(plan.assign, { author, members });
-    const { write, named } = stepChanges({ ...(target ? { status: target } : null), people: task.people, unassign: plan.unassign, ensure });
+    const { write } = stepChanges({ ...(target ? { status: target } : null), people: task.people, unassign: plan.unassign, ensure });
     /* A people-only step whose answer is already true has nothing to send. */
     if (!write.status && !write.add && !write.rem && !write.addMe) { onSaid(ensure.kind === "unmapped" ? `!${ensure.why}` : "nothing to change: the card is already as asked"); return; }
     const said = await ask({
@@ -8069,16 +8159,7 @@ function CardReadyForQaButton({ task, query, onSaid, ask, author }: {
       confirmLabel: label,
     });
     if (!said) return;
-    setBusy(true);
-    onSaid(target ? "moving…" : "updating…");
-    // One request: the same write the status picker and the people picker each
-    // make half of — see cardMove's note on the three-call version racing its
-    // own `updated` stamp.
-    const r = await api.clickupCard(task.id, write, task.updated)
-      .catch(() => ({ ok: false, error: "Could not reach the server", task: undefined }));
-    setBusy(false);
-    onSaid(r.ok ? `${target ? `now ${target}` : "card updated"}${write.rem ? " · unassigned" : ""}${assignedNote(named)}${ensure.kind === "unmapped" ? ` · ${ensure.why}` : ""}` : `!${r.error || "ClickUp refused that"}`);
-    if (r.ok) putCard(query, r.task);
+    await send(target, ensure);
   };
 
   return (

@@ -172,21 +172,24 @@ function blockList(name: string, v: unknown, trigger: StepTrigger): Res<StepBloc
     const at = `${name}[${i}]`;
     if (!isObj(b)) return bad(`${at} must be an object like {"type":"move","statusNames":["..."]}`);
     if (b.type === "move") {
-      for (const k of Object.keys(b)) if (k !== "type" && k !== "statusNames" && k !== "fallback") return bad(`${at}.${k} is not a setting`);
+      for (const k of Object.keys(b)) if (k !== "type" && k !== "statusNames" && k !== "fallback" && k !== "ask") return bad(`${at}.${k} is not a setting`);
       const r = names(`${at}.statusNames`, "statusNames" in b ? b.statusNames : []);
       if (!r.ok) return r;
       if ("fallback" in b && typeof b.fallback !== "boolean") return bad(`${at}.fallback must be true or false`);
-      out.push({ type: "move", statusNames: r.value, ...(b.fallback === true && !r.value.length ? { fallback: true } : null) });
+      if ("ask" in b && b.ask !== true && b.ask !== false) return bad(`${at}.ask must be true or false`);
+      out.push({ type: "move", statusNames: r.value, ...(b.fallback === true && !r.value.length ? { fallback: true } : null), ...(b.ask === true ? { ask: true as const } : null) });
     } else if (b.type === "unassign") {
-      for (const k of Object.keys(b)) if (k !== "type" && k !== "who") return bad(`${at}.${k} is not a setting`);
+      for (const k of Object.keys(b)) if (k !== "type" && k !== "who" && k !== "ask") return bad(`${at}.${k} is not a setting`);
+      if (b.ask === true) return bad(`${at}.ask is for move and assign blocks; “take people off” does not ask when it runs yet`);
       if (b.who !== "none" && b.who !== "me" && b.who !== "all") return bad(`${at}.who must be none, me or all`);
       out.push({ type: "unassign", who: b.who });
     } else if (b.type === "assign") {
-      const { type: _t, ...rest } = b;
+      const { type: _t, ask, ...rest } = b;
+      if (ask !== undefined && ask !== true && ask !== false) return bad(`${at}.ask must be true or false`);
       const r = assign(at, rest);
       if (!r.ok) return r;
-      if (r.value.who === "none") return bad(`${at}.who must be me, author or person: remove the block to assign nobody`);
-      out.push({ type: "assign", ...r.value });
+      if (r.value.who === "none" && ask !== true) return bad(`${at}.who must be me, author or person: remove the block to assign nobody (or set ask: true, where none is “nobody” as the starting choice)`);
+      out.push({ type: "assign", ...(ask === true ? { ask: true as const } : null), ...r.value });
     } else return bad(`${at}.type must be move, unassign or assign`);
   }
   const problem = blocksProblem(trigger, out);
@@ -194,6 +197,24 @@ function blockList(name: string, v: unknown, trigger: StepTrigger): Res<StepBloc
 }
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * A block that asks when it runs has no place in the three old keys, so a save that only knows those keys
+ * must not drop it: the ask on a move survives while the names stay what they were, and an asking assign
+ * survives unless the save set an assignment itself.
+ */
+function carryAsk(prev: StepBlock[] | undefined, next: StepBlock[], assignSet: boolean, namesSet: boolean): StepBlock[] {
+  if (!prev) return next;
+  const out = [...next];
+  const pm = prev.find((b) => b.type === "move" && b.ask);
+  const mi = out.findIndex((b) => b.type === "move");
+  if (pm && pm.type === "move" && mi >= 0 && !namesSet) out[mi] = { ...(out[mi] as Extract<StepBlock, { type: "move" }>), ask: true };
+  const pa = prev.find((b) => b.type === "assign" && b.ask);
+  if (pa && !assignSet && !out.some((b) => b.type === "assign")) out.push(pa);
+  /* The order the person gave stays: kinds that were there keep their places, new ones follow. */
+  const at = (b: StepBlock) => { const i = prev.findIndex((x) => x.type === b.type); return i < 0 ? prev.length + out.indexOf(b) : i; };
+  return [...out].sort((x, y) => at(x) - at(y));
+}
 
 /**
  * Apply a partial update on top of `base`. Unknown keys are refused rather than
@@ -225,7 +246,8 @@ export function applyPrefs(base: ClickUpPrefs, input: unknown): Res<ClickUpPrefs
       now.statusNames = l.statusNames; now.assign = l.assign;
       if ("unassign" in now) now.unassign = l.unassign;
     } else if (["enabled", "statusNames", "unassign", "assign"].some((k) => k in patch)) {
-      now.blocks = blocksFromLegacy(trigger, { enabled: now.enabled, statusNames: now.statusNames, unassign: now.unassign, assign: now.assign });
+      const next = blocksFromLegacy(trigger, { enabled: now.enabled, statusNames: now.statusNames, unassign: now.unassign, assign: now.assign });
+      now.blocks = carryAsk(was.blocks, next, "assign" in patch, "statusNames" in patch);
     } else now.blocks = was.blocks;
     return { ok: true, value: true };
   };

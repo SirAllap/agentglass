@@ -87,7 +87,8 @@ export function legacyFromBlocks(blocks: readonly StepBlock[]): { statusNames: s
   const mv = blocks.find((b): b is Extract<StepBlock, { type: "move" }> => b.type === "move");
   const un = blocks.find((b): b is Extract<StepBlock, { type: "unassign" }> => b.type === "unassign");
   const as = blocks.find((b): b is Extract<StepBlock, { type: "assign" }> => b.type === "assign");
-  const assign: StepAssign = as ? (as.who === "person" && as.person ? { who: "person", person: as.person } : { who: as.who }) : NO_ASSIGN;
+  /* A block that asks when it runs fixes nobody: an older reader of the file sees no assignment, not a guess. */
+  const assign: StepAssign = as && !as.ask ? (as.who === "person" && as.person ? { who: "person", person: as.person } : { who: as.who }) : NO_ASSIGN;
   return { statusNames: mv ? [...mv.statusNames] : [], unassign: un?.who ?? "none", assign };
 }
 
@@ -96,19 +97,24 @@ export const blocksOf = (trigger: StepTrigger, g: LegacyStep & { blocks?: StepBl
 
 /** What a step does, flattened for the places that run it. */
 export interface StepPlan {
-  /** Null: no move block, so the card's status is left where it is. */
-  move: { names: string[]; fallback: boolean } | null;
+  /** Null: no move block, so the card's status is left where it is. `ask`: the person picks it when it runs, starting at `names`. */
+  move: { names: string[]; fallback: boolean; ask: boolean } | null;
   unassign: HandoffUnassign;
+  /** Who is fixed on the card. `none` when the assign block asks: see `askAssign`. */
   assign: StepAssign;
+  /** The assign block asks when it runs; this is where its picker starts. Null when it does not ask, or there is no block. */
+  askAssign: StepAssign | null;
 }
 export function planOf(trigger: StepTrigger, g: LegacyStep & { blocks?: StepBlock[] }): StepPlan {
   const blocks = blocksOf(trigger, g);
   const mv = blocks.find((b): b is Extract<StepBlock, { type: "move" }> => b.type === "move");
   const l = legacyFromBlocks(blocks);
-  return { move: mv ? { names: [...mv.statusNames], fallback: mv.fallback === true } : null, unassign: l.unassign, assign: l.assign };
+  const as = blocks.find((b): b is Extract<StepBlock, { type: "assign" }> => b.type === "assign");
+  const askAssign: StepAssign | null = as?.ask ? (as.who === "person" && as.person ? { who: "person", person: as.person } : { who: as.who }) : null;
+  return { move: mv ? { names: [...mv.statusNames], fallback: mv.fallback === true, ask: mv.ask === true } : null, unassign: l.unassign, assign: l.assign, askAssign };
 }
 
 /** A move the step has chosen, or is allowed to guess: false while the person still has to pick one. */
 export const moveChosen = (p: StepPlan): boolean => !!p.move && (p.move.names.length > 0 || p.move.fallback);
 /** Does pressing the step change anything about the people? */
-export const touchesPeople = (p: StepPlan): boolean => p.unassign !== "none" || p.assign.who !== "none";
+export const touchesPeople = (p: StepPlan): boolean => p.unassign !== "none" || p.assign.who !== "none" || p.askAssign !== null;

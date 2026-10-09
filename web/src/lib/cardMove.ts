@@ -68,6 +68,8 @@ export type CardMove = {
    *  this read and the merge should be a conflict, not a silent overwrite. */
   updated: number;
   statuses: ListStatus[];
+  /** The list it lives in, for reading who can be put on it. */
+  listId?: string;
   /** Who is on the card now: what "Also assign" is decided against. */
   people?: { id?: number | null; me?: boolean; name?: string }[];
 };

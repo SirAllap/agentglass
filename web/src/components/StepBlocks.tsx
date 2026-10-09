@@ -2,12 +2,14 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } f
 import { Button } from "./workspace/Chrome.tsx";
 import { Dot } from "./StatusPanel.tsx";
 import { AnchoredMenu } from "./AnchoredMenu.tsx";
+import { PeoplePick } from "./PeoplePick.tsx";
+import { Face } from "./AssignPicker.tsx";
 import { ArrowIcon, CaretIcon, CrossIcon, DoneIcon, GripIcon, PlusIcon, UserMinusIcon, UserPlusIcon, CommentIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { ASSIGN_LABEL, ASSIGN_WHO, assignLabel, type Assign } from "../lib/stepAssign.ts";
 import { UNASSIGN_LABEL, type Unassign } from "../lib/workflowMap.ts";
 import { BLOCK_INFO, blockRefusal, type StepTrigger } from "../../../shared/stepBlocks.ts";
-import type { StepBlock } from "../../../shared/providers.ts";
+import type { ListMember, StepBlock } from "../../../shared/providers.ts";
 import { moveBlock } from "../lib/stepBlocksView.ts";
 
 /**
@@ -58,7 +60,7 @@ export function ChoiceMenu<T extends string>({ anchor, label, value, options, on
 }
 
 /** The answers to "Assign"; "a person…" goes on to the people, read only when asked for. */
-export function AssignMenu({ anchor, value, people, onPick, onClose }: { anchor: Anchor; value: Assign; people?: () => Promise<MapPerson[] | null>; onPick: (a: Assign) => void; onClose: () => void }) {
+export function AssignMenu({ anchor, value, people, withNobody, onPick, onClose }: { anchor: Anchor; value: Assign; /** The picker may start at nobody (only a block that asks when it runs). */ withNobody?: boolean; people?: () => Promise<MapPerson[] | null>; onPick: (a: Assign) => void; onClose: () => void }) {
   const [view, setView] = useState<"choice" | "people">("choice");
   const [list, setList] = useState<MapPerson[] | null | "reading">("reading");
   useEffect(() => {
@@ -68,28 +70,34 @@ export function AssignMenu({ anchor, value, people, onPick, onClose }: { anchor:
     void (people?.() ?? Promise.resolve(null)).catch(() => null).then((r) => { if (live) setList(r); });
     return () => { live = false; };
   }, [view, people]);
-  const note = (t: string) => <span className="px-2 py-1 text-[11px]" style={{ color: "var(--text3)" }}>{t}</span>;
+  /* "A person…" is the app's one people picker (components/PeoplePick), anchored where the choice was. */
+  if (view === "people") {
+    const rows: ListMember[] | null = list === "reading" || list === null ? null : list.map((m) => ({ id: m.id, name: m.name, initials: m.name.split(/\s+/).map((w) => w[0] ?? "").join("").slice(0, 2).toUpperCase() }));
+    return (
+      <PeoplePick anchor={anchor} members={rows ?? []} busy={list === "reading"} filterOver={8}
+        empty={list === null ? "The people could not be read." : "Nobody to pick."}
+        isOn={(m) => value.who === "person" && value.person?.id === m.id}
+        face={(m) => <Face m={m} />}
+        onPick={(m) => onPick({ who: "person", person: { id: m.id, name: m.name } })}
+        onClose={onClose} />
+    );
+  }
   return (
-    <AnchoredMenu anchor={anchor} align="left" minWidth={view === "people" ? 280 : 200} placeKey={`${view}:${Array.isArray(list) ? list.length : String(list)}`} onClose={onClose}>
+    <AnchoredMenu anchor={anchor} align="left" minWidth={200} onClose={onClose}>
       <div className="wfm" style={{ display: "contents" }}>
-        {view === "choice"
-          ? ASSIGN_WHO.filter((w) => w !== "none").map((w) => (
-            <Row key={w} selected={value.who === w} onClick={() => (w === "person" ? setView("people") : onPick({ who: w }))}><Check on={value.who === w} /><span className="n">{ASSIGN_LABEL[w]}</span></Row>))
-          : <>
-            {list === "reading" && note("reading…")}
-            {list === null && note("The people could not be read.")}
-            {Array.isArray(list) && list.length === 0 && note("Nobody to pick.")}
-            {Array.isArray(list) && list.map((m) => (
-              <Row key={m.id} selected={value.person?.id === m.id} onClick={() => onPick({ who: "person", person: { id: m.id, name: m.name } })}>
-                <Check on={value.person?.id === m.id} /><span className="n">{m.name}{m.sub && <span className="m"> {m.sub}</span>}</span>
-              </Row>))}
-            <Row onClick={() => setView("choice")}><span className="ck" aria-hidden /><span className="n" style={{ color: "var(--text3)" }}>Back</span></Row>
-          </>}
+        {ASSIGN_WHO.filter((w) => w !== "none" || withNobody).map((w) => (
+          <Row key={w} selected={value.who === w} onClick={() => (w === "person" ? setView("people") : onPick({ who: w }))}><Check on={value.who === w} /><span className="n">{w === "none" ? "nobody" : ASSIGN_LABEL[w]}</span></Row>))}
       </div>
     </AnchoredMenu>
   );
 }
 
+/** The same block, fixed again: its value stays, the question goes. A fixed assign cannot be "nobody", so that goes to the person pressing. */
+const withoutAsk = (b: StepBlock): StepBlock => {
+  if (b.type === "move") { const { ask: _a, ...rest } = b; return rest; }
+  if (b.type === "assign") { const { ask: _a, ...rest } = b; return rest.who === "none" ? { type: "assign", who: "me" } : rest; }
+  return b;
+};
 const hint = (c: ReactNode) => <span className="text-[11px]" style={{ color: "var(--text3)" }}>{c}</span>;
 const GLYPH: Record<string, (p: { size?: number }) => React.ReactElement> = { move: ArrowIcon, unassign: UserMinusIcon, assign: UserPlusIcon, comment: CommentIcon, field: ListGlyph };
 function ListGlyph({ size }: { size?: number }) { return <PlusIcon size={size} />; }
@@ -254,15 +262,16 @@ export function StepBlocks(p: StepBlocksProps) {
     const common = { type: "button" as const, "data-val": "", className: "wfm-pick", disabled: p.frozen, "aria-haspopup": "listbox" as const, "aria-labelledby": `${id}-l ${id}-v` };
     if (b.type === "move") {
       const label = p.status ?? (trigger === "merge" ? "Leave it there" : "Pick a status");
+      const shown = b.ask ? `Start at: ${label}` : label;
       return (
         <button {...common} data-pick="" aria-expanded={p.statusOpen}
           {...(p.moveTone === "bad" ? { "data-bad": "" } : p.moveTone ? { "data-empty": "" } : null)}
           onClick={(e) => p.onPickStatus(e.currentTarget)}>
-          {p.status && <Dot type={p.statusType} color={p.statusColor} />}<span id={`${id}-v`}>{label}</span><span className="cv" aria-hidden><CaretIcon size={ICON.xs} /></span>
+          {p.status && <Dot type={p.statusType} color={p.statusColor} />}<span id={`${id}-v`}>{shown}</span><span className="cv" aria-hidden><CaretIcon size={ICON.xs} /></span>
         </button>
       );
     }
-    const label = b.type === "unassign" ? UNASSIGN_LABEL[b.who] : assignLabel(b);
+    const label = b.type === "unassign" ? UNASSIGN_LABEL[b.who] : b.ask ? `Start at: ${b.who === "none" ? "nobody" : assignLabel(b)}` : assignLabel(b);
     return (
       <button {...common} data-plain="" aria-expanded={open?.type === b.type}
         onClick={(e) => (open?.type === b.type ? setOpen(null) : openAt(b.type, e.currentTarget))}>
@@ -281,7 +290,11 @@ export function StepBlocks(p: StepBlocksProps) {
         <button type="button" data-grip="" className="wfm-grip" disabled={p.frozen} aria-roledescription="drag handle"
           aria-label={`Reorder “${titleOf(b.type, trigger, n)}”. Drag it, or press arrow up and down.`}
           onPointerDown={(e) => startDrag(e, b.type)} onKeyDown={(e) => keyMove(e, i, b)}><GripIcon size={ICON.md} /></button>
-        <span className="wfm-lb"><b id={`${id}-l`} className="text-[13px] inline-flex items-center gap-2"><span className="wfm-gl"><Icon size={ICON.xs} /></span>{titleOf(b.type, trigger, n)}</b>{hint(hintOf(b.type, trigger, n))}</span>
+        <span className="wfm-lb"><b id={`${id}-l`} className="text-[13px] inline-flex items-center gap-2"><span className="wfm-gl"><Icon size={ICON.xs} /></span>{titleOf(b.type, trigger, n)}</b>{hint(hintOf(b.type, trigger, n))}{(b.type === "move" || b.type === "assign") && (
+            <button type="button" data-ask="" className="wfm-ask" aria-pressed={b.ask === true} disabled={p.frozen}
+              title={b.ask ? "It asks when it runs; the value is where the question starts. Press to fix it." : "Fix this value, or ask when it runs: the value becomes where the question starts."}
+              onClick={() => setBlock(b.type, b.ask ? withoutAsk(b) : { ...b, ask: true } as StepBlock, '[data-blk="' + b.type + '"] [data-ask]')}>Ask when it runs</button>
+          )}</span>
         <span className="relative">{valueButton(b, i)}</span>
         <button type="button" data-rmb="" className="wfm-rmx" disabled={p.frozen} aria-label={`Remove block: ${titleOf(b.type, trigger, n)}`} onClick={() => remove(i)}><CrossIcon size={ICON.xs} /></button>
       </div>
@@ -328,7 +341,7 @@ export function StepBlocks(p: StepBlocksProps) {
           onPick={(who) => setBlock("unassign", { type: "unassign", who })} onClose={() => { setOpen(null); focusNext.current = '[data-blk="unassign"] [data-val]'; }} />
       )}
       {cur?.type === "assign" && (
-        <AssignMenu anchor={anchorRef} value={cur} people={p.people} onPick={(a) => setBlock("assign", a.who === "none" ? cur : { type: "assign", ...a })}
+        <AssignMenu anchor={anchorRef} value={cur} people={p.people} withNobody={cur.ask === true} onPick={(a) => setBlock("assign", a.who === "none" && !cur.ask ? cur : { type: "assign", ...(cur.ask ? { ask: true as const } : null), ...a })}
           onClose={() => { setOpen(null); focusNext.current = '[data-blk="assign"] [data-val]'; }} />
       )}
     </div>

@@ -24,12 +24,14 @@ export const UNASSIGN_WORDS: Record<HandoffUnassign, string> = { none: "leave th
 /** One block in the sentence. `status` is the move block's status once the built-in guess is resolved. */
 export function blockClause(trigger: StepTrigger, b: StepBlock, o: { item: string; status: string | null }): string {
   if (b.type === "move") {
+    if (b.ask) return `ask which status to move the ${o.item} to, starting at ${o.status ?? (trigger === "merge" ? "“Leave it there”" : "(pick a status)")}`;
     if (trigger === "merge") return o.status ? `preselect ${o.status}` : "preselect nothing (“Leave it there”)";
     return `move the ${o.item} to ${o.status ?? "(pick a status)"}`;
   }
   if (b.type === "unassign") return b.who === "none" ? UNASSIGN_WORDS.none : `${UNASSIGN_WORDS[b.who]} the ${o.item}`;
   const w = assignWords(b);
-  return `assign it to ${w === "whoever presses it" ? "you" : (w ?? "nobody")}`;
+  const who = w === "whoever presses it" ? "you" : (w ?? "nobody");
+  return b.ask ? `ask who to assign it to, starting at ${who}` : `assign it to ${who}`;
 }
 
 /** "Press it: move the card to X, take everyone off the card, then assign it to you." The order of the blocks is the order of the words. */
