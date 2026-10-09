@@ -96,6 +96,8 @@ be its value there.
 | `HIT` | 26 | `web/src/lib/iconSize.ts` |
 | `MIN_BOX` | 20 | `web/src/lib/iconSize.ts` |
 | `LAYER` | viewer 10020 up to alarm 10300 | `web/src/lib/layers.ts` |
+| `COLLAPSE_FROM` | 7 | `web/src/lib/prStack.ts` |
+| `MAX_TIERS` | 64 | `web/src/lib/prStack.ts` |
 | `--surface-nav` | the nav, leaning to `--bg2` | `web/src/index.css` |
 | `--surface-card` | a card, panel, dialog or popover body | `web/src/index.css` |
 | `--surface-inset` | a well inside a card that takes input | `web/src/index.css` |
@@ -210,6 +212,39 @@ the standing zone and the footer become a 352px right column and the link and
 star move up to the identity line. Which block a card gets, and the per-repository
 rule, live in `lib/prCardBlock.ts`; the wording of each zone in
 `lib/prCardZones.ts`; both with tests.
+
+### A stacked pull request
+
+A pull request that targets another open pull request's branch is drawn as part
+of a stack, in three places and no new row (`StackMarks.tsx`, with the decision in
+`lib/prStack.ts` and the words in `lib/prStackWords.ts`).
+
+- **The spine** is one numbered box per open tier down the card's left edge,
+  inside its padding (5px in, 16px wide, 2px apart, never under `MIN_BOX` tall,
+  so a 6-stack card is 140px). The same boxes on every card of the stack: solid
+  is this card, tinted another one on the board, dashed one that is not on it.
+  A base that is gone is drawn and never counted: a drawn tick for merged, a
+  drawn cross for closed, `?` for a branch with no pull request. From
+  `COLLAPSE_FROM` tiers up the middle is a count (`+3`). A card's content starts
+  12px further in; that is the whole cost of the mark besides the box heights.
+  The boxes are decorative at 16px, so the spine is an `img` with the sentence
+  as its name and the token is the target.
+- **The token** replaces the base branch in the stand line: `MIN_BOX` tall,
+  `#1180 · ready to land` and a caret, pressing it opens that pull request inside
+  the app. The word is the tracker card's status when the app already holds it,
+  else the column the base sits in (also for a filtered-out one), else its state.
+  Dashed is a base that is not on the board, orange a broken stack. Where the
+  base cannot be opened it is the branch name, plain.
+- **The control** is three fixed slots after the number in a pull request's
+  header, 150px: previous (the base), the identifier with mini boxes and
+  `2 of 3` (opens the ladder), next. A missing neighbour keeps its slot, dimmed,
+  so stepping moves nothing. The ladder is a popover of `agx-menu` over the
+  branch row: the trunk, each rung with its checks, review and word, `you are
+  here`, a dashed rung for a missing base. The branch field carries the same
+  token.
+
+Colour is a family (`--c`, `--ci`) from the house tints and never the only
+signal: every mark has a word, a number or a drawn glyph, and a sentence.
 
 ## A plugin's live canvas
 

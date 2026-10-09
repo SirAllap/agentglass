@@ -156,7 +156,7 @@ import {
   prBaseOf,
   ghRateLimit,
   branchBehind, localHead, prRollup, repoIdFor as prRepoIdFor, subscribeTalkSeen,
-  prBranches, prsForBranch, nodeIdOk, locateRepo, isForeignRoot } from "./prs.ts";
+  prBranches, prsForBranch, prForHead, nodeIdOk, locateRepo, isForeignRoot } from "./prs.ts";
 import { planCheckOnBase, startCheckOnBase, checkOnBaseStatus, cancelCheckOnBase } from "./checkOnBasePr.ts";
 import { repoSpend } from "./spend.ts";
 import { repoMetrics } from "./checkRuns.ts";
@@ -7111,6 +7111,10 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     /* The pull requests on a branch — one out of it, any number into it. Asked
        of GitHub by name rather than filtered out of a scope, because a scope is
        about an AUTHOR and this question is about a branch. */
+    if (pathname === "/prs/for-head") {
+      const root = prRouteRoot(url.searchParams.get("root") ?? "");
+      return json(await prForHead(root, url.searchParams.get("branch") ?? ""));
+    }
     if (pathname === "/prs/for-branch") {
       const asked = url.searchParams.get("root") ?? "";
       const root = prRouteRoot(asked);

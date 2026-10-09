@@ -21,6 +21,11 @@ import { ALWAYS_OPEN, foldable, foldedLanes, setFoldedLanes, walkable } from "..
 import type { PrSummary } from "../../../shared/types.ts";
 import { staleApproval } from "../../../shared/mergeBlockers.ts";
 import { LANES, LANE_CAP, board as fileAll, suggestedAction, ACTION_LABEL, type Filed, type LaneId } from "../lib/prLanes.ts";
+import { isTrunkBranch, type Stack } from "../lib/prStack.ts";
+import { usePrStacks } from "../lib/usePrStacks.ts";
+import { spineSentence, type Facts } from "../lib/prStackWords.ts";
+import { factsReader, laneMap } from "../lib/prStackFacts.ts";
+import { BaseToken, Spine, spineHeight } from "./StackMarks.tsx";
 import { taskLink } from "../lib/taskLink.ts";
 import { onCard, cardVersion, withCard } from "../lib/prCardStore.ts";
 import { CHIP_H } from "../lib/priority.tsx";
@@ -46,7 +51,6 @@ import { useClickupSetup } from "../lib/clickupSetup.ts";
 /** The tracker bar's tint: the app's own accent, the one an unranked card chip already wears. */
 const ACCENT = "var(--accent, var(--primary))";
 
-const TRUNKS = new Set(["main", "master", "trunk", "develop", "development"]);
 
 /** How long nothing may happen before a pull request counts as quiet. */
 const QUIET_DAYS = 30;
@@ -76,7 +80,7 @@ type Card = PrSummary & { filed: Filed };
 export function TriageBoard({
   mine, review, total, hasTaskProvider, pinned,
   onOpen, onTogglePin, onShowTable, onAct, busy, acting, loading, settling, failed, hidden, onRetry, root, repoKey,
-  onlyUnread, onOnlyUnread,
+  onlyUnread, onOnlyUnread, unfiltered,
 }: {
   /** The `mine` scope, as the panel already has it. */
   mine: PrSummary[];
@@ -157,6 +161,14 @@ export function TriageBoard({
    */
   onlyUnread: boolean;
   onOnlyUnread: (v: boolean) => void;
+  /**
+   * The two lists before the board's own filters.
+   *
+   * A stacked pull request names its base, and the base may be one the filters
+   * hide; its card is not on the board but its state is still known, and the
+   * token says it. Absent, the lists above are all there is.
+   */
+  unfiltered?: { mine: PrSummary[]; review: PrSummary[] };
 }) {
   /* Answers arriving one at a time, each one a re-render of the board and
      nothing else — the cards do not move, a chip appears on one of them. */
@@ -210,6 +222,33 @@ export function TriageBoard({
      every card on it. See prCardBlock.ts for the rule and its ceiling. */
   const noCustomIds = useClickupSetup()?.noCustomIds === true;
   const repoUses = useMemo(() => repoUsesTracker(cards, hasTaskProvider, noCustomIds), [cards, hasTaskProvider, noCustomIds]);
+  /*
+   * STACKS. Read off the lists in hand — `unfiltered` when the panel says what
+   * the filters hid, so a base that is filtered out is still a base — plus the
+   * few bases the lists do not hold, asked one branch at a time. See prStack.ts.
+   */
+  const everyone = useMemo(() => {
+    const by = new Map<number, PrSummary>();
+    for (const p of [...cards, ...(unfiltered?.mine ?? []), ...(unfiltered?.review ?? [])]) if (!by.has(p.number)) by.set(p.number, p);
+    return [...by.values()];
+  }, [cards, unfiltered]);
+  const onBoard = useMemo(() => new Set(cards.map((c) => c.number)), [cards]);
+  const isShown = useCallback((n: number) => onBoard.has(n), [onBoard]);
+  const stacks = usePrStacks(root, everyone, isShown);
+  /* The column a filtered-out pull request WOULD sit in: the same filing, so the
+     word on a token is the one its own card would carry. */
+  const laneOfAll = useMemo(() => {
+    const out = laneMap(everyone.filter((p) => !onBoard.has(p.number)),
+      new Set((unfiltered?.mine ?? mine).map((p) => p.number)), new Set((unfiltered?.review ?? review).map((p) => p.number)), trueChecks);
+    for (const c of cards) out.set(c.number, c.filed.lane);
+    return out;
+  }, [cards, everyone, onBoard, unfiltered, mine, review, trueChecks]);
+  const factsOf = useMemo(() => factsReader({
+    pool: everyone, found: stacks.found, onBoard: (n) => onBoard.has(n), lane: (n) => laneOfAll.get(n),
+    status: (p) => withCard(p, hasTaskProvider).card?.status,
+  }), [everyone, stacks, onBoard, laneOfAll, hasTaskProvider]);
+  /* Outlined while the pointer is on the token that names it. */
+  const [lit, setLit] = useState<number | null>(null);
   const involved = cards.length;
   const canLand = lanes.get("land")?.length ?? 0;
   // Only over the cards in hand. The other few hundred are not loaded here and
@@ -876,7 +915,8 @@ export function TriageBoard({
                             pinned={pinned(p.number)} onOpen={() => onOpen(p.number)} onPin={() => onTogglePin(p)}
                             onAct={onAct} busy={busy} acting={acting}
                             dim={!matches(p) || (onlyLane !== null && onlyLane !== l.id)} root={root}
-                            unread={unread.get(p.number)} />
+                            unread={unread.get(p.number)}
+                            stack={stacks.of(p.number)} factsOf={factsOf} lit={lit === p.number} onLit={setLit} onOpenBase={onOpen} />
                         ))}
                         {/* Counted, and openable HERE. The cap is what keeps
                             the board a glance on a bad week; the rest of the
@@ -1144,7 +1184,7 @@ function cardVerdict(p: PrSummary): {
 const copyEdge = (done: boolean) =>
   `1px solid color-mix(in srgb, ${done ? "var(--success) 50%" : "var(--border) 55%"}, transparent)`;
 
-function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, busy, acting, dim, root, unread }: {
+function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, busy, acting, dim, root, unread, stack, factsOf, lit, onLit, onOpenBase }: {
   p: Card; hasTaskProvider: boolean;
   /** This repository links work items at all: see prCardBlock.ts. */
   repoUses: boolean;
@@ -1164,6 +1204,14 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
   dim?: boolean;
   /** Where to ask how far behind this branch is. Absent means do not ask. */
   root?: string;
+  /** The stack this pull request is in, or null: see prStack.ts. */
+  stack?: Stack | null;
+  factsOf?: (n: number) => Facts | undefined;
+  /** A token that names this card is under the pointer. */
+  lit?: boolean;
+  onLit?: (n: number | null) => void;
+  /** Open the pull request a token names, inside this app. */
+  onOpenBase?: (n: number) => void;
   onOpen: () => void; onPin: () => void;
   onAct: (p: PrSummary, what: "open" | "merge" | "rerun") => void; busy?: boolean;
 }) {
@@ -1220,8 +1268,10 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
        addressable without reading the design. */
     <div onClick={onOpen} role="button" tabIndex={-1} data-pr={p.number}
       data-dim={dim ? "1" : undefined}
-      className="rounded-lg mb-2 cursor-pointer agx-btn agx-prc overflow-hidden"
+      data-lit={lit ? "1" : undefined}
+      className={`rounded-lg mb-2 cursor-pointer agx-btn agx-prc overflow-hidden${stack ? " agx-stk-card" : ""}`}
       style={{
+        minHeight: stack ? spineHeight(stack.spine) : undefined,
         border: EDGE,
         background: "var(--surface-card)",
         /* Saturation as well as opacity: these cards are read by colour — green
@@ -1259,8 +1309,9 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
         * would start every card below it at a different place. Same reason the
         * lane's own "why" was cut to one line.
         */}
+      {stack && factsOf && <Spine stack={stack} label={spineSentence(stack, factsOf)} />}
       {verdict && (
-        <div className="flex items-center gap-1.5 px-2 shrink-0"
+        <div className="flex items-center gap-1.5 px-2 shrink-0 agx-stk-band"
           role="note" aria-label={verdict.aria}
           style={{
             height: 22, fontSize: 10.5,
@@ -1447,8 +1498,16 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
             {/* Never truncated: the one that matters — a stacked branch with
                 a long ticket in its name — is exactly the one you could not
                 read. Tinted when it is not the trunk. */}
-            <span className="shrink-0 whitespace-nowrap" title={`${p.headRefName} → ${p.baseRefName}`}
-              style={{ color: TRUNKS.has(p.baseRefName) ? "var(--text3)" : "var(--warning)" }}>{p.baseRefName}</span>
+            {stack?.base && stack.base.kind !== "pending" && factsOf && onOpenBase ? (
+              /* The base as a token: its number, one word for where it stands,
+                 and a way in. The branch names stay in the tooltip and in the
+                 pull request's own header. */
+              <BaseToken base={stack.base} facts={stack.base.kind === "missing" ? undefined : factsOf(stack.base.number)}
+                onOpen={onOpenBase} onLit={onLit} />
+            ) : (
+              <span className="shrink-0 whitespace-nowrap" title={`${p.headRefName} → ${p.baseRefName}`}
+                style={{ color: isTrunkBranch(p.baseRefName) ? "var(--text3)" : "var(--warning)" }}>{p.baseRefName}</span>
+            )}
             {st.failing && (
               <span className="shrink-0 inline-flex items-center rounded-md px-1.5 whitespace-nowrap"
                 style={{ height: CHIP_H + 2, color: "var(--error-ink)",

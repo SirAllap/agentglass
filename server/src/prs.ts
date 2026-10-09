@@ -336,6 +336,71 @@ export async function prsForBranch(root: string, branchIn: unknown): Promise<{
   return { ok: true, repo: id.nameWithOwner, from: out[0] ? shape(out[0]) : undefined, into: incoming.map(shape) };
 }
 
+/** The pull request a stack's base branch comes from, as the board needs it. */
+export interface HeadLookup {
+  number: number; state: "OPEN" | "CLOSED" | "MERGED"; isDraft: boolean;
+  headRefName: string; baseRefName: string; url: string;
+}
+
+const headLookupCache = new Map<string, { at: number; pr: HeadLookup | null }>();
+const headLookupFlight = new Map<string, Promise<{ ok: boolean; pr?: HeadLookup | null; needsAuth?: boolean; error?: string }>>();
+/** A pull request found moves slowly; "none" is shorter because somebody may open one. */
+const HEAD_FOUND_MS = 5 * 60_000;
+const HEAD_NONE_MS = 90_000;
+
+/**
+ * The pull request that came FROM a branch, in any state: the base of a stacked
+ * pull request, when the base is not in the list the board holds.
+ *
+ * One `gh pr list --head <branch> --state all` per branch, answered from memory
+ * for five minutes (ninety seconds when there was none) and shared by everyone
+ * asking at the same moment, so a board of twenty followers on one base costs
+ * one request, and a refresh costs none. A failed ask is not remembered —
+ * `ok: false`, and the caller leaves the card without a mark — so being offline
+ * for a minute does not become "no pull request" for five.
+ *
+ * `--limit 5`, not 1: `--head` matches the branch NAME, so a fork's pull request
+ * from a branch called the same would take the only slot. Those are dropped
+ * (`isCrossRepository`), then an open one wins, then the newest.
+ */
+export async function prForHead(rootIn: unknown, branchIn: unknown): Promise<{
+  ok: boolean; pr?: HeadLookup | null; needsAuth?: boolean; error?: string;
+}> {
+  const branch = typeof branchIn === "string" ? branchIn.trim() : "";
+  if (!branch || branch.startsWith("-") || /\s/.test(branch)) return { ok: false, error: "no branch" };
+  const id = await repoIdFor(rootIn as string);
+  if (!id) return { ok: false, error: "no GitHub remote here" };
+  const key = `${id.key}\u0000${branch}`;
+  const hit = headLookupCache.get(key);
+  if (hit && Date.now() - hit.at < (hit.pr ? HEAD_FOUND_MS : HEAD_NONE_MS)) return { ok: true, pr: hit.pr };
+  const flying = headLookupFlight.get(key);
+  if (flying) return flying;
+  const run = (async () => {
+    const rows = await ghJson<Record<string, unknown>[]>(
+      ["pr", "list", "--head", branch, "--state", "all", "--limit", "5",
+        "--json", "number,state,isDraft,headRefName,baseRefName,isCrossRepository,url,updatedAt"], rootIn as string);
+    if (!Array.isArray(rows)) {
+      const cap = await ghCapability();
+      return { ok: false, needsAuth: !cap.available || !cap.authed,
+        error: !cap.available ? "the gh CLI is not installed" : !cap.authed ? "gh is not signed in to GitHub" : "GitHub did not answer" };
+    }
+    const mine = rows.filter((r) => r.isCrossRepository !== true && r.headRefName === branch);
+    const rank = (r: Record<string, unknown>) => (r.state === "OPEN" ? 1 : 0);
+    const best = [...mine].sort((a, b) => rank(b) - rank(a) || String(b.updatedAt).localeCompare(String(a.updatedAt)))[0];
+    const pr: HeadLookup | null = best ? {
+      number: Number(best.number ?? 0),
+      state: best.state === "MERGED" || best.state === "CLOSED" ? best.state : "OPEN",
+      isDraft: !!best.isDraft,
+      headRefName: String(best.headRefName ?? ""), baseRefName: String(best.baseRefName ?? ""),
+      url: String(best.url ?? ""),
+    } : null;
+    headLookupCache.set(key, { at: Date.now(), pr });
+    return { ok: true, pr };
+  })().finally(() => { headLookupFlight.delete(key); });
+  headLookupFlight.set(key, run);
+  return run;
+}
+
 /**
  * The true rollup for ONE pull request — the latest run per check name.
  *
@@ -990,7 +1055,7 @@ export function ciNotifiesFor(filter: PrFilter): boolean {
  * whose checks have not landed says so rather than claiming "no checks", which
  * is a different and wrong answer.
  */
-const LIST_FIELDS_FAST = "number,title,author,state,isDraft,headRefName,baseRefName,url,updatedAt,reviewDecision,additions,deletions,changedFiles,labels,assignees,milestone";
+const LIST_FIELDS_FAST = "number,title,author,state,isDraft,headRefName,baseRefName,isCrossRepository,url,updatedAt,reviewDecision,additions,deletions,changedFiles,labels,assignees,milestone";
 
 type Entry = { at: number; prs: PrSummary[]; loading: boolean; checksPending: boolean; error?: string; total?: number; hasNext?: boolean; cursor?: string | null; fp?: string; began?: number };
 const listCache = new Map<string, Entry>();
@@ -1119,6 +1184,7 @@ export function mapSummary(p: any, withChecks: boolean): PrSummary {
     isDraft: !!p.isDraft,
     headRefName: p.headRefName || "",
     baseRefName: p.baseRefName || "",
+    ...(p.isCrossRepository === true ? { isCrossRepository: true } : null),
     url: p.url || "",
     updatedAt: p.updatedAt || "",
     reviewDecision: p.reviewDecision || null,

@@ -80,7 +80,7 @@ import { BOARD_ASK_MS, listOutcome, type ListOutcome } from "../lib/boardFace.ts
 import { keepLoadedChecks } from "../lib/prMerge.ts";
 import { applyFilter, checkLabel, checkRowId, checkSpan, checkStatusLine, checkVerdict, filterCounts, formatSpan, sectionChecks, shortName, slowest, spanShare, usualTick, usualTip, verdictHero, workflowCards, type CheckFilter } from "../lib/prChecksList.ts";
 import { askingBehind, behindAnswer, forgetBehind, forgetOneBehind, onBehind, refreshBehind } from "../lib/prBehindStore.ts";
-import { refreshRollup } from "../lib/prRollupStore.ts";
+import { refreshRollup, rollupOf } from "../lib/prRollupStore.ts";
 import { detailWithChecks, rowWithChecks, overlayDetail, reopenedRow, holdReopened, reopenKey, holdEdits, refreshPlan, rowPatch, landedDetail, dropLanded, staleOpen, once, type EditLog, type Landed, type Reopened } from "../lib/prRefresh.ts";
 import {
   anchorId, bootstrapSince, clearSeen, foldedIdx, markAllSeen, newKeys, newSince, onSeenChange, readSeen,
@@ -125,6 +125,11 @@ import { writeBlock } from "../lib/cardWrites.ts";
 import type { ListStatus as CuStatus, ListMember as CuMember, ProviderTask, HandoffUnassign } from "../../../shared/providers.ts";
 import { CloseButton, CloseIcon } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { isTrunkBranch, type Stack } from "../lib/prStack.ts";
+import { usePrStacks } from "../lib/usePrStacks.ts";
+import { factsReader, laneMap, rungReader } from "../lib/prStackFacts.ts";
+import { BaseToken, StackControl, type Neighbour } from "./StackMarks.tsx";
+import { wordOf, type Facts, type Rung } from "../lib/prStackWords.ts";
 import { AgentIcon, ArrowIcon, AttachIcon, BlockedIcon, BoltIcon, BranchIcon, CaretIcon, ChartIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CommitIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, EditIcon, EyeIcon, FileIcon, FlagIcon, IconLabel, LinkIcon, MergeIcon, MoreIcon, PinIcon, PlusIcon, RefreshIcon, SearchIcon, SparkleIcon, TagIcon, UndoIcon, UserIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { PrIcon } from "./workspace/icons.tsx";
 import { PrWatchMenu } from "./PrWatchMenu.tsx";
@@ -297,8 +302,7 @@ function ago(iso: string): string {
  * which draws the eye to something real, while a stack can never be quietly
  * shown as the trunk.
  */
-const TRUNKS = new Set(["main", "master", "trunk", "develop", "development"]);
-const isTrunk = (base: string): boolean => TRUNKS.has(base.toLowerCase());
+const isTrunk = isTrunkBranch;
 
 const stateTint = (p: PrSummary): string => {
   if (p.checks.pending > 0) return "var(--warning)";
@@ -3229,6 +3233,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [boardMineCards, rules, repo?.key, seenMarks],
   );
+  /* What the filters hid, for the one thing that still needs it: a stacked pull
+     request names its base, and the base may be filtered out. */
+  const boardUnfiltered = useMemo(() => ({ mine: boardMineCards, review: boardReviewCards }), [boardMineCards, boardReviewCards]);
   const boardReviewShown = useMemo(
     () => applyRulesKeepUnread(boardReviewCards, rules, readPrField, isRuleExempt),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -4452,6 +4459,51 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   }, [root, selected, detailTick]);
   const d = detail;
 
+  /*
+   * THE STACK THIS PULL REQUEST IS IN, for the header.
+   *
+   * Read off the lists the panel already holds (the board's two, and the table's
+   * pool), with the pull request itself in front so it is found whichever list
+   * it came from. The base's word is the one its card carries on the board.
+   */
+  const stackPool = useMemo(() => {
+    const by = new Map<number, PrSummary>();
+    for (const p of [...boardMineCards, ...boardReviewCards, ...prs]) if (!by.has(p.number)) by.set(p.number, p);
+    return [...by.values()];
+  }, [boardMineCards, boardReviewCards, prs]);
+  const stackSeed = useMemo(() => {
+    if (!d) return stackPool;
+    const fork = !!d.headRepoOwner && !!repo?.nameWithOwner && d.headRepoOwner.toLowerCase() !== repo.nameWithOwner.split("/")[0]!.toLowerCase();
+    const own = { number: d.number, headRefName: d.headRefName, baseRefName: d.baseRefName, state: d.state, isDraft: d.isDraft, ...(fork ? { isCrossRepository: true } : null) };
+    return [own, ...stackPool.filter((p) => p.number !== d.number)];
+  }, [d?.number, d?.headRefName, d?.baseRefName, d?.state, d?.isDraft, d?.headRepoOwner, repo?.nameWithOwner, stackPool]); // eslint-disable-line react-hooks/exhaustive-deps
+  const detailStacks = usePrStacks(root, stackSeed, () => true);
+  const stackUi = useMemo(() => {
+    if (!d) return undefined;
+    const stack = detailStacks.of(d.number);
+    if (!stack) return undefined;
+    const mineN = new Set(boardMine.map((p) => p.number));
+    const askedN = new Set(boardReview.map((p) => p.number));
+    const lanes = laneMap(stackPool, mineN, askedN, (p) => {
+      if (!root || !p.checks || p.checks.failure === 0) return p;
+      const real = rollupOf(root, p.number, `${p.headSha ?? ""}|${JSON.stringify(p.checks)}`);
+      return real ? { ...p, checks: real } : p;
+    });
+    const onBoard = new Set([...boardMineShown, ...boardReviewShown].map((p) => p.number));
+    const facts = factsReader({ pool: stackPool, found: detailStacks.found, onBoard: (n) => onBoard.has(n), lane: (n) => lanes.get(n),
+      status: (p) => withCard(p, hasTaskProvider).card?.status });
+    const briefs = rungReader(stackPool);
+    const rungs = (n: number): Rung | undefined => (n === d.number ? { number: n, title: d.title, line: `→ ${d.baseRefName}` } : briefs(n));
+    const nb = (n: number, base: Stack["base"], note?: string): Neighbour => ({
+      number: n, note, word: wordOf(facts(n), base ?? { kind: "pr", number: n, branch: "", draft: false }).word });
+    const b = stack.base;
+    const prev = b && (b.kind === "pr" || b.kind === "merged" || b.kind === "closed") ? nb(b.number, b) : null;
+    const nextN = stack.next[0];
+    const sib = stack.siblings[0];
+    const next = nextN !== undefined ? nb(nextN, null) : sib !== undefined ? nb(sib, null, "the other branch of this fork") : null;
+    return { stack, prev, next, rungs, facts, baseFacts: b && b.kind !== "missing" && b.kind !== "pending" ? facts(b.number) : undefined };
+  }, [d, detailStacks, stackPool, boardMine, boardReview, boardMineShown, boardReviewShown, root, hasTaskProvider]);
+
   /* Asked once and handed to both readers. The masthead strip and the Overview
    * box are two sentences about the same rollup, and "we pushed a moment ago"
    * is the input that decides whether an empty one means "none" or "not yet" —
@@ -4836,7 +4888,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                  and search above stays where it was, and picking any of them
                  switches back to the table it belongs to. */
               <TriageBoard
-                mine={boardMineShown} review={boardReviewShown}
+                mine={boardMineShown} review={boardReviewShown} unfiltered={boardUnfiltered}
                 /* The filter bar's own chip and switch — see the comment on
                    `unreadOnly` above. The board used to keep a second, unwired
                    copy of this switch and render a second chip for it, so
@@ -5020,7 +5072,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                   the MouseEvent in as the pull request number. */}
               <Masthead
                 root={root} repo={repo?.nameWithOwner ?? ""}
-                d={d} busy={busy || !!mergeWork} local={local} onShowLocal={showLocal}
+                d={d} busy={busy || !!mergeWork} local={local} onShowLocal={showLocal} stackUi={stackUi} onOpenPr={openPr}
                 onEditTitle={doEditTitle} onDraft={() => { void field(draftPatch(d.number, !d.isDraft), () => api.prDraft(root, d.number, !d.isDraft), d.isDraft ? "Mark ready failed" : "Convert to draft failed", "draft"); }}
                 onClose={doClose} onLocalReview={(recipe) => doLocalReview(undefined, recipe)}
                 onReviewInTerminal={onReviewInTerminal && d && !readOnly ? (recipe) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "") : undefined}
@@ -8274,9 +8326,13 @@ function prStateBadge(d: { state: PrSummary["state"]; isDraft: boolean }): { tin
   return { tint: "var(--success)", state: "Open", glyph: <PrIcon size={ICON.xs} /> };
 }
 
-function Masthead({ root, repo, d, busy, local, onShowLocal, onEditTitle, onDraft, onClose, onLocalReview, onReviewInTerminal, onLabels, onReviewers, onNudge, onEditField, condensed, viewed, threads, queued, awaitingChecks, localHead }: {
+function Masthead({ root, repo, d, busy, local, stackUi, onOpenPr, onShowLocal, onEditTitle, onDraft, onClose, onLocalReview, onReviewInTerminal, onLabels, onReviewers, onNudge, onEditField, condensed, viewed, threads, queued, awaitingChecks, localHead }: {
   root: string; repo: string;
   d: PrDetail; busy: boolean;
+  /** The stack this pull request is in, worded; absent when it is on its own. */
+  stackUi?: { stack: Stack; prev: Neighbour | null; next: Neighbour | null; rungs: (n: number) => Rung | undefined; facts: (n: number) => Facts | undefined; baseFacts?: Facts };
+  /** Open another pull request, inside this panel. */
+  onOpenPr: (n: number) => void;
   /** What plugins have written here — what their buttons in this row say. */
   local: LocalNotes;
   onShowLocal: () => void;
@@ -8415,6 +8471,10 @@ function Masthead({ root, repo, d, busy, local, onShowLocal, onEditTitle, onDraf
                 it under — and it has to stay on screen once the metadata folds
                 away, which is exactly when you are deep enough in a diff to
                 have forgotten what the card asked for. */}
+            {stackUi && (
+              <StackControl stack={stackUi.stack} prev={stackUi.prev} next={stackUi.next} onOpen={onOpenPr}
+                rungs={stackUi.rungs} factsOf={stackUi.facts} />
+            )}
             <PrCardChip pr={d} card={d.card} />
             {d.title}
           </span>
@@ -8551,6 +8611,11 @@ function Masthead({ root, repo, d, busy, local, onShowLocal, onEditTitle, onDraf
               color: isTrunk(d.baseRefName) ? "var(--text3)" : "var(--warning)",
               background: "color-mix(in srgb, var(--primary) 12%, transparent)",
             }}>{d.baseRefName}</span>
+          {/* The same token the card wears: the base's number and where it
+              stands, one press from opening it here. */}
+          {stackUi?.stack.base && stackUi.stack.base.kind !== "pending" && (
+            <BaseToken base={stackUi.stack.base} facts={stackUi.baseFacts} onOpen={onOpenPr} />
+          )}
         </Field>
         {/*
           * Where this branch lives on this machine.

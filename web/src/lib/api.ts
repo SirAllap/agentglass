@@ -1521,6 +1521,12 @@ const realApi = {
   prsForBranch: (root: string, branch: string) =>
     get<{ ok: boolean; repo?: string; from?: PrBranchSummary; into: PrBranchSummary[]; needsAuth?: boolean; error?: string }>(
       `/prs/for-branch?${new URLSearchParams({ root, branch })}`),
+  /** The pull request that came FROM a branch, in any state: a stacked pull
+   *  request's base when the board's list does not hold it. One cached `gh`
+   *  call on the server; see prForHead. */
+  prForHead: (root: string, branch: string) =>
+    get<{ ok: boolean; pr?: { number: number; state: "OPEN" | "CLOSED" | "MERGED"; isDraft: boolean; headRefName: string; baseRefName: string; url: string } | null; needsAuth?: boolean; error?: string }>(
+      `/prs/for-head?${new URLSearchParams({ root, branch })}`),
   /** Just the local half — whether your checkout is dirty, ahead, or can be
    *  fast-forwarded. Git only, no network, so it can be asked again while a
    *  pull request is open; `prBehind` holds the slow half. */
@@ -2737,6 +2743,7 @@ const demoApi: typeof realApi = {
   // shows the whole offer: how far behind, and that the local branch comes
   // along. Everything else keeps the old "no answer, no promises" shape.
   prsForBranch: (_r: string, _b: string) => D({ ok: true, into: [] as PrSummary[] }),
+  prForHead: (_r: string, b: string) => D(demo.prForHead(b)),
   /* The demo has no checkout, so the local half is simply absent — the panel
      then makes no promises about here, which is its oldest behaviour. */
   prLocalHead: (_r: string, branch: string) => D({

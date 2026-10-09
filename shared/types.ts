@@ -3335,6 +3335,9 @@ export interface PrSummary {
   isDraft: boolean;
   headRefName: string;
   baseRefName: string;
+  /** The branch is in a fork, so it is not a branch of this repository and no
+   *  pull request here can target it. Absent means it is. See prStack.ts. */
+  isCrossRepository?: boolean;
   url: string;
   updatedAt: string;
   reviewDecision: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;

@@ -1137,6 +1137,10 @@ export function prDetail(n: number): { ok: boolean; detail?: PrDetail; error?: s
   const d = prDetailOf(n);
   return d ? { ok: true, detail: d } : { ok: false, error: "no such pull request in the demo" };
 }
+/** The demo has no stacked pull requests, so no base is ever found by name. */
+export function prForHead(_branch: string): { ok: boolean; pr: null } {
+  return { ok: true, pr: null };
+}
 export function prDiff(n: number): { ok: boolean; text?: string; error?: string } {
   return n === 482 ? { ok: true, text: PR_482_DIFF } : { ok: true, text: "" };
 }
