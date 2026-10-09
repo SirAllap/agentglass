@@ -9,13 +9,14 @@ import type { PublicPlugin } from "../../shared/types.ts";
 
 const SANDBOX = { network: "agentglass" as const, read: [], write: [], programs: [] };
 
-type Fields = Pick<PublicPlugin, "sandbox" | "running" | "boxState" | "sandboxProbe" | "lastBoxFailure">;
+type Fields = Pick<PublicPlugin, "sandbox" | "running" | "boxState" | "sandboxProbe" | "boxPlan" | "lastBoxFailure">;
 
 const plugin = (over: Partial<Fields> = {}): Fields => ({
   sandbox: SANDBOX,
   running: false,
   boxState: undefined,
   sandboxProbe: undefined,
+  boxPlan: undefined,
   lastBoxFailure: undefined,
   ...over,
 });
@@ -33,7 +34,7 @@ describe("boxWording", () => {
   });
 
   test("not running, but the probe already says this host cannot build one: red, before a start is ever tried", () => {
-    const w = boxWording(plugin({ running: false, sandboxProbe: { ok: false, reason: "userns-blocked", detail: "bwrap: setting up uid map: Permission denied" } }));
+    const w = boxWording(plugin({ running: false, boxPlan: "refuse", sandboxProbe: { ok: false, reason: "userns-blocked", detail: "bwrap: setting up uid map: Permission denied" } }));
     expect(w!.tone).toBe("warning");
     expect(w!.text).toMatch(/AppArmor/);
     expect((w as { fix?: string }).fix).toBe(USERNS_FIX);
@@ -87,6 +88,71 @@ describe("boxWording", () => {
   test("running unboxed: no-block reads neutral, not red — a declared sandbox never actually reaches this reason", () => {
     const w = boxWording(plugin({ running: true, boxState: { kind: "unboxed", reason: "no-block" } }));
     expect(w!.tone).toBe("neutral");
+  });
+});
+
+/*
+ * The sentence a person reads before switching a plugin on, for every host
+ * the server can answer for. "Runs as you" is true when it starts unboxed and
+ * false when the start is refused; "will not start" is false anywhere but a
+ * Linux host with no box and no consent.
+ */
+describe("boxWording, platform x probe x plan x running", () => {
+  const fails = (reason: "missing" | "userns-blocked" | "failed") => ({ ok: false as const, reason, detail: "bwrap: no" });
+  const REASONS = ["missing", "userns-blocked", "failed"] as const;
+
+  for (const reason of REASONS) {
+    test(`Linux, no box (${reason}), no consent, not running: will not start, and does not say it runs as you`, () => {
+      const w = boxWording(plugin({ boxPlan: "refuse", sandboxProbe: fails(reason) }))!;
+      expect(w.tone).toBe("warning");
+      expect(w.text).toMatch(/will not start until you allow it to run unboxed or fix the host/);
+      expect(w.text).not.toMatch(/runs as you/);
+      expect((w as { willNotStart?: boolean }).willNotStart).toBe(true);
+    });
+
+    test(`Linux, no box (${reason}), consent or env, not running: starts unboxed, runs as you is true`, () => {
+      const w = boxWording(plugin({ boxPlan: "unboxed-consented", sandboxProbe: fails(reason) }))!;
+      expect(w.tone).toBe("warning");
+      expect(w.text).toMatch(/runs as you/);
+      expect(w.text).not.toMatch(/will not start/);
+      expect((w as { willNotStart?: boolean }).willNotStart).toBeUndefined();
+    });
+
+    test(`macOS or Windows (probe ${reason}), not running: unboxed by design, no refusal, no bubblewrap to install`, () => {
+      const w = boxWording(plugin({ boxPlan: "unboxed-platform", sandboxProbe: fails(reason) }))!;
+      expect(w.text).toMatch(/runs as you/);
+      expect(w.text).not.toMatch(/will not start|bubblewrap|AppArmor/);
+      expect((w as { fix?: string }).fix).toBeUndefined();
+    });
+
+    test(`macOS or Windows (boxState ${reason}), running: the same sentence, still no bubblewrap to install`, () => {
+      const w = boxWording(plugin({ running: true, boxPlan: "unboxed-platform", sandboxProbe: fails(reason), boxState: { kind: "unboxed", reason, detail: "bwrap: no" } }))!;
+      expect(w.text).toMatch(/runs as you/);
+      expect(w.text).not.toMatch(/will not start|bubblewrap|AppArmor/);
+    });
+
+    test(`Linux, running unboxed (${reason}): keeps runs as you`, () => {
+      const w = boxWording(plugin({ running: true, boxPlan: "unboxed-consented", sandboxProbe: fails(reason), boxState: { kind: "unboxed", reason, detail: "bwrap: no" } }))!;
+      expect(w.text).toMatch(/runs as you/);
+      expect(w.text).not.toMatch(/will not start/);
+    });
+  }
+
+  test("a server that sends no plan is read as Linux's default, never as a promise that it runs", () => {
+    const w = boxWording(plugin({ boxPlan: undefined, sandboxProbe: fails("missing") }))!;
+    expect(w.text).toMatch(/will not start/);
+  });
+
+  test("the box can be built: neutral on any platform, whatever the consent", () => {
+    for (const p of [undefined, "box"] as const) {
+      expect(boxWording(plugin({ boxPlan: p, sandboxProbe: { ok: true } }))!.tone).toBe("neutral");
+    }
+  });
+
+  test("a failure that stopped the last start says it did not start, not that it ran as you", () => {
+    const w = boxWording(plugin({ boxPlan: "box", sandboxProbe: { ok: true }, lastBoxFailure: "bwrap: no" }))!;
+    expect(w.text).toContain("bwrap: no");
+    expect(w.text).not.toMatch(/ran as you|runs as you/);
   });
 });
 

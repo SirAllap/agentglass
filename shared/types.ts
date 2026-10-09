@@ -5130,7 +5130,8 @@ export interface PublicPlugin {
   icon?: string;
   color?: string;
   /** What it asks to be given inside a box — see shared/pluginSandbox.ts.
-   *  Declared, not yet enforced. */
+   *  Enforced when this host can build a bwrap box; see `boxPlan` for what a
+   *  start does when it cannot. */
   sandbox?: import("./pluginSandbox.ts").PluginSandbox;
   running: boolean;
   pid: number | null;
@@ -5148,6 +5149,11 @@ export interface PublicPlugin {
    *  before a start is ever attempted, so the approval screen can say a box
    *  cannot be built before the person switches the plugin on. */
   sandboxProbe?: { ok: true } | { ok: false; reason: "missing" | "userns-blocked" | "failed"; detail: string };
+  /** What a start does on this host — see `boxPlan` in shared/pluginBoxPlan.ts.
+   *  Present only when `sandbox` is declared. The probe alone cannot draw the
+   *  screen: it says "missing" on every non-Linux host, where the plugin
+   *  starts unboxed all the same. */
+  boxPlan?: import("./pluginBoxPlan.ts").BoxPlan;
   /** The first line bwrap wrote to stderr the last time this plugin's box
    *  died in its opening instant. Set only while nothing is running. */
   lastBoxFailure?: string;

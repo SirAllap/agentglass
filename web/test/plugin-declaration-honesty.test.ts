@@ -8,6 +8,7 @@
  * because there is no renderer in this project.
  */
 import { describe, expect, test } from "bun:test";
+import { boxWording, processIsBoxed, processWillNotStart } from "../src/lib/pluginBoxState.ts";
 
 const SRC = await Bun.file(new URL("../src/components/plugins/PluginDeclaration.tsx", import.meta.url)).text();
 const BOX_SRC = await Bun.file(new URL("../src/lib/pluginBoxState.ts", import.meta.url)).text();
@@ -24,7 +25,31 @@ describe("approval screen", () => {
     const i = SRC.indexOf("export function PluginDeclaration(");
     expect(i).toBeGreaterThan(0);
     expect(SRC.slice(i)).toContain("PROCESS_WARNING");
-    expect(SRC.slice(i)).toMatch(/box\??\.tone === "boxed"[^\n]*BOXED_PROCESS_NOTE[^\n]*:\s*PROCESS_WARNING/);
+    expect(SRC.slice(i)).toMatch(/boxed \? BOXED_PROCESS_NOTE : [^\n]*: PROCESS_WARNING/);
+    expect(SRC.slice(i)).toContain("processIsBoxed(box)");
+  });
+
+  test("a refused start does not get 'runs as you' either: its process note says it does not start", () => {
+    const base = { sandbox: { network: "agentglass" as const, read: [], write: [], programs: [] }, running: false, boxState: undefined, lastBoxFailure: undefined };
+    const refused = boxWording({ ...base, boxPlan: "refuse", sandboxProbe: { ok: false, reason: "missing", detail: "bwrap is not on PATH" } });
+    expect(processWillNotStart(refused)).toBe(true);
+    const consented = boxWording({ ...base, boxPlan: "unboxed-consented", sandboxProbe: { ok: false, reason: "missing", detail: "bwrap is not on PATH" } });
+    expect(processWillNotStart(consented)).toBe(false);
+    expect(SRC).toMatch(/processWillNotStart\(box\) \? REFUSED_PROCESS_NOTE/);
+    expect(SRC.slice(SRC.indexOf("const REFUSED_PROCESS_NOTE"))).toMatch(/^const REFUSED_PROCESS_NOTE = "This plugin does not start/);
+  });
+
+  test("the process block agrees with the box block in every state: a box promised or built is never followed by 'runs as you'", () => {
+    const base = { sandbox: { network: "agentglass" as const, read: [], write: [], programs: [] }, running: false, boxState: undefined, sandboxProbe: undefined, boxPlan: undefined, lastBoxFailure: undefined };
+    // Before the plugin is switched on: the box card says "will run in a box".
+    expect(boxWording(base)!.tone).toBe("neutral");
+    expect(processIsBoxed(boxWording(base))).toBe(true);
+    expect(processIsBoxed(boxWording({ ...base, sandboxProbe: { ok: true } }))).toBe(true);
+    expect(processIsBoxed(boxWording({ ...base, running: true, boxState: { kind: "boxed" } }))).toBe(true);
+    // No box block at all, or a box known to be missing: the warning stays.
+    expect(processIsBoxed(boxWording({ ...base, sandbox: undefined }))).toBe(false);
+    expect(processIsBoxed(boxWording({ ...base, boxPlan: "refuse", sandboxProbe: { ok: false, reason: "missing", detail: "bwrap is not on PATH" } }))).toBe(false);
+    expect(processIsBoxed(boxWording({ ...base, running: true, boxState: { kind: "unboxed", reason: "failed", detail: "x" } }))).toBe(false);
   });
 
   test("no scope sentence claims the plugin cannot write or touch the machine", () => {
@@ -74,5 +99,16 @@ describe("docs/PLUGINS.md", () => {
 
   test("no longer promises a read plugin cannot write", () => {
     expect(DOC).not.toMatch(/Cannot write anything/);
+  });
+});
+
+describe("comments about the sandbox block say what docs/PLUGINS.md says", () => {
+  test("neither the manifest type nor the public plugin type calls the box unenforced", async () => {
+    const sandbox = await Bun.file(new URL("../../shared/pluginSandbox.ts", import.meta.url)).text();
+    const types = await Bun.file(new URL("../../shared/types.ts", import.meta.url)).text();
+    expect(DOC).toMatch(/Enforced when this host can build a `bwrap` box/);
+    expect(sandbox).not.toMatch(/Nothing enforces it yet/i);
+    expect(types).not.toMatch(/Declared, not yet enforced/i);
+    expect(sandbox).toMatch(/refused on Linux until it is allowed to run unboxed/);
   });
 });

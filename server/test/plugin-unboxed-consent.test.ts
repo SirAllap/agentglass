@@ -61,6 +61,7 @@ describe("a plugin whose box this host cannot build", () => {
     const rec = listPlugins()[0]!;
     expect(rec.running).toBe(false);
     expect(rec.lastBoxFailure).toContain("refused to run unboxed");
+    expect(rec.boxPlan).toBe("refuse"); // what the approval screen reads, not the probe alone
   });
 
   test("starts when the machine-wide escape hatch is set", async () => {
@@ -68,6 +69,7 @@ describe("a plugin whose box this host cannot build", () => {
     await installPlugin(fixture());
     await enablePlugin("watcher");
     expect(listPlugins()[0]!.running).toBe(true);
+    expect(listPlugins()[0]!.boxPlan).toBe("unboxed-consented");
   });
 
   // On macOS/Windows, bwrap does not exist at all, so sandboxProbe() fails
@@ -81,6 +83,8 @@ describe("a plugin whose box this host cannot build", () => {
       await installPlugin(fixture());
       await enablePlugin("watcher");
       expect(listPlugins()[0]!.running).toBe(true);
+      expect(listPlugins()[0]!.sandboxProbe).toMatchObject({ ok: false }); // no box can be built here (a real macOS host reports "missing")
+      expect(listPlugins()[0]!.boxPlan).toBe("unboxed-platform"); // and the screen must not read that as a refusal
     } finally {
       Object.defineProperty(process, "platform", { value: orig, configurable: true });
     }

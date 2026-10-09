@@ -33,6 +33,7 @@ import type { GuardedFetchOptions } from "./net.ts";
 import { blockedEntry, type BlockEntry } from "./plugin-blocklist.ts";
 import { type Contributes, type Field, RESERVED_KEYS, redactSecrets, validateContributes } from "../../shared/pluginUi.ts";
 import { type PluginSandbox, validateSandbox } from "../../shared/pluginSandbox.ts";
+import { boxPlan, type BoxPlan } from "../../shared/pluginBoxPlan.ts";
 import {
   hostResolvConfExtraRo, hostSystemPaths, openGrantFds, pluginDataDir, removePluginDataDir, resolveGrants,
   resolvePrograms, sandboxArgv, sandboxProbe, type SandboxProbe,
@@ -910,16 +911,15 @@ async function startProcess(rec: PluginRecord): Promise<void> {
       parentFds = built.parentFds;
       boxState = built.refused.length > 0 ? { kind: "boxed", refused: built.refused } : { kind: "boxed" };
       for (const r of built.refused) console.warn(`[plugin sandbox] ${rec.name}: refused ${r.path}: ${r.why}`);
-    } else if (mayRunUnboxed(rec)) {
-      // `process.platform !== "linux"` first, and unconditional: bwrap is a
-      // Linux mechanism, so on macOS/Windows `sandboxProbe()` fails with
-      // "missing" for every single plugin, always — there is no box to
-      // consent AWAY from there, unlike Linux where "missing"/"userns-
-      // blocked" is usually a fixable local policy. Refusing by default
-      // would not defend anything (there was never a box on these
+    } else if (planFor(rec) !== "refuse") {
+      // Anything but "refuse" (see boxPlan): off Linux this is unconditional
+      // — bwrap is a Linux mechanism, so on macOS/Windows `sandboxProbe()`
+      // fails with "missing" for every single plugin, always, and there is
+      // no box to consent AWAY from there, unlike Linux where "missing"/
+      // "userns-blocked" is usually a fixable local policy. Refusing by
+      // default would not defend anything (there was never a box on these
       // platforms to widen past) and would silently stop every plugin at
-      // the first boot after this ships. This is exactly the condition
-      // it replaces, unchanged for those two platforms.
+      // the first boot after this ships.
       // The host cannot build the box, and a human (or the machine-wide
       // escape hatch) has explicitly said this plugin may run anyway: the
       // plugin runs exactly as it would with no `sandbox` block at all,
@@ -1026,6 +1026,11 @@ export type PublicPlugin = PluginRecord & {
    *  on. `sandboxProbe()` is cached, so asking for every plugin costs one
    *  probe, not one per plugin. */
   sandboxProbe?: PublicSandboxProbe;
+  /** What a start does on this host, from the probe, the platform and the
+   *  consent — present only when the plugin declares a sandbox. The probe
+   *  alone is not enough to draw the screen: it reports "missing" on every
+   *  non-Linux host, where the plugin starts unboxed all the same. */
+  boxPlan?: BoxPlan;
   /** The first line bwrap wrote to stderr the last time this plugin's box
    *  died in its opening instant, cleared at the start of the next attempt.
    *  Set only while nothing is running: a plugin currently up has nothing
@@ -1048,9 +1053,15 @@ function publicProbe(): PublicSandboxProbe {
   return p.ok ? { ok: true } : { ok: false, reason: p.reason, detail: p.detail };
 }
 
-/** Whether a host that cannot build the box lets this plugin run without it. */
-function mayRunUnboxed(rec: PluginRecord): boolean {
-  return process.platform !== "linux" || rec.allowUnboxed === true || process.env.AGENTGLASS_PLUGINS_UNBOXED === "1";
+/** What starting this plugin does on this host — the one decision the start
+ *  path, `runsUnboxed` and the approval screen all read (see boxPlan). */
+function planFor(rec: PluginRecord): BoxPlan {
+  return boxPlan({
+    platform: process.platform,
+    probeOk: sandboxProbe().ok,
+    allowUnboxed: rec.allowUnboxed,
+    envAllowsAll: process.env.AGENTGLASS_PLUGINS_UNBOXED === "1",
+  });
 }
 
 /** Outside a box now, or enabled and about to be: a plugin that is not running
@@ -1059,7 +1070,9 @@ function mayRunUnboxed(rec: PluginRecord): boolean {
 function runsUnboxed(p: PluginRecord, boxState: BoxState | undefined): boolean {
   if (boxState) return boxState.kind === "unboxed";
   if (!p.enabled) return false;
-  return !p.sandbox || (!sandboxProbe().ok && mayRunUnboxed(p));
+  if (!p.sandbox) return true;
+  const plan = planFor(p);
+  return plan === "unboxed-consented" || plan === "unboxed-platform";
 }
 
 /** `running`/`pid`/`boxState` together, from the one live entry — so a
@@ -1067,14 +1080,17 @@ function runsUnboxed(p: PluginRecord, boxState: BoxState | undefined): boolean {
  *  raced a stop or a restart in between. Adds the host-level probe and any
  *  leftover crash detail, both keyed off the RECORD rather than the live
  *  entry, since they matter most while nothing is running. */
-function liveState(p: PluginRecord): Pick<PublicPlugin, "running" | "pid" | "boxState" | "sandboxProbe" | "lastBoxFailure"> {
+function liveState(p: PluginRecord): Pick<PublicPlugin, "running" | "pid" | "boxState" | "sandboxProbe" | "boxPlan" | "lastBoxFailure"> {
   const r = running.get(p.name);
-  const out: Pick<PublicPlugin, "running" | "pid" | "boxState" | "sandboxProbe" | "lastBoxFailure"> = {
+  const out: Pick<PublicPlugin, "running" | "pid" | "boxState" | "sandboxProbe" | "boxPlan" | "lastBoxFailure"> = {
     running: r !== undefined,
     pid: r?.pid ?? null,
   };
   if (r) out.boxState = r.boxState;
-  if (p.sandbox) out.sandboxProbe = publicProbe();
+  if (p.sandbox) {
+    out.sandboxProbe = publicProbe();
+    out.boxPlan = planFor(p);
+  }
   if (!r) {
     const fail = lastBoxFailure.get(p.name);
     if (fail) out.lastBoxFailure = fail;
