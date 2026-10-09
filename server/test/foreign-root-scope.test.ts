@@ -34,6 +34,22 @@ describe("the request path", () => {
     expect(start).toBeGreaterThan(0);
     expect(end).toBeGreaterThan(start);
     const block = src.slice(start, end).split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
-    expect(block).toMatch(/if \(isForeignRoot\(url\.searchParams\.get\("root"\) \?\? ""\) && !mayReadForeignRoot\(caller\)\) \{\s*return json\(\{ ok: false, error: [^}]*\}, 403\);/);
+    expect(block).toContain('if (isForeignRoot(url.searchParams.get("root") ?? "") && !mayReadForeignRoot(caller)) return foreignRefused();');
+  });
+  test("every pull request POST that reads a root from its body asks the same question first", () => {
+    // Split at each top-level route of the dispatcher; a block that names a
+    // /prs/ POST and reads `b.root` must refuse a gh: root before it uses one.
+    const guard = "if (isForeignRoot(b.root) && !mayReadForeignRoot(caller)) return foreignRefused();";
+    const blocks = src.split("\n    if (").filter((b) => {
+      const head = b.split("\n", 1)[0]!;
+      return head.includes('"/prs/') && head.includes('"POST"') && b.includes("b.root");
+    });
+    expect(blocks.length).toBeGreaterThanOrEqual(5);
+    for (const b of blocks) {
+      const head = b.split("\n", 1)[0]!;
+      const at = b.indexOf(guard);
+      expect(at, head).toBeGreaterThan(0);
+      expect(b.slice(0, at).includes("b.root"), `${head}: b.root is used before the guard`).toBe(false);
+    }
   });
 });

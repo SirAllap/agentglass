@@ -2606,6 +2606,8 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
           + "what an agent's own shell looks like. Answer it in the desktop app, in the "
           + "web UI, or on a paired phone."),
     }, 403);
+    // A `gh:` root reaches past the open project: see mayReadForeignRoot.
+    const foreignRefused = () => json({ ok: false, error: "a repository outside the open project needs full access" }, 403);
     const rebindBlocked = () =>
       json({ ok: false, error: "request Host is not a local or private address (DNS-rebinding guard — set AGENTGLASS_ALLOWED_HOSTS for a reverse-proxy name)" }, 403);
 
@@ -2752,10 +2754,9 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // minute per device — it is what lets the pane say when a phone was last
       // heard from, which is the difference between a device list and a guess.
       if (caller.device) markSeen(caller.device.id);
-      // A `gh:` root reaches past the open project: see mayReadForeignRoot.
-      if (isForeignRoot(url.searchParams.get("root") ?? "") && !mayReadForeignRoot(caller)) {
-        return json({ ok: false, error: "a repository outside the open project needs full access" }, 403);
-      }
+      // Here for a root in the query; the POST routes that read one from the
+      // body ask the same question once they have parsed it.
+      if (isForeignRoot(url.searchParams.get("root") ?? "") && !mayReadForeignRoot(caller)) return foreignRefused();
     }
 
     /*
@@ -7288,6 +7289,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (pathname === "/prs/conflict" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      if (isForeignRoot(b.root) && !mayReadForeignRoot(caller)) return foreignRefused();
       const asked = String(b.root ?? "");
       const root = prRouteRoot(asked);
       const number = Number(b.number ?? 0);
@@ -7352,6 +7354,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (pathname.startsWith("/prs/notify-watch/") && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      if (isForeignRoot(b.root) && !mayReadForeignRoot(caller)) return foreignRefused();
       if (pathname === "/prs/notify-watch/remove") return json(removeWatch(String(b.id ?? "")));
       if (pathname === "/prs/notify-watch/ack") return json(ackFire(Number(b.seq)));
       const id = await prRepoIdFor(b.root);
@@ -7506,6 +7509,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (!desktopOnly(req)) return json({ ok: false, error: "Check on base runs code from the pull request, so only the desktop app can start it" }, 403);
       let b: { root?: unknown; number?: unknown; command?: unknown; baseSha?: unknown; headSha?: unknown; sandbox?: unknown; allowNoSandbox?: unknown };
       try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      if (isForeignRoot(b.root) && !mayReadForeignRoot(caller)) return foreignRefused();
       const started = await startCheckOnBase(b.root, b.number, b.command, b);
       // Running a command from a CI log on this machine is the auditable fact; the command itself is kept, cut short.
       noteAction(clientIp, "/prs/check-on-base",
@@ -7532,6 +7536,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (!trustedCaller(req, from)) return csrfBlocked();
       let b: { root?: unknown; number?: unknown; send?: unknown };
       try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      if (isForeignRoot(b.root) && !mayReadForeignRoot(caller)) return foreignRefused();
       const got = await prDetail(b.root, b.number);
       if (!got.ok || !got.detail) return json({ ok: false, error: got.error ?? "no such pull request" }, 400);
       const text = nudgeText(got.detail);
@@ -7614,6 +7619,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (!trustedCaller(req, from)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      if (isForeignRoot(b.root) && !mayReadForeignRoot(caller)) return foreignRefused();
       const root = b.root ?? "";
       const n = b.number;
       /* A node id is checked at the door as well as in prs.ts — see nodeIdOk
