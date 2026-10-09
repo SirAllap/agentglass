@@ -95,14 +95,14 @@ describe("several people", () => {
     expect(togglePick([{ kind: "me" }], TEAM[1]!)).toEqual([]);
   });
   test("the trigger says up to two names and counts the rest; the sentence names them all", () => {
-    expect(shortName("David Pallares")).toBe("David P.");
+    expect(shortName("Sam Rivera")).toBe("Sam R.");
     expect(shortName("Cher")).toBe("Cher");
-    const three: Picked = [{ kind: "person", id: 1, name: "David Pallares" }, { kind: "person", id: 2, name: "Alex Moreno" }, { kind: "person", id: 3, name: "Priya Nair" }];
+    const three: Picked = [{ kind: "person", id: 1, name: "Sam Rivera" }, { kind: "person", id: 2, name: "Ada Lovelace" }, { kind: "person", id: 3, name: "Leo Marsh" }];
     expect(pickName([])).toBe("nobody");
-    expect(pickName(three.slice(0, 2))).toBe("David P., Alex M.");
-    expect(pickName(three)).toBe("David P., Alex M. +1");
-    expect(pickSentence(three.slice(0, 2))).toBe("David P. and Alex M.");
-    expect(pickSentence(three)).toBe("David P., Alex M. and Priya N.");
+    expect(pickName(three.slice(0, 2))).toBe("Sam R., Ada L.");
+    expect(pickName(three)).toBe("Sam R., Ada L. +1");
+    expect(pickSentence(three.slice(0, 2))).toBe("Sam R. and Ada L.");
+    expect(pickSentence(three)).toBe("Sam R., Ada L. and Leo M.");
     expect(pickSentence([{ kind: "me" }])).toBe("you");
   });
   test("they mean the same one write as a single person does: added when missing, nobody else taken off", () => {
