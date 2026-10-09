@@ -23,7 +23,7 @@
  * Wired from index.ts rather than importing `listPrs` here (or having prs.ts
  * import this module): prs.ts is imported by index.ts already, and this
  * module re-asking THROUGH prs.ts would be the same import cycle the
- * bundler cannot follow (see CLAUDE.md — a dynamic import between modules
+ * bundler cannot follow (see AGENTS.md — a dynamic import between modules
  * that already import each other emits an undefined helper). index.ts records
  * each ask right where it already calls `listPrs` for `/prs/list`, and hands
  * the recorded pairs a plain callback that also goes through `listPrs`.

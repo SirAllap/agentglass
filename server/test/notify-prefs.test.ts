@@ -106,7 +106,7 @@ describe("persistence — server/src/notifyPrefs.ts", () => {
     process.env.XDG_CONFIG_HOME = dir;
     // A fresh module instance per test: readNotifyPrefs() caches, and the
     // cache is what a stale XDG_CONFIG_HOME from a previous test would leak
-    // through — see CLAUDE.md's "known leaks" list.
+    // through — see AGENTS.md's "known leaks" list.
     mod = await import(`../src/notifyPrefs.ts?u=${Math.random()}`);
   });
   afterEach(() => {

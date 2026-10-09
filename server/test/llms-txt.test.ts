@@ -54,6 +54,6 @@ describe("AGENTS.md", () => {
     expect(AGENTS).toContain("make check");
     expect(AGENTS).toContain("agentglass-browser ");
     expect(AGENTS).toContain("agentglass-browser-mcp");
-    expect(AGENTS).toContain("CLAUDE.md");
+    expect(AGENTS).toContain("This repository is public");
   });
 });

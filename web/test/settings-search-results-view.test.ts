@@ -1,6 +1,6 @@
 /*
  * Three bugs found on the first screenshot of the results view, in the same
- * file (the app has no renderer to test the DOM against — see CLAUDE.md's
+ * file (the app has no renderer to test the DOM against — see AGENTS.md's
  * "Tests" section — so, as with every other settings-search test, the
  * decision is pulled out of the source and asserted there):
  *

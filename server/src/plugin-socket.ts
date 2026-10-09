@@ -7,7 +7,7 @@
  * Kept free of any import from index.ts or plugins.ts on purpose: plugins.ts
  * already imports this module (to start and stop the listener), and index.ts
  * imports plugins.ts, so this module importing either one back would make a
- * cycle the bundler has broken on before (see CLAUDE.md, "Editing"). Instead
+ * cycle the bundler has broken on before (see AGENTS.md, "Editing"). Instead
  * index.ts hands over its own request handler once, at boot, through
  * `setPluginSocketHandler` — the same shape `fetch` in `Bun.serve` always
  * had, just injected rather than imported.

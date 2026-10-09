@@ -43,7 +43,7 @@ describe("notesWorthyRepos", () => {
  * And the bell actually applies it — both to the note and to the "to pull"
  * chip, which the plan takes as its default: a counter that disagreed with
  * the filtered list would be the next bug report. Read between landmarks,
- * since there is no renderer in this project (CLAUDE.md).
+ * since there is no renderer in this project (AGENTS.md).
  */
 const bar = readFileSync(new URL("../src/components/TopBarNotes.tsx", import.meta.url), "utf8");
 const between = (from: string, to: string): string => {

@@ -6,7 +6,7 @@
  *
  * This runs the generator into a scratch file and diffs it against the
  * committed one, the same "does it still say what building it would say"
- * check tranche-floors.txt itself makes CLAUDE.md carry a comment about.
+ * check tranche-floors.txt itself makes AGENTS.md carry a comment about.
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";

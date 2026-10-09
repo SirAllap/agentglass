@@ -88,7 +88,7 @@ describe("nothing private is in the tree", () => {
 
   test("no link to an assistant session", () => {
     // Written clean and appended by tooling on pull request CREATION, which is
-    // why the rule in CLAUDE.md is to read the body back afterwards.
+    // why the rule in AGENTS.md is to read the body back afterwards.
     expect(hits(/claude\.ai\/code\/session[_/][A-Za-z0-9]+/)).toEqual([]);
   });
 
@@ -114,7 +114,7 @@ describe("nothing private is in the tree", () => {
      *   accident.
      *
      * Deliberately still a tripwire for the mistake that was actually made, and
-     * not a language detector — the rule it protects is written in CLAUDE.md,
+     * not a language detector — the rule it protects is written in AGENTS.md,
      * and somebody reading a failure here should go and read that.
      */
     const quoted = scanned.flatMap(({ path, text }) => {
@@ -235,7 +235,7 @@ describe("nothing private is in the tree", () => {
 
   test("and the rules it enforces are written down", () => {
     // A lock with no explanation beside it is a lock somebody deletes.
-    const rules = readFileSync(join(ROOT, "CLAUDE.md"), "utf8");
+    const rules = readFileSync(join(ROOT, "AGENTS.md"), "utf8");
     expect(rules).toContain("This repository is public");
     expect(rules).toContain("test/private-content.test.ts");
   });

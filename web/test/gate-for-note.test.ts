@@ -42,7 +42,7 @@ describe("gateForNote", () => {
 
 /*
  * And the bell actually wires it up to answerGate — read between landmarks,
- * since there is no renderer in this project (CLAUDE.md).
+ * since there is no renderer in this project (AGENTS.md).
  */
 const bell = readFileSync(new URL("../src/components/TopBarNotes.tsx", import.meta.url), "utf8");
 const between = (from: string, to: string): string => {

@@ -7,7 +7,7 @@
  * where the bench's freely-positioned window overlaps that strip, pressing on
  * the bench's own header dragged the whole app window instead of the bench.
  *
- * Source-level, because there is no renderer under `bun test` (see CLAUDE.md)
+ * Source-level, because there is no renderer under `bun test` (see AGENTS.md)
  * and the claim here is about which style object a component spreads onto its
  * root, not about pixels on screen.
  */
