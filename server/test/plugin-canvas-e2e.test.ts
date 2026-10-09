@@ -14,6 +14,7 @@ import { freePort } from "./freePort.ts";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
 import { CANVAS_LIMITS, loopingIds, validateScene, type CanvasScene } from "../../shared/pluginCanvas.ts";
+import { FLUSH_MS } from "../src/plugin-canvas.ts";
 
 let dir: string, base: string, port: number, proc: ReturnType<typeof Bun.spawn> | null = null;
 type Json = Record<string, any>;
@@ -99,6 +100,21 @@ beforeAll(async () => {
     if (!en.ok) throw new Error("enable failed: " + JSON.stringify(en));
   }
   for (const name of ["big", "small"]) for (let i = 0; i < 100 && !existsSync(join(dir, "agentglass", "plugins", name, "token.txt")); i++) await Bun.sleep(100);
+  // The token file exists before the plugin has drawn anything, and what it
+  // draws then sits in the server's coalescing window for FLUSH_MS. A test that
+  // started inside that window had its own first operations joined to the
+  // plugin's draw, a frame that began before the snapshot the window already
+  // held, so the window was sent a second snapshot instead of the "ops" frame
+  // the test waits for: 5 s of silence, the test's timeout, and bun kills the
+  // server it spawned for the 15 tests after it. Start from a scene that has
+  // been drawn and flushed.
+  for (const name of ["big", "small"]) {
+    const w = await openWindow();
+    w.ws.send(JSON.stringify({ type: "subscribe", plugin: name, panel: "board" }));
+    await w.next((f) => f.plugin === name && ((f.type === "snapshot" && f.scene.length > 0) || f.type === "ops"));
+    w.ws.close();
+  }
+  await Bun.sleep(FLUSH_MS + 50);
 }, SERVER_BOOT_MS);
 
 afterAll(async () => {
