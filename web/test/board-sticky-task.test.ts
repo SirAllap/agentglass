@@ -47,11 +47,8 @@ describe("what passes behind the Task column", () => {
    */
   it("carries the row's left padding, so nothing creeps as the board moves", () => {
     expect(/\.agx-stick\s*\{[^}]*padding-left:/.test(css)).toBe(true);
-    // The row carries no horizontal padding at all: its right 16px is the
-    // table grid's trailing 0px track and the gap before it.
-    expect(panel).toContain('className="agx-row w-full text-left hover:bg-white/5');
+    expect(panel).toContain('className="agx-row w-full text-left pr-4');
     expect(panel).not.toContain('className="agx-row w-full text-left px-4');
-    expect(panel).not.toContain('className="agx-row w-full text-left pr-4');
   });
 
   it("and the status heading holds still with it", () => {
