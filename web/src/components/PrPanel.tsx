@@ -60,7 +60,7 @@ import { SCROLLBAR_CSS, LINEBTN_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, Li
 import { Toggle } from "./diff/DiffControls.tsx";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import { Select } from "./Select.tsx";
-import { parseBody, parseUnifiedDiff, newLineNumbers, diffKind, parseShieldBadge, toggleChecklistItem, type MdBlock, type MdListItem, type ParsedFile } from "../lib/prBody.ts";
+import { parseBody, parseUnifiedDiff, newLineNumbers, diffKind, parseShieldBadge, toggleChecklistItem, parseChecklist, type MdBlock, type MdListItem, type ParsedFile } from "../lib/prBody.ts";
 import { afterViewed, fileAtFloor, stepFileIndex, verticalScrollerOf } from "../lib/prNav.ts";
 import { buildFileTree, treeOrder, type TreeNode } from "../lib/prFileTree.ts";
 import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
@@ -113,6 +113,7 @@ import { pins, isPinned, togglePin, subscribePins, type Pin } from "../lib/prPin
 import { TriageBoard } from "./TriageBoard.tsx";
 import { Inbox } from "./prs/Inbox.tsx";
 import { FileRail } from "./FileRail.tsx";
+import { Optimistic, reactionPatch, bodyPatch, resolvedPatch, labelsPatch } from "../lib/prOptimistic.ts";
 
 /**
  * The second half of a merge, named once.
@@ -2042,7 +2043,18 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const condensed = false;
   /** A file being read whole, over the panel. Null when nothing is open. */
   const [peek, setPeek] = useState<Peek | null>(null);
-  const [detail, setDetail] = useState<PrDetail | null>(null);
+  const [serverDetail, setDetail] = useState<PrDetail | null>(null);
+  /* What the screen draws is the server's pull request with any cheap write
+     still standing over it — see lib/prOptimistic.ts for why a layer rather
+     than editing `serverDetail` in place. `layerTick` is how the layer says
+     it changed. */
+  const [layerTick, setLayerTick] = useState(0);
+  const layerFail = useRef<(text: string) => void>(() => {});
+  const [layers] = useState(() => new Optimistic<PrDetail>({
+    onChange: () => setLayerTick((n) => n + 1),
+    onFail: (text) => layerFail.current(text),
+  }));
+  const detail = useMemo(() => (serverDetail ? layers.view(serverDetail) : null), [serverDetail, layers, layerTick]);
   /** Showing what was held while the real answer is on its way. Only true when
    *  there was something to show — a cold open has nothing to be stale about. */
   const [detailStale, setDetailStale] = useState(false);
@@ -2503,6 +2515,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     setToast({ ok, msg });
     setTimeout(() => setToast(null), 4500);
   }, []);
+  /* A cheap write that did not land is reported where every other write is. */
+  layerFail.current = (text) => flash(false, text);
 
   useEffect(() => {
     if (!active) return;
@@ -2730,8 +2744,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     const req = ++detailReq.current;
     if (staleTimer.current) clearTimeout(staleTimer.current);
     setDetailErr("");
+    const ticket = layers.readStarted();
     api.prDetail(root, n, force).then((r) => {
       if (req !== detailReq.current) return; // a later selection already won
+      if (r.ok && r.detail) layers.readLanded(ticket, { stale: !!r.stale });
       // Disarmed by any load, so a later, ordinary open of that number is ordinary.
       const trying = tryAsPr.current?.number === n ? tryAsPr.current : null;
       tryAsPr.current = null;
@@ -3520,7 +3536,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   // One picker for the masthead's "＋" and the sidebar's ✎ both — lifted here
   // so it can open from the masthead on every tab, not only where the sidebar
   // renders.
-  const fieldPicker = usePrFieldPicker(detail, root, act, flash);
+  const fieldPicker = usePrFieldPicker(detail, root, act, flash,
+    (add, remove, colors) => setLabels(add, remove, colors));
 
   const key = repo && detail ? `${repo.key}#${detail.number}` : "";
 
@@ -4032,6 +4049,63 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     return act("Description", () => api.prEdit(root, detail.number, { body }));
   };
 
+  /**
+   * A cheap write, drawn now and sent behind — see lib/prOptimistic.ts.
+   *
+   * When it lands, the pull request is read once more, quietly: that read began
+   * after the write finished, so it is the one allowed to replace the layer with
+   * GitHub's own answer. Only the pull request, and only if it is still the one
+   * open — the list is the slow read that made these feel slow in the first
+   * place, and it catches up on its own poll.
+   */
+  const cheap = (n: number, w: Parameters<typeof layers.run>[0], alsoList = false) => {
+    void layers.run(w).then((ok) => {
+      if (!ok || selectedRef.current !== n) return;
+      loadDetail(n, true);
+      if (alsoList) loadList(true);
+    });
+  };
+
+  /** A box ticked in the description. The whole body is the write, as it is on
+   *  github.com; one lane so two quick ticks cannot land in the wrong order and
+   *  leave the first one's body as the last word. */
+  const doToggleTask = (body: string) => {
+    if (!detail) return;
+    const n = detail.number;
+    cheap(n, {
+      patch: bodyPatch(n, body, parseChecklist(body)),
+      send: () => api.prEdit(root, n, { body }),
+      failText: "The checklist did not save",
+      lane: `body:${n}`,
+    });
+  };
+
+  const doResolve = (t: PrThread) => {
+    if (!detail) return;
+    const to = !t.isResolved;
+    cheap(detail.number, {
+      patch: resolvedPatch(t.id, to),
+      send: () => api.prSetThreadResolved(root, t.id, to),
+      failText: to ? "Resolve failed" : "Unresolve failed",
+      lane: `thread:${t.id}`,
+    });
+  };
+
+  /** Labels by name. Returns true on the press: the picker closes on it, and
+   *  a refusal comes back as the label disappearing again with a note. */
+  const setLabels = (add: string[], remove: string[], colors: Record<string, string> = {}) => {
+    if (!detail) return false;
+    if (!add.length && !remove.length) return true;
+    const n = detail.number;
+    cheap(n, {
+      patch: labelsPatch(n, add, remove, colors),
+      send: () => api.prLabels(root, n, add, remove),
+      failText: "Labels did not save",
+      lane: `labels:${n}`,
+    }, true);
+    return true;
+  };
+
   /** Labels and reviewers both take a comma-separated list and diff it against
    *  what is already there, so one box does both adding and removing. */
   const doLabels = async () => {
@@ -4046,7 +4120,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     const add = want.filter((l) => !cur.includes(l));
     const remove = cur.filter((l) => !want.includes(l));
     if (add.length === 0 && remove.length === 0) return;
-    await act("Labels", () => api.prLabels(root, detail.number, add, remove));
+    setLabels(add, remove);
   };
 
   const doReply = async (t: PrThread, body: string): Promise<boolean> => {
@@ -4079,9 +4153,14 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     }));
   };
 
-  const doReact = async (nodeId: string, content: string, on: boolean) => {
-    if (!nodeId) return;
-    await act(on ? "Reaction" : "Reaction removed", () => api.prReactTo(root, nodeId, content, on));
+  const doReact = (nodeId: string, content: string, on: boolean) => {
+    if (!nodeId || !detail) return;
+    cheap(detail.number, {
+      patch: reactionPatch(nodeId, content, on),
+      send: () => api.prReactTo(root, nodeId, content, on),
+      failText: on ? "Reaction failed" : "Removing the reaction failed",
+      lane: `react:${nodeId}:${content}`,
+    });
   };
   const doReviewers = async () => {
     if (!detail) return;
@@ -4869,7 +4948,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                           conflictFiles={conflictFiles}
                           updateRefused={!!refusedUpdate && refusedUpdate.number === d.number && refusedUpdate.updatedAt === d.updatedAt}
                           onEditRequest={() => setEditingBody(true)}
-                          onToggleTask={(newBody) => { void doEditBody(newBody); }}
+                          onToggleTask={doToggleTask}
                           onLocalReview={(recipe) => doLocalReview(undefined, recipe)}
                           onReviewInTerminal={onReviewInTerminal && d ? (recipe) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "") : undefined}
                           onMerge={doMerge} onClose={doClose}
@@ -4940,7 +5019,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                           d={d} lanes={lanes} raw={rawBots} onRaw={setRawBots} busy={busy} onComment={doComment}
                           atoms={newAtoms} newSet={newSet} onMarkRead={markPrRead}
                           sinceMine={sinceMine} onUnmarkRead={unmarkPrRead}
-                          onResolve={(t) => act(t.isResolved ? "Unresolve" : "Resolve", () => api.prSetThreadResolved(root, t.id, !t.isResolved))}
+                          onResolve={doResolve}
                           onReply={doReply}
                           onApply={doApplySuggestion}
                           onReact={doReact}
@@ -5095,7 +5174,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                     }}
                     busy={busy} onReply={doReply}
                     onApply={doApplySuggestion}
-                    onResolve={(t) => act(t.isResolved ? "Unresolve" : "Resolve", () => api.prSetThreadResolved(root, t.id, !t.isResolved))}
+                    onResolve={doResolve}
                   />
                   </div>
                   <FileRail d={d} path={showingFile ?? selFile}
@@ -7167,7 +7246,9 @@ type PrAct = (label: string, fn: () => Promise<{ ok: boolean; error?: string; de
 function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
   /** How to say what happened on the other board — the panel's own toast, so a
    *  ClickUp write reports where every other write reports. */
-  note: (ok: boolean, msg: string) => void) {
+  note: (ok: boolean, msg: string) => void,
+  /** Labels are a cheap write, drawn on the press rather than awaited. */
+  setLabels: (add: string[], remove: string[], colors: Record<string, string>) => boolean) {
   const [facets, setFacets] = useState<Facets | null>(null);
   const [mentions, setMentions] = useState<Mentions | null>(null);
   /* CODEOWNERS, read once per checkout when a picker is first opened. Empty rules
@@ -7213,7 +7294,11 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
       const was = d.labels.map((l) => l.name);
       node = <FieldPicker anchor={a} title="Apply labels" hint="Tick to add or remove" multi loading={loading}
         options={(facets?.labels ?? []).map((l) => ({ value: l.name, label: l.name, color: l.color }))}
-        selected={was} onClose={close} onCommit={commit(was, "Labels", (add, remove) => api.prLabels(root, d.number, add, remove))} />;
+        selected={was} onClose={close} onCommit={(next: string[]) => {
+          const colors: Record<string, string> = {};
+          for (const l of facets?.labels ?? []) colors[l.name] = l.color;
+          return setLabels(next.filter((x) => !was.includes(x)), was.filter((x) => !next.includes(x)), colors);
+        }} />;
     } else if (picker.field === "reviewers") {
       const was = d.reviewers.map((r) => r.login);
       /*
