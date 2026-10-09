@@ -130,7 +130,7 @@ const PERSON_TINT: Record<ReviewerState, string> = {
 /** One segment per reviewer: 2 of 3 approvals reads off the bar before it is read in words. */
 function Tally({ tally }: { tally: NonNullable<Stage["tally"]> }) {
   return (
-    <div className="flex gap-[3px] mt-2" role="img" aria-label={tally.map((t) => t.label).join(", ")}>
+    <div className="flex gap-0.5 mt-2" role="img" aria-label={tally.map((t) => t.label).join(", ")}>
       {tally.map((t) => (
         <span key={`${t.login}:${t.key}`} title={t.label} className="h-1.5 rounded-full flex-1 min-w-[10px] max-w-[64px]"
           style={{ background: PERSON_TINT[t.key], boxShadow: t.key === "requested" || t.key === "team" ? `inset 0 0 0 1px ${wash("var(--text)", 30)}` : undefined }} />
