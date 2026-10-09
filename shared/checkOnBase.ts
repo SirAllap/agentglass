@@ -94,7 +94,7 @@ export function factsLine(base: SideTally, head: SideTally): string {
   return `${phrase(base)} on base, ${phrase(head)} on head`;
 }
 
-const RUNNERS = /^(pytest|python3?|bun|npm|pnpm|yarn|npx|make|go|cargo|uv|tox|node|deno|dotnet|mvn|gradle|bundle|rspec|phpunit|\.\/)/;
+const RUNNERS = /^(?:(?:pytest|python3?|bun|npm|pnpm|yarn|npx|make|go|cargo|uv|tox|node|deno|dotnet|mvn|gradle|bundle|rspec|phpunit)(?: |$)|\.\/)/;
 const shellQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
 /**

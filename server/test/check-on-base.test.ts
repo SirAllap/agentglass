@@ -433,6 +433,10 @@ describe("the words", () => {
       expect(suggestCommand({ kind: "step", title }), title).toBe("");
     }
     expect(suggestCommand({ kind: "step", title: "npm test " + "a".repeat(200) })).toBe("");
+    // A runner is a whole word: a tool whose name merely starts like one is not one.
+    expect(suggestCommand({ kind: "step", title: "gopher-install now" })).toBe("");
+    expect(suggestCommand({ kind: "step", title: "nodeevil x" })).toBe("");
+    expect(suggestCommand({ kind: "step", title: "make" })).toBe("make");
     expect(suggestCommand({ kind: "step", title: "make test TEST=orbit/board_test.py" })).toBe("make test TEST=orbit/board_test.py");
     expect(suggestCommand({ kind: "annotation", title: "npm run test -- --runInBand" })).toBe("npm run test -- --runInBand");
   });
