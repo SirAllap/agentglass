@@ -8,7 +8,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { childTargets, isRealAgentglassPath } from "./isolation";
@@ -50,6 +50,27 @@ describe("the redirect", () => {
     const p = Bun.spawn(["sh", "-c", sh], { stdout: "pipe" });
     expect(await new Response(p.stdout).text()).toBe(want);
   });
+});
+
+test("no suite deletes HOME or an XDG base without giving it back", () => {
+  /* Every file shares one process, so a variable one of them deletes stays
+     deleted for whichever runs next. This file's own redirect tests read the
+     preload's values from process.env, and they failed (XDG_CONFIG_HOME is
+     undefined) in exactly the orders that put a file with a bare
+     `delete process.env.XDG_CONFIG_HOME` in an afterEach just before them.
+     The restore idiom here is `if (saved === undefined) delete ...; else ... = saved`,
+     so a file that deletes one of these and never compares against undefined
+     has no way to put it back.
+     CEILING: a source rule. A file that restores some of what it deletes, or
+     deletes through a loop (`delete process.env[k]`), is not judged. */
+  const dir = new URL(".", import.meta.url).pathname;
+  const guarded = /^\s*delete process\.env\.(HOME|XDG_[A-Z_]+)\b/m;
+  const offenders: string[] = [];
+  for (const f of readdirSync(dir).filter((n) => n.endsWith(".test.ts") && n !== "isolation.test.ts")) {
+    const code = readFileSync(join(dir, f), "utf8").split("\n").filter((l) => !/^\s*(\/\/|\/?\*)/.test(l)).join("\n");
+    if (guarded.test(code) && !code.includes("=== undefined")) offenders.push(f);
+  }
+  expect(offenders, `these delete HOME or an XDG base and never restore it: ${offenders.join(", ")}`).toEqual([]);
 });
 
 test("every suite in the repository loads it, and loads it first", async () => {
