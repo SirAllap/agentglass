@@ -120,6 +120,17 @@ describe("which channel an alert is posted on", () => {
   });
 });
 
+describe("what a tap on the alert carries", () => {
+  test("the pane the news is about rides in the data, and its absence adds nothing", async () => {
+    const { mod, state } = fakeModule();
+    __setNotificationsModule(mod);
+    await raise({ ...NOTE, pane: "%7" });
+    await raise(NOTE);
+    expect(state.requests[0].content.data).toEqual({ kind: "alert", pane: "%7" });
+    expect(state.requests[1].content.data).toEqual({ kind: "alert" });
+  });
+});
+
 describe("what the switch is allowed to claim", () => {
   test("no module in this build: unsupported, and it says so", async () => {
     __setNotificationsModule(null);

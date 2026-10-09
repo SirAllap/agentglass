@@ -691,15 +691,23 @@ function TerminalPane(): React.ReactNode {
    * Kept while the strip does not have it yet — a window just opened on the
    * computer is on the next poll, not this one.
    */
-  const arriving = useLocalSearchParams<{ where?: string; window?: string }>();
+  const arriving = useLocalSearchParams<{ where?: string; window?: string; pane?: string }>();
   useEffect(() => {
+    // A tapped alert names the pane itself. Dropped once the strip is listed,
+    // found or not, so a pane that has since closed cannot pin the request.
+    if (arriving.pane && strip) {
+      const tab = strip.find((t) => t.paneId === arriving.pane);
+      if (tab) { setActive(tab.paneId); setWhy(null); }
+      router.setParams({ pane: undefined });
+      return;
+    }
     if (!arriving.where || !strip) return;
     const tab = paneFor(strip, arriving.where, arriving.window);
     if (!tab) return;
     setActive(tab.paneId);
     setWhy(null);
     router.setParams({ where: undefined, window: undefined });
-  }, [arriving.where, arriving.window, strip, router]);
+  }, [arriving.where, arriving.window, arriving.pane, strip, router]);
   const [past, setPast] = useState<AgentSessionRow[] | null>(null);
   useEffect(() => onTermPrefs(() => {
     setBar(keyLayout()); setColumns(termColumns()); setAssist(termAssist());
