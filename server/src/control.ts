@@ -18,10 +18,38 @@ import type { ControlCmd, ViewId } from "../../shared/types.ts";
 // read-only socket. A view the keyboard reaches with one key and /control
 // answers 400 for is the drift this duplicated list exists to make visible.
 const VIEW_IDS: readonly ViewId[] = ["dash", "git", "diff", "pr", "tasks", "docker", "term", "chat", "browser", "files", "lantern", "seat", "plugins"];
-type OpenWhat = Extract<ControlCmd, { cmd: "open" }>["what"];
+type OpenWhat = Exclude<Extract<ControlCmd, { cmd: "open" }>["what"], "finder">;
 const OPEN_WHAT: readonly OpenWhat[] = ["stats", "skills", "search", "help", "palette"];
+/** The longest path the finder will be asked about; PATH_MAX on Linux. */
+const MAX_PATH = 4096;
 type ChatDo = Extract<ControlCmd, { cmd: "chat" }>["do"];
 const CHAT_DO: readonly ChatDo[] = ["new"];
+
+/**
+ * The path a finder command may carry, or null. Spelling only: nothing here
+ * touches the disk, and whether the finder may LOOK at the place is answered
+ * where it always was, by /browse and /preview each time a window asks, under
+ * that window's own credentials. A refused or missing path therefore opens the
+ * finder on its own "closed" or "not there" state rather than being second-
+ * guessed here with the caller's locality instead of the viewer's.
+ *
+ * Absolute, and already normalized: no `.`, `..` or empty segment, so the string
+ * every window shows and fetches is the one the caller wrote. A trailing slash
+ * is the one spelling allowed to differ, and it is how a folder is asked for.
+ * POSIX paths only; a Windows drive path is the next thing after this and is
+ * not here.
+ */
+function finderPath(raw: unknown): { path: string; kind: "file" | "dir" } | null {
+  if (typeof raw !== "string" || raw.length > MAX_PATH || !raw.startsWith("/")) return null;
+  // Control characters, not just NUL: a newline in a path is a log-injection
+  // and a rendering surprise in every window that draws it, never a real file.
+  if (/[\u0000-\u001f\u007f]/.test(raw)) return null;
+  if (raw === "/") return { path: "/", kind: "dir" };
+  const dir = raw.endsWith("/");
+  const body = dir ? raw.slice(0, -1) : raw;
+  if (body.slice(1).split("/").some((seg) => seg === "" || seg === "." || seg === "..")) return null;
+  return { path: body, kind: dir ? "dir" : "file" };
+}
 
 /**
  * Validate an untrusted POST /control body into a ControlCmd, or null.
@@ -45,6 +73,10 @@ export function parseControlCmd(body: unknown): ControlCmd | null {
     case "esc":
       return { cmd: "esc" };
     case "open":
+      if (b.what === "finder") {
+        const f = finderPath(b.path);
+        return f ? { cmd: "open", what: "finder", ...f } : null;
+      }
       return OPEN_WHAT.includes(b.what as OpenWhat) ? { cmd: "open", what: b.what as OpenWhat } : null;
     case "theme":
       // A name pins one palette; a direction steps the list. Name wins if both

@@ -50,6 +50,46 @@ describe("parseControlCmd — open", () => {
   });
 });
 
+describe("parseControlCmd — open finder", () => {
+  const ok = (path: unknown) => parseControlCmd({ cmd: "open", what: "finder", path });
+
+  test("a file path is a file; a trailing slash is a folder", () => {
+    expect(ok("/home/ana/notes/plan.md")).toEqual({ cmd: "open", what: "finder", path: "/home/ana/notes/plan.md", kind: "file" });
+    expect(ok("/home/ana/notes/")).toEqual({ cmd: "open", what: "finder", path: "/home/ana/notes", kind: "dir" });
+    expect(ok("/")).toEqual({ cmd: "open", what: "finder", path: "/", kind: "dir" });
+  });
+
+  test("a path that does not exist is still a command: the finder owns that state", () => {
+    expect(ok("/home/ana/not-there.md")).not.toBeNull();
+  });
+
+  test("relative, missing and non-string paths are refused", () => {
+    for (const p of ["notes/plan.md", "./plan.md", "~/plan.md", "", undefined, null, 7, ["/a"], { a: 1 }]) expect(ok(p)).toBeNull();
+    expect(parseControlCmd({ cmd: "open", what: "finder" })).toBeNull();
+  });
+
+  test("NUL and other control characters are refused", () => {
+    for (const p of ["/home/ana/plan.md\0.png", "/home/ana/a\nb.md", "/home/ana/a\rb.md", "/home/ana/\u007f.md"]) expect(ok(p)).toBeNull();
+  });
+
+  test("a path that is not already normalized is refused", () => {
+    for (const p of ["/home/ana/../bob/plan.md", "/home/ana/./plan.md", "/home//ana/plan.md", "//home/ana", "/home/ana//", "/.."]) expect(ok(p)).toBeNull();
+  });
+
+  test("a non-POSIX spelling is refused", () => {
+    for (const p of ["C:\\Users\\ana\\plan.md", "gh:acme/orbit", "file:///home/ana/plan.md"]) expect(ok(p)).toBeNull();
+  });
+
+  test("a path longer than PATH_MAX is refused", () => {
+    expect(ok("/" + "a".repeat(4096))).toBeNull();
+    expect(ok("/" + "a".repeat(4000))).not.toBeNull();
+  });
+
+  test("the plain panels are unchanged by it", () => {
+    expect(parseControlCmd({ cmd: "open", what: "palette", path: "/home/ana/plan.md" })).toEqual({ cmd: "open", what: "palette" });
+  });
+});
+
 describe("parseControlCmd — theme", () => {
   test("a name pins one palette", () => {
     expect(parseControlCmd({ cmd: "theme", name: "forest" })).toEqual({ cmd: "theme", name: "forest" });

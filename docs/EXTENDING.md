@@ -279,9 +279,25 @@ curl -sS http://localhost:4000/control \
 | `workspace` | `open?`: boolean | toggle (absent) or set — swaps between the dashboard and the last view, the way `Ctrl+\` does |
 | `esc` | — | close panels / workspace, as Escape does |
 | `open` | `what`: `stats`\|`skills`\|`search`\|`help`\|`palette` | open that panel |
+| `open` | `what`: `finder`, `path`: absolute | open the file finder (`Ctrl+Shift+P`) on that path, the way a click on it in a terminal does: a file shows in the reader, a path ending in `/` lists the folder |
 | `theme` | `name?`: id, or `dir?`: `1`\|`-1` | pin a palette, or step the list |
 | `zoom` | `dir`: `1`\|`-1`\|`0` | zoom in / out / reset — **desktop app only**; in a browser tab it is accepted and does nothing, because the browser's own zoom already covers it |
 | `chat` | `do`: `new` | open the chat view on a fresh tab |
+
+`open finder` is the one command that names a path. The server checks only its
+spelling — absolute, no `.`/`..`/empty segment, no control characters, at most
+4096 characters, `400` otherwise — and never touches the file: each window then asks
+for it under its own credentials, so a missing path or one the finder may not
+look at shows the finder's own "not there" or "closed" state. It is always the
+reader (the finder does not edit), so there is no mode.
+
+```bash
+# show a markdown file in the finder, no clicking
+curl -sS http://localhost:4000/control \
+  -H 'content-type: application/json' \
+  -d '{ "cmd": "open", "what": "finder", "path": "/home/ana/notes/plan.md" }'
+# add -H "Authorization: Bearer $AGENTGLASS_TOKEN" when a token is set
+```
 
 `chat` is the one command the receiving client cannot run on arrival: the chat
 panel is mounted only while the workspace is open, and `new` is exactly what you

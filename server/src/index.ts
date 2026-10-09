@@ -3675,6 +3675,19 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     // through the same setters the keyboard uses. It grants no capability the
     // keyboard doesn't already, so it needs no gate beyond the localOrigin +
     // token checks the whole surface already carries.
+    //
+    // `open finder` is the one command that names a path chosen by the caller,
+    // and trustedCaller below is enough for it for three reasons. It carries a
+    // spelling and nothing else: this handler never opens, stats or reads the
+    // path, it only validates the string (control.ts). Each window then asks
+    // /browse and /preview for it under its OWN credentials and locality, so a
+    // path the finder may not look at (the keys folder, a dotted folder for a
+    // non-local viewer) comes back as the finder's own "closed" state in the
+    // window, not as content. And the caller who can send it is the one who can
+    // already type the same path into the finder, or into a shell this server
+    // hosts: loopback without an Origin, or a vouched Origin plus the token. A
+    // page on another origin is refused here, which is the case that matters:
+    // it must not be able to put a file in front of the person.
     if (pathname === "/control" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       let b: unknown = {};

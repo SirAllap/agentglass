@@ -1166,6 +1166,11 @@ export type ControlCmd =
   | { cmd: "workspace"; open?: boolean }
   | { cmd: "esc" }
   | { cmd: "open"; what: "stats" | "skills" | "search" | "help" | "palette" }
+  /** The file finder (Ctrl+Shift+P) on one absolute path, the way a click on
+   *  that path in a terminal opens it. `kind` is the server's reading of the
+   *  spelling the caller sent: a trailing slash is a folder, anything else a
+   *  file. The finder is always reading, so there is no mode. */
+  | { cmd: "open"; what: "finder"; path: string; kind: "file" | "dir" }
   | { cmd: "theme"; dir?: 1 | -1; name?: string }
   | { cmd: "zoom"; dir: 1 | -1 | 0 }
   /** Drive the chat view itself. Unlike the rest, this one needs the chat panel

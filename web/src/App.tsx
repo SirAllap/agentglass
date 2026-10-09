@@ -59,7 +59,7 @@ import DbNoticeBanner from "./components/DbNoticeBanner.tsx";
 import { chordFromEvent, viewForChord, appActionForChord } from "./lib/keybindings.ts";
 import { openFocusedPaneDoor, type PaneDoor } from "./components/TerminalPanel.tsx";
 import { FilePalette } from "./components/FilePalette.tsx";
-import { onFinderAt, type FinderTarget } from "./lib/finderTarget.ts";
+import { finderFromControl, onFinderAt, openFinderAt, type FinderTarget } from "./lib/finderTarget.ts";
 import { WindowSwitcher } from "./components/terminal/WindowSwitcher.tsx";
 import { FloatingBench } from "./components/bench/FloatingBench.tsx";
 import { benchTakesBoard, toggleBench, showFile, addTab } from "./lib/benchStore.ts";
@@ -1062,6 +1062,10 @@ export default function App() {
           else if (cmd.what === "search") setSearchOpen(true);
           else if (cmd.what === "help") setHelpOpen(true);
           else if (cmd.what === "palette") setPaletteOpen(true);
+          else if (cmd.what === "finder") {
+            const at = finderFromControl(cmd);
+            if (at) openFinderAt(at.path, at.kind);
+          }
           break;
         case "theme":
           setTheme((cur) => nextThemeId(cur, cmd));
