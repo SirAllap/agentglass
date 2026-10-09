@@ -5851,6 +5851,194 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           down — this band holds chips, a title that wraps and a tab row, and its
           height changes with every one of them. */}
       <div ref={cardHead} className="sticky top-0 z-20 pb-1.5" style={{ background: "var(--bg)" }}>
+        {/* The card's actions live above its identity, not below its text: they
+            are what you reach for after reading, and a long card put them a
+            full scroll away. In the sticky band, so they follow the card. */}
+        <div className="flex items-center gap-1.5 flex-wrap pb-1.5 mb-1.5" style={{ borderBottom: edge(10) }}>
+        <div className="relative">
+          <button onClick={() => setAskOpen((o) => !o)} className="text-[10.5px] px-2 py-1 rounded-lg"
+            style={{ border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)", color: "var(--warning)" }}>
+            Hand to Claude ▾
+          </button>
+          {askOpen && (
+            <div className="agx-scroll absolute left-0 top-full mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col overflow-y-auto"
+              style={{ zIndex: 30, background: "var(--bg2)", border: edge(28), minWidth: 260, maxHeight: 340 }}>
+              {/* Your own skills first, because running one is the thing being
+                  reached for — the plain hand-offs below are the fallback for a
+                  card no skill covers. */}
+              {!!skills.length && (
+                <>
+                  <div className="px-2.5 pt-2 pb-1 flex items-center gap-2">
+                    <span className={`${EYEBROW}`} style={{ color: "var(--text4)" }}>
+                      Run a skill on this card
+                    </span>
+                    <span className="flex-1" />
+                    <input value={skillQ} onChange={(e) => setSkillQ(e.target.value)} placeholder="filter"
+                      spellCheck={false} autoComplete="off"
+                      className="text-[10px] px-1.5 py-0.5 rounded outline-none"
+                      style={{ background: "var(--bg3)", border: edge(16), color: "var(--text)", width: 92 }} />
+                  </div>
+                  {shown.map((sk, i) => {
+                    // One heading between the ones named for it and the rest,
+                    // rather than a filter that would have to be right about
+                    // which of the others take a card. See namedForIt.
+                    const firstOther = !namedForIt(sk) && (i === 0 || namedForIt(shown[i - 1]!));
+                    const modes = skillModes(sk.argument_hint);
+                    const run = (mode?: string) => {
+                      setAskOpen(false);
+                      const cwd = rootForTask(t.list, repos, here);
+                      if (!cwd) { onNote("No checkout to run it in — give the board's list a project name that matches a repo"); return; }
+                      const cmd = skillCommand(sk.name, t) + (mode ? ` ${mode}` : "");
+                      // A tmux window with the agent already running it, which
+                      // is the gesture the issues panel uses.
+                      requestTermIssue(cwd, windowName(t), cmd, true, yolo, t.title);
+                      onNote(`${cmd}${yolo ? " · permissions off" : ""} — opening a window`);
+                    };
+                    return (
+                      <div key={sk.name}>
+                      {firstOther && (
+                        <div className={`px-2.5 pt-2 pb-1 ${EYEBROW}`}
+                          style={{ color: "var(--text4)", borderTop: edge(10) }}>Also mention ClickUp</div>
+                      )}
+                      <div className="px-2.5 py-1.5 hover:bg-white/5">
+                        <button className="text-left w-full" title={sk.description} onClick={() => run()}>
+                          <div style={{ color: "var(--warning)" }}>
+                            /{sk.name.replace(/^\//, "")} <span style={{ color: "var(--text3)" }}>{t.customId || t.id}</span>
+                          </div>
+                          {sk.description && (
+                            <div className="text-[9.5px] line-clamp-2" style={{ color: "var(--text4)" }}>{sk.description}</div>
+                          )}
+                        </button>
+                        {/* The gears the skill itself advertises. Parsed from
+                            its own invocation line, so a skill that grows a
+                            third mode grows a third button here for free. */}
+                        {!!modes.length && (
+                          <div className="flex items-center gap-1 mt-1">
+                            {modes.map((m) => (
+                              <button key={m} onClick={() => run(m)}
+                                className="text-[9.5px] px-1.5 py-0.5 rounded-full"
+                                style={{ color: "var(--text3)", border: edge(16) }}>{m}</button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      </div>
+                    );
+                  })}
+                  {!shown.length && (
+                    <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>No skill matches that.</div>
+                  )}
+                  <div style={{ borderTop: edge(14) }} />
+                </>
+              )}
+              <div className="px-2.5 pt-2 pb-1 flex items-center gap-2">
+                <span className={`${EYEBROW}`} style={{ color: "var(--text4)" }}>
+                  Or hand it over to write your own
+                </span>
+                <span className="flex-1" />
+                {/* Where it lands. Sits with the rows it governs rather than in
+                    Settings: it is the kind of choice you change because of what
+                    you are about to do, not once a year. */}
+                {(["chat", "term"] as const).map((d) => (
+                  <button key={d} onClick={(e) => { e.stopPropagation(); setHandoffTo(d); setTo(d); }}
+                    title={d === "chat" ? "Open it in the app's chat" : "Open it in a tmux pane, like a skill"}
+                    className="text-[10px] px-1.5 py-0.5 rounded"
+                    style={to === d
+                      ? { background: "color-mix(in srgb, var(--primary) 20%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }
+                      : { border: edge(14), color: "var(--text4)" }}>
+                    {d === "chat" ? <IconLabel icon={<CommentIcon size={ICON.xs} />}>chat</IconLabel> : <IconLabel icon={<MonitorIcon size={ICON.xs} />}>pane</IconLabel>}
+                  </button>
+                ))}
+              </div>
+              {HANDOFFS.map((h) => (
+                <button key={h.id} className="text-left px-2.5 py-1.5 hover:bg-white/5"
+                  style={{ color: "var(--text2)" }}
+                  onClick={() => {
+                    setAskOpen(false);
+                    const cwd = rootForTask(t.list, repos, here);
+                    if (!cwd) { onNote("No checkout to hand this to"); return; }
+                    const text = h.build(t, full?.description ?? "");
+                    // The same two destinations a skill offers, through the same
+                    // two paths — nothing new is invented here.
+                    if (to === "term") { requestTermIssue(cwd, windowName(t), text, true, yolo, t.title); onNote(`${t.customId || t.id} handed to a pane`); }
+                    else onOpenChatWith?.(cwd, text, t.title.slice(0, 60));
+                  }}>
+                  <div>{h.label}</div>
+                  <div className="text-[9.5px]" style={{ color: "var(--text4)" }}>{h.hint}</div>
+                </button>
+              ))}
+              {/* Applies to a skill run, which spawns an agent — not to the
+                  hand-offs above, which only put text in a composer. Sticky,
+                  because whoever wants it once usually wants it all afternoon,
+                  and loud, because it is the setting that lets an agent edit
+                  files without asking. */}
+              {!!skills.length && (
+                <label className="flex items-start gap-2 px-2.5 py-2 cursor-pointer"
+                  style={{ borderTop: edge(14) }}>
+                  <input type="checkbox" checked={yolo} onChange={(e) => setYolo(e.target.checked)}
+                    style={{ accentColor: "var(--error)", marginTop: 2 }} />
+                  <span>
+                    <span style={{ color: yolo ? "var(--error)" : "var(--text2)" }}>Skip permission prompts</span>
+                    <span className="block text-[9.5px]" style={{ color: "var(--text4)" }}>
+                      The agent edits and runs without asking. Only for a card you already trust.
+                    </span>
+                  </span>
+                </label>
+              )}
+            </div>
+          )}
+        </div>
+        <button onClick={() => void copyIt(t.customId || t.id, "human")} className="text-[10.5px] px-2 py-1 rounded-lg"
+          style={{ border: line, color: "var(--text2)" }}>Copy {t.customId ? "PROJ id" : "id"}</button>
+        {/* Beside the id it belongs with, and before Open: the two buttons are
+            the two ways to take this card somewhere else, and the one that
+            leaves the app should not be the only way to get its address. */}
+        {t.url && (
+          <button onClick={() => void copyIt(t.url, "url")} className="text-[10.5px] px-2 py-1 rounded-lg"
+            style={{ border: line, color: "var(--text2)" }}
+            title={t.url}>{copied === "url" ? <span className="inline-flex items-center gap-1">copied<DoneIcon size={ICON.xs} /></span> : "Copy URL"}</button>
+        )}
+        {t.url && (
+          <a href={t.url} target="_blank" rel="noreferrer" className="text-[10.5px] px-2 py-1 rounded-lg"
+            style={{ border: line, color: "var(--text2)" }}>Open ↗</a>
+        )}
+        {/*
+          THIS CARD, and only this card.
+         *
+          The Refresh at the top of the board re-reads every card on it — which
+          on a board of 123 is seconds of waiting to see whether one comment
+          landed. `reread` already existed for exactly this shape (it runs after
+          a comment is posted, because the board's poll does not carry
+          comments); it simply had no way to be pressed.
+         *
+          Its own spinner rather than the board's, so it is obvious WHICH thing
+          is being re-read. */}
+        <button onClick={() => {
+          setRereading(true);
+          void api.clickupTask(t.id)
+            .then((r) => {
+              setFull(r);
+              /* And the fields the BOARD owns, or half the card stays as it was
+                 read a minute ago while the other half is current. */
+              if (r.ok && r.task) onFresh?.(r.task);
+            })
+            .catch(() => { /* keep what we have */ })
+            .finally(() => setRereading(false));
+        }}
+          disabled={rereading}
+          title="Read this card again — the board keeps whatever it had"
+          className="text-[10.5px] px-2 py-1 rounded-lg flex items-center gap-1.5 disabled:opacity-50"
+          style={{ border: line, color: "var(--text2)" }}>
+          {/* ICON.xs — below twelve a stroked glyph stops resolving at 1x, and
+              the suite says so. It caught this one too. */}
+          <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4}
+            strokeLinecap="round" strokeLinejoin="round" aria-hidden
+            style={rereading ? { animation: "agx-spin 1s linear infinite" } : undefined}>
+            <path d="M21 12a9 9 0 1 1-2.6-6.4" /><path d="M21 3v6h-6" />
+          </svg>
+          {rereading ? "reading…" : "Refresh card"}
+        </button>
+      </div>
         {/* The identity chips sit in the SAME band as the table's column titles
             beside them — one height, centred, rather than a top padding chosen
             to look about right. A padding is a guess that has to be re-guessed
@@ -6875,204 +7063,6 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
 
       {full === null && <div className="mb-3"><Spinner label="Reading the card…" className="" /></div>}
 
-      {/*
-        * Pinned to the bottom of the pane, in as little height as it can hold.
-        *
-        * These three are what you press AFTER reading, and a card whose
-        * description runs to two screens put them below all of it — so the last
-        * thing a long card asked of you was to scroll back down past what you
-        * had just read. Sticky costs nothing when the card is short (it sits
-        * where it always did) and saves the scroll when it is not.
-        *
-        * Opaque, not translucent: it has comment text sliding under it, and a
-        * blur here would be a per-frame composite on a pane that scrolls.
-        */}
-      <div className="flex items-center gap-1.5 flex-wrap pt-2 pb-3 mt-auto sticky bottom-0 z-20"
-        style={{ borderTop: edge(10), background: "var(--bg)" }}>
-        <div className="relative">
-          <button onClick={() => setAskOpen((o) => !o)} className="text-[10.5px] px-2 py-1 rounded-lg"
-            style={{ border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)", color: "var(--warning)" }}>
-            Hand to Claude ▾
-          </button>
-          {askOpen && (
-            <div className="agx-scroll absolute left-0 bottom-full mb-1 rounded-lg text-[11px] shadow-2xl flex flex-col overflow-y-auto"
-              style={{ zIndex: 30, background: "var(--bg2)", border: edge(28), minWidth: 260, maxHeight: 340 }}>
-              {/* Your own skills first, because running one is the thing being
-                  reached for — the plain hand-offs below are the fallback for a
-                  card no skill covers. */}
-              {!!skills.length && (
-                <>
-                  <div className="px-2.5 pt-2 pb-1 flex items-center gap-2">
-                    <span className={`${EYEBROW}`} style={{ color: "var(--text4)" }}>
-                      Run a skill on this card
-                    </span>
-                    <span className="flex-1" />
-                    <input value={skillQ} onChange={(e) => setSkillQ(e.target.value)} placeholder="filter"
-                      spellCheck={false} autoComplete="off"
-                      className="text-[10px] px-1.5 py-0.5 rounded outline-none"
-                      style={{ background: "var(--bg3)", border: edge(16), color: "var(--text)", width: 92 }} />
-                  </div>
-                  {shown.map((sk, i) => {
-                    // One heading between the ones named for it and the rest,
-                    // rather than a filter that would have to be right about
-                    // which of the others take a card. See namedForIt.
-                    const firstOther = !namedForIt(sk) && (i === 0 || namedForIt(shown[i - 1]!));
-                    const modes = skillModes(sk.argument_hint);
-                    const run = (mode?: string) => {
-                      setAskOpen(false);
-                      const cwd = rootForTask(t.list, repos, here);
-                      if (!cwd) { onNote("No checkout to run it in — give the board's list a project name that matches a repo"); return; }
-                      const cmd = skillCommand(sk.name, t) + (mode ? ` ${mode}` : "");
-                      // A tmux window with the agent already running it, which
-                      // is the gesture the issues panel uses.
-                      requestTermIssue(cwd, windowName(t), cmd, true, yolo, t.title);
-                      onNote(`${cmd}${yolo ? " · permissions off" : ""} — opening a window`);
-                    };
-                    return (
-                      <div key={sk.name}>
-                      {firstOther && (
-                        <div className={`px-2.5 pt-2 pb-1 ${EYEBROW}`}
-                          style={{ color: "var(--text4)", borderTop: edge(10) }}>Also mention ClickUp</div>
-                      )}
-                      <div className="px-2.5 py-1.5 hover:bg-white/5">
-                        <button className="text-left w-full" title={sk.description} onClick={() => run()}>
-                          <div style={{ color: "var(--warning)" }}>
-                            /{sk.name.replace(/^\//, "")} <span style={{ color: "var(--text3)" }}>{t.customId || t.id}</span>
-                          </div>
-                          {sk.description && (
-                            <div className="text-[9.5px] line-clamp-2" style={{ color: "var(--text4)" }}>{sk.description}</div>
-                          )}
-                        </button>
-                        {/* The gears the skill itself advertises. Parsed from
-                            its own invocation line, so a skill that grows a
-                            third mode grows a third button here for free. */}
-                        {!!modes.length && (
-                          <div className="flex items-center gap-1 mt-1">
-                            {modes.map((m) => (
-                              <button key={m} onClick={() => run(m)}
-                                className="text-[9.5px] px-1.5 py-0.5 rounded-full"
-                                style={{ color: "var(--text3)", border: edge(16) }}>{m}</button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                      </div>
-                    );
-                  })}
-                  {!shown.length && (
-                    <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>No skill matches that.</div>
-                  )}
-                  <div style={{ borderTop: edge(14) }} />
-                </>
-              )}
-              <div className="px-2.5 pt-2 pb-1 flex items-center gap-2">
-                <span className={`${EYEBROW}`} style={{ color: "var(--text4)" }}>
-                  Or hand it over to write your own
-                </span>
-                <span className="flex-1" />
-                {/* Where it lands. Sits with the rows it governs rather than in
-                    Settings: it is the kind of choice you change because of what
-                    you are about to do, not once a year. */}
-                {(["chat", "term"] as const).map((d) => (
-                  <button key={d} onClick={(e) => { e.stopPropagation(); setHandoffTo(d); setTo(d); }}
-                    title={d === "chat" ? "Open it in the app's chat" : "Open it in a tmux pane, like a skill"}
-                    className="text-[10px] px-1.5 py-0.5 rounded"
-                    style={to === d
-                      ? { background: "color-mix(in srgb, var(--primary) 20%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }
-                      : { border: edge(14), color: "var(--text4)" }}>
-                    {d === "chat" ? <IconLabel icon={<CommentIcon size={ICON.xs} />}>chat</IconLabel> : <IconLabel icon={<MonitorIcon size={ICON.xs} />}>pane</IconLabel>}
-                  </button>
-                ))}
-              </div>
-              {HANDOFFS.map((h) => (
-                <button key={h.id} className="text-left px-2.5 py-1.5 hover:bg-white/5"
-                  style={{ color: "var(--text2)" }}
-                  onClick={() => {
-                    setAskOpen(false);
-                    const cwd = rootForTask(t.list, repos, here);
-                    if (!cwd) { onNote("No checkout to hand this to"); return; }
-                    const text = h.build(t, full?.description ?? "");
-                    // The same two destinations a skill offers, through the same
-                    // two paths — nothing new is invented here.
-                    if (to === "term") { requestTermIssue(cwd, windowName(t), text, true, yolo, t.title); onNote(`${t.customId || t.id} handed to a pane`); }
-                    else onOpenChatWith?.(cwd, text, t.title.slice(0, 60));
-                  }}>
-                  <div>{h.label}</div>
-                  <div className="text-[9.5px]" style={{ color: "var(--text4)" }}>{h.hint}</div>
-                </button>
-              ))}
-              {/* Applies to a skill run, which spawns an agent — not to the
-                  hand-offs above, which only put text in a composer. Sticky,
-                  because whoever wants it once usually wants it all afternoon,
-                  and loud, because it is the setting that lets an agent edit
-                  files without asking. */}
-              {!!skills.length && (
-                <label className="flex items-start gap-2 px-2.5 py-2 cursor-pointer"
-                  style={{ borderTop: edge(14) }}>
-                  <input type="checkbox" checked={yolo} onChange={(e) => setYolo(e.target.checked)}
-                    style={{ accentColor: "var(--error)", marginTop: 2 }} />
-                  <span>
-                    <span style={{ color: yolo ? "var(--error)" : "var(--text2)" }}>Skip permission prompts</span>
-                    <span className="block text-[9.5px]" style={{ color: "var(--text4)" }}>
-                      The agent edits and runs without asking. Only for a card you already trust.
-                    </span>
-                  </span>
-                </label>
-              )}
-            </div>
-          )}
-        </div>
-        <button onClick={() => void copyIt(t.customId || t.id, "human")} className="text-[10.5px] px-2 py-1 rounded-lg"
-          style={{ border: line, color: "var(--text2)" }}>Copy {t.customId ? "PROJ id" : "id"}</button>
-        {/* Beside the id it belongs with, and before Open: the two buttons are
-            the two ways to take this card somewhere else, and the one that
-            leaves the app should not be the only way to get its address. */}
-        {t.url && (
-          <button onClick={() => void copyIt(t.url, "url")} className="text-[10.5px] px-2 py-1 rounded-lg"
-            style={{ border: line, color: "var(--text2)" }}
-            title={t.url}>{copied === "url" ? <span className="inline-flex items-center gap-1">copied<DoneIcon size={ICON.xs} /></span> : "Copy URL"}</button>
-        )}
-        {t.url && (
-          <a href={t.url} target="_blank" rel="noreferrer" className="text-[10.5px] px-2 py-1 rounded-lg"
-            style={{ border: line, color: "var(--text2)" }}>Open ↗</a>
-        )}
-        {/*
-          THIS CARD, and only this card.
-         *
-          The Refresh at the top of the board re-reads every card on it — which
-          on a board of 123 is seconds of waiting to see whether one comment
-          landed. `reread` already existed for exactly this shape (it runs after
-          a comment is posted, because the board's poll does not carry
-          comments); it simply had no way to be pressed.
-         *
-          Its own spinner rather than the board's, so it is obvious WHICH thing
-          is being re-read. */}
-        <button onClick={() => {
-          setRereading(true);
-          void api.clickupTask(t.id)
-            .then((r) => {
-              setFull(r);
-              /* And the fields the BOARD owns, or half the card stays as it was
-                 read a minute ago while the other half is current. */
-              if (r.ok && r.task) onFresh?.(r.task);
-            })
-            .catch(() => { /* keep what we have */ })
-            .finally(() => setRereading(false));
-        }}
-          disabled={rereading}
-          title="Read this card again — the board keeps whatever it had"
-          className="text-[10.5px] px-2 py-1 rounded-lg flex items-center gap-1.5 disabled:opacity-50"
-          style={{ border: line, color: "var(--text2)" }}>
-          {/* ICON.xs — below twelve a stroked glyph stops resolving at 1x, and
-              the suite says so. It caught this one too. */}
-          <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4}
-            strokeLinecap="round" strokeLinejoin="round" aria-hidden
-            style={rereading ? { animation: "agx-spin 1s linear infinite" } : undefined}>
-            <path d="M21 12a9 9 0 1 1-2.6-6.4" /><path d="M21 3v6h-6" />
-          </svg>
-          {rereading ? "reading…" : "Refresh card"}
-        </button>
-      </div>
       {dialog}
     </div>
   );
