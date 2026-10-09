@@ -1819,6 +1819,8 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
    * entry cannot survive that check, which is what makes writing it to disk
    * safe.
    */
+  const wtRunRef = useRef<(() => void) | null>(null);
+  const fillRef = useRef<(() => void) | null>(null);
   const wtSeen = useRef(new Map<string, PaneSeen>(readPaneSeen()));
   const rememberSeen = useCallback(() => { writePaneSeen(wtSeen.current); }, []);
   /*
@@ -2084,8 +2086,8 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
       setDetectedWt((prev) => (prev?.root === now?.root ? prev : now ?? null));
     };
     void run();
-    const id = setInterval(() => { void run(); }, 4000);
-    return () => { stopped = true; clearInterval(id); };
+    wtRunRef.current = () => { void run(); };
+    return () => { stopped = true; wtRunRef.current = null; };
   }, [open, focusIdx, paneIds, repos, root, here?.worktreeOf, here?.root, focusKey, focusWin]);
   /**
    * What the header chip and the status bar both name: the worktree the focused
@@ -2109,9 +2111,15 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
       }).catch(() => { /* the per-pane call still answers */ });
     };
     fill();
-    const id = setInterval(fill, 4000);
-    return () => { live = false; clearInterval(id); };
+    fillRef.current = fill;
+    return () => { live = false; fillRef.current = null; };
   }, [open, focusWin, paneIds.length]);
+  /* ONE timer for both reads above, and only while the window is looked at.
+     They were two setIntervals on the same 4 s beat, ungated: 15 identical
+     `pane-dirs?all=1` requests a minute (one `list-panes` each) for a window
+     nobody had focused. The ceiling: an agent that moves worktree while the
+     window is unfocused shows on the next focus, which polls at once. */
+  usePoll(open, () => { wtRunRef.current?.(); fillRef.current?.(); }, 4000);
 
   const chipWt = detectedWt ?? (wtDetecting ? null : here) ?? null;
   useEffect(() => { wtRef.current = chipWt; }, [chipWt]);

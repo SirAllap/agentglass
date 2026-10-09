@@ -52,7 +52,7 @@ import { chooseModel, type UsageNow, type Choice } from "./understudy-model.ts";
 import { allProviderUsage } from "./providerusage.ts";
 import { claimPaceAlerts, coerceAlertAt } from "./paceAlert.ts";
 import { refreshCodexUsage } from "./codexusage.ts";
-import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, typedReason, GATE_MAX_MS, gateFailClosed, denyByRule, allowByRule, validGateId } from "./gate.ts";
+import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, onGateChange, typedReason, GATE_MAX_MS, gateFailClosed, denyByRule, allowByRule, validGateId } from "./gate.ts";
 import { budgetHoldFor } from "./budget.ts";
 import { gateCwd, gateRuleFor } from "./gaterules.ts";
 import { parseControlCmd } from "./control.ts";
@@ -73,7 +73,7 @@ import {
   stashRename, stashToBranch, stashPartial, stashApplyOverwrite,
   refs, listSnapshots, createSnapshot, restoreSnapshot, deleteSnapshot,
   applyHunk, logGraph, mergeBranch, rebaseBranch, renameBranch, resetTo,
-  worktreesWithState as gitWorktrees, addWorktree, removeWorktree, worktreeLeftovers, rescueLeftovers, fixWorktreeOwnership, startAutoFetch, syncFromBase, setBase, setGitChangeHook, setMergedVerdictHook, setPrBaseHook,
+  worktreesWithState as gitWorktrees, addWorktree, removeWorktree, worktreeLeftovers, rescueLeftovers, fixWorktreeOwnership, startAutoFetch, setAutoFetchAudience, autoFetchWhenSomeoneComes, syncFromBase, setBase, setGitChangeHook, setMergedVerdictHook, setPrBaseHook,
   conflicts as gitConflicts, resolveWith, conflictBlocks, conflictFile, resolveBlocks, mergeSession, reopenConflict, stoppedRefusal, conflictPreview, mergeAbort, mergeContinue, baseCandidates, undoMerge, mergeInfo,
   cherryPick, cherryPickContinue, cherryPickAbort,
   revertCommit, amendCommit, squashCommits,
@@ -2058,6 +2058,9 @@ setTaskChangeHook(() => broadcast({ type: "tasks" }));
 // the panel is not necessarily open — so it is pushed, like everything else
 // that happens without the user asking.
 setReminderHook(() => broadcast({ type: "tasks" }));
+// Every way the pending list changes (a hold arrives, is decided, times out, or a
+// rule answers it) rings the clients, so they re-read it instead of polling.
+onGateChange(() => broadcast({ type: "gate" }));
 // Let the git layer ask what a branch's pull request says its base is. Wired
 // here rather than imported there, because gitwork must not depend on the
 // pull-request layer — same reason as the two hooks above. Reads the PR list
@@ -2335,9 +2338,17 @@ function pushOpenTools() {
   const open = openToolCalls();
   if (!open.length && !lastOpenCount) return;
   lastOpenCount = open.length;
-  broadcast({ type: "openTools", data: withEvidence(open) });
+  const data = withEvidence(open);
+  /* Only when the list, evidence included, differs from the last one sent:
+     with a call open, 15 byte-identical frames a minute went to every client
+     (measured). A client that connects later gets the list in `initial`. */
+  const sig = JSON.stringify(data);
+  if (sig === lastOpenSent) return;
+  lastOpenSent = sig;
+  broadcast({ type: "openTools", data });
 }
 let lastOpenCount = 0;
+let lastOpenSent = "";
 /**
  * How often the verdict is re-read.
  *
@@ -6640,7 +6651,10 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     // Single-flighted alongside the git reads: `docker ps`/`docker stats` are
     // slow spawns (seconds each) behind a short cache, and several tabs missing
     // that cache together would each launch one. One sample now serves them all.
-    if (pathname === "/docker/overview") return body(await singleFlight("docker:overview", async () => JSON.stringify(await dockerOverview())));
+    if (pathname === "/docker/overview") {
+      const fresh = url.searchParams.get("fresh") === "1";
+      return body(await singleFlight(`docker:overview:${fresh}`, async () => JSON.stringify(await dockerOverview(fresh))));
+    }
     if (pathname === "/docker/stats") {
       // Sample what the panel is showing. The overview is cached and scoped, so
       // this costs nothing extra and keeps the two answers about the same set of
@@ -8706,6 +8720,7 @@ const server = Bun.serve<WsData>({
         return;
       }
       clients.add(ws);
+      autoFetchWhenSomeoneComes();
       // Alive from the moment it connects, so the first alert after a page load
       // is never mistaken for a frozen peer and answered with notify-send as
       // well. The sweep has 30 seconds to disagree.
@@ -9433,6 +9448,7 @@ startPricingRefresh();
 const ws = workspaceRoots();
 console.log(ws.length ? `   Project     → ${ws.join(", ")} (${ws.length === 1 ? "this project" : "these projects"} only)` : "   Project     → every project on this machine");
 // Only meaningful once a project is open — see startAutoFetch().
+setAutoFetchAudience(() => clients.size > 0);
 startAutoFetch();
 // A pull request's checks finished. The latch is on the server so the message
 // arrives once per verdict no matter how many browser tabs are watching, and

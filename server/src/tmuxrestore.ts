@@ -33,7 +33,7 @@ import { wasPromptOf, wasPromptAnywhere, newestPromptId, promptedSince, firstPro
 import { agentNamed } from "./paneloc.ts";
 import { claudeCode } from "./agents/claudecode.ts";
 import { LANTERN_PROMPT_MARK } from "./lanternmark.ts";
-import { windowTree, LAYOUT_RE, type TmuxWindowDetail, type TmuxPaneRow } from "./tmuxlayout.ts";
+import { windowTree, allWindowTrees, LAYOUT_RE, type TmuxWindowDetail, type TmuxPaneRow } from "./tmuxlayout.ts";
 import { tmuxResume } from "./config.ts";
 
 /** A pane as captured. `startCommand` is the exact argv the pane was born
@@ -738,6 +738,13 @@ function writeMerged(fresh: CapturedSession[], now: number, whole: boolean, engi
   const sessions = [...fresh.map((s) => ({ ...s, windows: carried.get(s.name) ?? s.windows, lastSeen: now })), ...kept];
   const wholeOn = whole ? engine : before?.wholeOn;
   const state: RestoreState = { capturedAt: now, sessions, ...(engine ? { engine } : {}), ...(wholeOn ? { wholeOn } : {}) };
+  /* A photograph that says what the file already says is not written: only
+     the two timestamps differ, and 27 KB rewritten six times a minute (plus a
+     copy to layout.prev.json each time) was measured at 24 sessions. The file
+     is refreshed at least every FRESH_MS so `lastSeen` never ages toward the
+     fortnight floor, and `lastCaptureAt` answers from memory in between. */
+  lastTickAt = now;
+  if (before && now - before.capturedAt < FRESH_MS && sameDesk(before, state)) return before;
   mkdirSync(restoreDir(), { recursive: true });
   const tmp = `${layoutPath()}.${process.pid}.tmp`;
   /* The person's own, and now with the arguments of what they were running
@@ -745,6 +752,14 @@ function writeMerged(fresh: CapturedSession[], now: number, whole: boolean, engi
   writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 });
   swapInLayout(tmp);
   return state;
+}
+
+const FRESH_MS = 5 * 60_000;
+let lastTickAt = 0;
+/** Two photographs are the same desk when nothing but the clocks differs. */
+function sameDesk(a: RestoreState, b: RestoreState): boolean {
+  const bare = (st: RestoreState) => JSON.stringify(st, (k, v) => (k === "capturedAt" || k === "lastSeen" ? undefined : v));
+  return bare(a) === bare(b);
 }
 
 /** Sessions a person explicitly closed. The one way an entry leaves the file
@@ -834,15 +849,18 @@ async function captureOnce(now: number): Promise<RestoreState | null> {
   const newestPrompt = newestPromptId();
   const previous = lastShot?.engine === engine ? lastShot : null;
   const sessions: CapturedSession[] = [];
+  /* The whole desk in two calls (`allWindowTrees`); asked one session at a
+     time only when tmux did not answer the batch. */
+  const batch = await allWindowTrees();
   for (const name of names) {
     if (!validSessionName(name)) continue;
     if (isEphemeralSession(name)) continue;
-    const windows = await windowTree(name);
+    const windows = batch ? batch.trees.get(name) ?? [] : await windowTree(name);
     const out: CapturedWindow[] = [];
     for (const w of windows) {
       const panes: CapturedPane[] = [];
       for (const p of w.panes) {
-        const startCommand = await startCommandOf(name, w.id, p.id);
+        const startCommand = batch ? batch.starts.get(p.id) ?? "" : await startCommandOf(name, w.id, p.id);
         /*
          * THE OBSERVER IS NOT PHOTOGRAPHED.
          *
@@ -1079,7 +1097,8 @@ export function readRestoreState(): RestoreState | null {
 
 /** When the last capture was written, for the settings panel. */
 export function lastCaptureAt(): number | null {
-  return readRestoreState()?.capturedAt ?? null;
+  const filed = readRestoreState()?.capturedAt ?? null;
+  return filed === null ? null : Math.max(filed, lastTickAt);
 }
 
 /*

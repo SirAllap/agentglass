@@ -1022,10 +1022,31 @@ const AUTO_FETCH_CEILING_MS = 10 * 60_000;
  */
 export const FETCH_ARGV = ["fetch", "--all", "--prune", "--atomic"] as const;
 let fetching = false;
+/**
+ * Whether anybody is there to see the counts. Set by the server, which knows
+ * its window sockets; unset (a test, a bare import) means "yes".
+ *
+ * A server with no window open fetched every project once a minute for nobody
+ * (1 fetch and 2 for-each-ref spawns a minute measured with no client), and the
+ * counts it refreshed were re-read by nobody. The tick is skipped, and the
+ * first window to connect after a skipped tick fetches at once
+ * (`autoFetchWhenSomeoneComes`), so the first look is not a minute stale.
+ * The ceiling: the server cannot tell a focused window from one on a second
+ * monitor, so an open window keeps the minute clock.
+ */
+let anyoneWatching: () => boolean = () => true;
+let skippedForNobody = false;
+export function setAutoFetchAudience(fn: () => boolean): void { anyoneWatching = fn; }
+export function autoFetchWhenSomeoneComes(): void {
+  if (!skippedForNobody) return;
+  skippedForNobody = false;
+  void autoFetchOnce();
+}
 
 async function autoFetchOnce(): Promise<void> {
   // Overlapping fetches would pile up on a slow remote; one in flight is enough.
   if (fetching) return;
+  if (!anyoneWatching()) { skippedForNobody = true; return; }
   // Unscoped means "the whole machine", and fetching every repo on the machine
   // once a minute is exactly the cost this feature must not have. Several open
   // projects are fetched one after another, never at once: the ceiling below

@@ -194,17 +194,36 @@ test("importing the store does not start a poll; subscribing does", async () => 
     await new Promise((r) => setTimeout(r, 30));
     expect(calls, "the module polled merely because it was imported").toBe(0);
 
+    // The poll is a 30 s safety net now (the server rings a gate frame on
+    // every change), so waiting a tick out would make this test 30 s long.
+    // What is pinned instead: a next tick is armed, and nothing cancels it.
+    const realSetTimeout = globalThis.setTimeout;
+    const realClearTimeout = globalThis.clearTimeout;
+    const armed = new Set<unknown>();
+    let cancelled = 0;
+    (globalThis as any).setTimeout = (fn: () => void, ms?: number, ...rest: unknown[]) => {
+      const h = realSetTimeout(fn, ms, ...rest);
+      if (typeof ms === "number" && ms >= 1_000) armed.add(h);
+      return h;
+    };
+    (globalThis as any).clearTimeout = (h: any) => {
+      if (armed.has(h)) cancelled++;
+      return realClearTimeout(h);
+    };
     const off = s.subscribeGates(() => {});
-    await new Promise((r) => setTimeout(r, 30));
+    await new Promise((r) => realSetTimeout(r, 30));
     expect(calls, "nobody polled after a subscriber arrived").toBeGreaterThan(0);
 
     // Unsubscribing does not stop it, and that is the point: tying the poll to
     // a panel's lifetime is what made agentglass stop noticing new holds the
     // moment you opened the workspace.
-    const afterOff = calls;
     off();
-    await new Promise((r) => setTimeout(r, 2_100));
-    expect(calls, "the poll stopped when the last subscriber left").toBeGreaterThan(afterOff);
+    await new Promise((r) => realSetTimeout(r, 30));
+    globalThis.setTimeout = realSetTimeout;
+    globalThis.clearTimeout = realClearTimeout;
+    expect(armed.size, "no next tick was armed").toBeGreaterThan(0);
+    expect(cancelled, "the poll stopped when the last subscriber left").toBe(0);
+    for (const h of armed) realClearTimeout(h as any);
   } finally {
     globalThis.fetch = realFetch;
     (globalThis as any).window = realWindow;

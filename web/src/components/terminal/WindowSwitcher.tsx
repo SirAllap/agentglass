@@ -13,6 +13,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../lib/api.ts";
+import { usePoll } from "../../lib/usePoll.ts";
 import { HIT, ICON } from "../../lib/iconSize.ts";
 import { LAYER } from "../../lib/layers.ts";
 import { appChordFor, chordFromEvent, chordLabel } from "../../lib/keybindings.ts";
@@ -48,11 +49,12 @@ export function WindowSwitcher({ open, onClose, onGone }: {
   const returnTo = useRef<HTMLElement | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const loadRef = useRef<() => unknown>(() => {});
 
   useEffect(() => {
     if (!open) { setRows(null); setError(null); setQ(""); setSelId(null); return; }
     let dead = false;
-    const load = () => api.agentPanes()
+    loadRef.current = () => api.agentPanes()
       .then((r) => {
         if (dead) return;
         if (!r.ok) { setError(r.reason ?? "tmux did not answer"); return; }
@@ -60,10 +62,13 @@ export function WindowSwitcher({ open, onClose, onGone }: {
         setRows(windowsFromPanes(r.panes ?? []));
       })
       .catch((e: unknown) => { if (!dead) setError(e instanceof Error ? e.message : String(e)); });
-    void load();
-    const t = setInterval(load, REFRESH_MS);
-    return () => { dead = true; clearInterval(t); };
+    void loadRef.current();
+    return () => { dead = true; loadRef.current = () => {}; };
   }, [open]);
+  /* Every two seconds only while somebody is looking: the switcher stays
+     mounted behind a window nobody has focused, and each read is three tmux
+     spawns and up to 35 KB, identical while nothing moves (measured). */
+  usePoll(open, () => loadRef.current(), REFRESH_MS);
 
   // The field takes the caret by hand: `autoFocus` does not take when the
   // palette mounts while the terminal holds focus, which is the usual case.

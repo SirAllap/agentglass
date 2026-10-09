@@ -10,6 +10,7 @@ import { floorTiers, inkTints } from "./contrast.ts";
 // entry needs no flag — just put a dark bg in the dark run and a light one below.
 
 import { SERVER, authHeaders, whenServerUp } from "./api.ts";
+import { pollWhileLooking } from "./usePoll.ts";
 import type { AnsiPalette } from "./termPalette.ts";
 import { ACCENTS, applyAccent, currentAccent } from "./accent.ts";
 import { bootEntry, writeBootPaint } from "./bootPaint.ts";
@@ -470,8 +471,13 @@ export function watchDesktopPalette(): void {
       for (const fn of desktopListeners) fn();
     }
   };
+  /* Only while the window is looked at, and at once on return to it. It was
+     unconditional: 20 identical requests a minute in EVERY window, lane
+     windows included (781 in 260 s across nine, measured). The ceiling: a
+     desktop switch made while a window is not focused reaches it on its next
+     focus, not within three seconds. */
   void whenServerUp().then(() => {
     void tick();
-    setInterval(() => { void tick(); }, POLL_MS);
+    pollWhileLooking(() => { void tick(); }, POLL_MS);
   }).catch(() => {});
 }

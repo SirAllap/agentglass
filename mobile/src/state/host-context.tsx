@@ -30,7 +30,7 @@ import type {
 } from "../../../shared/types.ts";
 import { talkBody, talkSummary, talkUrgency } from "../../../shared/talkWords.ts";
 import { dedupePrs, mainCheckouts } from "../model/prRows.ts";
-import { ask, REVOKED } from "../lib/api.ts";
+import { ask, askCached, forgetCachedAsks, REVOKED } from "../lib/api.ts";
 import { forgetHost, loadHost, saveHost, type Host } from "../lib/host.ts";
 import { openLive, type LiveHandle, type LiveState } from "../lib/live.ts";
 import { remember, shouldNotify, shouldNotifyTalk } from "../notifications/policy.ts";
@@ -48,6 +48,8 @@ const POLL_MS = 20_000;
  *  repository per filter, and a red build is not news that goes stale in
  *  twenty seconds. */
 const SLOW_POLL_MS = 180_000;
+/** How long the tab may reuse what the pass above read (see `askCached`). */
+export const PR_READ_TTL_MS = 120_000;
 
 /** A pull request, tagged with the checkout that asked and why. `scope` is the
  *  server's own answer to "waiting on your review", so the queue's claim rests
@@ -106,6 +108,8 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
   // A load in flight when another is asked for, so the newer one wins and the
   // older one cannot land on top of it.
   const generation = useRef(0);
+  /** When the pull-request pass last started, for the return-to-foreground check. */
+  const prsAt = useRef(0);
   const liveRef = useRef<LiveHandle | null>(null);
   /** When each alert last buzzed. Held across reconnects because the socket is
    *  torn down and rebuilt for reasons that have nothing to do with the alerts
@@ -213,7 +217,10 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
    * would otherwise spend a minute of radio to find one red build.
    */
   const loadPrs = useCallback(async (which: Host): Promise<void> => {
-    const repos = await ask<{ repos: GitRepoRef[] }>(which, "/git/repos");
+    prsAt.current = Date.now();
+    /* `force`: this IS the refresh. What it reads is kept for the Pull requests
+       tab, which no longer asks the same lists again when it opens. */
+    const repos = await askCached<{ repos: GitRepoRef[] }>(which, "/git/repos", PR_READ_TTL_MS, true);
     if (!repos.ok) return;
 
     // One entry per repository: linked worktrees of one repo answer with the
@@ -223,8 +230,8 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
     const answers = await Promise.all(roots.flatMap((repo) =>
       (["mine", "review"] as const).map(async (scope) => {
         const query = `root=${encodeURIComponent(repo.root)}&filter=${scope}&state=open`;
-        const answer = await ask<{ ok: boolean; prs: PrSummary[]; repo?: { nameWithOwner?: string } }>(
-          which, `/prs/list?${query}`,
+        const answer = await askCached<{ ok: boolean; prs: PrSummary[]; repo?: { nameWithOwner?: string } }>(
+          which, `/prs/list?${query}`, PR_READ_TTL_MS, true,
         );
         if (!answer.ok || !answer.value.ok) return [];
         const name = answer.value.repo?.nameWithOwner ?? repo.name;
@@ -276,7 +283,11 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
     // requests, so it does not ride the socket's doorbell.
     void loadMe(host);
     void loadPrs(host);
-    const slow = setInterval(() => { void loadPrs(host); }, SLOW_POLL_MS);
+    /* Foreground only. `POLL_MS` stopped in the background and this did not:
+       21 requests in 10 minutes at three repositories, 100% identical, for a
+       screen nobody had open. Returning to the app asks at once when the last
+       pass is older than the interval (the AppState effect below). */
+    const slow = setInterval(() => { if (AppState.currentState === "active") void loadPrs(host); }, SLOW_POLL_MS);
 
     const handle = openLive(host, {
       onState: (state) => {
@@ -429,14 +440,17 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
     };
 
     const onChange = (state: AppStateStatus): void => {
-      if (state === "active") { liveRef.current?.wake(); void load(host); start(); syncNow(); }
+      if (state === "active") {
+        liveRef.current?.wake(); void load(host); start(); syncNow();
+        if (Date.now() - prsAt.current >= SLOW_POLL_MS) void loadPrs(host);
+      }
       else stop();
     };
 
     if (AppState.currentState === "active") { start(); syncNow(); }
     const sub = AppState.addEventListener("change", onChange);
     return () => { alive = false; stop(); sub.remove(); };
-  }, [host, load]);
+  }, [host, load, loadPrs]);
 
   const value = useMemo<Ctx>(() => ({
     host,
@@ -446,12 +460,14 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
     refresh,
     pair: async (next: Host): Promise<void> => {
       await saveHost(next);
+      forgetCachedAsks();
       setFleet(EMPTY);
       setHost(next);
     },
     forget: async (): Promise<void> => {
       syncKeepAlive(false);
       await forgetHost();
+      forgetCachedAsks();
       setFleet(EMPTY);
       setHost(null);
     },

@@ -1252,7 +1252,8 @@ const realApi = {
   /** Installed / daemon-down / OK — so the panel can show install guidance for a
    *  missing binary instead of the overview's daemon message. Mirrors gitCapability. */
   dockerCapability: () => get<DockerCapability>("/docker/capability"),
-  dockerOverview: () => get<DockerOverview>("/docker/overview"),
+  /** `fresh` asks past the server's cache: the Refresh button, not the poll. */
+  dockerOverview: (fresh = false) => get<DockerOverview>(`/docker/overview${fresh ? "?fresh=1" : ""}`),
   dockerStats: () => get<{ stats: DockerStat[] }>("/docker/stats"),
   /* --- the finder: browsing a place and looking at a file ----------------
      One pair for both worlds, because the finder's tabs should not behave

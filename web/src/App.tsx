@@ -14,6 +14,7 @@ import { publishFleet } from "./lib/demoBridge.ts";
 import { publishAgents } from "./lib/fleetAgents.ts";
 import { providerOf } from "./lib/format.ts";
 import { api, IS_DEMO } from "./lib/api.ts";
+import { usePoll } from "./lib/usePoll.ts";
 import { refusalFinal, useCoverHold } from "./lib/cover.ts";
 import { initialTheme, applyTheme, THEMES } from "./lib/themes.ts";
 import { subscribeControl } from "./lib/controlBus.ts";
@@ -525,13 +526,12 @@ export default function App() {
    * piece of the dashboard that genuinely doesn't need to be live.
    */
   const [sessions, setSessions] = useState<SessionRollup[]>([]);
-  useEffect(() => {
-    const take = keepIfSame(setSessions); // once per effect, not once per poll
-    const load = () => api.sessions(200).then(take).catch(() => { /* labels fall back to the uuid */ });
-    load();
-    const id = setInterval(load, 30_000);
-    return () => clearInterval(id);
-  }, []);
+  const takeSessions = useMemo(() => keepIfSame(setSessions), []); // once, not once per poll
+  const loadSessions = () => api.sessions(200).then(takeSessions).catch(() => { /* labels fall back to the uuid */ });
+  useEffect(() => { void loadSessions(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  /* Only while the window is looked at (89 KB per call with 200 rows, ungated
+     before: 2 a minute for a window nobody had focused). */
+  usePoll(true, () => { void loadSessions(); }, 30_000);
   const titles = useMemo(() => buildTitles(sessions), [sessions]);
   // Same rows, second question: the buffer the cards sum over is a capped
   // window, so cost/tokens/tools come from the session roll-up where there is

@@ -77,13 +77,26 @@ export function usePrTalkTick(key: string): number {
  */
 export function useReloadOnTick(tick: number, reload: () => unknown, scope = ""): void {
   const seen = useRef({ scope, tick });
+  const latest = useRef(reload);
+  latest.current = reload;
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     const was = seen.current;
     seen.current = { scope, tick };
     if (was.scope !== scope || was.tick === tick) return;
-    void reload();
-  }, [scope, tick, reload]);
+    /* Trailing, not one reload per tick: a review with a dozen comments sends
+       a dozen ticks in a few seconds, and each reload of the list is a request
+       per repository plus one per repository for the counts (5 ticks in 5 s
+       made 30 identical requests, measured). The ceiling: the screen catches
+       up `RELOAD_QUIET_MS` after the last tick of a burst. */
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => { timer.current = null; void latest.current(); }, RELOAD_QUIET_MS);
+  }, [scope, tick]);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
 }
+
+/** How long a burst of ticks must go quiet before the screen reloads (see `useReloadOnTick`). */
+export const RELOAD_QUIET_MS = 1500;
 
 /** The counts, for a test that wants to look without rendering a hook — there
  *  is no renderer in this project, so `noteTalk`'s effect on the store is

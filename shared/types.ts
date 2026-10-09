@@ -1921,6 +1921,10 @@ export type WsFrame =
    *  rather than the server guessing which of them cares about what. */
   | { type: "git" }
   | { type: "tasks" }
+  /** The list of pending gate holds changed (one arrived, was decided, timed
+   *  out, or was answered by a rule). Carries no payload: the client re-reads
+   *  `/gate/pending`, which replaces a two second poll of it. */
+  | { type: "gate" }
   /** A pull request's checks all finished. One frame per PR per verdict — the
    *  server holds the latch, so a suite of sixty-one checks sends one of these,
    *  not sixty-one. */

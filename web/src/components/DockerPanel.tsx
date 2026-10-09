@@ -405,8 +405,8 @@ export function DockerView({ active, onOpenBrowser }: {
   const selected = useMemo(() => containers.find((c) => c.id === selId) ?? containers[0] ?? null, [containers, selId]);
   const writeEnabled = ov?.writeEnabled ?? false;
 
-  const loadOverview = useCallback(async () => {
-    try { const o = await api.dockerOverview(); setOv(o); if (o.error) flash(false, o.error); }
+  const loadOverview = useCallback(async (fresh = false) => {
+    try { const o = await api.dockerOverview(fresh); setOv(o); if (o.error) flash(false, o.error); }
     catch (e) { flash(false, String(e)); }
   }, []);
   const loadStats = useCallback(async () => {
@@ -654,7 +654,7 @@ export function DockerView({ active, onOpenBrowser }: {
                         : { color: "var(--text3)", border: EDGE }}>
                       Dense
                     </button>
-                    <RefreshButton onRefresh={() => { loadOverview(); loadStats(); }} title="Refresh" />
+                    <RefreshButton onRefresh={() => { loadOverview(true); loadStats(); }} title="Refresh" />
                   </div>
                 </div>
 

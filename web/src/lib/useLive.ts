@@ -398,7 +398,10 @@ export function useLive(paused = false): LiveData {
         });
         return;
       }
+      if (frame.type === "gate") { void pollGatesNow(); return; }
       if (frame.type === "initial") {
+        // A socket that just (re)opened may have missed a change while it was down.
+        void pollGatesNow();
         // openTools seeds the per-agent "running" state for sessions whose
         // calls have already aged out of the buffer, and it rides on the same
         // first frame — so it is read before the events, not instead of them.

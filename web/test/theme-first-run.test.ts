@@ -37,7 +37,8 @@ async function boot(stored: Record<string, string>, { dark = true, palette = nul
   };
   const attrs = new Map<string, string>();
   const style = new Map<string, string>();
-  g.document = { documentElement: {
+  // hidden/hasFocus: the palette poll only ticks while the window is looked at.
+  g.document = { hidden: false, hasFocus: () => true, documentElement: {
     style: { setProperty: (k: string, v: string) => style.set(k, v), getPropertyValue: (k: string) => style.get(k) ?? "", removeProperty: (k: string) => style.delete(k) },
     setAttribute: (k: string, v: string) => attrs.set(k, v),
     getAttribute: (k: string) => attrs.get(k) ?? null,

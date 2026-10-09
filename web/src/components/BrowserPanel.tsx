@@ -1689,6 +1689,28 @@ export function BrowserView({ active: viewOn, scope }: {
     };
     w.addEventListener("found-in-page", onFound);
   }, [patch]);
+  /*
+   * ONE ref callback per tab, for the life of the tab.
+   *
+   * `ref={bind(t.id)}` made a new callback on every render, so React called
+   * the old one with null (which forgot the element) and the new one with the
+   * node, and `bind` attached all nine listeners again to the same guest, each
+   * with fresh closures nothing could dedupe. Measured in a harness with a fake
+   * guest: 2 -> 24 -> 47 -> 69 did-stop-loading listeners over three
+   * navigations, so one page load recorded the same visit 23 to 226 times, and
+   * each recording re-rendered the panel and added more. A stable callback is
+   * never re-invoked by a render; React calls it with null only on unmount.
+   */
+  const refCache = useRef(new Map<string, (node: HTMLElement | null) => void>());
+  const bindRef = useCallback((id: string) => {
+    let f = refCache.current.get(id);
+    if (!f) {
+      const attach = bind(id);
+      f = (node) => { attach(node); if (!node) refCache.current.delete(id); };
+      refCache.current.set(id, f);
+    }
+    return f;
+  }, [bind]);
 
   /* ------------------------------------------------------------- keyboard */
 
@@ -2975,7 +2997,7 @@ export function BrowserView({ active: viewOn, scope }: {
               ) : (
                 <BornAt url={t.url || BLANK}>{(src) => (
                 <webview
-                  ref={bind(t.id) as unknown as React.Ref<HTMLElement>}
+                  ref={bindRef(t.id) as unknown as React.Ref<HTMLElement>}
                   src={src}
                   /* `newtab --from-template`'s own in-memory jar, when this
                      tab is one — main minted it (`ag:tabEphemeralOpen`) and

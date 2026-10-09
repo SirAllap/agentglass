@@ -34,7 +34,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator, Alert, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, Text,
+  ActivityIndicator, Alert, AppState, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, Text,
   TextInput, View,
 } from "react-native";
 import * as Haptics from "expo-haptics";
@@ -1158,8 +1158,13 @@ function TerminalPane(): React.ReactNode {
    */
   useFocusEffect(useCallback(() => {
     void load(true);
-    const timer = setInterval(() => { void load(true); }, 2000);
-    return () => clearInterval(timer);
+    /* Focus says the screen is the one on top; only AppState says the phone is
+       on. A locked phone left on this tab kept asking every two seconds
+       (30 a minute, one list-panes each on the computer). Back in the
+       foreground it reads at once. */
+    const timer = setInterval(() => { if (AppState.currentState === "active") void load(true); }, 2000);
+    const sub = AppState.addEventListener("change", (s) => { if (s === "active") void load(true); });
+    return () => { clearInterval(timer); sub.remove(); };
   }, [load]));
 
   /** What came back from that. Either a pane to go to, or a reason. */
