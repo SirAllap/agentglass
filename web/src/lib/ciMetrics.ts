@@ -1,4 +1,4 @@
-// The CI metrics table: which checks are slow, flaky or drifting, and in what order.
+// The CI metrics table: which checks are slow, passed on a re-run, or drifting, and in what order.
 //
 // Measured: the Checks tab judges one pull request's job against that job's own
 // history, and says nothing about the repository as a whole. This is the same
@@ -11,19 +11,21 @@
 // inside a day (the trend is one median per day, so a 14-day drift is the
 // finest thing it can call).
 //
-// "Flaky" is not a failure rate. Measured on the old rule (1 failure in 20 runs)
-// a check that failed because the code was broken, and one cancelled by a newer
-// push, both came out flaky. It is `isFlaky` (shared/checkBaseline.ts): the same
-// commit both failed and passed the check.
+// "Re-run passed" is not a failure rate, and it is not "flaky": that word belongs
+// to a test, and a job can run thousands of them. Measured on the old rule
+// (1 failure in 20 runs) a check that failed because the code was broken, and one
+// cancelled by a newer push, both came out flagged. It is `rerunPassed`
+// (shared/checkBaseline.ts): the same commit both failed and passed the job, and
+// which test failed is not in the data.
 
-import { durationVerdict, isFlaky, MIN_SAMPLES, NOISE_MS, type CheckAggregate, type CheckMetric, type DurationVerdict, type Flakiness } from "../../../shared/checkBaseline.ts";
+import { durationVerdict, rerunPassed, MIN_SAMPLES, NOISE_MS, type CheckAggregate, type CheckMetric, type DurationVerdict, type SameCommit } from "../../../shared/checkBaseline.ts";
 
 /** The last week's median against the week before it. */
 const DRIFT_RATIO = 1.15;
 const WEEK = 7;
 
-export type Chip = "all" | "slow" | "flaky" | "drifting";
-export const CHIPS: readonly Chip[] = ["all", "slow", "flaky", "drifting"];
+export type Chip = "all" | "slow" | "rerun" | "drifting";
+export const CHIPS: readonly Chip[] = ["all", "slow", "rerun", "drifting"];
 
 export type SortKey = "check" | "usual" | "slow" | "fails" | "verdict";
 export interface Sort { key: SortKey; dir: "asc" | "desc" }
@@ -60,20 +62,20 @@ export interface Row {
   thisRun: number | null;
   failed: boolean;
   verdict: DurationVerdict;
-  flaky: boolean;
-  flakiness: Flakiness;
+  rerun: boolean;
+  sameCommit: SameCommit;
   drift: number | null;
 }
 
 /**
- * The hover for a flaky check: what was seen, in its own numbers. For a check
- * that is not flaky it says only what could not be judged (runs with no commit
+ * The hover for a check that passed on a re-run: what was seen, in its own numbers,
+ * and where to look next. For a check that did not it says only what could not be judged (runs with no commit
  * recorded: stored before it was kept, or read from a response without one),
  * and is empty when there is nothing to say.
  */
-export function flakyWhy(f: Flakiness): string {
-  if (f.flips > 0) return `Failed, then passed, on the same commit ${f.flips === 1 ? "once" : `${f.flips} times`} in ${f.days} days`;
-  return f.unknown > 0 ? `${f.unknown} run${f.unknown === 1 ? " has" : "s have"} no commit recorded, so ${f.unknown === 1 ? "it" : "they"} cannot be judged for flakiness` : "";
+export function rerunWhy(f: SameCommit): string {
+  if (f.flips > 0) return `Failed, then passed, on the same commit ${f.flips === 1 ? "once" : `${f.flips} times`} in ${f.days} days. That is the job, not a single test: open the failed run's log to see which test.`;
+  return f.unknown > 0 ? `${f.unknown} run${f.unknown === 1 ? " has" : "s have"} no commit recorded, so ${f.unknown === 1 ? "it" : "they"} cannot be judged for re-runs` : "";
 }
 
 export function toRow(m: CheckMetric): Row {
@@ -89,8 +91,8 @@ export function toRow(m: CheckMetric): Row {
     failed,
     // A failed run stops early, so "faster" would be a lie: shared/checkBaseline.ts refuses it too.
     verdict: failed ? "unknown" : durationVerdict(a.latest?.ms ?? null, usual),
-    flaky: isFlaky(a.flakiness),
-    flakiness: a.flakiness,
+    rerun: rerunPassed(a.sameCommit),
+    sameCommit: a.sameCommit,
     drift: drift(a.trend),
   };
 }
@@ -103,7 +105,7 @@ export const inChip = (c: Chip, r: Row): boolean => IN[c](r);
 const IN: Record<Chip, (r: Row) => boolean> = {
   all: () => true,
   slow: isSlow,
-  flaky: (r) => r.flaky,
+  rerun: (r) => r.rerun,
   drifting: (r) => r.drift != null,
 };
 

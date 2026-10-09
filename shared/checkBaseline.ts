@@ -71,21 +71,21 @@ export function durationVerdict(ms: number | null, usual: CheckUsual | undefined
  * `sha` is the commit the run was for; empty or absent when the run was stored
  * before the commit was kept. `pr` is the pull request it was read on: one
  * commit can sit in two pull requests with different bases, and a red run and a
- * green one there ran different merge code, which is not a flake.
+ * green one there ran different merge code, which is not a re-run that passed.
  */
 export interface StoredRun { conclusion: "success" | "failure" | "cancelled"; ms: number; completedAt: number; sha?: string; pr?: number | null }
 
 const DAY_MS = 86_400_000;
 
-/** Flaky is judged over this many days, the window CircleCI and Datadog use for the same rule. */
-export const FLAKY_DAYS = 14;
+/** A re-run that passed is looked for over this many days, the window CircleCI and Datadog use for the same rule. */
+export const RERUN_DAYS = 14;
 
 /**
  * Same-commit evidence for one check. A commit "flipped" when it has both a
  * failed and a passed run of the check: nothing about the code changed between
  * them, so the check disagreed with itself.
  */
-export interface Flakiness {
+export interface SameCommit {
   /** Commits that both failed and passed. */
   flips: number;
   /** Runs that count: passed or failed (never cancelled) with a known commit. */
@@ -98,14 +98,16 @@ export interface Flakiness {
 /**
  * Pure: the rows of ONE check. Cancelled runs are dropped, a failure that is
  * the same on every commit is not a flip (that is a broken check), and a
- * failure followed by a pass on the NEXT commit is a fix, not a flake.
- * Ceiling: it only sees a flake somebody re-ran, or that two reads of the same
- * commit caught; a check that flakes once in a thousand and is never re-run
- * stays invisible, and there is no per-test detail without JUnit artifacts.
+ * failure followed by a pass on the NEXT commit is a fix, not a re-run.
+ * Ceiling: it only sees a failure somebody re-ran, or that two reads of the same
+ * commit caught; a check that fails once in a thousand and is never re-run
+ * stays invisible. It is a fact about the JOB, not about any test inside it: a
+ * job can run thousands of tests, and which one failed is not in these rows,
+ * so "flaky" is never said of the job.
  * A run GitHub holds for approval (ACTION_REQUIRED) is mapped to a failure
  * upstream, so approving it and passing would read as a flip; not measured.
  */
-export function flakiness(rows: StoredRun[], now: number, days = FLAKY_DAYS): Flakiness {
+export function sameCommit(rows: StoredRun[], now: number, days = RERUN_DAYS): SameCommit {
   const since = now - days * DAY_MS;
   const seen = new Map<string, { failed: boolean; passed: boolean }>();
   let judged = 0, unknown = 0;
@@ -120,8 +122,8 @@ export function flakiness(rows: StoredRun[], now: number, days = FLAKY_DAYS): Fl
   return { flips: [...seen.values()].filter((c) => c.failed && c.passed).length, judged, unknown, days };
 }
 
-/** Flaky needs at least one flipped commit, and enough judged runs that it is not one lucky pair. */
-export const isFlaky = (f: Flakiness): boolean => f.flips >= 1 && f.judged >= MIN_SAMPLES;
+/** Needs at least one flipped commit, and enough judged runs that it is not one lucky pair. */
+export const rerunPassed = (f: SameCommit): boolean => f.flips >= 1 && f.judged >= MIN_SAMPLES;
 
 export interface CheckAggregate {
   runs: number;
@@ -136,8 +138,8 @@ export interface CheckAggregate {
   failureRate: number | null;
   /** One bucket per day over the last `days`, oldest first; `median` is null on a day with no success. */
   trend: { day: string; runs: number; median: number | null }[];
-  /** Whether the check disagreed with itself on one commit; the only thing "Flaky" means. */
-  flakiness: Flakiness;
+  /** Whether the check disagreed with itself on one commit; the only thing "Re-run passed" means. */
+  sameCommit: SameCommit;
 }
 
 export function aggregateRuns(rows: StoredRun[], now: number, days = 14): CheckAggregate {
@@ -159,7 +161,7 @@ export function aggregateRuns(rows: StoredRun[], now: number, days = 14): CheckA
     p90: ok.length ? percentile(ok, 0.9) : null,
     failureRate: ok.length + bad ? bad / (ok.length + bad) : null,
     trend,
-    flakiness: flakiness(rows, now),
+    sameCommit: sameCommit(rows, now),
   };
 }
 

@@ -4684,7 +4684,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               count={inboxUnread || undefined} countTint="warning"
               onClick={() => { setMetricsOn(false); setInboxOn(true); }} />
             <Pill on={metricsOn} icon={<ChartIcon size={ICON.xs} />} label="CI"
-              title="Every check of this repository against its own history — slow, flaky, drifting"
+              title="Every check of this repository against its own history — slow, passed on a re-run, drifting"
               onClick={() => { setInboxOn(false); setMetricsOn(true); }} />
             <span className="self-center shrink-0" style={{ width: 1, height: 12, background: "color-mix(in srgb, var(--text) 14%, transparent)" }} />
             {VIEWS.map((v) => {
@@ -12187,7 +12187,7 @@ export function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyW
             {onAsk && <Btn onClick={() => onAsk(k)} primary small title="Check the pull request out locally and hand the failure to Claude"><SparkleIcon size={ICON.xs} />Ask Claude why</Btn>}
             <Btn onClick={onRerun} disabled={busy} small pending={busyWhat === "Re-run checks"} title="Re-run every failing check on this pull request"><RefreshIcon size={ICON.xs} />Re-run failed</Btn>
             {/* GitHub offers all three, and "the whole run failed again for one
-                flaky job" is exactly when you want the single-job one. */}
+                job" is exactly when you want the single-job one. */}
             {(() => {
               const job = jobs.find((j) => j.name === k.name) ?? jobs.find((j) => k.name.includes(j.name));
               if (!job || !onRerunJobs) return null;

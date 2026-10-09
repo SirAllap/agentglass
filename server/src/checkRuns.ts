@@ -58,7 +58,7 @@ export function storable(c: PrCheck): { conclusion: StoredRun["conclusion"]; sta
 /**
  * Store what this read shows and prune the keys it touched. `sha` is the head
  * commit the GitHub response itself named for these checks; empty when it did
- * not, and those runs are not judged for flakiness. A run already stored
+ * not, and those runs are not judged for re-runs. A run already stored
  * without a commit gets it from a later read of the same job, and that counts
  * in the number returned like a new one.
  */
@@ -110,7 +110,7 @@ export function learnFromRead(repo: string, pr: number | null, sha: string, all:
   } catch { /* a history that cannot be written must never break a checks read */ }
 }
 
-/** Per check key: count, median, p90, failure rate, 14-day trend, same-commit flakiness. */
+/** Per check key: count, median, p90, failure rate, 14-day trend, same-commit flips. */
 export function repoMetrics(repo: string, now = Date.now()): CheckMetric[] {
   const rows = db.prepare(`SELECT key, conclusion, ms, completed_at, head_sha, pr FROM check_runs WHERE repo = ? ORDER BY key`).all(repo) as { key: string; conclusion: StoredRun["conclusion"]; ms: number; completed_at: number; head_sha: string; pr: number | null }[];
   const by = new Map<string, StoredRun[]>();
