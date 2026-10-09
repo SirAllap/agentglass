@@ -5033,6 +5033,23 @@ function CommentAction({ label, title, d, onClick, busy, on, tone }: {
   );
 }
 
+/** The copy button of an "Other links" row: says "Copied" for a moment, the way
+ *  the quick-start rows above it do, instead of copying in silence. */
+function CopyLinkChip({ url }: { url: string }) {
+  const [done, setDone] = useState(false);
+  useEffect(() => {
+    if (!done) return;
+    const t = setTimeout(() => setDone(false), 1200);
+    return () => clearTimeout(t);
+  }, [done]);
+  return (
+    <IconChip title={done ? "Copied" : "Copy the link"}
+      onClick={() => { void navigator.clipboard.writeText(url).then(() => setDone(true)).catch(() => setDone(false)); }}>
+      {done ? <DoneIcon size={ICON.xs} /> : <CopyIcon size={ICON.xs} />}
+    </IconChip>
+  );
+}
+
 /**
  * One line of the GitHub panel: a label, a value, and a way to take it.
  *
@@ -5736,10 +5753,9 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
     () => otherGithubLinks(full?.description, t.custom?.find((c) => /github/i.test(c.name))?.value),
     [full?.description, t.custom],
   );
-  const openOther = useCallback((url: string) => {
-    if (HAS_BROWSER && onOpenBrowser) { requestBrowserNav(url); onOpenBrowser(); return; }
-    openExternal(url);
-  }, [onOpenBrowser]);
+  // A wiki page, an issue or a commit is not something the app draws, so these
+  // leave for the desktop's default browser rather than the in-app one.
+  const openOther = useCallback((url: string) => { openExternal(url); }, []);
 
 
   useEffect(() => {
@@ -6748,14 +6764,12 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
               <div key={l.url} className="flex items-center gap-2 py-1">
                 <button onClick={() => openOther(l.url)}
                   className="text-left flex-1 min-w-0 rounded px-1 -mx-1 hover:bg-white/5"
-                  title={HAS_BROWSER && onOpenBrowser ? "Open in the browser tab" : "Open in your browser"}>
+                  title="Open in your browser">
                   <span className="block truncate text-[11px]" style={{ color: "var(--primary-ink)" }}>{l.title}</span>
                   <div className="truncate text-[10.5px]" style={{ color: "var(--text3)" }}>{l.path}</div>
                 </button>
-                <IconChip title="Open" onClick={() => openOther(l.url)}>↗</IconChip>
-                <IconChip title="Copy the link" onClick={() => { void navigator.clipboard.writeText(l.url).catch(() => {}); }}>
-                  <CopyIcon size={ICON.xs} />
-                </IconChip>
+                <IconChip title="Open in your browser" onClick={() => openOther(l.url)}>↗</IconChip>
+                <CopyLinkChip url={l.url} />
               </div>
             ))}
           </div>
