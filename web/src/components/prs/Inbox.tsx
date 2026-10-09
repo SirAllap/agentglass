@@ -25,7 +25,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { usePoll } from "../../lib/usePoll.ts";
 import type { InboxItem } from "../../../../shared/types.ts";
 import { api } from "../../lib/api.ts";
-import { byDay, facetCounts, facetOrder, FACETS, filterInbox, inFacet, orderByAnnotation, reasonLabel, searchInbox, sorters } from "../../lib/ghInbox.ts";
+import { botOnly, byDay, facetCounts, facetOrder, FACETS, filterInbox, inFacet, orderByAnnotation, reasonLabel, searchInbox, sorters, TURN_CHIP, turnLine, yourTurn } from "../../lib/ghInbox.ts";
 import { doneIds, isDone, isSaved, onShelf, savedIds, setDone, setSaved, subscribeMarks, type Shelf } from "../../lib/inboxMarks.ts";
 import { fmtAgo } from "../../lib/format.ts";
 import { openPr } from "../../lib/openPrs.ts";
@@ -33,7 +33,7 @@ import { useDialogs } from "../ConfirmDialog.tsx";
 import { openIssue } from "../../lib/openIssue.ts";
 import { Spinner } from "../Spinner.tsx";
 import { ICON } from "../../lib/iconSize.ts";
-import { CommentIcon, DoneIcon, EyeIcon, FlagIcon, HandIcon, InboxIcon, UserIcon } from "../../lib/glyphIcons.tsx";
+import { CaretIcon, ClockIcon, CommentIcon, DoneIcon, EyeIcon, FlagIcon, HandIcon, InboxIcon, UserIcon } from "../../lib/glyphIcons.tsx";
 import { GitIcon } from "../workspace/icons.tsx";
 import { RefreshButton, INPUT, INPUT_STYLE, EDGE, LINE } from "../workspace/Chrome.tsx";
 import { Optimistic } from "../../lib/prOptimistic.ts";
@@ -136,7 +136,8 @@ export function Inbox({ repo, onFlash, onUnread, active = true }: {
   const [err, setErr] = useState("");
   const [at, setAt] = useState(0);
   const [busy, setBusy] = useState(false);
-  const [shelf, setShelf] = useState<Shelf>("inbox");
+  /** "turn" is a view of the inbox shelf, not a shelf: nothing is stored under it. */
+  const [shelf, setShelf] = useState<Shelf | "turn">("inbox");
   const [facet, setFacet] = useState("");
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [q, setQ] = useState("");
@@ -144,6 +145,8 @@ export function Inbox({ repo, onFlash, onUnread, active = true }: {
   /** A plugin whose numbers order the list, or null for time. Only ever the person's pick. */
   const [sortBy, setSortBy] = useState<string | null>(null);
   const [allRepos, setAllRepos] = useState(false);
+  /** Bot-only updates on the person's pull requests, listed instead of counted. */
+  const [showBots, setShowBots] = useState(false);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   /* The local shelves are a store outside React — two other windows can move
      them — so the list subscribes rather than copying them into state. */
@@ -187,12 +190,13 @@ export function Inbox({ repo, onFlash, onUnread, active = true }: {
   const all = optimistic.view(raw ?? []);
   /** Everything on this shelf, in this repository unless asked otherwise. Every
    *  count below is computed from here, so a chip says what pressing it does. */
-  const shelved = useMemo(
-    () => onShelf(all, shelf).filter((n) => allRepos || !repo || n.repo === repo),
-    // marksTick: the shelves are outside React and this is what says they moved.
+  const here = useCallback((n: InboxItem) => allRepos || !repo || n.repo === repo, [allRepos, repo]);
+  /* marksTick: the shelves are outside React and this is what says they moved. */
+  const onView = useCallback((which: Shelf | "turn"): InboxItem[] =>
+    which === "turn" ? onShelf(all, "inbox").filter(yourTurn) : onShelf(all, which),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [all, shelf, allRepos, repo, marksTick],
-  );
+    [all, marksTick]);
+  const shelved = useMemo(() => onView(shelf).filter(here), [onView, shelf, here]);
   const facetCount = useMemo(() => {
     const m = new Map<string, number>();
     for (const f of FACETS) m.set(f.id, shelved.filter((n) => (unreadOnly ? n.unread : true) && inFacet(n, f.id)).length);
@@ -201,19 +205,33 @@ export function Inbox({ repo, onFlash, onUnread, active = true }: {
 
   /** Plugins that gave rows a number to order by; each is a "Sort" choice. */
   const orderers = useMemo(() => sorters(all), [all]);
-  const rows = useMemo(() => {
+  /** The toggles, facet, search and order the person has set, applied to any list. */
+  const applyView = useCallback((from: InboxItem[]) => {
     const list = searchInbox(
-      filterInbox(shelved, { unread: unreadOnly }).filter((n) => !facet || inFacet(n, facet)),
+      filterInbox(from, { unread: unreadOnly }).filter((n) => !facet || inFacet(n, facet)),
       q,
     );
     return sortBy && orderers.includes(sortBy)
       ? orderByAnnotation(list, sortBy)
       : [...list].sort((a, b) => (newest ? b.at - a.at : a.at - b.at));
-  }, [shelved, unreadOnly, facet, q, newest, sortBy, orderers]);
+  }, [unreadOnly, facet, q, newest, sortBy, orderers]);
+  const rows = useMemo(() => applyView(shelved), [applyView, shelved]);
 
-  const repoCounts = useMemo(() => facetOrder(facetCounts(onShelf(all, shelf), {}, "repo")), [all, shelf, marksTick]);
-  const unread = shelved.filter((n) => n.unread).length;
-  useEffect(() => { onUnread?.(unread); }, [unread, onUnread]);
+  const repoCounts = useMemo(() => facetOrder(facetCounts(onView(shelf), {}, "repo")), [onView, shelf]);
+  /* What each shelf's own count says, whichever is showing: the rail answers
+     "what is on that shelf", and the pill on the tab is the inbox's. */
+  const counts = useMemo(() => {
+    const unreadIn = (which: Shelf | "turn") => onView(which).filter((n) => n.unread && here(n)).length;
+    return { inbox: unreadIn("inbox"), turn: unreadIn("turn") };
+  }, [onView, here]);
+  useEffect(() => { onUnread?.(counts.inbox); }, [counts.inbox, onUnread]);
+  /** News on the person's pull requests that only bots wrote: never a row of
+   *  Your turn, and never dropped without saying so. It follows the same
+   *  filters the rows do, so the line counts what "Show them" would list. */
+  const botRows = useMemo(
+    () => (shelf === "turn" ? applyView(onView("inbox").filter((n) => botOnly(n) && here(n))) : []),
+    [shelf, applyView, onView, here],
+  );
   const allPicked = rows.length > 0 && rows.every((n) => picked.has(n.id));
 
   const act = async (ids: string[], what: "read" | "unsubscribe") => {
@@ -259,13 +277,78 @@ export function Inbox({ repo, onFlash, onUnread, active = true }: {
     else openPr(n.repo, n.number, { mention: n.reason === "mention" || n.reason === "team_mention" });
   };
 
+  /** One thread. `ghost` is a bot-only update the person asked to see: same
+   *  anatomy, quieter, and labelled for what it is. */
+  const renderRow = (n: InboxItem, ghost: boolean) => {
+    const turnView = n.turn && (shelf === "turn" || ghost);
+    const chip = turnView ? TURN_CHIP[n.turn!.kind] : null;
+    const line = turnView ? turnLine(n.turn!) : null;
+    return (
+      <div key={n.id} className="group flex items-start gap-2 px-2.5 py-2"
+        style={{ borderBottom: LINE, opacity: ghost ? 0.62 : undefined, background: n.unread && !ghost ? "color-mix(in srgb, var(--primary) 5%, transparent)" : "transparent" }}>
+        <button className="agx-btn mt-0.5 shrink-0" title={picked.has(n.id) ? "Unpick" : "Pick"}
+          onClick={() => setPicked((s) => { const next = new Set(s); if (next.has(n.id)) next.delete(n.id); else next.add(n.id); return next; })}>
+          <Tick on={picked.has(n.id)} />
+        </button>
+        <span className="mt-0.5 shrink-0" title={n.type}><Kind type={n.type} /></span>
+        <button className="agx-btn min-w-0 flex-1 text-left" onClick={() => open(n)}
+          disabled={n.number == null}
+          title={n.number == null ? `${n.type} — no page for this in the app` : `Open ${n.repo} #${n.number}`}>
+          <div className="flex items-baseline gap-1.5 text-[10px]" style={{ color: "var(--text4)" }}>
+            <span className="truncate">{n.repo}</span>
+            {n.number != null && <span className="tabular-nums" style={{ color: "var(--text3)" }}>#{n.number}</span>}
+          </div>
+          <div className="text-[11.5px] leading-snug break-words"
+            style={{ color: n.unread && !ghost ? "var(--text)" : "var(--text2)", fontWeight: n.unread && !ghost ? 600 : 400 }}>
+            {n.title}
+          </div>
+          {line && (line.by || line.text) && (
+            <div className="mt-0.5 text-[10.5px] truncate" style={{ color: "var(--text3)" }}>
+              {line.by && <span style={{ color: "var(--text2)" }}>{line.by}</span>}{line.by && line.text ? " " : ""}{line.text}
+            </div>
+          )}
+        </button>
+        {n.annotations?.map((a) => a.badge && (
+          <Chip key={a.plugin} tone={TO_ROW_TONE[a.badge.tone ?? "default"]} title={a.tip ? `${a.tip} — ${a.plugin}` : a.plugin}>{a.badge.text}</Chip>
+        ))}
+        {chip && chip.tone !== "neutral"
+          /* The two that ask something of you wear the house chip — a tint, no
+             border — rather than a third border weight. */
+          ? <Chip tone={chip.tone}>{chip.label}</Chip>
+          : <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-md whitespace-nowrap"
+              style={{ color: "var(--text3)", border: EDGE }}>{chip ? chip.label : reasonLabel(n.reason)}</span>}
+        <span className="shrink-0 text-[10px] tabular-nums w-[52px] text-right" style={{ color: "var(--text4)" }}
+          title={new Date(n.at).toLocaleString()}>{fmtAgo(n.at)}</span>
+        {/* Per-row verbs, quiet until the row is pointed at. */}
+        <span className="agx-hover-show flex items-center gap-1 shrink-0">
+          <button className="agx-btn rounded px-1.5 py-0.5 text-[10px]" style={{ color: isSaved(n.id) ? "var(--warning)" : "var(--text3)" }}
+            title={isSaved(n.id) ? "Take it off the saved shelf" : "Save it (kept on this machine)"}
+            onClick={() => setSaved(n.id, !isSaved(n.id))}>{isSaved(n.id) ? "Saved" : "Save"}</button>
+          <button className="agx-btn rounded px-1.5 py-0.5 text-[10px]" style={{ color: "var(--text3)" }}
+            title={isDone(n.id) ? "Put it back in the inbox" : "Finish with it — hides it here and marks it read on GitHub"}
+            onClick={() => {
+              const on = !isDone(n.id);
+              setDone(n.id, on);
+              if (on && n.unread) void act([n.id], "read");
+            }}>{isDone(n.id) ? "Undone" : "Done"}</button>
+          {n.unread && (
+            <button className="agx-btn rounded px-1.5 py-0.5 text-[10px]" style={{ color: "var(--text3)" }}
+              title="Mark it read on GitHub" disabled={busy}
+              onClick={() => void act([n.id], "read")}>Read</button>
+          )}
+        </span>
+      </div>
+    );
+  };
+
   return (
     <div className="flex flex-1 min-h-0">
       {/* The rail: shelves, then the named filters, then the repositories. */}
       <div className="shrink-0 flex flex-col gap-3 px-2 py-2 overflow-y-auto agx-scroll"
         style={{ width: 190, borderRight: LINE }}>
         <div className="flex flex-col gap-0.5">
-          <Rail mark={<InboxIcon size={ICON.xs} />} label="Inbox" n={unread} on={shelf === "inbox"} hint="Everything not finished" onClick={() => { setShelf("inbox"); setPicked(new Set()); }} />
+          <Rail mark={<InboxIcon size={ICON.xs} />} label="Inbox" n={counts.inbox} on={shelf === "inbox"} hint="Everything not finished" onClick={() => { setShelf("inbox"); setPicked(new Set()); }} />
+          <Rail mark={<ClockIcon size={ICON.xs} />} label="Your turn" n={counts.turn} on={shelf === "turn"} hint="Review requests, mentions, changes requested, and people writing on your pull requests" onClick={() => { setShelf("turn"); setPicked(new Set()); }} />
           <Rail mark={<FlagIcon size={ICON.xs} filled />} label="Saved" n={onShelf(all, "saved").length} on={shelf === "saved"} hint="Kept by you, on this machine — GitHub's API has no shelf for it" onClick={() => { setShelf("saved"); setPicked(new Set()); }} />
           <Rail mark={<DoneIcon size={ICON.xs} />} label="Done" n={undefined} on={shelf === "done"} hint="Finished by you, on this machine" onClick={() => { setShelf("done"); setPicked(new Set()); }} />
         </div>
@@ -282,9 +365,9 @@ export function Inbox({ repo, onFlash, onUnread, active = true }: {
           <div className="text-[9.5px] uppercase tracking-wider px-2 pb-1" style={{ color: "var(--text4)" }}>Repositories</div>
           {/* This panel is one repository at a time, so its own is the default
               and the rest are one press away rather than mixed in. */}
-          <Rail mark={<GitIcon size={ICON.xs} />} label={repo || "This repository"} n={onShelf(all, shelf).filter((n) => n.repo === repo).length}
+          <Rail mark={<GitIcon size={ICON.xs} />} label={repo || "This repository"} n={onView(shelf).filter((n) => n.repo === repo).length}
             on={!allRepos} hint="Only what is in the repository this panel is showing" onClick={() => setAllRepos(false)} />
-          <Rail mark="◇" label="Everywhere" n={onShelf(all, shelf).length}
+          <Rail mark="◇" label="Everywhere" n={onView(shelf).length}
             on={allRepos} hint="Every repository you get notifications from" onClick={() => setAllRepos(true)} />
           {allRepos && repoCounts.filter((r) => r.value && r.value !== repo).slice(0, 8).map((r) => (
             <div key={r.value} className="flex items-center gap-1 pl-2 pr-1 py-0.5 text-[10.5px]" style={{ color: "var(--text3)" }}>
@@ -386,7 +469,13 @@ export function Inbox({ repo, onFlash, onUnread, active = true }: {
 
         <div className="flex-1 min-h-0 overflow-y-auto agx-scroll">
           {raw === null && <div className="p-3"><Spinner label="Reading your notifications…" className="" /></div>}
-          {raw !== null && !rows.length && (
+          {raw !== null && !rows.length && shelf === "turn" && (
+            <div className="px-6 py-14 text-center leading-relaxed">
+              <div className="text-[12.5px] font-semibold" style={{ color: "var(--text)" }}>Nothing waits on you.</div>
+              <div className="text-[10.5px]" style={{ color: "var(--text4)" }}>Review requests, mentions, changes requested and people writing on your pull requests land here.</div>
+            </div>
+          )}
+          {raw !== null && !rows.length && shelf !== "turn" && (
             <div className="p-6 text-center text-[11.5px]" style={{ color: "var(--text3)" }}>
               {shelf === "done" ? "Nothing finished yet." : shelf === "saved" ? "Nothing saved yet." : unreadOnly ? "Nothing unread. Good." : "Nothing here."}
             </div>
@@ -395,55 +484,26 @@ export function Inbox({ repo, onFlash, onUnread, active = true }: {
             <div key={group.label}>
               <div className="px-2.5 py-1 text-[9.5px] uppercase tracking-wider sticky top-0 z-10"
                 style={{ color: "var(--text4)", background: "var(--bg)", borderBottom: LINE }}>{group.label}</div>
-              {group.items.map((n) => (
-                <div key={n.id} className="group flex items-start gap-2 px-2.5 py-2"
-                  style={{ borderBottom: LINE, background: n.unread ? "color-mix(in srgb, var(--primary) 5%, transparent)" : "transparent" }}>
-                  <button className="agx-btn mt-0.5 shrink-0" title={picked.has(n.id) ? "Unpick" : "Pick"}
-                    onClick={() => setPicked((s) => { const next = new Set(s); if (next.has(n.id)) next.delete(n.id); else next.add(n.id); return next; })}>
-                    <Tick on={picked.has(n.id)} />
-                  </button>
-                  <span className="mt-0.5 shrink-0" title={n.type}><Kind type={n.type} /></span>
-                  <button className="agx-btn min-w-0 flex-1 text-left" onClick={() => open(n)}
-                    disabled={n.number == null}
-                    title={n.number == null ? `${n.type} — no page for this in the app` : `Open ${n.repo} #${n.number}`}>
-                    <div className="flex items-baseline gap-1.5 text-[10px]" style={{ color: "var(--text4)" }}>
-                      <span className="truncate">{n.repo}</span>
-                      {n.number != null && <span className="tabular-nums" style={{ color: "var(--text3)" }}>#{n.number}</span>}
-                    </div>
-                    <div className="text-[11.5px] leading-snug break-words"
-                      style={{ color: n.unread ? "var(--text)" : "var(--text2)", fontWeight: n.unread ? 600 : 400 }}>
-                      {n.title}
-                    </div>
-                  </button>
-                  {n.annotations?.map((a) => a.badge && (
-                    <Chip key={a.plugin} tone={TO_ROW_TONE[a.badge.tone ?? "default"]} title={a.tip ? `${a.tip} — ${a.plugin}` : a.plugin}>{a.badge.text}</Chip>
-                  ))}
-                  <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-md whitespace-nowrap"
-                    style={{ color: "var(--text3)", border: EDGE }}>{reasonLabel(n.reason)}</span>
-                  <span className="shrink-0 text-[10px] tabular-nums w-[52px] text-right" style={{ color: "var(--text4)" }}
-                    title={new Date(n.at).toLocaleString()}>{fmtAgo(n.at)}</span>
-                  {/* Per-row verbs, quiet until the row is pointed at. */}
-                  <span className="agx-hover-show flex items-center gap-1 shrink-0">
-                    <button className="agx-btn rounded px-1.5 py-0.5 text-[10px]" style={{ color: isSaved(n.id) ? "var(--warning)" : "var(--text3)" }}
-                      title={isSaved(n.id) ? "Take it off the saved shelf" : "Save it (kept on this machine)"}
-                      onClick={() => setSaved(n.id, !isSaved(n.id))}>{isSaved(n.id) ? "Saved" : "Save"}</button>
-                    <button className="agx-btn rounded px-1.5 py-0.5 text-[10px]" style={{ color: "var(--text3)" }}
-                      title={isDone(n.id) ? "Put it back in the inbox" : "Finish with it — hides it here and marks it read on GitHub"}
-                      onClick={() => {
-                        const on = !isDone(n.id);
-                        setDone(n.id, on);
-                        if (on && n.unread) void act([n.id], "read");
-                      }}>{isDone(n.id) ? "Undone" : "Done"}</button>
-                    {n.unread && (
-                      <button className="agx-btn rounded px-1.5 py-0.5 text-[10px]" style={{ color: "var(--text3)" }}
-                        title="Mark it read on GitHub" disabled={busy}
-                        onClick={() => void act([n.id], "read")}>Read</button>
-                    )}
-                  </span>
-                </div>
-              ))}
+              {group.items.map((n) => renderRow(n, false))}
             </div>
           ))}
+          {/* The one place a bot is mentioned: a line at the end, never a row.
+              Silence would make this view look broken next to GitHub's own
+              inbox ("where is my pull request?"), and a row would break what
+              the view promises. */}
+          {raw !== null && botRows.length > 0 && (
+            <>
+              <div className="flex items-center gap-1.5 px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)", borderBottom: LINE }}>
+                <span>{botRows.length} update{botRows.length === 1 ? "" : "s"} on your pull requests {showBots ? "where only bots wrote:" : "are hidden: only bots wrote them."}</span>
+                <button className="agx-btn flex items-center gap-1 underline underline-offset-2" style={{ color: "var(--text2)" }}
+                  aria-expanded={showBots} onClick={() => setShowBots((v) => !v)}>
+                  {showBots ? "Hide them" : "Show them"}
+                  <span aria-hidden className="flex" style={{ transform: showBots ? "rotate(180deg)" : undefined }}><CaretIcon size={ICON.xs} /></span>
+                </button>
+              </div>
+              {showBots && botRows.map((n) => renderRow(n, true))}
+            </>
+          )}
         </div>
       </div>
       {dialog}

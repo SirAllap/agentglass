@@ -4932,6 +4932,19 @@ export interface ReviewRecipesResponse {
   error?: string;
 }
 
+/** What waits on the person: a review somebody asked for, a review that asked
+ *  for changes, a person writing on their own pull request, a mention. `bot` is
+ *  the fifth and it is never a row on that view — see `yourTurn`. */
+export type InboxTurnKind = "review" | "changes" | "person" | "mention" | "bot";
+
+export interface InboxTurn {
+  kind: InboxTurnKind;
+  /** Who wrote it (or, for a review request, who opened the pull request). */
+  by?: string;
+  /** The first words of what they wrote, on one line. */
+  snippet?: string;
+}
+
 /**
  * One row of GitHub's notification inbox.
  *
@@ -4951,6 +4964,10 @@ export interface InboxItem {
   title: string;
   at: number;
   number?: number;
+  /** Why this row waits on the person, when it does. Only ever set by the
+   *  server, from what GitHub said about the thread; absent means "not one of
+   *  the things the Your turn view is for". */
+  turn?: InboxTurn;
   /** What plugins that declared `inboxAnnotations` say about this row. Only
    *  ever added by the server, never stored with the notification, and never a
    *  reason for a row to be missing. */

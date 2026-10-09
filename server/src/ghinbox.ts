@@ -18,6 +18,7 @@
  * read — is what this offers, and nothing here pretends otherwise.
  */
 import { gh } from "./prs.ts";
+import { withTurns } from "./ghinbox-turn.ts";
 import type { InboxItem } from "../../shared/types.ts";
 
 export type { InboxItem };
@@ -28,6 +29,7 @@ interface RawNote {
   unread?: boolean;
   reason?: string;
   updated_at?: string;
+  last_read_at?: string | null;
   repository?: { full_name?: string };
   subject?: { title?: string; url?: string; type?: string };
 }
@@ -79,9 +81,20 @@ export interface InboxPage {
  * drops the cache, and `force` still asks the API outright.
  */
 const TTL_MS = 90_000;
-let cache: { at: number; all: boolean; page: InboxPage; etag: string } | null = null;
+let cache: { at: number; all: boolean; page: InboxPage; etag: string; lastRead: Map<string, number>; pending: boolean } | null = null;
 
 export function __resetInbox(): void { cache = null; }
+
+/** The page with what waits on the person added — see ghinbox-turn.ts. Rows
+ *  already answered cost nothing, so this runs on every read of the cache:
+ *  it is how a question that failed is asked again without a new list. */
+async function withTurn(c: NonNullable<typeof cache>): Promise<InboxPage> {
+  if (!c.page.items.length) { c.pending = false; return c.page; }
+  const r = await withTurns(c.page.items, c.lastRead);
+  c.pending = r.pending;
+  c.page = { ...c.page, items: r.items };
+  return c.page;
+}
 
 /** `gh api -i` prints the status line and headers, a blank line, then the body. */
 export function splitIncluded(out: string): { status: number; etag: string; body: string } {
@@ -104,7 +117,7 @@ export function splitIncluded(out: string): { status: number; etag: string; body
  */
 export async function inbox(all = true, force = false): Promise<InboxPage> {
   const same = cache && cache.all === all ? cache : null;
-  if (same && !force && Date.now() - same.at < TTL_MS) return same.page;
+  if (same && !force && Date.now() - same.at < TTL_MS) return same.pending ? withTurn(same) : same.page;
   const args = ["api", "-i", `/notifications?all=${all ? "true" : "false"}&per_page=50`];
   if (same?.etag && !force) args.splice(2, 0, "-H", `If-None-Match: ${same.etag}`);
   const r = await gh(args);
@@ -112,7 +125,7 @@ export async function inbox(all = true, force = false): Promise<InboxPage> {
   // "Not modified" is the answer, not a failure: gh exits non-zero on a 304.
   if (same && (got.status === 304 || /HTTP 304/.test(r.stderr))) {
     cache = { ...same, at: Date.now() };
-    return same.page;
+    return cache.pending ? withTurn(cache) : cache.page;
   }
   if (r.code !== 0) {
     // The last good answer beats an empty list: an inbox that empties itself
@@ -127,8 +140,13 @@ export async function inbox(all = true, force = false): Promise<InboxPage> {
     items: raw.map(toItem).filter((x): x is InboxItem => !!x).sort((a, b) => b.at - a.at),
     at: Date.now(),
   };
-  cache = { at: Date.now(), all, page, etag: got.etag };
-  return page;
+  cache = {
+    at: Date.now(), all, page, etag: got.etag,
+    // Until the question has been asked: a second read during it must join it, not return bare rows.
+    pending: true,
+    lastRead: new Map(raw.map((n) => [String(n.id ?? ""), Date.parse(n.last_read_at ?? "") || 0])),
+  };
+  return withTurn(cache);
 }
 
 export interface InboxWrite { ok: boolean; error?: string }
