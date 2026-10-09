@@ -6,16 +6,18 @@
 // the same failure mode in different clothes: landing on a tab that is not on
 // the bar, which draws an empty view with no way to tell why.
 import { beforeEach, describe, expect, test } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import {
   landingSource, taskLanding, setTaskLanding, lastTaskSource, rememberTaskSource,
 } from "../src/lib/taskLanding.ts";
+const stubGlobal = globalStubs();
 
 const store = new Map<string, string>();
-(globalThis as { localStorage?: unknown }).localStorage = {
+stubGlobal("localStorage", {
   getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
   setItem: (k: string, v: string) => { store.set(k, v); },
   removeItem: (k: string) => { store.delete(k); },
-};
+});
 
 const BAR = ["all", "github", "local", "clickup"];
 

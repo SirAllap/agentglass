@@ -12,8 +12,17 @@
  * is the opposite of what is true.
  */
 import { describe, expect, it } from "bun:test";
-import { busiestOf } from "../src/lib/usageStore.ts";
+import { globalStubs } from "./stubGlobal";
+import { stubStorage } from "./stubStorage";
 import type { ProviderUsage } from "../../shared/types.ts";
+
+// usageStore reaches sysNotify and api.ts, which read `localStorage` and
+// `location` when they load. Imported with neither, the file failed on its own
+// and only passed after some other file had left a storage behind.
+stubStorage();
+const stubGlobal = globalStubs();
+stubGlobal("location", { hostname: "localhost", origin: "http://localhost:4000" });
+const { busiestOf } = await import("../src/lib/usageStore.ts");
 
 const win = (label: string, usedPercent: number) => ({ label, minutes: 300, usedPercent, resetsAt: null });
 const claude = (...pcts: number[]): ProviderUsage => ({

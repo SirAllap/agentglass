@@ -4,6 +4,8 @@
 // actually run. Getting the precedence wrong either buries a pin or fills the
 // strip with skills nobody has ever used.
 import { test, expect, beforeAll, beforeEach } from "bun:test";
+import { globalStubs } from "./stubGlobal";
+const stubGlobal = globalStubs();
 
 const cell = new Map<string, string>();
 let m: typeof import("../src/lib/quickSkills.ts");
@@ -12,11 +14,11 @@ beforeAll(async () => {
   // Assigned rather than `??=`: other files install a no-op localStorage and
   // `bun test` shares one process, so the first loader would otherwise decide
   // whether anything written here is readable.
-  (globalThis as any).localStorage = {
+  stubGlobal("localStorage", {
     getItem: (k: string) => cell.get(k) ?? null,
     setItem: (k: string, v: string) => { cell.set(k, v); },
     removeItem: (k: string) => { cell.delete(k); },
-  };
+  });
   m = await import("../src/lib/quickSkills.ts");
 });
 

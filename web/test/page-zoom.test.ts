@@ -34,20 +34,17 @@
  * These bite by EFFECT — what was asked of the protocol, and what the caller is
  * told — not by the shape of the code.
  */
-import { describe, expect, test, beforeEach, afterAll } from "bun:test";
+import { describe, expect, test, beforeEach } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import { readFileSync } from "node:fs";
-
-/* Restored on the way out: one process runs every file, so a stub left behind
-   is a stub the next file inherits. */
-const priorStorage = (globalThis as any).localStorage;
-afterAll(() => { (globalThis as any).localStorage = priorStorage; });
+const stubGlobal = globalStubs();
 
 const store = new Map<string, string>();
-(globalThis as any).localStorage = {
+stubGlobal("localStorage", {
   getItem: (k: string) => store.get(k) ?? null,
   setItem: (k: string, v: string) => { store.set(k, String(v)); },
   removeItem: (k: string) => { store.delete(k); },
-};
+});
 
 const { applyGuestZoom, setPageZoomer, currentPageZoomer } = await import("../src/lib/browserDrive.ts");
 

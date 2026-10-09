@@ -2,8 +2,10 @@
  * Accent colour — a control that layers on top of a theme without belonging to
  * it.
  */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import { ACCENTS, currentAccent, lastAccent, setAccentPref } from "../src/lib/accent.ts";
+const stubGlobal = globalStubs();
 
 const isHex = (s: string) => /^#[0-9a-f]{6}$/i.test(s);
 
@@ -37,18 +39,16 @@ describe("accent colours", () => {
  * The colour is remembered on the way in, under its own key.
  */
 describe("following the theme is reversible", () => {
-  const real = (globalThis as { localStorage?: Storage }).localStorage;
   let store: Map<string, string>;
 
   beforeAll(() => {
     store = new Map();
-    (globalThis as { localStorage?: unknown }).localStorage = {
+    stubGlobal("localStorage", {
       getItem: (k: string) => store.get(k) ?? null,
       setItem: (k: string, v: string) => { store.set(k, v); },
       removeItem: (k: string) => { store.delete(k); },
-    };
+    });
   });
-  afterAll(() => { (globalThis as { localStorage?: unknown }).localStorage = real; });
 
   test("never picked one → teal, the colour the phone starts on", () => {
     store.clear();

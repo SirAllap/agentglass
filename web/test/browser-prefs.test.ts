@@ -3,6 +3,7 @@
 // default) and "chose a blank one" (open nothing). Clearing the key would make
 // those indistinguishable, which is why blank is stored explicitly.
 import { beforeEach, describe, expect, test } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import {
   BLANK, DEFAULT_HOME, ENGINE_KEY, HOME_KEY,
   homePage, homePageRaw, searchEngine, setHomePage, setSearchEngine,
@@ -10,14 +11,15 @@ import {
   zoomPercent, stepZoom, ZOOM_PCT_MIN, ZOOM_PCT_MAX,
 } from "../src/lib/browserPrefs.ts";
 import { readFileSync } from "node:fs";
+const stubGlobal = globalStubs();
 
 // bun's test environment has no DOM; the module only ever touches these two.
 const store = new Map<string, string>();
-(globalThis as { localStorage?: unknown }).localStorage = {
+stubGlobal("localStorage", {
   getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
   setItem: (k: string, v: string) => { store.set(k, v); },
   removeItem: (k: string) => { store.delete(k); },
-};
+});
 
 beforeEach(() => store.clear());
 

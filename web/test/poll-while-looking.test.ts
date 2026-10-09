@@ -7,11 +7,11 @@
  * listener when stopped. The globals are stubbed and restored: `bun test` runs
  * every file in one process.
  */
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { beforeAll, expect, test } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import { pollWhileLooking } from "../src/lib/usePoll.ts";
+const stubGlobal = globalStubs();
 
-const g = globalThis as unknown as { window?: unknown; document?: unknown };
-const saved = { window: g.window, document: g.document };
 let focused = false;
 let hidden = false;
 type Listeners = Map<string, Set<() => void>>;
@@ -22,13 +22,12 @@ const del = (m: Listeners) => (t: string, f: () => void) => { m.get(t)?.delete(f
 const fire = (m: Listeners, t: string) => { for (const f of [...(m.get(t) ?? [])]) f(); };
 
 beforeAll(() => {
-  g.window = { addEventListener: add(winL), removeEventListener: del(winL) };
-  g.document = {
+  stubGlobal("window", { addEventListener: add(winL), removeEventListener: del(winL) });
+  stubGlobal("document", {
     get hidden() { return hidden; }, hasFocus: () => focused,
     addEventListener: add(docL), removeEventListener: del(docL),
-  };
+  });
 });
-afterAll(() => { g.window = saved.window; g.document = saved.document; });
 
 test("pollWhileLooking is silent unfocused, asks at once on focus, and lets go", async () => {
   let n = 0;

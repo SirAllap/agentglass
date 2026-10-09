@@ -29,10 +29,11 @@ describe("zoomOwner", () => {
   // whoever does — an unmount arriving late is exactly that.
   it("a stale release cannot take it from the current owner", () => {
     const staleRelease = claimZoom("first");
-    claimZoom("second");
+    const release = claimZoom("second");
     staleRelease();
     expect(zoomOwner()).toBe("second");
     expect(zoomTaken()).toBe(true);
+    release(); // the owner is module state: leave it as the next test expects to find it
   });
 
   it("and releasing twice is harmless", () => {

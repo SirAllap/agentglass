@@ -7,7 +7,7 @@
  * aggregate changes when a run finishes, re-run or not, so the same head and
  * the same aggregate are the same checks.
  */
-import { afterAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeEach, describe, expect, it } from "bun:test";
 
 const calls: number[] = [];
 const mod = await import("../src/lib/api.ts");
@@ -23,7 +23,11 @@ const { rollupOf } = await import("../src/lib/prRollupStore.ts");
 const settle = () => new Promise((r) => setTimeout(r, 30));
 const realNow = Date.now;
 
+// Each test asks about a card of its own and starts with the clock and the
+// request count it would have alone, so the file gives the same answer in any
+// order (`bun test --seed`): the store keeps its answers per card.
 describe("a red card's checked rollup", () => {
+  beforeEach(() => { calls.length = 0; Date.now = realNow; });
   afterAll(() => { Date.now = realNow; });
 
   it("stands past the minute while the list says the same thing of the card", async () => {
@@ -38,16 +42,22 @@ describe("a red card's checked rollup", () => {
   });
 
   it("asks again the moment the head or the aggregate moves", async () => {
-    rollupOf("/r", 7, "sha2|red");
+    rollupOf("/r", 8, "sha1|red");
     await settle();
-    expect(calls).toEqual([7, 7]);
+    const t0 = realNow();
+    Date.now = () => t0 + 5 * 60_000; // past the minute, inside the ten: only the move asks
+    rollupOf("/r", 8, "sha2|red");
+    await settle();
+    expect(calls).toEqual([8, 8]);
   });
 
   it("still asks again after ten minutes of the same reading", async () => {
-    const t0 = realNow();
-    Date.now = () => t0 + 16 * 60_000; // the answer above was stamped at +5
-    rollupOf("/r", 7, "sha2|red");
+    rollupOf("/r", 9, "sha2|red");
     await settle();
-    expect(calls).toEqual([7, 7, 7]);
+    const t0 = realNow();
+    Date.now = () => t0 + 16 * 60_000;
+    rollupOf("/r", 9, "sha2|red");
+    await settle();
+    expect(calls).toEqual([9, 9]);
   });
 });

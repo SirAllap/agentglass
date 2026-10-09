@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it } from "bun:test";
+import { globalStubs } from "./stubGlobal";
+const stubGlobal = globalStubs();
 
 /**
  * The rail's layout, and specifically the properties that broke the app.
@@ -15,19 +17,19 @@ import { beforeEach, describe, expect, it } from "bun:test";
  * saved layout is corrupt.
  */
 const store = new Map<string, string>();
-(globalThis as unknown as { localStorage: Storage }).localStorage = {
+stubGlobal("localStorage", {
   getItem: (k: string) => store.get(k) ?? null,
   setItem: (k: string, v: string) => void store.set(k, v),
   removeItem: (k: string) => void store.delete(k),
   clear: () => store.clear(),
   key: () => null,
   length: 0,
-} as unknown as Storage;
+} as unknown as Storage);
 // views.ts asks desktop.ts whether there is a browser view, and desktop.ts
 // reaches api.ts, which reads `location` at module scope. Without this it
 // throws half-initialised and every import here dies on a TDZ for HAS_BROWSER
 // — which reads as "the rail is broken" rather than "the harness has no DOM".
-(globalThis as unknown as { location: URL }).location ??= new URL("http://localhost:5173/");
+stubGlobal("location", new URL("http://localhost:5173/"));
 
 const load = async () => await import(`../src/components/workspace/views.ts?t=${Math.random()}`);
 const ids = (list: { id: string }[]) => list.map((x) => x.id);

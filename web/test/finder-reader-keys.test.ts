@@ -7,17 +7,19 @@
  * reader asks it first.
  */
 import { beforeEach, describe, expect, it } from "bun:test";
+import { globalStubs } from "./stubGlobal";
+const stubGlobal = globalStubs();
 
 // keybindings.ts reaches api.ts, which reads `location` at module scope.
-(globalThis as unknown as { location: unknown }).location = { hostname: "localhost", origin: "http://localhost:4000" };
+stubGlobal("location", { hostname: "localhost", origin: "http://localhost:4000" });
 const store = new Map<string, string>();
-// @ts-expect-error — enough of a localStorage for a module that reads and writes.
-globalThis.localStorage = {
+// Enough of a localStorage for a module that reads and writes.
+stubGlobal("localStorage", {
   getItem: (k: string) => store.get(k) ?? null,
   setItem: (k: string, v: string) => { store.set(k, v); },
   removeItem: (k: string) => { store.delete(k); },
   clear: () => store.clear(),
-};
+});
 
 const kb = await import("../src/lib/keybindings.ts");
 const palette = await Bun.file(new URL("../src/components/FilePalette.tsx", import.meta.url)).text();

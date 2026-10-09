@@ -1,5 +1,7 @@
-import { test, expect, beforeAll } from "bun:test";
+import { test, expect, beforeAll, beforeEach } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import type { PendingGate } from "../../shared/types.ts";
+const stubGlobal = globalStubs();
 
 // agentglass reads notifications off the D-Bus session bus instead of being the
 // daemon, so the desktop's own Do Not Disturb cannot reach what lands on the
@@ -20,18 +22,22 @@ let sysNotify: typeof import("../src/lib/sysNotify.ts");
 let gateStore: typeof import("../src/lib/gateStore.ts");
 
 beforeAll(async () => {
-  (globalThis as any).localStorage = {
+  stubGlobal("localStorage", {
     getItem: (k: string) => cell.get(k) ?? null,
     setItem: (k: string, v: string) => { cell.set(k, v); },
     removeItem: (k: string) => { cell.delete(k); },
-  };
-  (globalThis as any).location = { hostname: "localhost", origin: "http://localhost:4000" };
+  });
+  stubGlobal("location", { hostname: "localhost", origin: "http://localhost:4000" });
   sysNotify = await import("../src/lib/sysNotify.ts");
   gateStore = await import("../src/lib/gateStore.ts");
   // Leave the singleton as this file found it, so running before or after
   // gate-store.test.ts cannot change either file's result.
   gateStore.__resetGateStore();
 });
+
+// Each test starts from a first launch's storage: quiet persists, so one test
+// turning it off is the next one's "default" in any order but the written one.
+beforeEach(() => { cell.clear(); });
 
 const gate = (id: string): PendingGate => ({
   id,

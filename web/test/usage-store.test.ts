@@ -7,7 +7,9 @@
  * honest rather than merely present.
  */
 import { describe, expect, test, beforeAll, afterAll, beforeEach } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import { setUsageRefreshOn } from "../src/lib/usageRefreshPref.ts";
+const stubGlobal = globalStubs();
 
 let usageStore: typeof import("../src/lib/usageStore.ts");
 let api: typeof import("../src/lib/api.ts");
@@ -28,20 +30,18 @@ let providerUsageCallCount = 0;
 // but "happened to" is not a guarantee once someone adds a real
 // localStorage shim to the harness for an unrelated reason.
 const localStorageStore = new Map<string, string>();
-let originalLocalStorage: unknown;
 
 beforeAll(async () => {
-  (globalThis as any).location = { hostname: "localhost", origin: "http://localhost:4000" };
+  stubGlobal("location", { hostname: "localhost", origin: "http://localhost:4000" });
 
-  originalLocalStorage = (globalThis as any).localStorage;
-  (globalThis as any).localStorage = {
+  stubGlobal("localStorage", {
     getItem: (k: string) => localStorageStore.get(k) ?? null,
     setItem: (k: string, v: string) => void localStorageStore.set(k, v),
     removeItem: (k: string) => void localStorageStore.delete(k),
     clear: () => localStorageStore.clear(),
     key: () => null,
     length: 0,
-  } as Storage;
+  } as Storage);
 
   // Import modules in order
   demo = await import("../src/lib/demo.ts");
@@ -56,10 +56,10 @@ beforeAll(async () => {
 
   // Patch clearInterval to track calls
   const originalClearInterval = globalThis.clearInterval;
-  (globalThis as any).clearInterval = (id: number) => {
+  stubGlobal("clearInterval", (id: number) => {
     clearIntervalCalls.push(id);
     return originalClearInterval(id);
-  };
+  });
 
   // Now import usageStore - it will use the patched api
   usageStore = await import("../src/lib/usageStore.ts");
@@ -68,9 +68,6 @@ beforeAll(async () => {
 afterAll(async () => {
   // Restore the original api.providerUsage
   (api.api as any).providerUsage = originalProviderUsage;
-  // Restore the original localStorage (undefined, on this runtime)
-  if (originalLocalStorage === undefined) delete (globalThis as any).localStorage;
-  else (globalThis as any).localStorage = originalLocalStorage;
 });
 
 beforeEach(() => {

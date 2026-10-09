@@ -22,9 +22,11 @@
  * the bug was shipped — what was false is that anything could reach it.
  */
 import { describe, expect, test, mock } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { stubStorage } from "./stubStorage.ts";
+const stubGlobal = globalStubs();
 
 type Failure = {
   reason: "missing" | "spawn" | "exited" | "timeout";
@@ -83,7 +85,7 @@ let identity: "ours" | "foreign" | "down" = "ours";
  * reads `location.href`/`location.hostname` and localStorage in its module
  * body — the very reason a stub was reached for in the first place.
  */
-(globalThis as any).location ??= { hostname: "127.0.0.1", origin: "http://127.0.0.1:4000", href: "http://127.0.0.1:4000/" };
+stubGlobal("location", { hostname: "127.0.0.1", origin: "http://127.0.0.1:4000", href: "http://127.0.0.1:4000/" });
 stubStorage();
 const API_PATH = new URL("../src/lib/api.ts", import.meta.url).pathname;
 const realApiModule = await import(`${API_PATH}?unmocked`);

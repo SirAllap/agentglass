@@ -22,20 +22,20 @@
  * process runs every file in this suite, and a `localStorage` left behind is
  * one the next file inherits.
  */
-import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { PrSummary } from "../../shared/types.ts";
 import { forgetCards } from "../src/lib/prCardStore.ts";
+const stubGlobal = globalStubs();
 
-const priorStorage = (globalThis as { localStorage?: unknown }).localStorage;
 const cell = new Map<string, string>();
-(globalThis as { localStorage?: unknown }).localStorage = {
+stubGlobal("localStorage", {
   getItem: (k: string) => cell.get(k) ?? null,
   setItem: (k: string, v: string) => { cell.set(k, String(v)); },
   removeItem: (k: string) => { cell.delete(k); },
-};
-afterAll(() => { (globalThis as { localStorage?: unknown }).localStorage = priorStorage; });
+});
 
 const { TriageBoard } = await import("../src/components/TriageBoard.tsx");
 const { ALWAYS_OPEN, foldedLanes, setFoldedLanes, walkable } = await import("../src/lib/boardPrefs.ts");

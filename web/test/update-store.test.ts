@@ -1,6 +1,8 @@
 import { beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import type { UpdateStatus } from "../../shared/types.ts";
 import { stubStorage } from "./stubStorage.ts";
+const stubGlobal = globalStubs();
 
 // updateStore reaches api.ts, which reads `location` at module scope, and it
 // persists the announced tag — so both browser globals are stood up first.
@@ -15,7 +17,7 @@ stubStorage({
   removeItem: (k: string) => { mem.delete(k); },
 });
 beforeAll(async () => {
-  (globalThis as any).location ??= new URL("http://localhost:5173/");
+  stubGlobal("location", new URL("http://localhost:5173/"));
   store = await import("../src/lib/updateStore.ts");
   ({ notifyHistory } = await import("../src/lib/sysNotify.ts"));
 });

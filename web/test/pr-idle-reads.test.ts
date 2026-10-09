@@ -10,6 +10,8 @@
  * All of it returned the answer it had returned before.
  */
 import { beforeEach, describe, expect, it } from "bun:test";
+import { globalStubs } from "./stubGlobal";
+const stubGlobal = globalStubs();
 
 const calls: { number: number; force: boolean }[] = [];
 const mod = await import("../src/lib/api.ts");
@@ -21,7 +23,7 @@ const { behindOf, forgetBehind, refreshBehind } = await import("../src/lib/prBeh
 
 const settle = () => new Promise((r) => setTimeout(r, 30));
 const setWindow = (looking: boolean) => {
-  (globalThis as any).document = { hidden: !looking, visibilityState: looking ? "visible" : "hidden", hasFocus: () => looking };
+  stubGlobal("document", { hidden: !looking, visibilityState: looking ? "visible" : "hidden", hasFocus: () => looking });
 };
 const later = (ms: number) => { const real = Date.now; Date.now = () => real() + ms; return () => { Date.now = real; }; };
 const src = (rel: string) => Bun.file(new URL(`../src/${rel}`, import.meta.url)).text();

@@ -9,20 +9,22 @@
  * sat on "Reading the working tree…" with no banner, and the same page showed
  * the failure at once when reloaded.
  */
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import { stubStorage } from "./stubStorage.ts";
+const stubGlobal = globalStubs();
 
 type Failure = { reason: string; what: string; fix: string };
 const died: Failure = { reason: "exited", what: "The server started and stopped again (exit 1).", fix: "…" };
 
-(globalThis as any).location ??= { hostname: "127.0.0.1", origin: "http://127.0.0.1:4000", href: "http://127.0.0.1:4000/" };
+stubGlobal("location", { hostname: "127.0.0.1", origin: "http://127.0.0.1:4000", href: "http://127.0.0.1:4000/" });
 stubStorage();
 // By value, not `"window" in globalThis`: a file that ran earlier and put its
 // stub back by assignment leaves the key behind holding undefined, and the
 // presence test then took that for a real window and never took ours away.
 const hadWindow = (globalThis as any).window !== undefined;
 const prevShell = (globalThis as any).window?.agentglass;
-(globalThis as any).window ??= globalThis;
+stubGlobal("window", globalThis);
 const shell: any = (globalThis as any).window.agentglass = {
   // Read at load, before the server had failed.
   sidecarFailure: null,
@@ -38,6 +40,9 @@ else (globalThis as any).window.agentglass = prevShell;
 if (!hadWindow) delete (globalThis as any).window;
 
 describe("onSidecarFailure", () => {
+  // What the shell says when the page loads; each test bends it its own way.
+  beforeEach(() => { shell.sidecarFailure = null; shell.sidecarFailureNow = () => died; });
+
   test("hands a new subscriber the failure it missed", async () => {
     const seen: (Failure | null)[] = [];
     const off = api.onSidecarFailure((f: Failure | null) => seen.push(f));

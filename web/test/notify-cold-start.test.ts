@@ -1,4 +1,6 @@
 import { test, expect, beforeAll, afterEach } from "bun:test";
+import { globalStubs } from "./stubGlobal";
+const stubGlobal = globalStubs();
 
 // The desktop app starts its server a beat after its window.
 //
@@ -31,14 +33,14 @@ class FakeSocket {
 }
 
 beforeAll(async () => {
-  (globalThis as any).localStorage = {
+  stubGlobal("localStorage", {
     getItem: (k: string) => cell.get(k) ?? null,
     setItem: (k: string, v: string) => { cell.set(k, v); },
     removeItem: (k: string) => { cell.delete(k); },
-  };
-  (globalThis as any).location = { hostname: "localhost", origin: "http://localhost:4000" };
-  (globalThis as any).WebSocket = FakeSocket;
-  (globalThis as any).fetch = async () => { asks++; return answer(); };
+  });
+  stubGlobal("location", { hostname: "localhost", origin: "http://localhost:4000" });
+  stubGlobal("WebSocket", FakeSocket);
+  stubGlobal("fetch", async () => { asks++; return answer(); });
   sysNotify = await import("../src/lib/sysNotify.ts");
 });
 

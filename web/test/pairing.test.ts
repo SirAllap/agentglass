@@ -12,13 +12,15 @@
  * A fixture would keep passing after a change to either side.
  */
 import { describe, expect, test } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import { readFileSync } from "node:fs";
 import { sealTo } from "../../server/src/pairing.ts";
+const stubGlobal = globalStubs();
 
 // api.ts reads `location` at module scope to work out which server it talks to,
 // and pairing.ts imports its `SERVER`. Stubbed before the import rather than
 // after, because that read happens the moment the module is evaluated.
-(globalThis as any).location = { hostname: "localhost", origin: "http://localhost:4000" };
+stubGlobal("location", { hostname: "localhost", origin: "http://localhost:4000" });
 
 const { unseal, makeKeys, guessName, ticketFromUrl } = await import("../src/lib/pairing.ts");
 

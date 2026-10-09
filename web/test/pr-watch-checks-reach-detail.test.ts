@@ -7,14 +7,16 @@
  * and a "CI passed" over checks that went back to pending says Notify again.
  */
 import { beforeAll, describe, expect, test } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import type { PrCheck, PrCheckRollup, PrChecksRead, PrDetail, PrSummary, PrWatch } from "../../shared/types.ts";
 import { detailWithChecks, rowWithChecks } from "../src/lib/prRefresh.ts";
 import { stubStorage } from "./stubStorage.ts";
+const stubGlobal = globalStubs();
 
 stubStorage();
 let store: typeof import("../src/lib/prWatchStore.ts");
 beforeAll(async () => {
-  (globalThis as any).location = { hostname: "localhost", origin: "http://localhost:4000" };
+  stubGlobal("location", { hostname: "localhost", origin: "http://localhost:4000" });
   store = await import("../src/lib/prWatchStore.ts");
 });
 

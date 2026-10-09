@@ -1,5 +1,7 @@
 import { test, expect, describe, beforeAll } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import { stubStorage } from "./stubStorage.ts";
+const stubGlobal = globalStubs();
 
 stubStorage();
 
@@ -9,7 +11,7 @@ stubStorage();
 
 let derive: typeof import("../src/lib/derive.ts");
 beforeAll(async () => {
-  (globalThis as any).location ??= new URL("http://localhost:5173/");
+  stubGlobal("location", new URL("http://localhost:5173/"));
   derive = await import("../src/lib/derive.ts");
 });
 

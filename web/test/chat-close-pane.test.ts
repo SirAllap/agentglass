@@ -6,6 +6,8 @@
 // `tmux -L agentglass ls` kept listing sessions for chats that no longer
 // existed, which is what prompted this.
 import { test, expect, beforeAll, beforeEach } from "bun:test";
+import { globalStubs } from "./stubGlobal";
+const stubGlobal = globalStubs();
 
 const cell = new Map<string, string>();
 let store: typeof import("../src/lib/chatStore.ts");
@@ -13,16 +15,16 @@ let api: typeof import("../src/lib/api.ts")["api"];
 let closed: string[];
 
 beforeAll(async () => {
-  (globalThis as any).location ??= new URL("http://localhost:5173/");
+  stubGlobal("location", new URL("http://localhost:5173/"));
   // Assigned, not `??=`. Several other test files install a NO-OP localStorage
   // (`setItem: () => {}`), and under `bun test` all of them share one process —
   // so whichever loads first decides whether writes here go anywhere at all.
   // This test reads back what it writes, so it has to own the store.
-  (globalThis as any).localStorage = {
+  stubGlobal("localStorage", {
     getItem: (k: string) => cell.get(k) ?? null,
     setItem: (k: string, v: string) => { cell.set(k, v); },
     removeItem: (k: string) => { cell.delete(k); },
-  };
+  });
   api = (await import("../src/lib/api.ts")).api;
   store = await import("../src/lib/chatStore.ts");
 });

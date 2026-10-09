@@ -1,4 +1,6 @@
 import { test, expect, beforeEach, beforeAll } from "bun:test";
+import { globalStubs } from "./stubGlobal";
+const stubGlobal = globalStubs();
 
 // Chats used to live only in the store's Map, which made them exactly as durable
 // as the page. A crash lost them; so did switching projects, since that path
@@ -13,11 +15,11 @@ const cell = new Map<string, string>();
 
 let persist: typeof import("../src/lib/chatPersist.ts");
 beforeAll(async () => {
-  (globalThis as any).localStorage = {
+  stubGlobal("localStorage", {
     getItem: (k: string) => cell.get(k) ?? null,
     setItem: (k: string, v: string) => { cell.set(k, v); },
     removeItem: (k: string) => { cell.delete(k); },
-  };
+  });
   persist = await import("../src/lib/chatPersist.ts");
 });
 beforeEach(() => cell.clear());

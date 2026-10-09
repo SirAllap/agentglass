@@ -1,4 +1,6 @@
-import { test, expect, beforeAll, afterEach } from "bun:test";
+import { test, expect, beforeAll, beforeEach, afterEach } from "bun:test";
+import { globalStubs } from "./stubGlobal";
+const stubGlobal = globalStubs();
 
 // The notification pane has two switches because it has two sources: the
 // machine's own notifications, mirrored in, and agentglass's own events. They
@@ -19,18 +21,27 @@ const cell = new Map<string, string>();
 let sysNotify: typeof import("../src/lib/sysNotify.ts");
 
 beforeAll(async () => {
-  (globalThis as any).localStorage = {
+  stubGlobal("localStorage", {
     getItem: (k: string) => cell.get(k) ?? null,
     setItem: (k: string, v: string) => { cell.set(k, v); },
     removeItem: (k: string) => { cell.delete(k); },
-  };
-  (globalThis as any).location = { hostname: "localhost", origin: "http://localhost:4000" };
+  });
+  stubGlobal("location", { hostname: "localhost", origin: "http://localhost:4000" });
+  // Turning the mirror on starts a capability probe that nobody awaits. Left to
+  // the real fetch it fails a moment after the file is over, is taken for a
+  // server that has not started yet, and its retry reads the storage this file
+  // has already given back: an unhandled error in whichever file is running.
+  // A verdict ("nothing to watch here") is not retried.
+  stubGlobal("fetch", async () => new Response(JSON.stringify({ supported: false }), { headers: { "content-type": "application/json" } }));
   sysNotify = await import("../src/lib/sysNotify.ts");
 });
 
 // Every test shares one sysNotify module (bun runs the suite in one process),
 // so a mode left "full" or a backoff timer left armed leaks into the next file
-// and flakes an unrelated assertion. Tear it all down after each test.
+// and flakes an unrelated assertion. Tear it all down after each test, and start
+// each one from the storage a first launch has: the switches persist, so a
+// choice one test made is the next test's "default" in any order but this one.
+beforeEach(() => { cell.clear(); });
 afterEach(() => { sysNotify.setSysNotifyMode("off"); sysNotify.__resetNotifyCapability(); });
 
 test("the defaults are the designed ones: nothing mirrored, our own alerts on", () => {

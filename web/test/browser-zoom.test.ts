@@ -8,18 +8,20 @@
  * unbothered by a value somebody else wrote.
  */
 import { describe, expect, test, beforeEach } from "bun:test";
+import { globalStubs } from "./stubGlobal";
+const stubGlobal = globalStubs();
 
 // A real one, in memory: these tests are about what is written and read back,
 // so the no-op stub the other suites use would pass while storing nothing.
 // Installed before the module under test is imported, since it reads at call
 // time but the import itself must not throw.
 const store = new Map<string, string>();
-(globalThis as any).localStorage = {
+stubGlobal("localStorage", {
   getItem: (k: string) => store.get(k) ?? null,
   setItem: (k: string, v: string) => { store.set(k, String(v)); },
   removeItem: (k: string) => { store.delete(k); },
   clear: () => store.clear(),
-};
+});
 
 const { ZOOM_KEY, ZOOM_MAX, ZOOM_MIN, setZoomLevel, zoomLevel, zoomPercent } = await import("../src/lib/browserPrefs.ts");
 

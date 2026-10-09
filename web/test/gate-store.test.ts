@@ -1,5 +1,7 @@
-import { test, expect, beforeAll } from "bun:test";
+import { test, expect, beforeAll, beforeEach, afterEach } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import type { PendingGate } from "../../shared/types.ts";
+const stubGlobal = globalStubs();
 
 // A gate hold is the one thing in agentglass with a stopped agent on the other
 // end of it, and the only "come and look" signal used to be a `notify-send`
@@ -17,13 +19,13 @@ let store: typeof import("../src/lib/gateStore.ts");
 let sysNotify: typeof import("../src/lib/sysNotify.ts");
 
 beforeAll(async () => {
-  (globalThis as any).localStorage = {
+  stubGlobal("localStorage", {
     getItem: (k: string) => cell.get(k) ?? null,
     setItem: (k: string, v: string) => { cell.set(k, v); },
     removeItem: (k: string) => { cell.delete(k); },
-  };
+  });
   // The store reaches api.ts, which resolves the server address at import time.
-  (globalThis as any).location = { hostname: "localhost", origin: "http://localhost:4000" };
+  stubGlobal("location", { hostname: "localhost", origin: "http://localhost:4000" });
   // No `window` in this environment, so importing the store does not start its
   // poll: the tests drive ingestGates directly, which is the same seam.
   store = await import("../src/lib/gateStore.ts");
@@ -48,13 +50,22 @@ const gate = (id: string, over: Partial<PendingGate> = {}): PendingGate => ({
 /** Notes raised on the notch for gates, newest first. */
 const gateNotes = () => sysNotify.notifyHistory().filter((n) => n.app === "gate");
 
+// Every test starts from an empty store with its own listener, so the file
+// gives the same answer in any order (`bun test --seed`). A hold present at the
+// first read is the standing state, not an arrival; `standing()` is that read.
 const arrivals: PendingGate[] = [];
 let unsub: (() => void) | null = null;
+beforeEach(() => {
+  store.__resetGateStore();
+  sysNotify.clearNotes();
+  arrivals.length = 0;
+  unsub = store.subscribeNewGates((g) => arrivals.push(g));
+});
+afterEach(() => { unsub?.(); });
+const standing = () => store.ingestGates([gate("a"), gate("b")]);
 
 test("arriving to gates that were already waiting does not raise a note", () => {
-  unsub = store.subscribeNewGates((g) => arrivals.push(g));
-
-  store.ingestGates([gate("a"), gate("b")]);
+  standing();
 
   // They are the standing state, and the panel shows them. A note means
   // "this just happened", so the first read is a baseline, not an event.
@@ -64,6 +75,7 @@ test("arriving to gates that were already waiting does not raise a note", () => 
 });
 
 test("a hold that arrives afterwards is announced", () => {
+  standing();
   store.ingestGates([gate("a"), gate("b"), gate("c", { tool_name: "Write" })]);
 
   expect(arrivals.map((g) => g.id)).toEqual(["c"]);
@@ -75,6 +87,7 @@ test("a hold that arrives afterwards is announced", () => {
 });
 
 test("a hold still waiting is not announced again on every poll", () => {
+  standing();
   for (let i = 0; i < 30; i++) store.ingestGates([gate("a"), gate("b"), gate("c")]);
 
   expect(arrivals.map((g) => g.id)).toEqual(["c"]);
@@ -82,6 +95,8 @@ test("a hold still waiting is not announced again on every poll", () => {
 });
 
 test("the snapshot keeps its identity while the set is unchanged", () => {
+  standing();
+  store.ingestGates([gate("a"), gate("b"), gate("c")]);
   const before = store.listGates();
   store.ingestGates([gate("a"), gate("b"), gate("c")]);
   // Polling every two seconds must not re-render every consumer that reads it.
@@ -97,6 +112,8 @@ test("the snapshot keeps its identity while the set is unchanged", () => {
  * a request you just answered, which teaches you to distrust the toasts.
  */
 test("answering a gate does not let an in-flight poll re-announce it", () => {
+  standing();
+  store.ingestGates([gate("a"), gate("b"), gate("c")]);
   store.forgetGate("c");
   expect(store.listGates().map((g) => g.id)).toEqual(["a", "b"]);
 
@@ -113,14 +130,13 @@ test("answering a gate does not let an in-flight poll re-announce it", () => {
 });
 
 test("a gate that resolves and is later reissued is announced again", () => {
-  store.ingestGates([gate("a")]);            // b and c resolved
+  standing();
+  store.ingestGates([gate("a")]);            // b resolved
   store.ingestGates([gate("a"), gate("b")]); // b comes back as a new hold
 
-  expect(arrivals.map((g) => g.id)).toEqual(["c", "b"]);
-  // c's own row is long gone (see above); only the reissued b's is on screen.
+  expect(arrivals.map((g) => g.id)).toEqual(["b"]);
   expect(gateNotes()).toHaveLength(1);
   expect(gateNotes()[0]!.key).toBe("gate:b");
-  unsub?.();
 });
 
 /*
@@ -135,8 +151,9 @@ test("a gate that resolves and is later reissued is announced again", () => {
  * frame reaches for — an immediate ingest that does not check `document.hidden`.
  */
 test("pollGatesNow ingests even while the tab is hidden", async () => {
+  standing(); // the first read is the baseline; the hold below is what arrives after it
   const realDocument = (globalThis as any).document;
-  (globalThis as any).document = { hidden: true, addEventListener() {} };
+  stubGlobal("document", { hidden: true, addEventListener() {} });
   const realFetch = globalThis.fetch;
   (globalThis as any).fetch = (...args: unknown[]) => {
     if (String(args[0]).includes("/gate/pending")) {
@@ -150,7 +167,7 @@ test("pollGatesNow ingests even while the tab is hidden", async () => {
     expect(gateNotes().some((n) => n.key === "gate:hidden-hold")).toBe(true);
   } finally {
     globalThis.fetch = realFetch;
-    (globalThis as any).document = realDocument;
+    stubGlobal("document", realDocument);
   }
 });
 
@@ -183,8 +200,8 @@ test("importing the store does not start a poll; subscribing does", async () => 
   };
   // A window, so the poll is allowed to start at all — its absence is why the
   // rest of this file can import the store without one running.
-  (globalThis as any).window = {};
-  (globalThis as any).document = { hidden: false, addEventListener() {} };
+  stubGlobal("window", {});
+  stubGlobal("document", { hidden: false, addEventListener() {} });
 
   try {
     // A second module instance: this file's own import happened without a
@@ -226,7 +243,7 @@ test("importing the store does not start a poll; subscribing does", async () => 
     for (const h of armed) realClearTimeout(h as any);
   } finally {
     globalThis.fetch = realFetch;
-    (globalThis as any).window = realWindow;
-    (globalThis as any).document = realDocument;
+    stubGlobal("window", realWindow);
+    stubGlobal("document", realDocument);
   }
 }, 10_000);

@@ -5,18 +5,20 @@
 // keep its identity between changes — a fresh array every read is an infinite
 // re-render, which is a white window rather than a warning.
 import { beforeEach, describe, expect, test } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import {
   TASK_SOURCES, shownTaskSources, taskSourceShown, setTaskSourceShown, subscribeTaskSources,
   orderedTaskSources, moveTaskSource, resetTaskSourceOrder, __forgetTaskSources,
 } from "../src/lib/taskSources.ts";
+const stubGlobal = globalStubs();
 
 // bun's test environment has no DOM; the module only ever touches these three.
 const store = new Map<string, string>();
-(globalThis as { localStorage?: unknown }).localStorage = {
+stubGlobal("localStorage", {
   getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
   setItem: (k: string, v: string) => { store.set(k, v); },
   removeItem: (k: string) => { store.delete(k); },
-};
+});
 
 beforeEach(() => {
   store.clear();

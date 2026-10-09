@@ -16,14 +16,16 @@
  * is a hole with another process behind it; the only thing this document can
  * honestly say about it is where it is. Hence the rectangle.
  */
-import { describe, expect, test, beforeEach, afterAll } from "bun:test";
+import { describe, expect, test, beforeEach } from "bun:test";
+import { globalStubs } from "./stubGlobal";
+const stubGlobal = globalStubs();
 
 const store = new Map<string, string>();
-(globalThis as any).localStorage = {
+stubGlobal("localStorage", {
   getItem: (k: string) => store.get(k) ?? null,
   setItem: (k: string, v: string) => { store.set(k, String(v)); },
   removeItem: (k: string) => { store.delete(k); },
-};
+});
 
 /** Whatever the DOM is pretending to hold this test. */
 let webviews: Array<{
@@ -38,28 +40,19 @@ let atPoint: { tag: string; xterm: boolean } | null = null;
 const rect = (left: number, top: number, w: number, h: number) =>
   ({ left, top, right: left + w, bottom: top + h, width: w, height: h });
 
-/* Put back whatever was here. These stubs are installed on the shared global
-   for the whole process, and bun runs every web test file in one — leaving a
-   `document` that only knows about <webview> behind made gate-store and
-   docker-panel-render fail while both passed alone. */
-const priorWindow = (globalThis as any).window;
-const priorDocument = (globalThis as any).document;
-const priorStorage = (globalThis as any).localStorage;
-afterAll(() => {
-  (globalThis as any).window = priorWindow;
-  (globalThis as any).document = priorDocument;
-  (globalThis as any).localStorage = priorStorage;
-});
+/* stubGlobal gives these back after the file: bun runs every web test file in
+   one process, and a `document` that only knows about <webview>, left behind,
+   made gate-store and docker-panel-render fail while both passed alone. */
 
 const listeners = new Map<string, (e: any) => void>();
-(globalThis as any).window = {
+stubGlobal("window", {
   addEventListener: (type: string, fn: (e: any) => void) => { listeners.set(type, fn); },
-};
-(globalThis as any).getComputedStyle = (el: any) => ({
+});
+stubGlobal("getComputedStyle", (el: any) => ({
   visibility: el?.__visibility ?? "visible",
   display: el?.__display ?? "block",
-});
-(globalThis as any).document = {
+}));
+stubGlobal("document", {
   querySelectorAll: (sel: string) =>
     sel === "webview"
       ? webviews.map((v) => ({
@@ -69,7 +62,7 @@ const listeners = new Map<string, (e: any) => void>();
         }))
       : [],
   elementFromPoint: () => atPoint && { closest: (s: string) => (s === ".xterm" && atPoint!.xterm ? {} : null) },
-};
+});
 
 /*
  * A FRESH COPY OF THE MODULE, not whichever one was loaded first.

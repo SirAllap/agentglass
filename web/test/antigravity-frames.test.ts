@@ -1,5 +1,7 @@
 import { test, expect, describe, beforeAll } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import { stubStorage } from "./stubStorage.ts";
+const stubGlobal = globalStubs();
 
 stubStorage();
 
@@ -10,7 +12,7 @@ stubStorage();
 
 let frames: typeof import("../src/lib/antigravityFrames.ts");
 beforeAll(async () => {
-  (globalThis as any).location ??= new URL("http://localhost:5173/");
+  stubGlobal("location", new URL("http://localhost:5173/"));
   frames = await import("../src/lib/antigravityFrames.ts");
 });
 

@@ -1,5 +1,7 @@
 import { test, expect, describe, beforeAll } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import { stubStorage } from "./stubStorage.ts";
+const stubGlobal = globalStubs();
 
 stubStorage();
 
@@ -11,7 +13,7 @@ stubStorage();
 
 let live: typeof import("../src/lib/useLive.ts");
 beforeAll(async () => {
-  (globalThis as any).location ??= new URL("http://localhost:5173/");
+  stubGlobal("location", new URL("http://localhost:5173/"));
   live = await import("../src/lib/useLive.ts");
 });
 

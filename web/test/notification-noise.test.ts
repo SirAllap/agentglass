@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import type { SystemNote } from "../src/lib/sysNotify.ts";
 import { DEFAULT_NOTIFY_PREFS } from "../../shared/notifyPrefs.ts";
 import { receiveNotifyPrefs } from "../src/lib/notifyPrefsStore.ts";
@@ -11,16 +12,14 @@ import { receiveNotifyPrefs } from "../src/lib/notifyPrefsStore.ts";
 const cell = new Map<string, string>();
 let policy: typeof import("../src/lib/notePolicy.ts");
 let sysNotify: typeof import("../src/lib/sysNotify.ts");
-let storage0: unknown;
 
 beforeAll(async () => {
-  storage0 = (globalThis as any).localStorage;
-  (globalThis as any).localStorage = {
+  stubGlobal("localStorage", {
     getItem: (k: string) => cell.get(k) ?? null,
     setItem: (k: string, v: string) => { cell.set(k, v); },
     removeItem: (k: string) => { cell.delete(k); },
-  };
-  (globalThis as any).location ??= { hostname: "localhost", origin: "http://localhost:4000" };
+  });
+  stubGlobal("location", { hostname: "localhost", origin: "http://localhost:4000" });
   policy = await import("../src/lib/notePolicy.ts");
   sysNotify = await import("../src/lib/sysNotify.ts");
   policy.__resetMuted();
@@ -38,8 +37,10 @@ afterAll(() => {
   sysNotify.clearNotes();
   sysNotify.setNotifyQuiet(true);
   receiveNotifyPrefs(DEFAULT_NOTIFY_PREFS);
-  (globalThis as any).localStorage = storage0;
 });
+// After the afterAll above, not before it: hooks run in the order they were
+// registered, and that one still needs the localStorage this gives back.
+const stubGlobal = globalStubs();
 
 const none = new Set<string>();
 const at = (urgency: 0 | 1 | 2, source?: string, app = "agentglass") => ({ app, urgency, ...(source ? { source } : {}) });

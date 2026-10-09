@@ -1,4 +1,6 @@
 import { test, expect, beforeAll, beforeEach } from "bun:test";
+import { globalStubs } from "./stubGlobal";
+const stubGlobal = globalStubs();
 
 /*
  * The bell must not be gated on the thing it is a fallback FOR.
@@ -58,13 +60,13 @@ class FakeNotification {
 }
 
 beforeAll(async () => {
-  (globalThis as any).localStorage = {
+  stubGlobal("localStorage", {
     getItem: (k: string) => cell.get(k) ?? null,
     setItem: (k: string, v: string) => { cell.set(k, v); },
     removeItem: (k: string) => { cell.delete(k); },
-  };
-  (globalThis as any).location = { hostname: "localhost", origin: "http://localhost:4000" };
-  (globalThis as any).Notification = FakeNotification;
+  });
+  stubGlobal("location", { hostname: "localhost", origin: "http://localhost:4000" });
+  stubGlobal("Notification", FakeNotification);
   sysNotify = await import("../src/lib/sysNotify.ts");
 });
 
@@ -108,7 +110,7 @@ test("a host with no Notification API at all still writes the bell row", () => {
     sysNotify.fireDesktopAlert({ title: "🔔 heads up", body: "agentglass", urgency: 1, notifyKind: BLOCKED });
     expect(sysNotify.notifyHistory().length).toBe(1);
   } finally {
-    (globalThis as any).Notification = saved;
+    stubGlobal("Notification", saved);
   }
 });
 

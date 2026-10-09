@@ -7,18 +7,20 @@
  * case below is a shape from that pull request.
  */
 import { describe, expect, it, beforeEach } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import type { PrDetail, PrThread } from "../../shared/types.ts";
+const stubGlobal = globalStubs();
 
 /* A real store, not a no-op. Several other test files install a `setItem: () =>
    {}` stub, and under `bun test` they share one process — so a test that reads
    back what it wrote has to own the store, and has to install it BEFORE the
    module under test is imported. */
 const cell = new Map<string, string>();
-(globalThis as unknown as { localStorage: unknown }).localStorage = {
+stubGlobal("localStorage", {
   getItem: (k: string) => cell.get(k) ?? null,
   setItem: (k: string, v: string) => { cell.set(k, v); },
   removeItem: (k: string) => { cell.delete(k); },
-};
+});
 
 const {
   at, threadLastAt, threadFirstAt, threadMovedOn, newSince, newKeys, foldedIdx, bootstrapSince, clearSeen,

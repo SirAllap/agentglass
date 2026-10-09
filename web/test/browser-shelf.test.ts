@@ -6,6 +6,7 @@
  * it silently, at launch, in a JSON file nobody reads.
  */
 import { beforeEach, describe, expect, test } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import {
   MAX_ESSENTIALS, MAX_DEPTH, SHELF_KEY, __resetShelfIds, addFolder, allItems, canNest,
   emptyShelf, findByUrl, folderCount, place, readShelves, removeFolder, removeItem,
@@ -13,16 +14,17 @@ import {
   boundItem, looseTabs, tabForItem,
   type Shelf,
 } from "../src/lib/browserShelf.ts";
+const stubGlobal = globalStubs();
 
 // No DOM under bun, and this module reads and writes one key. A Map is enough
 // to test what it does with what it finds there.
 const store = new Map<string, string>();
-(globalThis as unknown as { localStorage: Storage }).localStorage = {
+stubGlobal("localStorage", {
   getItem: (k: string) => store.get(k) ?? null,
   setItem: (k: string, v: string) => void store.set(k, v),
   removeItem: (k: string) => void store.delete(k),
   clear: () => store.clear(), key: () => null, length: 0,
-} as unknown as Storage;
+} as unknown as Storage);
 
 beforeEach(() => { __resetShelfIds(); store.clear(); });
 

@@ -17,15 +17,17 @@
  * entry survives only while the SAME agent is still in that pane.
  */
 import { describe, expect, test, beforeEach } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import { readFileSync } from "node:fs";
 import { nextSeen, readPaneSeen, writePaneSeen } from "../src/lib/paneWorktree.ts";
+const stubGlobal = globalStubs();
 
 const store = new Map<string, string>();
-(globalThis as { localStorage?: unknown }).localStorage = {
+stubGlobal("localStorage", {
   getItem: (k: string) => store.get(k) ?? null,
   setItem: (k: string, v: string) => { store.set(k, v); },
   removeItem: (k: string) => { store.delete(k); },
-} as unknown as Storage;
+} as unknown as Storage);
 
 beforeEach(() => store.clear());
 

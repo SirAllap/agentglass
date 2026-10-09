@@ -1,5 +1,7 @@
 import { test, expect, beforeAll, beforeEach } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import { stubStorage } from "./stubStorage.ts";
+const stubGlobal = globalStubs();
 
 stubStorage();
 
@@ -12,7 +14,7 @@ stubStorage();
 let store: typeof import("../src/lib/chatStore.ts");
 let api: typeof import("../src/lib/api.ts")["api"];
 beforeAll(async () => {
-  (globalThis as any).location ??= new URL("http://localhost:5173/");
+  stubGlobal("location", new URL("http://localhost:5173/"));
   api = (await import("../src/lib/api.ts")).api;
   store = await import("../src/lib/chatStore.ts");
 });

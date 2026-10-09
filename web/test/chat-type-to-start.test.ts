@@ -9,20 +9,22 @@
 // job, but the rule underneath — a seeded chat starts with that text already in
 // its draft, and an empty seed opens nothing — is here.
 import { test, expect, beforeAll, beforeEach } from "bun:test";
+import { globalStubs } from "./stubGlobal";
+const stubGlobal = globalStubs();
 
 const cell = new Map<string, string>();
 let store: typeof import("../src/lib/chatStore.ts");
 
 beforeAll(async () => {
-  (globalThis as any).location ??= new URL("http://localhost:5173/");
+  stubGlobal("location", new URL("http://localhost:5173/"));
   // Assigned rather than `??=`: other files install a no-op localStorage and
   // `bun test` shares one process, so the first loader would otherwise decide
   // whether anything written here is readable. See chat-engine-pick.test.ts.
-  (globalThis as any).localStorage = {
+  stubGlobal("localStorage", {
     getItem: (k: string) => cell.get(k) ?? null,
     setItem: (k: string, v: string) => { cell.set(k, v); },
     removeItem: (k: string) => { cell.delete(k); },
-  };
+  });
   store = await import("../src/lib/chatStore.ts");
 });
 

@@ -8,17 +8,19 @@
  * say how many it left out.
  */
 import { beforeEach, describe, expect, test } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import type { InboxItem, InboxTurnKind } from "../../shared/types.ts";
 import { botOnly, filterInbox, TURN_CHIP, turnLine, yourTurn } from "../src/lib/ghInbox.ts";
 import { __resetMarks, onShelf, setDone } from "../src/lib/inboxMarks.ts";
+const stubGlobal = globalStubs();
 
 const store = new Map<string, string>();
-(globalThis as unknown as { localStorage: Storage }).localStorage = {
+stubGlobal("localStorage", {
   getItem: (k: string) => store.get(k) ?? null,
   setItem: (k: string, v: string) => void store.set(k, v),
   removeItem: (k: string) => void store.delete(k),
   clear: () => store.clear(), key: () => null, length: 0,
-} as unknown as Storage;
+} as unknown as Storage);
 
 const row = (id: string, reason: string, turn?: InboxItem["turn"], over: Partial<InboxItem> = {}): InboxItem => ({
   id, unread: true, reason, type: "PullRequest", repo: "acme/orbit", title: `ORBIT-${id} A title`,

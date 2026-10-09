@@ -1,4 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { globalStubs } from "./stubGlobal";
+const stubGlobal = globalStubs();
 
 /**
  * When to show the release notes, and — the part that matters — when not to.
@@ -15,11 +17,11 @@ beforeAll(async () => {
   // Assigned, not defaulted: another suite installs its own stub at module
   // scope, and `??=` silently left this file writing into theirs — green alone,
   // red in the full run.
-  (globalThis as any).localStorage = {
+  stubGlobal("localStorage", {
     getItem: (k: string) => mem.get(k) ?? null,
     setItem: (k: string, v: string) => { mem.set(k, v); },
     removeItem: (k: string) => { mem.delete(k); },
-  };
+  });
   wn = await import("../src/lib/whatsNew.ts");
 });
 

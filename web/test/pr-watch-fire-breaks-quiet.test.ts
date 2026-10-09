@@ -6,7 +6,9 @@
  * button says plainly what happened and goes back to "Notify" once seen.
  */
 import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import type { PrWatch } from "../../shared/types.ts";
+const stubGlobal = globalStubs();
 
 const cell = new Map<string, string>();
 let sys: typeof import("../src/lib/sysNotify.ts");
@@ -14,10 +16,10 @@ let store: typeof import("../src/lib/prWatchStore.ts");
 let policy: typeof import("../src/lib/notePolicy.ts");
 
 beforeAll(async () => {
-  (globalThis as any).localStorage = {
+  stubGlobal("localStorage", {
     getItem: (k: string) => cell.get(k) ?? null, setItem: (k: string, v: string) => { cell.set(k, v); }, removeItem: (k: string) => { cell.delete(k); },
-  };
-  (globalThis as any).location = { hostname: "localhost", origin: "http://localhost:4000" };
+  });
+  stubGlobal("location", { hostname: "localhost", origin: "http://localhost:4000" });
   sys = await import("../src/lib/sysNotify.ts");
   store = await import("../src/lib/prWatchStore.ts");
   policy = await import("../src/lib/notePolicy.ts");

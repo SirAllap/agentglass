@@ -10,16 +10,18 @@
  * explains at length what a stub written for one file does to its neighbours.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import type { MarkOp, MarkRow } from "../../shared/types.ts";
+const stubGlobal = globalStubs();
 
 /* A real store, installed before the modules under test are imported — see
    pr-new.test.ts for why a shared no-op stub is not good enough. */
 const cell = new Map<string, string>();
-(globalThis as unknown as { localStorage: unknown }).localStorage = {
+stubGlobal("localStorage", {
   getItem: (k: string) => cell.get(k) ?? null,
   setItem: (k: string, v: string) => { cell.set(k, v); },
   removeItem: (k: string) => { cell.delete(k); },
-};
+});
 
 const { SEEN_KEY, readSeen, writeSeen, clearSeen, markAllSeen, onSeenChange } = await import("../src/lib/prNew.ts");
 const { __resetMarks, doneIds, isDone, isSaved, setDone, setSaved, subscribeMarks } = await import("../src/lib/inboxMarks.ts");

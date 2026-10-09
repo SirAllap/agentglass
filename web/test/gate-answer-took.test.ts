@@ -19,9 +19,11 @@
  * the type still has to admit the failure, and the store has to act on it — put
  * the card back where it was, and say so on the notch.
  */
-import { describe, expect, test, beforeAll, afterEach } from "bun:test";
+import { describe, expect, test, beforeAll, beforeEach, afterEach } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import { readFileSync } from "node:fs";
 import type { PendingGate } from "../../shared/types.ts";
+const stubGlobal = globalStubs();
 
 describe("what the client type admits", () => {
   const api = readFileSync(new URL("../src/lib/api.ts", import.meta.url), "utf8");
@@ -43,23 +45,27 @@ let sysNotify: typeof import("../src/lib/sysNotify.ts");
 const realFetch = globalThis.fetch;
 
 beforeAll(async () => {
-  (globalThis as any).localStorage = {
+  stubGlobal("localStorage", {
     getItem: (k: string) => cell.get(k) ?? null,
     setItem: (k: string, v: string) => { cell.set(k, v); },
     removeItem: (k: string) => { cell.delete(k); },
-  };
+  });
   // api.ts resolves the server address at import time, so it has to be there
   // before the store is loaded. No `window`, so importing starts no poll — the
   // ingest seam is driven directly.
-  (globalThis as any).location = { hostname: "localhost", origin: "http://localhost:4000" };
+  stubGlobal("location", { hostname: "localhost", origin: "http://localhost:4000" });
   store = await import("../src/lib/gateStore.ts");
   sysNotify = await import("../src/lib/sysNotify.ts");
 });
 
+// Reset before as well as after: the store and the bell's history are module
+// state, and the first test in the file would otherwise start from whatever the
+// file before it left there.
+const reset = () => { store.__resetGateStore(); sysNotify.clearNotes(); };
+beforeEach(reset);
 afterEach(() => {
   globalThis.fetch = realFetch;
-  store.__resetGateStore();
-  sysNotify.clearNotes();
+  reset();
 });
 
 const gate = (id: string, over: Partial<PendingGate> = {}): PendingGate => ({
