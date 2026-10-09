@@ -3613,6 +3613,13 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
           </button>
         </span>}
       />
+      {st?.crashLoop && (
+        <SettingRow
+          label="Layout left alone"
+          hint={`${st.crashLoop.launches} launches in ten minutes looked like a crash loop, so this start neither restored nor re-captured. Restore it by hand below once the app is stable, or delete ${st.crashLoop.file} to clear this.`}
+          control={<span />}
+        />
+      )}
       {st?.lastCaptureAt ? (
         <SettingRow
           label="Last layout capture"
