@@ -33,7 +33,7 @@ const {
 } = require("./guest-guard.js");
 const { startEgressProxy, literalRefusal, EGRESS_ENV } = require("./egress-guard.js");
 /* S9: the honest "an agent is driving this" header — see identify-header.js
-   for the decision and browser-phase3-plan-2026-09-25.md §S9/D8 for why. */
+   for the decision and which origins count. */
 const { IDENTIFY_HEADER, shouldIdentify, createOwnerBook } = require("./identify-header.js");
 
 /**
@@ -3973,8 +3973,7 @@ function guardWebviews(win, opts = {}) {
 
     /*
      * S9: `X-Agentglass-Agent`, self-asserted and sent only to a dev origin —
-     * see identify-header.js for what counts as one, and browser-phase3-plan
-     * -2026-09-25.md §S9 for why (D8). Off until `ag:browserSessionSettings`
+     * see identify-header.js for what counts as one and why. Off until `ag:browserSessionSettings`
      * turns it on for THIS session; nothing here reaches the switch.
      *
      * ONE dispatcher per session, same rule the COOP filter just above is
