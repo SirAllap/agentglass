@@ -8,10 +8,29 @@ import { listChats, subscribe as subscribeChats } from "../lib/chatStore.ts";
 import { listGates, subscribeGates, answerGate } from "../lib/gateStore.ts";
 import type { Insight, PendingGate, GateRecord } from "../../../shared/types.ts";
 import { Panel } from "./Panel.tsx";
+import { EDGE } from "./workspace/Chrome.tsx";
 import { api } from "../lib/api.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import { fmtAgo } from "../lib/format.ts";
 import { nobodyDecidedWhy } from "../lib/activity.ts";
+
+/**
+ * One card shape for everything this panel lists, and the same one the
+ * Sessions panel beside it draws: `rounded-xl`, a faint lift off the panel,
+ * `EDGE`, and the colour on a rail down the left edge.
+ *
+ * Each card used to paint its whole body in its own severity — an amber fill
+ * and amber outline for an insight, another tint per alert level, a third
+ * for a gate — so this one panel carried card treatments none of its
+ * siblings share, and the dashboard read as two styles side by side. The
+ * severity is still there, on the rail and the icon, which is where the
+ * Sessions cards already put their state.
+ */
+const CARD_CLS = "relative rounded-xl pl-4 pr-2.5 py-2";
+const CARD_STYLE = { background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: EDGE } as const;
+function Rail({ color }: { color: string }) {
+  return <span aria-hidden className="absolute left-[3px] top-2.5 bottom-2.5 w-[3px] rounded-full" style={{ background: color }} />;
+}
 
 const LEVEL: Record<Alert["level"], { color: string; icon: ReactNode }> = {
   error: { color: "var(--error-ink)", icon: <CrossIcon size={ICON.xs} /> },
@@ -148,9 +167,10 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump, active = true }
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, scale: 0.96 }}
               transition={{ type: "spring", stiffness: 380, damping: 26 }}
-              className="rounded-xl px-2.5 py-2 mb-2"
-              style={{ background: "color-mix(in srgb, var(--warning) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 50%, transparent)" }}
+              className={`${CARD_CLS} mb-2`}
+              style={CARD_STYLE}
             >
+              <Rail color="var(--warning)" />
               <div className="flex items-center gap-2">
                 <span className="flex" style={{ color: "var(--warning-ink)" }}><HandIcon size={ICON.xs} /></span>
                 <span className="text-[11.5px] font-semibold" style={{ color: "var(--text)" }}>Approve {g.tool_name}?</span>
@@ -216,9 +236,10 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump, active = true }
                 exit={{ opacity: 0, x: 10 }}
                 transition={{ type: "spring", stiffness: 350, damping: 28 }}
                 onClick={() => onSelectApp?.(a.agent.split(":")[0])}
-                className="flex items-start gap-2 rounded-xl px-2.5 py-2 mb-1.5 cursor-pointer"
-                style={{ background: `color-mix(in srgb, ${l.color} 12%, transparent)`, border: `1px solid color-mix(in srgb, ${l.color} 35%, transparent)` }}
+                className={`${CARD_CLS} flex items-start gap-2 mb-1.5 cursor-pointer`}
+                style={CARD_STYLE}
               >
+                <Rail color={l.color} />
                 <span className="flex" style={{ color: l.color }}>{l.icon}</span>
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[12px]" style={{ color: "var(--text2)" }}>{a.agent}</div>
@@ -246,13 +267,10 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump, active = true }
                     exit={{ opacity: 0, x: 10 }}
                     transition={{ type: "spring", stiffness: 350, damping: 28 }}
                     onClick={() => i.session && onSelectApp?.(i.session.split(":")[0])}
-                    className="flex items-start gap-2 rounded-xl px-2.5 py-2 mb-1.5"
-                    style={{
-                      background: `color-mix(in srgb, ${color} 10%, transparent)`,
-                      border: `1px solid color-mix(in srgb, ${color} 30%, transparent)`,
-                      cursor: i.session ? "pointer" : "default",
-                    }}
+                    className={`${CARD_CLS} flex items-start gap-2 mb-1.5`}
+                    style={{ ...CARD_STYLE, cursor: i.session ? "pointer" : "default" }}
                   >
+                    <Rail color={color} />
                     <span className="shrink-0 flex" style={{ color }}>{KIND_ICON[i.kind]}</span>
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-[11.5px] font-medium" style={{ color: "var(--text2)" }}>{i.title}</div>

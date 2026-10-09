@@ -37,7 +37,7 @@ import { flashElement } from "../lib/flash.ts";
 import { shaFromHref } from "../lib/commitLink.ts";
 import { isShortRef, openInApp, wantsExternal } from "../lib/linkRouter.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
-import { Button, RefreshButton, ScopeChip, Tabs, CTRL_H, EDGE, CHIP_SURFACE, INPUT, INPUT_STYLE, LINE } from "./workspace/Chrome.tsx";
+import { Button, RefreshButton, ScopeChip, Segmented, Tabs, CTRL_H, EDGE, CHIP_SURFACE, INPUT, INPUT_STYLE, LINE } from "./workspace/Chrome.tsx";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import type {
   PrSummary, PrDetail, PrRepoId, PrThread, PrComment, PrReview, PrReviewer, PrCheck, GitRepoRef, FileChange,
@@ -1703,7 +1703,10 @@ function Pill({ on, label, icon, dot, count, countTint, title, onClick }: {
 }) {
   return (
     <button onClick={onClick} title={title} role="tab" aria-selected={on}
-      className="agx-btn text-[10px] leading-none px-2 py-1 rounded-lg flex items-center gap-1.5 shrink-0 transition-all"
+      /* The `CHIP` rung (28, 11px): the Open / Closed / All `Segmented` at
+         the end of this row is house `Chip`s, and a row of 20px pills beside
+         28px chips read as two kinds of control. */
+      className="agx-btn text-[11px] leading-none px-2.5 min-h-[28px] rounded-lg flex items-center gap-1.5 shrink-0 transition-all"
       style={{
         color: on ? "var(--text)" : "var(--text3)",
         background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",
@@ -4469,7 +4472,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               */}
             <Pill on={boardShown} icon={<ColumnsIcon size={ICON.xs} />} label="Board"
               title={searching ? "Clear the search and go back to the lanes" : "Yours and the ones you were asked to look at, in lanes"}
-              onClick={() => { if (searching) setQuery(""); setInboxOn(false); setBoard(true); }} />
+              onClick={() => { if (searching) setQuery(""); setInboxOn(false); setStateSel("open"); setBoard(true); }} />
             {/* Its number is the only one on this row counting things nobody
                 has looked at yet, so it keeps the warning colour when it is not
                 the view you are in. */}
@@ -4492,18 +4495,16 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 style={{ color: "var(--text3)", border: "1px dashed color-mix(in srgb, var(--text) 16%, transparent)" }}>Custom</span>
             )}
             {/* Open / Closed / All — the state axis. "Closed" holds merged +
-                closed, like GitHub's own Closed tab. */}
-            <div className="ml-auto flex rounded-full overflow-hidden shrink-0 self-center" style={{ border: EDGE }}>
-              {STATES.map((s) => (
-                <button key={s.id} onClick={() => setStateSel(s.id)} title={`Show ${s.label.toLowerCase()} pull requests`}
-                  className="agx-btn text-[10px] px-2 py-0.5"
-                  style={{
-                    color: stateSel === s.id ? "var(--bg)" : "var(--text3)",
-                    background: stateSel === s.id ? "var(--primary)" : "transparent",
-                  }}>
-                  {s.label}
-                </button>
-              ))}
+                closed, like GitHub's own Closed tab. The board is a triage of
+                OPEN work (its lanes are "needs your review", "ready to land",
+                "blocked"), so picking Closed or All leaves it for the table:
+                fed the closed list, the board drew merged pull requests in
+                "Blocked" with "Open to re-run" under a heading counting them
+                as open. */}
+            <div className="ml-auto self-center">
+              <Segmented value={stateSel} label="Pull request state"
+                options={STATES.map((s) => ({ id: s.id, label: s.label, title: `Show ${s.label.toLowerCase()} pull requests` }))}
+                onChange={(s) => { setStateSel(s); if (s !== "open") setBoard(false); }} />
             </div>
           </div>
           {/* Always, once the repository is known — not "once rows arrived".
