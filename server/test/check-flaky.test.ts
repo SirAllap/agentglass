@@ -9,6 +9,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const dir = mkdtempSync(join(tmpdir(), "agx-check-flaky-"));
+/* A repository of its own: bun runs every test file in one process, the
+   database is whichever one the first import opened, and check-runs-baseline
+   records the same "unit" key under acme/orbit — sharing the name made both
+   files prune each other's history. */
 process.env.XDG_CONFIG_HOME = dir;
 process.env.AGENTGLASS_DB = join(dir, "p.db");
 const { recordRuns, repoMetrics } = await import("../src/checkRuns.ts");
@@ -25,7 +29,7 @@ const attempt = (name: string, state: C["state"], o: Partial<C> = {}): C => {
   const at = T0 + ++n * 600_000;
   return {
     name, workflow: "CI", event: "pull_request", state, done: true,
-    url: `https://github.com/acme/orbit/actions/runs/${9000 + Math.floor(n / 3)}/job/${at}`,
+    url: `https://github.com/acme/lumen/actions/runs/${9000 + Math.floor(n / 3)}/job/${at}`,
     startedAt: new Date(at).toISOString(), completedAt: new Date(at + 120_000).toISOString(), ...o,
   };
 };
@@ -35,22 +39,22 @@ const metric = (repo: string, name: string) => repoMetrics(repo, NOW).find((m) =
 describe("flaky = the same commit both failed and passed", () => {
   test("a check that failed then passed on the same commit, on several commits, is flaky", () => {
     for (const s of ["a1", "b2", "c3"]) {
-      recordRuns("acme/orbit", 1, sha(s), [attempt("unit", "failure")]);
-      recordRuns("acme/orbit", 1, sha(s), [attempt("unit", "success")]); // the re-run passed
+      recordRuns("acme/lumen", 1, sha(s), [attempt("unit", "failure")]);
+      recordRuns("acme/lumen", 1, sha(s), [attempt("unit", "success")]); // the re-run passed
     }
-    recordRuns("acme/orbit", 2, sha("d4"), [attempt("unit", "success")]);
-    recordRuns("acme/orbit", 2, sha("e5"), [attempt("unit", "success")]);
-    const f = metric("acme/orbit", "unit").flakiness;
+    recordRuns("acme/lumen", 2, sha("d4"), [attempt("unit", "success")]);
+    recordRuns("acme/lumen", 2, sha("e5"), [attempt("unit", "success")]);
+    const f = metric("acme/lumen", "unit").flakiness;
     expect(f.flips).toBe(3);
     expect(f.judged).toBe(8);
     expect(isFlaky(f)).toBe(true);
   });
 
   test("a check that fails on every commit and never passes is broken, not flaky", () => {
-    for (const s of ["f1", "f2", "f3", "f4", "f5", "f6"]) recordRuns("acme/orbit", 3, sha(s), [attempt("e2e", "failure")]);
+    for (const s of ["f1", "f2", "f3", "f4", "f5", "f6"]) recordRuns("acme/lumen", 3, sha(s), [attempt("e2e", "failure")]);
     // even retried on the same commit: it failed both times
-    recordRuns("acme/orbit", 3, sha("f6"), [attempt("e2e", "failure")]);
-    const a = metric("acme/orbit", "e2e");
+    recordRuns("acme/lumen", 3, sha("f6"), [attempt("e2e", "failure")]);
+    const a = metric("acme/lumen", "e2e");
     expect(a.failureRate).toBe(1);
     expect(a.flakiness.flips).toBe(0);
     expect(isFlaky(a.flakiness)).toBe(false);
@@ -58,30 +62,30 @@ describe("flaky = the same commit both failed and passed", () => {
 
   test("failing on one commit and passing on the next is a fix, not a flake", () => {
     // What the old rule got wrong: 1 failure in 6 runs, every one of them honest.
-    recordRuns("acme/orbit", 4, sha("g1"), [attempt("lint", "failure")]);
-    for (const s of ["g2", "g3", "g4", "g5", "g6"]) recordRuns("acme/orbit", 4, sha(s), [attempt("lint", "success")]);
-    const a = metric("acme/orbit", "lint");
+    recordRuns("acme/lumen", 4, sha("g1"), [attempt("lint", "failure")]);
+    for (const s of ["g2", "g3", "g4", "g5", "g6"]) recordRuns("acme/lumen", 4, sha(s), [attempt("lint", "success")]);
+    const a = metric("acme/lumen", "lint");
     expect(a.failureRate).toBeCloseTo(1 / 6);
     expect(isFlaky(a.flakiness)).toBe(false);
   });
 
   test("a cancelled run and a skipped one are not a failure", () => {
     for (const s of ["h1", "h2", "h3", "h4", "h5"]) {
-      recordRuns("acme/orbit", 5, sha(s), [attempt("build", "failure", { cancelled: true })]);
-      recordRuns("acme/orbit", 5, sha(s), [attempt("build", "success")]);
+      recordRuns("acme/lumen", 5, sha(s), [attempt("build", "failure", { cancelled: true })]);
+      recordRuns("acme/lumen", 5, sha(s), [attempt("build", "success")]);
     }
-    recordRuns("acme/orbit", 5, sha("h6"), [attempt("build", "skipped")]);
-    const f = metric("acme/orbit", "build").flakiness;
+    recordRuns("acme/lumen", 5, sha("h6"), [attempt("build", "skipped")]);
+    const f = metric("acme/lumen", "build").flakiness;
     expect(f.flips).toBe(0);
     expect(isFlaky(f)).toBe(false);
   });
 
   test("runs recorded without their commit cannot be judged, and say so", () => {
     for (let i = 0; i < 4; i++) {
-      recordRuns("acme/orbit", 6, "", [attempt("old", "failure")]);
-      recordRuns("acme/orbit", 6, "", [attempt("old", "success")]);
+      recordRuns("acme/lumen", 6, "", [attempt("old", "failure")]);
+      recordRuns("acme/lumen", 6, "", [attempt("old", "success")]);
     }
-    const f = metric("acme/orbit", "old").flakiness;
+    const f = metric("acme/lumen", "old").flakiness;
     expect(f.unknown).toBe(8);
     expect(f.judged).toBe(0);
     expect(isFlaky(f)).toBe(false);
@@ -89,27 +93,27 @@ describe("flaky = the same commit both failed and passed", () => {
 
   test("a read that arrives late fills in the commit of a run stored without one, and nothing overwrites it after", () => {
     const c = attempt("late", "failure");
-    expect(recordRuns("acme/orbit", 7, "", [c])).toBe(1);
-    expect(recordRuns("acme/orbit", 7, sha("i1"), [c])).toBe(1);
+    expect(recordRuns("acme/lumen", 7, "", [c])).toBe(1);
+    expect(recordRuns("acme/lumen", 7, sha("i1"), [c])).toBe(1);
     // a second read that names another commit does not move a run that already has one
-    expect(recordRuns("acme/orbit", 7, sha("i2"), [c])).toBe(0);
-    const f = metric("acme/orbit", "late").flakiness;
+    expect(recordRuns("acme/lumen", 7, sha("i2"), [c])).toBe(0);
+    const f = metric("acme/lumen", "late").flakiness;
     expect(f.unknown).toBe(0);
     expect(f.judged).toBe(1);
   });
 
   test("the same commit in two pull requests is two merge results, not one commit that disagreed", () => {
     for (const s of ["l1", "l2", "l3", "l4", "l5"]) {
-      recordRuns("acme/orbit", 20, sha(s), [attempt("stacked", "failure")]);
-      recordRuns("acme/orbit", 21, sha(s), [attempt("stacked", "success")]); // same head, another base
+      recordRuns("acme/lumen", 20, sha(s), [attempt("stacked", "failure")]);
+      recordRuns("acme/lumen", 21, sha(s), [attempt("stacked", "success")]); // same head, another base
     }
-    expect(metric("acme/orbit", "stacked").flakiness.flips).toBe(0);
+    expect(metric("acme/lumen", "stacked").flakiness.flips).toBe(0);
   });
 
   test("under the minimum sample nothing is called, however it flipped", () => {
-    recordRuns("acme/orbit", 8, sha("j1"), [attempt("rare", "failure")]);
-    recordRuns("acme/orbit", 8, sha("j1"), [attempt("rare", "success")]);
-    const f = metric("acme/orbit", "rare").flakiness;
+    recordRuns("acme/lumen", 8, sha("j1"), [attempt("rare", "failure")]);
+    recordRuns("acme/lumen", 8, sha("j1"), [attempt("rare", "success")]);
+    const f = metric("acme/lumen", "rare").flakiness;
     expect(f.flips).toBe(1);
     expect(isFlaky(f)).toBe(false);
   });

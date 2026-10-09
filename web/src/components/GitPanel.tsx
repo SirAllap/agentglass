@@ -827,6 +827,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     if (wtJump && wtJump.view === "git" && wtJump.root && wtJump.n !== wtJumpServed.current) {
       wtJumpServed.current = wtJump.n;
       setRoot(wtJump.root);
+      if (wtJump.tab) setView(wtJump.tab);
     }
   }, [wtJump]);
   const [tree, setTree] = useState<WorkingTree | null>(null);
@@ -1258,9 +1259,11 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     // losing the view, the filter and the row you were on — the whole pane read
     // as reset. The view stays mounted the entire time; only its visibility
     // changes, so there is nothing to rebuild, just data to refresh.
+    // Not the view: it starts on Changes already, and setting it here undid
+    // the tab a worktree jump had just chosen when that jump opened the panel.
     if (firstOpen.current) {
       firstOpen.current = false;
-      setToast(null); setTitle(""); setBody(""); setView("changes"); setNewBranch("");
+      setToast(null); setTitle(""); setBody(""); setNewBranch("");
     }
     api.editorCapability().then(setEditor).catch(() => setEditor({ hasNvim: false, editor: null }));
     // Refused while the server is still starting: asked again rather than left

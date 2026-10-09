@@ -51,7 +51,15 @@ describe("the merge group never moves", () => {
     expect(at).toBeGreaterThan(0);
     // Not behind a readiness check: it was drawn in the hero when the box turned green.
     expect(box.slice(box.lastIndexOf("\n", at), at)).not.toContain("path.ready");
-    expect(box).toContain("{(callout || extraNode || showMergeRow) && (");
+    // The footer opens on `showMergeRow` alone — whatever else joins that
+    // condition (a callout, the secondary buttons, the Update branch notice)
+    // is OR'ed with it, never a gate in front of it.
+    const footer = /\{\(([\w\s|]+)\) && \(\s*<div className="flex items-center gap-x-3/.exec(box);
+    expect(footer).not.toBeNull();
+    expect(footer![1].split("||").map((t) => t.trim())).toContain("showMergeRow");
+    // And the notice is drawn after the merge group, on its own full-width
+    // line, so it can never push the group sideways or up.
+    expect(box.indexOf("{noticeNode && <div className=\"basis-full")).toBeGreaterThan(box.indexOf("{showMergeRow && <span"));
     expect(box).toContain('if (a.id === "merge") return null');
   });
   it("no hero of the model carries the merge, auto-merge or update as its action, in any state", async () => {

@@ -51,7 +51,7 @@ import { api, type BranchSpend, type RepoSpend } from "../lib/api.ts";
 import {
   allowedMethods, pickMergeMethod, MERGE_LABEL, MERGE_OPTION, type MergeMethod,
 } from "../../../shared/mergeMethod.ts";
-import { updateBranchMove, prConflicted, gitSaysClean as cleanMerge } from "../lib/updateBranch.ts";
+import { updateBranchMove, branchNoticeJump, prConflicted, gitSaysClean as cleanMerge, type BranchNotice } from "../lib/updateBranch.ts";
 import { depSpec } from "../../../shared/deps.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { confirmMergeGuard } from "../lib/mergeGuard.ts";
@@ -5751,36 +5751,10 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
   const conflictNode = (
             <ConflictActions root={root} number={d.number} branch={d.headRefName} base={d.baseRefName} repo={/github\.com\/([^/]+\/[^/]+)\//.exec(d.url)?.[1] ?? ""} title={d.title} disabled={busy} />
   );
-  const noticeNode = (
-    <>
-          {/* Drawn by MergeBox on a row of its own under the buttons, full width.
-              Inside `extraNode` it was `basis-full` of a wrapper that is only as
-              wide as the button, so it sat beside it. */}
-          {canUpdate && updateMove.note && !updateMove.dirtyTree && (
-            <span className="basis-full text-[10.5px] leading-snug" style={{ color: "var(--text3)" }}>
-              {updateMove.note}
-            </span>
-          )}
-          {/* A dirty checkout is the one note with something to press: the sentence,
-              the two names as chips, and the changes one click away in the app's own
-              File changes. The button is always the right-hand end of this row. */}
-          {canUpdate && updateMove.dirtyTree && (
-            <div className="basis-full rounded overflow-hidden" style={{ border: LINE }}>
-              <Reason last tint="var(--warning)" glyph={<WarningIcon size={ICON.xs} />}
-                action={<Btn small onClick={() => requestWorktreeJump({ view: "diff", filter: dirName(updateMove.dirtyTree!.worktree) })}
-                  title="Open this worktree's uncommitted changes in File changes">Review changes</Btn>}>
-                {updateMove.note}
-                <span className="flex items-center gap-1.5 mt-1 min-w-0 font-mono text-[10.5px]">
-                  <span className="shrink-0 px-1.5 rounded" title={updateMove.dirtyTree.worktree}
-                    style={{ background: "var(--surface-inset)", color: "var(--text2)" }}>{dirName(updateMove.dirtyTree.worktree)}</span>
-                  <span className="truncate px-1.5 rounded" title={updateMove.dirtyTree.branch}
-                    style={{ background: "var(--surface-inset)", color: "var(--text2)" }}>{updateMove.dirtyTree.branch}</span>
-                </span>
-              </Reason>
-            </div>
-          )}
-    </>
-  );
+  /* Drawn by MergeBox on a row of its own under the buttons, full width.
+     Inside `extraNode` it was `basis-full` of a wrapper only as wide as the
+     button, so it sat beside it. */
+  const noticeNode = canUpdate && updateMove.notice ? <UpdateBranchNotice notice={updateMove.notice} root={root} /> : undefined;
   const extraNode = (
     <>
           {/*
@@ -5847,7 +5821,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
              * stale in that window, so the second press is usually for a gap
              * that has already been closed.
              */
-            <Btn onClick={() => onUpdateBranch(updateMove.syncLocal)} disabled={busy || !!awaitingChecks} warn hazard={!!updateMove.dirtyTree}
+            <Btn onClick={() => onUpdateBranch(updateMove.syncLocal)} disabled={busy || !!awaitingChecks} warn hazard={!!updateMove.notice}
               pending={busyWhat === "Update branch"}
               title={awaitingChecks
                 ? "The branch was just updated — waiting for the checks to start. Pushing again would restart them."
@@ -6016,7 +5990,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
         </section>
       ) : (
         <MergeBox path={path} busy={busy} onAction={onPathAction}
-          mergeNode={mergeNode} conflictNode={conflictNode} autoNode={autoNode} extraNode={extraNode} noticeNode={canUpdate && updateMove.note ? noticeNode : undefined} cornerNode={cornerNode}
+          mergeNode={mergeNode} conflictNode={conflictNode} autoNode={autoNode} extraNode={extraNode} noticeNode={noticeNode} cornerNode={cornerNode}
           notes={hasNotes ? notesNode : undefined}
           actionDisabled={actionDisabled} pendingAction={pendingAction} showMergeRow={!conflicted || !!d.autoMerge}
           history={<ReviewHistory reviews={d.reviews} timeline={d.timeline} pending={d.reviewers} author={d.author} you={d.viewerDidAuthor ? d.author : undefined} onGoReview={onGoReview} />} />
@@ -8383,6 +8357,54 @@ function Masthead({ root, repo, d, busy, local, onShowLocal, onEditTitle, onDraf
         </Field>
       </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Why Update branch will only sync GitHub this time, for all three reasons it
+ * can have, and the wording for all three in this one place so they read alike.
+ *
+ * Three things in one sentence: what is in the way, what the button will and
+ * will not do (the branch on GitHub moves, the copy here does not), and what
+ * to do so that the next press updates both. The names are
+ * chips — the worktree never gives way, a long branch truncates with the whole
+ * name on hover — and the button goes inside the app to what is in the way,
+ * never to a terminal. See `branchNoticeJump` for where each one lands.
+ */
+function UpdateBranchNotice({ notice: n, root }: { notice: BranchNotice; root: string }) {
+  const one = n.ahead === 1;
+  /* One sentence, one shape: what is in the way, what the button will and will
+     not do, and what to do so the next press updates both. The dirty wording
+     is the reference the other two follow. */
+  const { why, here, next, label, title } = n.kind === "dirty" ? {
+    why: "Your local copy has uncommitted changes", here: "this checkout", next: "Stash them, or commit and push, and it can update both.",
+    label: "Review changes", title: "Open this worktree's uncommitted changes in File changes",
+  } : n.kind === "diverged" ? {
+    why: `Your local branch has ${n.ahead} commit${one ? "" : "s"} GitHub does not have`, here: n.worktree ? "this checkout" : "your local branch",
+    next: `Pull, then push ${one ? "it" : "them"}, and it can update both.`,
+    ...(n.worktree
+      ? { label: "Show commits", title: "Open this worktree's history in Git, where the commits GitHub does not have are" }
+      : { label: "Show branch", title: "Not checked out anywhere: open Branches in Git, where its row counts the commits GitHub does not have" }),
+  } : {
+    why: "Your local copy has a merge, cherry-pick or revert in progress", here: "this checkout",
+    next: "Finish or abort it, push anything it leaves, and it can update both.",
+    label: "Open in Git", title: "Open this worktree in Git, where the merge in progress and its conflicts are",
+  };
+  return (
+    <div className="basis-full rounded overflow-hidden" style={{ border: LINE }}>
+      <Reason last tint="var(--warning)" glyph={<WarningIcon size={ICON.xs} />}
+        action={<Btn small onClick={() => requestWorktreeJump(branchNoticeJump(n, root))} title={title}>{label}</Btn>}>
+        {why}, so Update branch is a remote-only sync: it updates the branch on GitHub and leaves {here} as it is. {next}
+        <span className="flex items-center gap-1.5 mt-1 min-w-0 font-mono text-[10.5px]">
+          {n.worktree && (
+            <span data-notice-worktree className="shrink-0 whitespace-nowrap px-1.5 rounded" title={n.worktree}
+              style={{ background: "var(--surface-inset)", color: "var(--text2)" }}>{dirName(n.worktree)}</span>
+          )}
+          <span data-notice-branch className="truncate min-w-0 px-1.5 rounded" title={n.branch}
+            style={{ background: "var(--surface-inset)", color: "var(--text2)" }}>{n.branch}</span>
+        </span>
+      </Reason>
     </div>
   );
 }
