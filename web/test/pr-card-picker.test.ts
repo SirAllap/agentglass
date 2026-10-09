@@ -102,8 +102,11 @@ describe("where the card stands, beside the pull request", () => {
   });
 
   it("shows who is on it, as faces", () => {
-    expect(FACTS).toContain("task.people?.length");
-    expect(FACTS).toContain("No one assigned");
+    // In the Assigned control itself, as in the card view, not a list above it.
+    const control = bodyOf("CardPeoplePick");
+    expect(control).toContain("task.people ?? []");
+    expect(control).toContain('"nobody"');
+    expect(FACTS).toContain("<CardPeoplePick");
   });
 
   it("fills the hole while it is asking rather than appearing late", () => {

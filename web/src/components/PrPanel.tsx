@@ -64,6 +64,7 @@ import { mergeCardRef, mergeNote, statusColor, rfqaStatus } from "../lib/cardMov
 import { cardPlan, cardPlanNote } from "../lib/cardPlan.ts";
 import { cardOf, askingCard, onCard, putCard, forgetCards, cardVersion, withCard } from "../lib/prCardStore.ts";
 import { PeoplePick } from "./PeoplePick.tsx";
+import { orderMembers } from "../lib/peopleOrder.ts";
 import { SCROLLBAR_CSS, LINEBTN_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, LineMenuCtx, type LinePick, type LineSel } from "./diff/DiffLines.tsx";
 import { Toggle } from "./diff/DiffControls.tsx";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
@@ -7578,6 +7579,15 @@ function CardStatusPick({ task, query, onSaid }: { task: ProviderTask; query: st
   );
 }
 
+/** One person's face, the same 16px everywhere this section draws one. */
+function memberFace(p: { avatar?: string; color?: string; initials?: string }) {
+  return p.avatar
+    ? <img src={p.avatar} alt="" loading="lazy" referrerPolicy="no-referrer"
+        style={{ width: 16, height: 16, borderRadius: 999, objectFit: "cover", flexShrink: 0 }} />
+    : <span className="shrink-0 rounded-full inline-flex items-center justify-center"
+        style={{ width: 16, height: 16, background: p.color || "var(--bg4)", color: "#fff", fontSize: 8 }}>{p.initials}</span>;
+}
+
 /**
  * And who is on it. One press is one write: picking somebody already on the
  * card takes them off, which is what the tick beside their name means.
@@ -7608,31 +7618,41 @@ function CardPeoplePick({ task, query, onSaid }: { task: ProviderTask; query: st
     if (r.ok) putCard(query, r.task);
   };
 
+  const ordered = useMemo(() => orderMembers(members, on), [members, on]);
+  const people = task.people ?? [];
+  const mine = people.some((p) => p.me);
   return (
     <>
       {/* The same control the card view uses — see components/PeoplePick. It
           was a plain dropdown of names here, which ran off the bottom right of
-          the window and looked nothing like the one two views away. */}
+          the window and looked nothing like the one two views away. The
+          faces and names are IN the control, as in the card view's Assigned
+          field, rather than a list above a line of grey text. */}
       <button ref={btn} onMouseEnter={load} onClick={() => { load(); setOpen((v) => !v); }}
-        className="agx-btn text-left rounded px-1 -mx-1 py-0.5 hover:bg-white/5 text-[11px] flex items-center gap-1.5"
-        style={{ color: "var(--text3)" }} title="Put somebody on this card, or take them off">
-        <span className="min-w-0 truncate">Assign or unassign…</span>
+        className="agx-btn w-full text-left rounded px-1.5 py-1 text-[11px] flex items-center gap-1.5 min-w-0 hover:bg-white/5 focus-visible:outline-none focus-visible:ring-1"
+        style={{ color: mine ? "var(--success)" : "var(--text2)", border: EDGE }}
+        title="Put somebody on this card, or take them off">
+        {!!people.length && (
+          <span className="inline-flex items-center shrink-0 pl-1">
+            {people.slice(0, 4).map((p, n) => (
+              <span key={p.id ?? n} className="inline-flex rounded-full" style={{ marginLeft: n ? -4 : 0, boxShadow: "0 0 0 1.5px var(--surface-card)" }}>{memberFace(p)}</span>
+            ))}
+          </span>
+        )}
+        <span className="min-w-0 truncate">{mine ? "you" : (people.map((p) => p.name).join(", ") || "nobody")}</span>
         <span className="ml-auto shrink-0" style={{ color: "var(--text4)" }}>▾</span>
       </button>
       {open && (
         <PeoplePick
           anchor={btn}
-          members={members}
+          members={ordered}
           busy={members === null}
           isOn={(m) => on.has(m.id)}
+          dividerBefore={(m, prev) => on.has(m.id) !== on.has(prev.id)}
           isSaving={(m) => saving === m.id}
           onPick={(m) => { void toggle(m); }}
           onClose={() => setOpen(false)}
-          face={(m) => (m.avatar
-            ? <img src={m.avatar} alt="" loading="lazy" referrerPolicy="no-referrer"
-                style={{ width: 16, height: 16, borderRadius: 999, objectFit: "cover", flexShrink: 0 }} />
-            : <span className="shrink-0 rounded-full inline-flex items-center justify-center"
-                style={{ width: 16, height: 16, background: m.color || "var(--bg4)", color: "#fff", fontSize: 8 }}>{m.initials}</span>)}
+          face={memberFace}
         />
       )}
     </>
@@ -7754,29 +7774,18 @@ function CardFacts({ d, root }: { d: PrDetail; root: string }) {
           </span>
         ) : (
           <>
-            <CardStatusPick task={task} query={query} onSaid={setSaid} />
-            {task.people?.length
-              ? (
-                <div className="flex flex-col gap-1">
-                  {task.people.map((p, i) => (
-                    <span key={p.id ?? `${p.name}-${i}`} className="flex items-center gap-1.5 text-[11px] min-w-0" style={{ color: "var(--text2)" }}>
-                      {/* The face, as everywhere else people are drawn here.
-                          Two initials is a puzzle in a workspace of five
-                          hundred. */}
-                      {p.avatar
-                        ? <img src={p.avatar} alt="" loading="lazy" referrerPolicy="no-referrer"
-                            style={{ width: 16, height: 16, borderRadius: 999, objectFit: "cover", flexShrink: 0 }} />
-                        : <span className="shrink-0 rounded-full inline-flex items-center justify-center"
-                            style={{ width: 16, height: 16, background: p.color || "var(--bg4)", color: "#fff", fontSize: 8 }}>
-                            {p.initials}
-                          </span>}
-                      <span className="truncate">{p.name}{p.me ? " · you" : ""}</span>
-                    </span>
-                  ))}
-                </div>
-              )
-              : <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>No one assigned</span>}
-            <CardPeoplePick task={task} query={query} onSaid={setSaid} />
+            {/* Status and who is on it, as the card view lays them out: a
+                small-caps label over each control. */}
+            <div className="flex flex-col gap-1.5">
+              <div className="flex flex-col gap-1">
+                <span className="text-[8.5px] uppercase tracking-[0.18em]" style={{ color: "var(--text4)" }}>Status</span>
+                <CardStatusPick task={task} query={query} onSaid={setSaid} />
+              </div>
+              <div className="flex flex-col gap-1 min-w-0">
+                <span className="text-[8.5px] uppercase tracking-[0.18em]" style={{ color: "var(--text4)" }}>Assigned</span>
+                <CardPeoplePick task={task} query={query} onSaid={setSaid} />
+              </div>
+            </div>
 
             {/* Telling somebody it is ready.
                 Two routes, and they are not the same kind of thing. The card is

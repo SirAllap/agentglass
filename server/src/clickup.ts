@@ -2125,6 +2125,37 @@ export async function assignSelf(taskId: string, on: boolean, expectUpdated?: nu
  *  the caller offers those and never a free-text box, so this cannot be asked
  *  to invent one. */
 /**
+ * The same person arrives from two sources, and the first one to name an id used
+ * to win outright. The list endpoint answers some members with initials and no
+ * username; the workspace answers the same id with the username. Keeping the
+ * first meant a row with a letter in a grey circle and no name, and the real
+ * name further down under an id nothing looked up. So the two are merged per id,
+ * the filled field winning, and a member still without a name is dropped: a row
+ * nobody can read is not a choice.
+ */
+export function mergeMembers(raw: NonNullable<RawTask["assignees"]>[number][], me?: string): ListMember[] {
+  const byId = new Map<string, NonNullable<RawTask["assignees"]>[number]>();
+  for (const m of raw) {
+    if (m?.id == null) continue;
+    const key = String(m.id);
+    const prev = byId.get(key);
+    byId.set(key, prev ? {
+      ...prev, ...Object.fromEntries(Object.entries(m).filter(([, v]) => v)),
+    } as typeof prev : m);
+  }
+  return [...byId.values()]
+    .map((m) => ({
+      id: Number(m.id),
+      name: m.username ?? "",
+      initials: m.initials || initialsOf(m.username ?? ""),
+      color: m.color || undefined,
+      avatar: m.profilePicture || undefined,
+      me: me ? String(m.id) === me : undefined,
+    }))
+    .filter((m) => m.name);
+}
+
+/**
  * Who can be put on a card: the members of the list it lives in.
  *
  * The list rather than the workspace, and that is the whole point — a workspace
@@ -2161,20 +2192,7 @@ export async function listMembers(listId: string): Promise<CallResult<{ members:
   const workspace = (fromTeam.ok ? fromTeam.data?.teams ?? [] : [])
     .filter((t: any) => !me2?.workspaceId || String(t.id) === me2.workspaceId)
     .flatMap((t: any) => (t.members ?? []).map((m: any) => m.user).filter(Boolean));
-  const seenIds = new Set<string>();
-  const r = { ok: true as const, data: { members: [...(fromList.data?.members ?? []), ...workspace]
-    .filter((m: any) => m?.id != null && !seenIds.has(String(m.id)) && seenIds.add(String(m.id))) } };
-  const members: ListMember[] = (r.data?.members ?? [])
-    .filter((m) => m.id != null)
-    .map((m) => ({
-      id: Number(m.id),
-      name: m.username ?? "",
-      initials: m.initials || initialsOf(m.username ?? ""),
-      color: m.color || undefined,
-      avatar: m.profilePicture || undefined,
-      me: me ? String(m.id) === me : undefined,
-    }))
-    .filter((m) => m.name || m.initials);
+  const members = mergeMembers([...(fromList.data?.members ?? []), ...workspace], me);
   // You, even when the list does not name you.
   //
   // Measured against a real board: a nineteen-member list came back without the

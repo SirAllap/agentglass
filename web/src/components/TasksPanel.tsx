@@ -38,6 +38,7 @@ import { useDismiss } from "../lib/useDismiss.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import { Portal } from "./Portal.tsx";
 import { PeoplePick } from "./PeoplePick.tsx";
+import { orderMembers } from "../lib/peopleOrder.ts";
 import { Markdown, MarkdownImages } from "../lib/markdown.tsx";
 import { fmtAgo } from "../lib/format.ts";
 import { StatusPill } from "./StatusPill.tsx";
@@ -5769,17 +5770,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
     for (const id of boardPeople ?? []) ids.add(id);
     return ids;
   }, [t.people, boardPeople]);
-  const shownMembers = useMemo(() => {
-    const needle = whoQ.trim().toLowerCase();
-    return (members ?? [])
-      .filter((m) => m.name && (!needle || m.name.toLowerCase().includes(needle)))
-      .sort((a, b) => {
-        const ah = onBoard.has(a.id) ? 0 : 1, bh = onBoard.has(b.id) ? 0 : 1;
-        if (ah !== bh) return ah - bh;
-        if (a.me !== b.me) return a.me ? -1 : 1;
-        return a.name.localeCompare(b.name);
-      });
-  }, [members, whoQ, onBoard]);
+  const shownMembers = useMemo(() => orderMembers(members, onBoard, whoQ), [members, whoQ, onBoard]);
   /** The card this answer is for, so a click on the next card cannot be
    *  answered by the last card's request. */
   const asked = useRef<string | null>(null);
