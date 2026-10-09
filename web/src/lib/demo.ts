@@ -877,7 +877,13 @@ const PR_482_THREADS: PrThread[] = [
 
 const PR_482_DETAIL: PrDetail = {
   ...PR_SUMMARIES[0],
-  timeline: [],
+  /* Events between the remarks, so the conversation shows what GitHub's does:
+     a label, a review request, and the push that answered the first round. */
+  timeline: [
+    { kind: "labeled", at: ago(410), actor: "rmoreno", detail: "pricing", tint: "0e8a16" },
+    { kind: "review-requested", at: ago(400), actor: "rmoreno", detail: "t-okafor" },
+    { kind: "review-requested", at: ago(200), actor: "rmoreno", detail: "you" },
+  ],
   participants: [],
   bodyReactions: [],
   projects: [],
@@ -904,6 +910,8 @@ const PR_482_DETAIL: PrDetail = {
       body: "One blocker on legacy carts — see the thread on `pricing.ts`. Everything else reads well." },
     { author: "jkwan", isBot: false, state: "COMMENTED", submittedAt: ago(96), body: "" },
     { author: "acme-ci", isBot: true, state: "COMMENTED", submittedAt: ago(110), body: "Coverage report attached." },
+    // A line comment with no note of its own: a review GitHub draws as one line.
+    { author: "t-okafor", isBot: false, state: "COMMENTED", submittedAt: ago(300), body: "" },
   ],
   comments: [
     { id: 70001, author: "t-okafor", isBot: false, createdAt: ago(180),
@@ -915,9 +923,9 @@ const PR_482_DETAIL: PrDetail = {
   ],
   threads: PR_482_THREADS,
   commits: [
-    { oid: "a1c4e70f2b19d3c8", short: "a1c4e70", message: "Round at the cart boundary", author: "rmoreno", isMerge: false },
-    { oid: "b2d5f81a3c20e4d9", short: "b2d5f81", message: "Guard assertRounded for legacy carts", author: "rmoreno", isMerge: false },
-    { oid: "c3e6a92b4d31f5ea", short: "c3e6a92", message: "Backfill script for orders_2024", author: "rmoreno", isMerge: false },
+    { oid: "a1c4e70f2b19d3c8", short: "a1c4e70", message: "Round at the cart boundary", author: "rmoreno", isMerge: false, committedAt: ago(420) },
+    { oid: "b2d5f81a3c20e4d9", short: "b2d5f81", message: "Guard assertRounded for legacy carts", author: "rmoreno", isMerge: false, committedAt: ago(150) },
+    { oid: "c3e6a92b4d31f5ea", short: "c3e6a92", message: "Backfill script for orders_2024", author: "rmoreno", isMerge: false, committedAt: ago(140) },
   ],
   files: [
     { path: "src/services/pricing.ts", additions: 34, deletions: 11, status: "modified", comments: 1 },
