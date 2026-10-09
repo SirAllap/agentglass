@@ -417,3 +417,47 @@ describe("the Overview and the board agree", () => {
     expect(fn).toContain('tint: amber ? "var(--warning)" : "var(--success)"');
   });
 });
+
+describe("the author is not a reviewer, and a pending person makes it Awaiting", () => {
+  // The shape that was on screen: the author replied on his own pull request,
+  // a human had just been asked, and the auto-review had approved.
+  const d = {
+    author: "alice",
+    reviewers: [{ login: "bob" }],
+    reviews: [
+      review("alice", "COMMENTED", "2026-09-30T09:00:00Z"),
+      review("claude[bot]", "APPROVED", "2026-09-30T08:00:00Z", true),
+    ],
+  };
+  test("author is left out of the list and the summary is Awaiting", () => {
+    const rows = reviewerRoster(d);
+    expect(rows.map((r) => r.login).sort()).toEqual(["bob", "claude[bot]"]);
+    expect(R.reviewVerdict(rows)).toEqual({ kind: "awaiting", who: ["bob"] });
+  });
+  test("a request naming the author is dropped too", () => {
+    expect(reviewerRoster({ author: "alice", reviewers: [{ login: "alice" }], reviews: [] })).toEqual([]);
+  });
+  test("a bot approval alone is not Approved", () => {
+    expect(R.reviewVerdict(reviewerRoster({ author: "alice", reviews: [review("claude[bot]", "APPROVED", "2026-09-30T08:00:00Z", true)] })).kind).toBe("none");
+  });
+  test("a pending person outranks another person's bare comment, not a change request", () => {
+    const rs = [review("carol", "COMMENTED", "2026-09-30T09:00:00Z")];
+    expect(R.reviewVerdict(reviewerRoster({ author: "alice", reviewers: [{ login: "bob" }], reviews: rs })).kind).toBe("awaiting");
+    const ch = [review("carol", "CHANGES_REQUESTED", "2026-09-30T09:00:00Z")];
+    expect(R.reviewVerdict(reviewerRoster({ author: "alice", reviewers: [{ login: "bob" }], reviews: ch })).kind).toBe("changes");
+  });
+});
+
+describe("a comment after a change request", () => {
+  const ago = (iso: string) => (iso < "2026-09-30" ? "5d" : "15m");
+  const rows = (rs: ReturnType<typeof review>[]) => reviewerRoster({ author: "alice", reviews: rs });
+  test("keeps the state and says a new round happened", () => {
+    const [r] = rows([review("bob", "CHANGES_REQUESTED", "2026-09-25T10:00:00Z"), review("bob", "COMMENTED", "2026-09-30T10:00:00Z")]);
+    expect(r!.state).toBe("changes");
+    expect(R.reviewerTitle(r!, "asked for changes", ago)).toBe("bob — asked for changes 5d · commented again 15m");
+  });
+  test("a comment before the request adds nothing", () => {
+    const [r] = rows([review("bob", "COMMENTED", "2026-09-25T10:00:00Z"), review("bob", "CHANGES_REQUESTED", "2026-09-26T10:00:00Z")]);
+    expect(R.reviewerTitle(r!, "asked for changes", ago)).toBe("bob — asked for changes 5d");
+  });
+});

@@ -93,7 +93,7 @@ import { CodeBlock as MdCodeBlock } from "../lib/mdCode.tsx";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
 import { cardRef, chipAction } from "../lib/cardRef.ts";
 import { trackerName } from "../../../shared/taskref.ts";
-import { reviewerRoster, blockingReviewers, reviewVerdict, verdictLine, type ReviewerRow, type ReviewerState } from "../lib/prReviewers.ts";
+import { reviewerRoster, reviewerTitle, blockingReviewers, reviewVerdict, verdictLine, type ReviewerRow, type ReviewerState } from "../lib/prReviewers.ts";
 import { expandRecipe } from "../../../shared/recipeText.ts";
 import { suggestRecipeId } from "../../../shared/reviewSuggest.ts";
 import { openSettings } from "../lib/openSettings.ts";
@@ -6741,7 +6741,7 @@ function ReviewerList({ rows, author, onAsk }: { rows: ReviewerRow[]; author?: s
         const pending = !!r.again || ask === "done";
         return (
           <span key={r.login} className="flex items-center gap-1.5 text-[11px] min-w-0" style={{ color: "var(--text2)" }}
-            title={pending ? `Awaiting requested review from ${r.login}` : `${r.login} — ${mark.said}${r.at ? ` ${ago(r.at)}` : ""}`}>
+            title={pending ? `Awaiting requested review from ${r.login}` : reviewerTitle(r, mark.said, ago)}>
             <ReviewerFace r={{ login: r.login, isTeam: r.isTeam }} size={16} />
             <span className="truncate min-w-0">{r.login}</span>
             <span className="flex-1" />
