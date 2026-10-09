@@ -1829,6 +1829,9 @@ export async function viewTasks(
  * fills in a refresh later — the honest trade for not making it wait.
  */
 const commentCounts = new Map<string, number>();
+const countsInFlight = new Map<string, Promise<void>>();
+/** Comment reads one pass may spend. See refreshCommentCounts. */
+export const COUNT_BUDGET = 30;
 
 /**
  * Take back the counts a previous run already worked out.
@@ -1867,12 +1870,37 @@ export function applyCommentCounts(tasks: ProviderTask[]): ProviderTask[] {
  * refused — including the board's own next read.
  */
 export async function refreshCommentCounts(tasks: ProviderTask[], token: string): Promise<void> {
-  const need = tasks.filter((t) => !commentCounts.has(`${t.id}:${t.updated}`));
+  /*
+   * At most COUNT_BUDGET cards per pass, open ones first, in board order.
+   *
+   * Measured against a mock of a 250-card list: first sight of the board fired
+   * 250 comment reads, which is the whole minute of the workspace's rate limit
+   * and starves the board's own next read. ClickUp puts no comment count on a
+   * task, so the count costs a call per card; what can be chosen is how many
+   * per pass. The rest are counted by the next pass (every read of the board).
+   * A closed card is counted last because nobody is looking at the closed group.
+   *
+   * The ceiling: a board with more than COUNT_BUDGET uncounted open cards shows
+   * "Not counted yet" on the tail for a few reads, not for one.
+   */
+  const need = tasks
+    .filter((t) => !commentCounts.has(`${t.id}:${t.updated}`))
+    .sort((a, b) => Number(a.statusKind === "done") - Number(b.statusKind === "done"))
+    .slice(0, COUNT_BUDGET);
   const LANES = 5;
   for (let i = 0; i < need.length; i += LANES) {
     await Promise.all(need.slice(i, i + LANES).map(async (t) => {
-      const r = await call<{ comments?: unknown[] }>(`/task/${encodeURIComponent(t.id)}/comment`, token);
-      if (r.ok) commentCounts.set(`${t.id}:${t.updated}`, (r.data?.comments ?? []).length);
+      const key = `${t.id}:${t.updated}`;
+      // Two passes can overlap (a board read and the recount behind the last
+      // one); the second joins the first's request instead of repeating it.
+      let p = countsInFlight.get(key);
+      if (!p) {
+        p = call<{ comments?: unknown[] }>(`/task/${encodeURIComponent(t.id)}/comment`, token)
+          .then((r) => { if (r.ok) commentCounts.set(key, (r.data?.comments ?? []).length); })
+          .finally(() => countsInFlight.delete(key));
+        countsInFlight.set(key, p);
+      }
+      await p;
     }));
   }
   // Keyed by id+stamp, so an edited card leaves its old entry behind. Cleared
@@ -1952,6 +1980,11 @@ async function guardUnchanged(token: string, taskId: string, expectUpdated?: num
 }
 
 async function put(pathname: string, token: string, body: unknown): Promise<CallResult<RawTask>> {
+  findGen++;
+  try { return await putRaw(pathname, token, body); } finally { findGen++; }
+}
+
+async function putRaw(pathname: string, token: string, body: unknown): Promise<CallResult<RawTask>> {
   const ctl = new AbortController();
   const kill = setTimeout(() => ctl.abort(), TIMEOUT_MS);
   try {
@@ -2243,6 +2276,11 @@ export async function commentOn(taskId: string, text: string, assignee?: number)
  * wrong button.
  */
 async function send(method: string, pathname: string, body?: unknown): Promise<CallResult<unknown>> {
+  findGen++;
+  try { return await sendRaw(method, pathname, body); } finally { findGen++; }
+}
+
+async function sendRaw(method: string, pathname: string, body?: unknown): Promise<CallResult<unknown>> {
   const token = secretFor("clickup");
   if (!token) return { ok: false, error: "ClickUp is not connected" };
   const ctl = new AbortController();
@@ -2913,7 +2951,39 @@ export function normaliseCardQuery(text: string, knownPrefix: string): string | 
 
 export interface FoundCard { task: ProviderTask; asked: string }
 
-export async function findCard(text: string, knownPrefix: string): Promise<CallResult<FoundCard>> {
+/*
+ * One card read serves every asker for a minute.
+ *
+ * The PR board asks for each distinct card as it draws (measured: 25 cards =
+ * 25 reads per draw), and a redraw, the detail sidebar and the merge dialog
+ * ask for the same ones again. Answers are kept by the card asked for, and a
+ * request already in the air is joined rather than repeated. Any write here
+ * bumps `findGen`, so a read that started before an edit is neither served
+ * after it nor kept.
+ *
+ * The ceiling: a card edited on ClickUp's own site shows its old state for up
+ * to FIND_TTL_MS in the places that read through here.
+ */
+export const FIND_TTL_MS = 60_000;
+let findGen = 0;
+const findCache = new Map<string, { at: number; gen: number; p: Promise<CallResult<FoundCard>> }>();
+export function __clearFindCache(): void { findCache.clear(); }
+
+export function findCard(text: string, knownPrefix: string): Promise<CallResult<FoundCard>> {
+  const asked = normaliseCardQuery(text, knownPrefix);
+  if (!asked) return findCardUncached(text, knownPrefix);
+  const hit = findCache.get(asked);
+  if (hit && hit.gen === findGen && Date.now() - hit.at < FIND_TTL_MS) return hit.p;
+  const gen = findGen;
+  const p = findCardUncached(text, knownPrefix);
+  findCache.set(asked, { at: Date.now(), gen, p });
+  // A failure is not worth keeping: the next asker should get to try.
+  void p.then((r) => { if (!r.ok && findCache.get(asked)?.p === p) findCache.delete(asked); });
+  if (findCache.size > 200) findCache.clear();
+  return p;
+}
+
+async function findCardUncached(text: string, knownPrefix: string): Promise<CallResult<FoundCard>> {
   const token = secretFor("clickup");
   if (!token) return { ok: false, error: "ClickUp is not connected" };
   const asked = normaliseCardQuery(text, knownPrefix);
