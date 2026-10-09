@@ -80,6 +80,7 @@ import {
 import { canZoomIn, canZoomOut, fmtScale, DEFAULT_SCALE } from "../lib/uiScale.ts";
 import { currentAccent, setAccentPref } from "../lib/accent.ts";
 import { applyTheme } from "../lib/themes.ts";
+import { setting, subscribeSettings } from "../lib/settingsRegistry.ts";
 import { MOD_KEY } from "../lib/format.ts";
 import { externalUrl } from "../lib/externalUrl.ts";
 import type { UpdateStatus, ReleaseNotes, HookSetupStatus, BrowserUseStatus, LogDigest } from "../../../shared/types.ts";
@@ -289,12 +290,14 @@ function SourceRow({ id, i, n, onChanged }: {
 /** A row of mutually exclusive choices, for a preference with three answers
  *  rather than two. A toggle would have forced "show me their message" and
  *  "just tell me someone wrote" to be the same decision. */
-function Choice<T extends string>({ label, hint, value, options, onPick, disabled, disabledHint, modified }: {
+function Choice<T extends string>({ label, hint, value, options, onPick, disabled, disabledHint, modified, settingId }: {
+  /** See SettingRow. */
+  settingId?: string; agentExempt?: boolean;
   label: string; hint: string; value: T; options: { v: T; label: string }[];
   onPick: (v: T) => void; disabled?: boolean; disabledHint?: string; modified?: boolean;
 }) {
   return (
-    <SettingRow label={label} hint={disabled ? disabledHint ?? hint : hint} disabled={disabled} modified={modified}
+    <SettingRow label={label} hint={disabled ? disabledHint ?? hint : hint} disabled={disabled} modified={modified} settingId={settingId}
       control={
         <span className="flex items-center gap-1 rounded-lg p-0.5 justify-self-end"
           style={{ background: "color-mix(in srgb, var(--border) 28%, transparent)" }}>
@@ -316,14 +319,16 @@ function Choice<T extends string>({ label, hint, value, options, onPick, disable
 /** A −/value/+ stepper. A slider would imply the value is continuous and let
  *  you drag the window into a size the cockpit grid can't lay out; the ladder
  *  is short and every rung is one that works, so buttons say more. */
-function Stepper({ label, hint, value, onDec, onInc, canDec, canInc, modified }: {
+function Stepper({ label, hint, value, onDec, onInc, canDec, canInc, modified, settingId }: {
+  /** See SettingRow. */
+  settingId?: string; agentExempt?: boolean;
   label: string; hint: string; value: string; onDec: () => void; onInc: () => void; canDec: boolean; canInc: boolean;
   modified?: boolean;
 }) {
   const btn = "w-7 h-7 rounded-md text-[14px] leading-none flex items-center justify-center disabled:opacity-30 enabled:hover:bg-white/10";
   const border = EDGE;
   return (
-    <SettingRow label={label} hint={hint} modified={modified}
+    <SettingRow label={label} hint={hint} modified={modified} settingId={settingId}
       control={
         <span className="flex items-center gap-1 justify-self-end">
           <button onClick={onDec} disabled={!canDec} className={btn} style={{ border, color: "var(--text2)" }} aria-label="Smaller">−</button>
@@ -621,7 +626,6 @@ const PLACE_NOTE: Record<RailPlace, string> = {
  */
 function RailPane() {
   const rail = useSyncExternalStore(subscribeRail, loadRail, () => SHIPPED_RAIL);
-  const ids = railIds(rail);
   /** Which view is being dragged, and where it would land. Held here rather
    *  than per row: a drop target has to know what is coming. */
   const [drag, setDrag] = useState<{ id: ViewId; from: RailPlace } | null>(null);
@@ -674,6 +678,7 @@ function RailPane() {
                 }}
                 style={{ opacity: drag?.id === v.id ? 0.4 : 1, cursor: "grab" }}>
               <SettingRow
+                settingId={`rail.place.${v.id}`}
                 label={<span className="flex items-center gap-2.5 min-w-0">
                   <span className="shrink-0 select-none" style={{ color: "var(--text4)" }} aria-hidden title="Drag to reorder">⠿</span>
                   <span className="shrink-0 grid place-items-center w-5" style={{ color: "var(--text2)" }}><Icon size={ICON.md} /></span>
@@ -705,15 +710,15 @@ function RailPane() {
                   <span className="agx-reveal flex items-center gap-0.5 w-[46px]">
                     {place !== "hidden" && (
                       <>
-                        <MiniBtn label="Move up" disabled={i === 0} onClick={() => moveView(v.id, place, i - 1)}>↑</MiniBtn>
-                        <MiniBtn label="Move down" disabled={i === rail[place].length - 1} onClick={() => moveView(v.id, place, i + 1)}>↓</MiniBtn>
+                        <MiniBtn agentExempt label="Move up" disabled={i === 0} onClick={() => moveView(v.id, place, i - 1)}>↑</MiniBtn>
+                        <MiniBtn agentExempt label="Move down" disabled={i === rail[place].length - 1} onClick={() => moveView(v.id, place, i + 1)}>↓</MiniBtn>
                       </>
                     )}
                   </span>
                   <Select
                     align="right"
                     value={place}
-                    onChange={(p) => moveView(v.id, p as RailPlace, p === "work" ? ids.work.length : 0)}
+                    onChange={(p) => setting(`rail.place.${v.id}`).set(p)}
                     options={(Object.keys(PLACE_LABEL) as RailPlace[]).map((p) => ({
                       value: p,
                       label: p === "work" ? "Top" : p === "utility" ? "Bottom" : "Hidden",
@@ -729,6 +734,7 @@ function RailPane() {
       ))}
 
       <SettingRow
+        agentExempt
         label="On the rail itself"
         hint={<><b style={{ color: "var(--text2)" }}>Drag</b> an icon between the groups — a gap opens where it will land — or drop it on the dashed square at the bottom to put it away. <b style={{ color: "var(--text2)" }}>Right-click</b> any icon for the same moves, and <b style={{ color: "var(--text2)" }}>Alt+↑/↓</b> does it from the keyboard.</>}
         control={railCustomised()
@@ -742,7 +748,7 @@ function RailPane() {
   );
 }
 
-function MiniBtn({ label, disabled, onClick, children }: { label: string; disabled?: boolean; onClick: () => void; children: React.ReactNode }) {
+function MiniBtn({ label, disabled, onClick, children }: { settingId?: string; agentExempt?: boolean; label: string; disabled?: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button aria-label={label} title={label} disabled={disabled} onClick={onClick}
       className="w-[20px] h-[20px] grid place-items-center rounded-md text-[11px] hover:bg-white/10"
@@ -3924,8 +3930,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
   // The modal lives as long as the app. The diff toolbars and Ctrl +/- over a
   // terminal write these stores behind its back, so the dot and Reset would be
   // decided on a value from app start. Re-read them whenever it opens.
-  useEffect(() => {
-    if (!open) return;
+  const reread = useCallback(() => {
     setRenderer(rendererPref());
     setTermFontState(currentTermFont());
     setTermSizeState(currentTermSize());
@@ -3935,7 +3940,17 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
     setDThemeState(diffThemePref());
     setDWrapState(diffWrap());
     setAccentState(currentAccent());
-  }, [open]);
+  }, []);
+  useEffect(() => { if (open) reread(); }, [open, reread]);
+  // An agent's change (or the undo of one) lands while the dialog may be up.
+  // The rows keep their own copy of each value, so tell them to read again; the
+  // appearance rows hold two more copies (mode, accent) and are remounted. A
+  // row's own change is not an event here: it set its state when it called.
+  useEffect(() => subscribeSettings((c) => {
+    if (c.by === "row") return;
+    reread();
+    if (c.id.startsWith("appearance.")) setAppearanceNonce((n) => n + 1);
+  }), [reread]);
 
   /*
    * What "modified" means, page by page, and what "Reset page" does.
@@ -4506,10 +4521,11 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                         everywhere except Linux, where it uses Canvas. DOM is the
                         last resort, and the slow one. All apply to new shells. */}
                     <Choice<RendererPref>
+                      settingId="terminal.renderer"
                       label="Terminal renderer"
                       hint="GPU is fastest; Canvas is nearly as fast and never blanks; DOM is the slow fallback. Applies to newly opened shells."
                       value={renderer} modified={renderer !== "auto"}
-                      onPick={(v) => { setRenderer(v); setRendererPref(v); }}
+                      onPick={(v) => { setting("terminal.renderer").set(v); setRenderer(v); }}
                       options={[
                         { v: "auto", label: "Auto" },
                         { v: "gpu", label: "GPU" },
@@ -4532,6 +4548,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       * than a sentence saying why.
                       */}
                     <SettingRow
+                      settingId="terminal.font"
                       label="Font" modified={termFont !== ""}
                       hint={<>
                         These faces ship with agentglass — no install needed, and they render the same on
@@ -4546,7 +4563,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       control={<Select
                         align="right"
                         value={termFont}
-                        onChange={(v) => { setTermFont(v); setTermFontState(v); }}
+                        onChange={(v) => { setting("terminal.font").set(v); setTermFontState(v); }}
                         options={TERM_FONTS
                           .filter((f) => f.bundled || fontAvailable(f.family))
                           .map((f) => ({ value: f.id, label: f.name }))}
@@ -4567,11 +4584,12 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       </div>
                     </div>
                     <Stepper
+                      settingId="terminal.fontSize"
                       label="Font size"
                       hint={`Applies live to every open terminal, and is remembered. ${MOD_KEY}+ / ${MOD_KEY}− with the pointer over a terminal does the same without touching the window.`}
                       value={`${termSize}px`} modified={termSize !== DEFAULT_SIZE}
-                      onDec={() => { const n = Math.max(SIZE_MIN, termSize - 1); setTermSize(n); setTermSizeState(n); }}
-                      onInc={() => { const n = Math.min(SIZE_MAX, termSize + 1); setTermSize(n); setTermSizeState(n); }}
+                      onDec={() => { const n = Math.max(SIZE_MIN, termSize - 1); setting("terminal.fontSize").set(n); setTermSizeState(n); }}
+                      onInc={() => { const n = Math.min(SIZE_MAX, termSize + 1); setting("terminal.fontSize").set(n); setTermSizeState(n); }}
                       canDec={termSize > SIZE_MIN} canInc={termSize < SIZE_MAX} />
                     {/* The warning is the point of exposing this at all. Air
                         between rows is a real preference, and above 1 it is
@@ -4579,19 +4597,21 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                         which is the default on Linux. Better said here than
                         discovered as "the terminal looks wrong". */}
                     <Stepper
+                      settingId="terminal.lineHeight"
                       label="Line height"
                       hint={termLine > LINE_HEIGHT_MIN
                         ? "Above 1, box-drawing rules — the divider between tmux panes, the frames around an agent's output — are drawn with a gap on every row wherever the GPU renderer is off (the default on Linux). 1 keeps them solid."
                         : "Space between rows. 1 keeps box-drawing rules solid, which is what a terminal is normally set to."}
                       value={termLine.toFixed(2).replace(/0$/, "")} modified={termLine !== DEFAULT_LINE_HEIGHT}
-                      onDec={() => { const n = Math.max(LINE_HEIGHT_MIN, Math.round((termLine - 0.05) * 100) / 100); setTermLineHeight(n); setTermLineState(n); }}
-                      onInc={() => { const n = Math.min(LINE_HEIGHT_MAX, Math.round((termLine + 0.05) * 100) / 100); setTermLineHeight(n); setTermLineState(n); }}
+                      onDec={() => { const n = Math.max(LINE_HEIGHT_MIN, Math.round((termLine - 0.05) * 100) / 100); setting("terminal.lineHeight").set(n); setTermLineState(n); }}
+                      onInc={() => { const n = Math.min(LINE_HEIGHT_MAX, Math.round((termLine + 0.05) * 100) / 100); setting("terminal.lineHeight").set(n); setTermLineState(n); }}
                       canDec={termLine > LINE_HEIGHT_MIN} canInc={termLine < LINE_HEIGHT_MAX} />
                     <Choice<CursorStyle>
+                      settingId="terminal.cursor"
                       label="Cursor"
                       hint="The shape that marks where you're typing."
                       value={termCursor} modified={termCursor !== "block"}
-                      onPick={(v) => { setTermCursor(v); setTermCursorState(v); }}
+                      onPick={(v) => { setting("terminal.cursor").set(v); setTermCursorState(v); }}
                       options={CURSORS} />
                   </Section>
 
@@ -4702,18 +4722,21 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                         still wins while you are looking at that diff. Changing
                         your mind about one file is not a preference. */}
                     <Choice<"split" | "inline">
+                      settingId="diff.split"
                       label="Default view"
                       hint="How file changes, source control and pull requests open a diff. The toggle in each panel still overrides it for that diff."
                       value={dSplit ? "split" : "inline"} modified={dSplit !== DEFAULT_SPLIT}
-                      onPick={(v) => { const on = v === "split"; setDiffSplit(on); setDSplitState(on); }}
+                      onPick={(v) => { setting("diff.split").set(v); setDSplitState(v === "split"); }}
                       options={[{ v: "split", label: "Side by side" }, { v: "inline", label: "Inline" }]} />
-                    <Toggle on={dWrap} modified={dWrap !== DEFAULT_WRAP} onClick={() => { const v = !dWrap; setDiffWrap(v); setDWrapState(v); }}
+                    <Toggle on={dWrap} modified={dWrap !== DEFAULT_WRAP} onClick={() => { const v = !dWrap; setting("diff.wrap").set(v); setDWrapState(v); }}
+                      settingId="diff.wrap"
                       label="Wrap long lines"
                       hint="Wrap instead of scrolling sideways. Off keeps the columns aligned, which is what makes a code diff scannable; on is what a markdown or prose diff wants." />
                     <SettingRow
+                      settingId="diff.syntaxTheme"
                       label="Diff syntax theme"
                       hint="The colours code takes in a diff. Auto follows the app's light or dark; the toolbar in a diff changes the same setting."
-                      control={<span className="justify-self-end"><ThemePicker value={dTheme} onChange={(v) => { setDiffThemePref(v); setDThemeState(v); }} /></span>} />
+                      control={<span className="justify-self-end"><ThemePicker value={dTheme} onChange={(v) => { setting("diff.syntaxTheme").set(v); setDThemeState(v); }} /></span>} />
                   </Section>
                   )}
                   {ql && show("tasks") && <PageMatchHeading id="tasks" onOpen={() => { setPane("tasks" as Pane); setQ(""); }} />}

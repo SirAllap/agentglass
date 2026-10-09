@@ -81,6 +81,8 @@ import { SettingsModal } from "./components/SettingsModal.tsx";
 import { MachinePanel, type MachineTab } from "./components/MachinePanel.tsx";
 import { ZoomToast } from "./components/ZoomToast.tsx";
 import { UpdateToast } from "./components/UpdateToast.tsx";
+import { AgentChangeChip } from "./components/AgentChangeChip.tsx";
+import { subscribeSettings } from "./lib/settingsRegistry.ts";
 import { NoteToasts } from "./components/NoteToasts.tsx";
 import { AskedBanners } from "./components/AskedBanners.tsx";
 import { WhatsNew } from "./components/WhatsNew.tsx";
@@ -1023,6 +1025,13 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // An agent changed the theme through the settings registry (or the chip took
+  // it back): the DOM is already painted, but `theme` is state here, so follow it.
+  // A row's own change set it through onChange already.
+  useEffect(() => subscribeSettings((c) => {
+    if (c.by !== "row" && c.id.startsWith("appearance.")) setTheme(document.documentElement.getAttribute("data-theme") || initialTheme());
+  }), []);
+
   // What the window shows right now, for the agent's reads (lib/uiSnapshots.ts).
   // Plain data, rebuilt on render and read only when asked: no state of its own,
   // no effect, nothing subscribed.
@@ -1359,6 +1368,7 @@ export default function App() {
       <AskedBanners />
       <ZoomToast zoom={zoomed} />
       <UpdateToast />
+      <AgentChangeChip />
       <SettingsModal
         open={settingsOpen}
         jump={settingsJump}

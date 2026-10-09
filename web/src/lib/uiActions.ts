@@ -22,6 +22,7 @@ import { latchGitModal } from "./gitModalIntent.ts";
 import { toggleBench, showFile, showBoard } from "./benchStore.ts";
 import { openPeek } from "./openPeek.ts";
 import { THEMES } from "./themes.ts";
+import { settings } from "./settingsRegistry.ts";
 import type { MachineTab } from "../components/MachinePanel.tsx";
 import { PROVIDERS, uiState, type Sources } from "./uiSnapshots.ts";
 
@@ -45,6 +46,12 @@ export interface UiCtx {
 /** A handler of an `open` entry returns nothing; a handler of a `read` entry
  *  returns the snapshot it read, which is what the window answers with. */
 type Handler<Id extends UiActionId> = (a: UiArgs<Id>, ctx: UiCtx) => unknown;
+
+/** The registry's answer if it is one, else its refusal as an Error. */
+function answered<T extends { ok: boolean }>(r: T): Extract<T, { ok: true }> {
+  if (!r.ok) throw new Error((r as unknown as { error: string }).error);
+  return r as Extract<T, { ok: true }>;
+}
 
 function sourcesOf(ctx: UiCtx): Sources {
   if (!ctx.sources) throw new Error("this window cannot describe itself");
@@ -76,6 +83,14 @@ export const UI_HANDLERS: { [Id in UiActionId]: Handler<Id> } = {
   "theme.set": (a, c) => c.setTheme((cur) => nextThemeId(cur, a, THEMES.map((t) => t.id))),
   "zoom.step": (a, c) => c.zoom(a.dir),
   "settings.open": (a) => openSettings(a.page, a.row),
+  // Through the settings registry: the same defs the Settings rows call, so a
+  // value is validated and stored exactly as a click would, and an agent's
+  // write leaves an undo chip (AgentChangeChip).
+  // A refusal throws, so controlReply answers {ok:false, applied:false, error}
+  // instead of an ok whose value says it did not happen.
+  "settings.get": (a) => answered(settings.get(a.id)),
+  "settings.list": () => settings.list(),
+  "settings.set": (a) => answered(settings.set(a.id, a.value)),
   "machine.open": (a, c) => c.setMachine(a.tab),
   "project.picker": (_a, c) => c.setProjectOpen(true),
   "windows.switcher": (_a, c) => c.setWindowsOpen(true),

@@ -164,11 +164,14 @@ describe("nothing writes without being recorded", () => {
     // It was left out while its only callers were a Stream Deck and a phone.
     // It is now the door an agent opens panels by, so each command leaves one
     // line, `/control/<registry id>`, with an empty body: a path or a settings
-    // row a command named is a value, not an audit fact.
+    // row a command named is a value, not an audit fact. The one body it may
+    // carry is a settings.set's setting id (control-settings.test.ts pins that it
+    // is never the value).
     const at = index.indexOf('pathname === "/control"');
     expect(at).toBeGreaterThan(-1);
     const handler = index.slice(at, index.indexOf("\n    }", at));
     expect(handler).toContain("noteAction(");
-    expect(handler, "the command's arguments must not reach the audit log").toMatch(/noteAction\([^)]*`\/control\/\$\{controlId\(cmd\) \?\? "unknown"\}`, \{\}/s);
+    expect(handler, "the command's arguments must not reach the audit log").toMatch(/noteAction\([^)]*`\/control\/\$\{controlId\(cmd\) \?\? "unknown"\}`, (\{\}|setting \? \{ setting \} : \{\}),/s);
+    expect(handler).toContain("const setting = changedSetting(cmd);");
   });
 });

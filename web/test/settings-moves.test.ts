@@ -51,7 +51,9 @@ describe("slice 4 moves", () => {
 
   test("Diff syntax theme is a Diff row on the same key the diff views persist", async () => {
     expect(block("diff")).toContain('label="Diff syntax theme"');
-    expect(block("diff")).toContain("setDiffThemePref(v)");
+    // The row calls its def, and the def wraps the same setter the toolbar's key goes through.
+    expect(block("diff")).toContain('setting("diff.syntaxTheme").set(v)');
+    expect(await Bun.file(new URL("../src/lib/settingsRegistry.ts", import.meta.url)).text()).toContain("setDiffThemePref(v as string)");
     const prefs = await Bun.file(new URL("../src/lib/diffPrefs.ts", import.meta.url)).text();
     expect(prefs).toContain("THEME_KEY");
     expect(prefs).not.toContain('"agentglass.diffTheme"');

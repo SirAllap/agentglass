@@ -315,10 +315,40 @@ curl -sS http://localhost:4000/control \
 | `chat.new`, `theme.set`, `zoom.step`, `workspace.toggle`, `esc.peel` | as the old `chat`/`theme`/`zoom`/`workspace`/`esc` | |
 | `ui.state`, `ui.read` | — / `panel` | *reads, not opens:* see below |
 
+| `settings.set` (level 2) | `id`, `value`: a string, number or boolean | changes one exposed setting (below) |
+| `settings.get`, `settings.list` | `id` / — | read one exposed setting / list what is exposed |
+
+**Settings through the UI's own code path.** `web/src/lib/settingsRegistry.ts`
+holds a `SettingDef` per exposed setting; the Settings row calls `def.set(v)`
+and so does `settings.set`, so a value is checked and stored exactly as a click
+would (the def wraps the pref module's own setter). Only Appearance, Diff,
+Rail (which drawer a view sits in) and Terminal's "How it draws" group are
+exposed so far; any other id answers "not exposed". A def with no `level` is
+level 3 and refused; a `secret` def answers `{set:true}` and is never written.
+Every write reports what it replaced with an undo handle, and the window shows
+an "An agent changed X" chip with an Undo button (it leaves by itself after 20
+seconds, the change stays made). The audit line (`/control/settings.set`) holds
+the setting id and never the value, and one caller may make 30 changes a
+minute (`429` past that). `AGENTGLASS_CONTROL_LEVEL=1` keeps opens and reads
+and refuses every write. **Adding a setting is adding its def:** a Settings row
+in a migrated pane without a `settingId="…"` (or `agentExempt`) fails
+`web/test/settings-rows-bound.test.ts`.
+
+A `settings.set` is always answered, like a read: `{ok, applied, value:
+{id, prev, value, undo}}`, where `prev` is what it replaced and `undo` the
+handle the chip offers (empty, with `unchanged: true`, when the setting already
+had that value). A refused value or an id that is not exposed is `{ok:false,
+applied:false, error}`, and the audit line then says failed. `settings.get` and
+`settings.list` answer with the value and the exposed list; a secret answers
+`{set:true}` and nothing else. (`ui.read settings.diff` and the other
+`settings.*` panels describe a pane read-only; `settings.get` is the one that
+pairs with `settings.set`.)
+
 With no window attached the answer is `503 {"ok":false,"error":"no window"}`;
 otherwise `200 {"ok":true,"windows":N}`, which says the command was sent, not that
 a window ran it. Each command leaves one line in `GET /actions`
-(`/control/<id>`, the verdict, never the path or row it named).
+(`/control/<id>`, the verdict, never the path or row it named; a `settings.set`
+also names the setting, never the value).
 
 ### Asking for an answer, and reading state
 

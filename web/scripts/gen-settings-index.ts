@@ -43,7 +43,7 @@ const OUT_PATH = resolve(HERE, "../src/lib/settingsRows.gen.ts");
 // operable row — a stepper, a labelled radio group, a bulk-select button.
 const ROW_TAGS = ["SettingRow", "Row", "Toggle", "Fold", "Select", "Stepper", "Choice", "Bulk", "Path", "MiniBtn", "SoundRow"];
 
-type Row = { pane: string; section: string; label: string; hint: string };
+type Row = { pane: string; section: string; label: string; hint: string; settingId?: string; agentExempt?: true };
 type Page = { id: string; label: string };
 
 /** Every .tsx file under web/src/components, recursively. */
@@ -136,7 +136,18 @@ function rowsIn(text: string, pane: string): Row[] {
     const horizon = Math.min(m.index! + 300, labels[i + 1]?.index ?? text.length);
     const after = text.slice(m.index! + m[0].length, horizon);
     const hintMatch = after.match(/\bhint="([^"]{1,140})"/);
-    rows.push({ pane, section: sectionFor(markers, m.index!), label, hint: hintMatch ? hintMatch[1]! : "" });
+    // Which setting an agent reaches through this row, and the rows that are
+    // not settings at all (a reset button, a read-out). Both are written BEFORE
+    // `label=` in the tag, so they are found in the same text the tag name was:
+    // from the tag's opening to the label, nothing past it to mistake for the
+    // next row's.
+    const tagText = before.slice(tagMatch.index!);
+    const settingId = tagText.match(/\bsettingId="([^"]{1,80})"/)?.[1];
+    const agentExempt = /\bagentExempt\b/.test(tagText);
+    rows.push({
+      pane, section: sectionFor(markers, m.index!), label, hint: hintMatch ? hintMatch[1]! : "",
+      ...(settingId ? { settingId } : {}), ...(agentExempt ? { agentExempt: true as const } : {}),
+    });
   }
   return rows;
 }
@@ -193,7 +204,9 @@ export function buildOutput(): string {
   pages.sort((a, b) => a.id.localeCompare(b.id));
 
   const esc = (s: string) => s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  const rowLines = rows.map((r) => `  { pane: "${r.pane}", section: "${esc(r.section)}", label: "${esc(r.label)}", hint: "${esc(r.hint)}" },`).join("\n");
+  const rowLines = rows.map((r) =>
+    `  { pane: "${r.pane}", section: "${esc(r.section)}", label: "${esc(r.label)}", hint: "${esc(r.hint)}"`
+    + `${r.settingId ? `, settingId: "${esc(r.settingId)}"` : ""}${r.agentExempt ? ", agentExempt: true" : ""} },`).join("\n");
   const pageLines = pages.map((p) => `  { id: "${p.id}", label: "${esc(p.label)}" },`).join("\n");
 
   const out = `/*
@@ -203,7 +216,9 @@ export function buildOutput(): string {
  * a pane block renders). settings-index-rows.test.ts fails the build when
  * this file is stale.
  */
-export type SettingsRowRaw = { pane: string; section: string; label: string; hint: string };
+/** \`settingId\` is the SettingDef an agent reaches through the row (web/src/lib/settingsRegistry.ts);
+ *  \`agentExempt\` marks a row that is not a setting (a reset button, a read-out). */
+export type SettingsRowRaw = { pane: string; section: string; label: string; hint: string; settingId?: string; agentExempt?: true };
 export type SettingsPageRaw = { id: string; label: string };
 
 export const SETTINGS_ROWS: SettingsRowRaw[] = [

@@ -68,7 +68,7 @@ describe("runControl — one handler for both spellings", () => {
 
   it("a frame that names no door, or an unknown one, runs nothing", () => {
     const k = ctx();
-    for (const f of [{ cmd: "nope" }, ui("settings.set", { id: "x" }), ui("__proto__"), ui("toString"), ui("constructor")]) {
+    for (const f of [{ cmd: "nope" }, ui("settings.nope", { id: "x" }), ui("__proto__"), ui("toString"), ui("constructor")]) {
       expect(runControl(f as unknown as ControlCmd, k.c)).toBeNull();
     }
     expect(k.calls).toEqual([]);

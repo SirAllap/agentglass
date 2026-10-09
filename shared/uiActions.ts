@@ -13,10 +13,12 @@
  * entries: `legacy` says which body each one is, so there is one list and the
  * old spelling is a way of writing it, not a second list.
  *
- * Level 1 is "look or open": nothing here changes a setting, a file or a
- * remote. The server refuses an entry above the level it was told to accept
- * and an id that is not in this file at all, so a new door is a new line here
- * and nothing else is reachable.
+ * Level 1 is "look or open": nothing at that level changes a setting, a file or
+ * a remote. Level 2 changes a local setting, and only the ones the window's own
+ * settings registry lists (web/src/lib/settingsRegistry.ts): this file names
+ * the door, that one names what is behind it. The server refuses an entry above
+ * the level it was told to accept and an id that is not in this file at all, so
+ * a new door is a new line here and nothing else is reachable.
  *
  * What a registry entry cannot do is describe what a handler does with the
  * window it lands in. That is the handler's business, and it calls the seam
@@ -65,8 +67,8 @@ export const READ_PANELS = ["view", "chat", "bench", "gates", "settings.diff", "
 
 export type UiLevel = 1 | 2 | 3;
 /** open: shows something. read: answers with state and shows nothing. change:
- *  alters a local setting. external: has an effect outside the app. `open` and
- *  `read` are built. */
+ *  alters a local setting. external: has an effect outside the app. `open`,
+ *  `read` and `change` are built. */
 export type UiKind = "open" | "read" | "change" | "external";
 
 /**
@@ -90,7 +92,12 @@ export type ArgSpec =
    *  as "file" or "dir", else read from the spelling (a trailing slash). A
    *  validated command carries it already, so the window's second look over a
    *  normalized path, which has lost its slash, reads the same answer. */
-  | { t: "pathKind"; of: string };
+  | { t: "pathKind"; of: string }
+  /** One string, number or boolean and nothing nested: the value of a setting.
+   *  Which values a given setting takes is its definition's business (the
+   *  window's settings registry validates against it); this only keeps an
+   *  object, an array or a megabyte of text from travelling as one. */
+  | { t: "scalar"; optional?: true };
 
 export interface UiActionDef {
   level: UiLevel;
@@ -135,6 +142,15 @@ export const UI_ACTIONS = {
   "settings.open": def({
     level: 1, kind: "open", surface: "Settings on one page, optionally scrolled to one row (the plugin market is inside page plugins)",
     args: { page: { t: "enum", values: SETTINGS_PAGE_IDS }, row: { t: "slug", max: 80, optional: true } },
+  }),
+  "settings.get": def({
+    level: 1, kind: "read", surface: "the current value of one exposed setting (a secret answers only whether it is set)",
+    args: { id: { t: "slug", max: 80 } },
+  }),
+  "settings.list": def({ level: 1, kind: "read", surface: "the settings an agent may read and write, with their levels", args: {} }),
+  "settings.set": def({
+    level: 2, kind: "change", surface: "one exposed setting, through the same setter its Settings row calls",
+    args: { id: { t: "slug", max: 80 }, value: { t: "scalar" } },
   }),
   "machine.open": def({ level: 1, kind: "open", surface: "the machine panel on ports, resources or locks", args: { tab: { t: "enum", values: MACHINE_TABS } } }),
   "project.picker": def({ level: 1, kind: "open", surface: "the project picker", args: {} }),
@@ -212,6 +228,7 @@ type Val<S> =
   : S extends { t: "num"; values: readonly (infer V)[] } ? V
   : S extends { t: "bool" } ? boolean
   : S extends { t: "pathKind" } ? "file" | "dir"
+  : S extends { t: "scalar" } ? string | number | boolean
   : string;
 type Args<A> =
   { [K in keyof A as A[K] extends { optional: true } ? never : K]: Val<A[K]> } &
@@ -258,6 +275,9 @@ export function relPath(raw: unknown): string | null {
   return raw.split("/").some((seg) => seg === "" || seg === "." || seg === "..") ? null : raw;
 }
 
+/** Longest string a setting's value may be: a font id or a palette name, not text. */
+const MAX_SCALAR = 200;
+
 const SLUG = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 // A ref the way git spells one. Never starts with `-`, so it cannot be read as
 // an option by anything it is later handed to, and has no `..` range syntax.
@@ -272,6 +292,8 @@ function one(spec: ArgSpec, v: unknown): unknown {
     case "ref": return typeof v === "string" && REF.test(v) && !v.includes("..") ? v : undefined;
     case "abspath": return absPath(v)?.path;
     case "relpath": return relPath(v) ?? undefined;
+    case "scalar":
+      return typeof v === "boolean" || (typeof v === "number" && Number.isFinite(v)) || (typeof v === "string" && v.length <= MAX_SCALAR && !CONTROL_CHARS.test(v)) ? v : undefined;
     case "pathKind": return undefined;
   }
 }
@@ -315,7 +337,8 @@ export function parseUi(
 ): { cmd: "ui"; do: string; args: Record<string, unknown> } | null {
   if (typeof id !== "string" || !Object.prototype.hasOwnProperty.call(registry, id)) return null;
   const d = registry[id]!;
-  if (d.level > maxLevel) return null;
+  // `!(<=)`, not `>`: an entry with no level is level 3, never "unlimited".
+  if (!(d.level <= maxLevel)) return null;
   const a = parseArgs(d, args);
   return a ? { cmd: "ui", do: id, args: a } : null;
 }
@@ -332,7 +355,8 @@ export function legacyToUi(b: Record<string, unknown>, maxLevel: UiLevel): { id:
     const l = d.legacy!;
     if (b.cmd !== l.cmd) continue;
     if (l.pin && !Object.entries(l.pin).every(([k, v]) => b[k] === v)) continue;
-    if (d.level > maxLevel) return null;
+    // `!(<=)`, not `>`: an entry with no level is level 3, never "unlimited".
+  if (!(d.level <= maxLevel)) return null;
     const args = parseArgs(d, b);
     return args ? { id, args } : null;
   }

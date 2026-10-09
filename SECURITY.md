@@ -1020,11 +1020,21 @@ the full list and defaults:
 | `AGENTGLASS_GATE_FAILCLOSED=1` | *(opposite sense)* makes the gate deny on timeout instead of allowing |
 
 One thing is **not** individually switchable, and it is worth knowing which:
-the `/control` UI-navigation endpoint, which is unswitchable by design — it
-grants no capability the keyboard does not already have. Every door it opens is
-a level-1 entry (look or open) in a closed registry, an unknown id is refused,
-and each command leaves one line in the action log, the door and not the
-value it named.
+the `/control` UI-navigation endpoint's level-1 doors (look or open), which are
+unswitchable by design — they grant no capability the keyboard does not already
+have. Every door is an entry in a closed registry, an unknown id is refused, and
+each command leaves one line in the action log, the door and not the value it
+named.
+
+The one level-2 door, `settings.set`, changes a local preference and is
+switchable: `AGENTGLASS_CONTROL_LEVEL=1` refuses it and keeps the rest. It
+reaches only the settings the window's registry exposes (Appearance, Diff,
+Rail, Terminal display), through the same setter the Settings row calls, never
+a secret, a token or a remote-access setting; it is limited to 30 changes a
+minute per caller; every change shows an undo chip in the window; and the
+audit line names the setting, not the value. Over plain HTTP the machine token
+is already `full`, so this does not widen what a token can do; it makes the UI
+path visible and reversible.
 
 `/control` also has reads (`ui.state`, `ui.read`), which hand the window's own
 state to the caller: they sit behind the same gate, show nothing, and answer in

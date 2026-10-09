@@ -491,7 +491,12 @@ help, palette), `finder.open` (`path`), `settings.open` (`page`, optional `row`)
 `windows.switcher`, `bench.toggle`, `bench.file` and `peek.file` (`root`, `path`
 under it), `bench.board` (`root`, `kind`: pr, tasks, files), `git.modal`
 (`which`: insights, bisect), `git.compare` (`base`), `git.blame` (`path`),
-`chat.new`, `theme.set`, `zoom.step`, `workspace.toggle`, `esc.peel`. The list is
+`chat.new`, `theme.set`, `zoom.step`, `workspace.toggle`, `esc.peel`; and the
+settings door: `settings.set` (`id`, `value`) changes an exposed setting
+(Appearance, Diff, Rail, Terminal display; ids like `diff.wrap`,
+`terminal.fontSize`, `rail.place.docker`), `settings.get` (`id`) and
+`settings.list` read them. A change shows the person an "An agent changed X"
+chip with Undo; do not change a setting you were not asked to. The list is
 `shared/uiActions.ts`; an id that is not in it is a `400`, and so is an argument
 outside its shape.
 

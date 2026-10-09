@@ -15,10 +15,45 @@ import { UI_ACTIONS, legacyToUi, parseUi, uiToLegacy, idOfLegacy, type UiActionI
 // is deliberate (a scorecard that acts on nothing; a view an agent driving the
 // built-in browser needs mounted) and is explained where the list is kept.
 
-/** The highest level of door this server will open. Level 1 is look-or-open;
- *  2 (change a local setting) and 3 (an effect outside the app) are not built,
- *  so an entry that claims them is refused rather than trusted. */
-export const UI_MAX_LEVEL: UiLevel = 1;
+/** The highest level of door this server has built. Level 2 changes a local
+ *  setting, and only the ones the window lists; 3 (an effect outside the app)
+ *  is not built, so an entry that claims it is refused rather than trusted. */
+export const UI_MAX_LEVEL: UiLevel = 2;
+
+/**
+ * The level this process accepts: the built ceiling, or lower when
+ * AGENTGLASS_CONTROL_LEVEL says so (1 = open and read, no write). A value that
+ * is not 1 or 2 is the ceiling, not an error: the switch exists to take
+ * something away, and a typo must not read as "off" in one direction and "on"
+ * in the other.
+ */
+export function controlLevel(env: Record<string, string | undefined> = process.env): UiLevel {
+  return env.AGENTGLASS_CONTROL_LEVEL?.trim() === "1" ? 1 : UI_MAX_LEVEL;
+}
+
+/** Writes one caller may send in a minute. A person's sweep through Settings is
+ *  a dozen; a loop that flips a theme for fun is what this is for. */
+export const SETTINGS_WRITES_PER_MINUTE = 30;
+
+/**
+ * A sliding window per key, in memory. `hit` says whether this one is allowed
+ * and counts it only if it is, so a refused burst does not extend its own
+ * sentence. Entries older than the window are dropped on the way past, so the
+ * map holds one key per caller of the last minute, not one per caller ever.
+ */
+export function makeWriteLimiter(max = SETTINGS_WRITES_PER_MINUTE, windowMs = 60_000) {
+  const seen = new Map<string, number[]>();
+  return {
+    hit(key: string, now = Date.now()): boolean {
+      const recent = (seen.get(key) ?? []).filter((t) => now - t < windowMs);
+      if (recent.length >= max) { seen.set(key, recent); return false; }
+      recent.push(now);
+      seen.set(key, recent);
+      for (const [k, ts] of seen) if (k !== key && ts.every((t) => now - t >= windowMs)) seen.delete(k);
+      return true;
+    },
+  };
+}
 
 /**
  * Validate an untrusted POST /control body into a ControlCmd, or null.
@@ -29,14 +64,14 @@ export const UI_MAX_LEVEL: UiLevel = 1;
  * a panel or repaint a theme — but a string that reached a setter unchecked
  * would still be a bug, so each field is matched against a closed set.
  */
-export function parseControlCmd(body: unknown): ControlCmd | null {
+export function parseControlCmd(body: unknown, level: UiLevel = controlLevel()): ControlCmd | null {
   if (!body || typeof body !== "object" || Array.isArray(body)) return null;
   const b = body as Record<string, unknown>;
   // The general door: an id and its args. Unknown ids are refused (deny by default).
-  if (b.cmd === "ui") return parseUi(UI_ACTIONS, b.do, b.args, UI_MAX_LEVEL) as ControlCmd | null;
+  if (b.cmd === "ui") return parseUi(UI_ACTIONS, b.do, b.args, level) as ControlCmd | null;
   // The older spellings are the same entries written the old way, and are
   // answered in the old shape so a client that predates `ui` still understands.
-  const m = legacyToUi(b, UI_MAX_LEVEL);
+  const m = legacyToUi(b, level);
   return m ? (uiToLegacy(m.id, m.args) as ControlCmd | null) : null;
 }
 
@@ -47,6 +82,12 @@ export function parseControlCmd(body: unknown): ControlCmd | null {
  */
 export function controlId(cmd: ControlCmd): UiActionId | null {
   return cmd.cmd === "ui" ? cmd.do : idOfLegacy(cmd as { cmd: string } & Record<string, unknown>);
+}
+
+/** The setting a validated settings.set names, for the audit line. The setting
+ *  and the fact of change, never the value: a value may be a path or a name. */
+export function changedSetting(cmd: ControlCmd): string | null {
+  return cmd.cmd === "ui" && cmd.do === "settings.set" ? String((cmd.args as { id: string }).id) : null;
 }
 
 // ── replies ─────────────────────────────────────────────────────────────────

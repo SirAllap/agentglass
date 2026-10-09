@@ -5,13 +5,15 @@
  * a pane block renders). settings-index-rows.test.ts fails the build when
  * this file is stale.
  */
-export type SettingsRowRaw = { pane: string; section: string; label: string; hint: string };
+/** `settingId` is the SettingDef an agent reaches through the row (web/src/lib/settingsRegistry.ts);
+ *  `agentExempt` marks a row that is not a setting (a reset button, a read-out). */
+export type SettingsRowRaw = { pane: string; section: string; label: string; hint: string; settingId?: string; agentExempt?: true };
 export type SettingsPageRaw = { id: string; label: string };
 
 export const SETTINGS_ROWS: SettingsRowRaw[] = [
   { pane: "about", section: "Server log", label: "Server log digest", hint: "" },
-  { pane: "appearance", section: "", label: "Accent", hint: "" },
-  { pane: "appearance", section: "", label: "Mode", hint: "" },
+  { pane: "appearance", section: "", label: "Accent", hint: "", settingId: "appearance.accent" },
+  { pane: "appearance", section: "", label: "Mode", hint: "", settingId: "appearance.mode" },
   { pane: "browser", section: "", label: "All", hint: "" },
   { pane: "browser", section: "", label: "Home page", hint: "" },
   { pane: "browser", section: "", label: "None", hint: "" },
@@ -29,9 +31,9 @@ export const SETTINGS_ROWS: SettingsRowRaw[] = [
   { pane: "budgets", section: "GitHub", label: "GitHub API budget", hint: "" },
   { pane: "budgets", section: "GitHub", label: "How much of your GitHub allowance is left", hint: "" },
   { pane: "clickup", section: "", label: "Subtasks on Assigned to me", hint: "Slower: the workspace read can take twice as long." },
-  { pane: "diff", section: "How a diff opens", label: "Default view", hint: "How file changes, source control and pull requests open a diff. The toggle in each panel still overrides it for that diff." },
-  { pane: "diff", section: "How a diff opens", label: "Diff syntax theme", hint: "The colours code takes in a diff. Auto follows the app's light or dark; the toolbar in a diff changes the same setting." },
-  { pane: "diff", section: "How a diff opens", label: "Wrap long lines", hint: "" },
+  { pane: "diff", section: "How a diff opens", label: "Default view", hint: "How file changes, source control and pull requests open a diff. The toggle in each panel still overrides it for that diff.", settingId: "diff.split" },
+  { pane: "diff", section: "How a diff opens", label: "Diff syntax theme", hint: "The colours code takes in a diff. Auto follows the app's light or dark; the toolbar in a diff changes the same setting.", settingId: "diff.syntaxTheme" },
+  { pane: "diff", section: "How a diff opens", label: "Wrap long lines", hint: "", settingId: "diff.wrap" },
   { pane: "hooks", section: "Agent browser use", label: "Try it — three lines to paste into an agent", hint: "" },
   { pane: "hooks", section: "Agent browser use", label: "Why an agent needs this rather than curl", hint: "" },
   { pane: "hooks", section: "Claude Code hooks", label: "What wiring this actually changes", hint: "" },
@@ -71,9 +73,9 @@ export const SETTINGS_ROWS: SettingsRowRaw[] = [
   { pane: "privacy", section: "What is on disk", label: "Credentials", hint: "" },
   { pane: "privacy", section: "What is on disk", label: "History", hint: "" },
   { pane: "privacy", section: "What is on disk", label: "Settings", hint: "" },
-  { pane: "rail", section: "What is on the rail", label: "Move down", hint: "" },
-  { pane: "rail", section: "What is on the rail", label: "Move up", hint: "" },
-  { pane: "rail", section: "What is on the rail", label: "On the rail itself", hint: "" },
+  { pane: "rail", section: "What is on the rail", label: "Move down", hint: "", agentExempt: true },
+  { pane: "rail", section: "What is on the rail", label: "Move up", hint: "", agentExempt: true },
+  { pane: "rail", section: "What is on the rail", label: "On the rail itself", hint: "", agentExempt: true },
   { pane: "remote", section: "", label: "Address", hint: "" },
   { pane: "remote", section: "", label: "Nothing has arrived yet", hint: "" },
   { pane: "remote", section: "", label: "Route", hint: "" },
@@ -81,11 +83,11 @@ export const SETTINGS_ROWS: SettingsRowRaw[] = [
   { pane: "tasks", section: "Opens on", label: "Tasks view opens on", hint: "" },
   { pane: "terminal", section: "Bench note", label: "Note editor", hint: "Neovim opens the same note file in a terminal on the bench. Without nvim installed the built-in editor is used." },
   { pane: "terminal", section: "History and selection", label: "Scrollback", hint: "" },
-  { pane: "terminal", section: "How it draws", label: "Cursor", hint: "The shape that marks where you're typing." },
-  { pane: "terminal", section: "How it draws", label: "Font", hint: "" },
-  { pane: "terminal", section: "How it draws", label: "Font size", hint: "" },
-  { pane: "terminal", section: "How it draws", label: "Line height", hint: "" },
-  { pane: "terminal", section: "How it draws", label: "Terminal renderer", hint: "GPU is fastest; Canvas is nearly as fast and never blanks; DOM is the slow fallback. Applies to newly opened shells." },
+  { pane: "terminal", section: "How it draws", label: "Cursor", hint: "The shape that marks where you're typing.", settingId: "terminal.cursor" },
+  { pane: "terminal", section: "How it draws", label: "Font", hint: "", settingId: "terminal.font" },
+  { pane: "terminal", section: "How it draws", label: "Font size", hint: "", settingId: "terminal.fontSize" },
+  { pane: "terminal", section: "How it draws", label: "Line height", hint: "", settingId: "terminal.lineHeight" },
+  { pane: "terminal", section: "How it draws", label: "Terminal renderer", hint: "GPU is fastest; Canvas is nearly as fast and never blanks; DOM is the slow fallback. Applies to newly opened shells.", settingId: "terminal.renderer" },
   { pane: "terminal", section: "Mouse and clipboard", label: "Bar on a pane", hint: "Point at the seam along a pane's bottom edge and its branch, changes, pull request and card rise out of it." },
   { pane: "terminal", section: "Mouse and clipboard", label: "Copy on select", hint: "A selection is on the clipboard the instant you make it, the way tmux does it — no Ctrl+Shift+C." },
   { pane: "terminal", section: "Mouse and clipboard", label: "Focus follows mouse", hint: "Hovering a terminal pane types into it, without a click first. Only terminals — the rest of the app still waits to be clicked." },

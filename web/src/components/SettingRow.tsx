@@ -86,7 +86,12 @@ function HintMore({ open, toggle, controls, className }: { open: boolean; toggle
   );
 }
 
-export function SettingRow({ label, hint, control, onClick, href, download, disabled, role, ariaChecked, align, modified }: {
+export function SettingRow({ label, hint, control, onClick, href, download, disabled, role, ariaChecked, align, modified, settingId }: {
+  /** The SettingDef this row binds to (web/src/lib/settingsRegistry.ts), written
+   *  BEFORE `label` so the settings index generator reads it with the row. Also
+   *  `agentExempt`, a row that is not a setting, which is read from source only. */
+  settingId?: string;
+  agentExempt?: boolean;
   label: React.ReactNode;
   hint?: React.ReactNode;
   control?: React.ReactNode;
@@ -157,16 +162,17 @@ export function SettingRow({ label, hint, control, onClick, href, download, disa
   // is now called.
   const dataRow = rowId(textOf(label));
   if (href) return <><a href={href} download={download} className={cls} style={style} data-row={dataRow}>{body}</a>{more}</>;
+  const dataSetting = settingId ? { "data-setting-id": settingId } : undefined;
   if (onClick) {
     return (
       <>
         <button onClick={onClick} disabled={disabled} role={role} aria-checked={ariaChecked}
-          className={`${cls} text-left disabled:cursor-not-allowed`} style={style} data-row={dataRow}>{body}</button>
+          className={`${cls} text-left disabled:cursor-not-allowed`} style={style} data-row={dataRow} {...dataSetting}>{body}</button>
         {more}
       </>
     );
   }
-  return <div className={cls} style={style} data-row={dataRow}>{body}</div>;
+  return <div className={cls} style={style} data-row={dataRow} {...dataSetting}>{body}</div>;
 }
 
 /**
@@ -262,8 +268,10 @@ export function Fold({ label, hint, children, defaultOpen }: {
   );
 }
 
-export function Toggle({ on, onClick, label, hint, disabled, modified }: {
+export function Toggle({ on, onClick, label, hint, disabled, modified, settingId }: {
   on: boolean; onClick: () => void; label: string; hint: string;
+  /** See SettingRow. */
+  settingId?: string; agentExempt?: boolean;
   /** Differs from the shipped default: SettingRow draws the dot. */
   modified?: boolean;
   /** A host that cannot do this at all — the row stays, greyed, saying why in
@@ -271,7 +279,7 @@ export function Toggle({ on, onClick, label, hint, disabled, modified }: {
   disabled?: boolean;
 }) {
   return (
-    <SettingRow label={label} hint={hint} onClick={onClick} disabled={disabled} modified={modified}
+    <SettingRow label={label} hint={hint} onClick={onClick} disabled={disabled} modified={modified} settingId={settingId}
       role="switch" ariaChecked={on}
       /* A real switch: position carries the state, so it reads at a glance
          instead of having to be parsed. */

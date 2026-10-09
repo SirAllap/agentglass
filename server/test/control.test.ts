@@ -224,21 +224,24 @@ describe("parseControlCmd — the ui wire shape", () => {
     expect(ui("finder.open", { path: "/home/ana/notes", kind: "weird" })).toEqual({ cmd: "ui", do: "finder.open", args: { path: "/home/ana/notes", kind: "file" } });
   });
 
-  test("a level above the one this slice accepts is refused, and so is an id with no level", () => {
+  test("a level above the one this server accepts is refused, and so is an id with no level", () => {
     const registry = {
       look: { level: 1, kind: "open", surface: "x", args: {} },
       change: { level: 2, kind: "change", surface: "x", args: {} },
       effect: { level: 3, kind: "external", surface: "x", args: {} },
     } as const;
     expect(parseUi(registry, "look", {}, UI_MAX_LEVEL)).not.toBeNull();
-    expect(parseUi(registry, "change", {}, UI_MAX_LEVEL)).toBeNull();
+    expect(parseUi(registry, "change", {}, UI_MAX_LEVEL)).not.toBeNull();
+    expect(parseUi(registry, "change", {}, 1)).toBeNull();
     expect(parseUi(registry, "effect", {}, UI_MAX_LEVEL)).toBeNull();
-    expect(parseUi(registry, "change", {}, 2)).not.toBeNull();
-    expect(UI_MAX_LEVEL).toBe(1);
+    expect(UI_MAX_LEVEL).toBe(2);
+    // No level at all is level 3: refused, not "no limit".
+    const unlevelled = { oops: { kind: "open", surface: "x", args: {} } } as never;
+    expect(parseUi(unlevelled, "oops", {}, UI_MAX_LEVEL)).toBeNull();
   });
 
-  test("every entry the registry holds is level 1 in this slice", () => {
-    for (const [id, d] of Object.entries(UI_ACTIONS)) expect(d.level, id).toBe(1);
+  test("only the settings write is level 2; every other entry is level 1", () => {
+    for (const [id, d] of Object.entries(UI_ACTIONS)) expect(d.level, id).toBe(id === "settings.set" ? 2 : 1);
   });
 });
 

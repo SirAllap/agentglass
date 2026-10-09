@@ -128,10 +128,10 @@ describe("POST /control with the ui wire shape", () => {
     const w = await window_();
     const r = await post({ cmd: "ui", do: "settings.open", args: { page: "appearance", row: "theme" } });
     expect(r.status).toBe(200);
-    expect(await post({ cmd: "ui", do: "settings.set", args: { id: "x", value: 1 } }).then((x) => x.status)).toBe(400);
+    expect(await post({ cmd: "ui", do: "settings.reset", args: { id: "x", value: 1 } }).then((x) => x.status)).toBe(400);
     await Bun.sleep(150);
     expect(w.frames).toContainEqual({ cmd: "ui", do: "settings.open", args: { page: "appearance", row: "theme" } });
-    expect(w.frames.some((f) => f.do === "settings.set")).toBe(false);
+    expect(w.frames.some((f) => f.do === "settings.reset")).toBe(false);
   });
 
   test("each command leaves one audit line: the door and the verdict, never the path", async () => {
@@ -143,5 +143,72 @@ describe("POST /control with the ui wire shape", () => {
     expect(mine[0]!.ok).toBe(true);
     expect(JSON.stringify(log.actions)).not.toContain("secret-plan");
     expect(JSON.stringify(log.actions)).not.toContain("orbit");
+  });
+});
+
+describe("POST /control settings.set", () => {
+  const setBody = (value: unknown) => ({ cmd: "ui", do: "settings.set", args: { id: "diff.wrap", value } });
+  type Line = { action: string; ok: boolean; target: string | null; detail: string | null };
+  const lines = async () => ((await (await fetch(base + "/actions?limit=200")).json()) as { actions: Line[] }).actions.filter((a) => a.action === "/control/settings.set");
+
+  /** A window that answers every frame that carries a request id, the way App does. */
+  async function answering(reply: (data: any) => Record<string, unknown>) {
+    const w = await window_();
+    const asked: any[] = [];
+    w.ws.addEventListener("message", (ev) => {
+      try {
+        const f = JSON.parse(String((ev as MessageEvent).data));
+        if (f.type !== "control" || !f.rid) return;
+        asked.push(f.data);
+        void fetch(base + "/control/result", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ rid: f.rid, ...reply(f.data) }) });
+      } catch { /* not json */ }
+    });
+    return { w, asked };
+  }
+
+  test("is delivered, answered with what the window did, and the audit line names the setting and never the value", async () => {
+    const { asked } = await answering(() => ({ ok: true, applied: true, value: { ok: true, id: "terminal.font", prev: "", value: "fira", undo: "u1" } }));
+    const r = await post({ cmd: "ui", do: "settings.set", args: { id: "terminal.font", value: "fira-private-face" } });
+    expect(r.status).toBe(200);
+    expect(await r.json()).toMatchObject({ ok: true, applied: true, value: { undo: "u1" } });
+    expect(asked).toContainEqual({ cmd: "ui", do: "settings.set", args: { id: "terminal.font", value: "fira-private-face" } });
+    const mine = (await lines()).filter((l) => l.target === "terminal.font");
+    expect(mine.length).toBe(1);
+    expect(mine[0]!.ok).toBe(true);
+    expect(JSON.stringify(await lines())).not.toContain("fira-private-face");
+  });
+
+  test("a window that refuses the value makes the audit line a failure, not an ok", async () => {
+    await answering(() => ({ ok: false, applied: false, error: "not a valid value for terminal.fontSize" }));
+    const r = await post({ cmd: "ui", do: "settings.set", args: { id: "terminal.fontSize", value: 99 } });
+    expect(await r.json()).toMatchObject({ ok: false, applied: false });
+    const mine = (await lines()).filter((l) => l.target === "terminal.fontSize");
+    expect(mine.length).toBe(1);
+    expect(mine[0]!.ok).toBe(false);
+  });
+
+  test("a value that is not a scalar never reaches a window", async () => {
+    const { asked } = await answering(() => ({ ok: true, applied: true }));
+    for (const value of [{ a: 1 }, [1], null]) expect((await post(setBody(value))).status).toBe(400);
+    await Bun.sleep(100);
+    expect(asked).toEqual([]);
+  });
+
+  test("past the per-minute limit it is a 429, is not delivered, and is a line too", async () => {
+    const { asked } = await answering(() => ({ ok: true, applied: true, value: { ok: true } }));
+    let first429 = -1;
+    for (let i = 0; i < 40; i++) {
+      const r = await post(setBody(i % 2 === 0));
+      if (r.status === 429) { first429 = i; break; }
+      expect(r.status).toBe(200);
+    }
+    // The writes this file spent earlier count against the same caller.
+    expect(first429).toBeGreaterThan(20);
+    expect(first429).toBeLessThan(31);
+    expect(asked.filter((f) => f.args?.id === "diff.wrap").length).toBe(first429);
+    expect((await lines()).some((l) => !l.ok && l.detail === "rate limited")).toBe(true);
+    // Reads and opens are not writes: still answered.
+    expect((await post({ cmd: "ui", do: "settings.get", args: { id: "diff.wrap" } })).status).toBe(200);
+    expect((await post({ cmd: "ui", do: "settings.open", args: { page: "diff" } })).status).toBe(200);
   });
 });

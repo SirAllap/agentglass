@@ -55,7 +55,7 @@ import { refreshCodexUsage } from "./codexusage.ts";
 import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, onGateChange, typedReason, GATE_MAX_MS, gateFailClosed, denyByRule, allowByRule, validGateId } from "./gate.ts";
 import { budgetHoldFor } from "./budget.ts";
 import { gateCwd, gateRuleFor } from "./gaterules.ts";
-import { parseControlCmd, controlId, awaitControl, settleControl, parseReply, nextControlRid, callerRequestId, CONTROL_TIMEOUT_ERROR } from "./control.ts";
+import { parseControlCmd, controlId, awaitControl, settleControl, parseReply, nextControlRid, callerRequestId, CONTROL_TIMEOUT_ERROR, changedSetting, makeWriteLimiter } from "./control.ts";
 import { isReadAction } from "../../shared/uiActions.ts";
 import { outwardAction, outwardLine } from "./outward.ts";
 import { listLanes } from "./lanes.ts";
@@ -1529,6 +1529,8 @@ const DOCKER_SPAWNS = new Set([
 ]);
 
 const clients = new Set<ServerWebSocket<WsData>>();
+/** Settings writes through /control, per caller (control.ts). */
+const controlWriteLimit = makeWriteLimiter();
 /** A window's own name for itself (its `hello`) to its latest socket, which is
  *  how a browser ask reaches one window instead of all of them. */
 const browserSockets = new Map<string, ServerWebSocket<WsData>>();
@@ -3711,7 +3713,14 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
        */
       const pageOrigin = req.headers.get("origin");
       const who = caller ? { ...asActor(caller)!, fromPage: !!pageOrigin && vouchedOrigin(pageOrigin) } : caller;
-      const audit = (ok: boolean, error?: string) => noteAction(clientIp, `/control/${controlId(cmd) ?? "unknown"}`, {}, { ok, error }, who);
+      // A settings change names its setting in the line (the id and the fact
+      // of change, not the value), and is rate limited per caller.
+      const setting = changedSetting(cmd);
+      const audit = (ok: boolean, error?: string) => noteAction(clientIp, `/control/${controlId(cmd) ?? "unknown"}`, setting ? { setting } : {}, { ok, error }, who);
+      if (setting && !controlWriteLimit.hit(actorOf(clientIp, who))) {
+        audit(false, "rate limited");
+        return json({ ok: false, error: "too many settings changes; slow down" }, 429);
+      }
       if (clients.size === 0) {
         audit(false, "no window");
         return json({ ok: false, error: "no window" }, 503);
@@ -3726,7 +3735,8 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
        * answers (or the wait runs out), so it carries the verdict.
        */
       const label = callerRequestId((b as { id?: unknown }).id);
-      const asks = label !== null || (cmd.cmd === "ui" && isReadAction(cmd.do));
+      // A settings change is answered as well: what it replaced, and the undo handle.
+      const asks = label !== null || setting !== null || (cmd.cmd === "ui" && isReadAction(cmd.do));
       if (!asks) {
         broadcast({ type: "control", data: cmd });
         audit(true);
