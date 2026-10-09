@@ -4272,19 +4272,24 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                 seam this important is not a suggestion. */}
             <aside className="shrink-0 w-[280px] flex flex-col border-r"
               style={{ background: "var(--surface-nav)", borderColor: "var(--surface-line)" }}>
-              <div className="shrink-0 px-3 py-3 border-b" style={{ borderColor: "var(--surface-line)" }}>
-                {/* Leaving is a button you press, not an x you hunt for in a
-                    corner — and it says where it takes you, because after ten
-                    minutes in here that is the thing you have to be told. */}
-                <button onClick={onClose}
-                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[13px] text-left"
-                  style={{ color: "var(--text3)" }}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
-                    <path d="M19 12H5" /><path d="m12 19-7-7 7-7" />
-                  </svg>
-                  <span>Back to app</span>
-                </button>
-              </div>
+              {/* Leaving is a button you press, not an x you hunt for in a
+                  corner — and it says where it takes you, because after ten
+                  minutes in here that is the thing you have to be told.
+                *
+                  The row IS the button. It was a button the size of its text
+                  inside a padded bar, so the bar looked like the control and
+                  only the arrow and the words answered the pointer; a press on
+                  the rest of the row landed on nothing. Full width, no padding
+                  around it, and the only things that change on hover and press
+                  are its fill and its ink, so nothing under the pointer moves. */}
+              <button onClick={onClose} type="button"
+                className="agx-navback shrink-0 w-full flex items-center gap-2 px-5 border-b text-[13px] text-left"
+                style={{ color: "var(--text3)", borderColor: "var(--surface-line)", minHeight: 56 }}>
+                <svg width={ICON.sm} height={ICON.sm} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+                  <path d="M19 12H5" /><path d="m12 19-7-7 7-7" />
+                </svg>
+                <span>Back to app</span>
+              </button>
 
               <div className="shrink-0 px-3 py-3 border-b" style={{ borderColor: "var(--surface-line)" }}>
                 {/* --bg, not --bg2. The box used the raised tone, which was

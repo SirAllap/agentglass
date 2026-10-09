@@ -713,6 +713,24 @@
   background: color-mix(in srgb, var(--error) 18%, transparent) !important;
   color: var(--error-ink);
 }
+/* Pressed, for every Button: hover already darkens through `hover:brightness-125`,
+   and a control with no pressed answer reads as one that did not hear the click. */
+.agx-btn:active:not(:disabled) { filter: brightness(0.86); }
+/* A folding section's header (the ClickUp page's cards): the whole bar is the target. */
+.agx-fold { cursor: pointer; transition: background-color 120ms; }
+.agx-fold:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
+.agx-fold:active { background: color-mix(in srgb, var(--text) 11%, transparent); }
+/* A switch is 19px tall; its button is padded to the house hit size and answers
+   hover and press on its own track, not on the padding around it. */
+.agx-switch-hit { cursor: pointer; }
+.agx-switch-hit:disabled { cursor: default; }
+.agx-switch-hit:hover:not(:disabled) > span { filter: brightness(1.18); }
+.agx-switch-hit:active:not(:disabled) > span { filter: brightness(0.82); }
+/* A row that is a button, edge to edge: Settings' "Back to app". Fill and ink
+   only, so nothing under the pointer moves between rest, hover and press. */
+.agx-navback { transition: background-color 120ms, color 120ms; cursor: pointer; }
+.agx-navback:hover { background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text); }
+.agx-navback:active { background: color-mix(in srgb, var(--text) 13%, transparent); color: var(--text); }
 /* A tab is not a chip: it has no fill of its own, so the hover IS the surface. */
 .agx-tab:hover { background: color-mix(in srgb, var(--text) 10%, transparent); }
 /* A whole row that answers the pointer. `.agx-row` is the app's own list-row

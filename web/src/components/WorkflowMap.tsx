@@ -5,7 +5,7 @@ import { Dot, StatusPanel, StatusPopover, type PanelView } from "./StatusPanel.t
 import { ArrowIcon, CaretIcon, ListIcon, MergeIcon, NoteIcon, PlusIcon, UserIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import {
-  UNASSIGN_LABEL, addable, allStatuses, isActive, moments, needsStatus, pinsOn, reachOf, suggestStatus,
+  CHIP_H, GUTTER_STUB, GUTTER_W, LINE_LH, PREVIEW_NUDGE, SENTENCE_LH, SENTENCE_TRIM, STEP_GAP, UNASSIGN_LABEL, addable, allStatuses, gutterLabel, isActive, moments, needsStatus, pinsOn, reachLines, reachOf, suggestStatus,
   type Moment, type Nouns, type MapSpace, type Step, type StepKind, type TrackerAdapter, type Unassign,
 } from "../lib/workflowMap.ts";
 
@@ -47,6 +47,8 @@ function Glyph({ kind, box = 20 }: { kind: StepKind; box?: number }) {
 function Bullet({ on }: { on: boolean }) {
   return <span aria-hidden className="inline-block rounded-full mr-1 align-middle" style={{ width: 7, height: 7, background: on ? "var(--success)" : "transparent", border: on ? "none" : "1.5px solid var(--warning)" }} />;
 }
+/** A space name goes into markup that is set as a string; every character that could open or close it is escaped. */
+const xml = (t: string) => t.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const TYPE_WORD: Record<string, string> = { open: "not started", done: "done", closed: "closed" };
 
 function Tag({ tone, children }: { tone: "ok" | "warn" | "dim" | "info"; children: ReactNode }) {
@@ -66,7 +68,7 @@ function PickChip({ label, aria, gone, onOpen, ...rest }: { label: string; aria:
     <button type="button" aria-haspopup="listbox" aria-label={aria} onClick={(e) => onOpen(e.currentTarget)} {...rest}
       className="agx-chip inline-flex items-center gap-1.5 rounded-lg px-2 text-[11.5px] whitespace-nowrap align-middle mx-0.5"
       style={{
-        height: 24, border: gone ? "1px dashed var(--text3)" : tintEdge("var(--primary)", 45),
+        height: CHIP_H, border: gone ? "1px dashed var(--text3)" : tintEdge("var(--primary)", 45),
         background: gone ? "transparent" : "color-mix(in srgb, var(--primary) 12%, transparent)", color: gone ? "var(--text3)" : "var(--primary-ink)",
       }}>
       {label}<span aria-hidden className="flex opacity-60"><CaretIcon size={ICON.xs} /></span>
@@ -178,7 +180,10 @@ export function WorkflowMap(p: MapProps) {
         const r = row.getBoundingClientRect(), y2 = r.top + r.height / 2 - gb.top, w = gb.width;
         out += `<path d="M0 ${y1} C${w * 0.55} ${y1} ${w * 0.45} ${y2} ${w} ${y2}" fill="none" stroke="var(--primary)" stroke-width="1.5" stroke-linecap="round"${flash === st.kind ? ' class="agx-wf-draw" pathLength="1"' : ""}/>`;
       } else {
-        out += `<path d="M0 ${y1} H22" stroke="var(--warning)" stroke-width="1.5" stroke-dasharray="4 3" fill="none"/><text x="28" y="${y1 + 4}" font-size="10" fill="var(--warning-ink)">not in ${space.name.replace(/[<&]/g, "")}</text>`;
+        const l = gutterLabel(space.name);
+        out += `<g><title>${xml(l.full)}</title><path d="M0 ${y1} H${GUTTER_STUB}" stroke="var(--warning)" stroke-width="1.5" stroke-dasharray="4 3" fill="none"/>`
+          + `<text x="${GUTTER_STUB + 4}" y="${y1 - 1}" font-size="10" fill="var(--warning-ink)" pointer-events="all">${xml(l.lead)}</text>`
+          + `<text x="${GUTTER_STUB + 4}" y="${y1 + 11}" font-size="10" fill="var(--warning-ink)" pointer-events="all">${xml(l.name)}</text></g>`;
       }
     }
     s.innerHTML = out;
@@ -256,32 +261,24 @@ export function WorkflowMap(p: MapProps) {
           <span className="font-semibold text-[13px]" style={{ color: "var(--text)" }}>{m.title}</span>
           {dormant ? <Tag tone="dim">dormant: changes are off</Tag> : pend ? <Tag tone="warn">needs a status</Tag> : null}
         </div>
-        <div className="mt-2 ml-7 text-[12.5px] leading-[1.9]" style={{ color: "var(--text3)" }}>
-          {st.kind === "move" && <>
-            <div>Adds a button to the pull request’s {n.item} block. It {verb} the {n.item} to {chip(!st.status, st.status ?? "")}</div>
-            {st.also.length > 0 && <div className="text-[11.5px]">If a {n.item}’s list has none of that, it tries: {st.also.join(", ")}.</div>}
-            <div>Also takes <PickChip data-chip="unassign" label={UNASSIGN_LABEL[st.unassign]} aria={`Who comes off the ${n.item}: ${UNASSIGN_LABEL[st.unassign]}. Change`} onOpen={(el) => setUnassignAt(el)} /> off the {n.item}.</div>
-          </>}
-          {st.kind === "menu" && <div>Adds an item to the review menu. It {verb} the {n.item} to {chip(!st.status, st.status ?? "")}</div>}
-          {st.kind === "merge" && <div>Adds a choice to the merge dialog, preselected to {chip(false, st.status ?? "Leave it there")}</div>}
-          {st.kind === "people" && <div>Adds an Assigned list to the review menu: the {n.item}’s members, each a toggle.</div>}
-          {st.kind === "note" && <div>Adds a “Note” button to the pull request’s {n.item} block. It writes a comment on the {n.item}.</div>}
-        </div>
-        {st.implicit && st.status && <div className="mt-1 ml-7 text-[11.5px]" style={{ color: "var(--text3)" }}>The built-in default, until you choose one.</div>}
-        <div className="mt-2 ml-7 text-[11px] flex flex-wrap gap-x-2.5 gap-y-1" style={{ color: "var(--text3)" }}>
-          {r.kind === "everywhere" && <span style={{ color: "var(--success-ink)" }}><Bullet on />Works in every {n.space}</span>}
-          {r.kind === "none-needed" && <span>No status: nothing moves.</span>}
-          {r.kind === "pending" && <span style={{ color: "var(--warning-ink)" }}>Not active until you pick a status.</span>}
-          {r.kind === "all" && <span style={{ color: "var(--success-ink)" }}><Bullet on />In all {r.count} {n.spaces}</span>}
-          {r.kind === "some" && (r.total <= 5
-            ? spaces.map((s) => r.has.includes(s.name)
-              ? <span key={s.id} style={{ color: "var(--success-ink)" }}><Bullet on />{s.name}</span>
-              : <span key={s.id} style={{ color: "var(--warning-ink)" }}><Bullet on={false} />{s.name}: no such status — the button is absent</span>)
-            : <><span style={{ color: "var(--success-ink)" }}><Bullet on />{r.has.length} of {r.total} {n.spaces}</span><span style={{ color: "var(--warning-ink)" }}><Bullet on={false} />absent in {r.missing.join(", ")}</span></>)}
-        </div>
-        <div role="group" aria-label="Preview" className="mt-2.5 ml-7 rounded-lg px-2.5 py-2 text-[11.5px]" style={{ border: "1px dashed color-mix(in srgb, var(--text) 25%, transparent)", background: "var(--bg)" }}>
-          <Preview adapter={adapter} step={st} />
-          <div className="mt-1 text-[10.5px]" style={{ color: "var(--text3)" }}>Shows on: {m.shows}</div>
+        <div className="ml-7 mt-1.5 flex flex-col" style={{ gap: STEP_GAP }}>
+          <div className="text-[12.5px]" style={{ color: "var(--text3)", lineHeight: `${SENTENCE_LH}px`, marginBottom: -SENTENCE_TRIM }}>
+            {st.kind === "move" && <>
+              <div>Adds a button to the pull request’s {n.item} block. It {verb} the {n.item} to {chip(!st.status, st.status ?? "")}</div>
+              {st.also.length > 0 && <div className="text-[11.5px]" style={{ lineHeight: `${LINE_LH}px` }}>If a {n.item}’s list has none of that, it tries: {st.also.join(", ")}.</div>}
+              <div>Also takes <PickChip data-chip="unassign" label={UNASSIGN_LABEL[st.unassign]} aria={`Who comes off the ${n.item}: ${UNASSIGN_LABEL[st.unassign]}. Change`} onOpen={(el) => setUnassignAt(el)} /> off the {n.item}.</div>
+            </>}
+            {st.kind === "menu" && <div>Adds an item to the review menu. It {verb} the {n.item} to {chip(!st.status, st.status ?? "")}</div>}
+            {st.kind === "merge" && <div>Adds a choice to the merge dialog, preselected to {chip(false, st.status ?? "Leave it there")}</div>}
+            {st.kind === "people" && <div>Adds an Assigned list to the review menu: the {n.item}’s members, each a toggle.</div>}
+            {st.kind === "note" && <div>Adds a “Note” button to the pull request’s {n.item} block. It writes a comment on the {n.item}.</div>}
+          </div>
+          {st.implicit && st.status && <div className="text-[11.5px]" style={{ color: "var(--text3)", lineHeight: `${LINE_LH}px` }}>The built-in default, until you choose one.</div>}
+          {reachLines(r, spaces, n).map((l) => <div key={l.key} className="text-[11px]" style={{ color: l.tone === "ok" ? "var(--success-ink)" : l.tone === "warn" ? "var(--warning-ink)" : "var(--text3)", lineHeight: `${LINE_LH}px` }}>{l.dot !== undefined && <Bullet on={l.dot} />}{l.text}</div>)}
+          <div role="group" aria-label="Preview" className="rounded-lg px-2.5 py-2 text-[11.5px]" style={{ marginTop: PREVIEW_NUDGE, border: "1px dashed color-mix(in srgb, var(--text) 25%, transparent)", background: "var(--bg)" }}>
+            <Preview adapter={adapter} step={st} />
+            <div className="mt-1 text-[10.5px]" style={{ color: "var(--text3)" }}>Shows on: {m.shows}</div>
+          </div>
         </div>
         <span className="absolute" style={{ top: 10, right: 14 }}>
           <Button size="compact" label={`Remove step: ${m.title}`} onClick={() => { p.onRemove(st.kind); setFocusNext("[data-add]"); }} disabled={frozen}>Remove</Button>
@@ -379,7 +376,7 @@ export function WorkflowMap(p: MapProps) {
         </Button>
       </div>
       <div className="agx-settings-rows" style={{ padding: 0 }}>
-        <div ref={grid} className="relative grid" {...(frozen ? ({ inert: "" } as object) : {})} style={{ gridTemplateColumns: "minmax(0,1fr) 84px 300px", opacity: frozen ? 0.55 : 1 }}>
+        <div ref={grid} className="relative grid" {...(frozen ? ({ inert: "" } as object) : {})} style={{ gridTemplateColumns: `minmax(0,1fr) ${GUTTER_W}px 300px`, opacity: frozen ? 0.55 : 1 }}>
           <div>
             {steps.length
               ? steps.map(stepRow)

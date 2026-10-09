@@ -13,7 +13,7 @@ import { Button, EDGE, INPUT, INPUT_STYLE, LINE, Segmented, tintEdge } from "./w
 import { Dot, type PanelView } from "./StatusPanel.tsx";
 import { Tag, WorkflowMap } from "./WorkflowMap.tsx";
 import { CaretIcon, DoneIcon, LinkIcon, NoteIcon, UserIcon } from "../lib/glyphIcons.tsx";
-import { ICON } from "../lib/iconSize.ts";
+import { HIT, ICON } from "../lib/iconSize.ts";
 
 const n = CLICKUP.nouns;
 
@@ -70,7 +70,7 @@ function Card({ id, title, right, children, open, onToggle }: { id: string; titl
     <section className="agx-settings-section" aria-labelledby={id}>
       {onToggle ? (
         <details open={open} onToggle={(e) => onToggle((e.target as HTMLDetailsElement).open)}>
-          <summary className="agx-settings-head flex items-center gap-2.5 cursor-pointer list-none" id={id}>
+          <summary className="agx-settings-head agx-fold flex items-center gap-2.5 list-none" id={id}>
             <span aria-hidden className="flex transition-transform" style={{ transform: open ? "rotate(0deg)" : "rotate(-90deg)", color: "var(--text3)" }}><CaretIcon size={ICON.sm} /></span>
             {head}
           </summary>
@@ -178,7 +178,7 @@ export function ClickUpPane() {
         <span className="inline-flex items-center gap-2 text-[12px]">
           <span id="cu-changes-l" style={{ color: "var(--text)" }}>Changes in {n.name}</span>
           <button type="button" role="switch" aria-checked={changesOn} aria-labelledby="cu-changes-l" disabled={frozen || writes === null}
-            onClick={() => void setChanges(!changesOn)} className="rounded-full" style={{ opacity: frozen ? 0.45 : 1 }}>
+            onClick={() => void setChanges(!changesOn)} className="agx-switch-hit inline-flex items-center rounded-full" style={{ opacity: frozen ? 0.45 : 1, minHeight: HIT }}>
             <Switch on={changesOn} />
           </button>
           <b className="font-semibold min-w-[22px]" style={{ color: "var(--text)" }}>{changesOn ? "On" : "Off"}</b>
@@ -271,8 +271,9 @@ function Menu({ children }: { children: ReactNode }) {
 const Item = ({ children, wf }: { children: ReactNode; wf?: boolean }) => (
   <div className="px-1.5 py-1 rounded-md flex gap-1.5 items-center" style={wf ? { background: "color-mix(in srgb, var(--primary) 14%, transparent)", color: "var(--primary-ink)" } : undefined}>{children}</div>
 );
+/* A drawing of a pill inside a mock card: flat fill and no outline, because an outlined pill is how a control looks here and these press nothing. */
 const Chip2 = ({ children }: { children: ReactNode }) => (
-  <span className="inline-flex items-center gap-1.5 rounded-lg px-2 text-[11.5px]" style={{ height: 22, border: EDGE }}>{children}</span>
+  <span className="inline-flex items-center gap-1.5 rounded-lg px-2 text-[11.5px] cursor-default select-none" style={{ height: 22, background: "color-mix(in srgb, var(--text) 7%, transparent)" }}>{children}</span>
 );
 
 function PrView({ steps, linked }: { steps: ReturnType<typeof clickupSteps>; linked: boolean }) {
