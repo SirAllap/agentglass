@@ -167,7 +167,9 @@ export function TriageBoard({
   useEffect(() => onRollup(() => bumpRollup((n) => n + 1)), []);
   const trueChecks = useCallback((p: PrSummary): PrSummary => {
     if (!root || !p.checks || p.checks.failure === 0) return p;
-    const real = rollupOf(root, p.number);
+    /* Keyed by what the list says of it: the answer stands until the head
+       commit or the aggregate moves. See SAME_MS in prRollupStore. */
+    const real = rollupOf(root, p.number, `${p.headSha ?? ""}|${JSON.stringify(p.checks)}`);
     return real ? { ...p, checks: real } : p;
   }, [root]);
 

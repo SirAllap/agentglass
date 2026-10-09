@@ -65,7 +65,7 @@ import { buildFileTree, treeOrder, type TreeNode } from "../lib/prFileTree.ts";
 import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
 import { keepLoadedChecks } from "../lib/prMerge.ts";
 import { askingBehind, behindAnswer, forgetBehind, forgetOneBehind, onBehind, refreshBehind } from "../lib/prBehindStore.ts";
-import { forgetRollups, refreshRollup } from "../lib/prRollupStore.ts";
+import { refreshRollup } from "../lib/prRollupStore.ts";
 import { overlayDetail, refreshPlan } from "../lib/prRefresh.ts";
 import {
   anchorId, bootstrapSince, clearSeen, foldedIdx, markAllSeen, newKeys, newSince, onSeenChange, readSeen,
@@ -2593,60 +2593,18 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   // pane nobody is looking at — and resumes on return. Resuming refreshes; it
   // does not reset.
 
-  /**
-   * Warm the states you are not looking at.
+  /*
+   * Nothing is fetched ahead of being asked for.
    *
-   * Each state is its own cache entry on the server, so the first visit to
-   * Closed or All paid the whole fetch — about a second and a half of GitHub —
-   * while the user watched. Touching them once in the background makes the
-   * switch instant. Staggered, because the point is to spend idle time, not to
-   * queue three searches behind the one being waited on.
+   * The panel used to warm the other states (Closed, All), the next page, and
+   * five repository-wide counts (Failing, Ready and All among them) in the
+   * background, on every refresh — each a GraphQL request against the
+   * account's hourly 5000, most of them for tabs that are only ever opened by
+   * hand. What is loaded without a click is YOUR two queues: Mine and Needs my
+   * review, which are also the board. Their counts come from those lists'
+   * totals (see the board's fetch); any other tab, state or page pays for its
+   * own read when it is opened.
    */
-  useEffect(() => {
-    if (!active || !root || listState.loading) return;
-    const others = (["open", "closed", "all"] as StateSel[]).filter((st) => st !== stateSel);
-    const timers = others.map((st, i) => setTimeout(() => {
-      void api.prList(root, filter, st, false).catch(() => {});
-      void api.prCounts(root, st).catch(() => {});
-    }, 1500 + i * 2000));
-    return () => timers.forEach(clearTimeout);
-  }, [active, root, filter, stateSel, listState.loading]);
-
-  /**
-   * Fetch the next page before it is asked for.
-   *
-   * Each page is its own entry in the server's cache, so touching it once means
-   * Next answers from memory instead of waiting on GitHub. Deliberately after a
-   * beat, and never while the current page is still loading: the point is to
-   * spend the idle time, not to compete for it.
-   */
-  useEffect(() => {
-    if (!active || !root || !listState.hasNext || !listState.cursor || listState.loading) return;
-    const next = listState.cursor;
-    const t = setTimeout(() => { void api.prList(root, filter, stateSel, false, next).catch(() => {}); }, 900);
-    return () => clearTimeout(t);
-  }, [active, root, filter, stateSel, listState.hasNext, listState.cursor, listState.loading]);
-
-  /**
-   * Warm the filters you are not looking at.
-   *
-   * Each is its own cache entry on the server, so the first visit to a tab
-   * always paid the whole fetch. Touching them once fills the counts and leaves
-   * a warm cache to switch into. Staggered, because the server has one thread
-   * and three `gh` calls at once is the stall this panel exists to avoid.
-   */
-  useEffect(() => {
-    if (!active || !root) return;
-    let live = true;
-    // One request for all five numbers, and they are the TRUE totals for the
-    // current state — not a tally of the page on screen, which stopped being
-    // the answer the moment the list got pages, and not a stale figure carried
-    // over from a different state.
-    api.prCounts(root, stateSel)
-      .then((r) => { if (live && r.ok && r.counts) setViewCounts(r.counts as unknown as Record<string, number>); })
-      .catch(() => {});
-    return () => { live = false; };
-  }, [active, root, stateSel, listState.fetchedAt]);
 
   /*
    * A wait with a deadline.
@@ -2753,7 +2711,13 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   useEffect(() => {
     if (!active || !root) return;
     loadList();
-    const t = setInterval(() => {
+    /* Not while the window is hidden (minimised, another workspace): a poll
+       nobody can see still spends from the account's GitHub budget. Coming
+       back asks once, if a tick was skipped. */
+    let missed = false;
+    const tick = () => {
+      if (document.visibilityState === "hidden") { missed = true; return; }
+      missed = false;
       loadList();
       // Keep the open pull request current too. This reads the server's cache,
       // so it only reaches the network when that entry has actually aged out —
@@ -2761,9 +2725,13 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       // you navigate away and back.
       const n = selectedRef.current;
       if (n != null) loadDetail(n);
-    }, POLL_MS);
+    };
+    const t = setInterval(tick, POLL_MS);
+    const onBack = () => { if (missed && document.visibilityState === "visible") tick(); };
+    document.addEventListener("visibilitychange", onBack);
     return () => {
       clearInterval(t);
+      document.removeEventListener("visibilitychange", onBack);
       // Leaving the view, or changing what is being listed, cancels the
       // collection: it would otherwise land against a scope nobody is looking
       // at any more, and its backoff would still be counting from the old one.
@@ -3189,7 +3157,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     return () => clearTimeout(t);
   }, [boardOn, boardMine, boardReview]);
   useEffect(() => {
-    if (!boardOn || !root) return;
+    /* Not gated on the board being shown: these two lists are also where the
+       Mine and Needs my review counts come from, and the server answers both
+       from one cached read (see `probeOpen` in prs.ts). */
+    if (!root) return;
     let live = true;
     setBoardLoading(true);
     /* Settled rather than all: one scope failing must not leave the board
@@ -3201,11 +3172,19 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     const force = boardForce.current;
     boardForce.current = false;
     void Promise.allSettled([
-      api.prList(root, "mine", stateSel, force).then((r) => { if (live) setBoardMine((cur) => keepLoadedChecks(cur, r.prs ?? [])); }),
-      api.prList(root, "review", stateSel, force).then((r) => { if (live) setBoardReview((cur) => keepLoadedChecks(cur, r.prs ?? [])); }),
+      api.prList(root, "mine", stateSel, force).then((r) => {
+        if (!live) return;
+        setBoardMine((cur) => keepLoadedChecks(cur, r.prs ?? []));
+        if (typeof r.total === "number") setViewCounts((c) => ({ ...c, mine: r.total! }));
+      }),
+      api.prList(root, "review", stateSel, force).then((r) => {
+        if (!live) return;
+        setBoardReview((cur) => keepLoadedChecks(cur, r.prs ?? []));
+        if (typeof r.total === "number") setViewCounts((c) => ({ ...c, review: r.total! }));
+      }),
     ]).then(() => { if (live) setBoardLoading(false); });
     return () => { live = false; };
-  }, [boardOn, root, stateSel, listState.fetchedAt, boardTick]);
+  }, [root, stateSel, listState.fetchedAt, boardTick]);
 
   /**
    * What the agents have spent in this repository, by branch — one request for
@@ -4316,14 +4295,24 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               return;
             }
             forgetBehind();
-            forgetRollups();
+            /* Not the checked rollups: each is a GraphQL request per red card,
+               and one is asked again by itself once the list shows its head or
+               its aggregate moved (see rollupOf), which is exactly what a
+               forced list read below brings in. */
             /* And the tracker cards, which were the one reading Refresh could
                not shift: they are held here, not on the server, so re-asking
                the server for the same rows brought the same card back. */
             forgetCards();
-            boardForce.current = true;
-            setBoardTick((n) => n + 1);
-            loadList(true);
+            /* What is on screen, once. The board is YOUR two queues, and the
+               server answers both from ONE request (QUEUES_QUERY in prs.ts), as
+               it does the table when that shows one of them; a table showing
+               anything else is forced only when it is the thing on screen. */
+            if (boardShown) {
+              boardForce.current = true;
+              setBoardTick((n) => n + 1);
+            }
+            const tableIsQueue = stateSel === "open" && (filter === "mine" || filter === "review") && !cursor && !serverQuery;
+            loadList(!boardShown || tableIsQueue);
           }} busy={busy}
             title={selected != null ? "Refresh this pull request" : "Refresh the list"} />
         </div>
@@ -4476,13 +4465,14 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                    read. One switch now; the board just reads and writes it. */
                 onlyUnread={unreadOnly} onOnlyUnread={setUnreadOnly}
                 /*
-                 * Every open pull request, not the count for whichever filter
-                 * happened to be selected — `listState.total` is the current
-                 * scope's, so in board mode it was the size of `mine` and the
-                 * sentence read "the other 0 are a table" over three hundred
-                 * and eighty-eight of them.
+                 * Unknown, on purpose: the repository-wide count was a search
+                 * over every open pull request, fetched only to print this
+                 * number. Below zero the board says "open pull requests"
+                 * without one. `listState.total` is NOT a stand-in — it is the
+                 * current scope's, so the sentence read "the other 0 are a
+                 * table" over three hundred and eighty-eight of them.
                  */
-                total={viewCounts.all ?? listState.total ?? prs.length}
+                total={-1}
                 hasTaskProvider={hasTaskProvider}
                 pinned={(n) => isPinned(repo.nameWithOwner, n)}
                 onOpen={openPr}

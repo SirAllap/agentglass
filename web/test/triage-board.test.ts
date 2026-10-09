@@ -659,7 +659,7 @@ describe("the number on a card", () => {
  */
 describe("a red card", () => {
   it("checks itself against the latest run per name", () => {
-    expect(board).toContain("const real = rollupOf(root, p.number);");
+    expect(board).toContain("const real = rollupOf(root, p.number, `${p.headSha ?? \"\"}|${JSON.stringify(p.checks)}`);");
     expect(board).toContain("return real ? { ...p, checks: real } : p;");
   });
 

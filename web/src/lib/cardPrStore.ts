@@ -21,10 +21,13 @@
 import { api } from "./api.ts";
 import type { CardPr } from "./cardPrPick.ts";
 
-/** The board's own poll interval (`CU_POLL_MS` in TasksPanel.tsx) — kept in
- *  step rather than imported, since importing a component module from a lib
- *  one would run the other way around. */
-const TTL_MS = 60_000;
+/** Ten minutes, no longer the board's own poll interval (`CU_POLL_MS` in
+ *  TasksPanel.tsx). Each answer is a `gh pr list --search`, a GraphQL request
+ *  against the account's 5000 an hour, and in step with a one-minute poll a
+ *  board of thirty cards could spend thirty a minute on a link that changes
+ *  once in a card's life. Ceiling: a pull request opened for a card shows on
+ *  its row up to ten minutes late. */
+export const TTL_MS = 10 * 60_000;
 /** At once, matching prCardStore.ts: one ClickUp/GitHub token behind the
  *  server, and a board's worth of rows is a burst, not a stream. */
 const AT_ONCE = 2;

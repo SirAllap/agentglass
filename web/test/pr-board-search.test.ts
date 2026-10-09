@@ -786,7 +786,9 @@ describe("what Refresh asks for", () => {
      */
     expect(src).toContain("boardForce.current = true;");
     expect(src).toContain("if (selected != null) loadDetail(selected, true);");
-    expect(src).toContain("forgetRollups();");
+    // Not the checked rollups: one GraphQL request per red card. They are
+    // re-asked when the list shows the card's head or aggregate moved.
+    expect(src).not.toContain("forgetRollups();");
   });
 
   it("forces the board once, and leaves the poll on the cache", () => {
