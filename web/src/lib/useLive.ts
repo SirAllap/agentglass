@@ -7,6 +7,7 @@ import { emitControl } from "./controlBus.ts";
 import { clientId, emitBrowserAsk } from "./browserBus.ts";
 import { emitUnderstudy } from "./understudyBus.ts";
 import { emitPlugin } from "./pluginBus.ts";
+import { showAsked, closedElsewhere, restoreAsked } from "./askedBanners.ts";
 import { recordNote, fireDesktopAlert, firePopupOnly, fireWatchAlert, deliverPendingWatchFires } from "./sysNotify.ts";
 import { setPrWatchState, publishChecksRead, hasActiveWatch, reloadPrWatches } from "./prWatchStore.ts";
 import { pollGatesNow } from "./gateStore.ts";
@@ -376,6 +377,8 @@ export function useLive(paused = false): LiveData {
       if (frame.type === "prwatch") { setPrWatchState(frame.data); return; }
       if (frame.type === "prchecks") { publishChecksRead(frame.data); return; }
       if (frame.type === "prwatchfire") { fireWatchAlert(frame.data); return; }
+      if (frame.type === "askedalert") { showAsked(frame.data); return; }
+      if (frame.type === "askedclosed") { closedElsewhere(frame.data.id); return; }
       if (frame.type === "ci") {
         /*
          * Only the pull requests that are about to merge, unless told
@@ -411,6 +414,8 @@ export function useLive(paused = false): LiveData {
         void pollGatesNow();
         // Fires decided while no window was open, and a watch list that could not be read the first time.
         void deliverPendingWatchFires();
+        // What the person asked for and has not dealt with: a reload or a restart brings it back.
+        void restoreAsked();
         reloadPrWatches();
         // openTools seeds the per-agent "running" state for sessions whose
         // calls have already aged out of the buffer, and it rides on the same

@@ -41,6 +41,8 @@
  */
 import { randomUUID } from "node:crypto";
 import { db } from "./db.ts";
+import { raiseAsked } from "./askedAlerts.ts";
+import { askedAlertKey, watchPayload } from "../../shared/notifyPayload.ts";
 import { entered } from "./loopwatch.ts";
 import type { PrCheck, PrCheckRollup, PrChecksRead, PrTalk, PrWatch, PrWatchFire, PrWatchPreset, PrWatchRule } from "../../shared/types.ts";
 
@@ -97,7 +99,7 @@ const MAX_RULES_PER_PR = 20;
 const MAX_READS_PER_TICK = 20;
 
 /** `state` is the PR's own state, when the read had it: a merged or closed PR ends every watch on it. */
-export interface Snapshot { checks?: PrCheckRollup; allDone: boolean; verdict: "green" | "red" | null; all: PrCheck[]; state?: string }
+export interface Snapshot { checks?: PrCheckRollup; allDone: boolean; verdict: "green" | "red" | null; all: PrCheck[]; state?: string; /** The head commit these checks were read at. */ sha?: string }
 export type ReadChecks = (root: string, number: number) => Promise<Snapshot | null>;
 export interface Outcome { summary: string; detail: string; ok: boolean }
 
@@ -307,8 +309,16 @@ export function sawMine(repo: string, root: string, prs: { number: number; title
 /** Decided, so kept: a fire is written down BEFORE anyone is told, and stays until a client acknowledges
  *  it. The window may be closed, the laptop asleep, the socket mid-reconnect: the next client to connect
  *  is handed everything unacknowledged, oldest first, for up to FIRE_TTL_MS (`pendingFires`, `ackFire`). */
-function deliver(r: Row, rule: PrWatchRule, o: Outcome, now = Date.now()): void {
+function deliver(r: Row, rule: PrWatchRule, o: Outcome, now = Date.now(), snap?: Snapshot, eventId = snap?.sha ?? String(now)): void {
+  /* One alert per event: the PR, the commit the checks were read at, and the verdict. The alert is what a window
+     draws and keeps until the person acts on it (askedAlerts.ts); the fire below is the bell row and the OS popup.
+     A fire for an event already raised says nothing more. */
   const f: Omit<PrWatchFire, "seq"> = { ruleId: r.id, rule: rule.type, repo: r.repo, number: r.number, title: r.title, summary: o.summary, detail: o.detail, ok: o.ok };
+  const alert = raiseAsked({ key: askedAlertKey({ repo: r.repo, number: r.number, sha: eventId, verdict: o.summary }), ok: o.ok,
+    payload: watchPayload(f, { root: r.root, checks: snap?.checks, all: snap?.all }), armedAt: r.created }, now);
+  if (!alert) return;
+  f.alertId = alert.id;
+  f.payload = alert.payload;
   const seq = Number(db.run(`INSERT INTO pr_watch_fire (payload, created) VALUES (?, ?)`, [JSON.stringify(f), now]).lastInsertRowid);
   for (const fn of fireListeners) { try { fn({ ...f, seq }); } catch { /* the row is kept: it is delivered at the next connect */ } }
 }
@@ -325,10 +335,10 @@ export function ackFire(seq: number): { ok: boolean } {
 }
 
 /** Claim first, deliver second. Returns whether THIS call won the claim. */
-function fireOnce(r: Row, rule: PrWatchRule, o: Outcome, now: number): boolean {
+function fireOnce(r: Row, rule: PrWatchRule, o: Outcome, now: number, snap?: Snapshot): boolean {
   const text = o.detail ? `${o.summary}: ${o.detail}` : o.summary;
   const won = db.run(`UPDATE pr_watch SET active = 0, last_at = ?, last_text = ? WHERE id = ? AND active = 1`, [now, text, r.id]).changes > 0;
-  if (won) { deliver(r, rule, o, now); changed(); }
+  if (won) { deliver(r, rule, o, now, snap); changed(); }
   return won;
 }
 
@@ -362,7 +372,7 @@ export function onTalkSeen(repo: string, number: number, title: string, talk: Pr
     const fresh = theirs.filter((t) => (Date.parse(t.at) || 0) > base);
     const text = remarkText(fresh[0]!, fresh.length - 1);
     db.run(`UPDATE pr_watch SET last_at = ?, last_text = ?, seen = ? WHERE id = ?`, [now, text, newest, r.id]);
-    deliver({ ...r, title: title || r.title }, rule, { summary: "New comment", detail: text, ok: true }, now);
+    deliver({ ...r, title: title || r.title }, rule, { summary: "New comment", detail: text, ok: true }, now, undefined, String(newest)); // a remark is its own event: told apart by when it was said
     fired++;
   }
   if (fired) changed();
@@ -416,7 +426,7 @@ export async function checkWatches(read: ReadChecks, now = Date.now(), gate = fa
     for (const { r, rule } of withRule(rows)) {
       if (rule.type === "comment") continue;
       const o = evalRule(rule, snap);
-      if (o && fireOnce(r, rule, o, now)) fired++;
+      if (o && fireOnce(r, rule, o, now, snap)) fired++;
     }
   }
   return fired;

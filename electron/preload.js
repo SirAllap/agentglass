@@ -369,6 +369,8 @@ contextBridge.exposeInMainWorld("agentglass", {
    *  the caller checks for it rather than assuming — see desktop.ts.
    * @param {string} p */
   revealPath: (p) => ipcRenderer.invoke("ag:revealPath", p),
+  // A notification press: lift the window first, then the renderer routes.
+  raiseWindow: () => ipcRenderer.invoke("ag:raiseWindow"),
   powerStatus: () => ipcRenderer.invoke("ag:powerStatus"),
   /** @param {"on" | "agent" | "off"} mode */
   setPowerMode: (mode) => ipcRenderer.invoke("ag:setPowerMode", mode),

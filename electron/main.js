@@ -3268,6 +3268,17 @@ function registerIpc(win) {
   ipcMain.handle("ag:powerStatus", () => power.status());
   ipcMain.handle("ag:setPowerMode", (_e, m) => power.setMode(String(m)));
 
+  // What pressing a notification does first: the window it leads to has to be
+  // on screen. Only the app's own window answers, so a guest page cannot use
+  // this to steal focus.
+  ipcMain.handle("ag:raiseWindow", (e) => {
+    if (e.sender !== win.webContents) return false;
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+    return true;
+  });
+
   /*
    * Show a file where it lives, in the desktop's own file manager.
    *

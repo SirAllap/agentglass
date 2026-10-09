@@ -351,6 +351,8 @@ export async function prsForBranch(root: string, branchIn: unknown): Promise<{
 export async function prRollup(rootIn: unknown, numberIn: unknown, fresh = false): Promise<{ ok: boolean; checks?: PrCheckRollup; /** Every check by name — what the notify watches match against. */ all?: PrCheck[];
   /** OPEN, CLOSED or MERGED — a watch on a PR that is no longer open ends. */
   state?: string;
+  /** The commit these checks belong to: what makes two verdicts on one PR different events. */
+  sha?: string;
   /** More than the 100 contexts one page holds: `all` is not every check, so nothing may conclude "all done" from it. */
   truncated?: boolean; error?: string }> {
   const number = Number(numberIn);
@@ -378,7 +380,7 @@ export async function prRollup(rootIn: unknown, numberIn: unknown, fresh = false
     // The commit named in this same response, not the cached one: a push since the list read would file these runs under the old commit.
     learnFromRead(repo.key, number, pr?.commits?.nodes?.[0]?.commit?.oid ?? "", r2.all);
     if (Number(ctxs?.totalCount ?? 0) <= raw.length) projectChecks(repo, number, r2.rollup, r2.all, began);
-    return { ok: true, checks: r2.rollup, all: r2.all, state: typeof pr?.state === "string" ? pr.state : undefined, truncated: Number(ctxs?.totalCount ?? 0) > raw.length };
+    return { ok: true, checks: r2.rollup, all: r2.all, state: typeof pr?.state === "string" ? pr.state : undefined, sha: pr?.commits?.nodes?.[0]?.commit?.oid || undefined, truncated: Number(ctxs?.totalCount ?? 0) > raw.length };
   }, { fresh, keep: (v) => v.ok });
 }
 const ROLLUP_TTL_MS = 30_000;

@@ -2,6 +2,7 @@ import { forgetShared, sharedRead } from "./sharedRead.ts";
 import type { UiAction, Field, NoteStatus, PluginPanel, PluginPrNotes } from "./pluginTypes.ts";
 import type { ImportedPlace } from "./desktop.ts";
 import type { PrWatchFire, PrWatchRule, PrWatchState } from "../../../shared/types.ts";
+import type { AskedAlert } from "../../../shared/notifyPayload.ts";
 import type { CheckOnBasePlan, CheckOnBaseStatus } from "../../../shared/checkOnBase.ts";
 import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest } from "../../../shared/types.ts";
 import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember } from "../../../shared/providers.ts";
@@ -2114,6 +2115,12 @@ const realApi = {
   prWatchPending: () => get<{ ok: boolean; fires: PrWatchFire[] }>("/prs/notify-watch/pending"),
   prWatchAck: (seq: number) => post<{ ok: boolean }>("/prs/notify-watch/ack", { seq }),
   prWatchRemove: (id: string) => post<{ ok: boolean }>("/prs/notify-watch/remove", { id }),
+  /** The notifications the person asked for: the ones still waiting, and the last few for the audit. */
+  askedAlerts: () => get<{ ok: boolean; open: AskedAlert[] }>("/alerts/asked"),
+  askedAudit: () => get<{ ok: boolean; audit: AskedAlert[] }>("/alerts/asked/audit"),
+  askedSeen: (id: string) => post<{ ok: boolean }>("/alerts/asked/seen", { id }),
+  askedClose: (id: string, acted: boolean) => post<{ ok: boolean }>("/alerts/asked/close", { id, acted }),
+  askedOsFailed: (id: string, reason: string) => post<{ ok: boolean }>("/alerts/asked/os-failed", { id, reason }),
   prWatchApply: (root: string, number: number, title: string) =>
     post<{ ok: boolean; applied: number; error?: string }>("/prs/notify-watch/apply", { root, number, title }),
   prWatchPreset: (root: string, rules: PrWatchRule[], auto: boolean) =>
@@ -2628,6 +2635,11 @@ const demoApi: typeof realApi = {
   prWatchPending: () => D({ ok: true, fires: [] as PrWatchFire[] }),
   prWatchAck: (_s: number) => D({ ok: true }),
   prWatchRemove: (_id: string) => D({ ok: true }),
+  askedAlerts: () => D({ ok: true, open: [] as AskedAlert[] }),
+  askedAudit: () => D({ ok: true, audit: [] as AskedAlert[] }),
+  askedSeen: (_id: string) => D({ ok: true }),
+  askedClose: (_id: string, _acted: boolean) => D({ ok: true }),
+  askedOsFailed: (_id: string, _reason: string) => D({ ok: true }),
   prWatchApply: (_r: string, _n: number, _t: string) => D({ ok: false, applied: 0, error: "not available in the demo" }),
   prWatchPreset: (_r: string, _rules: PrWatchRule[], _a: boolean) => D({ ok: false, error: "not available in the demo" }),
   prMerge: (_r: string, _n: number, _m: "squash" | "merge" | "rebase", _o: { deleteBranch?: boolean; auto?: boolean; headSha?: string; subject?: string; body?: string; disableAuto?: boolean }) => D(demoPrAction()),

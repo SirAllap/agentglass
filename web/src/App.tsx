@@ -80,6 +80,7 @@ import { MachinePanel, type MachineTab } from "./components/MachinePanel.tsx";
 import { ZoomToast } from "./components/ZoomToast.tsx";
 import { UpdateToast } from "./components/UpdateToast.tsx";
 import { NoteToasts } from "./components/NoteToasts.tsx";
+import { AskedBanners } from "./components/AskedBanners.tsx";
 import { WhatsNew } from "./components/WhatsNew.tsx";
 import { SessionModal } from "./components/SessionModal.tsx";
 import { ProjectPicker, PICKER_ANSWERED_KEY } from "./components/ProjectPicker.tsx";
@@ -1119,6 +1120,13 @@ export default function App() {
     // Both of these already had a way in and simply were not being handed one.
     if (g.kind === "chat") { openChatFor(g.id); return; }
     if (g.kind === "settings") { openSettings(g.pane as never); return; }
+    // A document: Files, switched to the checkout it lives in, with the folder it is in opened.
+    if (g.kind === "file") {
+      const cut = g.path.lastIndexOf("/");
+      requestFilesReveal(g.root, cut > 0 ? g.path.slice(0, cut) : "");
+      goView("files");
+      return;
+    }
     if (g.kind === "pane") {
       goView("term");
       try {
@@ -1340,6 +1348,7 @@ export default function App() {
           the same reason MachinePanel is: a Slack ping is not about the panel
           you happen to be looking at. */}
       <NoteToasts onGoto={goFromNote} />
+      <AskedBanners />
       <ZoomToast zoom={zoomed} />
       <UpdateToast />
       <SettingsModal

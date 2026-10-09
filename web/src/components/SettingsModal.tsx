@@ -108,6 +108,7 @@ import { CloseButton } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { CheckboxIcon, ClockIcon, CrossIcon, DoneIcon } from "../lib/glyphIcons.tsx";
 import { ciOnlyApproved, setCiOnlyApproved } from "../lib/ciNotifyPref.ts";
+import { AskedAlertLog } from "./AskedAlertLog.tsx";
 import { setTalkNotify, talkNotify, type TalkNotify } from "../lib/talkNotify.ts";
 import { RETENTION, setUnderstudyEnabled, useUnderstudy } from "./understudy/UnderstudyPanel.tsx";
 import { Appearance, closedCount } from "./understudy/Appearance.tsx";
@@ -2479,6 +2480,11 @@ function NotificationsSection(p: {
             { v: "off", label: "Off" },
           ]}
           onPick={p.onTalkMode} />
+      </Section>
+
+      <Section title="Asked for, and what became of it"
+        desc="The notifications you armed, newest first. Quiet: nothing here interrupts.">
+        <AskedAlertLog />
       </Section>
 
       <Section title="From other apps">

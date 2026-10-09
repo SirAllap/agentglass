@@ -144,6 +144,7 @@ import {
   listWatches, addWatch, removeWatch, setPreset, applyPreset, sawMine, onTalkSeen as watchOnTalkSeen, pendingFires, ackFire,
   subscribeWatchChange, subscribeWatchFire, subscribeWatchChecks, startPrNotifyWatch,
 } from "./prNotifyWatch.ts";
+import { subscribeAskedAlerts, handleAskedAlertRoute } from "./askedAlerts.ts";
 import { measureFile } from "./filemeasure.ts";
 import { editorCursor } from "./editorwhere.ts";
 import {
@@ -7115,6 +7116,13 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
        cannot tell without asking. */
     /* "Tell me when this pull request's CI does X" — the rules and the repo
        defaults, kept server side so they outlive the window. See prNotifyWatch.ts. */
+    // The notifications they asked for: the ones still waiting, answering one, the audit. See askedAlerts.ts.
+    if (pathname.startsWith("/alerts/asked")) {
+      if (req.method === "POST" && !trustedCaller(req, from)) return csrfBlocked();
+      const b = req.method === "POST" ? await req.json().catch(() => ({})) as Record<string, unknown> : {};
+      const hit = handleAskedAlertRoute(req.method, pathname, b);
+      if (hit) return json(hit.data, hit.status);
+    }
     if (pathname === "/prs/notify-watch" && req.method === "GET") return json({ ok: true, ...listWatches() });
     // Fires decided while no client was there to hear them, oldest first — for the window on connect and for a phone.
     if (pathname === "/prs/notify-watch/pending" && req.method === "GET") return json({ ok: true, fires: pendingFires() });
@@ -9647,13 +9655,15 @@ function noteMine(root: string, filter: string, state: string, r: { repo: { name
 subscribeTalkSeen(watchOnTalkSeen);
 subscribeWatchChange(() => broadcast({ type: "prwatch", data: listWatches() }));
 subscribeWatchFire((f) => broadcast({ type: "prwatchfire", data: f }));
+// What the person asked for stays until they act on it; closing it in one window takes it down in all of them.
+subscribeAskedAlerts((e) => broadcast(e));
 subscribeWatchChecks((c) => broadcast({ type: "prchecks", data: c }));
 const prNotifyKick = process.env.NODE_ENV === "test" ? () => {} : startPrNotifyWatch(async (root, number) => {
   const r = await prRollup(root, number, true); // forced: the watch's own cadence is the budget, and a cached read would add its age to the wait
   if (!(r.ok && r.checks && r.all)) return null;
   // Past 100 contexts `all` is only the first page: never conclude "all done" from it.
   const complete = !r.truncated;
-  return { checks: complete ? r.checks : undefined, allDone: r.checks.allDone && complete, verdict: complete ? r.checks.verdict : null, all: r.all, state: r.state };
+  return { checks: complete ? r.checks : undefined, allDone: r.checks.allDone && complete, verdict: complete ? r.checks.verdict : null, all: r.all, state: r.state, sha: r.sha };
 }).kick;
 // A plugin drew something, or wrote notes on a pull request. The frame says
 // only where to look again; what was drawn is fetched over the token.
