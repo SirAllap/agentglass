@@ -275,6 +275,22 @@ export async function tmux(args: string[], stdin?: string): Promise<TmuxResult> 
   }
 }
 
+/** `tmux` for the one caller that cannot await: the pty handshake, which has
+ *  to know what a session is running BEFORE it builds the command that would
+ *  attach to it. Same binary, socket, config and environment as `tmux`. */
+export function tmuxSync(args: string[]): TmuxResult {
+  const bin = resolveTmuxBin();
+  if (!bin) return { ok: false, stdout: "", stderr: "tmux is not installed" };
+  try {
+    const r = Bun.spawnSync([bin, ...engineSocketArgs(true), "-f", confPath(), ...args], {
+      stdout: "pipe", stderr: "pipe", env: tmuxEnv(), timeout: TMUX_TIMEOUT_MS,
+    });
+    return { ok: r.exitCode === 0, stdout: r.stdout.toString(), stderr: r.stderr.toString() };
+  } catch (e) {
+    return { ok: false, stdout: "", stderr: failed("tmux", e, "tmux could not be run") };
+  }
+}
+
 /** Is tmux usable at all here?
  *
  *  Two separate reasons it might not be, and they need different words in the

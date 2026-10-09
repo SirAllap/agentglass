@@ -41,7 +41,7 @@ import { appChordFor, chordLabel } from "../../lib/keybindings.ts";
 import {
   activateTab, activeTab, addTab, benchRoots, benchState, closeBench, closeTab, freeSlot, openBench,
   setBenchFab, setBenchGeom, setBenchGrown, setBenchRoot, showBoard, subscribeBench, tabsFor, zoomBench,
-  READER_SLOT, type BenchTab,
+  READER_SLOT, readerSeed, type BenchTab,
 } from "../../lib/benchStore.ts";
 import { claimZoom } from "../../lib/zoomOwner.ts";
 import { BenchTerm } from "./BenchTerm.tsx";
@@ -367,30 +367,59 @@ export function FloatingBench() {
    * tmux session, which tmux answers by mirroring — the same bug that made the
    * docked console a copy of the Terminal.
    *
-   * The FIRST file is the one the session is created with; after that the
-   * session exists and tmux ignores the command, which is exactly what we want.
+   * The file the session is created WITH is the one on screen when the reader
+   * is built — never simply the oldest file tab. It was `files[0]`, and a
+   * checkout that still held an older tab opened THAT file (or, when it was
+   * gone, a plain shell) whatever you had just asked for; the /bench/edit
+   * below that was meant to correct it fires once, before the session exists
+   * while the window is closed, and was never sent again. Measured on an
+   * isolated server: "Edit in nvim" on results.json showed results.md, the
+   * older tab.
+   *
+   * Pinned once built, so moving between file tabs asks the running editor
+   * rather than reconnecting. Rebuilt (a new `gen`) when that editor cannot be
+   * reached: the server replaces a reader session that is not an editor, so
+   * reconnecting with the file you asked for is how a dead or wrong session
+   * turns back into nvim on that file.
    */
   const files = useMemo(() => tabs.filter((t) => t.kind === "file"), [tabs]);
-  const seed = files[0];
+  const [readerAt, setReaderAt] = useState<{ root: string; tab: BenchTab; gen: number } | null>(null);
+  const seed = readerSeed(readerAt?.root === root ? readerAt.tab : null, active, files);
+  const pinned = !!readerAt && readerAt.root === root && seed === readerAt.tab;
+  /* Pinned when the terminal is first drawn, not when the page loads: until
+     then the file asked for last is the one to start with. */
+  const drawn = seen.has(reader);
+  useEffect(() => {
+    if (!root || !seed || pinned || !drawn) return;
+    setReaderAt((b) => ({ root, tab: seed, gen: b?.gen ?? 0 }));
+  }, [root, seed, pinned, drawn]);
 
   useEffect(() => {
     if (!root || active?.kind !== "file" || !active.path) return;
+    const want = active;
     let live = true;
     let tries = 0;
     const ask = () => {
-      api.benchEdit(root, active.path!, active.line ?? 0, !!active.readonly)
+      api.benchEdit(root, want.path!, want.line ?? 0, !!want.readonly)
         .then((r) => {
-          /* Not live yet means the editor is still starting — the session was
-             created a moment ago by the terminal below. One retry rather than a
-             poll: if it is not up by then, the tab is showing it starting and
-             the file it was created with is the one you asked for anyway. */
-          if (live && r.ok && !r.live && tries++ < 1) setTimeout(ask, 700);
+          if (!live || !r.ok || r.live) return;
+          /* Not live yet means the editor may still be starting — the session
+             was created a moment ago by the terminal below — so one retry. Not
+             live after that means there is no editor on that socket at all: a
+             reader that quit, or a session that was never nvim. Rebuild it on
+             the file asked for; the server ends a reader that is not an editor
+             (see ptyOpen) and attaches to one that is. */
+          if (tries++ < 1) { setTimeout(ask, 700); return; }
+          setReaderAt((b) => ({ root, tab: want, gen: (b?.gen ?? 0) + 1 }));
         })
         .catch(() => { /* the tab still shows whatever the editor has */ });
     };
     ask();
     return () => { live = false; };
-  }, [root, active?.id, active?.path, active?.line, active?.readonly, active?.kind]);
+    /* `active` itself, not its fields: asking again for the file already on
+       screen (after its editor quit) is a new tab object with the same path,
+       and it has to reach the editor too. */
+  }, [root, active]);
 
   /* ------------------------------------------------------------------ zoom */
 
@@ -748,6 +777,7 @@ export function FloatingBench() {
                 {root && seed && seen.has(reader) && (
                   <div className="absolute inset-0" style={{ visibility: active?.kind === "file" ? "visible" : "hidden" }}>
                     <BenchTerm
+                      key={readerAt?.gen ?? 0}
                       root={root}
                       slot={READER_SLOT}
                       view={seed.path}

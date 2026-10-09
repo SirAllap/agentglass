@@ -30,7 +30,7 @@ import { inScope, workspaceRoot, terminalDisabledSource, tmuxTerminal, tmuxPrefi
 import { noteNvimArgv } from "./bench.ts";
 import { engineAttachArgv, engineBenchArgv, engineConsoleArgv, engineWindowRunning, engineSplitRunning, engineSessionName } from "./tmuxpane.ts";
 import { confHealth, ensureConf } from "./tmuxconf.ts";
-import { readerSocketPath } from "./bench.ts";
+import { readerSocketPath, readerSessionState, endReaderSession, BENCH_READER_SLOT } from "./bench.ts";
 import { browseReal } from "./browse.ts";
 import { SKIP_DIRS } from "./gitwork.ts";
 
@@ -935,6 +935,36 @@ export function ptyOpen(ws: PtyWs) {
      it said yes. */
   const noteRun = d.bench && d.note ? noteNvimArgv(cwd) : null;
   const benchRuns = d.bench ? (agentRun.length ? agentRun : noteRun ?? editorArgv) : null;
+  /*
+   * The reader is an editor or it is nothing.
+   *
+   * Every file tab of a checkout shares the reader's session, and `-A` attaches
+   * to whatever already holds that name. Two ways that went wrong, both
+   * measured on an isolated server with the finder's "Edit in nvim":
+   *
+   * - The session was created as a plain SHELL whenever the file it was
+   *   created for could not be opened (gone since, or refused). Nothing ever
+   *   replaced it: every later file, however valid, attached to that prompt,
+   *   and /bench/edit had no editor to hand the file to. So a reader session
+   *   that is not the editor is ended here, and this attach starts the editor
+   *   on the file it names.
+   * - With nothing to open, it does not become a shell: it says why. A prompt
+   *   in the checkout, in a tab named after a file, reads as "nvim did not
+   *   start" and nobody can tell which file it failed on.
+   *
+   * Only with the engine: without tmux there is no session to be wrong about.
+   */
+  if (d.bench === BENCH_READER_SLOT && d.view && !agentRun.length && !noteRun && engineAttachArgv(startIn)) {
+    const held = readerSessionState(startIn);
+    if (held === "other") endReaderSession(startIn);
+    if (held !== "editor" && !editorArgv) {
+      if (wired) wired.dispose();
+      const why = !viewable ? "is not a file the bench may open" : !existsSync(wanted!) ? "is not there any more" : "has no editor to open it (set $EDITOR or install nvim)";
+      ctl(ws, { t: "fatal", error: `${basename(wanted ?? String(d.view))} ${why}` });
+      ws.close(1008, "nothing to edit");
+      return;
+    }
+  }
   const engine = d.bench
     ? engineBenchArgv(startIn, d.bench, benchRuns, ticket?.role ? { AGENTGLASS_ROLE: ticket.role } : undefined)
     : d.console
