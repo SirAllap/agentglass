@@ -4806,7 +4806,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             {metricsOn ? (
               <CiMetrics root={projectRoot} repo={repo?.nameWithOwner ?? ""} active={active && selected == null} />
             ) : inboxOn ? (
-              <Inbox repo={repo?.nameWithOwner ?? ""} onFlash={flash} onUnread={setInboxUnread} active={active && selected == null} />
+              <Inbox repo={repo?.nameWithOwner ?? ""} root={projectRoot} prs={prs} onFlash={flash} onUnread={setInboxUnread} active={active && selected == null} />
             ) : boardShown && repo && !listState.needsAuth ? (
               /* The board replaces the TABLE, not the panel: every pill, facet
                  and search above stays where it was, and picking any of them

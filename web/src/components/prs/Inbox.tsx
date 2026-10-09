@@ -23,11 +23,14 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { usePoll } from "../../lib/usePoll.ts";
-import type { InboxItem } from "../../../../shared/types.ts";
+import type { InboxItem, PrSummary } from "../../../../shared/types.ts";
 import { api } from "../../lib/api.ts";
 import { botOnly, byDay, facetCounts, facetOrder, FACETS, filterInbox, inFacet, orderByAnnotation, reasonLabel, searchInbox, sorters, TURN_CHIP, turnLine, yourTurn } from "../../lib/ghInbox.ts";
 import { doneIds, isDone, isSaved, onShelf, savedIds, setDone, setSaved, subscribeMarks, type Shelf } from "../../lib/inboxMarks.ts";
 import { fmtAgo } from "../../lib/format.ts";
+import { inboxCiLine } from "../../lib/inboxCiText.ts";
+import { jobIdOf } from "../../lib/prFailureHint.ts";
+import { failureKey, loadCached, summaryOf, useFailureStore } from "../../lib/checkFailuresStore.ts";
 import { openPr } from "../../lib/openPrs.ts";
 import { useDialogs } from "../ConfirmDialog.tsx";
 import { openIssue } from "../../lib/openIssue.ts";
@@ -118,9 +121,12 @@ function Rail({ mark, label, n, on, hint, onClick }: {
   );
 }
 
-export function Inbox({ repo, onFlash, onUnread, active = true }: {
+export function Inbox({ repo, root, prs, onFlash, onUnread, active = true }: {
   /** The repository the panel is showing, which is what this opens filtered to. */
   repo: string;
+  /** The checkout and the pull requests the panel has loaded: what a failed CI row is worded from. Neither asks GitHub. */
+  root: string;
+  prs: PrSummary[];
   onFlash?: (ok: boolean, text: string) => void;
   /** How many are unread in THIS repository, for the pill that opened this —
    *  the only number the panel shows before the inbox is on screen. */
@@ -133,6 +139,14 @@ export function Inbox({ repo, onFlash, onUnread, active = true }: {
      lookbehind skipped every receiver including `window`. */
   const { ask, dialog } = useDialogs();
   const [raw, setRaw] = useState<InboxItem[] | null>(null);
+  /* The failing part of a failed CI row, from what the app already read: one request to this server's own cache. */
+  useFailureStore();
+  useEffect(() => {
+    if (!root) return;
+    const ids = new Set<string>();
+    for (const p of prs) for (const c of p.checks?.failing ?? []) { const j = jobIdOf(c); if (j) ids.add(j); }
+    if (ids.size) void loadCached(root, [...ids]);
+  }, [root, prs]);
   const [err, setErr] = useState("");
   const [at, setAt] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -283,6 +297,7 @@ export function Inbox({ repo, onFlash, onUnread, active = true }: {
     const turnView = n.turn && (shelf === "turn" || ghost);
     const chip = turnView ? TURN_CHIP[n.turn!.kind] : null;
     const line = turnView ? turnLine(n.turn!) : null;
+    const ci = root ? inboxCiLine(n, prs, (job) => summaryOf(failureKey(root, job))) : null;
     return (
       <div key={n.id} className="group flex items-start gap-2 px-2.5 py-2"
         style={{ borderBottom: LINE, opacity: ghost ? 0.62 : undefined, background: n.unread && !ghost ? "color-mix(in srgb, var(--primary) 5%, transparent)" : "transparent" }}>
@@ -302,6 +317,11 @@ export function Inbox({ repo, onFlash, onUnread, active = true }: {
             style={{ color: n.unread && !ghost ? "var(--text)" : "var(--text2)", fontWeight: n.unread && !ghost ? 600 : 400 }}>
             {n.title}
           </div>
+          {ci && (
+            <div className="mt-0.5 flex text-[10.5px]" style={{ color: "var(--text3)" }} title={ci.text + ci.tail}>
+              <span className="truncate">{ci.text}</span><span className="shrink-0 whitespace-pre">{ci.tail}</span>
+            </div>
+          )}
           {line && (line.by || line.text) && (
             <div className="mt-0.5 text-[10.5px] truncate" style={{ color: "var(--text3)" }}>
               {line.by && <span style={{ color: "var(--text2)" }}>{line.by}</span>}{line.by && line.text ? " " : ""}{line.text}
