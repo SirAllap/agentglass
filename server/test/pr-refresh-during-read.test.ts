@@ -18,7 +18,7 @@ const dir = mkdtempSync(join(tmpdir(), "agx-refresh-during-"));
 const bin = join(dir, "bin");
 const repo = join(dir, "orbit");
 const ghLog = join(dir, "gh.log");
-let out: { rows: number[]; asked: string[]; rowsAfterWrite: number[]; askedAfterWrite: number } | null = null;
+let out: { rows: number[]; asked: string[]; rowsAfterWrite: number[]; askedAfterWrite: number; stamps: { fetchedAt: number; startedAt?: number } } | null = null;
 let failure = "";
 
 beforeAll(async () => {
@@ -82,5 +82,11 @@ describe("a Refresh during a read", () => {
   it("drops a read that began before a write instead of keeping it as fresh", () => {
     expect(out!.rowsAfterWrite).toEqual([1, 2, 9]);
     expect(out!.askedAfterWrite).toBe(2);
+  });
+  it("stamps the list with when its read STARTED, not when it ended", () => {
+    const { fetchedAt, startedAt } = out!.stamps;
+    // the stub GitHub takes 400 ms to answer
+    expect(typeof startedAt).toBe("number");
+    expect(fetchedAt - startedAt!).toBeGreaterThanOrEqual(300);
   });
 });

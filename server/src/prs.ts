@@ -911,7 +911,7 @@ export function ciNotifiesFor(filter: PrFilter): boolean {
  */
 const LIST_FIELDS_FAST = "number,title,author,state,isDraft,headRefName,baseRefName,url,updatedAt,reviewDecision,additions,deletions,changedFiles,labels,assignees,milestone";
 
-type Entry = { at: number; prs: PrSummary[]; loading: boolean; checksPending: boolean; error?: string; total?: number; hasNext?: boolean; cursor?: string | null; fp?: string };
+type Entry = { at: number; prs: PrSummary[]; loading: boolean; checksPending: boolean; error?: string; total?: number; hasNext?: boolean; cursor?: string | null; fp?: string; began?: number };
 const listCache = new Map<string, Entry>();
 /** List key -> when its read began. */
 const inflight = new Map<string, number>();
@@ -1942,8 +1942,9 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
   inflight.set(key, Date.now());
   const epoch = listEpoch.get(repo.key) ?? 0;
   const prev = listCache.get(key);
+  const startedAt = Date.now();
   const keep = (over: Partial<Entry>): Entry => ({
-    at: prev?.at ?? 0, prs: prev?.prs ?? [], loading: true, checksPending: true, error: prev?.error, ...over,
+    at: prev?.at ?? 0, prs: prev?.prs ?? [], loading: true, checksPending: true, error: prev?.error, began: prev?.began, ...over,
   });
   listCache.set(key, keep({}));
 
@@ -1971,7 +1972,7 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
           /* An empty queue is an answer too: its fingerprint carries the
              count, so "still none" is one point, not three. */
           if (fp && prev?.fp === fp && !prev.error) {
-            listCache.set(key, { ...prev, at: Date.now(), loading: false, checksPending: false });
+            listCache.set(key, { ...prev, at: Date.now(), began: startedAt, loading: false, checksPending: false });
             return;
           }
         }
@@ -2005,7 +2006,7 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
          */
         const before = new Map((listCache.get(key)?.prs ?? []).map((p) => [p.number, p]));
         listCache.set(key, {
-          at: Date.now(), prs: early.rows.map((r) => carryOver(before.get(r.number), r)),
+          at: Date.now(), began: readStart, prs: early.rows.map((r) => carryOver(before.get(r.number), r)),
           loading: false, checksPending: true,
           total: early.total, hasNext: early.hasNext, cursor: early.cursor,
         });
@@ -2196,7 +2197,7 @@ function storePage(repo: PrRepoId, filter: PrFilter, state: PrState, key: string
      the write `saveDiskCache` persists, so a blank that gets here outlives
      the session that caused it. */
   listCache.set(key, {
-    at: Date.now(), prs: keepNewerDetails(repo, page.rows.map((r) => carryOver(prior.get(r.number), r)), since),
+    at: Date.now(), began: since, prs: keepNewerDetails(repo, page.rows.map((r) => carryOver(prior.get(r.number), r)), since),
     loading: false, checksPending: false,
     total: page.total, hasNext: page.hasNext, cursor: page.cursor, fp,
   });
@@ -2535,6 +2536,7 @@ export async function listPrs(rootIn: unknown, filterIn: unknown, stateIn: unkno
     repo,
     prs,
     fetchedAt: cur?.at ?? 0,
+    startedAt: cur?.began ?? 0,
     stale: !cur?.at || Date.now() - (cur?.at ?? 0) > LIST_TTL_MS,
     loading: !!cur?.loading,
     checksPending: !!cur?.checksPending,
@@ -3282,7 +3284,7 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
     return { ok: true, detail: hit.detail, stale: true };
   }
 
-  const p = readDetail(rootIn, number, repo, key).finally(() => { if (detailFlights.get(key) === p) detailFlights.delete(key); });
+  const p = readDetail(rootIn, number, repo, key).finally(() => { if (detailFlights.get(key) === p) { detailFlights.delete(key); detailFlightAt.delete(key); } });
   detailFlights.set(key, p); detailFlightAt.set(key, Date.now());
   return p;
 }
@@ -3974,7 +3976,9 @@ async function runPr(rootIn: unknown, number: number, args: string[], stdin?: st
   if (r.code !== 0) return { ok: false, error: (r.stderr || r.stdout).trim().split("\n")[0] || "gh failed" };
   // The first line, the same as the error path above. This is shown in a toast
   // — a phone-width one — and some of these commands print a paragraph.
-  return { ok: true, detail: r.stdout.trim().split("\n")[0] || undefined };
+  // `at`: the server's own clock at the moment the write settled, the stamp a
+  // list's `startedAt` is compared with (never the browser's clock).
+  return { ok: true, detail: r.stdout.trim().split("\n")[0] || undefined, at: Date.now() };
 }
 
 const REVIEW_FLAG = { approve: "--approve", request_changes: "--request-changes", comment: "--comment" } as const;

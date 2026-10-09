@@ -44,6 +44,10 @@ describe("the UNKNOWN recheck is a forced read", () => {
 
 describe("a reopened pull request is held in the board it left", () => {
   const mine = { ...detail, state: "OPEN", viewerDidAuthor: true } as unknown as PrDetail;
+  const held = async (at = 1000) => {
+    const { reopenedRow } = await import("../src/lib/prRefresh.ts");
+    return new Map([["/r#7", { n: 7, root: "/r", at, t: Date.now(), row: reopenedRow(mine)! }]]);
+  };
   it("has a row only for the author's own", async () => {
     const { reopenedRow } = await import("../src/lib/prRefresh.ts");
     expect(reopenedRow(mine)!.number).toBe(7);
@@ -51,22 +55,34 @@ describe("a reopened pull request is held in the board it left", () => {
     expect(reopenedRow({ ...mine, viewerDidAuthor: false } as unknown as PrDetail)).toBeNull();
   });
   it("puts the row back into a list that lacks it, so the card is there at once", async () => {
-    const { reopenedRow, holdReopened } = await import("../src/lib/prRefresh.ts");
-    const held = new Map([[7, { at: 1000, row: reopenedRow(mine)! }]]);
-    expect(holdReopened([], held, 0, 2000).map((r) => r.number)).toEqual([7]);
+    const { holdReopened } = await import("../src/lib/prRefresh.ts");
+    expect((await import("../src/lib/prRefresh.ts")).holdReopened([], await held(), 0, "/r").map((r) => r.number)).toEqual([7]);
+    expect(holdReopened([], await held(), undefined, "/r").map((r) => r.number)).toEqual([7]);
   });
-  it("does not outrank a read that began after the reopen, or one that has the row, or age", async () => {
-    const { reopenedRow, holdReopened } = await import("../src/lib/prRefresh.ts");
-    const held = () => new Map([[7, { at: 1000, row: reopenedRow(mine)! }]]);
-    expect(holdReopened([], held(), 1500, 2000)).toEqual([]);
+  it("compares SERVER stamps: a read that started before the write's stamp does not outrank it", async () => {
+    const { holdReopened } = await import("../src/lib/prRefresh.ts");
+    expect(holdReopened([], await held(1000), 999, "/r").map((r) => r.number)).toEqual([7]);
+    expect(holdReopened([], await held(1000), 1000, "/r")).toEqual([]);
+    expect(holdReopened([], await held(1000), 5000, "/r")).toEqual([]);
+  });
+  it("is not moved by the browser's own clock", async () => {
+    const { holdReopened } = await import("../src/lib/prRefresh.ts");
+    // a stamp far in the browser's past or future decides only by the server pair; the browser clock only ages a row out
+    expect(holdReopened([], await held(4_000_000_000_000), 3_999_999_999_999, "/r").length).toBe(1);
+    expect(holdReopened([], await held(1), 2, "/r").length).toBe(0);
+    expect(holdReopened([], await held(1000), 999, "/r", Date.now() + 86_400_000).length).toBe(0); // aged out, nothing else
+  });
+  it("does not outrank a list that has the row, and is per repository", async () => {
+    const { holdReopened } = await import("../src/lib/prRefresh.ts");
     const has = [row];
-    expect(holdReopened(has, held(), 0, 2000)).toBe(has);
-    expect(holdReopened([], held(), 0, 1000 + 31_000)).toEqual([]);
+    expect(holdReopened(has, await held(), 0, "/r")).toBe(has);
+    expect(holdReopened([], await held(), 0, "/other")).toEqual([]);
   });
-  it("is what the reopen press and the list reads go through", () => {
+  it("is what the reopen press and the list reads go through, and a close forgets it", () => {
     const at = panel.indexOf("if (ok2 && reopen)");
-    expect(panel.slice(at, at + 500)).toMatch(/reopenedRef\.current\.set/);
-    expect(panel).toMatch(/setBoardMine\(\(cur\) => withReopened\(openLists\(holdEdits/);
+    expect(panel.slice(at, at + 700)).toMatch(/reopenedRef\.current\.set/);
+    expect(panel).toMatch(/setBoardMine\(\(cur\) => withReopened\(openLists\(holdEdits[^\n]*r\.startedAt/);
+    expect(panel).toMatch(/reopenedRef\.current\.delete\(/);
   });
 });
 

@@ -72,7 +72,9 @@ export function overlayDetail(rows: PrSummary[], d: PrDetail): PrSummary[] {
  * still wait for the read.
  */
 export const REOPEN_HOLD_MS = 30_000;
-export type Reopened = Map<number, { at: number; row: PrSummary }>;
+/** Keyed `${root}#${number}`: another repository's pull request of the same number is not this one. `at` is the SERVER's stamp of the reopen; `t` only measures how long it has been held. */
+export type Reopened = Map<string, { n: number; root: string; at: number; t: number; row: PrSummary }>;
+export const reopenKey = (root: string, n: number) => `${root}#${n}`;
 
 export function reopenedRow(d: PrDetail): PrSummary | null {
   if (!d.viewerDidAuthor) return null;
@@ -82,12 +84,21 @@ export function reopenedRow(d: PrDetail): PrSummary | null {
   } as unknown as PrSummary;
 }
 
-/** `rows` with every held reopen that this read (started at `fetchedAt`) predates. */
-export function holdReopened(rows: PrSummary[], held: Reopened, fetchedAt: number, now = Date.now()): PrSummary[] {
+/**
+ * `rows` with every held reopen the read behind them cannot have seen.
+ *
+ * `startedAt` is the server's stamp of when that read was sent and `e.at` the
+ * server's stamp of the reopen: both on ONE clock, so a browser clock that is
+ * off (a remote or mobile client) cannot decide it. A read with no stamp
+ * (0 / missing) is not proven newer, so the row stays. The browser's clock is
+ * used only to let a held row expire.
+ */
+export function holdReopened(rows: PrSummary[], held: Reopened, startedAt: number | undefined, root: string, now = Date.now()): PrSummary[] {
   let out = rows;
-  for (const [n, e] of held) {
-    if (now - e.at > REOPEN_HOLD_MS) { held.delete(n); continue; }
-    if (fetchedAt >= e.at || out.some((r) => r.number === n)) continue;
+  for (const [k, e] of held) {
+    if (now - e.t > REOPEN_HOLD_MS) { held.delete(k); continue; }
+    if (e.root !== root) continue;
+    if ((startedAt ?? 0) >= e.at || out.some((r) => r.number === e.n)) continue;
     out = [e.row, ...out];
   }
   return out;

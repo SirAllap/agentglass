@@ -67,7 +67,7 @@ import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
 import { keepLoadedChecks } from "../lib/prMerge.ts";
 import { askingBehind, behindAnswer, forgetBehind, forgetOneBehind, onBehind, refreshBehind } from "../lib/prBehindStore.ts";
 import { refreshRollup } from "../lib/prRollupStore.ts";
-import { overlayDetail, reopenedRow, holdReopened, holdEdits, refreshPlan, rowPatch, landedDetail, dropLanded, staleOpen, once, type EditLog, type Landed, type Reopened } from "../lib/prRefresh.ts";
+import { overlayDetail, reopenedRow, holdReopened, reopenKey, holdEdits, refreshPlan, rowPatch, landedDetail, dropLanded, staleOpen, once, type EditLog, type Landed, type Reopened } from "../lib/prRefresh.ts";
 import {
   anchorId, bootstrapSince, clearSeen, foldedIdx, markAllSeen, newKeys, newSince, onSeenChange, readSeen,
   reviewSpeaks, writeSeen, type NewAtom,
@@ -2599,8 +2599,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    *  even when a read that began before it comes back still listing it. */
   const openLists = (rows: PrSummary[]) => (stateSel === "open" ? dropLanded(rows, landedRef.current) : rows);
   /** The author's own lists also keep a pull request the detail just reopened. */
-  const withReopened = (rows: PrSummary[], fetchedAt: number) =>
-    (stateSel === "open" ? holdReopened(rows, reopenedRef.current, fetchedAt) : rows);
+  const withReopened = (rows: PrSummary[], startedAt: number | undefined) =>
+    (stateSel === "open" ? holdReopened(rows, reopenedRef.current, startedAt, root) : rows);
 
   const loadList = useCallback((force = false) => {
     if (!root) return;
@@ -2612,7 +2612,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       // Same rule as the board: a refresh may add and correct, but it may not
       // un-know. Every fetch starts at the fast pass, so without this a list
       // that had its check states dropped back to "not in yet" on every poll.
-      setPrs((cur) => (want === "mine" ? withReopened : (x: PrSummary[]) => x)(openLists(holdEdits(keepLoadedChecks(cur, r.prs), editLog.current, r.fetchedAt)), r.fetchedAt));
+      setPrs((cur) => (want === "mine" ? withReopened : (x: PrSummary[]) => x)(openLists(holdEdits(keepLoadedChecks(cur, r.prs), editLog.current, r.fetchedAt)), r.startedAt));
       setListState({ fetchedAt: r.fetchedAt, loading: r.loading, checksPending: r.checksPending, error: r.error, needsAuth: r.needsAuth, total: r.total, hasNext: r.hasNext, cursor: r.cursor ?? null, pageSize: r.pageSize });
       // The keyboard cursor, never the open pull request. This lands on every
       // poll and on every scope switch, and when the list was a column beside a
@@ -3288,8 +3288,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
      screen are the closed ones until the read lands, so the reopened pull
      request is put back straight away. */
   useEffect(() => {
-    if (stateSel === "open" && reopenedRef.current.size) setBoardMine((cur) => holdReopened(cur.filter((r) => r.state === "OPEN"), reopenedRef.current, 0));
-  }, [stateSel]);
+    if (stateSel === "open" && reopenedRef.current.size) setBoardMine((cur) => holdReopened(cur.filter((r) => r.state === "OPEN"), reopenedRef.current, 0, root));
+  }, [stateSel, root]);
   const [boardTick, setBoardTick] = useState(0);
   /** Set by Refresh, read once by the board's fetch. See the button. */
   const boardForce = useRef(false);
@@ -3320,7 +3320,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     void Promise.allSettled([
       api.prList(root, "mine", stateSel, force).then((r) => {
         if (!live) return;
-        setBoardMine((cur) => withReopened(openLists(holdEdits(keepLoadedChecks(cur, r.prs ?? []), editLog.current, r.fetchedAt)), r.fetchedAt));
+        setBoardMine((cur) => withReopened(openLists(holdEdits(keepLoadedChecks(cur, r.prs ?? []), editLog.current, r.fetchedAt)), r.startedAt));
         if (typeof r.total === "number") setViewCounts((c) => ({ ...c, mine: r.total! }));
       }),
       api.prList(root, "review", stateSel, force).then((r) => {
@@ -4076,8 +4076,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     if (!ok) return;
     /* Drawn on the press: the detail says Closed and the board card leaves in
        the same tick, and a refusal takes both back. */
+    let stamp: number | undefined;   // the server's clock when the write settled
     const ok2 = await field(statePatch(detail.number, reopen ? "OPEN" : "CLOSED", new Date().toISOString()),
-      () => api.prClose(root, detail.number, reopen), reopen ? "Reopen failed" : "Close failed", "state");
+      () => api.prClose(root, detail.number, reopen).then((r) => { stamp = r.at; return r; }), reopen ? "Reopen failed" : "Close failed", "state");
+    // Closing again ends a held reopen; a reopen is held until a read that started after it lands.
+    if (!reopen) reopenedRef.current.delete(reopenKey(root, detail.number));
     if (ok2) flash(true, reopen ? "Reopen — done" : "Close — done");
     /* A reopened pull request is in none of the lists it left, so its row is
        written into the author's own and held (see holdReopened); a read
@@ -4085,7 +4088,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     if (ok2 && reopen) {
       const row = reopenedRow({ ...detail, state: "OPEN" });
       if (row) {
-        reopenedRef.current.set(detail.number, { at: Date.now(), row });
+        // No stamp from the server (an older one): hold until it expires rather than trust the browser's clock.
+        reopenedRef.current.set(reopenKey(root, detail.number), { n: detail.number, root, at: stamp ?? Number.MAX_SAFE_INTEGER, t: Date.now(), row });
         setBoardMine((cur) => withReopened(cur, 0));
         if (filter === "mine") setPrs((cur) => withReopened(cur, 0));
       }

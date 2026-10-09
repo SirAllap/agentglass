@@ -3806,6 +3806,10 @@ export interface PrListResponse {
   /** When the cached copy was taken. The UI shows this rather than pretending
    *  to be live — every number here costs a subprocess. */
   fetchedAt: number;
+  /** When the read behind these rows was SENT, on the server's clock (0 when
+   *  unknown). A write's `at` is on the same clock: the only pair a client may
+   *  compare to know whether a read saw the write. */
+  startedAt?: number;
   stale: boolean;
   loading: boolean;
   /** The rows are here but their check states are still being fetched. */
@@ -3827,6 +3831,8 @@ export interface PrActionResult {
   /** A merge that landed: who pressed it, so the screen can say so before the
    *  next read does. */
   mergedBy?: string;
+  /** The server's clock when the write settled; see PrListResponse.startedAt. */
+  at?: number;
   /** Update branch only: GitHub refused because base and head conflict — the
    *  one refusal the panel can offer to resolve. */
   conflict?: boolean;

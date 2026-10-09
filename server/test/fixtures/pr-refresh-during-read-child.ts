@@ -60,6 +60,7 @@ served = [1, 2, 9];                             // somebody opens #9 while it is
 await listPrs(root, "mine", "open", true);      // then presses Refresh
 const got = await settled("mine");
 out.rows = got.prs.map((p) => p.number);
+out.stamps = { fetchedAt: got.fetchedAt, startedAt: (got as any).startedAt };
 out.asked = asked.slice();
 // A write (a reopen) lands while a read is running: what that read stored predates it.
 asked.length = 0;
