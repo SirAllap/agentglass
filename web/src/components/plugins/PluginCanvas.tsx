@@ -6,9 +6,10 @@ import { subscribeCanvas } from "../../lib/canvasLive.ts";
 import { EMPTY_CANVAS, type CanvasState } from "../../lib/canvasState.ts";
 import {
   PILE_MAX, SLOT_GAP, actionWithValue, arcPath, boardOf, boardRoutes, childrenIndex, pathLength, rideClearMs, trimStart, clampGrow, formatCountdown, fraction, parentsFirst, pathData,
-  pileSplit, planFlip, rectOrAncestor, routeEdge, sparkPoints, type Point, type Rect,
+  pileSplit, planFlip, rectOrAncestor, routeEdge, sparkCapY, sparkPoints, type Point, type Rect,
 } from "../../lib/canvasGeometry.ts";
 import { CanvasMotion, FLOW_BUSY_MS, FLOW_MARKS, TRAVEL_MS } from "../../lib/canvasMotion.ts";
+import { needsClock } from "../../lib/canvasOrbit.ts";
 import { LUMA_MS, LUMA_MS_REDUCED, gateScene, type GateState } from "../../lib/canvasFlash.ts";
 import { useAtTween, usePanelFit } from "../../lib/canvasView.ts";
 import { TONE_COLOR, TONE_INK } from "../../lib/pluginTones.ts";
@@ -202,8 +203,8 @@ export function PluginCanvas({ plugin, panel, running, onAction }: Props) {
   const byId = useMemo(() => new Map(scene.map((n) => [n.id, n] as const)), [scene]);
   const traces = useMemo(() => boardRoutes(scene), [scene]);
   const edges = useMemo(() => scene.filter((n) => n.type === "edge"), [scene]);
-  // A countdown, and a clock's ticks that count to a time, need the 1 Hz ticker; nothing else does.
-  const hasCountdown = useMemo(() => scene.some((n) => n.type === "countdown" || (n.type === "ticks" && n.until !== undefined)), [scene]);
+  // Only what counts to a time needs the 1 Hz ticker (needsClock); nothing else does.
+  const hasCountdown = useMemo(() => scene.some(needsClock), [scene]);
   const now = useNow(hasCountdown && !unseen);
   const fit = usePanelFit(wrapRef);
   const at = useAtTween(scene, reduced, unseen);
@@ -630,17 +631,20 @@ function NodeView({ node: n, ctx }: { node: CanvasNode; ctx: Ctx }): ReactNode {
     }
     case "spark": {
       const values = Array.isArray(n.values) ? n.values.filter((v): v is number => typeof v === "number" && Number.isFinite(v)) : [];
+      const cap = num(n.cap);
+      const capY = cap === undefined ? undefined : sparkCapY(values, 24, cap);
       return (
         <span ref={ref} className="block w-full min-w-[64px]">
-          <svg role="img" aria-label="trend" viewBox="0 0 100 24" preserveAspectRatio="none" className="w-full block" style={{ height: 24 }}>
-            <polyline points={sparkPoints(values, 100, 24)} fill="none" stroke={TONE_COLOR[toneOf(n.tone, "accent")]} strokeWidth={1.5}
+          <svg role="img" aria-label={cap === undefined ? "trend" : "trend against a limit"} viewBox="0 0 100 24" preserveAspectRatio="none" className="w-full block" style={{ height: 24 }}>
+            {capY !== undefined && <line data-spark-cap x1={0} x2={100} y1={capY} y2={capY} stroke="var(--text3)" strokeWidth={1} strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />}
+            <polyline points={sparkPoints(values, 100, 24, cap)} fill="none" stroke={TONE_COLOR[toneOf(n.tone, "accent")]} strokeWidth={1.5}
               strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
           </svg>
         </span>
       );
     }
     case "gauge":
-      return <Gauge node={n} refCb={ref} />;
+      return <Gauge node={n} now={ctx.now} refCb={ref} />;
     case "dock":
       return <Dock node={n} ctx={ctx} refCb={ref} />;
     case "fold":
@@ -714,7 +718,7 @@ function SheetHost({ node: n, ctx }: { node: CanvasNode; ctx: Ctx }) {
   );
 }
 
-function Gauge({ node: n, refCb }: { node: CanvasNode; refCb: (el: HTMLElement | null) => void }) {
+function Gauge({ node: n, now, refCb }: { node: CanvasNode; now: number; refCb: (el: HTMLElement | null) => void }) {
   const value = num(n.value) ?? 0, max = num(n.max) ?? 1;
   const f = fraction(value, max);
   const color = TONE_COLOR[toneOf(n.tone, "accent")];
@@ -722,7 +726,7 @@ function Gauge({ node: n, refCb }: { node: CanvasNode; refCb: (el: HTMLElement |
   const c = DIAL / 2, r = c - 6;
   let shape: ReactNode;
   if (isGlyphShape(n)) {
-    shape = <GaugeGlyph node={n} />;
+    shape = <GaugeGlyph node={n} now={now} />;
   } else if (n.shape === "arc") {
     shape = (
       <svg width={DIAL} height={DIAL} viewBox={`0 0 ${DIAL} ${DIAL}`} aria-hidden>

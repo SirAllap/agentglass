@@ -147,6 +147,28 @@ describe("a sheet that draws an instrument", () => {
     ret({ chip: "x".repeat(CANVAS_LIMITS.label + 1) }); ret({ chip: "a​b" });
   });
 
+  test("a station's leader can stand above it, and still only in a plane", () => {
+    const sc = orbit();
+    for (const leader of ["left", "right", "below", "above", "none"]) ok([set("t1", { leader })], sc);
+    bad([set("t1", { leader: "over" })]);
+    bad([set("t1", { leader: "Above" })]);
+    bad([add({ id: "loose", type: "token", label: "x", leader: "above" })], []);
+  });
+
+  test("a dock can show the time left on the window's clock, with until", () => {
+    const d = (props: Record<string, unknown>) => [add({ id: "d", type: "dock", title: "Gate", ...props })];
+    ok(d({ until: 1_900_000_000_000, unit: "left" }));
+    ok(d({ until: 1_900_000_000_000, value: "soon" }));
+    bad(d({ until: -1 }), []);
+    bad(d({ until: "soon" }), []);
+    bad(d({ until: Infinity }), []);
+    bad(d({ until: 8.64e15 + 1 }), []);
+    const s = ok(d({ value: "9", until: 1_900_000_000_000 }));
+    bad([set("d", { until: "soon" })], s);
+    // a set can start the clock and take it away again
+    expect(get(ok([set("d", { until: 1_900_000_001_000 })], s), "d")?.until).toBe(1_900_000_001_000);
+  });
+
   test("a gauge gains ticks, segments, a mark and concentric values, each with its own limits", () => {
     const g = (props: Record<string, unknown>) => [add({ id: "g", type: "gauge", ...props })];
     ok(g({ shape: "ticks", value: 24, max: 30 }));
@@ -156,6 +178,15 @@ describe("a sheet that draws an instrument", () => {
     bad(g({ shape: "ticks", value: 1, max: 121 }), []);
     bad(g({ shape: "ticks", value: 1, max: 30.5 }), []);
     bad(g({ shape: "segments", value: 1, max: 13 }), []);
+    // A ticks gauge can run on the window's clock, like the sheet's ticks: until, with period.
+    ok(g({ shape: "ticks", value: 0, max: 30, until: 1_900_000_000_000, period: 3600 }));
+    ok(g({ shape: "ticks", value: 0, max: 30, until: 1_900_000_000_000 }));
+    bad(g({ shape: "ticks", value: 0, max: 30, period: 3600 }), []);
+    bad(g({ shape: "ring", value: 0, max: 30, until: 1_900_000_000_000 }), []);
+    bad(g({ shape: "ticks", value: 0, max: 30, until: 1_900_000_000_000, period: 0 }), []);
+    bad(g({ shape: "ticks", value: 0, max: 30, until: 1_900_000_000_000, period: 86_401 }), []);
+    bad(g({ shape: "ticks", value: 0, max: 30, until: 1_900_000_000_000, period: 60.5 }), []);
+    bad(g({ shape: "ticks", value: 0, max: 30, until: -1 }), []);
     bad(g({ shape: "arc", value: 3, max: 10, mark: 1.1 }), []);
     bad(g({ shape: "pips", value: 3, max: 10, mark: 0.5 }), []);
     bad(g({ shape: "ring", value: 3, max: 10, values: [0.1] }), []);

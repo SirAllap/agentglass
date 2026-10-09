@@ -1,6 +1,7 @@
 import { createContext, useContext, useId, type ReactNode } from "react";
 import type { CanvasAction, CanvasNode } from "../../../../shared/pluginCanvas.ts";
-import { arcPath, fraction, polar } from "../../lib/canvasGeometry.ts";
+import { arcPath, fraction, liveText, polar } from "../../lib/canvasGeometry.ts";
+import { gaugeLit } from "../../lib/canvasOrbit.ts";
 import { useFoldPhase } from "../../lib/canvasView.ts";
 import { TONE_COLOR, TONE_INK } from "../../lib/pluginTones.ts";
 import { int, num, str, toneOf } from "./canvasRead.ts";
@@ -27,7 +28,7 @@ export const useFoldPhaseOf = (): number => useContext(FoldPhase);
 const GAUGE = 52;
 
 /** The graphic of a gauge, with no text: an arc, ring, bar, pips, needle, ticks or segments. Also `mark` and `values`. */
-export function GaugeGlyph({ node: n, size = GAUGE }: { node: CanvasNode; size?: number }): ReactNode {
+export function GaugeGlyph({ node: n, size = GAUGE, now = 0 }: { node: CanvasNode; size?: number; now?: number }): ReactNode {
   const uid = useId();
   const value = num(n.value) ?? 0, max = num(n.max) ?? 1;
   const f = fraction(value, max);
@@ -70,7 +71,7 @@ export function GaugeGlyph({ node: n, size = GAUGE }: { node: CanvasNode; size?:
       </>);
     }
     case "ticks": {
-      const total = int(n.max, 8, 120, 60), lit = Math.round(Math.min(total, Math.max(0, value)));
+      const total = int(n.max, 8, 120, 60), lit = gaugeLit(n, now, total);
       let on = "", off = "";
       for (let i = 0; i < total; i++) {
         const seg = tick(i / total, -90, 360, r - 6, r + 1);
@@ -121,7 +122,8 @@ export function Dock({ node: n, ctx, refCb }: { node: CanvasNode; ctx: Ctx; refC
   const action = n.action as CanvasAction | undefined;
   const selected = n.selected === true, here = n.here === true;
   const leg = n.leg === "busy" || n.leg === "flowing" ? n.leg : "idle";
-  const value = str(n.value), unit = str(n.unit);
+  // With `until` the value line is the time left, redrawn by the window's own clock; `value` is what shows when there is none.
+  const value = liveText(n.until, str(n.value), ctx.now), unit = str(n.unit);
   const press = () => {
     ctx.view.revealFold();
     if (action) void ctx.onAction(action);
@@ -132,7 +134,7 @@ export function Dock({ node: n, ctx, refCb }: { node: CanvasNode; ctx: Ctx; refC
       <span className="cv-dock-journey" aria-hidden><i className="cv-dock-leg" /><i className="cv-dock-node" /></span>
       <span className="cv-dock-title">{str(n.title)}</span>
       <span className="cv-dock-main">
-        {gauge && <GaugeGlyph node={gauge} />}
+        {gauge && <GaugeGlyph node={gauge} now={ctx.now} />}
         <span className="min-w-0">
           {value && <span className="cv-dock-value" style={{ color: TONE_INK[tone === "default" ? "default" : tone] }}>{value}</span>}
           {unit && <span className="cv-dock-unit">{unit}</span>}

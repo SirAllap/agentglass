@@ -9,7 +9,7 @@ import { describe, expect, test } from "bun:test";
 import { CANVAS_LIMITS, effectiveMs, loopingIds, type CanvasScene } from "../../shared/pluginCanvas.ts";
 import {
   PILE_MAX, TweenBudget, actionWithValue, arcPath, childrenIndex, clampGrow, easingCss, formatCountdown, fraction, parentsFirst,
-  pathData, pathLength, pileSplit, planFlip, planTween, rectOrAncestor, routeEdge, sparkPoints, travelFrames, type Rect,
+  pathData, pathLength, pileSplit, planFlip, planTween, rectOrAncestor, liveText, routeEdge, sparkCapY, sparkPoints, travelFrames, type Rect,
 } from "../src/lib/canvasGeometry.ts";
 import { CanvasMotion } from "../src/lib/canvasMotion.ts";
 
@@ -369,6 +369,28 @@ describe("small drawings", () => {
     expect(sparkPoints([5, 5, 5], 100, 20)).toBe("0.0,10.0 50.0,10.0 100.0,10.0");
     expect(sparkPoints([7], 100, 20)).toBe("50.0,10.0");
     expect(sparkPoints([], 100, 20)).toBe("");
+  });
+  test("a cap above the series is part of the scale: the series stays under the line", () => {
+    expect(sparkPoints([0, 10], 100, 20, 20)).toBe("0.0,20.0 100.0,10.0");
+    expect(sparkCapY([0, 10], 20, 20)).toBe(0);
+  });
+  test("a cap under the series pulls the low end of the scale down to itself", () => {
+    expect(sparkCapY([5, 10], 20, 0)).toBe(20);
+    expect(sparkPoints([5, 10], 100, 20, 0)).toBe("0.0,10.0 100.0,0.0");
+  });
+  test("a cap inside the range changes no point and sits at its own height; no cap changes nothing", () => {
+    expect(sparkPoints([0, 10], 100, 20, 5)).toBe(sparkPoints([0, 10], 100, 20));
+    expect(sparkCapY([0, 10], 20, 5)).toBe(10);
+    expect(sparkPoints([0, 10], 100, 20, undefined)).toBe("0.0,20.0 100.0,0.0");
+  });
+  test("a flat series on its cap, and a cap with nothing to compare, draw through the middle", () => {
+    expect(sparkCapY([5, 5], 20, 5)).toBe(10);
+    expect(sparkCapY([], 20, 5)).toBe(10);
+  });
+  test("a line is the time left with an until, and its own text without", () => {
+    expect(liveText(1_090_000, "9", 1_000_000)).toBe("01:30");
+    expect(liveText(undefined, "9", 1_000_000)).toBe("9");
+    expect(liveText("soon", undefined, 1_000_000)).toBeUndefined();
   });
 
   test("a gauge fraction is in [0, 1] and a bad pair is empty", () => {

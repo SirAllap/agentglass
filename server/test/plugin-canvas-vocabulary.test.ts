@@ -147,11 +147,21 @@ describe("what is refused", () => {
     expect(applyOps(r.ok ? r.value.scene : [], [{ op: "set", id: "constructor", props: { gap: "lg" } }]).ok).toBe(true);
   });
 
+  test("a spark can carry a cap, a limit line at a value", () => {
+    const r = applyOps([], [add({ id: "s1", type: "spark", values: [1, 4, 2], cap: 3.5, tone: "warning" })]);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.scene[0]?.cap).toBe(3.5);
+    expect(applyOps([], [add({ id: "s2", type: "spark", values: [1, 4], cap: -2 })]).ok).toBe(true);
+    expect(applyOps([], [add({ id: "s3", type: "spark", values: [1, 4], cap: 0 })]).ok).toBe(true);
+  });
+
   test("numbers that reach layout: non-finite, out of range, wrong kind", () => {
     const g = (props: Record<string, unknown>) => bad([add({ id: "g1", type: "gauge", shape: "arc", value: 1, max: 2, ...props })]);
     g({ value: 1e308 }); g({ value: -1 }); g({ value: NaN }); g({ value: Infinity }); g({ value: "3" }); g({ max: 0 }); g({ shape: "spiral" });
     bad([add({ id: "s1", type: "spark", values: [1, 2, 1e13] })]);
     bad([add({ id: "s1", type: "spark", values: Array.from({ length: 121 }, () => 1) })]);
+    // a cap is one finite number in the same range as the values
+    for (const cap of [1e13, NaN, "2", [2]]) bad([add({ id: "s1", type: "spark", values: [1, 2], cap })]);
     bad([add({ id: "c1", type: "counter", label: "x", value: 1e13 })]);
     bad([add({ id: "k1", type: "countdown", until: -5 })]);
     bad([add({ id: "t9", type: "token", label: "x", count: 1.5 })]);

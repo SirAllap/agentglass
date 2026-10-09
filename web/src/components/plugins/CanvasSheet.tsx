@@ -1,8 +1,8 @@
 import { Fragment, useId, type ReactNode } from "react";
 import type { CanvasNode } from "../../../../shared/pluginCanvas.ts";
 import {
-  arcPointsBox, bandPaths, bracketPath, edgePaths, hatchPath, labelLayout, moonRadius, onCircle, onPlane, pieSlice, planeGeom, tickPaths, trailSlices,
-  type LabelIn, type PlaneGeom, type Pt,
+  arcPointsBox, bandPaths, bracketPath, edgePaths, hatchPath, labelLayout, moonRadius, onCircle, onPlane, pieSlice, planeGeom, tickPaths, trailSlices, VALUE_DROP,
+  type LabelIn, type LabelSide, type PlaneGeom, type Pt,
 } from "../../lib/canvasOrbit.ts";
 import { TONE_COLOR, TONE_INK } from "../../lib/pluginTones.ts";
 import { int, num, str, toneOf } from "./canvasRead.ts";
@@ -77,7 +77,7 @@ export function CanvasSheet({ sheet, kids, edges, view, className }: { sheet: Ca
     for (const q of arcPointsBox(geoms.get(p.id)!, BEYOND)) { minX = Math.min(minX, q.x); maxX = Math.max(maxX, q.x); }
   }
   const labelled: LabelIn[] = moons.filter((m) => str(m.n.label) && m.n.leader && m.n.leader !== "none")
-    .map((m) => ({ id: m.n.id, x: m.x, y: m.y, r: m.r, side: m.n.leader as "left" | "right" | "below" }));
+    .map((m) => ({ id: m.n.id, x: m.x, y: m.y, r: m.r, side: m.n.leader as LabelSide, lines: str(m.n.value) ? 2 : 1 }));
   const { labels, dropped } = labelLayout(labelled, { w, h, left: Math.max(100, minX - 8), right: Math.min(w - 100, maxX + 8) });
   const labelOf = new Map(labels.map((l) => [l.id, l] as const));
 
@@ -258,7 +258,7 @@ function MoonMarks({ m, fade, label }: { m: Moon; fade: number; label: { anchor:
           <text className="cv-label" x={label.x} y={label.y} textAnchor={label.anchor} style={{ opacity: fade, fill: TONE_INK[tone === "default" ? "muted" : tone] }}>{str(n.label)}</text>
         </>
       )}
-      {label && value && <text className="cv-value" x={label.x} y={label.y + 13} textAnchor={label.anchor} style={{ opacity: fade }}>{`${value}${unit ? ` ${unit}` : ""}`}</text>}
+      {label && value && <text className="cv-value" x={label.x} y={label.y + VALUE_DROP} textAnchor={label.anchor} style={{ opacity: fade }}>{`${value}${unit ? ` ${unit}` : ""}`}</text>}
     </>
   );
 }

@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { MOON_MAX_R } from "../../shared/canvasSheet.ts";
 import type { CanvasNode } from "../../shared/pluginCanvas.ts";
 import {
-  LABEL_H, bandPaths, bracketPath, edgePaths, hatchPath, labelLayout, moonRadius, onPlane, planeGeom, tickPaths, tickState, trailSlices, type LabelIn,
+  LABEL_H, VALUE_DROP, bandPaths, bracketPath, edgePaths, gaugeLit, hatchPath, labelLayout, moonRadius, needsClock, onPlane, planeGeom, tickPaths, tickState, trailSlices, type LabelIn,
 } from "../src/lib/canvasOrbit.ts";
 
 const node = (props: Record<string, unknown>): CanvasNode => ({ id: "n", type: "plane", ...props });
@@ -54,6 +54,76 @@ describe("a moon is bigger near, smaller far, and never past the cap", () => {
   });
   test("whatever it is told, a moon stays inside MOON_MAX_R", () => {
     for (const near of [-5, 0, 5, 1e9]) for (const depth of [0, 1, 1e9]) expect(moonRadius("lg", near, depth)).toBeLessThanOrEqual(MOON_MAX_R);
+  });
+});
+
+describe("a ticks gauge on the clock", () => {
+  test("lit marks follow until and period, so an elapsed gauge costs the plugin nothing while it runs", () => {
+    const g = (extra: Record<string, unknown>) => ({ id: "g", type: "gauge", shape: "ticks", value: 5, max: 30, ...extra }) as CanvasNode;
+    expect(gaugeLit(g({}), 0, 30)).toBe(5);
+    expect(gaugeLit(g({ value: 99 }), 0, 30)).toBe(30);
+    expect(gaugeLit(g({ until: 1_060_000, period: 60 }), 1_000_000, 30)).toBe(0);
+    expect(gaugeLit(g({ until: 1_030_000, period: 60 }), 1_000_000, 30)).toBe(15);
+    expect(gaugeLit(g({ until: 1_000_000, period: 60 }), 1_000_000, 30)).toBe(30);
+    expect(gaugeLit(g({ until: 900_000, period: 60 }), 1_000_000, 30)).toBe(30);
+    // until wins over value, as it does over `passed` on the sheet's ticks
+    expect(gaugeLit(g({ value: 29, until: 1_060_000, period: 60 }), 1_000_000, 30)).toBe(0);
+    // period defaults to 60 s, as on the sheet's ticks
+    expect(gaugeLit(g({ until: 1_030_000 }), 1_000_000, 30)).toBe(15);
+  });
+});
+
+const dock = await Bun.file(new URL("../src/components/plugins/CanvasDock.tsx", import.meta.url).pathname).text();
+const sheetSrc = await Bun.file(new URL("../src/components/plugins/CanvasSheet.tsx", import.meta.url).pathname).text();
+const canvas = await Bun.file(new URL("../src/components/plugins/PluginCanvas.tsx", import.meta.url).pathname).text();
+
+describe("the dock and the flow view hand the clock to the glyph", () => {
+  // No renderer under bun test: a rule about source is asserted against source.
+  test("a ticks glyph lights its marks with gaugeLit, not with value alone", () => {
+    const at = dock.indexOf('case "ticks": {');
+    const body = dock.slice(at, dock.indexOf('case "segments"', at));
+    expect(at).toBeGreaterThan(0);
+    expect(body).toContain("gaugeLit(n, now, total)");
+  });
+  test("the dock and the flow view's gauge pass ctx.now to it", () => {
+    expect(dock).toContain("now={ctx.now}");
+    expect(canvas).toContain("now={now}");
+    expect(canvas).toContain("now={ctx.now}");
+  });
+  test("a dock's value line is the time left when it has until, drawn by formatCountdown", () => {
+    const at = dock.indexOf("export function Dock(");
+    const body = dock.slice(at, dock.indexOf("export function Fold(", at));
+    expect(at).toBeGreaterThan(0);
+    expect(body).toContain("liveText(n.until, str(n.value), ctx.now)");
+  });
+  test("the sheet tells the layout whether a label has a value line, and draws that line VALUE_DROP under the name", () => {
+    expect(sheetSrc).toContain("lines: str(m.n.value) ? 2 : 1");
+    expect(sheetSrc).toContain("y={label.y + VALUE_DROP}");
+  });
+  test("a spark draws its cap as a dashed line on sparkCapY's height, and tells a screen reader there is a limit", () => {
+    const at = canvas.indexOf('case "spark": {');
+    const body = canvas.slice(at, canvas.indexOf('case "gauge":', at));
+    expect(at).toBeGreaterThan(0);
+    expect(body).toContain("sparkCapY(values, 24, cap)");
+    expect(body).toContain("sparkPoints(values, 100, 24, cap)");
+    expect(body).toContain("{capY !== undefined && <line data-spark-cap");
+  });
+  test("the 1 Hz ticker runs on needsClock, so a ticks gauge with until gets one", () => {
+    expect(canvas).toContain("scene.some(needsClock)");
+  });
+});
+
+describe("what asks for the 1 Hz clock", () => {
+  test("only what counts to a time: a countdown, a clock's ticks, a ticks gauge with until", () => {
+    const n = (o: Record<string, unknown>) => ({ id: "x", ...o }) as CanvasNode;
+    expect(needsClock(n({ type: "countdown", until: 5 }))).toBe(true);
+    expect(needsClock(n({ type: "ticks", count: 60, until: 5 }))).toBe(true);
+    expect(needsClock(n({ type: "gauge", shape: "ticks", value: 0, max: 30, until: 5 }))).toBe(true);
+    expect(needsClock(n({ type: "dock", title: "Gate", until: 5 }))).toBe(true);
+    expect(needsClock(n({ type: "dock", title: "Gate", value: "5" }))).toBe(false);
+    expect(needsClock(n({ type: "ticks", count: 60, passed: 3 }))).toBe(false);
+    expect(needsClock(n({ type: "gauge", shape: "ticks", value: 3, max: 30 }))).toBe(false);
+    expect(needsClock(n({ type: "label", text: "x" }))).toBe(false);
   });
 });
 
@@ -141,6 +211,29 @@ describe("labels", () => {
     expect(labels.length + dropped.left).toBe(24);
     expect(dropped.left).toBeGreaterThan(0);
     expect(overlap(labels.map((l) => l.y))).toBe(false);
+  });
+  test("an above label is the mirror of a below one: the same 10 unit leader, with its last line standing on it", () => {
+    const at = { id: "top", x: 388, y: 120, r: 8 };
+    const [below] = labelLayout([{ ...at, side: "below" }], bounds).labels;
+    const [one] = labelLayout([{ ...at, side: "above", lines: 1 }], bounds).labels;
+    const [two] = labelLayout([{ ...at, side: "above", lines: 2 }], bounds).labels;
+    expect(one!.side).toBe("above");
+    expect(one!.anchor).toBe("middle");
+    // leader: from just over the moon's top edge to 10 units above that
+    expect(one!.line).toBe("M388 111L388 101");
+    expect(below!.line).toBe("M388 129L388 139");
+    // the name of a one-line label: its baseline is 14 over the moon's top edge, as a below label's is 21 under its bottom edge less the text height
+    expect(one!.y).toBe(120 - 8 - 14);
+    // with a value under it, the name moves up one value line, so the value is where the single line was
+    expect(two!.y).toBe(one!.y - VALUE_DROP);
+    expect(two!.y + VALUE_DROP).toBe(one!.y);
+    // never in a column: an above label takes no room from, and never counts toward, a margin
+    expect(labelLayout([{ ...at, side: "above" }], bounds).dropped).toEqual({ left: 0, right: 0 });
+  });
+  test("an above label does not move the left and right columns", () => {
+    const base = labelLayout(seven(), bounds).labels.filter((l) => l.side === "left" || l.side === "right");
+    const withAbove = labelLayout([...seven(), { id: "top", x: 388, y: 120, r: 8, side: "above" }], bounds).labels.filter((l) => l.side === "left" || l.side === "right");
+    expect(withAbove).toEqual(base);
   });
   test("the same input gives the same layout", () => {
     expect(labelLayout(seven(), bounds)).toEqual(labelLayout(seven(), bounds));

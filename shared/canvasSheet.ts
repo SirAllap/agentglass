@@ -27,7 +27,7 @@
  */
 import type { CanvasNode } from "./pluginCanvas.ts";
 import {
-  CANVAS_LIMITS, SHEET_LIMITS, action, activity, below, bool, idRef, num, oneOf, shortStr, toneCheck, unitStr, type Check,
+  CANVAS_LIMITS, SHEET_LIMITS, PERIOD, UNTIL, action, activity, below, bool, idRef, num, oneOf, shortStr, toneCheck, unitStr, type Check,
 } from "./canvasChecks.ts";
 
 export const SHEET_TYPES = ["sheet", "fold", "dock", "orb", "plane", "band", "hatch", "ticks", "reticle"] as const;
@@ -36,7 +36,7 @@ export const SHEET_CONTAINERS = ["sheet", "fold", "dock", "plane"] as const;
 
 export const SHEET_FITS = ["wide", "narrow"] as const;
 export const TOKEN_SHAPES = ["ring", "dot", "diamond"] as const;
-export const LEADERS = ["left", "right", "below", "none"] as const;
+export const LEADERS = ["left", "right", "below", "above", "none"] as const;
 export const SHEET_W = { min: 320, max: 1200 } as const;
 export const SHEET_H = { min: 200, max: 700 } as const;
 export const FOLD_H = { min: 160, max: 760 } as const;
@@ -92,12 +92,12 @@ const arcValues: Check = (v) => {
 export const SHEET_SPEC: Record<SheetType, Record<string, Check>> = {
   sheet: { w: num(SHEET_W.min, SHEET_W.max, true), h: num(SHEET_H.min, SHEET_H.max, true), material: oneOf(["plain", "inset"] as const), fit: oneOf(SHEET_FITS), label: shortStr, key },
   fold: { h: num(FOLD_H.min, FOLD_H.max, true), hNarrow: num(FOLD_H.min, FOLD_H.max, true), open: bool, label: shortStr, action },
-  dock: { title: shortStr, value: shortStr, unit: unitStr, hint: shortStr, hint2: shortStr, tone: toneCheck, selected: bool, here: bool, leg: activity, action },
+  dock: { title: shortStr, value: shortStr, until: UNTIL, unit: unitStr, hint: shortStr, hint2: shortStr, tone: toneCheck, selected: bool, here: bool, leg: activity, action },
   orb: { cx: num(0, SHEET_W.max, true), cy: num(0, SHEET_H.max, true), r: num(8, 300, true), light: angle, bands: num(0, 8, true), terminator: bool, tone: toneCheck, halo: bool },
   plane: { cx: num(0, SHEET_W.max, true), cy: num(0, SHEET_H.max, true), rx: num(40, 600, true), tilt: num(TILT.min, TILT.max), roll: num(-45, 45), depth: unit01, label: shortStr },
   band: { r0: ratio, r1: ratio, from: angle, to: num(0, 720), layer: oneOf(["back", "front", "all"] as const), segments: num(1, SHEET_LIMITS.segments, true), lit: num(0, SHEET_LIMITS.segments, true), tone: toneCheck, halo: bool },
   hatch: { of: idRef, from: angle, to: num(0, 720), gap: num(6, 24, true), angle: below(0, 180) },
-  ticks: { count: num(8, SHEET_LIMITS.ticks, true), mark: num(1, SHEET_LIMITS.ticks, true), lit: num(0, 16, true), passed: num(0, SHEET_LIMITS.ticks, true), until: num(0, 8.64e15), period: num(1, 86_400, true), side: oneOf(["out", "in"] as const), numerals, tone: toneCheck },
+  ticks: { count: num(8, SHEET_LIMITS.ticks, true), mark: num(1, SHEET_LIMITS.ticks, true), lit: num(0, 16, true), passed: num(0, SHEET_LIMITS.ticks, true), until: UNTIL, period: PERIOD, side: oneOf(["out", "in"] as const), numerals, tone: toneCheck },
   reticle: { of: idRef, chip: shortStr },
 };
 
@@ -112,7 +112,7 @@ export const TOKEN_EXTRA: Record<string, Check> = {
   leader: oneOf(LEADERS), value: shortStr, unit: unitStr,
 };
 export const EDGE_EXTRA: Record<string, Check> = { breakAt: unit01, breakGap: num(0.02, 0.5) };
-export const GAUGE_EXTRA: Record<string, Check> = { mark: unit01, values: arcValues };
+export const GAUGE_EXTRA: Record<string, Check> = { mark: unit01, values: arcValues, until: UNTIL, period: PERIOD };
 export const GAUGE_SHAPES = ["ticks", "segments"] as const;
 
 /** Props only a `fold` has and that a `set` may never change: the window owns
@@ -209,6 +209,8 @@ export function invariantError(n: Node): string | undefined {
       if (shape === "segments" && !(max !== undefined && Number.isInteger(max) && max <= 12)) return "a segments gauge needs a whole max up to 12";
       if (n.values !== undefined && shape !== "arc") return "values belong to an arc gauge";
       if (n.mark !== undefined && shape !== "arc" && shape !== "ring" && shape !== "bar") return "mark belongs to an arc, ring or bar gauge";
+      if ((n.until !== undefined || n.period !== undefined) && shape !== "ticks") return "until and period belong to a ticks gauge";
+      if (n.period !== undefined && n.until === undefined) return "gauge period needs until";
       if (value !== undefined && max !== undefined && value > max) return "gauge value is over its max";
       return undefined;
     }

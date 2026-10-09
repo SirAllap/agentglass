@@ -88,6 +88,9 @@ export const bool: Check = (v) => (typeof v === "boolean" ? v : undefined);
 /** Inclusive on both ends. A half-open range is `below`. */
 export const num = (min: number, max: number, int = false): Check => (v) =>
   typeof v === "number" && Number.isFinite(v) && v >= min && v <= max && (!int || Number.isInteger(v)) ? v : undefined;
+/** `until` is an epoch in ms (the largest a Date holds), `period` the seconds a clock spans: one spec for every node that counts to a time. */
+export const UNTIL: Check = num(0, 8.64e15);
+export const PERIOD: Check = num(1, 86_400, true);
 /** `min <= v < max`: an angle is below 360, never 360 (which would read as 0). */
 export const below = (min: number, max: number): Check => (v) =>
   typeof v === "number" && Number.isFinite(v) && v >= min && v < max ? v : undefined;

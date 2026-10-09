@@ -42,7 +42,7 @@
  * one-shots and `activity` states the app animates itself, and every one of
  * them collapses to nothing under `prefers-reduced-motion`.
  */
-import { ACTION_ID_RE, CANVAS_ACTIVITY, CANVAS_ID_RE, CANVAS_LIMITS, INVISIBLE, SHEET_LIMITS, action, activity, bool, idRef, num, oneOf, shortStr, toneCheck, unitStr, type CanvasActivity, type Check } from "./canvasChecks.ts";
+import { ACTION_ID_RE, CANVAS_ACTIVITY, CANVAS_ID_RE, CANVAS_LIMITS, INVISIBLE, SHEET_LIMITS, action, activity, bool, idRef, num, oneOf, shortStr, toneCheck, unitStr, PERIOD, UNTIL, type CanvasActivity, type Check } from "./canvasChecks.ts";
 
 import { ADD_ONLY, EDGE_EXTRA, GAUGE_EXTRA, GAUGE_SHAPES, SHEET_CONTAINERS, SHEET_REQUIRED, SHEET_SPEC, SHEET_TYPES, TOKEN_EXTRA, contextError, dependants, invariantError, sceneError, sheetPlaceError } from "./canvasSheet.ts";
 
@@ -172,9 +172,9 @@ const SPEC: Record<CanvasType, Record<string, Check>> = {
   stat: { label: shortStr, value: shortStr, hint: shortStr, tone: toneCheck },
   badge: { text: shortStr, tone: toneCheck },
   icon: { icon: iconCheck, tone: toneCheck, label: shortStr },
-  spark: { values: sparkValues, tone: toneCheck },
+  spark: { values: sparkValues, cap: num(-1e12, 1e12), tone: toneCheck },
   gauge: { shape: oneOf(["arc", "ring", "bar", "pips", "needle", ...GAUGE_SHAPES] as const), ...GAUGE_EXTRA, value: num(0, 1e9), max: num(1, 1e9), label: shortStr, tone: toneCheck, digits: num(0, 4, true), hideMax: bool },
-  countdown: { until: num(0, 8.64e15), label: shortStr, tone: toneCheck, shape: oneOf(["text", "ring"] as const), period: num(1, 86_400, true) },
+  countdown: { until: UNTIL, label: shortStr, tone: toneCheck, shape: oneOf(["text", "ring"] as const), period: PERIOD },
   edge: { from: idRef, to: idRef, activity, tone: toneCheck, label: shortStr, kind: oneOf(["trace", "control", "seal"] as const), points, ...EDGE_EXTRA },
   button: { label: shortStr, action, tone: oneOf(["primary", "default", "danger"] as const), confirm: shortStr, disabled: bool },
   segmented: { label: shortStr, options, value: (v) => (typeof v === "string" && ACTION_ID_RE.test(v) ? v : undefined), action, style: oneOf(["chips", "lever"] as const) },

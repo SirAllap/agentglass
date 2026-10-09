@@ -234,16 +234,35 @@ export function formatCountdown(until: number, now: number): string {
   return `${two(Math.floor(s / 60))}:${two(s % 60)}`;
 }
 
+/** A line that is the time left when it has an `until`, and its own text when it has none. */
+export const liveText = (until: unknown, text: string | undefined, now: number): string | undefined =>
+  typeof until === "number" ? formatCountdown(until, now) : text;
+
+/** The scale of a sparkline: its lowest and highest value, with a cap line counted in so the line is always inside the box. */
+const sparkRange = (values: readonly number[], cap: number | undefined): { lo: number; span: number } => {
+  const all = cap === undefined ? values : [...values, cap];
+  const lo = Math.min(...all), hi = Math.max(...all);
+  return { lo, span: hi - lo };
+};
+
 /** A sparkline's points in a `w` x `h` box, as `x,y x,y …`. A flat series
- *  draws through the middle rather than dividing by zero. */
-export function sparkPoints(values: readonly number[], w: number, h: number): string {
+ *  draws through the middle rather than dividing by zero. A `cap` is part of
+ *  the scale, so a series under its limit sits below the line and does not
+ *  stretch to fill the box. */
+export function sparkPoints(values: readonly number[], w: number, h: number, cap?: number): string {
   if (values.length === 0) return "";
-  const lo = Math.min(...values), hi = Math.max(...values), span = hi - lo;
+  const { lo, span } = sparkRange(values, cap);
   return values.map((v, i) => {
     const x = values.length === 1 ? w / 2 : (i / (values.length - 1)) * w;
     const y = span === 0 ? h / 2 : h - ((v - lo) / span) * h;
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   }).join(" ");
+}
+
+/** The height of a sparkline's cap line in the same `h` box, on the same scale as `sparkPoints`. */
+export function sparkCapY(values: readonly number[], h: number, cap: number): number {
+  const { lo, span } = sparkRange(values, cap);
+  return span === 0 ? h / 2 : h - ((cap - lo) / span) * h;
 }
 
 /** A point on a circle, angle in degrees from 12 o'clock, clockwise. */

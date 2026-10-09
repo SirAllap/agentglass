@@ -378,7 +378,9 @@ POST /plugin/self/panel/<id>/ops   {"seq": 12, "ops": [ ... ]}   ->  {"ok": true
 Node types ([shared/pluginCanvas.ts](../shared/pluginCanvas.ts) is the whole
 list, with each one's props): containers `stack`, `row` and `lane` (a stage:
 `title`, `state: open | closed | sealed`, `layout: list | grid | pile`, `icon`,
-`activity`); leaves `token`, `label`, `counter`, `stat`, `badge`, `icon`, `spark`,
+`activity`); leaves `token`, `label`, `counter`, `stat`, `badge`, `icon`, `spark`
+(`values`, and `cap`, a limit drawn as a dashed line at that value on the same scale:
+it is counted into the range, so a trend under its limit stays under the line),
 `gauge` (`shape: arc | ring | bar | pips`, `value`, `max`), `countdown` (`until`,
 ticked by the app so a clock is not an op per second) and `edge` (`from`, `to`,
 `activity: idle | busy | flowing`; the app routes it between the two boxes); and
@@ -458,19 +460,25 @@ meaning.
 | `ticks` | a plane; at most 1 | `count`* 8-120, `mark` (every nth is longer), `lit` 0-16 (the last marks before the hand), `passed`, `until` (an epoch in ms) with `period` in seconds (1-86400): the window works out the passed marks and the hand once a second, so a clock costs the plugin no operations; `until` wins over `passed`. `side: out \| in`, `numerals` up to 4 `{at, text}` of 1-3 characters, `tone` |
 | `hatch` | a sheet; at most 2 | `of`* (an orb, or a band of that sheet), `from`*, `to`*, `gap`* 6-24, `angle` 0 to below 180. The lines cover the shape, at most 80 |
 | `reticle` | a plane; at most 1 | `of`* (a token of that plane), `chip` (plain text, top left) |
-| `dock` | the root, a stack or a row | `title`*, `value`, `unit`, `hint`, `hint2`, `tone`, `selected`, `here` (the stop of a journey you are at), `leg: idle \| busy \| flowing` (the trace into it), `action`; holds one `gauge` |
+| `dock` | the root, a stack or a row | `title`*, `value`, `until` (an epoch in ms: the value line becomes the time left as `mm:ss`, redrawn by the window once a second, so a live line costs no operations; `value` is what shows without it), `unit`, `hint`, `hint2`, `tone`, `selected`, `here` (the stop of a journey you are at), `leg: idle \| busy \| flowing` (the trace into it), `action`; holds one `gauge` |
 | `fold` | the root, a stack or a row | `h`* 160-760 and `hNarrow` (the height when the panel is narrow), `open` (the first state), `label`, `action` |
 
 A `token` in a plane gains `at`* (it is refused outside a plane, and a token in a
 plane without it), `size: lg`, `shape: ring \| dot \| diamond`, `halo`, `trail`
 0-12 slices with `trailSpan` 5-120 degrees (a fading tail behind it), `leader:
-left \| right \| below \| none` (its label on a hairline; the app stacks each margin
-column and drops what does not fit, saying how many), `value` and `unit` (a second
+left \| right \| below \| above \| none` (its label on a hairline; the app stacks each margin
+column and drops what does not fit, saying how many; `below` and `above` hang the
+label on a short hairline under or over the moon, which is where the top station goes
+when a label under it would run into the body), `value` and `unit` (a second
 line); its `count` is the number in the moon. An `edge` between two tokens of one
 plane follows the plane; `breakAt` 0-1 with `breakGap` 0.02-0.5 cuts a gap with end
 marks, the open breaker. A `gauge` gains `shape: ticks` (`max` 8-120) and
 `segments` (`max` up to 12), `mark` 0-1 (a tick on an arc, ring or bar: a p95, a
-threshold) and `values`, 1-3 concentric arcs on an arc.
+threshold) and `values`, 1-3 concentric arcs on an arc. A `ticks` gauge also takes
+`until` (an epoch in ms) with `period` in seconds, 1-86400: the window lights the
+marks as the period runs, once a second, so an elapsed gauge costs the plugin no
+operations while it runs. `until` wins over `value`, which stays the static
+fallback; a `period` alone, or either on another shape, is refused.
 
 Rules a reviewer can lean on. The window shows the sheet whose `fit` matches the
 PANEL's width (900 px is the line), so build the narrow one rather than hoping the

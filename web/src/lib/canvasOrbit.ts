@@ -1,5 +1,5 @@
 import type { CanvasNode } from "../../../shared/pluginCanvas.ts";
-import { MOON_MAX_R } from "../../../shared/canvasSheet.ts";
+import { MOON_MAX_R, type LEADERS } from "../../../shared/canvasSheet.ts";
 
 /**
  * The arithmetic of a sheet (shared/canvasSheet.ts): where an angle on a tilted
@@ -100,6 +100,16 @@ export function tickState(until: number | undefined, now: number, period: number
   return { passed, hand: 270 + (passed / count) * 360 };
 }
 
+/** Whether the window's 1 Hz clock has anything to draw for this node: a countdown, or anything that carries `until` (the spec lets only ticks, a ticks gauge and a dock), so a new `until` consumer needs no entry here. */
+export const needsClock = (n: CanvasNode): boolean => n.type === "countdown" || until(n) !== undefined;
+
+/** How many of a ticks gauge's `total` marks are lit at `now`: the plugin's own `value`, or, with `until`, the share of `period` that has run (a mark per step, 0 when it starts, all of them once spent). */
+export function gaugeLit(n: CanvasNode, now: number, total: number): number {
+  const end = until(n);
+  if (end !== undefined) return tickState(end, now, numOr(n.period, 60), total, undefined).passed;
+  return Math.round(clamp(numOr(n.value, 0), 0, total));
+}
+
 export interface TickPaths { unlit: string; passed: string; lit: string; mark: string; hand: string; handDot: Pt }
 const TICK_LEN = 6;
 export function tickPaths(p: PlaneGeom, n: CanvasNode, now: number): TickPaths {
@@ -193,17 +203,21 @@ export const onCircle = (c: Pt, r: number, deg: number): Pt => ({ x: c.x + r * M
 
 // ---------------------------------------------------------------- labels
 
-export interface LabelIn { id: string; x: number; y: number; r: number; side: "left" | "right" | "below" }
-export interface LabelOut { id: string; side: "left" | "right" | "below"; anchor: "start" | "middle" | "end"; x: number; y: number; line: string }
+/** Where a label goes: every leader but `none`, which has no label. */
+export type LabelSide = Exclude<(typeof LEADERS)[number], "none">;
+export interface LabelIn { id: string; x: number; y: number; r: number; side: LabelSide; /** Text lines the label has (name, and a value under it); 1 when absent. Only an `above` label needs it: it is the last line that sits next to the moon. */ lines?: 1 | 2 }
+export interface LabelOut { id: string; side: LabelSide; anchor: "start" | "middle" | "end"; x: number; y: number; line: string }
 /** Height of a label (name and value lines) and the least gap between two in a column. */
 export const LABEL_H = 30;
 const RELAX_PASSES = 40;
+/** How far under a label's name its value line is drawn. */
+export const VALUE_DROP = 13;
 
 /**
  * Where each label goes. Left and right labels stack in a column beside the
  * ring, in the order of their moons, spread out until no two are closer than
  * LABEL_H and none leaves the sheet; a label that cannot fit is not drawn and
- * its column says how many it dropped. A `below` label hangs under its moon.
+ * its column says how many it dropped. A `below` label hangs under its moon, an `above` one stands over it.
  * The relaxation is capped, so it is bounded work whatever a plugin sends.
  */
 export function labelLayout(items: readonly LabelIn[], bounds: { w: number; h: number; left: number; right: number }): { labels: LabelOut[]; dropped: { left: number; right: number } } {
@@ -235,8 +249,11 @@ export function labelLayout(items: readonly LabelIn[], bounds: { w: number; h: n
       labels.push({ id: it.id, side, anchor: side === "left" ? "end" : "start", x, y: ys[i]!, line: `M${fix(sx)} ${fix(it.y)}L${fix(side === "left" ? x + 4 : x - 4)} ${fix(ys[i]! + 4)}` });
     });
   }
-  for (const it of items.filter((i) => i.side === "below")) {
-    labels.push({ id: it.id, side: "below", anchor: "middle", x: it.x, y: it.y + it.r + 21, line: `M${fix(it.x)} ${fix(it.y + it.r + 1)}L${fix(it.x)} ${fix(it.y + it.r + 11)}` });
+  // `below` and `above` mirror each other: the same 10 unit leader off the moon's edge. Under it the name sits 21 down; over it the label's last line stands on the leader (baseline 14 up), so a value pushes the name up one line.
+  for (const it of items.filter((i) => i.side === "below" || i.side === "above")) {
+    const s = it.side === "above" ? -1 : 1;
+    const name = s === 1 ? it.y + it.r + 21 : it.y - it.r - 14 - (it.lines === 2 ? VALUE_DROP : 0);
+    labels.push({ id: it.id, side: it.side, anchor: "middle", x: it.x, y: name, line: `M${fix(it.x)} ${fix(it.y + s * (it.r + 1))}L${fix(it.x)} ${fix(it.y + s * (it.r + 11))}` });
   }
   return { labels, dropped };
 }
