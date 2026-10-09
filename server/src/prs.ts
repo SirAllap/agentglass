@@ -32,7 +32,7 @@ import type {
   PrRepoId, PrSummary, PrBranchSummary, PrDetail, PrListResponse, PrActionResult, PrCheck, PrCheckRollup,
   PrCheckState, PrThread, PrReview, PrComment, PrCommit, PrFile, PrChecklistItem, PrMergeState, CiVerdict,
   PrTalk, PrTalkNote,
-  PrAuthored, PrReaction, PrEvent, PrCheckJob, PrReviewer, PrMergePolicy, PrMergeGate, PrMergeMethod, PrLocalHead, FailingTests,
+  PrAuthored, PrReaction, PrEvent, PrCheckJob, PrReviewer, PrMergePolicy, PrMergeGate, PrMergeMethod, PrLocalHead, FailingTests, ReviewPerson,
 } from "../../shared/types.ts";
 import { CARD_PEOPLE_MAX } from "../../shared/cardPeople.ts";
 import { cardIdIn } from "../../shared/cardRef.ts";
@@ -1326,7 +1326,7 @@ const SEARCH_ROWS = `query($q:String!,$first:Int!,$after:String){
  */
 export function humanVerdict(
   nodes: unknown,
-  o: { author?: string; pending?: string[]; headAt?: string; viewer?: string } = {},
+  o: { author?: string; pending?: string[]; teams?: string[]; headAt?: string; viewer?: string } = {},
 ): PrSummary["humanReview"] {
   const rows = Array.isArray(nodes) ? nodes : [];
   const author = (o.author || "").toLowerCase();
@@ -1362,6 +1362,37 @@ export function humanVerdict(
     rows_.slice().sort((a, b) => (b[1].at || "").localeCompare(a[1].at || ""))[0];
 
   const pendingLogins = new Set((o.pending ?? []).map((l) => l.toLowerCase()));
+
+  /*
+   * EVERY PERSON THE PULL REQUEST IS WAITING ON OR HAS HEARD FROM, one entry
+   * each. The winning group above keeps only its own `who`, so a reviewer who
+   * was asked and never answered vanished the moment somebody else's verdict
+   * outranked "awaiting" — the card named one person while two owed an answer.
+   *
+   * Read from what is already in hand (`strong`, `pending`): no request.
+   * Asked AND has a standing verdict is `again` (the ball is back with them,
+   * whatever they said before); asked with none is `await`. A team has a name
+   * and no verdict, so it is only ever `await`. Bots and the author are out,
+   * like everywhere else here. Somebody who only commented is listed only when
+   * nobody else is, because a comment is not something anyone waits on.
+   * Ceiling: when they were asked and how many threads each one has open are
+   * not in the list's data and stay in the detail.
+   */
+  const people: ReviewPerson[] = [];
+  const listed = new Set<string>();
+  const add = (login: string, state: ReviewPerson["state"], team?: boolean) => {
+    if (!login || listed.has(login.toLowerCase())) return;
+    listed.add(login.toLowerCase());
+    people.push(team ? { login, state, team: true } : { login, state });
+  };
+  const teamNames = new Set((o.teams ?? []).map((t) => t.toLowerCase()));
+  const strongBy = new Map([...strong.entries()].map(([l, v]) => [l.toLowerCase(), v]));
+  for (const l of o.pending ?? []) {
+    if (teamNames.has(l.toLowerCase())) add(l, "await", true);
+    else if (!isBotLogin(l) && l.toLowerCase() !== author) add(l, strongBy.has(l.toLowerCase()) ? "again" : "await");
+  }
+  for (const [l, v] of strong) add(l, v.state === "APPROVED" ? "approved" : "changes");
+  if (!people.length) for (const l of spoke) add(l, "comment");
 
   const build = (
     kind: "approved" | "changes",
@@ -1402,6 +1433,7 @@ export function humanVerdict(
        */
       askedAgain: picked.some(([login]) => pendingLogins.has(login.toLowerCase())),
       ...(otherCount ? { others: otherCount } : null),
+      people,
     };
   };
 
@@ -1435,9 +1467,10 @@ export function humanVerdict(
       kind: "awaiting",
       who: pending,
       mine: pending.some((l) => l.toLowerCase() === (o.viewer || "").toLowerCase()),
+      people,
     };
   }
-  return spoke.size ? { kind: "commented", who: [...spoke], mine: false } : null;
+  return spoke.size ? { kind: "commented", who: [...spoke], mine: false, people } : null;
 }
 
 /**
@@ -1765,6 +1798,7 @@ function completeRows(bare: PrSummary[], checkNodes: any[], me: string): PrSumma
     const head = n.commits?.nodes?.[0]?.commit;
     const roll = head?.statusCheckRollup;
     const ctx = roll?.contexts;
+    const asked = mapReviewers(n.reviewRequests?.nodes);
     second.set(n.number, {
       rollup: rollupFromCounts(ctx?.checkRunCountsByState, ctx?.statusContextCountsByState, roll?.state),
       stats: {
@@ -1780,7 +1814,8 @@ function completeRows(bare: PrSummary[], checkNodes: any[], me: string): PrSumma
           /* Still-outstanding requests: GitHub drops a reviewer from this list
              the moment they answer, so a non-empty one IS "somebody has not
              looked yet". */
-          pending: mapReviewers(n.reviewRequests?.nodes).map((r) => r.login),
+          pending: asked.map((r) => r.login),
+          teams: asked.filter((r) => r.isTeam).map((r) => r.login),
           headAt: head?.committedDate,
           viewer: me,
         }),
@@ -1788,7 +1823,7 @@ function completeRows(bare: PrSummary[], checkNodes: any[], me: string): PrSumma
            on PrSummary for why the ones we have not cached draw nothing. */
         card: cardFor(n.headRefName, n.title),
         openThreads: unresolvedThreads(n),
-        reviewers: mapReviewers(n.reviewRequests?.nodes),
+        reviewers: asked,
         /* The commit the rollup above belongs to, read off the same node rather
            than asked for separately — which is the whole reason it can be
            trusted as a merge precondition. A row says "green"; that word is
@@ -3661,6 +3696,7 @@ async function readDetail(rootIn: unknown, number: number, repo: PrRepoId, key: 
     humanReview: humanVerdict(p.reviews?.nodes, {
       author: p.author?.login,
       pending: mapReviewers(p.reviewRequests?.nodes).map((r) => r.login),
+      teams: mapReviewers(p.reviewRequests?.nodes).filter((r) => r.isTeam).map((r) => r.login),
       /* Off the commit the rollup already carries, rather than a second
          `commits(...)` — every list in this query has to offer a cursor, and a
          head commit is not a list anybody pages through. */

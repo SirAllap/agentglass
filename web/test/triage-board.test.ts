@@ -25,6 +25,7 @@ import { LANES, LANE_CAP } from "../src/lib/prLanes.ts";
 import { CHIP_H } from "../src/lib/priority.tsx";
 
 const board = await Bun.file(new URL("../src/components/TriageBoard.tsx", import.meta.url)).text();
+const faces = await Bun.file(new URL("../src/components/CardFaces.tsx", import.meta.url)).text();
 import type { PrSummary } from "../../shared/types.ts";
 
 const day = 86_400_000;
@@ -568,13 +569,14 @@ describe("who is on it", () => {
      * `Avatar` keeps initials as its own fallback, so nothing is lost where
      * there is no face.
      */
-    expect(board).toContain("<Avatar login={login} size={16} />");
+    expect(faces).toContain("<Avatar login={f.login} size={ICON.md} />");
     expect(board).not.toContain("r.login.slice(0, 2).toUpperCase()");
   });
 
-  it("the author leads the identity line; whoever the lane header names sits beside the name", () => {
+  it("the author leads the identity line; everyone the band waits on is a face on its right", () => {
     expect(board).toContain("<Avatar login={p.author} size={20} />");
-    expect(board).toContain("headerPeople.slice(0, HEADER_FACES)");
+    expect(board).toContain("<CardFaces r={reviewers} />");
+    expect(board).not.toContain("headerPeople");
     expect(board).not.toContain("agx-prc-foot");
   });
 });

@@ -322,6 +322,40 @@ describe("the verdict a card leads with", () => {
     expect(drawnIn({ humanReview: V("changes", { others: 1 }) })).toContain("1 approval");
   });
 
+  test("two people owe an answer: the sentence counts them and each has a face with its ring", () => {
+    // One asked again after changes, one never answered: the case the band used to name one of.
+    const html = drawnIn({ humanReview: V("changes", { cleared: true, askedAgain: true, who: ["tlindqvist"],
+      people: [{ login: "tlindqvist", state: "again" }, { login: "rnakamura", state: "await" }] }) });
+    expect(html).toContain("Waiting on 2 reviewers");
+    expect(html).toContain('title="tlindqvist \u2014 re-review requested"');
+    expect(html).toContain('title="rnakamura \u2014 review requested, not answered yet"');
+    expect(html).toContain("1.5px dashed var(--text4)");
+  });
+
+  test("one person owing an answer keeps the sentence that names them", () => {
+    expect(drawnIn({ humanReview: V("awaiting", { who: ["mkovac"], people: [{ login: "mkovac", state: "await" }] }) })).toContain("Waiting on mkovac");
+  });
+
+  test("changes requested keeps its sentence while the others still get their faces", () => {
+    const html = drawnIn({ humanReview: V("changes", { who: ["tlindqvist"], people: [
+      { login: "tlindqvist", state: "changes" }, { login: "rnakamura", state: "await" }, { login: "ofarah", state: "approved" }] }) });
+    expect(html).toContain("Changes requested by tlindqvist");
+    expect(html).not.toContain("Waiting on 2 reviewers");
+    expect(html.match(/data-face-state=/g)).toHaveLength(3);
+  });
+
+  test("five waiting: three faces and a +2 that names the others", () => {
+    const people = ["a1", "b2", "c3", "d4", "e5"].map((login) => ({ login, state: "await" }));
+    const html = drawnIn({ humanReview: V("awaiting", { who: people.map((x) => x.login), people }) });
+    expect(html).toContain("Waiting on 5 reviewers");
+    expect(html.match(/data-face-state=/g)).toHaveLength(3);
+    expect(html).toContain("+2");
+  });
+
+  test("a row from before `people` existed still draws the faces it did", () => {
+    expect(drawnIn({ humanReview: V("awaiting", { who: ["a1", "b2"] }) }).match(/data-face-state="await"/g)).toHaveLength(2);
+  });
+
   test("says when a follow-up round has already been asked for", () => {
     /*
      * Applying a review and pressing "Re-request review" used to leave this

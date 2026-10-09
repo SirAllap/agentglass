@@ -3339,6 +3339,20 @@ export interface PrTalk {
   mine?: boolean;
 }
 
+/**
+ * One person (or team) the pull request is waiting on or has heard from.
+ *
+ * `again`: asked to look again after a verdict of their own; `await`: asked and
+ * never answered; `changes`, `approved`: their standing verdict; `comment`:
+ * spoke without a verdict. See `humanVerdict`, which builds the list.
+ */
+export interface ReviewPerson {
+  login: string;
+  state: "again" | "await" | "changes" | "approved" | "comment";
+  /** A team's name: it has no face and cannot have answered. */
+  team?: boolean;
+}
+
 export interface PrSummary {
   number: number;
   title: string;
@@ -3414,6 +3428,13 @@ export interface PrSummary {
      *  nobody named here is still the one holding up the merge — draw it like
      *  a fresh request (amber), not a still-standing one (red). */
     cleared?: boolean;
+    /**
+     * Everyone, one entry each, with the state that person is in: the winning
+     * group's `who` leaves out the person who was asked and never answered.
+     * Additive — nothing that reads `kind` and `who` changes. Absent from a
+     * server older than this field.
+     */
+    people?: ReviewPerson[];
   } | null;
   /**
    * The tracker card this pull request came from, when we already know it.

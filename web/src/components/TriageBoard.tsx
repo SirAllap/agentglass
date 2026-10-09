@@ -34,6 +34,8 @@ import { repoUsesTracker, trackerBlock } from "../lib/prCardBlock.ts";
 import { CTRL_H, EDGE, LINE } from "./workspace/Chrome.tsx";
 import { CODE_FONT_STYLE } from "./diff/DiffLines.tsx";
 import { Avatar } from "./Avatar.tsx";
+import { CardFaces } from "./CardFaces.tsx";
+import { cardReviewers, facesAria, waitingLine } from "../lib/cardReviewers.ts";
 import { askingBehind, behindOf, onBehind } from "../lib/prBehindStore.ts";
 import { onRollup, rollupOf } from "../lib/prRollupStore.ts";
 import { failureHint, jobIdOf } from "../lib/prFailureHint.ts";
@@ -1141,7 +1143,7 @@ function cardVerdict(p: PrSummary): {
      */
     if (v.cleared) {
       const line = v.mine ? "You were asked to look again"
-        : names ? `Waiting on review by ${names}` : "Waiting on review";
+        : waitingLine(cardReviewers(v)) ?? (names ? `Waiting on review by ${names}` : "Waiting on review");
       return {
         tint: "var(--warning)", glyph: <CircleIcon size={ICON.xs} />, url: v.url,
         line: line + also,
@@ -1169,7 +1171,7 @@ function cardVerdict(p: PrSummary): {
     /* Your own column is the one place this card is about YOU. */
     return {
       tint: "var(--warning)", glyph: <CircleIcon size={ICON.xs} />,
-      line: v.mine ? "Waiting on you" : names ? `Waiting on ${names}` : "Awaiting review",
+      line: v.mine ? "Waiting on you" : waitingLine(cardReviewers(v)) ?? (names ? `Waiting on ${names}` : "Awaiting review"),
       aria: v.mine ? "Waiting on you to review" : names ? `Waiting on ${names} to review` : "Awaiting review",
     };
   }
@@ -1244,10 +1246,7 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
   const { pre, rest } = splitTitle(p.title);
   const ev = eventLine(p.filed.reason, p.updatedAt);
   const verdict = cardVerdict(p);
-  const hr = p.humanReview as unknown;
-  const headerPeople: string[] = hr && typeof hr === "object" && Array.isArray((hr as { who?: unknown }).who)
-    ? ((hr as { who: unknown[] }).who.filter((x): x is string => typeof x === "string" && x !== ""))
-    : [];
+  const reviewers = cardReviewers(p.humanReview);
   /*
    * THE CARDS THE BOARDS DO NOT HOLD, asked for one at a time.
    *
@@ -1312,7 +1311,7 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
       {stack && factsOf && <Spine stack={stack} label={spineSentence(stack, factsOf)} />}
       {verdict && (
         <div className="flex items-center gap-1.5 px-2 shrink-0 agx-stk-band"
-          role="note" aria-label={verdict.aria}
+          role="note" aria-label={reviewers.faces.length ? `${verdict.aria}. ${facesAria(reviewers)}` : verdict.aria}
           style={{
             height: 22, fontSize: 10.5,
             background: `color-mix(in srgb, ${verdict.tint} 13%, transparent)`,
@@ -1327,23 +1326,17 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
             <span aria-hidden className="rounded"
               style={{ width: 130, height: 8, background: "color-mix(in srgb, var(--text) 12%, transparent)" }} />
           ) : (
-            <span className="truncate min-w-0" style={{ color: "var(--text)", fontWeight: 500 }}>
+            /* `title`: the line gives way to the faces, then to the open-threads
+               pill, and a name cut to "tl…" is the one thing the card is for. */
+            <span className="truncate min-w-0" title={verdict.line} style={{ color: "var(--text)", fontWeight: 500 }}>
               {verdict.line}
             </span>
           )}
-          {/* The people the line names, as faces right after it: who was asked,
-              who approved, who asked for changes. */}
-          {headerPeople.length > 0 && (
-            <span className="shrink-0 flex items-center" aria-hidden>
-              {headerPeople.slice(0, HEADER_FACES).map((login, n) => (
-                <span key={login} className="rounded-full inline-flex"
-                  style={{ marginLeft: n ? -3 : 0, boxShadow: "0 0 0 1.5px var(--surface-card)", position: "relative", zIndex: HEADER_FACES - n }}>
-                  <Avatar login={login} size={16} />
-                </span>
-              ))}
-            </span>
-          )}
           <span className="flex-1" />
+          {/* Everyone the band waits on or has heard from, one face each with
+              its state, on the right: the line keeps the room it truncates in,
+              and the open-threads pill and the arrow after them stay put. */}
+          <CardFaces r={reviewers} />
           {/* Open line threads: the number that says whether a "changes
               requested" is one nit or twelve, and whether an approval still
               has something under it. Only when there are any. */}
@@ -1592,9 +1585,6 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, 
     </div>
   );
 }
-
-/** Faces drawn in a lane header beside the name it says. */
-const HEADER_FACES = 3;
 
 const Tag = ({ children, tint, title }: { children: React.ReactNode; tint?: string; title?: string }) => (
   <span title={title} className="rounded px-1" style={{ color: tint ?? "var(--text3)", border: `1px solid color-mix(in srgb, ${tint ?? "var(--text)"} ${tint ? 34 : 16}%, transparent)` }}>

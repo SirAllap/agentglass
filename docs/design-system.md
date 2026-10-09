@@ -200,6 +200,19 @@ with a quiet "No card linked". When the line cannot hold the block it takes a
 line of its own, right aligned; in a lane narrower than the block it wraps onto
 a second row rather than overflow.
 
+The header band above the identity line says what a person decided, in a 22px
+row that never wraps. At its right it draws one 16px face per person (8px apart) the pull
+request is waiting on or has heard from: up to three, then a `+N` pill whose
+tooltip lists the rest, every face titled "login — state". A 1.5px ring
+outside the face says the state (amber solid: asked to look again; grey dashed:
+asked and not answered; red: changes requested; green: approved; grey solid:
+commented) and an `ICON.xs` badge at its corner repeats it by shape, so the
+colour is never the only cue. Faces sit before the open-threads pill and the
+arrow, which do not move. The decision (who, which state, in which order, and
+the "Waiting on N reviewers" sentence for two or more) is
+`web/src/lib/cardReviewers.ts`; when and how many threads each person has open
+stay in the pull request's own page, because the list does not carry them.
+
 The two copy buttons (card id, card name) live in a 56px box inside the block
 and replace the faces on pointer-over or focus-within, so nothing moves; with no
 hover (coarse pointer) they take an inline slot. Under them: the title (cut
