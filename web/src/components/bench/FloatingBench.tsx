@@ -33,6 +33,7 @@ import { motion } from "motion/react";
 import { Portal } from "../Portal.tsx";
 import { openFind, useFindScope } from "../../lib/findScope.ts";
 import { LAYER } from "../../lib/layers.ts";
+import { NO_DRAG } from "../../lib/dragRegion.ts";
 import { api } from "../../lib/api.ts";
 import { isLanternTab } from "../../lib/lanternAsk.ts";
 import { shortPath } from "../../lib/shortPath.ts";
@@ -595,6 +596,10 @@ export function FloatingBench() {
                 background: "var(--bg2)",
                 border: "1px solid color-mix(in srgb, var(--primary) 38%, transparent)",
                 boxShadow: "0 30px 70px -18px #000",
+                // The bench is freely positioned and can land over the TopBar's
+                // drag strip; without this its own header would drag the OS
+                // window instead of moving itself (see dragRegion.ts).
+                ...NO_DRAG,
               }}
               onKeyDown={onKey}
               role="dialog" aria-label="The bench" aria-hidden={!st.open || undefined}>

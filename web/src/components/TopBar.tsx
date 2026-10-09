@@ -26,6 +26,7 @@ import { stalenessLabel } from "../lib/usageAge.ts";
 import { paceConfig, subscribePaceConfig } from "../lib/paceConfig.ts";
 import { OLD_READING_MS, windowPace } from "../lib/usagePace.ts";
 import { warmDayStrip } from "../lib/dayStrip.ts";
+import { NO_DRAG } from "../lib/dragRegion.ts";
 import { DayStrip, PaceLines, PaceMarker } from "./PlanPace.tsx";
 import { metersMustHide } from "../lib/topbarFit.ts";
 import { subscribe as subscribeChats, listChats, getActiveChatId, getChat } from "../lib/chatStore.ts";
@@ -52,10 +53,6 @@ const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%,
 /** The seven-day window's label, asked of the same function that made it rather
  *  than spelled out here, so the two cannot drift apart. */
 const WEEKLY = windowLabel(10080);
-
-/** Anything clickable inside a drag region has to opt out of it, or the window
- *  moves instead of the button firing. */
-const NO_DRAG = { WebkitAppRegion: "no-drag" } as React.CSSProperties;
 
 /**
  * Minimise, maximise, close — drawn by the app because the window is frameless.
