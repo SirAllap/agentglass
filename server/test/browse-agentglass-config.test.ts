@@ -127,8 +127,10 @@ describe("a caller on this machine", () => {
   test("the folder's siblings under the other XDG bases stay closed", () => {
     const data = join(root, "data", "agentglass");
     mkdirSync(data, { recursive: true });
+    const was = process.env.XDG_DATA_HOME;
     process.env.XDG_DATA_HOME = join(root, "data");
-    try { expect(browseDir(data, false, true).ok).toBe(false); } finally { delete process.env.XDG_DATA_HOME; }
+    // Restored, not deleted: the isolation preload's value is what later files read.
+    try { expect(browseDir(data, false, true).ok).toBe(false); } finally { if (was === undefined) delete process.env.XDG_DATA_HOME; else process.env.XDG_DATA_HOME = was; }
   });
 });
 

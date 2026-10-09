@@ -16,6 +16,9 @@ let repo = "";
 const git = (...args: string[]) =>
   Bun.spawnSync(["git", "-c", "user.email=t@e.st", "-c", "user.name=T", "-c", "commit.gpgsign=false", ...args], { cwd: repo });
 
+// Dated relative to today: the window is the last 90 days, so a written-down date ages out. Larger n is more recent.
+const ago = (n: number): string => new Date(Date.now() - (10 - n) * 86_400_000).toISOString();
+
 function commit(file: string, msg: string, when: string): void {
   writeFileSync(join(repo, file), msg + "\n");
   git("add", "-A");
@@ -96,10 +99,10 @@ describe("changelog", () => {
   beforeEach(build);
 
   it("groups conventional commits, breaking first", async () => {
-    commit("a.txt", "feat: add widget", "2026-07-01T10:00:00+00:00");
-    commit("b.txt", "fix(api): return null", "2026-07-02T10:00:00+00:00");
-    commit("c.txt", "feat!: drop v1", "2026-07-03T10:00:00+00:00");
-    commit("d.txt", "plain sentence", "2026-07-04T10:00:00+00:00");
+    commit("a.txt", "feat: add widget", ago(1));
+    commit("b.txt", "fix(api): return null", ago(2));
+    commit("c.txt", "feat!: drop v1", ago(3));
+    commit("d.txt", "plain sentence", ago(4));
     const c = await generateChangelog(repo, "", "");
     expect(c.error).toBeUndefined();
     expect(c.sections.map((s) => s.title)).toEqual(["Breaking changes", "Features", "Fixes", "Other"]);
@@ -116,8 +119,8 @@ describe("changelog", () => {
   });
 
   it("respects a from..to range", async () => {
-    commit("a.txt", "feat: old", "2026-07-01T10:00:00+00:00");
-    commit("b.txt", "feat: new", "2026-07-02T10:00:00+00:00");
+    commit("a.txt", "feat: old", ago(1));
+    commit("b.txt", "feat: new", ago(2));
     const from = git("rev-parse", "HEAD~1").stdout.toString().trim();
     const c = await generateChangelog(repo, from, "HEAD");
     expect(c.from).toBe(from);

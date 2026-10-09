@@ -360,6 +360,7 @@ export async function prRollup(rootIn: unknown, numberIn: unknown, fresh = false
      A push or a re-run shows up on the next list read, well inside the window
      the checks strip already lags GitHub by. */
   return ttlRead(`rollup\u0000${repo.key}#${number}`, ROLLUP_TTL_MS, async () => {
+    const began = Date.now();
     const r = await ghJson<any>([
       "api", "graphql", "-f", `query=${q}`,
       "-F", `owner=${repo.owner}`, "-F", `name=${repo.name}`, "-F", `number=${number}`,
@@ -370,6 +371,7 @@ export async function prRollup(rootIn: unknown, numberIn: unknown, fresh = false
     if (!raw) return { ok: false, error: "GitHub would not list its checks" };
     const normalised = raw.map((c: any) => ({ ...c, workflowName: c.checkSuite?.workflowRun?.workflow?.name || "" }));
     const r2 = rollupChecks(normalised);
+    if (Number(ctxs?.totalCount ?? 0) <= raw.length) projectChecks(repo, number, r2.rollup, r2.all, began);
     return { ok: true, checks: r2.rollup, all: r2.all, state: typeof pr?.state === "string" ? pr.state : undefined, truncated: Number(ctxs?.totalCount ?? 0) > raw.length };
   }, { fresh, keep: (v) => v.ok });
 }
@@ -795,7 +797,11 @@ export function noteCi(repo: PrRepoId, pr: PrSummary): void {
     // The poll has this and the notification path does not, so it travels with
     // the verdict rather than being looked up again later against a list that
     // may never have been fetched.
-    approved: pr.reviewDecision === "APPROVED",
+    /* A person's approval, not GitHub's `reviewDecision`: the auto-review bot has
+       write access here, so a pull request nobody had read reported APPROVED and
+       a "checks red" went out over it. `humanReview` already leaves bots (and the
+       author) out and takes each reviewer's latest strong verdict. */
+    approved: pr.humanReview?.kind === "approved",
   };
   for (const fn of ciListeners) { try { fn(v); } catch { /* a listener must not break the poll */ } }
 }
@@ -2127,6 +2133,39 @@ function keepNewerDetails(repo: PrRepoId, rows: PrSummary[], since: number, now 
     if (now - p.at > PROJECTED_HOLD_MS) { projected.delete(k); return r; }
     return p.at > since ? projectDetailOnRow(r, p.detail) : r;
   });
+}
+
+/**
+ * A checks read lands: write it into the cached detail and every cached list
+ * row of that pull request.
+ *
+ * Measured on a pull request whose suite had just failed: the CI notifier read
+ * `summary` failed and `coverage-gate` cancelled and raised "checks red", and
+ * the detail opened from that notification still said "1 check still running"
+ * from its own read, up to 45 s old. A check finishing does not bump the pull
+ * request's `updatedAt`, so neither projection above (both gated on it) ever
+ * carried the notifier's fresher answer across, and `prRollup` wrote to nobody.
+ *
+ * `began` is when the read started: a detail stored after that is at least as
+ * new and is left alone. The detail's `required` marks come from its own gate
+ * query, so they are carried over by name.
+ *
+ * Ceiling, named: only reads that hold every check (not truncated at 100).
+ * The board's own second pass (`refreshChecks`) still writes rows alone.
+ */
+export function projectChecks(repo: PrRepoId, number: number, checks: PrCheckRollup, all: PrCheck[], began: number): void {
+  const dk = `${repo.key}#${number}`;
+  const hit = detailCache.get(dk);
+  if (hit && hit.at <= began) {
+    const req = new Map((hit.detail.checksAll ?? []).map((c) => [checkKey(c.workflow, c.name), c.required]));
+    const marked = all.map((c) => (req.get(checkKey(c.workflow, c.name)) === undefined ? c : { ...c, required: req.get(checkKey(c.workflow, c.name)) }));
+    detailCache.set(dk, { ...hit, detail: { ...hit.detail, checks, checksAll: marked } });
+  }
+  for (const [k, e] of listCache) {
+    if (!k.startsWith(`${repo.key}\u0000`) || !e.prs.some((r) => r.number === number)) continue;
+    if (e.at > began) continue;
+    listCache.set(k, { ...e, prs: e.prs.map((r) => (r.number === number ? { ...r, checks, checksLoaded: true } : r)) });
+  }
 }
 
 /** Seconds to wait before each re-ask of a `mergeable` GitHub answered UNKNOWN. */
@@ -3752,6 +3791,7 @@ export async function prDiff(rootIn: unknown, numberIn: unknown, force = false):
 /** For a test, and for a Refresh that means it. */
 export function __clearDiffCache(): void { diffCache.clear(); diffInflight.clear(); }
 /** For a test: a pull request as if it had just been read. */
+export function __peekDetail(key: string): PrDetail | undefined { return detailCache.get(key)?.detail; }
 export function __seedDetail(key: string, detail: PrDetail): void { detailCache.set(key, { at: Date.now(), detail }); }
 
 // ---------------------------------------------------------------------------
