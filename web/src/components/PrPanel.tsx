@@ -573,7 +573,7 @@ function ReviewHistory({ reviews, pending, author, onGoReview }: {
   const seenAuthor = new Set<string>();
 
   return (
-    <div className="rounded-lg overflow-hidden" style={{ background: "var(--surface-inset)", border: EDGE }}>
+    <div style={{ borderBottom: LINE }}>
       {/*
        * A REAL DISCLOSURE, copied from the board's own group headers
        * (TasksPanel's status groups): the whole row is the control, not a
@@ -582,10 +582,9 @@ function ReviewHistory({ reviews, pending, author, onGoReview }: {
        */}
       <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open}
         title={open ? "Hide past rounds" : "Show past rounds"}
-        className="agx-btn w-full flex items-center gap-2 px-3 text-left hover:bg-white/5"
-        style={{ minHeight: CTRL_H.regular, color: "var(--text2)" }}>
-        <span aria-hidden className="inline-flex items-center justify-center shrink-0"
-          style={{ width: 16, height: 16, borderRadius: 6, background: "color-mix(in srgb, var(--text) 6%, transparent)" }}>
+        className="agx-btn w-full flex items-center gap-2 px-3 py-1.5 text-[11.5px] text-left hover:bg-white/5"
+        style={{ color: "var(--text2)" }}>
+        <span aria-hidden className="inline-flex items-center justify-center shrink-0 w-3.5">
           <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none"
             style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform 120ms ease" }}>
             <path d="M4 2.5 L8.5 6 L4 9.5" stroke="var(--text2)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
@@ -595,7 +594,7 @@ function ReviewHistory({ reviews, pending, author, onGoReview }: {
         <span className="text-[10px] tabular-nums px-1.5 rounded-full" style={{ ...CHIP_SURFACE, color: "var(--text3)" }}>{rounds.length}</span>
       </button>
       {open && (
-        <div className="flex flex-col" style={{ borderTop: EDGE }}>
+        <div className="flex flex-col pb-1">
           {rounds.map((r, i) => {
             const kind = REVIEW_ROUND[r.state]!;
             // Only the reviewer's OWN latest round can have been re-asked since —
@@ -613,8 +612,7 @@ function ReviewHistory({ reviews, pending, author, onGoReview }: {
               <button key={r.nodeId ?? `${r.author}-${r.submittedAt}-${i}`}
                 type="button" disabled={!r.url} onClick={() => r.url && onGoReview(r.nodeId, r.url)}
                 title={r.url ? "Go to this review in the conversation" : undefined}
-                className="agx-btn w-full flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-left whitespace-nowrap hover:bg-white/5 disabled:hover:bg-transparent disabled:cursor-default"
-                style={{ borderTop: i ? EDGE : undefined }}>
+                className="agx-btn w-full flex items-center gap-1.5 pl-9 pr-3 py-1.5 text-[11px] text-left whitespace-nowrap hover:bg-white/5 disabled:hover:bg-transparent disabled:cursor-default">
                 <span aria-hidden className="flex shrink-0" style={{ color: kind.tint }}>{kind.glyph}</span>
                 <Avatar login={r.author} size={14} />
                 <b className="shrink-0 truncate max-w-[110px]" style={{ color: "var(--text2)", fontWeight: 500 }}>{r.author}</b>

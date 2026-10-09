@@ -382,9 +382,15 @@ describe("the Overview and the board agree", () => {
     expect(fn).toContain('<Chip text="asked again"');
   });
 
-  test("the review history sits in an inset box, each round on one un-wrapped line", () => {
+  test("the review history is a flat section on the rows around it, each round on one un-wrapped line", () => {
     const fn = panel.slice(panel.indexOf("function ReviewHistory("), panel.indexOf("function Bar("));
-    expect(fn).toContain("var(--surface-inset)");
+    // A boxed, inset panel among full-width rows read as stuck on: the history
+    // takes the same row padding and rule as the Reason rows beside it and
+    // indents its rounds under the heading instead.
+    expect(fn).not.toContain("var(--surface-inset)");
+    expect(fn).not.toContain("rounded-lg");
+    expect(fn).toContain("borderBottom: LINE");
+    expect(fn).toContain("pl-9");
     expect(fn).toContain("whitespace-nowrap");
     // The trailing "Go to it" affordance sits inside the row at CTRL_H, not a
     // bare button floating at the far edge of a wide section.
