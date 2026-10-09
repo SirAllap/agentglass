@@ -1679,8 +1679,28 @@ function mayHostBrowser(req: Request): boolean {
 
 function localOrigin(req: Request): boolean {
   const o = req.headers.get("origin");
-  if (!o) return true;
+  if (!o) return !crossSiteSubresource(req);
   return vouchedOrigin(o);
+}
+
+/**
+ * A browser loading this server as a subresource of somebody else's page.
+ *
+ * A simple GET (an `<img>`, a `<script>`) carries no Origin, so on a server
+ * with no token it passed the Origin rule as if it were curl, and a page the
+ * person merely visited could make the server spend their ClickUp and GitHub
+ * budgets or run a read with side effects. Every current browser says where a
+ * request came from in Sec-Fetch-Site, and curl, the hooks and the CLIs send
+ * none; a top-level navigation (a link to the UI) is still let through.
+ *
+ * Only where there is no token. With one, such a request carries none and the
+ * token gate answers 401, while the desktop renderer, which is cross-site to
+ * loopback, loads avatars as `<img>` with the token in the URL and no Origin;
+ * refusing it here would blank them. The ceiling: a desktop app that adopted
+ * a server started by hand without a token shows no avatars from it.
+ */
+function crossSiteSubresource(req: Request): boolean {
+  return !AUTH_TOKEN && req.headers.get("sec-fetch-site") === "cross-site" && req.headers.get("sec-fetch-mode") !== "navigate";
 }
 
 /**
