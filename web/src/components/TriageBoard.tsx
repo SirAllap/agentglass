@@ -40,6 +40,7 @@ import { UnreadBadge } from "./UnreadBadge.tsx";
 import { matchIndex, prMatches, stepMatch } from "../lib/prBoardFind.ts";
 import { closeFind, openFind, registerEngine, topScope } from "../lib/findScope.ts";
 import { CloseIcon } from "./CloseButton.tsx";
+import { boardFace } from "../lib/boardFace.ts";
 
 /** The tracker bar's tint: the app's own accent, the one an unranked card chip already wears. */
 const ACCENT = "var(--accent, var(--primary))";
@@ -73,7 +74,7 @@ type Card = PrSummary & { filed: Filed };
 
 export function TriageBoard({
   mine, review, total, hasTaskProvider, pinned,
-  onOpen, onTogglePin, onShowTable, onAct, busy, acting, loading, settling, pinnedList, root, repoKey,
+  onOpen, onTogglePin, onShowTable, onAct, busy, acting, loading, settling, failed, hidden, onRetry, pinnedList, root, repoKey,
   onlyUnread, onOnlyUnread,
 }: {
   /** The `mine` scope, as the panel already has it. */
@@ -136,6 +137,17 @@ export function TriageBoard({
    * never draws.
    */
   settling?: boolean;
+  /**
+   * A list could not be read on the last ask. With no rows to show, "nothing
+   * wants anything from you" would be an answer nobody gave, so the board says
+   * what happened instead. See boardFace.ts.
+   */
+  failed?: boolean;
+  /** Rows that arrived and were hidden by the board's own filters, so an empty
+   *  board can say it is the filters and not the repository. */
+  hidden?: number;
+  /** Ask again, from the failed state. */
+  onRetry?: () => void;
   /** The checkout these pull requests belong to — needed to ask how far behind
    *  each branch is, which is not on the list payload. See prBehindStore. */
   root?: string;
@@ -219,7 +231,8 @@ export function TriageBoard({
      previous answer still on screen must not blank it: last minute's board is
      a better answer than a skeleton, and it is about to be right again.
      `settling` is the other half — see the prop. */
-  const waiting = (!!loading && involved === 0) || !!settling;
+  const face = boardFace({ reading: !!loading, settling: !!settling, involved, failed: !!failed, hidden: hidden ?? 0 });
+  const waiting = face === "waiting";
   const rest = total - involved;
   /*
    * Whether `total` can be repeated out loud.
@@ -541,14 +554,16 @@ export function TriageBoard({
           the other three hundred". */}
       <div className="shrink-0 px-4 pt-3 pb-1 text-[12.5px] flex items-start gap-4">
         <div className="min-w-0 flex-1">
-        {waiting ? (
+        {waiting || face === "failed" ? (
           <>
             {/* No number, because there is no number yet. A zero here is the
                 same lie the empty lanes used to tell, in bigger type. */}
-            <b className="text-[17px] font-semibold" style={{ color: "var(--text4)" }}>…</b>
-            <span className="ml-1">Reading the two lists this board is made of</span>
+            <b className="text-[17px] font-semibold" style={{ color: "var(--text4)" }}>{waiting ? "…" : "—"}</b>
+            <span className="ml-1">{waiting ? "Reading the two lists this board is made of" : "Could not read the two lists this board is made of"}</span>
             <span className="block text-[11px] mt-2" style={{ color: "var(--text3)" }}>
-              Yours, and the ones you were asked to look at. Until both are in, an empty lane means nothing.
+              {waiting
+                ? "Yours, and the ones you were asked to look at. Until both are in, an empty lane means nothing."
+                : "Nothing is claimed about them, not even that they are empty."}
             </span>
           </>
         ) : (
@@ -664,7 +679,7 @@ export function TriageBoard({
         * narrow window, and the counts scrolled off the right edge are exactly
         * what you want before deciding to go and look.
         */}
-      {!waiting && (
+      {!waiting && face !== "failed" && (
         <div className="shrink-0 flex flex-wrap gap-1 px-4 pb-1.5">
           {cols.map((l) => {
             const n = lanes.get(l.id)?.length ?? 0;
@@ -704,7 +719,32 @@ export function TriageBoard({
       {/* Sideways only. The five columns still have to be reachable on a narrow
           window; the up-and-down is each column's own, below. */}
       <div className="flex-1 min-h-0 overflow-x-auto overflow-y-hidden agx-scroll px-4 pb-3">
-        {!waiting && involved === 0 ? (
+        {face === "failed" || face === "filtered" ? (
+          /* Neither is the answer "nothing", and each says which it is: a read
+             that failed has no number to give, and rows the filters hid are
+             still there, one press away. */
+          <div className="h-full grid place-items-center text-center">
+            <div style={{ maxWidth: 400 }}>
+              <div className="text-[13px]" style={{ color: face === "failed" ? "var(--warning-ink)" : "var(--text2)" }}>
+                {face === "failed" ? "The pull requests could not be read." : "Your filters hide every pull request on this board."}
+              </div>
+              <p className="m-0 mt-1.5 text-[11px] leading-snug" style={{ color: "var(--text3)" }}>
+                {face === "failed"
+                  ? "This is not an empty board — the list did not come back. Asking again costs the same two calls."
+                  : `${hidden} came in and none passes the filters above; clear one to see them.`}
+              </p>
+              {face === "failed" && onRetry && (
+                <button onClick={onRetry} className="agx-btn mt-3 rounded px-2 py-1 text-[10.5px]"
+                  style={{ color: "var(--text2)", border: EDGE }}>
+                  Try again
+                </button>
+              )}
+              <div className="mt-4 text-left">
+                <PinnedStrip list={pinnedList} onOpen={onOpen} />
+              </div>
+            </div>
+          </div>
+        ) : face === "empty" ? (
           /* Loaded, and genuinely nothing. Said once, plainly, instead of five
              columns each announcing its own emptiness — which is the same
              sentence five times and reads as a board that failed to load. */

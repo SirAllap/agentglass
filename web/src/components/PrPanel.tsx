@@ -72,6 +72,7 @@ import { parseBody, parseUnifiedDiff, newLineNumbers, diffKind, parseShieldBadge
 import { afterViewed, fileAtFloor, stepFileIndex, verticalScrollerOf } from "../lib/prNav.ts";
 import { buildFileTree, treeOrder, type TreeNode } from "../lib/prFileTree.ts";
 import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
+import { BOARD_ASK_MS, listOutcome, type ListOutcome } from "../lib/boardFace.ts";
 import { keepLoadedChecks } from "../lib/prMerge.ts";
 import { applyFilter, checkLabel, checkSpan, checkStatusLine, checkVerdict, filterCounts, formatSpan, sectionChecks, shortName, slowest, spanShare, usualTick, usualTip, verdictHero, workflowCards, type CheckFilter } from "../lib/prChecksList.ts";
 import { askingBehind, behindAnswer, forgetBehind, forgetOneBehind, onBehind, refreshBehind } from "../lib/prBehindStore.ts";
@@ -3257,6 +3258,16 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * two before the first resolves — a claim, and the wrong one.
    */
   const [boardLoading, setBoardLoading] = useState(true);
+  /** A list could not be read on the board's last ask. See boardFace.ts. */
+  const [boardFailed, setBoardFailed] = useState(false);
+  const boardAsk = useRef(BOARD_ASK_MS);
+  /* Rows that came in and the board's own filters hid, so an empty board can
+     say "your filters" instead of "nothing". Counted by number: a pull request
+     that is both yours and asked of you is in both lists. */
+  const boardHidden = useMemo(() => {
+    const count = (a: PrSummary[], b: PrSummary[]) => new Set([...a, ...b].map((p) => p.number)).size;
+    return count(boardMineCards, boardReviewCards) - count(boardMineShown, boardReviewShown);
+  }, [boardMineCards, boardReviewCards, boardMineShown, boardReviewShown]);
   /*
    * The board asks again while the check rollups are still out.
    *
@@ -3322,32 +3333,56 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
        from one cached read (see `probeOpen` in prs.ts). */
     if (!root) return;
     let live = true;
+    let again: ReturnType<typeof setTimeout> | undefined;
     setBoardLoading(true);
     /* Settled rather than all: one scope failing must not leave the board
-       waiting for ever on the other. A failed list is an empty one, and the
-       board then says so honestly instead of spinning. */
+       waiting for ever on the other. What a list says is read by `listOutcome`:
+       rows or a real empty answer replace what is on screen; a response that
+       says it is still reading (every write drops the server's cache, so the
+       first read after a merge is `{ prs: [], loading: true }`) is NOT an answer,
+       so the rows stay and the board asks again; a failure keeps the rows and,
+       with none, is said as a failure instead of as "nothing". */
     /* Forced only when somebody asked for it. The poll reads the server's
        cache — that is what makes this board cost two calls — and Refresh is the
        one press that means "go and look again". */
     const force = boardForce.current;
     boardForce.current = false;
     void Promise.allSettled([
-      api.prList(root, "mine", stateSel, force).then((r) => {
-        if (!live) return;
-        setBoardMine((cur) => withReopened(openLists(holdEdits(keepLoadedChecks(cur, r.prs ?? []), editLog.current, r.fetchedAt)), r.startedAt));
-        if (typeof r.total === "number") setViewCounts((c) => ({ ...c, mine: r.total! }));
+      api.prList(root, "mine", stateSel, force).then((r): ListOutcome => {
+        const o = listOutcome(r);
+        if (live && o === "answered") {
+          setBoardMine((cur) => withReopened(openLists(holdEdits(keepLoadedChecks(cur, r.prs ?? []), editLog.current, r.fetchedAt)), r.startedAt));
+          if (typeof r.total === "number") setViewCounts((c) => ({ ...c, mine: r.total! }));
+        }
+        return o;
       }),
-      api.prList(root, "review", stateSel, force).then((r) => {
-        if (!live) return;
-        setBoardReview((cur) => openLists(holdEdits(keepLoadedChecks(cur, r.prs ?? []), editLog.current, r.fetchedAt)));
-        if (typeof r.total === "number") setViewCounts((c) => ({ ...c, review: r.total! }));
+      api.prList(root, "review", stateSel, force).then((r): ListOutcome => {
+        const o = listOutcome(r);
+        if (live && o === "answered") {
+          setBoardReview((cur) => openLists(holdEdits(keepLoadedChecks(cur, r.prs ?? []), editLog.current, r.fetchedAt)));
+          if (typeof r.total === "number") setViewCounts((c) => ({ ...c, review: r.total! }));
+        }
+        return o;
       }),
-    ]).then(() => {
-      if (live) setBoardLoading(false);
+    ]).then((settled) => {
       /* A refresh pressed on the board is waiting on exactly this read. */
       boardSettle.current?.(); boardSettle.current = null;
+      if (!live) return;
+      const outcomes = settled.map((x) => (x.status === "fulfilled" ? x.value : listOutcome(null)));
+      const reading = outcomes.includes("reading");
+      setBoardFailed(!reading && outcomes.includes("failed"));
+      if (reading) {
+        /* Same backoff as the table's own unfinished answer — see prSettle.ts.
+           The board stays on its skeleton, or on its stale rows, meanwhile. */
+        const s = settleAfter({ loading: true }, boardAsk.current);
+        boardAsk.current = s.next;
+        again = setTimeout(() => setBoardTick((n) => n + 1), s.wait ?? BOARD_ASK_MS);
+      } else {
+        boardAsk.current = BOARD_ASK_MS;
+        setBoardLoading(false);
+      }
     });
-    return () => { live = false; };
+    return () => { live = false; clearTimeout(again); };
   }, [root, stateSel, listState.fetchedAt, boardTick]);
 
   /**
@@ -4800,6 +4835,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 onShowTable={() => { setInboxOn(false); setMetricsOn(false); setBoard(false); setFilter("all"); setQuery(""); }}
                 busy={busy}
                 loading={boardLoading} settling={boardSettling} acting={actingOn} root={root}
+                failed={boardFailed} hidden={boardHidden}
+                onRetry={() => { boardForce.current = true; setBoardTick((n) => n + 1); }}
                 /* `repo.key`, because that is what the conversation's "last
                    looked" marks are written under — see the `key` this panel
                    builds for them. A different spelling of the same repository
