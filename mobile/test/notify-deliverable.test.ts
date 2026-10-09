@@ -69,12 +69,13 @@ interface Fake {
   channelThrows: boolean;
   scheduleThrows: boolean;
   posted: { title: string; body: string }[];
+  requests: any[];
 }
 
 function fakeModule(over: Partial<Fake> = {}): { mod: any; state: Fake } {
   const state: Fake = {
     granted: true, canAskAgain: true, channelImportance: ANDROID_IMPORTANCE.HIGH,
-    channelThrows: false, scheduleThrows: false, posted: [], ...over,
+    channelThrows: false, scheduleThrows: false, posted: [], requests: [], ...over,
   };
   const mod = {
     setNotificationHandler: () => {},
@@ -91,6 +92,7 @@ function fakeModule(over: Partial<Fake> = {}): { mod: any; state: Fake } {
     },
     scheduleNotificationAsync: async (req: any) => {
       if (state.scheduleThrows) throw new Error("android refused");
+      state.requests.push(req);
       state.posted.push({ title: req.content.title, body: req.content.body });
       return "id";
     },
@@ -103,6 +105,20 @@ function fakeModule(over: Partial<Fake> = {}): { mod: any; state: Fake } {
 const NOTE: AlertNote = { title: "✋ Approval needed", body: "agentglass · main:3 «claude»", urgency: 2 };
 
 beforeEach(() => { __setNotificationsModule(undefined); });
+
+describe("which channel an alert is posted on", () => {
+  test("the declared alerts channel is in the trigger, where expo-notifications reads it", async () => {
+    // An alert whose channel sits in `content` is posted on Expo's fallback
+    // "Miscellaneous" channel (measured on an emulator): the library takes the
+    // channel from the trigger and from nowhere else.
+    const { mod, state } = fakeModule();
+    __setNotificationsModule(mod);
+    expect(await raise(NOTE)).toEqual({ ok: true });
+    expect(state.requests).toHaveLength(1);
+    expect(state.requests[0].trigger).toEqual({ channelId: "agentglass-alerts" });
+    expect(state.requests[0].content.channelId).toBeUndefined();
+  });
+});
 
 describe("what the switch is allowed to claim", () => {
   test("no module in this build: unsupported, and it says so", async () => {
