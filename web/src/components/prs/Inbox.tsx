@@ -29,6 +29,7 @@ import { botOnly, byDay, facetCounts, facetOrder, FACETS, filterInbox, inFacet, 
 import { doneIds, isDone, isSaved, onShelf, savedIds, setDone, setSaved, subscribeMarks, type Shelf } from "../../lib/inboxMarks.ts";
 import { fmtAgo } from "../../lib/format.ts";
 import { inboxCiLine } from "../../lib/inboxCiText.ts";
+import { INBOX_RAIL_WIDTH, railFolds } from "../../lib/inboxLayout.ts";
 import { jobIdOf } from "../../lib/prFailureHint.ts";
 import { failureKey, loadCached, summaryOf, useFailureStore } from "../../lib/checkFailuresStore.ts";
 import { openPr } from "../../lib/openPrs.ts";
@@ -138,6 +139,17 @@ export function Inbox({ repo, root, prs, onFlash, onUnread, active = true }: {
      This one had a `window.confirm` and the lint could not see it: its
      lookbehind skipped every receiver including `window`. */
   const { ask, dialog } = useDialogs();
+  /* The panel's own width, to decide where the rail sits — see inboxLayout.ts. */
+  const box = useRef<HTMLDivElement>(null);
+  const [folded, setFolded] = useState(false);
+  useEffect(() => {
+    const el = box.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => setFolded(railFolds(entries[0]!.contentRect.width)));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const group = folded ? "flex flex-row items-center gap-0.5" : "flex flex-col gap-0.5";
   const [raw, setRaw] = useState<InboxItem[] | null>(null);
   /* The failing part of a failed CI row, from what the app already read: one request to this server's own cache. */
   useFailureStore();
@@ -299,14 +311,14 @@ export function Inbox({ repo, root, prs, onFlash, onUnread, active = true }: {
     const line = turnView ? turnLine(n.turn!) : null;
     const ci = root ? inboxCiLine(n, prs, (job) => summaryOf(failureKey(root, job))) : null;
     return (
-      <div key={n.id} className="group flex items-start gap-2 px-2.5 py-2"
+      <div key={n.id} className="group flex flex-wrap items-start gap-x-2 gap-y-1 px-2.5 py-2"
         style={{ borderBottom: LINE, opacity: ghost ? 0.62 : undefined, background: n.unread && !ghost ? "color-mix(in srgb, var(--primary) 5%, transparent)" : "transparent" }}>
         <button className="agx-btn mt-0.5 shrink-0" title={picked.has(n.id) ? "Unpick" : "Pick"}
           onClick={() => setPicked((s) => { const next = new Set(s); if (next.has(n.id)) next.delete(n.id); else next.add(n.id); return next; })}>
           <Tick on={picked.has(n.id)} />
         </button>
         <span className="mt-0.5 shrink-0" title={n.type}><Kind type={n.type} /></span>
-        <button className="agx-btn min-w-0 flex-1 text-left" onClick={() => open(n)}
+        <button className="agx-btn min-w-[220px] flex-1 text-left" onClick={() => open(n)}
           disabled={n.number == null}
           title={n.number == null ? `${n.type} — no page for this in the app` : `Open ${n.repo} #${n.number}`}>
           <div className="flex items-baseline gap-1.5 text-[10px]" style={{ color: "var(--text4)" }}>
@@ -328,6 +340,10 @@ export function Inbox({ repo, root, prs, onFlash, onUnread, active = true }: {
             </div>
           )}
         </button>
+        {/* Everything after the title travels together: beside it when it fits,
+            under it, to the right, when it does not — never taking the title's
+            width. Laid out the same in every state; hover only shows the verbs. */}
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-x-2 gap-y-1 min-w-0">
         {n.annotations?.map((a) => a.badge && (
           <Chip key={a.plugin} tone={TO_ROW_TONE[a.badge.tone ?? "default"]} title={a.tip ? `${a.tip} — ${a.plugin}` : a.plugin}>{a.badge.text}</Chip>
         ))}
@@ -357,32 +373,37 @@ export function Inbox({ repo, root, prs, onFlash, onUnread, active = true }: {
               onClick={() => void act([n.id], "read")}>Read</button>
           )}
         </span>
+        </div>
       </div>
     );
   };
 
   return (
-    <div className="flex flex-1 min-h-0">
-      {/* The rail: shelves, then the named filters, then the repositories. */}
-      <div className="shrink-0 flex flex-col gap-3 px-2 py-2 overflow-y-auto agx-scroll"
-        style={{ width: 190, borderRight: LINE }}>
-        <div className="flex flex-col gap-0.5">
+    <div ref={box} className={`flex flex-1 min-h-0 ${folded ? "flex-col" : ""}`}>
+      {/* The rail: shelves, then the named filters, then the repositories.
+          Above the list as a strip that scrolls sideways when the panel is
+          too narrow for it to sit beside — the same controls, the same order. */}
+      <div className={folded
+          ? "shrink-0 flex flex-row items-center gap-4 px-2 py-1.5 overflow-x-auto overflow-y-hidden agx-scroll [&>*]:shrink-0 [&_button]:w-auto [&_button]:whitespace-nowrap"
+          : "shrink-0 flex flex-col gap-3 px-2 py-2 overflow-y-auto agx-scroll"}
+        style={folded ? { borderBottom: LINE } : { width: INBOX_RAIL_WIDTH, borderRight: LINE }}>
+        <div className={group}>
           <Rail mark={<InboxIcon size={ICON.xs} />} label="Inbox" n={counts.inbox} on={shelf === "inbox"} hint="Everything not finished" onClick={() => { setShelf("inbox"); setPicked(new Set()); }} />
           <Rail mark={<ClockIcon size={ICON.xs} />} label="Your turn" n={counts.turn} on={shelf === "turn"} hint="Review requests, mentions, changes requested, and people writing on your pull requests" onClick={() => { setShelf("turn"); setPicked(new Set()); }} />
           <Rail mark={<FlagIcon size={ICON.xs} filled />} label="Saved" n={onShelf(all, "saved").length} on={shelf === "saved"} hint="Kept by you, on this machine — GitHub's API has no shelf for it" onClick={() => { setShelf("saved"); setPicked(new Set()); }} />
           <Rail mark={<DoneIcon size={ICON.xs} />} label="Done" n={undefined} on={shelf === "done"} hint="Finished by you, on this machine" onClick={() => { setShelf("done"); setPicked(new Set()); }} />
         </div>
 
-        <div className="flex flex-col gap-0.5">
-          <div className="text-[9.5px] uppercase tracking-wider px-2 pb-1" style={{ color: "var(--text4)" }}>Filters</div>
+        <div className={group}>
+          <div className={`text-[9.5px] uppercase tracking-wider px-2 ${folded ? "" : "pb-1"}`} style={{ color: "var(--text4)" }}>Filters</div>
           {FACETS.map((f) => (
             <Rail key={f.id} mark={FACET_ICON[f.id] ?? null} label={f.label} n={facetCount.get(f.id)} hint={f.hint}
               on={facet === f.id} onClick={() => { setFacet(facet === f.id ? "" : f.id); setPicked(new Set()); }} />
           ))}
         </div>
 
-        <div className="flex flex-col gap-0.5">
-          <div className="text-[9.5px] uppercase tracking-wider px-2 pb-1" style={{ color: "var(--text4)" }}>Repositories</div>
+        <div className={group}>
+          <div className={`text-[9.5px] uppercase tracking-wider px-2 ${folded ? "" : "pb-1"}`} style={{ color: "var(--text4)" }}>Repositories</div>
           {/* This panel is one repository at a time, so its own is the default
               and the rest are one press away rather than mixed in. */}
           <Rail mark={<GitIcon size={ICON.xs} />} label={repo || "This repository"} n={onView(shelf).filter((n) => n.repo === repo).length}
@@ -390,7 +411,7 @@ export function Inbox({ repo, root, prs, onFlash, onUnread, active = true }: {
           <Rail mark="◇" label="Everywhere" n={onView(shelf).length}
             on={allRepos} hint="Every repository you get notifications from" onClick={() => setAllRepos(true)} />
           {allRepos && repoCounts.filter((r) => r.value && r.value !== repo).slice(0, 8).map((r) => (
-            <div key={r.value} className="flex items-center gap-1 pl-2 pr-1 py-0.5 text-[10.5px]" style={{ color: "var(--text3)" }}>
+            <div key={r.value} className="flex items-center gap-1 pl-2 pr-1 py-0.5 text-[10.5px] shrink-0 whitespace-nowrap" style={{ color: "var(--text3)" }}>
               <span className="truncate flex-1" title={r.value}>{r.value}</span>
               <span className="tabular-nums">{r.n}</span>
             </div>
@@ -400,7 +421,7 @@ export function Inbox({ repo, root, prs, onFlash, onUnread, active = true }: {
         {/* The one bulk verb GitHub gives that is not per-thread. Per repository
             rather than global, because "all of them everywhere" is a press
             nobody can take back. */}
-        <button className="agx-btn rounded-md px-2 py-1 text-[10.5px] mt-auto" style={{ color: "var(--text3)", border: EDGE }}
+        <button className={`agx-btn rounded-md px-2 py-1 text-[10.5px] ${folded ? "" : "mt-auto"}`} style={{ color: "var(--text3)", border: EDGE }}
           disabled={busy || !repo}
           title={`Mark everything in ${repo} as read on GitHub`}
           onClick={async () => {
