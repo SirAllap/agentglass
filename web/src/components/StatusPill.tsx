@@ -27,7 +27,7 @@ export function StatusPill({ status, color, dim }: { status: string; color?: str
        came out three pixels taller than the id chip beside it on the board's
        card. Every chip on a row is the same height now, by number rather than
        by each one's own padding arithmetic. */
-    <span className="text-[9.5px] tracking-[0.06em] px-1.5 rounded whitespace-nowrap inline-flex items-center leading-none"
+    <span className="text-[9.5px] tracking-[0.06em] px-1.5 rounded whitespace-nowrap inline-flex items-center leading-none min-w-0 max-w-full"
       title={status}
       style={{
         height: CHIP_H,
@@ -35,7 +35,7 @@ export function StatusPill({ status, color, dim }: { status: string; color?: str
         background: `color-mix(in srgb, ${c} ${dim ? 8 : 15}%, transparent)`,
         border: `1px solid color-mix(in srgb, ${c} ${dim ? 18 : 34}%, transparent)`,
       }}>
-      {status.toUpperCase()}
+      <span className="truncate">{status.toUpperCase()}</span>
     </span>
   );
 }

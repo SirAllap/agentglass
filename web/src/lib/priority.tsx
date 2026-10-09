@@ -156,18 +156,24 @@ export function CardChip({ id, priority, status, onOpen, title, className }: {
  * drawing, moved somewhere both views can reach it, so a third surface cannot
  * invent a fourth answer.
  */
-export function CardFace({ p, n = 0, size = 16 }: {
+export function CardFace({ p, n = 0, size = 16, overlap, ring = 3 }: {
   p: { name: string; initials: string; color?: string; avatar?: string; me?: boolean };
   /** Position in a stack, for the overlap. */
   n?: number;
   size?: number;
+  /** Px each face tucks under the one before it. Default a third of the face. */
+  overlap?: number;
+  /** Px of the card's own colour round a face, which is what separates two that touch. */
+  ring?: number;
 }) {
   const base = {
-    width: size, height: size, borderRadius: 999, marginLeft: n ? -(size * 0.3) : 0,
+    width: size, height: size, borderRadius: 999, marginLeft: n ? -(overlap ?? size * 0.3) : 0,
     /* A ring in the app's own success colour marks you, the way the tasks view
        does — the one face in a stack you do not have to read the name of. */
-    boxShadow: `0 0 0 1.5px ${p.me ? "var(--success)" : "transparent"}, 0 0 0 3px var(--bg2)`,
-    zIndex: 3 - n,
+    boxShadow: `0 0 0 1.5px ${p.me ? "var(--success)" : "transparent"}, 0 0 0 ${ring}px var(--bg2)`,
+    /* Left over right, and never below the surface they sit on: `3 - n` went negative
+       at the fourth face, which drew it behind the bar it stood in. */
+    zIndex: 10 - n,
     position: "relative" as const,
   };
   const title = p.me ? `${p.name} — you` : p.name;

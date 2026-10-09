@@ -471,7 +471,7 @@ describe("the card carries the suite as a bar", () => {
 
   it("still says the verdict in words", () => {
     // Colour alone cannot say "red" to somebody who cannot see red.
-    expect(render({ mine: [pr(4, { ok: 2, fail: 1 })] })).toContain("1 failing");
+    expect(render({ mine: [pr(4, { ok: 2, fail: 1 })] })).toContain("1 check failing");
     expect(render({ mine: [pr(5, { ok: 6, pend: 8 })] })).toContain("6 of 14 in");
   });
 });
@@ -590,7 +590,7 @@ describe("who is on it", () => {
      * `Avatar` keeps initials as its own fallback, so nothing is lost where
      * there is no face.
      */
-    expect(board).toContain("<Avatar login={login} size={16} />");
+    expect(board).toContain("<Avatar login={login} size={22} />");
     expect(board).not.toContain("r.login.slice(0, 2).toUpperCase()");
   });
 
@@ -598,7 +598,7 @@ describe("who is on it", () => {
     // The two facts a list row carries. Past five the card is a contact sheet,
     // and the pull request itself lists them all.
     expect(board).toContain("[p.author, ...(p.reviewers ?? []).map((r) => r.login)]");
-    expect(board).toContain(".slice(0, 5)");
+    expect(board).toContain(".slice(0, FACES_MAX)");
   });
 });
 
@@ -677,8 +677,8 @@ describe("taking a card away with you", () => {
        message. */
     expect(board).toContain("copyLink()");
     expect(board).toContain('navigator.clipboard?.writeText(p.url || "")');
-    // Same 26px box as the star it sits next to.
-    expect(board.split("width: 26, height: 26").length - 1).toBe(2);
+    // Same house box (HIT) as the star it sits next to.
+    expect(board.split("width: HIT, height: HIT").length - 1).toBe(2);
   });
 });
 
@@ -761,12 +761,15 @@ describe("the card header strip, cleared", () => {
 
   it("says the same thing the merge box says", () => {
     expect(fn).toContain("Waiting on review by");
-    expect(fn).toContain("Changes applied, asked to look again.");
+    /* The header names who the ball is with; the sentence under it, in the
+       card's own last-event zone, says what happened. Said twice it was one
+       fact on two lines of the same card. */
+    expect(fn).not.toContain("Changes applied, asked to look again.");
   });
 });
 
 describe("card assignees on a board card", () => {
-  const fn = board.slice(board.indexOf("Card assigned to"), board.indexOf("The sentence that put it in this lane"));
+  const fn = board.slice(board.indexOf("Card assigned to"), board.indexOf("WHAT HAPPENED LAST"));
 
   it("draws up to five faces and says the rest as +N", () => {
     expect(board).toContain("const ASSIGNEE_FACES = 5;");

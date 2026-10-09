@@ -409,7 +409,7 @@ describe("the verdict a card leads with", () => {
       checks: { total: 3, success: 1, failure: 2, skipped: 0, pending: 0, allDone: true, verdict: "red", failing: [] },
     } as Partial<PrSummary>);
     expect(html).toContain("Approved");
-    expect(html).toContain("2 failing");
+    expect(html).toContain("2 checks failing");
   });
 });
 
@@ -531,14 +531,14 @@ describe("what the card finally says", () => {
     expect(html, "the initials stand in when there is no photo").toContain("AG");
   });
 
-  test("goes amber when nothing has moved in over a week", () => {
+  test("says so in words when nothing has moved in over a week", () => {
     const old = new Date(Date.now() - 9 * 86_400_000).toISOString();
-    expect(inCard({ updatedAt: old })).toContain("Nothing has moved here in over a week");
+    expect(inCard({ updatedAt: old })).toContain("9 days without activity");
   });
 
   test("but not on one that moved yesterday", () => {
     const fresh = new Date(Date.now() - 86_400_000).toISOString();
-    expect(inCard({ updatedAt: fresh })).not.toContain("Nothing has moved here in over a week");
+    expect(inCard({ updatedAt: fresh })).not.toContain("days without activity");
   });
 
   test("the card's id is a button that opens it, with room around the flag", () => {
@@ -679,7 +679,7 @@ describe("the card line is always there", () => {
   };
 
   test("says so when the branch names no card at all", () => {
-    expect(inCard({ headRefName: "chore/release-notes" })).toContain("no linked card");
+    expect(inCard({ headRefName: "chore/release-notes" })).toContain("No card linked to this pull request");
   });
 
   test("and tells that apart from a card nobody has cached", () => {
@@ -693,7 +693,7 @@ describe("the card line is always there", () => {
     // anything yet.
     const html = inCard({ headRefName: "ORBIT-9999-a-thing", checksLoaded: false } as Partial<PrSummary>);
     expect(html).not.toContain("card not found");
-    expect(html).not.toContain("no linked card");
+    expect(html).not.toContain("No card linked to this pull request");
   });
 });
 

@@ -184,6 +184,22 @@ Reach for these before writing a `<button>`, an `<input>` or a colour:
 A view that needs something these cannot express adds it to `Chrome.tsx`,
 where the next view will find it, and adds its row to the table above.
 
+### The pull-request card on the triage board
+
+A tracker bar over one panel, joined by an elbow (dashed when no card is
+linked). The bar is `42px` whatever it holds, tinted from the app's accent; the
+panel's header is `38px` and carries the forge's mark, the number that copies
+itself, the link and the star at `HIT`. Under it three zones split by `LINE`:
+what it is (title cut after three lines), where it stands (a word, the base, the
+diff, a 3px bar; colour only on the checks) and what happened last. One footer:
+Open at the left, who is on the pull request at the right, in the same place in
+every state. Up to five faces, then `+N`.
+
+The card measures itself (`container-type: inline-size`, `.agx-prc`): from 760px
+the standing zone becomes a 380px right column and the footer spans both; under
+400px the panel header drops its word, under 340px the bar drops the tracker's
+name. The wording of each zone lives in `lib/prCardZones.ts`, with tests.
+
 ## A plugin's live canvas
 
 `PluginCanvas.tsx` draws a scene a plugin changes many times a second

@@ -2421,3 +2421,32 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 @media (prefers-reduced-motion: reduce) {
   [data-canvas-loop] { animation: none; }
 }
+
+/*
+ * THE PULL-REQUEST CARD'S WIDE LAYOUT.
+ *
+ * A lane is anywhere from 268px to well over a thousand, and a card stacked
+ * three zones high at 1060px is a long empty line per row. The card measures
+ * ITSELF (a container, not the viewport — the lane's width is what changes, and
+ * it changes with the window, the fold state and the number of lanes), and past
+ * 760px the standing zone becomes a right column so the title and the sentence
+ * keep the width and the footer spans both.
+ */
+.agx-prc { container-type: inline-size; container-name: agx-prc; }
+.agx-prc-body { display: block; }
+.agx-prc-stand { border-top: 1px solid var(--surface-line); }
+@container agx-prc (min-width: 760px) {
+  .agx-prc-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 380px;
+    grid-template-areas: "ident stand" "event stand" "foot foot";
+  }
+  .agx-prc-ident { grid-area: ident; }
+  .agx-prc-stand { grid-area: stand; align-content: start; border-top: 0; border-left: 1px solid var(--surface-line); }
+  .agx-prc-event { grid-area: event; }
+  .agx-prc-foot { grid-area: foot; }
+}
+/* The tracker's name gives way before the id and the status do: at the narrowest lane the bar holds the mark, the id, the status and the faces. */
+@container agx-prc (max-width: 340px) { .agx-prc-lab { display: none; } }
+/* And the panel's own header gives up its word before it gives up the star: the mark says which source it is. */
+@container agx-prc (max-width: 400px) { .agx-prc-plab { display: none; } }

@@ -80,10 +80,11 @@ describe("Escape closes the Machine dialog", () => {
 });
 
 describe("one-off control heights join the ladder", () => {
-  test("the triage card's button is a compact control", () => {
+  test("the triage card's button is a house-sized control", () => {
     const tag = openingTag(triage, "button", 'onAct(p, "open")');
     expect(tag).not.toBe("");
-    expect(tag).toContain("CTRL_H.compact");
+    // HIT, the same 26 as the icon buttons in the panel header above it.
+    expect(tag).toContain("height: HIT");
     expect(tag).not.toMatch(/\bpy-0\.5\b/);
     expect(tag).toContain("rounded-lg");
   });
