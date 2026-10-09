@@ -41,7 +41,7 @@ import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import type {
   PrSummary, PrDetail, PrRepoId, PrThread, PrComment, PrReview, PrReviewer, PrCheck, GitRepoRef, FileChange,
   PrReaction, PrAuthorAssociation, PrEvent, PrCommit, PrFile, PrCheckJob, PrLocalHead,
-  ReviewRecipe, ReviewRecipeGroup, ReviewRecipeContext,
+  ReviewRecipe, ReviewRecipeGroup, ReviewRecipeContext, PrActionResult,
 } from "../../../shared/types.ts";
 import { api, type BranchSpend, type RepoSpend } from "../lib/api.ts";
 import {
@@ -6444,12 +6444,19 @@ function SidebarSection({ title, onEdit, children }: { title: string; onEdit?: (
  * with both screens side by side. The roster and its order are in
  * lib/prReviewers.
  */
-function ReviewerList({ rows }: { rows: ReviewerRow[] }) {
+function ReviewerList({ rows, author, onAsk }: { rows: ReviewerRow[]; author?: string; onAsk?: (login: string) => Promise<PrActionResult> }) {
+  // Logins asked again from this row, so the ↻ turns into "asked" at once
+  // instead of waiting for the next list refresh.
+  const [asked, setAsked] = useState<Record<string, "busy" | "done" | string>>({});
   if (!rows.length) return <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>No reviewers</span>;
   return (
     <div className="flex flex-col gap-1">
       {rows.map((r) => {
         const mark = REVIEW_MARK[r.state];
+        // GitHub offers "Re-request review" only to a person who has already
+        // answered; a bot, a team and the author cannot be asked this way.
+        const canAsk = !!onAsk && r.state !== "awaiting" && !r.again && !r.isBot && !r.isTeam && r.login !== author;
+        const ask = asked[r.login];
         return (
           <span key={r.login} className="flex items-center gap-1.5 text-[11px] min-w-0" style={{ color: "var(--text2)" }}
             title={`${r.login} — ${mark.said}${r.at ? ` ${ago(r.at)}` : ""}${r.again ? " · asked again since" : ""}`}>
@@ -6458,7 +6465,21 @@ function ReviewerList({ rows }: { rows: ReviewerRow[] }) {
             <span className="flex-1" />
             {/* Asked again after answering — GitHub's ↻, and the reason a green
                 tick beside it is not the whole story. */}
-            {r.again && <span aria-hidden className="shrink-0 flex" style={{ color: "var(--text4)" }} title="Asked to look again"><RefreshIcon size={ICON.sm} /></span>}
+            {(r.again || ask === "done") && <span aria-hidden className="shrink-0 flex" style={{ color: "var(--text4)" }} title="Asked to look again"><RefreshIcon size={ICON.sm} /></span>}
+            {canAsk && ask !== "done" && (
+              <button type="button" aria-label={`Re-request review from ${r.login}`}
+                title={ask && ask !== "busy" ? `Could not ask again: ${ask}` : "Re-request review"}
+                disabled={ask === "busy"}
+                onClick={async () => {
+                  setAsked((m) => ({ ...m, [r.login]: "busy" }));
+                  const res = await onAsk!(r.login).catch((e: unknown) => ({ ok: false, error: String(e) }) as PrActionResult);
+                  setAsked((m) => ({ ...m, [r.login]: res.ok ? "done" : (res.error || "failed") }));
+                }}
+                className="shrink-0 grid place-items-center rounded-md hover:bg-white/5 disabled:opacity-50"
+                style={{ width: 20, height: 20, color: ask && ask !== "busy" ? "var(--error)" : "var(--primary)" }}>
+                <RefreshIcon size={ICON.sm} />
+              </button>
+            )}
             <span aria-hidden className="shrink-0 flex" style={{ color: mark.tint }}>{mark.glyph}</span>
           </span>
         );
@@ -7591,7 +7612,7 @@ function PrSidebar({ d, root, spend, onEditField }: {
                   {v.askedAgain && <span className="truncate" style={{ color: "var(--text4)" }}>· asked again</span>}
                 </div>
               )}
-              <ReviewerList rows={rows} />
+              <ReviewerList rows={rows} author={d.author} onAsk={(login) => api.prReviewers(root, d.number, [login], [])} />
             </>
           );
         })()}

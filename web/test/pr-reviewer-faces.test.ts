@@ -42,7 +42,7 @@ describe("a team is not drawn as a face", () => {
     const section = sidebar.slice(0, sidebar.indexOf("</SidebarSection>"));
     expect(section, "the same verdict the masthead used to draw, now above the roster it came from")
       .toContain("verdictLine(v)");
-    expect(section).toContain("<ReviewerList rows={rows} />");
+    expect(section).toContain("<ReviewerList rows={rows} ");
   });
 
   /*
@@ -72,7 +72,7 @@ describe("a team is not drawn as a face", () => {
        empty, so the panel said "No reviewers" over two approvals and a request
        for changes. The roster is the union — see pr-reviewers.test.ts. */
     expect(panel).not.toContain("people={d.reviewers}");
-    expect(panel).toContain("<ReviewerList rows={rows} />");
+    expect(panel).toContain("<ReviewerList rows={rows} ");
   });
 
   test("an assignee is a person with nothing to flag", () => {
