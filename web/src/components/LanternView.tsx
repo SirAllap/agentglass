@@ -288,7 +288,10 @@ export function AgentCard({ r, onJump, onClear, quiet, cacheTtlMs, kinds }: { r:
               <span className="text-[10px] uppercase tracking-wide shrink-0 font-medium" style={{ color: tone }}>{waitWord(w)}</span>
               <span className="ml-auto text-[10.5px] tabular-nums shrink-0" style={{ color: tone }} title={`Stopped on you since ${new Date(w.since).toLocaleString()}`}>for {fmtAgo(w.since)}</span>
             </div>
-            {w.why && <div className="text-[11.5px]" style={{ color: "var(--text)" }}>{w.why}</div>}
+            {/* The notification's own words — a paragraph somebody's session wrote,
+                not a label the app composed, so it reads in the prose face like a
+                pull request body or a comment (docs/design-system.md, Principles). */}
+            {w.why && <div className="text-[11.5px]" style={{ color: "var(--text)", fontFamily: "var(--font-prose)" }}>{w.why}</div>}
           </div>
         </div>
       )}
@@ -300,7 +303,7 @@ export function AgentCard({ r, onJump, onClear, quiet, cacheTtlMs, kinds }: { r:
             <div className="flex items-start gap-2 min-w-0">
               <Label tone={r.state === "working" ? "var(--success)" : undefined}>now</Label>
               <div className="flex-1 min-w-0 flex flex-col">
-                <span className="text-[11.5px] leading-snug line-clamp-2" style={{ color: "var(--text)" }} title={now.text}>{now.text}</span>
+                <span className="text-[11.5px] leading-snug line-clamp-2" style={{ color: "var(--text)", fontFamily: "var(--font-prose)" }} title={now.text}>{now.text}</span>
                 <span className="text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>
                   {now.tag}{now.at ? ` · ${fmtAgo(now.at)} ago` : ""}
                 </span>
@@ -310,7 +313,7 @@ export function AgentCard({ r, onJump, onClear, quiet, cacheTtlMs, kinds }: { r:
           {!quiet && f?.lastAsk && (
             <div className="flex items-start gap-2 min-w-0">
               <Label>asked</Label>
-              <span className="flex-1 min-w-0 text-[11px] leading-snug line-clamp-2" style={{ color: "var(--text3)" }} title={f.lastAsk.text}>{f.lastAsk.text}</span>
+              <span className="flex-1 min-w-0 text-[11px] leading-snug line-clamp-2" style={{ color: "var(--text3)", fontFamily: "var(--font-prose)" }} title={f.lastAsk.text}>{f.lastAsk.text}</span>
             </div>
           )}
         </div>

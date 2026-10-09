@@ -86,10 +86,13 @@ export function SavedRepliesPane({ open }: { open: boolean }) {
               <div className="min-w-0 flex-1">
                 <div className="text-[11.5px]" style={{ color: "var(--text)" }}>{r.title}</div>
                 {/* Two lines of it, so a list of twelve is still a list. The whole
-                    thing is one press away. */}
+                    thing is one press away. The text itself is what a person wrote
+                    to post under their own name — the same reason a pull request
+                    body reads in --font-prose rather than the app's mono stack. */}
                 <div className="text-[10.5px] mt-0.5" style={{
                   color: "var(--text3)", display: "-webkit-box", WebkitLineClamp: 2,
                   WebkitBoxOrient: "vertical", overflow: "hidden", whiteSpace: "pre-wrap",
+                  fontFamily: "var(--font-prose)", lineHeight: 1.5,
                 }}>{r.text}</div>
               </div>
               <button onClick={() => editRow(r)} disabled={busy}
@@ -115,7 +118,7 @@ export function SavedRepliesPane({ open }: { open: boolean }) {
         <textarea value={text} onChange={(e) => setText(e.target.value)} rows={5}
           placeholder="What goes in the box. Markdown works here."
           className="px-2 py-1.5 rounded text-[11px] outline-none resize-y"
-          style={{ background: "var(--surface-inset)", color: "var(--text)", border: EDGE, fontFamily: "var(--diff-font, ui-monospace, monospace)" }} />
+          style={{ background: "var(--surface-inset)", color: "var(--text)", border: EDGE, fontFamily: "var(--font-prose)", lineHeight: 1.5 }} />
         {err && <div className="text-[10.5px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
         <div className="flex items-center gap-1.5">
           <button onClick={() => void save()} disabled={busy || !text.trim()}
