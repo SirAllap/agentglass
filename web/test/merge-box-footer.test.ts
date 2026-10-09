@@ -11,7 +11,7 @@ const panel = await Bun.file(new URL("../src/components/PrPanel.tsx", import.met
 describe("merge box footer", () => {
   it("draws the secondary actions and the merge group in the same row", () => {
     const at = box.indexOf("{extraNode && <div");
-    const merge = box.indexOf("{!path.ready && showMergeRow && <span");
+    const merge = box.indexOf("{showMergeRow && <span");
     expect(at).toBeGreaterThan(0);
     expect(merge).toBeGreaterThan(at);
     // No second bordered row for extraNode.
@@ -22,5 +22,52 @@ describe("merge box footer", () => {
     const at = panel.indexOf("const extraNode = (");
     const end = panel.indexOf("const hasNotes", at);
     expect(panel.slice(at, end)).not.toContain('className="ml-auto flex gap-1.5"');
+  });
+});
+
+describe("the rarely used actions leave the footer", () => {
+  it("To draft and Close are drawn in the hero's corner, not in the footer row", () => {
+    const at = panel.indexOf("const extraNode = (");
+    const end = panel.indexOf("const cornerNode = (", at);
+    expect(end).toBeGreaterThan(at);
+    const extra = panel.slice(at, end);
+    expect(extra).not.toContain("To draft");
+    expect(extra).not.toContain(">Close<");
+    const corner = panel.slice(end, panel.indexOf("const hasNotes", end));
+    expect(corner).toContain("To draft");
+    expect(corner).toContain("Close");
+    expect(box).toContain("{cornerNode && <div");
+    expect(box.indexOf("{cornerNode && <div")).toBeLessThan(box.indexOf("agx-mb-stages\""));
+  });
+  it("Close is red only on hover or focus", () => {
+    expect(box).toMatch(/\.agx-mb-quiet-danger:hover[^{]*,\.agx-mb-quiet-danger:focus-visible\{color:var\(--error-ink\)/);
+    expect(box).toMatch(/\.agx-mb-quiet\{[^}]*color:var\(--text3\)/);
+  });
+});
+
+describe("the merge group never moves", () => {
+  it("is in the footer whether or not the pull request is ready", () => {
+    const at = box.indexOf("{showMergeRow && <span");
+    expect(at).toBeGreaterThan(0);
+    // Not behind a readiness check: it was drawn in the hero when the box turned green.
+    expect(box.slice(box.lastIndexOf("\n", at), at)).not.toContain("path.ready");
+    expect(box).toContain("{(callout || extraNode || showMergeRow) && (");
+    expect(box).toContain('if (a.id === "merge") return null');
+  });
+  it("no hero of the model carries the merge, auto-merge or update as its action, in any state", async () => {
+    const { mergePath } = await import("../../shared/mergePath.ts");
+    const NOW = Date.parse("2026-09-30T12:00:00Z");
+    const ok: any[] = [{ name: "build", workflow: "CI", state: "success", done: true, required: true }];
+    const run = { name: "build", workflow: "CI", state: "pending", done: false, required: true, startedAt: new Date(NOW - 30_000).toISOString() };
+    const g: any = { permission: "WRITE", canBypass: false, protectionVisible: true, locked: false, approvals: 1, codeOwners: false, lastPushApproval: false, dismissStale: false, conversationResolution: false, upToDate: false, signatures: false, deployments: [], requiredContexts: [], mergeQueue: false, inQueue: false };
+    const b = { state: "OPEN", mergeState: "CLEAN", baseRefName: "main", now: NOW, gate: g, checksAll: ok, reviewDecision: "APPROVED" };
+    const states = [
+      b, { ...b, mergeState: "BEHIND", behind: 4 }, { ...b, mergeState: "BEHIND", behind: 4, gate: { ...g, upToDate: true } },
+      { ...b, mergeState: "BLOCKED", checksAll: [run] }, { ...b, mergeState: "BLOCKED", viewerDidAuthor: true, checksAll: [run], autoArmed: true },
+    ];
+    for (const st of states) {
+      const h = mergePath(st as any).hero;
+      for (const a of [h.primary, h.secondary, h.also]) expect(["merge", "arm-auto", "update-branch"]).not.toContain(a?.id ?? "");
+    }
   });
 });

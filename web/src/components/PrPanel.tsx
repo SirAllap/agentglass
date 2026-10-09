@@ -4988,7 +4988,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                           onToggleTask={doToggleTask}
                           onLocalReview={(recipe) => doLocalReview(undefined, recipe)}
                           onReviewInTerminal={onReviewInTerminal && d ? (recipe) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "") : undefined}
-                          onMerge={doMerge} onClose={doClose}
+                          onMerge={doMerge} onClose={doClose} onAskReview={doReviewers}
                           method={mergeMethod} onMethod={setMergeMethod}
                           onUpdateBranch={(syncLocal: boolean) => {
                             // Latched before the call, not after: the refetch
@@ -5406,7 +5406,7 @@ function ConflictActions({ root, number, branch, base, repo, title, disabled }: 
   );
 }
 
-export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, openThreads, conversationCount, behind, behindAsking, localHead, conflictFiles, updateRefused, method, onMethod, onLocalReview, onReviewInTerminal, onMerge, onClose, onUpdateBranch, onRerun, onAutoMerge, onCancelAutoMerge, onDraft, onGoThreads, onGoReview, onGoMoved, movedSince, onEditRequest, onToggleTask, awaitingChecks }: {
+export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, openThreads, conversationCount, behind, behindAsking, localHead, conflictFiles, updateRefused, method, onMethod, onLocalReview, onReviewInTerminal, onMerge, onClose, onUpdateBranch, onRerun, onAutoMerge, onCancelAutoMerge, onDraft, onGoThreads, onGoReview, onAskReview, onGoMoved, movedSince, onEditRequest, onToggleTask, awaitingChecks }: {
   d: PrDetail;
   /** The checkout this pull request is being read from — where a conflict would
    *  be prepared. */
@@ -5443,6 +5443,8 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
   /** Take me to that review inside this panel, by the node id of its row —
    *  falling back to `url` outside when this panel has no row for it. */
   onGoReview: (nodeId: string | undefined, url: string) => void;
+  /** Opens the reviewers picker: the box's "Ask someone to review". */
+  onAskReview: () => void;
   /** Open Files with the "since your review" filter already on. */
   onGoMoved: () => void;
   /** How many of this review's files have changed since your own last review — see
@@ -5566,6 +5568,8 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
   const path = mergePath({
     state: d.state, mergeState: d.mergeState, mergeable: d.mergeable, isDraft: d.isDraft,
     reviewDecision: d.reviewDecision, humanReview: d.humanReview, reviewers: d.reviewers, reviews: d.reviews, askedAt,
+    headSha: d.headSha ?? d.commits[d.commits.length - 1]?.oid,
+    threadAuthors: d.threads.filter((t) => !t.isResolved).map((t) => t.comments[0]?.author ?? ""),
     author: d.author, viewerDidAuthor: d.viewerDidAuthor, viewerRequested: d.viewerRequested,
     checks: c, checksAll: d.checksAll, gate: d.gate, baseRefName: d.baseRefName, openThreads,
     conflicted, conflictFiles: conflictFiles?.files.length, behind, awaitingChecks, autoArmed: !!d.autoMerge,
@@ -5577,6 +5581,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
       case "rerun": onRerun(); break;
       case "go-thread": onGoThreads(); break;
       case "go-review": onGoReview(a.nodeId, a.url ?? d.url); break;
+      case "ask-review": onAskReview(); break;
       case "mark-ready": onDraft(); break;
       case "open-github": openExternal(d.url); break;
       case "update-branch": onUpdateBranch(updateMove.syncLocal); break;
@@ -5784,8 +5789,6 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
           {c.failure > 0 && !heroHas("rerun") && <Btn onClick={onRerun} disabled={busy || !!awaitingChecks} pending={busyWhat === "Re-run checks"}
             title={awaitingChecks ? "A new run is already starting from the update" : "Run the failed checks again"}>
             Re-run failed</Btn>}
-          <Btn onClick={onDraft} disabled={busy} small pending={busyWhat === "Mark ready" || busyWhat === "Convert to draft"}>{d.isDraft ? "Mark ready" : "To draft"}</Btn>
-          <Btn onClick={onClose} disabled={busy} danger small pending={busyWhat === "Close"}>Close</Btn>
           {/* Last in the row, so its own line is UNDER everything rather than
               between the update button and the pair pinned to the right — which
               is what happened when it sat next to the button that earns it. It
@@ -5795,6 +5798,18 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
               {updateMove.note}
             </span>
           )}
+    </>
+  );
+  /* Rarely used, so they sit in the box's top-right corner as text and not as
+     two buttons in the row that carries the merge. Close is red only when it is
+     about to be pressed (hover or focus), so it does not read as the box's
+     loudest control while nobody is near it. */
+  const cornerNode = (
+    <>
+      <button type="button" onClick={onDraft} disabled={busy} className="agx-btn agx-mb-quiet"
+        aria-busy={busyWhat === "Mark ready" || busyWhat === "Convert to draft" || undefined}>{d.isDraft ? "Mark ready" : "To draft"}</button>
+      <button type="button" onClick={onClose} disabled={busy} className="agx-btn agx-mb-quiet agx-mb-quiet-danger"
+        aria-busy={busyWhat === "Close" || undefined}>Close</button>
     </>
   );
   const hasNotes = (isBehind && confirmBehind) || !!(conflictFiles?.resolvedLocally && conflictFiles.resolvedLocally.ahead > 0)
@@ -5940,7 +5955,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
         </section>
       ) : (
         <MergeBox path={path} busy={busy} onAction={onPathAction}
-          mergeNode={mergeNode} conflictNode={conflictNode} autoNode={autoNode} extraNode={extraNode}
+          mergeNode={mergeNode} conflictNode={conflictNode} autoNode={autoNode} extraNode={extraNode} cornerNode={cornerNode}
           notes={hasNotes ? notesNode : undefined}
           actionDisabled={actionDisabled} pendingAction={pendingAction} showMergeRow={!conflicted || !!d.autoMerge}
           history={<ReviewHistory reviews={d.reviews} pending={d.reviewers} author={d.author} onGoReview={onGoReview} forceOpen />} />

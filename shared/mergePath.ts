@@ -33,13 +33,14 @@
 import type { PrCheck, PrCheckRollup, PrMergeGate, PrReview, PrReviewer, PrSummary } from "./types.ts";
 import { MIN_SAMPLES, runKey } from "./checkBaseline.ts";
 import { mergeBlockers, staleApproval, type MergeBlocker } from "./mergeBlockers.ts";
+import { approvalsNeed, buildRoster, rosterCounts, type ReviewerState, type RosterEntry } from "./reviewRoster.ts";
 
-export type Mover = "you" | "author" | "reviewer" | "ci" | "wait" | "other" | "fyi" | "done";
+export type Mover = "you" | "author" | "reviewer" | "team" | "ci" | "wait" | "other" | "fyi" | "done";
 export type StageKey = "review" | "required" | "other" | "merge";
 export type StageStatus = "done" | "blocked" | "wait" | "idle";
 
 export const MOVER_LABEL: Record<Mover, string> = {
-  you: "YOU", author: "AUTHOR", reviewer: "REVIEWER", ci: "CI · WAIT", wait: "WAIT", other: "SOMEONE ELSE", fyi: "FYI", done: "DONE",
+  you: "YOU", author: "AUTHOR", reviewer: "REVIEWER", team: "TEAM", ci: "CI · WAIT", wait: "WAIT", other: "SOMEONE ELSE", fyi: "FYI", done: "DONE",
 };
 
 export type RowKind =
@@ -50,7 +51,7 @@ export type RowKind =
 
 export type ActionId =
   | "merge" | "open-log" | "rerun" | "go-thread" | "go-review" | "history" | "mark-ready"
-  | "resolve-conflicts" | "open-github" | "update-branch" | "arm-auto";
+  | "resolve-conflicts" | "open-github" | "update-branch" | "arm-auto" | "ask-review";
 
 export interface PathAction {
   id: ActionId;
@@ -86,6 +87,10 @@ export interface Stage {
   current: boolean;
   /** A number worth a line of its own, such as "~4 min". */
   big?: string;
+  /** Review only: "2 of 3 approvals needed", beside the label. */
+  need?: string;
+  /** Review only: one segment per person, coloured by where they are. */
+  tally?: { key: ReviewerState; login: string; label: string }[];
   sub: string;
 }
 
@@ -98,6 +103,10 @@ export interface PathRow {
   title: string;
   /** Where it comes from: the workflow of a check, who and when for a review. */
   sub?: string;
+  /** A row about one reviewer: who, and which way they are going (the avatar's colour). */
+  person?: { login: string; state: ReviewerState };
+  /** Open threads this row stands for, when it is not all of them. */
+  threads?: number;
   pill?: "required";
   why: string;
   mover: Mover;
@@ -156,6 +165,10 @@ export interface MergePathInput {
   /** When each still-asked reviewer was last asked (login lowercased → ISO),
    *  from the timeline's review-requested events. */
   askedAt?: Record<string, string>;
+  /** The commit at the tip of the branch: what an approval is compared with. */
+  headSha?: string;
+  /** First author of each open thread, so threads can be said per reviewer. */
+  threadAuthors?: string[];
   author?: string;
   viewerDidAuthor?: boolean;
   viewerRequested?: boolean;
@@ -250,7 +263,17 @@ function workflowOf(c: PrCheck): { workflow: string; job: string } {
     : { workflow: "", job: c.name };
 }
 
-const rankOf = (m: Mover) => (m === "you" || m === "author" || m === "other" ? 0 : m === "reviewer" ? 1 : m === "done" ? 3 : 2);
+const rankOf = (m: Mover) => (m === "you" || m === "author" || m === "other" ? 0 : m === "reviewer" || m === "team" ? 1 : m === "done" ? 3 : 2);
+const lc = (s: string) => s.toLowerCase();
+/* The merge group has one place, the footer's right end, in every state: a
+   button that moved up into the hero when the box turned green was a control
+   to hunt for exactly when it mattered. The hero only points at it. */
+const MERGE_BELOW = "Merge is at the bottom right ↓";
+const STATE_WORD: Record<ReviewerState, string> = {
+  approved: "approved", "approved-old": "approved before the last push", "approved-void": "approval no longer counts",
+  changes: "changes requested", "changes-again": "re-review requested", commented: "commented", requested: "not answered yet",
+  dismissed: "review dismissed", team: "team asked",
+};
 const STAGE_ORDER: StageKey[] = ["review", "required", "other", "merge"];
 
 export function mergePath(i: MergePathInput): MergePath {
@@ -328,6 +351,28 @@ export function mergePath(i: MergePathInput): MergePath {
 
   const b = (kind: MergeBlocker["kind"]) => blockers.find((x) => x.kind === kind);
 
+  // Each reviewer on their own, and whose move each one is.
+  const roster = buildRoster({
+    reviews: i.reviews, reviewers: i.reviewers, author: i.author, headSha: i.headSha, reviewDecision: i.reviewDecision,
+    gate, threadAuthors: i.threadAuthors, askedAt: i.askedAt,
+    askedAgain: hv?.kind === "changes" && (hv.askedAgain || hv.cleared) ? hv.who : undefined,
+  });
+  const entries = roster.entries;
+  const pending = entries.filter((e) => e.state === "requested" || e.state === "changes-again");
+  /* Who the viewer is, from what the detail says: they gave the verdict, or they
+     are the one person asked. Two people asked and a viewer among them is not
+     something the detail can resolve, so neither is called "you". */
+  const isMine = (e: RosterEntry) =>
+    !!(hv?.mine && hv.who.some((w) => lc(w) === lc(e.login)))
+    || !!(i.viewerRequested && pending.length === 1 && pending[0] === e);
+  const personMover = (e: RosterEntry): Mover => (e.state === "team" ? "team" : isMine(e) ? "you" : "reviewer");
+  const rowFor = (e: RosterEntry): Pick<PathRow, "person" | "threads"> => ({ person: { login: e.login, state: e.state }, threads: e.threads || undefined });
+  const emitted = new Set<string>();
+  const forReviewThreads = hv?.kind === "changes" || i.reviewDecision === "CHANGES_REQUESTED" || entries.some((e) => e.state === "changes");
+  const codeOwnerNote = gate?.codeOwners ? " This branch also needs a code owner's approval." : "";
+  const attributedThreads = entries.filter((e) => e.state === "commented" || e.state === "changes" || e.state === "changes-again")
+    .reduce((n, e) => n + e.threads, 0);
+
   for (const bl of blockers) {
     switch (bl.kind) {
       case "draft":
@@ -350,30 +395,82 @@ export function mergePath(i: MergePathInput): MergePath {
         });
         break;
       case "changes-requested": {
-        const again = !!(hv?.kind === "changes" && (hv.askedAgain || hv.cleared));
-        const who = nameList(changesWho) || "A reviewer";
-        const when = agoShort(now, changesRef?.submittedAt ?? hv?.at);
-        const askedWhen = agoShort(now, changesWho.map((w) => i.askedAt?.[w.toLowerCase()]).filter(Boolean).sort().pop());
-        add({
-          id: "changes", kind: "changes", stage: "review", title: "Changes requested",
-          sub: again
-            ? `re-requested${askedWhen ? ` ${askedWhen}` : ""} · waiting on ${who}`
-            : `by ${who}${when ? ` · ${when}` : ""}`,
-          why: again
-            ? `${who} was asked to look again; it clears when they approve.`
-            : `Clears only when ${who} approves or the request is dismissed.`,
-          mover: again ? reviewerMover : authorMover === "you" ? "you" : (hv?.mine ? "you" : "author"),
-        });
+        const wanting = entries.filter((e) => e.state === "changes" || e.state === "changes-again");
+        if (wanting.length === 0) {
+          // GitHub says changes are wanted and the reviews did not say by whom
+          // (a long history, or only the server's verdict arrived).
+          const again = !!(hv?.kind === "changes" && (hv.askedAgain || hv.cleared));
+          const who = nameList(changesWho) || "A reviewer";
+          const when = agoShort(now, changesRef?.submittedAt ?? hv?.at);
+          const askedWhen = agoShort(now, changesWho.map((w) => i.askedAt?.[w.toLowerCase()]).filter(Boolean).sort().pop());
+          add({
+            id: "changes", kind: "changes", stage: "review", title: "Changes requested",
+            sub: again ? `re-requested${askedWhen ? ` ${askedWhen}` : ""} · waiting on ${who}` : `by ${who}${when ? ` · ${when}` : ""}`,
+            why: again ? `${who} was asked to look again; it clears when they approve.` : `Clears only when ${who} approves or the request is dismissed.`,
+            mover: again ? reviewerMover : authorMover === "you" ? "you" : (hv?.mine ? "you" : "author"),
+          });
+          break;
+        }
+        for (const e of wanting) {
+          const again = e.state === "changes-again";
+          const when = agoShort(now, e.at);
+          const askedWhen = agoShort(now, i.askedAt?.[lc(e.login)]);
+          const thr = e.threads ? ` · ${plural(e.threads, "thread")} open` : "";
+          emitted.add(lc(e.login));
+          add({
+            id: `changes:${lc(e.login)}`, kind: "changes", stage: "review", title: `${e.login} · ${again ? "re-review requested" : "changes requested"}`,
+            sub: again
+              ? `${askedWhen ? `asked ${askedWhen}` : "asked again"} · was "changes"${when ? ` ${when}` : ""}${thr}`
+              : `${when}${thr}`.replace(/^ · /, ""),
+            why: again
+              ? `${e.login}'s old request still blocks until they answer the new round.`
+              : `Clears only when ${e.login} approves or the request is dismissed.${e.threads ? " Answer and Resolve their threads." : ""}`,
+            mover: again ? personMover(e) : authorMover === "you" ? "you" : isMine(e) ? "you" : "author",
+            ...rowFor(e),
+          });
+        }
         break;
       }
       case "review-required": {
-        const names = asked.length ? nameList(asked) : "";
-        add({
-          id: "review-required", kind: "review-required", stage: "review", title: bl.title,
-          sub: names ? `asked: ${names}` : "nobody has been asked yet",
-          why: bl.detail,
-          mover: names ? reviewerMover : authorMover,
-        });
+        let rowsHere = 0;
+        for (const e of entries) {
+          if (e.state === "requested" || e.state === "team") {
+            const team = e.state === "team";
+            const askedWhen = agoShort(now, e.at);
+            emitted.add(lc(e.login));
+            rowsHere++;
+            add({
+              id: `review:${lc(e.login)}`, kind: "review-required", stage: "review",
+              title: `${e.login} · ${team ? "review requested from the team" : "review requested"}`,
+              sub: team ? `${askedWhen ? `asked ${askedWhen} · ` : ""}waiting for someone on the team` : askedWhen ? `asked ${askedWhen} · not answered yet` : "not answered yet",
+              why: `An approving review is what this waits for.${codeOwnerNote}`,
+              mover: personMover(e), ...rowFor(e),
+            });
+          } else if (e.state === "approved-void" || e.state === "dismissed") {
+            const void_ = e.state === "approved-void";
+            emitted.add(lc(e.login));
+            rowsHere++;
+            add({
+              id: `${void_ ? "void" : "dismissed"}:${lc(e.login)}`, kind: "review-required", stage: "review",
+              title: `${e.login} · ${void_ ? "approval no longer counts" : "review dismissed"}`,
+              sub: `${void_ ? "approved" : "reviewed"} ${agoShort(now, e.at) || "earlier"}${void_ ? " · before the last push" : ""}`.trim(),
+              why: void_
+                ? `This branch dismisses approvals when new commits land; ${e.login} has to approve again.`
+                : `A dismissed review no longer counts; ask ${e.login} to look again if it is still needed.`,
+              mover: authorMover, ...rowFor(e),
+            });
+          }
+        }
+        const missing = roster.needed === null ? (rowsHere === 0 ? 1 : 0) : Math.max(0, roster.needed - roster.counted - rowsHere);
+        if (rowsHere === 0 || missing > 0) {
+          const names = entries.filter((e) => e.state === "requested" || e.state === "team").map((e) => e.login);
+          add({
+            id: "review-required", kind: "review-required", stage: "review",
+            title: roster.needed && (roster.counted > 0 || rowsHere > 0) && missing > 0 ? `Needs ${plural(missing, "more approving review")}` : bl.title,
+            sub: names.length ? `${plural(missing, "more approval")} needed · ask someone else` : "nobody has been asked yet",
+            why: bl.detail, mover: authorMover,
+          });
+        }
         break;
       }
       case "behind":
@@ -398,16 +495,28 @@ export function mergePath(i: MergePathInput): MergePath {
   }
 
   // Threads. Required to be resolved, or the very thing a review asked for.
-  if (openThreads > 0) {
-    const required = !!gate?.conversationResolution;
-    const forReview = hv?.kind === "changes" || i.reviewDecision === "CHANGES_REQUESTED";
+  const requiredThreads = !!gate?.conversationResolution;
+  const threadMover: Mover = requiredThreads || forReviewThreads ? authorMover : "fyi";
+  const threadWhy = requiredThreads
+    ? "Answering is not resolving: press Resolve on each after the reply."
+    : forReviewThreads ? "They are what the review asked for: answer each, then press Resolve."
+    : "This branch does not require them resolved, but they are still open questions.";
+  // A commenter's own threads are on their row; the rest are one row.
+  for (const e of entries) {
+    if (e.state !== "commented" || e.threads === 0) continue;
+    emitted.add(lc(e.login));
     add({
-      id: "threads", kind: "threads", stage: "review", title: `${plural(openThreads, "review thread")} open`,
-      why: required
-        ? "Answering is not resolving: press Resolve on each after the reply."
-        : forReview ? "They are what the review asked for: answer each, then press Resolve."
-        : "This branch does not require them resolved, but they are still open questions.",
-      mover: required || forReview ? authorMover : "fyi",
+      id: `threads:${lc(e.login)}`, kind: "threads", stage: "review", title: `${e.login} · commented`,
+      sub: `${agoShort(now, e.at) ? `${agoShort(now, e.at)} · ` : ""}${plural(e.threads, "thread")} open · no verdict`,
+      why: requiredThreads ? "A comment does not block, but its open thread does: answer it, then press Resolve." : "A comment does not block, and this branch does not require its threads resolved.",
+      mover: threadMover, ...rowFor(e),
+    });
+  }
+  const restThreads = Math.max(0, openThreads - attributedThreads);
+  if (restThreads > 0) {
+    add({
+      id: "threads", kind: "threads", stage: "review", title: `${plural(restThreads, "review thread")} open`,
+      why: threadWhy, mover: threadMover, threads: restThreads,
     });
   }
 
@@ -477,24 +586,48 @@ export function mergePath(i: MergePathInput): MergePath {
     });
   }
 
-  // What is already decided on the review side: each human's latest verdict,
-  // when it is an approval nobody has asked to be redone. Not a blocker, so
-  // never counted; a bot's approval is not a person's and is not listed.
-  const latest = new Map<string, PrReview>();
-  for (const r of [...humans].sort((a, c) => (a.submittedAt || "").localeCompare(c.submittedAt || ""))) {
-    if (r.state === "APPROVED" || r.state === "CHANGES_REQUESTED") latest.set(r.author.toLowerCase(), r);
-  }
-  const askedLc = new Set(asked.map((a) => a.toLowerCase()));
-  const approvals = [...latest.values()].filter((r) => r.state === "APPROVED" && !askedLc.has(r.author.toLowerCase()))
-    .sort((a, c) => (c.submittedAt || "").localeCompare(a.submittedAt || ""));
-  const reviewers = new Set([...latest.keys(), ...(i.reviewers ?? []).filter((r) => !r.isTeam).map((r) => r.login.toLowerCase())]);
-  for (const r of approvals) {
-    const when = agoShort(now, r.submittedAt);
-    add({
-      id: `approved-${r.author.toLowerCase()}`, kind: "approved", stage: "review",
-      title: `Approved by ${r.author}${when ? ` · ${when}` : ""}`,
-      why: "Already done; it counts unless new commits or a dismissal undo it.", mover: "done", counted: false,
-    });
+  // What the review side already decided, and what does not block, one row per
+  // person: an approval is DONE; the rest is FYI, said once so the tally has a
+  // row behind every segment. Never counted, so never "what stands in the way".
+  const notRequired = roster.needed === 0;
+  for (const e of entries) {
+    if (emitted.has(lc(e.login))) continue;
+    const when = agoShort(now, e.at);
+    const lead = when ? `${when} · ` : "";
+    const person = rowFor(e);
+    const id = `${e.state}:${lc(e.login)}`;
+    if (e.state === "approved" || e.state === "approved-old") {
+      const commitNote = e.state === "approved-old" ? "before the last push (still counts)"
+        : e.review?.commit && i.headSha ? "on the current commit" : "";
+      add({
+        id: `approved-${lc(e.login)}`, kind: "approved", stage: "review", title: `${e.login} · approved`,
+        sub: [when, commitNote, e.askedAgain ? "asked to look again" : ""].filter(Boolean).join(" · ") || undefined,
+        why: roster.needed ? `Counts toward the ${roster.needed} approvals.${e.state === "approved-old" ? " This repository keeps approvals across pushes." : ""}` : "Counts, unless new commits or a dismissal undo it.",
+        mover: "done", counted: false, ...person,
+      });
+    } else if (e.state === "changes" || e.state === "changes-again") {
+      add({
+        id, kind: "note", stage: "review", title: `${e.login} · changes requested`, sub: `${lead}${notRequired ? "not required by this branch" : "GitHub is not blocking on it"}`.trim(),
+        why: "It is not what stands between this and the merge right now.", mover: "fyi", ...person,
+      });
+    } else if (e.state === "commented") {
+      add({
+        id, kind: "note", stage: "review", title: `${e.login} · commented`, sub: `${lead}no verdict`,
+        why: "A comment is not an approval and does not block.", mover: "fyi", ...person,
+      });
+    } else if (e.state === "requested" || e.state === "team") {
+      add({
+        id, kind: "note", stage: "review", title: `${e.login} · ${e.state === "team" ? "review requested from the team" : "review requested"}`,
+        sub: `${lead}not answered yet`,
+        why: notRequired ? "This branch does not require a review: it is a request, not a wait." : "The approvals it needs are in; this is an extra request, not a wait.",
+        mover: "fyi", ...person,
+      });
+    } else {
+      add({
+        id, kind: "note", stage: "review", title: `${e.login} · ${e.state === "approved-void" ? "approval no longer counts" : "review dismissed"}`, sub: `${lead}does not count`.trim(),
+        why: "It does not count toward the approvals, and nothing is waiting on it.", mover: "fyi", ...person,
+      });
+    }
   }
 
   // Order: what needs a person, then a reviewer, then time. Stable inside.
@@ -504,7 +637,7 @@ export function mergePath(i: MergePathInput): MergePath {
       || rankOf(a.r.mover) - rankOf(c.r.mover)
       || STAGE_ORDER.indexOf(a.r.stage) - STAGE_ORDER.indexOf(c.r.stage)
       || a.idx - c.idx)
-    .map(({ r }, k): PathRow => ({ ...r, n: k + 1, moverLabel: MOVER_LABEL[r.mover] }));
+    .map(({ r }, k): PathRow => ({ ...r, n: k + 1, moverLabel: r.mover === "reviewer" && r.person ? r.person.login.toUpperCase() : MOVER_LABEL[r.mover] }));
   const counted = ordered.filter((r) => r.counted);
   const first = counted[0] ?? null;
   const ready = !first;
@@ -573,28 +706,38 @@ export function mergePath(i: MergePathInput): MergePath {
   const approvedSaid = hv?.kind === "approved"
     ? (approval ? approval.head : hv.mine ? "You approved" : approvedBy ? `Approved by ${approvedBy}` : "Approved")
     : "";
-  const reviewStage = ((): Pick<Stage, "status" | "sub"> => {
+  const reviewStage = ((): Pick<Stage, "status" | "sub" | "need" | "tally"> => {
+    const need = approvalsNeed(roster, i.reviewDecision) ?? undefined;
+    const tally = entries.map((e) => ({ key: e.state, login: e.login, label: `${e.login} · ${STATE_WORD[e.state]}` }));
+    const headline = { ...(need ? { need } : null), ...(tally.length ? { tally } : null) };
+    const said = (fallback: string) => (entries.length ? rosterCounts(entries) : fallback);
     const chg = revRows.find((r) => r.kind === "changes");
     if (chg) {
       const bits: string[] = [];
-      if (currentKey === "review" && first?.mover === "you") bits.push("you are here");
-      else bits.push(chg.mover === "reviewer" ? "waiting on a second look" : `${nameList(changesWho) || "a reviewer"} wants changes`);
-      if (openThreads > 0) bits.push(plural(openThreads, "thread"));
-      if (approvals.length) bits.unshift(`${approvals.length} of ${reviewers.size} approved`);
-      if (approvals.length && chg.mover === "reviewer") bits[1] = `waiting on ${nameList(changesWho) || "a reviewer"}`;
-      return { status: chg.mover === "reviewer" ? "wait" : "blocked", sub: bits.join(" · ") };
+      if (!entries.length) {
+        if (currentKey === "review" && first?.mover === "you") bits.push("you are here");
+        else bits.push(chg.mover === "reviewer" ? "waiting on a second look" : `${nameList(changesWho) || "a reviewer"} wants changes`);
+        if (openThreads > 0) bits.push(plural(openThreads, "thread"));
+      }
+      return { status: chg.mover === "reviewer" ? "wait" : "blocked", sub: entries.length ? rosterCounts(entries) : bits.join(" · "), ...headline };
     }
     const req = revRows.find((r) => r.kind === "review-required");
-    if (req) return { status: req.mover === "reviewer" ? "wait" : "blocked", sub: req.sub ?? "needs a review" };
+    if (req) return { status: req.mover === "reviewer" || req.mover === "team" ? "wait" : "blocked", sub: said(req.sub ?? "needs a review"), ...headline };
     const thr = revRows.find((r) => r.kind === "threads");
-    if (thr) return { status: "blocked", sub: currentKey === "review" && thr.mover === "you" ? `you are here · ${plural(openThreads, "thread")}` : plural(openThreads, "open thread") };
-    if (i.reviewDecision === "APPROVED" || hv?.kind === "approved") {
-      const said = approvedSaid || "Approved";
-      return { status: approvalStale ? "wait" : "done", sub: said.charAt(0).toLowerCase() + said.slice(1) };
+    if (thr) {
+      const n = openThreads;
+      return { status: "blocked", sub: said(currentKey === "review" && thr.mover === "you" ? `you are here · ${plural(n, "thread")}` : plural(n, "open thread")), ...headline };
     }
-    if (hv?.kind === "awaiting") return { status: "idle", sub: `asked ${nameList(hv.who)} · not required` };
-    if (hv?.kind === "commented") return { status: "idle", sub: "reviewed, no verdict · not required" };
-    return { status: "done", sub: gate && gate.approvals === 0 ? "no review required" : "no review yet" };
+    if (i.reviewDecision === "APPROVED" || hv?.kind === "approved") {
+      const line = approvedSaid || "Approved";
+      return { status: approvalStale ? "wait" : "done", sub: said(line.charAt(0).toLowerCase() + line.slice(1)), ...headline };
+    }
+    if (roster.needed === 0 && entries.length) {
+      return { status: entries.some((e) => e.counts) ? "done" : "idle", sub: `${rosterCounts(entries)} · not required`, ...headline };
+    }
+    if (hv?.kind === "awaiting") return { status: "idle", sub: `asked ${nameList(hv.who)} · not required`, ...headline };
+    if (hv?.kind === "commented") return { status: "idle", sub: "reviewed, no verdict · not required", ...headline };
+    return { status: "done", sub: gate && gate.approvals === 0 ? "no review required" : "no review yet", ...headline };
   })();
 
   // Required checks
@@ -663,11 +806,11 @@ export function mergePath(i: MergePathInput): MergePath {
           tone: "ready", eyebrow: "READY TO MERGE · BEHIND " + base.toUpperCase(),
           parts: [{ text: `Ready to merge, but it is behind ${base}.` }],
           sub: `You can merge anyway; the checks that passed ran against an older ${base}, so this exact combination is untested.`,
-          primary: { id: "merge", label: "Merge pull request" }, secondary: { id: "update-branch", label: "Update branch" },
+          after: MERGE_BELOW,
         }
         : {
           tone: "ready", eyebrow: "READY TO MERGE", parts: [{ text: "Ready to merge." }], sub: sub || undefined,
-          primary: { id: "merge", label: "Merge pull request" },
+          after: MERGE_BELOW,
         };
     }
 
@@ -724,45 +867,74 @@ export function mergePath(i: MergePathInput): MergePath {
           sub: f.why, primary: f.mover === "ci" ? undefined : github,
         });
       case "changes": {
-        const who = nameList(changesWho) || "A reviewer";
+        const standing = entries.filter((e) => e.state === "changes").map((e) => e.login);
+        const again = entries.filter((e) => e.state === "changes-again").map((e) => e.login);
+        const who = nameList(f.person ? (f.person.state === "changes-again" ? again : standing) : changesWho) || "A reviewer";
         if (f.mover === "reviewer") {
           return mk([em(who), t(" was asked to look again. The changes are in; it is their move.")], { secondary: historyAction, sub: ciLine });
         }
         if (f.mover === "author") {
-          return mk([em(who), t(" wants changes. The author has to answer them.")], { secondary: historyAction, sub: ciLine });
+          return mk([em(who), t(` want${standing.length === 1 || !standing.length ? "s" : ""} changes. The author has to answer them.`)], { secondary: historyAction, sub: ciLine });
         }
         if (!i.viewerDidAuthor) {
           return mk([t("You asked for changes. Look again once the author has answered.")], { secondary: historyAction });
         }
+        const pendingSaid = again.length === 1 ? ` ${again[0]}'s re-review is pending.` : again.length > 1 ? ` ${nameList(again)}: re-reviews are pending.` : "";
+        // The threads of the people asking, when it is known whose they are; else all of them.
+        const theirs = entries.filter((e) => e.state === "changes").reduce((n, e) => n + e.threads, 0) || openThreads;
         const tail = openThreads > 0
-          ? `Answer the ${plural(openThreads, "thread")}, then ${eta ? `this can merge in ${eta}` : "this can merge"}.`
-          : "Address them and ask for another look.";
-        return mk([em(who), t(` still wants changes. ${tail}`)], {
+          ? `Answer the ${plural(theirs, "thread")}${again.length ? "." : `, then ${eta ? `this can merge in ${eta}` : "this can merge"}.`}${pendingSaid}`
+          : `Address them and ask for another look.${pendingSaid}`;
+        return mk([em(who), t(` still want${standing.length > 1 ? "" : "s"} changes. ${tail}`)], {
           primary: openThreads > 0
             ? { id: "go-thread", label: "Go to first open thread →" }
-            : { id: "go-review", label: "Go to the review →", nodeId: changesRef?.nodeId, url: changesRef?.url ?? hv?.url },
+            : { id: "go-review", label: "Go to the review →", nodeId: f.person ? entries.find((e) => e.login === f.person!.login)?.review?.nodeId : changesRef?.nodeId, url: (f.person ? entries.find((e) => e.login === f.person!.login)?.review?.url : changesRef?.url) ?? hv?.url },
           secondary: historyAction, sub: ciLine,
-          after: `then re-request review from ${changesWho[0] ?? "the reviewer"}`,
+          after: `then re-request review from ${standing[0] ?? changesWho[0] ?? "the reviewer"}`,
         });
       }
       case "review-required": {
-        if (f.mover === "reviewer") {
-          return mk([t("Waiting on "), em(nameList(asked)), t(" to review.")], { sub: f.why, secondary: historyAction });
+        const waitingOn = entries.filter((e) => e.state === "requested" || e.state === "team").map((e) => e.login);
+        if (f.id.startsWith("void:") || f.id.startsWith("dismissed:")) {
+          const void_ = f.id.startsWith("void:");
+          const who = f.person?.login ?? "A reviewer";
+          return mk([em(who), t(void_ ? "'s approval no longer counts. It was given before the last push." : "'s review was dismissed, so it no longer counts.")], {
+            sub: f.why, primary: f.mover === "you" ? { id: "ask-review", label: "Ask for a review" } : undefined, secondary: historyAction,
+          });
         }
-        if (f.mover === "you" && i.viewerRequested) {
+        if (f.mover === "reviewer" || f.mover === "team") {
+          return mk([t("Waiting on "), em(nameList(waitingOn.length ? waitingOn : asked)), t(" to review.")], { sub: f.why, secondary: historyAction });
+        }
+        if (f.mover === "you" && i.viewerRequested && f.person) {
           return mk([t("Your review is what this is waiting for.")], { sub: f.why });
         }
-        return mk([t("It needs an approving review, and nobody has been asked.")], {
-          sub: "Pick a reviewer from the Reviewers list on this page.", secondary: historyAction,
-        });
+        if (waitingOn.length > 0) {
+          const more = roster.needed === null ? 1 : Math.max(1, roster.needed - roster.counted - waitingOn.length);
+          const words = `${nameList(waitingOn)} ${waitingOn.length === 1 ? "is" : "are"} asked, and it needs ${more === 1 ? "one more approval" : `${more} more approvals`}.`;
+          return f.mover === "you"
+            ? mk([t(`Ask someone else to review. ${words}`)], { sub: f.why, primary: { id: "ask-review", label: "Ask someone else" }, secondary: historyAction })
+            : mk([t(`It needs more reviewers. ${words}`)], { sub: "Pick a reviewer from the Reviewers list on this page.", secondary: historyAction });
+        }
+        const one = roster.needed === null || roster.needed - roster.counted <= 1;
+        return f.mover === "you"
+          ? mk([t(`Ask someone to review. Nobody has been asked, and it needs ${one ? "an approving review" : `${roster.needed! - roster.counted} more approvals`}.`)], {
+            sub: f.why, primary: { id: "ask-review", label: "Ask someone to review" }, secondary: historyAction,
+          })
+          : mk([t("It needs an approving review, and nobody has been asked.")], {
+            sub: "Pick a reviewer from the Reviewers list on this page.", secondary: historyAction,
+          });
       }
       case "threads":
-        return mk([t(`${plural(openThreads, "review thread")} still open. Answer them and press Resolve on each.`)], {
-          primary: { id: "go-thread", label: "Go to first open thread →" }, sub: ciLine,
-        });
+        return f.person
+          ? mk([em(f.person.login), t(` left ${plural(f.threads ?? 1, "thread")} open. Answer and press Resolve on each.`)], {
+            primary: { id: "go-thread", label: "Go to first open thread →" }, sub: ciLine,
+          })
+          : mk([t(`${plural(f.threads ?? openThreads, "review thread")} still open. Answer them and press Resolve on each.`)], {
+            primary: { id: "go-thread", label: "Go to first open thread →" }, sub: ciLine,
+          });
       case "behind":
         return mk([t(`It has to be up to date with ${base} first.`)], {
-          primary: f.mover === "you" ? { id: "update-branch", label: "Update branch" } : undefined, sub: f.why,
+          after: "Update branch is at the bottom left ↓", sub: f.why,
         });
       case "unexplained":
         return f.mover === "wait"
@@ -778,7 +950,6 @@ export function mergePath(i: MergePathInput): MergePath {
         const they = n === 1 ? "The required check" : `The ${n} required checks`;
         return mk([t(`Waiting on CI. ${they} ${eta ? `should finish in ${eta}` : n === 1 ? "is still running" : "are still running"}.`)], {
           sub: i.autoArmed ? "Auto-merge is armed: it merges by itself when they pass." : "Nothing to do until they finish. Merge when green takes it from there.",
-          primary: i.autoArmed ? undefined : { id: "arm-auto", label: "Merge when green" },
         });
       }
     }

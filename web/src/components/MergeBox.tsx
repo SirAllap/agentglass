@@ -19,6 +19,7 @@ import { CrossIcon, DoneIcon } from "../lib/glyphIcons.tsx";
 import { WarningIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import type { Hero, Mover, MergePath, PathAction, PathRow, Stage } from "../../../shared/mergePath.ts";
+import type { ReviewerState } from "../../../shared/reviewRoster.ts";
 import { Button, CTRL_H, EDGE, LINE } from "./workspace/Chrome.tsx";
 
 export const MERGEBOX_CSS = `
@@ -29,6 +30,10 @@ export const MERGEBOX_CSS = `
 .agx-mb-head > .agx-mb-what{grid-column:1 / 3}
 .agx-mb-head > .agx-mb-why{grid-column:3}
 .agx-mb-head > .agx-mb-who{grid-column:4}
+.agx-mb-quiet{height:24px;padding:0 6px;border-radius:6px;font-size:10.5px;color:var(--text3);background:transparent}
+.agx-mb-quiet:hover:not(:disabled),.agx-mb-quiet:focus-visible{color:var(--text);background:color-mix(in srgb,var(--text) 7%,transparent)}
+.agx-mb-quiet-danger:hover:not(:disabled),.agx-mb-quiet-danger:focus-visible{color:var(--error-ink);background:color-mix(in srgb,var(--error) 9%,transparent)}
+.agx-mb-quiet:disabled{opacity:.4}
 .agx-mb-spin{transform-origin:50% 50%;animation:agx-spin 1.1s linear infinite}
 @media (prefers-reduced-motion: reduce){.agx-mb-spin{animation:agx-breathe 1.6s ease-in-out infinite}}
 @container agx-mb (max-width: 640px){
@@ -104,8 +109,44 @@ function Who({ row }: { row: Pick<PathRow, "mover" | "moverLabel"> }) {
     ? { background: tone.tint, color: "var(--bg)" }
     : { background: wash(tone.tint, 8), color: tone.ink, boxShadow: `inset 0 0 0 1px ${wash(tone.tint, 60)}` };
   return (
-    <span className="agx-mb-who inline-flex items-center rounded-lg px-2 text-[10px] font-semibold tracking-wider whitespace-nowrap"
+    <span className="agx-mb-who inline-flex items-center rounded-lg px-2 text-[10px] font-semibold tracking-wider whitespace-nowrap max-w-full truncate"
       style={{ height: CTRL_H.compact, ...style }}>{row.moverLabel}</span>
+  );
+}
+
+/** Where a reviewer is, as a colour: the tally's segment and the row's avatar say it the same way. */
+const PERSON_TINT: Record<ReviewerState, string> = {
+  approved: "var(--success)",
+  "approved-old": "color-mix(in srgb, var(--success) 62%, var(--surface-card))",
+  "approved-void": "color-mix(in srgb, var(--text) 32%, transparent)",
+  changes: "var(--error)",
+  "changes-again": "var(--warning)",
+  commented: "color-mix(in srgb, var(--text) 40%, transparent)",
+  requested: "color-mix(in srgb, var(--text) 20%, transparent)",
+  team: "color-mix(in srgb, var(--text) 20%, transparent)",
+  dismissed: "color-mix(in srgb, var(--text) 14%, transparent)",
+};
+
+/** One segment per reviewer: 2 of 3 approvals reads off the bar before it is read in words. */
+function Tally({ tally }: { tally: NonNullable<Stage["tally"]> }) {
+  return (
+    <div className="flex gap-[3px] mt-2" role="img" aria-label={tally.map((t) => t.label).join(", ")}>
+      {tally.map((t) => (
+        <span key={`${t.login}:${t.key}`} title={t.label} className="h-1.5 rounded-full flex-1 min-w-[10px] max-w-[64px]"
+          style={{ background: PERSON_TINT[t.key], boxShadow: t.key === "requested" || t.key === "team" ? `inset 0 0 0 1px ${wash("var(--text)", 30)}` : undefined }} />
+      ))}
+    </div>
+  );
+}
+
+/** A reviewer's initial in the colour of where they are; an approval is a tick. */
+function Avatar({ login, state }: { login: string; state: ReviewerState }) {
+  const approved = state === "approved" || state === "approved-old";
+  return (
+    <span aria-hidden className="shrink-0 grid place-items-center rounded-full text-[10.5px] font-semibold uppercase"
+      style={{ width: 22, height: 22, background: PERSON_TINT[state], color: state === "requested" || state === "team" || state === "dismissed" ? "var(--text2)" : "var(--bg)" }}>
+      {approved ? <DoneIcon size={ICON.xs} /> : state === "team" ? "#" : login.charAt(0)}
+    </span>
   );
 }
 
@@ -121,8 +162,11 @@ function StageCell({ s, first }: { s: Stage; first: boolean }) {
       }}>
       <div className="flex items-center gap-2">
         <Bubble n={s.n} tone={tone} filled={filled} done={s.status === "done"} />
-        <span className="text-[11.5px] font-semibold truncate" style={{ color: s.current || s.status !== "idle" ? tone.ink : "var(--text2)" }}>{s.label}</span>
+        <span className={`text-[11.5px] font-semibold leading-snug ${s.need ? "" : "truncate"}`} style={{ color: s.current || s.status !== "idle" ? tone.ink : "var(--text2)" }}>
+          {s.label}{s.need && <span style={{ fontWeight: 500 }}> · {s.need}</span>}
+        </span>
       </div>
+      {s.tally && <Tally tally={s.tally} />}
       {s.big && <div className="text-[16px] font-semibold mt-1.5 tabular-nums" style={{ color: tone.ink }}>{s.big}</div>}
       <div className={`text-[10.5px] leading-snug ${s.big ? "mt-1" : "mt-1.5"}`} style={{ color: "var(--text3)" }}>{s.sub}</div>
     </div>
@@ -152,7 +196,7 @@ function Segments({ segs, total }: { segs: { key: string; count: number; label: 
 }
 
 export function MergeBox({
-  path, onAction, busy, mergeNode, conflictNode, autoNode, extraNode, notes, history, actionDisabled, pendingAction, showMergeRow = true,
+  path, onAction, busy, mergeNode, conflictNode, autoNode, extraNode, cornerNode, notes, history, actionDisabled, pendingAction, showMergeRow = true,
 }: {
   path: MergePath;
   onAction: (a: PathAction) => void;
@@ -165,6 +209,8 @@ export function MergeBox({
   autoNode: ReactNode;
   /** The quieter row of what else can be done to the branch. */
   extraNode?: ReactNode;
+  /** Rarely used actions (To draft, Close), quiet, in the hero's top-right corner. */
+  cornerNode?: ReactNode;
   /** Things only the panel knows about this branch (a confirmation, the files that conflict), as rows under the list. */
   notes?: ReactNode;
   /** The review history, drawn under the hero while the secondary button has it open. */
@@ -179,12 +225,13 @@ export function MergeBox({
   const { hero, stages, rows, otherCi, callout, count } = path;
   const tone = heroTone(hero.tone);
   const counted = rows.filter((r) => r.counted);
-  const fyiRows = rows.filter((r) => !r.counted);
+  const fyiRows = rows.filter((r) => !r.counted && r.mover !== "done");
+  const doneRows = rows.filter((r) => r.mover === "done");
   // The strip already says "optional · 58 passed"; a row is for checks still to be heard from.
   const showOther = !!otherCi && otherCi.running + otherCi.queued + otherCi.failed > 0;
 
   const action = (a: PathAction, primary: boolean): ReactNode => {
-    if (a.id === "merge") return mergeNode;
+    if (a.id === "merge") return null; // the merge group lives in the footer, in every state
     if (a.id === "resolve-conflicts") return conflictNode ?? null;
     const isHistory = a.id === "history";
     return (
@@ -198,11 +245,45 @@ export function MergeBox({
     );
   };
 
+  const renderRow = (r: PathRow): ReactNode => {
+
+            const t = moverTone(r.mover);
+            const onPerson = r.mover === "you" || r.mover === "author" || r.mover === "other";
+            return (
+              <div key={r.id} className="agx-mb-row px-4 py-3" style={{ borderBottom: LINE, background: onPerson && r.counted ? wash(TONE.you.tint, 7) : undefined }}>
+                <span className="pt-0.5">
+                  {r.person ? <Avatar login={r.person.login} state={r.person.state} />
+                    : r.mover === "done" ? <span aria-hidden className="grid place-items-center rounded-full" style={{ width: 22, height: 22, color: "var(--text3)" }}><DoneIcon size={ICON.sm} /></span>
+                    : !r.counted ? <span aria-hidden className="grid place-items-center rounded-full" style={{ width: 22, height: 22, color: "var(--text3)" }}><WarningIcon size={ICON.sm} /></span>
+                    : r.mover === "ci" || r.mover === "wait" ? <Ring mode={r.ring?.mode ?? "queued"} fraction={r.ring?.fraction} tint={TONE.wait.tint} />
+                    : <Bubble n={r.n} tone={t} filled />}
+                </span>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <b className="text-[12.5px] break-words" style={{ color: r.mover === "done" ? "var(--text2)" : "var(--text)", fontWeight: r.mover === "done" ? 500 : 600 }}>{r.title}</b>
+                    {r.pill && (
+                      <span className="rounded-full px-1.5 text-[9.5px] leading-[15px]"
+                        style={{ color: TONE.wait.ink, boxShadow: `inset 0 0 0 1px ${wash(TONE.wait.tint, 65)}` }}>{r.pill}</span>
+                    )}
+                  </div>
+                  {r.sub && <div className="text-[10.5px] mt-0.5 break-words" style={{ color: "var(--text3)" }}>{r.sub}</div>}
+                  {r.link && (
+                    <button type="button" onClick={() => onAction({ id: "open-log", label: r.link!.label, url: r.link!.url })}
+                      className="agx-btn text-[10.5px] mt-1.5 underline underline-offset-2" style={{ color: "var(--text)" }}>{r.link.label}</button>
+                  )}
+                </div>
+                <div className="agx-mb-why text-[11px] leading-snug min-w-0" style={{ color: r.mover === "done" ? "var(--text3)" : "var(--text2)" }}>{r.why}</div>
+                <Who row={r} />
+              </div>
+            );
+  };
+
   return (
     <section className="agx-mb rounded-xl overflow-hidden" style={{ border: EDGE, background: "var(--surface-card)" }}>
       <style>{MERGEBOX_CSS}</style>
 
-      <div className="px-4 py-3.5" style={{ boxShadow: `inset 3px 0 0 ${tone.tint}`, background: hero.tone === "ready" ? wash(tone.tint, 7) : undefined }}>
+      <div className="px-4 py-3.5 flex items-start gap-3" style={{ boxShadow: `inset 3px 0 0 ${tone.tint}`, background: hero.tone === "ready" ? wash(tone.tint, 7) : undefined }}>
+        <div className="min-w-0 flex-1">
         <div className="text-[10px] font-semibold uppercase tracking-[.13em]" style={{ color: tone.ink }}>{hero.eyebrow}</div>
         <h2 className="text-[17px] leading-snug font-semibold mt-1.5" style={{ color: "var(--text)", maxWidth: "62ch" }}>
           {hero.parts.map((p, k) => p.em ? <span key={k} style={{ color: tone.ink }}>{p.text}</span> : <span key={k}>{p.text}</span>)}
@@ -216,6 +297,8 @@ export function MergeBox({
             {hero.after && <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>{hero.after}</span>}
           </div>
         )}
+        </div>
+        {cornerNode && <div className="shrink-0 flex items-center gap-0.5 -mr-1.5 -mt-1">{cornerNode}</div>}
       </div>
       {historyOpen && history}
 
@@ -223,7 +306,7 @@ export function MergeBox({
         {stages.map((s, k) => <StageCell key={s.key} s={s} first={k === 0} />)}
       </div>
 
-      {(counted.length > 0 || fyiRows.length > 0 || showOther) && (
+      {(counted.length > 0 || fyiRows.length > 0 || doneRows.length > 0 || showOther) && (
         <div style={{ borderTop: LINE }}>
           <div className="agx-mb-row agx-mb-head px-4 py-2 text-[9.5px] uppercase tracking-[.12em]"
             style={{ background: wash("var(--text)", 5), color: "var(--text3)", borderBottom: LINE }}>
@@ -234,36 +317,12 @@ export function MergeBox({
             <span className="agx-mb-who">Who moves it</span>
           </div>
 
-          {[...counted, ...fyiRows].map((r) => {
-            const t = moverTone(r.mover);
-            const onPerson = r.mover === "you" || r.mover === "author" || r.mover === "other";
-            return (
-              <div key={r.id} className="agx-mb-row px-4 py-3" style={{ borderBottom: LINE, background: onPerson && r.counted ? wash(TONE.you.tint, 7) : undefined }}>
-                <span className="pt-0.5">
-                  {r.mover === "done" ? <span aria-hidden className="grid place-items-center rounded-full" style={{ width: 22, height: 22, color: "var(--text3)" }}><DoneIcon size={ICON.sm} /></span>
-                    : !r.counted ? <span aria-hidden className="grid place-items-center rounded-full" style={{ width: 22, height: 22, color: "var(--text3)" }}><WarningIcon size={ICON.sm} /></span>
-                    : r.mover === "ci" || r.mover === "wait" ? <Ring mode={r.ring?.mode ?? "queued"} fraction={r.ring?.fraction} tint={TONE.wait.tint} />
-                    : <Bubble n={r.n} tone={t} filled />}
-                </span>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <b className="text-[12.5px] font-semibold break-words" style={{ color: "var(--text)" }}>{r.title}</b>
-                    {r.pill && (
-                      <span className="rounded-full px-1.5 text-[9.5px] leading-[15px]"
-                        style={{ color: TONE.wait.ink, boxShadow: `inset 0 0 0 1px ${wash(TONE.wait.tint, 65)}` }}>{r.pill}</span>
-                    )}
-                  </div>
-                  {r.sub && <div className="text-[10.5px] mt-0.5 break-words" style={{ color: "var(--text3)" }}>{r.sub}</div>}
-                  {r.link && (
-                    <button type="button" onClick={() => onAction({ id: "open-log", label: r.link!.label, url: r.link!.url })}
-                      className="agx-btn text-[10.5px] mt-1.5 underline underline-offset-2" style={{ color: "var(--text)" }}>{r.link.label}</button>
-                  )}
-                </div>
-                <div className="agx-mb-why text-[11px] leading-snug min-w-0" style={{ color: "var(--text2)" }}>{r.why}</div>
-                <Who row={r} />
-              </div>
-            );
-          })}
+          {[...counted, ...fyiRows].map((r) => renderRow(r))}
+          {doneRows.length > 0 && (
+            <div className="px-4 py-2 text-[9.5px] uppercase tracking-[.12em]"
+              style={{ background: wash("var(--text)", 5), color: "var(--text3)", borderBottom: LINE }}>Already done · {doneRows.length}</div>
+          )}
+          {doneRows.map((r) => renderRow(r))}
 
           {otherCi && showOther && (
             <div className="agx-mb-row px-4 py-3" style={{ borderBottom: callout || extraNode ? LINE : undefined }}>
@@ -290,7 +349,7 @@ export function MergeBox({
           secondary group sits left, the merge group right, and the callout,
           when there is one, above the row on a line of its own; when they do not fit, the groups wrap under each other
           instead of squeezing. */}
-      {(callout || extraNode || (!path.ready && showMergeRow)) && (
+      {(callout || extraNode || showMergeRow) && (
         <div className="flex items-center gap-x-3 gap-y-2 flex-wrap px-4 py-3" style={{ borderTop: LINE, background: wash("var(--border)", 12) }}>
           {callout && (
             <span className="flex items-center gap-2 min-w-0 basis-full pl-3 text-[11.5px] font-semibold leading-snug"
@@ -302,7 +361,7 @@ export function MergeBox({
             </span>
           )}
           {extraNode && <div className="flex items-center gap-1.5 flex-wrap min-w-0">{extraNode}</div>}
-          {!path.ready && showMergeRow && <span className="flex items-center gap-1.5 ml-auto flex-wrap">{mergeNode}{hero.primary?.id !== "arm-auto" && autoNode}</span>}
+          {showMergeRow && <span className="flex items-center gap-1.5 ml-auto flex-wrap">{mergeNode}{!path.ready && autoNode}</span>}
         </div>
       )}
     </section>

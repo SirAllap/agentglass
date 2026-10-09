@@ -42,11 +42,12 @@ const current = (p: MergePath) => p.stages.find((s) => s.current)?.key;
 
 describe("approved and everything green", () => {
   const p = mergePath(base());
-  test("the hero says ready and the primary is the merge", () => {
+  test("the hero says ready and points at the merge, which stays in the footer", () => {
     expect(p.ready).toBe(true);
     expect(p.hero.tone).toBe("ready");
     expect(say(p)).toBe("Ready to merge.");
-    expect(p.hero.primary?.id).toBe("merge");
+    expect(p.hero.primary).toBeUndefined();
+    expect(p.hero.after).toBe("Merge is at the bottom right ↓");
     expect(p.hero.sub).toContain("Approved by alice");
     expect(p.hero.sub).toContain("2 required checks passed");
   });
@@ -166,7 +167,8 @@ describe("a locked base, and GitHub not saying why", () => {
 describe("review", () => {
   test("required and nobody asked", () => {
     const p = mergePath(base({ mergeState: "BLOCKED", reviewDecision: "REVIEW_REQUIRED", humanReview: undefined, reviews: [], reviewers: [] }));
-    expect(say(p)).toBe("It needs an approving review, and nobody has been asked.");
+    expect(say(p)).toBe("Ask someone to review. Nobody has been asked, and it needs an approving review.");
+    expect(p.hero.primary).toEqual({ id: "ask-review", label: "Ask someone to review" });
     expect(rowKinds(p)).toEqual([["review-required", "you"]]);
     expect(p.rows[0]!.sub).toBe("nobody has been asked yet");
     expect(current(p)).toBe("review");
@@ -175,8 +177,8 @@ describe("review", () => {
   test("required and asked: it is the reviewers' move", () => {
     const p = mergePath(base({ mergeState: "BLOCKED", reviewDecision: "REVIEW_REQUIRED", humanReview: { kind: "awaiting", who: ["alice", "carol"] }, reviews: [], reviewers: [{ login: "alice" }, { login: "carol" }] }));
     expect(say(p)).toBe("Waiting on alice and carol to review.");
-    expect(rowKinds(p)).toEqual([["review-required", "reviewer"]]);
-    expect(p.rows[0]!.moverLabel).toBe("REVIEWER");
+    expect(rowKinds(p)).toEqual([["review-required", "reviewer"], ["review-required", "reviewer"]]);
+    expect(p.rows.map((r) => r.moverLabel)).toEqual(["ALICE", "CAROL"]);
     expect(p.hero.tone).toBe("wait");
     expect(stage(p, "review").status).toBe("wait");
   });
@@ -190,7 +192,7 @@ describe("review", () => {
     expect(p.rows[0]!.why).toContain("code owner");
   });
   test("an approval nobody required does not hold anything", () => {
-    const p = mergePath(base({ reviewDecision: null, humanReview: { kind: "commented", who: ["alice"] }, gate: gate({ approvals: 0 }) }));
+    const p = mergePath(base({ reviewDecision: null, humanReview: { kind: "commented", who: ["alice"] }, reviews: [review("alice", "COMMENTED")], gate: gate({ approvals: 0 }) }));
     expect(p.ready).toBe(true);
     expect(stage(p, "review").status).toBe("idle");
   });
@@ -229,7 +231,7 @@ describe("changes requested, threads open, CI still running", () => {
     expect(p.count).toBe(4);
     expect(rowKinds(p)).toEqual([["changes", "you"], ["threads", "you"], ["check-queued", "ci"], ["check-running", "ci"]]);
     expect(p.rows.filter((r) => r.counted).map((r) => r.n)).toEqual([1, 2, 3, 4]);
-    expect(p.rows[0]!.sub).toBe("by alice · 5d ago");
+    expect(p.rows[0]!.sub).toBe("5d ago");
     expect(p.rows[0]!.why).toBe("Clears only when alice approves or the request is dismissed.");
   });
   test("a running check with a known duration shows how far along, an unknown one only that it runs", () => {
@@ -247,7 +249,7 @@ describe("changes requested, threads open, CI still running", () => {
   test("the strip: review holds it, required checks are in flight, the rest wait", () => {
     expect(current(p)).toBe("review");
     expect(p.stages.map((s) => s.status)).toEqual(["blocked", "wait", "idle", "idle"]);
-    expect(stage(p, "review").sub).toBe("you are here · 12 threads");
+    expect(stage(p, "review").sub).toBe("1 changes");
     expect(stage(p, "required").sub).toBe("1 running · 1 queued · by themselves");
     expect(stage(p, "other").sub).toBe("optional · 55 running");
     expect(stage(p, "merge").sub).toBe("opens after 1 and 2");
@@ -283,11 +285,11 @@ describe("changes requested, threads open, CI still running", () => {
 describe("only CI is left", () => {
   const two = [req("build", "pending", { startedAt: ago(1 * M) }), req("audit", "pending")];
   const p = mergePath(base({ mergeState: "BLOCKED", checksAll: two }));
-  test("nothing to do, and the primary is to arm auto-merge", () => {
+  test("nothing to do, and arming auto-merge stays in the footer", () => {
     expect(p.hero.tone).toBe("wait");
     expect(p.hero.eyebrow).toBe("WAITING ON CI · NOTHING TO DO");
     expect(say(p)).toBe("Waiting on CI. The 2 required checks are still running.");
-    expect(p.hero.primary).toEqual({ id: "arm-auto", label: "Merge when green" });
+    expect(p.hero.primary).toBeUndefined();
     expect(rowKinds(p).every(([, m]) => m === "ci")).toBe(true);
   });
   test("an ETA only from a duration this pull request already has", () => {
@@ -338,16 +340,18 @@ describe("only CI is left", () => {
 });
 
 describe("behind the base", () => {
-  test("where GitHub allows it: ready, with the update as the secondary", () => {
+  test("where GitHub allows it: ready, with the update left to the footer", () => {
     const p = mergePath(base({ mergeState: "BEHIND", behind: 81 }));
     expect(p.ready).toBe(true);
     expect(say(p)).toBe("Ready to merge, but it is behind main.");
-    expect(p.hero.secondary?.id).toBe("update-branch");
+    expect(p.hero.secondary?.id).not.toBe("update-branch");
+    expect(p.hero.primary).toBeUndefined();
   });
   test("where the branch must be up to date: the update is the one thing", () => {
     const p = mergePath(base({ mergeState: "BEHIND", behind: 81, gate: gate({ upToDate: true }) }));
     expect(say(p)).toBe("It has to be up to date with main first.");
-    expect(p.hero.primary?.id).toBe("update-branch");
+    expect(p.hero.primary).toBeUndefined();
+    expect(p.hero.after).toBe("Update branch is at the bottom left ↓");
   });
   test("Other CI says how far behind and whether that matters", () => {
     const p = mergePath(base({ mergeState: "UNSTABLE", behind: 81, checksAll: [req("build", "success"), running("lint")] }));
@@ -378,7 +382,7 @@ describe("counts are GitHub's", () => {
     const q = mergePath(base({ mergeState: "BLOCKED", checksAll: [
       req("build", "failure", { event: "pull_request" }), req("build", "failure", { event: "pull_request_review" }),
     ] }));
-    expect(q.rows.map((r) => r.sub)).toEqual(["CI · pull_request", "CI · pull_request_review"]);
+    expect(q.rows.filter((r) => r.kind === "check-failing").map((r) => r.sub)).toEqual(["CI · pull_request", "CI · pull_request_review"]);
   });
 });
 
@@ -433,7 +437,7 @@ describe("review history is offered whatever the headline", () => {
   });
   test("re-requested: the row says when and on whom", () => {
     const row = p.rows.find((r) => r.kind === "changes")!;
-    expect(row.sub).toBe("re-requested 3h ago · waiting on carol");
+    expect(row.sub).toBe("asked 3h ago · was \"changes\" 29h ago");
   });
 });
 
@@ -451,16 +455,17 @@ describe("what the review side already decided is said", () => {
   const p = mergePath(input);
   test("a quiet DONE row per current human approval, after the blockers, no bots", () => {
     const done = p.rows.filter((r) => r.kind === "approved");
-    expect(done.map((r) => [r.title, r.mover, r.moverLabel, r.counted])).toEqual([["Approved by alice · 25m ago", "done", "DONE", false]]);
+    expect(done.map((r) => [r.title, r.mover, r.moverLabel, r.counted])).toEqual([["alice · approved", "done", "DONE", false]]);
     expect(p.rows[p.rows.length - 1].kind).toBe("approved");
     expect(p.count).toBe(rowKinds(p).length);
   });
   test("the Review cell says how far it got and who it waits on", () => {
-    expect(stage(p, "review").sub).toBe("1 of 2 approved · waiting on carol");
+    expect(stage(p, "review").sub).toBe("1 approved · 1 re-requested");
   });
-  test("an approval that was asked again, or overtaken by changes, is not current", () => {
+  test("an approval that was asked again still counts; one overtaken by changes is not current", () => {
     const q = mergePath({ ...input, reviewers: [{ login: "carol" }, { login: "alice" }] });
-    expect(q.rows.some((r) => r.kind === "approved")).toBe(false);
+    // Asked to look again is not a withdrawal: GitHub still counts it, so it stays, said as such.
+    expect(q.rows.find((r) => r.kind === "approved")!.sub).toContain("asked to look again");
     const r = mergePath({ ...input, reviews: [review("alice", "APPROVED", ago(2 * H)), review("alice", "CHANGES_REQUESTED", ago(1 * H))] });
     expect(r.rows.some((x) => x.kind === "approved")).toBe(false);
   });
