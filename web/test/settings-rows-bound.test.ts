@@ -25,7 +25,7 @@ const migratedRows = SETTINGS_ROWS.filter((r) => R.isMigrated(r.pane, r.section)
 
 describe("rows in a migrated pane", () => {
   test("there are some, in each migrated pane", () => {
-    for (const p of ["appearance", "diff", "rail", "terminal", "notifications", "browser", "tasks"]) expect(migratedRows.some((r) => r.pane === p), p).toBe(true);
+    for (const p of ["appearance", "diff", "rail", "terminal", "notifications", "browser", "tasks", "clickup"]) expect(migratedRows.some((r) => r.pane === p), p).toBe(true);
   });
 
   test("each carries a settingId, is marked agentExempt (not a setting) or agentNever (a setting an agent must not reach)", () => {
@@ -63,7 +63,7 @@ const FAMILIES: [string, string][] = [
 ];
 
 describe("defs and rows agree", () => {
-  const modal = src("components/SettingsModal.tsx") + src("components/ThemePicker.tsx");
+  const modal = src("components/SettingsModal.tsx") + src("components/ThemePicker.tsx") + src("components/ClickUpPane.tsx");
 
   test("every def is reached by a row: a settingId in the generated list, or in source for the rows the generator cannot read", () => {
     const fromGen = new Set(SETTINGS_ROWS.map((r) => r.settingId).filter(Boolean) as string[]);
@@ -108,7 +108,36 @@ describe("pages left out on purpose", () => {
   });
 
   test("the pages that hold credentials, trust or consent are among them", () => {
-    for (const id of ["connections", "clickup", "remote", "plugins", "hooks", "understudy"]) expect(id in R.NOT_EXPOSED_ON_PURPOSE, id).toBe(true);
+    for (const id of ["connections", "remote", "plugins", "hooks", "understudy"]) expect(id in R.NOT_EXPOSED_ON_PURPOSE, id).toBe(true);
+  });
+});
+
+describe("a page that is migrated for most of it and refuses the rest", () => {
+  test("the ClickUp page is migrated, and what it refuses is named with a reason", () => {
+    expect("clickup" in R.MIGRATED).toBe(true);
+    expect((R.NOT_YET_MIGRATED as readonly string[]).includes("clickup")).toBe(false);
+    expect(R.NEVER_ON_PAGE.clickup!.why.length).toBeGreaterThan(30);
+  });
+
+  test("no def on such a page is a secret or names the token, the connection, the workspace or the write switch", () => {
+    for (const [page, { pattern }] of Object.entries(R.NEVER_ON_PAGE)) {
+      const defs = R.SETTING_DEFS.filter((d) => d.page === page);
+      expect(defs.length, page).toBeGreaterThan(0);
+      expect(defs.filter((d) => d.secret || pattern.test(d.id) || pattern.test(d.label)).map((d) => d.id), page).toEqual([]);
+    }
+  });
+
+  test("the guard bites: a secret-class ClickUp def is refused, listed as secret, and never read back", () => {
+    const secret = { id: "clickup.token", page: "clickup", section: "", label: "ClickUp token", secret: true as const, level: 2 as const, default: "", get: () => "pk_1_X", validate: () => "x", set: () => ({ ok: true as const, prev: "", value: "x", revert: () => {} }) };
+    const sneaky = { ...secret, id: "clickup.connection.workspace", secret: undefined, label: "Workspace" };
+    for (const d of [secret, sneaky]) {
+      const { pattern } = R.NEVER_ON_PAGE.clickup!;
+      expect(!!d.secret || pattern.test(d.id), d.id).toBe(true);
+    }
+    const s = R.makeSettings([secret]);
+    expect(s.set("clickup.token", "pk_2")).toEqual({ ok: false, error: "secret: not writable through this channel" });
+    expect(s.get("clickup.token")).toEqual({ ok: true, id: "clickup.token", set: true });
+    expect(JSON.stringify(s.list())).not.toContain("pk_1_X");
   });
 });
 

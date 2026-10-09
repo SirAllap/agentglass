@@ -293,6 +293,7 @@ The ClickUp page in Settings (it appears once ClickUp is connected) shows these 
 | `sprintListPattern` | `^sprint\b` | Which list names are sprints. A name that ends in a date range is a sprint whatever this says. |
 | `readOnlyFieldPattern` | `do not edit` | Custom fields whose name matches are shown but never written. |
 | `bell.kinds` | `assigned`, `status`, `mention`, `comment` | Which kinds of change raise a note on the card bell. |
+| `statusSpaces.counted` | `[]` | Ids of the spaces whose statuses count in the status pickers, the "Your statuses in" selector and the coverage lines. Empty counts the spaces your cards live in (every space until a card has been read). The rest are ignored, not deleted: the ClickUp page lists them under "Ignored" and counts one again with a click. |
 
 Writing to a board at all is separate, and off: see `AGENTGLASS_CLICKUP_WRITE` above.
 

@@ -6401,6 +6401,12 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const r = await clickupSpaces(url.searchParams.get("fresh") === "1");
       return json(r.ok ? { ok: true, spaces: r.data?.spaces ?? [] } : { ok: false, error: r.error, throttled: r.throttled === true, unauthorised: r.unauthorised === true });
     }
+    /* The picker's spaces: the ones this person's cards live in first, the rest after. */
+    if (pathname === "/clickup/status-spaces") {
+      const { clickupStatusSpaces } = await import("./clickup.ts");
+      const r = await clickupStatusSpaces(url.searchParams.get("fresh") === "1");
+      return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error, throttled: r.throttled === true, unauthorised: r.unauthorised === true });
+    }
     /* The tabs a list has in ClickUp, for the sidebar to hang under it. Read on
        demand — one call, and only for a list somebody actually opened. */
     /*

@@ -1,4 +1,3 @@
-import { HIT } from "./iconSize.ts";
 /*
  * The workflow map's decisions, away from the screen.
  *
@@ -23,8 +22,43 @@ export type Unassign = "none" | "me" | "all";
 export const UNASSIGN_LABEL: Record<Unassign, string> = { none: "nobody", me: "only me", all: "everyone" };
 
 export interface MapStatus { status: string; type: string; color?: string }
-/** A space (or a project): the unit that owns a set of statuses. */
-export interface MapSpace { id: string; name: string; statuses: MapStatus[] }
+/**
+ * The unit that owns a set of statuses: a list (or a board, or a project).
+ * ClickUp hands them out by space and the data layer narrows them to the ones
+ * the person counts; the map only sees the units it is given.
+ */
+export interface MapSpace {
+  id: string;
+  name: string;
+  /** The folder (or group) it sits in, said under its name. */
+  group?: string;
+  statuses: MapStatus[];
+  /** False for an ignored unit: kept and listed, out of the pickers and the coverage. Absent counts. */
+  counted?: boolean;
+  /** A list whose set is only the statuses its cards wear (see shared/statusSpaces.ts). */
+  fromList?: boolean;
+  /** For a list place, the space it sits in; counting follows the space. */
+  spaceId?: string;
+}
+
+/** The spaces that count, and the ignored ones the page lists under "Ignored". */
+export function splitSpaces(spaces: readonly MapSpace[]): { yours: MapSpace[]; other: MapSpace[] } {
+  return { yours: spaces.filter((s) => s.counted !== false), other: spaces.filter((s) => s.counted === false) };
+}
+
+/** The ids of the real spaces that count (a list place follows its space and has no id of its own to keep). */
+export const countedIds = (spaces: readonly MapSpace[]): string[] => spaces.filter((s) => !s.fromList && s.counted !== false).map((s) => s.id);
+
+/**
+ * The list to save after ignoring or counting one space. Null when it would leave
+ * nothing counted: with no space counted there is no status to pick, and an empty
+ * saved list means "the default" and would silently undo the press.
+ */
+export function withCounted(spaces: readonly MapSpace[], id: string, on: boolean): string[] | null {
+  const now = countedIds(spaces);
+  const next = on ? (now.includes(id) ? now : [...now, id]) : now.filter((x) => x !== id);
+  return next.length ? next : null;
+}
 
 /** The words a tracker uses for the same things. */
 export interface Nouns {
@@ -33,6 +67,9 @@ export interface Nouns {
   workspace: string;
   space: string;
   spaces: string;
+  /** The unit a status set belongs to, as the map says it: "list" / "board" / "project". */
+  list: string;
+  lists: string;
   item: string;
   items: string;
   /** The label of a button that moves an item: "Move to" / "Transition to". */
@@ -163,12 +200,18 @@ export type Reach =
   | { kind: "none-needed" }
   | { kind: "pending" }
   | { kind: "all"; count: number }
-  | { kind: "some"; has: string[]; missing: string[]; total: number };
+  | { kind: "some"; has: string[]; missing: string[]; total: number }
+  /** The status exists, but only in spaces the person ignores: the step is shown, not silently broken. */
+  | { kind: "ignored"; where: string[] };
 
-export function reachOf(spaces: readonly MapSpace[], s: Step, m: Moment): Reach {
+export function reachOf(spaces: readonly MapSpace[], s: Step, m: Moment, ignored: readonly MapSpace[] = []): Reach {
   if (!m.needs) return { kind: "everywhere" };
   if (!s.status) return m.optional ? { kind: "none-needed" } : { kind: "pending" };
   const c = coverage(spaces, s.status);
+  if (c.has.length === 0) {
+    const where = coverage(ignored.filter((x) => !x.fromList), s.status).has;
+    if (where.length) return { kind: "ignored", where };
+  }
   return c.all ? { kind: "all", count: spaces.length } : { kind: "some", has: c.has, missing: c.missing, total: spaces.length };
 }
 
@@ -179,87 +222,3 @@ export const addable = (adapter: TrackerAdapter, steps: readonly Step[]): StepKi
 /** Pins on a status row of the chosen space: the steps that point at it. */
 export const pinsOn = (steps: readonly Step[], status: string): StepKind[] =>
   steps.filter((s) => s.status && same(s.status, status)).map((s) => s.kind);
-
-/*
- * The gutter between a step and the status list.
- *
- * A step whose status the chosen space lacks ends in a dashed stub with a
- * label, drawn in the gutter column. The label was "not in <space name>" on one
- * line starting 28px in: with a name like "Support Escalations and Customer
- * Success Operations (EMEA)" it ran out of the 84px gutter and was painted over
- * the first rows of the status list ("to do" printed under it). The gutter's
- * width is fixed by the grid, so what is decided here is how much of a name
- * fits, never how wide the column is.
- *
- * Two lines rather than one: "not in" and then the name, cut with an ellipsis
- * and carried whole in `full` for the tooltip. The ceiling: a name is cut by
- * character count, at the face's average advance, not measured; the face is
- * monospaced here, so the count is exact, and a proportional face would need a
- * measured width instead.
- */
-export const GUTTER_W = 104;
-export const GUTTER_STUB = 18;
-/** Clear space kept between the label and the status list on the right. */
-export const GUTTER_GAP = 6;
-/** Advance of one character of the 10px label face. */
-export const GUTTER_CHAR = 6.1;
-
-export interface GutterLabel { lead: string; name: string; full: string }
-
-export function gutterLabel(spaceName: string): GutterLabel {
-  const room = GUTTER_W - GUTTER_STUB - 4 - GUTTER_GAP;
-  const max = Math.max(1, Math.floor(room / GUTTER_CHAR));
-  const clean = spaceName.replace(/\s+/g, " ").trim();
-  const name = clean.length <= max ? clean : `${clean.slice(0, max - 1).trimEnd()}…`;
-  return { lead: "not in", name, full: clean ? `not in ${clean}` : "not in this space" };
-}
-
-/*
- * Vertical rhythm of a step.
- *
- * A sentence with a status picker inside it has a 26px control (HIT) on a line
- * of 12.5px type. The line height was 1.9 times the type, 23.75px: shorter than
- * the control, so a line that held a picker grew past its neighbours and the
- * pill touched the line above and below, while a line without one stayed
- * tight, and the gaps down the card were whatever each block happened to carry
- * (a margin here, a 4px row gap there). One line height now clears the control
- * by two pixels on either side, and every block of a step sits in one column
- * with one gap.
- */
-export const CHIP_H = HIT;
-export const SENTENCE_LH = CHIP_H + 4;
-/** Line height of the quieter lines under a sentence (coverage, the default note). */
-export const LINE_LH = 18;
-/** The gap between the blocks of a step: sentence, coverage lines, preview. */
-export const STEP_GAP = 6;
-/*
- * Equal gaps between boxes are not equal gaps between ink. A line's own leading
- * sits above and below its text, and a 30px sentence line holds far more of it
- * than an 18px coverage line, while the preview is a bordered box with none.
- * Measured on the rendered card: sentence to first coverage line 19px, between
- * coverage lines 15, last coverage line to the preview 11.5. The trim and the
- * nudge take those to 14, 13 and 13.5.
- */
-export const SENTENCE_TRIM = 3;
-export const PREVIEW_NUDGE = 4;
-
-/** One line of the coverage text under a step, as data the screen draws. */
-export interface ReachLine { key: string; tone: "ok" | "warn" | "dim"; /** true: filled marker, false: empty ring, absent: no marker */ dot?: boolean; text: string }
-
-export function reachLines(r: Reach, spaces: readonly MapSpace[], n: { space: string; spaces: string }): ReachLine[] {
-  switch (r.kind) {
-    case "everywhere": return [{ key: "e", tone: "ok", dot: true, text: `Works in every ${n.space}` }];
-    case "none-needed": return [{ key: "n", tone: "dim", text: "No status: nothing moves." }];
-    case "pending": return [{ key: "p", tone: "warn", text: "Not active until you pick a status." }];
-    case "all": return [{ key: "a", tone: "ok", dot: true, text: `In all ${r.count} ${n.spaces}` }];
-    case "some":
-      return r.total <= 5
-        ? spaces.map((s) => r.has.includes(s.name)
-          ? { key: s.id, tone: "ok" as const, dot: true, text: s.name }
-          : { key: s.id, tone: "warn" as const, dot: false, text: `${s.name}: no such status — the button is absent` })
-        : [
-          { key: "has", tone: "ok", dot: true, text: `${r.has.length} of ${r.total} ${n.spaces}` },
-          { key: "miss", tone: "warn", dot: false, text: `absent in ${r.missing.join(", ")}` },
-        ];
-  }
-}

@@ -35,7 +35,18 @@ describe("the store", () => {
       sprintListPattern: "^sprint\\b",
       readOnlyFieldPattern: "do not edit",
       bell: { kinds: ["assigned", "status", "mention", "comment"] },
+      statusSpaces: { counted: [] },
     });
+  });
+
+  test("the chosen spaces are ids: saved as given, an old file without them reads as the default, junk is refused", () => {
+    expect(P.applyPrefs(P.defaultPrefs(), { statusSpaces: { counted: ["901", "902", "901"] } })).toMatchObject({ ok: true, value: { statusSpaces: { counted: ["901", "902"] } } });
+    expect(P.applyPrefs(P.defaultPrefs(), { statusSpaces: { counted: ["Sales"] } }).ok).toBe(false);
+    expect(P.applyPrefs(P.defaultPrefs(), { statusSpaces: { counted: "901" } }).ok).toBe(false);
+    expect(P.applyPrefs(P.defaultPrefs(), { statusSpaces: { all: true } }).ok).toBe(false);
+    writeFileSync(file, JSON.stringify({ bell: { kinds: ["status"] } }));
+    P.__setPrefsPath(file);
+    expect(P.clickupPrefs().statusSpaces).toEqual({ counted: [] });
   });
 
   test("a partial update merges one level and survives a reload", () => {

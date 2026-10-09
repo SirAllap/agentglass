@@ -14,10 +14,11 @@ import type { ClickUpPrefs } from "../../shared/providers.ts";
 import { WorkflowMap, type MapProps } from "../src/components/WorkflowMap.tsx";
 import { CLICKUP, clickupSteps } from "../src/lib/clickupWorkflow.ts";
 import { allStatuses, resolveImplicit, type MapSpace } from "../src/lib/workflowMap.ts";
+import { partitionUnits } from "../src/lib/workflowLayout.ts";
 
 const st = (status: string, type = "custom") => ({ status, type });
 const SPACES: MapSpace[] = [
-  { id: "1", name: "Engineering", statuses: [st("to do", "open"), st("code review"), st("ready for qa"), st("done", "done")] },
+  { id: "1", name: "Engineering", group: "Platform", statuses: [st("to do", "open"), st("code review"), st("ready for qa"), st("done", "done")] },
   { id: "2", name: "Support", statuses: [st("open", "open"), st("solved", "closed")] },
 ];
 const prefs = (over: Partial<ClickUpPrefs> = {}): ClickUpPrefs => ({
@@ -26,20 +27,22 @@ const prefs = (over: Partial<ClickUpPrefs> = {}): ClickUpPrefs => ({
   merge: { enabled: false, statusNames: [] },
   flows: { noteOnCard: false },
   prLinkField: "", swatchField: "", cardSkillPattern: "", assigned: { includeSubtasks: false },
-  sprintListPattern: "", readOnlyFieldPattern: "", bell: { kinds: [] },
+  sprintListPattern: "", readOnlyFieldPattern: "", bell: { kinds: [] }, statusSpaces: { counted: [] },
   ...over,
 });
-const draw = (p: ClickUpPrefs, over: Partial<MapProps> = {}) => renderToStaticMarkup(React.createElement(WorkflowMap, {
-  adapter: CLICKUP, spaces: SPACES, panel: { kind: "ok" }, steps: clickupSteps(p), changesOn: true,
+/** The markup without its stylesheet: a class name written in the CSS is not something a person meets. */
+const bare = (html: string) => html.replace(/<style>[\s\S]*?<\/style>/g, "");
+const draw = (p: ClickUpPrefs, over: Partial<MapProps> = {}) => bare(renderToStaticMarkup(React.createElement(WorkflowMap, {
+  adapter: CLICKUP, part: partitionUnits(SPACES), panel: { kind: "ok" }, steps: clickupSteps(p), changesOn: true,
   onAdd: () => {}, onStatus: () => {}, onRemove: () => {}, onUnassign: () => {}, onRetry: () => {}, ...over,
-}));
+})));
 
 describe("a workspace that set nothing", () => {
   const html = draw(prefs(), { changesOn: false });
   test("says it only reads, and offers to add a step", () => {
-    expect(html).toContain("No steps. agentglass only reads.");
+    expect(html).toContain("No steps yet");
     expect(html).toContain("Add a step");
-    expect(html).toContain("read-only");
+    expect(html).toContain("Nothing in ClickUp changes until you add one");
   });
   test("has no QA field, no dimmed row, no switch for a step: nothing to turn off", () => {
     for (const t of ["Hand off", "QA status names", "Take off the card", "Review status names", "Names on your boards"]) expect(html).not.toContain(t);
@@ -64,14 +67,31 @@ describe("steps", () => {
   test("a status chip names the status, and who comes off is said in words", () => {
     expect(html).toContain("Ready for QA");
     expect(html).toContain(">only me<");
-    expect(html).toContain("changes on");
+    expect(html).toContain("Changes on");
   });
-  test("the spaces that lack the status are named, and the button is said to be absent there", () => {
-    expect(html).toContain("Support");
-    expect(html).toContain("no such status — the button is absent");
+  test("a step says which lists have its status in one pill, and the lists that lack it are one press away", () => {
+    expect(html).toContain('aria-label="Coverage: Engineering only. Show per-list detail"');
+    expect(html).toContain("Engineering only");
+    expect(html).not.toContain("no such status — the button is absent");
+  });
+  test("each step is a card with a number, a title, where it shows and a one-line purpose", () => {
+    expect(html).toContain('aria-label="Step 1: Move button on a pull request"');
+    expect(html).toContain("Shows on pull request › card block");
+    expect(html).toContain("Move the card to");
+    expect(html).toContain("Also take off the card");
+    expect(html).toContain("Preselect");
+  });
+  test("the column names each list with its folder and carries a pin, numbered like the step, on the status it points at", () => {
+    expect(html).toContain("Your statuses in");
+    expect(html).toContain("Platform");
+    expect(html).toMatch(/data-status="ready for qa"[^>]*data-tg=""/);
+    expect(html).toMatch(/title="Step 1">1</);
+    const gap = draw(prefs({ merge: { enabled: true, statusNames: ["solved"] } }));
+    expect(gap).toContain("Not in Engineering");
+    expect(gap).toContain("point at a status this list does not have.");
   });
   test("Remove has a name that says which step", () => {
-    expect(html).toContain('aria-label="Remove step: Move button on a pull request"');
+    expect(html).toContain('aria-label="Remove step 1"');
   });
   test("no polling and no per-keystroke write in the files that draw it", async () => {
     for (const f of ["WorkflowMap", "StatusPanel", "ClickUpPane"]) {
@@ -84,29 +104,46 @@ describe("steps", () => {
 describe("a step with nothing to point at, and one switched off", () => {
   test("a review item that finds no review status anywhere says it needs one and is not active", () => {
     const html = draw(prefs({ review: { enabled: true, statusNames: [], assignReviewer: false } }), { steps: clickupSteps(prefs({ review: { enabled: true, statusNames: [], assignReviewer: false } })) });
-    expect(html).toContain("needs a status");
-    expect(html).toContain("Not active until you pick a status.");
-    expect(html).toContain("choose a status…");
+    expect(html).toContain("Needs a status");
+    expect(html).toContain("Pick a status");
+    expect(html).not.toContain("wfm-cov");
   });
   test("a migrated hand-off on the built-in default says so instead of claiming it is off", () => {
     const p = prefs({ handoff: { enabled: true, statusNames: [], unassign: "none" } });
     const html = draw(p, { steps: resolveImplicit(CLICKUP, clickupSteps(p), allStatuses(SPACES)) });
-    expect(html).not.toContain("needs a status");
+    expect(html).not.toContain("Needs a status");
     expect(html).toContain("The built-in default, until you choose one.");
   });
   test("changes off: the steps stay, marked dormant, and no line is drawn to a status", () => {
     const html = draw(prefs({ flows: { noteOnCard: true } }), { changesOn: false });
-    expect(html).toContain("dormant: changes are off");
+    expect(html).toContain("Not active · changes off");
+    expect(html).toContain("Changes are off, so no step is active.");
     expect(html).toContain("Note button on a pull request");
   });
   test("a refused token freezes the map: inert, paused, and Add is disabled", () => {
     const html = draw(prefs({ flows: { noteOnCard: true } }), { frozen: true });
-    expect(html).toContain("paused: token refused");
+    expect(html).toContain("Paused: token refused");
     expect(html).toContain('inert=""');
   });
-  test("no spaces yet: the lane says so rather than inventing statuses", () => {
-    const html = draw(prefs(), { spaces: [], panel: { kind: "empty" } });
-    expect(html).toContain("No spaces to show.");
+  test("no lists yet: the column says so rather than inventing statuses", () => {
+    const html = draw(prefs(), { part: partitionUnits([]), panel: { kind: "empty" } });
+    expect(html).toContain("No lists to show.");
+  });
+  test("a status only an ignored list has is said so, and the way back is one press", () => {
+    const p = prefs({ handoff: { enabled: true, statusNames: ["lead"], unassign: "none" } });
+    const sales: MapSpace = { id: "9", name: "Sales pipeline", statuses: [st("lead", "open"), st("won", "done")] };
+    const html = draw(p, { part: partitionUnits([...SPACES, { ...sales, counted: false }]), onCountAgain: () => {} });
+    expect(html).toContain("Only in ignored lists");
+    expect(html).toContain("only exists in lists you ignore (Sales pipeline)");
+    expect(html).toContain("Count Sales pipeline again");
+    expect(html).toContain("Ignored (1)");
+    expect(html).not.toContain("No list has it");
+  });
+  test("a status no list has says so and does not blame an ignored one", () => {
+    const html = draw(prefs({ handoff: { enabled: true, statusNames: ["qa passed"], unassign: "none" } }));
+    expect(html).toContain("No list has it");
+    expect(html).toContain("It may have been renamed.");
+    expect(html).not.toContain("Count ");
   });
 });
 
@@ -152,8 +189,8 @@ describe("the page is only there with ClickUp", () => {
   test("the map keeps a focus request until its target exists, and the composer's Escape stays inside it", async () => {
     const src = await Bun.file(new URL("../src/components/WorkflowMap.tsx", import.meta.url).pathname).text();
     expect(src).toContain("root.current?.querySelector<HTMLElement>(focusNext)");
-    expect(src).toContain("const ok = await p.onAdd(composer.kind");
-    expect(src).toContain('if (e.key === "Escape") { e.stopPropagation(); setComposer(null);');
+    expect(src).toContain("const ok = await p.onAdd(kind, v);");
+    expect(src).toContain('if (e.key === "Escape") { e.stopPropagation(); setComposer(false);');
     expect(src).not.toContain("queueMicrotask");
   });
   test("the review menu reads nothing from ClickUp when neither of its steps is added", async () => {

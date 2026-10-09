@@ -26,7 +26,7 @@ const prefs = (includeSubtasks: boolean): ClickUpPrefs => ({
   merge: { enabled: false, statusNames: [] },
   flows: { noteOnCard: false },
   prLinkField: "", swatchField: "", cardSkillPattern: "", assigned: { includeSubtasks },
-  sprintListPattern: "", readOnlyFieldPattern: "", bell: { kinds: ["assigned", "status", "mention", "comment"] },
+  sprintListPattern: "", readOnlyFieldPattern: "", bell: { kinds: ["assigned", "status", "mention", "comment"] }, statusSpaces: { counted: [] },
 });
 const draw = () => renderToStaticMarkup(React.createElement(SubtasksNote, { onChanged: () => {} }));
 

@@ -27,7 +27,7 @@ const prefs = (over: Partial<ClickUpPrefs> = {}): ClickUpPrefs => ({
   merge: { enabled: false, statusNames: [] },
   flows: { noteOnCard: false },
   prLinkField: "", swatchField: "", cardSkillPattern: "", assigned: { includeSubtasks: false },
-  sprintListPattern: "", readOnlyFieldPattern: "", bell: { kinds: [] },
+  sprintListPattern: "", readOnlyFieldPattern: "", bell: { kinds: [] }, statusSpaces: { counted: [] },
   ...over,
 });
 

@@ -12,7 +12,7 @@ import type { TrackerAdapter, Step, StepKind, Unassign } from "./workflowMap.ts"
 import { STEP_ORDER } from "./workflowMap.ts";
 
 export const CLICKUP: TrackerAdapter = {
-  nouns: { name: "ClickUp", workspace: "workspace", space: "space", spaces: "spaces", item: "card", items: "cards", move: "Move to", verb: "Move" },
+  nouns: { name: "ClickUp", workspace: "workspace", space: "space", spaces: "spaces", list: "list", lists: "lists", item: "card", items: "cards", move: "Move to", verb: "Move" },
   kinds: STEP_ORDER,
   suggest: { move: /qa|test/i, menu: /review/i, merge: /^(done|complete|completed|released|approved|closed)$/i },
   fallback: {
@@ -30,6 +30,7 @@ export type PrefsPatch = {
   review?: Partial<ClickUpPrefs["review"]>;
   merge?: Partial<ClickUpPrefs["merge"]>;
   flows?: Partial<ClickUpPrefs["flows"]>;
+  statusSpaces?: Partial<ClickUpPrefs["statusSpaces"]>;
 };
 
 const named = (names: string[]) => ({ status: names[0] ?? null, also: names.slice(1), implicit: names.length === 0 });

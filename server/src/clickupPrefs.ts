@@ -96,6 +96,7 @@ export function defaultPrefs(): ClickUpPrefs {
     sprintListPattern: DEFAULT_SPRINT_LIST_PATTERN,
     readOnlyFieldPattern: DEFAULT_READ_ONLY_FIELD_PATTERN,
     bell: { kinds: [...CLICKUP_BELL_KINDS] },
+    statusSpaces: { counted: [] },
   };
 }
 
@@ -151,7 +152,7 @@ export function applyPrefs(base: ClickUpPrefs, input: unknown): Res<ClickUpPrefs
     for (const key of Object.keys(g)) if (!allowed.includes(key)) return bad(`${k}.${key} is not a setting`);
     return { ok: true, value: g };
   };
-  const top = ["handoff", "review", "merge", "flows", "prLinkField", "swatchField", "cardSkillPattern", "assigned", "sprintListPattern", "readOnlyFieldPattern", "bell"];
+  const top = ["handoff", "review", "merge", "flows", "prLinkField", "swatchField", "cardSkillPattern", "assigned", "sprintListPattern", "readOnlyFieldPattern", "bell", "statusSpaces"];
   for (const k of Object.keys(input)) if (!top.includes(k)) return bad(`${k} is not a setting`);
 
   if ("handoff" in input) {
@@ -196,6 +197,17 @@ export function applyPrefs(base: ClickUpPrefs, input: unknown): Res<ClickUpPrefs
       if (!Array.isArray(k)) return bad("bell.kinds must be a list");
       for (const x of k) if (!CLICKUP_BELL_KINDS.includes(x as ClickUpBellKind)) return bad(`bell.kinds has an unknown kind: ${String(x).slice(0, 40)}`);
       out.bell.kinds = CLICKUP_BELL_KINDS.filter((x) => k.includes(x));
+    }
+  }
+  if ("statusSpaces" in input) {
+    const g = groupOf("statusSpaces", ["counted"]);
+    if (!g.ok) return g;
+    if ("counted" in g.value) {
+      const r = names("statusSpaces.counted", g.value.counted);
+      if (!r.ok) return r;
+      // A space id is digits; anything else would only ever match nothing, so it is refused loudly rather than saved.
+      if (r.value.some((x) => !/^[0-9]{1,20}$/.test(x))) return bad("statusSpaces.counted must be a list of space ids");
+      out.statusSpaces.counted = r.value;
     }
   }
   if ("prLinkField" in input) { const r = text("prLinkField", input.prLinkField); if (!r.ok) return r; out.prLinkField = r.value; }

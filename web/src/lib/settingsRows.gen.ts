@@ -31,7 +31,7 @@ export const SETTINGS_ROWS: SettingsRowRaw[] = [
   { pane: "budgets", section: "Codex quota", label: "Keep Codex usage current", hint: "Runs a minimal Codex turn hourly so the quota reading is not stale — uses a small amount of the quota it measures" },
   { pane: "budgets", section: "GitHub", label: "GitHub API budget", hint: "" },
   { pane: "budgets", section: "GitHub", label: "How much of your GitHub allowance is left", hint: "" },
-  { pane: "clickup", section: "", label: "Subtasks on Assigned to me", hint: "Slower: the workspace read can take twice as long." },
+  { pane: "clickup", section: "", label: "Subtasks on Assigned to me", hint: "Slower: the workspace read can take twice as long.", agentNever: "changes how heavy the shared ClickUp read is against a rate-limited token the owner also works with, so it is the owner's to turn on" },
   { pane: "diff", section: "How a diff opens", label: "Default view", hint: "How file changes, source control and pull requests open a diff. The toggle in each panel still overrides it for that diff.", settingId: "diff.split" },
   { pane: "diff", section: "How a diff opens", label: "Diff syntax theme", hint: "The colours code takes in a diff. Auto follows the app's light or dark; the toolbar in a diff changes the same setting.", settingId: "diff.syntaxTheme" },
   { pane: "diff", section: "How a diff opens", label: "Wrap long lines", hint: "", settingId: "diff.wrap" },

@@ -187,6 +187,8 @@ export interface ProviderTask {
   /** The list, board or project it sits in — its HOME, in ClickUp's words. */
   list: string | null;
   listId?: string;
+  /** The space the list sits in; the task payload carries it, so it costs no call. */
+  spaceId?: string;
   /**
    * The other lists it also appears in.
    *
@@ -601,12 +603,37 @@ export interface ClickUpPrefs {
   /** Which custom fields are shown but never written. */
   readOnlyFieldPattern: string;
   bell: { kinds: ClickUpBellKind[] };
+  /** Which spaces count for statuses, by id. Empty: the spaces where this person's cards live
+   *  (every space until a card has been read). The rest are ignored, never deleted. */
+  statusSpaces: { counted: string[] };
 }
 
 /** One status of a space, as Get Spaces carries it. */
 export interface SpaceStatus { status: string; type: string; color?: string }
 /** A space and the statuses its lists inherit; a list may override them. */
-export interface ClickUpSpace { id: string; name: string; statuses: SpaceStatus[] }
+export interface ClickUpSpace {
+  id: string;
+  name: string;
+  statuses: SpaceStatus[];
+  /** The folder a list sits in, said under its name in the settings page. Get Spaces carries none; a source that knows it sets it. */
+  group?: string;
+  /** Where the cards the app already read for this person live. Absent on a bare
+   *  Get Spaces answer; set by `statusSpaces` once cards are known. */
+  mine?: boolean;
+  /** How many of those cards sit here, to put the busiest first. */
+  cards?: number;
+  /** Whether this space counts for statuses. Absent (an older answer) means it does;
+   *  `false` is an ignored space: kept in the answer, out of the pickers and the coverage. */
+  counted?: boolean;
+  /** For a list place, the space it sits in; counting follows the space. */
+  spaceId?: string;
+  /** A list whose cards wear statuses its space does not have: the set is only
+   *  the ones SEEN on those cards, not the list's full set (that would be a
+   *  request of its own). Named "Space / List". */
+  fromList?: boolean;
+  /** A space that says in its own name that nobody should use it. */
+  legacy?: boolean;
+}
 
 /** Somebody who can be put on a card: the members of the list it lives in.
  *  Same shape as an assignee, because they become one. */

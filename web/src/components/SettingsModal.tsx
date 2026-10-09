@@ -782,8 +782,8 @@ function MiniBtn({ label, disabled, onClick, children }: { settingId?: string; a
 /** Panes whose content is a grid of cards, not a column of rows. */
 const WIDE_PANES = new Map<string, string>([
   ["plugins", "1180px"],
-  /* The workflow map is three columns (steps, the lines, the statuses) and needs this much to keep a sentence on two lines. */
-  ["clickup", "980px"],
+  /* The workflow map is a column of step cards beside a column of statuses, with the lines running between them; this is the width that keeps a card's header on two lines. */
+  ["clickup", "1100px"],
 ]);
 
 const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];

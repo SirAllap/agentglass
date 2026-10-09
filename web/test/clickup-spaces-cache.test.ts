@@ -48,6 +48,21 @@ describe("readSpaces", () => {
     expect(names(await b)).toEqual(["New"]);
   });
 
+  test("a changed pick of spaces is read again past the held answer, and does not ask the server to skip its memo", async () => {
+    const a = S.readSpaces();
+    await tick();
+    calls[0]!.done(["Engineering"]);
+    await a;
+    const b = S.readSpaces(false, true);
+    await tick();
+    expect(calls.length).toBe(2);
+    expect(calls[1]!.url).not.toContain("fresh=1");
+    calls[1]!.done(["Engineering", "Support"]);
+    expect(names(await b)).toEqual(["Engineering", "Support"]);
+    expect(names(await S.readSpaces())).toEqual(["Engineering", "Support"]);
+    expect(calls.length).toBe(2);
+  });
+
   test("an answer that left before the credential changed is not kept for the new one", async () => {
     const a = S.readSpaces();
     await tick();

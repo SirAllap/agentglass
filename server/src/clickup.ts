@@ -16,6 +16,7 @@
  * unusual enough to be worth stating: ClickUp's personal tokens are sent bare,
  * and adding `Bearer` produces a 401 that looks exactly like a wrong token.
  */
+import { statusSpaces, type StatusSpaces } from "../../shared/statusSpaces.ts";
 import { singleFlight } from "./singleflight.ts";
 import { cardIdDigits, mentionsCardId } from "../../shared/cardRef.ts";
 import { matchesQuery, mergeRequestNumber, readTaskRef } from "../../shared/taskref.ts";
@@ -248,6 +249,7 @@ interface RawTask {
   priority?: { priority?: string } | null;
   tags?: { name?: string }[];
   list?: { id?: string; name?: string } | null;
+  space?: { id?: string | number } | null;
   assignees?: { id?: string | number; username?: string; email?: string; initials?: string; color?: string; profilePicture?: string }[];
   locations?: { id?: string; name?: string }[];
   points?: number | null;
@@ -390,6 +392,7 @@ export function toTask(raw: RawTask, myId?: string): ProviderTask {
     tags: (raw.tags ?? []).map((t) => t.name ?? "").filter(Boolean),
     list: raw.list?.name ?? null,
     listId: raw.list?.id ? String(raw.list.id) : undefined,
+    ...(raw.space?.id ? { spaceId: String(raw.space.id) } : null),
     /* Free — it rides on the same response, on every endpoint that returns a
        task — and it is the difference between "this card is in Defects" and
        "this card is in Defects and in the two lists you actually work from". */
@@ -3477,6 +3480,17 @@ export async function clickupSpaces(fresh = false): Promise<CallResult<{ spaces:
       })),
     },
   };
+}
+
+/**
+ * The same spaces, led by where this person's cards live — see `statusSpaces`.
+ * Zero extra requests: the spaces come from the memo above and the cards from
+ * the assigned-to-me snapshot, read from memory and never fetched here.
+ */
+export async function clickupStatusSpaces(fresh = false): Promise<CallResult<StatusSpaces>> {
+  const r = await clickupSpaces(fresh);
+  if (!r.ok) return { ...r, data: undefined };
+  return { ok: true, data: statusSpaces(r.data?.spaces ?? [], clickupCached()?.tasks ?? [], clickupPrefs().statusSpaces.counted) };
 }
 
 export interface ClickUpFolder {
