@@ -50,7 +50,11 @@ const patch = (name: string, fn: (...a: never[]) => unknown) => {
   a[name] = fn;
 };
 afterAll(() => { for (const [k, v] of Object.entries(real)) (api as unknown as Record<string, unknown>)[k] = v; });
-beforeEach(() => { store.clear(); attrs.clear(); views.resetRail(); });
+afterAll(() => { keybindings.resetChords(); keybindings.resetAppChords(); keybindings.resetBindings(); });
+// The chord caches live in the module, not in the stub store above, so clearing
+// the store does not clear them: a file that ran earlier and ended on a rebound
+// chord would make "flag only what was changed" read true before anything changed.
+beforeEach(() => { store.clear(); attrs.clear(); views.resetRail(); keybindings.resetBindings(); keybindings.resetChords(); keybindings.resetAppChords(); });
 
 describe("the panes the window holds read the pref modules the rows call", () => {
   it("prefs follow the clock the row sets", () => {

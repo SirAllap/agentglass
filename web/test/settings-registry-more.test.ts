@@ -9,7 +9,7 @@
  * reaches the caller in the module's words. The second half is the other side
  * of the ledger: what is NOT a def, held so that adding one is a decision.
  */
-import { beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, beforeEach, describe, expect, it } from "bun:test";
 import { globalStubs } from "./stubGlobal.ts";
 
 const stubGlobal = globalStubs();
@@ -45,6 +45,8 @@ const fresh = (fn: () => void) => { store.clear(); fn(); return snapshot(); };
 const NEW = ["terminal.focusFollowsMouse", "terminal.paneBar", "terminal.copyOnSelect", "terminal.noteEditor", "terminal.tabGroups", "terminal.tabGroupRules", "terminal.scrollback", "terminal.wordSeparators", "notifications.quiet", "notifications.ciOnlyApproved", "notifications.talk", "browser.searchEngine", "tasks.landing", "tasks.source.github", "tasks.source.local", "tasks.source.clickup"];
 
 beforeEach(() => { store.clear(); sources.__forgetTaskSources(); keybindings.resetBindings(); });
+// The shared keybindings module keeps the rebound key past this file.
+afterAll(() => { keybindings.resetBindings(); });
 
 describe("a def stores what the pref module's own setter stores", () => {
   const cases: [string, unknown, () => void][] = [
