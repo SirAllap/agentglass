@@ -15,7 +15,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 const { findFiles } = await import("../src/files.ts");
 
@@ -100,5 +100,20 @@ describe("what a name search answers with", () => {
     // things under it are what you are looking for.
     const r = findFiles(dir, "projects");
     expect(r.dirs).toContain("docs/projects");
+  });
+});
+
+describe("the root is not part of what is searched", () => {
+  it("a query found only in the checkout's own folder name answers with nothing", () => {
+    // fd matches the ABSOLUTE path, so the mkdtemp name of this very folder
+    // matched every file in it: a search for the repository's own name, or for
+    // `-H` when the random part happens to start with an H, listed everything.
+    const own = basename(dir);
+    for (const q of [own, own.slice(0, 5)]) {
+      const r = findFiles(dir, q);
+      expect(r.ok).toBe(true);
+      expect(r.files, q).toEqual([]);
+      expect(r.dirs, q).toEqual([]);
+    }
   });
 });

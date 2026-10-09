@@ -12,7 +12,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { diskAllows, diskFind, diskPlaces, diskRoots, diskWalk } from "../src/disk.ts";
 import { fileText, fileTree } from "../src/files.ts";
 
@@ -130,6 +130,25 @@ describe("what the machine search answers", () => {
     expect(r.ok).toBe(true);
     expect(r.files).toEqual([]);
     expect(r.dirs).toEqual([]);
+  });
+
+  test("a query found only in the root's own name matches nothing under it", () => {
+    // fd matches the absolute path, so `-H` under a root called `agx-home-Hk2j9x`
+    // (one mkdtemp name in 62 starts that way) listed every file in it, and a
+    // query for the folder's own name did the same on every run. The root is
+    // not part of what is being searched.
+    const own = basename(home);
+    for (const q of [own, own.toUpperCase(), tmpdir().slice(1), `${basename(home).slice(0, 5)}-`]) {
+      const r = diskFind(home, q);
+      expect(r.ok).toBe(true);
+      expect(r.files, q).toEqual([]);
+      expect(r.dirs, q).toEqual([]);
+    }
+    // ...and a name below the root that happens to contain regex syntax is
+    // still a plain string.
+    writeFileSync(join(docs, "a+b (1).md"), "x\n");
+    expect(diskFind(home, "a+b (1)").files).toContain("Documents/projects/PoL ORBIT-1042/a+b (1).md");
+    expect(diskFind(home, "a.b").files).toEqual([]);
   });
 
   test("a query spelled like an fd option is a pattern, not an option", () => {

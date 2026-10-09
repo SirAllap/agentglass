@@ -11,7 +11,7 @@
  */
 import { test, expect, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, chmodSync, statSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 
 const SOCK = `agx-batch-${process.pid}`;
@@ -40,6 +40,18 @@ beforeAll(async () => {
   process.env.AGENTGLASS_TMUX_PATH = shim;
   delete process.env.TMUX;
   restore = await import("../src/tmuxrestore.ts");
+  /* The engine's config, so a pane whose command dies at boot is KEPT, dead,
+     as the real engine keeps it (`remain-on-exit failed`). Without it the
+     restored server has `remain-on-exit off`, and the fixture's `bash -c` pane
+     (a command with a newline in it, cut short by the capture) closes as soon
+     as it exits: when the split reaches the window first, the window survives
+     with only the split's pane, which is now index 0 and in the wrong
+     directory. Measured under load, 11 runs in 30. Written by hand:
+     `ensureConf` remembers the content it last wrote, and every test file
+     shares one process. */
+  const conf = await import("../src/tmuxconf.ts");
+  mkdirSync(dirname(conf.confPath()), { recursive: true });
+  writeFileSync(conf.confPath(), conf.confContent());
   for (let i = 0; i < SESSIONS; i++) {
     sh(["new-session", "-d", "-s", `desk${i}`, "-c", "/tmp"]);
     sh(["new-window", "-d", "-t", `=desk${i}`, "-n", "w2", "-c", "/tmp"]);
@@ -122,11 +134,12 @@ test("a layout captured after the change puts the desk back as it was after a po
   await restore.captureLayout();
   const list = (a: string[]) => sh(a).stdout.toString().trim().split("\n").filter(Boolean);
   /* Per session: each window's name with the directories of its panes, in
-     order. The engine's own first window is left out: `restoreLayout` makes a
+     order. Indexes are left out: the engine's config counts from 1 and the
+     fixture's server from 0, and the ORDER is what a restore has to keep. The engine's own first window is left out: `restoreLayout` makes a
      session with one blank window of its own, before and after this change. */
   const shape = () => list(["list-sessions", "-F", "#{session_name}"]).sort().map((n) => [
     n,
-    list(["list-panes", "-s", "-t", `=${n}`, "-F", "#{window_index} #{window_name} #{pane_index} #{pane_current_path}"])
+    list(["list-panes", "-s", "-t", `=${n}`, "-F", "#{window_index} #{window_name} #{pane_current_path}"])
       .map((l) => l.split(" ").slice(1)).filter((l) => l[0] !== "tmux"),
   ]);
   const before = shape();
