@@ -145,7 +145,8 @@ function assign(name: string, v: unknown): Res<StepAssign> {
   if (!isObj(v)) return bad(`${name} must be an object like {"who":"me"}`);
   for (const k of Object.keys(v)) if (k !== "who" && k !== "person") return bad(`${name}.${k} is not a setting`);
   const w = v.who;
-  if (w !== "none" && w !== "me" && w !== "author" && w !== "person") return bad(`${name}.who must be none, me, author or person`);
+  if (w === "author") return bad(`${name}.who "author" is not offered for ClickUp: a pull request's author and a ClickUp member are different systems and never the same identity. Use { "who": "none", "ask": true } on an assign block to pick who when it runs.`);
+  if (w !== "none" && w !== "me" && w !== "person") return bad(`${name}.who must be none, me or person`);
   if (w !== "person") {
     return "person" in v && v.person != null ? bad(`${name}.person is only for who: "person"`) : { ok: true, value: { who: w } };
   }
@@ -179,17 +180,43 @@ function blockList(name: string, v: unknown, trigger: StepTrigger): Res<StepBloc
       if ("ask" in b && b.ask !== true && b.ask !== false) return bad(`${at}.ask must be true or false`);
       out.push({ type: "move", statusNames: r.value, ...(b.fallback === true && !r.value.length ? { fallback: true } : null), ...(b.ask === true ? { ask: true as const } : null) });
     } else if (b.type === "unassign") {
-      for (const k of Object.keys(b)) if (k !== "type" && k !== "who" && k !== "ask") return bad(`${at}.${k} is not a setting`);
-      if (b.ask === true) return bad(`${at}.ask is for move and assign blocks; “take people off” does not ask when it runs yet`);
-      if (b.who !== "none" && b.who !== "me" && b.who !== "all") return bad(`${at}.who must be none, me or all`);
-      out.push({ type: "unassign", who: b.who });
+      for (const k of Object.keys(b)) if (k !== "type" && k !== "who" && k !== "ask" && k !== "people") return bad(`${at}.${k} is not a setting`);
+      if ("ask" in b && b.ask !== true && b.ask !== false) return bad(`${at}.ask must be true or false`);
+      if (b.who !== "none" && b.who !== "me" && b.who !== "all" && b.who !== "people") return bad(`${at}.who must be none, me, all or people`);
+      let people: { id: number; name: string }[] | undefined;
+      if (b.who === "people" || "people" in b) {
+        if (b.who !== "people") return bad(`${at}.people is for who: "people"`);
+        if (!Array.isArray(b.people) || b.people.length > 20) return bad(`${at}.people must be a list of up to 20 people`);
+        people = [];
+        for (const p of b.people) {
+          if (!isObj(p) || typeof p.id !== "number" || !Number.isSafeInteger(p.id) || p.id <= 0) return bad(`${at}.people needs {"id": <member id>, "name": "<name>"} entries`);
+          const n = text(`${at}.people.name`, p.name);
+          if (!n.ok) return n;
+          if (!n.value) return bad(`${at}.people names must be the member's name`);
+          if (!people.some((x) => x.id === p.id)) people.push({ id: p.id, name: n.value });
+        }
+        if (!people.length && b.ask !== true) return bad(`${at}.people is empty: remove the block to take nobody off`);
+      }
+      out.push({ type: "unassign", who: b.who, ...(people ? { people } : null), ...(b.ask === true ? { ask: true as const } : null) });
     } else if (b.type === "assign") {
-      const { type: _t, ask, ...rest } = b;
+      const { type: _t, ask, also, ...rest } = b;
       if (ask !== undefined && ask !== true && ask !== false) return bad(`${at}.ask must be true or false`);
       const r = assign(at, rest);
       if (!r.ok) return r;
       if (r.value.who === "none" && ask !== true) return bad(`${at}.who must be me, author or person: remove the block to assign nobody (or set ask: true, where none is “nobody” as the starting choice)`);
-      out.push({ type: "assign", ...(ask === true ? { ask: true as const } : null), ...r.value });
+      let more: { id: number; name: string }[] = [];
+      if (also !== undefined) {
+        if (ask !== true || r.value.who !== "person") return bad(`${at}.also is for a block that asks when it runs and starts at a person`);
+        if (!Array.isArray(also) || also.length > 20) return bad(`${at}.also must be a list of up to 20 people`);
+        for (const p of also) {
+          if (!isObj(p) || typeof p.id !== "number" || !Number.isSafeInteger(p.id) || p.id <= 0) return bad(`${at}.also needs {"id": <member id>, "name": "<name>"} entries`);
+          const n = text(`${at}.also.name`, p.name);
+          if (!n.ok) return n;
+          if (!n.value) return bad(`${at}.also names must be the member's name`);
+          if (p.id !== r.value.person?.id && !more.some((x) => x.id === p.id)) more.push({ id: p.id, name: n.value });
+        }
+      }
+      out.push({ type: "assign", ...(ask === true ? { ask: true as const } : null), ...r.value, ...(more.length ? { also: more } : null) });
     } else return bad(`${at}.type must be move, unassign or assign`);
   }
   const problem = blocksProblem(trigger, out);
@@ -323,6 +350,30 @@ export function applyPrefs(base: ClickUpPrefs, input: unknown): Res<ClickUpPrefs
   return { ok: true, value: out };
 }
 
+/**
+ * A settings file written while "the pull request's author" was a choice: it never matched a GitHub user to
+ * a ClickUp member reliably (they are different systems), so the choice is gone and a saved one becomes
+ * "ask when it runs, starting at nobody": the person is asked each time, which is what the author choice
+ * was trying to guess. Returns what it changed, for the log; the file is rewritten at the next save.
+ */
+export function migrateAuthorChoice(raw: Record<string, unknown>): string[] {
+  const changed: string[] = [];
+  const triggers = { handoff: "move", review: "menu", merge: "merge" } as const;
+  for (const k of ["handoff", "review", "merge"] as const) {
+    const g = raw[k];
+    if (!isObj(g)) continue;
+    let hit = false;
+    if (isObj(g.assign) && g.assign.who === "author") { g.assign = { who: "none" }; hit = true; }
+    if (Array.isArray(g.blocks)) {
+      g.blocks = g.blocks.map((b) => (isObj(b) && b.type === "assign" && b.who === "author" ? (hit = true, { type: "assign", ask: true, who: "none" }) : b));
+    } else if (hit) {
+      g.blocks = [...blocksFromLegacy(triggers[k], { enabled: g.enabled === true, statusNames: Array.isArray(g.statusNames) ? (g.statusNames as string[]) : [], unassign: g.unassign as HandoffUnassign | undefined, assign: { who: "none" } }), { type: "assign", ask: true, who: "none" }];
+    }
+    if (hit) changed.push(k);
+  }
+  return changed;
+}
+
 let cache: ClickUpPrefs | undefined;
 
 /** What is on disk laid over the defaults. A key that no longer validates (a
@@ -335,6 +386,8 @@ export function clickupPrefs(): ClickUpPrefs {
     if (existsSync(p)) {
       const raw = JSON.parse(readFileSync(p, "utf8")) as unknown;
       if (isObj(raw)) {
+        const migrated = migrateAuthorChoice(raw);
+        if (migrated.length) console.log(`[clickup] "the pull request's author" is no longer a choice; ${migrated.join(", ")}: now "ask when it runs", starting at nobody`);
         for (const k of Object.keys(raw)) {
           let r = applyPrefs(prefs, { [k]: raw[k] });
           /* A step whose old keys were edited by hand to disagree with its blocks: the blocks are what the page

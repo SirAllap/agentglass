@@ -9,8 +9,9 @@ import { ICON } from "../lib/iconSize.ts";
 import { ASSIGN_LABEL, ASSIGN_WHO, assignLabel, type Assign } from "../lib/stepAssign.ts";
 import { UNASSIGN_LABEL, type Unassign } from "../lib/workflowMap.ts";
 import { BLOCK_INFO, blockRefusal, type StepTrigger } from "../../../shared/stepBlocks.ts";
-import type { ListMember, StepBlock } from "../../../shared/providers.ts";
+import { AUTHOR_IS_MEMBER, type ListMember, type StepBlock } from "../../../shared/providers.ts";
 import { moveBlock } from "../lib/stepBlocksView.ts";
+import { shortName } from "../lib/askAtRun.ts";
 
 /**
  * The blocks of one step: what it does, as a list the person builds.
@@ -32,7 +33,6 @@ import { moveBlock } from "../lib/stepBlocksView.ts";
 /** Somebody the "a person…" choice can name. */
 export interface MapPerson { id: number; name: string; sub?: string }
 
-const UNASSIGN_OPTIONS = (["none", "me", "all"] as const).map((v) => ({ value: v, label: UNASSIGN_LABEL[v] }));
 
 /*
  * The small lists: who comes off, who to assign, which block to add.
@@ -48,19 +48,41 @@ const Row = ({ selected, onClick, children, disabled, ...rest }: { selected?: bo
 );
 const Check = ({ on }: { on: boolean }) => <span className="ck" aria-hidden>{on ? <DoneIcon size={ICON.xs} /> : null}</span>;
 
-/** A short list of choices. */
-export function ChoiceMenu<T extends string>({ anchor, label, value, options, onPick, onClose }: { anchor: Anchor; label: string; value: T; options: { value: T; label: string }[]; onPick: (v: T) => void; onClose: () => void }) {
+/** Who comes off: nobody, only you, everyone, or named people (the app's one people picker, ticks, stays open). */
+export function UnassignMenu({ anchor, value, people, onPick, onPeople, onClose }: { anchor: Anchor; value: { who: Unassign | "people"; people?: { id: number; name: string }[] }; people?: () => Promise<MapPerson[] | null>; onPick: (who: Unassign) => void; onPeople: (list: { id: number; name: string }[]) => void; onClose: () => void }) {
+  const [view, setView] = useState<"choice" | "people">("choice");
+  const [list, setList] = useState<MapPerson[] | null | "reading">("reading");
+  useEffect(() => {
+    if (view !== "people") return;
+    let live = true;
+    setList("reading");
+    void (people?.() ?? Promise.resolve(null)).catch(() => null).then((r) => { if (live) setList(r); });
+    return () => { live = false; };
+  }, [view, people]);
+  if (view === "people") {
+    const rows: ListMember[] = list === "reading" || list === null ? [] : list.map((m) => ({ id: m.id, name: m.name, initials: m.name.split(/\s+/).map((w) => w[0] ?? "").join("").slice(0, 2).toUpperCase() }));
+    const now = value.who === "people" ? value.people ?? [] : [];
+    return (
+      <PeoplePick anchor={anchor} members={rows} busy={list === "reading"} filterOver={12}
+        empty={list === null ? "The people could not be read." : "Nobody to pick."}
+        isOn={(m) => now.some((x) => x.id === m.id)}
+        face={(m) => <Face m={m} />}
+        onPick={(m) => onPeople(now.some((x) => x.id === m.id) ? now.filter((x) => x.id !== m.id) : [...now, { id: m.id, name: m.name }])}
+        onClose={onClose} />
+    );
+  }
   return (
     <AnchoredMenu anchor={anchor} align="left" minWidth={200} onClose={onClose}>
-      <div className="wfm" style={{ display: "contents" }} aria-label={label}>
-        {options.map((o) => <Row key={o.value} selected={value === o.value} onClick={() => onPick(o.value)}><Check on={value === o.value} /><span className="n">{o.label}</span></Row>)}
+      <div className="wfm" style={{ display: "contents" }}>
+        {(["none", "me", "all"] as const).map((w) => <Row key={w} selected={value.who === w} onClick={() => onPick(w)}><Check on={value.who === w} /><span className="n">{UNASSIGN_LABEL[w]}</span></Row>)}
+        <Row selected={value.who === "people"} onClick={() => setView("people")}><Check on={value.who === "people"} /><span className="n">people…</span></Row>
       </div>
     </AnchoredMenu>
   );
 }
 
 /** The answers to "Assign"; "a person…" goes on to the people, read only when asked for. */
-export function AssignMenu({ anchor, value, people, withNobody, onPick, onClose }: { anchor: Anchor; value: Assign; /** The picker may start at nobody (only a block that asks when it runs). */ withNobody?: boolean; people?: () => Promise<MapPerson[] | null>; onPick: (a: Assign) => void; onClose: () => void }) {
+export function AssignMenu({ anchor, value, people, withNobody, also, onPeople, onPick, onClose }: { anchor: Anchor; value: Assign; /** For a block that asks: the people the question starts with, beside `value.person`. */ also?: { id: number; name: string }[]; /** The picked people changed (the list stays open: a block that asks may start with several). */ onPeople?: (list: { id: number; name: string }[]) => void; /** The picker may start at nobody (only a block that asks when it runs). */ withNobody?: boolean; people?: () => Promise<MapPerson[] | null>; onPick: (a: Assign) => void; onClose: () => void }) {
   const [view, setView] = useState<"choice" | "people">("choice");
   const [list, setList] = useState<MapPerson[] | null | "reading">("reading");
   useEffect(() => {
@@ -76,16 +98,20 @@ export function AssignMenu({ anchor, value, people, withNobody, onPick, onClose 
     return (
       <PeoplePick anchor={anchor} members={rows ?? []} busy={list === "reading"} filterOver={8}
         empty={list === null ? "The people could not be read." : "Nobody to pick."}
-        isOn={(m) => value.who === "person" && value.person?.id === m.id}
+        isOn={(m) => value.who === "person" && (value.person?.id === m.id || !!also?.some((x) => x.id === m.id))}
         face={(m) => <Face m={m} />}
-        onPick={(m) => onPick({ who: "person", person: { id: m.id, name: m.name } })}
+        onPick={(m) => {
+          if (!onPeople) { onPick({ who: "person", person: { id: m.id, name: m.name } }); return; }
+          const now = value.who === "person" && value.person ? [{ id: value.person.id, name: value.person.name }, ...(also ?? [])] : [];
+          onPeople(now.some((x) => x.id === m.id) ? now.filter((x) => x.id !== m.id) : [...now, { id: m.id, name: m.name }]);
+        }}
         onClose={onClose} />
     );
   }
   return (
     <AnchoredMenu anchor={anchor} align="left" minWidth={200} onClose={onClose}>
       <div className="wfm" style={{ display: "contents" }}>
-        {ASSIGN_WHO.filter((w) => w !== "none" || withNobody).map((w) => (
+        {ASSIGN_WHO.filter((w) => (w !== "none" || withNobody) && (w !== "author" || AUTHOR_IS_MEMBER.clickup)).map((w) => (
           <Row key={w} selected={value.who === w} onClick={() => (w === "person" ? setView("people") : onPick({ who: w }))}><Check on={value.who === w} /><span className="n">{w === "none" ? "nobody" : ASSIGN_LABEL[w]}</span></Row>))}
       </div>
     </AnchoredMenu>
@@ -95,7 +121,8 @@ export function AssignMenu({ anchor, value, people, withNobody, onPick, onClose 
 /** The same block, fixed again: its value stays, the question goes. A fixed assign cannot be "nobody", so that goes to the person pressing. */
 const withoutAsk = (b: StepBlock): StepBlock => {
   if (b.type === "move") { const { ask: _a, ...rest } = b; return rest; }
-  if (b.type === "assign") { const { ask: _a, ...rest } = b; return rest.who === "none" ? { type: "assign", who: "me" } : rest; }
+  if (b.type === "assign") { const { ask: _a, also: _o, ...rest } = b; return rest.who === "none" ? { type: "assign", who: "me" } : rest; }
+  if (b.type === "unassign") { const { ask: _a, ...rest } = b; return rest.who === "people" && !rest.people?.length ? { type: "unassign", who: "none" } : rest; }
   return b;
 };
 const hint = (c: ReactNode) => <span className="text-[11px]" style={{ color: "var(--text3)" }}>{c}</span>;
@@ -250,10 +277,10 @@ export function StepBlocks(p: StepBlocksProps) {
     setUndo(null); setOpen(null); setAdded(b.type);
     setSaid(`Added “${titleOf(b.type, trigger, n)}” at position ${shown.length + 1}.`);
   };
-  const setBlock = (type: StepBlock["type"], b: StepBlock, then?: string) => {
+  const setBlock = (type: StepBlock["type"], b: StepBlock, then?: string, keepOpen = false) => {
     commit(shown.map((x) => (x.type === type ? b : x)));
-    setUndo(null); setOpen(null);
-    focusNext.current = then ?? `[data-blk="${type}"] [data-val]`;
+    setUndo(null);
+    if (!keepOpen) { setOpen(null); focusNext.current = then ?? `[data-blk="${type}"] [data-val]`; }
   };
 
   /* ---- a row ---- */
@@ -271,7 +298,8 @@ export function StepBlocks(p: StepBlocksProps) {
         </button>
       );
     }
-    const label = b.type === "unassign" ? UNASSIGN_LABEL[b.who] : b.ask ? `Start at: ${b.who === "none" ? "nobody" : assignLabel(b)}` : assignLabel(b);
+    const unLabel = b.type === "unassign" ? (b.who === "people" ? (b.people ?? []).map((x) => shortName(x.name)).join(", ") || "people…" : UNASSIGN_LABEL[b.who]) : "";
+    const label = b.type === "unassign" ? (b.ask ? `Start at: ${unLabel}` : unLabel) : b.ask ? `Start at: ${b.who === "none" ? "nobody" : b.who === "person" && b.also?.length ? [b.person!.name, ...b.also.map((x) => x.name)].map(shortName).join(", ") : assignLabel(b)}` : assignLabel(b);
     return (
       <button {...common} data-plain="" aria-expanded={open?.type === b.type}
         onClick={(e) => (open?.type === b.type ? setOpen(null) : openAt(b.type, e.currentTarget))}>
@@ -290,7 +318,7 @@ export function StepBlocks(p: StepBlocksProps) {
         <button type="button" data-grip="" className="wfm-grip" disabled={p.frozen} aria-roledescription="drag handle"
           aria-label={`Reorder “${titleOf(b.type, trigger, n)}”. Drag it, or press arrow up and down.`}
           onPointerDown={(e) => startDrag(e, b.type)} onKeyDown={(e) => keyMove(e, i, b)}><GripIcon size={ICON.md} /></button>
-        <span className="wfm-lb"><b id={`${id}-l`} className="text-[13px] inline-flex items-center gap-2"><span className="wfm-gl"><Icon size={ICON.xs} /></span>{titleOf(b.type, trigger, n)}</b>{hint(hintOf(b.type, trigger, n))}{(b.type === "move" || b.type === "assign") && (
+        <span className="wfm-lb"><b id={`${id}-l`} className="text-[13px] inline-flex items-center gap-2"><span className="wfm-gl"><Icon size={ICON.xs} /></span>{titleOf(b.type, trigger, n)}</b>{hint(hintOf(b.type, trigger, n))}{(b.type === "move" || b.type === "assign" || b.type === "unassign") && (
             <button type="button" data-ask="" className="wfm-ask" aria-pressed={b.ask === true} disabled={p.frozen}
               title={b.ask ? "It asks when it runs; the value is where the question starts. Press to fix it." : "Fix this value, or ask when it runs: the value becomes where the question starts."}
               onClick={() => setBlock(b.type, b.ask ? withoutAsk(b) : { ...b, ask: true } as StepBlock, '[data-blk="' + b.type + '"] [data-ask]')}>Ask when it runs</button>
@@ -337,11 +365,13 @@ export function StepBlocks(p: StepBlocksProps) {
         </AnchoredMenu>
       )}
       {cur?.type === "unassign" && (
-        <ChoiceMenu<Unassign> anchor={anchorRef} label={`Who comes off the ${n.item}`} value={cur.who} options={UNASSIGN_OPTIONS}
-          onPick={(who) => setBlock("unassign", { type: "unassign", who })} onClose={() => { setOpen(null); focusNext.current = '[data-blk="unassign"] [data-val]'; }} />
+        <UnassignMenu anchor={anchorRef} value={cur} people={p.people}
+          onPick={(who) => setBlock("unassign", { type: "unassign", who, ...(cur.ask ? { ask: true as const } : null) })}
+          onPeople={(list) => setBlock("unassign", { type: "unassign", who: list.length ? "people" : "none", ...(list.length ? { people: list } : null), ...(cur.ask ? { ask: true as const } : null) }, undefined, true)}
+          onClose={() => { setOpen(null); focusNext.current = '[data-blk="unassign"] [data-val]'; }} />
       )}
       {cur?.type === "assign" && (
-        <AssignMenu anchor={anchorRef} value={cur} people={p.people} withNobody={cur.ask === true} onPick={(a) => setBlock("assign", a.who === "none" && !cur.ask ? cur : { type: "assign", ...(cur.ask ? { ask: true as const } : null), ...a })}
+        <AssignMenu anchor={anchorRef} value={cur} people={p.people} withNobody={cur.ask === true} {...(cur.ask ? { also: cur.also, onPeople: (list: { id: number; name: string }[]) => setBlock("assign", list.length ? { type: "assign", ask: true, who: "person", person: list[0]!, ...(list.length > 1 ? { also: list.slice(1) } : null) } : { type: "assign", ask: true, who: "none" }, undefined, true) } : null)} onPick={(a) => setBlock("assign", a.who === "none" && !cur.ask ? cur : { type: "assign", ...(cur.ask ? { ask: true as const } : null), ...a })}
           onClose={() => { setOpen(null); focusNext.current = '[data-blk="assign"] [data-val]'; }} />
       )}
     </div>

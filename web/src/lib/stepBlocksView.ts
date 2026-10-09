@@ -8,6 +8,7 @@ import type { StepBlock, HandoffUnassign } from "../../../shared/providers.ts";
 import { blockRefusal, type StepTrigger } from "../../../shared/stepBlocks.ts";
 import type { StepKind } from "./workflowMap.ts";
 import { assignWords } from "./stepAssign.ts";
+import { pickSentence } from "./askAtRun.ts";
 
 /** The places that take blocks. The note and the assigned list are single controls and have none. */
 export const triggerOf = (k: StepKind): StepTrigger | null => (k === "move" || k === "menu" || k === "merge" ? k : null);
@@ -28,9 +29,12 @@ export function blockClause(trigger: StepTrigger, b: StepBlock, o: { item: strin
     if (trigger === "merge") return o.status ? `preselect ${o.status}` : "preselect nothing (“Leave it there”)";
     return `move the ${o.item} to ${o.status ?? "(pick a status)"}`;
   }
-  if (b.type === "unassign") return b.who === "none" ? UNASSIGN_WORDS.none : `${UNASSIGN_WORDS[b.who]} the ${o.item}`;
+  if (b.type === "unassign") {
+    const who = b.who === "people" ? ((b.people ?? []).length ? `take ${pickSentence((b.people ?? []).map((x) => ({ kind: "person" as const, id: x.id, name: x.name })))} off the ${o.item}` : `take nobody off the ${o.item}`) : b.who === "none" ? UNASSIGN_WORDS.none : `${UNASSIGN_WORDS[b.who]} the ${o.item}`;
+    return b.ask ? `ask who to take off the ${o.item}, starting with: ${who.replace(/^take /, "").replace(` off the ${o.item}`, "")}` : who;
+  }
   const w = assignWords(b);
-  const who = w === "whoever presses it" ? "you" : (w ?? "nobody");
+  const who = b.who === "person" && b.also?.length ? pickSentence([b.person!, ...b.also].map((x) => ({ kind: "person" as const, id: x.id, name: x.name }))) : w === "whoever presses it" ? "you" : (w ?? "nobody");
   return b.ask ? `ask who to assign it to, starting at ${who}` : `assign it to ${who}`;
 }
 

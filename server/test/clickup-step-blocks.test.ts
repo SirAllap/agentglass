@@ -19,12 +19,12 @@ const person = { who: "person" as const, person: { id: 8, name: "Sam Rivera" } }
 
 describe("saving blocks", () => {
   test("a list is stored in order and the three old keys follow it", () => {
-    const r = save({ handoff: { enabled: true, blocks: [{ type: "assign", who: "author" }, { type: "move", statusNames: ["Ready for QA"] }, { type: "unassign", who: "all" }] } });
+    const r = save({ handoff: { enabled: true, blocks: [{ type: "assign", who: "me" }, { type: "move", statusNames: ["Ready for QA"] }, { type: "unassign", who: "all" }] } });
     expect(r.ok).toBe(true);
     P.__setPrefsPath(file);
     const h = P.clickupPrefs().handoff;
     expect(h.blocks!.map((b) => b.type)).toEqual(["assign", "move", "unassign"]);
-    expect(h).toMatchObject({ enabled: true, statusNames: ["Ready for QA"], unassign: "all", assign: { who: "author" } });
+    expect(h).toMatchObject({ enabled: true, statusNames: ["Ready for QA"], unassign: "all", assign: { who: "me" } });
   });
   test("a person is kept whole and the block's kind is not part of the assignment", () => {
     save({ merge: { enabled: true, blocks: [{ type: "assign", ...person }] } });
@@ -95,9 +95,9 @@ describe("the old shape still reads and still writes", () => {
     expect(P.clickupPrefs().handoff).toMatchObject({ enabled: true, statusNames: ["qa"], assign: { who: "me" }, blocks: [{ type: "move", statusNames: ["qa"] }, { type: "assign", who: "me" }] });
   });
   test("what is written on disk carries both, and reading it back gives the same blocks", () => {
-    save({ review: { enabled: true, blocks: [{ type: "move", statusNames: ["code review"] }, { type: "assign", who: "author" }] } });
+    save({ review: { enabled: true, blocks: [{ type: "move", statusNames: ["code review"] }, { type: "assign", who: "me" }] } });
     const disk = JSON.parse(readFileSync(file, "utf8")).review;
-    expect(disk).toMatchObject({ statusNames: ["code review"], assign: { who: "author" }, blocks: [{ type: "move" }, { type: "assign" }] });
+    expect(disk).toMatchObject({ statusNames: ["code review"], assign: { who: "me" }, blocks: [{ type: "move" }, { type: "assign" }] });
     P.__setPrefsPath(file);
     expect(P.clickupPrefs().review.blocks).toEqual(disk.blocks);
   });
@@ -110,10 +110,10 @@ describe("the old shape still reads and still writes", () => {
 
 describe("a block that asks when it runs", () => {
   test("is saved with its starting choice, and the old keys see no assignment", () => {
-    expect(save({ merge: { enabled: true, blocks: [{ type: "move", statusNames: ["done"] }, { type: "assign", ask: true, who: "author" }] } }).ok).toBe(true);
+    expect(save({ merge: { enabled: true, blocks: [{ type: "move", statusNames: ["done"] }, { type: "assign", ask: true, who: "me" }] } }).ok).toBe(true);
     P.__setPrefsPath(file);
     const g = P.clickupPrefs().merge;
-    expect(g.blocks).toEqual([{ type: "move", statusNames: ["done"] }, { type: "assign", ask: true, who: "author" }]);
+    expect(g.blocks).toEqual([{ type: "move", statusNames: ["done"] }, { type: "assign", ask: true, who: "me" }]);
     expect(g).toMatchObject({ statusNames: ["done"], assign: { who: "none" } });
   });
   test("nobody is a starting choice only for a block that asks", () => {
@@ -121,20 +121,56 @@ describe("a block that asks when it runs", () => {
     const r = save({ handoff: { blocks: [{ type: "assign", who: "none" }] } });
     expect(r.ok).toBe(false);
   });
-  test("a move can ask, and taking people off cannot yet", () => {
+  test("a move can ask, and so can taking people off", () => {
     expect(save({ handoff: { enabled: true, blocks: [{ type: "move", statusNames: ["qa"], ask: true }] } }).ok).toBe(true);
     P.__setPrefsPath(file);
     expect(P.clickupPrefs().handoff.blocks).toEqual([{ type: "move", statusNames: ["qa"], ask: true }]);
-    const r = save({ handoff: { blocks: [{ type: "unassign", who: "me", ask: true }] } });
-    expect(r.ok).toBe(false);
-    expect((r as { error: string }).error).toMatch(/does not ask when it runs/);
+    expect(save({ handoff: { blocks: [{ type: "unassign", who: "me", ask: true }] } }).ok).toBe(true);
     expect(save({ handoff: { blocks: [{ type: "assign", ask: "yes", who: "me" }] } }).ok).toBe(false);
   });
   test("a save that only knows the old keys does not drop the question", () => {
     save({ handoff: { enabled: true, blocks: [{ type: "move", statusNames: ["qa"], ask: true }, { type: "assign", ask: true, who: "me" }] } });
     save({ handoff: { unassign: "all" } });
     expect(P.clickupPrefs().handoff.blocks).toEqual([{ type: "move", statusNames: ["qa"], ask: true }, { type: "assign", ask: true, who: "me" }, { type: "unassign", who: "all" }]);
-    save({ handoff: { assign: { who: "author" } } });
-    expect(P.clickupPrefs().handoff.blocks!.filter((b) => b.type === "assign")).toEqual([{ type: "assign", who: "author" }]);
+    save({ handoff: { assign: { who: "me" } } });
+    expect(P.clickupPrefs().handoff.blocks!.filter((b) => b.type === "assign")).toEqual([{ type: "assign", who: "me" }]);
+  });
+});
+
+describe("the pull request's author is not a ClickUp choice", () => {
+  test("a new save of it is refused with the way out", () => {
+    for (const patch of [{ handoff: { assign: { who: "author" } } }, { merge: { blocks: [{ type: "assign", who: "author" }] } }]) {
+      const r = save(patch);
+      expect(r.ok).toBe(false);
+      expect((r as { error: string }).error).toMatch(/different systems/);
+    }
+  });
+  test("a saved one becomes ask-when-it-runs starting at nobody, in the old keys and in blocks, and the file is read, not refused", () => {
+    writeFileSync(file, JSON.stringify({
+      handoff: { enabled: true, statusNames: ["qa"], unassign: "all", assign: { who: "author" } },
+      review: { enabled: true, statusNames: ["code review"], assign: { who: "none" }, blocks: [{ type: "move", statusNames: ["code review"] }, { type: "assign", who: "author" }] },
+    }));
+    P.__setPrefsPath(file);
+    const p = P.clickupPrefs();
+    expect(p.handoff.blocks).toEqual([{ type: "move", statusNames: ["qa"] }, { type: "unassign", who: "all" }, { type: "assign", ask: true, who: "none" }]);
+    expect(p.handoff.assign).toEqual({ who: "none" });
+    expect(p.review.blocks).toEqual([{ type: "move", statusNames: ["code review"] }, { type: "assign", ask: true, who: "none" }]);
+    expect(P.migrateAuthorChoice({ handoff: { assign: { who: "author" } }, merge: { assign: { who: "me" } } })).toEqual(["handoff"]);
+  });
+});
+
+describe("taking named people off", () => {
+  test("is saved with the people, and the old keys see none", () => {
+    expect(save({ handoff: { enabled: true, blocks: [{ type: "unassign", who: "people", people: [{ id: 3, name: "Sam Rivera" }, { id: 4, name: "Priya Nair" }, { id: 3, name: "Sam again" }] }] } }).ok).toBe(true);
+    P.__setPrefsPath(file);
+    const g = P.clickupPrefs().handoff;
+    expect(g.blocks).toEqual([{ type: "unassign", who: "people", people: [{ id: 3, name: "Sam Rivera" }, { id: 4, name: "Priya Nair" }] }]);
+    expect(g.unassign).toBe("none");
+  });
+  test("asks, starting at people, or at nobody with an empty list", () => {
+    expect(save({ handoff: { enabled: true, blocks: [{ type: "unassign", who: "people", people: [], ask: true }] } }).ok).toBe(true);
+    expect(save({ handoff: { blocks: [{ type: "unassign", who: "people", people: [] }] } }).ok).toBe(false);
+    expect(save({ handoff: { blocks: [{ type: "unassign", who: "all", people: [{ id: 1, name: "A" }] }] } }).ok).toBe(false);
+    expect(save({ handoff: { blocks: [{ type: "unassign", who: "people", people: [{ id: -1, name: "A" }] }] } }).ok).toBe(false);
   });
 });

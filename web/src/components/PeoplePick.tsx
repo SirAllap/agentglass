@@ -43,6 +43,8 @@ export interface PeoplePickProps {
   /** Drawn for each row: the app's own face, whichever component that is where
    *  this is used. */
   face: (m: ListMember) => ReactNode;
+  /** A heading to draw before this row, when it opens a group ("Suggested", "Everyone"). */
+  groupBefore?: (m: ListMember, prev: ListMember | undefined) => string | undefined;
   /** A few words after a name, for why somebody is up the list ("pull request author · on the card"). */
   note?: (m: ListMember) => string | undefined;
   /** After the list, outside the scroll: a choice that is not a person ("Nobody"). */
@@ -94,9 +96,11 @@ export function PeoplePick(p: PeoplePickProps) {
           const on = p.isOn(m);
           const saving = p.isSaving?.(m) ?? false;
           const divide = i > 0 && !!p.dividerBefore?.(m, shown[i - 1]!);
+          const heading = p.groupBefore?.(m, shown[i - 1]);
           return (
             <div key={m.id}>
               {divide && <div className="my-1" style={{ borderTop: LINE }} />}
+              {heading && <div className="px-2 pt-1.5 pb-0.5 text-[9.5px] uppercase tracking-[0.1em]" style={{ color: "var(--text4)" }}>{heading}</div>}
               <button className="w-full text-left px-2 py-1.5 hover:bg-white/5 flex items-center gap-2 disabled:opacity-70"
                 disabled={saving} onClick={() => p.onPick(m)}>
                 {p.face(m)}

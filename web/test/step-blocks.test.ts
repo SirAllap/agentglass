@@ -90,7 +90,7 @@ describe("a file from before blocks is the same step", () => {
   });
   test("round trip: blocks to the three keys and back lose nothing, for every combination the page can build", () => {
     const person = { who: "person" as const, person: { id: 7, name: "Sam Rivera" } };
-    for (const names of [[], ["qa"], ["qa", "testing"]]) for (const un of ["none", "me", "all"] as const) for (const as of [{ who: "none" as const }, { who: "me" as const }, { who: "author" as const }, person]) {
+    for (const names of [[], ["qa"], ["qa", "testing"]]) for (const un of ["none", "me", "all"] as const) for (const as of [{ who: "none" as const }, { who: "me" as const }, person]) {
       const g = legacy({ statusNames: names, unassign: un, assign: as });
       const blocks = blocksFromLegacy("move", g);
       const back = legacyFromBlocks(blocks);

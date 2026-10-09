@@ -4,9 +4,9 @@ import { PeoplePick } from "./PeoplePick.tsx";
 import { CaretIcon, DoneIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { EDGE, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
-import type { ListMember, StepAssign } from "../../../shared/providers.ts";
+import { AUTHOR_IS_MEMBER, type ListMember } from "../../../shared/providers.ts";
 import type { Ensure, PrAuthor } from "../lib/stepAssign.ts";
-import { askModel, filterAsk, pickName, pickToEnsure, startingPick, type AskModel, type Picked } from "../lib/askAtRun.ts";
+import { askModel, isPicked, pickName, pickSentence, pickedIds, pickToEnsure, startingPick, startingTakeOff, togglePick, type AskModel, type Picked } from "../lib/askAtRun.ts";
 
 /**
  * Who a block that asks when it runs puts on the card, chosen where the card is being acted on.
@@ -23,8 +23,6 @@ export interface AskAssign {
   setPick: (p: Picked) => void;
   /** The same choice as the write understands it. */
   ensure: Ensure;
-  /** Said once when the setting could not be honoured (an author who maps to nobody). */
-  note?: string;
   /** The members are known (or could not be read): the picker is not guessing any more. */
   ready: boolean;
 }
@@ -32,7 +30,8 @@ export interface AskAssign {
 export function useAskAssign(o: {
   on: boolean;
   listId?: string;
-  start?: StepAssign;
+  start?: Parameters<typeof startingPick>[0];
+  /** Only used where the tracker's accounts are GitHub's (AUTHOR_IS_MEMBER); for ClickUp it is ignored. */
   author?: PrAuthor | null;
   onCard?: readonly { id?: number | null }[];
   /** For a caller that already holds the members: no read at all. */
@@ -47,12 +46,14 @@ export function useAskAssign(o: {
   }, [o.on, o.listId, o.members]);
   const members = o.members !== undefined ? o.members : read === "none" ? [] : read;
   const ready = !o.on || members !== null;
-  const startKey = JSON.stringify([o.start ?? null, o.author?.login ?? null, members?.length ?? -1]);
-  const begin = useMemo(() => startingPick(o.start, { members, author: o.author }), [startKey]);
+  const author = o.author;
+  const authorIsMember = AUTHOR_IS_MEMBER.clickup === true;
+  const startKey = JSON.stringify([o.start ?? null, author?.login ?? null, members?.length ?? -1]);
+  const begin = useMemo(() => startingPick(o.start, { members, author, authorIsMember }), [startKey]);
   const [chosen, setChosen] = useState<Picked | null>(null);
   const pick = chosen ?? begin.pick;
-  const model = useMemo(() => askModel({ members, author: o.author, onCard: o.onCard }), [members, o.author?.login, JSON.stringify(o.onCard ?? [])]);
-  return { model, members, pick, setPick: setChosen, ensure: pickToEnsure(pick), ...(chosen ? null : begin.note ? { note: begin.note } : null), ready };
+  const model = useMemo(() => askModel({ members, author, authorIsMember, onCard: o.onCard }), [members, author?.login, JSON.stringify(o.onCard ?? [])]);
+  return { model, members, pick, setPick: setChosen, ensure: pickToEnsure(pick), ready };
 }
 
 export function Face({ m }: { m: Pick<ListMember, "avatar" | "color" | "initials"> }) {
@@ -62,40 +63,51 @@ export function Face({ m }: { m: Pick<ListMember, "avatar" | "color" | "initials
 }
 
 /**
- * The picker: a button that says who, and the app's one people picker under it (components/PeoplePick:
- * the same list, filter box and clamp the card's "Assigned" select uses), with the suggestions first
- * and "Nobody" as its own choice below the list.
+ * The take-off's question: who comes off the card, among the people on it. Same shape as the assign hook, over
+ * the card's own people (nothing to read).
  */
-export function AssignPicker({ state, disabled, label = "Assign to" }: { state: AskAssign; disabled?: boolean; label?: string }) {
+export function useAskTakeOff(o: { on: boolean; cardPeople: readonly ListMember[]; start?: Parameters<typeof startingTakeOff>[0] }): AskAssign & { ids: number[] } {
+  const key = JSON.stringify([o.start ?? null, o.cardPeople.map((m) => m.id)]);
+  const begin = useMemo(() => startingTakeOff(o.start, { cardPeople: o.cardPeople }), [key]);
+  const [chosen, setChosen] = useState<Picked | null>(null);
+  const pick = chosen ?? begin;
+  const members = [...o.cardPeople];
+  const model = useMemo(() => askModel({ members, onCard: members }), [key]);
+  return { model, members, pick, setPick: setChosen, ensure: pickToEnsure(pick), ready: true, ids: pickedIds(pick, members) };
+}
+
+/**
+ * The picker: a button that says who (their faces, stacked, and their names), and the app's one people picker
+ * under it (components/PeoplePick, as the card's "Assigned" select draws it: filter box, ticks, stays open, the card's
+ * people first, then you, a rule, then everyone). A tick adds a person or takes them off the choice; "Nobody" clears it.
+ */
+export function AssignPicker({ state, disabled, label = "Assign to", nobody = "leave the card’s people as they are" }: { state: AskAssign; disabled?: boolean; label?: string; nobody?: string }) {
   const [open, setOpen] = useState(false);
   const btn = useRef<HTMLButtonElement>(null);
   const { model, pick, setPick } = state;
-  const who = pick.kind === "person" ? state.members?.find((m) => m.id === pick.id) : undefined;
-  const tags = new Map(model.rows.map((r) => [r.member.id, r.tags] as const));
+  const faces = pick.slice(0, 3).map((x) => (x.kind === "me" ? state.members?.find((m) => m.me) : state.members?.find((m) => m.id === x.id)));
+  const onCard = new Set(model.rows.filter((r) => r.onCard).map((r) => r.member.id));
   const close = () => { setOpen(false); btn.current?.focus(); };
   return (
     <span className="inline-flex flex-col gap-1 items-start" data-assign-picker="">
-      <button ref={btn} type="button" disabled={disabled} aria-haspopup="listbox" aria-expanded={open} aria-label={`${label}: ${pickName(pick)}`} title={`${label}: ${pickName(pick)}`}
+      <button ref={btn} type="button" disabled={disabled} aria-haspopup="listbox" aria-expanded={open} aria-label={`${label}: ${pickName(pick)}`} title={`${label}: ${pickSentence(pick)}`}
         onClick={() => setOpen((v) => !v)}
         className="inline-flex items-center gap-2 text-[11px] px-2 py-1 rounded disabled:opacity-50" style={{ border: EDGE, color: "var(--text)", background: "var(--bg)" }}>
-        {who ? <Face m={who} /> : null}
-        <span className="truncate max-w-[200px]">{pickName(pick)}</span>
+        {faces.some(Boolean) && <span className="inline-flex items-center">{faces.map((m, i) => m && <span key={m.id} className="inline-flex rounded-full" style={{ marginLeft: i ? -4 : 0, boxShadow: "0 0 0 1.5px var(--bg)" }}><Face m={m} /></span>)}</span>}
+        <span className="truncate max-w-[220px]">{pickName(pick)}</span>
         <CaretIcon size={ICON.xs} />
       </button>
-      {state.note && <span className="text-[10px]" role="status" style={{ color: "var(--warning-ink)" }}>{state.note}</span>}
-      {model.authorUnmapped && <span className="text-[10px]" style={{ color: "var(--text3)" }}>No member matches “{model.authorUnmapped}”, the pull request’s author.</span>}
       {open && (
-        <PeoplePick anchor={btn} members={model.rows.map((r) => r.member)} busy={state.members === null} filterOver={8}
-          isOn={(m) => pick.kind === "person" && pick.id === m.id}
-          dividerBefore={(m, prev) => (tags.get(prev.id)?.length ?? 0) > 0 && (tags.get(m.id)?.length ?? 0) === 0}
-          note={(m) => (tags.get(m.id) ?? []).filter((t) => t !== "you").join(" · ") || undefined}
+        <PeoplePick anchor={btn} members={model.rows.map((r) => r.member)} busy={state.members === null} filterOver={12}
+          isOn={(m) => isPicked(pick, m)}
+          dividerBefore={(m, prev) => onCard.has(m.id) !== onCard.has(prev.id)}
           face={(m) => <Face m={m} />}
-          onPick={(m) => { setPick({ kind: "person", id: m.id, name: m.name }); close(); }}
+          onPick={(m) => setPick(togglePick(pick, m))}
           onClose={close}
-          footer={<button type="button" className="w-full text-left px-2 py-1.5 hover:bg-white/5 flex items-center gap-2 text-[11.5px]" style={{ color: pick.kind === "nobody" ? "var(--success)" : "var(--text2)" }}
-            onClick={() => { setPick({ kind: "nobody" }); close(); }}>
-            <span className="flex-1">Nobody</span><span className="text-[10px]" style={{ color: "var(--text3)" }}>leave the card’s people as they are</span>
-            {pick.kind === "nobody" ? <DoneIcon size={ICON.xs} /> : null}
+          footer={<button type="button" className="w-full text-left px-2 py-1.5 hover:bg-white/5 flex items-center gap-2 text-[11.5px]" style={{ color: pick.length === 0 ? "var(--success)" : "var(--text2)" }}
+            onClick={() => { setPick([]); close(); }}>
+            <span className="flex-1">Nobody</span><span className="text-[10px]" style={{ color: "var(--text3)" }}>{nobody}</span>
+            {pick.length === 0 ? <DoneIcon size={ICON.xs} /> : null}
           </button>} />
       )}
     </span>

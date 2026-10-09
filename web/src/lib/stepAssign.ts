@@ -43,7 +43,11 @@ type Person = { id?: number | null; me?: boolean; name?: string };
 
 const fold = (s: string) => s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/\s+/g, " ").trim();
 
-/** The one member this author is, or null. See the file's note for why it is this strict. */
+/**
+ * The one member this author is, or null. Only for a tracker whose accounts ARE its users' GitHub
+ * accounts (a capability a provider states, see AUTHOR_IS_MEMBER): ClickUp's are a different system
+ * with a different identity, and no email or name makes a GitHub user a ClickUp member.
+ */
 export function authorMember(author: PrAuthor | null | undefined, members: readonly ListMember[] | null | undefined): ListMember | null {
   if (!author || !members?.length) return null;
   const email = author.email?.trim().toLowerCase();
@@ -63,6 +67,8 @@ export type Ensure =
   | { kind: "none" }
   | { kind: "me" }
   | { kind: "person"; id: number; name: string }
+  /** Several people, each ensured the way one would be: added when missing, never anybody else taken off. */
+  | { kind: "many"; list: ReadonlyArray<{ kind: "me" } | { kind: "person"; id: number; name: string }> }
   | { kind: "unmapped"; why: string };
 
 export function resolveEnsure(
@@ -89,6 +95,8 @@ export interface CardWrite { status?: string; add?: number[]; rem?: number[]; ad
  * say afterwards ("you" for the account that pressed); null when nobody is added.
  */
 export function stepChanges(o: {
+  /** Take exactly these people off (those of them on the card), instead of the `unassign` rule. */
+  takeOff?: readonly number[];
   /** Absent for a step with no move block: the card stays where it is and only its people change. */
   status?: string;
   people: readonly Person[] | undefined;
@@ -96,21 +104,26 @@ export function stepChanges(o: {
   ensure: Ensure;
 }): { write: CardWrite; named: string | null; stays: boolean } {
   const people = o.people ?? [];
-  let rem = handoffRemovals([...people] as { id?: number | null; me?: boolean }[], o.unassign);
+  let rem = o.takeOff
+    ? people.map((p) => p.id).filter((n): n is number => n != null && o.takeOff!.includes(n))
+    : handoffRemovals([...people] as { id?: number | null; me?: boolean }[], o.unassign);
   const write: CardWrite = o.status ? { status: o.status } : {};
-  let named: string | null = null;
+  const names: string[] = [];
   let stays = false;
   const e = o.ensure;
-  if (e.kind === "me") {
-    const mine = people.find((p) => p.me && p.id != null);
-    if (mine) { rem = rem.filter((id) => id !== mine.id); stays = true; }
-    else { write.addMe = true; named = "you"; }
-  } else if (e.kind === "person") {
-    rem = rem.filter((id) => id !== e.id);
-    if (people.some((p) => p.id === e.id)) stays = true;
-    else { write.add = [e.id]; named = e.name; }
+  for (const x of e.kind === "many" ? e.list : [e]) {
+    if (x.kind === "me") {
+      const mine = people.find((p) => p.me && p.id != null);
+      if (mine) { rem = rem.filter((id) => id !== mine.id); stays = true; }
+      else { write.addMe = true; names.push("you"); }
+    } else if (x.kind === "person") {
+      rem = rem.filter((id) => id !== x.id);
+      if (people.some((p) => p.id === x.id)) stays = true;
+      else { write.add = [...(write.add ?? []), x.id]; names.push(x.name); }
+    }
   }
   if (rem.length) write.rem = rem;
+  const named = names.length ? (names.length === 1 ? names[0]! : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`) : null;
   return { write, named, stays };
 }
 
@@ -138,11 +151,12 @@ export function pressSentence(o: {
 /** What the press said it did about the assignment, for the line after it. */
 export const assignedNote = (named: string | null): string => (named ? ` · assigned ${named}` : "");
 
-/** The tracker id an ensure means, for a form that already holds the members (no request). */
-export function ensureId(e: Ensure, members: readonly ListMember[] | null | undefined): number | null {
-  if (e.kind === "person") return e.id;
-  if (e.kind === "me") return members?.find((m) => m.me)?.id ?? null;
-  return null;
+/** The tracker ids an ensure means, for a form that already holds the members (no request). */
+export function ensureIds(e: Ensure, members: readonly ListMember[] | null | undefined): number[] {
+  if (e.kind === "person") return [e.id];
+  if (e.kind === "me") { const id = members?.find((m) => m.me)?.id; return id == null ? [] : [id]; }
+  if (e.kind === "many") return e.list.flatMap((x) => ensureIds(x, members));
+  return [];
 }
 
 /** The pull request's author as this module reads it. */

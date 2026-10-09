@@ -517,6 +517,10 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
 function assignLine(e: Ensure, people: { id?: number | null; me?: boolean }[] | undefined): string {
   if (e.kind === "me") return people?.some((p) => p.me) ? "You are already on the card." : "and puts you on the card.";
   if (e.kind === "person") return people?.some((p) => p.id === e.id) ? `${e.name} is already on the card.` : `and puts ${e.name} on the card.`;
+  if (e.kind === "many") {
+    const missing = e.list.filter((x) => (x.kind === "me" ? !people?.some((p) => p.me) : !people?.some((p) => p.id === x.id))).map((x) => (x.kind === "me" ? "you" : x.name));
+    return missing.length ? `and puts ${missing.length === 1 ? missing[0] : `${missing.slice(0, -1).join(", ")} and ${missing[missing.length - 1]}`} on the card.` : "Everyone picked is already on the card.";
+  }
   return "";
 }
 

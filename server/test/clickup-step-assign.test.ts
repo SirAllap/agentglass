@@ -83,7 +83,7 @@ describe("the saved row", () => {
     const pick = { who: "person", person: { id: 8, name: "Sam Rivera" } } as const;
     expect(P.setClickupPrefs({ handoff: { assign: { who: "me" } } }).ok).toBe(true);
     expect(P.clickupPrefs().handoff.assign).toEqual({ who: "me" });
-    expect(P.setClickupPrefs({ review: { assign: { who: "author" } } }).ok).toBe(true);
+    expect(P.setClickupPrefs({ review: { assign: { who: "author" } } }).ok).toBe(false); // not a ClickUp choice any more
     expect(P.setClickupPrefs({ merge: { assign: pick } }).ok).toBe(true);
     P.__setPrefsPath(file);
     expect(P.clickupPrefs().merge.assign).toEqual(pick);

@@ -17,7 +17,7 @@ import { CLICKUP, clickupRemove, clickupSteps } from "../src/lib/clickupWorkflow
 import { partitionUnits } from "../src/lib/workflowLayout.ts";
 import type { MapSpace } from "../src/lib/workflowMap.ts";
 import {
-  assignLabel, assignWords, authorMember, ensureId, pressSentence, resolveEnsure, stepChanges, type Assign, type Ensure,
+  assignLabel, assignWords, authorMember, ensureIds, pressSentence, resolveEnsure, stepChanges, type Assign, type Ensure,
 } from "../src/lib/stepAssign.ts";
 
 const member = (id: number, name: string, extra: Partial<ListMember> = {}): ListMember => ({ id, name, initials: name.slice(0, 2), ...extra });
@@ -73,10 +73,11 @@ describe("who the choice means", () => {
     expect(resolveEnsure({ who: "author" }, { author: { login: "sr", name: "Sam Rivera" }, members: null }).kind).toBe("unmapped");
   });
   test("for a form that already holds the members, the id is read without a request", () => {
-    expect(ensureId({ kind: "me" }, MEMBERS)).toBe(1);
-    expect(ensureId({ kind: "me" }, null)).toBeNull();
-    expect(ensureId({ kind: "person", id: 9, name: "x" }, null)).toBe(9);
-    expect(ensureId({ kind: "unmapped", why: "x" }, MEMBERS)).toBeNull();
+    expect(ensureIds({ kind: "me" }, MEMBERS)).toEqual([1]);
+    expect(ensureIds({ kind: "me" }, null)).toEqual([]);
+    expect(ensureIds({ kind: "person", id: 9, name: "x" }, null)).toEqual([9]);
+    expect(ensureIds({ kind: "unmapped", why: "x" }, MEMBERS)).toEqual([]);
+    expect(ensureIds({ kind: "many", list: [{ kind: "me" }, { kind: "person", id: 9, name: "x" }] }, MEMBERS)).toEqual([1, 9]);
   });
 });
 
@@ -166,10 +167,10 @@ describe("what is saved", () => {
   test("a step carries what was saved on it, and only the steps that move a status", () => {
     const pick = { who: "person", person: { id: 2, name: "Sam Rivera" } } as const;
     const steps = clickupSteps(base({
-      handoff: { enabled: true, statusNames: ["qa"], unassign: "none", assign: { who: "me" } }, review: { enabled: true, statusNames: ["review"], assignReviewer: false, assign: { who: "author" } },
+      handoff: { enabled: true, statusNames: ["qa"], unassign: "none", assign: { who: "me" } }, review: { enabled: true, statusNames: ["review"], assignReviewer: false, assign: { who: "me" } },
       merge: { enabled: true, statusNames: ["done"], assign: pick },
     } as never));
-    expect(steps.map((s) => [s.kind, s.assign.who])).toEqual([["move", "me"], ["menu", "author"], ["merge", "person"]]);
+    expect(steps.map((s) => [s.kind, s.assign.who])).toEqual([["move", "me"], ["menu", "me"], ["merge", "person"]]);
   });
   test("removing a step takes its assignment with it", () => {
     for (const k of ["move", "menu", "merge"] as const) {
@@ -187,7 +188,7 @@ describe("the map", () => {
     onAdd: () => {}, onBlocks: () => {}, onRemove: () => {}, onRetry: () => {},
   })).replace(/<style>[\s\S]*?<\/style>/g, "");
   const p = {
-    handoff: { enabled: true, statusNames: ["ready for deployment"], unassign: "all", assign: { who: "author" } },
+    handoff: { enabled: true, statusNames: ["ready for deployment"], unassign: "all", assign: { who: "me" } },
     review: { enabled: true, statusNames: ["code review"], assignReviewer: true, assign: { who: "none" } },
     merge: { enabled: true, statusNames: ["done"], assign: { who: "person", person: { id: 2, name: "Sam Rivera" } } },
     flows: { noteOnCard: true },
@@ -200,11 +201,11 @@ describe("the map", () => {
     for (const k of ["people", "note"]) expect(card(k)).not.toContain("data-blk=");
   });
   test("the row says the saved choice, and an unassigned step has no assign row at all", () => {
-    expect(card("move")).toContain(">the pull request’s author<");
+    expect(card("move")).toContain(">me — whoever presses it<");
     expect(card("merge")).toContain(">Sam Rivera<");
   });
   test("the sentence reads what will happen, in the order of the blocks", () => {
-    expect(card("move")).toContain("Press it: move the card to ready for deployment, take everyone off the card, then assign it to the pull request’s author.");
+    expect(card("move")).toContain("Press it: move the card to ready for deployment, take everyone off the card, then assign it to you.");
     expect(card("menu")).toContain("Pick it: move the card to code review.");
     expect(card("merge")).toContain("Confirm the merge: preselect done, then assign it to Sam Rivera.");
   });
@@ -247,6 +248,6 @@ describe("the places that press it", () => {
   });
   test("the review menu adds nobody when the status is left where it is", async () => {
     const panel = await read("components/PrPanel.tsx");
-    expect(panel).toContain("const ensured = stepOn && (!moveOn || movesStatus) ? ensureId(ensure, members) : null;");
+    expect(panel).toContain("const ensuredKey = (stepOn && (!moveOn || movesStatus) ? ensureIds(ensure, members) : []).join(\",\");");
   });
 });

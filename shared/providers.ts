@@ -556,6 +556,14 @@ export type HandoffUnassign = "none" | "me" | "all";
  * replaced: the person is added when missing and everybody else stays.
  */
 export type AssignWho = "none" | "me" | "author" | "person";
+
+/**
+ * Is a pull request's author the same person as a member of this tracker? Only where the tracker's
+ * accounts are GitHub accounts (GitHub Issues would be). ClickUp's are not: a GitHub login and a ClickUp
+ * member are different systems and never the same identity, so nothing here guesses one from the other
+ * and "the pull request's author" is not a choice ClickUp offers.
+ */
+export const AUTHOR_IS_MEMBER: Record<string, boolean> = { clickup: false };
 export interface StepAssign {
   who: AssignWho;
   /** Only with `who: "person"`: the member's tracker id, and the name it had when chosen. */
@@ -574,12 +582,16 @@ export type StepBlock =
    * With `ask` the names are the starting choice, and the person picks the status when it runs.
    */
   | { type: "move"; statusNames: string[]; fallback?: boolean; ask?: true }
-  | { type: "unassign"; who: HandoffUnassign }
+  /**
+   * Take people off the card. `who: "people"` names them (`people`); `none`, `me` and `all` are the fixed
+   * choices. With `ask` the person ticks who comes off when it runs, starting at this value.
+   */
+  | { type: "unassign"; who: HandoffUnassign | "people"; people?: { id: number; name: string }[]; ask?: true }
   /**
    * Assign the card. With `ask` the person is picked when it runs, and `who` is where the picker starts
    * (`none` is "nobody"; without `ask` that is not a block, it is the absence of one).
    */
-  | ({ type: "assign"; ask?: true } & StepAssign);
+  | ({ type: "assign"; ask?: true; /** More people the question starts with, beside `person` (only with `ask`). */ also?: { id: number; name: string }[] } & StepAssign);
 
 export interface HandoffConfig {
   /** Off until a workspace says it has a QA column. */

@@ -276,7 +276,7 @@ describe("the hand-off control in the panel", () => {
   it("keeps the one write: a single clickupCard call with the built changes", () => {
     const body = fn(PANEL, "function CardReadyForQaButton(");
     expect(body.match(/api\.clickupCard\(/g)?.length).toBe(1);
-    expect(body).toContain("stepChanges({ ...(target ? { status: target } : null), people: task.people, unassign: plan.unassign, ensure })");
+    expect(body).toContain("stepChanges({ ...(target ? { status: target } : null), people: task.people, unassign: plan.unassign, ...(fixedTakeOff ? { takeOff: fixedTakeOff } : null), ensure })");
   });
 
   it("shows the ClickUp page in Settings only for a connected ClickUp", () => {
