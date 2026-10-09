@@ -4328,6 +4328,8 @@ export interface BrowseEntry {
   /** Epoch millis; rendered relative on the client, where the clock is. */
   mtime: number;
   hidden: boolean;
+  /** Listed but not openable: the finder may name a dotted entry, not enter or read it. */
+  locked?: boolean;
 }
 
 export interface BrowseReport {

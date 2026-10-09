@@ -64,8 +64,8 @@ const TABS: { id: PaletteTab; label: string; placeholder: string }[] = [
 /** One row of the result list, whatever produced it. Kept as data rather than
  *  as JSX so the keyboard can index into it without asking the DOM. */
 type Row =
-  | { kind: "dir"; rel: string; abs?: string; items?: number | null; mtime?: number }
-  | { kind: "file"; rel: string; hits?: GrepHit[]; abs?: string; bytes?: number | null; mtime?: number }
+  | { kind: "dir"; rel: string; abs?: string; items?: number | null; mtime?: number; locked?: boolean }
+  | { kind: "file"; rel: string; hits?: GrepHit[]; abs?: string; bytes?: number | null; mtime?: number; locked?: boolean }
   /* A recent carries its own checkout. It is a memory of somewhere you have
      been, and the palette may be pointed somewhere else by the time you come
      back to it — opening it against the current chip would build a path in the
@@ -162,6 +162,11 @@ const ROOT_KEY = "agentglass.files.paletteRoot";
 const PLACE_KEY = "agentglass.files.palettePlace";
 const PLACE_RECENTS_KEY = "agentglass.files.placeRecents";
 const PLACE_RECENTS_MAX = 8;
+/* Whether dotted entries are listed. Off by default: `~` is mostly dotfiles and
+   they bury the folder you meant. A typed leading dot asks for them anyway. */
+const HIDDEN_KEY = "agentglass.files.paletteHidden";
+const readHidden = (): boolean => { try { return localStorage.getItem(HIDDEN_KEY) === "1"; } catch { return false; } };
+const saveHidden = (on: boolean) => { try { localStorage.setItem(HIDDEN_KEY, on ? "1" : "0"); } catch { /* non-fatal */ } };
 const readPlace = (): string => { try { return localStorage.getItem(PLACE_KEY) ?? ""; } catch { return ""; } };
 const savePlace = (p: string) => { try { localStorage.setItem(PLACE_KEY, p); } catch { /* non-fatal */ } };
 const readPlaceRecents = (): string[] => {
@@ -279,6 +284,7 @@ export function FilePalette({
    */
   const [browsePath, setBrowsePath] = useState<string | null>(null);
   const [browsed, setBrowsed] = useState<BrowseReport | null>(null);
+  const [showHidden, setShowHidden] = useState(readHidden);
   const [cursor, setCursor] = useState(0);
   /** Which picture the in-app viewer is on, by index into `viewFiles`. Null is closed. */
   const [viewAt, setViewAt] = useState<number | null>(null);
@@ -470,12 +476,13 @@ export function FilePalette({
   // The folder under the cursor, fetched when it changes. Errors land in the
   // report itself — "no permission to read this folder" is an answer, and the
   // list says it rather than showing an empty folder that looks like a bug.
+  const wantHidden = showHidden || !!typedPath?.tail.startsWith(".");
   useEffect(() => {
     if (!open || !at) { setBrowsed(null); return; }
     let live = true;
-    void api.browse(at).then((r) => { if (live) setBrowsed(r); }).catch(() => { if (live) setBrowsed(null); });
+    void api.browse(at, wantHidden).then((r) => { if (live) setBrowsed(r); }).catch(() => { if (live) setBrowsed(null); });
     return () => { live = false; };
-  }, [open, at]);
+  }, [open, at, wantHidden]);
 
   const rows: Row[] = useMemo(() => {
     if (at) {
@@ -483,8 +490,8 @@ export function FilePalette({
       if (!d?.ok) return [];
       const base = at.replace(/\/+$/, "");
       return d.entries.map((e): Row => e.kind === "dir"
-        ? { kind: "dir", rel: e.name, abs: `${base}/${e.name}`, items: e.items, mtime: e.mtime }
-        : { kind: "file", rel: e.name, abs: `${base}/${e.name}`, bytes: e.bytes, mtime: e.mtime });
+        ? { kind: "dir", rel: e.name, abs: `${base}/${e.name}`, items: e.items, mtime: e.mtime, locked: e.locked }
+        : { kind: "file", rel: e.name, abs: `${base}/${e.name}`, bytes: e.bytes, mtime: e.mtime, locked: e.locked });
     }
     if (tab === "machine") {
       const d = onDisk.data;
@@ -699,7 +706,7 @@ export function FilePalette({
   const IMAGEY = /\.(png|jpe?g|jfif|gif|webp|avif|bmp|ico|cur|svg|apng|tiff?|heic|heif|psd|xcf|jp2|jxl|exr|hdr|tga|pcx|ppm|pgm|pbm|cr2|cr3|nef|arw|dng|orf|raf|rw2|sr2|pdf|mp4|webm|mkv|mov|m4v|mp3|wav|ogg|flac|m4a|opus)$/i;
 
   const openRow = useCallback((row: Row | undefined, secondary = false, click = false) => {
-    if (!row) return;
+    if (!row || (row.kind !== "recent" && row.locked)) return;
 
     /* A picture the browser can draw opens in the app, on ⏎ or a double-click.
        A single click only selects it, as it always did: the pane beside the
@@ -1027,12 +1034,18 @@ export function FilePalette({
                     className="px-1 py-0.5 rounded min-h-[20px] truncate max-w-[180px]"
                     style={{ color: c.last ? "var(--text)" : "var(--text3)" }}>{c.label}</button>
                 ))}
-                {browsed?.hiddenSkipped ? (
-                  /* Said, not hidden: a folder that shows less than it holds
-                     without saying so is a browser you stop trusting. */
-                  <span className="ml-auto" title="Hidden files and folders are out of the finder's reach">
-                    {browsed.hiddenSkipped} hidden {browsed.hiddenSkipped === 1 ? "item" : "items"} left out
-                  </span>
+                {browsed?.hiddenSkipped || showHidden ? (
+                  /* Said, and one click from undone: a folder that shows less
+                     than it holds without saying so is a browser you stop
+                     trusting, and the count is the switch that fixes it. */
+                  <button className="ml-auto px-1.5 py-0.5 rounded min-h-[20px]" aria-pressed={showHidden}
+                    style={{ color: showHidden ? "var(--text)" : "var(--primary-hover)" }}
+                    title={showHidden ? "Hidden files and folders are listed. Click to leave them out again" : "Click to list hidden files and folders"}
+                    onClick={() => { const on = !showHidden; setShowHidden(on); saveHidden(on); inputRef.current?.focus(); }}>
+                    {showHidden
+                      ? "Showing hidden · hide"
+                      : `${browsed!.hiddenSkipped} hidden ${browsed!.hiddenSkipped === 1 ? "item" : "items"} left out · show`}
+                  </button>
                 ) : null}
               </div>
             )}
@@ -1158,10 +1171,10 @@ function RowView({ row, i, on, onHover, onPick, onDouble }: {
   const icon = iconFor(name, row.kind === "dir");
   return (
     <button data-row={i} onMouseEnter={() => onHover(i)} onClick={() => onPick(row)} onDoubleClick={() => onDouble(row)}
-      className="w-full text-left px-3 py-2" title={row.rel}
+      className="w-full text-left px-3 py-2" title={row.kind !== "recent" && row.locked ? `${row.rel} — listed, but kept closed: it holds credentials or is off-limits from here` : row.rel}
       style={{
         ...(on ? { background: "color-mix(in srgb, var(--primary) 16%, transparent)" } : null),
-        ...(row.kind === "recent" && row.gone ? { opacity: 0.55 } : null),
+        ...((row.kind === "recent" && row.gone) || (row.kind !== "recent" && row.locked) ? { opacity: 0.55 } : null),
       }}>
       <div className="flex items-baseline gap-1.5 text-[12px]">
         <span className="shrink-0" style={{ color: icon.tint }}>{icon.glyph}</span>

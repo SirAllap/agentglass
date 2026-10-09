@@ -9,7 +9,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { browseDir, browseReal, fileBytes, fileFacts, imageSize, kindOf, openInDesktop } from "../src/browse.ts";
 
 const made: string[] = [];
@@ -78,6 +78,78 @@ describe("what is in this folder", () => {
     expect(r.entries.map((e) => e.name)).toEqual(["visible.txt"]);
     // Said out loud rather than silently showing less than the folder holds.
     expect(r.hiddenSkipped).toBe(2);
+  });
+
+  test("a caller that is not on this machine gets today's rules: dotted names are not listed even when asked", async () => {
+    const d = tmp();
+    writeFileSync(join(d, "visible.txt"), "x");
+    mkdirSync(join(d, ".config"));
+    writeFileSync(join(d, ".config", "prefs.json"), "{}");
+    const r = browseDir(d, true, false);
+    expect(r.entries.map((e) => e.name)).toEqual(["visible.txt"]);
+    expect(r.hiddenSkipped).toBe(1);
+    expect(browseDir(join(d, ".config"), true, false).ok).toBe(false);
+    expect(fileFacts(join(d, ".config", "prefs.json"), false).ok).toBe(false);
+    expect((await fileBytes(join(d, ".config", "prefs.json"), false)).ok).toBe(false);
+  });
+
+  test("a local caller may list and enter a dotted folder", async () => {
+    const d = tmp();
+    mkdirSync(join(d, ".config"));
+    writeFileSync(join(d, ".config", "prefs.json"), "{\"a\":1}");
+    const top = browseDir(d, true, true);
+    expect(top.hiddenSkipped).toBe(0);
+    expect(top.entries.find((e) => e.name === ".config")).toMatchObject({ kind: "dir", hidden: true, items: 1, locked: false });
+    const inside = browseDir(join(d, ".config"), false, true);
+    expect(inside.ok).toBe(true);
+    expect(inside.entries.map((e) => e.name)).toEqual(["prefs.json"]);
+    expect(fileFacts(join(d, ".config", "prefs.json"), true).ok).toBe(true);
+  });
+
+  /* One case per store, each asserted in the read doors and in the listing of
+     the folder that holds it. The names are the credential stores the finder
+     must never open, for a caller on this machine as much as for any other. */
+  const DENIED = [
+    ".ssh/id_x", ".gnupg/pubring.kbx", ".aws/credentials", ".kube/config", ".docker/config.json",
+    ".config/agent-secrets/key", ".config/gh/hosts.yml", ".config/google-chrome/Default/Cookies",
+    ".mozilla/firefox/profile/cookies.sqlite", ".password-store/site.gpg", ".claude/.credentials.json",
+    ".netrc", ".npmrc", ".env", ".env.local", ".git-credentials", ".config/1Password/vault",
+  ];
+  for (const rel of DENIED) {
+    test(`stays locked for a local caller: ${rel}`, async () => {
+      const d = tmp();
+      const file = join(d, rel);
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, "not-a-real-secret");
+      expect(fileFacts(file, true).ok).toBe(false);
+      expect((await fileBytes(file, true)).ok).toBe(false);
+      // Walk down from the root: the first denied step must show as locked in
+      // the listing that holds it, and must not open.
+      const parts = rel.split("/");
+      let at = d;
+      for (let i = 0; i < parts.length; i++) {
+        const row = browseDir(at, true, true).entries.find((e) => e.name === parts[i]);
+        expect(row).toBeDefined();
+        const next = join(at, parts[i]!);
+        if (row!.locked) {
+          if (row!.kind === "dir") expect(browseDir(next, true, true).ok).toBe(false);
+          return;
+        }
+        at = next;
+      }
+      throw new Error(`${rel} was never locked on the way down`);
+    });
+  }
+
+  test("a link out of a dotted folder into a denied store is refused", async () => {
+    const d = tmp();
+    mkdirSync(join(d, ".ssh"));
+    writeFileSync(join(d, ".ssh", "id_x"), "not-a-real-secret");
+    mkdirSync(join(d, ".config"));
+    symlinkSync(join(d, ".ssh"), join(d, ".config", "friendly"));
+    expect(browseDir(join(d, ".config", "friendly"), true, true).ok).toBe(false);
+    expect(fileFacts(join(d, ".config", "friendly", "id_x"), true).ok).toBe(false);
+    expect((await fileBytes(join(d, ".config", "friendly", "id_x"), true)).ok).toBe(false);
   });
 
   test("a symlink is shown as a link, not as what it points at", () => {

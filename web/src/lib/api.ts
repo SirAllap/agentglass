@@ -1244,7 +1244,7 @@ const realApi = {
   /* --- the finder: browsing a place and looking at a file ----------------
      One pair for both worlds, because the finder's tabs should not behave
      differently depending on which backend answers them. */
-  browse: (path: string) => get<BrowseReport>(`/browse?path=${encodeURIComponent(path)}`),
+  browse: (path: string, hidden = false) => get<BrowseReport>(`/browse?path=${encodeURIComponent(path)}${hidden ? "&hidden=1" : ""}`),
   previewFacts: (path: string) => get<FileFacts>(`/preview/facts?path=${encodeURIComponent(path)}`),
   /**
    * The bytes of a file, as a blob URL the browser can draw.

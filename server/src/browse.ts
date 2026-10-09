@@ -21,8 +21,8 @@
  */
 import { readdirSync, statSync, lstatSync, readFileSync } from "node:fs";
 import { failed } from "./refused.ts";
-import { basename, dirname, extname, join, resolve } from "node:path";
-import { diskAllows, diskRoots } from "./disk.ts";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { diskAllows, diskEnabled, diskRoots } from "./disk.ts";
 import { safeAbs } from "./git.ts";
 import { agentglassPrivate, inScope, realish, workspaceRoots } from "./config.ts";
 
@@ -44,10 +44,14 @@ export interface BrowseEntry {
   items: number | null;
   /** Epoch millis. Rendered relative on the client, which is where the clock is. */
   mtime: number;
-  /** True when the name starts with a dot. Never listed today (the boundary
-   *  excludes them) but the field exists so the UI can say so rather than
-   *  quietly showing less than the folder holds. */
+  /** True when the name starts with a dot. Listed only when the caller asks
+   *  for hidden entries; otherwise they are counted in `hiddenSkipped`. */
   hidden: boolean;
+  /** True when the finder may NOT open this entry even though it may name it:
+   *  a dotted entry under the home roots is listed on request, but `diskAllows`
+   *  still refuses to read or enter it. The row says so instead of offering a
+   *  door that answers with an error. */
+  locked: boolean;
 }
 
 export interface BrowseReport {
@@ -71,8 +75,55 @@ export interface BrowseReport {
  * `diskAllows` is the home roots with every dotted path taken out, which is
  * what keeps `~/.ssh` and `~/.aws` out of a file browser.
  */
-export function browseAllows(p: unknown): boolean {
-  return browseReal(p) !== null;
+export function browseAllows(p: unknown, local = false): boolean {
+  return browseReal(p, local) !== null;
+}
+
+/*
+ * The dotted door, for a caller on this machine only.
+ *
+ * `diskAllows` refuses every dotted segment below a home root, which also kept
+ * `~/.config` and `~/.claude` out of a file browser whose owner lives in them.
+ * A local caller may now enter those, EXCEPT the places that keep secrets. The
+ * list is a floor, not a promise that everything else is harmless: it names the
+ * stores that are credentials by design. Paths are measured from the root they
+ * sit under, on the resolved path AND on the spelling, so a link from a friendly
+ * name cannot reach a denied store and a denied name cannot be borrowed.
+ */
+const DENY_TREES: readonly (readonly string[])[] = [
+  [".ssh"], [".gnupg"], [".aws"], [".kube"], [".password-store"], [".azure"], [".gcloud"],
+  [".docker", "config.json"],
+  [".config", "agent-secrets"], [".config", "gh"], [".config", "gcloud"], [".config", "1Password"],
+  [".config", "Bitwarden"], [".config", "keepassxc"], [".config", "google-chrome"], [".config", "chromium"],
+  [".config", "BraveSoftware"], [".config", "microsoft-edge"], [".config", "vivaldi"],
+  [".mozilla"], [".zen"], [".librewolf"], [".config", "mozilla"],
+  [".local", "share", "keyrings"], [".local", "share", "Bitwarden"],
+  [".claude", ".credentials.json"],
+];
+/** File names that are secrets wherever they sit under a dotted path. */
+const DENY_NAMES = /^(\.netrc|_netrc|\.git-credentials|\.npmrc|\.pypirc|\.pgpass|\.env(\..*)?|\.credentials\.json|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?|.*\.(pem|key|kdbx))$/i;
+
+function underDenied(p: string): boolean {
+  const roots = diskRoots();
+  const segs = (r: string) => relative(r, p).split(sep);
+  const hit = roots.some((r) => {
+    const rel = relative(r, p);
+    if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return false;
+    const s = segs(r);
+    return DENY_TREES.some((t) => t.every((seg, i) => s[i] === seg));
+  });
+  return hit || DENY_NAMES.test(basename(p));
+}
+
+/** Home-rooted, dotted, and not a secret store: what the local door adds. */
+function dottedAllows(abs: string, real: string): boolean {
+  if (!diskEnabled()) return false;
+  const roots = diskRoots();
+  const inRoot = (p: string) => roots.some((r) => {
+    const rel = relative(r, p);
+    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  });
+  return inRoot(real) && inRoot(abs) && !underDenied(real) && !underDenied(abs);
 }
 
 /**
@@ -84,7 +135,7 @@ export function browseAllows(p: unknown): boolean {
  * link's spelling says nothing about its target. A link whose target leaves
  * both worlds is refused the same as typing the target would be.
  */
-export function browseReal(p: unknown): string | null {
+export function browseReal(p: unknown, local = false): string | null {
   const abs = safeAbs(p);
   if (!abs) return null;
   const real = realish(abs);
@@ -92,6 +143,8 @@ export function browseReal(p: unknown): string | null {
   // from a project that contains them.
   if (agentglassPrivate(real)) return null;
   if (diskAllows(real)) return real;
+  // `local` is true only for a caller the server has resolved to loopback.
+  if (local && dottedAllows(abs, real)) return real;
   /*
    * The checkout door, and it is CLOSED when there is no checkout.
    *
@@ -107,10 +160,10 @@ export function browseReal(p: unknown): string | null {
 }
 
 /** The folder above, unless that would leave everywhere this may look. */
-function parentOf(abs: string): string | null {
+function parentOf(abs: string, local: boolean): string | null {
   const up = dirname(abs);
   if (up === abs) return null;
-  return browseAllows(up) ? up : null;
+  return browseAllows(up, local) ? up : null;
 }
 
 /**
@@ -119,12 +172,21 @@ function parentOf(abs: string): string | null {
  * Sizes and dates come from `lstat`, not `stat`: a symlink's own metadata is
  * what the row is about, and following it is how a browser ends up reporting
  * the size of something in a place it is not allowed to look at.
+ *
+ * `showHidden` widens what is LISTED, never what may be read: the folder itself
+ * was already judged by `browseAllows`, so a dotted entry appears as a name, a
+ * size, a date and an item count, and is marked `locked` when `browseAllows`
+ * would refuse to open it (`~/.ssh` under home). Listing `~` therefore names
+ * `.ssh` and `.aws`; it does not let anybody into them or read what they hold.
  */
-export function browseDir(pathIn: unknown): BrowseReport {
+export function browseDir(pathIn: unknown, showHidden = false, local = false): BrowseReport {
+  showHidden = showHidden && local;
+  // Inside a dotted place every row is judged, not only the dotted ones: `gh` under `.config` is a secret store with an ordinary name.
+  const viaDot = local && !diskAllows(realish(String(safeAbs(pathIn) ?? "")));
   const abs = safeAbs(pathIn);
   const empty = { ok: false, path: String(abs ?? ""), parent: null, entries: [], more: 0, hiddenSkipped: 0 };
   if (!abs) return { ...empty, error: "invalid path" };
-  if (!browseAllows(abs)) return { ...empty, error: "outside the places this may look" };
+  if (!browseAllows(abs, local)) return { ...empty, error: "outside the places this may look" };
 
   let names: string[];
   try {
@@ -139,7 +201,8 @@ export function browseDir(pathIn: unknown): BrowseReport {
   let hiddenSkipped = 0;
   let more = 0;
   for (const name of names.sort((a, b) => a.localeCompare(b))) {
-    if (name.startsWith(".")) { hiddenSkipped++; continue; }
+    const hidden = name.startsWith(".");
+    if (hidden && !showHidden) { hiddenSkipped++; continue; }
     if (entries.length >= MAX_ENTRIES) { more++; continue; }
     const full = join(abs, name);
     try {
@@ -148,7 +211,7 @@ export function browseDir(pathIn: unknown): BrowseReport {
       // A symlink is followed ONLY to decide whether it behaves as a folder,
       // and only when its target is somewhere this may look. Anything else is
       // shown as what it is.
-      const target = link && browseAllows(realish(full)) ? safeStat(full) : null;
+      const target = link && browseAllows(realish(full), local) ? safeStat(full) : null;
       const dir = st.isDirectory() || (target?.isDirectory() ?? false);
       entries.push({
         name,
@@ -156,7 +219,8 @@ export function browseDir(pathIn: unknown): BrowseReport {
         bytes: dir ? null : (target ?? st).size,
         items: dir ? countItems(full) : null,
         mtime: st.mtimeMs,
-        hidden: false,
+        hidden,
+        locked: (hidden || viaDot) && !browseAllows(full, local),
       });
     } catch { /* vanished between readdir and lstat: it is not there, so it is not a row */ }
   }
@@ -167,7 +231,7 @@ export function browseDir(pathIn: unknown): BrowseReport {
     ? a.name.localeCompare(b.name)
     : a.kind === "dir" ? -1 : 1);
 
-  return { ok: true, path: abs, parent: parentOf(abs), entries, more, hiddenSkipped };
+  return { ok: true, path: abs, parent: parentOf(abs, local), entries, more, hiddenSkipped };
 }
 
 const safeStat = (p: string) => { try { return statSync(p); } catch { return null; } };
@@ -356,11 +420,11 @@ export function imageSize(buf: Buffer): { width: number; height: number } | null
  * Including the text itself when it is text: a second round trip to fetch the
  * body of a 3KB note is a spinner nobody needed.
  */
-export function fileFacts(pathIn: unknown): FileFacts {
+export function fileFacts(pathIn: unknown, local = false): FileFacts {
   const abs = safeAbs(pathIn);
   const empty: FileFacts = { ok: false, path: String(abs ?? ""), name: "", kind: "binary", mime: "", bytes: 0, mtime: 0 };
   if (!abs) return { ...empty, error: "invalid path" };
-  if (!browseAllows(abs)) return { ...empty, error: "outside the places this may look" };
+  if (!browseAllows(abs, local)) return { ...empty, error: "outside the places this may look" };
 
   let st;
   try { st = statSync(abs); } catch { return { ...empty, error: "no such file" }; }
@@ -401,9 +465,9 @@ export function fileFacts(pathIn: unknown): FileFacts {
  * ever installed or downloaded to satisfy a preview — with no tool the panel
  * says so and offers to open it in whatever the desktop uses.
  */
-export async function fileBytes(pathIn: unknown): Promise<{ ok: true; body: Uint8Array | ArrayBuffer; mime: string } | { ok: false; error: string }> {
+export async function fileBytes(pathIn: unknown, local = false): Promise<{ ok: true; body: Uint8Array | ArrayBuffer; mime: string } | { ok: false; error: string }> {
   // What was judged is what is read: the real path, links resolved.
-  const abs = browseReal(pathIn);
+  const abs = browseReal(pathIn, local);
   if (!abs) return { ok: false, error: "outside the places this may look" };
   let st;
   try { st = statSync(abs); } catch { return { ok: false, error: "no such file" }; }
@@ -455,10 +519,10 @@ export function browseRoots(): string[] {
  * against the same boundary as every other read, and it is only ever a path
  * this server would have shown you anyway.
  */
-export function openInDesktop(pathIn: unknown): { ok: boolean; with?: string; error?: string } {
+export function openInDesktop(pathIn: unknown, local = false): { ok: boolean; with?: string; error?: string } {
   // The desktop opens the real file, the one that was judged — not a link
   // that was judged by its name and points somewhere else.
-  const abs = browseReal(pathIn);
+  const abs = browseReal(pathIn, local);
   if (!abs) return { ok: false, error: "outside the places this may look" };
   try { statSync(abs); } catch { return { ok: false, error: "no such file" }; }
 

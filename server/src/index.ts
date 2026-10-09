@@ -6585,13 +6585,13 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         if (!trustedCaller(req, from)) return csrfBlocked();
         let b: { path?: unknown } = {};
         try { b = (await req.json()) as { path?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
-        const r = openInDesktop(b?.path);
+        const r = openInDesktop(b?.path, (peer.source === "socket" && !!clientIp && isLoopback(clientIp)));
         return json(r, r.ok ? 200 : 400);
       }
-      if (pathname === "/browse") return json(browseDir(url.searchParams.get("path") || ""));
-      if (pathname === "/preview/facts") return json(fileFacts(url.searchParams.get("path") || ""));
+      if (pathname === "/browse") return json(browseDir(url.searchParams.get("path") || "", url.searchParams.get("hidden") === "1", (peer.source === "socket" && !!clientIp && isLoopback(clientIp))));
+      if (pathname === "/preview/facts") return json(fileFacts(url.searchParams.get("path") || "", (peer.source === "socket" && !!clientIp && isLoopback(clientIp))));
       if (pathname === "/preview/raw") {
-        const r = await fileBytes(url.searchParams.get("path") || "");
+        const r = await fileBytes(url.searchParams.get("path") || "", (peer.source === "socket" && !!clientIp && isLoopback(clientIp)));
         if (!r.ok) return json({ error: r.error }, 404);
         return new Response(r.body, {
           headers: {
