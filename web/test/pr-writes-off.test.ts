@@ -44,8 +44,9 @@ describe("every ClickUp write in PrPanel", () => {
 
   it("finds the call sites it is supposed to guard", () => {
     // Merge-with-card (a status write, or the card write when it also assigns),
-    // review menu, status, people, hand-off, note.
-    expect(calls.length).toBe(7);
+    // review menu, status, people, hand-off, note, and the staged card move (which
+    // reads writeBlock first and writes only after the person's yes).
+    expect(calls.length).toBe(8);
   });
 
   it("sits in a component that reads writeBlock, bar the merge", () => {

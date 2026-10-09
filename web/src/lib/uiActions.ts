@@ -20,6 +20,8 @@ import { openFinderAt } from "./finderTarget.ts";
 import { latchChatIntent } from "./chatIntent.ts";
 import { latchGitModal } from "./gitModalIntent.ts";
 import { latchViewModal } from "./viewModalIntent.ts";
+import { latchStage } from "./stageIntent.ts";
+import { requestPrJump } from "./prJump.ts";
 import { showWhatsNew } from "./whatsNew.ts";
 import { toggleBench, showFile, showBoard } from "./benchStore.ts";
 import { openPeek } from "./openPeek.ts";
@@ -133,6 +135,15 @@ export const UI_HANDLERS: { [Id in UiActionId]: Handler<Id> } = {
   // The chords' own seam. The chord lets the key fall through when nothing
   // answers; an agent is told instead, since silence reads as success.
   "pane.open": (a, c) => { if (!c.paneDoor(a.which)) throw new Error("no focused terminal pane has a " + a.which + " to open"); },
+  // Level 3, stage only. Each leaves the draft for the pull request panel and
+  // opens the pull request view, as a notification does; the panel opens its own
+  // dialog filled in once the pull request has loaded. Nothing here sends. Written
+  // out in each handler rather than behind a helper, so the stage guard
+  // (web/test/ui-level-guards.test.ts) reads the seams every one of them calls.
+  "pr.merge.stage": (a, c) => { latchStage({ id: "pr.merge.stage", a }, c.as); requestPrJump(a.repo, a.number); c.goView("pr"); },
+  "pr.comment.stage": (a, c) => { latchStage({ id: "pr.comment.stage", a }, c.as); requestPrJump(a.repo, a.number); c.goView("pr"); },
+  "pr.review.stage": (a, c) => { latchStage({ id: "pr.review.stage", a }, c.as); requestPrJump(a.repo, a.number); c.goView("pr"); },
+  "card.move.stage": (a, c) => { latchStage({ id: "card.move.stage", a }, c.as); requestPrJump(a.repo, a.number); c.goView("pr"); },
   // Reads: stores and pref modules only, nothing is shown, raised or focused.
   "ui.state": (_a, c) => uiState(sourcesOf(c)),
   "ui.read": (a, c) => readPanel(a.panel, sourcesOf(c)),

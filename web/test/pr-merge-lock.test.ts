@@ -116,7 +116,7 @@ function fnBody(sig: string): string {
 describe("the handler is the guard, the DOM only shows it", () => {
   const doMerge = code.slice(code.indexOf("const doMerge = "), code.indexOf("const runMerge = "));
   it("the merge runs under the lock, which the dialog is inside of", () => {
-    expect(doMerge).toContain("once(merging, () => runMerge(method))");
+    expect(doMerge).toContain("once(merging, () => runMerge(method, prefill))");
   });
   it("act is locked by a ref, not only by the state a same-tick second press cannot see", () => {
     const act = fnBody("const act = useCallback(async (label: string");
@@ -124,7 +124,7 @@ describe("the handler is the guard, the DOM only shows it", () => {
     expect(act).toMatch(/finally \{ actLock\.current = false;/);
   });
   it("a merge that answered ok is written to both views before the re-read", () => {
-    const run = fnBody("const runMerge = async (method: MergeMethod) =>");
+    const run = fnBody("const runMerge = async (method: MergeMethod, prefill?: { by: string; subject?: string; body?: string }) =>");
     expect(run).toMatch(/if \(res\.ok\) markLanded\(detail\.number, res\.mergedBy\)/);
     expect(fnBody("const markLanded = (n: number, by?: string) =>")).toMatch(/setDetail[\s\S]*setPrs\(gone\); setBoardMine\(gone\); setBoardReview\(gone\)/);
   });

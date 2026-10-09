@@ -29,6 +29,7 @@ const BIN = (name: string) => new URL(`../../bin/${name}`, import.meta.url).path
 const CLI = BIN("agentglass-ui");
 const MCP = BIN("agentglass-ui-mcp");
 const L2 = describeUiActions(UI_ACTIONS, 2);
+const L3 = describeUiActions(UI_ACTIONS, 3);
 const L1 = describeUiActions(UI_ACTIONS, 1);
 
 /** Run a snippet with a bin file loaded as a module (its main does not run) and
@@ -109,7 +110,7 @@ describe.skipIf(!HAVE_PY)("arguments, as pure functions", () => {
 describe.skipIf(!HAVE_PY)("a command, built from what the app offers", () => {
   const build = (id: string, given: Record<string, unknown>, level = 2, as_ = "tester") =>
     py(CLI, "print(json.dumps(g['build_command'](D['a'], D['l'], D['id'], D['g'], D['as'])))",
-      { a: level === 2 ? L2 : L1, l: level, id, g: given, as: as_ }) as [Record<string, unknown> | null, string | null];
+      { a: level === 3 ? L3 : level === 2 ? L2 : L1, l: level, id, g: given, as: as_ }) as [Record<string, unknown> | null, string | null];
 
   test("a good call is the /control body, with the caller's name and a label", () => {
     expect(build("settings.open", { page: "appearance" })[0]).toEqual({
@@ -119,15 +120,28 @@ describe.skipIf(!HAVE_PY)("a command, built from what the app offers", () => {
 
   const buildP = (id: string, present: string | null, given: Record<string, unknown> = { page: "diff" }, level = 2) =>
     py(CLI, "print(json.dumps(g['build_command'](D['a'], D['l'], D['id'], D['g'], 'tester', 'cli', D['p'])))",
-      { a: level === 2 ? L2 : L1, l: level, id, p: present, g: given }) as [Record<string, unknown> | null, string | null];
+      { a: level === 3 ? L3 : level === 2 ? L2 : L1, l: level, id, p: present, g: given }) as [Record<string, unknown> | null, string | null];
 
   test("--now and --quiet become `present` on an open, and no flag leaves it to the server", () => {
     expect(buildP("settings.open", "now")[0]).toMatchObject({ present: "now", as: "tester" });
     expect(buildP("settings.open", "quiet")[0]).toMatchObject({ present: "quiet" });
     expect(buildP("settings.open", null)[0]).not.toHaveProperty("present");
   });
+  test("a stage door is built at level 3 with its text as given, and takes a present mode like an open", () => {
+    const given = { repo: "acme/orbit", number: 42, body: "Line one\nLine two" };
+    expect(buildP("pr.comment.stage", null, given, 3)[0]).toEqual({ cmd: "ui", do: "pr.comment.stage", args: given, id: "cli", as: "tester" });
+    expect(buildP("pr.comment.stage", "quiet", given, 3)[0]).toMatchObject({ present: "quiet" });
+    expect(buildP("pr.comment.stage", "now", given, 3)[0]).toMatchObject({ present: "now" });
+  });
+  test("a stage door below level 3 is 'not offered', and a stage with a missing or odd argument says which", () => {
+    expect(buildP("pr.comment.stage", null, { repo: "acme/orbit", number: 42, body: "x" }, 2)[1]).toContain("not offered");
+    expect(buildP("pr.comment.stage", null, { repo: "acme/orbit", number: 42 }, 3)[1]).toContain("needs body");
+    expect(buildP("pr.comment.stage", null, { repo: "acme/orbit", number: 42, body: "x", token: "y" }, 3)[1]).toContain("takes repo, number, body, not token");
+    expect(buildP("pr.comment.stage", null, { repo: "orbit", number: 42, body: "x" }, 3)[1]).toContain("repo must be");
+    expect(buildP("pr.comment.stage", null, { repo: "acme/orbit", number: 42, body: "" }, 3)[1]).toContain("body must be");
+  });
   test("a mode on a read or a change is refused, and so is a word that is neither", () => {
-    expect(buildP("ui.state", "now", {})[1]).toContain("only an open has a present mode");
+    expect(buildP("ui.state", "now", {})[1]).toContain("only an open or a stage has a present mode");
     expect(buildP("settings.open", "soon")[1]).toBe("present is now or quiet");
   });
 
@@ -213,9 +227,9 @@ describe.skipIf(!HAVE_PY)("the MCP tool list is the registry", () => {
   const names = (a: unknown) => py(MCP, "print(json.dumps([g['tool_name'](x['id']) for x in D]))", a) as string[];
 
   test("one tool per entry, nothing added, nothing left out, no two sharing a name", () => {
-    const t = tools(L2);
+    const t = tools(L3);
     expect(t).toHaveLength(UI_ACTION_IDS.length);
-    expect(t.map((x) => x.name)).toEqual(names(L2));
+    expect(t.map((x) => x.name)).toEqual(names(L3));
     expect(new Set(t.map((x) => x.name)).size).toBe(UI_ACTION_IDS.length);
     expect(t.map((x) => x.name)).toContain("ui_settings_set");
     expect(t.map((x) => x.name)).toContain("ui_state");
@@ -223,14 +237,14 @@ describe.skipIf(!HAVE_PY)("the MCP tool list is the registry", () => {
   });
 
   test("each tool takes exactly its entry's arguments, and requires the entry's required ones", () => {
-    const t = tools(L2);
+    const t = tools(L3);
     const byName = new Map(t.map((x) => [x.name, x]));
-    const toolOf = new Map(UI_ACTION_IDS.map((id, i) => [id, names(L2)[i]!]));
+    const toolOf = new Map(UI_ACTION_IDS.map((id, i) => [id, names(L3)[i]!]));
     for (const id of UI_ACTION_IDS) {
       const d = UI_ACTIONS[id] as UiActionDef;
       const tool = byName.get(toolOf.get(id)!)!;
       // An open also takes `now`, the one argument that is not its door's own.
-      const own = d.kind === "open" ? [...Object.keys(d.args), "now"] : Object.keys(d.args);
+      const own = d.kind === "open" || d.kind === "stage" ? [...Object.keys(d.args), "now"] : Object.keys(d.args);
       expect(Object.keys(tool.inputSchema.properties).sort(), id).toEqual(own.sort());
       const required = Object.entries(d.args).filter(([, s]) => !("optional" in s && s.optional) && s.t !== "pathKind").map(([k]) => k).sort();
       expect([...tool.inputSchema.required].sort(), id).toEqual(required);
@@ -239,8 +253,8 @@ describe.skipIf(!HAVE_PY)("the MCP tool list is the registry", () => {
   });
 
   test("a read is marked read-only, and a read's description says its text is data", () => {
-    const t = tools(L2);
-    const ns = names(L2);
+    const t = tools(L3);
+    const ns = names(L3);
     UI_ACTION_IDS.forEach((id, i) => {
       const d = UI_ACTIONS[id] as UiActionDef;
       const tool = t.find((x) => x.name === ns[i])!;
@@ -339,7 +353,7 @@ describe.skipIf(!HAVE_PY)("against a running app", () => {
     expect(r.actions).toEqual(JSON.parse(JSON.stringify(L2)));
     const l = await cli("list");
     expect(l.code).toBe(0);
-    expect(l.out.actions.map((a: { id: string }) => a.id)).toEqual(UI_ACTION_IDS);
+    expect(l.out.actions.map((a: { id: string }) => a.id)).toEqual(UI_ACTION_IDS.filter((id) => (UI_ACTIONS[id] as UiActionDef).level <= 2));
     expect(l.out.actions.find((a: { id: string }) => a.id === "settings.set")).toMatchObject({ level: 2, kind: "change", args: { id: "an id", value: "a value" } });
   });
 

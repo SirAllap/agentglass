@@ -12,6 +12,9 @@ import type { ConfirmSpec } from "../components/ConfirmDialog.tsx";
 export async function confirmMergeGuard(
   pr: { reviews: PrReview[]; reviewers: PrReviewer[]; author?: string },
   ask: (spec: ConfirmSpec) => Promise<boolean>,
+  /** The name an agent gave itself when it staged this merge: the question is
+   *  then marked as prepared by it and holds its button for a moment. */
+  preparedBy?: string,
 ): Promise<boolean> {
   const g = mergeGuard(pr);
   if (!g) return true;
@@ -20,5 +23,6 @@ export async function confirmMergeGuard(
     body: `${guardLines(g).map((l) => `• ${l}`).join("\n")}\n\nGitHub allows it. Merging skips ${g.pending.length ? "their review" : "a human review"}.`,
     confirmLabel: "Merge anyway",
     cancelFocus: true,
+    ...(preparedBy ? { preparedBy } : null),
   });
 }

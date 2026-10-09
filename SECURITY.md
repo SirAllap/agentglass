@@ -1049,9 +1049,39 @@ value; only an unset variable is the default. What each level means:
 - **Level 3 only stages.** An entry at level 3 may open a dialog with its fields
   filled in; it may not call a route that writes. The person's click is the
   effect. There are no automatic grants, so `AGENTGLASS_CONTROL_LEVEL=3` lets an
-  agent prepare something and never perform it. No door of this kind ships yet,
-  and the guard that holds the shape (no level 3 handler reaches a writer or a
-  mutating route) is `web/test/ui-level-guards.test.ts`. An entry with no level
+  agent prepare something and never perform it. Four doors ship, all on one pull
+  request: `pr.merge.stage` (method, commit subject and body), `pr.comment.stage`
+  (the text), `pr.review.stage` (verdict and text) and `card.move.stage` (the new
+  status of the card the pull request carries). Each opens the dialog the screen
+  already has, filled in, and nothing more: the merge, the comment, the review and
+  the move happen when the person presses that dialog's own button. What arrived
+  is shown as written by the caller (`as` is a label the caller picks, so it is
+  quoted, never trusted), in a field the person can edit, under a line saying
+  nothing is sent until they press; the confirm button, `Enter` and the chord
+  stay dead for a second after it opens (counted from the first frame, not from
+  after it), and Cancel has the focus. A stage is quiet by default even for a
+  caller that did not name itself: it waits behind the same chip as an open while
+  the person types, and it is served only while the pull request view is the one
+  on screen, the pull request is loaded and no other question is being asked, so
+  it never lands under the terminal or in place of a question. The text is bounded
+  and plain: no control character but a newline and a tab, nothing Unicode calls
+  default-ignorable, format, private-use, unassigned or a lone surrogate (variation
+  selectors, fillers, zero-width and bidirectional characters, the tag block; a
+  heart or a family emoji still pass, capped at sixteen joiners), no HTML comment,
+  link reference definition or `<details>`, no run of blank lines. It is drawn
+  only as a field's value, never as markdown or HTML before the person has it.
+  What an agent prepared is never merged into what the person already typed: if
+  the comment box has their text, or a review is in progress, nothing is staged and
+  a line on screen says so. The "prepared by" mark is kept next to the draft, so it
+  survives a reload, and the Files rail will not submit a prepared review. A door opens only where the screen's own button would be there: an open
+  pull request GitHub would merge, a method the repository allows, a review of
+  someone else's, a status the card's list has. Merge goes through the same guard
+  question a click does. Ceiling: a person who presses without reading completes
+  it, as they would a dialog anyone else had filled in. The guard that holds the
+  shape (no level 3 handler reaches a writer or a
+  mutating route) is `web/test/ui-level-guards.test.ts`, and the panel half
+  (nothing sent before the answer, every prepared dialog marked and held) is
+  `web/test/ui-stage-guard.test.ts`. An entry with no level
   counts as level 3, and a door above the level the server holds is a `403` that
   names the door and says the limit is the owner's; it does not say how to move it. Refusals
   are logged once per caller per minute, with a count of the ones the row stands for.

@@ -56,7 +56,7 @@ import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, onGateCh
 import { budgetHoldFor } from "./budget.ts";
 import { gateCwd, gateRuleFor } from "./gaterules.ts";
 import { parseControlCmd, controlId, awaitControl, settleControl, parseReply, nextControlRid, callerRequestId, CONTROL_TIMEOUT_ERROR, changedSetting, makeWriteLimiter, makeRefusalThrottle, controlSwitch, controlRefusal } from "./control.ts";
-import { isReadAction, isWriteKind, describeUiActions, presentOf, argsRefusal, entryOfBody, levelAllows, UI_ACTIONS } from "../../shared/uiActions.ts";
+import { isReadAction, isWriteKind, describeUiActions, presentOf, argsRefusal, entryOfBody, levelAllows, UI_ACTIONS, type UiKind } from "../../shared/uiActions.ts";
 import { outwardAction, outwardLine } from "./outward.ts";
 import { listLanes } from "./lanes.ts";
 import { gateLane, dropBrowserTarget, askBrowser, browserReadyCount, exportAudit, noteBrowserManager, noteBrowserReady, parseAsk, setBrowserSink, settleBrowser, type BrowserOp, runSteps, waitForEvents, recordFrames, traceRecording, auditAsScript, downloadFile, runLanes, withObservation, parseScrape, runScrape } from "./browserdrive.ts";
@@ -3789,7 +3789,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // How it is shown: quiet for a caller that named itself, now for one that
       // did not, or what the body says. An unknown word is a refusal, since a
       // guess here decides whether a dialog lands on somebody who is typing.
-      const present = presentOf((b as { present?: unknown }).present, as);
+      const present = presentOf((b as { present?: unknown }).present, as, (UI_ACTIONS[controlId(cmd) as keyof typeof UI_ACTIONS] as { kind?: UiKind } | undefined)?.kind);
       if (!present) return json({ ok: false, error: "present is quiet or now" }, 400);
       // The mode is a fact about an open; a read or a settings change shows
       // nothing, so its line does not carry one.

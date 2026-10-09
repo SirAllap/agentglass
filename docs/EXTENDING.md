@@ -277,7 +277,12 @@ owner's (it does not say how to move it).
 The levels: 1 looks or opens (kinds `open`, `read`), 2 changes a local setting
 (kind `change`) and 3 **stages** (kind `stage`): a level 3 entry opens a dialog
 with its fields filled in and never calls a route that writes, so the person's
-click is the effect. No kind performs an external effect, and no setting, door
+click is the effect. Four ship, all on one pull request (`pr.merge.stage`,
+`pr.comment.stage`, `pr.review.stage`, `card.move.stage`): each opens the screen's
+own dialog filled in, marked as written by the caller and editable, with its
+confirm held back for a second (`agentglass-ui stage <id> --arg k=v`, or the
+`ui_pr_merge_stage`-style MCP tools). Text arguments are the `text` spec:
+bounded, no hidden or control characters, no HTML comment. No kind performs an external effect, and no setting, door
 or argument can change the level. A new door states its level; one with none
 counts as 3, and a name that smells of a credential or of consent (token, key,
 secret, password, credential, remote, trust, gate, consent) must be level 3 or
@@ -517,8 +522,7 @@ server can list tools only while the app is running.
 dialog (any component that draws through a `Portal`) without a registry entry (a
 `modals: [file]` on the entry that opens it) or a reasoned line in
 `NOT_AGENT_DOOR` fails `web/test/ui-registry-guard.test.ts`. Left out on purpose,
-each with its reason in that file: the merge dialog (it would stage a merge, which
-is level 3), the people picker (choosing writes an assignment), the Rescue modal
+each with its reason in that file: the people picker (choosing writes an assignment), the Rescue modal
 (it only exists inside the worktree-removal flow), and the menus and pickers that
 open from a click on a panel's own subject.
 

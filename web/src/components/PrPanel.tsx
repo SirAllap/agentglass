@@ -38,6 +38,9 @@ import { MergeBox } from "./MergeBox.tsx";
 import { mergePath, type PathAction } from "../../../shared/mergePath.ts";
 import { buildReviewStory, relative, stamp, type StoryVerdict } from "../../../shared/reviewStory.ts";
 import { subscribePrJump, prJump, clearPrJump } from "../lib/prJump.ts";
+import { preparedLine, useStageHold } from "../lib/stageHold.ts";
+import { planStage } from "../lib/stagePlan.ts";
+import { clearPrepared, clearStage, markPrepared, markedAt, peekStage, preparedFor, preparedSnapshot, subscribePrepared, subscribeStage } from "../lib/stageIntent.ts";
 import { findMention, selectorFor } from "../lib/prMention.ts";
 import { fileSection } from "../lib/patchLines.ts";
 import { groupPatch } from "../lib/changeGroups.ts";
@@ -1923,8 +1926,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   /** Hand the review to the user's own tmux instead of to the chat. */
   onReviewInTerminal?: (root: string, number: number, recipe?: string, card?: string) => void;
 }) {
-  const { ask, askText, dialog } = useDialogs();
-  const { askMerge, dialog: mergeDialog } = useMergeDialog();
+  const { ask, askText, open: askOpen, dialog } = useDialogs();
+  const { askMerge, open: mergeOpen, dialog: mergeDialog } = useMergeDialog();
   // The same test the card chip uses: a ClickUp move is only offered for a
   // reference that is actually ClickUp's. A Jira shop's `ABC-12-thing` branch
   // looks identical, and offering to move a card that does not exist is worse
@@ -4090,6 +4093,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       // the panel, switching tabs, a rebuild — leaves the draft where it was.
       setReviews((cur) => { const next = { ...cur }; delete next[key]; saveMap(REVIEW_KEY, next); return next; });
       setTab("conversation");
+      clearPrepared(`review|${detail.url}`);
     }
   };
 
@@ -4124,11 +4128,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   /* One merge at a time, from the press to the settled answer — the dialog
      included. `mergeWork` only greys the button after a re-render; this is what
      makes a second press in the same tick send nothing. */
-  const doMerge = (method: MergeMethod) => once(merging, () => runMerge(method));
-  const runMerge = async (method: MergeMethod) => {
+  const doMerge = (method: MergeMethod, prefill?: { by: string; subject?: string; body?: string }) => once(merging, () => runMerge(method, prefill));
+  const runMerge = async (method: MergeMethod, prefill?: { by: string; subject?: string; body?: string }) => {
     if (!detail) return;
     const head = detail.commits[detail.commits.length - 1]?.oid;
-    if (!(await confirmMergeGuard(detail, ask))) return;
+    if (!(await confirmMergeGuard(detail, ask, prefill?.by))) return;
     const choice = await askMerge({
       number: detail.number, title: detail.title, method,
       baseRefName: detail.baseRefName, headRefName: detail.headRefName, headRepoOwner: detail.headRepoOwner,
@@ -4141,6 +4145,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       botApproved: detail.reviews.some((r) => r.isBot && r.state === "APPROVED"),
       card: mergeCardRef(detail, clickup),
       author: authorOf(detail),
+      prefill,
     });
     if (!choice) return;
     /*
@@ -4209,6 +4214,78 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       () => api.prMerge(root, detail.number, mergeMethod, { auto: true, deleteBranch: !detail.mergePolicy?.deletesBranch }),
       "Auto-merge did not arm", "auto");
   };
+
+  /**
+   * A dialog an agent asked for, opened filled in (stageIntent.ts, stagePlan.ts).
+   *
+   * Nothing in this block sends. The merge goes through `doMerge`, so the guard and
+   * the merge dialog ask exactly what they ask for a click; the comment and the
+   * review only fill in the boxes the person already has; the card move asks its own
+   * question first and writes only on a yes. What the agent wrote is marked as its
+   * own (markPrepared) and is editable. web/test/ui-stage-guard.test.ts holds this
+   * block to that: no writer is called before an answer.
+   */
+  const stageReq = useSyncExternalStore(subscribeStage, peekStage, () => null);
+  /* The review mark, read here as well as in the Review tab: the Files rail submits the
+     same draft, and it does not draw the line. */
+  useSyncExternalStore(subscribePrepared, preparedSnapshot, () => 0);
+  const stageCardMove = async (want: string, by: string) => {
+    if (!detail) return;
+    const ref = mergeCardRef(detail, clickup);
+    if (!ref) { flash(false, `#${detail.number} has no card to move`); return; }
+    const blocked = writeBlock(clickup);
+    if (blocked) { flash(false, blocked); return; }
+    const found = await api.clickupFind(ref.query).catch(() => null);
+    if (!found?.ok || !found.task) { flash(false, found?.error || "ClickUp could not find the card"); return; }
+    const task = found.task;
+    const meta = task.listId ? await api.clickupList(task.listId).catch(() => null) : null;
+    const target = (meta?.ok ? (meta.statuses ?? []) : []).find((st) => st.status.toLowerCase() === want.toLowerCase());
+    if (!target) { flash(false, `${ref.label}: its list has no status called "${want}"`); return; }
+    if (target.status === task.status) { flash(true, `${ref.label} is already ${target.status}`); return; }
+    const said = await ask({
+      title: `Move to ${target.status}?`, preparedBy: by, confirmLabel: `Move to ${target.status}`,
+      body: `${ref.label}\n${task.status} \u2192 ${target.status}`,
+    });
+    if (!said) return;
+    const r = await api.clickupCard(task.id, { status: target.status }, task.updated).catch(() => ({ ok: false, error: "Could not reach the server", task: undefined }));
+    flash(r.ok, r.ok ? `${ref.label} is now ${target.status}` : (r.error || "ClickUp refused that"));
+    if (r.ok) putCard(ref.query, r.task);
+  };
+  useEffect(() => {
+    const r = stageReq;
+    if (!r || !detail || !repo) return;
+    // Only for the pull request it named, and only while this view is the one on
+    // screen with nothing else being asked: a dialog opened under the terminal, or
+    // in place of a question the person is answering, is somebody else's moment.
+    if (!active || detailStale || askOpen || mergeOpen) return;
+    const mine = /\/([^/]+\/[^/]+)\/pull\/(\d+)(?:[/?#]|$)/.exec(detail.url);
+    if (!mine || mine[1]!.toLowerCase() !== r.a.repo.toLowerCase() || Number(mine[2]) !== r.a.number || detail.number !== r.a.number) return;
+    clearStage();
+    if (readOnly) { flash(false, "This pull request is read-only here, so nothing was prepared"); return; }
+    const plan = planStage(r, detail);
+    if (!plan.ok) { flash(false, plan.why); return; }
+    const x = plan.request;
+    if (x.id === "pr.merge.stage") {
+      void doMerge(x.a.method, { by: x.by, subject: x.a.subject, body: x.a.body });
+    } else if (x.id === "pr.comment.stage") {
+      // Never merged into what the person already typed: their words and the
+      // agent's would share one mark.
+      const k = `say|${detail.url}`;
+      if (readStash(k).trim()) { flash(false, `${x.by} prepared a comment, but the comment box already has your text, so nothing was put in it`); setTab("conversation"); return; }
+      writeStash(k, x.a.body);
+      markPrepared(k, x.by);
+      setTab("conversation");
+    } else if (x.id === "pr.review.stage") {
+      // The same, and a verdict the person already chose is not flipped.
+      if (hasReviewDraft) { flash(false, `${x.by} prepared a review, but you already have one in progress, so nothing was changed`); setTab("review"); return; }
+      setMyReview({ verb: x.a.verdict, body: x.a.body ?? "" });
+      markPrepared(`review|${detail.url}`, x.by);
+      setTab("review");
+    } else {
+      void stageCardMove(x.a.status, x.by);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stageReq, detail, repo, active, detailStale, askOpen, mergeOpen]);
 
   /**
    * Close, or reopen a closed one.
@@ -5631,6 +5708,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                      * notification that asks somebody to guess.
                      */
                     onSubmit={canReview ? () => {
+                      if (preparedFor(`review|${detail.url}`)) {
+                        setTab("review");
+                        flash(false, "An agent prepared this review: read it on the Review tab and send it from there");
+                        return;
+                      }
                       if (myReview.verb !== "approve" && !myReview.body.trim() && myDrafts.length === 0) {
                         setTab("review");
                         flash(false, "Say something or queue a line first — only an approval can go on its own");
@@ -12081,7 +12163,9 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   /* `key` so a quote lands: the composer reads its stash when it mounts, which is
      the same mechanism that restores a half-written comment, and remounting is how a
      quote written into that stash reaches the box somebody is about to type in. */
-  const composer = <Composer key={composerKey} onSend={onComment} busy={busy} placeholder="Leave a comment — markdown works here" sendLabel="Comment" onOpenGithub={() => openExternal(d.url)} stash={`say|${d.url}`} />;
+  const stashKey = `say|${d.url}`;
+  const prep = useSyncExternalStore(subscribePrepared, () => preparedFor(stashKey)?.n ?? 0, () => 0) ? preparedFor(stashKey) : null;
+  const composer = <Composer key={`${composerKey}|${markedAt(stashKey)}`} preparedBy={prep} onSend={onComment} busy={busy} placeholder="Leave a comment — markdown works here" sendLabel="Comment" onOpenGithub={() => openExternal(d.url)} stash={stashKey} />;
 
   if (entries.length === 0) {
     return (
@@ -12284,7 +12368,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
  * Write, preview, send. Shared by the conversation and by anywhere else that
  * takes markdown, so the two never drift into behaving differently.
  */
-function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOpenGithub, initial, autoFocus, secondary, stash }: {
+function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOpenGithub, initial, autoFocus, secondary, stash, preparedBy }: {
   onSend: (body: string) => Promise<boolean>; busy: boolean; placeholder: string; sendLabel: string;
   /** What the main button promises, when the label alone cannot say it. */
   sendTitle?: string;
@@ -12306,7 +12390,11 @@ function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOp
    *  here survives the box being closed, the tab being changed and the app
    *  being rebuilt, and comes back the next time this same box is opened. */
   stash?: string;
+  /** An agent left text in this box: its name for itself. A line says so, and
+   *  the send buttons and the chord stay dead for a moment (stageHold.ts). */
+  preparedBy?: { by: string; n: number } | null;
 }) {
+  const held = useStageHold(!!preparedBy, preparedBy?.n);
   const [text, setText] = useState(() => (stash ? readStash(stash) : "") || initial || "");
   const [preview, setPreview] = useState(false);
   const [sending, setSending] = useState(false);
@@ -12324,7 +12412,7 @@ function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOp
   };
   /** Was there something here when the box opened? Worth saying — text that
    *  reappears without explanation reads as a bug, not as a rescue. */
-  const [restored, setRestored] = useState(() => !!(stash && readStash(stash).trim()));
+  const [restored, setRestored] = useState(() => !!(stash && readStash(stash).trim()) && !preparedBy);
   useEffect(() => { if (stash) writeStash(stash, text); }, [stash, text]);
 
   // `initial` can arrive AFTER the box is open: "± Suggest" prefills a
@@ -12434,11 +12522,17 @@ function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOp
    *  guard, the spinner, the clear-on-success — instead of a copy of it that
    *  drifts. */
   const send = async (which: (body: string) => Promise<boolean> = onSend) => {
-    if (!text.trim() || sending) return;
+    if (!text.trim() || sending || held) return;
     setSending(true);
     const ok = await which(text);
     setSending(false);
-    if (ok) { setText(""); setPreview(false); }
+    if (ok) {
+      setText(""); setPreview(false);
+      // Empty the stash first: clearing the mark can remount this box before its own
+      // effect writes the empty text, and the new one would read the text just sent
+      // and offer it back as "never sent".
+      if (stash) { writeStash(stash, ""); clearPrepared(stash); }
+    }
   };
 
   return (
@@ -12488,6 +12582,13 @@ function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOp
               style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>Attach on GitHub ↗</button>
           )}
           <button onClick={() => setImageNote(null)} className="agx-btn shrink-0 grid place-items-center w-5 h-5 rounded" style={{ color: "var(--text3)" }} aria-label="Dismiss"><CloseIcon size={ICON.xs} /></button>
+        </div>
+      )}
+      {preparedBy && (
+        <div className="flex items-center gap-2 px-2.5 py-1 text-[10px]" data-prepared-by="" role="status"
+          style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", borderBottom: LINE }}>
+          <span>{preparedLine(preparedBy.by)}</span>
+          <button onClick={() => { if (stash) clearPrepared(stash); }} className="agx-btn ml-auto shrink-0 grid place-items-center w-5 h-5 rounded" style={{ color: "var(--text3)" }} aria-label="Dismiss"><CloseIcon size={ICON.xs} /></button>
         </div>
       )}
       {restored && (
@@ -12545,12 +12646,12 @@ function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOp
         </span>
         <span className="ml-auto flex items-center gap-1.5">
           {secondary && (
-            <Btn onClick={() => send(secondary.onSend)} disabled={sending || busy || !text.trim()} small
+            <Btn onClick={() => send(secondary.onSend)} disabled={sending || busy || held || !text.trim()} small
               title={!text.trim() ? "Write something first" : secondary.title}>
               {secondary.label}
             </Btn>
           )}
-          <Btn onClick={() => send()} disabled={sending || busy || !text.trim()} primary={!quiet} small
+          <Btn onClick={() => send()} disabled={sending || busy || held || !text.trim()} primary={!quiet} small
             title={!text.trim() ? "Write something first" : sendTitle}>
             {sending ? "Sending…" : sendLabel}
           </Btn>
@@ -12921,6 +13022,11 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
   const body = draft.body;
   const setBody = (b: string) => onDraft({ body: b });
   const [preview, setPreview] = useState(false);
+  /* An agent filled this form in (stageIntent.ts): say so, and keep Submit dead for a moment. */
+  const reviewMark = `review|${d.url}`;
+  useSyncExternalStore(subscribePrepared, preparedSnapshot, () => 0);
+  const preparedBy = preparedFor(reviewMark);
+  const holdReview = useStageHold(!!preparedBy, preparedBy?.n);
   /** Which queued comment is open. One at a time on purpose: the row of chips
    *  is the thing that has to stay a row, and opening every remark at once is
    *  the layout this replaced. */
@@ -12962,6 +13068,13 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
           </button>
         </div>
 
+        {preparedBy && (
+          <div className="flex items-center gap-2 px-3 py-1.5 text-[10.5px]" data-prepared-by="" role="status"
+            style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", borderBottom: LINE }}>
+            <span>{preparedLine(preparedBy.by)}</span>
+            <button onClick={() => clearPrepared(reviewMark)} className="agx-btn ml-auto shrink-0 grid place-items-center w-5 h-5 rounded" style={{ color: "var(--text3)" }} aria-label="Dismiss"><CloseIcon size={ICON.xs} /></button>
+          </div>
+        )}
         <div className="p-3 flex flex-col gap-2.5">
           {/* Queued comments as chips, one open at a time.
               Listed in full, this panel grew with the review: eleven cards and
@@ -13088,7 +13201,7 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
               })}
             </div>
             <span className="ml-auto">
-              <Btn onClick={() => onSubmit(verb, body)} disabled={busy || (verb !== "approve" && nothing)} primary
+              <Btn onClick={() => onSubmit(verb, body)} disabled={busy || holdReview || (verb !== "approve" && nothing)} primary
                 pending={busyWhat === "Review"}
                 title={verb !== "approve" && nothing ? "Say something, or queue a line comment" : undefined}>Submit review</Btn>
             </span>

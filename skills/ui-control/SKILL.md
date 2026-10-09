@@ -35,9 +35,9 @@ session the window holds (`event.open`, `session.open`), the running version's
 release notes (`whatsnew.open`), the Lantern schedule dialog, the Terminal's
 Resume list, and what the pane chords open for the focused terminal pane
 (`pane.open`). Opening only shows: starting a rebase, saving a schedule,
-resuming a session is the person's click. Not doors, on purpose: the merge dialog
-(a merge is level 3), the people picker, the Rescue modal and the menus inside a
-panel; `agentglass-ui list` is the truth.
+resuming a session is the person's click. Not doors, on purpose: the people
+picker, the Rescue modal and the menus inside a panel; `agentglass-ui list` is
+the truth.
 
 What you can read: `agentglass-ui read <panel>` for view, chat, bench, gates and
 the Settings panes (diff, terminal, browser, notifications, prefs, rail, keys,
@@ -78,6 +78,29 @@ Read the sentence and do what it says; do not retry the same call.
    with its fields filled in, and the person's own click is the effect. There is
    no grant that makes it automatic. It is offered only when the owner has allowed level 3. If the task needs one and no door
    stages it, say so and let the person do it.
+
+   The stage doors are `pr.merge.stage` (repo, number, method, optional subject
+   and body), `pr.comment.stage` (repo, number, body), `pr.review.stage` (repo,
+   number, verdict `approve`/`request_changes`/`comment`, body: required unless
+   approving) and `card.move.stage` (repo, number, status: one the card's list
+   has). Use `agentglass-ui stage <id> --arg repo=acme/orbit --arg number=42 ...`
+   (or the MCP tool of the same name). Say what you did in those words: *I
+   prepared the merge dialog; it is yours to read and press*. Never say you
+   merged, posted, reviewed or moved anything. The text you send is shown to the
+   person as written by you, so write it as a draft they will edit: plain text,
+   no hidden or control characters and no HTML comment (they are refused), at
+   most 8000 characters (a subject: one line, 256). A stage opens the pull
+   request in the app, so it is quiet like an open (it waits behind a chip while
+   the person types; `--now` only when they just asked you to prepare it). It
+   is declined on screen when the screen's own button would not be there (the
+   pull request is closed, not mergeable, yours to review, or the repository does
+   not allow that method) and when the person already has text in that comment
+   box or a review in progress. `applied: true` only means the window took the
+   request: a refusal, or a pull request that never loads, shows on screen and is
+   not reported back to you, so do not tell the person it is open until they
+   say so. The text may not hide anything: no invisible or control characters, no
+   HTML comment, no link reference definition, no `<details>`, no run of blank
+   lines; a refused text is a `400` that names the argument.
 
 The level is the owner's, set when the server starts. No door, setting or
 argument can change it, so do not try to find one or to work out how: a refusal

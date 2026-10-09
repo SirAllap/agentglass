@@ -100,6 +100,11 @@ def schema_of(spec):
                 "description": "the new value; which values a setting takes is the setting's own (see ui_settings_list, whose `type` says whether it stores a string: pass those as a JSON string, even when they are digits)"}
     if t == "slug":
         return {"type": "string", "maxLength": spec.get("max", 80), "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"}
+    if t == "repo":
+        return {"type": "string", "maxLength": 201, "pattern": "^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$", "description": "a repository as owner/name"}
+    if t == "text":
+        return {"type": "string", "minLength": 1, "maxLength": spec.get("max", 0),
+                "description": ("one line of " if spec.get("line") else "") + "plain text the person will read and may edit; no control or hidden characters, no HTML comment"}
     return {"type": "string", "description": {"ref": "a git ref", "abspath": "an absolute path", "relpath": "a path relative to the root"}.get(t, "text")}
 
 
@@ -108,7 +113,7 @@ def tools_from_actions(actions):
     tools = []
     for a in actions:
         props = {k: schema_of(s) for k, s in a["args"].items()}
-        if a["kind"] == "open":
+        if a["kind"] in ("open", "stage"):
             props[NOW] = {"type": "boolean", "description": "show it at once instead of quietly; only when the person just asked to be shown"}
         required = [k for k, s in a["args"].items() if not s.get("optional") and s.get("t") != "pathKind"]
         kind = a["kind"]
@@ -118,6 +123,10 @@ def tools_from_actions(actions):
         elif kind == "open":
             desc += (" Quiet by default: if the person is typing it waits as a chip they click (the answer says queued). "
                      "Pass now=true only when they just asked you to show it.")
+        elif kind == "stage":
+            desc += (" Prepares a dialog and nothing else: the person reads it, edits it and presses its button themselves; "
+                     "you cannot complete it. It shows as written by you. Quiet by default, now=true only when they just asked you to prepare it. "
+                     "applied means the window took the request; a refusal shows on screen and is not reported back.")
         else:
             desc += " The answer carries `prev`: set that back to undo. Never a secret."
         tools.append({
@@ -125,7 +134,7 @@ def tools_from_actions(actions):
             "description": desc,
             "inputSchema": {"type": "object", "properties": props, "required": required, "additionalProperties": False},
             "annotations": {"readOnlyHint": kind == "read", "destructiveHint": False,
-                            "idempotentHint": kind != "change", "openWorldHint": False},
+                            "idempotentHint": kind not in ("change", "stage"), "openWorldHint": False},
         })
     return tools
 
@@ -151,7 +160,7 @@ def run(name, args):
                              + ", ".join(sorted(tool_name(a["id"]) for a in actions))}], "isError": True}
     given = dict(args) if isinstance(args, dict) else {}
     present = None
-    if entry["kind"] == "open":
+    if entry["kind"] in ("open", "stage"):
         now = given.pop(NOW, None)
         if now is not None and not isinstance(now, bool):
             return {"content": [{"type": "text", "text": "now is true or false"}], "isError": True}
@@ -182,6 +191,7 @@ def handle_message(msg):
                 "The agentglass window's own screen: open a panel, read what is open, read and change a setting the "
                 "app exposes. Reads (ui_state, ui_read, ui_settings_get, ui_settings_list) show nothing; opens are quiet "
                 "and wait behind a chip while the person types (now=true only when they just asked to be shown). "
+                "A stage tool (level 3, when the owner allows it) only prepares a dialog filled in with what you wrote, for the person to read, edit and press themselves: nothing is merged, posted, submitted or moved by you. "
                 + UNTRUSTED + " Never set a secret. To undo a change, set the setting back to `prev`."),
         })
     if method == "tools/list":

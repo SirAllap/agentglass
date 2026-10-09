@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { preparedLine, useStageHold } from "../lib/stageHold.ts";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { Select } from "./Select.tsx";
@@ -81,6 +82,11 @@ export type MergeSpec = {
    *  built from it alone told the reader a bot had signed off on a pull request
    *  no one had looked at. */
   botApproved?: boolean;
+  /** Set when an agent staged this merge: the text it wrote and the name it gave
+   *  itself. The fields open on it, editable, under a "prepared by" line, and the
+   *  merge button (and the chord) stay dead for a moment. Nothing merges until the
+   *  person presses it; the method on the spec is the one the agent named. */
+  prefill?: { by: string; subject?: string; body?: string };
 };
 
 /** What the dialog resolves to. `null` is a cancel. */
@@ -138,7 +144,9 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
   const asked = useAskAssign({ on: mergeOn && !!askAssign && !!readyCard, ...(readyCard?.listId ? { listId: readyCard.listId } : null), ...(askAssign ? { start: askAssign } : null), author: pending?.author ?? null, onCard: readyCard?.people });
   const ensure: Ensure = askAssign ? asked.ensure : fixedEnsure;
   const subjectRef = useRef<HTMLInputElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
   const rebase = pending?.method === "rebase";
+  const held = useStageHold(!!pending?.prefill, pending);
 
   // The commits are what a squash quotes, and the count is what the header
   // states. Computed once per question rather than per keystroke.
@@ -146,13 +154,19 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
 
   useEffect(() => {
     if (!pending) return;
-    setSubject(mergeSubject(pending.method, pending) ?? "");
-    setBody(mergeBody(pending.method, pending, pending.commits) ?? "");
+    setSubject(pending.prefill?.subject ?? mergeSubject(pending.method, pending) ?? "");
+    setBody(pending.prefill?.body ?? mergeBody(pending.method, pending, pending.commits) ?? "");
     // Only offered when the repository is not already doing it — and then on
     // by default, which is what this app has always done. The difference is
     // that now it says so.
     setDeleteBranch(!pending.repoDeletesBranch);
-    const t = setTimeout(() => { subjectRef.current?.focus(); subjectRef.current?.select(); }, 40);
+    // A prepared dialog opens on Cancel: the subject is the agent's to be read, and a
+    // selected subject is one keystroke from being replaced by whatever the person
+    // was typing when it arrived.
+    const t = setTimeout(() => {
+      if (pending.prefill) { cancelRef.current?.focus(); return; }
+      subjectRef.current?.focus(); subjectRef.current?.select();
+    }, 40);
     return () => clearTimeout(t);
   }, [pending]);
 
@@ -261,14 +275,14 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
       // box uses, and it works from anywhere in the dialog.
       if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault(); e.stopPropagation();
-        if (rebase || subject.trim()) submit();
+        if (!held && (rebase || subject.trim())) submit();
       }
     };
     // Capture, because the panel's single-letter shortcuts listen on window
     // too and a dialog owns the keyboard until it is answered.
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [pending, subject, body, deleteBranch, rebase, card, status, ensure]);
+  }, [pending, subject, body, deleteBranch, rebase, card, status, ensure, held]);
 
   const how = pending ? MERGE_OPTION[pending.method] : null;
 
@@ -311,6 +325,11 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
                   <Ref>{pending.baseRefName}</Ref>
                 </div>
               </div>
+
+              {pending.prefill && (
+                <div className="px-4 py-2 text-[11.5px]" data-prepared-by="" role="status"
+                  style={{ color: "var(--warning-ink)", borderBottom: LINE }}>{preparedLine(pending.prefill.by)}</div>
+              )}
 
               {(pending.awaitingReview?.length ?? 0) > 0 && (
                 <div className="px-4 py-2.5 text-[11.5px] leading-relaxed flex items-start gap-2"
@@ -476,12 +495,12 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
               <div className="px-4 py-2.5 flex items-center gap-2" style={{ borderTop: LINE }}>
                 <span className="text-[10px]" style={{ color: "var(--text4)" }}>{MOD_KEY}↵ to confirm · Esc to cancel</span>
                 <span className="ml-auto flex items-center gap-2">
-                  <button onClick={() => pending.resolve(null)}
+                  <button ref={cancelRef} onClick={() => pending.resolve(null)}
                     className="text-[11px] px-2.5 py-1 rounded"
                     style={{ color: "var(--text2)", border: EDGE }}>Cancel</button>
                   <button
                     onClick={() => pending.resolve(answer())}
-                    disabled={!rebase && !subject.trim()}
+                    disabled={(!rebase && !subject.trim()) || held}
                     className="text-[11px] px-2.5 py-1 rounded font-medium disabled:opacity-40"
                     style={{ color: "var(--on-primary)", background: "var(--primary)" }}>{how.label}</button>
                 </span>
@@ -528,8 +547,14 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
  */
 export function useMergeDialog() {
   const [pending, setPending] = useState<Pending | null>(null);
+  const open = useRef<Pending | null>(null);
   const askMerge = (spec: MergeSpec): Promise<MergeChoice | null> =>
-    new Promise<MergeChoice | null>((resolve) =>
-      setPending({ ...spec, resolve: (v) => { setPending(null); resolve(v); } }));
-  return { askMerge, dialog: <MergeDialog pending={pending} /> };
+    new Promise<MergeChoice | null>((resolve) => {
+      // A question on screen is answered "no" before another takes its place.
+      open.current?.resolve(null);
+      const next: Pending = { ...spec, resolve: (v) => { open.current = null; setPending(null); resolve(v); } };
+      open.current = next;
+      setPending(next);
+    });
+  return { askMerge, open: pending !== null, dialog: <MergeDialog pending={pending} /> };
 }
