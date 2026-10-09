@@ -3722,7 +3722,13 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
   // opening only — the next plain open still lands where you left it.
   useEffect(() => {
     const at = jump?.pane ? resolvePane(jump.pane) : null;
-    if (open && at && (TABS.some((t) => t.id === at) || at.startsWith("plugin:"))) setPane(at as Pane);
+    if (open && at && (TABS.some((t) => t.id === at) || at.startsWith("plugin:"))) {
+      setPane(at as Pane);
+      // A page that was asked for must be the page on screen: while the search
+      // box has text the results view replaces every page, so the jump moved
+      // only the sidebar highlight and the screen did not change.
+      setQ("");
+    }
   }, [open, jump]);
   const contentRef = useRef<HTMLDivElement | null>(null);
   /*
