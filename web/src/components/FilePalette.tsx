@@ -44,7 +44,7 @@ import { DRAWER_MAX, DRAWER_MIN, RAIL_W, clampDrawer, indexOfSel, rememberedSel,
 import type { FileGitFacts } from "../../../shared/types.ts";
 import { RevealButton } from "./finder/RevealButton.tsx";
 import type { BrowseReport } from "../../../shared/types.ts";
-import { appChordFor, chordLabel } from "../lib/keybindings.ts";
+import { appChordFor, chordLabel, isAppChord } from "../lib/keybindings.ts";
 import { LAYER } from "../lib/layers.ts";
 import { FINDER_BOX, FINDER_MARGIN } from "../lib/finderSize.ts";
 import { shortPath } from "../lib/shortPath.ts";
@@ -1270,6 +1270,10 @@ export function FilePalette({
               <div className="flex-1 min-w-0 min-h-0 flex"
                 onKeyDown={(e) => {
                   if (e.target instanceof HTMLInputElement) return;
+                  // The app's own chords (Ctrl+Shift+P closes this very finder)
+                  // are answered on window; stopping them here made the shortcut
+                  // dead the moment focus sat inside the reader.
+                  if (isAppChord(e.nativeEvent)) return;
                   e.stopPropagation();
                   if (e.key === "Escape") { e.preventDefault(); inputRef.current?.focus(); return; }
                   if (e.key === "/" && !e.ctrlKey && !e.metaKey) { e.preventDefault(); setFindSignal((n) => n + 1); return; }
