@@ -155,3 +155,51 @@ export function approvalsNeed(r: Roster, reviewDecision?: string | null): string
   if (reviewDecision === "REVIEW_REQUIRED") return "approval required";
   return null;
 }
+
+/**
+ * What a merge would skip: a person asked to review who has not answered, or an
+ * approval that came only from automation.
+ *
+ * GitHub allows the merge in both cases (its own decision counts a bot with
+ * write access), so this never blocks: it is the fact a person should have in
+ * front of them before pressing. Measured on a pull request whose only approval
+ * was a review bot's while a named colleague sat requested: the box said "Ready
+ * to merge" over "0 of 1 approvals needed", a contradiction, because the roster
+ * counts people and GitHub's decision counted the bot.
+ */
+export interface MergeGuard {
+  /** People and teams asked and not answered, in the order GitHub lists them. */
+  pending: string[];
+  /** Automations whose latest verdict is an approval. */
+  botApprovers: string[];
+  /** Somebody who is not the author and not a bot approved, latest verdict standing. */
+  humanApproved: boolean;
+  /** Approved, but only by automation. */
+  botOnly: boolean;
+}
+
+export function mergeGuard(i: { reviews?: PrReview[]; reviewers?: PrReviewer[]; author?: string }): MergeGuard | null {
+  const author = lc(i.author);
+  const pending = (i.reviewers ?? []).filter((r) => r.login && (r.isTeam || lc(r.login) !== author)).map((r) => r.login);
+  // The latest verdict of each author: a later dismissal or change request undoes an approval.
+  const last = new Map<string, PrReview>();
+  const verdicts = (i.reviews ?? [])
+    .filter((r) => (r.state === "APPROVED" || r.state === "CHANGES_REQUESTED" || r.state === "DISMISSED") && lc(r.author) !== author)
+    .sort((a, b) => (a.submittedAt || "").localeCompare(b.submittedAt || ""));
+  for (const r of verdicts) last.set(lc(r.author), r);
+  const approvals = [...last.values()].filter((r) => r.state === "APPROVED");
+  const botApprovers = approvals.filter((r) => r.isBot).map((r) => r.author);
+  const humanApproved = approvals.some((r) => !r.isBot);
+  const botOnly = !humanApproved && botApprovers.length > 0;
+  return pending.length || botOnly ? { pending, botApprovers, humanApproved, botOnly } : null;
+}
+
+const joinNames = (n: string[]) => n.length <= 2 ? n.join(" and ") : `${n[0]}, ${n[1]} +${n.length - 2}`;
+
+/** The warning lines, one per fact: "bob hasn't reviewed yet", "only a bot has approved". */
+export function guardLines(g: MergeGuard): string[] {
+  const out: string[] = [];
+  if (g.pending.length) out.push(`${joinNames(g.pending)} ${g.pending.length === 1 ? "hasn't" : "haven't"} reviewed yet`);
+  if (g.botOnly) out.push(g.botApprovers.length === 1 ? "only a bot has approved" : "only bots have approved");
+  return out;
+}

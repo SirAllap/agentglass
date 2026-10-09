@@ -33,7 +33,7 @@
 import type { PrCheck, PrCheckRollup, PrMergeGate, PrReview, PrReviewer, PrSummary } from "./types.ts";
 import { MIN_SAMPLES, runKey } from "./checkBaseline.ts";
 import { mergeBlockers, staleApproval, type MergeBlocker } from "./mergeBlockers.ts";
-import { approvalsNeed, buildRoster, rosterCounts, type ReviewerState, type RosterEntry } from "./reviewRoster.ts";
+import { approvalsNeed, buildRoster, guardLines, mergeGuard, rosterCounts, type MergeGuard, type ReviewerState, type RosterEntry } from "./reviewRoster.ts";
 
 export type Mover = "you" | "author" | "reviewer" | "team" | "ci" | "wait" | "other" | "fyi" | "done";
 export type StageKey = "review" | "required" | "other" | "merge";
@@ -76,6 +76,8 @@ export interface Hero {
   also?: PathAction;
   /** A small line beside the actions: what comes after them. */
   after?: string;
+  /** Ready to merge, but a merge now skips something: drawn amber under the sentence. */
+  warnings?: string[];
 }
 
 export interface Stage {
@@ -150,6 +152,8 @@ export interface MergePath {
   callout: Callout | null;
   /** Past rounds of review worth opening; zero hides the button. */
   historyCount: number;
+  /** What pressing Merge would skip, whatever else is going on; the panel asks before it goes ahead. */
+  guard: MergeGuard | null;
 }
 
 export interface MergePathInput {
@@ -358,6 +362,7 @@ export function mergePath(i: MergePathInput): MergePath {
     askedAgain: hv?.kind === "changes" && (hv.askedAgain || hv.cleared) ? hv.who : undefined,
   });
   const entries = roster.entries;
+  const guard = mergeGuard({ reviews: i.reviews, reviewers: i.reviewers, author: i.author });
   const pending = entries.filter((e) => e.state === "requested" || e.state === "changes-again");
   /* Who the viewer is, from what the detail says: they gave the verdict, or they
      are the one person asked. Two people asked and a viewer among them is not
@@ -615,6 +620,14 @@ export function mergePath(i: MergePathInput): MergePath {
         id, kind: "note", stage: "review", title: `${e.login} · commented`, sub: `${lead}no verdict`,
         why: "A comment is not an approval and does not block.", mover: "fyi", ...person,
       });
+    } else if ((e.state === "requested" || e.state === "team") && guard?.pending.some((n) => lc(n) === lc(e.login))) {
+      // Not a wait (GitHub allows the merge) but not an FYI either: merging now skips this person.
+      add({
+        id, kind: "note", stage: "review", title: `${e.login} · ${e.state === "team" ? "review requested from the team" : "review requested"}`,
+        sub: `${lead}not answered yet`,
+        why: `${when ? `Requested ${when}` : "Requested"}, not answered — merging now skips their review.`,
+        mover: e.state === "team" ? "team" : "reviewer", counted: false, ...person,
+      });
     } else if (e.state === "requested" || e.state === "team") {
       add({
         id, kind: "note", stage: "review", title: `${e.login} · ${e.state === "team" ? "review requested from the team" : "review requested"}`,
@@ -707,10 +720,20 @@ export function mergePath(i: MergePathInput): MergePath {
     ? (approval ? approval.head : hv.mine ? "You approved" : approvedBy ? `Approved by ${approvedBy}` : "Approved")
     : "";
   const reviewStage = ((): Pick<Stage, "status" | "sub" | "need" | "tally"> => {
-    const need = approvalsNeed(roster, i.reviewDecision) ?? undefined;
+    /*
+     * GitHub's own decision wins over the roster's count. The roster counts
+     * people; GitHub also counts an automation with write access, so "APPROVED"
+     * over "0 of 1 approvals needed" read as a contradiction. Count what GitHub
+     * counted, name who, and say that no person has approved yet.
+     */
+    const botCounted = i.reviewDecision === "APPROVED" && guard?.botOnly && roster.needed !== null && roster.needed > 0 && roster.counted < roster.needed;
+    const need = (botCounted
+      ? `${Math.max(roster.counted + guard!.botApprovers.length, roster.needed!)} of ${roster.needed} approvals · by ${nameList(guard!.botApprovers)} (bot)`
+      : approvalsNeed(roster, i.reviewDecision)) ?? undefined;
     const tally = entries.map((e) => ({ key: e.state, login: e.login, label: `${e.login} · ${STATE_WORD[e.state]}` }));
     const headline = { ...(need ? { need } : null), ...(tally.length ? { tally } : null) };
-    const said = (fallback: string) => (entries.length ? rosterCounts(entries) : fallback);
+    const noHuman = guard?.botOnly ? "no human approval yet" : "";
+    const said = (fallback: string) => [noHuman, entries.length ? rosterCounts(entries) : fallback].filter(Boolean).join(" · ");
     const chg = revRows.find((r) => r.kind === "changes");
     if (chg) {
       const bits: string[] = [];
@@ -800,17 +823,18 @@ export function mergePath(i: MergePathInput): MergePath {
       if (running > 0) bits.push(`${running} other ${running === 1 ? "check is" : "checks are"} still running, none required`);
       const armed = i.autoArmed ? "Auto-merge is armed." : "";
       const behind = rows.some((r) => r.kind === "behind");
+      const warnings = guard ? guardLines(guard) : [];
       const sub = [bits.join(" · "), armed].filter(Boolean).join(" ");
       return behind
         ? {
           tone: "ready", eyebrow: "READY TO MERGE · BEHIND " + base.toUpperCase(),
           parts: [{ text: `Ready to merge, but it is behind ${base}.` }],
           sub: `You can merge anyway; the checks that passed ran against an older ${base}, so this exact combination is untested.`,
-          after: MERGE_BELOW,
+          after: MERGE_BELOW, ...(warnings.length ? { warnings } : null),
         }
         : {
           tone: "ready", eyebrow: "READY TO MERGE", parts: [{ text: "Ready to merge." }], sub: sub || undefined,
-          after: MERGE_BELOW,
+          after: MERGE_BELOW, ...(warnings.length ? { warnings } : null),
         };
     }
 
@@ -971,5 +995,5 @@ export function mergePath(i: MergePathInput): MergePath {
       ? { tone: "ok", text: `"Merge when green" covers ${counted.length === 1 ? "the one row" : `all ${counted.length} rows`} — nothing here needs a person.` }
     : null;
 
-  return { ready, hero, stages, rows: ordered, count: counted.length, otherCi, callout, historyCount };
+  return { ready, hero, stages, rows: ordered, count: counted.length, otherCi, callout, historyCount, guard };
 }

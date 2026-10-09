@@ -288,6 +288,11 @@ export function MergeBox({
         <h2 className="text-[17px] leading-snug font-semibold mt-1.5" style={{ color: "var(--text)", maxWidth: "62ch" }}>
           {hero.parts.map((p, k) => p.em ? <span key={k} style={{ color: tone.ink }}>{p.text}</span> : <span key={k}>{p.text}</span>)}
         </h2>
+        {hero.warnings?.map((w) => (
+          <p key={w} className="text-[12px] font-semibold leading-snug mt-1.5 flex items-center gap-1.5" style={{ color: TONE.wait.ink }}>
+            <span aria-hidden className="shrink-0 flex"><WarningIcon size={ICON.sm} /></span>{w}
+          </p>
+        ))}
         {hero.sub && <p className="text-[11.5px] leading-snug mt-1.5" style={{ color: "var(--text3)" }}>{hero.sub}</p>}
         {(hero.primary || hero.secondary || hero.also || hero.after) && (
           <div className="flex items-center gap-2 flex-wrap mt-3">

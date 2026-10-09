@@ -177,9 +177,9 @@ const cases: Case[] = [
     need: "approval required", rows: ["Needs an approving review → YOU", "· alice · approved → DONE"],
   },
   {
-    name: "no rule at all and a person asked: a request, not a wait",
+    name: "no rule at all and a person asked: still ready, but merging skips them (a warning, not a wait)",
     in: pr({ mergeState: "CLEAN", reviewDecision: null, gate: gate({ approvals: 0 }), reviewers: [{ login: "dave" }] }),
-    say: "Ready to merge.", ready: true, need: "review not required", status: "idle", rows: ["· dave · review requested → FYI"],
+    say: "Ready to merge.", ready: true, need: "review not required", status: "idle", rows: ["· dave · review requested → DAVE"],
   },
   {
     name: "approvals satisfied but a thread is open and must be resolved",

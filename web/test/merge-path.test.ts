@@ -470,3 +470,61 @@ describe("what the review side already decided is said", () => {
     expect(r.rows.some((x) => x.kind === "approved")).toBe(false);
   });
 });
+
+describe("merging past a review somebody owes, or past nobody human", () => {
+  // The reported shape: an automation's approval satisfies the rule (GitHub says APPROVED),
+  // bob's colleague carol was asked 4h ago and has not answered, CI is green.
+  const bot = (at = ago(5 * H)): PrReview => ({ ...review("review-bot", "APPROVED", at), isBot: true });
+  const botOnly = base({
+    author: "bob", reviewDecision: "APPROVED", humanReview: { kind: "approved", who: ["review-bot"] },
+    reviews: [bot()], reviewers: [{ login: "carol" }], askedAt: { carol: ago(4 * H) },
+  });
+
+  test("both: pending person and a bot-only approval", () => {
+    const p = mergePath(botOnly);
+    expect(p.guard).toEqual({ pending: ["carol"], botApprovers: ["review-bot"], humanApproved: false, botOnly: true });
+    expect(p.ready).toBe(true);
+    expect(say(p)).toBe("Ready to merge.");
+    expect(p.hero.warnings).toEqual(["carol hasn't reviewed yet", "only a bot has approved"]);
+  });
+  test("pending person only: a human approved", () => {
+    const p = mergePath({ ...botOnly, reviews: [review("alice", "APPROVED"), bot()] });
+    expect(p.hero.warnings).toEqual(["carol hasn't reviewed yet"]);
+    expect(p.guard?.botOnly).toBe(false);
+  });
+  test("bot-only approval, nobody pending", () => {
+    const p = mergePath({ ...botOnly, reviewers: [] });
+    expect(p.hero.warnings).toEqual(["only a bot has approved"]);
+    expect(p.guard?.pending).toEqual([]);
+  });
+  test("none: every requested person answered and a human approved", () => {
+    const p = mergePath(base({ reviews: [review("alice", "APPROVED"), bot()] }));
+    expect(p.guard).toBeNull();
+    expect(p.hero.warnings).toBeUndefined();
+  });
+  test("a bot approval later dismissed is not an approval", () => {
+    const p = mergePath({ ...botOnly, reviewers: [], reviews: [bot(ago(5 * H)), { ...bot(ago(2 * H)), state: "DISMISSED" }] });
+    expect(p.guard).toBeNull();
+  });
+  test("the Review cell counts what GitHub counted and says no human has approved", () => {
+    const s = stage(mergePath(botOnly), "review");
+    expect(s.need).toBe("1 of 1 approvals · by review-bot (bot)");
+    expect(s.sub).toBe("no human approval yet · 1 not answered");
+    expect(s.need).not.toContain("0 of");
+  });
+  test("with a human approval the cell is unchanged", () => {
+    const s = stage(mergePath(base()), "review");
+    expect(s.need).toBe("1 of 1 approvals");
+    expect(s.sub).not.toContain("no human");
+  });
+  test("the pending person's row is theirs, amber, and says what merging skips", () => {
+    const row = mergePath(botOnly).rows.find((r) => r.person?.login === "carol")!;
+    expect([row.mover, row.moverLabel, row.counted]).toEqual(["reviewer", "CAROL", false]);
+    expect(row.why).toBe("Requested 4h ago, not answered — merging now skips their review.");
+  });
+  test("a request that is not a warning stays FYI", () => {
+    // Blocked elsewhere: the guard still lists carol, but review-required already owns the row.
+    const row = mergePath(base({ reviewers: [], reviews: [review("carol", "COMMENTED")] })).rows.find((r) => r.person?.login === "carol")!;
+    expect(row.mover).toBe("fyi");
+  });
+});

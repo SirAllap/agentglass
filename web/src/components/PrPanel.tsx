@@ -53,6 +53,7 @@ import {
 import { updateBranchMove, prConflicted, gitSaysClean as cleanMerge } from "../lib/updateBranch.ts";
 import { depSpec } from "../../../shared/deps.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
+import { confirmMergeGuard } from "../lib/mergeGuard.ts";
 import { useMergeDialog } from "./MergeDialog.tsx";
 import { mergeCardRef, mergeNote, statusColor, rfqaStatus } from "../lib/cardMove.ts";
 import { cardPlan, cardPlanNote } from "../lib/cardPlan.ts";
@@ -3905,15 +3906,14 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const runMerge = async (method: MergeMethod) => {
     if (!detail) return;
     const head = detail.commits[detail.commits.length - 1]?.oid;
+    if (!(await confirmMergeGuard(detail, ask))) return;
     const choice = await askMerge({
       number: detail.number, title: detail.title, method,
       baseRefName: detail.baseRefName, headRefName: detail.headRefName, headRepoOwner: detail.headRepoOwner,
       commits: detail.commits,
       repoDeletesBranch: !!detail.mergePolicy?.deletesBranch,
-      /* `reviewers` is GitHub's OUTSTANDING request list — it drops somebody the
-         moment they submit — so a non-empty one on an open pull request is
-         exactly "asked, still waiting". Teams included: a team request is a
-         person's turn too, just not one person's. */
+      /* The guard above has asked already; the form keeps its own line so the
+         fact is still on screen while the message is written. */
       awaitingReview: detail.reviewers.map((r) => r.login),
       humanApproved: detail.reviews.some((r) => !r.isBot && r.state === "APPROVED"),
       botApproved: detail.reviews.some((r) => r.isBot && r.state === "APPROVED"),
@@ -3977,8 +3977,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * then arming it queued the opposite of what the button in front of you
    * read — and by the time it fires, nobody is watching.
    */
-  const doAutoMerge = () => {
+  const doAutoMerge = async () => {
     if (!detail) return;
+    if (!(await confirmMergeGuard(detail, ask))) return;
     void field(autoMergePatch(detail.number, { enabledBy: "you", method: mergeMethod }),
       () => api.prMerge(root, detail.number, mergeMethod, { auto: true, deleteBranch: !detail.mergePolicy?.deletesBranch }),
       "Auto-merge did not arm", "auto");
