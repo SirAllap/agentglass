@@ -1922,7 +1922,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
    * Deliberately a separate act from typing in the box. ClickUp's API has no
    * text search with a personal token, so this sweeps the most recently updated
    * few hundred cards and filters them here — MEASURED at sixteen seconds for
-   * the first page on his workspace, ten minutes of cache after that. A search
+   * the first page on a large workspace, ten minutes of cache after that. A search
    * box that stalls for sixteen seconds without a word is a broken search box;
    * one that says "this will take a moment" and then answers is a feature.
    */

@@ -247,7 +247,7 @@ export async function tmux(args: string[], stdin?: string): Promise<TmuxResult> 
        * engine's tmux went on resolving `-L <socket>` in /tmp/tmux-<uid> — the
        * developer's. Found by running the suite behind a tmux that records
        * where each call lands: with everything else clean, two calls from
-       * chat-pane.test.ts were the only ones left in his directory.
+       * chat-pane.test.ts were the only ones left in the developer's directory.
        *
        * A no-op in production, and checked rather than assumed: nothing in
        * server/src assigns to `process.env`, so `process.env` here IS the
@@ -518,7 +518,7 @@ export async function engineWindowRunning(
    * window nobody asked for, and nothing ever closes it: the run's window is
    * made separately, one command later. So a session created for a run has one
    * dead window forever — measured on an isolated server, 3 windows for 2 runs
-   * — and it showed up in his strip as a stray `fish` sitting beside the work.
+   * — and it showed up in the developer's strip as a stray `fish` sitting beside the work.
    * It also keeps the session alive after the real windows are gone.
    *
    * The answer is this file's neighbour's: `tmuxrestore` has always created

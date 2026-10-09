@@ -200,7 +200,7 @@ type Sess = {
    *
    * It changes one thing on the wire: the server resumes the tmux session the
    * desk was last in for any plain shell, and a docked console must not join
-   * it. Measured on his machine — three tmux clients, all on session `orbit` —
+   * it. Measured on a development machine — three tmux clients, all on session `orbit` —
    * so the console under Docker's logs mirrored whichever tab the terminal view
    * had selected, and a `docker exec` typed there would have gone to the pane
    * running an agent. See PtyWsData.fresh.

@@ -102,7 +102,7 @@ export function actorLabel(row: ActivityRow): string {
  * subtly wrong: a day boundary, a fold key, and what refuses to fold.
  *
  * Here they can be run over the real rows, which is how they were verified:
- * 200 records out of a copy of his own database, against a SQL query over the
+ * 200 records out of a copy of a real database, against a SQL query over the
  * same copy.
  */
 /**
@@ -146,7 +146,7 @@ export function byDay<T extends { at: number }>(runs: T[]): { day: string; runs:
  * Folding first lets a run of identical neighbours span local midnight: the
  * fold keeps the timestamp of its FIRST member and carries the whole count
  * across the boundary, so one day is credited with events that happened on the
- * other. Measured on his own database — 200 rows, one fold of
+ * other. Measured on a real database — 200 rows, one fold of
  * `/prs/pending-review` with two members on one day and three on the next:
  *
  *     day            SQL   the page said

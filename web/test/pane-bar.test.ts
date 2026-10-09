@@ -230,7 +230,7 @@ describe("the bar", () => {
     // A popup stops the bar from OPENING; it does not take the seam away. The
     // seam is 3px at the pane's edge and the only thing on screen that says the
     // pane has a bar at all, and the popup signal can be true with nothing on
-    // screen — measured on his machine, twice.
+    // screen — measured on a development machine, twice.
     /* Nothing of ours is drawn while a popup is up — seam included. A popup is
        painted INTO this screen, so a 3px line "at the pane's edge" is a line
        across somebody's scratch: reported twice, the second time with the

@@ -53,7 +53,7 @@ describe("what the frame says about a popup", () => {
        in a pane has that pane's tty, and it covers nothing — it is a picture
        inside a rectangle we are already drawing on.
 
-       Measured on his machine: an agent left `tmux attach -t scratch` running
+       Measured on a development machine: an agent left `tmux attach -t scratch` running
        in a background session, and the pane bar was gone from every pane of an
        unrelated session for as long as it lived. */
     const f = frame(

@@ -239,7 +239,7 @@ export async function judge(
  * is in. Nothing else can write there and nothing is there to read.
  *
  * `CLAUDE_CONFIG_DIR` is pointed at a private directory too, for the reason
- * understudy-pane.ts measured: his own config carries fourteen kinds of hook,
+ * understudy-pane.ts measured: a real config carries fourteen kinds of hook,
  * every one of which fired on a run that is not a conversation with him. NOT
  * an empty one, though — the credential lives in that directory, and an
  * empty config dir on an install signed in through the browser is a judge

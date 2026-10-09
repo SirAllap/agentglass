@@ -32,13 +32,13 @@ const SOCK = [...TMUX_ISOLATED, "-L", `agx-bartest-${process.pid}`];
 /*
  * And a socket DIRECTORY of its own, which this had not got. A `-L` name with
  * no TMUX_TMPDIR resolves to /tmp/tmux-<uid> — the developer's, beside the
- * `default` his sessions are on. Measured with a recording tmux on PATH: 68 of
+ * `default` the developer's sessions are on. Measured with a recording tmux on PATH: 68 of
  * this file's calls landed there, and the machine still had `agx-bartest-*`
- * sockets in his directory from runs hours earlier, one per run, cleaned up by
- * reaching into his directory to delete them.
+ * sockets in the developer's directory from runs hours earlier, one per run, cleaned up by
+ * reaching into the developer's directory to delete them.
  *
  * Not the danger `-f /dev/null` above already closed — that is the half that
- * keeps his tmux config, and so tmux-continuum's restore, out of a server this
+ * keeps the developer's tmux config, and so tmux-continuum's restore, out of a server this
  * file starts. This is the other half: a fixture has no business leaving
  * anything in that directory at all, and `tmuxSockets()` hands every server in
  * a directory to `listPanes`.

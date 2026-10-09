@@ -319,13 +319,13 @@ function tmuxRefused(socket: string[], args: string[]): boolean {
    * from the command line of a tmux client in /proc. An empty socket array is
    * exactly what a developer's plain `tmux` (no `-S`, no `-L`) resolves to, so
    * `setStatusLine`, `fitWindow` and `restoreWindows` could each be pointed at
-   * his live server by a test that resolved the wrong pid.
+   * the developer's live server by a test that resolved the wrong pid.
    *
    * Narrowed to the default socket rather than the whole directory, because
    * four suites deliberately run their own server as `-L agx-<something>` in
    * that same directory (tmux-bar, tmux-tabs, tmux-stale, pane-routes) and
    * those are theirs to touch. `default` is the one nothing in this repo ever
-   * creates and the one his sessions are on — measured: /tmp/tmux-1000/default
+   * creates and the one the developer's sessions are on — measured: /tmp/tmux-1000/default
    * held five sessions somebody was working in.
    *
    * The rule itself lives in `tmuxSocketAllowed`, where a test can ask it
@@ -345,7 +345,7 @@ function tmuxRefused(socket: string[], args: string[]): boolean {
    * here rather than only at the sweep is what makes it worth having: the sweep
    * was never the only way out. `loadtest.ts` hits `/panes` and every other
    * endpoint, and those call `tmuxSockets()` + `listPanes()` — read-only, and
-   * still 25 of his servers answering a stranger.
+   * still 25 of the developer's servers answering a stranger.
    *
    * This is the extension the note on `tmuxSocketConfined` called "the obvious
    * next change", now that something depends on it. Free in production: nothing
@@ -924,7 +924,7 @@ export function parseFrame(out: string, tty: string): { session: string; id: str
    * inside a pane has that PANE's tty, and it is content: it covers nothing,
    * it is a picture inside a rectangle we are already drawing on.
    *
-   * Measured on his own machine, an agent left `fish -c tmux attach -t scratch`
+   * Measured on a development machine, an agent left `fish -c tmux attach -t scratch`
    * running in a background session for seven minutes, and the pane bar was
    * gone from every pane of an unrelated session the whole time — "I think
    * something happened with the last piece of work, the little bar is gone now". The
@@ -1915,7 +1915,7 @@ export function socketPath(args: string[]): string {
  * checks above come first and why the four suites that name their own server
  * are unaffected.
  *
- * This is not a corner case here. Agents in this repo run inside his tmux, so
+ * This is not a corner case here. Agents in this repo run inside the developer's tmux, so
  * `$TMUX` is set in the environment `bun test` inherits, and the guard below
  * used to ask `socketDir()` where a bare command would land. With TMUX_TMPDIR
  * pointed at a scratch directory — which four test files do, correctly, for
@@ -1968,7 +1968,7 @@ function usableTmuxTmpdir(): string | null {
    * the sweeps that KILL servers, on the sessions they were trying to avoid.
    *
    * Not hypothetical here. Three times already: a test that restored his
-   * sessions through continuum, a probe that rewrote his prefix, and a pane id
+   * sessions through continuum, a probe that rewrote the developer's prefix, and a pane id
    * resolved against the wrong server that shrank a window he was working in.
    * Each one isolated the environment, and something resolved back to the real
    * path anyway. `blindTmuxBanned` does not cover this one: it only bites when
@@ -2078,7 +2078,7 @@ function sameSocket(p: string): string {
  * `@agx-had-size`. Counted: 18 test files spawn the server as a child, and 15
  * of them handed it no TMUX_TMPDIR — so `bun test` in server/ or mobile/ was
  * one marked window away from resizing a real session. Measured while writing this: none
- * of his windows carried the mark, so nothing had been damaged yet — that is a
+ * of the developer's windows carried the mark, so nothing had been damaged yet — that is a
  * fact about that afternoon, not about the code.
  *
  * This is the same guard NODE_ENV already gives the database (#319), the
@@ -2109,7 +2109,7 @@ function sameSocket(p: string): string {
  *   socketPath([])         /tmp/agx-test-tmux-ABSENT/tmux-1000/default
  *   guard says allowed     true
  *   commands that landed   display-message -p -t @1 #{window_width}
- *                          show-options -gv prefix        ** on his server **
+ *                          show-options -gv prefix        ** on the developer's server **
  *
  * That precondition is not contrived: `test/tmuxTmp.ts` creates one fixed
  * directory in a `catch {}` and exports the path either way, so a single failed
@@ -2136,11 +2136,11 @@ function blindTmuxBanned(): boolean {
  * nothing, and the behavioural half of the test only ever drives `-S <stand-in>`.
  *
  * THREE refusals, because there are three ways for this process to be next to
- * his tmux and each version of this guard has known one more than the last:
+ * the developer's tmux and each version of this guard has known one more than the last:
  *
  *   1. `$TMUX`, ALWAYS — a private TMUX_TMPDIR does not buy it back. Agents in
- *      this repo run inside his tmux, so `bun test` inherits a `$TMUX` naming
- *      his socket, and a bare command goes there whatever TMUX_TMPDIR says.
+ *      this repo run inside the developer's tmux, so `bun test` inherits a `$TMUX` naming
+ *      the developer's socket, and a bare command goes there whatever TMUX_TMPDIR says.
  *      Nothing in this repo ever sets `$TMUX`: the four suites that run a
  *      server of their own name it with `-L agx-…`, which is checked first and
  *      is not this. So "the socket $TMUX names" is a precise spelling of "his",
@@ -2168,7 +2168,7 @@ function blindTmuxBanned(): boolean {
  *
  * Compared through `sameSocket`, not raw. `-S //tmp/tmux-1000/default`,
  * `-S /tmp/tmux-1000/./default` and `-S /tmp/tmux-1000/../tmux-1000/default`
- * all named his socket and all three used to be ALLOWED by all three rules
+ * all named the developer's socket and all three used to be ALLOWED by all three rules
  * above, because each one compared strings. Nothing spells it that way today;
  * "nothing spells it that way today" is also what was true of the two holes
  * this same function has already been fixed for.
@@ -2365,7 +2365,7 @@ export function tmuxSockets(known?: string[]): string[][] {
   // Discovery is exactly how this process would learn about the developer's own
   // server: nothing else in the app knows that socket's name. See
   // blindTmuxBanned. The known client is dropped too — under `bun test` it was
-  // resolved out of /proc, and /proc on this machine has his tmux in it.
+  // resolved out of /proc, and /proc on this machine has the developer's tmux in it.
   if (blindTmuxBanned()) return [];
   const dir = socketDir();
   let names: string[] = [];
@@ -3160,7 +3160,7 @@ const HAD_SIZE_BY = "@agx-had-size-by";
  *   NODE_ENV = undefined   TMUX_TMPDIR = undefined
  *   socketPath([])  /tmp/tmux-1000/default
  *   allowed([])     true
- *   tmuxSockets()   25 sockets, his default among them
+ *   tmuxSockets()   25 sockets, the developer's default among them
  *
  * That is the THIRD time this same reach has been closed, each time through a
  * door the previous fix did not know about: a guard for `bun test`, then a lint
@@ -3189,7 +3189,7 @@ const HAD_SIZE_BY = "@agx-had-size-by";
  * that redirects it, CI, and a fresh checkout — sweeps NOTHING, whatever it
  * does with NODE_ENV or TMUX_TMPDIR, because its ledger is empty. A boot that
  * has never pinned anything issues zero tmux commands, so it never even lists
- * his socket directory.
+ * the developer's socket directory.
  *
  * WHAT IT DOES NOT COVER, plainly: a launcher that redirects nothing at all.
  * Such a process reads this installation's ledger and would perform this
@@ -4791,7 +4791,7 @@ export function sweepPinnedWindows(sockets: string[][]): number {
    * The caller normally hands over `pinnedSockets()`, which is built from this
    * same file, so the check looks redundant from `index.ts`. It is not: the
    * other door into here is `releaseStale`, which passes a socket read off a
-   * tmux client in /proc — on this machine, /proc has his tmux in it — and that
+   * tmux client in /proc — on this machine, /proc has the developer's tmux in it — and that
    * caller cannot be asked to remember. Both doors, one rule.
    */
   const ledger = new Set(pinLedger().map(sameSocket));

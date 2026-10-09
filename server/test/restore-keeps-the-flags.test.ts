@@ -3,7 +3,7 @@
  *
  * The restore rebuilt every agent pane as a plain `claude --resume <id>`,
  * whatever it had actually been started with. The owner opens every session
- * with `--dangerously-skip-permissions` — measured on his own machine, four
+ * with `--dangerously-skip-permissions` — measured on a development machine, four
  * panes of four — so a restore handed him back a desk that behaved differently
  * from the one he had, pane by pane, and he had to notice and fix each one.
  *

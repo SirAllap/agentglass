@@ -1,7 +1,7 @@
 /*
  * Which pull requests really belong to a card.
  *
- * Measured on his own repository, on card ORBIT-1042. GitHub's search answered
+ * Measured on a real repository, on card ORBIT-1042. GitHub's search answered
  * with three, and all three were wrong:
  *
  *   #1042  matched by its own NUMBER — no "1042" anywhere in its title or

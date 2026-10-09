@@ -1355,7 +1355,7 @@ describe("a queue he fills by hand drains itself", () => {
 
   step("a row written before any of this still stops being listed", async () => {
     /*
-     * The rows already on his machine carry no mark, because nothing ever wrote
+     * The rows already on a development machine carry no mark, because nothing ever wrote
      * one. Repairing them means a hand-written UPDATE against a live database,
      * so instead the queue consults the run table as well: a row with a run
      * against it is not pending whatever its own column says.

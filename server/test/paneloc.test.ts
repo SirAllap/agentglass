@@ -290,7 +290,7 @@ describe("the walk under a pane", () => {
   });
 
   test("a CLI that is a script run by node is found by the package on its command line", () => {
-    /* `comm` says `node` for it — measured on the owner's machine, where
+    /* `comm` says `node` for it — measured on a development machine, where
        `/usr/bin/qwen` is `#!/usr/bin/env node` — so a tab running it was read
        as a plain shell, and its chip never named the worktree it stood in. */
     const qwen = ["node", "/usr/lib/node_modules/@qwen-code/qwen-code/scripts/cli-entry.js", "-i", "go on"];
@@ -303,7 +303,7 @@ describe("the walk under a pane", () => {
   });
 
   test("Node 26 calls itself node-MainThread, and the launcher names its script by a symlink on PATH", () => {
-    /* Both measured on the owner's machine: /proc/self/comm reads
+    /* Both measured on a development machine: /proc/self/comm reads
        `node-MainThread`, and `/usr/bin/qwen` is a symlink into the package.
        Neither spelling names the package until the link is followed. */
     const io = { ...tree({ comm: "node-MainThread", argv: ["node", "/usr/bin/qwen"], cwd: WT }),

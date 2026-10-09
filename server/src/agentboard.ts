@@ -120,7 +120,7 @@ export function forgetAgent(name: string, session: string): boolean {
  * The board kept lines nobody could clear: a session that ended without
  * saying `done` left its name on the field for fourteen days, and by the
  * second day a field of twenty read as twenty agents. Measured on the
- * owner's board: twenty-five rows, five of them alive.
+ * a real board: twenty-five rows, five of them alive.
  */
 export function dropLine(name: string): boolean {
   const n = (name || "").trim();

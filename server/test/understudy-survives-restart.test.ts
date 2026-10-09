@@ -814,7 +814,7 @@ test("a branch that was merged and then deleted is landed work, not unstarted", 
 /*
  * A FAILED RUN USED TO HIDE ITS TASK FOR EVER.
  *
- * Measured today, in his database: two rows in `understudy_asked` with
+ * Measured today, in a real database: two rows in `understudy_asked` with
  * `taken_at` cleared — the queue's own word for "pending again" — while the
  * screen showed an empty queue and nothing was running. Their runs had failed,
  * and the "is this spoken for" count treated a failed run as somebody working

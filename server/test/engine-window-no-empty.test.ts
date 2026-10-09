@@ -24,7 +24,7 @@
  *
  * Against a real tmux, isolated on its own socket and TMUX_TMPDIR: a `-L` with
  * the developer's tmpdir lands on the developer's server, and this test counts
- * windows — on his machine it would count HIS.
+ * windows — on a development machine it would count the developer's.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";

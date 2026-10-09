@@ -22,7 +22,7 @@
  *     asked width=2325 dsf=1.5   ->  innerWidth 2326  dpr 1.5
  *
  * The old formula asked for `natW * dpr / factor`, believing the number was in
- * embedder pixels and would be divided again. On his window at 125%, zooming
+ * embedder pixels and would be divided again. On a window at 125%, zooming
  * IN by 1.2 laid the page out at 2790 * 1.25 / 1.2 = 2906 CSS pixels — wider
  * than it started, so asking for bigger made it smaller. The agent's `zoom`
  * verb had the same defect and confessed it, because it reads back from the

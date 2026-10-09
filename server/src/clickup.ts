@@ -696,7 +696,7 @@ export async function changedForMe(sinceMs: number): Promise<CallResult<{ tasks:
  * Text search across the workspace, since ClickUp's API has none.
  *
  * MEASURED first, because the shape of this is decided by one number: a single
- * page of `/team/{id}/task` on his workspace takes **16.6 seconds** and returns
+ * page of `/team/{id}/task` on a large workspace takes **16.6 seconds** and returns
  * a hundred rows. There is no `?query=` on v2 with a personal token — the
  * search in ClickUp's own web app is not an endpoint anybody else can call — so
  * the only honest options were "sweep and filter here" or "nothing".
@@ -2229,7 +2229,7 @@ export async function listMembers(listId: string): Promise<CallResult<{ members:
    * The list AND the workspace, because the list alone is wrong here.
    *
    * The comment above was the theory. Measured against a real board: both of
-   * his lists answered with the same twenty people — Ada, Bjorn, a bot account,
+   * both lists answered with the same twenty people — Ada, Bjorn, a bot account,
    * Carol — and not one of the six ClickUp's own picker offers
    * for those very cards. Whatever `/list/{id}/member` is reporting, it is not
    * the team that works the board, and it was leaving the people he actually
@@ -3309,7 +3309,7 @@ export { otherGithubLinks } from "../../shared/githubLinks.ts";
  *
  * GitHub's search does not answer the question it was asked. `ORBIT-1042` is
  * tokenised at the hyphen, so the search matches anything carrying the bare
- * number — and MEASURED on his own repository, all three "linked" pull requests
+ * number — and MEASURED on a real repository, all three "linked" pull requests
  * were false:
  *
  *   #1042  matched by its own NUMBER. Its title and body contain no "1042"

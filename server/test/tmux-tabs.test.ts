@@ -29,7 +29,7 @@ import { TMUX_ISOLATED } from "./tmuxIsolated.ts";
  * tpm, tmux-resurrect, tmux-kanagawa, tmux-assistant-resurrect, and
  * tmux-continuum's `continuum_restore.sh`. His `@continuum-restore` is on; the
  * only brake is continuum's own "is another tmux of mine already running",
- * which is true on his desk today and false on a fresh boot or on CI.
+ * which is true on a desk today and false on a fresh boot or on CI.
  *
  * So the socket argv carries `-f /dev/null` — the same door tmux-bar uses, and
  * the only one available to a file that never spawns tmux itself — and the

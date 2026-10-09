@@ -77,7 +77,7 @@ export const TMUX_TEST_TMPDIR = `/tmp/agx-test-tmux-${process.pid}`;
  * whose directory is absent falls back to /tmp/tmux-<uid> silently, and the
  * guard in tmuxctl.ts used to read the variable's mere presence as isolation
  * and unlock itself: a suite that set nothing was refused, a suite that set
- * this and lost the directory was let through to his live server.
+ * this and lost the directory was let through to the developer's live server.
  *
  * Nothing here is swallowed, EEXIST included — that one means the path is
  * present but is NOT a directory, which tmux refuses outright ("couldn't create

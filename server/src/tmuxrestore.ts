@@ -420,7 +420,7 @@ export interface AgentUnder { name: string; argv: string[]; cwd: string; started
  * that is the measured half of this: a window born from
  * `tmux new-window "exec claude …"` has no shell left in it — `exec`
  * replaced it — so the agent IS the pane's process and a walk that started
- * at its children found nothing. Six windows on the owner's desk were
+ * at its children found nothing. Six windows on a desk were
  * photographed that way with no flags and no way to resume.
  *
  * Named by `agentNamed` (paneloc.ts): the binary's basename, or the npm
@@ -1398,7 +1398,7 @@ async function restorePass(mode: "lazy" | "all"): Promise<{ ok: boolean; restore
       /*
        * ONLY WHILE THE DESK IS STILL COMING BACK.
        *
-       * A live session in steady state is the owner's working desk, and this
+       * A live session in steady state is a working desk, and this
        * file's oldest promise is that a restore only ever builds what is
        * missing from a desk nobody has yet — never adds a window to one
        * somebody is sitting at. `settled` is that line: false until this
@@ -1487,7 +1487,7 @@ async function engineShell(): Promise<string> {
  * — it exits, and the window goes with it. Measured on this user's machine
  * after a reboot: a session of five windows came back with one, the four whose
  * resume failed vanished in the same second they were made, and the count said
- * five. He rebuilt his desk by hand.
+ * five. The desk was rebuilt by hand.
  *
  * Checking immediately proves nothing: `new-window` returns as soon as tmux has
  * forked, and a CLI that fails takes a few hundred milliseconds to say so. One

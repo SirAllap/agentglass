@@ -748,7 +748,7 @@ export function applyThemeTo(socket: string[]): boolean {
    * from `socketOf()` off a real client's argv in /proc, which on this machine
    * has the developer's tmux in it. `socketOf()` returns `[]` for both of his
    * clients (`tmux -2 attach -t <name>`, `tmux new-session -A -s <name>`), and
-   * `[]` is exactly the bare spelling that resolves to his server.
+   * `[]` is exactly the bare spelling that resolves to the developer's server.
    *
    * `isTest()` is kept alongside the guard rather than replaced by it. The
    * guard would let a suite repaint its OWN `-L agx-…` server, which is

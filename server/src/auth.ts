@@ -588,7 +588,7 @@ export function scopeNeeded(method: string, pathname: string): Scope {
  * `/chat/send` and `/terminal/tmux/windows` are the two names that are
  * deliberately *not* here, and understudy-allowlist.test.ts asserts both by
  * name rather than by rule. The first is speaking as him into a running agent;
- * the second reshapes his desk out from under him. Something that can do either
+ * the second reshapes the person's desk out from under them. Something that can do either
  * has stopped being a watcher, so on the day somebody adds "just let it reply",
  * the failing test is the conversation that should happen first.
  */
