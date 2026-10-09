@@ -1446,7 +1446,7 @@ import { startLanternWatch, restartLanternWatch, lastLook } from "./lanternwatch
 import { installServerLog, readEntries } from "./serverlog.ts";
 import { digest as logDigest } from "./logdigest.ts";
 import { mintTicket, claimTicket, pending as pendingPairings, acceptTicket, rejectTicket, collect as collectPairing, dropTicket, getTicket, MAX_ATTEMPTS } from "./pairing.ts";
-import { updateStatus, viewerStatus, startUpdate, updateLog, releaseNotes } from "./selfupdate.ts";
+import { buildInfoPaths, updateStatus, viewerStatus, startUpdate, updateLog, releaseNotes } from "./selfupdate.ts";
 import { rateOk } from "./ratelimit.ts";
 import { noteClient, noteSocket, isLoopback, isSelf, isBlocked, blockDevice, remoteStatus, tailnetNames, refreshTailscale, TAILNET_OK_MS, proxiedByTailscaled, loopbackPeerIsOtherUser } from "./remote.ts";
 import { parseWindowMs } from "./params.ts";
@@ -2495,10 +2495,17 @@ function csvEscape(v: unknown): string {
 let stampCache: string | null = null;
 function buildStamp(): string {
   if (stampCache !== null) return stampCache;
-  try {
-    const here = new URL("../../build-info.json", import.meta.url).pathname;
-    stampCache = String(JSON.parse(fsRead(here, "utf8")).commit || "");
-  } catch { stampCache = ""; }
+  /* The compiled binary has no `../../build-info.json` next to its module; the
+     file sits beside the executable, where selfupdate looks. Measured: /health
+     answered build:"" on an installed app until this used the same list. */
+  stampCache = "";
+  /* The checkout's own file first: a stale staged copy must not win there. */
+  for (const p of [new URL("../../build-info.json", import.meta.url).pathname, ...buildInfoPaths()]) {
+    try {
+      const commit = String(JSON.parse(fsRead(p, "utf8")).commit || "");
+      if (commit) { stampCache = commit; break; }
+    } catch { /* not here — try the next place */ }
+  }
   return stampCache;
 }
 

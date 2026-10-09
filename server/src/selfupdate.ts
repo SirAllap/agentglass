@@ -108,9 +108,15 @@ function git(cwd: string, args: string[], timeout = 30_000) {
   return spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout });
 }
 
+/** Where an installed app keeps build-info.json: beside the binary. A checkout
+ *  has the staged copy instead. One list, so /health and the About pane cannot
+ *  disagree about where to look. */
+export function buildInfoPaths(execPath = process.execPath, cwd = process.cwd()): string[] {
+  return [join(dirname(execPath), "build-info.json"), resolve(cwd, "electron/staging/build-info.json")];
+}
+
 export function buildInfo(): BuildInfo {
-  const beside = join(dirname(process.execPath), "build-info.json");
-  for (const p of [beside, resolve(process.cwd(), "electron/staging/build-info.json")]) {
+  for (const p of buildInfoPaths()) {
     try {
       if (!existsSync(p)) continue;
       const j = JSON.parse(readFileSync(p, "utf8"));
