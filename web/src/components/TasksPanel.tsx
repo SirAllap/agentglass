@@ -12,7 +12,9 @@
 // with fourteen checkouts nobody can name.
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { BlockedIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, DotIcon, IconLabel, KeyboardIcon, LockIcon, MonitorIcon, NoteIcon, PlusIcon, RefreshIcon, SearchIcon } from "../lib/glyphIcons.tsx";
+import { BlockedIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, DotIcon, IconLabel, KeyboardIcon, LockIcon, MonitorIcon, NoteIcon, PlusIcon, PullRequestIcon, RefreshIcon, SearchIcon } from "../lib/glyphIcons.tsx";
+import { pickCardPr, cardPrTint, sortedCardPrs, type CardPr } from "../lib/cardPrPick.ts";
+import { cardPrsOf, onCardPrs, cardPrVersion } from "../lib/cardPrStore.ts";
 import { api } from "../lib/api.ts";
 import { FilterBuilder } from "./tasks/FilterBuilder.tsx";
 import { EMPTY, apply as applyFilters, fieldsOf, liveCount as builtCount, type FilterSet } from "./tasks/filters.ts";
@@ -3009,6 +3011,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                   minWidth: TABLE_MIN_W, background: "var(--bg)",
                   borderBottom: edge(10) }}>
               <span className="agx-stick-head">Task</span>
+              <span className="text-center">PR</span>
               {anyWho && <span className="text-center">Who</span>}
               {!!squadLabel && <span className="text-center truncate" title={squadLabel}>{squadLabel}</span>}
               {anySprint && <span>Sprint</span>}
@@ -3071,6 +3074,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                   // away whole is one nobody prunes.
                   <ClickUpRow key={t.id} t={t} today={today} on={t.id === sel} onPick={() => setSel(t.id)}
                     grid={grid} showWho={anyWho} showSquad={!!squadLabel} showSprint={anySprint} showEst={anyEst} blocked={[]} onHand={handCard}
+                    repos={repos} here={here}
                     onForget={() => { setLooked((cur) => { const left = cur.filter((x) => x.id !== t.id); if (!left.length) setOnLooked(false); return left; }); if (sel === t.id) setSel(null); }} />
                 ))}
               </div>
@@ -3138,7 +3142,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                 </button>
                 {!folded[g.status] && g.rows.map((t) => (
                   <ClickUpRow key={t.id} t={t} today={today} on={t.id === sel} onPick={() => setSel(t.id)}
-                    grid={grid} showWho={anyWho} showSquad={!!squadLabel} showSprint={anySprint} showEst={anyEst} blocked={blockedBy(t)} onHand={handCard} />
+                    grid={grid} showWho={anyWho} showSquad={!!squadLabel} showSprint={anySprint} showEst={anyEst} blocked={blockedBy(t)} onHand={handCard}
+                    repos={repos} here={here} />
                 ))}
               </div>
             ))}
@@ -4306,7 +4311,13 @@ const cuGrid = (who: boolean, squad: boolean, sprint: boolean, est: boolean, for
   // Its own track, not a floating overlay on top of the last column: a button
   // with nothing under it is easy, a button on top of the ↗ chip is the thing
   // this table stopped doing.
-  ["1fr", who ? "50px" : "", squad ? "36px" : "", sprint ? "88px" : "", "34px", "72px", est ? "38px" : "", "30px", "40px", forget ? "30px" : ""].filter(Boolean).join(" ");
+  // PR sits right after the title, its own track rather than a layer on top of
+  // it: the arrow at ↗ is the rarely-pressed ClickUp escape hatch, and putting
+  // the pull request beside it would bury the one people actually want under
+  // the one they almost never press. Fixed width and always present — like
+  // Cmts and Pts, a card with none draws an empty cell rather than shifting
+  // its neighbours.
+  ["1fr", "58px", who ? "50px" : "", squad ? "36px" : "", sprint ? "88px" : "", "34px", "72px", est ? "38px" : "", "30px", "40px", forget ? "30px" : ""].filter(Boolean).join(" ");
 
 /**
  * The one custom field worth a column of its own: a coloured drop-down.
@@ -4577,7 +4588,7 @@ function PriorityPick({ t, writable, busy, onApply }: {
   );
 }
 
-function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint, showEst, blocked, onHand, onForget }: {
+function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint, showEst, blocked, onHand, onForget, repos, here }: {
   t: ProviderTask; today: string; on: boolean; onPick: () => void;
   grid: string; showWho: boolean; showSquad: boolean; showSprint: boolean; showEst: boolean;
   /** Unfinished cards this one is waiting on. Empty means it can be started. */
@@ -4588,6 +4599,9 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
   /** Drop this card from Looked up. Only that section's rows get the column —
    *  the board proper has nothing to forget. */
   onForget?: () => void;
+  /** Where `clickup/prs` looks for this card's repository — same inputs
+   *  `rootForTask` already takes in the card's own sidebar. */
+  repos: GitRepoRef[]; here: string;
 }) {
   /*
    * The three things you want from a row without opening it.
@@ -4611,6 +4625,25 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
   const now = t.due === today;
   const done = t.statusKind === "done";
   const sq = showSquad ? swatch(t) : null;
+
+  /*
+   * The card's pull requests, read through the shared cache rather than
+   * fetched here: see cardPrStore.ts for why a search per row per render is
+   * not on the table. `useSyncExternalStore` re-renders this one row the
+   * moment the cache's answer lands, without the board re-fetching anything.
+   */
+  useSyncExternalStore(onCardPrs, cardPrVersion, cardPrVersion);
+  const prField = t.custom?.find((c) => /github/i.test(c.name))?.value ?? "";
+  const prCwd = rootForTask(t.list, repos, here) ?? here;
+  const prEntry = cardPrsOf(t.id, t.customId || "", prField, prCwd);
+  const prPick = pickCardPr(prEntry?.prs);
+  const [prMenu, setPrMenu] = useState<{ x: number; y: number } | null>(null);
+  const openCardPr = (p: CardPr) => {
+    const ref = prRefFromUrl(p.url);
+    if (ref) openPr(ref.repo, p.number);
+    else openPrs(String(p.number), p.state === "OPEN" ? "open" : "all");
+  };
+
   return (
     <div role="row" tabIndex={0} aria-current={on ? "true" : undefined} onClick={onPick}
       onKeyDown={(e) => { if (e.key === "Enter") onPick(); }}
@@ -4696,6 +4729,46 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
           ))}
         </div>
       </div>
+      {/* The pull request, own track beside the title. Empty when there is
+          none — like Cmts and Pts — rather than shifting ↗ to its left, which
+          is the rarely-pressed ClickUp escape hatch and stays where it always
+          was. */}
+      <span className="flex items-center">
+        {prPick.kind !== "none" && (() => {
+          const shown = prPick.kind === "one" ? prPick.pr : prPick.primary;
+          const restCount = prPick.kind === "many" ? prPick.rest.length : 0;
+          const tint = cardPrTint(shown);
+          const label = shown.draft ? "Draft" : shown.state === "MERGED" ? "Merged" : shown.state === "CLOSED" ? "Closed" : "Open";
+          return (
+            <button type="button"
+              onClick={(e) => { e.stopPropagation(); if (prPick.kind === "many") { const r = e.currentTarget.getBoundingClientRect(); setPrMenu({ x: r.left, y: r.bottom + 4 }); } else { openCardPr(shown); } }}
+              className="agx-onrow inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1"
+              style={{
+                color: tint, background: `color-mix(in srgb, ${tint} 13%, transparent)`,
+                border: `1px solid color-mix(in srgb, ${tint} 40%, transparent)`,
+                outlineColor: tint,
+              }}
+              title={`${label} pull request #${shown.number}${restCount ? ` (+${restCount} more)` : ""} — ${shown.title}`}>
+              <PullRequestIcon size={ICON.xs} />
+              <span className="text-[10.5px] tabular-nums font-mono leading-none">#{shown.number}</span>
+              {restCount > 0 && <span className="text-[9.5px] leading-none" style={{ opacity: 0.85 }}>+{restCount}</span>}
+            </button>
+          );
+        })()}
+        {prMenu && prPick.kind === "many" && (
+          <ContextMenu x={prMenu.x} y={prMenu.y} onClose={() => setPrMenu(null)}>
+            {sortedCardPrs([prPick.primary, ...prPick.rest]).map((p) => (
+              <MenuItem key={p.number} onClick={() => { setPrMenu(null); openCardPr(p); }}>
+                <span className="flex items-center gap-1.5 min-w-0">
+                  <span className="shrink-0" style={{ width: 7, height: 7, borderRadius: 999, background: cardPrTint(p) }} />
+                  <span className="tabular-nums font-mono shrink-0">#{p.number}</span>
+                  <span className="truncate" style={{ color: "var(--text3)" }}>{p.title}</span>
+                </span>
+              </MenuItem>
+            ))}
+          </ContextMenu>
+        )}
+      </span>
       {showWho && (
         <span className="flex items-center pl-1">
           {(t.people ?? []).slice(0, 3).map((p, n) => <Face key={n} p={p} n={n} />)}
