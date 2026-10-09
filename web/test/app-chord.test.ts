@@ -12,7 +12,7 @@
  * encoded identically. Shipping the shifted default on top of that encoder
  * would have bound the app to readline's previous-command.
  */
-import { beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, beforeEach, describe, expect, it } from "bun:test";
 import { globalStubs } from "./stubGlobal";
 const stubGlobal = globalStubs();
 
@@ -38,6 +38,10 @@ const press = (key: string, mods: Partial<{ ctrlKey: boolean; metaKey: boolean; 
   ({ key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...mods });
 
 beforeEach(() => { store.clear(); kb.resetAppChords(); kb.resetChords(); kb.resetBindings(); });
+// The module is shared with every file after this one, and its chord caches
+// outlive the file: a test that ended on a rebound chord handed the next file a
+// customised palette chord (seen as pane-state's appChords flag, order-dependent).
+afterAll(() => { kb.resetAppChords(); kb.resetChords(); kb.resetBindings(); });
 
 describe("what the keyboard actually sends", () => {
   it("tells Ctrl+Shift+P apart from Ctrl+P", () => {

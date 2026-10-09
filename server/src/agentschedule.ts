@@ -29,6 +29,7 @@ import { agentKind } from "../../shared/agentKinds.ts";
 import * as AgentOps from "./agentops.ts";
 import { pushLantern } from "./alerts.ts";
 import { resolveCivil, localZone } from "./reminders.ts";
+import { createWakeup, type Wakeup } from "./wakeup.ts";
 
 export interface AgentSchedule {
   id: string;
@@ -132,6 +133,7 @@ export function addSchedule(p: { name: unknown; cwd: unknown; kind?: unknown; pr
    */
   const id = `sc_${randomBytes(9).toString("base64url")}`;
   insert.run(id, p.name, cwd, kind, prompt, yolo ? 1 : 0, Math.floor(due), now);
+  wake?.arm();   // an earlier due time is the one change a sleeping timer cannot see
   return { ok: true, schedule: { id, name: p.name, cwd, kind, prompt, yolo, due: Math.floor(due), created: now, firedAt: null, cancelledAt: null, result: "" } };
 }
 
@@ -183,17 +185,22 @@ export async function drainDueSchedules(now = Date.now(), deps: FireDeps = LIVE)
   return claimed;
 }
 
-let ticker: ReturnType<typeof setInterval> | null = null;
-let ticking = false;
+const nextQ = db.query<{ d: number | null }, []>(
+  `SELECT MIN(due) AS d FROM agent_schedule WHERE fired_at IS NULL AND cancelled_at IS NULL`);
+/** The earliest unfired due time, or null: the usual state, and the one with no timer. */
+export function nextScheduleWake(): number | null { return nextQ.get()?.d ?? null; }
+
+/**
+ * The claim, on one timer for the next due time (wakeup.ts) instead of a
+ * ten-second tick. Capped at 30 s a sleep so a laptop that slept through a due
+ * time starts it within 30 s of waking.
+ */
+let wake: Wakeup | null = null;
 export function startScheduleTick(): void {
-  if (ticker) return;
-  const tick = () => {
-    if (ticking) return;
-    ticking = true;
-    void drainDueSchedules().catch(() => { /* the next tick tries again */ }).finally(() => { ticking = false; });
-  };
-  tick();
-  ticker = setInterval(tick, 10_000);
-  (ticker as unknown as { unref?: () => void }).unref?.();
+  if (wake) return;
+  wake = createWakeup({ next: nextScheduleWake, run: async () => { await drainDueSchedules(); }, capMs: 30_000 });
+  wake.now();
 }
-export function stopScheduleTick(): void { if (ticker) clearInterval(ticker); ticker = null; ticking = false; }
+export function stopScheduleTick(): void { wake?.stop(); wake = null; }
+/** Re-read when the next wake is due. For the tests. */
+export function armSchedules(): void { wake?.arm(); }

@@ -727,7 +727,7 @@ def main(argv=None):
         allow = list(args.allow_host) + os.environ.get("AGENTGLASS_COCKPIT_ALLOW_HOSTS", "").split(",")
         return T._run_http(bind, expose=args.expose, allow_hosts=allow, handle=handle_message, name=NAME,
                            token_env="AGENTGLASS_COCKPIT_TOKEN",
-                           distinct_from=("AGENTGLASS_TOKEN", "AGENTGLASS_MCP_TOKEN"),
+                           distinct_from=("AGENTGLASS_TOKEN", "AGENTGLASS_MCP_TOKEN", "AGENTGLASS_UI_MCP_TOKEN"),
                            opens="the cockpit's read-only tools", expose_env="AGENTGLASS_COCKPIT_EXPOSE")
     return T._serve_stdio(handle_message)
 

@@ -7,18 +7,23 @@
  * writes. The consequence is the point: reminders keep working when Taskwarrior
  * is missing, unconfigured, or in the middle of being edited from Neovim.
  *
- * There is no `arm()` and no `setTimeout`. A tick claims what is due in one
+ * There is no timer PER REMINDER. One claim claims what is due in one
  * transactional statement and delivers what it claimed. That single decision
- * removes, at once: the boot storm (restore is just the first tick), the
+ * removes, at once: the boot storm (restore is just the first claim), the
  * cancelled-reminder-fires-anyway bug (cancellation is in the claim predicate),
  * the timer-and-sweep double claim (there is one claimer), the suspend gap (a
  * laptop that slept through 09:00 fires at 09:03 rather than never), and the
  * bookkeeping of a scheduling horizon.
+ *
+ * WHEN the claim runs is one timer for the next due time (wakeup.ts), re-set by
+ * `addReminder`, and absent when nothing is pending. It was a ten-second tick,
+ * 360 wake-ups an hour on a machine with no reminders at all.
  */
 import { randomUUID } from "node:crypto";
 import { db } from "./db.ts";
 import { pushReminder } from "./alerts.ts";
 import { entered } from "./loopwatch.ts";
+import { createWakeup, type Wakeup } from "./wakeup.ts";
 import type { Reminder } from "../../shared/types.ts";
 
 type Row = {
@@ -110,6 +115,7 @@ export function addReminder(input: {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [row.id, row.task_uuid, row.title, row.root, row.civil, row.zone, row.due, row.created, row.snooze_of],
   );
+  wake?.arm();   // an earlier due time is the one change a sleeping timer cannot see
   return { ok: true, reminder: toReminder(row) };
 }
 
@@ -130,8 +136,10 @@ export function cancelReminder(id: string): { ok: boolean } {
  * Snooze closes the old row and opens a new one.
  *
  * `due` is never mutated, so the ledger is append-only and "did this fire?" has
- * one answer forever. It is also why there is nothing to un-schedule: with no
- * timers, a snooze cannot leave a stale one behind to fire twice.
+ * one answer forever. It is also why there is nothing to un-schedule: there is
+ * no timer per reminder, only the one for the next due time, and the new row
+ * re-arms it (see `addReminder`), so a snooze cannot leave a stale one behind
+ * to fire twice.
  */
 export function snoozeReminder(id: string, minutes: number): { ok: boolean; reminder?: Reminder; error?: string } {
   const row = db.query<Row, [string]>(`SELECT * FROM reminders WHERE id = ?`).get(id);
@@ -228,17 +236,6 @@ export function drainDue(now = Date.now()): Reminder[] {
 }
 
 /**
- * The tick.
- *
- * Ten seconds, and deliberately not load-shed by `backoff()`. That idiom exists
- * for sweeps that fork eighteen subprocesses; this is one indexed read over
- * tens of rows, and shedding the one loop whose entire job is to be on time
- * would be the wrong trade.
- *
- * Boot is just the first tick — there is no separate restore path with its own
- * semantics, which is where a scheduled design usually breaks.
- */
-/**
  * Ask again, for an alarm nobody answered.
  *
  * An alarm you slept through should ask a second time; that is most of what
@@ -281,18 +278,48 @@ export function nagUnacked(now = Date.now()): number {
 /** Test seam: the count is per-process, so a suite must be able to reset it. */
 export function __resetNags(): void { nags.clear(); }
 
-let ticker: ReturnType<typeof setInterval> | null = null;
-let ticking = false;
-export function startReminderTick(): void {
-  if (ticker) return;
-  const tick = () => {
-    if (ticking) return;
-    ticking = true;
-    entered("reminder tick");
-    try { drainDue(); nagUnacked(); } catch { /* the next tick tries again */ } finally { ticking = false; }
-  };
-  tick();
-  ticker = setInterval(tick, 10_000);
-  (ticker as unknown as { unref?: () => void }).unref?.();
+/**
+ * When the claim next has something to do: the earliest unfired due time, or
+ * the moment an unanswered alarm may ask again (see `nagUnacked`). Null when
+ * neither exists, which is the usual state and the one with no timer.
+ */
+export function nextReminderWake(): number | null {
+  let next: number | null = db.query<{ d: number | null }, []>(
+    `SELECT MIN(due) AS d FROM reminders WHERE fired_at IS NULL AND acked_at IS NULL AND cancelled_at IS NULL`,
+  ).get()?.d ?? null;
+  for (const r of db.query<Row, []>(
+    `SELECT * FROM reminders WHERE fired_at IS NOT NULL AND acked_at IS NULL AND cancelled_at IS NULL LIMIT ${BUDGET}`,
+  ).all()) {
+    const seen = nags.get(r.id) ?? { at: r.fired_at ?? Date.now(), n: 0 };
+    if (seen.n >= NAG_MAX) continue;
+    const at = seen.at + NAG_EVERY_MS;
+    if (next === null || at < next) next = at;
+  }
+  return next;
 }
-export function stopReminderTick(): void { if (ticker) clearInterval(ticker); ticker = null; ticking = false; }
+
+/**
+ * The claim, on its clock.
+ *
+ * Deliberately not load-shed by `backoff()`. That idiom exists for sweeps that
+ * fork eighteen subprocesses; this is one indexed read over tens of rows, and
+ * shedding the one loop whose entire job is to be on time would be the wrong
+ * trade. Capped at 30 s a sleep, so a laptop that slept through a due time
+ * claims it within 30 s of waking (wakeup.ts has the why).
+ *
+ * Boot is just the first run — there is no separate restore path with its own
+ * semantics, which is where a scheduled design usually breaks.
+ */
+let wake: Wakeup | null = null;
+export function startReminderTick(): void {
+  if (wake) return;
+  wake = createWakeup({
+    next: nextReminderWake,
+    run: () => { entered("reminder claim"); drainDue(); nagUnacked(); },
+    capMs: 30_000,
+  });
+  wake.now();
+}
+export function stopReminderTick(): void { wake?.stop(); wake = null; }
+/** Re-read when the next wake is due. For a writer that is not `addReminder`, and the tests. */
+export function armReminders(): void { wake?.arm(); }

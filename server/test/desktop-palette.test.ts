@@ -7,11 +7,11 @@
  * the terminal colours — with invented values.
  */
 import { describe, test, expect, beforeEach, afterEach, afterAll } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync, renameSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { desktopTheme, parseColors, mix } from "../../shared/desktopPalette.ts";
-import { desktopPalette, __forgetDesktopPalette } from "../src/desktopPalette.ts";
+import { desktopPalette, watchDesktopPalette, __forgetDesktopPalette } from "../src/desktopPalette.ts";
 
 const COLORS = `mode = "dark"
 
@@ -180,5 +180,136 @@ describe("the desktop's mark, rebuilt from geometry", () => {
   test("a file with no geometry is no mark", () => {
     expect(rebuildMark('<svg viewBox="0 0 1 1"></svg>')).toBeNull();
     expect(rebuildMark("<svg><path d=\"m0 0\"/></svg>")).toBeNull();
+  });
+});
+
+describe("telling the app when the desktop switches theme", () => {
+  const prior = { home: process.env.HOME, state: process.env.XDG_STATE_HOME };
+  let home = "";
+  let current = "";
+  const stage = (slug: string, colors = COLORS) => {
+    /* How the desktop switches: a new `theme` directory renamed over the old one. */
+    const next = join(current, "theme-next");
+    mkdirSync(next, { recursive: true });
+    writeFileSync(join(next, "colors.toml"), colors);
+    rmSync(join(current, "theme"), { recursive: true, force: true });
+    renameSync(next, join(current, "theme"));
+    writeFileSync(join(current, "theme.name"), slug + "\n");
+  };
+  const settle = (ms = 700) => new Promise((r) => setTimeout(r, ms));
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "agx-desk-watch-"));
+    current = join(home, ".local", "state", "omarchy", "current");
+    mkdirSync(current, { recursive: true });
+    process.env.HOME = home;
+    delete process.env.XDG_STATE_HOME;
+    __forgetDesktopPalette();
+    stage("orbit-night");
+  });
+  afterEach(() => { rmSync(home, { recursive: true, force: true }); });
+  afterAll(() => {
+    if (prior.home === undefined) delete process.env.HOME; else process.env.HOME = prior.home;
+    if (prior.state === undefined) delete process.env.XDG_STATE_HOME; else process.env.XDG_STATE_HOME = prior.state;
+    __forgetDesktopPalette();
+  });
+
+  /* Waits for the announcement rather than for a fixed 700 ms: the watcher
+     thread is slow to hand an event over when the machine is busy (16 copies of
+     this file at once missed the fixed window twice in ninety-six), and a late
+     announcement is not a wrong one. "Once" is still exact: after the first one
+     the file keeps listening for as long as a second would need to arrive. */
+  const until = async (f: () => boolean, ms = 5000) => {
+    for (const end = Date.now() + ms; !f() && Date.now() < end;) await settle(20);
+  };
+
+  test("a switch is announced once, however many files it writes", async () => {
+    let calls = 0;
+    const stop = watchDesktopPalette(() => { calls++; });
+    try {
+      stage("orbit-day", COLORS.replace("#1a1b26", "#f5f0e6"));
+      await until(() => calls > 0);
+      await settle();
+      expect(calls).toBe(1);
+    } finally { stop(); }
+  });
+
+  /* Bun 1.3.9 ends an fs.watch at its first error event, and the error is a
+     name that was in the directory when the event was queued and gone when the
+     watcher looked at it: `theme-next` of every switch. A watcher that stayed
+     dead after that announced nothing for the rest of the run, and in this file
+     it was the whole flake: a switch staged straight after the watch opened,
+     with the watcher thread a moment behind, was never announced (2 of 96 runs
+     with sixteen copies of this file at once, none alone). The error is raised
+     here on demand because on a quiet machine it comes about once in thirty. */
+  const fakeWatch = () => {
+    const opened: { fire: () => void; fail: () => void; closed: boolean }[] = [];
+    const open = ((_dir: string, cb: () => void) => {
+      let onError: () => void = () => {};
+      const w = { closed: false, fire: () => cb(), fail: () => onError(), on: (_e: string, f: () => void) => { onError = f; }, close: () => { w.closed = true; } };
+      opened.push(w);
+      return w;
+    }) as unknown as typeof import("node:fs").watch;
+    return { open, opened };
+  };
+
+  test("a watch that raised an error is replaced, and the switch it missed is announced", async () => {
+    let calls = 0;
+    const { open, opened } = fakeWatch();
+    const stop = watchDesktopPalette(() => { calls++; }, open);
+    try {
+      expect(opened.length).toBe(1);
+      stage("orbit-day", COLORS.replace("#1a1b26", "#f5f0e6"));
+      opened[0]!.fail();
+      await until(() => calls > 0);
+      expect(calls).toBe(1);
+      expect(opened.length).toBe(2);
+      expect(opened[0]!.closed).toBe(true);
+      /* The new watch is the live one. */
+      stage("orbit-dusk", COLORS.replace("#1a1b26", "#101018"));
+      opened[1]!.fire();
+      await until(() => calls > 1);
+      expect(calls).toBe(2);
+    } finally { stop(); }
+    expect(opened[1]!.closed).toBe(true);
+  });
+
+  test("a directory that went away with the error ends the watch quietly", async () => {
+    let calls = 0;
+    const { open, opened } = fakeWatch();
+    const stop = watchDesktopPalette(() => { calls++; }, (d, cb) => {
+      if (opened.length > 0) throw new Error("ENOENT");
+      return open(d, cb as never);
+    });
+    try {
+      opened[0]!.fail();
+      await settle(400);
+      expect(calls).toBe(0);
+    } finally { stop(); }
+  });
+
+  test("nothing is announced while nothing changes", async () => {
+    let calls = 0;
+    const stop = watchDesktopPalette(() => { calls++; });
+    try {
+      writeFileSync(join(current, "unrelated"), "x");
+      await settle();
+      expect(calls).toBe(0);
+    } finally { stop(); }
+  });
+
+  test("a stopped watcher says nothing more", async () => {
+    let calls = 0;
+    const stop = watchDesktopPalette(() => { calls++; });
+    stop();
+    stage("orbit-day", COLORS.replace("#1a1b26", "#f5f0e6"));
+    await settle();
+    expect(calls).toBe(0);
+  });
+
+  test("a desktop that publishes nothing costs nothing: no watcher, no error", () => {
+    rmSync(current, { recursive: true, force: true });
+    const stop = watchDesktopPalette(() => {});
+    expect(typeof stop).toBe("function");
+    stop();
   });
 });

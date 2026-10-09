@@ -129,3 +129,28 @@ describe("the id a command line has to carry", () => {
     expect(ids.every((id) => id.startsWith("sc_"))).toBe(true);
   });
 });
+
+describe("the claim's clock", () => {
+  // One timer for the next due time instead of a ten-second tick: it needs the
+  // earliest unfired row, and addSchedule must tell it about a new one.
+  test("the next wake is the earliest unfired, uncancelled due time, else nothing", async () => {
+    const { nextScheduleWake } = await import("../src/agentschedule.ts");
+    expect(nextScheduleWake()).toBeNull();
+    const a = addSchedule({ name: "w1", cwd: WT, when: "+30m" }, Date.now());
+    const b = addSchedule({ name: "w2", cwd: WT, when: "+10m" }, Date.now());
+    const dueB = (b as { schedule: { due: number } }).schedule.due;
+    expect(nextScheduleWake()).toBe(dueB);
+    cancelSchedule((b as { schedule: { id: string } }).schedule.id);
+    expect(nextScheduleWake()).toBe((a as { schedule: { due: number } }).schedule.due);
+    db.exec("UPDATE agent_schedule SET fired_at = 1");
+    expect(nextScheduleWake()).toBeNull();
+  });
+
+  test("adding a schedule re-arms the timer", async () => {
+    const text = await Bun.file(new URL("../src/agentschedule.ts", import.meta.url)).text();
+    const at = text.indexOf("export function addSchedule(");
+    const body = text.slice(at, text.indexOf("\nexport function cancelSchedule(", at))
+      .split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+    expect(body).toContain("wake?.arm()");
+  });
+});

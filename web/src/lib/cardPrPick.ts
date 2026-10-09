@@ -24,6 +24,26 @@ export interface CardPr {
   url: string;
   author?: string;
   mine?: boolean;
+  /** Whose it is: see `CardPr` in shared/providers.ts. Absent means own, which
+   *  is what every pull request was before the server said otherwise. */
+  link?: "own" | "mention";
+  /** For a mention: the item the pull request belongs to. */
+  belongsTo?: string;
+}
+
+/** A pull request this card only NAMES, as opposed to one cut for it. */
+export const isRelated = (p: CardPr): boolean => p.link === "mention";
+
+/** The words for a related pull request's tooltip and accessible name. */
+export function relatedNote(p: CardPr): string {
+  return `mentions this card${p.belongsTo ? `; belongs to ${p.belongsTo}` : ""}`;
+}
+
+/** How many of the others are the card's own and how many only mention it, for
+ *  the chip's count. */
+export function restCounts(rest: readonly CardPr[]): { own: number; related: number } {
+  const related = rest.filter(isRelated).length;
+  return { own: rest.length - related, related };
 }
 
 function rank(p: CardPr): number {
@@ -34,10 +54,14 @@ function rank(p: CardPr): number {
 }
 
 /** Every pull request the card has, in the order the chip and its popover
- *  read them: open first, then draft, then merged, then closed; within each,
- *  your own before anyone else's, then newest number first. */
+ *  read them: the card's OWN before any that merely mention it (a stacked pull
+ *  request names the one under it, and being newer must not make it the chip
+ *  of the card below); then open, draft, merged, closed; within each, yours
+ *  before anyone else's, then newest number first. */
 export function sortedCardPrs(prs: readonly CardPr[]): CardPr[] {
-  return [...prs].sort((a, b) => rank(a) - rank(b) || Number(!!b.mine) - Number(!!a.mine) || b.number - a.number);
+  return [...prs].sort((a, b) =>
+    Number(isRelated(a)) - Number(isRelated(b)) || rank(a) - rank(b)
+    || Number(!!b.mine) - Number(!!a.mine) || b.number - a.number);
 }
 
 export type CardPrPick =
@@ -61,6 +85,7 @@ export function pickCardPr(prs: readonly CardPr[] | null | undefined): CardPrPic
  *  `PrPanel.tsx`'s `rowState` already draws it. No new colour, just the two
  *  house mappings this app already has for a pull request's state. */
 export function cardPrTint(p: CardPr): string {
+  if (isRelated(p)) return "var(--info)";
   if (p.draft) return "var(--text3)";
   if (p.state === "MERGED") return "#a371f7";
   if (p.state === "CLOSED") return "var(--error)";
@@ -93,6 +118,7 @@ export function mergedInk(): string {
  *  the page it sits on. Fills stay `cardPrTint` as they are; only text reads
  *  through this. */
 export function cardPrInk(p: CardPr): string {
+  if (isRelated(p)) return "var(--info-ink)";
   if (p.draft) return "var(--text3)";
   if (p.state === "MERGED") return mergedInk();
   if (p.state === "CLOSED") return "var(--error-ink)";

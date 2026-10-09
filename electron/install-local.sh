@@ -240,6 +240,16 @@ if [ -f "$APP/resources/bin/agentglass-cockpit-mcp" ] && [ -f "$APP/resources/bi
   chmod +x "$APP/resources/bin/agentglass-cockpit-mcp" 2>/dev/null || true
   ln -sf "$APP/resources/bin/agentglass-cockpit-mcp" "$BIN/agentglass-cockpit-mcp"
 fi
+# The app's own screen, for an agent: panels, reads and settings. The MCP form
+# loads the browser MCP server's transport and the CLI from beside it.
+if [ -f "$APP/resources/bin/agentglass-ui" ]; then
+  chmod +x "$APP/resources/bin/agentglass-ui" 2>/dev/null || true
+  ln -sf "$APP/resources/bin/agentglass-ui" "$BIN/agentglass-ui"
+  if [ -f "$APP/resources/bin/agentglass-ui-mcp" ] && [ -f "$APP/resources/bin/agentglass-browser-mcp" ]; then
+    chmod +x "$APP/resources/bin/agentglass-ui-mcp" 2>/dev/null || true
+    ln -sf "$APP/resources/bin/agentglass-ui-mcp" "$BIN/agentglass-ui-mcp"
+  fi
+fi
 # The named-agent CLI: a script's launcher and liveness for unattended agents
 # on the engine. Same home as the browser CLI, for the same reason.
 if [ -f "$APP/resources/bin/agentglass-agent" ]; then
@@ -262,7 +272,7 @@ fi
 #
 # Copied rather than symlinked: this outlives any particular build, and a
 # dangling skill is a tool an agent believes in and cannot use.
-for _s in browser-use orchestrator; do
+for _s in browser-use orchestrator ui-control; do
   [ -f "$APP/resources/skills/$_s/SKILL.md" ] || continue
   mkdir -p "$HOME/.claude/skills/$_s"
   cp "$APP/resources/skills/$_s/SKILL.md" "$HOME/.claude/skills/$_s/SKILL.md"
@@ -331,6 +341,8 @@ echo "  command  agentglass"
 [ -L "$BIN/agentglass-browser" ] && echo "  agent cli agentglass-browser (drives the built-in browser)"
 [ -L "$BIN/agentglass-browser-mcp" ] && echo "  mcp      claude mcp add agentglass-browser -- agentglass-browser-mcp"
 [ -L "$BIN/agentglass-cockpit-mcp" ] && echo "  mcp      claude mcp add agentglass-cockpit -- agentglass-cockpit-mcp"
+[ -L "$BIN/agentglass-ui" ] && echo "  agent cli agentglass-ui (opens panels, reads state, reads and sets settings)"
+[ -L "$BIN/agentglass-ui-mcp" ] && echo "  mcp      claude mcp add agentglass-ui -- agentglass-ui-mcp"
 [ -f "$HOME/.claude/skills/browser-use/SKILL.md" ] && echo "  skill    ~/.claude/skills/browser-use (so agents know it is there)"
 echo "  launcher $DESKTOP/agentglass.desktop"
 

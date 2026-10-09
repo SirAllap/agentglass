@@ -6,7 +6,7 @@
  * asks `isAppChord` before it stops a key; these pin the answer and that the
  * reader asks it first.
  */
-import { beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, beforeEach, describe, expect, it } from "bun:test";
 import { globalStubs } from "./stubGlobal";
 const stubGlobal = globalStubs();
 
@@ -28,6 +28,10 @@ const press = (key: string, mods: Partial<{ ctrlKey: boolean; metaKey: boolean; 
   ({ key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...mods });
 
 beforeEach(() => { store.clear(); kb.resetAppChords(); kb.resetChords(); kb.resetBindings(); });
+// The module is shared with every file after this one, and its chord caches
+// outlive the file: a test that ended on a rebound chord handed the next file a
+// customised palette chord (seen as pane-state's appChords flag, order-dependent).
+afterAll(() => { kb.resetAppChords(); kb.resetChords(); kb.resetBindings(); });
 
 describe("isAppChord", () => {
   it("counts the palette chord, so the reader lets it reach window", () => {

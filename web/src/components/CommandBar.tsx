@@ -26,6 +26,7 @@ import type { GitRepoRef } from "../../../shared/types.ts";
 import { openSettings } from "../lib/openSettings.ts";
 import { searchSettings, type SettingsPage } from "../lib/settingsIndex.ts";
 import { SETTINGS_PAGES as ALL_SETTINGS_PAGES } from "../lib/settingsRows.gen.ts";
+import { clickupSetup } from "../lib/clickupSetup.ts";
 import { HAS_BROWSER } from "../lib/desktop.ts";
 import type { Recipe } from "../../../shared/types.ts";
 import type { ProjectCommand, TerminalCommands } from "../../../shared/types.ts";
@@ -316,6 +317,14 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  /* The ClickUp page exists only while ClickUp is connected, so the palette lists it only then. */
+  const [cuHere, setCuHere] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    void clickupSetup().then((c) => { if (live) setCuHere(c.connected); });
+    return () => { live = false; };
+  }, [open]);
   const [customOpen, setCustomOpen] = useState(false);
   const [customLabel, setCustomLabel] = useState("");
   const [customCmd, setCustomCmd] = useState("");
@@ -478,11 +487,12 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
    * nobody asked for on top of every make target in the repo.
    */
   const ql = query.trim().toLowerCase();
+  const shownPages = cuHere ? SETTINGS_PAGES : SETTINGS_PAGES.filter((p) => p.id !== "clickup");
   const settingsPageMatches = ql
-    ? SETTINGS_PAGES.filter((p) => p.label.toLowerCase().includes(ql))
-    : SETTINGS_PAGES;
+    ? shownPages.filter((p) => p.label.toLowerCase().includes(ql))
+    : shownPages;
   const settingsRowMatches = ql
-    ? searchSettings(ql, SETTINGS_PAGES_NO_KW).filter((r) => r.row)
+    ? searchSettings(ql, SETTINGS_PAGES_NO_KW).filter((r) => r.row && (cuHere || r.pane !== "clickup"))
     : [];
 
   const groups: [string, ProjectCommand[]][] = [];

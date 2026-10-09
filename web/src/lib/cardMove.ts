@@ -40,13 +40,13 @@ import { cardRef, looksLikeOurs } from "./cardRef.ts";
  */
 export function mergeCardRef(
   pr: { headRefName?: string; title?: string; body?: string },
-  setup: { connected: boolean; prefix?: string } | null,
+  setup: { connected: boolean; prefix?: string; noCustomIds?: boolean } | null,
 ): { label: string; query: string } | null {
   if (!setup?.connected) return null;
   const ref = cardRef(pr);
   if (!ref) return null;
   if (ref.from === "url") return { label: ref.label, query: ref.query };
-  if (!looksLikeOurs(ref, setup?.prefix, false)) return null;
+  if (!looksLikeOurs(ref, setup?.prefix, false, setup?.noCustomIds)) return null;
   return { label: ref.label, query: ref.query };
 }
 
@@ -149,6 +149,21 @@ export function reviewStatus(statuses: ListStatus[], current: string, names: str
     for (const n of names) { hit = open.find((s) => eqStatus(s.status, n)); if (hit) break; }
   } else hit = open.find((s) => /review/i.test(s.status));
   return hit && !eqStatus(hit.status, current) ? hit.status : "";
+}
+
+/**
+ * What the merge dialog's card choice opens on: the first of the workspace's
+ * names that the card's list has, unless the card is already there, else
+ * `LEAVE_ALONE`. Offered, never imposed: the dialog still lets the person
+ * change it, and leaving it writes nothing. Names are the workspace's own, so
+ * a list without any of them preselects nothing rather than guessing a word.
+ */
+export function mergePreselect(statuses: ListStatus[], current: string, names: string[]): string {
+  for (const n of names) {
+    const hit = statuses.find((x) => eqStatus(x.status, n));
+    if (hit) return eqStatus(hit.status, current) ? LEAVE_ALONE : hit.status;
+  }
+  return LEAVE_ALONE;
 }
 
 /**

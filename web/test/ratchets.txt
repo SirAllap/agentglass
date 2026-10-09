@@ -4,4 +4,4 @@
 # so a migration lowers the line in the same commit and nothing can creep
 # back into the room it freed.
 bg2-fill 0
-border-literal 463
+border-literal 456

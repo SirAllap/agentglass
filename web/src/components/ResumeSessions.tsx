@@ -26,6 +26,7 @@ import type { AgentSessionRow } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
 import { ago } from "../lib/fileRecents.ts";
 import { Portal } from "./Portal.tsx";
+import { subscribeViewModal, takeViewModal } from "../lib/viewModalIntent.ts";
 import { LAYER } from "../lib/layers.ts";
 import { CHIP, CHIP_SURFACE, CHIP_SURFACE_CLS, INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 import { ICON } from "../lib/iconSize.ts";
@@ -64,6 +65,15 @@ export function ResumeSessions({ root, disabled, onOpen, onGo }: {
     { top: 0, left: 0, maxHeight: 460 });
 
   const close = useCallback(() => { setOpen(false); setQ(""); }, []);
+
+  // Asked for through the registry (lib/viewModalIntent.ts); MoreMenu opens
+  // itself first so this is mounted to hear it, and a request that arrived
+  // before the mount is still in the mailbox.
+  useEffect(() => {
+    const run = () => { if (takeViewModal("terminal.resume")) setOpen(true); };
+    run();
+    return subscribeViewModal(run);
+  }, []);
 
   /* Asked for when the menu opens, not on a timer: a transcript list is a
      directory read per checkout and this is a menu, not a live view. */

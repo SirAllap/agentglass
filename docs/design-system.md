@@ -74,6 +74,7 @@ be its value there.
 | `CTRL_H` | compact 22, regular 28, large 32 | `web/src/components/workspace/Chrome.tsx` |
 | `EDGE` | 1px, `--text` at 14%: the outline | `web/src/components/workspace/Chrome.tsx` |
 | `LINE` | 1px, `--surface-line`: the rule | `web/src/components/workspace/Chrome.tsx` |
+| `tintEdge` | a 1px edge tinted by a hue the caller owns: the edge that means something | `web/src/components/workspace/Chrome.tsx` |
 | `CHIP` | the control shape: 11px, `rounded-lg`, 28px min height | `web/src/components/workspace/Chrome.tsx` |
 | `CHIP_SURFACE` | fill and `EDGE` for a control with no on-state | `web/src/components/workspace/Chrome.tsx` |
 | `CHIP_SURFACE_CLS` | its hover step | `web/src/components/workspace/Chrome.tsx` |
@@ -96,6 +97,8 @@ be its value there.
 | `HIT` | 26 | `web/src/lib/iconSize.ts` |
 | `MIN_BOX` | 20 | `web/src/lib/iconSize.ts` |
 | `LAYER` | viewer 10020 up to alarm 10300 | `web/src/lib/layers.ts` |
+| `COLLAPSE_FROM` | 7 | `web/src/lib/prStack.ts` |
+| `MAX_TIERS` | 64 | `web/src/lib/prStack.ts` |
 | `--surface-nav` | the nav, leaning to `--bg2` | `web/src/index.css` |
 | `--surface-card` | a card, panel, dialog or popover body | `web/src/index.css` |
 | `--surface-inset` | a well inside a card that takes input | `web/src/index.css` |
@@ -197,6 +200,19 @@ with a quiet "No card linked". When the line cannot hold the block it takes a
 line of its own, right aligned; in a lane narrower than the block it wraps onto
 a second row rather than overflow.
 
+The header band above the identity line says what a person decided, in a 22px
+row that never wraps. At its right it draws one 16px face per person (8px apart) the pull
+request is waiting on or has heard from: up to three, then a `+N` pill whose
+tooltip lists the rest, every face titled "login — state". A 1.5px ring
+outside the face says the state (amber solid: asked to look again; grey dashed:
+asked and not answered; red: changes requested; green: approved; grey solid:
+commented) and an `ICON.xs` badge at its corner repeats it by shape, so the
+colour is never the only cue. Faces sit before the open-threads pill and the
+arrow, which do not move. The decision (who, which state, in which order, and
+the "Waiting on N reviewers" sentence for two or more) is
+`web/src/lib/cardReviewers.ts`; when and how many threads each person has open
+stay in the pull request's own page, because the list does not carry them.
+
 The two copy buttons (card id, card name) live in a 56px box inside the block
 and replace the faces on pointer-over or focus-within, so nothing moves; with no
 hover (coarse pointer) they take an inline slot. Under them: the title (cut
@@ -210,6 +226,39 @@ the standing zone and the footer become a 352px right column and the link and
 star move up to the identity line. Which block a card gets, and the per-repository
 rule, live in `lib/prCardBlock.ts`; the wording of each zone in
 `lib/prCardZones.ts`; both with tests.
+
+### A stacked pull request
+
+A pull request that targets another open pull request's branch is drawn as part
+of a stack, in three places and no new row (`StackMarks.tsx`, with the decision in
+`lib/prStack.ts` and the words in `lib/prStackWords.ts`).
+
+- **The spine** is one numbered box per open tier down the card's left edge,
+  inside its padding (5px in, 16px wide, 2px apart, never under `MIN_BOX` tall,
+  so a 6-stack card is 140px). The same boxes on every card of the stack: solid
+  is this card, tinted another one on the board, dashed one that is not on it.
+  A base that is gone is drawn and never counted: a drawn tick for merged, a
+  drawn cross for closed, `?` for a branch with no pull request. From
+  `COLLAPSE_FROM` tiers up the middle is a count (`+3`). A card's content starts
+  12px further in; that is the whole cost of the mark besides the box heights.
+  The boxes are decorative at 16px, so the spine is an `img` with the sentence
+  as its name and the token is the target.
+- **The token** replaces the base branch in the stand line: `MIN_BOX` tall,
+  `#1180 · ready to land` and a caret, pressing it opens that pull request inside
+  the app. The word is the tracker card's status when the app already holds it,
+  else the column the base sits in (also for a filtered-out one), else its state.
+  Dashed is a base that is not on the board, orange a broken stack. Where the
+  base cannot be opened it is the branch name, plain.
+- **The control** is three fixed slots after the number in a pull request's
+  header, 150px: previous (the base), the identifier with mini boxes and
+  `2 of 3` (opens the ladder), next. A missing neighbour keeps its slot, dimmed,
+  so stepping moves nothing. The ladder is a popover of `agx-menu` over the
+  branch row: the trunk, each rung with its checks, review and word, `you are
+  here`, a dashed rung for a missing base. The branch field carries the same
+  token.
+
+Colour is a family (`--c`, `--ci`) from the house tints and never the only
+signal: every mark has a word, a number or a drawn glyph, and a sentence.
 
 ## A plugin's live canvas
 

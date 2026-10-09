@@ -55,3 +55,37 @@ test("SIGKILL of the server takes the watcher with it", async () => {
 test("SIGTERM of the server takes the watcher with it", async () => {
   expect(await leaked((s) => s.kill("SIGTERM"))).toBe(false);
 }, 20_000);
+
+/*
+ * The wrapper must not fork on a timer. It used to `sleep 1` in a loop to see
+ * whether the server was alive: 3,600 forks an hour from the first Docker
+ * panel open. A `sleep` shim on PATH records every call; docker itself is the
+ * absolute-path real one, so only the wrapper's own forks are counted.
+ */
+test("the wrapper forks nothing while it waits", async () => {
+  const shimDir = mkdtempSync(join(tmpdir(), "agx-dockerfork-"));
+  const log = join(shimDir, "sleep.log");
+  const realSleep = Bun.which("sleep") ?? "/bin/sleep";
+  writeFileSync(join(shimDir, "sleep"), `#!/bin/sh\necho x >> "${log}"\nexec ${realSleep} "$@"\n`);
+  chmodSync(join(shimDir, "sleep"), 0o755);
+  writeFileSync(join(shimDir, "docker"), `#!/bin/sh\necho $$ > "${pidFile}"\nexec ${realSleep} 300\n`);
+  chmodSync(join(shimDir, "docker"), 0o755);
+  rmSync(pidFile, { force: true });
+  const script = `import { startVolumeWatch } from ${JSON.stringify(join(import.meta.dir, "../src/dockerwatch.ts"))};
+    startVolumeWatch(); console.log("up"); setInterval(() => {}, 1000);`;
+  const server = Bun.spawn([process.execPath, "-e", script], {
+    stdout: "pipe", stderr: "ignore",
+    env: { ...process.env, PATH: `${shimDir}:${process.env.PATH}`, NODE_ENV: "test" },
+  });
+  try {
+    await (server.stdout as ReadableStream<Uint8Array>).getReader().read();
+    expect(await until(() => existsSync(pidFile) && readFileSync(pidFile, "utf8").trim() !== "", 5000)).toBe(true);
+    stray.push(Number(readFileSync(pidFile, "utf8")));
+    await Bun.sleep(3500);
+    expect(existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean).length : 0).toBe(0);
+  } finally {
+    server.kill("SIGKILL");
+    await server.exited;
+    rmSync(shimDir, { recursive: true, force: true });
+  }
+}, 20_000);

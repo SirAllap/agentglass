@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api, IS_DEMO } from "../lib/api.ts";
 import { IS_DESKTOP } from "../lib/desktop.ts";
 import { ReleaseNotesModal } from "./ReleaseNotesModal.tsx";
-import { markSeen, releaseToAnnounce } from "../lib/whatsNew.ts";
+import { markSeen, onShowWhatsNew, releaseToAnnounce } from "../lib/whatsNew.ts";
 
 /**
  * What changed, the first time the app runs a version it has not run before.
@@ -25,6 +25,9 @@ import { markSeen, releaseToAnnounce } from "../lib/whatsNew.ts";
 export function WhatsNew() {
   const [tag, setTag] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
+  // Asked for through the registry's door (lib/whatsNew.ts showWhatsNew): shown
+  // as About's button shows them, and never marked as seen.
+  const [demand, setDemand] = useState<{ error?: string; loading: boolean } | null>(null);
 
   useEffect(() => {
     // A browser tab cannot have updated anything: `/update/notes` is gated on
@@ -50,7 +53,28 @@ export function WhatsNew() {
     return () => { live = false; clearTimeout(t); };
   }, []);
 
-  const close = () => { if (tag) markSeen(tag); setTag(null); };
+  useEffect(() => onShowWhatsNew(() => {
+    setTag(null);
+    setNotes("");
+    setDemand({ loading: true });
+    if (IS_DEMO || !IS_DESKTOP) { setDemand({ loading: false, error: "Release notes come with the desktop app" }); return; }
+    api.updateNotes()
+      .then((r) => {
+        setTag(r.tag || "");
+        setNotes(r.notes ?? "");
+        setDemand({ loading: false, ...(r.ok && r.notes.trim() ? {} : { error: r.error || "No notes for this release" }) });
+      })
+      .catch(() => setDemand({ loading: false, error: "Could not load the release notes" }));
+  }), []);
 
-  return <ReleaseNotesModal open={!!tag} tag={tag ?? ""} notes={notes} onClose={close} />;
+  const close = () => {
+    if (tag && !demand) markSeen(tag);
+    setTag(null);
+    setDemand(null);
+  };
+
+  return (
+    <ReleaseNotesModal open={!!tag || !!demand} tag={tag ?? ""} notes={notes}
+      loading={demand?.loading} error={demand?.error} onClose={close} />
+  );
 }

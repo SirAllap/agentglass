@@ -55,7 +55,8 @@ import { refreshCodexUsage } from "./codexusage.ts";
 import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, onGateChange, typedReason, GATE_MAX_MS, gateFailClosed, denyByRule, allowByRule, validGateId } from "./gate.ts";
 import { budgetHoldFor } from "./budget.ts";
 import { gateCwd, gateRuleFor } from "./gaterules.ts";
-import { parseControlCmd } from "./control.ts";
+import { parseControlCmd, controlId, awaitControl, settleControl, parseReply, nextControlRid, callerRequestId, CONTROL_TIMEOUT_ERROR, changedSetting, makeWriteLimiter, makeRefusalThrottle, controlSwitch, controlRefusal } from "./control.ts";
+import { isReadAction, isWriteKind, describeUiActions, presentOf, argsRefusal, entryOfBody, levelAllows, UI_ACTIONS } from "../../shared/uiActions.ts";
 import { outwardAction, outwardLine } from "./outward.ts";
 import { listLanes } from "./lanes.ts";
 import { gateLane, dropBrowserTarget, askBrowser, browserReadyCount, exportAudit, noteBrowserManager, noteBrowserReady, parseAsk, setBrowserSink, settleBrowser, type BrowserOp, runSteps, waitForEvents, recordFrames, traceRecording, auditAsScript, downloadFile, runLanes, withObservation, parseScrape, runScrape } from "./browserdrive.ts";
@@ -103,7 +104,7 @@ import { spawnPoolStats } from "./spawnpool.ts";
 import { singleFlight, inflightCount } from "./singleflight.ts";
 import { openInEditor, editorTarget, editorCapability, HAS_NVIM } from "./editor.ts";
 import { syncTheme, snippetStatus, SNIPPETS, tmuxThemePath, repairTmuxTheme, currentTheme, automatedThemeClient } from "./themesync.ts";
-import { desktopPalette, desktopLogo } from "./desktopPalette.ts";
+import { desktopPalette, desktopLogo, watchDesktopPalette } from "./desktopPalette.ts";
 import { existsSync as fsExists, readFileSync as fsRead, writeFileSync as fsWrite, mkdtempSync } from "node:fs";
 import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
 import { listPortsAsync, listResources, spaceFor, killPort } from "./machine.ts";
@@ -116,7 +117,7 @@ import { currentRuns, runById, runActivity, startRun, adoptPane, finishRun } fro
 import { failed } from "./refused.ts";
 import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, addClickupFolder, refreshFoldersIfStale, replaceViewUrl, readView } from "./providers.ts";
 import { clickupPrefs, setClickupPrefs, settleFirstRun } from "./clickupPrefs.ts";
-import { savedViews, savedFolders, currentView, setCurrent, removeView, removeFolder, knownCardPrefix, boardHolding, setWritesAllowed, patchCachedTask } from "./clickupviews.ts";
+import { savedViews, savedFolders, currentView, setCurrent, removeView, removeFolder, knownCardPrefix, knownNoCustomIds, boardHolding, setWritesAllowed, patchCachedTask } from "./clickupviews.ts";
 import { assignSelf, setAssignee, setCard, listMembers, setStatus, setPriority, setField, clearField, sprintLists, searchTasks, searchTasksStream, warmBodySweep, taskDetail, tagsForTask, findCard, cardPullRequests, clickupWriteEnabled, commentOn, updateTask, setTag, moveToList, createTask, addChecklist, addChecklistItem, setChecklistItem, editComment as editClickupComment, replyToComment, resolveComment, deleteComment as deleteClickupComment } from "./clickup.ts";
 import { clickupTasks, dropAssignedCache } from "./clickup.ts";
 import type { ProviderId } from "../../shared/providers.ts";
@@ -156,7 +157,7 @@ import {
   prBaseOf,
   ghRateLimit,
   branchBehind, localHead, prRollup, repoIdFor as prRepoIdFor, subscribeTalkSeen,
-  prBranches, prsForBranch, nodeIdOk, locateRepo, isForeignRoot } from "./prs.ts";
+  prBranches, prsForBranch, prForHead, nodeIdOk, locateRepo, isForeignRoot } from "./prs.ts";
 import { planCheckOnBase, startCheckOnBase, checkOnBaseStatus, cancelCheckOnBase } from "./checkOnBasePr.ts";
 import { repoSpend } from "./spend.ts";
 import { repoMetrics } from "./checkRuns.ts";
@@ -1528,6 +1529,38 @@ const DOCKER_SPAWNS = new Set([
 ]);
 
 const clients = new Set<ServerWebSocket<WsData>>();
+/** Writes through /control (a settings change, a staged level 3 door), per caller (control.ts). */
+const controlWriteLimit = makeWriteLimiter();
+/**
+ * How far /control may go, read ONCE here, when the process starts. Nothing
+ * below re-reads the environment, and nothing in this file, the registry or a
+ * settings def assigns to it, so a running server cannot be talked into a
+ * higher level by anything that reaches it, an agent with the machine token
+ * included. The owner changes it the only way it can change: by restarting the
+ * server with another value (server/test/control-levels.test.ts pins this).
+ */
+const CONTROL = controlSwitch();
+// A variable that was set to something unreadable has already failed closed
+// (control.ts); the owner hears it once, here, with the value and what is held.
+for (const w of CONTROL.warnings) console.warn(`agentglass: ${w}`);
+/** Refusals of /control, one /actions row per caller per minute with a count of the rest. */
+const controlRefusals = makeRefusalThrottle();
+/**
+ * The sockets a /control frame goes to: windows that said hello (web/src/lib/
+ * useLive.ts does on every connect), not every /stream listener. A control frame
+ * carries the request id a reply must echo, and a listener that never said
+ * hello (a paired phone, a second tool that only watches events) has no business
+ * holding it. The ceiling: any local holder of the machine token can say hello
+ * too, so this keeps the id off sockets that merely watch, and does not make the
+ * reply channel authenticated per window.
+ */
+function controlWindows(): ServerWebSocket<WsData>[] {
+  return [...browserSockets.values()].filter((w) => clients.has(w));
+}
+function sendControl(frame: WsFrame): void {
+  const msg = JSON.stringify(frame);
+  for (const w of controlWindows()) { try { w.send(msg); } catch { /* the sweep drops a dead socket */ } }
+}
 /** A window's own name for itself (its `hello`) to its latest socket, which is
  *  how a browser ask reaches one window instead of all of them. */
 const browserSockets = new Map<string, ServerWebSocket<WsData>>();
@@ -2191,7 +2224,7 @@ const UNDERSTUDY_MACHINE = new Set([
   "/ingest", "/browser/ready", "/statusline", "/v1/traces", "/otlp/v1/traces", "/v1/logs", "/otlp/v1/logs",
   "/desk/claim",
 ]);
-const UNDERSTUDY_BLIND = new Set(["/control", "/providers", "/pair", ...UNDERSTUDY_MACHINE]);
+const UNDERSTUDY_BLIND = new Set(["/control", "/control/result", "/providers", "/pair", ...UNDERSTUDY_MACHINE]);
 function understudyBlind(pathname: string): boolean {
   return UNDERSTUDY_BLIND.has(pathname) || UNDERSTUDY_BLIND_PREFIXES.some((p) => pathname.startsWith(p));
 }
@@ -3675,14 +3708,149 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     // through the same setters the keyboard uses. It grants no capability the
     // keyboard doesn't already, so it needs no gate beyond the localOrigin +
     // token checks the whole surface already carries.
+    //
+    // `open finder` is the one command that names a path chosen by the caller,
+    // and trustedCaller below is enough for it for three reasons. It carries a
+    // spelling and nothing else: this handler never opens, stats or reads the
+    // path, it only validates the string (control.ts). Each window then asks
+    // /browse and /preview for it under its OWN credentials and locality, so a
+    // path the finder may not look at (the keys folder, a dotted folder for a
+    // non-local viewer) comes back as the finder's own "closed" state in the
+    // window, not as content. And the caller who can send it is the one who can
+    // already type the same path into the finder, or into a shell this server
+    // hosts: loopback without an Origin, or a vouched Origin plus the token. A
+    // page on another origin is refused here, which is the case that matters:
+    // it must not be able to put a file in front of the person.
+    /*
+     * What /control accepts, as data: the registry's entries at or below the
+     * level this process allows, with their argument specs. The agent CLI and
+     * the MCP server build their commands and their tool lists from this, so
+     * they follow the registry (and AGENTGLASS_CONTROL_LEVEL) with nothing of
+     * their own to keep in step. A read: it names doors, it opens none.
+     */
+    if (pathname === "/control/actions" && req.method === "GET") {
+      return json({ ok: true, level: CONTROL.level, readonly: CONTROL.readonly, actions: describeUiActions(UI_ACTIONS, CONTROL.level) });
+    }
     if (pathname === "/control" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       let b: unknown = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
-      const cmd = parseControlCmd(b);
-      if (!cmd) return json({ ok: false, error: "unknown control command" }, 400);
-      broadcast({ type: "control", data: cmd });
-      return json({ ok: true });
+      const cmd = parseControlCmd(b, CONTROL.level);
+      if (!cmd) {
+        /*
+         * A body that names a real door above the level this process holds is
+         * told which level that door is and which switch would allow it (403,
+         * and a line in the log, since an agent that keeps asking for a write
+         * it cannot have is worth seeing). A body that names no door at all
+         * stays the bare 400: it must not list what exists above its level.
+         */
+        const no = controlRefusal(b, CONTROL);
+        if (!no) {
+          // A door this server would run, with arguments it will not: say which argument and what it takes.
+          const e = entryOfBody(b as Record<string, unknown>);
+          const bad = e && levelAllows(e.def, CONTROL.level) ? argsRefusal(e.id, e.def, (b as { cmd?: unknown }).cmd === "ui" ? (b as { args?: unknown }).args : b) : null;
+          return json({ ok: false, error: bad ?? "unknown control command" }, 400);
+        }
+        const refusedFrom = req.headers.get("origin");
+        const refusedAs = callerRequestId((b as { as?: unknown }).as);
+        const refusedWho = caller ? { ...asActor(caller)!, fromPage: !!refusedFrom && vouchedOrigin(refusedFrom) } : caller;
+        // The 403 is never throttled; the log row is, so a loop of refused writes is not a loop of rows.
+        const row = controlRefusals.note(`level:${actorOf(clientIp, refusedWho)}`);
+        if (row.log) {
+          noteAction(clientIp, `/control/${no.id}`, { ...(refusedAs ? { as: refusedAs } : {}), ...(row.suppressed ? { refused: row.suppressed } : {}) }, { ok: false, error: "level" }, refusedWho);
+        }
+        return json({ ok: false, error: no.error, level: CONTROL.level }, 403);
+      }
+      /*
+       * Delivery, said truthfully. The command rides the same sockets every
+       * window holds, and with none attached it used to be dropped while the
+       * caller was told ok, so a Stream Deck button and an agent could not tell
+       * "shown" from "nobody was there". `clients` is the audience broadcast()
+       * writes to, so zero here means zero would receive it. What this cannot
+       * know is whether a window RAN it: the frame is fire-and-forget, so `ok`
+       * still means accepted and sent to N windows, not applied.
+       *
+       * One audit line per command, the id and the verdict and nothing else:
+       * the path or row a command named is a value, and the log records that a
+       * door was opened, not what was looked at. Refused-for-no-window is a
+       * line too, since an agent that keeps asking is worth seeing.
+       */
+      const pageOrigin = req.headers.get("origin");
+      const who = caller ? { ...asActor(caller)!, fromPage: !!pageOrigin && vouchedOrigin(pageOrigin) } : caller;
+      // A settings change names its setting in the line (the id and the fact
+      // of change, not the value), and is rate limited per caller.
+      const setting = changedSetting(cmd);
+      // Any write kind is limited, not only the one built first: a level 3
+      // stage opens a dialog on the person's screen and is rate limited too.
+      const writes = isWriteKind((UI_ACTIONS[controlId(cmd) as keyof typeof UI_ACTIONS] as { kind?: string } | undefined)?.kind);
+      // `as` is the name a CLI or an MCP server stamps itself with (the browser
+      // CLI's --as): a label for the log line, never a credential.
+      const as = callerRequestId((b as { as?: unknown }).as);
+      // How it is shown: quiet for a caller that named itself, now for one that
+      // did not, or what the body says. An unknown word is a refusal, since a
+      // guess here decides whether a dialog lands on somebody who is typing.
+      const present = presentOf((b as { present?: unknown }).present, as);
+      if (!present) return json({ ok: false, error: "present is quiet or now" }, 400);
+      // The mode is a fact about an open; a read or a settings change shows
+      // nothing, so its line does not carry one.
+      const kindOf = (UI_ACTIONS[controlId(cmd) as keyof typeof UI_ACTIONS] as { kind?: string } | undefined)?.kind;
+      const opens = kindOf === "open" || kindOf === "stage";
+      const audit = (ok: boolean, error?: string, queued?: boolean, refused?: number) =>
+        noteAction(clientIp, `/control/${controlId(cmd) ?? "unknown"}`, { ...(setting ? { setting } : {}), ...(as ? { as } : {}), ...(opens ? { present } : {}), ...(queued ? { queued: true } : {}), ...(refused ? { refused } : {}) }, { ok, error }, who);
+      if (writes && !controlWriteLimit.hit(actorOf(clientIp, who))) {
+        const row = controlRefusals.note(`rate:${actorOf(clientIp, who)}`);
+        if (row.log) audit(false, "rate limited", undefined, row.suppressed);
+        return json({ ok: false, error: "too many changes from this caller; slow down" }, 429);
+      }
+      const windows = controlWindows().length;
+      if (windows === 0) {
+        audit(false, "no window");
+        return json({ ok: false, error: "no window" }, 503);
+      }
+      /*
+       * A command that carries an `id`, and every read (a read with no answer is
+       * nothing), is held until a window says what it did: {ok, applied, value?,
+       * error?}, `ok` = a window took it, `applied` = it ran. Without either, the
+       * old fire-and-forget answer is unchanged. The request id the windows echo
+       * is minted by the server, not the caller's: the caller's `id` is only a
+       * label handed back to it. The audit line is written when the window
+       * answers (or the wait runs out), so it carries the verdict.
+       */
+      const label = callerRequestId((b as { id?: unknown }).id);
+      // A settings change is answered as well: what it replaced, and the undo handle.
+      // A quiet open asks too: the window may hold it behind a chip, and a caller
+      // told "ok" for something nobody has seen would be told wrong.
+      const asks = label !== null || writes || (cmd.cmd === "ui" && isReadAction(cmd.do)) || (opens && present === "quiet");
+      // `level` tells the window what the server holds, so settings.list can say which
+      // settings are writable HERE and not only in principle.
+      const frame = { present, level: CONTROL.level, ...(as ? { as } : {}) };
+      if (!asks) {
+        sendControl({ type: "control", data: cmd, ...frame });
+        audit(true);
+        return json({ ok: true, windows });
+      }
+      const rid = nextControlRid();
+      const reply = await awaitControl(rid, () => sendControl({ type: "control", data: cmd, rid, ...frame }));
+      // Held behind a chip is a verdict too: taken, not yet shown.
+      audit(reply.ok && (reply.applied || reply.queued === true), reply.error, reply.queued === true);
+      return json({ ...reply, ...(label ? { id: label } : {}) }, reply.error === CONTROL_TIMEOUT_ERROR ? 504 : 200);
+    }
+
+    /*
+     * A window answering a command it was handed (see POST /control). NOT an
+     * agent-facing route: it is the window's call, behind the same trustedCaller
+     * gate as /browser/result, and what keeps one caller from answering another's
+     * ask is the request id, which only travels on the window sockets. The first
+     * answer wins; a second, a late one and an unknown id are all `known: false`,
+     * which is ordinary (two windows were open, or the wait ran out).
+     */
+    if (pathname === "/control/result" && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      let b: unknown = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const reply = parseReply(b);
+      if (!reply) return json({ ok: false, error: "not a reply" }, 400);
+      return json({ ok: true, known: settleControl((b as { rid?: unknown }).rid, reply) });
     }
 
     /*
@@ -6223,15 +6391,15 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
          nobody's problem, and the sidebar must not wait on a request to draw
          the tree it already has. */
       void refreshFoldersIfStale();
-      return json({ views: savedViews(), folders: savedFolders(), connected: hasCredential("clickup"), current: currentView(), prefix: knownCardPrefix(), writeEnabled: clickupWriteEnabled(), writeForced: process.env.AGENTGLASS_CLICKUP_WRITE === "1" });
+      return json({ views: savedViews(), folders: savedFolders(), connected: hasCredential("clickup"), current: currentView(), prefix: knownCardPrefix(), noCustomIds: knownNoCustomIds(), writeEnabled: clickupWriteEnabled(), writeForced: process.env.AGENTGLASS_CLICKUP_WRITE === "1" });
     }
     /* The folder picker's two reads. Spaces first, then one call per space that
        answers with its folders AND the lists inside each of them — which is why
        adding a folder costs nothing beyond what the picker already spent. */
     if (pathname === "/clickup/spaces") {
       const { clickupSpaces } = await import("./clickup.ts");
-      const r = await clickupSpaces();
-      return json(r.ok ? { ok: true, spaces: r.data?.spaces ?? [] } : { ok: false, error: r.error });
+      const r = await clickupSpaces(url.searchParams.get("fresh") === "1");
+      return json(r.ok ? { ok: true, spaces: r.data?.spaces ?? [] } : { ok: false, error: r.error, throttled: r.throttled === true, unauthorised: r.unauthorised === true });
     }
     /* The tabs a list has in ClickUp, for the sidebar to hang under it. Read on
        demand — one call, and only for a list somebody actually opened. */
@@ -6338,13 +6506,14 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         url.searchParams.get("card") ?? "",
         url.searchParams.get("field") ?? undefined,
         root,
+        url.searchParams.get("task") ?? "",
       );
       return json(r);
     }
     if (pathname === "/clickup/find") {
       // The prefix comes from what we have already read, so a bare number is
       // enough and nobody has to be asked what their ids look like.
-      const r = await findCard(url.searchParams.get("q") ?? "", knownCardPrefix());
+      const r = await findCard(url.searchParams.get("q") ?? "", knownCardPrefix(), { noCustomIds: knownNoCustomIds() });
       return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error });
     }
     if (pathname === "/clickup/where") {
@@ -7110,6 +7279,10 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     /* The pull requests on a branch — one out of it, any number into it. Asked
        of GitHub by name rather than filtered out of a scope, because a scope is
        about an AUTHOR and this question is about a branch. */
+    if (pathname === "/prs/for-head") {
+      const root = prRouteRoot(url.searchParams.get("root") ?? "");
+      return json(await prForHead(root, url.searchParams.get("branch") ?? ""));
+    }
     if (pathname === "/prs/for-branch") {
       const asked = url.searchParams.get("root") ?? "";
       const root = prRouteRoot(asked);
@@ -9755,6 +9928,9 @@ startCardWatch((n) => broadcast({ type: "card", data: n }));
    on a schedule nothing in the test asked for, against whatever pairs an
    earlier test's process-wide map still holds. */
 if (process.env.NODE_ENV !== "test") {
+  /* The desktop switched theme: windows re-read its palette, instead of each
+     asking every few seconds whether it had. */
+  watchDesktopPalette(() => broadcast({ type: "desktop-palette" }));
   startPrWatch({
     liveClients: () => clients.size,
     // A root that no longer resolves rejects; a timer has nobody to tell.

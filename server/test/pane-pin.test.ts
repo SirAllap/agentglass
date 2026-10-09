@@ -232,3 +232,24 @@ describe("deciding what is an orphan", () => {
     expect(out[0]).toMatchObject({ name: A, lastUsedAt: 7_000_000, pinned: true });
   });
 });
+
+describe("the sweep asks tmux only when it has something to judge", () => {
+  // The sweep listed every session each minute (a spawn an hour sixty times) and
+  // threw the answer away, because candidates are only names `touchPane`
+  // recorded. With none recorded there is nothing to ask about.
+  test("no pane touched: tmux is not asked", async () => {
+    let asked = 0;
+    const io = { list: async () => { asked++; return [A]; }, kill: async () => {} };
+    expect(await evictIdlePanes(5_000_000, io)).toEqual([]);
+    expect(asked).toBe(0);
+  });
+
+  test("a pane touched: it is asked, and the idle one is still reclaimed", async () => {
+    let asked = 0;
+    const t = fakeTmux([A]);
+    const io = { list: async () => { asked++; return t.io.list(); }, kill: t.io.kill };
+    touchPane(A, 2_000_000);
+    expect(await evictIdlePanes(2_000_000 + HOUR, io)).toEqual([A]);
+    expect(asked).toBe(1);
+  });
+});

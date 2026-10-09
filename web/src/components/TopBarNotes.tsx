@@ -31,6 +31,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { api } from "../lib/api.ts";
 import { subscribe as subscribeChats, listChats } from "../lib/chatStore.ts";
 import { subscribeGitChanged } from "../lib/gitBus.ts";
+import { pollWhileLooking } from "../lib/usePoll.ts";
 import { notesWorthyRepos } from "../lib/gitNote.ts";
 import { answerGate, gateForNote, listGates, subscribeGates, subscribeNewGates } from "../lib/gateStore.ts";
 import { enqueue, dequeue } from "../lib/toastQueue.ts";
@@ -255,12 +256,16 @@ export function useAmbientNotes(): { note: Note | null; behind: number; ahead: n
       } catch { /* offline or no repos -- the readings just stay put */ }
     };
     void poll();
-    const id = setInterval(poll, 90_000);
+    // Only while the window is looked at, and once on the way back: the bare
+    // interval kept asking about every repo (`git worktree`, `rev-parse`,
+    // `status` each) all night, about 360 spawns an hour measured with the
+    // window hidden, for a number nobody could see.
+    const stop = pollWhileLooking(() => { void poll(); }, 90_000);
     // 90s is right for "someone else pushed", and far too slow for "you just
     // pulled" — the strip went on advertising commits you had already taken. The
     // server says when a repo moved, so read it then too.
     const off = subscribeGitChanged(() => { void poll(); });
-    return () => { dead = true; clearInterval(id); off(); };
+    return () => { dead = true; stop(); off(); };
   }, []);
 
   return { note, behind, ahead };

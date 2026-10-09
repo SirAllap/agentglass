@@ -48,6 +48,8 @@ const MUTATING = [
   `pathname === "/plugins/allow-unboxed"`,
   `pathname === "/gate/decide"`,
   `pathname === "/control"`,
+  // The window's answer to a command; not agent-facing, same gate as /browser/result.
+  `pathname === "/control/result"`,
   `pathname === "/browser-use/install"`,
   `pathname === "/git/commit"`,
   `pathname === "/theme/sync"`,

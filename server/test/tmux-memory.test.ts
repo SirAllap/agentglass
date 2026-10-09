@@ -22,6 +22,12 @@ import { join } from "node:path";
 import { memoryPath, recall, remember, STALE_AFTER_MS } from "../src/tmuxmemory.ts";
 import { deskAttachArgv, listPanes } from "../src/tmuxctl.ts";
 
+/* What the preload (or an earlier file) left in these two, given back after
+   each test. Deleting them outright left XDG_CONFIG_HOME unset for every file
+   that ran after this one, and test/isolation.test.ts failed in any order that
+   put it next. */
+const SAVED = { XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, TMUX_TMPDIR: process.env.TMUX_TMPDIR };
+
 let home = "";
 let sockdir = "";
 let sockets: string[] = [];
@@ -48,8 +54,9 @@ beforeEach(() => {
 afterEach(() => {
   for (const s of sockets) tmux(s, "kill-server");
   rmSync(home, { recursive: true, force: true });
-  delete process.env.XDG_CONFIG_HOME;
-  delete process.env.TMUX_TMPDIR;
+  for (const [k, v] of Object.entries(SAVED)) {
+    if (v === undefined) delete process.env[k]; else process.env[k] = v;
+  }
 });
 
 /** A detached tmux server with one session in it, on a socket of its own. */

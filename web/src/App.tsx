@@ -18,8 +18,12 @@ import { usePoll } from "./lib/usePoll.ts";
 import { refusalFinal, useCoverHold } from "./lib/cover.ts";
 import { initialTheme, applyTheme, THEMES } from "./lib/themes.ts";
 import { subscribeControl } from "./lib/controlBus.ts";
-import { latchChatIntent } from "./lib/chatIntent.ts";
-import type { ControlCmd } from "../../shared/types.ts";
+import { routeControl, offers, attachIdleApply } from "./lib/agentOffers.ts";
+import { focusKindOf, noteInput, sinceInputMs } from "./lib/quietPresent.ts";
+import { controlReplyLater, type UiCtx } from "./lib/uiActions.ts";
+import { answerControl } from "./lib/controlAnswer.ts";
+import { liveSources } from "./lib/uiSnapshotSources.ts";
+import type { AppSlice } from "./lib/uiSnapshots.ts";
 import { actionFor } from "./lib/keybindings.ts";
 import { claimFind, findChordIsOursToTake, openFind, scopeHolding } from "./lib/findScope.ts";
 import { FindBar } from "./components/FindBar.tsx";
@@ -79,6 +83,10 @@ import { SettingsModal } from "./components/SettingsModal.tsx";
 import { MachinePanel, type MachineTab } from "./components/MachinePanel.tsx";
 import { ZoomToast } from "./components/ZoomToast.tsx";
 import { UpdateToast } from "./components/UpdateToast.tsx";
+import { AgentChangeChip } from "./components/AgentChangeChip.tsx";
+import { uiOf } from "../../shared/uiActions.ts";
+import { back, VIEW_SWITCHERS } from "./lib/agentBack.ts";
+import { subscribeSettings } from "./lib/settingsRegistry.ts";
 import { NoteToasts } from "./components/NoteToasts.tsx";
 import { AskedBanners } from "./components/AskedBanners.tsx";
 import { WhatsNew } from "./components/WhatsNew.tsx";
@@ -327,6 +335,8 @@ export default function App() {
   machineOpenRef.current = machine != null;
   const wsViewRef = useRef(wsView);
   wsViewRef.current = wsView;
+  // An agent's view switch leaves a "back to where you were" chip (lib/agentBack.ts).
+  useEffect(() => { back.noteView(wsView); }, [wsView]);
   // The catalog is the one panel that can open *over* the workspace, from the
   // rail. Escape has to be able to tell the two apart, or one keystroke closes
   // both and you lose the shell you were looking at to read a description.
@@ -1021,6 +1031,31 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // An agent changed the theme through the settings registry (or the chip took
+  // it back): the DOM is already painted, but `theme` is state here, so follow it.
+  // A row's own change set it through onChange already.
+  useEffect(() => subscribeSettings((c) => {
+    if (c.by !== "row" && c.id.startsWith("appearance.")) setTheme(document.documentElement.getAttribute("data-theme") || initialTheme());
+  }), []);
+
+  // What the window shows right now, for the agent's reads (lib/uiSnapshots.ts).
+  // Plain data, rebuilt on render and read only when asked: no state of its own,
+  // no effect, nothing subscribed.
+  const eventsRef = useRef(events);
+  eventsRef.current = events;
+  const appSliceRef = useRef<AppSlice>(null as unknown as AppSlice);
+  appSliceRef.current = {
+    view: wsView, theme, scale, workspace: workspace ?? null, windowMs, filter,
+    modals: {
+      settings: settingsOpen, palette: paletteOpen, help: helpOpen, stats: statsOpen, skills: skillsOpen, search: searchOpen,
+      finder: filesOpen, windows: windowsOpen, projectPicker: projectOpen, machine,
+    },
+    selectedEvent: selected ? { id: String(selected.id), type: selected.hook_event_type, app: selected.source_app } : null,
+    session: sessionView,
+    peek: peek ? { path: peek.path } : null,
+    finderPath: finderTarget?.path ?? null,
+  };
+
   // External control (a Stream Deck, a phone): the live socket relays a command
   // from POST /control and we run it here — through the very setters the keyboard
   // handler above uses, so there is one navigation path, not two. Subscribes once
@@ -1028,59 +1063,91 @@ export default function App() {
   // React guarantees stable; theme/zoom use functional updates so the current
   // value is read at apply time, not captured in this closure.
   useEffect(() => {
-    const nextThemeId = (cur: string, cmd: Extract<ControlCmd, { cmd: "theme" }>): string => {
-      if (cmd.name) return THEMES.some((t) => t.id === cmd.name) ? cmd.name : cur;
-      const i = THEMES.findIndex((t) => t.id === cur);
-      const n = THEMES.length;
-      return THEMES[(((i < 0 ? 0 : i) + (cmd.dir ?? 1)) % n + n) % n]!.id;
+    // One handler table for both spellings of a command (lib/uiActions.ts);
+    // this only hands it the state App owns.
+    const ctx: UiCtx = {
+      goView,
+      // No overlay to toggle any more: an external controller asking for "the
+      // workspace" gets the last view that was not the dashboard, which is what
+      // it was asking to see.
+      workspace: () => setWsView((cur) => (cur === "dash" ? lastNonDash.current : cur)),
+      // The same peel Escape does, minus the focus guards — a remote command
+      // isn't typed into a field or a shell, so nothing has to be spared.
+      peel: () => {
+        setSelected(null);
+        setPaletteOpen(false);
+        setHelpOpen(false);
+        setStatsOpen(false);
+        setSkillsOpen(false);
+        setSearchOpen(false);
+        setSessionView(null);
+        // Settings is an overlay too: an agent that opened a page must be able to close it.
+        setSettingsOpen(false);
+        setSettingsJump(null);
+      },
+      panel: (what) => {
+        if (what === "stats") setStatsOpen(true);
+        else if (what === "skills") setSkillsOpen(true);
+        else if (what === "search") setSearchOpen(true);
+        else if (what === "help") setHelpOpen(true);
+        else setPaletteOpen(true);
+      },
+      // Through the same door as the keys, so a remote controller and a
+      // keystroke cannot disagree about what "zoom" means. There is no pointer
+      // in a remote command, so it lands on the window.
+      zoom,
+      setMachine,
+      setProjectOpen,
+      setWindowsOpen,
+      // Looked up in this window's feed first; with a view covering the
+      // dashboard that feed is paused (useLive), so the server's recent events,
+      // the very list the dashboard starts from, are the second place to look. An
+      // id in neither is a refusal the agent hears.
+      openEvent: async (id) => {
+        const e = eventsRef.current.find((x) => x.id === id) ?? (await api.recent().catch(() => [] as WatchEvent[])).find((x) => x.id === id);
+        if (!e) return false;
+        setSelected(e);
+        return true;
+      },
+      openSession: (id, app) => setSessionView({ id, app: app ?? "" }),
+      paneDoor: (which) => openFocusedPaneDoor(which),
+      // What ui.state / ui.read describe. Read through the ref App refreshes on
+      // every render, because this effect runs once and would otherwise answer
+      // with the first render's state.
+      sources: liveSources(() => appSliceRef.current),
     };
-    return subscribeControl((cmd) => {
-      switch (cmd.cmd) {
-        case "view":
-          goView(cmd.to);
-          break;
-        case "workspace":
-          // No overlay to toggle any more: an external controller asking for
-          // "the workspace" gets the last view that was not the dashboard,
-          // which is what it was asking to see.
-          setWsView((cur) => (cur === "dash" ? lastNonDash.current : cur));
-          break;
-        case "esc":
-          // The same peel Escape does, minus the focus guards — a remote command
-          // isn't typed into a field or a shell, so nothing has to be spared.
-          setSelected(null);
-          setPaletteOpen(false);
-          setHelpOpen(false);
-          setStatsOpen(false);
-          setSkillsOpen(false);
-          setSearchOpen(false);
-          setSessionView(null);
-          break;
-        case "open":
-          if (cmd.what === "stats") setStatsOpen(true);
-          else if (cmd.what === "skills") setSkillsOpen(true);
-          else if (cmd.what === "search") setSearchOpen(true);
-          else if (cmd.what === "help") setHelpOpen(true);
-          else if (cmd.what === "palette") setPaletteOpen(true);
-          break;
-        case "theme":
-          setTheme((cur) => nextThemeId(cur, cmd));
-          break;
-        case "zoom":
-          // Through the same door as the keys, so a remote controller and a
-          // keystroke cannot disagree about what "zoom" means. There is no
-          // pointer in a remote command, so it lands on the window — which is
-          // what an external controller can sensibly mean by it.
-          zoom(cmd.dir);
-          break;
-        case "chat":
-          // Latch before opening: the panel drains the mailbox on mount, so
-          // this works whether or not the chat view is already up.
-          latchChatIntent(cmd.do);
-          goView("chat");
-          break;
+    return subscribeControl((cmd, rid, meta) => {
+      const hidden = document.visibilityState === "hidden";
+      // A door that can replace the whole view leaves a way back (lib/agentBack.ts),
+      // armed here, when it actually runs: a held open runs later than it arrived.
+      const run = () => {
+        const door = uiOf(cmd as { cmd: string } & Record<string, unknown>)?.do;
+        if (door && VIEW_SWITCHERS.includes(door)) back.arm(wsViewRef.current, meta?.as);
+        return controlReplyLater(cmd, { ...ctx, serverLevel: meta?.level, as: meta?.as });
+      };
+      // A command off the server's socket says how to show it; one without
+      // (a window's own button) is the person's own doing, so it is now.
+      const go = routeControl(cmd, meta?.present ?? "now", focusKindOf(document.activeElement), sinceInputMs());
+      if (go.route === "queue") {
+        offers.hold({ key: go.key, as: meta?.as, label: go.label, heldAt: Date.now(), apply: () => { void run(); } });
+        // Taken, not shown: the caller hears that, not a bare ok.
+        answerControl(rid, { ok: true, applied: false, queued: true, value: { queued: true, label: go.label } }, api.controlResult, hidden);
+        return;
       }
+      void run().then((reply) => answerControl(rid, reply, api.controlResult, hidden));
     });
+  }, []);
+
+  // The input clock a quiet open is judged by, and the timer that applies a held
+  // one once the person has gone quiet (lib/quietPresent.ts, lib/agentOffers.ts).
+  // Capture and passive: it only reads the time, and it must hear a key a
+  // terminal swallows.
+  useEffect(() => {
+    const note = () => noteInput();
+    const evs = ["keydown", "pointerdown", "paste"] as const;
+    for (const e of evs) window.addEventListener(e, note, { capture: true, passive: true });
+    const detach = attachIdleApply();
+    return () => { for (const e of evs) window.removeEventListener(e, note, { capture: true }); detach(); };
   }, []);
 
   // /stats carries the server's process start; fall back to page mount for
@@ -1351,6 +1418,7 @@ export default function App() {
       <AskedBanners />
       <ZoomToast zoom={zoomed} />
       <UpdateToast />
+      <AgentChangeChip onBack={goView} />
       <SettingsModal
         open={settingsOpen}
         jump={settingsJump}

@@ -5,7 +5,8 @@ import { Select } from "./Select.tsx";
 import { StatusPill } from "./StatusPill.tsx";
 import { Spinner } from "./Spinner.tsx";
 import { MERGE_OPTION, mergeBody, mergeSubject, type MergeMethod, type MergeCommit } from "../../../shared/mergeMethod.ts";
-import { LEAVE_ALONE, movesCard, statusColor, statusOptions, type CardMove } from "../lib/cardMove.ts";
+import { LEAVE_ALONE, mergePreselect, movesCard, statusColor, statusOptions, type CardMove } from "../lib/cardMove.ts";
+import { useClickupPrefs } from "../lib/clickupPrefs.ts";
 import { api } from "../lib/api.ts";
 import { __forgetClickupSetup } from "../lib/clickupSetup.ts";
 import { MOD_KEY } from "../lib/format.ts";
@@ -111,6 +112,11 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
   const [deleteBranch, setDeleteBranch] = useState(false);
   const [card, setCard] = useState<CardState>({ kind: "none" });
   const [status, setStatus] = useState("");
+  /* The card choice is a step the workspace adds: absent until it is, and
+     unknown prefs read as absent so the row never flashes in and out. */
+  const mergePrefs = useClickupPrefs()?.merge;
+  const mergeOn = mergePrefs?.enabled === true;
+  const mergeNames = mergePrefs?.statusNames.join("\u0000") ?? "";
   const subjectRef = useRef<HTMLInputElement>(null);
   const rebase = pending?.method === "rebase";
 
@@ -160,7 +166,7 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
         status: task.status, statusColor: task.statusColor, updated: task.updated,
         statuses: meta?.ok ? (meta.statuses ?? []) : [],
       };
-      setStatus(LEAVE_ALONE);
+      setStatus(mergePreselect(move.statuses, move.status, mergeNames ? mergeNames.split("\u0000") : []));
       // Read-only is not a failure and not a thing to hide: the card and where
       // it is are still worth seeing, with the reason nothing can be done about
       // it from here.
@@ -170,13 +176,13 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
 
   useEffect(() => {
     const ref = pending?.card;
-    if (!pending || !ref) { setCard({ kind: "none" }); setStatus(""); return; }
+    if (!pending || !ref || !mergeOn) { setCard({ kind: "none" }); setStatus(""); return; }
     let live = true;
     setCard({ kind: "loading" });
     void lookUp(ref, () => live);
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pending]);
+  }, [pending, mergeOn, mergeNames]);
 
   /**
    * Turn ClickUp writes on from here.

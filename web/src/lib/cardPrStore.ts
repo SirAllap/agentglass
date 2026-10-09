@@ -56,7 +56,7 @@ function pump(): void {
     const { key, card, field, cwd } = waiting.shift()!;
     running++;
     inflight.add(key);
-    api.clickupPrs(card, field, cwd)
+    api.clickupPrs(card, field, cwd, key)
       .then((r) => { seen.set(key, { at: Date.now(), prs: r.ok ? (r.prs ?? []) : [], error: !r.ok }); })
       .catch(() => { seen.set(key, { at: Date.now(), prs: [], error: true }); })
       .finally(() => { running--; inflight.delete(key); tell(); pump(); });
@@ -67,8 +67,8 @@ function pump(): void {
  * The pull requests for this card, or `null` while nobody has asked yet.
  *
  * Asking is the side effect, same as `prCardStore.cardOf`: calling this for a
- * card nothing has asked about queues it. A card with no `github` field and
- * no custom id worth searching on is not queued — there is nothing for
+ * card nothing has asked about queues it. A card with no `github` field, no
+ * custom id and no task id worth searching on is not queued — there is nothing for
  * `clickup/prs` to search with, and a request that can only come back empty
  * is not a request worth making.
  */
@@ -76,7 +76,9 @@ export function cardPrsOf(taskId: string, card: string, field: string, cwd: stri
   const key = taskId;
   const hit = seen.get(key);
   if (hit && Date.now() - hit.at < TTL_MS) return hit;
-  if (!card && !field) return hit ?? null;
+  // The task's own id is a search term too: a free workspace has no custom id,
+  // and its branches say `CU-<task id>`.
+  if (!card && !field && !taskId) return hit ?? null;
   if (!inflight.has(key) && !waiting.some((w) => w.key === key)) {
     waiting.push({ key, card, field, cwd });
     pump();

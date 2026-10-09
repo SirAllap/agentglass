@@ -1243,7 +1243,13 @@ async function ensureServer(adopt) {
      tells TypeScript that the two ternaries are asking the same question. */
   const [cmd, argv] = PACKAGED
     ? [/** @type {string} */ (SIDECAR_BIN), []]
-    : ["bun", ["run", path.join(REPO, "server", "src", "index.ts")]];
+    : ["bun", ["--no-env-file", "run", path.join(REPO, "server", "src", "index.ts")]];
+  /* No `cwd`, on purpose and with a ceiling. The sidecar starts in the launch
+     directory because the open project's default root, the Clone's checkout and
+     the self-update script are found from it; a data directory would quietly
+     empty those. What a launch directory must not do is configure the server:
+     the binary is compiled without `.env` and `bunfig.toml` autoload
+     (build.mjs), and the dev spawn passes --no-env-file. */
   const child = spawn(cmd, argv, { stdio: DESK_PIPE ? ["ignore", "ignore", "pipe", "pipe"] : ["ignore", "ignore", "pipe"], env });
   sidecar = child;
   const err = tailStderr(child);

@@ -36,6 +36,7 @@ import { findRanges, paint as paintFind, clear as clearFind, step as stepFind, r
 import { groupAt, groupLabel, groupTotals, type ChangeGroup } from "../lib/changeGroups.ts";
 import { IconLabel, SearchIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { cursorDelay } from "../lib/cursorPace.ts";
 import { INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 
 export type Peek = {
@@ -92,10 +93,6 @@ const READABLE = /\.(md|markdown|mdx)$/i;
  *  the markdown viewer. */
 export const isRenderable = (path: string) => READABLE.test(path);
 
-/** Cursor poll cadence (see the effect that asks): fast while it moves, slow once it has rested. */
-const CURSOR_MS = 450;
-const CURSOR_SLOW_MS = 1500;
-const CURSOR_STILL = 5;
 
 /**
  * Where the file changed, down its right, as places rather than as lines.
@@ -327,10 +324,11 @@ export function PeekFile({ peek, onClose, topPx }: {
      has no way to call us. Under half a second is what "it follows me" feels
      like while the cursor is moving; the call is one short-lived process
      (about 16 ms of CPU, 133 a minute measured) and it stops with the pane.
-     It also stops while the window is not looked at, and slows to 1.5 s once
-     five answers in a row said the cursor has not moved, dropping back to
-     450 ms on the first change. The ceiling: the first move after a rest is
-     seen up to 1.5 s late. */
+     While the window is not looked at there is no timer at all: focus and
+     visibilitychange start it again. It slows to 1.5 s once five answers in a
+     row said the cursor has not moved, dropping back to 450 ms on the first
+     change (cursorPace.ts). The ceiling: the first move after a rest is seen up
+     to 1.5 s late. */
   useEffect(() => {
     if (!editorId) return;
     let live = true;
@@ -338,9 +336,14 @@ export function PeekFile({ peek, onClose, topPx }: {
     let still = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const looking = () => !document.hidden && document.hasFocus();
+    const rearm = () => {
+      const ms = cursorDelay(looking(), still);
+      clearTimeout(timer);
+      if (live && ms !== null) timer = setTimeout(ask, ms);
+    };
     const ask = () => {
       clearTimeout(timer);
-      if (!looking()) { timer = setTimeout(ask, CURSOR_MS); return; }
+      if (!looking()) return;
       void api.editorWhere(editorId).then((r) => {
         if (!live) return;
         if (r.ok && r.line) {
@@ -348,14 +351,17 @@ export function PeekFile({ peek, onClose, topPx }: {
           last = r.line;
           setCursor(r.line);
         }
-      }).catch(() => { /* no idea, then */ }).finally(() => {
-        if (live) timer = setTimeout(ask, still >= CURSOR_STILL ? CURSOR_SLOW_MS : CURSOR_MS);
-      });
+      }).catch(() => { /* no idea, then */ }).finally(rearm);
     };
     const back = () => { still = 0; ask(); };
     ask();
     window.addEventListener("focus", back);
-    return () => { live = false; clearTimeout(timer); window.removeEventListener("focus", back); };
+    document.addEventListener("visibilitychange", back);
+    return () => {
+      live = false; clearTimeout(timer);
+      window.removeEventListener("focus", back);
+      document.removeEventListener("visibilitychange", back);
+    };
   }, [editorId]);
 
   const canRender = READABLE.test(peek.path);

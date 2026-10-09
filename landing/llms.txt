@@ -19,6 +19,7 @@ It attaches to agents already running in tmux and in the repositories already op
 
 - [AGENTS.md](https://raw.githubusercontent.com/SirAllap/agentglass/main/AGENTS.md): the short version for an agent — using the built-in browser from a session, and working in this repository
 - [Browser skill](https://raw.githubusercontent.com/SirAllap/agentglass/main/skills/browser-use/SKILL.md): the built-in browser's CLI and MCP server, verb by verb — observe, read, click, fill, the DevTools protocol, fake network responses, isolated profiles
+- [UI control skill](https://raw.githubusercontent.com/SirAllap/agentglass/main/skills/ui-control/SKILL.md): the app's own screen from a session — open a panel, read what is open, read and change a setting; the three levels and what to never do
 - [Contributing](https://raw.githubusercontent.com/SirAllap/agentglass/main/CONTRIBUTING.md): dev setup, ground rules, how to report a bug
 
 ## Optional

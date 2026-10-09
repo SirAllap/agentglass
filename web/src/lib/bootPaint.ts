@@ -47,12 +47,22 @@ export function bootEntry(id: string, vars: Record<string, string>): BootPaintEn
 }
 
 let written = "";
+/** The last write could not be stored (private mode): memory is all there is to
+ *  compare with, so it is trusted rather than rewriting on every repaint. */
+let unstorable = false;
+const stored = (): string | null => { try { return localStorage.getItem(BOOT_PAINT_KEY); } catch { return null; } };
+
 /** Leave `p` for the next launch. False when it is what is already there —
- *  applyTheme runs on every repaint, and most repaints change nothing. */
+ *  applyTheme runs on every repaint, and most repaints change nothing.
+ *
+ *  "Already there" is read from storage, not only remembered: a copy that is
+ *  remembered but gone (site data cleared under an open window, or a test that
+ *  empties its storage) would otherwise be skipped for good, and the next launch
+ *  would open on the default palette. Ceiling: one `getItem` per repaint. */
 export function writeBootPaint(p: BootPaint): boolean {
   const json = JSON.stringify(p);
-  if (json === written) return false;
+  if (json === written && (unstorable || stored() === json)) return false;
   written = json;
-  try { localStorage.setItem(BOOT_PAINT_KEY, json); } catch { /* private mode: the cover falls back to the default palette */ }
+  try { localStorage.setItem(BOOT_PAINT_KEY, json); unstorable = false; } catch { unstorable = true; /* private mode: the cover falls back to the default palette */ }
   return true;
 }

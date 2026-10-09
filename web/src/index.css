@@ -340,6 +340,9 @@
     padding: 14px 18px;
     text-align: left;
   }
+  /* The edge a row's label sits on (14/18 above): a block that is not a row but sits
+     in the same card, like the workflow map's steps, shares it. */
+  .agx-settings-x { padding-inline: 18px; }
   .agx-settings-row > :last-child { justify-self: end; }
   /* A row with no control — five of the Export rows, and every plain link row.
      The rule above sent its only child to the right edge, so those pages read
@@ -710,6 +713,24 @@
   background: color-mix(in srgb, var(--error) 18%, transparent) !important;
   color: var(--error-ink);
 }
+/* Pressed, for every Button: hover already darkens through `hover:brightness-125`,
+   and a control with no pressed answer reads as one that did not hear the click. */
+.agx-btn:active:not(:disabled) { filter: brightness(0.86); }
+/* A folding section's header (the ClickUp page's cards): the whole bar is the target. */
+.agx-fold { cursor: pointer; transition: background-color 120ms; }
+.agx-fold:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
+.agx-fold:active { background: color-mix(in srgb, var(--text) 11%, transparent); }
+/* A switch is 19px tall; its button is padded to the house hit size and answers
+   hover and press on its own track, not on the padding around it. */
+.agx-switch-hit { cursor: pointer; }
+.agx-switch-hit:disabled { cursor: default; }
+.agx-switch-hit:hover:not(:disabled) > span { filter: brightness(1.18); }
+.agx-switch-hit:active:not(:disabled) > span { filter: brightness(0.82); }
+/* A row that is a button, edge to edge: Settings' "Back to app". Fill and ink
+   only, so nothing under the pointer moves between rest, hover and press. */
+.agx-navback { transition: background-color 120ms, color 120ms; cursor: pointer; }
+.agx-navback:hover { background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text); }
+.agx-navback:active { background: color-mix(in srgb, var(--text) 13%, transparent); color: var(--text); }
 /* A tab is not a chip: it has no fill of its own, so the hover IS the surface. */
 .agx-tab:hover { background: color-mix(in srgb, var(--text) 10%, transparent); }
 /* A whole row that answers the pointer. `.agx-row` is the app's own list-row
@@ -803,6 +824,17 @@
 @keyframes agx-zoom-in {
   from { opacity: 0; transform: translate(-50%, 6px); }
   to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+/* The agent chips' entrance (AgentOffers.tsx). Only on the way in, and short:
+   the corner is shared and a chip that is replaced must not leave an old one
+   sliding out beside the new. */
+@keyframes agx-chip-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  @keyframes agx-chip-in { from { opacity: 0; } to { opacity: 1; } }
 }
 
 /* The phone mark in the tmux tab strip.
@@ -2546,3 +2578,90 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 @media (prefers-reduced-motion: reduce) {
   .agx-trk-faces, .agx-trk-ovl { transition: none; }
 }
+
+/*
+ * Stacked pull requests: the spine on a board card, the token that names the
+ * base, and the three-slot control in a pull request's header.
+ *
+ * Rings are `box-shadow: inset`, a dashed outline is an `outline`, so the
+ * border ratchet counts none of them. Colour is a family (--c, with --ci for
+ * ink) and never the only signal: every mark has a word, a number or a drawn
+ * glyph, and a sentence behind it.
+ */
+.agx-stk-card { position: relative; }
+/* The spine lives in the card's own left padding; the content makes room. */
+.agx-stk-card .agx-prc-main, .agx-stk-card .agx-stk-band { padding-left: 26px; }
+.agx-stk {
+  position: absolute; left: 5px; top: 5px; bottom: 5px; width: 16px; z-index: 1;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.agx-stk-fork { flex: 1 1 0; display: flex; flex-direction: column; gap: 2px; }
+.agx-stk-b {
+  --c: var(--primary); --ci: var(--primary-ink);
+  flex: 1 1 0; min-height: 20px; display: grid; place-items: center; border-radius: 4px;
+  font-size: 9.5px; font-weight: 700; line-height: 1; letter-spacing: -0.2px; color: var(--ci);
+  background: color-mix(in srgb, var(--c) 12%, transparent);
+  box-shadow: inset 0 0 0 1px var(--c);
+}
+.agx-stk-fork .agx-stk-b { font-size: 8.5px; letter-spacing: -0.4px; }
+.agx-stk-b[data-k="cur"] { background: var(--c); color: var(--bg); }
+.agx-stk-b[data-k="off"] { background: transparent; box-shadow: none; outline: 1px dashed var(--text3); outline-offset: -1px; color: var(--text2); }
+.agx-stk-b[data-k="merged"] { --c: var(--primary); background: color-mix(in srgb, var(--c) 28%, transparent); }
+.agx-stk-b[data-k="closed"] { --c: var(--text3); --ci: var(--text2); background: transparent; box-shadow: none; outline: 1px dashed var(--text3); outline-offset: -1px; }
+.agx-stk-b[data-k="missing"] { --c: var(--warning); --ci: var(--warning-ink); background: color-mix(in srgb, var(--c) 14%, transparent); box-shadow: none; outline: 1px dashed var(--c); outline-offset: -1px; }
+.agx-stk[data-warn] .agx-stk-b[data-k="cur"] { --c: var(--warning); color: var(--bg); }
+.agx-stk[data-warn] .agx-stk-b[data-k="off"] { outline-color: var(--warning); color: var(--warning-ink); }
+.agx-stk-gap { flex: none; height: 16px; display: grid; place-items: center; font-size: 9px; font-weight: 700; line-height: 1; color: var(--text2); }
+/* Pointer-over a token outlines the base card it names: an outline, so nothing moves. */
+.agx-stk-card[data-lit] { outline: 2px solid var(--primary); outline-offset: 1px; }
+
+.agx-stk-t {
+  all: unset; box-sizing: border-box; cursor: pointer;
+  --c: var(--primary); --ci: var(--primary-ink);
+  display: inline-flex; align-items: center; gap: 6px; padding: 0 6px; border-radius: 6px;
+  max-width: 210px; overflow: hidden; white-space: nowrap; font-size: 10.5px; color: var(--ci);
+  background: color-mix(in srgb, var(--c) 10%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 45%, transparent);
+}
+.agx-stk-t:hover { background: color-mix(in srgb, var(--c) 18%, transparent); }
+.agx-stk-t:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.agx-stk-t[data-tone="ok"] { --c: var(--success); --ci: var(--success-ink); }
+.agx-stk-t[data-tone="warn"] { --c: var(--warning); --ci: var(--warning-ink); }
+.agx-stk-t[data-tone="err"] { --c: var(--error); --ci: var(--error-ink); }
+.agx-stk-t[data-tone="muted"] { --c: var(--text3); --ci: var(--text2); }
+.agx-stk-t[data-off] { background: transparent; box-shadow: none; outline: 1px dashed color-mix(in srgb, var(--c) 60%, transparent); outline-offset: -1px; }
+.agx-stk-t[data-broken] { --c: var(--warning); --ci: var(--warning-ink); }
+.agx-stk-t[data-plain] { cursor: default; }
+.agx-stk-t[data-plain] > .agx-stk-w { flex: none; }
+.agx-stk-t[data-plain]:hover { background: color-mix(in srgb, var(--c) 10%, transparent); }
+.agx-stk-t > b { font-weight: 700; }
+.agx-stk-t > .agx-stk-w { color: var(--text2); overflow: hidden; text-overflow: ellipsis; }
+.agx-stk-t[data-broken] > .agx-stk-w { color: var(--warning-ink); }
+
+/* The header control: three fixed slots, so stepping through a stack moves nothing. */
+.agx-stk-c {
+  --c: var(--primary); --ci: var(--primary-ink);
+  display: inline-flex; align-items: stretch; flex: none; width: 150px; overflow: hidden; border-radius: 6px;
+  background: color-mix(in srgb, var(--c) 10%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 45%, transparent);
+}
+.agx-stk-c[data-broken] { --c: var(--warning); --ci: var(--warning-ink); }
+.agx-stk-c > button { all: unset; box-sizing: border-box; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; color: var(--ci); font-size: 11px; }
+.agx-stk-c > button:hover:not([disabled]) { background: color-mix(in srgb, var(--c) 18%, transparent); }
+.agx-stk-c > button:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.agx-stk-c > button[disabled] { cursor: default; opacity: 0.45; }
+.agx-stk-c > .agx-stk-ar { width: 24px; }
+.agx-stk-c > .agx-stk-mid { flex: 1; gap: 6px; font-weight: 700; white-space: nowrap; box-shadow: inset 1px 0 0 color-mix(in srgb, var(--c) 30%, transparent), inset -1px 0 0 color-mix(in srgb, var(--c) 30%, transparent); }
+.agx-stk-c > .agx-stk-mid[aria-expanded="true"] { background: color-mix(in srgb, var(--c) 22%, transparent); }
+.agx-stk-mini { display: inline-flex; gap: 1px; align-items: flex-end; }
+.agx-stk-mini > i { display: block; width: 3px; height: 9px; border-radius: 1px; box-shadow: inset 0 0 0 1px var(--c); }
+.agx-stk-mini > i[data-cur] { background: var(--c); }
+
+/* The ladder behind the identifier. */
+.agx-stk-lad { width: 480px; max-width: calc(100vw - 32px); padding: 8px; }
+.agx-stk-row { display: grid; grid-template-columns: 20px 1fr auto; gap: 8px; padding: 6px 4px; border-radius: 6px; align-items: start; font-size: 11px; position: relative; }
+.agx-stk-row[data-me] { background: color-mix(in srgb, var(--primary) 12%, transparent); }
+.agx-stk-rail { position: relative; display: grid; justify-items: center; align-self: stretch; }
+.agx-stk-row:not(:last-child) .agx-stk-rail::after { content: ""; position: absolute; left: 50%; top: 22px; bottom: -12px; width: 2px; margin-left: -1px; background: color-mix(in srgb, var(--text) 22%, transparent); }
+.agx-stk-rail .agx-stk-b { width: 20px; flex: none; position: relative; z-index: 1; }
+.agx-stk-trunk { position: relative; z-index: 1; height: 16px; max-width: 44px; padding: 0 2px; display: grid; place-items: center; border-radius: 3px; font-size: 8px; text-transform: uppercase; line-height: 1; color: var(--text3); background: var(--surface-card); box-shadow: inset 0 0 0 1px var(--surface-line); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

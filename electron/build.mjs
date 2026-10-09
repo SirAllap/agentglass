@@ -232,8 +232,15 @@ if (provenanceOnly) {
   // once made it into an installed app before anyone noticed the size.
   rmSync(resolve(HERE, "staging"), { recursive: true, force: true });
   mkdirSync(resolve(HERE, "staging"), { recursive: true });
+  // Neither file is read from the directory the sidecar happens to run in: a
+  // compiled binary autoloads `.env` and `bunfig.toml` from its working
+  // directory by default, and that directory is wherever the app was launched
+  // from. Measured with a probe binary: a `.env` set a variable, and a
+  // `bunfig.toml` preload ran. The server's configuration is its environment
+  // and its own settings file, and nothing else.
   run("bun", [
-    "build", "--compile", resolve(REPO, "server/src/index.ts"),
+    "build", "--compile", "--no-compile-autoload-dotenv", "--no-compile-autoload-bunfig",
+    resolve(REPO, "server/src/index.ts"),
     "--outfile", resolve(HERE, "staging/agentglass-server"),
   ]);
 }

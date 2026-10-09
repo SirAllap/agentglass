@@ -184,16 +184,19 @@ export const assigneesPatch = (number: number, add: string[], remove: string[]) 
    back in the request list, `cleared` when every changes-requester is.
    Ceiling: only an approved or changes verdict is recomputed — an "awaiting"
    or "commented" one has no `who` to re-derive from, and the read that follows
-   the write settles it. */
+   the write settles it. `people` is left off for the same reason: the face of
+   whoever was just asked would keep its old ring, so the card falls back to
+   `who` until that read lands. */
 export const reviewersPatch = (number: number, add: string[], remove: string[]) => (d: PrDetail): PrDetail => {
   if (d.number !== number) return d;
   const kept = d.reviewers.filter((r) => !remove.includes(r.login));
   const reviewers: PrDetail["reviewers"] = [...kept, ...add.filter((l) => !kept.some((r) => r.login === l)).map((login) => ({ login }))];
   const v = d.humanReview;
-  if (!v || (v.kind !== "changes" && v.kind !== "approved")) return { ...d, reviewers };
+  if (!v) return { ...d, reviewers };
+  if (v.kind !== "changes" && v.kind !== "approved") { const { people: _p, ...bare } = v; return { ...d, reviewers, humanReview: bare }; }
   const asked = new Set(reviewers.filter((r) => !r.isTeam).map((r) => r.login.toLowerCase()));
   const back = v.who.map((l) => asked.has(l.toLowerCase()));
-  const { cleared: _drop, ...rest } = v;
+  const { cleared: _drop, people: _people, ...rest } = v;
   return { ...d, reviewers, humanReview: { ...rest, askedAgain: back.some(Boolean), ...(v.kind === "changes" && back.every(Boolean) ? { cleared: true } : null) } };
 };
 

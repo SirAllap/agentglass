@@ -4,6 +4,7 @@
 // renderer as the telemetry view.
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { diffSplit, diffWrap } from "../lib/diffPrefs.ts";
+import { subscribeGitModal, takeGitModal } from "../lib/gitModalIntent.ts";
 import { conflictBriefing, conflictHandoff } from "../lib/conflictBrief.ts";
 import { ConflictMode } from "./ConflictMode.tsx";
 import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
@@ -1132,6 +1133,24 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const [newWtBranch, setNewWtBranch] = useState("");
   const [commitView, setCommitView] = useState<{ changes: FileChange[]; title: string } | null>(null);
   const [blamePath, setBlamePath] = useState<{ path: string } | null>(null);
+  // A modal asked for through /control (lib/gitModalIntent.ts). Not before there
+  // is a checkout for it to be about: draining at mount would spend the one slot
+  // on a modal with no repository and leave nothing to retry when one arrived.
+  useEffect(() => {
+    if (!root) return;
+    const run = () => {
+      const m = takeGitModal();
+      if (!m) return;
+      if (m.which === "insights") setInsightsOpen(true);
+      else if (m.which === "bisect") setBisectOpen(true);
+      else if (m.which === "palette") setPaletteOpen(true);
+      else if (m.which === "compare") setCompareTarget(m.base);
+      else if (m.which === "rebase") setRebaseBase(m.base);
+      else setBlamePath({ path: m.path });
+    };
+    run();
+    return subscribeGitModal(run);
+  }, [root]);
   const [walk, setWalk] = useState<WalkthroughResult | null>(null);
   const [walkLoading, setWalkLoading] = useState(false);
   const walkReqSig = useRef<string | null>(null);

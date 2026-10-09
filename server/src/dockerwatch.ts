@@ -86,18 +86,24 @@ export function recordExit(facts: ExitFacts | null, now: () => Date = () => new 
  * `docker events` learns its reader is gone only when it next writes, and on a
  * quiet machine that is never: thirty of them were found orphaned, hours old,
  * one per server that had exited (SIGKILL included, which runs no handler). So
- * the child is a shell that polls for the server's pid and takes docker down
- * with it, and on SIGTERM as well, because killing the shell alone would leave
- * docker behind. Ceiling: it notices within a second, not instantly, and it
- * needs a POSIX `sh`.
+ * the child is a shell that takes docker down with it, and on SIGTERM as well,
+ * because killing the shell alone would leave docker behind.
+ *
+ * The shell learns the server is gone from stdin: it is a pipe the server holds
+ * open, and the kernel closes it at any exit, SIGKILL included, so a `read`
+ * returns at once. The first version polled `kill -0 <pid>` with a `sleep 1`,
+ * which was 3,600 forks an hour from the first Docker panel open until the
+ * server exited. Ceiling: it needs a POSIX `sh`, and a server that hands the
+ * pipe to something long-lived would keep docker alive with it.
  */
-const WATCH_SCRIPT = `parent=$1; shift
-"$@" &
+const WATCH_SCRIPT = `exec 3<&0
+"$@" </dev/null 3<&- &
 child=$!
-trap 'kill $child 2>/dev/null; exit 0' TERM INT
-while kill -0 "$parent" 2>/dev/null && kill -0 $child 2>/dev/null; do sleep 1; done
-kill $child 2>/dev/null
-wait $child`;
+( read _ <&3; kill $child 2>/dev/null ) &
+reader=$!
+trap 'kill $child $reader 2>/dev/null; exit 0' TERM INT
+wait $child
+kill $reader 2>/dev/null`;
 
 let proc: ReturnType<typeof Bun.spawn> | null = null;
 let stopping = false;
@@ -120,9 +126,9 @@ export function startVolumeWatch(): void {
   if (!bin) return;
 
   try {
-    proc = Bun.spawn(["sh", "-c", WATCH_SCRIPT, "sh", String(process.pid), bin,
+    proc = Bun.spawn(["sh", "-c", WATCH_SCRIPT, "sh", bin,
       "events", "--filter", "type=container", "--filter", "event=die", "--format", "{{json .}}"], {
-      stdout: "pipe", stderr: "ignore",
+      stdin: "pipe", stdout: "pipe", stderr: "ignore",
     });
   } catch {
     // No daemon, no permission, no docker: try again later, say nothing. This

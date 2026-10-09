@@ -4,6 +4,7 @@ import type { NotifyKind, NotifyPrefs } from "./notifyPrefs.ts";
 import type { AskedAlert, NotifyPayload } from "./notifyPayload.ts";
 import type { CheckUsual } from "./checkBaseline.ts";
 import type { InboxAnnotation } from "./pluginUi.ts";
+import type { UiCmd } from "./uiActions.ts";
 
 export type HookEventType =
   | "SessionStart"
@@ -1166,11 +1167,19 @@ export type ControlCmd =
   | { cmd: "workspace"; open?: boolean }
   | { cmd: "esc" }
   | { cmd: "open"; what: "stats" | "skills" | "search" | "help" | "palette" }
+  /** The file finder (Ctrl+Shift+P) on one absolute path, the way a click on
+   *  that path in a terminal opens it. `kind` is the server's reading of the
+   *  spelling the caller sent: a trailing slash is a folder, anything else a
+   *  file. The finder is always reading, so there is no mode. */
+  | { cmd: "open"; what: "finder"; path: string; kind: "file" | "dir" }
   | { cmd: "theme"; dir?: 1 | -1; name?: string }
   | { cmd: "zoom"; dir: 1 | -1 | 0 }
   /** Drive the chat view itself. Unlike the rest, this one needs the chat panel
    *  mounted to run — see web/src/lib/chatIntent.ts. */
-  | { cmd: "chat"; do: "new" };
+  | { cmd: "chat"; do: "new" }
+  /** Any door in shared/uiActions.ts, by id. The older spellings above are
+   *  aliases of entries there; this is the general one. */
+  | UiCmd;
 
 /** An agent asking the built-in browser to do one thing. Answered by whichever
  *  window is showing it, over POST /browser/result — see browserdrive.ts. */
@@ -1923,6 +1932,9 @@ export type WsFrame =
    *  each need a different slice of git state, so they re-read what they show
    *  rather than the server guessing which of them cares about what. */
   | { type: "git" }
+  /** The desktop's theme changed. Carries nothing: the client reads
+   *  `/desktop/palette`, as it does at boot, instead of polling it. */
+  | { type: "desktop-palette" }
   | { type: "tasks" }
   /** The list of pending gate holds changed (one arrived, was decided, timed
    *  out, or was answered by a rule). Carries no payload: the client re-reads
@@ -1957,8 +1969,11 @@ export type WsFrame =
    *  the OS on macOS and Windows too, not just Linux. */
   | { type: "alert"; data: AlertNote }
   /** A UI-navigation command from POST /control, rebroadcast to every client.
-   *  It changes what is *shown*, never the fleet. */
-  | { type: "control"; data: ControlCmd }
+   *  It changes what is *shown*, never the fleet. `rid` is present when the
+   *  sender is waiting for an answer: the window replies with POST
+   *  /control/result carrying the same id. `present` and `as` say how to show
+   *  it and who asked (shared/uiActions.ts presentOf). */
+  | { type: "control"; data: ControlCmd; rid?: string; present?: "quiet" | "now"; as?: string; level?: 1 | 2 | 3 }
   /** The understudy scorecard, recomputed and pushed whole. It reports what
    *  the understudy WOULD have done and how often that matched; it commands
    *  nothing, which is why it rides the same read-only socket. */
@@ -3324,6 +3339,20 @@ export interface PrTalk {
   mine?: boolean;
 }
 
+/**
+ * One person (or team) the pull request is waiting on or has heard from.
+ *
+ * `again`: asked to look again after a verdict of their own; `await`: asked and
+ * never answered; `changes`, `approved`: their standing verdict; `comment`:
+ * spoke without a verdict. See `humanVerdict`, which builds the list.
+ */
+export interface ReviewPerson {
+  login: string;
+  state: "again" | "await" | "changes" | "approved" | "comment";
+  /** A team's name: it has no face and cannot have answered. */
+  team?: boolean;
+}
+
 export interface PrSummary {
   number: number;
   title: string;
@@ -3332,6 +3361,9 @@ export interface PrSummary {
   isDraft: boolean;
   headRefName: string;
   baseRefName: string;
+  /** The branch is in a fork, so it is not a branch of this repository and no
+   *  pull request here can target it. Absent means it is. See prStack.ts. */
+  isCrossRepository?: boolean;
   url: string;
   updatedAt: string;
   reviewDecision: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
@@ -3396,6 +3428,13 @@ export interface PrSummary {
      *  nobody named here is still the one holding up the merge — draw it like
      *  a fresh request (amber), not a still-standing one (red). */
     cleared?: boolean;
+    /**
+     * Everyone, one entry each, with the state that person is in: the winning
+     * group's `who` leaves out the person who was asked and never answered.
+     * Additive — nothing that reads `kind` and `who` changes. Absent from a
+     * server older than this field.
+     */
+    people?: ReviewPerson[];
   } | null;
   /**
    * The tracker card this pull request came from, when we already know it.

@@ -23,6 +23,7 @@ import type { PtyClientFrame, PtyServerFrame } from "../../../shared/types.ts";
 import { b64Encode } from "../lib/b64.ts";
 import type { Host } from "../lib/host.ts";
 import { C, type Palette } from "../theme.ts";
+import { redialIn, STABLE_MS } from "./redial.ts";
 import { terminalDocument, terminalTheme } from "./terminal-html.ts";
 import { createCoalescer, type Coalescer } from "./writeCoalescer.ts";
 
@@ -165,6 +166,11 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
    * that worked and nothing else did.
    */
   const [attempt, setAttempt] = useState(0);
+  /** Drops in a row that `redial.ts` has answered, and whether the next effect
+   *  run is one of those answers (as opposed to a pane, a tab or the app
+   *  coming back, which start the count again). */
+  const drops = useRef(0);
+  const redialing = useRef(false);
 
   /*
    * The palette, as the page's own theme object, recomputed every render.
@@ -250,6 +256,11 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     // carries a guess, and everything downstream spends a round trip undoing
     // it — including tmux, in front of somebody who is watching.
     if (!measured) return;
+    if (!redialing.current) drops.current = 0;
+    redialing.current = false;
+    let refused = false;
+    let openedAt = 0;
+    let redial: ReturnType<typeof setTimeout> | null = null;
     const query = new URLSearchParams({
       token: host.token,
       cols: String(size.current.cols),
@@ -274,6 +285,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     handlers.current.onState("connecting");
 
     ws.onopen = (): void => {
+      openedAt = Date.now();
       handlers.current.onState("live");
       // The page may have measured itself before the socket existed.
       ws.send(ptyFrame({ t: "resize", ...size.current }));
@@ -296,7 +308,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
         try { frame = JSON.parse(event.data) as PtyServerFrame; } catch { return; }
         // The only control frame worth surfacing: the server refusing, and
         // saying why. "that pane is gone" is a real answer somebody can act on.
-        if (frame.t === "fatal") handlers.current.onState("gone", frame.error);
+        if (frame.t === "fatal") { refused = true; handlers.current.onState("gone", frame.error); }
         if (frame.t === "opened") {
           handlers.current.onOpened?.({ pane: frame.pane, window: frame.window, cwd: frame.cwd, session: frame.session });
         }
@@ -348,10 +360,35 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       handlers.current.onState("gone");
     };
     ws.onerror = closed;
-    ws.onclose = closed;
+    /*
+     * And dialled again, when the other end simply went away.
+     *
+     * A desktop install restarts the server, which drops this socket and takes
+     * the grouped tmux session with it; the pane itself is untouched. Without
+     * this the screen stayed on "Disconnected" until the app was backgrounded
+     * and brought back. `redial.ts` holds what is and is not worth a second
+     * try; the count restarts for a socket that had been up for a while.
+     */
+    ws.onclose = (event: { code?: number }): void => {
+      closed();
+      if (socket.current !== ws) return;
+      if (openedAt && Date.now() - openedAt >= STABLE_MS) drops.current = 0;
+      const wait = redialIn({
+        code: event?.code, refused, active: AppState.currentState === "active", failures: drops.current,
+      });
+      if (wait === null) return;
+      drops.current += 1;
+      redial = setTimeout(() => {
+        redial = null;
+        if (socket.current !== ws || AppState.currentState !== "active") return;
+        redialing.current = true;
+        setAttempt((n) => n + 1);
+      }, wait);
+    };
 
     return () => {
       socket.current = null;
+      if (redial) clearTimeout(redial);
       /* Whatever this pane's socket left in the batch is thrown away rather
          than delivered. It belongs to a pane nobody is looking at any more,
          and 48ms is easily enough time for the next one to have arrived —

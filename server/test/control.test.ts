@@ -2,7 +2,8 @@
 // validator is a trust boundary: a malformed or unknown command must resolve to
 // null and never reach a client. These pin the closed sets it accepts.
 import { describe, expect, test } from "bun:test";
-import { parseControlCmd } from "../src/control.ts";
+import { parseControlCmd, controlId, UI_MAX_LEVEL } from "../src/control.ts";
+import { UI_ACTIONS, parseUi, parseArgs, argsRefusal } from "../../shared/uiActions.ts";
 
 describe("parseControlCmd — view", () => {
   test("accepts every real view id", () => {
@@ -47,6 +48,46 @@ describe("parseControlCmd — open", () => {
   test("rejects an unknown panel", () => {
     expect(parseControlCmd({ cmd: "open", what: "settings" })).toBeNull();
     expect(parseControlCmd({ cmd: "open" })).toBeNull();
+  });
+});
+
+describe("parseControlCmd — open finder", () => {
+  const ok = (path: unknown) => parseControlCmd({ cmd: "open", what: "finder", path });
+
+  test("a file path is a file; a trailing slash is a folder", () => {
+    expect(ok("/home/ana/notes/plan.md")).toEqual({ cmd: "open", what: "finder", path: "/home/ana/notes/plan.md", kind: "file" });
+    expect(ok("/home/ana/notes/")).toEqual({ cmd: "open", what: "finder", path: "/home/ana/notes", kind: "dir" });
+    expect(ok("/")).toEqual({ cmd: "open", what: "finder", path: "/", kind: "dir" });
+  });
+
+  test("a path that does not exist is still a command: the finder owns that state", () => {
+    expect(ok("/home/ana/not-there.md")).not.toBeNull();
+  });
+
+  test("relative, missing and non-string paths are refused", () => {
+    for (const p of ["notes/plan.md", "./plan.md", "~/plan.md", "", undefined, null, 7, ["/a"], { a: 1 }]) expect(ok(p)).toBeNull();
+    expect(parseControlCmd({ cmd: "open", what: "finder" })).toBeNull();
+  });
+
+  test("NUL and other control characters are refused", () => {
+    for (const p of ["/home/ana/plan.md\0.png", "/home/ana/a\nb.md", "/home/ana/a\rb.md", "/home/ana/\u007f.md"]) expect(ok(p)).toBeNull();
+  });
+
+  test("a path that is not already normalized is refused", () => {
+    for (const p of ["/home/ana/../bob/plan.md", "/home/ana/./plan.md", "/home//ana/plan.md", "//home/ana", "/home/ana//", "/.."]) expect(ok(p)).toBeNull();
+  });
+
+  test("a non-POSIX spelling is refused", () => {
+    for (const p of ["C:\\Users\\ana\\plan.md", "gh:acme/orbit", "file:///home/ana/plan.md"]) expect(ok(p)).toBeNull();
+  });
+
+  test("a path longer than PATH_MAX is refused", () => {
+    expect(ok("/" + "a".repeat(4096))).toBeNull();
+    expect(ok("/" + "a".repeat(4000))).not.toBeNull();
+  });
+
+  test("the plain panels are unchanged by it", () => {
+    expect(parseControlCmd({ cmd: "open", what: "palette", path: "/home/ana/plan.md" })).toEqual({ cmd: "open", what: "palette" });
   });
 });
 
@@ -126,5 +167,163 @@ describe("parseControlCmd — junk", () => {
     // And the list is still a list: a view that is not on it stays off. (`dash`
     // joined the list in 0.8, so the off-list example is a name that never will.)
     expect(parseControlCmd({ cmd: "view", to: "settings" })).toBeNull();
+  });
+});
+
+describe("parseControlCmd — the ui wire shape", () => {
+  const ui = (id: unknown, args?: unknown) => parseControlCmd({ cmd: "ui", do: id, args });
+
+  test("a registry id with valid args is a ui command, carrying only the args it names", () => {
+    expect(ui("settings.open", { page: "appearance" })).toEqual({ cmd: "ui", do: "settings.open", args: { page: "appearance" } });
+    expect(ui("settings.open", { page: "diff", row: "wrap-long-lines", junk: "x" })).toEqual({ cmd: "ui", do: "settings.open", args: { page: "diff", row: "wrap-long-lines" } });
+    expect(ui("project.picker")).toEqual({ cmd: "ui", do: "project.picker", args: {} });
+    expect(ui("machine.open", { tab: "ports" })).toEqual({ cmd: "ui", do: "machine.open", args: { tab: "ports" } });
+  });
+
+  test("an id that is not in the registry is refused, whatever it looks like", () => {
+    for (const id of ["settings.set", "settings.get", "pr.merge", "", "__proto__", "constructor", "toString", "hasOwnProperty", 7, null, undefined, {}]) {
+      expect(ui(id, {})).toBeNull();
+    }
+    expect(parseControlCmd({ cmd: "ui" })).toBeNull();
+  });
+
+  test("args are closed: a wrong enum, a missing required field or a non-object are refused", () => {
+    expect(ui("settings.open", { page: "secrets" })).toBeNull();
+    expect(ui("settings.open", {})).toBeNull();
+    expect(ui("settings.open")).toBeNull();
+    expect(ui("settings.open", "appearance")).toBeNull();
+    expect(ui("settings.open", ["appearance"])).toBeNull();
+    expect(ui("settings.open", { page: "appearance", row: "has space" })).toBeNull();
+    expect(ui("settings.open", { page: "appearance", row: 3 })).toBeNull();
+    expect(ui("machine.open", { tab: "kill" })).toBeNull();
+    expect(ui("git.modal", { which: "rebase" })).toBeNull();
+    expect(ui("git.modal", { which: "rescue" })).toBeNull();
+  });
+
+  test("paths are spellings: absolute for a root, relative and downward for a file under it", () => {
+    expect(ui("peek.file", { root: "/home/ana/code/orbit", path: "docs/plan.md" })).toEqual({ cmd: "ui", do: "peek.file", args: { root: "/home/ana/code/orbit", path: "docs/plan.md" } });
+    for (const path of ["/etc/passwd", "../x", "a/../../x", "a//b", "./a", "", "a\0b", "a\nb"]) {
+      expect(ui("peek.file", { root: "/home/ana/code/orbit", path })).toBeNull();
+    }
+    for (const root of ["orbit", "/home/ana/../bob", "/home//ana", "~/orbit"]) {
+      expect(ui("bench.file", { root, path: "a.md" })).toBeNull();
+    }
+  });
+
+  test("a git ref cannot read as an option or a range", () => {
+    expect(ui("git.compare", { base: "origin/main" })).toEqual({ cmd: "ui", do: "git.compare", args: { base: "origin/main" } });
+    for (const base of ["--output=x", "-b", "a..b", "a b", "", "a\nb", "x".repeat(201)]) expect(ui("git.compare", { base })).toBeNull();
+  });
+
+  test("the second batch of doors takes only what its specs allow", () => {
+    expect(ui("git.rebase", { base: "origin/main" })).toEqual({ cmd: "ui", do: "git.rebase", args: { base: "origin/main" } });
+    for (const base of ["--exec=x", "a..b", "", "a b"]) expect(ui("git.rebase", { base })).toBeNull();
+    expect(ui("event.open", { id: 12 })).toEqual({ cmd: "ui", do: "event.open", args: { id: 12 } });
+    for (const id of [-1, 1.5, "12", null, Number.NaN, Number.MAX_SAFE_INTEGER + 2, undefined]) expect(ui("event.open", { id })).toBeNull();
+    expect(ui("session.open", { id: "5f2c0a9e-1111" })).toEqual({ cmd: "ui", do: "session.open", args: { id: "5f2c0a9e-1111" } });
+    expect(ui("session.open", { id: "5f2c0a9e-1111", app: "orbit" })).toEqual({ cmd: "ui", do: "session.open", args: { id: "5f2c0a9e-1111", app: "orbit" } });
+    for (const id of ["a b", "x\ny", "", "../x"]) expect(ui("session.open", { id })).toBeNull();
+    expect(ui("session.open", { id: "a", app: "a b" })).toBeNull();
+    expect(ui("pane.open", { which: "card" })).toEqual({ cmd: "ui", do: "pane.open", args: { which: "card" } });
+    expect(ui("pane.open", { which: "rescue" })).toBeNull();
+    expect(ui("settings.plugin", { name: "orbit-notes" })).toEqual({ cmd: "ui", do: "settings.plugin", args: { name: "orbit-notes" } });
+    for (const name of ["a/b", "plugin:x y", "", "x".repeat(65)]) expect(ui("settings.plugin", { name })).toBeNull();
+    for (const id of ["whatsnew.open", "lantern.schedule", "terminal.resume"] as const) expect(ui(id)).toEqual({ cmd: "ui", do: id, args: {} });
+    expect(ui("git.modal", { which: "palette" })).toEqual({ cmd: "ui", do: "git.modal", args: { which: "palette" } });
+  });
+
+  test("a finder through ui carries the kind the spelling implies, like the old spelling", () => {
+    expect(ui("finder.open", { path: "/home/ana/notes/" })).toEqual({ cmd: "ui", do: "finder.open", args: { path: "/home/ana/notes", kind: "dir" } });
+    expect(ui("finder.open", { path: "/home/ana/notes/plan.md" })).toEqual({ cmd: "ui", do: "finder.open", args: { path: "/home/ana/notes/plan.md", kind: "file" } });
+    expect(ui("finder.open", { path: "notes" })).toBeNull();
+    // Said outright, it is taken; anything else falls back to the spelling.
+    expect(ui("finder.open", { path: "/home/ana/notes", kind: "dir" })).toEqual({ cmd: "ui", do: "finder.open", args: { path: "/home/ana/notes", kind: "dir" } });
+    expect(ui("finder.open", { path: "/home/ana/notes", kind: "weird" })).toEqual({ cmd: "ui", do: "finder.open", args: { path: "/home/ana/notes", kind: "file" } });
+  });
+
+  test("a level above the one this server accepts is refused, and so is an id with no level", () => {
+    const registry = {
+      look: { level: 1, kind: "open", surface: "x", args: {} },
+      change: { level: 2, kind: "change", surface: "x", args: {} },
+      stage: { level: 3, kind: "stage", surface: "x", args: {} },
+    } as const;
+    expect(parseUi(registry, "look", {}, 2)).not.toBeNull();
+    expect(parseUi(registry, "change", {}, 2)).not.toBeNull();
+    expect(parseUi(registry, "change", {}, 1)).toBeNull();
+    expect(parseUi(registry, "stage", {}, 2)).toBeNull();
+    expect(parseUi(registry, "stage", {}, UI_MAX_LEVEL)).not.toBeNull();
+    // No level at all is level 3: refused below 3, and then not a stage, so refused anyway.
+    const unlevelled = { oops: { kind: "open", surface: "x", args: {} } } as never;
+    expect(parseUi(unlevelled, "oops", {}, 2)).toBeNull();
+    expect(parseUi(unlevelled, "oops", {}, UI_MAX_LEVEL)).toBeNull();
+  });
+
+  test("only the writes are level 2 (a setting, the palette, the zoom); every other entry is level 1, or a level 3 stage", () => {
+    for (const [id, d] of Object.entries(UI_ACTIONS) as [string, { level: number; kind: string }][]) expect(d.level, id).toBe(["settings.set", "theme.set", "zoom.step"].includes(id) ? 2 : d.kind === "stage" ? 3 : 1);
+  });
+});
+
+describe("parseControlCmd — the old spellings are registry entries", () => {
+  test("each legacy body parses to the same entry its ui spelling does", () => {
+    const pairs: [Record<string, unknown>, Record<string, unknown>][] = [
+      [{ cmd: "view", to: "git" }, { cmd: "ui", do: "view.open", args: { to: "git" } }],
+      [{ cmd: "open", what: "help" }, { cmd: "ui", do: "panel.open", args: { what: "help" } }],
+      [{ cmd: "open", what: "finder", path: "/a/b" }, { cmd: "ui", do: "finder.open", args: { path: "/a/b" } }],
+      [{ cmd: "chat", do: "new" }, { cmd: "ui", do: "chat.new", args: {} }],
+      [{ cmd: "zoom", dir: -1 }, { cmd: "ui", do: "zoom.step", args: { dir: -1 } }],
+      [{ cmd: "theme", name: "nord" }, { cmd: "ui", do: "theme.set", args: { name: "nord" } }],
+      [{ cmd: "esc" }, { cmd: "ui", do: "esc.peel", args: {} }],
+      [{ cmd: "workspace" }, { cmd: "ui", do: "workspace.toggle", args: {} }],
+    ];
+    for (const [old, wire] of pairs) {
+      const a = parseControlCmd(old)!;
+      const b = parseControlCmd(wire)!;
+      expect(a, JSON.stringify(old)).not.toBeNull();
+      expect(b, JSON.stringify(wire)).not.toBeNull();
+      expect(controlId(a), JSON.stringify(old)).toBe(controlId(b));
+    }
+  });
+
+  test("the audit id is the registry id, for either spelling, and never carries a value", () => {
+    expect(controlId(parseControlCmd({ cmd: "view", to: "git" })!)).toBe("view.open");
+    expect(controlId(parseControlCmd({ cmd: "open", what: "finder", path: "/secret/place" })!)).toBe("finder.open");
+    expect(controlId(parseControlCmd({ cmd: "open", what: "stats" })!)).toBe("panel.open");
+    expect(controlId(parseControlCmd({ cmd: "ui", do: "settings.open", args: { page: "about" } })!)).toBe("settings.open");
+  });
+
+  test("the closed sets are the registry's: every view, panel and chat verb comes from it", () => {
+    for (const to of UI_ACTIONS["view.open"].args.to.values) expect(parseControlCmd({ cmd: "view", to })).not.toBeNull();
+    for (const what of UI_ACTIONS["panel.open"].args.what.values) expect(parseControlCmd({ cmd: "open", what })).not.toBeNull();
+  });
+
+  test("a theme name can no longer be anything: it is a slug", () => {
+    expect(parseControlCmd({ cmd: "theme", name: "github-dark-dimmed" })).not.toBeNull();
+    expect(parseControlCmd({ cmd: "theme", name: "x y" })).toBeNull();
+    expect(parseControlCmd({ cmd: "theme", name: "x".repeat(65) })).toBeNull();
+  });
+});
+
+// Measured: a real door with a wrong argument answered the bare "unknown control
+// command", so a caller could not tell a typo in the door from a typo in a value.
+describe("argsRefusal — a wrong argument names itself and what the door takes", () => {
+  test("a wrong enum lists the values, a missing one says it is needed", () => {
+    const d = UI_ACTIONS["panel.open"];
+    expect(argsRefusal("panel.open", d, { what: "stat" })).toMatch(/^panel\.open does not take that "what"; accepted: one of .*stats/);
+    expect(argsRefusal("panel.open", d, {})).toMatch(/^panel\.open needs "what": one of /);
+    expect(argsRefusal("panel.open", d, [])).toBe("panel.open takes its arguments as an object");
+  });
+
+  test("every door: whatever parseArgs refuses for a wrong value gets a sentence, and a good one gets null", () => {
+    for (const [id, d] of Object.entries(UI_ACTIONS)) {
+      for (const [k, spec] of Object.entries(d.args)) {
+        if (spec.t === "pathKind") continue;
+        const bad = argsRefusal(id, d, { [k]: { nested: true } });
+        // Either this argument is the culprit, or another required one is missing first.
+        expect(bad, `${id}.${k}`).toMatch(/needs "|does not take that "/);
+        expect(bad).toContain(id);
+      }
+    }
+    expect(argsRefusal("panel.open", UI_ACTIONS["panel.open"], { what: "stats" })).toBeNull();
+    expect(parseArgs(UI_ACTIONS["panel.open"], { what: "stats" })).not.toBeNull();
   });
 });

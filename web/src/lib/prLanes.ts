@@ -229,7 +229,8 @@ export function fileInLane(p: PrSummary, stake: Stake, hint?: FailureHint | null
   }
 
   /*
-   * Still running beats red, and that is a correction.
+   * Still running beats red, and that is a correction — for a failure that may
+   * be on its way out, not for one that is going to stay.
    *
    * Measured against GitHub on a pull request whose failing check had just been
    * re-run: their aggregate answers `FAILURE: 1` and `IN_PROGRESS: 2`, because
@@ -240,10 +241,22 @@ export function fileInLane(p: PrSummary, stake: Stake, hint?: FailureHint | null
    * green and busy, and no amount of pressing Refresh could move it, because
    * the number was real and its meaning was not.
    *
-   * So a suite with anything still in flight is a wait. The failure it is
-   * carrying is, more often than not, the attempt being replaced.
+   * So a suite with anything still in flight is a wait while the failure it is
+   * carrying might be the attempt being replaced. That is knowable only when
+   * the failures are NAMED: `failing` is filled from the latest run per name
+   * (the board swaps the list's aggregate for that read on a card that claims
+   * red), so a name in it has no run of the same name in flight — the run that
+   * would have replaced it is not there. The list's own aggregate has no names,
+   * `failing` is empty, and that is the only case left that is still a guess.
+   *
+   * The other way round was measured too: a pull request whose roll-up job,
+   * REQUIRED, had failed in three seconds, with one other job still running and
+   * fifty-six passed, sat in "in flight" with no red anywhere while its own
+   * detail said "Merging is blocked". Waiting on a suite does not unblock a
+   * check that has already failed and is not coming back.
    */
-  if (running) {
+  const standing = red && c.failing.length > 0;
+  if (running && !standing) {
     return { lane: stake.mine ? "flight" : "others",
       reason: red
         ? `${c.success} of ${c.total} checks in — ${plural(c.failure, "failure")} so far, which a re-run may be replacing.`
@@ -261,10 +274,13 @@ export function fileInLane(p: PrSummary, stake: Stake, hint?: FailureHint | null
        another pull request (or on main). Nothing read, nothing claimed. */
     const own = hint?.ownership;
     const elsewhere = own?.notYours ? (own.main ? "red on main" : `red on ${plural(own.prs, "other PR")}`) : null;
+    /* Said, because the card must not read as finished when it is not: the
+       failure stands, and the rest of the suite is still going. */
+    const busy = running ? `, and ${plural(c.pending, "other check")} still running` : "";
     return { lane: stake.mine ? "blocked" : "others", test,
       reason: names
-        ? `${names}${rest} failing${stake.mine ? (elsewhere ? ` — ${elsewhere}, not yours` : " — yours to fix") : ", so reviewing it is wasted work until it moves"}.`
-        : `${plural(c.failure, "check")} failing.` };
+        ? `${names}${rest} failing${stake.mine ? (elsewhere ? ` — ${elsewhere}, not yours` : " — yours to fix") : ", so reviewing it is wasted work until it moves"}${busy}.`
+        : `${plural(c.failure, "check")} failing${busy}.` };
   }
 
   if (changesAsked) {

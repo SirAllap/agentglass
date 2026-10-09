@@ -27,7 +27,7 @@
  * overflow, the clause about automation, and the button still being pressable
  * underneath all of it.
  */
-import { describe, expect, test, mock } from "bun:test";
+import { afterAll, describe, expect, test, mock } from "bun:test";
 import { globalStubs } from "./stubGlobal";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -58,41 +58,28 @@ mock.module(new URL("../src/components/Portal.tsx", import.meta.url).pathname, (
   PortalFloor: React.createContext(0),
 }));
 /*
- * The api stub DELEGATES; it does not replace the module.
+ * The four ClickUp calls are answered here, on the real `api` object, and given
+ * back when the file ends.
  *
- * `mock.module` is keyed on a resolved path and lasts for the whole `bun test`
- * process, and this call sits at module scope — so the four functions below
- * used to BE `src/lib/api.ts` for every suite that loaded it afterwards. That
- * is not a local decision, it is a process-wide one, and it broke two suites
- * that had nothing to do with this dialog. Measured on ubuntu-latest, where
- * the file order put this file tenth and its victim thirtieth:
- * `gate-answer-took.test.ts` died with "api.gateDecide is not a function",
- * because the stub had four clickup calls and nothing else. It stayed green
- * here for the ordinary reason an order-dependent bug does — this machine
- * loads the files in a different order.
+ * This used to be `mock.module` on api.ts, and that is keyed on a resolved path
+ * and lasts for the whole `bun test` process: every module loaded after this
+ * file got a copy of `api` whose `clickupViews` answered null without a request.
+ * clickup-prefs-gate.test.ts loads clickupSetup.ts, found "no ClickUp here" and
+ * made no request at all, so it failed in the orders that ran this file first
+ * (seeds 1, 3 and 5 of `bun test --seed N`). Before that it had been the whole
+ * module with four functions on it, which broke gate-answer-took.test.ts.
+ * Patching the shared object and restoring it touches neither.
  *
- * So the real module is imported first, through a specifier `mock.module` does
- * not match, and the stub is that module with the four calls overridden. Every
- * other export — `api.gateDecide` included — is the genuine one.
- *
- * The globals go up before that import rather than after: `api.ts` reads
- * `location.href`/`location.hostname` and localStorage while its module body
- * runs, which is the throw this mock originally existed to dodge.
+ * The globals go up before the import: `api.ts` reads `location.href`/
+ * `location.hostname` and localStorage while its module body runs.
  */
 stubGlobal("location", { hostname: "localhost", origin: "http://localhost:4000", href: "http://localhost:4000/" });
 stubStorage();
-const API_PATH = new URL("../src/lib/api.ts", import.meta.url).pathname;
-const realApiModule = await import(`${API_PATH}?unmocked`);
-mock.module(API_PATH, () => ({
-  ...realApiModule,
-  api: {
-    ...realApiModule.api,
-    clickupViews: async () => null,
-    clickupFind: async () => null,
-    clickupList: async () => null,
-    clickupSetWrites: async () => null,
-  },
-}));
+const { api } = await import("../src/lib/api.ts");
+const clickupCalls = ["clickupViews", "clickupFind", "clickupList", "clickupSetWrites"] as const;
+const realCalls = clickupCalls.map((k) => [k, (api as Record<string, unknown>)[k]] as const);
+for (const k of clickupCalls) (api as Record<string, unknown>)[k] = async () => null;
+afterAll(() => { for (const [k, fn] of realCalls) (api as Record<string, unknown>)[k] = fn; });
 
 const { MergeDialog } = await import("../src/components/MergeDialog.tsx");
 type Spec = NonNullable<Parameters<typeof MergeDialog>[0]["pending"]>;

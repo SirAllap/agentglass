@@ -25,6 +25,11 @@ describe("which repositories use the tracker", () => {
   test("an empty board has nothing to read and says no", () => {
     expect(repoUsesTracker([], true)).toBe(false);
   });
+  test("on a workspace with no custom ids a bare KEY-12 is not the tracker's, a CU- id is", () => {
+    expect(repoUsesTracker([withId], true, true)).toBe(false);
+    expect(repoUsesTracker([withId, { headRefName: "CU-86abc123_x" }], true, true)).toBe(true);
+    expect(repoUsesTracker([withId], true, false)).toBe(true);
+  });
 });
 
 describe("which block a card gets", () => {

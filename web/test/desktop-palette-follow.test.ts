@@ -56,3 +56,17 @@ test("the desktop's mark is served from the machine, never shipped", async () =>
   expect(picker).toMatch(/if \(!svg\) return <>\{name\}<\/>;/);
 });
 
+/*
+ * NO CLOCK.
+ *
+ * Every window asked the server every three seconds whether the desktop had
+ * switched theme, which it does a handful of times a day. The server watches
+ * the theme directory now and says so on the live socket.
+ */
+test("the desktop's palette is read on the server's word, not on a timer", async () => {
+  expect(code).not.toMatch(/pollWhileLooking|setInterval/);
+  const live = await Bun.file(new URL("../src/lib/useLive.ts", import.meta.url)).text();
+  expect(live).toMatch(/frame\.type === "desktop-palette"\) \{\s*(\/\/[^\n]*\n\s*)*desktopPaletteMoved\(\);/);
+  /* A switch made while the socket was down was announced to nobody here. */
+  expect(live).toMatch(/ws\.onopen = \(\) => \{[\s\S]*?desktopPaletteMoved\(\);[\s\S]*?\};\s*ws\.onclose/);
+});

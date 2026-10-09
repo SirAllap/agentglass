@@ -21,6 +21,11 @@ import { ALWAYS_OPEN, foldable, foldedLanes, setFoldedLanes, walkable } from "..
 import type { PrSummary } from "../../../shared/types.ts";
 import { staleApproval } from "../../../shared/mergeBlockers.ts";
 import { LANES, LANE_CAP, board as fileAll, suggestedAction, ACTION_LABEL, type Filed, type LaneId } from "../lib/prLanes.ts";
+import { isTrunkBranch, type Stack } from "../lib/prStack.ts";
+import { usePrStacks } from "../lib/usePrStacks.ts";
+import { spineSentence, type Facts } from "../lib/prStackWords.ts";
+import { factsReader, laneMap } from "../lib/prStackFacts.ts";
+import { BaseToken, Spine, spineHeight } from "./StackMarks.tsx";
 import { taskLink } from "../lib/taskLink.ts";
 import { onCard, cardVersion, withCard } from "../lib/prCardStore.ts";
 import { CHIP_H } from "../lib/priority.tsx";
@@ -29,6 +34,8 @@ import { repoUsesTracker, trackerBlock } from "../lib/prCardBlock.ts";
 import { CTRL_H, EDGE, LINE } from "./workspace/Chrome.tsx";
 import { CODE_FONT_STYLE } from "./diff/DiffLines.tsx";
 import { Avatar } from "./Avatar.tsx";
+import { CardFaces } from "./CardFaces.tsx";
+import { cardReviewers, facesAria, waitingLine } from "../lib/cardReviewers.ts";
 import { askingBehind, behindOf, onBehind } from "../lib/prBehindStore.ts";
 import { onRollup, rollupOf } from "../lib/prRollupStore.ts";
 import { failureHint, jobIdOf } from "../lib/prFailureHint.ts";
@@ -41,11 +48,11 @@ import { matchIndex, prMatches, stepMatch } from "../lib/prBoardFind.ts";
 import { closeFind, openFind, registerEngine, topScope } from "../lib/findScope.ts";
 import { CloseIcon } from "./CloseButton.tsx";
 import { boardFace } from "../lib/boardFace.ts";
+import { useClickupSetup } from "../lib/clickupSetup.ts";
 
 /** The tracker bar's tint: the app's own accent, the one an unranked card chip already wears. */
 const ACCENT = "var(--accent, var(--primary))";
 
-const TRUNKS = new Set(["main", "master", "trunk", "develop", "development"]);
 
 /** How long nothing may happen before a pull request counts as quiet. */
 const QUIET_DAYS = 30;
@@ -75,7 +82,7 @@ type Card = PrSummary & { filed: Filed };
 export function TriageBoard({
   mine, review, total, hasTaskProvider, pinned,
   onOpen, onTogglePin, onShowTable, onAct, busy, acting, loading, settling, failed, hidden, onRetry, root, repoKey,
-  onlyUnread, onOnlyUnread,
+  onlyUnread, onOnlyUnread, unfiltered,
 }: {
   /** The `mine` scope, as the panel already has it. */
   mine: PrSummary[];
@@ -156,6 +163,14 @@ export function TriageBoard({
    */
   onlyUnread: boolean;
   onOnlyUnread: (v: boolean) => void;
+  /**
+   * The two lists before the board's own filters.
+   *
+   * A stacked pull request names its base, and the base may be one the filters
+   * hide; its card is not on the board but its state is still known, and the
+   * token says it. Absent, the lists above are all there is.
+   */
+  unfiltered?: { mine: PrSummary[]; review: PrSummary[] };
 }) {
   /* Answers arriving one at a time, each one a re-render of the board and
      nothing else — the cards do not move, a chip appears on one of them. */
@@ -207,7 +222,35 @@ export function TriageBoard({
   const cards = useMemo(() => [...lanes.values()].flat(), [lanes]);
   /* Per repository: this board IS one repository's, so the answer is read off
      every card on it. See prCardBlock.ts for the rule and its ceiling. */
-  const repoUses = useMemo(() => repoUsesTracker(cards, hasTaskProvider), [cards, hasTaskProvider]);
+  const noCustomIds = useClickupSetup()?.noCustomIds === true;
+  const repoUses = useMemo(() => repoUsesTracker(cards, hasTaskProvider, noCustomIds), [cards, hasTaskProvider, noCustomIds]);
+  /*
+   * STACKS. Read off the lists in hand — `unfiltered` when the panel says what
+   * the filters hid, so a base that is filtered out is still a base — plus the
+   * few bases the lists do not hold, asked one branch at a time. See prStack.ts.
+   */
+  const everyone = useMemo(() => {
+    const by = new Map<number, PrSummary>();
+    for (const p of [...cards, ...(unfiltered?.mine ?? []), ...(unfiltered?.review ?? [])]) if (!by.has(p.number)) by.set(p.number, p);
+    return [...by.values()];
+  }, [cards, unfiltered]);
+  const onBoard = useMemo(() => new Set(cards.map((c) => c.number)), [cards]);
+  const isShown = useCallback((n: number) => onBoard.has(n), [onBoard]);
+  const stacks = usePrStacks(root, everyone, isShown);
+  /* The column a filtered-out pull request WOULD sit in: the same filing, so the
+     word on a token is the one its own card would carry. */
+  const laneOfAll = useMemo(() => {
+    const out = laneMap(everyone.filter((p) => !onBoard.has(p.number)),
+      new Set((unfiltered?.mine ?? mine).map((p) => p.number)), new Set((unfiltered?.review ?? review).map((p) => p.number)), trueChecks);
+    for (const c of cards) out.set(c.number, c.filed.lane);
+    return out;
+  }, [cards, everyone, onBoard, unfiltered, mine, review, trueChecks]);
+  const factsOf = useMemo(() => factsReader({
+    pool: everyone, found: stacks.found, onBoard: (n) => onBoard.has(n), lane: (n) => laneOfAll.get(n),
+    status: (p) => withCard(p, hasTaskProvider).card?.status,
+  }), [everyone, stacks, onBoard, laneOfAll, hasTaskProvider]);
+  /* Outlined while the pointer is on the token that names it. */
+  const [lit, setLit] = useState<number | null>(null);
   const involved = cards.length;
   const canLand = lanes.get("land")?.length ?? 0;
   // Only over the cards in hand. The other few hundred are not loaded here and
@@ -235,13 +278,6 @@ export function TriageBoard({
   const totalKnown = rest >= 0;
   const tableLabel = rest > 0 ? `Show all ${total} as a table` : "Show the table";
 
-  /*
-   * The keyboard, and why the cursor is a pair rather than an index.
-   *
-   * A board has two axes and a flat index has one, so `j` from the bottom of a
-   * lane would wrap into the top of the next — which reads as the cursor
-   * teleporting. Lane and row, and `j` at the end of a lane simply stops.
-   */
   /*
    * The columns actually drawn.
    *
@@ -370,7 +406,6 @@ export function TriageBoard({
       return next;
     });
   }, [folded]);
-  const [cur, setCur] = useState<{ lane: number; row: number }>({ lane: 0, row: 0 });
   const frame = useRef<HTMLDivElement>(null);
   /*
    * THE KEYS DID NOTHING, AND THE ROW BELOW THE COUNTS SAID THEY DID.
@@ -419,21 +454,6 @@ export function TriageBoard({
       folded: isFolded(id), opened: !!openLanes[id], cap: LANE_CAP,
     });
   }, [lanes, cols, openLanes, isFolded]);
-  const at = shown(cur.lane)[cur.row];
-
-  // Keep the cursor on something. Lanes empty and fill as checks land, and a
-  // cursor left pointing past the end is a keypress that does nothing.
-  useEffect(() => {
-    const n = shown(cur.lane).length;
-    if (n === 0) {
-      const next = cols.findIndex((_, i) => shown(i).length > 0);
-      if (next >= 0) setCur({ lane: next, row: 0 });
-    } else if (cur.row >= n) setCur((c) => ({ ...c, row: n - 1 }));
-  }, [lanes, cur.lane, cur.row, shown, cols]);
-
-  useEffect(() => {
-    frame.current?.querySelector<HTMLElement>("[data-cur=\"1\"]")?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [cur]);
 
   /*
    * The app's find bar, driving this board.
@@ -445,7 +465,7 @@ export function TriageBoard({
    * which the first one cannot see at all.
    *
    * So the bar now runs THIS one. Ctrl+F anywhere on the board sets the same
-   * needle, dims the same cards and steps the same cursor; the box beside the
+   * needle, dims the same cards and steps through the same matches; the box beside the
    * lanes is the visible half of it rather than a second feature. Registered as
    * an engine, which is the seam findScope already has for a view that searches
    * something other than the document (see FindEngine).
@@ -460,8 +480,9 @@ export function TriageBoard({
   shownRef.current = shown;
   const colsRef = useRef(cols);
   colsRef.current = cols;
-  const curRef = useRef(cur);
-  curRef.current = cur;
+  /* Where the last step landed. Not painted: a card that looked chosen read as
+     a pull request state, and nothing else on the board moves it. */
+  const stepAt = useRef({ lane: 0, row: 0 });
   useEffect(() => {
     /** Every card the board is DRAWING, in reading order, with where it sits. */
     const drawn = () => {
@@ -473,7 +494,7 @@ export function TriageBoard({
     };
     const flagsFor = (q: string, list: ReturnType<typeof drawn>) => list.map((x) => prMatches(x.p, q));
     const here = (list: ReturnType<typeof drawn>) =>
-      list.findIndex((x) => x.lane === curRef.current.lane && x.row === curRef.current.row);
+      list.findIndex((x) => x.lane === stepAt.current.lane && x.row === stepAt.current.row);
     let q = "";
     return registerEngine(() => {
       /* Only while this board is the thing on screen. The panel keeps it
@@ -498,7 +519,9 @@ export function TriageBoard({
           const to = stepMatch(flagsFor(q, list), here(list), dir);
           if (to < 0) return;
           const hit = list[to]!;
-          setCur({ lane: hit.lane, row: hit.row });
+          stepAt.current = { lane: hit.lane, row: hit.row };
+          frame.current?.querySelector<HTMLElement>(`[data-pr="${hit.p.number}"]`)
+            ?.scrollIntoView({ block: "nearest", inline: "nearest" });
         },
         at() {
           const list = drawn();
@@ -889,13 +912,13 @@ export function TriageBoard({
                       </div>
                     ) : (
                       <>
-                        {rows.map((p, r) => (
+                        {rows.map((p) => (
                           <CardView key={p.number} p={p} hasTaskProvider={hasTaskProvider} repoUses={repoUses}
-                            cursor={cur.lane === i && cur.row === r}
                             pinned={pinned(p.number)} onOpen={() => onOpen(p.number)} onPin={() => onTogglePin(p)}
                             onAct={onAct} busy={busy} acting={acting}
                             dim={!matches(p) || (onlyLane !== null && onlyLane !== l.id)} root={root}
-                            unread={unread.get(p.number)} />
+                            unread={unread.get(p.number)}
+                            stack={stacks.of(p.number)} factsOf={factsOf} lit={lit === p.number} onLit={setLit} onOpenBase={onOpen} />
                         ))}
                         {/* Counted, and openable HERE. The cap is what keeps
                             the board a glance on a bad week; the rest of the
@@ -1120,7 +1143,7 @@ function cardVerdict(p: PrSummary): {
      */
     if (v.cleared) {
       const line = v.mine ? "You were asked to look again"
-        : names ? `Waiting on review by ${names}` : "Waiting on review";
+        : waitingLine(cardReviewers(v)) ?? (names ? `Waiting on review by ${names}` : "Waiting on review");
       return {
         tint: "var(--warning)", glyph: <CircleIcon size={ICON.xs} />, url: v.url,
         line: line + also,
@@ -1148,7 +1171,7 @@ function cardVerdict(p: PrSummary): {
     /* Your own column is the one place this card is about YOU. */
     return {
       tint: "var(--warning)", glyph: <CircleIcon size={ICON.xs} />,
-      line: v.mine ? "Waiting on you" : names ? `Waiting on ${names}` : "Awaiting review",
+      line: v.mine ? "Waiting on you" : waitingLine(cardReviewers(v)) ?? (names ? `Waiting on ${names}` : "Awaiting review"),
       aria: v.mine ? "Waiting on you to review" : names ? `Waiting on ${names} to review` : "Awaiting review",
     };
   }
@@ -1163,11 +1186,11 @@ function cardVerdict(p: PrSummary): {
 const copyEdge = (done: boolean) =>
   `1px solid color-mix(in srgb, ${done ? "var(--success) 50%" : "var(--border) 55%"}, transparent)`;
 
-function CardView({ p, hasTaskProvider, repoUses, pinned, cursor, onOpen, onPin, onAct, busy, acting, dim, root, unread }: {
+function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, busy, acting, dim, root, unread, stack, factsOf, lit, onLit, onOpenBase }: {
   p: Card; hasTaskProvider: boolean;
   /** This repository links work items at all: see prCardBlock.ts. */
   repoUses: boolean;
-  pinned: boolean; cursor?: boolean;
+  pinned: boolean;
   /** Unread remarks on this one, or null. See prUnread.ts. */
   unread?: Unread | null;
   /** The pull request whose action is running, so only its card spins. */
@@ -1183,6 +1206,14 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, cursor, onOpen, onPin,
   dim?: boolean;
   /** Where to ask how far behind this branch is. Absent means do not ask. */
   root?: string;
+  /** The stack this pull request is in, or null: see prStack.ts. */
+  stack?: Stack | null;
+  factsOf?: (n: number) => Facts | undefined;
+  /** A token that names this card is under the pointer. */
+  lit?: boolean;
+  onLit?: (n: number | null) => void;
+  /** Open the pull request a token names, inside this app. */
+  onOpenBase?: (n: number) => void;
   onOpen: () => void; onPin: () => void;
   onAct: (p: PrSummary, what: "open" | "merge" | "rerun") => void; busy?: boolean;
 }) {
@@ -1215,10 +1246,7 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, cursor, onOpen, onPin,
   const { pre, rest } = splitTitle(p.title);
   const ev = eventLine(p.filed.reason, p.updatedAt);
   const verdict = cardVerdict(p);
-  const hr = p.humanReview as unknown;
-  const headerPeople: string[] = hr && typeof hr === "object" && Array.isArray((hr as { who?: unknown }).who)
-    ? ((hr as { who: unknown[] }).who.filter((x): x is string => typeof x === "string" && x !== ""))
-    : [];
+  const reviewers = cardReviewers(p.humanReview);
   /*
    * THE CARDS THE BOARDS DO NOT HOLD, asked for one at a time.
    *
@@ -1237,13 +1265,14 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, cursor, onOpen, onPin,
        a test asking how many landed in a lane, a probe asking which column it
        is measuring. The number is already on screen; this just makes it
        addressable without reading the design. */
-    <div onClick={onOpen} role="button" tabIndex={-1} data-pr={p.number} data-cur={cursor ? "1" : undefined}
+    <div onClick={onOpen} role="button" tabIndex={-1} data-pr={p.number}
       data-dim={dim ? "1" : undefined}
-      className="rounded-lg mb-2 cursor-pointer agx-btn agx-prc overflow-hidden"
+      data-lit={lit ? "1" : undefined}
+      className={`rounded-lg mb-2 cursor-pointer agx-btn agx-prc overflow-hidden${stack ? " agx-stk-card" : ""}`}
       style={{
-        border: cursor ? "1px solid color-mix(in srgb, var(--primary) 60%, transparent)" : EDGE,
+        minHeight: stack ? spineHeight(stack.spine) : undefined,
+        border: EDGE,
         background: "var(--surface-card)",
-        boxShadow: cursor ? "inset 2px 0 0 var(--primary)" : undefined,
         /* Saturation as well as opacity: these cards are read by colour — green
            lane, red checks, amber waiting — and dimming alone leaves a row of
            paler versions of the same signal still competing for the eye.
@@ -1279,9 +1308,10 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, cursor, onOpen, onPin,
         * would start every card below it at a different place. Same reason the
         * lane's own "why" was cut to one line.
         */}
+      {stack && factsOf && <Spine stack={stack} label={spineSentence(stack, factsOf)} />}
       {verdict && (
-        <div className="flex items-center gap-1.5 px-2 shrink-0"
-          role="note" aria-label={verdict.aria}
+        <div className="flex items-center gap-1.5 px-2 shrink-0 agx-stk-band"
+          role="note" aria-label={reviewers.faces.length ? `${verdict.aria}. ${facesAria(reviewers)}` : verdict.aria}
           style={{
             height: 22, fontSize: 10.5,
             background: `color-mix(in srgb, ${verdict.tint} 13%, transparent)`,
@@ -1296,23 +1326,17 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, cursor, onOpen, onPin,
             <span aria-hidden className="rounded"
               style={{ width: 130, height: 8, background: "color-mix(in srgb, var(--text) 12%, transparent)" }} />
           ) : (
-            <span className="truncate min-w-0" style={{ color: "var(--text)", fontWeight: 500 }}>
+            /* `title`: the line gives way to the faces, then to the open-threads
+               pill, and a name cut to "tl…" is the one thing the card is for. */
+            <span className="truncate min-w-0" title={verdict.line} style={{ color: "var(--text)", fontWeight: 500 }}>
               {verdict.line}
             </span>
           )}
-          {/* The people the line names, as faces right after it: who was asked,
-              who approved, who asked for changes. */}
-          {headerPeople.length > 0 && (
-            <span className="shrink-0 flex items-center" aria-hidden>
-              {headerPeople.slice(0, HEADER_FACES).map((login, n) => (
-                <span key={login} className="rounded-full inline-flex"
-                  style={{ marginLeft: n ? -3 : 0, boxShadow: "0 0 0 1.5px var(--surface-card)", position: "relative", zIndex: HEADER_FACES - n }}>
-                  <Avatar login={login} size={16} />
-                </span>
-              ))}
-            </span>
-          )}
           <span className="flex-1" />
+          {/* Everyone the band waits on or has heard from, one face each with
+              its state, on the right: the line keeps the room it truncates in,
+              and the open-threads pill and the arrow after them stay put. */}
+          <CardFaces r={reviewers} />
           {/* Open line threads: the number that says whether a "changes
               requested" is one nit or twelve, and whether an approval still
               has something under it. Only when there are any. */}
@@ -1467,8 +1491,16 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, cursor, onOpen, onPin,
             {/* Never truncated: the one that matters — a stacked branch with
                 a long ticket in its name — is exactly the one you could not
                 read. Tinted when it is not the trunk. */}
-            <span className="shrink-0 whitespace-nowrap" title={`${p.headRefName} → ${p.baseRefName}`}
-              style={{ color: TRUNKS.has(p.baseRefName) ? "var(--text3)" : "var(--warning)" }}>{p.baseRefName}</span>
+            {stack?.base && stack.base.kind !== "pending" && factsOf && onOpenBase ? (
+              /* The base as a token: its number, one word for where it stands,
+                 and a way in. The branch names stay in the tooltip and in the
+                 pull request's own header. */
+              <BaseToken base={stack.base} facts={stack.base.kind === "missing" ? undefined : factsOf(stack.base.number)}
+                onOpen={onOpenBase} onLit={onLit} />
+            ) : (
+              <span className="shrink-0 whitespace-nowrap" title={`${p.headRefName} → ${p.baseRefName}`}
+                style={{ color: isTrunkBranch(p.baseRefName) ? "var(--text3)" : "var(--warning)" }}>{p.baseRefName}</span>
+            )}
             {st.failing && (
               <span className="shrink-0 inline-flex items-center rounded-md px-1.5 whitespace-nowrap"
                 style={{ height: CHIP_H + 2, color: "var(--error-ink)",
@@ -1553,9 +1585,6 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, cursor, onOpen, onPin,
     </div>
   );
 }
-
-/** Faces drawn in a lane header beside the name it says. */
-const HEADER_FACES = 3;
 
 const Tag = ({ children, tint, title }: { children: React.ReactNode; tint?: string; title?: string }) => (
   <span title={title} className="rounded px-1" style={{ color: tint ?? "var(--text3)", border: `1px solid color-mix(in srgb, ${tint ?? "var(--text)"} ${tint ? 34 : 16}%, transparent)` }}>

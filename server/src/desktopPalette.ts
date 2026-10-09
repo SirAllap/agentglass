@@ -13,7 +13,7 @@
  *
  * The next desktop is another function returning the same shape, tried in turn.
  */
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync, watch } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { desktopTheme, parseColors, type DesktopTheme } from "../../shared/desktopPalette.ts";
@@ -71,6 +71,62 @@ function omarchy(): DesktopPalette | null {
 /** The desktop's palette, or null on a desktop that publishes none. */
 export function desktopPalette(): DesktopPalette | null {
   return omarchy();
+}
+
+/**
+ * Say so when the desktop switches theme, so nobody has to ask on a clock.
+ *
+ * The clients asked every three seconds, in every window, to notice a thing
+ * that happens a handful of times a day. The switch replaces `theme` and
+ * rewrites `theme.name` inside the same directory, so that directory is what is
+ * watched (the files themselves are swapped for new inodes and a watch on one
+ * would go quiet after the first switch). Debounced, because one switch is
+ * several events, and compared by stamp, so an event that changed nothing the
+ * palette reads says nothing.
+ *
+ * `open` is `fs.watch`, a parameter so a test can make the watcher raise an error on demand. Returns the stop function. On a desktop that has no such directory nothing is
+ * watched and the stop does nothing; one that appears later is not noticed
+ * until the server restarts, which is the ceiling of this version.
+ */
+export function watchDesktopPalette(onChange: () => void, open: typeof watch = watch): () => void {
+  let last = desktopPalette()?.stamp ?? "";
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let watcher: ReturnType<typeof watch> | null = null;
+  let broken = false;
+  let stopped = false;
+  const arm = (): boolean => {
+    try { watcher = open(omarchyDir(), schedule); } catch { watcher = null; return false; }
+    /* An error event with nobody listening throws; the types here do not name
+       the emitter. Bun 1.3.9 also ends the watch at the first one (measured:
+       30 of 30 watchers heard nothing after it): the switch stages `theme-next`
+       and renames it over `theme`, and a watcher that looks at a name that is
+       already gone raises ENOENT. So an error is not "the directory went
+       away", it is "this watch is over": the next debounce opens a new one and
+       compares the stamp, which also catches the switch the dead one missed. */
+    (watcher as unknown as { on(e: "error", f: () => void): void }).on("error", () => { broken = true; schedule(); });
+    return true;
+  };
+  function schedule() {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      if (stopped) return;
+      /* Reopened here, on the debounce, so an error storm costs four opens a
+         second at most. A directory that really is gone fails to open and the
+         watch ends there, as it did before. */
+      if (broken) { try { watcher?.close(); } catch { /* already over */ } broken = false; if (!arm()) return; }
+      const now = desktopPalette()?.stamp ?? "";
+      if (now === last) return;
+      last = now;
+      onChange();
+    }, 250);
+  }
+  if (!arm()) return () => {};
+  return () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+    watcher?.close();
+  };
 }
 
 /** For a test that points HOME somewhere else between cases. */

@@ -18,7 +18,7 @@
  */
 import { singleFlight } from "./singleflight.ts";
 import { cardIdDigits, mentionsCardId } from "../../shared/cardRef.ts";
-import { matchesQuery, mergeRequestNumber } from "../../shared/taskref.ts";
+import { matchesQuery, mergeRequestNumber, readTaskRef } from "../../shared/taskref.ts";
 import * as Index from "./clickupindex.ts";
 import { writesAllowed } from "./clickupviews.ts";
 import { clickupPrefs, matchPref, DEFAULT_SPRINT_LIST_PATTERN, DEFAULT_READ_ONLY_FIELD_PATTERN } from "./clickupPrefs.ts";
@@ -26,7 +26,7 @@ import { secretFor, annotate, redacted, fingerprint } from "./credentials.ts";
 import { markdownToDelta, type MentionPerson } from "./clickupDelta.ts";
 import type {
   ListMember, TaskReply, ProviderTask, ClickUpUser, ClickUpWorkspace, ListStatus, ListField, ListPlace, TaskDetail,
-  CardEvent, CardFieldKind, CardPr } from "../../shared/providers.ts";
+  CardEvent, CardFieldKind, CardPr, ClickUpSpace } from "../../shared/providers.ts";
 
 const CLICKUP_API = "https://api.clickup.com/api/v2";
 
@@ -1207,6 +1207,7 @@ export function forgetAll(): void {
   __clearFindCache();
   __resetCounts();
   people = null;
+  memo.clear();
   listViewCache.clear(); spaceTagCache.clear(); taskSpaceCache.clear();
 }
 
@@ -2902,13 +2903,13 @@ export async function taskDetail(askedId: string): Promise<CallResult<TaskDetail
      (ORBIT-1042), and every call below takes the plain one — the comment and
      time-in-status routes do not take the custom-id flag at all. One read
      turns the first into the second; a plain id never pays for it. */
-  let taskId = askedId;
+  let taskId = defaultIdOf(askedId) ?? askedId;
   const workspace = redacted("clickup")?.workspaceId;
-  if (/-/.test(askedId) && workspace) {
+  if (/-/.test(taskId) && workspace) {
     const found = await call<RawTask>(
-      `/task/${encodeURIComponent(askedId)}?custom_task_ids=true&team_id=${encodeURIComponent(workspace)}`, token);
+      `/task/${encodeURIComponent(taskId)}?custom_task_ids=true&team_id=${encodeURIComponent(workspace)}`, token);
     if (!found.ok) return { ...found, data: undefined };
-    taskId = found.data?.id ?? askedId;
+    taskId = found.data?.id ?? taskId;
   }
   const r = await call<RawTask & {
     description?: string; markdown_description?: string;
@@ -3108,6 +3109,23 @@ export async function rawListTasks(
 // ---------------------------------------------------------------------------
 
 /**
+ * The default task id inside ClickUp's own spelling of it, `CU-86abc123`.
+ *
+ * That is what its GitHub integration writes into a branch, and it is the id
+ * with a prefix on it, NOT a custom id: asked for with the hyphen it went down
+ * the custom-id route, which has never heard of it. Six or more lowercase
+ * alphanumerics with a digit and a letter, or seven or more digits — the same
+ * bounds as shared/taskref.ts, so `CU-1042` (a custom id whose prefix happens
+ * to be CU) and `CU-utf8-fix` are not taken for one.
+ */
+export function defaultIdOf(text: string): string | null {
+  const m = /^CU-([a-z0-9]{6,})$/i.exec((text || "").trim());
+  const id = m?.[1]?.toLowerCase();
+  if (!id) return null;
+  return /^\d{7,}$/.test(id) || (/\d/.test(id) && /[a-z]/.test(id)) ? id : null;
+}
+
+/**
  * A card you know the number of, which is not the same as a board you work from.
  *
  * "What was ORBIT-1042 again?" is a question with no board attached: the card is on
@@ -3122,6 +3140,8 @@ export async function rawListTasks(
 export function normaliseCardQuery(text: string, knownPrefix: string): string | null {
   const q = (text || "").trim();
   if (!q) return null;
+  const plain = defaultIdOf(q);
+  if (plain) return plain;
   // Already shaped like an id — letters, a hyphen, digits.
   if (/^[A-Za-z][\w]*-\d+$/.test(q)) return q.toUpperCase();
   // A bare number: only meaningful once we have seen what this workspace's ids
@@ -3153,13 +3173,13 @@ let findGen = 0;
 const findCache = new Map<string, { at: number; gen: number; p: Promise<CallResult<FoundCard>> }>();
 export function __clearFindCache(): void { findCache.clear(); }
 
-export function findCard(text: string, knownPrefix: string): Promise<CallResult<FoundCard>> {
+export function findCard(text: string, knownPrefix: string, o: FindOptions = {}): Promise<CallResult<FoundCard>> {
   const asked = normaliseCardQuery(text, knownPrefix);
-  if (!asked) return findCardUncached(text, knownPrefix);
+  if (!asked) return findCardUncached(text, knownPrefix, o);
   const hit = findCache.get(asked);
   if (hit && hit.gen === findGen && Date.now() - hit.at < FIND_TTL_MS) return hit.p;
   const gen = findGen;
-  const p = findCardUncached(text, knownPrefix);
+  const p = findCardUncached(text, knownPrefix, o);
   findCache.set(asked, { at: Date.now(), gen, p });
   // A failure is not worth keeping: the next asker should get to try.
   void p.then((r) => { if (!r.ok && findCache.get(asked)?.p === p) findCache.delete(asked); });
@@ -3167,12 +3187,19 @@ export function findCard(text: string, knownPrefix: string): Promise<CallResult<
   return p;
 }
 
-async function findCardUncached(text: string, knownPrefix: string): Promise<CallResult<FoundCard>> {
+/** `noCustomIds`: cards were read and none carries a custom id, so this
+ *  workspace never will have a prefix to be waited for — see `knownNoCustomIds`. */
+export interface FindOptions { noCustomIds?: boolean }
+
+async function findCardUncached(text: string, knownPrefix: string, o: FindOptions = {}): Promise<CallResult<FoundCard>> {
   const token = secretFor("clickup");
   if (!token) return { ok: false, error: "ClickUp is not connected" };
   const asked = normaliseCardQuery(text, knownPrefix);
   if (!asked) {
-    return { ok: false, error: knownPrefix ? "That does not look like a card id" : "Open a board first, so I know what your ids look like" };
+    // "Open a board first" promises a prefix that, on a workspace without
+    // custom ids, no board will ever show.
+    if (knownPrefix) return { ok: false, error: "That does not look like a card id" };
+    return { ok: false, error: o.noCustomIds ? "Paste the card's address, or its id (CU-…)" : "Open a board first, so I know what your ids look like" };
   }
   const me = redacted("clickup");
   const custom = /-/.test(asked);
@@ -3271,6 +3298,74 @@ export function mentionsCard(cardId: string, pr: { title?: string; body?: string
   return re.test(`${pr.headRefName ?? ""} ${pr.title ?? ""} ${pr.body ?? ""}`);
 }
 
+/**
+ * Does this pull request name that task by ClickUp's own default id?
+ *
+ * The sibling of `mentionsCard` for a card with no custom id, which is every
+ * card on a free workspace. Two spellings, both ones ClickUp itself writes:
+ * `CU-86abc123` in a branch, a title or a description, and the task's address
+ * (`/t/86abc123`, or `/t/<team>/86abc123` where custom ids are on). A bare id is
+ * NOT a mention — eight characters turn up in hashes and in prose, and the
+ * search that found the row is no evidence of its own (see `mentionsCard`).
+ *
+ * The boundary is `mentionsCard`'s, with one difference: an underscore may
+ * follow, because the integration's branch is literally `CU-86abc123_retry`.
+ * A letter or digit after the id means a different id.
+ */
+export function mentionsTask(taskId: string, pr: { title?: string; body?: string; headRefName?: string }): boolean {
+  const id = taskId.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (!id) return false;
+  const re = new RegExp(`(?:(?:^|[^A-Za-z0-9])CU-|clickup\\.com/t/(?:[\\w-]+/)?)${id}(?![A-Za-z0-9])`, "i");
+  return re.test(`${pr.headRefName ?? ""} ${pr.title ?? ""} ${pr.body ?? ""}`);
+}
+
+/**
+ * Is this pull request FOR the card, or does it only name it?
+ *
+ * `mentionsCard` answers "does the text carry the id", and a stacked pull
+ * request's body does for both cards it sits between: MEASURED on two stacked
+ * pull requests, the second said "Depends on #19748 (ORBIT-24797 ...)" and so
+ * the search for the first card returned it too. Both cards then drew the
+ * newer one as their chip, and anybody reading the board asked why two cards
+ * had the same pull request.
+ *
+ * The item a pull request was cut for is the one `readTaskRef` already reads
+ * for the pull request's own screen (branch first, then title, then a lone
+ * address in the body), so the board and the detail cannot disagree:
+ *
+ *   the card is that item                      own
+ *   that item is a different one               mention
+ *   it names no item at all (lower-case branch, id only in prose): the id
+ *     in the branch or title                   own
+ *     in the body only, and no other id anywhere  own, nothing else claims it
+ *     in the body only, next to another id    mention
+ *
+ * Null when the text does not carry the card at all. Ceiling: a pull request
+ * genuinely cut for two cards at once is own for the first one written and a
+ * mention for the second.
+ */
+export function prLinkKind(
+  card: { cardId: string; taskId?: string },
+  pr: { title?: string; body?: string; headRefName?: string },
+): "own" | "mention" | null {
+  const { cardId, taskId = "" } = card;
+  if (!mentionsCard(cardId, pr) && !mentionsTask(taskId, pr)) return null;
+  const owner = readTaskRef(pr);
+  const names = [cardId, taskId, taskId && `CU-${taskId}`].filter(Boolean).map((x) => String(x).toLowerCase());
+  if (owner) {
+    // A native id in the branch while the caller did not hand over the task's
+    // own id (the card pane asks without it): nothing here can say it is
+    // someone else's, so the card keeps it.
+    if (!taskId && owner.query.startsWith("CU-")) return "own";
+    return names.includes(owner.query.toLowerCase()) || names.includes(owner.label.toLowerCase()) ? "own" : "mention";
+  }
+  const head = { title: pr.title, headRefName: pr.headRefName };
+  if (mentionsCard(cardId, head) || mentionsTask(taskId, head)) return "own";
+  const others = new Set(`${pr.headRefName ?? ""} ${pr.title ?? ""} ${pr.body ?? ""}`.match(/\b[A-Z]{2,10}-\d{2,}\b/gi)?.map((x) => x.toLowerCase()));
+  for (const n of names) others.delete(n);
+  return others.size ? "mention" : "own";
+}
+
 // Who `gh` is signed in as, asked once per process: it does not change under a
 // running server, and asking per card would double every lookup.
 let ghLogin: Promise<string> | null = null;
@@ -3282,21 +3377,24 @@ function viewerLogin(gh: (args: string[], cwd?: string) => Promise<{ code: numbe
 }
 
 export async function cardPullRequests(
-  cardId: string, fieldUrl: string | undefined, root: string,
+  cardId: string, fieldUrl: string | undefined, root: string, taskId = "",
 ): Promise<{ ok: boolean; prs: CardPr[]; error?: string }> {
   const { gh } = await import("./prs.ts");
   const out = new Map<number, CardPr>();
 
   const stated = prNumberFromUrl(fieldUrl ?? "");
   if (stated) {
-    out.set(stated, { number: stated, title: "", state: "", url: fieldUrl!, stated: true });
+    out.set(stated, { number: stated, title: "", state: "", url: fieldUrl!, stated: true, link: "own" });
   }
 
-  if (!cardId) return { ok: true, prs: [...out.values()] };
+  // The custom id when the card has one; otherwise ClickUp's default id, which
+  // every card has and which a free workspace has instead of any other.
+  const term = cardId || taskId;
+  if (!term) return { ok: true, prs: [...out.values()] };
   // `--search` rather than a filter: the id appears in a branch, a title or a
   // commit, and which of those is not ours to assume.
   const r = await gh(
-    ["pr", "list", "--search", cardId, "--state", "all", "--limit", "20",
+    ["pr", "list", "--search", term, "--state", "all", "--limit", "20",
       // `body` and `headRefName` are not decoration: they are what the rows are
       // CHECKED against below. Without them the search's own idea of a match is
       // the final answer, and that idea is wrong — see the filter.
@@ -3314,11 +3412,16 @@ export async function cardPullRequests(
     for (const p of rows) {
       // Every row is checked. GitHub's search does not answer the question we
       // asked it — see `mentionsCard`.
-      if (!mentionsCard(cardId, p)) continue;
+      if (!mentionsCard(cardId, p) && !mentionsTask(taskId, p)) continue;
       const had = out.get(p.number);
       out.set(p.number, {
         number: p.number, title: p.title, state: p.state, draft: p.isDraft, url: p.url,
         stated: had?.stated, author: p.author?.login,
+        // What the card's own field says outranks any reading of the text.
+        ...(() => {
+          const link = had?.stated ? "own" : prLinkKind({ cardId, taskId }, p) ?? "mention";
+          return link === "own" ? { link } : { link, belongsTo: readTaskRef(p)?.label };
+        })(),
         mine: !!me && p.author?.login?.toLowerCase() === me,
       });
     }
@@ -3348,16 +3451,32 @@ export async function cardPullRequests(
  * That is what makes a saved folder worth storing as a FOLDER: the app keeps
  * an id, and the contents are whatever ClickUp says they are today.
  */
-export async function clickupSpaces(): Promise<CallResult<{ spaces: { id: string; name: string }[] }>> {
+export async function clickupSpaces(fresh = false): Promise<CallResult<{ spaces: ClickUpSpace[] }>> {
   const token = secretFor("clickup");
   if (!token) return { ok: false, error: "ClickUp is not connected" };
   const me = redacted("clickup");
   if (!me?.workspaceId) return { ok: false, error: "No ClickUp workspace chosen yet" };
-  const r = await call<{ spaces?: { id: string; name?: string }[] }>(
-    `/team/${encodeURIComponent(me.workspaceId)}/space?archived=false`, token,
-  );
+  /* The same answer carries each space's statuses (`statuses[]`, with their
+     type and colour), so the workflow map's pickers cost no request of their
+     own. Held ten minutes like the roster, and per workspace so changing
+     workspace does not show the old one's statuses. A refusal is not held:
+     the next ask retries. `fresh` is the Re-read press, which must reach
+     ClickUp rather than the memo. */
+  const key = `spaces:${me.workspaceId}`;
+  if (fresh) memo.delete(`${base}|${token}|${key}`);
+  const r = await memoOk(key, token, () => call<{ spaces?: { id: string; name?: string; statuses?: { status?: string; type?: string; color?: string }[] }[] }>(
+    `/team/${encodeURIComponent(me.workspaceId!)}/space?archived=false`, token,
+  ));
   if (!r.ok) return { ...r, data: undefined };
-  return { ok: true, data: { spaces: (r.data?.spaces ?? []).map((s) => ({ id: String(s.id), name: s.name ?? "" })).filter((s) => s.id) } };
+  return {
+    ok: true,
+    data: {
+      spaces: (r.data?.spaces ?? []).filter((s) => s.id).map((s) => ({
+        id: String(s.id), name: s.name ?? "",
+        statuses: (s.statuses ?? []).filter((x) => x.status).map((x) => ({ status: x.status!, type: x.type ?? "custom", ...(x.color ? { color: x.color } : {}) })),
+      })),
+    },
+  };
 }
 
 export interface ClickUpFolder {

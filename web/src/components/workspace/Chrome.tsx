@@ -56,6 +56,15 @@ export const EDGE = "1px solid color-mix(in srgb, var(--text) 14%, transparent)"
 export const LINE = "1px solid var(--surface-line)";
 
 /**
+ * A one-pixel edge tinted by a hue the caller owns: a primary edge on what is
+ * chosen, a warning edge on what needs a look. The neutral outline is `EDGE` and
+ * the rule is `LINE`; this is for the edge that means something, and it is the
+ * one place the string is spelled so the ratchet counts the exceptions, not the
+ * spelling.
+ */
+export const tintEdge = (hue: string, pct: number): string => `1px solid color-mix(in srgb, ${hue} ${pct}%, transparent)`;
+
+/**
  * The one shape — and the class that gives it a body.
  *
  * Exported as a string as well, because a handful of call sites need to put it
@@ -141,7 +150,7 @@ function chipBody(hasState: boolean, resting: boolean): CSSProperties {
   if (hasState && !resting) return {};
   return {
     background: "color-mix(in srgb, var(--text) 5%, transparent)",
-    border: "1px solid color-mix(in srgb, var(--text) 11%, transparent)",
+    border: tintEdge("var(--text)", 11),
   };
 }
 
@@ -189,13 +198,13 @@ export function Chip({
   const tone: CSSProperties = primary
     ? {
       background: "color-mix(in srgb, var(--primary) 18%, transparent)",
-      border: "1px solid color-mix(in srgb, var(--primary) 34%, transparent)",
+      border: tintEdge("var(--primary)", 34),
       color: "var(--primary-ink)",
     }
     : danger
       ? {
         background: "color-mix(in srgb, var(--error) 10%, transparent)",
-        border: "1px solid color-mix(in srgb, var(--error) 30%, transparent)",
+        border: tintEdge("var(--error)", 30),
         color: "var(--error-ink)",
       }
       : { ...chipBody(hasState, !!resting), ...chipTone(!!on) };
@@ -355,7 +364,7 @@ export function ScopeChip({ label, kind, trailing = "none", on, onClick, title, 
     <>
       {kind && (
         <span className="shrink-0 text-[9.5px] leading-none px-1 py-0.5 rounded"
-          style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>{kind}</span>
+          style={{ color: "var(--text3)", border: tintEdge("var(--border)", 40) }}>{kind}</span>
       )}
       <span className="truncate min-w-0">{label}</span>
       {trailing === "menu" && (
@@ -511,13 +520,13 @@ export function Button({
   const skin: CSSProperties = on !== undefined
     ? chipTone(on)
     : tint
-      ? { color: tint, background: `color-mix(in srgb, ${tint} 8%, transparent)`, border: `1px solid color-mix(in srgb, ${tint} 32%, transparent)` }
+      ? { color: tint, background: `color-mix(in srgb, ${tint} 8%, transparent)`, border: tintEdge(tint, 32) }
       : tone === "plain"
         ? CHIP_SURFACE
         : {
           color: TONE_INK[tone],
           background: tone === "primary" ? hue : `color-mix(in srgb, ${hue} ${tone === "warn" ? 16 : 8}%, transparent)`,
-          border: `1px solid color-mix(in srgb, ${hue} ${tone === "primary" ? 100 : tone === "warn" ? 55 : 85}%, transparent)`,
+          border: tintEdge(hue!, tone === "primary" ? 100 : tone === "warn" ? 55 : 85),
         };
   const text = size === "compact" ? "text-[10.5px]" : "text-[11px]";
   const pad = square ? "" : size === "compact" ? "px-2" : "px-2.5";

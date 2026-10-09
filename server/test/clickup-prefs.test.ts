@@ -21,11 +21,12 @@ describe("the store", () => {
   beforeEach(() => { rmSync(file, { force: true }); P.__setPrefsPath(file); });
   afterAll(() => P.__setPrefsPath(null));
 
-  test("a missing file is today's behaviour: all thirteen settings at their defaults", () => {
+  test("a missing file is today's behaviour: every setting at its default", () => {
     expect(existsSync(file)).toBe(false);
     expect(P.clickupPrefs()).toEqual({
       handoff: { enabled: false, statusNames: [], unassign: "none" },
-      review: { statusNames: [], assignReviewer: false },
+      review: { enabled: false, statusNames: [], assignReviewer: false },
+      merge: { enabled: false, statusNames: [] },
       flows: { noteOnCard: false },
       prLinkField: "",
       swatchField: "",

@@ -21,7 +21,7 @@
  * its source, because "the banner exists in the file" was true the whole time
  * the bug was shipped — what was false is that anything could reach it.
  */
-import { describe, expect, test, mock } from "bun:test";
+import { afterAll, describe, expect, test, mock } from "bun:test";
 import { globalStubs } from "./stubGlobal";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -80,25 +80,34 @@ let identity: "ours" | "foreign" | "down" = "ours";
  * arrived", a sentence about the store and not about this file. It was green
  * here only because this machine loads the files in another order.
  *
- * The real module is pulled in through a specifier `mock.module` does not
- * match, so the override is additive. The globals go first because `api.ts`
- * reads `location.href`/`location.hostname` and localStorage in its module
- * body — the very reason a stub was reached for in the first place.
+ * The real module is imported before the mock exists, so the override is
+ * additive and the functions below are the same objects the rest of the suite
+ * holds. The globals go first because `api.ts` reads `location.href`/
+ * `location.hostname` and localStorage in its module body — the very reason a
+ * stub was reached for in the first place.
+ *
+ * `mock.module` cannot be undone: a second `mock.module`, `mock.restore()` and
+ * importing under another specifier were each tried, and a file loaded after
+ * this one still got the first stub. So the three functions answer through
+ * `active`, which is false once this file is done and sends them to the real
+ * ones, and the values are the real module's own, bar `SERVER_GUESSED`. Its
+ * ceiling: that one stays false for the rest of the run, and only ServerBanner
+ * reads it. leak-guard.ts checks api.ts at the end of the run.
  */
 stubGlobal("location", { hostname: "127.0.0.1", origin: "http://127.0.0.1:4000", href: "http://127.0.0.1:4000/" });
 stubStorage();
 const API_PATH = new URL("../src/lib/api.ts", import.meta.url).pathname;
-const realApiModule = await import(`${API_PATH}?unmocked`);
+const realApiModule = await import(API_PATH);
+let active = true;
+afterAll(() => { active = false; });
 mock.module(API_PATH, () => ({
   ...realApiModule,
-  IS_DEMO: false,
-  SERVER: "http://127.0.0.1:4000",
   // False, exactly as the packaged desktop computes it. The whole bug lived in
   // this being the first thing the component looked at.
   SERVER_GUESSED: false,
-  probeServer: async () => identity,
-  sidecarFailure: () => shellFailure,
-  onSidecarFailure: () => () => {},
+  probeServer: (...a: unknown[]) => (active ? Promise.resolve(identity) : realApiModule.probeServer(...a)),
+  sidecarFailure: (...a: unknown[]) => (active ? shellFailure : realApiModule.sidecarFailure(...a)),
+  onSidecarFailure: (...a: unknown[]) => (active ? () => {} : realApiModule.onSidecarFailure(...a)),
 }));
 
 const render = async (failure: Failure | null) => {

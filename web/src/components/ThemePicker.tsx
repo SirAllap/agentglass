@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { SettingRow, Switch } from "./SettingRow.tsx";
 import {
-  THEMES, chooseTheme, applyTheme, isDarkTheme, EXPERIMENTAL_THEME_IDS,
-  themeMode, applyThemeMode, desktopPaletteName, onDesktopPalette,
+  THEMES, isDarkTheme, EXPERIMENTAL_THEME_IDS,
+  themeMode, desktopPaletteName, onDesktopPalette,
   type Theme, type ThemeMode,
 } from "../lib/themes.ts";
-import { ACCENTS, currentAccent, setAccentPref, lastAccent } from "../lib/accent.ts";
+import { ACCENTS, currentAccent, lastAccent } from "../lib/accent.ts";
+import { setting } from "../lib/settingsRegistry.ts";
 import { SERVER, authHeaders } from "../lib/api.ts";
 import { DoneIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
@@ -185,12 +186,13 @@ export function AppearancePane({ current, onChange, onAccent }: {
   useEffect(() => onDesktopPalette(() => { setDesk(desktopPaletteName()); setMode(themeMode()); }), []);
 
   const chooseMode = (m: ThemeMode) => {
-    const id = applyThemeMode(m);
+    setting("appearance.mode").set(m);
     setMode(m);
-    if (id) onChange(id);
+    onChange(document.documentElement.getAttribute("data-theme") || current);
   };
   const choose = (id: string) => {
-    setMode(chooseTheme(id));
+    setting("appearance.theme").set(id);
+    setMode(themeMode());
     onChange(id);
   };
 
@@ -203,8 +205,7 @@ export function AppearancePane({ current, onChange, onAccent }: {
     setOwn(getComputedStyle(document.documentElement).getPropertyValue("--theme-primary").trim());
   }, [accent, current, desk]);
   const chooseAccent = (id: string) => {
-    setAccentPref(id);
-    applyTheme(current); // re-assert the theme so the overlay (or its removal) lands
+    setting("appearance.accent").set(id); // stores it and re-asserts the theme, so the overlay (or its removal) lands
     setAccentState(id);
     onAccent?.(id);
   };
@@ -220,6 +221,7 @@ export function AppearancePane({ current, onChange, onAccent }: {
   return (
     <>
       <SettingRow
+        settingId="appearance.mode"
         label="Mode"
         hint={desk && mode === "desktop"
           ? <>Wearing <b style={{ color: "var(--text3)" }}>{desk.name}</b>, your desktop's theme — it follows when you switch there.</>
@@ -250,6 +252,7 @@ export function AppearancePane({ current, onChange, onAccent }: {
           over a desktop theme whose own accent they wanted, because nothing on
           that circle said what it did. A sentence can say it; a swatch cannot. */}
       <SettingRow
+        settingId="appearance.accent"
         label="Accent" modified={!following}
         hint={following
           ? <>Following your theme{desk && mode === "desktop" ? <> — <b style={{ color: "var(--text3)" }}>{desk.name}</b> brings its own</> : <>'s own primary</>}.</>

@@ -520,6 +520,12 @@ export interface ClickUpBoards {
    * decide that some id is not one of ours.
    */
   prefix?: string;
+  /**
+   * Cards were read and none of them carries a custom id. Custom ids are a
+   * paid ClickApp, so this workspace has none to wait for. False is "unknown
+   * or has some", never "has some".
+   */
+  noCustomIds?: boolean;
   writeEnabled: boolean;
   /** Forced on by the environment rather than chosen here, so the UI says so
    *  instead of offering a switch that will not stay off. */
@@ -572,10 +578,16 @@ export const DEFAULT_READ_ONLY_FIELD_PATTERN = "do not edit";
 export interface ClickUpPrefs {
   handoff: HandoffConfig;
   review: {
+    /** The review menu's move item. Off until a workspace adds it as a step; a
+     *  settings file from before this key existed had the item, so it reads as on. */
+    enabled: boolean;
     /** Status names the review menu moves a card to; empty falls back to /review/i, then leaves it alone. */
     statusNames: string[];
     assignReviewer: boolean;
   };
+  /** The card choice in the merge dialog. Off until a workspace adds it; the first of
+   *  `statusNames` the card's list has is preselected, none means "Leave it there". */
+  merge: { enabled: boolean; statusNames: string[] };
   flows: { noteOnCard: boolean };
   /** Custom field that holds a PR link; empty means the guess (a name containing "github"). */
   prLinkField: string;
@@ -590,6 +602,11 @@ export interface ClickUpPrefs {
   readOnlyFieldPattern: string;
   bell: { kinds: ClickUpBellKind[] };
 }
+
+/** One status of a space, as Get Spaces carries it. */
+export interface SpaceStatus { status: string; type: string; color?: string }
+/** A space and the statuses its lists inherit; a list may override them. */
+export interface ClickUpSpace { id: string; name: string; statuses: SpaceStatus[] }
 
 /** Somebody who can be put on a card: the members of the list it lives in.
  *  Same shape as an assignee, because they become one. */
@@ -803,6 +820,14 @@ export interface CardPr {
   author?: string;
   /** Authored by the account `gh` is signed in as. */
   mine?: boolean;
+  /** Whose pull request this is: "own" when the card is the item it was cut
+   *  for (branch, title, a lone address, or the card's own field), "mention"
+   *  when it merely names the card (a stacked pull request saying it depends
+   *  on another card's). Absent from an older server, read as own. */
+  link?: "own" | "mention";
+  /** For a mention: the item the pull request was actually cut for, when it
+   *  names one ("ORBIT-24798"). */
+  belongsTo?: string;
 }
 
 /** One reply in a comment thread. */

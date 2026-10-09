@@ -36,7 +36,7 @@ export type TrackerId =
   | "clickup" | "jira" | "linear" | "shortcut" | "asana" | "trello"
   | "github" | "gitlab" | "azure";
 
-export type Evidence = "url" | "branch" | "title";
+export type Evidence = "url" | "branch" | "title" | "body";
 
 export interface TaskRef {
   /** What the chip says, because it is what people say out loud. */
@@ -134,6 +134,49 @@ const human = (s: string): string | null => {
 };
 
 /**
+ * ClickUp's own spelling of a task id: `CU-86abc123`.
+ *
+ * It is what ClickUp's GitHub integration writes into the branch it cuts
+ * (`CU-86abc123_retry-on-429_ada`) and what it accepts in a title or a
+ * description. The ids are short lowercase alphanumerics, so `HUMAN_ID` — capitals
+ * and digits — reads none of them; measured, `CU-86abc123` came back null and
+ * only an all-digit id matched, by accident.
+ *
+ * What keeps a branch full of ordinary words out, each one a real shape:
+ *
+ *   CU-utf8-fix, CU-default      under six characters, or no digit at all
+ *   CU-86abc123X                 a capital after it: not an id's alphabet
+ *   cu-… / xCU-…                 the prefix is written in capitals and stands
+ *                                alone, like `HUMAN_ID`'s
+ *
+ * An id is six or more of [a-z0-9] with a digit AND a letter, or seven or more
+ * digits. An underscore may follow — it is the integration's own separator.
+ * A bare `#86abc123` is NOT read: it collides with pull request numbers, and
+ * the `CU-` is what makes the string ours.
+ */
+const CLICKUP_ID = /(?:^|[/_\-\s[(#])CU-((?=[a-z0-9]*\d)(?:[a-z0-9]*[a-z][a-z0-9]*|\d{7,}))(?![A-Za-z0-9])/;
+
+const native = (id: string): boolean => id.startsWith("CU-") && CLICKUP_ID.test(id);
+
+const nativeId = (s: string): string | null => {
+  const id = CLICKUP_ID.exec(s || "")?.[1];
+  return id && id.length >= 6 ? `CU-${id}` : null;
+};
+
+/** The one native id a description names on a line of its own, or null when it
+ *  names none or two. Same lines as an address: a template's checklist and a
+ *  quoted reply are not this pull request's. */
+function nativeIdInBody(body: string): string | null {
+  const found = new Set<string>();
+  for (const line of (body || "").split(/\r?\n/)) {
+    if (/^\s*(?:[-*+>]|\d+[.)])\s/.test(line)) continue;
+    const id = nativeId(line);
+    if (id) found.add(id);
+  }
+  return found.size === 1 ? [...found][0]! : null;
+}
+
+/**
  * The issue this pull request says it closes, in the host's own syntax.
  *
  * `Fixes #12`, `Closes owner/repo#12`. This is the one every public repository
@@ -173,8 +216,8 @@ export function readTaskRef(
   // The label people recognise, wherever it turns up. Branch first: it is
   // written by the tool that cut it, so it is the id far more often than a
   // title somebody typed.
-  const branch = human(pr.headRefName ?? "");
-  const named = branch ?? human(pr.title ?? "");
+  const branch = nativeId(pr.headRefName ?? "") ?? human(pr.headRefName ?? "");
+  const named = branch ?? nativeId(pr.title ?? "") ?? human(pr.title ?? "");
   const [only, ...rest] = addresses(pr.body ?? "");
 
   if (only && !rest.length) {
@@ -191,8 +234,17 @@ export function readTaskRef(
       if (url) return { label: issue.label, query: issue.query, url, from: "url", tracker: hostOf(pr.url) };
     }
   }
-  if (!named) return null;
-  return { label: named, query: named, from: branch ? "branch" : "title", tracker: null };
+  if (!named) {
+    // The weakest evidence there is, so it only speaks when nothing else did.
+    // Where this stops: ClickUp's GitHub integration also posts a comment on the
+    // pull request with the task's link, and that comment is NOT read. It would
+    // cost one extra `gh` call per pull request (25 for a board of 25), which is
+    // not worth a link the branch, the title or the description already carries
+    // whenever the integration is the one that wrote the comment.
+    const inBody = nativeIdInBody(pr.body ?? "");
+    return inBody ? { label: inBody, query: inBody, from: "body", tracker: "clickup" } : null;
+  }
+  return { label: named, query: named, from: branch ? "branch" : "title", tracker: native(named) ? "clickup" : null };
 }
 
 /** `…/owner/repo/pull/91` → `…/owner/repo/issues/12`, and the same for a

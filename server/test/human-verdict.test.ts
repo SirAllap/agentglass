@@ -214,3 +214,83 @@ describe("open line threads, from the same node as the verdict", () => {
     expect(src).toContain("openThreads: unresolvedThreads(n),");
   });
 });
+
+/*
+ * `people`: everyone asked or heard from, one entry each. The winning group's
+ * `who` leaves out the person who was asked and never answered, so a pull
+ * request with one reviewer back on the hook and another never heard from
+ * named only the first. Fixtures are invented logins.
+ */
+describe("people: every reviewer, one entry each", () => {
+  const people = (nodes: unknown, o: Parameters<typeof humanVerdict>[1] = {}) => humanVerdict(nodes, { author: "maintainer", ...o })?.people;
+
+  test("one asked, nobody answered", () => {
+    expect(people([], { pending: ["mkovac"] })).toEqual([{ login: "mkovac", state: "await" }]);
+  });
+
+  test("the owner's case: changes requested then re-asked, plus one never answered", () => {
+    const v = humanVerdict([r("tlindqvist", "CHANGES_REQUESTED")], { author: "maintainer", pending: ["tlindqvist", "rnakamura"] });
+    expect(v?.kind).toBe("changes");
+    expect(v?.cleared).toBe(true);
+    // `who` still names only the winning group; `people` has the other one.
+    expect(v?.who).toEqual(["tlindqvist"]);
+    expect(v?.people).toEqual([{ login: "tlindqvist", state: "again" }, { login: "rnakamura", state: "await" }]);
+  });
+
+  test("a reviewer who approved and was asked again is `again`, not `approved`", () => {
+    expect(people([r("okoro", "APPROVED")], { pending: ["okoro"] })).toEqual([{ login: "okoro", state: "again" }]);
+  });
+
+  test("changes, approved and not answered together", () => {
+    const p = people([r("tlindqvist", "CHANGES_REQUESTED"), r("ofarah", "APPROVED")], { pending: ["rnakamura"] });
+    expect(p).toEqual([
+      { login: "rnakamura", state: "await" },
+      { login: "tlindqvist", state: "changes" },
+      { login: "ofarah", state: "approved" },
+    ]);
+  });
+
+  test("five asked, each once, in the order GitHub lists them", () => {
+    const five = ["a1", "b2", "c3", "d4", "e5"];
+    expect(people([], { pending: five })?.map((x) => x.login)).toEqual(five);
+    expect(people([], { pending: five })?.every((x) => x.state === "await")).toBe(true);
+  });
+
+  test("bots and the author are never a face, asked or not", () => {
+    expect(people([r("claude", "APPROVED"), r("maintainer", "APPROVED")], { pending: ["copilot[bot]", "maintainer", "okoro"] }))
+      .toEqual([{ login: "okoro", state: "await" }]);
+  });
+
+  test("a dismissed verdict is not a standing one: asked again it is `await`", () => {
+    expect(people([r("okoro", "CHANGES_REQUESTED", "2026-09-01T10:00:00Z"), r("okoro", "DISMISSED", "2026-09-02T10:00:00Z")], { pending: ["okoro"] }))
+      .toEqual([{ login: "okoro", state: "await" }]);
+  });
+
+  test("a team is flagged and is only ever waited on", () => {
+    expect(people([], { pending: ["platform", "okoro"], teams: ["platform"] }))
+      .toEqual([{ login: "platform", state: "await", team: true }, { login: "okoro", state: "await" }]);
+  });
+
+  test("logins are matched without case", () => {
+    expect(people([r("Okoro", "APPROVED")], { pending: ["okoro"] })).toEqual([{ login: "okoro", state: "again" }]);
+  });
+
+  test("somebody who only commented is listed when nobody else is", () => {
+    const v = humanVerdict([r("bjorn", "COMMENTED")], { author: "maintainer" });
+    expect(v?.kind).toBe("commented");
+    expect(v?.people).toEqual([{ login: "bjorn", state: "comment" }]);
+    expect(people([r("bjorn", "COMMENTED")], { pending: ["okoro"] })).toEqual([{ login: "okoro", state: "await" }]);
+  });
+
+  test("additive: kind, who and the flags read the same as before", () => {
+    const v = humanVerdict([r("a", "APPROVED"), r("b", "CHANGES_REQUESTED")], { author: "maintainer", pending: ["c"] });
+    const { people: _p, ...rest } = v!;
+    expect(rest.kind).toBe("changes");
+    expect(rest.who).toEqual(["b"]);
+    expect(rest.others).toBe(1);
+  });
+
+  test("nobody asked and nobody spoke is still null", () => {
+    expect(humanVerdict([], { author: "maintainer" })).toBeNull();
+  });
+});

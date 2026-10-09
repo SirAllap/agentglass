@@ -160,6 +160,10 @@ export function targetOf(pathname: string, b: Record<string, unknown>): string {
   // A gate: what was held, not the uuid it was held under.
   if (pathname.startsWith("/gate/")) return clip([named(b.tool), named(b.summary)].filter(Boolean).join(" · "));
   if (pathname.startsWith("/docker/")) return named(b.id);
+  // A settings change from an agent: which setting, never to what.
+  // A door an agent opened: who (the name it stamped), and for a settings
+  // change which setting, never to what.
+  if (pathname.startsWith("/control/")) return [b.as ? `as ${named(b.as)}` : "", named(b.setting), named(b.present), b.queued ? "queued" : "", b.refused ? `+${named(b.refused)} refused` : ""].filter(Boolean).join(" · ");
   // A chat launch: where it runs and on what. Never the prompt — see index.ts.
   if (pathname === "/chat/send") return clip([repo, named(b.name)].filter(Boolean).join(" · "));
   if (pathname.startsWith("/prs/")) {
@@ -189,9 +193,14 @@ export function targetOf(pathname: string, b: Record<string, unknown>): string {
  * pressing something, which is tens a day, not the thousands an hour the events
  * table takes.
  *
- * `/control` is not routed through here and is not meant to be: it moves the
- * UI's own focus and grants nothing the keyboard does not already have, so
- * logging it would bury the merges under navigation.
+ * `/control` is routed through here as `/control/<registry id>`, with no body:
+ * it used to be left out because it moves only the UI's own focus and grants
+ * nothing the keyboard does not already have, and a line per button press
+ * would bury the merges. That reasoning held while its only callers were a
+ * Stream Deck and a phone. It is now also the door an agent opens panels by,
+ * and "which agent opened what, and was anyone there to see it" has no other
+ * answer. The id and the verdict are the whole line, so the volume is one short
+ * row per command and the values a command named never reach the log.
  */
 export function noteAction(
   ip: string | null | undefined,

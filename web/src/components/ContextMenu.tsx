@@ -15,6 +15,7 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Portal } from "./Portal.tsx";
+import { menuEventGuards } from "../lib/menuEvents.ts";
 import { EDGE } from "./workspace/Chrome.tsx";
 
 export function ContextMenu({ x, y, onClose, children }: { x: number; y: number; onClose: () => void; children: ReactNode }) {
@@ -45,21 +46,29 @@ export function ContextMenu({ x, y, onClose, children }: { x: number; y: number;
 
   return (
     <Portal>
-      {/* Full-viewport catcher rather than a document mousedown listener: it
-          also stops the click landing on whatever is underneath, which for a
-          rail menu is usually a tab that would switch view on the way out. */}
-      <div className="fixed inset-0" style={{ zIndex: 9998 }} onMouseDown={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
-      <div ref={ref} role="menu"
-        className="fixed p-1.5 rounded-xl flex flex-col gap-0.5 text-[11px]"
-        style={{
-          top: pos.y, left: pos.x, minWidth: 184, zIndex: 9999,
-          background: "color-mix(in srgb, var(--bg2) 97%, black)",
-          border: EDGE,
-          boxShadow: "0 24px 60px -18px rgba(0,0,0,0.7)",
-          backdropFilter: "blur(18px)",
-        }}
-      >
-        {children}
+      {/* `display: contents`: a wrapper that exists only to hold the guards, and
+          lays out as nothing. Without it every event in here bubbled through the
+          React tree to whatever opened the menu — see lib/menuEvents.ts. */}
+      <div style={{ display: "contents" }} {...menuEventGuards()}>
+        {/* Full-viewport catcher rather than a document mousedown listener: it
+            also stops the click landing on whatever is underneath, which for a
+            rail menu is usually a tab that would switch view on the way out.
+            It closes on the CLICK, not the mousedown: closing on the press
+            removed it before the release, and the release then belonged to the
+            row beneath. */}
+        <div className="fixed inset-0" style={{ zIndex: 9998 }} onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
+        <div ref={ref} role="menu"
+          className="fixed p-1.5 rounded-xl flex flex-col gap-0.5 text-[11px]"
+          style={{
+            top: pos.y, left: pos.x, minWidth: 184, zIndex: 9999,
+            background: "color-mix(in srgb, var(--bg2) 97%, black)",
+            border: EDGE,
+            boxShadow: "0 24px 60px -18px rgba(0,0,0,0.7)",
+            backdropFilter: "blur(18px)",
+          }}
+        >
+          {children}
+        </div>
       </div>
     </Portal>
   );

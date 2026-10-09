@@ -55,17 +55,17 @@ async function boot(stored: Record<string, string>, { dark = true, palette = nul
   /* What main.tsx does, in its order. */
   m.applyTheme(m.initialTheme());
   const painted = () => attrs.get("data-theme");
-  let poll: () => void = () => {};
   const settle = async () => { for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0)); };
+  /* No timer to catch any more: the first answer is the boot read, and a later
+     one is what useLive does on the server's frame or a reconnect. */
   const afterFirstPoll = async () => {
-    g.setInterval = (fn: () => void) => { poll = fn; return 0; };
     m.watchDesktopPalette();
     await settle();
-    g.setInterval = saved.setInterval;
   };
-  const nextPoll = async () => { poll(); await settle(); };
+  const nextPoll = async () => { m.desktopPaletteMoved(); await settle(); };
   const serverStarts = () => { serverUp = true; };
-  return { m, store, painted, afterFirstPoll, nextPoll, serverStarts, synced };
+  const serverGoes = () => { serverUp = false; };
+  return { m, store, painted, afterFirstPoll, nextPoll, serverStarts, serverGoes, synced };
 }
 
 describe("a first run", () => {
@@ -179,5 +179,28 @@ describe("a choice already made", () => {
     await afterFirstPoll();
     expect(m.themeMode()).toBe("system");
     expect(painted()).toBe("graphite");
+  });
+});
+
+describe("a poll that gets no answer", () => {
+  /* The desktop's window flashed white for a few seconds, rarely, with no theme
+     change on the machine. A poll that failed (the server busy, swapping,
+     restarting) was read as "this desktop publishes no palette": the mode fell
+     back to the OS's Porcelain, and the next poll that got through painted the
+     desktop's colours again. */
+  test("keeps the desktop's palette on screen until the server answers again", async () => {
+    const { painted, afterFirstPoll, nextPoll, serverGoes, serverStarts, store } = await boot(
+      { "agentglass-theme-mode": "desktop", "agentglass-theme": "desktop", "agentglass-desktop-mode-moved": "1" },
+      { dark: false, palette: PALETTE },
+    );
+    await afterFirstPoll();
+    expect(painted()).toBe("desktop");
+    serverGoes();
+    await nextPoll();
+    expect(painted()).toBe("desktop");
+    expect(store.has("agentglass-desktop-last")).toBe(true);
+    serverStarts();
+    await nextPoll();
+    expect(painted()).toBe("desktop");
   });
 });

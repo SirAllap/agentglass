@@ -13,9 +13,8 @@
  * There is no DOM in these suites — bun test, no jsdom — so the component is
  * rendered to a string with `react-dom/server` and read as markup, the same way
  * server-banner-desktop.test.ts does it. That means no effects run: the keyboard
- * cursor, `scrollIntoView` and the reconciliation that keeps the cursor on
- * something are all effect-borne and cannot be seen from here. They are not
- * asserted, rather than asserted emptily.
+ * `scrollIntoView` on a find step is effect-borne and cannot be seen from
+ * here. It is not asserted, rather than asserted emptily.
  */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "bun:test";
@@ -26,6 +25,7 @@ import { LANES, LANE_CAP } from "../src/lib/prLanes.ts";
 import { CHIP_H } from "../src/lib/priority.tsx";
 
 const board = await Bun.file(new URL("../src/components/TriageBoard.tsx", import.meta.url)).text();
+const faces = await Bun.file(new URL("../src/components/CardFaces.tsx", import.meta.url)).text();
 import type { PrSummary } from "../../shared/types.ts";
 
 const day = 86_400_000;
@@ -569,13 +569,14 @@ describe("who is on it", () => {
      * `Avatar` keeps initials as its own fallback, so nothing is lost where
      * there is no face.
      */
-    expect(board).toContain("<Avatar login={login} size={16} />");
+    expect(faces).toContain("<Avatar login={f.login} size={ICON.md} />");
     expect(board).not.toContain("r.login.slice(0, 2).toUpperCase()");
   });
 
-  it("the author leads the identity line; whoever the lane header names sits beside the name", () => {
+  it("the author leads the identity line; everyone the band waits on is a face on its right", () => {
     expect(board).toContain("<Avatar login={p.author} size={20} />");
-    expect(board).toContain("headerPeople.slice(0, HEADER_FACES)");
+    expect(board).toContain("<CardFaces r={reviewers} />");
+    expect(board).not.toContain("headerPeople");
     expect(board).not.toContain("agx-prc-foot");
   });
 });
@@ -739,6 +740,17 @@ describe("the shortcuts the legend promises", () => {
     }
     expect(SRC).not.toContain("</K> pin<");
     expect(SRC).not.toContain("</K> open it<");
+  });
+
+  it("no card paints a keyboard cursor", () => {
+    // With the keys gone nothing could move it, so one card always wore a blue
+    // border and a left strip that read as a pull request state.
+    const html = render({ review: [pr(1), pr(2)], mine: [pr(3)], total: 3 });
+    expect(drawn(html, "review")).toBeGreaterThan(0);
+    expect(html).not.toContain("data-cur");
+    expect(html).not.toContain("inset 2px 0 0");
+    expect(SRC).not.toContain("data-cur");
+    expect(SRC).not.toMatch(/\bsetCur\b/);
   });
 });
 

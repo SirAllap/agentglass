@@ -64,4 +64,12 @@ describe("re-requesting the reviewer who asked for changes", () => {
     const src = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();
     expect(src).not.toContain("onAsk={(login) => api.prReviewers(");
   });
+
+  test("`people` is dropped rather than left showing the old ring on the face just asked", () => {
+    const withPeople = detail({ humanReview: { kind: "changes", who: ["alice"], askedAgain: false, people: [{ login: "alice", state: "changes" }, { login: "dave", state: "await" }] } });
+    expect(reviewersPatch(7, ["alice"], [])(withPeople).humanReview?.people).toBeUndefined();
+    const waiting = detail({ humanReview: { kind: "awaiting", who: ["dave"], people: [{ login: "dave", state: "await" }] } });
+    expect(reviewersPatch(7, [], ["dave"])(waiting).humanReview?.people).toBeUndefined();
+    expect(reviewersPatch(7, [], ["dave"])(waiting).humanReview?.kind).toBe("awaiting");
+  });
 });

@@ -86,7 +86,8 @@ export function prefPattern(src: string, fallback: string): RegExp {
 export function defaultPrefs(): ClickUpPrefs {
   return {
     handoff: { enabled: false, statusNames: [], unassign: "none" },
-    review: { statusNames: [], assignReviewer: false },
+    review: { enabled: false, statusNames: [], assignReviewer: false },
+    merge: { enabled: false, statusNames: [] },
     flows: { noteOnCard: false },
     prLinkField: "",
     swatchField: "",
@@ -150,7 +151,7 @@ export function applyPrefs(base: ClickUpPrefs, input: unknown): Res<ClickUpPrefs
     for (const key of Object.keys(g)) if (!allowed.includes(key)) return bad(`${k}.${key} is not a setting`);
     return { ok: true, value: g };
   };
-  const top = ["handoff", "review", "flows", "prLinkField", "swatchField", "cardSkillPattern", "assigned", "sprintListPattern", "readOnlyFieldPattern", "bell"];
+  const top = ["handoff", "review", "merge", "flows", "prLinkField", "swatchField", "cardSkillPattern", "assigned", "sprintListPattern", "readOnlyFieldPattern", "bell"];
   for (const k of Object.keys(input)) if (!top.includes(k)) return bad(`${k} is not a setting`);
 
   if ("handoff" in input) {
@@ -165,10 +166,17 @@ export function applyPrefs(base: ClickUpPrefs, input: unknown): Res<ClickUpPrefs
     }
   }
   if ("review" in input) {
-    const g = groupOf("review", ["statusNames", "assignReviewer"]);
+    const g = groupOf("review", ["enabled", "statusNames", "assignReviewer"]);
     if (!g.ok) return g;
+    if ("enabled" in g.value) { const r = bool("review.enabled", g.value.enabled); if (!r.ok) return r; out.review.enabled = r.value; }
     if ("statusNames" in g.value) { const r = names("review.statusNames", g.value.statusNames); if (!r.ok) return r; out.review.statusNames = r.value; }
     if ("assignReviewer" in g.value) { const r = bool("review.assignReviewer", g.value.assignReviewer); if (!r.ok) return r; out.review.assignReviewer = r.value; }
+  }
+  if ("merge" in input) {
+    const g = groupOf("merge", ["enabled", "statusNames"]);
+    if (!g.ok) return g;
+    if ("enabled" in g.value) { const r = bool("merge.enabled", g.value.enabled); if (!r.ok) return r; out.merge.enabled = r.value; }
+    if ("statusNames" in g.value) { const r = names("merge.statusNames", g.value.statusNames); if (!r.ok) return r; out.merge.statusNames = r.value; }
   }
   if ("flows" in input) {
     const g = groupOf("flows", ["noteOnCard"]);
@@ -214,6 +222,18 @@ export function clickupPrefs(): ClickUpPrefs {
           const r = applyPrefs(prefs, { [k]: raw[k] });
           if (r.ok) prefs = r.value;
         }
+        /* A file from before the review menu and the merge choice were steps: both
+           were always there, so they stay for anyone the file shows using ClickUp
+           (a hand-off, reviewers, a note or review names set). A file of pure
+           defaults is the marker `settleFirstRun` writes for a machine with no
+           token yet, and that person connects later with nothing on. Only a file
+           that never heard of the key reads this way; one written since says
+           `enabled` itself. Ceiling: somebody who had switched all of those off
+           and kept only the review item loses it once, and can add it back. */
+        if (!isObj(raw.review) || !("enabled" in raw.review)) {
+          const usedIt = prefs.handoff.enabled || prefs.review.assignReviewer || prefs.flows.noteOnCard || prefs.review.statusNames.length > 0;
+          if (usedIt) { prefs.review.enabled = true; prefs.merge.enabled = true; }
+        }
       }
     }
   } catch { /* unreadable file: the defaults are the app as it was */ }
@@ -224,10 +244,11 @@ export function clickupPrefs(): ClickUpPrefs {
 /**
  * The first start after the settings existed, decided once.
  *
- * A person who already had ClickUp connected had the reviewer list, the Note on
- * card and the hand-off to the QA column; the defaults above switch all three
- * off, so an update would take them away until Settings was opened. So when
- * there is no file and a token exists, the file is written with those three on
+ * A person who already had ClickUp connected had the review menu's move, the
+ * reviewer list, the merge dialog's card choice, the Note on card and the hand-off
+ * to the QA column; the defaults above switch all five off, so an update would take them away until
+ * Settings was opened. So when there is no file and a token exists, the file is
+ * written with those five on
  * — the hand-off clearing every assignee, as it always did — and every other
  * key at its default.
  *
@@ -247,6 +268,8 @@ export function settleFirstRun(connected: boolean): "seeded" | "defaults" | "kep
   if (connected) {
     first.handoff.enabled = true;
     first.handoff.unassign = "all";
+    first.review.enabled = true;
+    first.merge.enabled = true;
     first.review.assignReviewer = true;
     first.flows.noteOnCard = true;
   }

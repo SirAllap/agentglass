@@ -28,3 +28,35 @@ describe("a prefix nobody has read yet", () => {
     expect(mergeCardRef(pr, { connected: true, prefix: "ACME-" })).toBeNull();
   });
 });
+
+describe("a workspace known to have no custom ids", () => {
+  // Without them a free ClickUp workspace has no `ABC-12` to find, so one in a
+  // branch is somebody else's tracker (a Jira key, HOTFIX-12) and a chip for it
+  // dead-ends in "No card called ABC-12".
+  const jira = { headRefName: "fix/ABC-12-pagination" };
+  const native = { headRefName: "CU-86abc123_pagination" };
+  const none = { connected: true, noCustomIds: true };
+
+  it("does not take a bare ABC-12 for a card, for either gate", () => {
+    expect(chipAction(cardRef(jira), none)).toBeNull();
+    expect(mergeCardRef(jira, none)).toBeNull();
+    expect(looksLikeOurs(cardRef(jira)!, undefined, true, true)).toBe(false);
+  });
+
+  it("still takes ClickUp's own CU- id, wherever the prefix stands", () => {
+    expect(chipAction(cardRef(native), none)).toEqual({ in: "tasks" });
+    expect(mergeCardRef(native, none)?.query).toBe("CU-86abc123");
+    // A workspace WITH a prefix is no reason to refuse the native spelling.
+    expect(chipAction(cardRef(native), { connected: true, prefix: "ORBIT-" })).toEqual({ in: "tasks" });
+  });
+
+  it("still takes an address", () => {
+    const linked = { headRefName: "fix/ABC-12", body: "https://app.clickup.com/t/86abc123" };
+    expect(chipAction(cardRef(linked), none)).toEqual({ in: "tasks" });
+  });
+
+  it("changes nothing while it is unknown", () => {
+    expect(chipAction(cardRef(jira), { connected: true })).toEqual({ in: "tasks" });
+    expect(chipAction(cardRef(jira), { connected: true, noCustomIds: false })).toEqual({ in: "tasks" });
+  });
+});

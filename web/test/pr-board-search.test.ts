@@ -710,7 +710,7 @@ describe("assigning on GitHub, and the card on the other board", () => {
     // name because that is all a status has, and the fallback is to leave it.
     // The match itself moved to `reviewStatus` in cardMove.ts (same rule, now
     // with the workspace's own names first); the panel only asks it.
-    expect(src).toContain("setPick(reviewStatus(st, t.status, prefs?.review.statusNames ?? []));");
+    expect(src).toContain("setPick(prefs?.review.enabled ? reviewStatus(st, t.status, prefs.review.statusNames) : \"\");");
   });
 
   it("moves the people and the status together, or not at all", () => {

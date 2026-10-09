@@ -160,11 +160,20 @@ describe("nothing writes without being recorded", () => {
     expect(targetOf("/chat/send", { root: "/home/you/code/shop-api", name: "opus" })).toBe("shop-api · opus");
   });
 
-  step("/control is left out, and that is a decision rather than an oversight", () => {
-    // It moves the UI's own focus and grants nothing the keyboard does not
-    // already have, so logging it would bury the merges under navigation.
+  step("/control is recorded by door and verdict, and the values it named are not", () => {
+    // It was left out while its only callers were a Stream Deck and a phone.
+    // It is now the door an agent opens panels by, so each command leaves one
+    // line, `/control/<registry id>`, with an empty body: a path or a settings
+    // row a command named is a value, not an audit fact. The one body it may
+    // carry is a settings.set's setting id, and the name a CLI stamped itself
+    // with (`as`, a label), and for an open its present mode and whether it was
+    // held behind a chip (two closed words); control-settings.test.ts pins that
+    // the setting is never the value.
     const at = index.indexOf('pathname === "/control"');
     expect(at).toBeGreaterThan(-1);
-    expect(index.slice(at, at + 600)).not.toContain("noteAction(");
+    const handler = index.slice(at, index.indexOf("\n    }", at));
+    expect(handler).toContain("noteAction(");
+    expect(handler, "the command's arguments must not reach the audit log").toMatch(/noteAction\([^)]*`\/control\/\$\{controlId\(cmd\) \?\? "unknown"\}`, \{ \.\.\.\(setting \? \{ setting \} : \{\}\), \.\.\.\(as \? \{ as \} : \{\}\), \.\.\.\(opens \? \{ present \} : \{\}\), \.\.\.\(queued \? \{ queued: true \} : \{\}\), \.\.\.\(refused \? \{ refused \} : \{\}\) \},/s);
+    expect(handler).toContain("const setting = changedSetting(cmd);");
   });
 });

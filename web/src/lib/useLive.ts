@@ -3,6 +3,7 @@ import type { WatchEvent, WsFrame, WsClientHello, OpenToolCall } from "../../../
 import { WS_URL, IS_DEMO, hasToken, probeAuth, whenServerUp } from "./api.ts";
 import * as demo from "./demo.ts";
 import { gitChanged } from "./gitBus.ts";
+import { desktopPaletteMoved } from "./themes.ts";
 import { emitControl } from "./controlBus.ts";
 import { clientId, emitBrowserAsk } from "./browserBus.ts";
 import { emitUnderstudy } from "./understudyBus.ts";
@@ -171,6 +172,9 @@ export function useLive(paused = false): LiveData {
       // Marks that moved elsewhere while this socket was down were broadcast to
       // nobody here; ask for them. A no-op in a window that never started sync.
       void syncMarks();
+      // A switch of the desktop's theme made while this socket was down was
+      // announced to nobody here.
+      desktopPaletteMoved();
     };
     ws.onclose = async () => {
       if (disposed.current || wsRef.current !== ws) return;
@@ -202,6 +206,10 @@ export function useLive(paused = false): LiveData {
       } catch {
         return;
       }
+      if (frame.type === "desktop-palette") {
+        desktopPaletteMoved();
+        return;
+      }
       if (frame.type === "git") {
         // Not our data — a nudge for whoever is showing git state.
         gitChanged();
@@ -219,7 +227,7 @@ export function useLive(paused = false): LiveData {
         // An external controller (Stream Deck, phone) drove the UI. Imperative,
         // not data — hand it to App, which runs it through the same setters the
         // keyboard does.
-        emitControl(frame.data);
+        emitControl(frame.data, frame.rid, { present: frame.present, as: frame.as, level: frame.level });
         return;
       }
       if (frame.type === "notify-prefs") {

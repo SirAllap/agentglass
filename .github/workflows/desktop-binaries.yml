@@ -81,7 +81,10 @@ jobs:
           ext=""
           [ "${{ runner.os }}" = "Windows" ] && ext=".exe"
           mkdir -p electron/staging
-          bun build --compile --target=${{ matrix.bunTarget }} server/src/index.ts \
+          # No `.env` and no `bunfig.toml` from the directory the sidecar runs
+          # in: a compiled binary reads both by default (electron/build.mjs).
+          bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig \
+            --target=${{ matrix.bunTarget }} server/src/index.ts \
             --outfile "electron/staging/agentglass-server${ext}"
           # The Claude model catalogue is read from disk at runtime, not
           # imported, so --compile does not carry it. It goes beside the sidecar

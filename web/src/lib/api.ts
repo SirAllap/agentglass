@@ -5,9 +5,10 @@ import type { PrWatchFire, PrWatchRule, PrWatchState } from "../../../shared/typ
 import type { AskedAlert } from "../../../shared/notifyPayload.ts";
 import type { CheckOnBasePlan, CheckOnBaseStatus } from "../../../shared/checkOnBase.ts";
 import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest } from "../../../shared/types.ts";
-import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs } from "../../../shared/providers.ts";
+import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr } from "../../../shared/providers.ts";
 import { DEFAULT_NOTIFY_PREFS, type NotifyPrefs } from "../../../shared/notifyPrefs.ts";
 import type { CheckMetric } from "../../../shared/checkBaseline.ts";
+import type { UiReply } from "../../../shared/uiActions.ts";
 
 /** A partial update: any group may name just the keys it changes. */
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? Partial<T[K]> : T[K] };
@@ -1046,6 +1047,9 @@ const realApi = {
    *  holding that agent's request open until this lands — see browserdrive.ts. */
   browserResult: (r: { client?: string; id: string; ok: boolean; value?: unknown; error?: string; diagnosis?: unknown }) =>
     post<{ ok: boolean; known: boolean }>("/browser/result", r),
+  /** Answer a command the server is holding open (POST /control with an `id`, or a
+   *  read). Not an agent-facing call: the window makes it, under its own credentials. */
+  controlResult: (r: { rid: string } & UiReply) => post<{ ok: boolean; known: boolean }>("/control/result", r),
   /** Stop offering a project in the picker, or offer it again. Nothing on disk
    *  is touched — see config.ts. */
   hideProject: (path: string, hidden: boolean) => post<{ ok: boolean; hidden: string[]; persisted: boolean; error?: string }>("/projects/hidden", { path, hidden }),
@@ -1460,7 +1464,7 @@ const realApi = {
   clickupRemoveView: (id: string) => post<{ ok: boolean }>("/clickup/views/remove", { id }),
   /** The folder picker: the workspace's spaces, then one space's folders — the
    *  second answer already carries the lists inside each folder. */
-  clickupSpaces: () => get<{ ok: boolean; error?: string; spaces?: { id: string; name: string }[] }>("/clickup/spaces"),
+  clickupSpaces: (fresh = false) => get<{ ok: boolean; error?: string; throttled?: boolean; unauthorised?: boolean; spaces?: ClickUpSpace[] }>(fresh ? "/clickup/spaces?fresh=1" : "/clickup/spaces"),
   clickupFolders: (spaceId: string) =>
     /* `folderless` marks the one entry that is not a folder: the lists sitting
        directly in the space, gathered under a single heading so this shape
@@ -1493,9 +1497,9 @@ const realApi = {
   /** Who can be put on a card, from the list it lives in. */
   clickupMembers: (list: string) =>
     get<{ ok: boolean; error?: string; members?: ListMember[] }>(`/clickup/members?list=${encodeURIComponent(list)}`),
-  clickupPrs: (card: string, field: string, root: string) =>
-    get<{ ok: boolean; prs: { number: number; title: string; state: string; draft?: boolean; url: string; stated?: boolean }[]; error?: string }>(
-      `/clickup/prs?${new URLSearchParams({ card, field, root })}`),
+  clickupPrs: (card: string, field: string, root: string, task = "") =>
+    get<{ ok: boolean; prs: CardPr[]; error?: string }>(
+      `/clickup/prs?${new URLSearchParams({ card, field, root, task })}`),
   /** Ask the server to read the search's expensive half now. Fire and forget:
    *  it answers at once and does the work behind the answer. */
   clickupWarm: () => get<{ ok: boolean }>("/clickup/warm").catch(() => ({ ok: false })),
@@ -1521,6 +1525,12 @@ const realApi = {
   prsForBranch: (root: string, branch: string) =>
     get<{ ok: boolean; repo?: string; from?: PrBranchSummary; into: PrBranchSummary[]; needsAuth?: boolean; error?: string }>(
       `/prs/for-branch?${new URLSearchParams({ root, branch })}`),
+  /** The pull request that came FROM a branch, in any state: a stacked pull
+   *  request's base when the board's list does not hold it. One cached `gh`
+   *  call on the server; see prForHead. */
+  prForHead: (root: string, branch: string) =>
+    get<{ ok: boolean; pr?: { number: number; state: "OPEN" | "CLOSED" | "MERGED"; isDraft: boolean; headRefName: string; baseRefName: string; url: string } | null; needsAuth?: boolean; error?: string }>(
+      `/prs/for-head?${new URLSearchParams({ root, branch })}`),
   /** Just the local half — whether your checkout is dirty, ahead, or can be
    *  fast-forwarded. Git only, no network, so it can be asked again while a
    *  pull request is open; `prBehind` holds the slow half. */
@@ -2355,6 +2365,7 @@ const demoApi: typeof realApi = {
   browserLanes: () => D({ ok: true, lanes: [] as LaneRow[] }),
   browserReady: (_client: string, _on: boolean, _lanes?: string[]) => D({ ok: true }),
   browserResult: (_r: { client?: string; id: string; ok: boolean; value?: unknown; error?: string; diagnosis?: unknown }) => D({ ok: true, known: false }),
+  controlResult: (_r: { rid: string } & UiReply) => D({ ok: true, known: false }),
   hideProject: (_path: string, _hidden: boolean) => D({ ok: false, hidden: [] as string[], persisted: false, error: "unavailable in the demo" }),
   gitTree: (root: string) => D(demo.gitTree(root)),
   // There is no git behind a demo build, so the Diff view lands on its own
@@ -2721,14 +2732,14 @@ const demoApi: typeof realApi = {
   clickupView: (_i?: string, _f?: boolean) => D({ tasks: [], statuses: [], fields: [], at: 0 }),
   clickupAddView: (_u: string) => D({ ok: false, error: "not available in the demo" }),
   clickupRemoveView: (_i: string) => D({ ok: true }),
-  clickupSpaces: () => D({ ok: true, spaces: [] as { id: string; name: string }[] }),
+  clickupSpaces: (_fresh?: boolean) => D({ ok: true, spaces: [] as ClickUpSpace[] }),
   clickupFolders: (_s: string) => D({ ok: true, folders: [] as { id: string; name: string; lists: { id: string; name: string }[]; folderless?: boolean }[] }),
   clickupAddFolder: (_i: string, _n: string) => D({ ok: false, error: "not available in the demo" }),
   clickupRemoveFolder: (_i: string) => D({ ok: true }),
   clickupListViews: (_l: string) => D({ ok: true, views: [] as { id: string; name: string }[], links: [] as { id: string; name: string; type: string }[] }),
   clickupList: (_i: string) => D({ ok: false, error: "not available in the demo" }),
   clickupReplaceView: (_i: string, _u: string) => D({ ok: false, error: "not available in the demo" }),
-  clickupPrs: (_c: string, _f: string, _r: string) => D({ ok: true, prs: [] }),
+  clickupPrs: (_c: string, _f: string, _r: string, _t?: string) => D({ ok: true, prs: [] }),
   clickupWarm: () => D({ ok: false }),
   clickupFind: (_q: string) => D({ ok: false, error: "not available in the demo" }),
   // The one pull request in the demo that is behind its base is #461, and it
@@ -2737,6 +2748,7 @@ const demoApi: typeof realApi = {
   // shows the whole offer: how far behind, and that the local branch comes
   // along. Everything else keeps the old "no answer, no promises" shape.
   prsForBranch: (_r: string, _b: string) => D({ ok: true, into: [] as PrSummary[] }),
+  prForHead: (_r: string, b: string) => D(demo.prForHead(b)),
   /* The demo has no checkout, so the local half is simply absent — the panel
      then makes no promises about here, which is its oldest behaviour. */
   prLocalHead: (_r: string, branch: string) => D({

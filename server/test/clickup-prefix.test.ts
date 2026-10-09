@@ -60,6 +60,31 @@ describe("the prefix this workspace's cards are numbered with", () => {
   });
 });
 
+describe("a workspace that has no custom ids", () => {
+  // Custom ids are a paid ClickApp, so a free workspace never has a prefix. But
+  // "no board read yet" says nothing about it, and must not be taken for it.
+  it("is not claimed before a card has been read", () => {
+    V.addView(view("v1"));
+    expect(V.knownNoCustomIds()).toBe(false);
+    V.putCache({ view: view("v1"), tasks: [], statuses: [], fields: [], at: 1 });
+    expect(V.knownNoCustomIds()).toBe(false);
+  });
+
+  it("is claimed when cards were read and none carries one", () => {
+    V.addView(view("v1"));
+    V.putCache({ view: view("v1"), tasks: [card(undefined), card(undefined)], statuses: [], fields: [], at: 1 });
+    expect(V.knownNoCustomIds()).toBe(true);
+  });
+
+  it("is dropped by a single card that has one, on any board", () => {
+    V.addView(view("v1"));
+    V.addView(view("v2"));
+    V.putCache({ view: view("v1"), tasks: [card(undefined)], statuses: [], fields: [], at: 1 });
+    V.putCache({ view: view("v2"), tasks: [card("ORBIT-1042")], statuses: [], fields: [], at: 1 });
+    expect(V.knownNoCustomIds()).toBe(false);
+  });
+});
+
 describe("which board already holds a card", () => {
   it("finds it by ClickUp's own id and by the human one", () => {
     // The two halves of the app hold different ids: a pull request carries

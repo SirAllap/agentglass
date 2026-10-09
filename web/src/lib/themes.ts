@@ -10,7 +10,6 @@ import { floorTiers, inkTints } from "./contrast.ts";
 // entry needs no flag — just put a dark bg in the dark run and a light one below.
 
 import { SERVER, authHeaders, whenServerUp } from "./api.ts";
-import { pollWhileLooking } from "./usePoll.ts";
 import type { AnsiPalette } from "./termPalette.ts";
 import { ACCENTS, applyAccent, currentAccent } from "./accent.ts";
 import { bootEntry, writeBootPaint } from "./bootPaint.ts";
@@ -399,10 +398,14 @@ export function themeAnsi(id: string): AnsiPalette | undefined {
   return THEMES.find((t) => t.id === id)?.ansi;
 }
 
-const POLL_MS = 3000;
 /** The desktop palette last carried out to tmux — see the tick below. */
 const SYNCED_KEY = "agentglass-desktop-synced";
 const MOVED_KEY = "agentglass-desktop-mode-moved";
+
+/** The server said the desktop switched theme, or the socket came back: read
+ *  the palette now. Nothing until `watchDesktopPalette` has started. */
+let readPalette: () => void = () => {};
+export function desktopPaletteMoved(): void { readPalette(); }
 
 /** Call once at boot. */
 export function watchDesktopPalette(): void {
@@ -416,6 +419,11 @@ export function watchDesktopPalette(): void {
       const r = await fetch(`${SERVER}/desktop/palette`, { headers: authHeaders() });
       if (r.ok) { next = ((await r.json()) as { palette: Answer | null }).palette; answered = true; }
     } catch { /* no server yet, or none at all (the static demo) */ }
+    /* A poll that got no answer says nothing about the desktop. Read as "no
+       palette", it dropped the desktop's mode to the OS's Porcelain for as long
+       as the server took to answer again — a white window for a few seconds,
+       whenever the server was busy or restarting. What is on screen stays. */
+    if (!answered) return;
     const changed = (next?.stamp ?? "") !== stamp;
     stamp = next?.stamp ?? "";
     desktop = next?.theme ?? null;
@@ -471,13 +479,11 @@ export function watchDesktopPalette(): void {
       for (const fn of desktopListeners) fn();
     }
   };
-  /* Only while the window is looked at, and at once on return to it. It was
-     unconditional: 20 identical requests a minute in EVERY window, lane
-     windows included (781 in 260 s across nine, measured). The ceiling: a
-     desktop switch made while a window is not focused reaches it on its next
-     focus, not within three seconds. */
-  void whenServerUp().then(() => {
-    void tick();
-    pollWhileLooking(() => { void tick(); }, POLL_MS);
-  }).catch(() => {});
+  /* No clock. The server watches the desktop's theme and says so on the live
+     socket (useLive calls desktopPaletteMoved), and the socket asks again when
+     it reconnects. This asked every three seconds, in every window, lane
+     windows included (781 requests in 260 s across nine, measured), to notice
+     a thing that happens a handful of times a day. Here: once at boot. */
+  readPalette = () => { void tick(); };
+  void whenServerUp().then(() => { void tick(); }).catch(() => {});
 }
