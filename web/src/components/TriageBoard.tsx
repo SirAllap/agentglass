@@ -25,6 +25,7 @@ import { onCard, cardVersion, withCard } from "../lib/prCardStore.ts";
 import { openCard } from "../lib/openCard.ts";
 import { PriorityFlag, CardChip, CardFace, CHIP_H } from "../lib/priority.tsx";
 import { StatusPill } from "./StatusPill.tsx";
+import { CTRL_H, EDGE } from "./workspace/Chrome.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { askingBehind, behindOf, onBehind } from "../lib/prBehindStore.ts";
 import { onRollup, rollupOf } from "../lib/prRollupStore.ts";
@@ -1676,8 +1677,10 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
         {/* One button, and it is the one this lane is asking for. A row of five
             is a row nobody reads; the rest are a click away inside. */}
         <button onClick={(e) => { e.stopPropagation(); onAct(p, "open"); }} disabled={busy}
-          className="agx-btn rounded px-2 py-0.5 text-[10px] disabled:opacity-40 inline-flex items-center gap-1"
-          style={{ color: "var(--text2)", border: edge(20) }}>
+          /* `control, compact`: the in-card button of the canon, 22 tall on the
+             ladder rather than a 24px height of its own from `py-0.5`. */
+          className="agx-btn rounded-lg px-2 text-[10.5px] disabled:opacity-40 inline-flex items-center gap-1"
+          style={{ color: "var(--text2)", border: EDGE, height: CTRL_H.compact }}>
           {/* `busy` is the panel'''s, and on this board only one card can be
               acting at a time — the whole surface disables while it runs. So the
               spinner goes on the card whose action is in flight rather than on

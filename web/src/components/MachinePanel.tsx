@@ -12,7 +12,7 @@
 // because "is 5173 still up?" is a question you have while looking at anything.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CopyIcon, DiskIcon, IconLabel, RefreshIcon } from "../lib/glyphIcons.tsx";
-import { RefreshButton, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { RefreshButton, Tabs, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
 import type { GitLock, GitLocksReport, GitRepoRef, ProcDetail, MachineTotals, PortEntry, PortsReport, ProcEntry, ResourceReport, SpaceReport } from "../../../shared/types.ts";
@@ -59,20 +59,16 @@ export function MachinePanel({ tab, onTab, onClose, onOpenBrowser }: {
         }}>
         <div className="flex items-center gap-2 px-3 py-2 shrink-0" style={{ borderBottom: edge(16) }}>
           <span className="text-[12px] font-medium" style={{ color: "var(--text)" }}>Machine</span>
-          <span className="inline-flex rounded-md overflow-hidden ml-2" style={{ border: edge(20) }}>
-            {(["ports", "resources", "locks"] as const).map((t) => (
-              <button key={t} onClick={() => onTab(t)} className="text-[10.5px] px-3 py-1"
-                style={t === tab
-                  ? { background: "color-mix(in srgb, var(--primary) 20%, transparent)", color: "var(--text)" }
-                  : { color: "var(--text3)" }}>{t === "ports" ? "Ports" : t === "resources" ? "Resources" : "Locks"}</button>
-            ))}
-          </span>
+          {/* The shared `Tabs`: these swap the whole body, so they are a tab
+              list to a screen reader, not three loose buttons in a box. */}
+          <div className="ml-2"><Tabs value={tab} onChange={onTab} label="Machine" panelId="machine-tab-body"
+            options={[{ id: "ports", label: "Ports" }, { id: "resources", label: "Resources" }, { id: "locks", label: "Locks" }]} /></div>
           <CloseButton onClick={onClose} title="Close" style={{ color: "var(--text2)", border: edge(18) }} className="agx-btn ml-auto shrink-0 rounded" />
         </div>
         {/* Not a scroller itself: each tab owns its own scrolling, because
             Resources pins a footer under one and a scroller here would push
             that footer off the bottom instead. */}
-        <div className="flex-1 min-h-0 flex flex-col">
+        <div id="machine-tab-body" role="tabpanel" className="flex-1 min-h-0 flex flex-col">
           {tab === "ports" ? <Ports onOpenBrowser={onOpenBrowser} /> : tab === "resources" ? <Resources /> : <Locks />}
         </div>
       </div>

@@ -37,7 +37,7 @@ import { flashElement } from "../lib/flash.ts";
 import { shaFromHref } from "../lib/commitLink.ts";
 import { isShortRef, openInApp, wantsExternal } from "../lib/linkRouter.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
-import { RefreshButton, ScopeChip, CTRL_H, EDGE, CHIP_SURFACE, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { RefreshButton, ScopeChip, Tabs, CTRL_H, EDGE, CHIP_SURFACE, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import type {
   PrSummary, PrDetail, PrRepoId, PrThread, PrComment, PrReview, PrReviewer, PrCheck, GitRepoRef, FileChange,
@@ -4819,55 +4819,53 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               />
               {fieldPicker.node}
               <div className="flex border-b shrink-0 overflow-x-auto items-center" style={{ borderColor: "color-mix(in srgb, var(--text) 11%, transparent)" }}>
-                {TABS.map((t) => (
-                  <button key={t.id}
+                {/* The shared `Tabs`, so this strip is an exclusive group to a screen
+                    reader (`role="tab"`, `aria-selected`, arrow keys) like every
+                    other one in the app, and wears the same underline. It was plain
+                    buttons, which announced five unrelated actions. */}
+                <Tabs value={tab} label="Pull request sections" panelId="pr-tab-body"
+                  onChange={(id) => {
                     /* Written from the live element on the way out, as well as
                        on scroll. A tab whose content shrinks is clamped by the
                        browser the moment the new one renders, and a value read
                        after that is zero. */
-                    onClick={() => {
-                      const el = tabBodyRef.current;
-                      if (el && tab !== "files") tabScroll.current[tab] = el.scrollTop;
-                      setTab(t.id);
-                    }} className="text-[10.5px] px-3 py-1.5 whitespace-nowrap"
-                    style={{
-                      color: tab === t.id ? "var(--text)" : "var(--text3)",
-                      borderBottom: `2px solid ${tab === t.id ? "var(--primary)" : "transparent"}`,
-                      background: tab === t.id ? "color-mix(in srgb, var(--primary) 8%, transparent)" : "transparent",
-                    }}>
+                    const el = tabBodyRef.current;
+                    if (el && tab !== "files") tabScroll.current[tab] = el.scrollTop;
+                    setTab(id);
+                  }}
+                  options={TABS.map((t) => ({ id: t.id, label: (<>
                     {t.label}
-                    {/* The count carries the state, so a tab that wants
-                        something is amber at the number people already read
-                        rather than only at a mark beside it. */}
-                    {t.n != null && (
-                      <span className="ml-1 tabular-nums" style={t.warn ? { color: "var(--warning-ink)" } : { opacity: .6 }}>{t.n}</span>
-                    )}
-                    {/* And the dot stays. Colour alone cannot say "amber" to
-                        somebody who cannot see it, and Review is often warn
-                        with no count at all — a verdict is owed and nothing is
-                        queued — which is a tint with nothing to tint. */}
-                    {t.warn && <span className="ml-1" style={{ color: "var(--warning-ink)" }}>●</span>}
-                    {/* Said as a number, not a dot: "somebody replied" and
-                        "seven people replied while you were at lunch" are
-                        different sizes of the same news, and the second is why
-                        you would leave what you are doing. */}
-                    {!!t.hot && (
-                      <span className="ml-1.5 text-[9.5px] px-1.5 rounded-full tabular-nums align-middle"
-                        title={`${t.hot} new since you last looked`}
-                        style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 18%, transparent)",
-                          border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>
-                        {t.hot} new
-                      </span>
-                    )}
-                    {t.one && (
-                      <span className="ml-1.5 text-[10px] px-1 rounded align-middle"
-                        title="The tree, the diff and what the rest of the pull request says about the file you are on — all at once"
-                        style={{ color: "var(--primary-ink)", border: "1px dashed color-mix(in srgb, var(--primary) 55%, transparent)" }}>
-                        one screen
-                      </span>
-                    )}
-                  </button>
-                ))}
+                      {/* The count carries the state, so a tab that wants
+                          something is amber at the number people already read
+                          rather than only at a mark beside it. */}
+                      {t.n != null && (
+                        <span className="ml-1 tabular-nums" style={t.warn ? { color: "var(--warning-ink)" } : { opacity: .6 }}>{t.n}</span>
+                      )}
+                      {/* And the dot stays. Colour alone cannot say "amber" to
+                          somebody who cannot see it, and Review is often warn
+                          with no count at all — a verdict is owed and nothing is
+                          queued — which is a tint with nothing to tint. */}
+                      {t.warn && <span className="ml-1" style={{ color: "var(--warning-ink)" }}>●</span>}
+                      {/* Said as a number, not a dot: "somebody replied" and
+                          "seven people replied while you were at lunch" are
+                          different sizes of the same news, and the second is why
+                          you would leave what you are doing. */}
+                      {!!t.hot && (
+                        <span className="ml-1.5 text-[9.5px] px-1.5 rounded-full tabular-nums align-middle"
+                          title={`${t.hot} new since you last looked`}
+                          style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 18%, transparent)",
+                            border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>
+                          {t.hot} new
+                        </span>
+                      )}
+                      {t.one && (
+                        <span className="ml-1.5 text-[10px] px-1 rounded align-middle"
+                          title="The tree, the diff and what the rest of the pull request says about the file you are on — all at once"
+                          style={{ color: "var(--primary-ink)", border: "1px dashed color-mix(in srgb, var(--primary) 55%, transparent)" }}>
+                          one screen
+                        </span>
+                      )}
+                  </>) }))} />
                 <div className="ml-auto flex items-center gap-1.5 px-2 shrink-0">
                   {myDrafts.length > 0 && <Chip text={`${myDrafts.length} pending`} tint="var(--warning)" title="Line comments queued but not sent" />}
                   {hasReviewDraft && tab !== "review" && (
@@ -4898,7 +4896,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                   columns scroll inside it, which is what the mockup means by
                   putting `overflow:auto` on each of the three. */}
               <CommitJumpCtx.Provider value={jumpToCommit}>
-              <div ref={tabBodyRef} className={`flex-1 min-h-0 agx-scroll ${tab === "files" ? "overflow-hidden p-0" : "overflow-y-auto p-3"}`}
+              <div ref={tabBodyRef} id="pr-tab-body" role="tabpanel" className={`flex-1 min-h-0 agx-scroll ${tab === "files" ? "overflow-hidden p-0" : "overflow-y-auto p-3"}`}
                 onScroll={(e) => {
                   /*
                    * Files is a frame, not a page, and frames do not scroll.

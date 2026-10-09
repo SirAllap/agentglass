@@ -322,6 +322,8 @@ export default function App() {
   // — a render value captured there would be the one from the mount.
   const filesOpenRef = useRef(filesOpen);
   filesOpenRef.current = filesOpen;
+  const machineOpenRef = useRef(false);
+  machineOpenRef.current = machine != null;
   const wsViewRef = useRef(wsView);
   wsViewRef.current = wsView;
   // The catalog is the one panel that can open *over* the workspace, from the
@@ -925,6 +927,15 @@ export default function App() {
          * raised stays up, and the next Escape puts that away.
          */
         if (filesOpenRef.current) { setFilesOpen(false); return; }
+        /*
+         * The Machine dialog next, and alone, for the same reason. It was
+         * missing from this handler altogether, so Escape closed everything
+         * except it: a pass that pressed Escape after each of its tabs found it
+         * still on top three screens later. A picker inside it stops Escape at
+         * the document, so the key reaches here only when nothing inside
+         * answered it.
+         */
+        if (machineOpenRef.current) { setMachine(null); return; }
         // Escape closes whatever is ON the shell. It never closes the shell —
         // there is nothing behind it to go back to any more.
         setSelected(null);

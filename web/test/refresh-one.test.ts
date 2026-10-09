@@ -42,7 +42,10 @@ describe("the header refresh control is drawn once", () => {
   it("never renders the word as a JSX text child", () => {
     // A `title="Refresh"` tooltip is fine and several controls keep one; what
     // is banned is the word sitting on screen as the button's own label.
-    const label = />Refresh(?:ing)?\u2026?</;
+    // `\s*` both sides: a label on its own line between the tags is the same
+    // visible text, and the first version of this pattern missed exactly that
+    // one in the plugins pane.
+    const label = />\s*Refresh(?:ing)?\u2026?\s*</;
     for (const [f, src] of sources) {
       expect(stripComments(src)).not.toMatch(label);
     }

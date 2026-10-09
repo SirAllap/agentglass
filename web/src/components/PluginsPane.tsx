@@ -21,7 +21,7 @@ import { api } from "../lib/api.ts";
 import { fmtAgo } from "../lib/format.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import type { DeviceScope, InstallSource, PublicPlugin } from "../../../shared/types.ts";
-import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { INPUT, INPUT_STYLE, RefreshButton } from "./workspace/Chrome.tsx";
 
 /** The one-line "From …" a reviewer reads — a local path plainly, a git
  *  source with its ref if one was pinned, a market install naming the list
@@ -273,11 +273,10 @@ export function PluginsPane({ open, focus }: {
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search plugins"
             className={`w-[190px] ${INPUT}`}
             style={INPUT_STYLE} />
-          <button onClick={load}
-            className="text-[12px] px-2.5 py-1.5 rounded-lg whitespace-nowrap hover:opacity-80"
-            style={{ color: "var(--text2)", border: "1px solid var(--surface-line)" }}>
-            Refresh
-          </button>
+          {/* The house refresh, the same icon control as the Market's just
+              below: a text "Refresh" here and an icon there was one pane with
+              two idioms for the same verb. */}
+          <RefreshButton onRefresh={() => void load()} title="Refresh the installed plugins" />
           {/* In the header, with the other things you do to this list. It was
               a dashed half-width tile at the end of the grid, which on an
               empty list was the only thing there and read as a stray box. */}
