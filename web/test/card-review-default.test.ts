@@ -63,15 +63,15 @@ const slice = (open: string, close: string) => { const a = src.indexOf(open); re
 describe("the sidebar gates on the settings", () => {
   test("the review preselect is reviewStatus with the saved names, not an inline regex", () => {
     const body = slice("function ClickUpSide(", "\ntype Facets");
-    expect(body).toContain("reviewStatus(st, t.status, prefs.review.statusNames)");
+    expect(body).toContain("reviewStatus(st, t.status, rp.move.names)");
     expect(body).not.toContain("/review/i");
   });
   test("the move item is a step: preselected only when added, its Status block absent otherwise", () => {
     const body = slice("function ClickUpSide(", "\ntype Facets");
-    expect(body).toContain('prefs?.review.enabled ? reviewStatus(');
-    expect(body).toContain("const moveOn = reviewPrefs?.enabled === true;");
+    expect(body).toContain('prefs?.review.enabled && rp?.move && (rp.move.names.length > 0 || rp.move.fallback) ? reviewStatus(');
+    expect(body).toContain("const moveOn = stepOn && !!menuPlan?.move;");
     expect(body).toContain("{moveOn && (");
-    expect(body).toContain("if (!ref || (!moveOn && !assignReviewer)) return null;");
+    expect(body).toContain("if (!ref || (!stepOn && !assignReviewer)) return null;");
   });
   test("putting people on the card needs assignReviewer, and unknown reads as off", () => {
     const body = slice("function ClickUpSide(", "\ntype Facets");

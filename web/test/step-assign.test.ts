@@ -13,7 +13,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ClickUpPrefs, ListMember } from "../../shared/providers.ts";
 import { WorkflowMap } from "../src/components/WorkflowMap.tsx";
-import { CLICKUP, clickupAssign, clickupRemove, clickupSteps } from "../src/lib/clickupWorkflow.ts";
+import { CLICKUP, clickupRemove, clickupSteps } from "../src/lib/clickupWorkflow.ts";
 import { partitionUnits } from "../src/lib/workflowLayout.ts";
 import type { MapSpace } from "../src/lib/workflowMap.ts";
 import {
@@ -170,16 +170,11 @@ describe("what is saved", () => {
       merge: { enabled: true, statusNames: ["done"], assign: pick },
     } as never));
     expect(steps.map((s) => [s.kind, s.assign.who])).toEqual([["move", "me"], ["menu", "author"], ["merge", "person"]]);
-    expect(clickupAssign("move", { who: "me" })).toEqual({ handoff: { assign: { who: "me" } } });
-    expect(clickupAssign("menu", { who: "author" })).toEqual({ review: { assign: { who: "author" } } });
-    expect(clickupAssign("merge", pick)).toEqual({ merge: { assign: pick } });
-    expect(clickupAssign("note", { who: "me" })).toEqual({});
-    expect(clickupAssign("people", { who: "me" })).toEqual({});
   });
   test("removing a step takes its assignment with it", () => {
     for (const k of ["move", "menu", "merge"] as const) {
-      const patch = clickupRemove(k) as Record<string, { assign?: Assign }>;
-      expect(Object.values(patch)[0]!.assign).toEqual({ who: "none" });
+      const patch = clickupRemove(k) as Record<string, { blocks?: unknown[] }>;
+      expect(Object.values(patch)[0]!.blocks).toEqual([]);
     }
   });
 });
@@ -189,7 +184,7 @@ describe("the map", () => {
   const SPACES: MapSpace[] = [{ id: "1", name: "Engineering", statuses: [st("to do", "open"), st("code review"), st("ready for deployment"), st("done", "done")] }];
   const draw = (p: unknown) => renderToStaticMarkup(React.createElement(WorkflowMap, {
     adapter: CLICKUP, part: partitionUnits(SPACES), panel: { kind: "ok" }, steps: clickupSteps(p as ClickUpPrefs), changesOn: true,
-    onAdd: () => {}, onStatus: () => {}, onRemove: () => {}, onUnassign: () => {}, onAssign: () => {}, onRetry: () => {},
+    onAdd: () => {}, onBlocks: () => {}, onRemove: () => {}, onRetry: () => {},
   })).replace(/<style>[\s\S]*?<\/style>/g, "");
   const p = {
     handoff: { enabled: true, statusNames: ["ready for deployment"], unassign: "all", assign: { who: "author" } },
@@ -199,26 +194,24 @@ describe("the map", () => {
   };
   const html = draw(p);
   const card = (kind: string) => html.slice(html.indexOf(`data-step="${kind}"`), html.indexOf("</article>", html.indexOf(`data-step="${kind}"`)));
-  test("each step that moves a status has the row, in the control-row look, and the others do not", () => {
-    for (const k of ["move", "menu", "merge"]) {
-      expect(card(k)).toContain("Also assign");
-      expect(card(k)).toMatch(/class="wfm-crow"[^]*?data-assign="[a-z]+" class="wfm-pick"/);
-    }
-    for (const k of ["people", "note"]) expect(card(k)).not.toContain("Also assign");
+  test("each step built from blocks shows its assign block as a row, and the ones without blocks have none", () => {
+    for (const k of ["move", "merge"]) expect(card(k)).toMatch(/data-blk="assign"[^]*?class="wfm-pick"/);
+    expect(card("menu")).not.toContain('data-blk="assign"');
+    for (const k of ["people", "note"]) expect(card(k)).not.toContain("data-blk=");
   });
-  test("the row says the saved choice, and leave as is when nothing was saved", () => {
+  test("the row says the saved choice, and an unassigned step has no assign row at all", () => {
     expect(card("move")).toContain(">the pull request’s author<");
-    expect(card("menu")).toContain(">leave as is<");
     expect(card("merge")).toContain(">Sam Rivera<");
   });
-  test("the press line reads what will happen", () => {
-    expect(card("move")).toContain("Press it: moves the card to ready for deployment, takes everyone off and assigns the pull request’s author.");
-    expect(card("menu")).toContain("Pick it: moves the card to code review.");
-    expect(card("merge")).toContain("Confirm the merge: moves the card to done and assigns Sam Rivera.");
+  test("the sentence reads what will happen, in the order of the blocks", () => {
+    expect(card("move")).toContain("Press it: move the card to ready for deployment, take everyone off the card, then assign it to the pull request’s author.");
+    expect(card("menu")).toContain("Pick it: move the card to code review.");
+    expect(card("merge")).toContain("Confirm the merge: preselect done, then assign it to Sam Rivera.");
   });
-  test("a step still waiting for a status has no sentence to read", () => {
-    expect(draw({ ...p, handoff: { ...p.handoff, statusNames: [] } })).not.toContain("Press it:");
-    expect(draw({ ...p, review: { ...p.review, statusNames: [], enabled: true } })).not.toContain("Pick it:");
+  test("a step still waiting for a status says so in its sentence and its badge", () => {
+    const h = draw({ ...p, handoff: { ...p.handoff, blocks: [{ type: "move", statusNames: [] }] } });
+    expect(h).toContain("Needs a status");
+    expect(h).toContain("move the card to (pick a status).");
   });
 });
 
@@ -236,7 +229,7 @@ describe("the places that press it", () => {
     const body = code(fn(await read("components/PrPanel.tsx"), "function CardReadyForQaButton("));
     expect(body.match(/api\.clickupCard\(/g)?.length).toBe(1);
     expect(body.match(/api\.clickupMembers\(/g)?.length).toBe(1);
-    expect(body).toContain('handoff.assign.who === "author"');
+    expect(body).toContain('plan.assign.who === "author"');
   });
   test("the merge dialog reads the team only for the author, and sends the person in the card's own write", async () => {
     const dialog = code(await read("components/MergeDialog.tsx"));
@@ -254,6 +247,6 @@ describe("the places that press it", () => {
   });
   test("the review menu adds nobody when the status is left where it is", async () => {
     const panel = await read("components/PrPanel.tsx");
-    expect(panel).toContain("const ensured = moveOn && movesStatus ? ensureId(ensure, members) : null;");
+    expect(panel).toContain("const ensured = stepOn && (!moveOn || movesStatus) ? ensureId(ensure, members) : null;");
   });
 });

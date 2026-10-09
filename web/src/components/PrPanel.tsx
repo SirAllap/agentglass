@@ -64,7 +64,9 @@ import { depSpec } from "../../../shared/deps.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { confirmMergeGuard } from "../lib/mergeGuard.ts";
 import { useMergeDialog } from "./MergeDialog.tsx";
-import { authorOf, assignedNote, ensureId, pressSentence, resolveEnsure, stepChanges, type Ensure, type PrAuthor } from "../lib/stepAssign.ts";
+import { authorOf, assignedNote, ensureId, resolveEnsure, stepChanges, type Ensure, type PrAuthor } from "../lib/stepAssign.ts";
+import { blocksOf, planOf, touchesPeople } from "../../../shared/stepBlocks.ts";
+import { blocksSentence, peopleButtonLabel } from "../lib/stepBlocksView.ts";
 import { mergeCardRef, mergeNote, statusColor, readyForQaStatus, reviewStatus, cardNoteText, whoToTell } from "../lib/cardMove.ts";
 import { useClickupPrefs, clickupPrefs } from "../lib/clickupPrefs.ts";
 import { cardPlan, cardPlanNote } from "../lib/cardPlan.ts";
@@ -7361,11 +7363,15 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
      Settings says so, and unknown reads as off. */
   const reviewPrefs = useClickupPrefs()?.review;
   const assignReviewer = reviewPrefs?.assignReviewer === true;
-  /* The move item is a step like the others: absent until it is added. */
-  const moveOn = reviewPrefs?.enabled === true;
+  /* The menu's item is a step like the others: absent until it is added, and built from blocks.
+     With a move block it shows the status to move to; with only an assign block it moves nothing
+     and says what it assigns. With no blocks it does nothing and is not drawn. */
+  const menuPlan = reviewPrefs ? planOf("menu", reviewPrefs) : null;
+  const stepOn = reviewPrefs?.enabled === true && !!menuPlan && (!!menuPlan.move || touchesPeople(menuPlan));
+  const moveOn = stepOn && !!menuPlan?.move;
 
   /* Nothing to read for a menu that will draw nothing: neither step added. Unknown prefs read as off. */
-  const wanted0 = moveOn || assignReviewer;
+  const wanted0 = stepOn || assignReviewer;
   useEffect(() => {
     if (!query || !wanted0) return;
     let live = true;
@@ -7392,7 +7398,8 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
          knowing the word: the workspace's own names first (Settings), else any
          open status with "review" in it, else leave it exactly where it is.
          Prefs not known yet read as no names, which is the shipped guess. */
-      setPick(prefs?.review.enabled ? reviewStatus(st, t.status, prefs.review.statusNames) : "");
+      const rp = prefs?.review ? planOf("menu", prefs.review) : null;
+      setPick(prefs?.review.enabled && rp?.move && (rp.move.names.length > 0 || rp.move.fallback) ? reviewStatus(st, t.status, rp.move.names) : "");
       if (blocked) setPick("");
     })();
     return () => { live = false; };
@@ -7415,14 +7422,15 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
    * card moves. Worked out from the people this menu already read, so it costs
    * no request; with the status left where it is, it adds nobody.
    */
-  const assignPref = reviewPrefs?.assign;
+  const assignPref = menuPlan?.assign;
   const author = useMemo(() => authorOf(d), [d.author, d.authorName, d.authorEmail]);
   const ensure = useMemo<Ensure>(
     () => (members === null ? { kind: "none" } : resolveEnsure(assignPref, { author, members })),
     [assignPref, author, members],
   );
   const movesStatus = !!pick && pick !== (card?.status ?? "");
-  const ensured = moveOn && movesStatus ? ensureId(ensure, members) : null;
+  /* A move block only assigns when the card moves; with no move block the assignment is the whole step. */
+  const ensured = stepOn && (!moveOn || movesStatus) ? ensureId(ensure, members) : null;
   const base = assignReviewer ? on : was;
   const effective = useMemo(() => (ensured != null && !base.has(ensured) ? new Set([...base, ensured]) : base), [base, ensured]);
   const wanted = useMemo(
@@ -7433,7 +7441,7 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
     () => blocked ? cardPlan({ label, pick: "", statusNow: card?.status, on: was, was, nameOf }) : wanted,
     [blocked, wanted, label, card?.status, was, nameOf],
   );
-  const unmappedNote = moveOn && movesStatus && ensure.kind === "unmapped" ? ensure.why : "";
+  const unmappedNote = stepOn && (!moveOn || movesStatus) && ensure.kind === "unmapped" ? ensure.why : "";
 
   const run = useCallback(async () => {
     if (folded || !card || !plan.lines.length) return true;
@@ -7482,7 +7490,7 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
    * renders ran a different number of hooks, React threw, and the window went
    * black. That is the blank app in his screenshot.
    */
-  if (!ref || (!moveOn && !assignReviewer)) return null;
+  if (!ref || (!stepOn && !assignReviewer)) return null;
 
   const people = (members ?? []).filter((m) => m.name && (!q.trim() || m.name.toLowerCase().includes(q.trim().toLowerCase())))
     .sort((a, b) => {
@@ -7574,6 +7582,12 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
               </div>
             )}
           </div>
+          )}
+          {stepOn && !moveOn && reviewPrefs && (
+            <div className="px-3 py-2 text-[10.5px] shrink-0" style={{ color: "var(--text3)" }} data-menu-assign="">
+              {blocksSentence({ lead: "Done:", trigger: "menu", blocks: blocksOf("menu", reviewPrefs), item: "card", status: null })}
+              {unmappedNote && <div className="mt-1 text-[9.5px]" role="status" style={{ color: "var(--warning-ink)" }}>{unmappedNote}</div>}
+            </div>
           )}
           {assignReviewer && <>
           <div className="px-2 pt-2 shrink-0">
@@ -7928,7 +7942,8 @@ function CardPeoplePick({ task, query, onSaid }: { task: ProviderTask; query: st
  *  it leaves and enters, and who comes off it. A bare "are you sure" asked
  *  people to trust a sentence about a write they could not see. */
 export function ReadyForQaSummary({ task, target, targetColor, unassign = "all", ensure = { kind: "none" } }: {
-  task: ProviderTask; target: string; targetColor?: string;
+  /** `target` is absent for a step with no move block: the status stays and only the people change. */
+  task: ProviderTask; target?: string; targetColor?: string;
   /** Who the workspace's hand-off setting takes off; everybody when not said. */
   unassign?: HandoffUnassign;
   /** Who "Also assign" makes sure is on the card afterwards. */
@@ -7953,8 +7968,7 @@ export function ReadyForQaSummary({ task, target, targetColor, unassign = "all",
         <div style={key}>Status</div>
         <div className="flex items-center gap-1.5 min-w-0">
           <StatusPill status={task.status} color={task.statusColor} />
-          <span style={{ color: "var(--text3)" }}>→</span>
-          <StatusPill status={target} color={targetColor} />
+          {target ? <><span style={{ color: "var(--text3)" }}>→</span><StatusPill status={target} color={targetColor} /></> : <span style={{ color: "var(--text3)" }}>stays</span>}
         </div>
         <div style={key}>Unassign</div>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -8029,44 +8043,50 @@ function CardReadyForQaButton({ task, query, onSaid, ask, author }: {
 
   const handoff = useClickupPrefs()?.handoff;
   // Unknown prefs read as off, so the button never flashes on and away.
+  const plan = handoff ? planOf("move", handoff) : null;
   const target = statuses && handoff ? readyForQaStatus(statuses, task.status, handoff) : undefined;
-  if (!target || !handoff) return null;
+  /* A step with no move block keeps its button when it still changes who is on the card. */
+  const peopleOnly = !!handoff?.enabled && !!plan && !plan.move && touchesPeople(plan);
+  if (!handoff || !plan || (!target && !peopleOnly)) return null;
+  const label = target ? `Move to ${target}` : peopleButtonLabel(plan);
 
   const move = async () => {
     if (busy || blocked) return;
-    /* Who "Also assign" means. Only the author needs the team read (the member
+    /* Who "Assign" means. Only the author needs the team read (the member
        list the server already holds for this list: no request when it is warm);
        "me" is answered by the server from the connected account, a named person
        is already an id. */
-    const members = handoff.assign.who === "author" && task.listId
+    const members = plan.assign.who === "author" && task.listId
       ? await api.clickupMembers(task.listId).then((r) => (r?.ok ? (r.members ?? []) : null)).catch(() => null)
       : null;
-    const ensure = resolveEnsure(handoff.assign, { author, members });
+    const ensure = resolveEnsure(plan.assign, { author, members });
+    const { write, named } = stepChanges({ ...(target ? { status: target } : null), people: task.people, unassign: plan.unassign, ensure });
+    /* A people-only step whose answer is already true has nothing to send. */
+    if (!write.status && !write.add && !write.rem && !write.addMe) { onSaid(ensure.kind === "unmapped" ? `!${ensure.why}` : "nothing to change: the card is already as asked"); return; }
     const said = await ask({
-      title: `Move to ${target}?`,
-      node: <ReadyForQaSummary task={task} target={target} targetColor={statusColor(statuses ?? [], target)} unassign={handoff.unassign} ensure={ensure} />,
-      confirmLabel: `Move to ${target}`,
+      title: `${label}?`,
+      node: <ReadyForQaSummary task={task} {...(target ? { target, targetColor: statusColor(statuses ?? [], target) } : null)} unassign={plan.unassign} ensure={ensure} />,
+      confirmLabel: label,
     });
     if (!said) return;
     setBusy(true);
-    onSaid("moving…");
+    onSaid(target ? "moving…" : "updating…");
     // One request: the same write the status picker and the people picker each
     // make half of — see cardMove's note on the three-call version racing its
     // own `updated` stamp.
-    const { write, named } = stepChanges({ status: target, people: task.people, unassign: handoff.unassign, ensure });
     const r = await api.clickupCard(task.id, write, task.updated)
       .catch(() => ({ ok: false, error: "Could not reach the server", task: undefined }));
     setBusy(false);
-    onSaid(r.ok ? `now ${target}${write.rem ? " · unassigned" : ""}${assignedNote(named)}${ensure.kind === "unmapped" ? ` · ${ensure.why}` : ""}` : `!${r.error || "ClickUp refused that"}`);
+    onSaid(r.ok ? `${target ? `now ${target}` : "card updated"}${write.rem ? " · unassigned" : ""}${assignedNote(named)}${ensure.kind === "unmapped" ? ` · ${ensure.why}` : ""}` : `!${r.error || "ClickUp refused that"}`);
     if (r.ok) putCard(query, r.task);
   };
 
   return (
     <button onClick={() => { void move(); }} disabled={busy || !!blocked}
       className="agx-btn text-[10.5px] px-2 py-0.5 rounded disabled:opacity-50"
-      title={blocked ?? pressSentence({ lead: "This button", status: target, item: "card", unassign: handoff.unassign, assign: handoff.assign })}
+      title={blocked ?? blocksSentence({ lead: "This button:", trigger: "move", blocks: blocksOf("move", handoff), item: "card", status: target ?? null })}
       style={{ color: "var(--text2)", border: EDGE }}>
-      Move to {target}
+      {label}
     </button>
   );
 }

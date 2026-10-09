@@ -8,6 +8,7 @@
  * Class names are `wfm-` so nothing here reaches a control elsewhere.
  */
 import { EDGE, LINE, tintEdge } from "./workspace/Chrome.tsx";
+import { HIT } from "../lib/iconSize.ts";
 
 export const WFM_CSS = `
 .wfm{--w-wash:color-mix(in srgb,var(--primary) 11%,var(--bg));--w-wash2:color-mix(in srgb,var(--primary) 20%,var(--bg));
@@ -100,6 +101,26 @@ export const WFM_CSS = `
 .wfm-mom:hover{border-color:var(--primary);background:var(--w-wash)}.wfm-mom:active{transform:translateY(1px)}
 .wfm-mom .gl{width:28px;height:28px;border-radius:8px;background:var(--surface-card);display:grid;place-items:center;color:var(--primary);flex:none}
 .wfm-moments{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px;width:100%}
+.wfm-blks{display:flex;flex-direction:column;border-radius:10px;background:var(--surface-inset);box-shadow:inset 0 0 0 1px var(--w-line)}
+.wfm-blk{display:grid;grid-template-columns:${HIT}px minmax(0,1fr) auto ${HIT}px;gap:12px;align-items:center;padding:12px 12px 12px 8px;transition:background .12s}
+.wfm-blk+.wfm-blk{border-top:var(--w-rule)}
+.wfm-gl{width:20px;height:20px;border-radius:6px;background:var(--surface-card);display:inline-grid;place-items:center;color:var(--primary);flex:none}
+.wfm-grip,.wfm-rmx{display:grid;place-items:center;width:${HIT}px;height:${HIT}px;border-radius:6px;border:0;background:transparent;color:var(--text3);cursor:pointer;transition:background .12s,color .12s,box-shadow .12s}
+.wfm-grip{cursor:grab;touch-action:none}.wfm-grip:active{cursor:grabbing}
+.wfm-grip:hover{background:var(--bg);color:var(--text);box-shadow:inset 0 0 0 1px var(--w-line)}
+.wfm-rmx:hover{background:var(--w-err-wash);color:var(--error-ink);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--error) 50%,transparent)}
+.wfm-grip:disabled,.wfm-rmx:disabled{opacity:.5;cursor:not-allowed}
+.wfm-blk[data-mode=drag]{position:fixed;z-index:70;background:var(--bg);border-radius:10px;box-shadow:0 0 0 1px var(--primary),var(--surface-lift);pointer-events:none}
+.wfm-blk[data-mode=drag] .wfm-grip{color:var(--primary);cursor:grabbing}
+.wfm-blk[data-mode=slot]{background:var(--w-wash);outline:1px dashed var(--primary);outline-offset:-4px;border-radius:10px}
+.wfm-blk[data-mode=slot]>*{visibility:hidden}
+.wfm-addrow{display:flex;align-items:center;gap:12px;padding:8px 12px;flex-wrap:wrap}.wfm-blk+.wfm-addrow{border-top:var(--w-rule)}
+.wfm-undo{display:flex;align-items:center;gap:8px;padding:4px 12px;border-radius:8px;background:var(--bg);box-shadow:inset 0 0 0 1px var(--w-line);font-size:11px}
+.wfm-opt[data-add]{align-items:flex-start;padding:8px;gap:12px}.wfm-opt .n.wfm-blkopt{display:flex;flex-direction:column;gap:2px}
+.wfm-opt[aria-disabled=true]{cursor:not-allowed}.wfm-opt[aria-disabled=true]:hover{background:transparent}
+.wfm-opt[aria-disabled=true] .wfm-gl{color:var(--text3)}.wfm-opt[aria-disabled=true] .n>b{color:var(--text3)}
+.wfm-why{font-size:11px;color:var(--warning-ink)}
+.wfm-mom[aria-disabled=true]{opacity:.6;cursor:not-allowed}.wfm-mom[aria-disabled=true]:hover{border-color:var(--w-edge);background:var(--bg)}
 .wfm-hlx{background:var(--w-wash2)!important;box-shadow:0 0 0 2px var(--primary)!important;border-radius:6px}
 .wfm-ok{color:var(--success-ink)}
 @media (prefers-reduced-motion:reduce){.wfm *{transition:none!important;animation:none!important}}

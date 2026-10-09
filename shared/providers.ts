@@ -562,9 +562,23 @@ export interface StepAssign {
   person?: { id: number; name: string };
 }
 
+/**
+ * What a step does, as a list the person builds: each block is one action, and the
+ * list's order is the order it reads in. The kinds are in shared/stepBlocks.ts
+ * (BLOCK_INFO); a new kind is a new member here, not a new field on every step.
+ * A step is sent to the tracker as one write whatever its blocks.
+ */
+export type StepBlock =
+  /** Move the card. No names with `fallback` is the built-in guess; with neither, a status still to be picked. */
+  | { type: "move"; statusNames: string[]; fallback?: boolean }
+  | { type: "unassign"; who: HandoffUnassign }
+  | ({ type: "assign" } & StepAssign);
+
 export interface HandoffConfig {
   /** Off until a workspace says it has a QA column. */
   enabled: boolean;
+  /** What the step does, in order. Absent in a file from before blocks: read from the three keys below. */
+  blocks?: StepBlock[];
   /** Status names to look for, in order; the first one the card's list has wins. */
   statusNames: string[];
   unassign: HandoffUnassign;
@@ -600,13 +614,15 @@ export interface ClickUpPrefs {
     enabled: boolean;
     /** Status names the review menu moves a card to; empty falls back to /review/i, then leaves it alone. */
     statusNames: string[];
+    /** What the move item does, in order (see HandoffConfig.blocks). */
+    blocks?: StepBlock[];
     assignReviewer: boolean;
     /** Who the move item also makes sure is on the card. */
     assign: StepAssign;
   };
   /** The card choice in the merge dialog. Off until a workspace adds it; the first of
    *  `statusNames` the card's list has is preselected, none means "Leave it there". */
-  merge: { enabled: boolean; statusNames: string[]; assign: StepAssign };
+  merge: { enabled: boolean; statusNames: string[]; assign: StepAssign; blocks?: StepBlock[] };
   flows: { noteOnCard: boolean };
   /** Custom field that holds a PR link; empty means the guess (a name containing "github"). */
   prLinkField: string;

@@ -34,7 +34,7 @@ const prefs = (over: Partial<ClickUpPrefs> = {}): ClickUpPrefs => ({
 const bare = (html: string) => html.replace(/<style>[\s\S]*?<\/style>/g, "");
 const draw = (p: ClickUpPrefs, over: Partial<MapProps> = {}) => bare(renderToStaticMarkup(React.createElement(WorkflowMap, {
   adapter: CLICKUP, part: partitionUnits(SPACES), panel: { kind: "ok" }, steps: clickupSteps(p), changesOn: true,
-  onAdd: () => {}, onStatus: () => {}, onRemove: () => {}, onUnassign: () => {}, onAssign: () => {}, onRetry: () => {}, ...over,
+  onAdd: () => {}, onBlocks: () => {}, onRemove: () => {}, onRetry: () => {}, ...over,
 })));
 
 describe("a workspace that set nothing", () => {
@@ -60,7 +60,7 @@ describe("steps", () => {
   });
   const html = draw(p);
   test("each is listed with where it appears, in map order", () => {
-    const at = ["Move button on a pull request", "Move item in the review menu", "Move option in the merge dialog", "Assigned list in the review menu", "Note button on a pull request"].map((t) => html.indexOf(t));
+    const at = ["Button on a pull request", "Item in the review menu", "Option in the merge dialog", "Assigned list in the review menu", "Note button on a pull request"].map((t) => html.indexOf(t));
     expect(at.every((i) => i > -1)).toBe(true);
     expect([...at].sort((a, b) => a - b)).toEqual(at);
   });
@@ -75,10 +75,10 @@ describe("steps", () => {
     expect(html).not.toContain("no such status — the button is absent");
   });
   test("each step is a card with a number, a title, where it shows and a one-line purpose", () => {
-    expect(html).toContain('aria-label="Step 1: Move button on a pull request"');
+    expect(html).toContain('aria-label="Step 1: Button on a pull request"');
     expect(html).toContain("Shows on pull request › card block");
     expect(html).toContain("Move the card to");
-    expect(html).toContain("Also take off the card");
+    expect(html).toContain("Take people off the card");
     expect(html).toContain("Preselect");
   });
   test("the column names each list with its folder and carries a pin, numbered like the step, on the status it points at", () => {
@@ -189,7 +189,7 @@ describe("the page is only there with ClickUp", () => {
   test("the map keeps a focus request until its target exists, and the composer's Escape stays inside it", async () => {
     const src = await Bun.file(new URL("../src/components/WorkflowMap.tsx", import.meta.url).pathname).text();
     expect(src).toContain("root.current?.querySelector<HTMLElement>(focusNext)");
-    expect(src).toContain("const ok = await p.onAdd(kind, v);");
+    expect(src).toContain("const ok = await p.onAdd(k);");
     expect(src).toContain('if (e.key === "Escape") { e.stopPropagation(); setComposer(false);');
     expect(src).not.toContain("queueMicrotask");
   });
@@ -206,7 +206,7 @@ describe("the page is only there with ClickUp", () => {
 
 describe("the column opens on the list with most of the person's cards", () => {
   const render = (units: MapSpace[]) => renderToStaticMarkup(
-    React.createElement(WorkflowMap, { adapter: CLICKUP, part: partitionUnits(units), panel: { kind: "ok" }, steps: [], changesOn: true, onAdd() {}, onStatus() {}, onRemove() {}, onUnassign() {}, onAssign() {}, onRetry() {} }));
+    React.createElement(WorkflowMap, { adapter: CLICKUP, part: partitionUnits(units), panel: { kind: "ok" }, steps: [], changesOn: true, onAdd() {}, onBlocks() {}, onRemove() {}, onRetry() {} }));
   const u = (id: string, name: string, cards?: number): MapSpace => ({ id, name, statuses: [st("to do", "open")], ...(cards === undefined ? null : { cards }) });
 
   test("the busiest of several is selected, though it is not first in the answer", () => {
@@ -225,7 +225,7 @@ describe("the column opens on the list with most of the person's cards", () => {
 describe("the eye on a list", () => {
   const u = (id: string, name: string, extra: Partial<MapSpace> = {}): MapSpace => ({ id, name, statuses: [st("to do", "open")], cards: 1, ...extra });
   const render = (units: MapSpace[], toggle: MapProps["onToggleCounted"] = () => {}) => renderToStaticMarkup(
-    React.createElement(WorkflowMap, { adapter: CLICKUP, part: partitionUnits(units), panel: { kind: "ok" }, steps: [], changesOn: true, onToggleCounted: toggle, onAdd() {}, onStatus() {}, onRemove() {}, onUnassign() {}, onAssign() {}, onRetry() {} }));
+    React.createElement(WorkflowMap, { adapter: CLICKUP, part: partitionUnits(units), panel: { kind: "ok" }, steps: [], changesOn: true, onToggleCounted: toggle, onAdd() {}, onBlocks() {}, onRemove() {}, onRetry() {} }));
   const eyes = (html: string) => [...html.matchAll(/<button[^>]*class="wfm-eye"[^>]*>/g)].map((m) => m[0]);
 
   test("every counted list has an eye that says what it does, and an ignored one has the same eye to bring it back", () => {

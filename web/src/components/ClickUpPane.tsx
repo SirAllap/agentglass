@@ -4,11 +4,12 @@ import { clickupPrefs, clickupPrefsSaved } from "../lib/clickupPrefs.ts";
 import { __forgetClickupSetup, clickupSetup } from "../lib/clickupSetup.ts";
 import { __forgetClickupSpaces, PENDING_CARDS, useClickupSpaces } from "../lib/clickupSpaces.ts";
 import { __forgetClickupPrefs } from "../lib/clickupPrefs.ts";
-import { CLICKUP, addTurnsWritesOn, clickupAdd, clickupAssign, clickupRemove, clickupSetStatus, clickupSteps, clickupUnassign, type PrefsPatch } from "../lib/clickupWorkflow.ts";
-import { allStatuses, countedIds, isActive, moments, resolveImplicit, withCounted, type MapSpace, type StepKind } from "../lib/workflowMap.ts";
+import { CLICKUP, addTurnsWritesOn, clickupAdd, clickupBlocks, clickupRemove, clickupSteps, type PrefsPatch } from "../lib/clickupWorkflow.ts";
+import { blocksSentence, peopleButtonLabel, triggerOf } from "../lib/stepBlocksView.ts";
+import { allStatuses, countedIds, isActive, moments, movesNothing, resolveImplicit, withCounted, type MapSpace, type StepKind } from "../lib/workflowMap.ts";
 import { eyeIds, pageState, partitionUnits, type Partition } from "../lib/workflowLayout.ts";
 import { openSettings } from "../lib/openSettings.ts";
-import { assignWords, pressSentence } from "../lib/stepAssign.ts";
+import { assignWords } from "../lib/stepAssign.ts";
 import { setting } from "../lib/settingsRegistry.ts";
 import { DEFAULT_SPRINT_LIST_PATTERN, DEFAULT_READ_ONLY_FIELD_PATTERN, type ClickUpPrefs, type ProviderStatus } from "../../../shared/providers.ts";
 import { DEFAULT_CARD_SKILL_PATTERN } from "../../../shared/cardSkills.ts";
@@ -383,15 +384,13 @@ export function ClickUpPane() {
 
       <WorkflowMap adapter={CLICKUP} part={part} panel={panel} steps={steps} changesOn={changesOn} frozen={frozen} source={source}
         onHover={setHover}
-        onAdd={async (kind, status) => {
-          const ok = await send(clickupAdd(kind, status));
+        onAdd={async (kind) => {
+          const ok = await send(clickupAdd(kind));
           if (ok && addTurnsWritesOn(changesOn, steps.length)) await setChanges(true);
           return ok;
         }}
-        onStatus={(kind, status) => { void send(clickupSetStatus(kind, status)); }}
+        onBlocks={(kind, blocks) => { const t = triggerOf(kind); if (t) void send(clickupBlocks(t, blocks)); }}
         onRemove={(kind) => { void send(clickupRemove(kind)); }}
-        onUnassign={(v) => { void send(clickupUnassign(v)); }}
-        onAssign={(kind, a) => { void send(clickupAssign(kind, a)); }}
         people={readPeople}
         onToggleCounted={toggleCounted}
         onCountAgain={(u) => { const ids = withCounted(units, u.fromList && u.spaceId ? u.spaceId : u.id, true); if (ids) count(ids); }}
@@ -461,6 +460,8 @@ function PrView({ steps, all, writes, hover, linked }: { steps: ReturnType<typeo
   const g = (k: string) => steps.find((s) => s.kind === k);
   const mv = g("move"), mn = g("menu"), pp = g("people"), nt = g("note");
   const mg = all.find((s) => s.kind === "merge");
+  /* A button shows once it does something: a status to move to, or people to change. */
+  const mvOn = !!mv && (!!mv.status || (movesNothing(mv) && (mv.unassign !== "none" || mv.assign.who !== "none")));
   return (
     <Pane>
       <div className="flex gap-2 items-center text-[13px]"><Chip2>Open</Chip2><b>#318</b>{hint("orbit/api · 12 checks passed")}</div>
@@ -469,15 +470,16 @@ function PrView({ steps, all, writes, hover, linked }: { steps: ReturnType<typeo
         <>
           <Mini>
             <Chip2><Dot type="custom" />{sm.id}</Chip2><Chip2><Dot type="custom" />{sm.status}</Chip2>
-            {mv?.status && <Chip2 cls={lit(hover, "move")}>{n.move} {mv.status}</Chip2>}
+            {mvOn && <Chip2 cls={lit(hover, "move")}>{mv!.status ? `${n.move} ${mv!.status}` : peopleButtonLabel(mv!)}</Chip2>}
             {nt && <Chip2 cls={lit(hover, "note")}><NoteIcon size={ICON.xs} /> Note</Chip2>}
-            {!mv?.status && !nt && hint("No control from a step here.")}
+            {!mvOn && !nt && hint("No control from a step here.")}
           </Mini>
-          {mv?.status && <div className={lit(hover, "move")} data-preview="move">{hint(pressSentence({ lead: "Press the button:", status: mv.status, item: n.item, unassign: mv.unassign, assign: mv.assign }))}</div>}
+          {mvOn && <div className={lit(hover, "move")} data-preview="move">{hint(blocksSentence({ lead: "Press the button:", trigger: "move", blocks: mv!.blocks ?? [], item: n.item, status: mv!.status }))}</div>}
           <Menu>
             <div className="px-3 py-2 text-[13px]">Request changes</div>
             <Item>Approve</Item>
             {mn?.status && <Item cls={lit(hover, "menu")}><span style={{ color: "var(--primary)", fontWeight: 700 }}>{n.move} {mn.status}</span>{assignWords(mn.assign) && hint(`and assigns ${assignWords(mn.assign)}`)}</Item>}
+            {mn && !mn.status && movesNothing(mn) && mn.assign.who !== "none" && <Item cls={lit(hover, "menu")}><span style={{ color: "var(--primary)", fontWeight: 700 }}>{peopleButtonLabel(mn)}</span></Item>}
             {pp && <Item cls={lit(hover, "people")}><UserIcon size={ICON.xs} />Assigned · {sm.who}, {sm.others}</Item>}
           </Menu>
           {hint(mg && writes ? <>Merge dialog: <span className={lit(hover, "merge")} style={{ fontWeight: 700, color: "var(--text)" }}>{n.move} {sm.id} to {mg.status ?? "Leave it there"}</span>{mg.status && assignWords(mg.assign) && <> and assigns {assignWords(mg.assign)}</>}</> : "Merge dialog: no extra option.")}

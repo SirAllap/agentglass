@@ -24,9 +24,9 @@ describe("the store", () => {
   test("a missing file is today's behaviour: every setting at its default", () => {
     expect(existsSync(file)).toBe(false);
     expect(P.clickupPrefs()).toEqual({
-      handoff: { enabled: false, statusNames: [], unassign: "none", assign: { who: "none" } },
-      review: { enabled: false, statusNames: [], assignReviewer: false, assign: { who: "none" } },
-      merge: { enabled: false, statusNames: [], assign: { who: "none" } },
+      handoff: { enabled: false, blocks: [], statusNames: [], unassign: "none", assign: { who: "none" } },
+      review: { enabled: false, blocks: [], statusNames: [], assignReviewer: false, assign: { who: "none" } },
+      merge: { enabled: false, blocks: [], statusNames: [], assign: { who: "none" } },
       flows: { noteOnCard: false },
       prLinkField: "",
       swatchField: "",
@@ -54,7 +54,7 @@ describe("the store", () => {
     expect(r.ok).toBe(true);
     P.__setPrefsPath(file); // drops the cache: this reads the file
     const p = P.clickupPrefs();
-    expect(p.handoff).toEqual({ enabled: true, statusNames: ["Testing", "QA"], unassign: "none", assign: { who: "none" } });
+    expect(p.handoff).toEqual({ enabled: true, blocks: [{ type: "move", statusNames: ["Testing", "QA"] }], statusNames: ["Testing", "QA"], unassign: "none", assign: { who: "none" } });
     expect(p.prLinkField).toBe("PR link");
     expect(p.bell.kinds).toHaveLength(4);
   });
@@ -153,7 +153,7 @@ describe("the store", () => {
     const p = P.clickupPrefs();
     expect(p.review.assignReviewer).toBe(true);
     expect(p.flows.noteOnCard).toBe(true);
-    expect(p.handoff).toEqual({ enabled: true, statusNames: [], unassign: "all", assign: { who: "none" } });
+    expect(p.handoff).toEqual({ enabled: true, blocks: [{ type: "move", statusNames: [], fallback: true }, { type: "unassign", who: "all" }], statusNames: [], unassign: "all", assign: { who: "none" } });
     expect(p.sprintListPattern).toBe("^sprint\\b");
     expect(JSON.parse(readFileSync(file, "utf8")).flows.noteOnCard).toBe(true);
   });
@@ -264,7 +264,7 @@ describe("the route", () => {
     const r = await post({ handoff: { enabled: true, statusNames: ["Testing"] } });
     expect(r.status).toBe(200);
     const j = await (await fetch(base + "/clickup/prefs")).json() as any;
-    expect(j.prefs.handoff).toEqual({ enabled: true, statusNames: ["Testing"], unassign: "none", assign: { who: "none" } });
+    expect(j.prefs.handoff).toEqual({ enabled: true, blocks: [{ type: "move", statusNames: ["Testing"] }], statusNames: ["Testing"], unassign: "none", assign: { who: "none" } });
     const onDisk = JSON.parse(readFileSync(join(cfg, "agentglass", "clickup-prefs.json"), "utf8"));
     expect(onDisk.handoff.enabled).toBe(true);
   });

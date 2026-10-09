@@ -20,7 +20,8 @@ import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { CLICKUP_BELL_KINDS, DEFAULT_SPRINT_LIST_PATTERN, DEFAULT_READ_ONLY_FIELD_PATTERN } from "../../shared/providers.ts";
 import { DEFAULT_CARD_SKILL_PATTERN } from "../../shared/cardSkills.ts";
-import type { ClickUpPrefs, ClickUpBellKind, HandoffUnassign, StepAssign } from "../../shared/providers.ts";
+import type { ClickUpPrefs, ClickUpBellKind, HandoffUnassign, StepAssign, StepBlock } from "../../shared/providers.ts";
+import { MAX_BLOCKS, blocksFromLegacy, blocksProblem, legacyFromBlocks, type StepTrigger } from "../../shared/stepBlocks.ts";
 
 const FILE = join(
   process.env.XDG_CONFIG_HOME || join(homedir(), ".config"),
@@ -85,9 +86,9 @@ export function prefPattern(src: string, fallback: string): RegExp {
 
 export function defaultPrefs(): ClickUpPrefs {
   return {
-    handoff: { enabled: false, statusNames: [], unassign: "none", assign: { who: "none" } },
-    review: { enabled: false, statusNames: [], assignReviewer: false, assign: { who: "none" } },
-    merge: { enabled: false, statusNames: [], assign: { who: "none" } },
+    handoff: { enabled: false, blocks: [], statusNames: [], unassign: "none", assign: { who: "none" } },
+    review: { enabled: false, blocks: [], statusNames: [], assignReviewer: false, assign: { who: "none" } },
+    merge: { enabled: false, blocks: [], statusNames: [], assign: { who: "none" } },
     flows: { noteOnCard: false },
     prLinkField: "",
     swatchField: "",
@@ -100,6 +101,7 @@ export function defaultPrefs(): ClickUpPrefs {
   };
 }
 
+type StepGroup = { enabled: boolean; statusNames: string[]; unassign?: HandoffUnassign; assign: StepAssign; blocks?: StepBlock[] };
 type Fail = { ok: false; error: string };
 type Ok<T> = { ok: true; value: T };
 type Res<T> = Ok<T> | Fail;
@@ -158,6 +160,42 @@ function assign(name: string, v: unknown): Res<StepAssign> {
 }
 
 /**
+ * A step's block list: replaced whole, in the order given. Each block is checked
+ * the way the screen checks it (see blocksProblem), so a list the page would not
+ * offer is not saved by hand either, and an unknown key is refused like anywhere else.
+ */
+function blockList(name: string, v: unknown, trigger: StepTrigger): Res<StepBlock[]> {
+  if (!Array.isArray(v)) return bad(`${name} must be a list of blocks`);
+  if (v.length > MAX_BLOCKS) return bad(`${name} has more than ${MAX_BLOCKS} blocks`);
+  const out: StepBlock[] = [];
+  for (const [i, b] of v.entries()) {
+    const at = `${name}[${i}]`;
+    if (!isObj(b)) return bad(`${at} must be an object like {"type":"move","statusNames":["..."]}`);
+    if (b.type === "move") {
+      for (const k of Object.keys(b)) if (k !== "type" && k !== "statusNames" && k !== "fallback") return bad(`${at}.${k} is not a setting`);
+      const r = names(`${at}.statusNames`, "statusNames" in b ? b.statusNames : []);
+      if (!r.ok) return r;
+      if ("fallback" in b && typeof b.fallback !== "boolean") return bad(`${at}.fallback must be true or false`);
+      out.push({ type: "move", statusNames: r.value, ...(b.fallback === true && !r.value.length ? { fallback: true } : null) });
+    } else if (b.type === "unassign") {
+      for (const k of Object.keys(b)) if (k !== "type" && k !== "who") return bad(`${at}.${k} is not a setting`);
+      if (b.who !== "none" && b.who !== "me" && b.who !== "all") return bad(`${at}.who must be none, me or all`);
+      out.push({ type: "unassign", who: b.who });
+    } else if (b.type === "assign") {
+      const { type: _t, ...rest } = b;
+      const r = assign(at, rest);
+      if (!r.ok) return r;
+      if (r.value.who === "none") return bad(`${at}.who must be me, author or person: remove the block to assign nobody`);
+      out.push({ type: "assign", ...r.value });
+    } else return bad(`${at}.type must be move, unassign or assign`);
+  }
+  const problem = blocksProblem(trigger, out);
+  return problem ? bad(`${name} ${problem}`) : { ok: true, value: out };
+}
+
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
+/**
  * Apply a partial update on top of `base`. Unknown keys are refused rather than
  * ignored: a typo that is silently dropped looks exactly like a setting that
  * was saved. Nested groups merge one level, so `{ handoff: { enabled: true } }`
@@ -172,11 +210,30 @@ export function applyPrefs(base: ClickUpPrefs, input: unknown): Res<ClickUpPrefs
     for (const key of Object.keys(g)) if (!allowed.includes(key)) return bad(`${k}.${key} is not a setting`);
     return { ok: true, value: g };
   };
+  /* Blocks and the three old keys are one step written two ways. Blocks given: they win, and the old keys
+     are rewritten from them (a patch that sets both must agree, or it is refused rather than half kept).
+     Only old keys given: the blocks are read from them, as a file from before blocks is. */
+  const settle = (key: string, trigger: StepTrigger, patch: Record<string, unknown>, now: StepGroup, was: StepGroup): Res<true> => {
+    if ("blocks" in patch) {
+      const r = blockList(`${key}.blocks`, patch.blocks, trigger);
+      if (!r.ok) return r;
+      const l = legacyFromBlocks(r.value);
+      for (const k of ["statusNames", "unassign", "assign"] as const) {
+        if (k in patch && !same(now[k], l[k])) return bad(`${key}.${k} says something different from ${key}.blocks: set one of them`);
+      }
+      now.blocks = r.value;
+      now.statusNames = l.statusNames; now.assign = l.assign;
+      if ("unassign" in now) now.unassign = l.unassign;
+    } else if (["enabled", "statusNames", "unassign", "assign"].some((k) => k in patch)) {
+      now.blocks = blocksFromLegacy(trigger, { enabled: now.enabled, statusNames: now.statusNames, unassign: now.unassign, assign: now.assign });
+    } else now.blocks = was.blocks;
+    return { ok: true, value: true };
+  };
   const top = ["handoff", "review", "merge", "flows", "prLinkField", "swatchField", "cardSkillPattern", "assigned", "sprintListPattern", "readOnlyFieldPattern", "bell", "statusSpaces"];
   for (const k of Object.keys(input)) if (!top.includes(k)) return bad(`${k} is not a setting`);
 
   if ("handoff" in input) {
-    const g = groupOf("handoff", ["enabled", "statusNames", "unassign", "assign"]);
+    const g = groupOf("handoff", ["enabled", "blocks", "statusNames", "unassign", "assign"]);
     if (!g.ok) return g;
     if ("enabled" in g.value) { const r = bool("handoff.enabled", g.value.enabled); if (!r.ok) return r; out.handoff.enabled = r.value; }
     if ("statusNames" in g.value) { const r = names("handoff.statusNames", g.value.statusNames); if (!r.ok) return r; out.handoff.statusNames = r.value; }
@@ -186,21 +243,24 @@ export function applyPrefs(base: ClickUpPrefs, input: unknown): Res<ClickUpPrefs
       out.handoff.unassign = u as HandoffUnassign;
     }
     if ("assign" in g.value) { const r = assign("handoff.assign", g.value.assign); if (!r.ok) return r; out.handoff.assign = r.value; }
+    const s = settle("handoff", "move", g.value, out.handoff, base.handoff); if (!s.ok) return s;
   }
   if ("review" in input) {
-    const g = groupOf("review", ["enabled", "statusNames", "assignReviewer", "assign"]);
+    const g = groupOf("review", ["enabled", "blocks", "statusNames", "assignReviewer", "assign"]);
     if (!g.ok) return g;
     if ("enabled" in g.value) { const r = bool("review.enabled", g.value.enabled); if (!r.ok) return r; out.review.enabled = r.value; }
     if ("statusNames" in g.value) { const r = names("review.statusNames", g.value.statusNames); if (!r.ok) return r; out.review.statusNames = r.value; }
     if ("assignReviewer" in g.value) { const r = bool("review.assignReviewer", g.value.assignReviewer); if (!r.ok) return r; out.review.assignReviewer = r.value; }
     if ("assign" in g.value) { const r = assign("review.assign", g.value.assign); if (!r.ok) return r; out.review.assign = r.value; }
+    const s = settle("review", "menu", g.value, out.review, base.review); if (!s.ok) return s;
   }
   if ("merge" in input) {
-    const g = groupOf("merge", ["enabled", "statusNames", "assign"]);
+    const g = groupOf("merge", ["enabled", "blocks", "statusNames", "assign"]);
     if (!g.ok) return g;
     if ("enabled" in g.value) { const r = bool("merge.enabled", g.value.enabled); if (!r.ok) return r; out.merge.enabled = r.value; }
     if ("statusNames" in g.value) { const r = names("merge.statusNames", g.value.statusNames); if (!r.ok) return r; out.merge.statusNames = r.value; }
     if ("assign" in g.value) { const r = assign("merge.assign", g.value.assign); if (!r.ok) return r; out.merge.assign = r.value; }
+    const s = settle("merge", "merge", g.value, out.merge, base.merge); if (!s.ok) return s;
   }
   if ("flows" in input) {
     const g = groupOf("flows", ["noteOnCard"]);
@@ -254,7 +314,13 @@ export function clickupPrefs(): ClickUpPrefs {
       const raw = JSON.parse(readFileSync(p, "utf8")) as unknown;
       if (isObj(raw)) {
         for (const k of Object.keys(raw)) {
-          const r = applyPrefs(prefs, { [k]: raw[k] });
+          let r = applyPrefs(prefs, { [k]: raw[k] });
+          /* A step whose old keys were edited by hand to disagree with its blocks: the blocks are what the page
+             writes and shows, so they win, rather than the whole step falling back to its defaults. */
+          if (!r.ok && isObj(raw[k]) && "blocks" in (raw[k] as object) && (k === "handoff" || k === "review" || k === "merge")) {
+            const { statusNames: _s, unassign: _u, assign: _a, ...rest } = raw[k] as Record<string, unknown>;
+            r = applyPrefs(prefs, { [k]: rest });
+          }
           if (r.ok) prefs = r.value;
         }
         /* A file from before the review menu and the merge choice were steps: both
@@ -267,7 +333,11 @@ export function clickupPrefs(): ClickUpPrefs {
            and kept only the review item loses it once, and can add it back. */
         if (!isObj(raw.review) || !("enabled" in raw.review)) {
           const usedIt = prefs.handoff.enabled || prefs.review.assignReviewer || prefs.flows.noteOnCard || prefs.review.statusNames.length > 0;
-          if (usedIt) { prefs.review.enabled = true; prefs.merge.enabled = true; }
+          if (usedIt) {
+            prefs.review.enabled = true; prefs.merge.enabled = true;
+            prefs.review.blocks = blocksFromLegacy("menu", prefs.review);
+            prefs.merge.blocks = blocksFromLegacy("merge", prefs.merge);
+          }
         }
       }
     }
@@ -307,6 +377,9 @@ export function settleFirstRun(connected: boolean): "seeded" | "defaults" | "kep
     first.merge.enabled = true;
     first.review.assignReviewer = true;
     first.flows.noteOnCard = true;
+    first.handoff.blocks = blocksFromLegacy("move", first.handoff);
+    first.review.blocks = blocksFromLegacy("menu", first.review);
+    first.merge.blocks = blocksFromLegacy("merge", first.merge);
   }
   try {
     mkdirSync(dirname(p), { recursive: true });

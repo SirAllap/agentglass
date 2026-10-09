@@ -3,11 +3,13 @@ import { Button, LINE } from "./workspace/Chrome.tsx";
 import { Dot, StatusPanel, StatusPopover, type PanelView } from "./StatusPanel.tsx";
 import { WFM_CSS } from "./workflowMapStyle.ts";
 import { ArrowIcon, CaretIcon, DoneIcon, EyeIcon, EyeOffIcon, ListIcon, MergeIcon, NoteIcon, PlusIcon, UserIcon, WarningIcon, CrossIcon } from "../lib/glyphIcons.tsx";
+import { StepBlocks, type MapPerson } from "./StepBlocks.tsx";
+import type { StepBlock } from "../../../shared/providers.ts";
+import { blocksSentence, blockNeedsValue, stepIsEmpty, triggerOf } from "../lib/stepBlocksView.ts";
 import { HIT, ICON } from "../lib/iconSize.ts";
-import { ASSIGN_LABEL, ASSIGN_WHO, assignLabel, pressSentence, type Assign } from "../lib/stepAssign.ts";
 import {
-  UNASSIGN_LABEL, addable, allStatuses, isActive, moments, needsStatus, suggestStatus,
-  type MapSpace, type Moment, type Nouns, type Step, type StepKind, type TrackerAdapter, type Unassign,
+  STEP_ORDER, allStatuses, isActive, moments, needsStatus, suggestStatus,
+  type MapSpace, type Moment, type Nouns, type Step, type StepKind, type TrackerAdapter,
 } from "../lib/workflowMap.ts";
 import {
   coveragePill, coverageRows, defaultUnit, eyeIds, lineInk, notInUnit, planConnectors, statusHome,
@@ -23,7 +25,7 @@ import {
  * it is handed (the ones that count, and the ones folded away), and the steps that exist
  * from the adapter's kinds; the page that mounts it decides what saving means. Nothing is
  * offered that the tracker did not send, nothing is saved until it has what it needs (a
- * step that needs a status is a draft until one is picked), and a step without its status
+ * step that needs a status says so), and a step without its status
  * does nothing and says so.
  */
 export interface MapProps {
@@ -40,13 +42,11 @@ export interface MapProps {
   source?: ReactNode;
   /** The step the person's attention is on, so the page can show which part of a pull request it adds. */
   onHover?: (k: StepKind | null) => void;
-  /** Resolves false when the save failed: the draft then stays open with what was picked. */
-  onAdd: (kind: StepKind, status: string | null) => Promise<boolean> | void;
-  onStatus: (kind: StepKind, status: string | null) => void;
+  /** Add a step. The ones built from blocks start empty; resolves false when the save failed. */
+  onAdd: (kind: StepKind) => Promise<boolean> | void;
+  /** Replace a step's blocks, in the order given. */
+  onBlocks: (kind: StepKind, blocks: StepBlock[]) => void;
   onRemove: (kind: StepKind) => void;
-  onUnassign: (v: Unassign) => void;
-  /** Set the step's "also assign". */
-  onAssign: (kind: StepKind, a: Assign) => void;
   /** The people a step can name, read when the person list opens (the tracker's cached members). Null: could not be read. */
   people?: () => Promise<MapPerson[] | null>;
   onRetry: () => void;
@@ -56,8 +56,7 @@ export interface MapProps {
   onToggleCounted?: (unit: MapSpace) => void;
 }
 
-/** Somebody the "a person…" choice can name. */
-export interface MapPerson { id: number; name: string; sub?: string }
+export type { MapPerson };
 
 /**
  * The eye on a list: hide it from the ones that count, or bring it back. It has its place at the end of
@@ -76,7 +75,6 @@ export function ListEye({ unit, nouns, onToggle, blocked }: { unit: MapSpace; no
   );
 }
 
-const UNASSIGN_OPTIONS = (["none", "me", "all"] as const).map((v) => ({ value: v, label: UNASSIGN_LABEL[v] }));
 /** The mark each moment wears in the map, drawn and not typed. */
 export const GLYPH: Record<StepKind, (p: { size?: number }) => React.ReactElement> = { move: ArrowIcon, menu: ListIcon, merge: MergeIcon, people: UserIcon, note: NoteIcon };
 
@@ -98,80 +96,14 @@ function Segs({ on }: { on: boolean[] }) {
   return <span className="wfm-segs" aria-hidden>{on.map((y, i) => <i key={i} {...(y ? { "data-y": "" } : {})} />)}</span>;
 }
 
-/** A short list that takes focus once when it opens and moves it with the arrows. */
-function ChoiceList<T extends string>({ label, value, options, onPick, onEsc }: { label: string; value: T; options: { value: T; label: string }[]; onPick: (v: T) => void; onEsc: () => void }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => { ref.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.focus(); }, []);
-  return (
-    <div ref={ref} role="listbox" aria-label={label} className="wfm wfm-pop" style={{ width: 200 }}>
-      {options.map((o) => (
-        <button key={o.value} type="button" role="option" aria-selected={value === o.value} className="wfm-opt"
-          onClick={() => onPick(o.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") { e.stopPropagation(); onEsc(); }
-            else if (e.key === "ArrowDown") { e.preventDefault(); ((e.currentTarget.nextElementSibling ?? e.currentTarget) as HTMLElement).focus(); }
-            else if (e.key === "ArrowUp") { e.preventDefault(); ((e.currentTarget.previousElementSibling ?? e.currentTarget) as HTMLElement).focus(); }
-          }}>
-          <span className="ck" aria-hidden>{value === o.value ? <DoneIcon size={ICON.xs} /> : null}</span>
-          <span className="n">{o.label}</span>
-        </button>
-      ))}
-    </div>
-  );
-}
-
-/** The four answers to "Also assign"; "a person…" goes on to the people, read only when asked for. */
-function AssignList({ value, people, onPick, onEsc }: { value: Assign; people?: () => Promise<MapPerson[] | null>; onPick: (a: Assign) => void; onEsc: () => void }) {
-  const [view, setView] = useState<"choice" | "people">("choice");
-  const [list, setList] = useState<MapPerson[] | null | "reading">("reading");
-  useEffect(() => {
-    if (view !== "people") return;
-    let live = true;
-    setList("reading");
-    void (people?.() ?? Promise.resolve(null)).catch(() => null).then((r) => { if (live) setList(r); });
-    return () => { live = false; };
-  }, [view, people]);
-  if (view === "choice") {
-    return <ChoiceList label="Also assign" value={value.who} options={ASSIGN_WHO.map((w) => ({ value: w, label: ASSIGN_LABEL[w] }))}
-      onPick={(w) => (w === "person" ? setView("people") : onPick({ who: w }))} onEsc={onEsc} />;
-  }
-  return (
-    <div role="listbox" aria-label="Pick a person" className="wfm wfm-pop" style={{ width: 280, maxHeight: 320, overflowY: "auto" }}
-      onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); onEsc(); } }}>
-      {list === "reading" && <span className="px-2 py-1 text-[11px]" style={{ color: "var(--text3)" }}>reading…</span>}
-      {list === null && <span className="px-2 py-1 text-[11px]" style={{ color: "var(--text3)" }}>The people could not be read.</span>}
-      {Array.isArray(list) && list.length === 0 && <span className="px-2 py-1 text-[11px]" style={{ color: "var(--text3)" }}>Nobody to pick.</span>}
-      {Array.isArray(list) && list.map((m) => (
-        <button key={m.id} type="button" role="option" aria-selected={value.person?.id === m.id} className="wfm-opt" autoFocus={value.person?.id === m.id}
-          onClick={() => onPick({ who: "person", person: { id: m.id, name: m.name } })}
-          onKeyDown={(e) => {
-            if (e.key === "ArrowDown") { e.preventDefault(); ((e.currentTarget.nextElementSibling ?? e.currentTarget) as HTMLElement).focus(); }
-            else if (e.key === "ArrowUp") { e.preventDefault(); ((e.currentTarget.previousElementSibling ?? e.currentTarget) as HTMLElement).focus(); }
-          }}>
-          <span className="ck" aria-hidden>{value.person?.id === m.id ? <DoneIcon size={ICON.xs} /> : null}</span>
-          <span className="n">{m.name}{m.sub && <span className="m"> {m.sub}</span>}</span>
-        </button>
-      ))}
-      <button type="button" className="wfm-opt" onClick={() => setView("choice")}><span className="ck" aria-hidden /><span className="n" style={{ color: "var(--text3)" }}>Back</span></button>
-    </div>
-  );
-}
-
 const PRESS_LEAD: Partial<Record<StepKind, string>> = { move: "Press it:", menu: "Pick it:", merge: "Confirm the merge:" };
 const hint = (c: ReactNode, extra?: object) => <span className="text-[11px]" style={{ color: "var(--text3)", ...extra }}>{c}</span>;
-const MOVE_HINT: Partial<Record<StepKind, string>> = {
-  move: "Where the card goes when this button is pressed",
-  menu: "Where the card goes when this item is picked",
-  merge: "Offered at merge time; you can still change it",
-};
 
 export function WorkflowMap(p: MapProps) {
   const { adapter, part, panel, changesOn, frozen } = p;
   const n = adapter.nouns;
   const M = useMemo(() => moments(n), [n]);
-  const [draft, setDraft] = useState<StepKind | null>(null);
-  /* A step that needs a status is not saved until it has one: the draft is the last card, with its picker open. */
-  const steps = useMemo<Step[]>(() => (draft && !p.steps.some((s) => s.kind === draft) ? [...p.steps, { kind: draft, status: null, also: [], unassign: "none", assign: { who: "none" } }] : p.steps), [p.steps, draft]);
+  const steps = p.steps;
   const units = useMemo(() => [...part.counted, ...part.folded.map((f) => f.unit)], [part]);
   const listed = useMemo(() => allStatuses(part.counted), [part.counted]);
   const [selId, setSelId] = useState<string | null>(null);
@@ -183,8 +115,7 @@ export function WorkflowMap(p: MapProps) {
   const [hl, setHl] = useState<ReadonlySet<StepKind>>(new Set());
   const [openCov, setOpenCov] = useState<ReadonlySet<StepKind>>(new Set());
   const [flash, setFlash] = useState<StepKind | null>(null);
-  const [unassignAt, setUnassignAt] = useState<HTMLElement | null>(null);
-  const [assignAt, setAssignAt] = useState<{ kind: StepKind; anchor: HTMLElement } | null>(null);
+  const [autoAdd, setAutoAdd] = useState<StepKind | null>(null);
   const [focusNext, setFocusNext] = useState<string | null>(null);
   const [foldOpen, setFoldOpen] = useState(false);
   const root = useRef<HTMLElement>(null);
@@ -193,7 +124,6 @@ export function WorkflowMap(p: MapProps) {
   const stepsBox = useRef<HTMLDivElement>(null);
   const uid = useId();
   const dormant = !changesOn && steps.length > 0;
-  const free = addable(adapter, steps);
   const light = (ks: StepKind[], on: boolean) => {
     setHl((cur) => { const next = new Set(cur); for (const k of ks) on ? next.add(k) : next.delete(k); return next; });
     p.onHover?.(on ? (ks[0] ?? null) : null);
@@ -209,6 +139,14 @@ export function WorkflowMap(p: MapProps) {
     const t = setTimeout(() => setFocusNext(null), 2000);
     return () => clearTimeout(t);
   }, [focusNext, steps, composer]);
+  /* A step built from blocks starts empty, so its menu of blocks opens as soon as the saved step is on the page. */
+  useEffect(() => {
+    if (!autoAdd) return;
+    const el = root.current?.querySelector<HTMLElement>(`[data-step="${autoAdd}"] [data-addblock]`);
+    if (el) { setAutoAdd(null); el.click(); return; }
+    const t = setTimeout(() => setAutoAdd(null), 2500);
+    return () => clearTimeout(t);
+  }, [autoAdd, steps]);
   useEffect(() => { if (flash) { const t = setTimeout(() => setFlash(null), 1000); return () => clearTimeout(t); } }, [flash]);
 
   /* The lines. Drawn from where the controls and the status rows actually are, so they follow a
@@ -271,16 +209,10 @@ export function WorkflowMap(p: MapProps) {
 
   const chooseMoment = async (k: StepKind) => {
     setComposer(false);
-    if (M[k].needs && !M[k].optional) {
-      setDraft(k);
-      setFocusNext(`[data-step="${k}"] [data-pick]`);
-      setTimeout(() => { const el = root.current?.querySelector<HTMLElement>(`[data-step="${k}"] [data-pick]`); if (el) setPicker({ kind: k, anchor: el }); }, 0);
-      return;
-    }
-    const ok = await p.onAdd(k, null);
+    const ok = await p.onAdd(k);
     if (ok === false) return;
     setFlash(k);
-    setFocusNext(`[data-step="${k}"] [data-rm]`);
+    if (triggerOf(k)) { setAutoAdd(k); setFocusNext(`[data-step="${k}"] [data-addblock]`); } else setFocusNext(`[data-step="${k}"] [data-rm]`);
   };
 
   const spaceWord = n.lists;
@@ -288,13 +220,10 @@ export function WorkflowMap(p: MapProps) {
     <StatusPanel nouns={n} part={part} view={panel} current={current ?? ""} leave={M[kind].optional}
       suggested={suggestStatus(adapter, kind, listed)} onActive={setLit} onRetry={p.onRetry}
       source={p.source}
-      onPick={async (v) => {
+      onPick={(v) => {
         setPicker(null); setLit(null);
-        if (draft === kind && !p.steps.some((s) => s.kind === kind)) {
-          const ok = await p.onAdd(kind, v);
-          if (ok === false) { setFocusNext(`[data-step="${kind}"] [data-pick]`); return; }
-          setDraft(null);
-        } else p.onStatus(kind, v);
+        const st = steps.find((x) => x.kind === kind);
+        if (st?.blocks) p.onBlocks(kind, st.blocks.map((b) => (b.type === "move" ? { type: "move", statusNames: v ? [v] : [] } : b)));
         setFlash(kind);
         setFocusNext(`[data-step="${kind}"] [data-pick]`);
       }}
@@ -397,23 +326,15 @@ export function WorkflowMap(p: MapProps) {
     const bad = !!pill && (pill.tone === "none" || pill.tone === "ignored");
     const open = openCov.has(st.kind);
     const Icon = GLYPH[st.kind];
-    const isDraft = draft === st.kind && !p.steps.some((s) => s.kind === st.kind);
-    const pickLabel = st.status ?? (pend ? "Pick a status" : "Leave it there");
-    const pickRow = (
-      <div className="wfm-crow">
-        <span className="wfm-lb"><b id={`${uid}-l${st.kind}`} className="text-[13px]">{st.kind === "merge" ? "Preselect" : `${n.verb} the ${n.item} to`}</b>{hint(MOVE_HINT[st.kind])}</span>
-        <button type="button" data-pick={st.kind} className="wfm-pick" aria-haspopup="listbox" aria-expanded={picker?.kind === st.kind} aria-labelledby={`${uid}-l${st.kind} ${uid}-v${st.kind}`}
-          disabled={frozen} {...(pend || pill?.tone === "ignored" ? { "data-empty": "" } : bad ? { "data-bad": "" } : {})}
-          onClick={(e) => (picker?.kind === st.kind ? closePicker(false) : openPicker(st.kind)(e.currentTarget))}>
-          {st.status && <Dot type={listed.find((x) => x.name.toLowerCase() === st.status!.toLowerCase())?.type ?? "custom"} color={listed.find((x) => x.name.toLowerCase() === st.status!.toLowerCase())?.color} />}
-          <span id={`${uid}-v${st.kind}`}>{pickLabel}</span><span className="cv" aria-hidden><CaretIcon size={ICON.xs} /></span>
-        </button>
-      </div>
-    );
+    const trig = triggerOf(st.kind);
+    const empty = !!trig && stepIsEmpty(trig, st.blocks ?? []);
+    const moveBlock = st.blocks?.find((x): x is Extract<StepBlock, { type: "move" }> => x.type === "move");
+    const awaiting = pend || (!!trig && !!moveBlock && blockNeedsValue(trig, moveBlock) && !st.status);
+    const stDot = st.status ? listed.find((x) => x.name.toLowerCase() === st.status!.toLowerCase()) : undefined;
     const count = home && home.counted.length === 0 && home.folded.length > 0 ? part.folded.find((f) => f.unit.statuses.some((x) => x.status.toLowerCase() === st.status!.toLowerCase())) : null;
     return (
       <article key={st.kind} data-step={st.kind} aria-label={`Step ${num}: ${m.title}`}
-        {...(pend || isDraft || pill?.tone === "ignored" ? { "data-need": "" } : bad ? { "data-bad": "" } : {})} {...(hl.has(st.kind) ? { "data-hl": "" } : {})} {...(flash === st.kind ? { "data-flash": "" } : {})}
+        {...(awaiting || empty || pill?.tone === "ignored" ? { "data-need": "" } : bad ? { "data-bad": "" } : {})} {...(hl.has(st.kind) ? { "data-hl": "" } : {})} {...(flash === st.kind ? { "data-flash": "" } : {})}
         className="wfm-step" style={{ opacity: dormant ? 0.82 : 1 }}
         onMouseEnter={() => light([st.kind], true)} onMouseLeave={() => light([st.kind], false)}
         onFocus={() => light([st.kind], true)} onBlur={() => light([st.kind], false)}>
@@ -424,43 +345,29 @@ export function WorkflowMap(p: MapProps) {
             <span className="inline-flex gap-1 items-center text-[11px]" style={{ color: "var(--text3)" }}><Icon size={ICON.xs} /> Shows on {m.shows}</span>
           </div>
           <div className="wfm-acts">
-            {dormant ? <Badge>Not active · changes off</Badge> : pend ? <Badge tone="warn">Needs a status</Badge> : null}
+            {dormant ? <Badge>Not active · changes off</Badge> : empty ? <Badge tone="warn">Needs a block</Badge> : awaiting ? <Badge tone="warn">Needs a status</Badge> : null}
             {pill && (pill.expands
               ? <button type="button" className="wfm-cov" data-tone={pill.tone} aria-expanded={open} aria-label={`Coverage: ${pill.label}. ${open ? "Hide" : "Show"} per-${n.list} detail`} onClick={() => toggleCov(st.kind)}>
                 <Segs on={pill.bars} />{pill.label}<span className="cv" aria-hidden><CaretIcon size={ICON.xs} /></span></button>
               : <span className="wfm-cov" data-tone="static"><Segs on={pill.bars} />{pill.label}</span>)}
             <Button size="compact" tone="plain" data-rm="" label={`Remove step ${num}`} disabled={frozen}
               style={{ background: "transparent", border: 0, color: "var(--text3)" }}
-              onClick={() => { if (isDraft) { setDraft(null); setPicker(null); } else p.onRemove(st.kind); setFocusNext("[data-add]"); }}>Remove</Button>
+              onClick={() => { setPicker(null); p.onRemove(st.kind); setFocusNext("[data-add]"); }}>Remove step</Button>
           </div>
         </header>
         <div className="wfm-sb">
           <div className="text-[13px]">{m.blurb}</div>
-          {m.needs && (
-            <div className="wfm-ctl">
-              {pickRow}
-              {st.kind === "move" && (
-                <div className="wfm-crow">
-                  <span className="wfm-lb"><b id={`${uid}-u`} className="text-[13px]">Also take off the {n.item}</b>{hint(`Who is unassigned when the ${n.item} moves`)}</span>
-                  <button type="button" data-unassign="" className="wfm-pick" data-plain="" aria-haspopup="listbox" aria-expanded={!!unassignAt} aria-labelledby={`${uid}-u ${uid}-uv`} disabled={frozen}
-                    onClick={(e) => setUnassignAt(unassignAt ? null : e.currentTarget)}>
-                    <span id={`${uid}-uv`}>{UNASSIGN_LABEL[st.unassign]}</span><span className="cv" aria-hidden><CaretIcon size={ICON.xs} /></span>
-                  </button>
-                </div>
-              )}
-              <div className="wfm-crow">
-                <span className="wfm-lb"><b id={`${uid}-a${st.kind}`} className="text-[13px]">Also assign</b>{hint(st.kind === "merge" ? `Added to the ${n.item} when the merge moves it; the others stay` : `Added to the ${n.item} when it moves; the others stay`)}</span>
-                <button type="button" data-assign={st.kind} className="wfm-pick" data-plain="" aria-haspopup="listbox" aria-expanded={assignAt?.kind === st.kind} aria-labelledby={`${uid}-a${st.kind} ${uid}-av${st.kind}`} disabled={frozen}
-                  onClick={(e) => setAssignAt(assignAt?.kind === st.kind ? null : { kind: st.kind, anchor: e.currentTarget })}>
-                  <span id={`${uid}-av${st.kind}`}>{assignLabel(st.assign)}</span><span className="cv" aria-hidden><CaretIcon size={ICON.xs} /></span>
-                </button>
+          {trig && st.blocks && (
+            <>
+              <StepBlocks trigger={trig} blocks={st.blocks} status={st.status} statusType={stDot?.type ?? "custom"} statusColor={stDot?.color}
+                {...(awaiting ? { moveTone: "empty" as const } : pill?.tone === "ignored" ? { moveTone: "ignored" as const } : bad ? { moveTone: "bad" as const } : null)}
+                n={n} frozen={frozen} people={p.people} statusOpen={picker?.kind === st.kind}
+                onChange={(next) => p.onBlocks(st.kind, next)}
+                onPickStatus={(anchor) => (picker?.kind === st.kind ? closePicker(false) : openPicker(st.kind)(anchor))} />
+              <div className="text-[13px]" data-press={st.kind} style={{ color: "var(--text2)", borderLeft: "3px solid var(--text)", padding: "8px 12px", borderRadius: 10, background: "var(--bg)", boxShadow: "inset 0 0 0 1px var(--w-line)" }}>
+                {blocksSentence({ lead: PRESS_LEAD[st.kind] ?? "Press it:", trigger: trig, blocks: st.blocks, item: n.item, status: st.status })}
               </div>
-            </div>
-          )}
-          {m.needs && (st.status || m.optional) && (
-            <div className="text-[11px]" data-press={st.kind} style={{ color: "var(--text3)" }}>
-              {pressSentence({ lead: PRESS_LEAD[st.kind] ?? "Press it:", status: st.status, item: n.item, ...(st.kind === "move" ? { unassign: st.unassign } : null), assign: st.assign })}
-            </div>
+            </>
           )}
           {st.kind === "move" && st.also.length > 0 && <div className="text-[11px]" style={{ color: "var(--text3)" }}>If a {n.item}’s {n.list} has none of that, it tries: {st.also.join(", ")}.</div>}
           {st.implicit && st.status && <div className="text-[11px]" style={{ color: "var(--text3)" }}>The built-in default, until you choose one.</div>}
@@ -494,17 +401,17 @@ export function WorkflowMap(p: MapProps) {
   const loading = panel.kind === "loading" && units.length === 0;
   const momentCard = (k: StepKind) => {
     const I = GLYPH[k], m = M[k];
+    const used = steps.some((x) => x.kind === k);
     return (
-      <button key={k} type="button" className="wfm-mom" data-mom={k} onClick={() => void chooseMoment(k)}>
+      <button key={k} type="button" className="wfm-mom" data-mom={k} aria-disabled={used} onClick={() => { if (!used) void chooseMoment(k); }}>
         <span className="gl"><I size={ICON.md} /></span>
-        <span className="flex flex-col gap-0.5"><b className="text-[13px]">{m.title}</b>{hint(m.blurb)}{m.needs && !m.optional && hint("Needs a status", { color: "var(--warning-ink)" })}</span>
+        <span className="flex flex-col gap-0.5"><b className="text-[13px]">{m.title}</b>{hint(m.blurb)}
+          {used ? hint("Already has a step. Remove it to add it again.", { color: "var(--warning-ink)" }) : triggerOf(k) ? hint("You add its blocks next.") : null}</span>
       </button>
     );
   };
-  const moments_ = (
-    free.length ? <div className="wfm-moments" role="group" aria-label="Where in agentglass">{free.map(momentCard)}</div>
-      : <div className="text-[11px]" style={{ color: "var(--text3)" }}>Every place already has a step. Remove one to add it again.</div>
-  );
+  const kinds = STEP_ORDER.filter((k) => adapter.kinds.includes(k));
+  const moments_ = <div className="wfm-moments" role="group" aria-label="Where in agentglass">{kinds.map(momentCard)}</div>;
 
   return (
     <section ref={root} className="wfm agx-settings-section" aria-labelledby={`${uid}-h`}>
@@ -512,7 +419,7 @@ export function WorkflowMap(p: MapProps) {
       <div className="agx-settings-head flex items-center gap-4 flex-wrap">
         <div className="flex flex-col gap-0.5 flex-1 min-w-0">
           <div className="agx-settings-head-t" id={`${uid}-h`}>Workflow map</div>
-          {hint("Each step puts one control into agentglass and ties it to a status of yours.")}
+          {hint("Each step puts one control into agentglass. You build what it does from blocks.")}
         </div>
         <Badge tone={changesOn ? "warn" : "dim"}>{changesOn ? "Changes on" : "Changes off"}</Badge>
         {frozen && <Badge tone="warn">Paused: token refused</Badge>}
@@ -531,7 +438,7 @@ export function WorkflowMap(p: MapProps) {
             {composer && !frozen && (
               <div role="group" aria-label="Add a step" className="flex flex-col gap-3 p-4 rounded-xl" style={{ background: "var(--bg)", boxShadow: "0 0 0 1px var(--primary)" }}
                 onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setComposer(false); setFocusNext("[data-add]"); } }}>
-                <div className="flex items-center gap-2"><h3 className="m-0 text-[13px] font-bold">Add a step</h3>{hint("Pick where the step shows up. You choose its status next.")}<span className="flex-1" />
+                <div className="flex items-center gap-2"><h3 className="m-0 text-[13px] font-bold">Add a step</h3>{hint("Pick where the step shows up. Its blocks come next.")}<span className="flex-1" />
                   <Button size="compact" onClick={() => { setComposer(false); setFocusNext("[data-add]"); }}>Close</Button></div>
                 {moments_}
               </div>
@@ -542,7 +449,7 @@ export function WorkflowMap(p: MapProps) {
               : (
                 <div className="flex flex-col gap-3 items-start p-6 rounded-xl" style={{ border: "1px dashed var(--w-edge)", background: "var(--bg)" }}>
                   <h3 className="m-0 text-[13px] font-bold">No steps yet</h3>
-                  <div className="text-[13px] max-w-[520px]">A step adds one control to a pull request and says which of your statuses it moves the {n.item} to. Nothing in {n.name} changes until you add one and turn changes on.</div>
+                  <div className="text-[13px] max-w-[520px]">A step adds one control to a pull request, and you build what it does from blocks: move the {n.item}, take people off it, assign it. Nothing in {n.name} changes until you add one and turn changes on.</div>
                   {moments_}
                 </div>
               ))}
@@ -560,27 +467,6 @@ export function WorkflowMap(p: MapProps) {
         return (
           <StatusPopover anchor={picker.anchor} label={`Status for: ${M[st.kind].title}`} onClose={closePicker}>
             {statusPanel(st.kind, st.status)}
-          </StatusPopover>
-        );
-      })()}
-      {unassignAt && (() => {
-        const move = steps.find((s) => s.kind === "move");
-        if (!move) return null;
-        return (
-          <StatusPopover anchor={unassignAt} label={`Who comes off the ${n.item}`} onClose={(f) => { setUnassignAt(null); if (f) setFocusNext("[data-unassign]"); }}>
-            <ChoiceList label="Who comes off" value={move.unassign} options={UNASSIGN_OPTIONS}
-              onPick={(v) => { p.onUnassign(v); setUnassignAt(null); setFocusNext("[data-unassign]"); }}
-              onEsc={() => { setUnassignAt(null); setFocusNext("[data-unassign]"); }} />
-          </StatusPopover>
-        );
-      })()}
-      {assignAt && (() => {
-        const st = steps.find((x) => x.kind === assignAt.kind);
-        if (!st) return null;
-        const back = () => { setAssignAt(null); setFocusNext(`[data-assign="${assignAt.kind}"]`); };
-        return (
-          <StatusPopover anchor={assignAt.anchor} label={`Also assign: ${M[st.kind].title}`} onClose={(f) => { setAssignAt(null); if (f) setFocusNext(`[data-assign="${assignAt.kind}"]`); }}>
-            <AssignList value={st.assign} people={p.people} onPick={(a) => { p.onAssign(st.kind, a); back(); }} onEsc={back} />
           </StatusPopover>
         );
       })()}

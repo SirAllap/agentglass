@@ -82,21 +82,22 @@ export function resolveEnsure(
   }
 }
 
-export interface CardWrite { status: string; add?: number[]; rem?: number[]; addMe?: boolean }
+export interface CardWrite { status?: string; add?: number[]; rem?: number[]; addMe?: boolean }
 
 /**
- * The one write: the status, who comes off, who goes on. `named` is the name to
+ * The one write: the status (when the step moves one), who comes off, who goes on. `named` is the name to
  * say afterwards ("you" for the account that pressed); null when nobody is added.
  */
 export function stepChanges(o: {
-  status: string;
+  /** Absent for a step with no move block: the card stays where it is and only its people change. */
+  status?: string;
   people: readonly Person[] | undefined;
   unassign: HandoffUnassign;
   ensure: Ensure;
 }): { write: CardWrite; named: string | null; stays: boolean } {
   const people = o.people ?? [];
   let rem = handoffRemovals([...people] as { id?: number | null; me?: boolean }[], o.unassign);
-  const write: CardWrite = { status: o.status };
+  const write: CardWrite = o.status ? { status: o.status } : {};
   let named: string | null = null;
   let stays = false;
   const e = o.ensure;

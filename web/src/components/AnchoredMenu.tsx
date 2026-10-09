@@ -25,10 +25,12 @@ import { EDGE } from "./workspace/Chrome.tsx";
 
 const ITEMS = '[role="menuitem"]:not(:disabled)';
 
-export function AnchoredMenu({ anchor, align = "right", minWidth = 216, onClose, children }: {
+export function AnchoredMenu({ anchor, align = "right", minWidth = 216, placeKey, onClose, children }: {
   anchor: RefObject<HTMLElement | null>;
   align?: "left" | "right";
   minWidth?: number;
+  /** Changes when the list's content (and so its height) does, so it is placed again against its trigger. */
+  placeKey?: string | number;
   onClose: () => void;
   children: ReactNode;
 }) {
@@ -48,7 +50,7 @@ export function AnchoredMenu({ anchor, align = "right", minWidth = 216, onClose,
     if (!a || !el) return;
     // Natural size: nothing caps the list until this has answered.
     setPos(placeMenu(a, { width: el.offsetWidth, height: el.offsetHeight }, { width: window.innerWidth, height: window.innerHeight }, align));
-  }, [anchor, align]);
+  }, [anchor, align, placeKey]);
 
   // Visible now, so it can take focus; a hidden element cannot.
   useEffect(() => {

@@ -4,6 +4,7 @@ import { Button, INPUT, INPUT_STYLE, LINE } from "./workspace/Chrome.tsx";
 import { CaretIcon, DoneIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { LAYER } from "../lib/layers.ts";
+import { placeMenu } from "../lib/menuPlacement.ts";
 import type { Nouns } from "../lib/workflowMap.ts";
 import { pickView, type Partition, type PickGroup, type PickRow } from "../lib/workflowLayout.ts";
 
@@ -164,13 +165,23 @@ export function StatusPanel({ nouns, part, view, current, leave, suggested, sour
 export function StatusPopover({ anchor, label, onClose, children }: { anchor: HTMLElement; label: string; onClose: (refocus: boolean) => void; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
-  useLayoutEffect(() => {
-    const r = anchor.getBoundingClientRect();
-    const w = 380;
-    const left = Math.max(8, Math.min(r.left, window.innerWidth - w - 16));
-    const room = window.innerHeight - r.bottom;
-    /* Flip above when below cannot hold a list; the chips near the bottom of a long page are the ones that need it. */
-    setPos({ left, top: room < 440 && r.top > room ? Math.max(8, r.top - 4 - 430) : r.bottom + 4 });
+  /* Placed with the list's real height, against the trigger as it is NOW: a guess of the height put a short
+     list ~400px above its button, and a position taken once went stale as soon as the Settings scroller moved.
+     Measured after the portal is attached (see AnchoredMenu), and again when the page scrolls or the list's
+     height changes (a search narrowing it). */
+  useEffect(() => {
+    const place = () => {
+      const el = ref.current;
+      if (!el) return;
+      const p = placeMenu(anchor.getBoundingClientRect(), { width: 380, height: el.offsetHeight }, { width: window.innerWidth, height: window.innerHeight }, "left");
+      setPos((cur) => (cur && cur.left === p.left && cur.top === p.top ? cur : { left: p.left, top: p.top }));
+    };
+    place();
+    const ro = typeof ResizeObserver !== "undefined" && ref.current ? new ResizeObserver(place) : null;
+    if (ro && ref.current) ro.observe(ref.current);
+    document.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => { ro?.disconnect(); document.removeEventListener("scroll", place, true); window.removeEventListener("resize", place); };
   }, [anchor]);
   useEffect(() => {
     const out = (e: MouseEvent) => {
@@ -184,10 +195,9 @@ export function StatusPopover({ anchor, label, onClose, children }: { anchor: HT
     document.addEventListener("keydown", esc, true);
     return () => { document.removeEventListener("mousedown", out, true); document.removeEventListener("keydown", esc, true); };
   }, [anchor, onClose]);
-  if (!pos) return null;
   return (
     <Portal z={LAYER.settingsDialog}>
-      <div ref={ref} role="dialog" aria-label={label} className="fixed" style={{ left: pos.left, top: pos.top, width: 380, boxShadow: "var(--surface-lift)", borderRadius: 12 }}>
+      <div ref={ref} role="dialog" aria-label={label} className="fixed" style={{ left: pos?.left ?? 0, top: pos?.top ?? 0, width: 380, boxShadow: "var(--surface-lift)", borderRadius: 12, visibility: pos ? "visible" : "hidden" }}>
         {children}
       </div>
     </Portal>

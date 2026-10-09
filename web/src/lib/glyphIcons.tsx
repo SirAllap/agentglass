@@ -490,3 +490,22 @@ export function TrackerGlyph({ size = ICON.sm, className }: P) {
     </svg>
   );
 }
+
+/** ⋮⋮ — the handle a list item is dragged by. */
+export function GripIcon({ size = ICON.md, className }: P) {
+  return (
+    <svg {...svg(size, className)} fill="currentColor" stroke="none">
+      <circle cx="5" cy="3.2" r="1" /><circle cx="9" cy="3.2" r="1" /><circle cx="5" cy="7" r="1" /><circle cx="9" cy="7" r="1" /><circle cx="5" cy="10.8" r="1" /><circle cx="9" cy="10.8" r="1" />
+    </svg>
+  );
+}
+
+/** A person with a plus: put somebody on. */
+export function UserPlusIcon({ size = ICON.sm, className }: P) {
+  return <svg {...svg(size, className)}><circle cx="5.6" cy="4.8" r="2.2" /><path d="M1.6 12a4 4 0 0 1 8 0M11 3.4v3.4M9.3 5.1h3.4" /></svg>;
+}
+
+/** A person with a minus: take somebody off. */
+export function UserMinusIcon({ size = ICON.sm, className }: P) {
+  return <svg {...svg(size, className)}><circle cx="5.6" cy="4.8" r="2.2" /><path d="M1.6 12a4 4 0 0 1 8 0M9.3 5.1h3.4" /></svg>;
+}

@@ -74,7 +74,7 @@ describe("the saved row", () => {
     }));
     P.__setPrefsPath(file);
     const p = P.clickupPrefs();
-    expect(p.handoff).toEqual({ enabled: true, statusNames: ["ready for qa"], unassign: "all", assign: { who: "none" } });
+    expect(p.handoff).toEqual({ enabled: true, blocks: [{ type: "move", statusNames: ["ready for qa"] }, { type: "unassign", who: "all" }], statusNames: ["ready for qa"], unassign: "all", assign: { who: "none" } });
     expect(p.review.assign).toEqual({ who: "none" });
     expect(p.merge.assign).toEqual({ who: "none" });
   });

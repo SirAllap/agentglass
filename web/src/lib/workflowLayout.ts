@@ -12,7 +12,7 @@
  * project for another tracker. The words come in as `Nouns`.
  */
 import { luminance, parseColor } from "./contrast.ts";
-import { needsStatus, withCounted, type MapSpace, type Moment, type Nouns, type Step } from "./workflowMap.ts";
+import { movesNothing, needsStatus, withCounted, type MapSpace, type Moment, type Nouns, type Step } from "./workflowMap.ts";
 
 const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 const hasStatus = (u: MapSpace, status: string) => u.statuses.some((x) => same(x.status, status));
@@ -81,7 +81,7 @@ export interface CoveragePill {
  */
 export function coveragePill(p: Partition, step: Step, m: Moment, n: Pick<Nouns, "list" | "lists">): CoveragePill | null {
   const bars = (status: string | null) => p.counted.map((u) => (status ? hasStatus(u, status) : true));
-  if (!m.needs) return { tone: "static", label: `Every ${n.list}`, bars: bars(null), expands: false };
+  if (!m.needs || movesNothing(step)) return { tone: "static", label: `Every ${n.list}`, bars: bars(null), expands: false };
   if (!step.status) return m.optional ? { tone: "static", label: "No status: nothing moves", bars: bars(null), expands: false } : null;
   const home = statusHome(p, step.status);
   const k = home.counted.length, total = p.counted.length;

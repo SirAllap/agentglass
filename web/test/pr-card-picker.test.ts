@@ -47,7 +47,7 @@ describe("the window that went black", () => {
      * those two renders ran a different number of hooks and React threw the
      * whole tree away.
      */
-    const tail = CLICKUP.slice(CLICKUP.indexOf("if (!ref || (!moveOn && !assignReviewer)) return null;"));
+    const tail = CLICKUP.slice(CLICKUP.indexOf("if (!ref || (!stepOn && !assignReviewer)) return null;"));
     expect(tail.length).toBeGreaterThan(200);
     const hook = /\buse[A-Z]\w*\(/.exec(tail);
     expect(hook?.[0] ?? "none", "a hook below the early return").toBe("none");
@@ -56,7 +56,7 @@ describe("the window that went black", () => {
   it("keeps the early return, rather than drawing an empty half", () => {
     // The fix is not "always render": a pull request with no card must draw
     // nothing here at all.
-    expect(CLICKUP).toContain("if (!ref || (!moveOn && !assignReviewer)) return null;");
+    expect(CLICKUP).toContain("if (!ref || (!stepOn && !assignReviewer)) return null;");
   });
 
   it("holds the same line in the sidebar, which has the same shape", () => {

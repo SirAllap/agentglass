@@ -12,7 +12,7 @@ import {
   type MapSpace, type Step,
 } from "../src/lib/workflowMap.ts";
 import { LEAVE_ALONE, mergePreselect, readyForQaStatus, reviewStatus } from "../src/lib/cardMove.ts";
-import { CLICKUP, addTurnsWritesOn, clickupAdd, clickupRemove, clickupSetStatus, clickupSteps, clickupUnassign } from "../src/lib/clickupWorkflow.ts";
+import { CLICKUP, addTurnsWritesOn, clickupAdd, clickupBlocks, clickupRemove, clickupSteps } from "../src/lib/clickupWorkflow.ts";
 
 const st = (status: string, type = "custom") => ({ status, type });
 const SPACES: MapSpace[] = [
@@ -46,7 +46,8 @@ describe("settings read as steps", () => {
     const s = clickupSteps(p);
     expect(s.map((x) => x.kind)).toEqual(["move", "menu", "merge", "people", "note"]);
     /* The prefs above are the shape from before the row existed: a step without "Also assign" leaves everyone as they are. */
-    expect(s[0]).toEqual({ kind: "move", status: "Ready for QA", also: ["Testing"], unassign: "all", implicit: false, assign: { who: "none" } });
+    expect(s[0]).toMatchObject({ kind: "move", status: "Ready for QA", also: ["Testing"], unassign: "all", implicit: false, assign: { who: "none" } });
+    expect(s[0]!.blocks).toEqual([{ type: "move", statusNames: ["Ready for QA", "Testing"] }, { type: "unassign", who: "all" }]);
     expect(s[2]).toMatchObject({ kind: "merge", status: "done" });
   });
 
@@ -92,30 +93,28 @@ describe("settings read as steps", () => {
 });
 
 describe("what a change sends", () => {
-  test("adding a step with a status sends it as the only name and switches the step on", () => {
-    expect(clickupAdd("move", "ready for qa")).toEqual({ handoff: { enabled: true, statusNames: ["ready for qa"], unassign: "none" } });
-    expect(clickupAdd("menu", "code review")).toEqual({ review: { enabled: true, statusNames: ["code review"] } });
-    expect(clickupAdd("merge", null)).toEqual({ merge: { enabled: true, statusNames: [] } });
+  test("adding a step built from blocks starts it empty and switches it on: nothing is chosen for the person", () => {
+    expect(clickupAdd("move")).toEqual({ handoff: { enabled: true, blocks: [] } });
+    expect(clickupAdd("menu")).toEqual({ review: { enabled: true, blocks: [] } });
+    expect(clickupAdd("merge")).toEqual({ merge: { enabled: true, blocks: [] } });
   });
 
-  test("the two steps without a status are their own switch and touch nothing else", () => {
-    expect(clickupAdd("people", null)).toEqual({ review: { assignReviewer: true } });
-    expect(clickupAdd("note", null)).toEqual({ flows: { noteOnCard: true } });
-    expect(clickupSetStatus("note", "x")).toEqual({});
+  test("the two steps without blocks are their own switch and touch nothing else", () => {
+    expect(clickupAdd("people")).toEqual({ review: { assignReviewer: true } });
+    expect(clickupAdd("note")).toEqual({ flows: { noteOnCard: true } });
   });
 
-  test("picking another status replaces every name, so the line and the setting say the same", () => {
-    expect(clickupSetStatus("move", "testing")).toEqual({ handoff: { statusNames: ["testing"] } });
+  test("changing a step replaces its blocks, in the order given", () => {
+    const blocks = [{ type: "assign" as const, who: "me" as const }, { type: "move" as const, statusNames: ["testing"] }];
+    expect(clickupBlocks("move", blocks)).toEqual({ handoff: { blocks } });
+    expect(clickupBlocks("menu", blocks)).toEqual({ review: { blocks } });
+    expect(clickupBlocks("merge", blocks)).toEqual({ merge: { blocks } });
   });
 
-  test("removing a step takes its status with it, and removing the review item leaves the reviewer list", () => {
-    expect(clickupRemove("move")).toEqual({ handoff: { enabled: false, statusNames: [], unassign: "none", assign: { who: "none" } } });
-    expect(clickupRemove("menu")).toEqual({ review: { enabled: false, statusNames: [], assign: { who: "none" } } });
+  test("removing a step takes its blocks with it, and removing the review item leaves the reviewer list", () => {
+    expect(clickupRemove("move")).toEqual({ handoff: { enabled: false, blocks: [] } });
+    expect(clickupRemove("menu")).toEqual({ review: { enabled: false, blocks: [] } });
     expect(clickupRemove("people")).toEqual({ review: { assignReviewer: false } });
-  });
-
-  test("who comes off the card is its own change", () => {
-    expect(clickupUnassign("me")).toEqual({ handoff: { unassign: "me" } });
   });
 
   test("only the first step switches changes on, and only while they are off", () => {
@@ -205,8 +204,8 @@ describe("the map's bookkeeping", () => {
 
   test("the words come from the tracker: a transition is not a move", () => {
     const jira = { ...CLICKUP.nouns, name: "Jira", item: "issue", move: "Transition to", verb: "Transition" };
-    expect(moments(jira).move.title).toBe("Transition button on a pull request");
-    expect(moments(CLICKUP.nouns).move.title).toBe("Move button on a pull request");
+    expect(moments(jira).move.blurb).toContain("issue block");
+    expect(moments(CLICKUP.nouns).move.blurb).toContain("card block");
     expect(moments(jira).note.blurb).toBe("Writes a comment on the issue.");
   });
 });
