@@ -203,7 +203,7 @@ export const UI_ACTIONS = {
   "bench.file": def({ level: 1, kind: "open", surface: "a file on the bench, read-write as the bench always is", args: { root: { t: "abspath" }, path: { t: "relpath" } } }),
   "bench.board": def({ level: 1, kind: "open", surface: "a board (pull requests, tasks, files) as a bench tab", args: { root: { t: "abspath" }, kind: { t: "enum", values: BOARD_KINDS } } }),
   "peek.file": def({ modals: ["PeekFile.tsx"], level: 1, kind: "open", surface: "the file viewer, reading", args: { root: { t: "abspath" }, path: { t: "relpath" } } }),
-  "git.modal": def({ modals: ["InsightsModal.tsx", "BisectModal.tsx", "GitPalette.tsx"], level: 1, kind: "open", surface: "Insights, Bisect or the git command palette over the checkout the Git view is on", args: { which: { t: "enum", values: GIT_MODALS } } }),
+  "git.modal": def({ modals: ["InsightsModal.tsx", "BisectModal.tsx", "GitPalette.tsx", "GitPanel.tsx"], level: 1, kind: "open", surface: "Insights, Bisect or the git command palette over the checkout the Git view is on", args: { which: { t: "enum", values: GIT_MODALS } } }),
   "git.compare": def({ modals: ["CompareModal.tsx"], level: 1, kind: "open", surface: "the Compare modal against one ref", args: { base: { t: "ref" } } }),
   "git.blame": def({ modals: ["BlameModal.tsx"], level: 1, kind: "open", surface: "the Blame modal on one file of the checkout", args: { path: { t: "relpath" } } }),
   // Opening shows a plan and moves nothing: the rebase starts only when the owner
