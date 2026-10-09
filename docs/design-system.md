@@ -74,6 +74,7 @@ be its value there.
 | `CTRL_H` | compact 22, regular 28, large 32 | `web/src/components/workspace/Chrome.tsx` |
 | `EDGE` | 1px, `--text` at 14%: the outline | `web/src/components/workspace/Chrome.tsx` |
 | `LINE` | 1px, `--surface-line`: the rule | `web/src/components/workspace/Chrome.tsx` |
+| `tintEdge` | a 1px edge tinted by a hue the caller owns: the edge that means something | `web/src/components/workspace/Chrome.tsx` |
 | `CHIP` | the control shape: 11px, `rounded-lg`, 28px min height | `web/src/components/workspace/Chrome.tsx` |
 | `CHIP_SURFACE` | fill and `EDGE` for a control with no on-state | `web/src/components/workspace/Chrome.tsx` |
 | `CHIP_SURFACE_CLS` | its hover step | `web/src/components/workspace/Chrome.tsx` |

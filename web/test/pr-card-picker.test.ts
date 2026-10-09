@@ -47,7 +47,7 @@ describe("the window that went black", () => {
      * those two renders ran a different number of hooks and React threw the
      * whole tree away.
      */
-    const tail = CLICKUP.slice(CLICKUP.indexOf("if (!ref) return null;"));
+    const tail = CLICKUP.slice(CLICKUP.indexOf("if (!ref || (!moveOn && !assignReviewer)) return null;"));
     expect(tail.length).toBeGreaterThan(200);
     const hook = /\buse[A-Z]\w*\(/.exec(tail);
     expect(hook?.[0] ?? "none", "a hook below the early return").toBe("none");
@@ -56,7 +56,7 @@ describe("the window that went black", () => {
   it("keeps the early return, rather than drawing an empty half", () => {
     // The fix is not "always render": a pull request with no card must draw
     // nothing here at all.
-    expect(CLICKUP).toContain("if (!ref) return null;");
+    expect(CLICKUP).toContain("if (!ref || (!moveOn && !assignReviewer)) return null;");
   });
 
   it("holds the same line in the sidebar, which has the same shape", () => {
@@ -132,8 +132,8 @@ describe("the people who reset themselves", () => {
        ticked with whatever the card held. */
     expect(CLICKUP).toMatch(/const query = ref\?\.query \?\? ""/);
     expect(CLICKUP).toMatch(/await api\.clickupFind\(query\)/);
-    // The effect's dependency is that string and nothing else.
-    expect(CLICKUP).toMatch(/\n  \}, \[query\]\);/);
+    // The effect's dependencies are that string and one boolean (is any step added), never an object.
+    expect(CLICKUP).toMatch(/\n  \}, \[query, wanted0\]\);/);
     expect(CLICKUP).not.toMatch(/\n  \}, \[ref\]\);/);
   });
 

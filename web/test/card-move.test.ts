@@ -279,8 +279,8 @@ describe("the hand-off control in the panel", () => {
     expect(body).toContain("handoffChanges(target, task.people, handoff.unassign)");
   });
 
-  it("shows the Workflow block in Settings only for a connected ClickUp", () => {
-    expect(SETTINGS).toContain('spec.id === "clickup" && connected && <ClickUpWorkflow />');
+  it("shows the ClickUp page in Settings only for a connected ClickUp", () => {
+    expect(SETTINGS).toContain('{show("clickup") && cu && <ClickUpPane />}');
   });
 });
 

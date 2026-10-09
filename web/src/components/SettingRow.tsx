@@ -261,3 +261,20 @@ export function Fold({ label, hint, children, defaultOpen }: {
     </>
   );
 }
+
+export function Toggle({ on, onClick, label, hint, disabled, modified }: {
+  on: boolean; onClick: () => void; label: string; hint: string;
+  /** Differs from the shipped default: SettingRow draws the dot. */
+  modified?: boolean;
+  /** A host that cannot do this at all — the row stays, greyed, saying why in
+   *  its hint, because a switch that vanishes reads as a feature you imagined. */
+  disabled?: boolean;
+}) {
+  return (
+    <SettingRow label={label} hint={hint} onClick={onClick} disabled={disabled} modified={modified}
+      role="switch" ariaChecked={on}
+      /* A real switch: position carries the state, so it reads at a glance
+         instead of having to be parsed. */
+      control={<Switch on={on} />} />
+  );
+}

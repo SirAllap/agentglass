@@ -26,7 +26,7 @@ import { secretFor, annotate, redacted, fingerprint } from "./credentials.ts";
 import { markdownToDelta, type MentionPerson } from "./clickupDelta.ts";
 import type {
   ListMember, TaskReply, ProviderTask, ClickUpUser, ClickUpWorkspace, ListStatus, ListField, ListPlace, TaskDetail,
-  CardEvent, CardFieldKind, CardPr } from "../../shared/providers.ts";
+  CardEvent, CardFieldKind, CardPr, ClickUpSpace } from "../../shared/providers.ts";
 
 const CLICKUP_API = "https://api.clickup.com/api/v2";
 
@@ -1207,6 +1207,7 @@ export function forgetAll(): void {
   __clearFindCache();
   __resetCounts();
   people = null;
+  memo.clear();
   listViewCache.clear(); spaceTagCache.clear(); taskSpaceCache.clear();
 }
 
@@ -3398,16 +3399,32 @@ export async function cardPullRequests(
  * That is what makes a saved folder worth storing as a FOLDER: the app keeps
  * an id, and the contents are whatever ClickUp says they are today.
  */
-export async function clickupSpaces(): Promise<CallResult<{ spaces: { id: string; name: string }[] }>> {
+export async function clickupSpaces(fresh = false): Promise<CallResult<{ spaces: ClickUpSpace[] }>> {
   const token = secretFor("clickup");
   if (!token) return { ok: false, error: "ClickUp is not connected" };
   const me = redacted("clickup");
   if (!me?.workspaceId) return { ok: false, error: "No ClickUp workspace chosen yet" };
-  const r = await call<{ spaces?: { id: string; name?: string }[] }>(
-    `/team/${encodeURIComponent(me.workspaceId)}/space?archived=false`, token,
-  );
+  /* The same answer carries each space's statuses (`statuses[]`, with their
+     type and colour), so the workflow map's pickers cost no request of their
+     own. Held ten minutes like the roster, and per workspace so changing
+     workspace does not show the old one's statuses. A refusal is not held:
+     the next ask retries. `fresh` is the Re-read press, which must reach
+     ClickUp rather than the memo. */
+  const key = `spaces:${me.workspaceId}`;
+  if (fresh) memo.delete(`${base}|${token}|${key}`);
+  const r = await memoOk(key, token, () => call<{ spaces?: { id: string; name?: string; statuses?: { status?: string; type?: string; color?: string }[] }[] }>(
+    `/team/${encodeURIComponent(me.workspaceId!)}/space?archived=false`, token,
+  ));
   if (!r.ok) return { ...r, data: undefined };
-  return { ok: true, data: { spaces: (r.data?.spaces ?? []).map((s) => ({ id: String(s.id), name: s.name ?? "" })).filter((s) => s.id) } };
+  return {
+    ok: true,
+    data: {
+      spaces: (r.data?.spaces ?? []).filter((s) => s.id).map((s) => ({
+        id: String(s.id), name: s.name ?? "",
+        statuses: (s.statuses ?? []).filter((x) => x.status).map((x) => ({ status: x.status!, type: x.type ?? "custom", ...(x.color ? { color: x.color } : {}) })),
+      })),
+    },
+  };
 }
 
 export interface ClickUpFolder {

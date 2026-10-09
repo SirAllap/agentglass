@@ -7208,10 +7208,15 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
   const [err, setErr] = useState("");
   /* Putting people on the card is the team's choice, not a given: off until
      Settings says so, and unknown reads as off. */
-  const assignReviewer = useClickupPrefs()?.review.assignReviewer === true;
+  const reviewPrefs = useClickupPrefs()?.review;
+  const assignReviewer = reviewPrefs?.assignReviewer === true;
+  /* The move item is a step like the others: absent until it is added. */
+  const moveOn = reviewPrefs?.enabled === true;
 
+  /* Nothing to read for a menu that will draw nothing: neither step added. Unknown prefs read as off. */
+  const wanted0 = moveOn || assignReviewer;
   useEffect(() => {
-    if (!query) return;
+    if (!query || !wanted0) return;
     let live = true;
     setErr("");
     void (async () => {
@@ -7236,11 +7241,11 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
          knowing the word: the workspace's own names first (Settings), else any
          open status with "review" in it, else leave it exactly where it is.
          Prefs not known yet read as no names, which is the shipped guess. */
-      setPick(reviewStatus(st, t.status, prefs?.review.statusNames ?? []));
+      setPick(prefs?.review.enabled ? reviewStatus(st, t.status, prefs.review.statusNames) : "");
       if (blocked) setPick("");
     })();
     return () => { live = false; };
-  }, [query]);
+  }, [query, wanted0]);
 
   const nameOf = useCallback(
     (id: number) => (members ?? []).find((m) => m.id === id)?.name || `#${id}`,
@@ -7310,7 +7315,7 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
    * renders ran a different number of hooks, React threw, and the window went
    * black. That is the blank app in his screenshot.
    */
-  if (!ref) return null;
+  if (!ref || (!moveOn && !assignReviewer)) return null;
 
   const people = (members ?? []).filter((m) => m.name && (!q.trim() || m.name.toLowerCase().includes(q.trim().toLowerCase())))
     .sort((a, b) => {
@@ -7356,6 +7361,7 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
         <div className="px-3 py-3 text-[11px]" style={{ color: "var(--text3)" }}>Looking it up…</div>
       ) : (
         <>
+          {moveOn && (
           <div className="px-2 pt-2 pb-1 shrink-0">
             <div className="text-[9px] uppercase tracking-[0.16em] mb-1" style={{ color: "var(--text4)" }}>Status</div>
             {/* The card's own control, not a second design for the same choice:
@@ -7400,6 +7406,7 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
               </div>
             )}
           </div>
+          )}
           {assignReviewer && <>
           <div className="px-2 pt-2 shrink-0">
             <div className="text-[9px] uppercase tracking-[0.16em] mb-1" style={{ color: "var(--text4)" }}>Assigned</div>

@@ -78,10 +78,8 @@ describe("modified dot", () => {
     expect(rowCode).toContain("var(--success)");
   });
   test("Toggle and Choice pass it through", () => {
-    for (const sig of ["function Toggle(", "function Choice<T extends string>("]) {
-      const body = fnBody(modalCode, sig);
-      expect(body).toContain("modified={modified}");
-    }
+    expect(fnBody(rowCode, "export function Toggle(")).toContain("modified={modified}");
+    expect(fnBody(modalCode, "function Choice<T extends string>(")).toContain("modified={modified}");
   });
 });
 

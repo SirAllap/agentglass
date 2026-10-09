@@ -267,15 +267,18 @@ that nothing the code reads goes unnamed. None is required.
 
 ## ClickUp workflow settings
 
-How ClickUp works is code. How one team uses it (a QA column, a field that holds the PR link, a sprint naming habit) is a preference, kept in `clickup-prefs.json` beside `clickup-views.json` in the config directory and edited under Settings → Integrations → ClickUp. `GET /clickup/prefs` reads them; a `POST` is a partial update that is validated as a whole, and anything refused writes nothing and says which setting and why. A hand-edited pattern that does not compile falls back to its default rather than breaking the board. The three patterns are regular-expression sources, matched without regard to case; an empty string means the default. With no file, the app does what it did before these settings existed, except that the two flows that were one team's habit start off.
+The ClickUp page in Settings (it appears once ClickUp is connected) shows these as the steps of a workflow map: each step is off and absent from the pull request and card views until it is added from the user's own statuses. How ClickUp works is code. How one team uses it (a QA column, a field that holds the PR link, a sprint naming habit) is a preference, kept in `clickup-prefs.json` beside `clickup-views.json` in the config directory and edited under Settings → Integrations → ClickUp. `GET /clickup/prefs` reads them; a `POST` is a partial update that is validated as a whole, and anything refused writes nothing and says which setting and why. A hand-edited pattern that does not compile falls back to its default rather than breaking the board. The three patterns are regular-expression sources, matched without regard to case; an empty string means the default. With no file, the app does what it did before these settings existed, except that the two flows that were one team's habit start off.
 
 | Setting | Default | What it does |
 |---|---|---|
 | `handoff.enabled` | `false` | Shows the "move to QA" action on a pull request's card. |
 | `handoff.statusNames` | `[]` | Status names to look for, in order; the first one the card's list has wins. Empty with the hand-off on means `Ready for QA`. |
 | `handoff.unassign` | `none` | Who comes off the card on hand-off: `none`, `me` (the connected account) or `all`. |
+| `review.enabled` | `false` | Shows the move item in the review menu. A settings file written before this key existed reads as `true` when it shows ClickUp in use (a hand-off, reviewers, a note or review names set), because the item was always there; a file of pure defaults stays off. |
 | `review.statusNames` | `[]` | Status names the review menu moves a card to. Empty falls back to a status whose name contains `review`, then leaves the card alone. |
-| `review.assignReviewer` | `false` | Whether moving a card to review also puts the reviewer on it. |
+| `review.assignReviewer` | `false` | Whether the review menu lists the card's members, so the reviewer can be put on it. |
+| `merge.enabled` | `false` | Shows a card choice in the merge dialog. Off, the dialog has no ClickUp row at all. Read like `review.enabled` for a file from before the key existed, with no status, which is `Leave it there`. |
+| `merge.statusNames` | `[]` | Status names the merge dialog preselects, in order; the first one the card's list has wins. Empty means `Leave it there`. The choice is only preselected: the card moves when the merge is confirmed with it, and the row is in the dialog to change it. |
 | `flows.noteOnCard` | `false` | Offers a "note on card" comment when you ask for a review. |
 | `prLinkField` | empty | Custom field that holds a PR link. Empty guesses a field whose name contains `github`; a name set here is matched exactly, with no guess. |
 | `swatchField` | empty | Custom field drawn as a colour swatch. Empty guesses a coloured drop-down named like `squad`, `team`, `pod` or `tribe`, else the first coloured one; a name set here is matched exactly. |

@@ -26,7 +26,7 @@ describe("slice 6 nav groups", () => {
     expect(idsIn("Workspace")).toEqual(["terminal", "diff", "browser", "tasks"]);
     expect(idsIn("Agents")).toEqual(["hooks", "lantern", "understudy", "budgets"]);
     expect(idsIn("Library")).toEqual(["recipes", "review-prompts", "saved-replies"]);
-    expect(idsIn("Connections")).toEqual(["connections", "remote", "plugins"]);
+    expect(idsIn("Connections")).toEqual(["connections", "clickup", "remote", "plugins"]);
     expect(idsIn("System")).toEqual(["tmux", "privacy", "about"]);
   });
 

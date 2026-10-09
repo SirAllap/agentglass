@@ -6230,8 +6230,8 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
        adding a folder costs nothing beyond what the picker already spent. */
     if (pathname === "/clickup/spaces") {
       const { clickupSpaces } = await import("./clickup.ts");
-      const r = await clickupSpaces();
-      return json(r.ok ? { ok: true, spaces: r.data?.spaces ?? [] } : { ok: false, error: r.error });
+      const r = await clickupSpaces(url.searchParams.get("fresh") === "1");
+      return json(r.ok ? { ok: true, spaces: r.data?.spaces ?? [] } : { ok: false, error: r.error, throttled: r.throttled === true, unauthorised: r.unauthorised === true });
     }
     /* The tabs a list has in ClickUp, for the sidebar to hang under it. Read on
        demand — one call, and only for a list somebody actually opened. */

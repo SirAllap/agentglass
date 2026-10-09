@@ -152,6 +152,21 @@ export function reviewStatus(statuses: ListStatus[], current: string, names: str
 }
 
 /**
+ * What the merge dialog's card choice opens on: the first of the workspace's
+ * names that the card's list has, unless the card is already there, else
+ * `LEAVE_ALONE`. Offered, never imposed: the dialog still lets the person
+ * change it, and leaving it writes nothing. Names are the workspace's own, so
+ * a list without any of them preselects nothing rather than guessing a word.
+ */
+export function mergePreselect(statuses: ListStatus[], current: string, names: string[]): string {
+  for (const n of names) {
+    const hit = statuses.find((x) => eqStatus(x.status, n));
+    if (hit) return eqStatus(hit.status, current) ? LEAVE_ALONE : hit.status;
+  }
+  return LEAVE_ALONE;
+}
+
+/**
  * Who the note is for: somebody else on the card. Falls back to nobody rather
  * than to the connected account, who is the one opening the pull request —
  * telling yourself your own branch is ready is the one message that is never

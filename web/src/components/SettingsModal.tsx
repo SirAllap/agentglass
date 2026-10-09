@@ -14,7 +14,7 @@ import { RecipesPane } from "./RecipesPane.tsx";
 import { ReviewPromptsPane } from "./ReviewPromptsPane.tsx";
 import { SavedRepliesPane } from "./SavedRepliesPane.tsx";
 import { lastTerminalRoot } from "./TerminalPanel.tsx";
-import { Filter, Fold, SettingRow } from "./SettingRow.tsx";
+import { Filter, Fold, SettingRow, Toggle, Switch } from "./SettingRow.tsx";
 import { resetShown } from "../lib/settingsModified.ts";
 import { pageScore, searchSettings, absentFor, expandWord, rowId, type SettingsPage } from "../lib/settingsIndex.ts";
 import { motion, AnimatePresence } from "motion/react";
@@ -24,11 +24,12 @@ import { api } from "../lib/api.ts";
 import { browserPlaces, CAN_IMPORT_COOKIES, cookieSources, importCookies, forgetCookies, type CookieSource, type CookieImportReply } from "../lib/desktop.ts";
 import { loadProfiles } from "../lib/browserProfiles.ts";
 import { addVisible, allSites, bestSource, dropVisible, lockedWhy, reachable, siteView } from "../lib/cookiePick.ts";
-import { PROVIDERS, DEFAULT_SPRINT_LIST_PATTERN, DEFAULT_READ_ONLY_FIELD_PATTERN, type ProviderSpec, type ProviderStatus, type ProviderState, type ClickUpPrefs, type HandoffUnassign } from "../../../shared/providers.ts";
-import { clickupPrefs, clickupPrefsSaved, __forgetClickupPrefs } from "../lib/clickupPrefs.ts";
-import { __forgetClickupSetup } from "../lib/clickupSetup.ts";
+import { PROVIDERS, type ProviderSpec, type ProviderStatus, type ProviderState } from "../../../shared/providers.ts";
+import { __forgetClickupPrefs } from "../lib/clickupPrefs.ts";
+import { __forgetClickupSpaces } from "../lib/clickupSpaces.ts";
+import { ClickUpPane, CardSkillsRow } from "./ClickUpPane.tsx";
+import { __forgetClickupSetup, clickupSetup } from "../lib/clickupSetup.ts";
 import { forgetCards } from "../lib/prCardStore.ts";
-import { DEFAULT_CARD_SKILL_PATTERN } from "../../../shared/cardSkills.ts";
 import { checkedLine } from "../lib/providerFreshness.ts";
 import { fmtAgo, minutesAgo } from "../lib/format.ts";
 import { useClipped } from "./TopBarNotes.tsx";
@@ -243,40 +244,6 @@ function SetupCard({ title, steps, note, error }: {
   );
 }
 
-function Toggle({ on, onClick, label, hint, disabled, modified }: {
-  on: boolean; onClick: () => void; label: string; hint: string;
-  /** Differs from the shipped default: SettingRow draws the dot. */
-  modified?: boolean;
-  /** A host that cannot do this at all — the row stays, greyed, saying why in
-   *  its hint, because a switch that vanishes reads as a feature you imagined. */
-  disabled?: boolean;
-}) {
-  return (
-    <SettingRow label={label} hint={hint} onClick={onClick} disabled={disabled} modified={modified}
-      role="switch" ariaChecked={on}
-      /* A real switch: position carries the state, so it reads at a glance
-         instead of having to be parsed. */
-      control={<Switch on={on} />} />
-  );
-}
-
-/** The switch itself, without the row around it. Split out because the task
- *  sources need one inside a row that is NOT a button — see SourceRow. */
-function Switch({ on }: { on: boolean }) {
-  return (
-    <span className="relative rounded-full transition-colors block" style={{
-      width: 34, height: 19,
-      background: on ? "color-mix(in srgb, var(--primary) 55%, transparent)" : "color-mix(in srgb, var(--border) 55%, transparent)",
-    }}>
-      <span className="absolute rounded-full transition-transform" style={{
-        width: 15, height: 15, top: 2, left: 2,
-        transform: on ? "translateX(15px)" : "translateX(0)",
-        background: on ? "var(--primary-hover)" : "var(--text3)",
-      }} />
-    </span>
-  );
-}
-
 /**
  * One task source: whether it is on the bar, and where on it.
  *
@@ -383,7 +350,7 @@ function Row({ label, hint, kbd, href, download, onClick }: { label: string; hin
   );
 }
 
-type Pane = "recipes" | "review-prompts" | "saved-replies" | "appearance" | "prefs" | "terminal" | "diff" | "tasks" | "privacy" | "notifications" | "browser" | "rail" | "keys" | "lantern" | "log" | "budgets" | "hooks" | "connections" | "tmux" | "remote" | "plugins" | "understudy" | "about" | "onboarding"
+type Pane = "recipes" | "review-prompts" | "saved-replies" | "appearance" | "prefs" | "terminal" | "diff" | "tasks" | "privacy" | "notifications" | "browser" | "rail" | "keys" | "lantern" | "log" | "budgets" | "hooks" | "connections" | "clickup" | "tmux" | "remote" | "plugins" | "understudy" | "about" | "onboarding"
   /** A plugin's own settings page, one per plugin that declares any. */
   | `plugin:${string}`;
 /** "" is a page that is in no group and so not in the nav (see LINK_ONLY).
@@ -525,6 +492,9 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string; what?: strin
    called Connections is a heading repeating itself, which is the same noise as
    a heading over one item. */
   { id: "connections", label: "Tools & services", group: "Connections", kw: "requirements dependencies deps tmux git docker install integrations providers connect github gitlab clickup taskwarrior token api credentials account rate limit budget quota", what: "The tools and services this app leans on, and whether they are ready.", status: true, icon: ServerIcon },
+  /* Only while ClickUp is connected (see `tabs` in the modal): before that there is no
+     workspace for a status to mean anything in, and a page for it would be a dead end. */
+  { id: "clickup", label: "ClickUp", group: "Connections", kw: "clickup workflow map steps statuses cards tracker hand off qa review menu merge dialog note assigned people sprint swatch spaces subtasks pull request link", what: "How agentglass uses your ClickUp: the steps you add, tied to your own statuses.", icon: ChecklistIcon },
   { id: "remote", label: "Remote", group: "Connections", kw: "remote access pair phone tailscale token device", what: "Reach this machine from your phone.", icon: PhoneIcon },
   /* Filed beside Remote rather than under Agents: a plugin is
      someone else's code holding a scoped credential to this server, the
@@ -801,7 +771,11 @@ function MiniBtn({ label, disabled, onClick, children }: { label: string; disabl
  * says "Terminal" twice before the first setting.
  */
 /** Panes whose content is a grid of cards, not a column of rows. */
-const WIDE_PANES = new Set(["plugins"]);
+const WIDE_PANES = new Map<string, string>([
+  ["plugins", "1180px"],
+  /* The workflow map is three columns (steps, the lines, the statuses) and needs this much to keep a sentence on two lines. */
+  ["clickup", "980px"],
+]);
 
 const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -2967,131 +2941,6 @@ function rememberHeight(id: string, px: number): void {
   try { localStorage.setItem(CARD_H_KEY, JSON.stringify({ ...all, [id]: h })); } catch { /* private mode */ }
 }
 
-const UNASSIGN_OPTIONS: { value: HandoffUnassign; label: string; hint: string }[] = [
-  { value: "none", label: "Nobody", hint: "Everyone assigned stays on the card." },
-  { value: "me", label: "Only me", hint: "Your account comes off; the others stay." },
-  { value: "all", label: "Everyone", hint: "Nobody stays on the card until QA picks it up." },
-];
-
-/**
- * How this workspace hands a card to QA, under the ClickUp row and only once
- * ClickUp is connected: before that there is no board for a status name to
- * mean anything on. Off until asked for, because a column called "Ready for
- * QA" is one team's habit and every other workspace should never see a button
- * offering to write to it.
- *
- * The controls keep their place in every state. Switched off, the two below
- * the switch go dim rather than away, so turning it on moves nothing. Each
- * change is its own save of that one key; the server answers with the whole
- * stored settings, and that answer, not the draft, is what the rows show.
- */
-export function ClickUpWorkflow({ initial }: { initial?: ClickUpPrefs | null } = {}) {
-  const [prefs, setPrefs] = useState<ClickUpPrefs | null>(initial ?? null);
-  const [names, setNames] = useState<string | null>(null);
-  const [reviewNames, setReviewNames] = useState<string | null>(null);
-  const [note, setNote] = useState<string | null>(null);
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
-  useEffect(() => {
-    if (initial) return;
-    let live = true;
-    void clickupPrefs().then((p) => { if (live && p) setPrefs(p); });
-    return () => { live = false; };
-  }, [initial]);
-  if (!prefs) return null;
-  const h = prefs.handoff;
-  const send = async (patch: Parameters<typeof api.clickupSetPrefs>[0]) => {
-    const r = await api.clickupSetPrefs(patch);
-    if (!r.ok || !r.prefs) { setNote(r.error ?? "That did not save"); return; }
-    setNote(null); setNames(null); setReviewNames(null); setDrafts({}); setPrefs(r.prefs); clickupPrefsSaved(r.prefs);
-  };
-  /* One name-or-pattern row. A pattern equal to the shipped one shows as empty,
-     so the placeholder says what applies and nothing has to be retyped to get
-     it back; a refused one stays in the box with the sentence under it. */
-  const text = (key: "prLinkField" | "swatchField" | "cardSkillPattern" | "sprintListPattern" | "readOnlyFieldPattern",
-    label: string, hint: string, placeholder: string, fallback = "") => {
-    const saved = prefs[key] === fallback ? "" : prefs[key];
-    const commitText = () => {
-      const d = drafts[key];
-      if (d === undefined) return;
-      if (d.trim() === saved) { setDrafts(({ [key]: _gone, ...rest }) => rest); return; }
-      void send({ [key]: d });
-    };
-    return (
-      <SettingRow label={label} hint={hint}
-        control={
-          <input value={drafts[key] ?? saved} onChange={(e) => setDrafts({ ...drafts, [key]: e.target.value })} onBlur={commitText}
-            onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-            aria-label={label} placeholder={placeholder} spellCheck={false} autoComplete="off"
-            className={`w-[220px] ${INPUT}`} style={INPUT_STYLE} />
-        } />
-    );
-  };
-  const save = (patch: Partial<ClickUpPrefs["handoff"]>) => send({ handoff: patch });
-  const rv = prefs.review;
-  /* A comma-separated row: the draft is text, the save is the list, and a draft
-     that parses to what is already stored saves nothing. */
-  const listOf = (draft: string) => draft.split(",").map((x) => x.trim()).filter(Boolean);
-  const commitList = (draft: string | null, stored: string[], clear: () => void, apply: (l: string[]) => void) => {
-    if (draft === null) return;
-    const l = listOf(draft);
-    if (l.join("\u0000") === stored.join("\u0000")) { clear(); return; }
-    apply(l);
-  };
-  const rvShown = reviewNames ?? rv.statusNames.join(", ");
-  const commitReview = () => commitList(reviewNames, rv.statusNames, () => setReviewNames(null), (l) => { void send({ review: { statusNames: l } }); });
-  const shown = names ?? h.statusNames.join(", ");
-  const commit = () => commitList(names, h.statusNames, () => setNames(null), (l) => { void save({ statusNames: l }); });
-  return (
-    <div className="mt-1 mb-2">
-      {/* 18px: the edge a row's label sits on (.agx-settings-row), so the heading and what it heads share it. */}
-      <div className="panel-eyebrow pb-0.5" style={{ paddingLeft: 18, paddingRight: 18 }}>Workflow</div>
-      <Toggle on={h.enabled} onClick={() => { void save({ enabled: !h.enabled }); }}
-        label="Hand off to QA"
-        hint="Adds a move-to-QA button on a pull request's card." />
-      <div style={{ opacity: h.enabled ? 1 : 0.5 }}>
-        <SettingRow label="QA status names"
-          hint="Comma separated, first match wins. Empty: Ready for QA."
-          control={
-            <input value={shown} onChange={(e) => setNames(e.target.value)} onBlur={commit}
-              onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-              disabled={!h.enabled} aria-label="QA status names" placeholder="Ready for QA" spellCheck={false} autoComplete="off"
-              className={`w-[220px] ${INPUT}`} style={INPUT_STYLE} />
-          } />
-        <SettingRow label="Take off the card" hint="Who is unassigned when the card is handed over."
-          control={
-            <Select value={h.unassign} onChange={(v) => { void save({ unassign: v as HandoffUnassign }); }}
-              disabled={!h.enabled} style={{ minWidth: 132 }}
-              options={UNASSIGN_OPTIONS} />
-          } />
-      </div>
-      <SettingRow label="Review status names"
-        hint="First match wins. Empty: any status with review."
-        control={
-          <input value={rvShown} onChange={(e) => setReviewNames(e.target.value)} onBlur={commitReview}
-            onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-            aria-label="Review status names" placeholder="Code Review" spellCheck={false} autoComplete="off"
-            className={`w-[220px] ${INPUT}`} style={INPUT_STYLE} />
-        } />
-      <Toggle on={rv.assignReviewer} onClick={() => { void send({ review: { assignReviewer: !rv.assignReviewer } }); }}
-        label="Put people on the card from the review menu"
-        hint="Adds an Assigned list to the ClickUp half of the menu." />
-      <Toggle on={prefs.flows.noteOnCard} onClick={() => { void send({ flows: { noteOnCard: !prefs.flows.noteOnCard } }); }}
-        label="Note on card"
-        hint="Adds a button that writes a note on the card." />
-      <div className="panel-eyebrow pb-0.5 pt-2" style={{ paddingLeft: 18, paddingRight: 18 }}>Names on your boards</div>
-      {text("prLinkField", "PR link field", "Holds the PR link. Empty: any field named github.", "GitHub URL")}
-      {text("swatchField", "Colour column field", "Drop-down shown as a swatch. Empty: guessed from the field names.", "Team")}
-      {text("cardSkillPattern", "Card skills pattern", "Regex on a skill's name or description.", "clickup|\\bcu-|-cu\\b", DEFAULT_CARD_SKILL_PATTERN)}
-      {text("sprintListPattern", "Sprint list pattern", "Regex for sprint lists. Dated ones always count.", "^sprint\\b", DEFAULT_SPRINT_LIST_PATTERN)}
-      {text("readOnlyFieldPattern", "Read-only fields pattern", "Regex for fields shown but never written.", "do not edit", DEFAULT_READ_ONLY_FIELD_PATTERN)}
-      <Toggle on={prefs.assigned.includeSubtasks} onClick={() => { void send({ assigned: { includeSubtasks: !prefs.assigned.includeSubtasks } }); }}
-        label="Subtasks on Assigned to me"
-        hint="Slower: the workspace read can take twice as long." />
-      {note && <div className="text-[11px] mt-1" style={{ color: "var(--error-ink)" }}>{note}</div>}
-    </div>
-  );
-}
-
 function ProviderCard({ spec, status, checking, onChanged }: {
   spec: ProviderSpec; status: ProviderStatus | null;
   /** Nothing is known about this one yet. Different from `status === null`
@@ -3143,7 +2992,7 @@ function ProviderCard({ spec, status, checking, onChanged }: {
     // Cleared on success and only on success: a refused token is usually one
     // that was pasted short, and retyping it is a chore nobody needs.
     setToken(""); setNote(null);
-    if (spec.id === "clickup") { __forgetClickupSetup(); __forgetClickupPrefs(); }
+    if (spec.id === "clickup") { __forgetClickupSetup(); __forgetClickupPrefs(); __forgetClickupSpaces(); }
     await onChanged();
   };
 
@@ -3243,7 +3092,7 @@ function ProviderCard({ spec, status, checking, onChanged }: {
             onClick={async () => {
               setBusy(true); await api.providerDisconnect(spec.id, { forgetBoards }); setBusy(false);
               // The sidebar's copies of "connected" and of each card are held for a minute.
-              __forgetClickupSetup(); __forgetClickupPrefs(); forgetCards();
+              __forgetClickupSetup(); __forgetClickupPrefs(); __forgetClickupSpaces(); forgetCards();
               setConfirming(false); setForgetBoards(false); setSpaces(null); await onChanged();
             }}
             className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
@@ -3295,14 +3144,17 @@ function ProviderCard({ spec, status, checking, onChanged }: {
 
       </div>}
 
-      {spec.id === "clickup" && connected && <ClickUpWorkflow />}
+      {/* The workflow lives on its own page, named after the tracker, which appears once it is connected. */}
+      {spec.id === "clickup" && connected && (
+        <SettingRow label="Workflow and boards" hint="The steps you add to pull requests and cards, tied to your own statuses." onClick={() => openSettings("clickup")} />
+      )}
 
       {spaces && (
         <div className="flex flex-col gap-0.5 mt-2.5 rounded-lg p-1" style={{ background: "var(--bg3)", border: line }}>
           {!spaces.length && <div className="text-[11px] px-2 py-1 t-dim2">This token can see no workspaces.</div>}
           {spaces.map((w) => (
             <button key={w.id}
-              onClick={async () => { await api.providerWorkspace(spec.id, w.id, w.name); setSpaces(null); await onChanged(); }}
+              onClick={async () => { await api.providerWorkspace(spec.id, w.id, w.name); if (spec.id === "clickup") { __forgetClickupSetup(); __forgetClickupSpaces(); } setSpaces(null); await onChanged(); }}
               className="text-left text-[11.5px] px-2 py-1 rounded hover:bg-white/5" style={{ color: "var(--text2)" }}>
               {w.name}
             </button>
@@ -3935,11 +3787,25 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
    * job instead: every matching page renders in place, at once, so there is
    * nothing to jump to.
    */
+  /* Is there a ClickUp here? Read from the local store (no call leaves the machine)
+     whenever the modal opens or the page changes, which is when connecting or
+     disconnecting in Tools & services has just happened. null is "not known
+     yet", and reads as no: the ClickUp page never flashes in and away. */
+  const [cuConnected, setCuConnected] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    void clickupSetup().then((c) => { if (live) setCuConnected(c.connected); });
+    return () => { live = false; };
+  }, [open, pane]);
+  const cu = cuConnected === true;
+  const tabs = useMemo(() => TABS.filter((t) => t.id !== "clickup" || cu), [cu]);
+  useEffect(() => { if (pane === "clickup" && cuConnected === false) setPane("connections"); }, [pane, cuConnected]);
   const matches = useMemo(() => (
-    ql ? TABS.map((t) => ({ id: t.id, s: pageScore(t as SettingsPage, ql) }))
+    ql ? tabs.map((t) => ({ id: t.id, s: pageScore(t as SettingsPage, ql) }))
       .filter((x) => x.s > 0).sort((a, b) => b.s - a.s).slice(0, 5)
     : []
-  ), [ql]);
+  ), [ql, tabs]);
   const matchIds = useMemo(() => new Set<string>(matches.map((m) => m.id)), [matches]);
   /** Gates a page's content: the current page with no query running, or —
    *  while searching — whichever pages the query actually answers. Plain
@@ -3947,7 +3813,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
    *  block used to test; every one of those becomes `{show("x") && …}`. */
   const show = useCallback((id: string): boolean => (ql ? matchIds.has(id) : pane === id), [ql, matchIds, pane]);
   const absentHit = ql ? absentFor(ql) : null;
-  const rowResults = useMemo(() => (ql ? searchSettings(ql, TABS as SettingsPage[]) : []), [ql]);
+  const rowResults = useMemo(() => (ql ? searchSettings(ql, tabs as SettingsPage[]) : []), [ql, tabs]);
   /** The rows actually on screen — the ones on a page that made the cap-5
    *  cut — in the same rank order the header counts. This, not `rowResults`
    *  itself, is what up/down cycles through: a result you cannot see is not
@@ -4430,7 +4296,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                 {(() => {
                   const hit = (t: typeof TABS[number]) => !ql || pageScore(t as SettingsPage, ql) > 0;
                   const groups = TAB_GROUPS
-                    .map((g) => ({ g, tabs: TABS.filter((t) => t.group === g && hit(t)) }))
+                    .map((g) => ({ g, tabs: tabs.filter((t) => t.group === g && hit(t)) }))
                     .filter((x) => x.tabs.length);
                   if (!groups.length) return <div className="px-2.5 py-3 text-[12.5px]" style={{ color: "var(--text4)" }}>No settings match “{q.trim()}”.</div>;
                   return groups.map(({ g, tabs }) => (
@@ -4542,7 +4408,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                     changed nothing at all.
                   */}
                   <div className="agx-settings-col"
-                    style={WIDE_PANES.has(pane) ? ({ "--agx-settings-col": "1180px" } as React.CSSProperties) : undefined}>
+                    style={WIDE_PANES.has(pane) ? ({ "--agx-settings-col": WIDE_PANES.get(pane) } as React.CSSProperties) : undefined}>
                   <Filter.Provider value={filterCtx}>
                   {/*
                    * The results header.
@@ -5151,6 +5017,11 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
 
                   {show("hooks") && <>
                     <HooksPane open={open} />
+                    {cu && (
+                      <Section title="Cards" desc="How agent skills relate to the cards of your tracker.">
+                        <CardSkillsRow connected />
+                      </Section>
+                    )}
                     <Section title="New chats"
                       desc="What a chat gets when it starts.">
                       {/* Merged from a separate "Chat" page: this and the tmux
@@ -5201,6 +5072,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                   )}
                   {ql && show("connections") && <PageMatchHeading id="connections" onOpen={() => { setPane("connections" as Pane); setQ(""); }} />}
                   {show("connections") && <><RequirementsPane open={open} /><IntegrationsPane open={open} /></>}
+                  {ql && show("clickup") && cu && <PageMatchHeading id="clickup" onOpen={() => { setPane("clickup" as Pane); setQ(""); }} />}
+                  {show("clickup") && cu && <ClickUpPane />}
 
                   {ql && show("remote") && <PageMatchHeading id="remote" onOpen={() => { setPane("remote" as Pane); setQ(""); }} />}
 

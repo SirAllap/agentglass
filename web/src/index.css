@@ -340,6 +340,9 @@
     padding: 14px 18px;
     text-align: left;
   }
+  /* The edge a row's label sits on (14/18 above): a block that is not a row but sits
+     in the same card, like the workflow map's steps, shares it. */
+  .agx-settings-x { padding-inline: 18px; }
   .agx-settings-row > :last-child { justify-self: end; }
   /* A row with no control — five of the Export rows, and every plain link row.
      The rule above sent its only child to the right edge, so those pages read

@@ -578,10 +578,16 @@ export const DEFAULT_READ_ONLY_FIELD_PATTERN = "do not edit";
 export interface ClickUpPrefs {
   handoff: HandoffConfig;
   review: {
+    /** The review menu's move item. Off until a workspace adds it as a step; a
+     *  settings file from before this key existed had the item, so it reads as on. */
+    enabled: boolean;
     /** Status names the review menu moves a card to; empty falls back to /review/i, then leaves it alone. */
     statusNames: string[];
     assignReviewer: boolean;
   };
+  /** The card choice in the merge dialog. Off until a workspace adds it; the first of
+   *  `statusNames` the card's list has is preselected, none means "Leave it there". */
+  merge: { enabled: boolean; statusNames: string[] };
   flows: { noteOnCard: boolean };
   /** Custom field that holds a PR link; empty means the guess (a name containing "github"). */
   prLinkField: string;
@@ -596,6 +602,11 @@ export interface ClickUpPrefs {
   readOnlyFieldPattern: string;
   bell: { kinds: ClickUpBellKind[] };
 }
+
+/** One status of a space, as Get Spaces carries it. */
+export interface SpaceStatus { status: string; type: string; color?: string }
+/** A space and the statuses its lists inherit; a list may override them. */
+export interface ClickUpSpace { id: string; name: string; statuses: SpaceStatus[] }
 
 /** Somebody who can be put on a card: the members of the list it lives in.
  *  Same shape as an assignee, because they become one. */
