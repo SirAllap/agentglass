@@ -213,13 +213,77 @@ describe("telling the app when the desktop switches theme", () => {
     __forgetDesktopPalette();
   });
 
+  /* Waits for the announcement rather than for a fixed 700 ms: the watcher
+     thread is slow to hand an event over when the machine is busy (16 copies of
+     this file at once missed the fixed window twice in ninety-six), and a late
+     announcement is not a wrong one. "Once" is still exact: after the first one
+     the file keeps listening for as long as a second would need to arrive. */
+  const until = async (f: () => boolean, ms = 5000) => {
+    for (const end = Date.now() + ms; !f() && Date.now() < end;) await settle(20);
+  };
+
   test("a switch is announced once, however many files it writes", async () => {
     let calls = 0;
     const stop = watchDesktopPalette(() => { calls++; });
     try {
       stage("orbit-day", COLORS.replace("#1a1b26", "#f5f0e6"));
+      await until(() => calls > 0);
       await settle();
       expect(calls).toBe(1);
+    } finally { stop(); }
+  });
+
+  /* Bun 1.3.9 ends an fs.watch at its first error event, and the error is a
+     name that was in the directory when the event was queued and gone when the
+     watcher looked at it: `theme-next` of every switch. A watcher that stayed
+     dead after that announced nothing for the rest of the run, and in this file
+     it was the whole flake: a switch staged straight after the watch opened,
+     with the watcher thread a moment behind, was never announced (2 of 96 runs
+     with sixteen copies of this file at once, none alone). The error is raised
+     here on demand because on a quiet machine it comes about once in thirty. */
+  const fakeWatch = () => {
+    const opened: { fire: () => void; fail: () => void; closed: boolean }[] = [];
+    const open = ((_dir: string, cb: () => void) => {
+      let onError: () => void = () => {};
+      const w = { closed: false, fire: () => cb(), fail: () => onError(), on: (_e: string, f: () => void) => { onError = f; }, close: () => { w.closed = true; } };
+      opened.push(w);
+      return w;
+    }) as unknown as typeof import("node:fs").watch;
+    return { open, opened };
+  };
+
+  test("a watch that raised an error is replaced, and the switch it missed is announced", async () => {
+    let calls = 0;
+    const { open, opened } = fakeWatch();
+    const stop = watchDesktopPalette(() => { calls++; }, open);
+    try {
+      expect(opened.length).toBe(1);
+      stage("orbit-day", COLORS.replace("#1a1b26", "#f5f0e6"));
+      opened[0]!.fail();
+      await until(() => calls > 0);
+      expect(calls).toBe(1);
+      expect(opened.length).toBe(2);
+      expect(opened[0]!.closed).toBe(true);
+      /* The new watch is the live one. */
+      stage("orbit-dusk", COLORS.replace("#1a1b26", "#101018"));
+      opened[1]!.fire();
+      await until(() => calls > 1);
+      expect(calls).toBe(2);
+    } finally { stop(); }
+    expect(opened[1]!.closed).toBe(true);
+  });
+
+  test("a directory that went away with the error ends the watch quietly", async () => {
+    let calls = 0;
+    const { open, opened } = fakeWatch();
+    const stop = watchDesktopPalette(() => { calls++; }, (d, cb) => {
+      if (opened.length > 0) throw new Error("ENOENT");
+      return open(d, cb as never);
+    });
+    try {
+      opened[0]!.fail();
+      await settle(400);
+      expect(calls).toBe(0);
     } finally { stop(); }
   });
 
