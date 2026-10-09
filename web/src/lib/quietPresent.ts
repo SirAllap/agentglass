@@ -52,7 +52,8 @@ export function focusKindOf(el: FocusEl | null | undefined): FocusKind {
 
 export interface PresentInput {
   present: UiPresent;
-  /** The registry entry's kind: only an `open` can be held. */
+  /** The registry entry's kind: only an `open` or a `stage` (a dialog put in front
+   *  of the person) can be held. */
   kind: UiKind;
   /** The registry entry's `inPlace`: it closes or repaints, it moves nobody. */
   inPlace: boolean;
@@ -68,7 +69,7 @@ export interface PresentInput {
  * an in-place door has nothing to land on.
  */
 export function decidePresent(i: PresentInput): "apply" | "queue" {
-  if (i.present === "now" || i.kind !== "open" || i.inPlace) return "apply";
+  if (i.present === "now" || (i.kind !== "open" && i.kind !== "stage") || i.inPlace) return "apply";
   if (i.focus !== "other") return "queue";
   return i.sinceInputMs < TYPING_MS ? "queue" : "apply";
 }

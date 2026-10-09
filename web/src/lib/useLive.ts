@@ -227,7 +227,7 @@ export function useLive(paused = false): LiveData {
         // An external controller (Stream Deck, phone) drove the UI. Imperative,
         // not data — hand it to App, which runs it through the same setters the
         // keyboard does.
-        emitControl(frame.data, frame.rid, { present: frame.present, as: frame.as });
+        emitControl(frame.data, frame.rid, { present: frame.present, as: frame.as, level: frame.level });
         return;
       }
       if (frame.type === "notify-prefs") {

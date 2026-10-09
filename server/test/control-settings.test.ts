@@ -41,8 +41,8 @@ describe("settings.set arguments", () => {
 });
 
 describe("the level switch", () => {
-  test("the built ceiling is 2, so a write is accepted by default", () => {
-    expect(UI_MAX_LEVEL).toBe(2);
+  test("the default is 2, so a write is accepted by default", () => {
+    expect(UI_MAX_LEVEL).toBe(3);
     expect(controlLevel({})).toBe(2);
     expect(set(true)).not.toBeNull();
   });
@@ -55,8 +55,9 @@ describe("the level switch", () => {
     expect(parseControlCmd({ cmd: "view", to: "git" }, 1)).not.toBeNull();
   });
 
-  test("a value that is not 1 is the ceiling, never 'more than the ceiling'", () => {
-    for (const v of ["3", "9", "", "off", "0", undefined]) expect(controlLevel({ AGENTGLASS_CONTROL_LEVEL: v }), String(v)).toBe(2);
+  test("unset is the default, 2; a value that is set and unreadable fails closed to 1", () => {
+    expect(controlLevel({ AGENTGLASS_CONTROL_LEVEL: undefined })).toBe(2);
+    for (const v of ["9", "", "off", "0", "-1", "2.5", "high", "none", "readonly"]) expect(controlLevel({ AGENTGLASS_CONTROL_LEVEL: v }), String(v)).toBe(1);
   });
 });
 
@@ -103,10 +104,10 @@ describe("the route", async () => {
   const body = src.slice(at, src.indexOf("The understudy's own surface", at))
     .split("\n").filter((l) => !/^\s*(\/\/|\/?\*)/.test(l)).join("\n");
 
-  test("the limit is checked before anything is broadcast, and answers 429", () => {
+  test("the limit is checked before anything is sent, and answers 429", () => {
     expect(at).toBeGreaterThan(0);
     expect(body.indexOf("controlWriteLimit.hit(")).toBeGreaterThan(0);
-    expect(body.indexOf("controlWriteLimit.hit(")).toBeLessThan(body.indexOf("broadcast("));
+    expect(body.indexOf("controlWriteLimit.hit(")).toBeLessThan(body.indexOf("sendControl("));
     expect(body).toContain("429");
   });
 

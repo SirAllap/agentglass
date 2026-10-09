@@ -270,8 +270,18 @@ window keeps a handler for each (`Record<UiActionId, Handler>`, so `tsc` fails
 for an entry without one). The general spelling is
 `{"cmd":"ui","do":"<id>","args":{…}}`; the `cmd` bodies in the table below are
 older spellings of the same entries and keep working. An id that is not in the
-registry is `400` (deny by default), as is an entry above level 1 (look or open;
-nothing that changes a setting or reaches outside the app is built).
+registry is `400` (deny by default). An entry above the level the server holds
+(`AGENTGLASS_CONTROL_LEVEL`, default 2; `AGENTGLASS_CONTROL_READONLY=1` is 1) is
+`403` with a sentence naming the door and its level and saying the limit is the
+owner's (it does not say how to move it).
+The levels: 1 looks or opens (kinds `open`, `read`), 2 changes a local setting
+(kind `change`) and 3 **stages** (kind `stage`): a level 3 entry opens a dialog
+with its fields filled in and never calls a route that writes, so the person's
+click is the effect. No kind performs an external effect, and no setting, door
+or argument can change the level. A new door states its level; one with none
+counts as 3, and a name that smells of a credential or of consent (token, key,
+secret, password, credential, remote, trust, gate, consent) must be level 3 or
+not exposed (`web/test/ui-level-guards.test.ts`).
 
 ```bash
 # open the workspace on the git view
@@ -318,7 +328,8 @@ curl -sS http://localhost:4000/control \
 | `lantern.schedule`, `terminal.resume` | — | the Lantern schedule dialog (a schedule exists only when the person submits it) and the Terminal's Resume sessions list |
 | `settings.plugin` | `name` | Settings on one plugin's page |
 | `pane.open` | `which`: `git`\|`diff`\|`pr`\|`card` | what the pane chords open for the focused terminal pane (`ok:false` when no pane has one) |
-| `chat.new`, `theme.set`, `zoom.step`, `workspace.toggle`, `esc.peel` | as the old `chat`/`theme`/`zoom`/`workspace`/`esc` | |
+| `chat.new`, `workspace.toggle`, `esc.peel` | as the old `chat`/`workspace`/`esc` | |
+| `theme.set`, `zoom.step` (level 2) | as the old `theme`/`zoom`; they persist, so they are writes: refused at level 1, limited like `settings.set`; `theme.set` goes through `appearance.theme` and leaves the undo chip | |
 | `ui.state`, `ui.read` | — / `panel` | *reads, not opens:* see below |
 
 | `settings.set` (level 2) | `id`, `value`: a string, number or boolean | changes one exposed setting (below) |
@@ -345,8 +356,8 @@ Every write reports what it replaced with an undo handle, and the window shows
 an "An agent changed X" chip with an Undo button (it leaves by itself after 20
 seconds, the change stays made). The audit line (`/control/settings.set`) holds
 the setting id and never the value, and one caller may make 30 changes a
-minute (`429` past that). `AGENTGLASS_CONTROL_LEVEL=1` keeps opens and reads
-and refuses every write. **Adding a setting is adding its def:** a Settings row
+minute (`429` past that). `AGENTGLASS_CONTROL_LEVEL=1` (or
+`AGENTGLASS_CONTROL_READONLY=1`) keeps opens and reads and refuses every write. **Adding a setting is adding its def:** a Settings row
 in a migrated pane without a `settingId="…"` (or `agentExempt`) fails
 `web/test/settings-rows-bound.test.ts`.
 
@@ -461,7 +472,8 @@ set and how many devices are paired.
 **`POST /control/result` is not for agents.** It is how a window answers a
 command (`{"rid":…,"ok":…,"applied":…,"value":…}`), behind the same
 `trustedCaller` gate as the window's other calls (`/browser/result`). `rid` is
-minted by the server and travels only on the window sockets, so one caller cannot
+minted by the server and travels only to windows that said `hello` (not every
+`/stream` listener; a local token holder can say hello too), so one caller cannot
 answer another's request without it; the first answer wins and a duplicate, a
 late one or an unknown `rid` is `{"known":false}`. A caller that holds the machine
 token can do nothing through it that `/control` does not already allow.
@@ -474,7 +486,7 @@ copy of the registry: they ask the running app what it offers
 (`GET /control/actions`: the registry's entries up to the level the server
 allows, with their argument shapes), so a door added to `shared/uiActions.ts`
 is a verb and a tool with no further change, and `AGENTGLASS_CONTROL_LEVEL=1`
-takes `settings.set` out of both.
+(or `AGENTGLASS_CONTROL_READONLY=1`) takes `settings.set` out of both.
 
 ```bash
 agentglass-ui list                                  # every door: id, level, kind, arguments

@@ -1973,7 +1973,7 @@ export type WsFrame =
    *  sender is waiting for an answer: the window replies with POST
    *  /control/result carrying the same id. `present` and `as` say how to show
    *  it and who asked (shared/uiActions.ts presentOf). */
-  | { type: "control"; data: ControlCmd; rid?: string; present?: "quiet" | "now"; as?: string }
+  | { type: "control"; data: ControlCmd; rid?: string; present?: "quiet" | "now"; as?: string; level?: 1 | 2 | 3 }
   /** The understudy scorecard, recomputed and pushed whole. It reports what
    *  the understudy WOULD have done and how often that matched; it commands
    *  nothing, which is why it rides the same read-only socket. */

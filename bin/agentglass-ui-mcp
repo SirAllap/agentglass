@@ -5,14 +5,14 @@ read and change a setting.
 One tool per door in the app's registry (shared/uiActions.ts), and the list is
 not kept here: it is built from what the running app says it offers
 (GET /control/actions), so a door added to the registry is a tool the next time
-a client lists them, and a door the server refuses (AGENTGLASS_CONTROL_LEVEL=1
-takes settings_set away) is not a tool at all. The tool for `settings.set` is
+a client lists them, and a door the server refuses (an owner who limits the server takes
+settings_set away) is not a tool at all. The tool for `settings.set` is
 `ui_settings_set`; `ui.state` and `ui.read` are `ui_state` and `ui_read`. The
 commands themselves are built by `agentglass-ui`, loaded as a module, so the CLI
 and this server say the same thing about the same arguments.
 
-Three levels: 1 looks or opens, 2 changes a local setting, 3 would act outside
-the app and does not exist. A read shows nothing on screen. An open is quiet:
+Three levels: 1 looks or opens, 2 changes a local setting, 3 prepares something
+that acts outside the app and leaves the click to the person. A read shows nothing on screen. An open is quiet:
 it never raises the window or takes the keyboard, and while the person is typing
 it waits as a chip they click (the answer says `queued`). Pass `now: true` ONLY
 when the person has just asked you to show them it.

@@ -134,7 +134,8 @@ describe.skipIf(!HAVE_PY)("a command, built from what the app offers", () => {
   test("an id the app does not offer says so, and at level 1 says why a change is missing", () => {
     expect(build("no.such", {})[1]).toContain("not offered by this agentglass");
     const [, why] = build("settings.set", { id: "diff.wrap", value: true }, 1);
-    expect(why).toContain("AGENTGLASS_CONTROL_LEVEL=1");
+    expect(why).toContain("the owner has limited this server");
+    expect(why).not.toContain("AGENTGLASS_");
     expect(why).toContain("level 1");
     expect(build("settings.set", { id: "diff.wrap", value: true }, 2)[1]).toBeNull();
   });
@@ -154,6 +155,9 @@ describe.skipIf(!HAVE_PY)("what the server said, as one sentence", () => {
     expect(explain(503, { error: "no window" })).toMatchObject({ ok: false, error: expect.stringContaining("no window open") });
     expect(explain(504, { error: "x" })).toMatchObject({ ok: false, error: expect.stringContaining("did not answer in time") });
     expect(explain(429, {})).toMatchObject({ ok: false, error: expect.stringContaining("30 a minute") });
+    // A level refusal is the server's own sentence; a 403 without a level is still a token problem.
+    expect(explain(403, { ok: false, error: "settings.set is a level 2 door; the owner decides.", level: 1 })).toEqual({ ok: false, error: "settings.set is a level 2 door; the owner decides." });
+    expect(explain(403, { error: "forbidden" })).toMatchObject({ ok: false, error: expect.stringContaining("did not accept this token") });
     expect(explain(401, {})).toMatchObject({ ok: false, error: expect.stringContaining("did not accept this token") });
     expect(explain(0, { error: "no agentglass at http://x (refused)" })).toEqual({ ok: false, error: "no agentglass at http://x (refused)" });
   });
@@ -236,8 +240,9 @@ describe.skipIf(!HAVE_PY)("the MCP tool list is the registry", () => {
     const at = idx.indexOf('pathname === "/control/actions"');
     expect(at).toBeGreaterThan(0);
     const route = idx.slice(at, idx.indexOf("\n    }\n", at));
-    expect(route).toContain("controlLevel()");
-    expect(route).toContain("describeUiActions(UI_ACTIONS, level)");
+    // The level is the one read at start (CONTROL), not read again per request.
+    expect(route).toContain("describeUiActions(UI_ACTIONS, CONTROL.level)");
+    expect(route).not.toContain("controlLevel(");
   });
 });
 
@@ -288,6 +293,8 @@ async function window_(reply: (data: any) => Record<string, unknown>) {
     await fetch(base + "/control/result", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ rid: f.rid, ...reply(f.data) }) });
   });
   await new Promise((r) => ws.addEventListener("open", r));
+  // A control frame goes to windows that said hello, as the app's does on every connect.
+  ws.send(JSON.stringify({ type: "hello", clientId: `win-${crypto.randomUUID()}`, browser: true }));
   await Bun.sleep(100);
   return { seen, frames, close: () => { try { ws.close(); } catch { /* gone */ } } };
 }

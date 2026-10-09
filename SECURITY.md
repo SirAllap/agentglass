@@ -1019,22 +1019,52 @@ the full list and defaults:
 | `AGENTGLASS_CLICKUP_WRITE=1` | *(opposite sense)* turns **on** writes to a ClickUp board, which are off by default |
 | `AGENTGLASS_GATE_FAILCLOSED=1` | *(opposite sense)* makes the gate deny on timeout instead of allowing |
 
-One thing is **not** individually switchable, and it is worth knowing which:
-the `/control` UI-navigation endpoint's level-1 doors (look or open), which are
-unswitchable by design — they grant no capability the keyboard does not already
-have. Every door is an entry in a closed registry, an unknown id is refused, and
-each command leaves one line in the action log, the door and not the value it
-named.
+The `/control` channel, which drives the app's own window, has a level switch
+of its own, read once when the server starts: `AGENTGLASS_CONTROL_LEVEL=1|2|3`
+(default 2) and `AGENTGLASS_CONTROL_READONLY=1`, which is level 1 and wins over
+the other. A variable that is set to something unreadable (`0`, `off`, an empty
+string) fails closed to level 1 and the server says so once at start, naming the
+value; only an unset variable is the default. What each level means:
 
-The one level-2 door, `settings.set`, changes a local preference and is
-switchable: `AGENTGLASS_CONTROL_LEVEL=1` refuses it and keeps the rest. It
-reaches only the settings the window's registry exposes (Appearance, Diff,
-Rail, Terminal display), through the same setter the Settings row calls, never
-a secret, a token or a remote-access setting; it is limited to 30 changes a
-minute per caller; every change shows an undo chip in the window; and the
-audit line names the setting, not the value. Over plain HTTP the machine token
-is already `full`, so this does not widen what a token can do; it makes the UI
-path visible and reversible.
+- **Nav-only verbs, unchanged.** The older `view`, `open`, `workspace`, `esc`
+  and `chat new` spellings, and every other level-1 door (look or open), grant
+  no capability the keyboard does not already have. Every door is an entry in a
+  closed registry, an unknown id is refused, and each command leaves one line in
+  the action log, the door and not the value it named. They are the same
+  entries as the `ui` spelling, so the switch governs them as it governs
+  everything else; at level 1 they all still work, because level 1 is what looks
+  and opens.
+- **Level 2 changes a local preference.** `settings.set`, and also `theme` and
+  `zoom` (which persist a palette and a zoom, so they are not looks): refused at
+  level 1 and under READONLY, counted by the same limit, and `theme` goes
+  through the `appearance.theme` setting so it leaves the undo chip as well. It reaches only the
+  settings the window's registry exposes (Appearance, Diff, Rail, Terminal,
+  quiet mode and two pull-request notices, the search engine, what Tasks shows,
+  single-key shortcuts), through the same setter the Settings row calls, and
+  never a secret, a token, a remote-access, plugin-trust, gate or consent
+  setting. A name that smells of one of those is level 3 or not exposed, and a
+  test fails the build otherwise. It is limited to 30 changes a minute per
+  caller (`429`), every change shows an undo chip in the window, and the audit
+  line names the setting, not the value.
+- **Level 3 only stages.** An entry at level 3 may open a dialog with its fields
+  filled in; it may not call a route that writes. The person's click is the
+  effect. There are no automatic grants, so `AGENTGLASS_CONTROL_LEVEL=3` lets an
+  agent prepare something and never perform it. No door of this kind ships yet,
+  and the guard that holds the shape (no level 3 handler reaches a writer or a
+  mutating route) is `web/test/ui-level-guards.test.ts`. An entry with no level
+  counts as level 3, and a door above the level the server holds is a `403` that
+  names the door and says the limit is the owner's; it does not say how to move it. Refusals
+  are logged once per caller per minute, with a count of the ones the row stands for.
+- **The switch is not agent-writable.** It is an environment variable read at
+  start. No registry entry, setting, argument or route assigns it, and a source
+  test fails if one appears (`server/test/control-levels.test.ts`). Moving it
+  means restarting the server with another value, which is the owner's.
+
+Over plain HTTP the machine token is already `full`, so an agent can already
+call the git and merge routes directly. This channel does not widen what a token
+can do; it makes the path through the window safer: validated arguments, a
+closed registry, an undo, an audit line, and a person's click for anything that
+leaves the app.
 
 `/control` also has reads (`ui.state`, `ui.read`), which hand the window's own
 state to the caller: they sit behind the same gate, show nothing, and answer in
@@ -1045,7 +1075,10 @@ credential-named field is replaced by `{set: true|false}` where the answer is
 built, and token-shaped text is stripped on the window and again on the server.
 The window answers on `POST /control/result`, which is not an agent route: it is
 behind the same gate as `/browser/result`, and the request id it must echo is
-minted by the server and only travels on the window sockets. A caller that holds
+minted by the server and only travels to the windows (the sockets that said
+`hello`, as the app does on every connect), not to every `/stream` listener. The
+ceiling: a local holder of the machine token can say hello too, so this keeps the
+id off sockets that only watch and does not authenticate one window to another. A caller that holds
 the machine token can already do everything through `/control` that a forged
 answer could, so the route widens nothing. This does not stop an agent from
 being talked into acting on text it read: that is why the text is marked.

@@ -42,7 +42,10 @@ describe("decidePresent", () => {
     expect(decidePresent({ ...base, present: "now", focus: "terminal", sinceInputMs: 0 })).toBe("apply");
   });
   test("a read or a change has nothing to hold", () => {
-    for (const kind of ["read", "change", "external"] as const) expect(decidePresent({ ...base, kind, focus: "field", sinceInputMs: 0 })).toBe("apply");
+    for (const kind of ["read", "change"] as const) expect(decidePresent({ ...base, kind, focus: "field", sinceInputMs: 0 })).toBe("apply");
+  });
+  test("a stage puts a dialog in front of the person, so it waits like an open", () => {
+    expect(decidePresent({ ...base, kind: "stage", focus: "field", sinceInputMs: 0 })).toBe("queue");
   });
   test("an in-place door (Escape, theme, zoom) runs even when typing", () => {
     expect(decidePresent({ ...base, inPlace: true, focus: "terminal", sinceInputMs: 0 })).toBe("apply");

@@ -77,9 +77,28 @@ export const READ_PANELS = [...READ_PANELS_NOW, ...READ_PANELS_LATE] as const;
 
 export type UiLevel = 1 | 2 | 3;
 /** open: shows something. read: answers with state and shows nothing. change:
- *  alters a local setting. external: has an effect outside the app. `open`,
- *  `read` and `change` are built. */
-export type UiKind = "open" | "read" | "change" | "external";
+ *  alters a local setting. stage: prepares something that has an effect outside
+ *  the app (a dialog opened and filled in) and does nothing else; the person's
+ *  click is the effect. There is no kind that performs one: level 3 has no
+ *  "external" entry because no agent door is allowed to be the thing that
+ *  merges, posts or sends. */
+export type UiKind = "open" | "read" | "change" | "stage";
+
+/**
+ * Which kinds each level may hold, as a type and as data. The pairing is the
+ * whole of the level model: a look is level 1, a local change is level 2, and
+ * level 3 holds stage entries only. An entry that breaks it does not compile
+ * here and is refused by `levelAllows` if a cast got it past the compiler.
+ */
+export const KINDS_AT_LEVEL: Readonly<Record<UiLevel, readonly UiKind[]>> = {
+  1: ["open", "read"],
+  2: ["change"],
+  3: ["stage"],
+};
+type LevelKind =
+  | { level: 1; kind: "open" | "read" }
+  | { level: 2; kind: "change" }
+  | { level: 3; kind: "stage" };
 
 /**
  * What one argument may be. Closed on purpose: there is no "any string", so
@@ -111,9 +130,8 @@ export type ArgSpec =
    *  object, an array or a megabyte of text from travelling as one. */
   | { t: "scalar"; optional?: true };
 
-export interface UiActionDef {
-  level: UiLevel;
-  kind: UiKind;
+export type UiActionDef = LevelKind & UiActionBody;
+interface UiActionBody {
   args: Readonly<Record<string, ArgSpec>>;
   /** One line for a person reading the list: what opens. */
   surface: string;
@@ -153,13 +171,18 @@ export const UI_ACTIONS = {
   // One verb, not a free string: the ones that want to join it, compacting and
   // sending, reach into a real conversation.
   "chat.new": def({ level: 1, kind: "open", surface: "a new chat tab", legacy: { cmd: "chat", pin: { do: "new" } }, args: {} }),
+  // A palette and a zoom persist (localStorage), which is the effect of a level 2
+  // change, so both sit at level 2: refused at level 1 and under READONLY, and
+  // counted by the same per-caller write limit. theme.set goes through the
+  // appearance.theme setting, so it leaves the undo chip too; zoom has no
+  // setting behind it and is undone by stepping the other way.
   "theme.set": def({
-    inPlace: true, level: 1, kind: "open", surface: "pins a palette by name, or steps the list", legacy: { cmd: "theme" },
+    inPlace: true, level: 2, kind: "change", surface: "pins a palette by name, or steps the list", legacy: { cmd: "theme" },
     args: { name: { t: "slug", max: 64, optional: true }, dir: { t: "num", values: [1, -1], optional: true } },
     // A name pins one palette and wins over a direction; neither is no command.
     refine: (a) => (a.name !== undefined ? { name: a.name } : a.dir !== undefined ? { dir: a.dir } : null),
   }),
-  "zoom.step": def({ inPlace: true, level: 1, kind: "open", surface: "window zoom in, out or reset", legacy: { cmd: "zoom" }, args: { dir: { t: "num", values: [1, -1, 0] } } }),
+  "zoom.step": def({ inPlace: true, level: 2, kind: "change", surface: "window zoom in, out or reset", legacy: { cmd: "zoom" }, args: { dir: { t: "num", values: [1, -1, 0] } } }),
   "settings.open": def({ modals: ["SettingsModal.tsx", "plugins/Market.tsx"],
     level: 1, kind: "open", surface: "Settings on one page, optionally scrolled to one row (the plugin market is inside page plugins)",
     args: { page: { t: "enum", values: SETTINGS_PAGE_IDS }, row: { t: "slug", max: 80, optional: true } },
@@ -317,9 +340,54 @@ export function describeUiActions(
   registry: Readonly<Record<string, UiActionDef>> = UI_ACTIONS, maxLevel: UiLevel = 3,
 ): { id: string; level: number; kind: UiKind; surface: string; args: Record<string, ArgSpec> }[] {
   return Object.entries(registry)
-    // `!(<=)`, as everywhere: an entry with no level is level 3.
-    .filter(([, d]) => d.level <= maxLevel)
+    // The same test the parser runs, level AND kind: a door listed here is a door
+    // the server will run, never one it lists and then refuses.
+    .filter(([, d]) => levelAllows(d, maxLevel))
     .map(([id, d]) => ({ id, level: d.level, kind: d.kind, surface: d.surface, args: { ...d.args } }));
+}
+
+// ── levels ──────────────────────────────────────────────────────────────────
+
+/**
+ * Whether a server holding `maxLevel` may run this entry. Deny by default, in
+ * three ways at once: `!(<=)` rather than `>`, so an entry with no level (a
+ * cast, a plugin, a typo) compares false and counts as level 3; level 3 admits
+ * a `stage` entry and nothing else, so an entry that claims level 3 and some
+ * other kind is refused whatever the switch says; and a level below 3 admits
+ * only the kinds KINDS_AT_LEVEL lists, so a `change` filed under level 1 cannot
+ * ride in on the default.
+ */
+export function levelAllows(d: { level?: unknown; kind?: unknown }, maxLevel: UiLevel): boolean {
+  const lv = d.level === 1 || d.level === 2 || d.level === 3 ? d.level : 3;
+  if (!(lv <= maxLevel)) return false;
+  return (KINDS_AT_LEVEL[lv] as readonly unknown[]).includes(d.kind);
+}
+
+/** Whether a kind alters something: the ones the write rate limit and the
+ *  window's undo chip are about. Reads and opens do not. */
+export const isWriteKind = (kind: unknown): boolean => kind === "change" || kind === "stage";
+
+const LEVEL_WORDS: Record<UiLevel, string> = {
+  1: "looks or opens",
+  2: "changes a local setting",
+  3: "prepares something with an effect outside the app, which only the person's own click completes",
+};
+
+/**
+ * The sentence a caller is told when the entry exists and this server will not
+ * run it: which door, which level it is, which level the server holds, and
+ * whose decision that is. It does NOT say how to raise the level: the limit is
+ * the owner's, and a sentence an agent with a shell reads as a recipe is how a
+ * limit gets walked around. `readonly` is AGENTGLASS_CONTROL_READONLY, said as
+ * "read-only" without the name. An entry with no level is reported as level 3,
+ * which is how it is treated.
+ */
+export function levelRefusal(id: string, d: { level?: unknown; kind?: unknown }, maxLevel: UiLevel, readonly = false): string {
+  const lv: UiLevel = d.level === 1 || d.level === 2 || d.level === 3 ? d.level : 3;
+  const what = d.level === lv ? `a level ${lv} door (it ${LEVEL_WORDS[lv]})` : "a door with no level, which counts as level 3";
+  if (d.level === 3 && d.kind !== "stage") return `${id} is a level 3 door that is not a stage: no setting allows it, because level 3 only prepares and the person's click is the effect.`;
+  const held = readonly ? "the owner has made this server read-only (opens and reads only)" : `this server allows up to level ${maxLevel}`;
+  return `${id} is ${what}, and ${held}. That limit is the owner's setting, made when the server starts; ask the person who runs agentglass if you need it, and do not try to change it.`;
 }
 
 // ── validators ──────────────────────────────────────────────────────────────
@@ -421,8 +489,7 @@ export function parseUi(
 ): { cmd: "ui"; do: string; args: Record<string, unknown> } | null {
   if (typeof id !== "string" || !Object.prototype.hasOwnProperty.call(registry, id)) return null;
   const d = registry[id]!;
-  // `!(<=)`, not `>`: an entry with no level is level 3, never "unlimited".
-  if (!(d.level <= maxLevel)) return null;
+  if (!levelAllows(d, maxLevel)) return null;
   const a = parseArgs(d, args);
   return a ? { cmd: "ui", do: id, args: a } : null;
 }
@@ -439,10 +506,26 @@ export function legacyToUi(b: Record<string, unknown>, maxLevel: UiLevel): { id:
     const l = d.legacy!;
     if (b.cmd !== l.cmd) continue;
     if (l.pin && !Object.entries(l.pin).every(([k, v]) => b[k] === v)) continue;
-    // `!(<=)`, not `>`: an entry with no level is level 3, never "unlimited".
-  if (!(d.level <= maxLevel)) return null;
+    if (!levelAllows(d, maxLevel)) return null;
     const args = parseArgs(d, b);
     return args ? { id, args } : null;
+  }
+  return null;
+}
+
+/**
+ * The registry entry an untrusted /control body names, in either spelling, with
+ * no regard for level or arguments: what the refusal sentence needs to say which
+ * door was asked for. Null when the body names none.
+ */
+export function entryOfBody(b: Record<string, unknown>): { id: string; def: UiActionDef } | null {
+  if (b.cmd === "ui") {
+    return typeof b.do === "string" && Object.prototype.hasOwnProperty.call(UI_ACTIONS, b.do)
+      ? { id: b.do, def: UI_ACTIONS[b.do as UiActionId] as UiActionDef } : null;
+  }
+  for (const [id, d] of LEGACY) {
+    const l = d.legacy!;
+    if (b.cmd === l.cmd && (!l.pin || Object.entries(l.pin).every(([k, v]) => b[k] === v))) return { id, def: d };
   }
   return null;
 }

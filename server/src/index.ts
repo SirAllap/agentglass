@@ -55,8 +55,8 @@ import { refreshCodexUsage } from "./codexusage.ts";
 import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, onGateChange, typedReason, GATE_MAX_MS, gateFailClosed, denyByRule, allowByRule, validGateId } from "./gate.ts";
 import { budgetHoldFor } from "./budget.ts";
 import { gateCwd, gateRuleFor } from "./gaterules.ts";
-import { parseControlCmd, controlId, awaitControl, settleControl, parseReply, nextControlRid, callerRequestId, CONTROL_TIMEOUT_ERROR, changedSetting, makeWriteLimiter, controlLevel } from "./control.ts";
-import { isReadAction, describeUiActions, presentOf, UI_ACTIONS } from "../../shared/uiActions.ts";
+import { parseControlCmd, controlId, awaitControl, settleControl, parseReply, nextControlRid, callerRequestId, CONTROL_TIMEOUT_ERROR, changedSetting, makeWriteLimiter, makeRefusalThrottle, controlSwitch, controlRefusal } from "./control.ts";
+import { isReadAction, isWriteKind, describeUiActions, presentOf, UI_ACTIONS } from "../../shared/uiActions.ts";
 import { outwardAction, outwardLine } from "./outward.ts";
 import { listLanes } from "./lanes.ts";
 import { gateLane, dropBrowserTarget, askBrowser, browserReadyCount, exportAudit, noteBrowserManager, noteBrowserReady, parseAsk, setBrowserSink, settleBrowser, type BrowserOp, runSteps, waitForEvents, recordFrames, traceRecording, auditAsScript, downloadFile, runLanes, withObservation, parseScrape, runScrape } from "./browserdrive.ts";
@@ -1529,8 +1529,38 @@ const DOCKER_SPAWNS = new Set([
 ]);
 
 const clients = new Set<ServerWebSocket<WsData>>();
-/** Settings writes through /control, per caller (control.ts). */
+/** Writes through /control (a settings change, a staged level 3 door), per caller (control.ts). */
 const controlWriteLimit = makeWriteLimiter();
+/**
+ * How far /control may go, read ONCE here, when the process starts. Nothing
+ * below re-reads the environment, and nothing in this file, the registry or a
+ * settings def assigns to it, so a running server cannot be talked into a
+ * higher level by anything that reaches it, an agent with the machine token
+ * included. The owner changes it the only way it can change: by restarting the
+ * server with another value (server/test/control-levels.test.ts pins this).
+ */
+const CONTROL = controlSwitch();
+// A variable that was set to something unreadable has already failed closed
+// (control.ts); the owner hears it once, here, with the value and what is held.
+for (const w of CONTROL.warnings) console.warn(`agentglass: ${w}`);
+/** Refusals of /control, one /actions row per caller per minute with a count of the rest. */
+const controlRefusals = makeRefusalThrottle();
+/**
+ * The sockets a /control frame goes to: windows that said hello (web/src/lib/
+ * useLive.ts does on every connect), not every /stream listener. A control frame
+ * carries the request id a reply must echo, and a listener that never said
+ * hello (a paired phone, a second tool that only watches events) has no business
+ * holding it. The ceiling: any local holder of the machine token can say hello
+ * too, so this keeps the id off sockets that merely watch, and does not make the
+ * reply channel authenticated per window.
+ */
+function controlWindows(): ServerWebSocket<WsData>[] {
+  return [...browserSockets.values()].filter((w) => clients.has(w));
+}
+function sendControl(frame: WsFrame): void {
+  const msg = JSON.stringify(frame);
+  for (const w of controlWindows()) { try { w.send(msg); } catch { /* the sweep drops a dead socket */ } }
+}
 /** A window's own name for itself (its `hello`) to its latest socket, which is
  *  how a browser ask reaches one window instead of all of them. */
 const browserSockets = new Map<string, ServerWebSocket<WsData>>();
@@ -3699,15 +3729,33 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      * their own to keep in step. A read: it names doors, it opens none.
      */
     if (pathname === "/control/actions" && req.method === "GET") {
-      const level = controlLevel();
-      return json({ ok: true, level, actions: describeUiActions(UI_ACTIONS, level) });
+      return json({ ok: true, level: CONTROL.level, readonly: CONTROL.readonly, actions: describeUiActions(UI_ACTIONS, CONTROL.level) });
     }
     if (pathname === "/control" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       let b: unknown = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
-      const cmd = parseControlCmd(b);
-      if (!cmd) return json({ ok: false, error: "unknown control command" }, 400);
+      const cmd = parseControlCmd(b, CONTROL.level);
+      if (!cmd) {
+        /*
+         * A body that names a real door above the level this process holds is
+         * told which level that door is and which switch would allow it (403,
+         * and a line in the log, since an agent that keeps asking for a write
+         * it cannot have is worth seeing). A body that names no door at all
+         * stays the bare 400: it must not list what exists above its level.
+         */
+        const no = controlRefusal(b, CONTROL);
+        if (!no) return json({ ok: false, error: "unknown control command" }, 400);
+        const refusedFrom = req.headers.get("origin");
+        const refusedAs = callerRequestId((b as { as?: unknown }).as);
+        const refusedWho = caller ? { ...asActor(caller)!, fromPage: !!refusedFrom && vouchedOrigin(refusedFrom) } : caller;
+        // The 403 is never throttled; the log row is, so a loop of refused writes is not a loop of rows.
+        const row = controlRefusals.note(`level:${actorOf(clientIp, refusedWho)}`);
+        if (row.log) {
+          noteAction(clientIp, `/control/${no.id}`, { ...(refusedAs ? { as: refusedAs } : {}), ...(row.suppressed ? { refused: row.suppressed } : {}) }, { ok: false, error: "level" }, refusedWho);
+        }
+        return json({ ok: false, error: no.error, level: CONTROL.level }, 403);
+      }
       /*
        * Delivery, said truthfully. The command rides the same sockets every
        * window holds, and with none attached it used to be dropped while the
@@ -3727,6 +3775,9 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // A settings change names its setting in the line (the id and the fact
       // of change, not the value), and is rate limited per caller.
       const setting = changedSetting(cmd);
+      // Any write kind is limited, not only the one built first: a level 3
+      // stage opens a dialog on the person's screen and is rate limited too.
+      const writes = isWriteKind((UI_ACTIONS[controlId(cmd) as keyof typeof UI_ACTIONS] as { kind?: string } | undefined)?.kind);
       // `as` is the name a CLI or an MCP server stamps itself with (the browser
       // CLI's --as): a label for the log line, never a credential.
       const as = callerRequestId((b as { as?: unknown }).as);
@@ -3737,14 +3788,17 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (!present) return json({ ok: false, error: "present is quiet or now" }, 400);
       // The mode is a fact about an open; a read or a settings change shows
       // nothing, so its line does not carry one.
-      const opens = (UI_ACTIONS[controlId(cmd) as keyof typeof UI_ACTIONS] as { kind?: string } | undefined)?.kind === "open";
-      const audit = (ok: boolean, error?: string, queued?: boolean) =>
-        noteAction(clientIp, `/control/${controlId(cmd) ?? "unknown"}`, { ...(setting ? { setting } : {}), ...(as ? { as } : {}), ...(opens ? { present } : {}), ...(queued ? { queued: true } : {}) }, { ok, error }, who);
-      if (setting && !controlWriteLimit.hit(actorOf(clientIp, who))) {
-        audit(false, "rate limited");
-        return json({ ok: false, error: "too many settings changes; slow down" }, 429);
+      const kindOf = (UI_ACTIONS[controlId(cmd) as keyof typeof UI_ACTIONS] as { kind?: string } | undefined)?.kind;
+      const opens = kindOf === "open" || kindOf === "stage";
+      const audit = (ok: boolean, error?: string, queued?: boolean, refused?: number) =>
+        noteAction(clientIp, `/control/${controlId(cmd) ?? "unknown"}`, { ...(setting ? { setting } : {}), ...(as ? { as } : {}), ...(opens ? { present } : {}), ...(queued ? { queued: true } : {}), ...(refused ? { refused } : {}) }, { ok, error }, who);
+      if (writes && !controlWriteLimit.hit(actorOf(clientIp, who))) {
+        const row = controlRefusals.note(`rate:${actorOf(clientIp, who)}`);
+        if (row.log) audit(false, "rate limited", undefined, row.suppressed);
+        return json({ ok: false, error: "too many changes from this caller; slow down" }, 429);
       }
-      if (clients.size === 0) {
+      const windows = controlWindows().length;
+      if (windows === 0) {
         audit(false, "no window");
         return json({ ok: false, error: "no window" }, 503);
       }
@@ -3761,15 +3815,17 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // A settings change is answered as well: what it replaced, and the undo handle.
       // A quiet open asks too: the window may hold it behind a chip, and a caller
       // told "ok" for something nobody has seen would be told wrong.
-      const asks = label !== null || setting !== null || (cmd.cmd === "ui" && isReadAction(cmd.do)) || (opens && present === "quiet");
-      const frame = { present, ...(as ? { as } : {}) };
+      const asks = label !== null || writes || (cmd.cmd === "ui" && isReadAction(cmd.do)) || (opens && present === "quiet");
+      // `level` tells the window what the server holds, so settings.list can say which
+      // settings are writable HERE and not only in principle.
+      const frame = { present, level: CONTROL.level, ...(as ? { as } : {}) };
       if (!asks) {
-        broadcast({ type: "control", data: cmd, ...frame });
+        sendControl({ type: "control", data: cmd, ...frame });
         audit(true);
-        return json({ ok: true, windows: clients.size });
+        return json({ ok: true, windows });
       }
       const rid = nextControlRid();
-      const reply = await awaitControl(rid, () => broadcast({ type: "control", data: cmd, rid, ...frame }));
+      const reply = await awaitControl(rid, () => sendControl({ type: "control", data: cmd, rid, ...frame }));
       // Held behind a chip is a verdict too: taken, not yet shown.
       audit(reply.ok && (reply.applied || reply.queued === true), reply.error, reply.queued === true);
       return json({ ...reply, ...(label ? { id: label } : {}) }, reply.error === CONTROL_TIMEOUT_ERROR ? 504 : 200);

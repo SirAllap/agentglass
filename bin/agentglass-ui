@@ -18,8 +18,9 @@ Every answer is one JSON object on stdout, {"ok": true, ...} or
 otherwise, 2 for a usage mistake. `ok` means a window RAN the command.
 
 Three levels, from the registry: 1 looks or opens, 2 changes a local setting
-(`AGENTGLASS_CONTROL_LEVEL=1` on the server turns that off), 3 would act outside
-the app and does not exist. Reads show nothing on screen. An `open` is quiet by default for a call that
+(the owner can turn that off on the server, and it is theirs to turn back on),
+3 prepares something that acts outside the app (a dialog opened
+and filled in) and the person's own click is the effect. Reads show nothing on screen. An `open` is quiet by default for a call that
 carries a name (--as, which the CLI and the MCP server always send): it never
 raises the window and never takes the keyboard, and if the person is typing in
 a field or a terminal it waits as a chip they click ("<name> wants to show you:
@@ -178,7 +179,7 @@ def build_command(actions, level, id, given, as_name=None, label="cli", present=
     if entry is None:
         why = ""
         if level < 2:
-            why = " (changes are off here: AGENTGLASS_CONTROL_LEVEL=1 is set on the server)"
+            why = " (changes are off here: the owner has limited this server to looks and opens, and that is theirs to change)"
         return None, (f"{id} is not offered by this agentglass: it accepts doors up to level {level}{why}, "
                       f"and `agentglass-ui list` shows the {len(actions)} it has")
     specs = entry["args"]
@@ -229,7 +230,10 @@ def explain(status, body, id=None):
     if status == 504:
         return {"ok": False, "error": "a window got the command but did not answer in time; it may be busy or hidden, try once more"}
     if status == 429:
-        return {"ok": False, "error": "too many settings changes from this caller (30 a minute); slow down"}
+        return {"ok": False, "error": "too many changes from this caller (30 a minute); slow down"}
+    if status == 403 and isinstance(err, str) and "level" in body:
+        # The server's own sentence: which door, which level, which switch allows it.
+        return {"ok": False, "error": err}
     if status in (401, 403):
         return {"ok": False, "error": "the server did not accept this token; open a new pane from agentglass, which hands it the current one"}
     if status == 400:

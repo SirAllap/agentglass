@@ -35,7 +35,6 @@ export interface UiCtx {
   /** The peel Escape does, minus the focus guards. */
   peel(): void;
   panel(what: UiArgs<"panel.open">["what"]): void;
-  setTheme(next: (cur: string) => string): void;
   zoom(dir: 1 | -1 | 0): void;
   setMachine(tab: MachineTab): void;
   setProjectOpen(open: boolean): void;
@@ -50,6 +49,9 @@ export interface UiCtx {
   /** Where the reads gather their data (uiSnapshotSources.ts in the window; a
    *  fixture in a test). Absent in a window that cannot describe itself. */
   sources?: Sources;
+  /** The level the server holds (it tells the window with each command), so
+   *  `settings.list` says what is writable HERE. Absent: the window's own cap. */
+  serverLevel?: 1 | 2 | 3;
 }
 
 /** A handler of an `open` entry returns nothing; a handler of a `read` entry
@@ -89,7 +91,13 @@ export const UI_HANDLERS: { [Id in UiActionId]: Handler<Id> } = {
   // Latch before opening: the panel drains the mailbox on mount, so this works
   // whether or not the chat view is already up.
   "chat.new": (_a, c) => { latchChatIntent("new"); c.goView("chat"); },
-  "theme.set": (a, c) => c.setTheme((cur) => nextThemeId(cur, a, THEMES.map((t) => t.id))),
+  // Through the appearance.theme setting, as the Settings row does, so a palette
+  // change from an agent is validated the same way, leaves the undo chip, and the
+  // window repaints itself on the setting's own announcement.
+  "theme.set": (a) => {
+    const cur = answered(settings.get("appearance.theme")) as { value?: unknown };
+    return answered(settings.set("appearance.theme", nextThemeId(String(cur.value ?? ""), a, THEMES.map((t) => t.id))));
+  },
   "zoom.step": (a, c) => c.zoom(a.dir),
   "settings.open": (a) => openSettings(a.page, a.row),
   // Through the settings registry: the same defs the Settings rows call, so a
@@ -98,7 +106,7 @@ export const UI_HANDLERS: { [Id in UiActionId]: Handler<Id> } = {
   // A refusal throws, so controlReply answers {ok:false, applied:false, error}
   // instead of an ok whose value says it did not happen.
   "settings.get": (a) => answered(settings.get(a.id)),
-  "settings.list": () => settings.list(),
+  "settings.list": (_a, c) => settings.list(c.serverLevel),
   "settings.set": (a) => answered(settings.set(a.id, a.value)),
   "machine.open": (a, c) => c.setMachine(a.tab),
   "project.picker": (_a, c) => c.setProjectOpen(true),

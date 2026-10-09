@@ -61,6 +61,8 @@ async function window_(): Promise<Win> {
     try { const f = JSON.parse(String((ev as MessageEvent).data)); if (f.type === "control") frames.push({ data: f.data, rid: f.rid }); } catch { /* not json */ }
   });
   await new Promise((r) => ws.addEventListener("open", r));
+  // A control frame goes to windows that said hello, as the app's does on every connect.
+  ws.send(JSON.stringify({ type: "hello", clientId: `win-${crypto.randomUUID()}`, browser: true }));
   await Bun.sleep(100);
   return { frames, ws };
 }

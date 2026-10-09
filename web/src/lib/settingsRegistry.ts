@@ -480,7 +480,7 @@ const KEPT = 20;
 export const AGENT_CHANGES_KEPT = KEPT;
 
 export interface SettingsApi {
-  list(): { id: string; page: string; section: string; label: string; writable: boolean; secret: boolean; value?: SettingValue }[];
+  list(serverLevel?: number): { id: string; page: string; section: string; label: string; writable: boolean; secret: boolean; value?: SettingValue }[];
   get(id: unknown): AgentGetResult;
   set(id: unknown, value: unknown): AgentSetResult;
   undo(handle: string): boolean;
@@ -504,10 +504,12 @@ export function makeSettings(defs: readonly SettingDef[], now: () => number = Da
   const find = (id: unknown) => (typeof id === "string" ? byId.get(id) : undefined);
 
   return {
-    list: () => defs.map((d) => ({
+    list: (serverLevel) => defs.map((d) => ({
       id: d.id, page: d.page, section: d.section, label: d.label,
       // Secrets are listed, so the agent knows they exist, and never writable.
-      writable: !d.secret && (d.level ?? 3) <= AGENT_MAX_LEVEL,
+      // Writable HERE: the lower of what this window caps an agent at and what the
+      // server it is attached to holds, so a read-only server lists nothing writable.
+      writable: !d.secret && (d.level ?? 3) <= Math.min(AGENT_MAX_LEVEL, serverLevel ?? AGENT_MAX_LEVEL),
       secret: !!d.secret,
       ...(d.secret ? {} : { value: d.get() }),
     })),

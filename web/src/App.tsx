@@ -1088,7 +1088,6 @@ export default function App() {
         else if (what === "help") setHelpOpen(true);
         else setPaletteOpen(true);
       },
-      setTheme,
       // Through the same door as the keys, so a remote controller and a
       // keystroke cannot disagree about what "zoom" means. There is no pointer
       // in a remote command, so it lands on the window.
@@ -1115,7 +1114,7 @@ export default function App() {
     };
     return subscribeControl((cmd, rid, meta) => {
       const hidden = document.visibilityState === "hidden";
-      const run = () => controlReplyLater(cmd, ctx);
+      const run = () => controlReplyLater(cmd, { ...ctx, serverLevel: meta?.level });
       // A command off the server's socket says how to show it; one without
       // (a window's own button) is the person's own doing, so it is now.
       const go = routeControl(cmd, meta?.present ?? "now", focusKindOf(document.activeElement), sinceInputMs());

@@ -1,5 +1,5 @@
 import type { ControlCmd } from "../../shared/types.ts";
-import { UI_ACTIONS, legacyToUi, parseUi, uiToLegacy, idOfLegacy, type UiActionId, type UiLevel } from "../../shared/uiActions.ts";
+import { UI_ACTIONS, legacyToUi, parseUi, uiToLegacy, idOfLegacy, entryOfBody, levelAllows, levelRefusal, type UiActionId, type UiLevel } from "../../shared/uiActions.ts";
 
 // The closed sets a /control body is checked against now live in
 // shared/uiActions.ts, one entry per door, and this file only applies them. They
@@ -15,20 +15,97 @@ import { UI_ACTIONS, legacyToUi, parseUi, uiToLegacy, idOfLegacy, type UiActionI
 // is deliberate (a scorecard that acts on nothing; a view an agent driving the
 // built-in browser needs mounted) and is explained where the list is kept.
 
-/** The highest level of door this server has built. Level 2 changes a local
- *  setting, and only the ones the window lists; 3 (an effect outside the app)
- *  is not built, so an entry that claims it is refused rather than trusted. */
-export const UI_MAX_LEVEL: UiLevel = 2;
+/** The highest level of door this server has built. Level 3 is built as STAGE
+ *  only: an entry at that level opens a dialog the person finishes with their own
+ *  click, and the server runs nothing on its behalf. There are no automatic
+ *  grants, so raising the switch to 3 lets an agent prepare things and nothing
+ *  more. */
+export const UI_MAX_LEVEL: UiLevel = 3;
+/** What the switch says when it says nothing, or says something unreadable. */
+export const DEFAULT_CONTROL_LEVEL: UiLevel = 2;
+
+export interface ControlSwitch {
+  /** The level this process accepts. */
+  level: UiLevel;
+  /** AGENTGLASS_CONTROL_READONLY is what holds it at level 1. */
+  readonly: boolean;
+  /** One line per variable that was set to something unreadable, for the boot log. */
+  warnings: readonly string[];
+}
+
+/** A value as it is quoted in a warning: bounded and free of control characters. */
+const quoted = (v: string): string => JSON.stringify(v.replace(/[\u0000-\u001f\u007f]/g, "?").slice(0, 40));
 
 /**
- * The level this process accepts: the built ceiling, or lower when
- * AGENTGLASS_CONTROL_LEVEL says so (1 = open and read, no write). A value that
- * is not 1 or 2 is the ceiling, not an error: the switch exists to take
- * something away, and a typo must not read as "off" in one direction and "on"
- * in the other.
+ * The two switches, read from the environment and nothing else: no file, no
+ * route and no registry entry writes them, which is what keeps an agent from
+ * raising its own level. AGENTGLASS_CONTROL_LEVEL is 1, 2 or 3 and unset is the
+ * default, 2. A variable that is SET to anything else, an empty string
+ * included, fails CLOSED to level 1 and says so in `warnings`: the owner who
+ * wrote `0`, `off` or `none` asked for less, and a refusal that is too strict is
+ * a visible 403 they correct, where one that is too loose is silent.
+ * AGENTGLASS_CONTROL_READONLY takes 1/true/yes/on as read-only and
+ * 0/false/no/off as not; anything else set is read-only with a warning, for the
+ * same reason. Read-only is level 1 and wins over any LEVEL: the lower applies.
  */
-export function controlLevel(env: Record<string, string | undefined> = process.env): UiLevel {
-  return env.AGENTGLASS_CONTROL_LEVEL?.trim() === "1" ? 1 : UI_MAX_LEVEL;
+export function controlSwitch(env: Record<string, string | undefined> = process.env): ControlSwitch {
+  const warnings: string[] = [];
+  const rawLevel = env.AGENTGLASS_CONTROL_LEVEL;
+  let asked: UiLevel = DEFAULT_CONTROL_LEVEL;
+  if (rawLevel !== undefined) {
+    const t = rawLevel.trim();
+    if (t === "1") asked = 1; else if (t === "2") asked = 2; else if (t === "3") asked = 3;
+    else {
+      asked = 1;
+      warnings.push(`AGENTGLASS_CONTROL_LEVEL=${quoted(rawLevel)} is not 1, 2 or 3; holding /control at level 1 (opens and reads only) until it is fixed.`);
+    }
+  }
+  let readonly = false;
+  const rawRo = env.AGENTGLASS_CONTROL_READONLY;
+  if (rawRo !== undefined) {
+    const t = rawRo.trim().toLowerCase();
+    if (["1", "true", "yes", "on"].includes(t)) readonly = true;
+    else if (!["0", "false", "no", "off"].includes(t)) {
+      readonly = true;
+      warnings.push(`AGENTGLASS_CONTROL_READONLY=${quoted(rawRo)} is not 1 or 0; holding /control read-only (level 1) until it is fixed.`);
+    }
+  }
+  return Object.freeze({ level: readonly ? 1 : asked, readonly, warnings: Object.freeze(warnings) });
+}
+export const controlLevel = (env: Record<string, string | undefined> = process.env): UiLevel => controlSwitch(env).level;
+
+/**
+ * The sentence for a body that names a real door this server will not run, or
+ * null when the body names none (an unknown id, which stays "unknown control
+ * command": it must not say which doors exist above the level). The door and
+ * the switch that would allow it, and nothing about the arguments.
+ */
+export function controlRefusal(body: unknown, sw: ControlSwitch = controlSwitch()): { id: string; error: string } | null {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const e = entryOfBody(body as Record<string, unknown>);
+  if (!e || levelAllows(e.def, sw.level)) return null;
+  return { id: e.id, error: levelRefusal(e.id, e.def, sw.level, sw.readonly) };
+}
+
+/**
+ * One log line per caller per window for refusals (a level 403, a rate limit),
+ * with a count of the ones the line stands for. The refusal itself is never
+ * throttled, only the append-only /actions row: a loop of refused writes would
+ * otherwise be a loop of log rows. `note` says whether to write a row now and
+ * how many refusals since the last row went unwritten.
+ */
+export function makeRefusalThrottle(windowMs = 60_000) {
+  const seen = new Map<string, { at: number; held: number }>();
+  return {
+    note(key: string, now = Date.now()): { log: boolean; suppressed: number } {
+      const e = seen.get(key);
+      if (e && now - e.at < windowMs) { e.held++; return { log: false, suppressed: 0 }; }
+      const suppressed = e?.held ?? 0;
+      seen.set(key, { at: now, held: 0 });
+      for (const [k, v] of seen) if (k !== key && now - v.at >= windowMs) seen.delete(k);
+      return { log: true, suppressed };
+    },
+  };
 }
 
 /** Writes one caller may send in a minute. A person's sweep through Settings is

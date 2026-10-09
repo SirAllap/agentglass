@@ -28,7 +28,9 @@ stubGlobal("CustomEvent", class<T> extends Event { detail: T; constructor(t: str
 // uiActions reaches the settings registry and so pref modules that read localStorage when they load.
 stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {}, clear: () => {}, key: () => null, length: 0 } as unknown as Storage);
 stubGlobal("location", new URL("http://localhost:5173/"));
-stubGlobal("document", { documentElement: { getAttribute: () => "graphite", setAttribute: () => {}, style: { setProperty: () => {}, getPropertyValue: () => "" } } });
+const attrs = new Map<string, string>([["data-theme", "graphite"]]);
+stubGlobal("document", { documentElement: { getAttribute: (k: string) => attrs.get(k) ?? null, setAttribute: (k: string, v: string) => void attrs.set(k, v), style: { setProperty: () => {}, removeProperty: () => {}, getPropertyValue: () => "" } } });
+stubGlobal("getComputedStyle", () => ({ getPropertyValue: () => "" }));
 const { runControl, controlReply, controlReplyLater, nextThemeId, UI_HANDLERS } = await import("../src/lib/uiActions.ts");
 
 /** A ctx that records what it was asked, in order. */
@@ -37,7 +39,6 @@ function ctx() {
   const rec = (name: string) => (...a: unknown[]) => { calls.push([name, ...a]); };
   const c: UiCtx = {
     goView: rec("goView"), workspace: rec("workspace"), peel: rec("peel"), panel: rec("panel"),
-    setTheme: (next) => calls.push(["setTheme", next("graphite")]),
     zoom: rec("zoom"), setMachine: rec("setMachine"), setProjectOpen: rec("setProjectOpen"), setWindowsOpen: rec("setWindowsOpen"),
     openEvent: (id) => { calls.push(["openEvent", id]); return id !== 404; },
     openSession: rec("openSession"),
@@ -65,8 +66,29 @@ describe("runControl — one handler for both spellings", () => {
     runControl({ cmd: "esc" }, k.c);
     runControl({ cmd: "workspace" }, k.c);
     runControl({ cmd: "zoom", dir: -1 }, k.c);
-    runControl({ cmd: "theme", name: "porcelain" }, k.c);
-    expect(k.calls).toEqual([["panel", "stats"], ["peel"], ["workspace"], ["zoom", -1], ["setTheme", "porcelain"]]);
+    expect(k.calls).toEqual([["panel", "stats"], ["peel"], ["workspace"], ["zoom", -1]]);
+  });
+
+  it("theme.set goes through the appearance.theme setting, so it answers with what it replaced and an undo", () => {
+    const k = ctx();
+    const r = controlReply({ cmd: "theme", name: "porcelain" }, k.c);
+    expect(r, JSON.stringify(r)).toMatchObject({ ok: true });
+    expect(r.value).toMatchObject({ ok: true, id: "appearance.theme", value: "porcelain" });
+    expect(typeof (r.value as { undo: string }).undo).toBe("string");
+    // An unknown name leaves the palette where it was, as it always did.
+    expect(controlReply({ cmd: "theme", name: "mauve" }, k.c).ok).toBe(true);
+  });
+
+  it("settings.list says what is writable HERE: nothing when the server holds level 1, the usual set at 2 or when it does not say", () => {
+    const writable = (serverLevel?: 1 | 2 | 3) => {
+      const k = ctx();
+      const r = controlReply(ui("settings.list"), { ...k.c, serverLevel });
+      return (r.value as { writable: boolean }[]).filter((x) => x.writable).length;
+    };
+    expect(writable(1)).toBe(0);
+    expect(writable(2)).toBeGreaterThan(20);
+    expect(writable(3)).toBe(writable(2));
+    expect(writable(undefined)).toBe(writable(2));
   });
 
   it("a chat command latches the intent and then opens the view", () => {

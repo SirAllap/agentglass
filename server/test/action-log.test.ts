@@ -173,7 +173,7 @@ describe("nothing writes without being recorded", () => {
     expect(at).toBeGreaterThan(-1);
     const handler = index.slice(at, index.indexOf("\n    }", at));
     expect(handler).toContain("noteAction(");
-    expect(handler, "the command's arguments must not reach the audit log").toMatch(/noteAction\([^)]*`\/control\/\$\{controlId\(cmd\) \?\? "unknown"\}`, \{ \.\.\.\(setting \? \{ setting \} : \{\}\), \.\.\.\(as \? \{ as \} : \{\}\), \.\.\.\(opens \? \{ present \} : \{\}\), \.\.\.\(queued \? \{ queued: true \} : \{\}\) \},/s);
+    expect(handler, "the command's arguments must not reach the audit log").toMatch(/noteAction\([^)]*`\/control\/\$\{controlId\(cmd\) \?\? "unknown"\}`, \{ \.\.\.\(setting \? \{ setting \} : \{\}\), \.\.\.\(as \? \{ as \} : \{\}\), \.\.\.\(opens \? \{ present \} : \{\}\), \.\.\.\(queued \? \{ queued: true \} : \{\}\), \.\.\.\(refused \? \{ refused \} : \{\}\) \},/s);
     expect(handler).toContain("const setting = changedSetting(cmd);");
   });
 });

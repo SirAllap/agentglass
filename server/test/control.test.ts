@@ -245,20 +245,21 @@ describe("parseControlCmd — the ui wire shape", () => {
     const registry = {
       look: { level: 1, kind: "open", surface: "x", args: {} },
       change: { level: 2, kind: "change", surface: "x", args: {} },
-      effect: { level: 3, kind: "external", surface: "x", args: {} },
+      stage: { level: 3, kind: "stage", surface: "x", args: {} },
     } as const;
-    expect(parseUi(registry, "look", {}, UI_MAX_LEVEL)).not.toBeNull();
-    expect(parseUi(registry, "change", {}, UI_MAX_LEVEL)).not.toBeNull();
+    expect(parseUi(registry, "look", {}, 2)).not.toBeNull();
+    expect(parseUi(registry, "change", {}, 2)).not.toBeNull();
     expect(parseUi(registry, "change", {}, 1)).toBeNull();
-    expect(parseUi(registry, "effect", {}, UI_MAX_LEVEL)).toBeNull();
-    expect(UI_MAX_LEVEL).toBe(2);
-    // No level at all is level 3: refused, not "no limit".
+    expect(parseUi(registry, "stage", {}, 2)).toBeNull();
+    expect(parseUi(registry, "stage", {}, UI_MAX_LEVEL)).not.toBeNull();
+    // No level at all is level 3: refused below 3, and then not a stage, so refused anyway.
     const unlevelled = { oops: { kind: "open", surface: "x", args: {} } } as never;
+    expect(parseUi(unlevelled, "oops", {}, 2)).toBeNull();
     expect(parseUi(unlevelled, "oops", {}, UI_MAX_LEVEL)).toBeNull();
   });
 
-  test("only the settings write is level 2; every other entry is level 1", () => {
-    for (const [id, d] of Object.entries(UI_ACTIONS)) expect(d.level, id).toBe(id === "settings.set" ? 2 : 1);
+  test("only the writes are level 2 (a setting, the palette, the zoom); every other entry is level 1, or a level 3 stage", () => {
+    for (const [id, d] of Object.entries(UI_ACTIONS) as [string, { level: number; kind: string }][]) expect(d.level, id).toBe(["settings.set", "theme.set", "zoom.step"].includes(id) ? 2 : d.kind === "stage" ? 3 : 1);
   });
 });
 

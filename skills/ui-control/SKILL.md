@@ -60,10 +60,19 @@ Read the sentence and do what it says; do not retry the same call.
    pull-request notices, the search engine, what Tasks shows, single-key
    shortcuts). Not notification kinds, channels or voices, the home page, tokens,
    remote access, plugin trust or the gate: those are the person's. The
-   person gets an "An agent changed X" chip with Undo. `AGENTGLASS_CONTROL_LEVEL=1`
-   on the server turns this level off: then `settings set` is not offered at all.
-3. **An effect outside the app** (merge, push, send). Does not exist. If the task
-   needs one, say so and let the person click it.
+   person gets an "An agent changed X" chip with Undo. The palette and the zoom are in this level too, because they persist. The
+   owner can limit the server to level 1: then none of these is offered, and
+   asking anyway is refused with a sentence that says the limit is theirs.
+3. **An effect outside the app** (merge, push, send, anything touching a token,
+   remote access, plugin trust, the gate or consent). An agent never performs
+   one through this channel: a level 3 door only **stages**, opening the dialog
+   with its fields filled in, and the person's own click is the effect. There is
+   no grant that makes it automatic. It is offered only when the owner has allowed level 3. If the task needs one and no door
+   stages it, say so and let the person do it.
+
+The level is the owner's, set when the server starts. No door, setting or
+argument can change it, so do not try to find one or to work out how: a refusal
+naming a level is the answer, not a puzzle. Ask the person.
 
 ## Rules
 
@@ -90,7 +99,7 @@ Read the sentence and do what it says; do not retry the same call.
   carries: `agentglass-ui settings set diff.wrap false`. The chip's Undo does the
   same for the person. Several windows share one answer, so `prev` equal to the
   new value means it was already that.
-- Thirty settings changes a minute per caller; past that you are told to slow down.
+- Thirty changes (a setting, a staged dialog) a minute per caller; past that you are told to slow down.
 - Do not call `POST /control/result`: it is the window's reply channel.
 
 ## When it will not answer
