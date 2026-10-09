@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { HIT, ICON, MIN_BOX } from "../lib/iconSize.ts";
 import { InfoIcon } from "./settingsNavIcons.tsx";
-import { CircleIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, FlagIcon, GitHubGlyph, LinkIcon, RefreshIcon, SearchIcon, StarIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import { CircleIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, FlagIcon, LinkIcon, RefreshIcon, SearchIcon, StarIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { FACES_MAX, eventLine, splitTitle, standing } from "../lib/prCardZones.ts";
 import { ALWAYS_OPEN, foldable, foldedLanes, setFoldedLanes, walkable } from "../lib/boardPrefs.ts";
 import type { PrSummary } from "../../../shared/types.ts";
@@ -1298,7 +1298,7 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, cursor, onOpen, onPin,
         */}
       <div className="agx-prc-main">
         <div className="agx-prc-id">
-          <span aria-hidden className="flex shrink-0" style={{ color: "var(--text)" }}><GitHubGlyph size={ICON.sm} /></span>
+          <span className="flex shrink-0" title={`${p.author} opened this pull request`}><Avatar login={p.author} size={20} /></span>
           {/*
             * The number, and pressing it copies it.
             *
@@ -1523,11 +1523,12 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, cursor, onOpen, onPin,
             * Overlapped left to right, the way every other row of people in
             * this app is drawn, so five of them cost the width of two.
             */}
+          {(p.reviewers?.length ?? 0) > 0 && (
           <span className="ml-auto shrink-0 flex items-center" role="img"
-            aria-label={`${p.author}${p.reviewers?.length ? `, asked: ${p.reviewers.map((r) => r.login).join(", ")}` : ""}`}
-            title={`${p.author}${p.reviewers?.length ? ` · asked: ${p.reviewers.map((r) => r.login).join(", ")}` : ""}`}>
-            {[p.author, ...(p.reviewers ?? []).map((r) => r.login)]
-              .filter((l, n, all) => l && all.indexOf(l) === n)
+            aria-label={`Asked: ${p.reviewers!.map((r) => r.login).join(", ")}`}
+            title={`Asked: ${p.reviewers!.map((r) => r.login).join(", ")}`}>
+            {(p.reviewers ?? []).map((r) => r.login)
+              .filter((l, n, all) => l && l !== p.author && all.indexOf(l) === n)
               .slice(0, FACES_MAX)
               .map((login, n) => (
                 <span key={login} className="rounded-full"
@@ -1537,6 +1538,7 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, cursor, onOpen, onPin,
                 </span>
               ))}
           </span>
+          )}
         </div>
       </div>
     </div>

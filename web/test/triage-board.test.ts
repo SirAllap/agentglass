@@ -594,10 +594,10 @@ describe("who is on it", () => {
     expect(board).not.toContain("r.login.slice(0, 2).toUpperCase()");
   });
 
-  it("is the author and whoever was asked, capped", () => {
-    // The two facts a list row carries. Past five the card is a contact sheet,
-    // and the pull request itself lists them all.
-    expect(board).toContain("[p.author, ...(p.reviewers ?? []).map((r) => r.login)]");
+  it("is whoever was asked, capped; the author is the face on the identity line", () => {
+    // Past five the card is a contact sheet, and the pull request itself lists them all.
+    expect(board).toContain("(p.reviewers ?? []).map((r) => r.login)");
+    expect(board).toContain("<Avatar login={p.author} size={20} />");
     expect(board).toContain(".slice(0, FACES_MAX)");
   });
 });
