@@ -15,7 +15,7 @@ describe("comment actions reserve no height", () => {
     const at = panel.indexOf('<div className="agx-hover-show absolute');
     expect(at).not.toBe(-1);
     const tag = panel.slice(at, panel.indexOf(">", at));
-    expect(tag).toContain("bottom-0");
+    expect(tag).toContain("bottom-1.5");
     expect(tag).not.toMatch(/\bmt-\d/);
   });
 

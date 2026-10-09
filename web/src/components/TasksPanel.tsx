@@ -5108,8 +5108,10 @@ function DepRow({ d, onGo }: { d: ProviderTask; onGo: (id: string) => void }) {
  * each (`CTRL_H.compact`, a control inside a card); the destructive one keeps
  * its own colour and is held apart from the other three by a rule.
  */
-function CommentAction({ label, title, d, onClick, busy, on, tone }: {
+function CommentAction({ label, title, d, onClick, busy, on, tone, iconOnly }: {
   label: string; title: string; d: string;
+  /** The label stays as the tooltip and aria-label; only the glyph is drawn. */
+  iconOnly?: boolean;
   onClick: () => void;
   busy?: boolean;
   /** Already in that state — Resolve on a resolved comment. */
@@ -5119,9 +5121,10 @@ function CommentAction({ label, title, d, onClick, busy, on, tone }: {
   const colour = on ? (tone ?? "var(--success, #98c379)") : tone && label === "Delete" ? tone : "var(--text3)";
   return (
     <button onClick={onClick} disabled={busy} title={title} aria-label={title} aria-pressed={on || undefined}
-      className="agx-btn inline-flex items-center gap-1 rounded-md px-1.5 text-[10.5px]"
+      className={`agx-btn inline-flex items-center justify-center gap-1 rounded-md text-[10.5px] ${iconOnly ? "" : "px-1.5"}`}
       style={{
         height: CTRL_H.compact,
+        ...(iconOnly ? { width: CTRL_H.compact } : null),
         color: colour,
         border: `1px solid color-mix(in srgb, ${on ? (tone ?? "var(--success, #98c379)") : "var(--text)"} ${on ? 40 : 14}%, transparent)`,
         background: on ? `color-mix(in srgb, ${tone ?? "var(--success, #98c379)"} 12%, transparent)` : "transparent",
@@ -5130,7 +5133,7 @@ function CommentAction({ label, title, d, onClick, busy, on, tone }: {
         strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
         <path d={d} />
       </svg>
-      {label}
+      {!iconOnly && label}
     </button>
   );
 }
@@ -7074,25 +7077,26 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                 /* Out of the flow. In the flow this row was opacity:0 and
                    still took its ~22px plus mt-2 under every comment, so a
                    one-line remark sat in a card with a 43px blank band below
-                   it (measured 13px once the row is gone). Now it straddles
-                   the card's bottom edge like a hover toolbar: the card hugs
+                   it (measured 13px once the row is gone). Now it floats
+                   inside the card's bottom padding, icon-only so four fit
+                   inside the card at sidebar width: the card hugs
                    its text, and hovering the card still reveals it. */
-                <div className="agx-hover-show absolute right-3 bottom-0 translate-y-1/2 z-[6] flex flex-nowrap whitespace-nowrap items-center gap-1 rounded-lg p-0.5"
+                <div className="agx-hover-show absolute right-2 bottom-1.5 z-[6] flex flex-nowrap items-center gap-1 rounded-lg p-0.5"
                   style={{ background: "var(--surface-card)" }}>
                   {/* Controls, not a sentence.
                       These were four words in a row under the paragraph and read
                       as text somebody forgot to delete. An icon, a label, a
                       border and a compact control each, with the destructive
                       one held apart from the other three. */}
-                  <CommentAction label="Reply" title="Answer in this thread"
+                  <CommentAction iconOnly label="Reply" title="Answer in this thread"
                     d="M9 14l-5-5 5-5M4 9h9a7 7 0 0 1 7 7v4"
                     onClick={() => { setReplyTo(replyTo === c.id ? null : c.id); setNoteDraft(""); }} />
                   {c.mine && (
-                    <CommentAction label="Edit" title="Edit this comment"
+                    <CommentAction iconOnly label="Edit" title="Edit this comment"
                       d="M4 20h4l10-10a2.8 2.8 0 0 0-4-4L4 16v4z"
                       onClick={() => { setEditing(c.id); setNoteDraft(c.text); setReplyTo(null); }} />
                   )}
-                  <CommentAction label={c.resolved ? "Resolved" : "Resolve"}
+                  <CommentAction iconOnly label={c.resolved ? "Resolved" : "Resolve"}
                     title={c.resolved ? "Mark it unresolved" : "Mark it resolved"}
                     d="M4 12l5 5L20 6" on={!!c.resolved} tone="var(--success, #98c379)"
                     onClick={() => {
@@ -7111,7 +7115,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                   {c.mine && (
                     <>
                       <span aria-hidden className="mx-0.5" style={{ width: 1, height: 16, background: "color-mix(in srgb, var(--text) 12%, transparent)" }} />
-                      <CommentAction label="Delete" title="Delete this comment" tone="var(--error)"
+                      <CommentAction iconOnly label="Delete" title="Delete this comment" tone="var(--error)"
                         d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13M10 11v6M14 11v6"
                         busy={busyComment === c.id}
                         onClick={async () => {
