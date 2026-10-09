@@ -5030,7 +5030,11 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       let b: { enabled?: unknown };
       try { b = (await req.json()) as { enabled?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       if (typeof b.enabled !== "boolean") return json({ ok: false, error: "enabled must be a boolean" }, 400);
-      await setMaster(b.enabled);
+      try {
+        await setMaster(b.enabled);
+      } catch (e) {
+        return json({ ok: false, error: failed("plugins/master", e, b.enabled ? "the master switch was not changed: it could not be saved, try again" : "plugins are stopped, but the switch-off could not be saved, so they come back at the next start") }, 500);
+      }
       return json({ ok: true, master: b.enabled });
     }
 
@@ -5105,8 +5109,12 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       let b: { name?: unknown };
       try { b = (await req.json()) as { name?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       if (typeof b.name !== "string" || !b.name) return json({ ok: false, error: "name is required" }, 400);
-      const ok = await disablePlugin(b.name);
-      return json({ ok }, ok ? 200 : 404);
+      try {
+        const ok = await disablePlugin(b.name);
+        return json({ ok }, ok ? 200 : 404);
+      } catch (e) {
+        return json({ ok: false, error: failed("plugins/disable", e, "the plugin is stopped, but the switch-off could not be saved, so it comes back at the next start") }, 500);
+      }
     }
 
     if (pathname === "/plugins/remove" && req.method === "POST") {
@@ -5118,7 +5126,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         const ok = await removePlugin(b.name, { dropSettings: b.dropSettings === true });
         return json({ ok }, ok ? 200 : 404);
       } catch (e) {
-        return json({ ok: false, error: failed("plugins/remove", e, "the plugin was not removed: its key could not be revoked, try again") }, 500);
+        return json({ ok: false, error: failed("plugins/remove", e, "the plugin was not removed: its key could not be revoked or the change could not be saved, try again") }, 500);
       }
     }
 

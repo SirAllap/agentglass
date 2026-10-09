@@ -1847,7 +1847,7 @@ const realApi = {
   pluginEnable: (name: string) =>
     post<{ ok: boolean; error?: string }>("/plugins/enable", { name }),
   pluginDisable: (name: string) =>
-    post<{ ok: boolean }>("/plugins/disable", { name }),
+    post<{ ok: boolean; error?: string }>("/plugins/disable", { name }),
   /** Its settings are kept for a reinstall unless `dropSettings`. */
   pluginRemove: (name: string, dropSettings = false) =>
     post<{ ok: boolean }>("/plugins/remove", { name, dropSettings }),

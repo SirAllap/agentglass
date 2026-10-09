@@ -1198,12 +1198,18 @@ export function masterEnabled(): boolean {
 }
 
 export async function setMaster(enabled: boolean): Promise<void> {
-  write({ ...read(), master: enabled });
+  // Switching on is not applied until it is saved: nothing starts here, and a
+  // restart would otherwise come up with the switch off. Switching off stops
+  // everything even so, and then says it was not saved, because a plugin left
+  // running under a switch that was turned off is the worse of the two.
+  const saved = write({ ...read(), master: enabled });
+  if (enabled && !saved) throw new Error("could not save the master switch");
   // Flipping the master switch off must actually stop everything — a plugin
   // left running after the switch that supposedly controls it is off is the
   // whole feature failing, the same standard `endLease`/`revokeDevice` hold
   // their own callers to.
   if (!enabled) for (const name of [...running.keys()]) await stopRunning(name);
+  if (!saved) throw new Error("could not save the master switch");
 }
 
 /** What a caller may pass to `installPlugin` — a bare string (back-compat:
@@ -1581,7 +1587,10 @@ export async function enablePlugin(name: string, approved = true): Promise<{ ok:
   rec.approvedFingerprint = rec.fingerprint;
   rec.hadApproval = true;
   rec.enabled = true;
-  write(store);
+  // The approval is on disk before anything runs under it: a start that
+  // outlives a failed save would be running under an approval the next
+  // restart does not have.
+  if (!write(store)) return { ok: false, error: "could not save the approval, so the plugin was not switched on" };
   await startProcess(rec);
   return { ok: true };
 }
@@ -1599,7 +1608,10 @@ export async function setPluginUnboxedConsent(name: string, allow: boolean): Pro
   const rec = store.plugins.find((p) => p.name === name);
   if (!rec) return { ok: false, error: "no such plugin" };
   rec.allowUnboxed = allow;
-  write(store);
+  // Granting waits for the save, revoking does not (stopped below, then said):
+  // the same split as the master switch.
+  const saved = write(store);
+  if (allow && !saved) return { ok: false, error: "could not save the consent, so the plugin was not allowed to run unboxed" };
   if (allow) {
     // The same three gates `enablePlugin`/`resumeEnabledPlugins` hold a start
     // to: switched on, approved at its CURRENT fingerprint, and not blocked.
@@ -1613,6 +1625,7 @@ export async function setPluginUnboxedConsent(name: string, allow: boolean): Pro
     const r = running.get(name);
     if (r && r.boxState.kind === "unboxed" && r.boxState.reason !== "no-block") await stopRunning(name);
   }
+  if (!saved) return { ok: false, error: "could not save the change, so the consent comes back at the next start" };
   return { ok: true };
 }
 
@@ -1621,8 +1634,12 @@ export async function disablePlugin(name: string): Promise<boolean> {
   const rec = store.plugins.find((p) => p.name === name);
   if (!rec) return false;
   rec.enabled = false;
-  write(store);
+  // Stopped even when the save fails: the person asked for it off, and a
+  // plugin left running is the worse answer. The throw says what the disk
+  // still holds, which is that it comes back at the next start.
+  const saved = write(store);
   await stopRunning(name);
+  if (!saved) throw new Error("could not save the switch-off");
   return true;
 }
 
@@ -1647,7 +1664,7 @@ export async function removePlugin(name: string, opts: { dropSettings?: boolean 
     // from.
     if (!opts.dropSettings || !Object.hasOwn(store.keptSettings ?? {}, name)) return false; // `keptSettings["__proto__"]` is not an entry
     dropKeyOrThrow(store, name);
-    write({ ...store, keptSettings: withoutKey(store.keptSettings, name) });
+    if (!write({ ...store, keptSettings: withoutKey(store.keptSettings, name) })) throw new Error("could not save the removal of the kept settings");
     return true;
   }
   // First, before anything is deleted: a key that cannot be revoked leaves the
@@ -1656,18 +1673,13 @@ export async function removePlugin(name: string, opts: { dropSettings?: boolean 
   dropKeyOrThrow(store, name);
   await stopRunning(name);
   lastBoxFailure.delete(name);
-  // A record is read back from disk, so its `installDir` is trusted no more
-  // than a manifest is: the folder goes only when it is a child of the
-  // plugins root. Otherwise the record is dropped and the disk left alone —
-  // a stale entry is a nuisance, a deleted config directory is not.
-  if (insidePluginsRoot(rec.installDir)) rmSync(rec.installDir, { recursive: true, force: true });
-  // A different author's plugin installed later under this same name must
-  // not inherit whatever this one cached here.
-  removePluginDataDir(name);
   const keepable = withoutSecrets(rec.contributes?.settings, rec.settings);
   const keep = !opts.dropSettings && keepable && Object.keys(keepable).length > 0;
   const from = sourceKey(rec.source);
-  write({
+  // The record goes before the folder: a save that fails leaves both in place
+  // for a retry, where the other order leaves a record pointing at nothing.
+  // The ceiling: a crash between the two leaves a folder with no record.
+  if (!write({
     ...store,
     plugins: store.plugins.filter((p) => p.name !== name),
     // Only this plugin's own entry: settings another source left under the
@@ -1676,7 +1688,15 @@ export async function removePlugin(name: string, opts: { dropSettings?: boolean 
     keptSettings: keep
       ? { ...(store.keptSettings ?? {}), [name]: { ...(store.keptSettings?.[name] ?? {}), [from]: keepable! } }
       : opts.dropSettings ? withoutKept(store.keptSettings, name, from) : store.keptSettings,
-  });
+  })) throw new Error("could not save the removal");
+  // A record is read back from disk, so its `installDir` is trusted no more
+  // than a manifest is: the folder goes only when it is a child of the
+  // plugins root. Otherwise the record is dropped and the disk left alone —
+  // a stale entry is a nuisance, a deleted config directory is not.
+  if (insidePluginsRoot(rec.installDir)) rmSync(rec.installDir, { recursive: true, force: true });
+  // A different author's plugin installed later under this same name must
+  // not inherit whatever this one cached here.
+  removePluginDataDir(name);
   dropNotesOf(name);
   // Also when it was not running: a plugin installed later under the same
   // name must not inherit a queue of this one's events.

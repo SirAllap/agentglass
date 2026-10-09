@@ -147,6 +147,7 @@ export function PluginsPane({ open, focus }: {
   const [master, setMasterState] = useState<boolean | null>(null);
   const [plugins, setPlugins] = useState<PublicPlugin[]>([]);
   const [busyMaster, setBusyMaster] = useState(false);
+  const [masterError, setMasterError] = useState<string | null>(null);
 
   const load = useCallback(() => {
     api.plugins().then((r) => { setMasterState(r.master); setPlugins(r.plugins); }).catch(() => { /* left as last known */ });
@@ -160,9 +161,11 @@ export function PluginsPane({ open, focus }: {
   const toggleMaster = async () => {
     if (master === null || busyMaster) return;
     setBusyMaster(true);
+    setMasterError(null);
     const r = await api.pluginMaster(!master);
     setBusyMaster(false);
     if (r.ok) setMasterState(r.master ?? !master);
+    else setMasterError(r.error ?? "the master switch was not changed");
     load();
   };
 
@@ -250,6 +253,7 @@ export function PluginsPane({ open, focus }: {
                 : "Nothing installed runs, no matter what it is enabled to do. Install and review still work."}
               control={<Switch on={!!master} busy={busyMaster || master === null} />}
             />
+            {masterError && <Alert tone="error">{masterError}</Alert>}
           </div>
       </div>
 
@@ -375,9 +379,10 @@ function PluginCard({ plugin, masterOn, onChanged, onSettings }: {
       if (!ok) return;
     }
     setBusy(true);
-    if (next) await api.pluginEnable(plugin.name);
-    else await api.pluginDisable(plugin.name);
+    setUpdateError(null);
+    const r = next ? await api.pluginEnable(plugin.name) : await api.pluginDisable(plugin.name);
     setBusy(false);
+    if (!r.ok) setUpdateError(r.error ?? "the change was not made");
     onChanged();
   };
 
