@@ -10,7 +10,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
-import { LEAVE_ALONE, mergeCardRef, movesCard, mergeNote, statusColor, statusOptions, rfqaStatus } from "../src/lib/cardMove.ts";
+import { LEAVE_ALONE, mergeCardRef, movesCard, mergeNote, statusColor, statusOptions, readyForQaStatus } from "../src/lib/cardMove.ts";
 import type { ListStatus } from "../../shared/providers.ts";
 
 describe("which card is worth offering to move", () => {
@@ -172,21 +172,21 @@ describe("finding the list's own ready-for-QA status", () => {
     // A workspace spells it "Ready for QA"; another writes it in lowercase. The
     // word is theirs, and this control has no business assuming one spelling.
     const board = [s("To Do", 0), s("Ready for QA", 1), s("Done", 2, "done")];
-    expect(rfqaStatus(board, "To Do")).toBe("Ready for QA");
-    expect(rfqaStatus([s("To Do", 0), s("ready for qa", 1)], "To Do")).toBe("ready for qa");
+    expect(readyForQaStatus(board, "To Do")).toBe("Ready for QA");
+    expect(readyForQaStatus([s("To Do", 0), s("ready for qa", 1)], "To Do")).toBe("ready for qa");
   });
 
   it("offers nothing when the card is already there", () => {
     const board = [s("To Do", 0), s("Ready for QA", 1)];
-    expect(rfqaStatus(board, "Ready for QA")).toBeUndefined();
-    expect(rfqaStatus(board, "ready for qa")).toBeUndefined();
+    expect(readyForQaStatus(board, "Ready for QA")).toBeUndefined();
+    expect(readyForQaStatus(board, "ready for qa")).toBeUndefined();
   });
 
   it("offers nothing when the list has no such status at all", () => {
     // Naming a near-miss ("QA", "Ready") would move the card to a status
     // nobody meant — silence is the honest answer here, not a guess.
     const board = [s("To Do", 0), s("QA", 1), s("Ready", 2)];
-    expect(rfqaStatus(board, "To Do")).toBeUndefined();
+    expect(readyForQaStatus(board, "To Do")).toBeUndefined();
   });
 });
 

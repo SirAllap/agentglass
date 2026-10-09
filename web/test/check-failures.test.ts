@@ -97,13 +97,13 @@ describe("words", () => {
     expect(plural(1, "day")).toBe("1 day");
   });
   test("a check finds its job by the id in its own URL, which cannot name the wrong job", () => {
-    const jobs = [{ id: "11", name: "Tests / vart-evals" }, { id: "12", name: "vart-evals" }] as never[];
+    const jobs = [{ id: "11", name: "Tests / orbit-evals" }, { id: "12", name: "orbit-evals" }] as never[];
     // the name alone would pick job 12, whose name matches: the URL says 11
-    expect(jobFor({ name: "vart-evals", url: "https://github.com/acme/orbit/actions/runs/9/job/11" }, jobs)?.id).toBe("11");
+    expect(jobFor({ name: "orbit-evals", url: "https://github.com/acme/orbit/actions/runs/9/job/11" }, jobs)?.id).toBe("11");
   });
   test("a job the capped list does not hold is made from the URL: the panel is never silently absent", () => {
-    const j = jobFor({ name: "vart-evals", url: "https://github.com/acme/orbit/actions/runs/9/job/777", startedAt: "2026-10-01T10:00:00Z" }, [{ id: "1", name: "build" }] as never[]);
-    expect(j).toMatchObject({ id: "777", runId: "9", name: "vart-evals", url: "https://github.com/acme/orbit/actions/runs/9/job/777", startedAt: "2026-10-01T10:00:00Z" });
+    const j = jobFor({ name: "orbit-evals", url: "https://github.com/acme/orbit/actions/runs/9/job/777", startedAt: "2026-10-01T10:00:00Z" }, [{ id: "1", name: "build" }] as never[]);
+    expect(j).toMatchObject({ id: "777", runId: "9", name: "orbit-evals", url: "https://github.com/acme/orbit/actions/runs/9/job/777", startedAt: "2026-10-01T10:00:00Z" });
   });
   test("without an id in the link, the old name rules still apply", () => {
     const jobs = [{ id: "1", name: "build" }, { id: "2", name: "Sidecar (macos-latest)" }] as never[];

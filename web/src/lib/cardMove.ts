@@ -108,9 +108,9 @@ const eqStatus = (a: string, b: string) => a.trim().toLowerCase() === b.trim().t
  * assumed — one workspace spells it "Ready for QA", another "ready for qa",
  * and the word is theirs, not this app's. Undefined when the list has no such
  * status, or the card is already sitting in it: either way there is nothing
- * for a "move to RfQA" control to offer.
+ * for a "move to Ready for QA" control to offer.
  */
-export function rfqaStatus(statuses: ListStatus[], current: string): string | undefined {
+export function readyForQaStatus(statuses: ListStatus[], current: string): string | undefined {
   const hit = statuses.find((s) => s.status.trim().toLowerCase() === "ready for qa");
   return hit && !eqStatus(hit.status, current) ? hit.status : undefined;
 }

@@ -61,7 +61,7 @@ import { depSpec } from "../../../shared/deps.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { confirmMergeGuard } from "../lib/mergeGuard.ts";
 import { useMergeDialog } from "./MergeDialog.tsx";
-import { mergeCardRef, mergeNote, statusColor, rfqaStatus } from "../lib/cardMove.ts";
+import { mergeCardRef, mergeNote, statusColor, readyForQaStatus } from "../lib/cardMove.ts";
 import { cardPlan, cardPlanNote } from "../lib/cardPlan.ts";
 import { cardOf, askingCard, onCard, putCard, forgetCards, cardVersion, withCard } from "../lib/prCardStore.ts";
 import { PeoplePick } from "./PeoplePick.tsx";
@@ -7682,7 +7682,7 @@ function CardPeoplePick({ task, query, onSaid }: { task: ProviderTask; query: st
  * picker's is: hover cannot decide whether to show a button at all. One extra
  * read per card the sidebar already opened for.
  */
-function CardRfqaButton({ task, query, onSaid, ask }: {
+function CardReadyForQaButton({ task, query, onSaid, ask }: {
   task: ProviderTask; query: string; onSaid: (s: string) => void;
   ask: (spec: { title: string; body?: string; confirmLabel?: string; danger?: boolean }) => Promise<boolean>;
 }) {
@@ -7697,14 +7697,14 @@ function CardRfqaButton({ task, query, onSaid, ask }: {
     return () => { live = false; };
   }, [task.listId]);
 
-  const target = statuses ? rfqaStatus(statuses, task.status) : undefined;
+  const target = statuses ? readyForQaStatus(statuses, task.status) : undefined;
   if (!target) return null;
 
   const move = async () => {
     if (busy) return;
     const said = await ask({
       title: `Move ${query} to Ready for QA and unassign everyone?`,
-      confirmLabel: "Move to RfQA",
+      confirmLabel: "Move to Ready for QA",
     });
     if (!said) return;
     setBusy(true);
@@ -7725,7 +7725,7 @@ function CardRfqaButton({ task, query, onSaid, ask }: {
       className="agx-btn text-[10.5px] px-2 py-0.5 rounded disabled:opacity-50"
       title={`Move to ${target} and unassign everyone`}
       style={{ color: "var(--text2)", border: EDGE }}>
-      Move to RfQA
+      Move to Ready for QA
     </button>
   );
 }
@@ -7822,7 +7822,7 @@ function CardFacts({ d, root }: { d: PrDetail; root: string }) {
                 style={{ color: "var(--text2)", border: EDGE }}>
                 Note on card
               </button>
-              <CardRfqaButton task={task} query={query} onSaid={setSaid} ask={ask} />
+              <CardReadyForQaButton task={task} query={query} onSaid={setSaid} ask={ask} />
               {said && <span className="text-[10px]" style={{ color: said.startsWith("!") ? "var(--warning)" : "var(--success)" }}>{said.replace(/^!/, "")}</span>}
             </div>
 
