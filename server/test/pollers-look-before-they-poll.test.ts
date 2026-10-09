@@ -38,7 +38,9 @@ test("the reminder and session polls go through the focus gate, and the palette 
 
 test("the machine panel, the terminal's pane reads and the switcher use usePoll, not setInterval", () => {
   expect(code(machine)).not.toContain("setInterval(");
-  expect((code(machine).match(/usePoll\(true, load, POLL_MS\)/g) ?? []).length).toBe(3);
+  /* Resources and Locks keep POLL_MS; the ports list has its own, slower one. */
+  expect((code(machine).match(/usePoll\(true, load, POLL_MS\)/g) ?? []).length).toBe(2);
+  expect((code(machine).match(/usePoll\(true, load, PORTS_POLL_MS\)/g) ?? []).length).toBe(1);
   expect(code(switcher)).not.toContain("setInterval(");
   expect(code(switcher)).toContain("usePoll(open");
   /* One timer for both terminal reads, not two 4 s intervals. */
@@ -61,7 +63,8 @@ test("the browser panel hands each webview ONE ref callback, not a new one per r
 test("the cursor poll stops for an unfocused window and slows when the cursor rests", () => {
   const body = code(peek);
   expect(body).toContain("document.hasFocus()");
-  expect(body).toContain("CURSOR_SLOW_MS");
+  /* The pace lives in lib/cursorPace.ts (CURSOR_SLOW_MS there); null means no timer. */
+  expect(body).toContain("cursorDelay(looking(), still)");
   expect(body).not.toContain("setInterval(ask, 450)");
 });
 

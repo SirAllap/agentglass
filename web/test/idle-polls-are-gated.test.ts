@@ -97,3 +97,50 @@ describe("the fixed-rate polls of five seconds or less that were still ungated",
     expect(text).not.toContain("setInterval(poll, 5000)");
   });
 });
+
+describe("the top bar's behind-upstream poll", () => {
+  // Measured with the window hidden: `/git/repos` every 90 s was the one client
+  // poll that ignored visibility, about 360 git spawns an hour for a number
+  // nobody could see. The git-changed push stays, so "you just pulled" is still
+  // read at once.
+  test("runs through pollWhileLooking and keeps the git-changed refresh", async () => {
+    const text = await src("components/TopBarNotes.tsx");
+    const at = text.indexOf("const { repos, roots } = await api.gitRepos();");
+    expect(at).toBeGreaterThan(0);
+    const effect = text.slice(at, text.indexOf("return { note, behind, ahead };", at))
+      .split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+    expect(effect).toContain("pollWhileLooking(");
+    expect(effect).toContain("}, 90_000)");
+    expect(effect).toContain("subscribeGitChanged(");
+    expect(effect).not.toContain("setInterval(");
+  });
+});
+
+describe("the ports list's poll", () => {
+  // 1,490 requests an hour at 2.5 s, each an `ss -p` walk of the socket table.
+  // The other two Machine tabs keep 2.5 s: the CPU column is a rate and needs
+  // two close samples, the ports list does not.
+  test("ports poll every ten seconds while the others keep POLL_MS", async () => {
+    const text = await src("components/MachinePanel.tsx");
+    expect(text).toContain("const PORTS_POLL_MS = 10_000;");
+    const at = text.indexOf("function Ports(");
+    const body = text.slice(at, text.indexOf("\nfunction ", at + 1));
+    expect(body).toContain("usePoll(true, load, PORTS_POLL_MS);");
+    expect(body).not.toContain("POLL_MS);\n  usePoll");
+    expect(text.split("usePoll(true, load, POLL_MS);").length - 1).toBe(2);
+  });
+});
+
+describe("the Diff view's safety poll", () => {
+  // 240 git reads an hour with the window hidden, for rows nobody could see.
+  test("runs through pollWhileLooking and keeps the git-changed refresh", async () => {
+    const text = await src("lib/changeRows.ts");
+    const at = text.indexOf("subscribeGitChanged(() => {");
+    expect(at).toBeGreaterThan(0);
+    const effect = text.slice(at, text.indexOf("return { ...state, refresh: load };", at))
+      .split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+    expect(effect).toContain("pollWhileLooking(");
+    expect(effect).toContain("SAFETY_MS)");
+    expect(effect).not.toContain("setInterval(");
+  });
+});

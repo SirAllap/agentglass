@@ -256,3 +256,63 @@ describe("delivery", () => {
     }
   });
 });
+
+describe("the claim's clock", () => {
+  /*
+   * The ten-second tick became one timer for the next due time. What the owner
+   * relies on is unchanged and is what is asserted here: a reminder fires at its
+   * due time (not ten seconds after it), one added while the timer sleeps for
+   * something later still fires first, and an alarm nobody answered asks again.
+   */
+  const insertDue = (id: string, due: number, firedAt: number | null = null) =>
+    DB.db.run(
+      `INSERT INTO reminders (id, title, civil, zone, due, created, fired_at) VALUES (?, ?, 'x', 'UTC', ?, ?, ?)`,
+      [id, id, due, Date.now(), firedAt],
+    );
+
+  it("knows the next wake: the earliest unfired due time, else the next nag, else nothing", () => {
+    expect(R.nextReminderWake()).toBeNull();
+    insertDue("later", 5_000_000_000_000);
+    insertDue("sooner", 4_000_000_000_000);
+    expect(R.nextReminderWake()).toBe(4_000_000_000_000);
+    DB.db.run("DELETE FROM reminders");
+    R.__resetNags();
+    insertDue("asked", 1_000, 2_000);                 // fired at t=2000, never answered
+    expect(R.nextReminderWake()).toBe(2_000 + 5 * 60_000);
+    DB.db.run("UPDATE reminders SET acked_at = 1 WHERE id = 'asked'");
+    expect(R.nextReminderWake()).toBeNull();
+  });
+
+  it("fires at the due time, and a reminder added while it sleeps for a later one fires first", async () => {
+    let fired = 0;
+    R.setReminderHook(() => { fired++; });
+    R.startReminderTick();
+    try {
+      insertDue("far", Date.now() + 3_600_000);
+      R.armReminders();                                // it is now sleeping towards an hour away
+      const due = Date.now() + 700;
+      insertDue("soon", due);
+      R.armReminders();                                // what addReminder does
+      const end = Date.now() + 4_000;
+      while (Date.now() < end && fired === 0) await Bun.sleep(20);
+      expect(fired).toBe(1);
+      const row = DB.db.query<{ fired_at: number | null }, [string]>("SELECT fired_at FROM reminders WHERE id = ?").get("soon");
+      expect(row?.fired_at).not.toBeNull();
+      expect(row!.fired_at!).toBeGreaterThanOrEqual(due);
+      expect(row!.fired_at! - due).toBeLessThan(1_500);   // the old tick allowed ten seconds
+      const far = DB.db.query<{ fired_at: number | null }, [string]>("SELECT fired_at FROM reminders WHERE id = ?").get("far");
+      expect(far?.fired_at).toBeNull();
+    } finally {
+      R.stopReminderTick();
+      R.setReminderHook(null);
+    }
+  });
+
+  it("adding a reminder re-arms the timer (snooze goes through it)", async () => {
+    const text = await Bun.file(new URL("../src/reminders.ts", import.meta.url)).text();
+    const at = text.indexOf("export function addReminder(");
+    const body = text.slice(at, text.indexOf("\n}\n", at))
+      .split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+    expect(body).toContain("wake?.arm()");
+  });
+});

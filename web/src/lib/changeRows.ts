@@ -20,6 +20,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.ts";
 import { subscribeGitChanged } from "./gitBus.ts";
+import { pollWhileLooking } from "./usePoll.ts";
 import type { ChangeRow, ChangeRowsResult, FileDiff, TreeAuthorsInfo } from "../../../shared/types.ts";
 
 export type DiffMode = "working" | "committed";
@@ -111,8 +112,10 @@ export function useChangeRows(mode: DiffMode, active: boolean): RowsState & { re
       if (t) clearTimeout(t);
       t = setTimeout(() => { void load(); }, SETTLE_MS);
     });
-    const iv = setInterval(() => { void load(); }, SAFETY_MS);
-    return () => { off(); clearInterval(iv); if (t) clearTimeout(t); };
+    // Looked-at only, and once on the way back: 240 git reads an hour with the
+    // window hidden, for rows nobody could see. The git-changed push stays.
+    const stop = pollWhileLooking(() => { void load(); }, SAFETY_MS);
+    return () => { off(); stop(); if (t) clearTimeout(t); };
   }, [active, load]);
 
   return { ...state, refresh: load };

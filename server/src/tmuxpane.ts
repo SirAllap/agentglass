@@ -849,6 +849,10 @@ export async function evictIdlePanes(
 ): Promise<string[]> {
   const window = idleEvictMs();
   if (!window) return [];
+  // Nothing was ever touched, so nothing can be evicted: the sweep used to ask
+  // tmux for every session first (a spawn a minute, 60 an hour, to throw the
+  // answer away). Candidates are only names `touchPane` recorded, see above.
+  if (!lastUsed.size) return [];
   const evicted: string[] = [];
   for (const name of await io.list()) {
     // Checked before the bookkeeping, so a pinned pane is not silently given a

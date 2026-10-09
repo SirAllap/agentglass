@@ -31,6 +31,13 @@ export type MachineTab = "ports" | "resources" | "locks";
  *  makes the CPU column a rate at all: it needs two samples. */
 const POLL_MS = 2500;
 
+/** The ports list is the slow one: each answer is an `ss -p` walk of the socket
+ *  table, and a dev server you just started still shows within ten seconds of
+ *  the panel being looked at (the poll also fires on every return to the
+ *  window). 2.5 s was 1,490 requests an hour measured, for a list that differed
+ *  in nothing but its ages. */
+const PORTS_POLL_MS = 10_000;
+
 export function MachinePanel({ tab, onTab, onClose, onOpenBrowser }: {
   tab: MachineTab;
   onTab: (t: MachineTab) => void;
@@ -99,7 +106,7 @@ function Ports({ onOpenBrowser }: { onOpenBrowser?: () => void }) {
     api.machinePorts().then((d) => { setData((prev) => (prev && sameShown(prev, d) ? prev : d)); setError(null); }).catch((e) => setError(String(e)));
   }, []);
   useEffect(() => { load(); }, [load]);
-  usePoll(true, load, POLL_MS);
+  usePoll(true, load, PORTS_POLL_MS);
 
   /** Port, process name, checkout, and what started it — everything the row
    *  actually shows. Searching only the port number would miss "which of these

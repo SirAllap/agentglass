@@ -207,43 +207,61 @@ export function listPorts(): PortsReport {
 }
 
 /**
+ * One `ss` reading, split: the listening sockets as `ss -ltnpH` prints them,
+ * and the established ones as `ss -tnH state established` prints them (no State
+ * column), which is the shape `parseEstablished` has always read.
+ */
+export function splitSockets(out: string): { listening: string; established: string } {
+  const listening: string[] = [];
+  const established: string[] = [];
+  for (const raw of out.split("\n")) {
+    const line = raw.trim();
+    if (line.startsWith("LISTEN")) listening.push(line);
+    else if (line.startsWith("ESTAB")) established.push(line.replace(/^ESTAB\s+/, ""));
+  }
+  return { listening: listening.join("\n"), established: established.join("\n") };
+}
+
+/**
  * `listPorts`, awaited: the same `ss`, spawned without holding the event loop.
  *
  * For callers on a poll — the dashboard asks every 15 s from every open window,
  * and a synchronous spawn stops the whole server for as long as `ss` takes, up
  * to its timeout when it hangs.
+ *
+ * One `ss -tnapH` answers both questions, who listens and who is connected to
+ * it. It used to be two spawns per request (`-ltnpH`, then `state
+ * established`), 2,930 an hour measured on the open panel at its old 2.5 s
+ * period. `-p` is where the 20 ms goes (`-tnH state established` alone is 3),
+ * so the saving is the spawn and the second walk of the socket table, not the
+ * parsing. Ceiling: `-a` also prints the TIME-WAIT rows, hundreds on a busy
+ * box, which are cut by their first word and read by nothing.
  */
 export async function listPortsAsync(): Promise<PortsReport> {
   let out: string;
   try {
-    const p = Bun.spawn(["ss", "-ltnpH"], { stdout: "pipe", stderr: "pipe", timeout: 5_000 });
+    const p = Bun.spawn(["ss", "-tnapH"], { stdout: "pipe", stderr: "pipe", timeout: 5_000 });
     const [stdout, stderr, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
     if (code !== 0 && !stdout.length) return { ports: [], mine: 0, external: 0, error: stderr.trim() || "ss failed" };
     out = stdout;
   } catch {
     return { ports: [], mine: 0, external: 0, error: "ss is not installed — it ships with iproute2" };
   }
-  const report = parsePorts(out);
-  await markIdle(report);
+  const { listening, established } = splitSockets(out);
+  const report = parsePorts(listening);
+  markIdle(report, parseEstablished(established));
   return report;
 }
 
 /**
- * Sample who is connected to what, and mark the listeners nobody has used.
+ * Mark the listeners nobody has used, from one sample of who is connected.
  *
  * Runs on the panel's own poll and on a slow timer besides (see `index.ts`), so
- * the clock keeps running with the panel closed. A failed sample changes
- * nothing: no `ss` reading is not "no connections", and treating it as one
- * would start every clock at once.
+ * the clock keeps running with the panel closed. A failed `ss` never gets here:
+ * no reading is not "no connections", and treating it as one would start every
+ * clock at once.
  */
-export async function markIdle(report: PortsReport, now = Date.now()): Promise<void> {
-  let est: Map<number, number>;
-  try {
-    const p = Bun.spawn(["ss", "-tnH", "state", "established"], { stdout: "pipe", stderr: "pipe", timeout: 5_000 });
-    const [stdout, code] = await Promise.all([new Response(p.stdout).text(), p.exited]);
-    if (code !== 0) return;
-    est = parseEstablished(stdout);
-  } catch { return; }
+export function markIdle(report: PortsReport, est: Map<number, number>, now = Date.now()): void {
   const mine = report.ports.filter((p) => p.mine && p.pid != null);
   const key = (p: PortEntry) => `${p.pid}:${p.port}`;
   const seen = foldSample(readLastSeen(), mine.map((p) => ({ key: key(p), connections: est.get(p.port) ?? 0 })), now);
