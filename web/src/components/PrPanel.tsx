@@ -7574,9 +7574,8 @@ function PrSidebar({ d, root, spend, onEditField }: {
      * scrolling value and the other is `visible`, the `visible` one computes to
      * `auto` — so the column had a horizontal scrollbar too, and it was on
      * screen, three quarters of the width, under a sidebar whose every section
-     * is a narrow label. "It makes no sense for this scroll to be here, there
-     * must never be sideways scroll here", and there is nothing here worth reaching
-     * sideways for: a long label wants truncating, never a second axis.
+     * is a narrow label. There is nothing here worth reaching sideways for:
+     * a long label wants truncating, never a second axis.
      */
     <aside className="sticky top-0 shrink-0 w-[248px] pl-4 hidden lg:block overflow-y-auto overflow-x-hidden agx-scroll overscroll-contain"
       style={{ borderLeft: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", maxHeight: "calc(100vh - 6rem)" }}>
