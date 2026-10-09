@@ -11,7 +11,7 @@
 // second half is the half nobody builds, and it is the reason a machine ends up
 // with fourteen checkouts nobody can name.
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
-import { Fragment, type CSSProperties, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, type CSSProperties, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { BlockedIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, DotIcon, IconLabel, KeyboardIcon, LockIcon, MonitorIcon, NoteIcon, PlusIcon, PullRequestIcon, RefreshIcon, SearchIcon } from "../lib/glyphIcons.tsx";
 import { pickCardPr, cardPrTint, cardPrInk, mergedInk, sortedCardPrs, type CardPr } from "../lib/cardPrPick.ts";
 import { cardPrsOf, onCardPrs, cardPrVersion } from "../lib/cardPrStore.ts";
@@ -63,7 +63,7 @@ import { subscribeReminders, liveReminders, nudgeReminders } from "../lib/remind
 import { parseLocal, toLine, sortTasks, step, checkbox, toggleCheckbox, checkProgress, rootForTask, taskPrompt, lineWith, inUse, typingInto, dueBucket, bucketCounts, dueLabel, stamp, TASK_KEYS, SORTS, type SortMode, type Bucket } from "../lib/taskGrammar.ts";
 import { useSyncExternalStore } from "react";
 import { CloseButton, CloseIcon } from "./CloseButton.tsx";
-import { ICON } from "../lib/iconSize.ts";
+import { HIT, ICON } from "../lib/iconSize.ts";
 import { boardDue, BOARD_POLL_MS, BOARD_TICK_MS } from "../lib/boardPoll.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { PRIOS, prioLook, Flag } from "../lib/priority.tsx";
@@ -5033,6 +5033,19 @@ function CommentAction({ label, title, d, onClick, busy, on, tone }: {
   );
 }
 
+/** One row of the card's GitHub tab, pull request or other link. The text takes
+ *  the room and the buttons sit at the row's right edge, top-aligned with the
+ *  title line, so both kinds of row put their buttons in the same place. */
+const LINK_ROW = "flex items-start gap-2 py-1";
+const LINK_BUTTONS = "flex items-start gap-1 shrink-0";
+const ROW_SQUARE: CSSProperties = { width: HIT, height: HIT, border: EDGE, color: "var(--text3)" };
+function RowSquare({ href, onClick, title, children }: { href?: string; onClick?: () => void; title: string; children: ReactNode }) {
+  const cls = "agx-btn inline-flex items-center justify-center rounded-lg shrink-0 text-[12px]";
+  return href
+    ? <a href={href} target="_blank" rel="noreferrer noopener" className={cls} style={ROW_SQUARE} title={title} aria-label={title}>{children}</a>
+    : <button onClick={onClick} className={cls} style={ROW_SQUARE} title={title} aria-label={title}>{children}</button>;
+}
+
 /** The copy button of an "Other links" row: says "Copied" for a moment, the way
  *  the quick-start rows above it do, instead of copying in silence. */
 function CopyLinkChip({ url }: { url: string }) {
@@ -5043,10 +5056,10 @@ function CopyLinkChip({ url }: { url: string }) {
     return () => clearTimeout(t);
   }, [done]);
   return (
-    <IconChip title={done ? "Copied" : "Copy the link"}
+    <RowSquare title={done ? "Copied" : "Copy the link"}
       onClick={() => { void navigator.clipboard.writeText(url).then(() => setDone(true)).catch(() => setDone(false)); }}>
       {done ? <DoneIcon size={ICON.xs} /> : <CopyIcon size={ICON.xs} />}
-    </IconChip>
+    </RowSquare>
   );
 }
 
@@ -6718,7 +6731,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
             )}
           </div>
           {prs.map((p) => (
-            <div key={p.number} className="flex items-center gap-2 py-1">
+            <div key={p.number} className={LINK_ROW}>
               <button onClick={() => {
                 const ref = prRefFromUrl(p.url);
                 if (ref) openPr(ref.repo, p.number);
@@ -6742,8 +6755,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                 )}
                 <div className="truncate text-[10.5px]" style={{ color: "var(--text3)" }}>{p.title || p.url}</div>
               </button>
-              <a href={p.url} target="_blank" rel="noreferrer" className="text-[10px] px-1.5 py-0.5 rounded shrink-0"
-                style={{ border: EDGE, color: "var(--text3)" }}>↗</a>
+              <div className={LINK_BUTTONS}><RowSquare href={p.url} title="Open on GitHub">↗</RowSquare></div>
             </div>
           ))}
         </div>
@@ -6761,15 +6773,17 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
               Other links <span>{others.length}</span>
             </div>
             {others.map((l) => (
-              <div key={l.url} className="flex items-center gap-2 py-1">
+              <div key={l.url} className={LINK_ROW}>
                 <button onClick={() => openOther(l.url)}
                   className="text-left flex-1 min-w-0 rounded px-1 -mx-1 hover:bg-white/5"
                   title="Open in your browser">
                   <span className="block truncate text-[11px]" style={{ color: "var(--primary-ink)" }}>{l.title}</span>
                   <div className="truncate text-[10.5px]" style={{ color: "var(--text3)" }}>{l.path}</div>
                 </button>
-                <IconChip title="Open in your browser" onClick={() => openOther(l.url)}>↗</IconChip>
-                <CopyLinkChip url={l.url} />
+                <div className={LINK_BUTTONS}>
+                  <CopyLinkChip url={l.url} />
+                  <RowSquare title="Open in your browser" onClick={() => openOther(l.url)}>↗</RowSquare>
+                </div>
               </div>
             ))}
           </div>
