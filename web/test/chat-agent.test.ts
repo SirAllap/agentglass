@@ -40,6 +40,9 @@ describe("agentOf", () => {
     // And the converse: a Claude model name does not make a Claude session out
     // of an Antigravity one.
     expect(derive.agentOf({ source_app: "antigravity", model_name: "gpt-oss-120b-medium" })).toBe("antigravity");
+    // Hermes runs other vendors' models; source_app alone decides.
+    expect(derive.agentOf({ source_app: "hermes", model_name: "anthropic/claude-sonnet-4" })).toBe("hermes");
+    expect(derive.agentOf({ source_app: "hermes", model_name: "gpt-5.6-sol" })).toBe("hermes");
   });
 
   test("defaults to claude on anything unrecognised", () => {
@@ -228,6 +231,10 @@ describe("the chat roster, read off the shared provider table", () => {
       antigravity: {
         label: "Antigravity", cli: "agy", defaultModel: "gemini-3.6-flash-medium", defaultMode: "request-review",
         bypassMode: "always-proceed", canAttach: false, hasTranscript: false, hasEffort: false, canPane: false,
+      },
+      hermes: {
+        label: "Hermes", cli: "hermes", defaultModel: "anthropic/claude-sonnet-4", defaultMode: "default",
+        bypassMode: "yolo", canAttach: false, hasTranscript: false, hasEffort: false, canPane: false,
       },
     });
   });

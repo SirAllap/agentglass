@@ -1,10 +1,10 @@
 /*
  * The first-run hint that was always empty.
  *
- * All three agents that spawn a CLI — chat.ts, codex.ts, antigravity.ts — carry
- * a watchdog for the same failure: a `claude`/`codex`/`agy` that has never been
- * logged in blocks on an interactive prompt it can never receive here, so it
- * emits nothing and never exits. The watchdog gives up after the startup window
+ * All four agents that spawn a CLI — chat.ts, codex.ts, antigravity.ts and
+ * hermes.ts — carry a watchdog for the same failure: a `claude`/`codex`/`agy`/
+ * `hermes` that has never been logged in blocks on an interactive prompt it
+ * can never receive here, so it emits nothing and never exits. The watchdog gives up after the startup window
  * and tells the user what to run, and it tried to include whatever the CLI had
  * said on stderr, which is the part that says *why*.
  *
@@ -153,8 +153,8 @@ describe("stderr once the child is gone", () => {
  * hook-tdz.test.ts.
  */
 const SRC = join(import.meta.dir, "..", "src");
-/** The three agents that spawn a CLI and watch it for a first byte. */
-const AGENTS = ["chat.ts", "codex.ts", "antigravity.ts"];
+/** The four agents that spawn a CLI and watch it for a first byte. */
+const AGENTS = ["chat.ts", "codex.ts", "antigravity.ts", "hermes.ts"];
 
 describe("how the watchdogs read stderr", () => {
   for (const file of AGENTS) {

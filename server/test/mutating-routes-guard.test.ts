@@ -62,6 +62,7 @@ const MUTATING = [
   `pathname === "/chat/pane/key"`,
   `pathname === "/codex/send"`,
   `pathname === "/antigravity/send"`,
+  `pathname === "/hermes/send"`,
   `pathname === "/walkthrough"`,
   `pathname.startsWith("/git/")`,
   `pathname.startsWith("/docker/")`,

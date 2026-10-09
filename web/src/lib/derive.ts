@@ -783,6 +783,9 @@ export const agentOf = (s: { source_app?: string | null; model_name?: string | n
   // happily as Gemini ones, so a model-name fallback would file half its
   // sessions under the wrong CLI.
   if (app.startsWith("antigravity")) return "antigravity";
+  // Hermes runs other vendors' models, including ones whose names look like
+  // Codex. The source app is the signal; the model name is not.
+  if (app.startsWith("hermes")) return "hermes";
   if (app.startsWith("codex")) return "codex";
   if (/^(gpt|o[134])[-.]/i.test(s.model_name ?? "")) return "codex";
   return "claude";

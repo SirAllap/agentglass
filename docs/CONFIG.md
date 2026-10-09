@@ -57,7 +57,8 @@ are:
   `AGENTGLASS_TOKEN`. Either way, consider disabling the
   capability surfaces you don't use: `AGENTGLASS_TERMINAL_DISABLED=1`, `AGENTGLASS_FS_BROWSE_DISABLED=1`,
   `AGENTGLASS_CHAT_DISABLED=1`, `AGENTGLASS_CODEX_DISABLED=1`,
-  `AGENTGLASS_ANTIGRAVITY_DISABLED=1`, `AGENTGLASS_GIT_WRITE_DISABLED=1`,
+  `AGENTGLASS_ANTIGRAVITY_DISABLED=1`, `AGENTGLASS_HERMES_DISABLED=1`,
+  `AGENTGLASS_GIT_WRITE_DISABLED=1`,
   `AGENTGLASS_DOCKER_WRITE_DISABLED=1`.
 - **⚠️ Exposing it to a network is a three-part deliberate act.** `AGENTGLASS_BIND=0.0.0.0`
   hands the shell, git write and Docker control to that network. Do it only with
@@ -74,7 +75,11 @@ are:
   and `always-proceed` for Antigravity (`agy --dangerously-skip-permissions`) —
   are honored only when `AGENTGLASS_CHAT_BYPASS=1`. One opt-in covers all three,
   since it is the same decision. Without it Claude is downgraded to a prompting
-  default, Codex to its read-only sandbox, and Antigravity to asking.
+  default, Codex to its read-only sandbox, and Antigravity to asking. **Hermes**
+  is not offered at all without it: single-query Hermes has no mode that asks
+  first (it runs `execute_code` on its own and refuses only its
+  dangerous-pattern list; `--yolo` runs those too), so the opt-in covers the
+  whole engine rather than one of its modes.
 - **Your data stays local.** Events live in a local SQLite file, written
   owner-only (`0700` dir, `0600` file) on POSIX; on Windows, which has no POSIX
   mode bits, it falls back to your account's default ACL. Outbound calls are few and all of them are yours to
@@ -159,8 +164,11 @@ are:
 | `AGENTGLASS_CLAUDE_MODELS` | — | Path to the Claude model catalogue, overriding the copy in the checkout. See **Which models the Chat panel offers**. |
 | `AGENTGLASS_CODEX_DISABLED` | — | `1` → disable the **Codex** agent in the Chat panel, leaving Claude chat available. Codex is offered whenever a `codex` executable is on the server's `PATH`. |
 | `AGENTGLASS_ANTIGRAVITY_DISABLED` | — | `1` → disable the **Antigravity** agent in the Chat panel, leaving the other two available. Antigravity is offered whenever an `agy` executable is on the server's `PATH`. Independent of the Gemini CLI, which is a different product and is not driven from the chat panel at all. |
+| `AGENTGLASS_HERMES` | `hermes` on `PATH` | Path to the **Hermes Agent** executable the Chat panel drives. Used when the file exists; otherwise `hermes` is looked up on the server's `PATH`. |
+| `AGENTGLASS_HERMES_DISABLED` | — | `1` → disable the **Hermes** agent in the Chat panel. Even without it, Hermes is offered only when `AGENTGLASS_CHAT_BYPASS` (or `chatBypass` in config.json) is on, because it runs code without asking in both of its modes. |
+| `AGENTGLASS_HERMES_HOME` | `$HERMES_HOME`, else `~/.hermes` | The Hermes home agentglass reads, and pins the child's `HERMES_HOME` to: `config.yaml` for the model dropdown, `state.db` for the resume check. A root with a sticky `active_profile` resolves to `profiles/<name>`, as `hermes` does; a home anywhere under `~/.hermes` follows the `active_profile` of `~/.hermes` itself. Read-only; agentglass never writes there. |
 | `CODEX_HOME` | `~/.codex` | Codex's own override for where it keeps its state. agentglass reads the model cache and the rollout history (resumed-thread transcripts) from there. |
-| `AGENTGLASS_CHAT_BYPASS` | — | `1` → allow the Chat panel's unattended modes: `bypassPermissions` for Claude (`--dangerously-skip-permissions`), `full-access` for Codex (`--dangerously-bypass-approvals-and-sandbox`) and `always-proceed` for Antigravity (`--dangerously-skip-permissions`). Off by default; one opt-in covers all three, since it is the same decision. |
+| `AGENTGLASS_CHAT_BYPASS` | — | `1` → allow the Chat panel's unattended modes: `bypassPermissions` for Claude (`--dangerously-skip-permissions`), `full-access` for Codex (`--dangerously-bypass-approvals-and-sandbox`) and `always-proceed` for Antigravity (`--dangerously-skip-permissions`), and the Hermes agent as a whole (both of its modes run code without asking; `yolo` adds `--yolo`). Off by default; one opt-in covers all four, since it is the same decision. |
 | `AGENTGLASS_CHAT_ENGINE` | `process` | `tmux` → new chats run as a live `claude` in a pane on agentglass's own tmux server instead of one `claude -p` per turn. Faster per turn (the CLI's session start is paid once, not every message) and the session is attachable from your own terminal; costs a warm CLI (~380MB, growing with use) for as long as the chat is warm. Per-chat in **Settings → Preferences → How new chats run**. |
 | `AGENTGLASS_TMUX_SOCKET` | `agentglass` | Socket name for that server (`tmux -L <name>`). It is always launched with a config of our own (`-f`), never your `~/.tmux.conf` — otherwise tpm/resurrect/continuum would come with it and continuum's autosave would overwrite your own saved layout in the shared `~/.tmux/resurrect/`. Theme live reload also names this socket explicitly; it never sources the generated palette into your default tmux server. |
 | `AGENTGLASS_TMUX_IDLE_MINUTES` | `30` | Minutes a chat pane may sit unused before its CLI is reclaimed. The next turn resumes the session transparently (one slower turn). `0` disables eviction and keeps every warm chat resident. |
@@ -238,7 +246,7 @@ that nothing the code reads goes unnamed. None is required.
 
 | var | default |
 |---|---|
-| `AGENTGLASS_CHAT_STARTUP_TIMEOUT_MS`, `AGENTGLASS_CODEX_STARTUP_TIMEOUT_MS`, `AGENTGLASS_ANTIGRAVITY_STARTUP_TIMEOUT_MS` | `20000`, `20000`, `30000` — how long a chat CLI may take to show its prompt |
+| `AGENTGLASS_CHAT_STARTUP_TIMEOUT_MS`, `AGENTGLASS_CODEX_STARTUP_TIMEOUT_MS`, `AGENTGLASS_ANTIGRAVITY_STARTUP_TIMEOUT_MS`, `AGENTGLASS_HERMES_STARTUP_TIMEOUT_MS` | `20000`, `20000`, `30000`, `30000` — how long a chat CLI may take to show its prompt |
 | `AGENTGLASS_PANE_READY_TIMEOUT_MS`, `AGENTGLASS_PANE_PASTE_TIMEOUT_MS` | `45000`, `10000` — a seated agent's pane coming up, and a paste being taken |
 | `AGENTGLASS_REPO_CACHE_MS` | `15000` — how long the repository list is trusted before it is walked again |
 | `AGENTGLASS_PRESSURE_WINDOW_MS`, `AGENTGLASS_LOOPWATCH_SIZE` | `10000`, `200` — the loop watcher's window and how many samples it keeps |
@@ -286,6 +294,7 @@ Every route is behind the token and the origin/Host gates described in [Security
 | `GET /chat/{enabled,attach,panes,active}` · `POST /chat/{send,pane/close,pane/pin,pane/key}` | Drive a local `claude` session (streamed JSONL) — **gated** by `AGENTGLASS_CHAT_DISABLED`. `send` takes `engine` (`process` \| `tmux`); `pane/key` sends one allowed key into a prompt. |
 | `GET /codex/{enabled,transcript?id=}` · `POST /codex/send` | The same for a local `codex` (`codex exec --json`, `resume` for follow-ups) — **gated** by `AGENTGLASS_CODEX_DISABLED`. The transcript is read from `$CODEX_HOME/sessions`. |
 | `GET /antigravity/enabled` · `POST /antigravity/send` | The same for a local `agy` (`--conversation` for follow-ups) — **gated** by `AGENTGLASS_ANTIGRAVITY_DISABLED`. Its turns are also turned into events, since it reports to nothing else. |
+| `GET /hermes/enabled` · `POST /hermes/send` | The same for a local `hermes` (`hermes chat --query=<text> --format stream-json`, `--resume <id>` for follow-ups) — **gated** by `AGENTGLASS_HERMES_DISABLED` and by the chat bypass opt-in, and scoped like `/chat/send`. Needs Hermes Agent 0.21.4 (release v2026.9.21) or later, the first with `--format stream-json`; an older `hermes` exits on the unknown flag and the panel shows its error. The child gets no `AGENTGLASS_TOKEN` (which removes the free copy, not the reach: it runs as the same user, who can read the token file, and a tokenless loopback install needs none), no inherited `HERMES_YOLO_MODE`, `_HERMES_GATEWAY` or `HERMES_*_SESSION`, and `TERMINAL_CWD` set to the checked directory. A prompt with a NUL byte, or over 120 KB as UTF-8, is refused with a 400 or 413 rather than reaching the command line. A resume is refused when Hermes's own `state.db` row (or a compression continuation of it) records another directory, or Bypass while the turn is not Bypass, since `hermes --resume` restores both whatever its flags say. Its turns are also turned into events, since it reports to nothing else. Frame fields follow upstream `hermes_cli/stream_json.py` at [`aa75d37`](https://github.com/NousResearch/hermes-agent/blob/aa75d3724f8fa8e4b21cb77057af73bfe2e35213/hermes_cli/stream_json.py); the resume behaviour was read at [`e0550c9`](https://github.com/NousResearch/hermes-agent/blob/e0550c97bbd916cd5ff8fa0450e6291c31921b94/hermes_cli/cli_agent_setup_mixin.py); at `aa75d37` it is the same, with `_restore_session_state` in `cli_agent_setup_mixin.py` calling `_restore_session_cwd` and `_restore_session_yolo` from `hermes_cli/cli_session_mixin.py`. |
 | `GET /prs/{capability,list,detail,diff,commit-diff,inbox,rollup,counts,for-branch,behind,spend,codeowners,check-jobs,job-log,conflict-files,…}` | Pull requests through `gh`, per repository: the list for a tab, one PR in full, diffs, the inbox, check rollups, job logs, a conflict preview. Cached. |
 | `POST /prs/{review,review-with,line-comment,apply-suggestion,comment*,reply,thread-resolved,react,edit,labels,assignees,milestone,reviewers,draft,update-branch,rerun*,merge,close,inbox/act,conflict,…}` | Pull-request actions — **gated** by `AGENTGLASS_GIT_WRITE_DISABLED` and the scope, recorded. `conflict` cuts a worktree and merges the PR into it locally. |
 | `POST /prs/review-prompt` · `POST /prs/nudge` | The prompt to review a PR with Claude and where to run it (a read; scope still applies). The chase for a PR waiting on somebody — `{root, number, send}` returns the text; `send: true` also posts it down `AGENTGLASS_WEBHOOK`. |

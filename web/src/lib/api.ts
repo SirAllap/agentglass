@@ -2139,6 +2139,12 @@ const realApi = {
   antigravityStream: (payload: { cwd: string; message: string; model: string; mode: string; resumeId: string }, onEvent: (o: Record<string, unknown>) => void, signal?: AbortSignal) =>
     turnStream("/antigravity/send", payload, onEvent, signal),
 
+  // --- multi-chat: the same panel, driving Hermes Agent ---
+  // No transcript call in the thin PR (hasTranscript: false).
+  hermesEnabled: () => get<AgentCliStatus>("/hermes/enabled"),
+  hermesStream: (payload: { cwd: string; message: string; model: string; mode: string; resumeId: string }, onEvent: (o: Record<string, unknown>) => void, signal?: AbortSignal) =>
+    turnStream("/hermes/send", payload, onEvent, signal),
+
   dockerStart: (id: string) => post<DockerActionResult>("/docker/start", { id }),
   dockerStop: (id: string) => post<DockerActionResult>("/docker/stop", { id }),
   dockerRestart: (id: string) => post<DockerActionResult>("/docker/restart", { id }),
@@ -2463,6 +2469,12 @@ const demoApi: typeof realApi = {
     onEvent({ event: "init", conversation_id: "demo-0000-0000-0000-demodemodemo", init: { model: "demo" } });
     onEvent({ event: "step_update", step_update: { step_index: 0, state: "DONE", step_type: "agent_response", text_delta: "(chat is disabled in the demo — run agentglass locally to drive real Antigravity sessions)" } });
     onEvent({ event: "result", result: { status: "SUCCESS", usage: {} } });
+  },
+  hermesEnabled: () => D({ enabled: false, models: [] } as AgentCliStatus),
+  hermesStream: async (_payload: { cwd: string; message: string; model: string; mode: string; resumeId: string }, onEvent: (o: Record<string, unknown>) => void) => {
+    onEvent({ type: "system", subtype: "init", session_id: "20260101_000000_abcdef", model: "demo" });
+    onEvent({ type: "text", text: "(chat is disabled in the demo — run agentglass locally to drive real Hermes sessions)" });
+    onEvent({ type: "result", session_id: "20260101_000000_abcdef", exit_code: 0, tokens: {} });
   },
   dockerStart: (_id: string) => D(demo.dockerActionUnavailable()),
   dockerStop: (_id: string) => D(demo.dockerActionUnavailable()),

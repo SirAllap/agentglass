@@ -51,7 +51,7 @@ const agentHome = (): string => process.env.HOME || homedir();
 
 /**
  * The roster is the rows of shared/agentKinds.ts that carry a `probe` facet,
- * in that table's order — the same four CLIs this list held on its own before
+ * in that table's order — the CLIs this list held on its own before
  * the table became the one place a provider is written down.
  */
 export const ROSTER: Roster[] = AGENT_PROVIDERS.flatMap((p): Roster[] => {

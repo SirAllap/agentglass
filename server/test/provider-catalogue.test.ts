@@ -1,5 +1,5 @@
 /*
- * One table of providers, and the four lists that used to be written apart.
+ * One table of providers, and the lists that used to be written apart.
  *
  * The tab menu, the requirements roster, a run leg's spellings and the chat
  * panel's roster each held their own copy of "which CLIs exist", and they
@@ -40,10 +40,10 @@ describe("the provider table", () => {
     expect(agentKind("antigravity")).toBeUndefined();
   });
 
-  test("the requirements roster holds the same four CLIs with the same words", () => {
+  test("the requirements roster holds the same five CLIs with the same words", () => {
     const home = process.env.HOME!;
     const rows = Object.fromEntries(ROSTER.map((r) => [r.id, { ...r, configPath: r.configPath() }]));
-    expect(Object.keys(rows).sort()).toEqual(["antigravity", "claude-code", "codex", "gemini"]);
+    expect(Object.keys(rows).sort()).toEqual(["antigravity", "claude-code", "codex", "gemini", "hermes"]);
     expect(rows["gemini"]).toEqual({
       id: "gemini", label: "Gemini CLI", bin: "gemini", via: "otel",
       configPath: join(home, ".gemini", "settings.json"), match: "gemini",
@@ -58,6 +58,12 @@ describe("the provider table", () => {
       id: "antigravity", label: "Google Antigravity", bin: "agy", via: "chat",
       configPath: "", match: "antigravity",
       install: "https://antigravity.google/docs/cli",
+      connects: "the chat panel, which turns its own turns into events",
+    });
+    expect(rows["hermes"]).toEqual({
+      id: "hermes", label: "Hermes Agent", bin: "hermes", via: "chat",
+      configPath: "", match: "hermes",
+      install: "https://hermes-agent.nousresearch.com/docs/",
       connects: "the chat panel, which turns its own turns into events",
     });
     const { configPath: claudePath, ...claude } = rows["claude-code"]!;

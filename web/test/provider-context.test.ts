@@ -13,6 +13,7 @@ describe("providerInContext", () => {
   test("the focused agent wins over the filter", () => {
     expect(providerInContext("codex", "Anthropic")).toBe("codex");
     expect(providerInContext("antigravity", "Anthropic")).toBe("antigravity");
+    expect(providerInContext("hermes", "Anthropic")).toBe(null);
     expect(providerInContext("claude", "OpenAI")).toBe("anthropic");
   });
 
