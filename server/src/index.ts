@@ -153,7 +153,7 @@ import {
   listPrs, prDetail, prDiff, prAsset, ghCapability, submitReview, addComment, replyToThread,
   editComment, deleteComment, hideComment, unhideComment, setFileViewed, setAssignees, setMilestone, viewCounts, jobLog, checkJobs, checkFailures, cachedCheckFailures, failingTestsFor, rerunJobs, addLineComment, mentionables, facetOptions, applySuggestion, fileSlice,
   setThreadResolved, react, editPr, setLabels, setReviewers, setDraft, updateBranch,
-  rerunFailedChecks, mergePr, closePr, filesSince, codeowners, prepareReviewPrompt, pendingReviewFor, branchUrl, subscribeCi, subscribeTalk, commitDiff as prCommitDiff, submitReviewWith, prFileToTemp,
+  rerunFailedChecks, mergePr, closePr, unstickLook, unstickClose, unstickReopen, filesSince, codeowners, prepareReviewPrompt, pendingReviewFor, branchUrl, subscribeCi, subscribeTalk, commitDiff as prCommitDiff, submitReviewWith, prFileToTemp,
   prBaseOf,
   ghRateLimit,
   branchBehind, localHead, prRollup, repoIdFor as prRepoIdFor, subscribeTalkSeen,
@@ -7365,6 +7365,14 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     if (pathname === "/prs/github-status") {
       return json(await githubStatusCached());
     }
+    /* One fresh read for Unstick: the branch as it is on GitHub now, the head the
+       pull request points at, its state. `full=1` adds the facts the gate needs. */
+    if (pathname === "/prs/unstick-look") {
+      const root = prRouteRoot(url.searchParams.get("root") ?? "");
+      const n = Number(url.searchParams.get("number") ?? 0);
+      if (!Number.isInteger(n) || n <= 0) return json({ ok: false, error: "invalid pull request number" }, 400);
+      return json(await unstickLook(root, n, url.searchParams.get("full") === "1"));
+    }
     if (pathname === "/prs/behind") {
       const asked = url.searchParams.get("root") ?? "";
       const root = prRouteRoot(asked);
@@ -7627,6 +7635,10 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         case "/prs/apply-suggestion": res = await applySuggestion(root, n, b); break;
         case "/prs/merge": res = await mergePr(root, n, b.method, { deleteBranch: b.deleteBranch, auto: b.auto, headSha: b.headSha, subject: b.subject, body: b.body, disableAuto: b.disableAuto }); break;
         case "/prs/close": res = await closePr(root, n, b.reopen === true); break;
+        /* Unstick's two writes, each re-checked on the server against a fresh read
+           (see shared/unstick.ts) and each its own audit line. */
+        case "/prs/unstick-close": res = await unstickClose(root, n); break;
+        case "/prs/unstick-reopen": res = await unstickReopen(root, n); break;
         case "/prs/review-prompt": res = await prepareReviewPrompt(root, n, b.recipe, b.card); break;
         case "/prs/pending-review": res = await pendingReviewFor(root, n); break;
         default: res = null;

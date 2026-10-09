@@ -120,6 +120,10 @@ def tools_from_actions(actions):
         desc = f"{a['surface'][:1].upper()}{a['surface'][1:]} (level {a['level']}, {kind})."
         if kind == "read":
             desc += " Shows nothing on screen. " + UNTRUSTED
+        elif kind == "stage":
+            desc += (" Puts a dialog in front of the person, filled in, and does nothing else: the person's own click in it is what has an effect, "
+                     "and no tool here can press it. Quiet by default: if the person is typing it waits as a chip they click (the answer says queued). "
+                     "Pass now=true only when they just asked you to show it.")
         elif kind == "open":
             desc += (" Quiet by default: if the person is typing it waits as a chip they click (the answer says queued). "
                      "Pass now=true only when they just asked you to show it.")

@@ -38,6 +38,7 @@ import { CARD_PEOPLE_MAX } from "../../shared/cardPeople.ts";
 import { cardIdIn } from "../../shared/cardRef.ts";
 import { hasCredential } from "./credentials.ts";
 import { problemFromSummary, STATUS_SUMMARY_URL, type GithubProblem } from "../../shared/githubStatus.ts";
+import { factsOf, unstickLive, NO_WORDS, type Look } from "../../shared/unstick.ts";
 
 /** Same escape hatch the git writes use, so one variable disables both. */
 const WRITE_ENABLED = process.env.AGENTGLASS_GIT_WRITE_DISABLED !== "1";
@@ -4715,7 +4716,7 @@ export function updateBranchRefusal(raw: string): PrActionResult | null {
   // GitHub already moved the branch and its pull request has not followed, so
   // the head the request names is no longer the branch's: the raw GraphQL text
   // ("head sha didn't match the current head ref") reads as a bug in the app.
-  if (/head sha didn'?t match|head ref/i.test(raw)) {
+  if (/head sha didn'?t match|current head ref/i.test(raw)) {
     return { ok: false, prLagging: true, error: "GitHub updated the branch but the pull request has not caught up yet. Updating again would be refused until it does." };
   }
   if (/conflict/i.test(raw)) return { ok: false, conflict: true, error: conflicts };
@@ -5279,6 +5280,82 @@ export async function mergePr(rootIn: unknown, number: unknown, method: unknown,
 
 export async function closePr(rootIn: unknown, number: unknown, reopen = false): Promise<PrActionResult> {
   return runPr(rootIn, Number(number), ["pr", reopen ? "reopen" : "close", String(Number(number))]);
+}
+
+// ---------------------------------------------------------------------------
+// Unstick: close, reopen, sync (shared/unstick.ts says when and why)
+// ---------------------------------------------------------------------------
+
+/* The cheap read the run polls with: one GraphQL point, no check or review detail.
+   `headRef` is the branch as it is on GitHub right now (null when the branch is
+   gone), `headRefOid` is the head the pull request still points at. */
+const UNSTICK_LOOK_QUERY = `query($owner:String!,$name:String!,$number:Int!){
+  repository(owner:$owner,name:$name){pullRequest(number:$number){state mergeStateStatus headRefOid headRef{target{oid}}}}
+}`;
+
+export interface UnstickServerDeps {
+  look(rootIn: unknown, number: number, full: boolean): Promise<UnstickLook>;
+  act(rootIn: unknown, number: number, reopen: boolean): Promise<PrActionResult>;
+}
+export type UnstickLook = Look;
+
+/** One fresh read. `full` adds the facts the gate needs, taken from the same detail the panel shows. */
+export async function unstickLook(rootIn: unknown, number: number, full: boolean): Promise<UnstickLook> {
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
+  const light = await ghJson<any>(["api", "graphql", "-f", `query=${UNSTICK_LOOK_QUERY}`,
+    "-F", `owner=${repo.owner}`, "-F", `name=${repo.name}`, "-F", `number=${number}`]);
+  const pr = light?.data?.repository?.pullRequest;
+  if (!pr || typeof pr.state !== "string") return { ok: false, error: "GitHub did not answer" };
+  const refSha: string | null = typeof pr.headRef?.target?.oid === "string" ? pr.headRef.target.oid : null;
+  const base = { ok: true as const, state: pr.state as string, headSha: String(pr.headRefOid ?? ""), refSha, mergeState: String(pr.mergeStateStatus ?? "") };
+  if (!full) return base;
+  const det = await prDetail(rootIn, number, true);
+  if (!det.ok || !det.detail) return { ok: false, error: det.error || "could not read the pull request" };
+  /* The detail's own head and mergeability would be a second opinion on the same
+     facts; the light read just taken is the fresher of the two, so it wins. */
+  const facts = factsOf({ ...det.detail, headSha: base.headSha || det.detail.headSha, mergeState: base.mergeState || det.detail.mergeState, state: base.state }, refSha, repo.owner);
+  return { ...base, facts };
+}
+
+const unstickDefaults: UnstickServerDeps = {
+  look: unstickLook,
+  act: (rootIn, number, reopen) => closePr(rootIn, number, reopen),
+};
+
+/**
+ * Close, for Unstick only. The server asks GitHub again and runs the same hard
+ * list the panel ran, because the panel's copy can be minutes old and a close
+ * fires automations somewhere else. Refusals are sentences, and nothing is called
+ * before they pass.
+ */
+export async function unstickClose(rootIn: unknown, numberIn: unknown, deps: UnstickServerDeps = unstickDefaults): Promise<PrActionResult> {
+  const number = Number(numberIn);
+  if (!Number.isInteger(number) || number <= 0) return { ok: false, error: "invalid pull request number" };
+  const g = writeGuard(rootIn); if (g) return g;
+  const look = await deps.look(rootIn, number, true);
+  if (!look.ok) return { ok: false, error: `could not read the pull request, so nothing was closed: ${look.error}` };
+  if (!look.facts) return { ok: false, error: "GitHub did not give the details needed to check it, so nothing was closed" };
+  const live = unstickLive(look.facts);
+  if (!live.ok) return { ok: false, error: `${NO_WORDS[live.reason]} Nothing was closed.` };
+  return deps.act(rootIn, number, false);
+}
+
+/**
+ * Reopen, for Unstick only: the pull request must be closed (not merged) and its
+ * branch must still exist, or the reopen is refused with the reason and nothing is
+ * called. Reopening is also the recovery when a run stopped after the close.
+ */
+export async function unstickReopen(rootIn: unknown, numberIn: unknown, deps: UnstickServerDeps = unstickDefaults): Promise<PrActionResult> {
+  const number = Number(numberIn);
+  if (!Number.isInteger(number) || number <= 0) return { ok: false, error: "invalid pull request number" };
+  const g = writeGuard(rootIn); if (g) return g;
+  const look = await deps.look(rootIn, number, false);
+  if (!look.ok) return { ok: false, error: `could not read the pull request, so nothing was reopened: ${look.error}` };
+  if (look.state === "MERGED") return { ok: false, error: "the pull request is merged; it cannot be reopened" };
+  if (look.state === "OPEN") return { ok: true, detail: "already open", at: Date.now() };
+  if (!look.refSha) return { ok: false, error: "the branch is gone from GitHub, so the pull request cannot be reopened" };
+  return deps.act(rootIn, number, true);
 }
 
 // ---------------------------------------------------------------------------

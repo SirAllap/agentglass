@@ -77,7 +77,8 @@ Read the sentence and do what it says; do not retry the same call.
    one through this channel: a level 3 door only **stages**, opening the dialog
    with its fields filled in, and the person's own click is the effect. There is
    no grant that makes it automatic. It is offered only when the owner has allowed level 3. If the task needs one and no door
-   stages it, say so and let the person do it.
+   stages it, say so and let the person do it. The one that exists is `pr.unstick` (level 3): it opens the Unstick dialog on a pull request and
+   nothing else; never offer it on a pull request that is merely slow, the dialog refuses one that is not stuck.
 
    The stage doors are `pr.merge.stage` (repo, number, method, optional subject
    and body), `pr.comment.stage` (repo, number, body), `pr.review.stage` (repo,
@@ -127,7 +128,7 @@ naming a level is the answer, not a puzzle. Ask the person.
   carries no name (`--as`) is `now` too, so keep the name.
 - **Show me without taking the chat away.** `view.open`, `pane.open`,
   `workspace.toggle` (and the doors that land on a view: `chat.new`,
-  `lantern.schedule`, `terminal.resume`) replace the whole window, and the person
+  `lantern.schedule`, `terminal.resume`, `pr.unstick`) replace the whole window, and the person
   loses the conversation where you are talking to them. For "show me" prefer what
   floats over the current view and leaves the chat where it is: `panel.open`,
   `machine.open`, `peek.file`, the bench (`bench.toggle`, `bench.file`,

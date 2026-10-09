@@ -95,7 +95,7 @@ describe("routeControl", () => {
 });
 
 describe("the chip's words", () => {
-  const holdable = UI_ACTION_IDS.filter((id) => { const d = UI_ACTIONS[id] as UiActionDef; return d.kind === "open" && !d.inPlace; });
+  const holdable = UI_ACTION_IDS.filter((id) => { const d = UI_ACTIONS[id] as UiActionDef; return (d.kind === "open" || d.kind === "stage") && !d.inPlace; });
   test("every door that can be held has words, and a door that cannot be held has none", () => {
     expect(Object.keys(OFFER_LABELS).sort()).toEqual([...holdable].sort());
   });

@@ -237,6 +237,9 @@ export function MergeBox({
                     <button type="button" onClick={() => onAction({ id: "open-log", label: r.link!.label, url: r.link!.url })}
                       className="agx-btn text-[10.5px] mt-1.5 underline underline-offset-2" style={{ color: "var(--text)" }}>{r.link.label}</button>
                   )}
+                  {r.action && (
+                    <div className="mt-2">{action(r.action, false)}</div>
+                  )}
                 </div>
                 <div className="agx-mb-why text-[11px] leading-snug min-w-0" style={{ color: r.mover === "done" ? "var(--text3)" : "var(--text2)" }}>{r.why}</div>
                 <Who row={r} />

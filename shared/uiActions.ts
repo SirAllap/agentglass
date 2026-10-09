@@ -249,6 +249,14 @@ export const UI_ACTIONS = {
     level: 1, kind: "open", surface: "the git, diff, pull request or card view of the focused terminal pane's branch (the pane chords)",
     chords: ["pane.git", "pane.diff", "pane.pr", "pane.card"], args: { which: { t: "enum", values: PANE_DOORS } },
   }),
+  // The first level 3 door. It opens the Unstick dialog on one pull request and
+  // nothing else: the dialog runs nothing by being open, it says in words whether
+  // the pull request qualifies (shared/unstick.ts), and the close and reopen
+  // start only when the owner presses its confirm button.
+  "pr.unstick": def({ modals: ["UnstickDialog.tsx"],
+    level: 3, kind: "stage", surface: "the Unstick dialog (close, reopen and sync a pull request GitHub has lost track of) on one pull request; nothing runs until the owner confirms in it",
+    args: { root: { t: "abspath" }, number: { t: "int", max: 1_000_000 } },
+  }),
   // Reads. They answer and show nothing: no view changes, no window rises, no
   // focus moves. The answer is `{state, untrusted}` (see UiSnapshot below).
   "ui.state": def({ level: 1, kind: "read", surface: "what is open in the window now, and which panels ui.read can describe", args: {} }),

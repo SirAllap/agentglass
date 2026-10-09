@@ -18,11 +18,14 @@ const ok = {
 } as const;
 const parse = (id: string, args: unknown, level: 1 | 2 | 3 = 3) => parseUi(UI_ACTIONS as unknown as Record<string, UiActionDef>, id, args, level);
 
+/** The fifth level 3 door has its own arguments and its own tests (unstick-door.test.ts). */
+const UNSTICK = "pr.unstick" as const;
+
 describe("the stage doors", () => {
-  test("exactly these four are level 3, every one a stage, and nothing else is level 3", () => {
+  test("exactly these four, and pr.unstick (own file), are level 3, every one a stage, and nothing else is level 3", () => {
     const l3 = Object.entries(UI_ACTIONS).filter(([, d]) => d.level === 3).map(([id]) => id).sort();
-    expect(l3).toEqual([...STAGES].sort());
-    for (const id of STAGES) expect((UI_ACTIONS[id] as UiActionDef).kind, id).toBe("stage");
+    expect(l3).toEqual([...STAGES, UNSTICK].sort());
+    for (const id of [...STAGES, UNSTICK]) expect((UI_ACTIONS[id] as UiActionDef).kind, id).toBe("stage");
   });
 
   for (const id of STAGES) {
@@ -57,9 +60,9 @@ describe("the stage doors", () => {
     });
   }
 
-  test("the listing at level 2 has no stage door and at level 3 has all four", () => {
+  test("the listing at level 2 has no stage door and at level 3 has all four, and Unstick", () => {
     expect(describeUiActions(UI_ACTIONS, 2).filter((d) => d.kind === "stage")).toEqual([]);
-    expect(describeUiActions(UI_ACTIONS, 3).filter((d) => d.kind === "stage").map((d) => d.id).sort()).toEqual([...STAGES].sort());
+    expect(describeUiActions(UI_ACTIONS, 3).filter((d) => d.kind === "stage").map((d) => d.id).sort()).toEqual([...STAGES, UNSTICK].sort());
   });
 
   test("merge: only the three methods; subject is one line", () => {

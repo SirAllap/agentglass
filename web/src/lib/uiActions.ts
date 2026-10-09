@@ -22,6 +22,7 @@ import { latchGitModal } from "./gitModalIntent.ts";
 import { latchViewModal } from "./viewModalIntent.ts";
 import { latchStage } from "./stageIntent.ts";
 import { requestPrJump } from "./prJump.ts";
+import { latchUnstick } from "./unstickIntent.ts";
 import { showWhatsNew } from "./whatsNew.ts";
 import { toggleBench, showFile, showBoard } from "./benchStore.ts";
 import { openPeek } from "./openPeek.ts";
@@ -144,6 +145,9 @@ export const UI_HANDLERS: { [Id in UiActionId]: Handler<Id> } = {
   "pr.comment.stage": (a, c) => { latchStage({ id: "pr.comment.stage", a }, c.as); requestPrJump(a.repo, a.number); c.goView("pr"); },
   "pr.review.stage": (a, c) => { latchStage({ id: "pr.review.stage", a }, c.as); requestPrJump(a.repo, a.number); c.goView("pr"); },
   "card.move.stage": (a, c) => { latchStage({ id: "card.move.stage", a }, c.as); requestPrJump(a.repo, a.number); c.goView("pr"); },
+  // Stage: selects the pull request and opens the dialog. The dialog decides for
+  // itself whether it qualifies and runs nothing until the owner confirms.
+  "pr.unstick": (a, c) => { latchUnstick({ root: a.root, number: a.number }); c.goView("pr"); },
   // Reads: stores and pref modules only, nothing is shown, raised or focused.
   "ui.state": (_a, c) => uiState(sourcesOf(c)),
   "ui.read": (a, c) => readPanel(a.panel, sourcesOf(c)),

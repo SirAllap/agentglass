@@ -58,4 +58,8 @@ describe("updateBranchRefusal: the pull request has not caught up with the branc
     expect(r?.error).toContain("has not caught up yet");
     expect(r?.error).not.toContain("GraphQL");
   });
+
+  test("an unrelated error that merely mentions a head ref is not 'has not caught up' (it would count as a tried Update branch)", () => {
+    expect(updateBranchRefusal("GraphQL: head ref not found")?.prLagging).toBeUndefined();
+  });
 });

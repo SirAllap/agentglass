@@ -61,6 +61,12 @@ import {
 } from "../../../shared/mergeMethod.ts";
 import { stuckMinutes, STUCK_AFTER_MS, LAGGING_SENTENCE, type GithubProblem } from "../../../shared/githubStatus.ts";
 import { unknownSinceOf, forgetUnknown } from "../lib/unknownSince.ts";
+import { UnstickDialog } from "./UnstickDialog.tsx";
+import { observeUnstick, noteUpdateTrial, unstickGateFor, lagMature } from "../lib/unstickWatch.ts";
+import { takeUnstick, subscribeUnstick, UNSTICK_TTL_MS } from "../lib/unstickIntent.ts";
+import type { UnstickCard } from "./UnstickDialog.tsx";
+import type { UnstickFacts, UnstickGate } from "../../../shared/unstick.ts";
+import { factsOf } from "../../../shared/unstick.ts";
 import { updateStanding, awaitingChecksOf, updateHeld, updateHeldTitle, stalledNote, REQUEST_WINDOW_MS, type UpdateStanding } from "../../../shared/justUpdated.ts";
 import { updateBranchMove, branchNoticeJump, prConflicted, gitSaysClean as cleanMerge, type BranchNotice } from "../lib/updateBranch.ts";
 import { depSpec } from "../../../shared/deps.ts";
@@ -4723,6 +4729,82 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     return () => { live = false; };
   }, [unknownSince, stuck]);
 
+  /*
+   * Unstick: close, reopen and sync (shared/unstick.ts). Offered almost never.
+   *
+   * The facts come from the detail this panel already holds, with the branch ref
+   * only when it was read after the head last changed (refTrusted). Each refresh
+   * is folded into the memory of how long the signal has held and by how many
+   * separate looks; the gate then wants a normal Update branch to have been tried.
+   * Nothing is requested for this: no poll, no extra call until the dialog opens.
+   */
+  const unstickKey = d ? `${root}#${d.number}` : "";
+  const unstickFacts = useMemo(
+    () => d ? factsOf(d, refTrusted ? branchRef!.sha : null, repo?.nameWithOwner?.split("/")[0] ?? "") : null,
+    [d, refTrusted, branchRef, repo?.nameWithOwner]);
+  const [unstickTick, setUnstickTick] = useState(0);
+  useEffect(() => {
+    if (!unstickFacts || !unstickKey) return;
+    observeUnstick(unstickKey, unstickFacts);
+    setUnstickTick((n) => n + 1);
+  }, [unstickFacts, unstickKey]);
+  void unstickTick;
+  const unstickGate = unstickFacts ? unstickGateFor(unstickKey, unstickFacts) : null;
+  /* Said AFTER GitHub accepts it, with the head it was made on; the panel waits to
+     SEE a new head before it says the branch was updated. The refetch inside `act`
+     is the first read that could see an empty rollup, so the record is made in the
+     `.then`, before `act` re-reads. */
+  const doUpdateBranch = (syncLocal: boolean) => {
+    if (!d) return;
+    const headBefore = d.headSha ?? d.commits[d.commits.length - 1]?.oid ?? "";
+    return act("Update branch", () => api.prUpdateBranch(root, d.number, syncLocal).then((r) => {
+      if (r.conflict) setRefusedUpdate({ number: d.number, updatedAt: d.updatedAt });
+      // What the normal way did, for the Unstick gate: refused as "not caught up", or accepted and left waiting.
+      if (r.prLagging) noteUpdateTrial(unstickKey, { kind: "refused", at: Date.now() });
+      else if (r.ok && r.requested) noteUpdateTrial(unstickKey, { kind: "requested", at: Date.now(), headBefore });
+      if (r.ok) setAsked({ number: d.number, at: Date.now(), headBefore, note: r.requested ? undefined : r.detail });
+      return r;
+    }))
+      .finally(() => refreshBehind(root, d.number));
+  };
+
+  /* What the dialog was opened on, taken once when it opens. It does not follow `d`: the run's own
+     refresh can make the detail read fail or change what the gate says, and a dialog that vanished
+     or rewrote its title after the pull request was closed would hide the one thing it has to say. */
+  const [unstickShown, setUnstickShown] = useState<UnstickShown | null>(null);
+  const unstickShownRef = useRef<UnstickShown | null>(null);
+  unstickShownRef.current = unstickShown;
+  const cardForUnstick = useMemo(() => d ? mergeCardRef(d, clickup) : null, [d?.headRefName, d?.title, d?.body, clickup]); // eslint-disable-line react-hooks/exhaustive-deps
+  const openUnstick = () => {
+    if (!d || !unstickGate || !unstickFacts || unstickShownRef.current) return;
+    setUnstickShown({
+      root, number: d.number, url: d.url, gate: unstickGate, facts: unstickFacts, baseRefName: d.baseRefName,
+      card: cardForUnstick ? { query: cardForUnstick.query, label: cardForUnstick.label } : null,
+    });
+  };
+  // An agent's `pr.unstick` door: select the pull request, then open the dialog on it. Never runs it.
+  const [wantUnstick, setWantUnstick] = useState<{ root: string; number: number; at: number } | null>(null);
+  useEffect(() => {
+    // A request while a dialog is up (maybe mid-run) is dropped, not queued behind it.
+    const drain = () => { const w = takeUnstick(); if (w && !unstickShownRef.current) setWantUnstick({ ...w, at: Date.now() }); };
+    drain();
+    return subscribeUnstick(drain);
+  }, []);
+  useEffect(() => {
+    if (!wantUnstick) return;
+    // A request that never found its pull request does not wait for the person's next selection.
+    if (Date.now() - wantUnstick.at > UNSTICK_TTL_MS) { setWantUnstick(null); return; }
+    if (wantUnstick.root !== root) { setRoot(wantUnstick.root); return; }
+    if (selected !== wantUnstick.number) { setSelected(wantUnstick.number); return; }
+    if (d && d.number === wantUnstick.number) { openUnstick(); setWantUnstick(null); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- openUnstick reads the same values it is keyed on
+  }, [wantUnstick, root, selected, d, unstickGate]);
+  useEffect(() => {
+    if (!wantUnstick) return;
+    const t = setTimeout(() => setWantUnstick(null), UNSTICK_TTL_MS);
+    return () => clearTimeout(t);
+  }, [wantUnstick]);
+
   // You cannot review your own pull request — GitHub does not offer it either,
   // and a review control on every row buries the ones actually waiting on you.
   // You cannot review your own work, and you cannot review something that has
@@ -5424,20 +5506,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                           onReviewInTerminal={onReviewInTerminal && d && !readOnly ? (recipe) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "") : undefined}
                           onMerge={doMerge} onClose={doClose} onAskReview={doReviewers}
                           method={mergeMethod} onMethod={setMergeMethod}
-                          onUpdateBranch={(syncLocal: boolean) => {
-                            /* Said AFTER GitHub accepts it, with the head it was made
-                               on; the panel waits to SEE a new head before it says the
-                               branch was updated. The refetch inside `act` is the first
-                               read that could see an empty rollup, so the record is made
-                               in the `.then`, before `act` re-reads. */
-                            const headBefore = d.headSha ?? d.commits[d.commits.length - 1]?.oid ?? "";
-                            return act("Update branch", () => api.prUpdateBranch(root, d.number, syncLocal).then((r) => {
-                              if (r.conflict) setRefusedUpdate({ number: d.number, updatedAt: d.updatedAt });
-                              if (r.ok) setAsked({ number: d.number, at: Date.now(), headBefore, note: r.requested ? undefined : r.detail });
-                              return r;
-                            }))
-                              .finally(() => refreshBehind(root, d.number));
-                          }}
+                          onUpdateBranch={doUpdateBranch}
                           onRerun={() => act("Re-run checks", () => api.prRerun(root, d.number))}
                           onAutoMerge={doAutoMerge}
                           onCancelAutoMerge={() => { void field(autoMergePatch(d.number, null), () => api.prMerge(root, d.number, mergeMethod, { disableAuto: true }), "Auto-merge was not cancelled", "auto"); }}
@@ -5484,6 +5553,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                           awaitingChecks={awaitingChecks}
                           unknownSince={unknownSince} githubProblem={stuck || prLagging ? ghProblem : null} prLagging={prLagging}
                           updateState={updateState} updateNote={asked && asked.number === d.number ? asked.note : undefined}
+                          unstickOffer={!!unstickGate?.show} onUnstick={openUnstick}
+                          lagTryable={prLagging && lagMature(unstickKey)}
                         />
                       ) : (
                         <Conversation
@@ -5752,6 +5823,14 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
         )}
       </div>
       {peek && <PeekFile peek={peek} onClose={() => setPeek(null)} />}
+      {unstickShown && (
+        <UnstickDialog root={unstickShown.root} number={unstickShown.number} url={unstickShown.url} gate={unstickShown.gate}
+          facts={unstickShown.facts} card={unstickShown.card}
+          behind={() => behindAnswer(unstickShown.root, unstickShown.number).behind}
+          refresh={() => { loadList(true); loadDetail(unstickShown.number, true); refreshBehind(unstickShown.root, unstickShown.number, true); }}
+          onUpdateBranch={() => void doUpdateBranch(updateBranchMove(behind, unstickShown.baseRefName, localHead ?? undefined).syncLocal)}
+          onClose={() => setUnstickShown(null)} />
+      )}
       {dialog}
       {mergeDialog}
     </div>
@@ -5759,6 +5838,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     </ViewerCtx.Provider>
     </RepoCtx.Provider>
   );
+}
+
+/** What the Unstick dialog was opened on. */
+interface UnstickShown {
+  root: string; number: number; url: string; gate: UnstickGate; facts: UnstickFacts; baseRefName: string; card: UnstickCard | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -5848,7 +5932,7 @@ function ConflictActions({ root, number, branch, base, repo, title, disabled }: 
   );
 }
 
-export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, openThreads, conversationCount, behind, behindAsking, localHead, conflictFiles, updateRefused, method, onMethod, onLocalReview, onReviewInTerminal, onMerge, onClose, onUpdateBranch, onRerun, onAutoMerge, onCancelAutoMerge, onDraft, onGoThreads, onGoReview, onAskReview, onGoMoved, movedSince, onEditRequest, onToggleTask, awaitingChecks, updateState, updateNote, unknownSince, githubProblem, prLagging }: {
+export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, openThreads, conversationCount, behind, behindAsking, localHead, conflictFiles, updateRefused, method, onMethod, onLocalReview, onReviewInTerminal, onMerge, onClose, onUpdateBranch, onRerun, onAutoMerge, onCancelAutoMerge, onDraft, onGoThreads, onGoReview, onAskReview, onGoMoved, movedSince, onEditRequest, onToggleTask, awaitingChecks, updateState, updateNote, unknownSince, githubProblem, prLagging, unstickOffer, onUnstick, lagTryable }: {
   d: PrDetail;
   /** The checkout this pull request is being read from — where a conflict would
    *  be prepared. */
@@ -5916,9 +6000,16 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
   githubProblem?: GithubProblem | null;
   /** The branch moved on GitHub and the pull request has not followed. */
   prLagging?: boolean;
+  /** The Unstick gate said yes (shared/unstick.ts): the stuck row gets its button. */
+  unstickOffer?: boolean;
+  onUnstick?: () => void;
+  /** The pull request has been behind its branch long enough that pressing Update branch to see what GitHub says is the next move. */
+  lagTryable?: boolean;
 }) {
   const c = d.checks;
-  const upState: UpdateStanding = updateState ?? "idle";
+  /* Held only while "not caught up" is news. Once it has lasted, the press is released: it is refused
+     with a sentence, and that refusal is what Unstick needs to have seen before it will exist. */
+  const upState: UpdateStanding = updateState === "pr-lagging" && lagTryable ? "idle" : (updateState ?? "idle");
   const stuckNow = stuckMinutes(unknownSince, Date.now()) != null;
   const [allFiles, setAllFiles] = useState(false);
   /* GitHub's own "mergeable" — see githubWillMerge for why that is not only
@@ -6026,7 +6117,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
     threadAuthors: d.threads.filter((t) => !t.isResolved).map((t) => t.comments[0]?.author ?? ""),
     author: d.author, viewerDidAuthor: d.viewerDidAuthor, viewerRequested: d.viewerRequested,
     checks: c, checksAll: d.checksAll, gate: d.gate, baseRefName: d.baseRefName, openThreads,
-    conflicted, conflictFiles: conflictFiles?.files.length, behind, awaitingChecks, unknownSince, githubProblem, prLagging, autoArmed: !!d.autoMerge,
+    conflicted, conflictFiles: conflictFiles?.files.length, behind, awaitingChecks, unknownSince, githubProblem, prLagging, autoArmed: !!d.autoMerge, unstickOffer,
   });
   const heroHas = (id: PathAction["id"]) => path.hero.primary?.id === id || path.hero.secondary?.id === id || path.hero.also?.id === id;
   const onPathAction = (a: PathAction) => {
@@ -6039,6 +6130,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
       case "mark-ready": onDraft(); break;
       case "open-github": openExternal(d.url); break;
       case "update-branch": onUpdateBranch(updateMove.syncLocal); break;
+      case "unstick": onUnstick?.(); break;
       case "arm-auto": onAutoMerge(); break;
       default: break;
     }
@@ -6241,7 +6333,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
               title={updateHeldTitle(upState) ?? updateMove.title}>
               <RefreshIcon size={ICON.xs} />{updateMove.label}</Btn>
           )}
-          {canUpdate && upState === "pr-lagging" && (
+          {canUpdate && prLagging && (
             <span className="text-[10.5px] min-w-0" style={{ color: "var(--warning-ink)" }}>{LAGGING_SENTENCE}</span>
           )}
           {canUpdate && upState === "stalled" && (

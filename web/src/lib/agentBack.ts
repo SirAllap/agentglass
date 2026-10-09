@@ -24,6 +24,7 @@ export const VIEW_SWITCHERS: readonly UiActionId[] = [
   "view.open", "workspace.toggle", "pane.open", "chat.new",
   "lantern.schedule", "terminal.resume",
   "pr.merge.stage", "pr.comment.stage", "pr.review.stage", "card.move.stage",
+  "pr.unstick",
 ];
 
 /** A view change this soon after a switching door ran is the door's doing

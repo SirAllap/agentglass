@@ -10,6 +10,7 @@ import { DEFAULT_NOTIFY_PREFS, type NotifyPrefs } from "../../../shared/notifyPr
 import type { CheckMetric } from "../../../shared/checkBaseline.ts";
 import type { UiReply } from "../../../shared/uiActions.ts";
 import type { GithubProblem } from "../../../shared/githubStatus.ts";
+import type { Look } from "../../../shared/unstick.ts";
 
 /** A partial update: any group may name just the keys it changes. */
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? Partial<T[K]> : T[K] };
@@ -1550,6 +1551,9 @@ const realApi = {
   /** GitHub's own status, only worth asking once a pull request has been stuck
    *  at UNKNOWN for a while. The server caches it for ten minutes. */
   prGithubStatus: () => get<{ ok: boolean; problem: GithubProblem | null }>("/prs/github-status"),
+  /** One fresh read of a pull request for Unstick; `full` adds the gate's facts. */
+  prUnstickLook: (root: string, number: number, full = false) =>
+    get<Look>(`/prs/unstick-look?${new URLSearchParams({ root, number: String(number), ...(full ? { full: "1" } : {}) })}`),
   prBehind: (root: string, number: number, force = false) =>
     get<{ ok: boolean; behind?: number; ahead?: number; local?: PrLocalHead; refSha?: string; error?: string }>(
       `/prs/behind?${new URLSearchParams({ root, number: String(number), ...(force ? { force: "1" } : {}) })}`),
@@ -2152,6 +2156,9 @@ const realApi = {
   prMerge: (root: string, number: number, method: "squash" | "merge" | "rebase", opts: { deleteBranch?: boolean; auto?: boolean; headSha?: string; subject?: string; body?: string; disableAuto?: boolean }) =>
     post<PrActionResult>("/prs/merge", { root, number, method, ...opts }),
   prClose: (root: string, number: number, reopen = false) => post<PrActionResult>("/prs/close", { root, number, reopen }),
+  /** Unstick's two writes. The server re-checks each against a fresh read. */
+  prUnstickClose: (root: string, number: number) => post<PrActionResult>("/prs/unstick-close", { root, number }),
+  prUnstickReopen: (root: string, number: number) => post<PrActionResult>("/prs/unstick-reopen", { root, number }),
   /** The prompt to review a PR with Claude, and the directory to run it in.
    *  Reads only: no fetch, no checkout, nothing left behind. */
   /** The line comments GitHub is holding in your unsubmitted review, so the
@@ -2669,6 +2676,8 @@ const demoApi: typeof realApi = {
   prWatchPreset: (_r: string, _rules: PrWatchRule[], _a: boolean) => D({ ok: false, error: "not available in the demo" }),
   prMerge: (_r: string, _n: number, _m: "squash" | "merge" | "rebase", _o: { deleteBranch?: boolean; auto?: boolean; headSha?: string; subject?: string; body?: string; disableAuto?: boolean }) => D(demoPrAction()),
   prClose: (_r: string, _n: number, _reopen?: boolean) => D(demoPrAction()),
+  prUnstickClose: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" } as PrActionResult),
+  prUnstickReopen: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" } as PrActionResult),
   prReviewPrompt: (_r: string, _n: number, _recipe?: string, _card?: string) => D({ ok: false, error: "not available in the demo" }),
   prPrompts: () => D({ ok: true, recipes: [] as ReviewRecipe[] }),
   prPromptSave: (_r: ReviewRecipe) => D({ ok: false, error: "not available in the demo" }),
@@ -2764,6 +2773,7 @@ const demoApi: typeof realApi = {
   }),
   prRollup: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
   prGithubStatus: () => D({ ok: true, problem: null as GithubProblem | null }),
+  prUnstickLook: (_r: string, _n: number, _f?: boolean) => D<Look>({ ok: false, error: "not available in the demo" }),
   prBehind: (_r: string, n: number) => D(n === 461
     ? {
       ok: true, behind: 12, ahead: 3,

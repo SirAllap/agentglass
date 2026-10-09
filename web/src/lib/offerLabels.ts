@@ -2,13 +2,14 @@
  * What a held open is called on its chip: "Settings > Notifications",
  * "Insights", "the Git view". One entry per door that can be held, keyed by the
  * registry's ids, so a new `open` door with no words is a type error (the
- * doors marked `inPlace` are never held and have none). Only a validated
+ * doors marked `inPlace` are never held and have none). A `stage` door is held
+ * like an open: it puts a dialog in front of the person. Only a validated
  * command reaches here, so an argument is already a member of its closed set.
  */
 import { UI_ACTIONS, uiOf, type UiActionDef, type UiActionId, type UiArgs } from "../../../shared/uiActions.ts";
 import type { ControlCmd } from "../../../shared/types.ts";
 
-type OpenId = { [K in UiActionId]: (typeof UI_ACTIONS)[K]["kind"] extends "open" ? K : never }[UiActionId];
+type OpenId = { [K in UiActionId]: (typeof UI_ACTIONS)[K]["kind"] extends "open" | "stage" ? K : never }[UiActionId];
 type InPlaceId = { [K in OpenId]: (typeof UI_ACTIONS)[K] extends { inPlace: true } ? K : never }[OpenId];
 export type HoldableId = Exclude<OpenId, InPlaceId>;
 
@@ -45,6 +46,11 @@ export const OFFER_LABELS: Labels = {
   "terminal.resume": () => "Terminal > Resume sessions",
   "settings.plugin": (a) => `Settings > ${words(a.name)}`,
   "pane.open": (a) => `the ${a.which} of the focused terminal`,
+  "pr.merge.stage": (a) => `Pull request #${a.number} > Merge`,
+  "pr.comment.stage": (a) => `Pull request #${a.number} > Comment`,
+  "pr.review.stage": (a) => `Pull request #${a.number} > Review`,
+  "card.move.stage": (a) => `Pull request #${a.number} > Move card`,
+  "pr.unstick": (a) => `Pull request #${a.number} > Unstick`,
 };
 
 /** The registry entry of a command, or null when it names no door. */

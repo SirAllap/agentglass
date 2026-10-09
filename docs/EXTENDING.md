@@ -331,6 +331,7 @@ curl -sS http://localhost:4000/control \
 | `session.open` | `id`, `app?` | the session modal |
 | `whatsnew.open` | — | the release notes of the running version; never marks them seen |
 | `lantern.schedule`, `terminal.resume` | — | the Lantern schedule dialog (a schedule exists only when the person submits it) and the Terminal's Resume sessions list |
+| `pr.unstick` (level 3, a `stage`) | `root`, `number` | the Unstick dialog on one pull request: close, reopen and sync one GitHub has lost track of. Opening runs nothing; the dialog says in words whether the pull request qualifies and only the person's confirm click closes it. Offered only when the owner allows level 3 |
 | `settings.plugin` | `name` | Settings on one plugin's page |
 | `pane.open` | `which`: `git`\|`diff`\|`pr`\|`card` | what the pane chords open for the focused terminal pane (`ok:false` when no pane has one) |
 | `chat.new`, `workspace.toggle`, `esc.peel` | as the old `chat`/`workspace`/`esc` | |

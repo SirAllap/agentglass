@@ -35,6 +35,7 @@ import { buildReviewStory } from "./reviewStory.ts";
 import { MIN_SAMPLES, runKey } from "./checkBaseline.ts";
 import { stuckMinutes, type GithubProblem } from "./githubStatus.ts";
 import { mergeBlockers, computingDetail, staleApproval, type MergeBlocker } from "./mergeBlockers.ts";
+import { UNSTICK_LABEL } from "./unstick.ts";
 import { approvalsNeed, buildRoster, guardLines, mergeGuard, rosterCounts, type MergeGuard, type ReviewerState, type RosterEntry } from "./reviewRoster.ts";
 
 export type Mover = "you" | "author" | "reviewer" | "team" | "ci" | "wait" | "other" | "fyi" | "done";
@@ -53,7 +54,7 @@ export type RowKind =
 
 export type ActionId =
   | "merge" | "open-log" | "rerun" | "go-thread" | "go-review" | "history" | "mark-ready"
-  | "resolve-conflicts" | "open-github" | "update-branch" | "arm-auto" | "ask-review";
+  | "resolve-conflicts" | "open-github" | "update-branch" | "arm-auto" | "ask-review" | "unstick";
 
 export interface PathAction {
   id: ActionId;
@@ -120,6 +121,8 @@ export interface PathRow {
   /** A progress ring for a check that has not finished. `fraction` only where a typical duration is known. */
   ring?: { mode: "queued" | "running" | "failed"; fraction?: number };
   link?: { label: string; url: string };
+  /** A button in the row. Today only Unstick, and only on a row about GitHub being stuck. */
+  action?: PathAction;
 }
 
 export interface OtherCi {
@@ -197,6 +200,8 @@ export interface MergePathInput {
   githubProblem?: GithubProblem | null;
   /** The branch ref on GitHub is not the pull request's head: GitHub has not synced its own pull request. */
   prLagging?: boolean;
+  /** The Unstick gate (shared/unstick.ts) said yes. Put on the rows that are about GitHub being stuck, and nowhere else. */
+  unstickOffer?: boolean;
   /** Typical duration in ms by `workflow\u0001name`, when a caller has a history. */
   typical?: Record<string, number>;
 }
@@ -350,6 +355,7 @@ export function mergePath(i: MergePathInput): MergePath {
   const rows: Omit<PathRow, "n" | "moverLabel">[] = [];
   const add = (r: Omit<PathRow, "n" | "moverLabel" | "counted"> & { counted?: boolean }) =>
     rows.push({ counted: r.mover !== "fyi", ...r });
+  const unstickAction: { action?: PathAction } = i.unstickOffer ? { action: { id: "unstick", label: UNSTICK_LABEL } } : {};
 
   // Review, from the same facts the reviews are drawn from elsewhere.
   const humans = (i.reviews ?? []).filter((r) => !r.isBot && r.author?.toLowerCase() !== (i.author ?? "").toLowerCase());
@@ -505,7 +511,7 @@ export function mergePath(i: MergePathInput): MergePath {
         add({ id: "unexplained", kind: "unexplained", stage: "merge", title: bl.title, why: bl.detail, mover: "other" });
         break;
       case "computing":
-        add({ id: "computing", kind: "computing", stage: "merge", title: bl.title, why: bl.detail, mover: "wait" });
+        add({ id: "computing", kind: "computing", stage: "merge", title: bl.title, why: bl.detail, mover: "wait", ...unstickAction });
         break;
       case "awaiting":
         add({ id: "awaiting", kind: "awaiting", stage: "required", title: bl.title, why: bl.detail, mover: "wait" });
@@ -604,6 +610,7 @@ export function mergePath(i: MergePathInput): MergePath {
       id: "state", kind: "unexplained", stage: "merge", title: "GitHub says it cannot be merged yet",
       why: i.mergeState === "UNKNOWN" ? computingDetail(i.behind, stuckMin, i.githubProblem, i.prLagging) : "GitHub did not say which rule is unmet; its own page lists everything.",
       mover: i.mergeState === "UNKNOWN" ? "wait" : "other",
+      ...(i.mergeState === "UNKNOWN" ? unstickAction : null),
     });
   }
 

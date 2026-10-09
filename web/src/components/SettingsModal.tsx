@@ -1189,6 +1189,7 @@ const VERBS: Record<string, string> = {
   "/docker/start": "started container", "/docker/stop": "stopped container",
   "/docker/restart": "restarted container", "/docker/rm": "removed container",
   "/prs/merge": "merged pull request", "/prs/close": "closed pull request",
+  "/prs/unstick-close": "closed (unstick) pull request", "/prs/unstick-reopen": "reopened (unstick) pull request",
   "/prs/review": "reviewed", "/prs/comment": "commented on",
   "/prs/rerun": "re-ran the checks on", "/prs/draft": "changed draft state of",
   "/chat/send": "started a chat in",
