@@ -70,6 +70,11 @@ describe("the action behind Enter, by kind", () => {
     for (const k of ["image", "pdf", "video", "audio", "binary", null] as const) expect(primaryAction(k)).toBeNull();
   });
 
+  test("a file the viewer refused gets no editor, a folder still gets its terminal", () => {
+    for (const k of ["markdown", "code", "html"] as const) expect(primaryAction(k, true)).toBeNull();
+    expect(primaryAction("dir", true)).toMatchObject({ id: "terminal" });
+  });
+
   test("nobody says 'To the bench' any more", () => {
     for (const f of ["../src/components/finder/InfoRail.tsx", "../src/components/finder/FileView.tsx", "../src/lib/finderFolder.ts"]) {
       const src = readFileSync(new URL(f, import.meta.url), "utf8").split("\n").filter((l) => !/^\s*(\/\*|\*|\/\/)/.test(l)).join("\n");

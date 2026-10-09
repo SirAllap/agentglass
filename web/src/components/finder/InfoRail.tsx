@@ -60,7 +60,7 @@ export function InfoRail({ file, git, outline, current, home, onJump, onBench, o
   const { source, facts, text, kind } = file;
   const abs = source?.abs ?? null;
   const acts = kind ? viewerActions(kind) : { bench: false, browser: false };
-  const primary = primaryAction(kind);
+  const primary = primaryAction(kind, !!file.error);
 
   /* "Copied ✓" for a moment: a button that does something invisible reads as a
      button that did nothing, and gets pressed again. */

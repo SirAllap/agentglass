@@ -97,10 +97,12 @@ export interface PrimaryAction {
 
 /** The one button that goes to the bench, named for what it does there.
  *  A file that has an editor opens in it; a folder opens a shell in it; a
- *  picture, a PDF or a binary has neither, so none. */
-export function primaryAction(kind: ViewerKind | null): PrimaryAction | null {
+ *  picture, a PDF or a binary has neither, so none. A file the viewer was
+ *  refused (a credential store, a link to a key) is `closed`: the bench refuses
+ *  it too, so the editor is not offered for it. */
+export function primaryAction(kind: ViewerKind | null, closed = false): PrimaryAction | null {
   if (kind === "dir") return { id: "terminal", label: "Terminal here", title: "Open a bench shell in this folder — it stays open there when you leave the finder" };
-  if (kind === "markdown" || kind === "code" || kind === "html") {
+  if (!closed && (kind === "markdown" || kind === "code" || kind === "html")) {
     return { id: "edit", label: "Edit in nvim", title: "Edit this file in nvim on the bench — it stays open there when you leave the finder" };
   }
   return null;
