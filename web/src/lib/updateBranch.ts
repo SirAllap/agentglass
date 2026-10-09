@@ -23,6 +23,9 @@ export interface UpdateBranchMove {
   title: string;
   /** Shown under the row when the local copy cannot come along. */
   note?: string;
+  /** Set when the note is about a dirty checkout: the panel draws that one as a
+   *  notice with the worktree and branch as chips and a button to its changes. */
+  dirtyTree?: { worktree: string; branch: string };
   /** Whether to ask the server for the local fast-forward. */
   syncLocal: boolean;
 }
@@ -56,7 +59,8 @@ export function updateBranchMove(behind: number | null, base: string, local?: Pr
     ? `your local ${local.branch} has ${local.ahead} commit${local.ahead === 1 ? "" : "s"} GitHub does not have — push ${local.ahead === 1 ? "it" : "them"} and this can pull too`
     : local.sync === "busy"
       ? `${tail(local.worktree)} is mid-merge — your local ${local.branch} stays put`
-      : `uncommitted changes in ${tail(local.worktree)} — your local ${local.branch} stays put`;
+      : "Your local copy has uncommitted changes, so Update branch will only update GitHub. "
+        + "Stash them, or commit and push, to bring this branch up to date locally.";
 
   return {
     label: `Update branch${count}`,
@@ -66,6 +70,7 @@ export function updateBranchMove(behind: number | null, base: string, local?: Pr
         ? `${local.worktree} is mid-merge or mid-rebase`
         : `there are uncommitted changes in ${local.worktree}`}.`,
     note: why,
+    dirtyTree: local.sync === "dirty" && local.worktree ? { worktree: local.worktree, branch: local.branch } : undefined,
     syncLocal: false,
   };
 }

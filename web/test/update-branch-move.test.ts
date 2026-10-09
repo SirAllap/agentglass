@@ -57,13 +57,17 @@ describe("when it cannot", () => {
     const m = updateBranchMove(56, "main", head({ sync: "dirty", dirty: true, worktree: "/home/x/code/agentglass-work" }));
     expect(m.syncLocal).toBe(false);
     expect(m.label).toBe("Update branch · 56 behind");
-    expect(m.note).toContain("uncommitted changes in agentglass-work");
-    expect(m.note).toContain("stays put");
+    // A sentence for someone who has never read this code, capitals and all:
+    // it says what the button will and will not do, and what to do about it.
+    expect(m.note).toBe("Your local copy has uncommitted changes, so Update branch will only update GitHub. "
+      + "Stash them, or commit and push, to bring this branch up to date locally.");
+    expect(m.dirtyTree).toEqual({ worktree: "/home/x/code/agentglass-work", branch: "feat/thing" });
   });
 
   it("does not ask for a sync, and says why — local commits GitHub has not got", () => {
     const m = updateBranchMove(4, "main", head({ sync: "diverged", ahead: 2 }));
     expect(m.syncLocal).toBe(false);
+    expect(m.dirtyTree).toBeUndefined();
     expect(m.note).toContain("2 commits GitHub does not have");
   });
 

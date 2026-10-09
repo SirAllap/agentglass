@@ -103,6 +103,7 @@ import { expandRecipe } from "../../../shared/recipeText.ts";
 import { suggestRecipeId } from "../../../shared/reviewSuggest.ts";
 import { openSettings } from "../lib/openSettings.ts";
 import { requestWorktreeJump } from "../lib/worktreeJump.ts";
+import { dirName } from "../lib/worktree.ts";
 import { wtCell, wtCellTitle, folderOf } from "../lib/prWorktreeCell.ts";
 import { conflictBriefing, conflictHandoff } from "../lib/conflictBrief.ts";
 import { openCard } from "../lib/openCard.ts";
@@ -111,7 +112,7 @@ import { useClickupSetup } from "../lib/clickupSetup.ts";
 import type { ListStatus as CuStatus, ListMember as CuMember, ProviderTask } from "../../../shared/providers.ts";
 import { CloseButton, CloseIcon } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { AgentIcon, ArrowIcon, AttachIcon, BlockedIcon, BoltIcon, BranchIcon, CaretIcon, ChartIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CommitIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, EditIcon, EyeIcon, FileIcon, FlagIcon, IconLabel, LinkIcon, MergeIcon, MoreIcon, PlusIcon, RefreshIcon, SearchIcon, SparkleIcon, StarIcon, TagIcon, UndoIcon, UserIcon } from "../lib/glyphIcons.tsx";
+import { AgentIcon, ArrowIcon, AttachIcon, BlockedIcon, BoltIcon, BranchIcon, CaretIcon, ChartIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CommitIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, EditIcon, EyeIcon, FileIcon, FlagIcon, IconLabel, LinkIcon, MergeIcon, MoreIcon, PlusIcon, RefreshIcon, SearchIcon, SparkleIcon, StarIcon, TagIcon, UndoIcon, UserIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { PrIcon } from "./workspace/icons.tsx";
 import { PrWatchMenu } from "./PrWatchMenu.tsx";
 import { onChecksRead } from "../lib/prWatchStore.ts";
@@ -5825,10 +5826,28 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
               between the update button and the pair pinned to the right — which
               is what happened when it sat next to the button that earns it. It
               names a path, so it needs the width. */}
-          {canUpdate && updateMove.note && (
+          {canUpdate && updateMove.note && !updateMove.dirtyTree && (
             <span className="basis-full text-[10.5px] leading-snug" style={{ color: "var(--text3)" }}>
               {updateMove.note}
             </span>
+          )}
+          {/* A dirty checkout is the one note with something to press: the sentence,
+              the two names as chips, and the changes one click away in the app's own
+              File changes. The button is always the right-hand end of this row. */}
+          {canUpdate && updateMove.dirtyTree && (
+            <div className="basis-full rounded overflow-hidden" style={{ border: LINE }}>
+              <Reason last tint="var(--warning)" glyph={<WarningIcon size={ICON.xs} />}
+                action={<Btn small onClick={() => requestWorktreeJump({ view: "diff", filter: dirName(updateMove.dirtyTree!.worktree) })}
+                  title="Open this worktree's uncommitted changes in File changes">Review changes</Btn>}>
+                {updateMove.note}
+                <span className="flex items-center gap-1.5 mt-1 min-w-0 font-mono text-[10.5px]">
+                  <span className="shrink-0 px-1.5 rounded" title={updateMove.dirtyTree.worktree}
+                    style={{ background: "var(--surface-inset)", color: "var(--text2)" }}>{dirName(updateMove.dirtyTree.worktree)}</span>
+                  <span className="truncate px-1.5 rounded" title={updateMove.dirtyTree.branch}
+                    style={{ background: "var(--surface-inset)", color: "var(--text2)" }}>{updateMove.dirtyTree.branch}</span>
+                </span>
+              </Reason>
+            </div>
           )}
     </>
   );
@@ -8358,10 +8377,10 @@ function Masthead({ root, repo, d, busy, local, onShowLocal, onEditTitle, onDraf
   );
 }
 
-function Reason({ tint, glyph, children, action }: { tint: string; glyph: React.ReactNode; children: React.ReactNode; action?: React.ReactNode }) {
+function Reason({ tint, glyph, children, action, last }: { tint: string; glyph: React.ReactNode; children: React.ReactNode; action?: React.ReactNode; last?: boolean }) {
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 text-[11.5px]"
-      style={{ color: "var(--text)", borderBottom: LINE }}>
+      style={{ color: "var(--text)", borderBottom: last ? undefined : LINE }}>
       <span className="shrink-0 w-3.5 flex justify-center" style={{ color: tint }}>{glyph}</span>
       <span className="min-w-0">{children}</span>
       {action && <span className="ml-auto shrink-0 text-[10px]">{action}</span>}
