@@ -412,12 +412,12 @@ const tasks: SettingDef[] = [
 
 /** Space ids as one comma-separated string (a def's value is a scalar), "" for none chosen. Digits only:
  *  an id is the one thing this can name, and anything else is refused rather than saved to match nothing. */
-const spaceIds = (raw: unknown): string | null => {
+const spaceIds = accepting((raw: unknown): string | null => {
   if (typeof raw !== "string") return null;
   const ids = raw.split(",").map((x) => x.trim()).filter(Boolean);
   if (ids.length > 200 || ids.some((x) => !/^[0-9]{1,20}$/.test(x))) return null;
   return [...new Set(ids)].join(",");
-};
+}, "comma-separated space ids, digits only (up to 200), or \"\" for none");
 const splitIds = (v: SettingValue): string[] => String(v).split(",").filter(Boolean);
 
 const clickup: SettingDef[] = [

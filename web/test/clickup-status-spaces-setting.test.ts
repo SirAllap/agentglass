@@ -79,7 +79,7 @@ describe("clickup.statusSpaces.counted", () => {
 
   test("anything that is not a list of space ids is refused and saves nothing", async () => {
     for (const bad of ["Sales", "901;902", 901, true, null, Array.from({ length: 201 }, (_, i) => String(i)).join(",")]) {
-      expect(api().set(ID, bad), String(bad)).toEqual({ ok: false, error: `not a valid value for ${ID}` });
+      expect(api().set(ID, bad), String(bad)).toEqual({ ok: false, error: expect.stringContaining(`not a valid value for ${ID}; accepted: `) });
     }
     await settle();
     expect(sent).toEqual([]);
