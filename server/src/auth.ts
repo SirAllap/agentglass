@@ -667,6 +667,20 @@ export function isDeskPrivatePluginPath(pathname: string): boolean {
   return pathname === "/plugins/settings" || pathname === "/plugins/panels" || pathname.startsWith("/plugins/panels/");
 }
 
+/**
+ * May this caller read a pull request by a `gh:owner/name` root?
+ *
+ * Such a root is read with the person's gh token, which sees every repository
+ * they can, while every scope here is written against the open project. So it
+ * is for a caller that could already do anything here: this machine (null, or
+ * the machine token) or a full-scope paired device. A read-only phone, a
+ * plugin whatever its scope, the understudy and a seat are refused.
+ */
+export function mayReadForeignRoot(caller: Caller | null): boolean {
+  if (caller === null) return true;
+  return caller.kind !== "plugin" && caller.scope === "full" && !caller.principal;
+}
+
 /** True when this caller may make this request. */
 export function allowed(caller: Caller, method: string, pathname: string): boolean {
   // First, and returning outright — see `principal` on Caller. The understudy's

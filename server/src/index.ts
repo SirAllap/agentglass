@@ -207,7 +207,7 @@ import { join as joinPath, resolve as resolvePath, basename } from "node:path";
 import { hostname, tmpdir } from "node:os";
 import { privateHost, resolvePeer, originOf, guardedFetch, hostsOnly } from "./net.ts";
 import { DESK_HEADER, claimDesk, deskHeld } from "./desk.ts";
-import { resolveToken, healthProof, tokenOk, isIntake, isAuthExempt, callerFor, allowed, scopeNeeded, pluginOfRequest, answersFromADevice, deskKeyOk, understudyRequiresToken, UNDERSTUDY_NO_TOKEN_ERROR, mintUnderstudyToken, revokeUnderstudyToken, tokenlessWarning, type Caller, type Origin } from "./auth.ts";
+import { resolveToken, healthProof, tokenOk, isIntake, isAuthExempt, callerFor, allowed, mayReadForeignRoot, scopeNeeded, pluginOfRequest, answersFromADevice, deskKeyOk, understudyRequiresToken, UNDERSTUDY_NO_TOKEN_ERROR, mintUnderstudyToken, revokeUnderstudyToken, tokenlessWarning, type Caller, type Origin } from "./auth.ts";
 import {
   listPlugins, masterEnabled, setMaster, installPlugin, installFromCatalogue, updatePlugin, enablePlugin, disablePlugin, removePlugin, setPluginUnboxedConsent, envAllowsUnboxed,
   contributesOf, isRunning, pluginSettings, pluginOwnSettings, setPluginSettings, resumeEnabledPlugins, stopAllPluginsSync, pluginIcon,
@@ -2732,6 +2732,10 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // minute per device — it is what lets the pane say when a phone was last
       // heard from, which is the difference between a device list and a guess.
       if (caller.device) markSeen(caller.device.id);
+      // A `gh:` root reaches past the open project: see mayReadForeignRoot.
+      if (isForeignRoot(url.searchParams.get("root") ?? "") && !mayReadForeignRoot(caller)) {
+        return json({ ok: false, error: "a repository outside the open project needs full access" }, 403);
+      }
     }
 
     /*
