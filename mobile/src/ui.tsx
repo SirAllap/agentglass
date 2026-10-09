@@ -8,7 +8,7 @@
  * that does not autocorrect an IP address into a word, and a row that reports
  * its own touch target.
  */
-import { forwardRef, type ReactNode } from "react";
+import { forwardRef, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ActivityIndicator, KeyboardAvoidingView, Modal, Pressable, ScrollView, Text, TextInput, View,
   type StyleProp, type TextStyle, type ViewStyle,
@@ -24,11 +24,52 @@ import { Glyph } from "./nav/glyphs.tsx";
 /**
  * The floor for anything you tap.
  *
- * 44 is the number both platforms' guidelines land on, and it is not a
- * suggestion on a card that says "Deny": the cost of a mis-tap here is an
- * agent stopped or a command allowed that should not have been.
+ * 48 dp is the Android number, and it is not a suggestion on a card that says
+ * "Deny": the cost of a mis-tap here is an agent stopped or a command allowed
+ * that should not have been. It was 44 (the iOS number) until the audit walked
+ * the emulator and measured the controls a thumb actually missed: the window
+ * strip, the send button and the two reflow strips were all between 30 and 44.
  */
-export const TAP = 44;
+export const TAP = 48;
+
+/**
+ * True for a moment after `flash()` — what a copy button reads to say "done".
+ *
+ * A copy writes to the clipboard and draws nothing, so a press looked like a
+ * press that did not land (the haptic is not something a thumb always feels,
+ * and is off in silent mode). The timer is cleared on unmount and on a second
+ * press, so two quick copies do not cut the second message short.
+ */
+export function useFlash(ms = 1600): [boolean, () => void] {
+  const [on, setOn] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  const flash = useCallback((): void => {
+    if (timer.current) clearTimeout(timer.current);
+    setOn(true);
+    timer.current = setTimeout(() => setOn(false), ms);
+  }, [ms]);
+  return [on, flash];
+}
+
+/** A line over the bottom of the screen, for something that just happened and
+ *  needs no answer. Over the content rather than in the flow: a strip pushed in
+ *  at the top moves every row down under the thumb that caused it. */
+export function Snack({ text }: { text: string }): ReactNode {
+  return (
+    <View
+      accessibilityLiveRegion="polite"
+      pointerEvents="none"
+      style={{
+        position: "absolute", left: SPACE.lg, right: SPACE.lg, bottom: SPACE.xl + SPACE.lg,
+        minHeight: TAP, justifyContent: "center", paddingHorizontal: SPACE.lg,
+        borderRadius: RADIUS.sm, backgroundColor: C.text,
+      }}
+    >
+      <Text style={{ color: C.bg, fontSize: T.body }}>{text}</Text>
+    </View>
+  );
+}
 
 export function Btn({ label, onPress, tone = "plain", busy, disabled, style }: {
   label: string;
@@ -262,7 +303,7 @@ export function groupEdge(first: boolean, last: boolean): ViewStyle {
  * Not a platform Switch. Three of the four of these decide something with no
  * undo — a branch deleted, a merge armed to land while nobody is watching —
  * and a control whose whole state is a small sliding dot puts the weight of
- * that on a glance. This is a 44-point row with a box, a label and a line
+ * that on a glance. This is a TAP-high row with a box, a label and a line
  * saying what happens, and the line is where the argument actually is: a
  * repository that already deletes its own branches should be told that,
  * because "Delete the branch after" reads as necessary otherwise.
@@ -321,9 +362,9 @@ export function Toggle({ on, label, sub, disabled, onPress }: {
  * own control drew two halves at 34 with a comment apologising for it. A thumb
  * moving between screens met three weights of the identical gesture.
  *
- * So: one, at the app's own floor. `TAP` is 44 and the row is 44 plus the
- * track's 3 points of padding either side, which is what makes the touchable
- * part of each segment actually 44 rather than 44 minus the chrome.
+ * So: one, at the app's own floor. The row is `TAP` plus the track's 3 points
+ * of padding either side, which is what makes the touchable part of each
+ * segment actually `TAP` rather than `TAP` minus the chrome.
  *
  * Full width and equal segments, not a scrolling row of chips. Two things
  * follow from that and both are the point: every option is on screen, so there
@@ -335,7 +376,7 @@ export function Toggle({ on, label, sub, disabled, onPress }: {
  * whole reason these carry counts is to choose without tapping.
  */
 export function Segmented<T extends string>({ options, value, onChange, style }: {
-  options: { id: T; label: string; count?: number }[];
+  options: { id: T; label: string; count?: number | string }[];
   value: T;
   onChange: (id: T) => void;
   style?: StyleProp<ViewStyle>;
@@ -392,6 +433,53 @@ export function Segmented<T extends string>({ options, value, onChange, style }:
   );
 }
 
+/** A checked box, drawn with the glyph: the same 24-point square in every
+ *  checklist on the phone. */
+export function CheckBox({ on }: { on: boolean }): ReactNode {
+  return (
+    <View style={{
+      width: 24, height: 24, borderRadius: 6, borderWidth: 1.5, alignItems: "center", justifyContent: "center",
+      borderColor: on ? C.primary : C.border2, backgroundColor: on ? C.primary : "transparent",
+    }}>
+      {on ? <Glyph name="check" color={ink(C.primary)} size={16} weight={2.6} /> : null}
+    </View>
+  );
+}
+
+/**
+ * One choice of a wrapped two-column checklist: a box, a label, and how many
+ * it would keep. 52 high — the smallest a two-column row stays readable at —
+ * and `flexBasis: 48%` so two fit a row and an odd one takes the whole width.
+ */
+export function CheckItem({ label, count, on, onPress, dot }: {
+  label: string;
+  count?: number;
+  on: boolean;
+  onPress: () => void;
+  /** A status' own colour, drawn as a dot after the box. */
+  dot?: string;
+}): ReactNode {
+  return (
+    <Pressable
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked: on }}
+      accessibilityLabel={count === undefined ? label : `${label}, ${count}`}
+      onPress={onPress}
+      style={({ pressed }) => ({
+        flexBasis: "48%", flexGrow: 1, minHeight: 52, flexDirection: "row", alignItems: "center", gap: SPACE.md,
+        paddingHorizontal: SPACE.md, borderRadius: RADIUS.md, borderWidth: 1,
+        borderColor: on ? C.primary : C.border, backgroundColor: on ? tint(C.primary, 0.12) : C.bg2,
+        opacity: pressed ? 0.7 : 1,
+      })}
+    >
+      <CheckBox on={on} />
+      {dot ? <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: dot }} /> : null}
+      <Text numberOfLines={1} style={{ flex: 1, color: C.text, fontSize: T.body, fontWeight: on ? "700" : "500" }}>{label}</Text>
+      {count === undefined ? null : <Text style={{ color: C.text3, fontSize: T.small, fontVariant: ["tabular-nums"] }}>{count}</Text>}
+    </Pressable>
+  );
+}
+
 /**
  * A list that comes up from the bottom, for choosing one of many.
  *
@@ -409,10 +497,17 @@ export function Segmented<T extends string>({ options, value, onChange, style }:
  * the tab bar, and the bar is a flex sibling of the scene rather than something
  * drawn under it — an overlay inside a screen is clipped by the screen.
  */
-export function Sheet({ open, onClose, title, children }: {
+export function Sheet({ open, onClose, title, subtitle, footer, tall, children }: {
   open: boolean;
   onClose: () => void;
   title: string;
+  /** One quiet line under the title: what the sheet applies to. */
+  subtitle?: string;
+  /** Fixed under the scrolling body, so a choice made at the top of a long
+   *  sheet is confirmed without scrolling back to it. */
+  footer?: ReactNode;
+  /** A sheet with a lot in it: 92 % of the screen instead of 75. */
+  tall?: boolean;
   children: ReactNode;
 }): ReactNode {
   const insets = useSafeAreaInsets();
@@ -450,7 +545,7 @@ export function Sheet({ open, onClose, title, children }: {
           paddingTop: SPACE.md,
           // The gesture bar, paid once. Nothing else in the sheet knows about it.
           paddingBottom: insets.bottom + SPACE.md,
-          maxHeight: "75%",
+          maxHeight: tall ? "92%" : "75%",
         }}>
           {/* The grabber. It does not drag — this sheet is dismissed by the
               scrim or the back gesture — and it is here because it is the one
@@ -461,6 +556,7 @@ export function Sheet({ open, onClose, title, children }: {
           }} />
           <View style={{ paddingHorizontal: SPACE.lg, paddingTop: SPACE.md, paddingBottom: SPACE.sm }}>
             <Text style={{ color: C.text, fontSize: T.title, fontWeight: "700" }}>{title}</Text>
+            {subtitle ? <Text numberOfLines={1} style={{ color: C.text3, fontSize: T.small }}>{subtitle}</Text> : null}
           </View>
           <ScrollView
             contentContainerStyle={{ paddingHorizontal: SPACE.lg, paddingBottom: SPACE.sm }}
@@ -468,6 +564,12 @@ export function Sheet({ open, onClose, title, children }: {
           >
             {children}
           </ScrollView>
+          {footer ? (
+            <View style={{
+              flexDirection: "row", gap: SPACE.md, paddingHorizontal: SPACE.lg, paddingTop: SPACE.md,
+              borderTopWidth: 1, borderTopColor: C.border,
+            }}>{footer}</View>
+          ) : null}
         </View>
       </KeyboardAvoidingView>
     </Modal>
@@ -482,16 +584,20 @@ export function Sheet({ open, onClose, title, children }: {
  * hyphenated, a dozen board views all called a noun — so the second line is
  * what actually tells two of them apart.
  */
-export function SheetRow({ label, sub, on, onPress }: {
+export function SheetRow({ label, sub, on, disabled, onPress }: {
   label: string;
   sub?: string;
   on?: boolean;
+  /** Drawn dimmed and inert. Say WHY in `sub`: a row that is off with no
+   *  reason is a row somebody presses again. */
+  disabled?: boolean;
   onPress: () => void;
 }): ReactNode {
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityState={{ selected: !!on }}
+      accessibilityState={{ selected: !!on, disabled: !!disabled }}
+      disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => ({
         minHeight: 60,
@@ -501,7 +607,7 @@ export function SheetRow({ label, sub, on, onPress }: {
         paddingVertical: SPACE.sm,
         borderBottomWidth: 1,
         borderBottomColor: C.border,
-        opacity: pressed ? 0.6 : 1,
+        opacity: disabled ? 0.45 : pressed ? 0.6 : 1,
       })}
     >
       <View style={{ flex: 1, gap: 2 }}>
@@ -666,6 +772,12 @@ export function Row({ title, sub, lead, trail, chevron, onPress, disabled, tone,
 
 export type ChipTone = "neutral" | "accent" | "good" | "warn" | "bad";
 
+/** The ink a tone is written in — a chip's, and any strip that tints to match. */
+export function toneInk(tone: ChipTone): string {
+  return tone === "accent" ? C.primary : tone === "good" ? C.success : tone === "warn" ? C.warning
+    : tone === "bad" ? C.error : C.text2;
+}
+
 /**
  * A short fact in a pill: "Approved", "2 failed", "bug".
  *
@@ -680,8 +792,7 @@ export function Chip({ label, tone = "neutral", icon }: {
   tone?: ChipTone;
   icon?: ReactNode;
 }): ReactNode {
-  const ink_ = tone === "accent" ? C.primary : tone === "good" ? C.success : tone === "warn" ? C.warning
-    : tone === "bad" ? C.error : C.text2;
+  const ink_ = toneInk(tone);
   return (
     <View style={{
       flexDirection: "row", alignItems: "center", gap: 4, height: 24, paddingHorizontal: 8,
@@ -785,6 +896,7 @@ export function LabelChip({ name, color }: { name: string; color?: string }): Re
  * it, and two copies of a box are two boxes that stop matching.
  */
 export function CommandLine({ line }: { line: string }): ReactNode {
+  const [copied, flash] = useFlash();
   return (
     <View style={{
       flexDirection: "row", alignItems: "center", paddingLeft: SPACE.md,
@@ -797,13 +909,17 @@ export function CommandLine({ line }: { line: string }): ReactNode {
         onPress={() => {
           void Clipboard.setStringAsync(line);
           void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          flash();
         }}
         style={({ pressed }) => ({
-          width: TAP, height: TAP, alignItems: "center", justifyContent: "center",
+          minWidth: TAP, height: TAP, alignItems: "center", justifyContent: "center",
+          paddingHorizontal: copied ? SPACE.sm : 0,
           transform: [{ scale: pressed ? 0.97 : 1 }],
         })}
       >
-        <Glyph name="copy" color={C.text2} size={18} />
+        {copied
+          ? <Text style={{ color: C.success, fontSize: T.small, fontWeight: "600" }}>Copied</Text>
+          : <Glyph name="copy" color={C.text2} size={18} />}
       </Pressable>
     </View>
   );

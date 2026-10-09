@@ -79,3 +79,22 @@ export function spokenState(modifier: Modifier, latch: Latch): string {
   if (latch === "once") return `${name}, on for the next key`;
   return `${name}, off`;
 }
+
+/**
+ * The line above the bar while a modifier is waiting, in words.
+ *
+ * A colour change on a 48-point key is the only thing that used to say the next
+ * press would be a control code, and it says it to somebody who already knows.
+ * Null when nothing is held, so the line exists only while it is news.
+ */
+export function armedTip(held: Latches): string | null {
+  const name = (m: Modifier): string => (m === "ctrl" ? "Ctrl" : m === "alt" ? "Alt" : "Shift");
+  const list = (ms: Modifier[]): string => ms.map(name).join(" + ");
+  const once = armed(held).filter((m) => held[m] === "once");
+  const locked = armed(held).filter((m) => held[m] === "locked");
+  const parts: string[] = [];
+  if (once.length) parts.push(`${list(once)} ${once.length > 1 ? "are" : "is"} on for the next key`);
+  if (locked.length) parts.push(`${list(locked)} ${locked.length > 1 ? "stay" : "stays"} on until you tap ${locked.length > 1 ? "them" : "it"} again`);
+  if (!parts.length) return null;
+  return `${parts.join("; ")}.${locked.length === 0 ? " Tap it again to keep it on." : ""}`;
+}

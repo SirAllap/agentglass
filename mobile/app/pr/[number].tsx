@@ -53,6 +53,8 @@ import {
 } from "../../../shared/mergeMethod.ts";
 import { Btn, Card, Chip, Group, GroupTitle, Label, Note, Row, Segmented, Sheet, SheetRow, TAP, Toggle } from "../../src/ui.tsx";
 import { changesRequestedWarning, mergeObstacles } from "../../src/model/mergeObstacles.ts";
+import { mergeBanner, reviewerRows } from "../../src/model/prOverview.ts";
+import { LinkedCard, MergeBannerCard, ReviewersCard } from "../../src/review/Overview.tsx";
 import { Glyph, type GlyphName } from "../../src/nav/glyphs.tsx";
 import { ChevronIcon } from "../../src/nav/icons.tsx";
 import { C, MONO, RADIUS, SPACE, T, ink } from "../../src/theme.ts";
@@ -69,18 +71,6 @@ function checksLook(pr: PrDetail): { word: string; ink: string; mark: GlyphName 
   if (pending) return { word: `${pending} running`, ink: C.warning, mark: "run_circle" };
   if (failure) return { word: `${failure} failed`, ink: C.error, mark: "x_circle" };
   return { word: `${success} passed`, ink: C.success, mark: "ok_circle" };
-}
-
-/** What GitHub decided, in the words the list already uses — so a row and its
- *  detail cannot describe the same pull request differently (see
- *  model/prLook.ts). */
-function decisionLook(pr: PrDetail): { word: string; ink: string; mark: GlyphName } | null {
-  if (pr.reviewDecision === "APPROVED") return { word: "Approved", ink: C.success, mark: "check" };
-  if (pr.reviewDecision === "CHANGES_REQUESTED") return { word: "Changes requested", ink: C.error, mark: "comment" };
-  if (pr.reviewDecision === "REVIEW_REQUIRED") {
-    return { word: pr.viewerDidAuthor ? "Needs review" : "Needs your review", ink: C.warning, mark: "eye" };
-  }
-  return null;
 }
 
 function FileRow({ file, onOpen }: {
@@ -533,7 +523,10 @@ export default function PrScreen(): React.ReactNode {
 
   const now = Date.now();
   const checks = detail ? checksLook(detail) : null;
-  const decision = detail ? decisionLook(detail) : null;
+  /** What the Overview leads with: can it merge and whose move is it, and who
+   *  has reviewed. See src/model/prOverview.ts. */
+  const banner = useMemo(() => (detail ? mergeBanner(detail) : null), [detail]);
+  const reviewers = useMemo(() => (detail ? reviewerRows(detail) : []), [detail]);
   const files = detail?.files ?? [];
   const shownFiles = allFiles ? files : files.slice(0, 6);
   const openThreads = (detail?.threads ?? []).filter((t) => !t.isResolved).length;
@@ -632,15 +625,28 @@ export default function PrScreen(): React.ReactNode {
             </View>
 
             {/*
-              Is it all right: three rows, each a question with its answer.
+              Can it merge, who has said what, what is it for.
 
-              The detail used to say this as three outlined chips in a line
-              under the title — "approved", "2 failed" — and a separate Failing
-              card further down. The questions somebody opens a pull request on
-              a phone with are exactly three, and each has a place to go for the
-              rest: the checks, the threads, the merge. So each is a row, and
-              the row is the door.
+              The detail used to say this as three rows, one of them "Merge"
+              with the verdict as its title: the answer a person opens a pull
+              request on, drawn as a line among lines. It leads now as a strip
+              that says why and whose move it is, and the strip is the door to
+              the merge sheet. The checks keep a row, because that one opens
+              the job list and the run is what it is about.
             */}
+            {banner ? (
+              <MergeBannerCard
+                banner={banner}
+                onPress={banner.open && mayWrite ? () => { setMergeErr(null); setMerging(true); } : undefined}
+              />
+            ) : null}
+            <ReviewersCard rows={reviewers} />
+            {host && tracked !== false ? (
+              <LinkedCard
+                host={host} pr={detail} tracked={tracked}
+                onOpen={provider?.id === "clickup" ? (id) => router.push({ pathname: "/card/[id]", params: { id } }) : undefined}
+              />
+            ) : null}
             <Group inset={52}>
               <Row
                 title={checks?.word ?? "No checks"}
@@ -657,32 +663,6 @@ export default function PrScreen(): React.ReactNode {
                   pathname: "/pr/checks",
                   params: { number: String(number), root: root ?? "" },
                 }) : undefined}
-              />
-              <Row
-                title={decision?.word ?? "No review asked for"}
-                sub={openThreads
-                  ? `${openThreads} open ${openThreads === 1 ? "thread" : "threads"}`
-                  : (detail.threads ?? []).length ? "Every thread resolved" : "No threads"}
-                lead={<Glyph name={decision?.mark ?? "comment"} color={decision?.ink ?? C.text3} size={22} weight={1.9} />}
-                chevron
-                onPress={() => setPane("threads")}
-              />
-              <Row
-                title={detail.state !== "OPEN" ? (detail.state === "MERGED" ? "Merged" : "Closed")
-                  : detail.mergeable === "CONFLICTING" ? `Conflicts with ${detail.baseRefName}` : gate?.line ?? "Merge"}
-                sub={detail.state === "OPEN" ? `${detail.headRefName} into ${detail.baseRefName}` : undefined}
-                lead={<Glyph
-                  name="merge"
-                  color={detail.state === "MERGED" ? C.primary : gate && !gate.blocked && detail.mergeable !== "CONFLICTING" ? C.success : C.text3}
-                  size={22}
-                  weight={1.9}
-                />}
-                /* A conflict is a different need from a red check, and the list
-                   carries `mergeable` for exactly that reason. UNKNOWN is
-                   GitHub still computing it and must not be drawn as "fine",
-                   which is why only CONFLICTING is named. */
-                chevron={mayWrite && detail.state === "OPEN"}
-                onPress={mayWrite && detail.state === "OPEN" ? () => { setMergeErr(null); setMerging(true); } : undefined}
               />
             </Group>
 

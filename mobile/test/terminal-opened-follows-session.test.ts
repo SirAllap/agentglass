@@ -1,13 +1,17 @@
 /*
- * A window this screen opened is followed to its OWN session.
+ * A window this screen opened is followed to wherever it landed.
  *
- * Left unset, `open` stayed null forever whenever the new window landed
- * somewhere other than whichever session was already on screen — a phone's
- * mirror is grouped with a desk session that does not share the repo's name,
- * and the server's own fallback for an unattached press is the repo's
- * basename regardless. The strip's filter is `t.session === session`
- * (terminal.tsx), so the pane existed on the machine and the phone still
- * showed "Nothing open" over it.
+ * Left unset, `open` stayed null whenever the new window landed somewhere other
+ * than whichever session was already on screen — a phone's mirror is grouped
+ * with a desk session that does not share the repo's name, and the server's own
+ * fallback for an unattached press is the repo's basename regardless. The strip
+ * used to be filtered by a `session` the screen held, so the pane existed on
+ * the machine and the phone still showed "Nothing open" over it.
+ *
+ * The screen holds no session now: `open` is found among EVERY window by its
+ * pane id, and the strip is the project that window is in. So following it is
+ * `setActive`, and the bridge for a pane the poll has not listed yet. What this
+ * pins is that nobody puts a session filter back.
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -24,12 +28,18 @@ function between(source: string, from: string, to: string): string {
 }
 
 describe("onOpened", () => {
-  test("takes the session off the answer, not the one already on screen", () => {
+  test("goes to the pane it was told about and bridges it, with no session to keep in step", () => {
     const body = between(screen, "const onOpened = useCallback(", "}, [load]);");
-    expect(body).toContain("setSession(answer.session)");
-    // After the pane is set, so a poll racing this cannot filter it back out
-    // of the strip before the session it belongs to is the one being read.
-    expect(body.indexOf("setActive(answer.pane)")).toBeLessThan(body.indexOf("setSession(answer.session)"));
+    expect(body).toContain("setActive(answer.pane)");
+    expect(body).toContain("pendingOpen.current = { paneId: answer.pane, session: answer.session");
+    expect(body).not.toContain("setSession");
+  });
+
+  test("`open` is found among every window, not among a session's", () => {
+    const line = screen.split("\n").find((l) => l.includes("const open = all.find"));
+    expect(line, "the `open` computation moved").toBeTruthy();
+    expect(screen).not.toMatch(/t\.session === session\b/);
+    expect(screen).not.toContain("setSession(");
   });
 
   test("the type carries a session, not just a pane", () => {

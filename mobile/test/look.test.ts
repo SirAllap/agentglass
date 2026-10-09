@@ -10,10 +10,11 @@ import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
-  ACCENTS, BASE, PANE, PHONE_ACCENTS, accentFor, cssVars, inkOn, paletteFor, phonePalette, polarityOf, sanitizeLook,
+  ACCENTS, BASE, PANE, PHONE_ACCENTS, accentFor, cssVars, deskPalette, inkOn, paletteFor, phonePalette, polarityOf,
+  resolveLook, sanitizeLook,
   type AccentId, type Palette, type Polarity,
 } from "../../shared/palettes.ts";
-import { tint } from "../src/theme.ts";
+import { currentLook, tint } from "../src/theme.ts";
 
 const POLARITIES: Polarity[] = ["dark", "light"];
 const IDS = PHONE_ACCENTS.map((a) => a.id);
@@ -118,7 +119,7 @@ describe("the mode", () => {
       .toEqual({ mode: "light", accent: "violet" });
     // Half a record is still a choice somebody made: the good half survives.
     expect(sanitizeLook({ mode: "system", accent: "chartreuse" }, fallback))
-      .toEqual({ mode: "system", accent: "blue" });
+      .toEqual({ mode: "desk", accent: "blue" });
     expect(sanitizeLook({ mode: "sepia", accent: "rose" }, fallback))
       .toEqual({ mode: "dark", accent: "rose" });
     // And the shapes storage can actually hand back when it has been emptied,
@@ -284,5 +285,90 @@ describe("the phone's palette can be read", () => {
       expect(contrast(PANE[polarity].text3, PANE[polarity].bg2)).toBeGreaterThanOrEqual(4.5);
       expect(contrast(PANE[polarity].text3, PANE[polarity].bg)).toBeGreaterThanOrEqual(4.5);
     }
+  });
+});
+
+/*
+ * "Match the computer": the phone wears the desk's palette, and falls back to
+ * its own when the desk has nothing usable to say.
+ *
+ * WARM is the shape `GET /theme/current` answers for a warm light theme — a
+ * paper ground and a brown-black ink, none of it any phone palette.
+ */
+const WARM = {
+  bg: "#fdf6e3", bg2: "#eee8d5", bg3: "#e4dcc3", bg4: "#d8cfb0",
+  text: "#3b3a2f", text2: "#586e75", text3: "#657b83", text4: "#93a1a1",
+  border: "#e4dcc3", border2: "#d3c9a8",
+  primary: "#2aa198", primaryHover: "#1f7f78",
+  success: "#2f7d1f", warning: "#8a6500", error: "#c4392b", info: "#1f6fb5",
+};
+
+describe("match the computer", () => {
+  test("a warm desk paints the whole palette warm, and reads", () => {
+    const { palette, polarity } = resolveLook({ mode: "desk", accent: "teal" }, true, WARM);
+    expect(polarity).toBe("light");
+    // The phone is dark-by-OS here and the desk is light: the desk wins.
+    for (const key of ["bg", "bg2", "bg3", "bg4", "text", "text2", "border", "success", "error"] as const) {
+      expect(`${key}=${palette[key]}`).toBe(`${key}=${WARM[key]}`);
+    }
+    expect(contrast(palette.text, palette.bg)).toBeGreaterThan(7);
+    // The accent is still the owner's, and is walked until it reads on THESE grounds.
+    expect(contrast(palette.primary, palette.bg)).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(palette.primary, palette.bg2)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  test("a dark desk is dark whatever the OS says", () => {
+    const dark = { ...PANE.dark, bg: "#1e1e2e", bg2: "#313244", text: "#cdd6f4" };
+    for (const os of [true, false]) {
+      const { palette, polarity } = resolveLook({ mode: "desk", accent: "blue" }, os, dark);
+      expect(polarity).toBe("dark");
+      expect(palette.bg).toBe("#1e1e2e");
+    }
+  });
+
+  test("no theme, or one that is not a palette, is phone mode", () => {
+    // `{theme: null}` is what a computer with nothing picked answers; the rest
+    // are the shapes a half-written or hostile answer takes.
+    const phone = (os: boolean) => phonePalette(os ? "dark" : "light", "teal");
+    for (const os of [true, false]) {
+      for (const vars of [null, undefined, 7, "light", [], {}, { bg: "#fff" }, { bg: "url(x)", text: "red" }]) {
+        const r = resolveLook({ mode: "desk", accent: "teal" }, os, vars);
+        expect(r.palette).toEqual(phone(os));
+        expect(r.polarity).toBe(os ? "dark" : "light");
+      }
+    }
+  });
+
+  test("a colour that is not a plain hex falls back for that slot only", () => {
+    const got = deskPalette({ ...WARM, border: "javascript:1", info: 5 }, "teal");
+    expect(got).not.toBeNull();
+    expect(got!.palette.border).toBe(PANE.light.border);
+    expect(got!.palette.info).toBe(PANE.light.info);
+    expect(got!.palette.bg).toBe(WARM.bg);
+  });
+
+  test("Light and Dark are pins the desk never overrules", () => {
+    expect(resolveLook({ mode: "dark", accent: "teal" }, false, WARM).palette).toEqual(phonePalette("dark", "teal"));
+    expect(resolveLook({ mode: "light", accent: "teal" }, true, WARM).palette).toEqual(phonePalette("light", "teal"));
+    // System still follows the OS and ignores the desk.
+    expect(resolveLook({ mode: "system", accent: "teal" }, true, WARM).palette).toEqual(phonePalette("dark", "teal"));
+  });
+
+  test("it is what a new install gets, and what was stored stays", () => {
+    // Nothing is stored in a test process, so this is the shipped look.
+    expect(currentLook().mode).toBe("desk");
+    const fallback = { mode: "desk", accent: "teal" } as const;
+    expect(sanitizeLook({ mode: "dark", accent: "rose" }, fallback)).toEqual({ mode: "dark", accent: "rose" });
+    expect(sanitizeLook({ mode: "light" }, fallback)).toEqual({ mode: "light", accent: "teal" });
+    expect(sanitizeLook({ mode: "desk", accent: "blue" }, fallback)).toEqual({ mode: "desk", accent: "blue" });
+  });
+});
+
+describe("the desk does not outlive its computer", () => {
+  test("forgetting a computer drops its theme before the next one is paired", () => {
+    const src = readFileSync(join(import.meta.dir, "../src/state/host-context.tsx"), "utf8");
+    const at = src.indexOf("forget: async");
+    expect(at).toBeGreaterThan(-1);
+    expect(src.slice(at, src.indexOf("},", at))).toContain("setDeskTheme(null)");
   });
 });

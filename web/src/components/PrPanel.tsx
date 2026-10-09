@@ -138,6 +138,7 @@ import { CiMetrics } from "./prs/CiMetrics.tsx";
 import { FileRail } from "./FileRail.tsx";
 import { Optimistic, type Sent, reactionPatch, bodyPatch, resolvedPatch, labelsPatch, assigneesPatch, reviewersPatch, milestonePatch, draftPatch, titlePatch, statePatch, autoMergePatch } from "../lib/prOptimistic.ts";
 import { prTimeline } from "../lib/prTimeline.ts";
+import { eventParts } from "../../../shared/prEventLine.ts";
 
 /**
  * The second half of a merge, named once.
@@ -11259,32 +11260,17 @@ const EVENT_TINT: Record<string, string> = {
 
 /** One non-comment event, written the way GitHub words it. */
 function TimelineEvent({ e }: { e: PrEvent }) {
-  const who = <b style={{ color: "var(--text)" }}>{e.actor || "somebody"}</b>;
-  const mono = (t: string) => <code style={{ ...CODE_FONT_STYLE, color: "var(--text)" }}>{t}</code>;
-  const said = (() => {
-    switch (e.kind) {
-      case "force-push": return <>{who} force-pushed {e.detail ? mono(e.detail) : null}</>;
-      case "renamed": return <>{who} changed the title to “{e.detail}”</>;
-      case "labeled": return <>{who} added the <Chip text={e.detail || ""} tint={e.tint ? `#${e.tint}` : "var(--primary)"} /> label</>;
-      case "unlabeled": return <>{who} removed the <Chip text={e.detail || ""} tint="var(--text3)" /> label</>;
-      case "assigned": return <>{who} assigned <b style={{ color: "var(--text2)" }}>{e.detail}</b></>;
-      case "unassigned": return <>{who} unassigned <b style={{ color: "var(--text2)" }}>{e.detail}</b></>;
-      case "review-requested": return <>{who} requested a review from <b style={{ color: "var(--text2)" }}>{e.detail}</b></>;
-      case "review-request-removed": return <>{who} withdrew the review request for {e.detail}</>;
-      case "ready-for-review": return <>{who} marked this ready for review</>;
-      case "convert-to-draft": return <>{who} converted this to a draft</>;
-      case "merged": return <>{who} merged this into {mono(e.detail || "")}</>;
-      case "closed": return <>{who} closed this</>;
-      case "reopened": return <>{who} reopened this</>;
-      case "cross-referenced": return <>{who} mentioned this in {e.detail}</>;
-      case "milestoned": return <>{who} added this to the {e.detail} milestone</>;
-      case "demilestoned": return <>{who} removed this from the {e.detail} milestone</>;
-      case "head-ref-deleted": return <>{who} deleted the {mono(e.detail || "")} branch</>;
-      case "auto-merge-enabled": return <>{who} armed auto-merge</>;
-      case "auto-merge-disabled": return <>{who} cancelled auto-merge{e.detail ? ` (${e.detail})` : ""}</>;
-      default: return <>{who} did something</>;
+  /* The words are shared/prEventLine.ts, which the phone reads too; this only
+     says how each kind of part is drawn. */
+  const said = eventParts(e).map((p, i) => {
+    switch (p.as) {
+      case "who": return <b key={i} style={{ color: "var(--text)" }}>{p.text}</b>;
+      case "strong": return <b key={i} style={{ color: "var(--text2)" }}>{p.text}</b>;
+      case "code": return <code key={i} style={{ ...CODE_FONT_STYLE, color: "var(--text)" }}>{p.text}</code>;
+      case "label": return <Chip key={i} text={p.text} tint={e.kind === "unlabeled" ? "var(--text3)" : p.tint ? `#${p.tint}` : "var(--primary)"} />;
+      default: return <Fragment key={i}>{p.text}</Fragment>;
     }
-  })();
+  });
   const inner = <span>{said} <span style={{ color: "var(--text3)" }}>· {ago(e.at)}</span></span>;
   return (
     <div className="agx-tiny">

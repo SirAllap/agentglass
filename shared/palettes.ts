@@ -39,8 +39,9 @@ export interface Palette {
 /** What a surface actually is, once "system" has been asked. */
 export type Polarity = "dark" | "light";
 
-/** What somebody chose. "system" is a question, not a palette — see polarityOf. */
-export type ThemeMode = "dark" | "light" | "system";
+/** What somebody chose. "system" and "desk" are questions, not palettes — see
+ *  polarityOf and resolveLook. */
+export type ThemeMode = "desk" | "dark" | "light" | "system";
 
 export const BASE: Record<Polarity, Palette> = {
   dark: {
@@ -221,6 +222,59 @@ export function polarityOf(mode: ThemeMode, systemIsDark: boolean): Polarity {
   return systemIsDark ? "dark" : "light";
 }
 
+const SIX_HEX = /^#[0-9a-fA-F]{6}$/;
+const THREE_HEX = /^#[0-9a-fA-F]{3}$/;
+
+/**
+ * The computer's theme as a palette, or null when it cannot be one.
+ *
+ * `vars` is whatever `GET /theme/current` answered, so nothing in it is
+ * trusted: a key that is not a plain hex colour falls back to PANE's own slot
+ * for that surface, and an answer without a usable ground and ink is no theme at
+ * all. The surface is decided by the theme's own ground against its own ink —
+ * a dark theme is the one whose text is lighter than its background — because
+ * the server sends no polarity, and a name like "Midnight Purple Light" is not
+ * something to parse.
+ */
+export function deskPalette(vars: unknown, accent: AccentId): { palette: Palette; polarity: Polarity } | null {
+  if (!vars || typeof vars !== "object") return null;
+  const given = vars as Record<string, unknown>;
+  const read = (key: keyof Palette): string | null => {
+    const v = given[key];
+    if (typeof v !== "string") return null;
+    const t = v.trim();
+    if (SIX_HEX.test(t)) return t.toLowerCase();
+    if (THREE_HEX.test(t)) return `#${[...t.slice(1)].map((c) => c + c).join("")}`.toLowerCase();
+    return null;
+  };
+  const bg = read("bg");
+  const text = read("text");
+  if (!bg || !text) return null;
+  const polarity: Polarity = luminance(bg) < luminance(text) ? "dark" : "light";
+  const base = { ...PANE[polarity] };
+  for (const key of Object.keys(base) as (keyof Palette)[]) base[key] = read(key) ?? base[key];
+  return { palette: readable(paletteFor(polarity, accent, { dark: base, light: base }), polarity), polarity };
+}
+
+/**
+ * What the phone paints, from what was chosen.
+ *
+ * Desk asks the computer and, when it has nothing usable to say — never
+ * reached, never had a theme picked, or sent something that is not a palette —
+ * is the phone's own system-following look, which is what an app with no desk
+ * to follow has to be. Dark and Light are pins and never look at the desk.
+ */
+export function resolveLook(
+  look: Look, systemIsDark: boolean, deskVars: unknown,
+): { palette: Palette; polarity: Polarity } {
+  if (look.mode === "desk") {
+    const desk = deskPalette(deskVars, look.accent);
+    if (desk) return desk;
+  }
+  const polarity = polarityOf(look.mode, systemIsDark);
+  return { palette: phonePalette(polarity, look.accent), polarity };
+}
+
 /** A chosen look: what to resolve, and what to paint the live parts with. */
 export interface Look { mode: ThemeMode; accent: AccentId }
 
@@ -239,7 +293,10 @@ export function sanitizeLook(raw: unknown, fallback: Look): Look {
   const mode = saved.mode;
   const accent = saved.accent;
   return {
-    mode: mode === "dark" || mode === "light" || mode === "system" ? mode : fallback.mode,
+    // "system" was a mode before "desk" existed and has no card any more; a
+    // desk with nothing to follow already IS the OS-following look, so a phone
+    // that stored it lands on the same colours and can now choose again.
+    mode: mode === "system" ? "desk" : mode === "desk" || mode === "dark" || mode === "light" ? mode : fallback.mode,
     accent: PHONE_ACCENTS.some((a) => a.id === accent) ? accent as AccentId : fallback.accent,
   };
 }
@@ -335,7 +392,13 @@ function mix(hex: string, to: string, amount: number): string {
  * 4.5:1 under its own ink as a fill. Neutral already is — it is the ink.
  */
 export function phonePalette(polarity: Polarity, accent: AccentId): Palette {
-  const p = paletteFor(polarity, accent, PANE);
+  return readable(paletteFor(polarity, accent, PANE), polarity);
+}
+
+/** `p` with its primary walked to a shade that reads on ITS grounds and under
+ *  its own ink — see phonePalette. Shared with the desk's palette, whose
+ *  grounds are not PANE's and whose accent needs the same walk. */
+function readable(p: Palette, polarity: Polarity): Palette {
   const reads = (c: string): boolean =>
     contrastRatio(c, p.bg) >= 4.5 && contrastRatio(c, p.bg2) >= 4.5 && contrastRatio(inkOn(c), c) >= 4.5;
   let primary = p.primary;

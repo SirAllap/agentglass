@@ -46,7 +46,7 @@ export function forgetTracksWork(): void { held = null; inflight = null; }
  * because `tracksWork` and `taskProvider` both already treat "no answer" as
  * unknown and do the right thing with it.
  */
-function useProviders(host: Host | null): ProviderStatus[] | null | undefined {
+export function useProviders(host: Host | null): ProviderStatus[] | null | undefined {
   const origin = host?.origin ?? "";
   const [value, setValue] = useState<ProviderStatus[] | null | undefined>(() => fresh(origin));
 

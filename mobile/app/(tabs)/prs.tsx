@@ -13,30 +13,44 @@
  * list whose bottom nobody scrolls to. Picking a chip reaches any of them.
  *
  * ── the row ──────────────────────────────────────────────────────────────
- * Three lines, each answering one of the questions that decide whether it is
- * opened: the title beside a mark that says what CI thinks; the review and
- * the checks as chips, with the size; and whose it is, how old, and its
- * number. The words and tones are decided in model/prLook.ts.
+ * A card (src/review/PrCard.tsx): whose move it is, what CI thinks, what it is,
+ * and the tracker card it belongs to. Whole card is the touch target. The words
+ * and choices are decided in model/prCard.ts.
+ *
+ * ── paging ───────────────────────────────────────────────────────────────
+ * A page is twenty rows a repository, and the next one is a button, not a
+ * scroll that fires: a list that grows under the thumb loses its place, and each
+ * page is a GitHub read the person did not choose to spend.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FlatList, Pressable, RefreshControl, Text, View } from "react-native";
+import { FlatList, RefreshControl, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import type { GitRepoRef, PrSummary } from "../../../shared/types.ts";
-import { prRepoKey, unreadOf, unreadTitle, type Unread } from "../../../shared/prUnread.ts";
+import { prRepoKey, unreadOf, type Unread } from "../../../shared/prUnread.ts";
 import { ask, askCached } from "../../src/lib/api.ts";
 import { useAgentglass, PR_READ_TTL_MS } from "../../src/state/host-context.tsx";
 import { useReloadOnTick, useTalkTick } from "../../src/state/pr-talk.ts";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
 import { useSeenMarks } from "../../src/state/read-marks.ts";
-import { Card, Chip, CommandLine, Field, FilterChips, GroupTitle, Note, Segmented, groupEdge } from "../../src/ui.tsx";
+import { Btn, Card, CommandLine, FilterChips, GroupTitle, Note, Segmented } from "../../src/ui.tsx";
+import { PrCard } from "../../src/review/PrCard.tsx";
+import { PrActiveFilters } from "../../src/review/PrActiveFilters.tsx";
+import { PrFilterSheet } from "../../src/review/PrFilterSheet.tsx";
+import { PrSearchRow } from "../../src/review/PrSearchRow.tsx";
+import { forgetPrCards, usePrCard } from "../../src/state/pr-cards.ts";
+import { useTracksWork } from "../../src/state/use-tracks-work.ts";
+import { allCount } from "../../src/model/prCard.ts";
 import { mainCheckouts } from "../../src/model/prRows.ts";
 import { sumPrCounts, type PrViewCounts } from "../../src/model/prCounts.ts";
-import { byState, stateQuery, STATE_LABEL, STATE_VIEWS, type StateView } from "../../src/model/prState.ts";
-import { prTextMatch } from "../../../shared/prSearch.ts";
-import { ciLook, flatten, reviewLook, type CiMark, type RepoGroup } from "../../src/model/prLook.ts";
-import { Glyph, type GlyphName } from "../../src/nav/glyphs.tsx";
-import { since } from "../../src/lib/dates.ts";
-import { C, MONO, SPACE, T } from "../../src/theme.ts";
+import { byState, stateQuery, STATE_LABEL, type StateView } from "../../src/model/prState.ts";
+import {
+  activeChips, effectiveState, matchesFilters, NO_FILTERS, removeChip, withoutCard, type PrFilters,
+} from "../../src/model/prFilters.ts";
+import { listPath as prListPath, withLocalMatches } from "../../src/model/prSearch.ts";
+import { flatten, type RepoGroup } from "../../src/model/prLook.ts";
+import { mergeFresh, nextPageCount } from "../../src/model/prPaging.ts";
+import type { Host } from "../../src/lib/host.ts";
+import { C, SPACE, T } from "../../src/theme.ts";
 
 type Filter = "mine" | "review" | "all";
 
@@ -52,6 +66,9 @@ const FILTER_LABEL: Record<Filter, string> = {
 const REPO_CAP = 8;
 const ALL = "*";
 
+/** How long typing pauses before the words go to the server. */
+const SEARCH_DEBOUNCE_MS = 400;
+
 /** What `/prs/list` answers with.
  *
  *  Declared here rather than imported because the server's copy lives in
@@ -64,78 +81,36 @@ interface PrList {
   needsAuth?: boolean;
   loading?: boolean;
   total?: number;
+  hasNext?: boolean;
+  cursor?: string | null;
+  pageSize?: number;
 }
+
+/** A repository's rows, and where its next page starts. */
+interface PrGroup extends RepoGroup<PrSummary> { total?: number; hasNext?: boolean; cursor?: string | null; pageSize?: number }
+
+/** What the button says when the server did not say a page size. */
+const PAGE_DEFAULT = 20;
 
 // PrViewCounts and how repositories' counts add up live in
 // src/model/prCounts.ts — the one field this screen reads is named after a
 // filter, which is what keeps the two in step: a rename on either side stops
 // matching `FILTERS`.
 
-const MARK: Record<CiMark, { glyph: GlyphName; ink: () => string; says: string }> = {
-  fail: { glyph: "x_circle", ink: () => C.error, says: "Checks failed" },
-  run: { glyph: "run_circle", ink: () => C.warning, says: "Checks running" },
-  ok: { glyph: "ok_circle", ink: () => C.success, says: "Checks passed" },
-  draft: { glyph: "draft_circle", ink: () => C.text3, says: "Draft" },
-  none: { glyph: "circle", ink: () => C.text4, says: "No checks" },
-  loading: { glyph: "circle", ink: () => C.text4, says: "Checks not read yet" },
-};
-
-function Row({ pr, now, forMe, unread, onOpen }: {
+/** One row: its card line is looked up here so each row asks for its own. */
+function Item({ host, pr, tracked, now, forMe, unread, query, onOpen }: {
+  host: Host;
   pr: PrSummary;
+  tracked: boolean | null;
   now: number;
   forMe: boolean;
   /** Something said on it since this person last looked — see shared/prUnread.ts. */
   unread: Unread | null;
+  query: string;
   onOpen: () => void;
 }): React.ReactNode {
-  const ci = ciLook(pr);
-  const review = reviewLook(pr, forMe);
-  const mark = MARK[ci.mark];
-  const gone = pr.state === "OPEN" ? null : pr.state === "MERGED" ? "Merged" : "Closed";
-  return (
-    <Pressable
-      onPress={onOpen}
-      accessibilityRole="button"
-      accessibilityLabel={`${pr.title}. ${gone ? `${gone}. ` : ""}${mark.says}${ci.label ? `, ${ci.label}` : ""}. ${review?.label ?? ""}. #${pr.number} by ${pr.author}${unread ? `. ${unreadTitle(unread)}` : ""}`}
-    >
-      {({ pressed }) => (
-        /* Padding, not a card. The surface and the border belong to the group
-           this row sits in — see groupEdge in src/ui.tsx. */
-        <View style={{
-          flexDirection: "row", gap: SPACE.md, paddingHorizontal: SPACE.lg, paddingVertical: 14,
-          backgroundColor: pressed ? C.bg3 : "transparent",
-        }}>
-          <View style={{ paddingTop: 1 }}><Glyph name={mark.glyph} color={mark.ink()} size={20} weight={1.9} /></View>
-          <View style={{ flex: 1, minWidth: 0, gap: 6 }}>
-            <Text numberOfLines={2} style={{ color: C.text, fontSize: 15, fontWeight: "500", lineHeight: 20 }}>
-              {pr.title}
-            </Text>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-              {/* First: the one chip that says "go and look", where the rest
-                  describe the state. */}
-              {unread ? <Chip label={`${unread.count} new`} tone="accent" /> : null}
-              {/* An open one says nothing: it is the default, and the list is
-                  mostly it. A merged or closed one has to say so, or under
-                  "Any" it reads as one still waiting on somebody. */}
-              {gone ? <Chip label={gone} tone={gone === "Merged" ? "accent" : "neutral"} /> : null}
-              {review ? <Chip label={review.label} tone={review.tone} /> : null}
-              {ci.label ? <Chip label={ci.label} tone={ci.tone} /> : null}
-              <View style={{ flex: 1 }} />
-              {/* Size, because "is this ten minutes or an afternoon" is the other
-                  thing that decides whether you open it now. */}
-              <Text style={{ fontSize: T.small, fontFamily: MONO }}>
-                <Text style={{ color: C.success }}>+{pr.additions}</Text>
-                <Text style={{ color: C.error }}> −{pr.deletions}</Text>
-              </Text>
-            </View>
-            <Text numberOfLines={1} style={{ color: C.text3, fontSize: T.small }}>
-              #{pr.number} · {pr.author} · {since(pr.updatedAt, now)}
-            </Text>
-          </View>
-        </View>
-      )}
-    </Pressable>
-  );
+  const { state, find } = usePrCard(host, pr, tracked);
+  return <PrCard pr={pr} now={now} forMe={forMe} unread={unread} card={state} query={query} onFind={find} onOpen={onOpen} />;
 }
 
 export default function PrsScreen(): React.ReactNode {
@@ -146,11 +121,30 @@ export default function PrsScreen(): React.ReactNode {
   /** A repository's root, or ALL. */
   const [pick, setPick] = useState<string>(ALL);
   const [filter, setFilter] = useState<Filter>("review");
-  /** Open unless asked: the list answers "what is waiting", and a closed
-   *  pull request is a thing you go looking for, with the chips or the box. */
-  const [view, setView] = useState<StateView>("open");
+  /** What the sheet narrows by. Its state is Open unless asked — the list
+   *  answers "what is waiting", and a closed pull request is a thing you go
+   *  looking for — and Any while searching. */
+  const [filters, setFilters] = useState<PrFilters>(NO_FILTERS);
+  const [sheet, setSheet] = useState(false);
   const [text, setText] = useState("");
-  const [groups, setGroups] = useState<RepoGroup<PrSummary>[] | null>(null);
+  /** What was typed, once typing paused: the words the server is asked. */
+  const [query, setQuery] = useState("");
+  useEffect(() => {
+    const timer = setTimeout(() => setQuery(text.trim()), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [text]);
+  const searching = query.length > 0;
+  /** The state the tab's own list is read in, and the state shown: a search
+   *  looks at every state unless one was chosen. */
+  const browseView = effectiveState(filters, false);
+  const view = effectiveState(filters, searching);
+  const [groups, setGroups] = useState<PrGroup[] | null>(null);
+  const [more, setMore] = useState(false);
+  /** Why the last "Load more" brought nothing, when it failed. */
+  const [moreError, setMoreError] = useState<string | null>(null);
+  /** The "All" tab's number — the server sends none, see allCount. */
+  const [allKnown, setAllKnown] = useState<number | null>(null);
+  const tracked = useTracksWork(host);
   const [failed, setFailed] = useState<{ error: string; needsAuth: boolean } | null>(null);
   const [loading, setLoading] = useState(false);
   /**
@@ -202,16 +196,29 @@ export default function PrsScreen(): React.ReactNode {
      whatever order GitHub does: without this, a slow answer to the filter you
      left could land after the one you are on and paint the wrong list. */
   const asked = useRef(0);
+  /** One place spells the question, first page or a later one; model/prSearch.ts
+   *  is where a search stops being the tab's list. */
+  const listPath = useCallback((root: string, after?: string): string =>
+    prListPath({ root, tab: filter, state: view, text: query, after }),
+    [filter, view, query]);
   /* `force`: something changed (a refresh, a live tick, the server still
      * loading), so ask the computer. Opening the tab or moving a filter reads
      * what the queue's own pass just read, which is the same URLs. */
   const load = useCallback(async (force = false): Promise<void> => {
     if (!host || !shown.length) return;
     const mine = ++asked.current;
-    const answers = await Promise.all(shown.map(async (repo) => ({
-      repo,
-      answer: await askCached<PrList>(host, `/prs/list?root=${encodeURIComponent(repo.root)}&filter=${filter}&state=${stateQuery(view)}`, PR_READ_TTL_MS, force),
-    })));
+    const answers = await Promise.all(shown.map(async (repo) => {
+      const [answer, browsed] = await Promise.all([
+        askCached<PrList>(host, listPath(repo.root), PR_READ_TTL_MS, force),
+        /* What a search cannot see in GitHub's own text — number, author, branch —
+           is matched on the tab's own list, which is the read the screen made
+           before a word was typed, so it is almost always in the cache. */
+        query
+          ? askCached<PrList>(host, prListPath({ root: repo.root, tab: filter, state: browseView, text: "" }), PR_READ_TTL_MS, force)
+          : null,
+      ]);
+      return { repo, answer, browsed };
+    }));
     if (mine !== asked.current) return;
     const good = answers.filter((a) => a.answer.ok && a.answer.value.ok);
     // Said only when NOTHING answered: one repository without a GitHub remote
@@ -227,14 +234,50 @@ export default function PrsScreen(): React.ReactNode {
     }
     setFailed(null);
     setLoading(good.some((a) => a.answer.ok && a.answer.value.loading));
-    setGroups(good.map(({ repo, answer }) => ({
+    // A refresh keeps the pages "Load more" appended (see model/prPaging.ts).
+    setGroups((was) => mergeFresh<PrSummary, PrGroup>(was, good.map(({ repo, answer, browsed }) => ({
       root: repo.root,
       name: repo.name,
-      items: answer.ok && Array.isArray(answer.value.prs) ? answer.value.prs : [],
-    })));
-  }, [host, shown, filter, view]);
+      items: withLocalMatches(
+        answer.ok && Array.isArray(answer.value.prs) ? answer.value.prs : [],
+        browsed?.ok && Array.isArray(browsed.value.prs) ? browsed.value.prs : [],
+        query,
+      ),
+      total: answer.ok ? answer.value.total : undefined,
+      hasNext: answer.ok ? !!answer.value.hasNext : false,
+      cursor: answer.ok ? answer.value.cursor : null,
+      pageSize: answer.ok ? answer.value.pageSize : undefined,
+    }))));
+  }, [host, shown, filter, view, browseView, query, listPath]);
 
-  useEffect(() => { setGroups(null); void load(); }, [load]);
+  useEffect(() => { setGroups(null); setMoreError(null); void load(); }, [load]);
+
+  /* The next page of every repository that has one, appended. Same guard as
+     `load`: a read started after this one (a new filter, a refresh) makes these
+     rows belong to a list that is gone. */
+  const loadMore = useCallback(async (): Promise<void> => {
+    if (!host || !groups) return;
+    const mine = asked.current;
+    setMore(true);
+    let failure: string | null = null;
+    const next = await Promise.all(groups.map(async (g) => {
+      if (!g.hasNext || !g.cursor) return g;
+      const a = await ask<PrList>(host, listPath(g.root, g.cursor));
+      if (!a.ok || !a.value.ok) {
+        failure ??= a.ok ? a.value.error ?? "GitHub did not answer" : a.error;
+        return g;
+      }
+      // The same pull request can move between pages while it is read.
+      const have = new Set(g.items.map((p) => p.number));
+      return {
+        ...g,
+        items: [...g.items, ...(Array.isArray(a.value.prs) ? a.value.prs : []).filter((p) => !have.has(p.number))],
+        total: a.value.total ?? g.total, hasNext: !!a.value.hasNext, cursor: a.value.cursor ?? null,
+      };
+    }));
+    if (mine === asked.current) { setGroups(next); setMoreError(failure); }
+    setMore(false);
+  }, [host, groups, listPath]);
 
   // A live comment or review landed on one of these pull requests.
   const loadFresh = useCallback(() => load(true), [load]);
@@ -245,15 +288,15 @@ export default function PrsScreen(): React.ReactNode {
    *  to an older ask is still out. */
   const countsAsked = useRef(0);
   const loadCounts = useCallback(async (): Promise<void> => {
-    if (!host || !shown.length || view === "merged") return;
+    if (!host || !shown.length || browseView === "merged") return;
     const mine = ++countsAsked.current;
     const answers = await Promise.all(shown.map((r) =>
-      ask<{ ok: boolean; counts?: PrViewCounts }>(host, `/prs/counts?root=${encodeURIComponent(r.root)}&state=${stateQuery(view)}`)));
+      ask<{ ok: boolean; counts?: PrViewCounts }>(host, `/prs/counts?root=${encodeURIComponent(r.root)}&state=${stateQuery(browseView)}`)));
     if (mine !== countsAsked.current) return;
     const got = answers.flatMap((a) => (a.ok && a.value.ok && a.value.counts ? [a.value.counts] : []));
     const sum = sumPrCounts(got);
     if (sum) setCounts(sum);
-  }, [host, shown, view]);
+  }, [host, shown, browseView]);
 
   // Counts follow what is shown and not the filter — a new repo set or state
   // split really is a different question, so the row goes quiet while the
@@ -266,13 +309,17 @@ export default function PrsScreen(): React.ReactNode {
     if (!host || !shown.length) return;
     setCounts(null);
     void loadCounts();
-  }, [host, shown, view, loadCounts]);
+  }, [host, shown, browseView, loadCounts]);
 
   // The same signals `load` re-reads the list on. Re-asks the SAME question,
   // so it must not flash to null while it waits — the numbers on screen are
   // still true until told otherwise, and a background refresh that blanked
   // them for a second was worse than the stale ones it was fixing.
   useReloadOnTick(useTalkTick(), loadCounts);
+
+  useEffect(() => { setAllKnown(null); }, [shown, browseView]);
+  // A search's rows are not the tab's, so they are not its count.
+  useEffect(() => { if (filter === "all" && groups && !searching) setAllKnown(allCount(groups)); }, [filter, groups, searching]);
 
   // The check rollup lands on a second pass, so one re-read a moment later is
   // the difference between "checks…" forever and the row settling.
@@ -284,24 +331,45 @@ export default function PrsScreen(): React.ReactNode {
 
   const onRefresh = useCallback((): void => {
     setPulling(true);
+    forgetPrCards(host);
     void loadCounts();
     void load(true).finally(() => setPulling(false));
-  }, [load, loadCounts]);
+  }, [host, load, loadCounts]);
 
-  /* The state split and the search are both applied here, on what the server
-     sent, so typing never asks GitHub anything. A repository with nothing left
-     loses its heading rather than showing an empty one. */
-  const narrowed = useMemo(() => (groups ?? []).map((g) => ({
-    ...g, items: byState(g.items, view).filter((p) => prTextMatch(p, text)),
-  })).filter((g) => g.items.length), [groups, view, text]);
+  /* The state split and the sheet's filters are applied here, on what the
+     server sent, so narrowing never asks GitHub anything. A repository with
+     nothing left loses its heading rather than showing an empty one. */
+  const inState = useMemo(() => (groups ?? []).map((g) => ({ ...g, items: byState(g.items, view) })), [groups, view]);
+  const narrowed = useMemo(() => inState.map((g) => ({
+    ...g, items: g.items.filter((p) => matchesFilters(p, filters)),
+  })).filter((g) => g.items.length), [inState, filters]);
   const rows = useMemo(() => flatten(narrowed), [narrowed]);
-  const searching = text.trim().length > 0;
+  const loadedRows = useMemo(() => (groups ?? []).flatMap((g) => g.items), [groups]);
+  const activeFilters = useMemo(() => activeChips(filters, (s) => STATE_LABEL[s]), [filters]);
+  const shownRows = rows.filter((r) => !("heading" in r)).length;
+  const inStateRows = inState.reduce((n, g) => n + g.items.length, 0);
+  /* What a card filter leaves out: the rows with no card that every OTHER
+     facet would keep. Zero unless a card filter is on without "No card". */
+  const hiddenNoCard = useMemo(() => (
+    filters.cardStatus.length && !filters.noCard
+      ? withoutCard(inState.flatMap((g) => g.items).filter((p) => matchesFilters(p, { ...filters, noCard: true })))
+      : 0
+  ), [inState, filters]);
   /** "No merged pull request…" / "No pull request…" */
   const kind = view === "all" ? "" : `${view} `;
-  const isItem = (r: (typeof rows)[number] | undefined): boolean => !!r && "item" in r;
+  const hasMore = (groups ?? []).some((g) => g.hasNext);
+  const pageSize = (groups ?? []).find((g) => g.pageSize)?.pageSize ?? PAGE_DEFAULT;
   const now = Date.now();
 
   if (!host) return null;
+
+  const repoName = pick === ALL ? "all repositories" : (repos ?? []).find((r) => r.root === pick)?.name ?? "this repository";
+  /** The repositories' contributors, for the sheet's people list. */
+  const moreAuthors = async (): Promise<string[]> => {
+    const answers = await Promise.all(shown.map((r) =>
+      ask<{ ok: boolean; data?: { authors?: string[] } }>(host, `/prs/facets?root=${encodeURIComponent(r.root)}`)));
+    return [...new Set(answers.flatMap((a) => (a.ok && a.value.ok ? a.value.data?.authors ?? [] : [])))];
+  };
 
   const chips = [
     { id: ALL, label: "All repos" },
@@ -311,22 +379,49 @@ export default function PrsScreen(): React.ReactNode {
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
       <View style={{ paddingHorizontal: SPACE.lg, paddingTop: SPACE.xs, gap: SPACE.sm, paddingBottom: SPACE.md }}>
-        <Field value={text} onChangeText={setText} placeholder="Search title, #number, author, branch" />
-        <Segmented
-          value={filter}
-          onChange={setFilter}
-          options={FILTERS.map((id) => ({
-            id,
-            label: FILTER_LABEL[id],
-            count: counts && id !== "all" ? counts[id] : undefined,
-          }))}
-        />
+        <PrSearchRow value={text} onChange={setText} active={activeFilters.length} onFilters={() => setSheet(true)} />
+        {/* A search leaves the tabs: it looks through the whole repository, and
+            a tab still lit above a list that ignores it would say otherwise. */}
+        {searching ? (
+          <View style={{ minHeight: 48, justifyContent: "center" }}>
+            <Note>
+              Searching all of {repoName} · title, description, #number, author, branch ·{" "}
+              {groups === null ? "…" : `${shownRows}${hasMore ? "+" : ""} result${shownRows === 1 && !hasMore ? "" : "s"}`}
+            </Note>
+          </View>
+        ) : (
+          <Segmented
+            value={filter}
+            onChange={setFilter}
+            options={FILTERS.map((id) => ({
+              id,
+              label: FILTER_LABEL[id],
+              count: id === "all" ? allKnown ?? undefined : counts?.[id],
+            }))}
+          />
+        )}
       </View>
-      <FilterChips
-        label="State"
-        options={STATE_VIEWS.map((id) => ({ id, label: STATE_LABEL[id] }))}
-        value={view}
-        onChange={setView}
+      <PrActiveFilters
+        chips={activeFilters}
+        onRemove={(id) => setFilters((f) => removeChip(f, id))}
+        onClear={() => setFilters(NO_FILTERS)}
+        shown={shownRows}
+        total={inStateRows}
+        more={hasMore}
+        hidden={hiddenNoCard}
+        onShowHidden={() => setFilters((f) => ({ ...f, noCard: true }))}
+      />
+      <PrFilterSheet
+        open={sheet}
+        onClose={() => setSheet(false)}
+        scope={searching ? `search · ${repoName}` : `${FILTER_LABEL[filter]} · ${repoName}`}
+        filters={filters}
+        onApply={setFilters}
+        rows={loadedRows}
+        loaded={view}
+        searching={searching}
+        hasMore={hasMore}
+        moreAuthors={moreAuthors}
       />
       {/* Only with more than one repository: a single chip is a label. */}
       {(repos?.length ?? 0) > 1 ? <FilterChips label="Repository" options={chips} value={pick} onChange={setPick} /> : null}
@@ -335,15 +430,13 @@ export default function PrsScreen(): React.ReactNode {
         data={rows}
         keyboardShouldPersistTaps="handled"
         keyExtractor={(row) => ("heading" in row ? `h:${row.heading}` : `${row.root}#${row.item.number}`)}
-        /* No gap between rows: they are one card divided by hairlines, not a
-           stack of cards. See groupEdge in src/ui.tsx. */
         contentContainerStyle={{ padding: SPACE.lg, paddingTop: SPACE.sm, paddingBottom: SPACE.xl }}
         refreshControl={<RefreshControl refreshing={pulling} onRefresh={onRefresh} tintColor={C.text3} />}
         ListEmptyComponent={
           groups === null && !failed ? null : (
             <Card>
               <Text style={{ color: failed ? C.error : C.text, fontSize: T.body, fontWeight: "600" }}>
-                {failed ? "Can't ask GitHub" : searching ? "No match" : view === "open" ? "Nothing open" : `Nothing ${view === "all" ? "here" : view}`}
+                {failed ? "Can't ask GitHub" : searching || activeFilters.length ? "No match" : view === "open" ? "Nothing open" : `Nothing ${view === "all" ? "here" : view}`}
               </Text>
               <Note tone={failed ? "bad" : "quiet"}>
                 {failed
@@ -351,8 +444,8 @@ export default function PrsScreen(): React.ReactNode {
                     ? "GitHub has not been signed in to on the computer. Run this there:"
                     : failed.error)
                   : searching
-                    ? `No ${kind}pull request matches “${text.trim()}”${pick === ALL ? "" : " in this repository"}.${view === "all" ? "" : " Try Any, which includes the merged and the closed."}`
-                    : filter === "review" && view === "open"
+                    ? `No ${kind}pull request matches “${query}”${pick === ALL ? "" : " in this repository"}.${view === "all" ? "" : " Try State: Any, which includes the merged and the closed."}`
+                    : filter === "review" && view === "open" && !activeFilters.length
                       ? "Nobody is waiting on your review."
                       : `No ${kind}pull request matches this filter${pick === ALL ? "" : " in this repository"}.`}
               </Note>
@@ -363,24 +456,37 @@ export default function PrsScreen(): React.ReactNode {
             </Card>
           )
         }
-        renderItem={({ item: row, index }) => (
+        ListFooterComponent={hasMore ? (
+          <View style={{ gap: SPACE.sm }}>
+            {moreError ? <Note tone="bad">The next page did not load: {moreError}. Press the button to try again.</Note> : null}
+            <Btn
+              label={`Load ${nextPageCount(groups ?? [], pageSize)} more`}
+              onPress={() => { void loadMore(); }}
+              busy={more}
+              style={{ minHeight: 48, marginTop: SPACE.xs }}
+            />
+          </View>
+        ) : null}
+        ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
+        renderItem={({ item: row }) => (
           "heading" in row
             ? <GroupTitle text={row.heading} trailing={<Text style={{ color: C.text3, fontSize: 13 }}>{row.count}</Text>} />
             : (
-              <View style={groupEdge(!isItem(rows[index - 1]), !isItem(rows[index + 1]))}>
-                <Row
-                  pr={row.item}
-                  now={now}
-                  forMe={filter === "review"}
-                  unread={unreadOf(row.item, prRepoKey(row.item), seenMarks)}
-                  // The object form, not a built string: a checkout path is full
-                  // of characters a URL segment has opinions about.
-                  onOpen={() => router.push({
-                    pathname: "/pr/[number]",
-                    params: { number: String(row.item.number), root: row.root },
-                  })}
-                />
-              </View>
+              <Item
+                host={host}
+                pr={row.item}
+                tracked={tracked}
+                now={now}
+                forMe={filter === "review" && !searching}
+                query={query}
+                unread={unreadOf(row.item, prRepoKey(row.item), seenMarks)}
+                // The object form, not a built string: a checkout path is full
+                // of characters a URL segment has opinions about.
+                onOpen={() => router.push({
+                  pathname: "/pr/[number]",
+                  params: { number: String(row.item.number), root: row.root },
+                })}
+              />
             )
         )}
       />

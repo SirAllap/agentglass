@@ -248,7 +248,7 @@ interface RawTask {
   priority?: { priority?: string } | null;
   tags?: { name?: string }[];
   list?: { id?: string; name?: string } | null;
-  assignees?: { id?: string | number; username?: string; initials?: string; color?: string; profilePicture?: string }[];
+  assignees?: { id?: string | number; username?: string; email?: string; initials?: string; color?: string; profilePicture?: string }[];
   locations?: { id?: string; name?: string }[];
   points?: number | null;
   custom_fields?: RawField[];
@@ -2109,12 +2109,21 @@ export interface WriteOutcome {
  * millisecond would slip through — and it catches the case that actually
  * happens, which is somebody moving the card while you had it open.
  */
-async function guardUnchanged(token: string, taskId: string, expectUpdated?: number): Promise<string | null> {
+async function guardUnchanged(token: string, taskId: string, expectUpdated?: number): Promise<WriteOutcome | null> {
   if (!expectUpdated) return null;
   const r = await call<RawTask>(`/task/${encodeURIComponent(taskId)}`, token);
-  if (!r.ok) return r.error ?? "could not check the task first";
+  // A read that failed says nothing about whether the card moved, so it is not
+  // a conflict — that flag sends the person looking for a colleague who did
+  // nothing. It is not a green light either: the write would go out unchecked.
+  if (!r.ok) {
+    return {
+      ok: false,
+      unauthorised: r.unauthorised,
+      error: `Nothing was changed — could not check the card first. ${r.error ?? "ClickUp did not answer"}`,
+    };
+  }
   const now = Number(r.data?.date_updated) || 0;
-  if (now && now !== expectUpdated) return "Somebody changed this card while you had it open — reloaded";
+  if (now && now !== expectUpdated) return { ok: false, conflict: true, error: "Somebody changed this card while you had it open — reloaded" };
   return null;
 }
 
@@ -2155,8 +2164,8 @@ export async function assignSelf(taskId: string, on: boolean, expectUpdated?: nu
   if (!clickupWriteEnabled()) return { ok: false, error: "Writing to ClickUp is switched off" };
   const me = redacted("clickup")?.accountId;
   if (!me) return { ok: false, error: "Do not know which ClickUp account this is" };
-  const stale = await guardUnchanged(token, taskId, expectUpdated);
-  if (stale) return { ok: false, conflict: true, error: stale };
+  const refused = await guardUnchanged(token, taskId, expectUpdated);
+  if (refused) return refused;
   const n = Number(me);
   const r = await put(`/task/${encodeURIComponent(taskId)}`, token, {
     assignees: on ? { add: [n] } : { rem: [n] },
@@ -2194,6 +2203,7 @@ export function mergeMembers(raw: NonNullable<RawTask["assignees"]>[number][], m
       initials: m.initials || initialsOf(m.username ?? ""),
       color: m.color || undefined,
       avatar: m.profilePicture || undefined,
+      email: m.email || undefined,
       me: me ? String(m.id) === me : undefined,
     }))
     .filter((m) => m.name);
@@ -2248,7 +2258,7 @@ export async function listMembers(listId: string): Promise<CallResult<{ members:
   if (me && !members.some((m) => m.me)) {
     const who = await memoOk("whoami", token, () => whoAmI(token));
     if (who.ok && who.data) {
-      members.unshift({ id: Number(me), name: who.data.name || "you", initials: initialsOf(who.data.name || "you"), me: true });
+      members.unshift({ id: Number(me), name: who.data.name || "you", initials: initialsOf(who.data.name || "you"), email: who.data.email || undefined, me: true });
     }
   }
   // You first: the commonest assignment on any board is your own.
@@ -2270,8 +2280,8 @@ export async function setAssignee(taskId: string, userId: number, on: boolean, e
   if (!token) return { ok: false, error: "ClickUp is not connected" };
   if (!clickupWriteEnabled()) return { ok: false, error: "Writing to ClickUp is switched off" };
   if (!Number.isFinite(userId)) return { ok: false, error: "That is not a person" };
-  const stale = await guardUnchanged(token, taskId, expectUpdated);
-  if (stale) return { ok: false, conflict: true, error: stale };
+  const refused = await guardUnchanged(token, taskId, expectUpdated);
+  if (refused) return refused;
   const r = await put(`/task/${encodeURIComponent(taskId)}`, token, {
     assignees: on ? { add: [userId] } : { rem: [userId] },
   });
@@ -2312,8 +2322,8 @@ export async function setCard(
   // A no-op is a mistake upstream, not a write: sending one dates somebody
   // else's card for nothing.
   if (!add.length && !rem.length && !status) return { ok: false, error: "nothing to change" };
-  const stale = await guardUnchanged(token, taskId, expectUpdated);
-  if (stale) return { ok: false, conflict: true, error: stale };
+  const refused = await guardUnchanged(token, taskId, expectUpdated);
+  if (refused) return refused;
   const body: Record<string, unknown> = {};
   if (add.length || rem.length) {
     body.assignees = { ...(add.length ? { add } : null), ...(rem.length ? { rem } : null) };
@@ -2330,8 +2340,8 @@ export async function setStatus(taskId: string, status: string, expectUpdated?: 
   if (!token) return { ok: false, error: "ClickUp is not connected" };
   if (!clickupWriteEnabled()) return { ok: false, error: "Writing to ClickUp is switched off" };
   if (!status.trim()) return { ok: false, error: "no status given" };
-  const stale = await guardUnchanged(token, taskId, expectUpdated);
-  if (stale) return { ok: false, conflict: true, error: stale };
+  const refused = await guardUnchanged(token, taskId, expectUpdated);
+  if (refused) return refused;
   const r = await put(`/task/${encodeURIComponent(taskId)}`, token, { status });
   __reset();
   const me = redacted("clickup")?.accountId;
@@ -2361,8 +2371,8 @@ export async function setPriority(taskId: string, priority: string | null, expec
   if (!clickupWriteEnabled()) return { ok: false, error: "Writing to ClickUp is switched off" };
   const wire = !priority ? null : PRIORITY_WIRE[priority];
   if (wire === undefined) return { ok: false, error: "that is not a priority" };
-  const stale = await guardUnchanged(token, taskId, expectUpdated);
-  if (stale) return { ok: false, conflict: true, error: stale };
+  const refused = await guardUnchanged(token, taskId, expectUpdated);
+  if (refused) return refused;
   const r = await put(`/task/${encodeURIComponent(taskId)}`, token, { priority: wire });
   __reset();
   const me = redacted("clickup")?.accountId;
@@ -2508,8 +2518,8 @@ export async function updateTask(taskId: string, patch: TaskPatch, expectUpdated
   const no = writable();
   if (no) return { ok: false, error: no };
   const token = secretFor("clickup")!;
-  const stale = await guardUnchanged(token, taskId, expectUpdated);
-  if (stale) return { ok: false, conflict: true, error: stale };
+  const refused = await guardUnchanged(token, taskId, expectUpdated);
+  if (refused) return refused;
 
   const body: Record<string, unknown> = {};
   if (patch.name !== undefined) body.name = patch.name;

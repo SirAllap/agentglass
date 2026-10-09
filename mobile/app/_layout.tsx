@@ -15,7 +15,7 @@ import { ActivityIndicator, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import * as SplashScreen from "expo-splash-screen";
 import { HostProvider, useAgentglass } from "../src/state/host-context.tsx";
-import { usePaletteTick } from "../src/state/use-palette.ts";
+import { useDeskTheme, usePaletteTick } from "../src/state/use-palette.ts";
 import { UsageProvider } from "../src/state/use-usage.ts";
 import { C, T, currentLook } from "../src/theme.ts";
 
@@ -31,6 +31,7 @@ function Gate(): React.ReactNode {
   // tree re-reads it — the React-Native equivalent of resetting a CSS variable
   // on :root and letting the cascade do the rest.
   usePaletteTick();
+  useDeskTheme(host);
 
   useEffect(() => {
     if (!ready) return;

@@ -24,13 +24,17 @@ import type { GitRepoRef, IssueRow, IssueViewCounts, IssuesReport } from "../../
 import { ask } from "../../src/lib/api.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
-import { Chip, FilterChips, GroupTitle, LabelChip, ListEmpty, Segmented, groupEdge } from "../../src/ui.tsx";
+import { Chip, FilterChips, GroupTitle, LabelChip, ListEmpty, Segmented } from "../../src/ui.tsx";
+import { Avatar } from "../../src/Avatar.tsx";
+import { issueMatches } from "../../src/model/issueList.ts";
+import { Ghost } from "../../src/review/PrCard.tsx";
+import { PrSearchRow } from "../../src/review/PrSearchRow.tsx";
 import { mainCheckouts } from "../../src/model/prRows.ts";
 import { flatten, type RepoGroup } from "../../src/model/prLook.ts";
 import { IssuesIcon } from "../../src/nav/icons.tsx";
 import { since } from "../../src/lib/dates.ts";
 import { sumIssueCounts } from "../../src/model/issueCounts.ts";
-import { C, SPACE, T } from "../../src/theme.ts";
+import { C, RADIUS, SPACE, T } from "../../src/theme.ts";
 
 type Filter = "mine" | "open" | "all";
 
@@ -45,6 +49,11 @@ const FILTERS: { id: Filter; label: string }[] = [
 const REPO_CAP = 8;
 const ALL = "*";
 
+/**
+ * One issue as a card: the number and title, then what it is about (every
+ * label, the comment count), then who has it. Closed ones are dimmed rather
+ * than hidden, so "did I close that?" is answerable in the All filter.
+ */
 function Row({ issue, now, me, onOpen }: {
   issue: IssueRow;
   now: number;
@@ -53,33 +62,40 @@ function Row({ issue, now, me, onOpen }: {
 }): React.ReactNode {
   const closed = issue.state.toLowerCase() === "closed";
   const mine = !!me && issue.assignees.includes(me);
+  const who = issue.assignees[0];
   return (
-    <Pressable onPress={onOpen} accessibilityRole="button" accessibilityLabel={`${closed ? "Closed" : "Open"} issue: ${issue.title}. #${issue.number}`}>
-      {({ pressed }) => (
-        <View style={{
-          flexDirection: "row", gap: SPACE.md, paddingHorizontal: SPACE.lg, paddingVertical: 14,
-          backgroundColor: pressed ? C.bg3 : "transparent",
-        }}>
-          {/* GitHub's own mark, green while open and grey once closed: the
-              shape says it is an issue and the colour says which state. */}
-          <View style={{ paddingTop: 1 }}><IssuesIcon color={closed ? C.text3 : C.success} size={20} /></View>
-          <View style={{ flex: 1, minWidth: 0, gap: 6 }}>
-            <Text numberOfLines={2} style={{ color: C.text, fontSize: 15, fontWeight: "500", lineHeight: 20 }}>
-              {issue.title}
-            </Text>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-              {issue.labels.slice(0, 3).map((l) => <LabelChip key={l.name} name={l.name} color={l.color} />)}
-              {issue.assignees.length === 0
-                ? <Chip label="Unassigned" />
-                : <Chip label={mine ? "You" : issue.assignees.join(", ")} tone={mine ? "accent" : "neutral"} />}
+    <Pressable
+      onPress={onOpen}
+      accessibilityRole="button"
+      accessibilityLabel={`${closed ? "Closed" : "Open"} issue: ${issue.title}. #${issue.number}`}
+      style={({ pressed }) => ({
+        padding: SPACE.md, gap: SPACE.sm, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: C.border,
+        backgroundColor: pressed ? C.bg3 : C.bg2, opacity: closed ? 0.7 : 1,
+      })}
+    >
+      <Text numberOfLines={2} style={{ color: closed ? C.text2 : C.text, fontSize: 15, fontWeight: "600", lineHeight: 20 }}>
+        <Text style={{ color: C.text3, fontSize: T.small }}>#{issue.number}  </Text>{issue.title}
+      </Text>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+        {closed ? <Chip label="closed" tone="good" /> : null}
+        {issue.labels.map((l) => <LabelChip key={l.name} name={l.name} color={l.color} />)}
+        {issue.comments > 0 ? <Chip label={String(issue.comments)} /> : null}
+        <Text numberOfLines={1} style={{ color: C.text3, fontSize: T.small, flexShrink: 1 }}>
+          {issue.author} · {since(issue.updatedAt, now)}
+        </Text>
+        <View style={{ flex: 1 }} />
+        {who
+          ? (
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+              {mine ? <Text style={{ color: C.primary, fontSize: T.small, fontWeight: "600" }}>You</Text> : null}
+              <Avatar name={who} login={who} size={24} />
             </View>
-            <Text numberOfLines={1} style={{ color: C.text3, fontSize: T.small }}>
-              #{issue.number} · {issue.author} · {since(issue.updatedAt, now)}
-              {issue.comments > 0 ? ` · ${issue.comments} ${issue.comments === 1 ? "comment" : "comments"}` : ""}
-            </Text>
-          </View>
-        </View>
-      )}
+          )
+          : (
+            // Dashed, because an empty slot is a different claim from a person.
+            <Ghost text="unassigned" />
+          )}
+      </View>
     </Pressable>
   );
 }
@@ -95,6 +111,7 @@ export default function IssuesScreen(): React.ReactNode {
   const [error, setError] = useState<string | null>(null);
   const [pulling, setPulling] = useState(false);
   const [counts, setCounts] = useState<IssueViewCounts | null>(null);
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
     if (!host) return;
@@ -169,9 +186,14 @@ export default function IssuesScreen(): React.ReactNode {
     void Promise.all([load(), loadCounts()]).finally(() => setPulling(false));
   }, [load, loadCounts]);
 
-  const rows = useMemo(() => flatten(groups ?? []), [groups]);
+  // Typing narrows what was loaded; a repository with no match drops its heading.
+  const rows = useMemo(() => {
+    if (!search.trim()) return flatten(groups ?? []);
+    return flatten((groups ?? [])
+      .map((g) => ({ ...g, items: g.items.filter((i) => issueMatches(i, search)) }))
+      .filter((g) => g.items.length));
+  }, [groups, search]);
   const filterOptions = useMemo(() => FILTERS.map((f) => ({ ...f, count: counts?.[f.id] })), [counts]);
-  const isItem = (r: (typeof rows)[number] | undefined): boolean => !!r && "item" in r;
   const now = Date.now();
 
   if (!host) return null;
@@ -180,7 +202,10 @@ export default function IssuesScreen(): React.ReactNode {
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
-      <View style={{ paddingHorizontal: SPACE.lg, paddingTop: SPACE.xs, paddingBottom: SPACE.md }}>
+      <View style={{ paddingHorizontal: SPACE.lg, paddingTop: SPACE.xs, paddingBottom: SPACE.md, gap: SPACE.md }}>
+        <PrSearchRow
+          value={search} onChange={setSearch} placeholder="Search title, #number, label" label="Search issues"
+        />
         <Segmented value={filter} onChange={setFilter} options={filterOptions} />
       </View>
       {(repos?.length ?? 0) > 1 ? <FilterChips label="Repository" options={chips} value={pick} onChange={setPick} /> : null}
@@ -188,9 +213,7 @@ export default function IssuesScreen(): React.ReactNode {
       <FlatList
         data={rows}
         keyExtractor={(row) => ("heading" in row ? `h:${row.heading}` : `${row.root}#${row.item.number}`)}
-        /* No gap between rows: they are one card divided by hairlines, not a
-           stack of cards. See groupEdge in src/ui.tsx. */
-        contentContainerStyle={{ padding: SPACE.lg, paddingTop: SPACE.sm, paddingBottom: SPACE.xl }}
+        contentContainerStyle={{ padding: SPACE.lg, paddingTop: SPACE.sm, paddingBottom: SPACE.xl, gap: SPACE.sm }}
         refreshControl={<RefreshControl refreshing={pulling} onRefresh={onRefresh} tintColor={C.text3} />}
         ListEmptyComponent={
           groups === null && !error ? null : (
@@ -198,28 +221,28 @@ export default function IssuesScreen(): React.ReactNode {
               error={error}
               errorTitle="Can't ask GitHub"
               emptyTitle="Nothing open"
-              emptyText={filter === "mine"
+              emptyText={search.trim()
+                ? "No issue on this list matches what is typed above. Clear the search to see the rest."
+                : filter === "mine"
                 ? `No open issue is assigned to you${pick === ALL ? "" : " in this repository"}.`
                 : `No issue matches this filter${pick === ALL ? "" : " in this repository"}.`}
               onRetry={() => { void load(); }}
             />
           )
         }
-        renderItem={({ item: row, index }) => (
+        renderItem={({ item: row }) => (
           "heading" in row
             ? <GroupTitle text={row.heading} trailing={<Text style={{ color: C.text3, fontSize: 13 }}>{row.count}</Text>} />
             : (
-              <View style={groupEdge(!isItem(rows[index - 1]), !isItem(rows[index + 1]))}>
-                <Row
-                  issue={row.item}
-                  now={now}
-                  me={fleet.me}
-                  onOpen={() => router.push({
-                    pathname: "/issue/[number]",
-                    params: { number: String(row.item.number), root: row.root },
-                  })}
-                />
-              </View>
+              <Row
+                issue={row.item}
+                now={now}
+                me={fleet.me}
+                onOpen={() => router.push({
+                  pathname: "/issue/[number]",
+                  params: { number: String(row.item.number), root: row.root },
+                })}
+              />
             )
         )}
       />

@@ -237,9 +237,13 @@ describe("when the poll runs", () => {
     const block = source.slice(at, source.indexOf("}, [load]));", at));
     expect(block).toContain("setInterval(");
     expect(block).toContain("clearInterval(timer)");
-    // One timer in the whole screen, and it is that one. A second one started
-    // from a mount effect is the leak this test exists to refuse.
-    expect([...source.matchAll(/setInterval\(/g)]).toHaveLength(1);
+    // Two timers in the whole screen: the pane list, and the dirty dot on the
+    // Git icon (four seconds, see the note on it). Each lives in a focus effect
+    // and is cleared by it — a third, started from a mount effect, is the leak
+    // this test exists to refuse.
+    expect([...source.matchAll(/setInterval\(/g)]).toHaveLength(2);
+    expect([...source.matchAll(/clearInterval\(timer\)/g)]).toHaveLength(2);
+    expect([...source.matchAll(/useFocusEffect\(useCallback\(/g)].length).toBeGreaterThanOrEqual(2);
   });
 
   test("no faster than a second, because the server pays for every tick", () => {
@@ -251,7 +255,8 @@ describe("when the poll runs", () => {
      * is spending more than a percent of the server on watching for a hand
      * splitting a pane.
      */
-    const ms = Number(/setInterval\([^,]+,\s*(\d+)\)/.exec(source)?.[1]);
-    expect(ms).toBeGreaterThanOrEqual(1000);
+    for (const m of source.matchAll(/setInterval\([^\n]*?,\s*(\d+)\)/g)) {
+      expect(Number(m[1])).toBeGreaterThanOrEqual(1000);
+    }
   });
 });

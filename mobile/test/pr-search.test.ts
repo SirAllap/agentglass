@@ -74,11 +74,15 @@ describe("state chips", () => {
 describe("the screen is wired to them", async () => {
   const src = await Bun.file(new URL("../app/(tabs)/prs.tsx", import.meta.url)).text();
   const code = src.split("\n").filter((l) => !/^\s*(\/\*|\*|\/\/)/.test(l)).join("\n");
-  test("no request hard-codes state=open any more", () => {
+  const model = await Bun.file(new URL("../src/model/prSearch.ts", import.meta.url)).text();
+  test("no request hard-codes state=open, and the list is asked through one spelling", () => {
     expect(code).not.toContain("state=open");
-    expect(code.match(/state=\$\{stateQuery\(view\)\}/g)?.length).toBe(2);
+    expect(code).toContain("prListPath({ root, tab: filter, state: view, text: query, after })");
+    // The counts are the tab's, so they are read in the tab's own state.
+    expect(code.match(/state=\$\{stateQuery\(browseView\)\}/g)?.length).toBe(1);
   });
-  test("the box filters with the shared match", () => {
-    expect(code).toContain("prTextMatch(p, text)");
+  test("the box asks the server, and the loaded rows still match by the shared match", () => {
+    expect(code).toContain("withLocalMatches(");
+    expect(model).toContain("prTextMatch(p, text)");
   });
 });

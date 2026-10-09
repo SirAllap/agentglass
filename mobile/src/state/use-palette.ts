@@ -22,28 +22,27 @@
  * The pairing screen is the one that does not call it, and cannot need to:
  * Settings is unreachable until this phone is paired.
  *
- * ── the computer's own palette, which is a different question ─────────────
- * `usePaletteFrom(host)` used to paint the WHOLE APP in whatever theme the
- * computer was on. That cannot coexist with a phone that has its own mode —
- * the machine's answer landed last, so a phone set to Light came back out of a
- * pocket in the desk's dark theme — so the app's chrome is the phone's now.
+ * ── the computer's own palette ────────────────────────────────────────────
+ * "Match the computer" is the default look, so `useDeskTheme` (mounted once by
+ * the root) keeps the theme module in step with `/theme/current`, and the whole
+ * app wears it; a Light or Dark pin ignores the answer.
  *
- * The terminal is the exception, and `useDeskPalette` below is why it survived:
- * that screen is not chrome, it is a WINDOW ONTO THE COMPUTER'S SCREEN, and the
- * computer paints it. Measured on a real pane: agentglass's own theme sync
- * writes `set -g window-style "bg=<the desk's --bg>"` into the user's tmux
+ * The terminal wants the answer under every look, and raw, because that screen
+ * is not chrome, it is a WINDOW ONTO THE COMPUTER'S SCREEN, and the computer
+ * paints it. Measured on a real pane: agentglass's own theme sync writes
+ * `set -g window-style "bg=<the desk's --bg>"` into the user's tmux
  * (server/src/themesync.ts), so every cell of every pane arrives with an
  * explicit background and the phone's `theme.background` is never reached. With
  * the phone in Light against that dark tmux, the DEFAULT foreground went to
  * #1f2328 and the words "Claude Code" at the top of a session disappeared into
  * the pane — dark on dark, while everything the program had coloured itself
- * stayed readable.
+ * stayed readable. `useDeskPalette` reads what the root already fetched.
  */
 import { useEffect, useState } from "react";
 import { AppState, type AppStateStatus } from "react-native";
 import { ask } from "../lib/api.ts";
 import type { Host } from "../lib/host.ts";
-import { onPaletteChange, type Palette } from "../theme.ts";
+import { deskThemeVars, onPaletteChange, setDeskTheme, type Palette } from "../theme.ts";
 
 export function usePaletteTick(): number {
   const [tick, setTick] = useState(0);
@@ -58,31 +57,39 @@ interface ThemeAnswer {
 /**
  * The palette the computer is wearing, for the one surface it paints.
  *
- * Asked once per host and again on every foreground, which is when somebody has
- * most likely just changed the theme at their desk.
- *
  * Null means the machine has never had a theme picked (it answers `theme: null`
  * rather than guessing) or has not been reached yet, and the caller falls back
  * to the phone's own palette. That is kept as null rather than turned into a
  * default here: "not configured" and "configured to the default" are different
  * facts, and only the caller knows what to do with the difference.
  */
-export function useDeskPalette(host: Host | null): Partial<Palette> | null {
-  const [desk, setDesk] = useState<Partial<Palette> | null>(null);
+export function useDeskPalette(): Partial<Palette> | null {
+  usePaletteTick();
+  return deskThemeVars();
+}
 
+/**
+ * Keep the app's own palette in step with the computer's, for "Match the
+ * computer". Mounted once by the root, because the choice colours every screen;
+ * the answer is handed to the theme module, which paints it only when the look
+ * is "desk" — so this can run under a pin without being able to overrule it.
+ *
+ * `theme: null` is passed on as null: a computer that has no theme picked must
+ * clear the last one it had, or the phone would keep a desk the user has since
+ * left behind.
+ */
+export function useDeskTheme(host: Host | null): void {
   useEffect(() => {
-    if (!host) { setDesk(null); return; }
+    if (!host) return;
     let alive = true;
     const pull = async (): Promise<void> => {
       const answer = await ask<ThemeAnswer>(host, "/theme/current");
       if (!alive || !answer.ok) return; // offline keeps the colours it has
-      setDesk(answer.value.theme?.vars ?? null);
+      setDeskTheme(answer.value.theme?.vars ?? null);
     };
     void pull();
     const onChange = (state: AppStateStatus): void => { if (state === "active") void pull(); };
     const sub = AppState.addEventListener("change", onChange);
     return () => { alive = false; sub.remove(); };
   }, [host]);
-
-  return desk;
 }

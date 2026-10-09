@@ -21,7 +21,7 @@ import {
   ActivityIndicator, KeyboardAvoidingView, Linking, Pressable, ScrollView, Text, TextInput, View,
 } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import type { IssueDetail, IssuePr, IssuePrsReport, IssueStartResult } from "../../../shared/types.ts";
+import type { IssueDetail, IssuePr, IssuePrsReport, IssueStartResult, PrSummary } from "../../../shared/types.ts";
 import { ask } from "../../src/lib/api.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { Md } from "../../src/md/Md.tsx";
@@ -31,10 +31,16 @@ import { openLinkedPr } from "../../src/state/open-pr.ts";
 import { repoOf } from "../../src/model/prRef.ts";
 import { since } from "../../src/lib/dates.ts";
 import { canRunAgents } from "../../src/model/scope.ts";
+import { prVerdict } from "../../src/model/issueList.ts";
+import { listPath } from "../../src/model/prSearch.ts";
 import { Btn, Card, Chip, Group, GroupTitle, Label, LabelChip, Note, Row, Sheet, TAP } from "../../src/ui.tsx";
 import { IssuesIcon, PrsIcon } from "../../src/nav/icons.tsx";
 import { RADIUS as R } from "../../src/theme.ts";
 import { C, MONO, SPACE, T } from "../../src/theme.ts";
+
+/** The action bar's buttons: the thumb's main target on this screen, taller
+ *  than the 48 floor. */
+const BAR_BTN = { minHeight: 52 } as const;
 
 /** What a linked pull request is called, and what colour that is. `linked` is
  *  the difference between one somebody attached and a bare `#123` that
@@ -58,6 +64,10 @@ export default function IssueScreen(): React.ReactNode {
 
   const [detail, setDetail] = useState<IssueDetail | null>(null);
   const [prs, setPrs] = useState<IssuePr[] | null>(null);
+  /** The repository's open pull requests, read once PRs are known, only to
+   *  say what each linked one's review says. Null is "not read", and the rows
+   *  then carry what they always did. */
+  const [open, setOpen] = useState<PrSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   /** One box, two buttons. `/issues/claim` takes an optional comment and posts
@@ -94,7 +104,11 @@ export default function IssueScreen(): React.ReactNode {
       const query = `root=${encodeURIComponent(root)}&number=${encodeURIComponent(number)}`;
       const answer = await ask<IssuePrsReport>(host, `/issues/prs?${query}`);
       if (gone || !answer.ok) return;
-      setPrs(Array.isArray(answer.value.prs) ? answer.value.prs : []);
+      const got = Array.isArray(answer.value.prs) ? answer.value.prs : [];
+      setPrs(got);
+      if (!got.some((p) => p.state === "OPEN")) return;
+      const list = await ask<{ prs?: PrSummary[] }>(host, listPath({ root, tab: "all", state: "open", text: "" }));
+      if (!gone && list.ok && Array.isArray(list.value.prs)) setOpen(list.value.prs);
     })();
     return () => { gone = true; };
   }, [host, number, root]);
@@ -152,10 +166,12 @@ export default function IssueScreen(): React.ReactNode {
    * and that half-failure is a real one worth reading. A screen that just
    * cleared the box would report a comment nobody posted.
    */
-  const act = useCallback(async (what: "comment" | "claim"): Promise<void> => {
-    if (!host || !detail || !root) return;
+  /** True only when GitHub took it — the comment sheet closes on that and on
+   *  nothing else, so a refusal is read where the typed words still are. */
+  const act = useCallback(async (what: "comment" | "claim"): Promise<boolean> => {
+    if (!host || !detail || !root) return false;
     const text = say.trim();
-    if (what === "comment" && !text) return;
+    if (what === "comment" && !text) return false;
     setBusy(what);
     setSaid(null);
     const answer = await ask<{ ok: boolean; error?: string; detail?: string }>(
@@ -169,15 +185,16 @@ export default function IssueScreen(): React.ReactNode {
       },
     );
     setBusy(null);
-    if (!answer.ok) { setSaid({ ok: false, text: answer.error }); return; }
+    if (!answer.ok) { setSaid({ ok: false, text: answer.error }); return false; }
     if (!answer.value.ok) {
       setSaid({ ok: false, text: answer.value.error || "GitHub refused that." });
-      return;
+      return false;
     }
     setSay("");
     setSaid({ ok: true, text: answer.value.detail || "Done." });
     // Re-read, because both of these change what "Who has it" says.
     void load();
+    return true;
   }, [host, detail, root, say, load]);
 
   const closed = (detail?.state ?? "").toLowerCase() === "closed";
@@ -307,11 +324,12 @@ export default function IssueScreen(): React.ReactNode {
             <Group inset={50}>
               {prs.map((pr) => {
                 const tone = prTone(pr);
+                const verdict = prVerdict(pr, open);
                 return (
                   <Row
                     key={pr.number}
                     title={`#${pr.number} ${pr.title}`}
-                    sub={tone.word}
+                    sub={verdict ? `${tone.word} · ${verdict.label}` : tone.word}
                     lead={<PrsIcon color={tone.ink} size={20} />}
                     chevron
                     // In the app when the computer has the checkout — see
@@ -365,13 +383,13 @@ export default function IssueScreen(): React.ReactNode {
           paddingHorizontal: SPACE.lg, paddingTop: SPACE.md, paddingBottom: SPACE.lg,
           borderTopWidth: 1, borderTopColor: C.border, backgroundColor: C.bg2,
         }}>
-          {!closed ? <Btn label="Comment" style={{ flex: 1 }} onPress={() => setCommenting(true)} /> : null}
+          {!closed ? <Btn label="Comment" style={{ flex: 1, ...BAR_BTN }} onPress={() => setCommenting(true)} /> : null}
           {detail.work ? (
             canRunAgents(host?.scope) ? (
               <Btn
                 label="Open in terminal"
                 tone="primary"
-                style={{ flex: 1.6 }}
+                style={{ flex: 1.6, ...BAR_BTN }}
                 onPress={() => router.push({
                   pathname: "/terminal",
                   params: { where: detail.work!.path, window: detail.work!.window ?? `i${detail.number}` },
@@ -382,7 +400,7 @@ export default function IssueScreen(): React.ReactNode {
             <Btn
               label="Start with Claude"
               tone="primary"
-              style={{ flex: 1.6 }}
+              style={{ flex: 1.6, ...BAR_BTN }}
               busy={starting}
               onPress={() => { void start(); }}
             />
@@ -411,7 +429,7 @@ export default function IssueScreen(): React.ReactNode {
               style={{ flex: 1 }}
               busy={busy === "comment"}
               disabled={!say.trim() || busy !== null}
-              onPress={() => { void act("comment").then(() => setCommenting(false)); }}
+              onPress={() => { void act("comment").then((ok) => { if (ok) setCommenting(false); }); }}
             />
             {!detail?.assignees.length ? (
               <Btn
@@ -423,7 +441,7 @@ export default function IssueScreen(): React.ReactNode {
                 style={{ flex: 1.4 }}
                 busy={busy === "claim"}
                 disabled={busy !== null}
-                onPress={() => { void act("claim").then(() => setCommenting(false)); }}
+                onPress={() => { void act("claim").then((ok) => { if (ok) setCommenting(false); }); }}
               />
             ) : null}
           </View>

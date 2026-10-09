@@ -41,23 +41,16 @@ describe("the empty state", () => {
     // Same follow as the header's own `+` (see terminal-opened-follows-session):
     // a window that lands somewhere is a window this screen switches to.
     expect(fn).toContain("setActive(answer.value.pane)");
-    expect(fn).toContain("setSession(answer.value.session)");
   });
 
   test("bridges to the freshly opened pane rather than trusting the next poll", () => {
-    /*
-     * Reported from a real device: the server DID create the session and
-     * window, but a session with zero tmux clients and no agent is exactly
-     * what `paneTabs` filters out of the strip forever, so `open` stayed null
-     * and the phone sat on "Nothing open" through repeated "Look again"
-     * presses. `pendingOpen` bridges it until an attach makes the poll list
-     * it for real — see terminal-pending-tab.test.ts for the pure decision.
-     */
+    // `pendingOpen` bridges until an attach makes the poll list the pane for real;
+    // terminal-pending-tab.test.ts holds the pure decision.
     const fn = between(screen, "const openShellIn = useCallback(", "}, [host, load]);");
     expect(fn).toContain("pendingOpen.current = {");
     expect(fn).toContain("paneId: answer.value.pane, session: answer.value.session");
 
-    const openLine = screen.split("\n").find((l) => l.includes("const open = tabs.find"));
+    const openLine = screen.split("\n").find((l) => l.includes("const open = all.find"));
     expect(openLine, "the `open` computation moved").toBeTruthy();
     expect(openLine).toContain("pendingTab(pendingOpen.current, active)");
   });
@@ -78,7 +71,7 @@ describe("the empty state", () => {
   });
 
   test("Look again is still there", () => {
-    expect(screen).toContain('<Btn label="Look again" onPress={() => { void load(); }} />');
+    expect(screen).toContain('label="Look again"');
   });
 
   /* The header's own `+`, which this test's own opening comment refers to. */

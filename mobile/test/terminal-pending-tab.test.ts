@@ -1,14 +1,8 @@
 /*
- * A pane the phone itself just opened, before the poll lists it for real.
- *
- * Reported from a real device: the empty state's "Open a shell in <name>"
- * button made a real window on the computer — one pane, one window, zero
- * tmux clients on the session, no agent under it — and the phone stayed on
- * "Nothing open" through repeated presses of "Look again". `paneTabs` filters
- * out a detached, agent-less pane ON PURPOSE (a stale session from a test or
- * an old worktree should not clutter the strip), and nothing ever attaches to
- * flip that session's `attached` to true, because attaching IS what mounting
- * a terminal for the pane does — a chicken standing on its own egg.
+ * A pane the phone itself just opened, before the poll lists it for real:
+ * `paneTabs` filters a detached, agent-less pane on purpose, and attaching is
+ * what mounting its terminal does, so without a bridge the empty state's "Open
+ * a shell in <name>" left the phone on "Nothing open".
  */
 import { describe, expect, test } from "bun:test";
 import { pendingTab } from "../src/terminal/tabs.ts";
@@ -30,6 +24,6 @@ describe("pendingTab", () => {
 
   test("the active pane IS the one just opened — a tab to bridge with", () => {
     const tab = pendingTab(PENDING, "%9");
-    expect(tab).toEqual({ paneId: "%9", label: "atlas", session: "atlas", where: "/home/x/code/atlas", agent: false, windowId: "", windowName: "", windowPanes: 1 });
+    expect(tab).toEqual({ paneId: "%9", label: "atlas", name: "atlas", session: "atlas", where: "/home/x/code/atlas", agent: false, windowId: "", windowName: "", windowPanes: 1 });
   });
 });

@@ -15,6 +15,10 @@
  * order it was added — because a phone that shows a different slice of the
  * board than the computer is a second place to keep in your head.
  *
+ * The board's own tools — the list selector, search, filters, Open/All and the
+ * status sections — all run on the cards read once (model/cardBoard.ts): typing
+ * and ticking cost the tracker nothing. Only choosing another list reads again.
+ *
  * Status is drawn in the colour the workspace gave it and spelled the way the
  * workspace spells it. Renaming somebody's workflow is not ours to do, and a
  * board's colours are how its people read it at a glance. What the app decides
@@ -22,14 +26,15 @@
  * are per-list and a workspace may have four words for "doing", so nothing may
  * branch on them.
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { FlatList, Linking, Pressable, RefreshControl, Text, View } from "react-native";
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
-import type { ClickUpBoards, ProviderTask } from "../../../shared/providers.ts";
+import { ASSIGNED_VIEW_ID, type ClickUpBoards, type ListPlace, type ListStatus, type ProviderTask, type SavedView } from "../../../shared/providers.ts";
 import type { LocalTask, TasksListResponse } from "../../../shared/types.ts";
 import { ask } from "../../src/lib/api.ts";
+import { writes } from "../../src/state/card-cache.ts";
 import { withCard } from "../../src/state/card-edits.ts";
 import { useCardChanges } from "../../src/state/useCardChanges.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
@@ -38,10 +43,20 @@ import { useTaskProvider } from "../../src/state/use-tracks-work.ts";
 import { localMeta, visibleLocal } from "../../src/model/localTasks.ts";
 import { projectNames, scopeLocal } from "../../src/model/taskScope.ts";
 import { matchesQuery } from "../../../shared/taskref.ts";
-import { Card, Label, ListEmpty, Note, Segmented, Sheet, SheetRow, TAP, groupEdge } from "../../src/ui.tsx";
-import { Glyph } from "../../src/nav/glyphs.tsx";
+import { Btn, Card, Label, ListEmpty, Note, Segmented, groupEdge } from "../../src/ui.tsx";
 import { dueIn } from "../../src/lib/dates.ts";
-import { C, MONO, RADIUS, SPACE, T, tint } from "../../src/theme.ts";
+import { BoardHeader } from "../../src/cards/BoardHeader.tsx";
+import { CardFilterSheet } from "../../src/cards/CardFilterSheet.tsx";
+import { CardRow } from "../../src/cards/CardRow.tsx";
+import { ListSheet } from "../../src/cards/ListSheet.tsx";
+import { SectionHead } from "../../src/cards/SectionHead.tsx";
+import { PrSearchRow } from "../../src/review/PrSearchRow.tsx";
+import { useLearnedCardPrs } from "../../src/state/card-links.ts";
+import {
+  activeFacets, boardCount, cardSections, flatItems, NO_CARD_FILTERS, openAllView, prCount, truncatedNote, whyEmpty, type CardFilters,
+} from "../../src/model/cardBoard.ts";
+import { boardPath, listTarget } from "../../src/model/cardSelector.ts";
+import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
 
 /*
  * `/clickup/views` answers `ClickUpBoards` — the shared type the server
@@ -56,69 +71,13 @@ type ViewsAnswer = ClickUpBoards;
 interface ViewTasks {
   tasks: ProviderTask[];
   truncated: boolean;
+  /** Every status the list accepts, in its own order — the section order. */
+  statuses?: ListStatus[];
+  /** Space / Folder / List, for the line above the board's name. */
+  place?: ListPlace;
   /** A 200 that carries the failure: the read did not happen, and `tasks` is
    *  empty or the last good list. */
   error?: string;
-}
-
-function Row({ task, prefix, onCopied, onOpen }: {
-  task: ProviderTask;
-  prefix: string;
-  onCopied: (what: string) => void;
-  onOpen: () => void;
-}): React.ReactNode {
-  const when = dueIn(task.due, new Date());
-  // The workspace's colour, with a floor: some boards pick a status colour that
-  // is legible on their own white background and vanishes on this one.
-  const statusInk = task.statusColor && task.statusColor !== "#ffffff" ? task.statusColor : C.text3;
-
-  return (
-    <Pressable
-      onPress={onOpen}
-      onLongPress={() => {
-        // The id, because it is what every skill, branch name and commit
-        // message here is written against — and it is the one thing you cannot
-        // retype from memory on a phone.
-        const id = task.customId || task.id;
-        void Clipboard.setStringAsync(id);
-        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        onCopied(id);
-      }}
-    >
-      {/* Padding, not a card. The surface and the border belong to the group
-          this row sits in — see groupEdge in src/ui.tsx — and a Card here
-          would draw a second one inside the first. */}
-      <View style={{ padding: SPACE.lg, gap: SPACE.sm }}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm }}>
-          <Text style={{ color: C.text3, fontSize: T.small, fontFamily: MONO }}>
-            {task.customId || task.id}
-          </Text>
-          <View style={{ flex: 1 }} />
-          {when ? (
-            <Text style={{ color: when.late ? C.error : C.text3, fontSize: T.small, fontWeight: "500" }}>{when.text}</Text>
-          ) : null}
-        </View>
-
-        <Text numberOfLines={3} style={{ color: C.text, fontSize: 15, fontWeight: "500", lineHeight: 20 }}>{task.title}</Text>
-
-        <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap" }}>
-          {/* The status in the colour the board gave it, as a dot and a tint
-              behind the word, and the word itself in the text colour: some
-              boards pick their colours against a white page, and a status
-              written in its own pale yellow was unreadable on this one. */}
-          <View style={{
-            flexDirection: "row", alignItems: "center", gap: 6, height: 24, paddingHorizontal: 8, borderRadius: 6,
-            backgroundColor: /^#[0-9a-f]{6}$/i.test(statusInk) ? tint(statusInk, 0.18) : C.bg3,
-          }}>
-            <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: statusInk }} />
-            <Text style={{ color: C.text, fontSize: T.small, fontWeight: "500" }}>{task.status}</Text>
-          </View>
-          {task.list ? <Text style={{ color: C.text3, fontSize: T.small }}>{task.list}</Text> : null}
-          {task.sprint ? <Text style={{ color: C.text3, fontSize: T.small }}>· {task.sprint}</Text> : null}
-        </View>
-      </View>
-    </Pressable>
-  );
 }
 
 /**
@@ -174,6 +133,14 @@ function LocalRow({ task, onCopied }: {
   );
 }
 
+/** What an empty board says, by what is narrowing it. */
+const EMPTY_TEXT = {
+  none: "This list has no cards.",
+  search: "No card matches what is typed above. Clear the search to see the rest.",
+  filters: "No card has this status and assignee. Reset the filters to see the rest.",
+  "all-done": "Nothing is still open. The switch above shows the rest.",
+} as const;
+
 export default function TasksScreen(): React.ReactNode {
   usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
   const { host } = useAgentglass();
@@ -182,7 +149,20 @@ export default function TasksScreen(): React.ReactNode {
   const [views, setViews] = useState<ViewsAnswer | null>(null);
   const [chosen, setChosen] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
+  const [filtering, setFiltering] = useState(false);
   const [tasks, setTasks] = useState<ProviderTask[] | null>(null);
+  const [statuses, setStatuses] = useState<ListStatus[]>([]);
+  const [place, setPlace] = useState<ListPlace | undefined>(undefined);
+  const [truncated, setTruncated] = useState(false);
+  /* What the search box says and what the sheet ticked. Both narrow the cards
+     already loaded, so neither is a request; both are this board's, so
+     choosing another list clears them. */
+  const [search, setSearch] = useState("");
+  const [filters, setFilters] = useState<CardFilters>(NO_CARD_FILTERS);
+  /* Said under the selector when adding a list did not work; the board on
+     screen is then still the one that was. */
+  const [notice, setNotice] = useState<string | null>(null);
+  const learned = useLearnedCardPrs(host);
   const [local, setLocal] = useState<LocalTask[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pulling, setPulling] = useState(false);
@@ -205,40 +185,62 @@ export default function TasksScreen(): React.ReactNode {
    * An id handed over from somewhere else — today, the chip on a pull request
    * that names the item it came from.
    *
-   * It filters what this screen already has rather than asking the tracker,
-   * and that is the whole reason it works for everybody: the rows are whatever
-   * the connected provider returned, and "every word appears somewhere in the
-   * row" is a question that can be asked of a card, a Taskwarrior task, or
-   * whatever comes next. Nothing here knows which one it is looking at.
-   *
-   * Dismissed rather than sticky: it arrives with a navigation and the screen
-   * is a tab somebody comes back to, so it must not still be filtering
-   * tomorrow.
+   * It goes into the search box, which filters what this screen already has
+   * rather than asking the tracker, and that is the whole reason it works for
+   * everybody: the rows are whatever the connected provider returned, and
+   * "every word appears somewhere in the row" is a question that can be asked
+   * of a card, a Taskwarrior task, or whatever comes next. Nothing here knows
+   * which one it is looking at. The box's own clear button is the way out, and
+   * it is typed text rather than a sticky mode, so it cannot still be
+   * filtering tomorrow.
    */
   const { q } = useLocalSearchParams<{ q?: string }>();
-  const [finding, setFinding] = useState<string | null>(null);
-  useEffect(() => { setFinding(q && q.trim() ? q.trim() : null); }, [q]);
+  useEffect(() => { if (q && q.trim()) setSearch(q.trim()); }, [q]);
   const board = provider?.id === "clickup";
   const localList = !!provider && !board;
 
+  /* Another computer (re-paired, or switched) is another board: nothing chosen
+     or read from the old one may be drawn, filtered or searched on the new. */
+  const origin = useRef(host?.origin);
+  useEffect(() => {
+    if (origin.current === host?.origin) return;
+    origin.current = host?.origin;
+    setViews(null); setChosen(null); setTasks(null); setLocal(null); setStatuses([]); setPlace(undefined);
+    setTruncated(false); setError(null); setNotice(null); setFilters(NO_CARD_FILTERS); setSearch("");
+  }, [host?.origin]);
+
   useEffect(() => {
     if (!host || !board) return;
+    let gone = false;
     void (async () => {
       const answer = await ask<ViewsAnswer>(host, "/clickup/views");
+      if (gone) return;
       if (!answer.ok) { setError(answer.error); return; }
       setViews(answer.value);
+      // The card screen asks the same question; it is answered here already.
+      writes.put(host.origin, answer.value.writeEnabled === true);
       setChosen((current) => current ?? answer.value.current ?? answer.value.views[0]?.id ?? null);
     })();
+    return () => { gone = true; };
   }, [host, board]);
 
+  /* Only the newest read may land: a slow answer for the board you just left
+     would otherwise replace the one you are looking at. Every call bumps it,
+     including one that returns at once, so a change to "nothing to read" also
+     cancels what was in flight. */
+  const asked = useRef(0);
   const load = useCallback(async (): Promise<void> => {
+    const mine = ++asked.current;
     if (!host) return;
     if (localList) {
       // A failed read of the scope is "no scope", not an error of the list: the
       // rows below are still the machine's, and the switch simply is not there.
-      const scope = await ask<{ workspaces?: string[] }>(host, "/projects");
+      const [scope, answer] = await Promise.all([
+        ask<{ workspaces?: string[] }>(host, "/projects"),
+        ask<TasksListResponse>(host, "/tasks/list"),
+      ]);
+      if (mine !== asked.current) return;
       setNames(scope.ok ? projectNames(scope.value.workspaces) : []);
-      const answer = await ask<TasksListResponse>(host, "/tasks/list");
       if (!answer.ok) { setError(answer.error); setLocal([]); return; }
       // The route answers 200 with `ok: false` and `error` when the tool is
       // there and the read failed; `tasks` is then the last good list, kept.
@@ -248,8 +250,12 @@ export default function TasksScreen(): React.ReactNode {
     }
     if (!board || !chosen) return;
     const answer = await ask<ViewTasks>(host, `/clickup/view?id=${encodeURIComponent(chosen)}`);
+    if (mine !== asked.current) return;
     if (!answer.ok) { setError(answer.error); setTasks([]); return; }
     setError(answer.value.error ?? null);
+    setStatuses(answer.value.statuses ?? []);
+    setPlace(answer.value.place);
+    setTruncated(!!answer.value.truncated);
     setTasks(Array.isArray(answer.value.tasks) ? answer.value.tasks : []);
   }, [host, board, localList, chosen]);
 
@@ -260,20 +266,16 @@ export default function TasksScreen(): React.ReactNode {
      callback is stable so the subscription is made once. */
   useCardChanges(useCallback((task: ProviderTask) => setTasks((was) => withCard(was, task)), []));
 
-  const shown = useMemo(
-    // Done cards are the bulk of any board and none of them are work you owe.
-    // Kept behind a switch rather than dropped, because "did I close that?" is
-    // a real question somebody asks from a sofa.
-    () => (tasks ?? [])
-      .filter((t) => (openOnly ? t.statusKind !== "done" : true))
-      .filter((t) => !finding || matchesQuery([t.title, t.customId, t.id, t.list], finding)),
-    [tasks, openOnly, finding],
-  );
+  /* Done cards are the bulk of any board and none of them are work you owe.
+     Kept behind the Open / All switch rather than dropped, because "did I
+     close that?" is a real question somebody asks from a sofa. */
+  const { shown, counts } = useMemo(() => openAllView(tasks ?? [], search, filters, openOnly), [tasks, search, filters, openOnly]);
+  const items = useMemo(() => flatItems(cardSections(shown, statuses, filters.group)), [shown, statuses, filters.group]);
   const scoped = !!names?.length && !everything;
   const shownLocal = useMemo(
     () => visibleLocal(scopeLocal(local, scoped ? names ?? [] : []), openOnly)
-      .filter((t) => !finding || matchesQuery([t.description, t.project, ...t.tags], finding)),
-    [local, openOnly, finding, scoped, names],
+      .filter((t) => !search.trim() || matchesQuery([t.description, t.project, ...t.tags], search)),
+    [local, openOnly, search, scoped, names],
   );
 
   const onRefresh = useCallback((): void => {
@@ -285,81 +287,97 @@ export default function TasksScreen(): React.ReactNode {
 
   /* The screen is "Cards" on the board, like every destination is its own
      name. On the machine's own list it is the tracker's name, because that is
-     what the list IS. The view moved out of the title into a chip under the
-     filter: a title that is secretly a picker is a control nobody finds. */
+     what the list IS. Which list is open is the selector under the title: a
+     title that is secretly a picker is a control nobody finds. */
+
+  /* Choosing another list: the filters and the search were about the old one. */
+  const choose = useCallback((id: string): void => {
+    setNotice(null);
+    if (id === chosen) return;
+    setChosen(id); setFilters(NO_CARD_FILTERS); setSearch("");
+  }, [chosen]);
+
+  /* A list from the workspace. One the computer already keeps a board for is
+     free; any other is added first, the way the desk's "the list itself" does,
+     which is one read of the list from the tracker. */
+  const openList = useCallback((listId: string): void => {
+    if (!host) return;
+    const target = listTarget(listId, views?.views ?? []);
+    if ("view" in target) { choose(target.view); return; }
+    setNotice(null);
+    void ask<{ ok: boolean; error?: string; view?: SavedView }>(host, "/clickup/views/add", { method: "POST", body: { url: target.add } })
+      .then((a) => {
+        const added = a.ok && a.value.ok ? a.value.view : undefined;
+        if (!added) { setNotice(a.ok ? a.value.error ?? "That list could not be opened." : a.error); return; }
+        setViews((was) => (was ? { ...was, views: [...was.views.filter((v) => v.id !== added.id), added] } : was));
+        choose(added.id);
+      });
+  }, [host, views, choose]);
   useLayoutEffect(() => {
     navigation.setOptions({ title: board || !provider ? "Cards" : provider.title });
   }, [navigation, board, provider]);
+
+  const cut = board && tasks ? truncatedNote(tasks.length, truncated) : null;
 
   if (!host) return null;
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
-      {/* What was a chip at the end of a scrolling strip is a segment, because
-          it was never a filter among filters — it is the only two-state thing
-          on the screen, and a chip that toggles looks exactly like a chip that
-          selects. Two segments say which of two lists you are looking at. */}
+      {/* Open / All is a segment, because it was never a filter among filters —
+          it is the only two-state thing on the screen, and a chip that toggles
+          looks exactly like a chip that selects. Two segments say which of two
+          lists you are looking at, and on the board each says how many. */}
       {/* And not drawn over the "no tracker" card: a switch between two views
           of nothing is the filter that card warns people not to go looking for. */}
       {provider !== null ? (
-        <View style={{ paddingHorizontal: SPACE.lg, paddingTop: SPACE.md }}>
+        <View style={{ paddingHorizontal: SPACE.lg, paddingTop: SPACE.md, gap: SPACE.md }}>
+          {board ? (
+            <>
+              <BoardHeader path={boardPath(view ?? undefined, place)} name={view?.name ?? "…"} onPress={() => setPicking(true)} />
+              <PrSearchRow
+                value={search} onChange={setSearch} active={activeFacets(filters)} onFilters={() => setFiltering(true)}
+                placeholder="Search this board" label="Search this board"
+              />
+            </>
+          ) : (
+            <PrSearchRow value={search} onChange={setSearch} placeholder="Search this list" label="Search this list" />
+          )}
           <Segmented
             value={openOnly ? "open" : "all"}
             onChange={(id) => setOpenOnly(id === "open")}
             options={[
-              { id: "open" as const, label: "Open" },
-              { id: "all" as const, label: "All" },
+              { id: "open" as const, label: "Open", count: board && tasks ? boardCount(counts.open, truncated) : undefined },
+              { id: "all" as const, label: "All", count: board && tasks ? boardCount(counts.all, truncated) : undefined },
             ]}
           />
+          {cut ? <Note>{cut}</Note> : null}
           {localList && names?.length ? (
-            <View style={{ marginTop: SPACE.md }}>
-              <Segmented
-                value={everything ? "everything" : "project"}
-                onChange={(id) => setEverything(id === "everything")}
-                options={[
-                  { id: "project" as const, label: names.join(", ") },
-                  { id: "everything" as const, label: "Everything" },
-                ]}
-              />
-            </View>
+            <Segmented
+              value={everything ? "everything" : "project"}
+              onChange={(id) => setEverything(id === "everything")}
+              options={[
+                { id: "project" as const, label: names.join(", ") },
+                { id: "everything" as const, label: "Everything" },
+              ]}
+            />
           ) : null}
-          {board ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`View: ${view?.name ?? "none"}. Change view`}
-              onPress={() => setPicking(true)}
-              hitSlop={{ top: 8, bottom: 8 }}
-              style={({ pressed }) => ({
-                alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 4, height: 32,
-                marginTop: SPACE.md, paddingLeft: 12, paddingRight: 8, borderRadius: RADIUS.sm,
-                borderWidth: 1, borderColor: C.border2, backgroundColor: pressed ? C.bg3 : "transparent",
-              })}
-            >
-              <Text style={{ color: C.text, fontSize: 13, fontWeight: "500" }}>View: {view?.name ?? "…"}</Text>
-              <Glyph name="down" color={C.text3} size={18} />
-            </Pressable>
-          ) : null}
+          {notice ? <Note tone="bad">{notice}</Note> : null}
         </View>
       ) : null}
 
-      <Sheet open={picking && board} onClose={() => setPicking(false)} title="View">
-        {(views?.views ?? []).map((view) => (
-          <SheetRow
-            key={view.id}
-            label={view.name}
-            sub={view.builtin ? "built in" : undefined}
-            on={view.id === chosen}
-            onPress={() => { setChosen(view.id); setPicking(false); }}
+      {board ? (
+        <>
+          <ListSheet
+            open={picking} onClose={() => setPicking(false)} host={host} views={views?.views ?? []} current={chosen}
+            onBoard={choose} onList={openList}
           />
-        ))}
-        <View style={{ paddingTop: SPACE.md }}>
-          <Note>
-            These are the workspace&apos;s own saved views, in the order they were added on the
-            computer — so the board says the same thing in both places.
-          </Note>
-        </View>
-      </Sheet>
-
+          <CardFilterSheet
+            open={filtering} onClose={() => setFiltering(false)} scope={view?.name ?? "This board"}
+            filters={filters} onApply={setFilters} cards={tasks ?? []} statuses={statuses}
+            query={search} openOnly={openOnly} truncated={truncated}
+          />
+        </>
+      ) : null}
 
       {/*
         Three states, where there were two.
@@ -373,37 +391,17 @@ export default function TasksScreen(): React.ReactNode {
         name no product. `undefined` — still asking — draws nothing, because
         the wrong empty state for a second reads as a flash of a lie.
       */}
-      {/* Said out loud, with the way out beside it. A list quietly showing
-          three of forty rows is the same screen as a tracker that lost
-          everything, and the difference has to be on screen. */}
-      {finding ? (
-        <View style={{
-          flexDirection: "row", alignItems: "center", gap: SPACE.sm,
-          paddingHorizontal: SPACE.lg, paddingVertical: SPACE.sm,
-          borderBottomWidth: 1, borderBottomColor: C.border, backgroundColor: C.bg2,
-        }}>
-          <Text numberOfLines={1} style={{ color: C.text2, fontSize: T.small, flex: 1 }}>
-            Showing what matches <Text style={{ color: C.text, fontFamily: MONO }}>{finding}</Text>
-          </Text>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Show everything again"
-            onPress={() => setFinding(null)}
-            style={{ minHeight: TAP, justifyContent: "center", paddingLeft: SPACE.md }}
-          >
-            <Text style={{ color: C.primary, fontSize: T.small, fontWeight: "600" }}>Clear</Text>
-          </Pressable>
-        </View>
-      ) : null}
-
       {provider === null ? (
         <View style={{ padding: SPACE.lg }}>
           <Card>
-            <Label text="No tracker here" />
+            <Label text="No tracker on this computer" />
             <Note>
-              This computer is not connected to a task tracker, so there are no cards to show.
-              It is connected at the computer, in Settings, not from here.
+              Cards come from ClickUp or Taskwarrior, and neither is connected. Connect one on the
+              computer and this tab fills in by itself.
             </Note>
+            <View style={{ paddingTop: SPACE.sm }}>
+              <Btn label="See why in Settings" onPress={() => router.push("/trackers")} />
+            </View>
           </Card>
         </View>
       ) : localList ? (
@@ -436,11 +434,10 @@ export default function TasksScreen(): React.ReactNode {
         />
       ) : (
         <FlatList
-          data={shown}
-          keyExtractor={(task) => task.id}
-          /* No gap between rows: they are one card divided by hairlines, not a
-             stack of cards. See groupEdge in src/ui.tsx. */
-          contentContainerStyle={{ padding: SPACE.lg, paddingBottom: SPACE.xl }}
+          data={items}
+          keyExtractor={(item) => item.key}
+          extraData={learned}
+          contentContainerStyle={{ padding: SPACE.lg, paddingTop: SPACE.sm, paddingBottom: SPACE.xl }}
           refreshControl={<RefreshControl refreshing={pulling} onRefresh={onRefresh} tintColor={C.text3} />}
           ListEmptyComponent={
             tasks === null ? null : (
@@ -448,18 +445,22 @@ export default function TasksScreen(): React.ReactNode {
                 error={error}
                 errorTitle="Cannot read the board"
                 emptyTitle="Nothing here"
-                emptyText={"This view has no cards that are still open. The switch above shows the rest."}
+                emptyText={EMPTY_TEXT[whyEmpty(tasks, search, filters, openOnly) ?? "none"]}
                 onRetry={() => { void load(); }}
               />
             )
           }
-          renderItem={({ item, index }) => (
-            <View style={groupEdge(index === 0, index === shown.length - 1)}>
-              <Row
-                task={item}
-                prefix={views?.prefix ?? ""}
+          renderItem={({ item }) => item.kind === "head" ? (
+            <SectionHead label={item.section.label ?? ""} color={item.section.color} count={item.section.cards.length} />
+          ) : (
+            <View style={{ paddingBottom: SPACE.sm }}>
+              <CardRow
+                task={item.card}
+                prs={prCount(item.card, learned(item.card.id))}
+                query={search}
+                showList={chosen === ASSIGNED_VIEW_ID}
                 onCopied={(id) => { setSaid(id); setTimeout(() => setSaid(null), 1600); }}
-                onOpen={() => router.push({ pathname: "/card/[id]", params: { id: item.id } })}
+                onOpen={() => router.push({ pathname: "/card/[id]", params: { id: item.card.id } })}
               />
             </View>
           )}

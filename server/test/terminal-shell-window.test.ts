@@ -22,7 +22,7 @@ describe("Shell window", () => {
   });
 
   test("the sheet offers Shell whether or not agents are installed", () => {
-    const sheet = mobile.slice(mobile.indexOf('title="New window"'));
+    const sheet = mobile.slice(mobile.indexOf("open={picking}"));
     expect(sheet).toContain('label="Shell"');
     expect(sheet).toContain('openAgent("shell", false)');
     // Not inside the branch that only draws when nothing is installed.

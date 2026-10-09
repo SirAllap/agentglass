@@ -2588,8 +2588,12 @@ function paneRowsOn(
      * A boolean says which server without saying where it is. See the note
      * on `AgentPane.own`.
      */
+    const { group: rawGroup, ...rest } = r;
+    // Held to the shape the strip holds it to (`parseWindows`): a chip label.
+    const group = sanitizeGroupName(rawGroup);
     rows.push({
-      ...r, socket,
+      ...rest, socket,
+      ...(group ? { group } : {}),
       /* Absent when there is nothing to compare against. `mine` is false both
          for "another server" and for "this app has never attached anything",
          and those are different answers: the first is a session to hide, the

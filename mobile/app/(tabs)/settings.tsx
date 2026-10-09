@@ -34,13 +34,15 @@ import {
   keepAliveAvailable, keepAliveRunning, loadKeepAlivePref, saveKeepAlivePref, syncKeepAlive, wantKeepAlive,
 } from "../../src/notifications/keepAlive.ts";
 import { onTalkPref, setTalkPref, talkPref, type TalkPref } from "../../src/notifications/talkPref.ts";
-import { Btn, Group, GroupTitle, Note, Row, Sheet, Switch, TAP } from "../../src/ui.tsx";
+import { Btn, Group, GroupTitle, Note, Row, Sheet, Switch, TAP, useFlash } from "../../src/ui.tsx";
 import { Glyph, type GlyphName } from "../../src/nav/glyphs.tsx";
 import { KeyboardIcon } from "../../src/nav/icons.tsx";
 import {
-  ACCENTS, C, MONO, RADIUS, SPACE, T, currentLook, ink, setLook, tint, type ThemeMode,
+  ACCENTS, C, MONO, RADIUS, SPACE, T, currentLook, deskPreview, ink, setLook, tint, type Palette, type ThemeMode,
 } from "../../src/theme.ts";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
+import { trackersSummary } from "../../src/model/trackerRows.ts";
+import { useProviders } from "../../src/state/use-tracks-work.ts";
 import { phonePalette } from "../../../shared/palettes.ts";
 import type { DeviceScope } from "../../../shared/types.ts";
 import { ACCESSORY_KEYS } from "../../src/terminal/keys.ts";
@@ -109,9 +111,8 @@ function Pick<V extends string>({ value, options, onChange, label }: {
             accessibilityRole="radio"
             accessibilityState={{ checked: on }}
             onPress={() => onChange(o.id)}
-            hitSlop={{ top: 4, bottom: 4 }}
             style={({ pressed }) => ({
-              minHeight: 36, paddingHorizontal: SPACE.md, borderRadius: RADIUS.pill,
+              minHeight: TAP, paddingHorizontal: SPACE.md, borderRadius: RADIUS.pill,
               alignItems: "center", justifyContent: "center",
               backgroundColor: on ? C.primary : "transparent",
               transform: [{ scale: pressed ? 0.97 : 1 }],
@@ -128,69 +129,120 @@ function Pick<V extends string>({ value, options, onChange, label }: {
 }
 
 /**
- * The accents, in one row.
+ * The accents, two rows of four.
  *
- * Seven across, and that is the constraint the swatch size comes from: 44 is
- * the floor for a tap target and seven of them are 308 against the 329 a card
- * had inside its padding on the emulator's 393dp screen. A gap between them
- * does not fit — measured, an 8 put the seventh on a line of its own — so the
- * leftover is spread instead.
+ * Eight across was 8 x 44 = 352 in a card that has 329 inside its padding on a
+ * 393 dp screen and less on a 360 dp phone, so the last swatch wrapped onto a
+ * line of its own. Four across at 48 is 192 and fits every phone, with the
+ * leftover spread by the row.
  */
 function Swatches(): React.ReactNode {
   const look = currentLook();
+  const rows = [ACCENTS.slice(0, 4), ACCENTS.slice(4)];
   return (
-    <View style={{
-      flexDirection: "row", justifyContent: "space-between", paddingHorizontal: SPACE.md, paddingBottom: SPACE.md,
-    }}>
-      {ACCENTS.map((a) => {
-        const on = look.accent === a.id;
-        // What will actually be painted, which on the phone is the accent
-        // walked to a shade that reads — see phonePalette.
-        const face = phonePalette(look.polarity, a.id).primary;
-        return (
-          <Pressable
-            key={a.id}
-            accessibilityRole="radio"
-            accessibilityLabel={a.name}
-            accessibilityState={{ checked: on }}
-            onPress={() => setLook({ accent: a.id })}
-            style={{ width: TAP, height: TAP, alignItems: "center", justifyContent: "center" }}
-          >
-            {/* Selected is a ring AROUND the swatch with the card showing
-                through the gap, not a border on it. A border has to be a
-                colour, and there is no colour that works for all seven: drawn
-                in the text colour it disappeared on neutral — measured on the
-                emulator, neutral IS the text colour — and drawn in the accent
-                it is a violet ring on violet. A gap is visible against every
-                one of them because it is the card. */}
-            <View style={{
-              width: 42, height: 42, borderRadius: 21, alignItems: "center", justifyContent: "center",
-              borderWidth: 2, borderColor: on ? face : "transparent",
-            }}>
+    <View style={{ paddingHorizontal: SPACE.md, paddingBottom: SPACE.md, gap: SPACE.sm }}>
+      {rows.map((row, r) => (
+        <View key={r} style={{ flexDirection: "row", gap: SPACE.sm }}>
+          {row.map((a) => {
+            const on = look.accent === a.id;
+            // What will actually be painted, which on the phone is the accent
+            // walked to a shade that reads — see phonePalette.
+            const face = phonePalette(look.polarity, a.id).primary;
+            return (
+              <Pressable
+                key={a.id}
+                accessibilityRole="radio"
+                accessibilityLabel={a.name}
+                accessibilityState={{ checked: on }}
+                onPress={() => setLook({ accent: a.id })}
+                style={({ pressed }) => ({
+                  flex: 1, height: TAP, borderRadius: RADIUS.lg, backgroundColor: face,
+                  alignItems: "center", justifyContent: "center",
+                  // Selected is a ring with the card showing through the gap,
+                  // not a border in a colour: there is no colour that is
+                  // visible against all eight faces, and the card is.
+                  borderWidth: 2, borderColor: on ? C.text : "transparent",
+                  opacity: pressed ? 0.85 : 1,
+                })}
+              >
+                {on ? <Glyph name="check" color={ink(face)} size={20} /> : null}
+              </Pressable>
+            );
+          })}
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/** The three looks, as cards that show what they are: a thumbnail in the
+ *  palette it would paint, then a name and one line. */
+function LookCards(): React.ReactNode {
+  const look = currentLook();
+  const desk = deskPreview();
+  const light = phonePalette("light", look.accent);
+  const dark = phonePalette("dark", look.accent);
+  const cards: { id: ThemeMode; name: string; sub: string; p: Palette }[] = [
+    {
+      id: "desk", name: "Match the computer",
+      sub: desk ? "Follows the desk theme" : "Follows the desk theme; the phone\u2019s own until it answers",
+      p: desk ?? phonePalette(look.polarity, look.accent),
+    },
+    { id: "light", name: "Light", sub: "Warm paper, always", p: light },
+    { id: "dark", name: "Dark", sub: "Always dark", p: dark },
+  ];
+  return (
+    <View style={{ paddingHorizontal: SPACE.md, paddingBottom: SPACE.md }}>
+      <View accessibilityRole="radiogroup" accessibilityLabel="Look" style={{ flexDirection: "row", gap: SPACE.sm }}>
+        {cards.map((c) => {
+          const on = look.mode === c.id;
+          return (
+            <Pressable
+              key={c.id}
+              accessibilityRole="radio"
+              accessibilityState={{ checked: on }}
+              onPress={() => setLook({ mode: c.id })}
+              style={({ pressed }) => ({
+                flex: 1, padding: SPACE.sm, borderRadius: RADIUS.lg, gap: 6,
+                borderWidth: 2, borderColor: on ? C.primary : C.border2,
+                backgroundColor: on ? tint(C.primary, 0.1) : "transparent",
+                opacity: pressed ? 0.85 : 1,
+              })}
+            >
               <View style={{
-                width: 30, height: 30, borderRadius: 15, backgroundColor: face,
-                // A hairline on every swatch, for the two that are nearly the
-                // card they sit on.
-                borderWidth: 1, borderColor: C.border2,
-              }} />
-            </View>
-          </Pressable>
-        );
-      })}
+                height: 52, borderRadius: RADIUS.sm, backgroundColor: c.p.bg, padding: 8, gap: 5,
+                borderWidth: 1, borderColor: c.p.border2,
+              }}>
+                <View style={{ height: 5, width: "70%", borderRadius: 3, backgroundColor: c.p.text }} />
+                <View style={{ height: 5, width: "40%", borderRadius: 3, backgroundColor: c.p.primary }} />
+                <View style={{ height: 5, width: "85%", borderRadius: 3, backgroundColor: c.p.border2 }} />
+              </View>
+              <Text style={{ color: C.text, fontSize: T.body, fontWeight: "600" }}>{c.name}</Text>
+              <Text style={{ color: C.text3, fontSize: T.small }}>{c.sub}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
     </View>
   );
 }
 
 /** The computer: what it is called, where it is, and what this phone may do
  *  to it. A sheet, because it is looked at and dismissed. */
-function ComputerSheet({ open, onClose, onForget }: {
+function ComputerSheet({ open, onClose, onForget, going }: {
   open: boolean;
   onClose: () => void;
   onForget: () => void;
+  going: boolean;
 }): React.ReactNode {
   const { host, live, fleet } = useAgentglass();
   const computer = useComputer(host);
   const router = useRouter();
+  const [copied, flash] = useFlash();
+  // The confirmation lives in the sheet, where the button was pressed: a system
+  // alert over a sheet is two layers asking one question.
+  const [sure, setSure] = useState(false);
+  useEffect(() => { if (!open) setSure(false); }, [open]);
   if (!host) return null;
   const scope = SCOPE[host.scope];
   /* How long ago this pairing was made. Worth a row because the sheet is where
@@ -211,10 +263,11 @@ function ComputerSheet({ open, onClose, onForget }: {
             second phone or a browser at the desk, and a typo in a port is a
             pairing that fails for a reason nobody can see. */}
         <Btn
-          label="Copy the address"
+          label={copied ? "Address copied" : "Copy the address"}
           onPress={() => {
             void Clipboard.setStringAsync(host.origin);
             void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            flash();
           }}
         />
         <View style={{ gap: SPACE.xs, padding: SPACE.md, borderRadius: RADIUS.lg, backgroundColor: C.bg3 }}>
@@ -226,7 +279,36 @@ function ComputerSheet({ open, onClose, onForget }: {
           </Note>
         </View>
         <Btn label="Troubleshooting" onPress={() => { onClose(); router.push("/troubleshoot"); }} />
-        <Btn label="Forget this computer" tone="danger" onPress={() => { onClose(); onForget(); }} />
+        {sure ? (
+          <View style={{ gap: SPACE.sm, padding: SPACE.md, borderRadius: RADIUS.lg, backgroundColor: tint(C.error, 0.12) }}>
+            <Text style={{ color: C.error, fontSize: T.body, fontWeight: "600" }}>Forget this computer?</Text>
+            {/* Said plainly, because it is the half people get wrong: this drops
+                the phone's copy. The credential stays valid until it is revoked
+                at the computer, and a phone cannot be trusted to revoke itself —
+                a phone that has been taken is exactly the one that will not. */}
+            <Note>
+              This phone will lose its credential and you will pair again to come back. To cut it off
+              for good, forget the device at the computer as well.
+            </Note>
+            <View style={{ flexDirection: "row", gap: SPACE.sm }}>
+              <Btn label="Keep it" disabled={going} style={{ flex: 1 }} onPress={() => setSure(false)} />
+              <Btn label="Forget" tone="danger" busy={going} style={{ flex: 1 }} onPress={onForget} />
+            </View>
+          </View>
+        ) : (
+          // Soft red with red words: the page used to end in a full-width red
+          // button, which is a mis-tap waiting for a thumb on its way down.
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setSure(true)}
+            style={({ pressed }) => ({
+              minHeight: TAP, alignItems: "center", justifyContent: "center", borderRadius: RADIUS.md,
+              backgroundColor: tint(C.error, pressed ? 0.22 : 0.12),
+            })}
+          >
+            <Text style={{ color: C.error, fontSize: T.body, fontWeight: "600" }}>Forget this computer…</Text>
+          </Pressable>
+        )}
       </View>
     </Sheet>
   );
@@ -247,6 +329,7 @@ export default function SettingsScreen(): React.ReactNode {
   const [going, setGoing] = useState(false);
   const [sheet, setSheet] = useState(false);
   const look = currentLook();
+  const providers = useProviders(host);
   /*
    * Whether an alert can actually be DELIVERED — not whether permission was
    * once granted.
@@ -329,33 +412,14 @@ export default function SettingsScreen(): React.ReactNode {
   }, [alerts]);
 
   const onForget = useCallback((): void => {
-    Alert.alert(
-      "Forget this computer?",
-      // Said plainly, because it is the half people get wrong: this drops the
-      // phone's copy. The credential stays valid until it is revoked at the
-      // computer, and a phone cannot be trusted to revoke itself — a phone that
-      // has been taken is exactly the one that will not.
-      "This phone will lose its credential and you will pair again to come back. " +
-      "To cut it off for good, forget the device at the computer as well.",
-      [
-        { text: "Keep it", style: "cancel" },
-        {
-          text: "Forget",
-          style: "destructive",
-          onPress: () => { setGoing(true); void forget(); },
-        },
-      ],
-    );
+    setGoing(true);
+    // A refused forget leaves the phone paired; the button must come back.
+    void forget().catch(() => setGoing(false));
   }, [forget]);
 
   if (!host) return null;
 
   const supported = notificationsSupported();
-  const MODES: { id: ThemeMode; name: string }[] = [
-    { id: "system", name: "System" },
-    { id: "dark", name: "Dark" },
-    { id: "light", name: "Light" },
-  ];
   const status = live === "open" ? "Connected" : live === "connecting" ? "Connecting…" : "Offline";
 
   return (
@@ -498,12 +562,10 @@ export default function SettingsScreen(): React.ReactNode {
 
       <GroupTitle text="Appearance" />
       <Group inset={50}>
-        <Row
-          title="Theme"
-          sub={look.mode === "system" ? `Following the phone, ${look.polarity} now` : undefined}
-          lead={<Lead name="contrast" />}
-          trail={<Pick label="Theme" value={look.mode} options={MODES} onChange={(mode) => setLook({ mode })} />}
-        />
+        <View>
+          <Row title="Look" lead={<Lead name="contrast" />} />
+          <LookCards />
+        </View>
         <View>
           <Row
             title="Accent"
@@ -513,6 +575,10 @@ export default function SettingsScreen(): React.ReactNode {
           <Swatches />
         </View>
       </Group>
+      <Note>
+        “Match the computer” is the default: pull requests, cards, files and the terminal all wear the same theme as
+        the desk. Light and Dark pin it to this phone.
+      </Note>
 
       <GroupTitle text="Terminal" />
       <Group inset={50}>
@@ -559,6 +625,13 @@ export default function SettingsScreen(): React.ReactNode {
       <GroupTitle text="Help" />
       <Group inset={50}>
         <Row
+          title="Task trackers"
+          sub={trackersSummary(providers)}
+          lead={<Lead name="list" />}
+          chevron
+          onPress={() => router.push("/trackers")}
+        />
+        <Row
           title="Troubleshooting"
           sub="What this computer has, and what is missing"
           lead={<Lead name="wrench" />}
@@ -576,11 +649,7 @@ export default function SettingsScreen(): React.ReactNode {
         />
       </Group>
 
-      <View style={{ paddingTop: SPACE.lg }}>
-        <Btn label="Forget this computer" tone="danger" busy={going} onPress={onForget} />
-      </View>
-
-      <ComputerSheet open={sheet} onClose={() => setSheet(false)} onForget={onForget} />
+      <ComputerSheet open={sheet} onClose={() => setSheet(false)} onForget={onForget} going={going} />
     </ScrollView>
   );
 }

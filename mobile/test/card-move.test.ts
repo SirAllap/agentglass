@@ -26,25 +26,28 @@ function handler(name: string): string {
 describe("move", () => {
   const move = handler("move");
 
-  test("posts to the status route with the stamp it read", () => {
+  test("posts to the status route with the stamp it read, or the one it was handed", () => {
     expect(move).toContain('"/clickup/status"');
-    expect(move).toMatch(/body:\s*\{[^}]*\bupdated:\s*card\.updated\b/);
+    expect(move).toMatch(/body:\s*\{[^}]*\bupdated:\s*how\.stamp \?\? card\.updated\b/);
   });
 
-  test("tells a conflict apart from a refusal", () => {
-    expect(move).toContain("answer.value.conflict");
+  test("tells a conflict apart from a refusal, and re-reads the card only for a conflict", () => {
+    expect(move).toContain("moveOutcome(answer)");
+    expect(move).toMatch(/outcome\.kind === "conflict"[\s\S]*await load\(\)/);
+    expect(move.split("await load()").length - 1).toBe(2); // the conflict read, and the no-card fallback
   });
 
   test("puts the returned card on screen and out to the list", () => {
-    expect(move).toContain("landed(answer.value.task)");
+    expect(move).toContain("landed(outcome.task)");
   });
 });
 
-describe("claim does the same with what it is handed", () => {
-  test("it already sent the stamp; now it keeps the answer too", () => {
-    const claim = handler("claim");
-    expect(claim).toMatch(/\bupdated:\s*card\.updated\b/);
-    expect(claim).toContain("landed(answer.value.task)");
+describe("apply (assignees) does the same with what it is handed", () => {
+  test("it sends the stamp it read, or the one it was handed, and keeps the answer", () => {
+    const apply = handler("apply");
+    expect(apply).toMatch(/\bupdated:\s*how\.stamp \?\? card\.updated\b/);
+    expect(apply).toContain("moveOutcome(answer)");
+    expect(apply).toContain("landed(outcome.task)");
   });
 });
 
