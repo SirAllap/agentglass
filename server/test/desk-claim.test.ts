@@ -13,7 +13,7 @@
 // that connection stays open. Every caller that can claim could already forge
 // the Origin, so a hostile claim gains nothing it did not have; an honest one
 // shuts the forgery for as long as the app runs.
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -93,19 +93,24 @@ const register = (base: string, headers: Record<string, string> = {}) =>
     body: JSON.stringify({ client: "orbit-window", on: false }),
   });
 
+/** Every claim the server granted and the test has not dropped yet. */
+const granted = new Set<() => void>();
+
 /** A claim, opened and left open; `close()` drops it. */
 async function claim(base: string, headers: Record<string, string>) {
   const ac = new AbortController();
+  const close = () => { granted.delete(close); ac.abort(); };
   const r = await fetch(base + "/desk/claim", { method: "POST", headers, signal: ac.signal });
   let first = "";
   if (r.status === 200) {
     const reader = r.body!.getReader();
     const { value } = await reader.read();
     first = new TextDecoder().decode(value);
+    granted.add(close);
   } else {
     await r.text();
   }
-  return { status: r.status, first, close: () => ac.abort() };
+  return { status: r.status, first, close };
 }
 
 /** Until the server has seen the claim's connection go. */
@@ -128,6 +133,22 @@ describe("a server the app did not start", () => {
     proc.stderr?.on("data", (c) => { said = (said + c).slice(-8000); });
     await up(base, () => said);
   }, SERVER_BOOT_MS);
+
+  /*
+   * Every test here starts on a free desk. The server frees a claim when it
+   * sees the connection drop, a beat after `close()`, so a test that claims
+   * the moment the one above it closed can meet the old claim and get 409. On
+   * a loaded machine that beat is long enough to lose: 6 runs of this file in
+   * 40, with six copies at once beside eight busy cores, failed that way, and
+   * once it happened the stray claim was never closed, so every test after it
+   * failed too (seven at once, as on CI). Dropping whatever is still granted
+   * and waiting for the server to say the desk is free closes it: 0 in 200
+   * under the same load.
+   */
+  afterEach(async () => {
+    for (const close of granted) close();
+    expect(await until(async () => (await register(base)).status === 200)).toBe(true);
+  });
 
   afterAll(() => {
     try { proc?.kill(); } catch { /* already gone */ }
@@ -172,6 +193,7 @@ describe("a server the app did not start", () => {
   test("a second claim while one is held is refused, and does not replace it", async () => {
     const c = await claim(base, { ...bearer, "x-agentglass-desk": KEY });
     try {
+      expect(c.status).toBe(200);
       const other = "a-second-claimant-key-0123456789abcdefghij";
       const again = await claim(base, { ...bearer, "x-agentglass-desk": other });
       expect(again.status).toBe(409);
