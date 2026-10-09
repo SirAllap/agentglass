@@ -157,7 +157,7 @@ import {
   prBaseOf,
   ghRateLimit,
   branchBehind, localHead, prRollup, repoIdFor as prRepoIdFor, subscribeTalkSeen,
-  prBranches, prsForBranch, prForHead, nodeIdOk, locateRepo, isForeignRoot } from "./prs.ts";
+  prBranches, githubStatusCached, prsForBranch, prForHead, nodeIdOk, locateRepo, isForeignRoot } from "./prs.ts";
 import { planCheckOnBase, startCheckOnBase, checkOnBaseStatus, cancelCheckOnBase } from "./checkOnBasePr.ts";
 import { repoSpend } from "./spend.ts";
 import { repoMetrics } from "./checkRuns.ts";
@@ -7360,6 +7360,10 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         url.searchParams.get("root") || "",
         url.searchParams.get("branch") || "",
       ) });
+    }
+    /* GitHub's public status, cached ten minutes server-side (see prs.ts). */
+    if (pathname === "/prs/github-status") {
+      return json(await githubStatusCached());
     }
     if (pathname === "/prs/behind") {
       const asked = url.searchParams.get("root") ?? "";

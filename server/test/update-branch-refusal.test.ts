@@ -49,3 +49,13 @@ describe("a refusal that is not a conflict", () => {
     expect(updateBranchRefusal("")).toBeNull();
   });
 });
+
+describe("updateBranchRefusal: the pull request has not caught up with the branch", () => {
+  test("GraphQL's head sha mismatch becomes a sentence, marked", () => {
+    const r = updateBranchRefusal("GraphQL: head sha didn't match the current head ref. (updatePullRequestBranch)");
+    expect(r?.ok).toBe(false);
+    expect(r?.prLagging).toBe(true);
+    expect(r?.error).toContain("has not caught up yet");
+    expect(r?.error).not.toContain("GraphQL");
+  });
+});

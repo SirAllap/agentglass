@@ -33,7 +33,8 @@
 import type { PrCheck, PrCheckRollup, PrEvent, PrMergeGate, PrReview, PrReviewer, PrSummary } from "./types.ts";
 import { buildReviewStory } from "./reviewStory.ts";
 import { MIN_SAMPLES, runKey } from "./checkBaseline.ts";
-import { mergeBlockers, staleApproval, type MergeBlocker } from "./mergeBlockers.ts";
+import { stuckMinutes, type GithubProblem } from "./githubStatus.ts";
+import { mergeBlockers, computingDetail, staleApproval, type MergeBlocker } from "./mergeBlockers.ts";
 import { approvalsNeed, buildRoster, guardLines, mergeGuard, rosterCounts, type MergeGuard, type ReviewerState, type RosterEntry } from "./reviewRoster.ts";
 
 export type Mover = "you" | "author" | "reviewer" | "team" | "ci" | "wait" | "other" | "fyi" | "done";
@@ -190,6 +191,12 @@ export interface MergePathInput {
   awaitingChecks?: boolean;
   autoArmed?: boolean;
   now?: number;
+  /** When this app first saw mergeability UNKNOWN for this pull request. */
+  unknownSince?: number | null;
+  /** GitHub's own status, asked only once UNKNOWN has lasted. */
+  githubProblem?: GithubProblem | null;
+  /** The branch ref on GitHub is not the pull request's head: GitHub has not synced its own pull request. */
+  prLagging?: boolean;
   /** Typical duration in ms by `workflow\u0001name`, when a caller has a history. */
   typical?: Record<string, number>;
 }
@@ -285,6 +292,7 @@ const STAGE_ORDER: StageKey[] = ["review", "required", "other", "merge"];
 
 export function mergePath(i: MergePathInput): MergePath {
   const now = i.now ?? Date.now();
+  const stuckMin = i.mergeState === "UNKNOWN" ? stuckMinutes(i.unknownSince, now) ?? (i.prLagging ? 0 : null) : null;
   const base = i.baseRefName || "the base branch";
   const all = i.checksAll ?? [];
   const gate = i.gate;
@@ -337,7 +345,7 @@ export function mergePath(i: MergePathInput): MergePath {
   const blockers = mergeBlockers({
     state: i.state, mergeState: i.mergeState, mergeable: i.mergeable, isDraft: i.isDraft,
     reviewDecision: i.reviewDecision, checks: i.checks, checksAll: all, baseRefName: i.baseRefName,
-    gate, openThreads, conflicted, awaitingChecks: i.awaitingChecks,
+    gate, openThreads, conflicted, awaitingChecks: i.awaitingChecks, behind: i.behind, stuckMin, githubProblem: i.githubProblem, prLagging: i.prLagging,
   });
   const rows: Omit<PathRow, "n" | "moverLabel">[] = [];
   const add = (r: Omit<PathRow, "n" | "moverLabel" | "counted"> & { counted?: boolean }) =>
@@ -594,7 +602,7 @@ export function mergePath(i: MergePathInput): MergePath {
   if (!willMerge && !rows.some((r) => r.counted) && i.state === "OPEN") {
     add({
       id: "state", kind: "unexplained", stage: "merge", title: "GitHub says it cannot be merged yet",
-      why: i.mergeState === "UNKNOWN" ? "It computes mergeability lazily; this settles in a few seconds." : "GitHub did not say which rule is unmet; its own page lists everything.",
+      why: i.mergeState === "UNKNOWN" ? computingDetail(i.behind, stuckMin, i.githubProblem, i.prLagging) : "GitHub did not say which rule is unmet; its own page lists everything.",
       mover: i.mergeState === "UNKNOWN" ? "wait" : "other",
     });
   }
@@ -858,6 +866,12 @@ export function mergePath(i: MergePathInput): MergePath {
     const t = (text: string): HeroPart => ({ text });
     const em = (text: string): HeroPart => ({ text, em: true });
     const github: PathAction = { id: "open-github", label: "Open on GitHub ↗" };
+    /* Stuck: the way out first (Update branch, when it is behind, is the button
+       at the bottom left), then GitHub's own status when it reports trouble. */
+    const stuckActions = (g: PathAction): Partial<Hero> => ({
+      primary: g,
+      ...(i.githubProblem ? { secondary: { id: "open-log", label: "GitHub status ↗", url: i.githubProblem.url } as PathAction } : null),
+    });
 
     switch (f.kind) {
       case "draft":
@@ -970,10 +984,14 @@ export function mergePath(i: MergePathInput): MergePath {
         });
       case "unexplained":
         return f.mover === "wait"
-          ? mk([t("GitHub is still working out whether it can merge.")], { sub: "It computes mergeability lazily; this settles in a few seconds." })
+          ? mk([t(i.prLagging ? "The pull request has not caught up with its branch." : stuckMin != null ? `GitHub has not said whether it can merge for ${stuckMin} min.` : "GitHub is still working out whether it can merge.")], {
+            sub: computingDetail(i.behind, stuckMin, i.githubProblem, i.prLagging), ...(stuckMin != null ? stuckActions(github) : null),
+          })
           : mk([t("GitHub is blocking it without saying why.")], { sub: b("unexplained")?.detail ?? f.why, primary: github });
       case "computing":
-        return mk([t("GitHub is still working out whether it can merge.")], { sub: f.why });
+        return mk([t(i.prLagging ? "The pull request has not caught up with its branch." : stuckMin != null ? `GitHub has not said whether it can merge for ${stuckMin} min.` : "GitHub is still working out whether it can merge.")], {
+          sub: f.why, ...(stuckMin != null ? stuckActions(github) : null),
+        });
       case "awaiting":
         return mk([t("Waiting for the checks to start.")], { sub: f.why });
       default: {

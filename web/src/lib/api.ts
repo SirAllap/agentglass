@@ -9,6 +9,7 @@ import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedVie
 import { DEFAULT_NOTIFY_PREFS, type NotifyPrefs } from "../../../shared/notifyPrefs.ts";
 import type { CheckMetric } from "../../../shared/checkBaseline.ts";
 import type { UiReply } from "../../../shared/uiActions.ts";
+import type { GithubProblem } from "../../../shared/githubStatus.ts";
 
 /** A partial update: any group may name just the keys it changes. */
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? Partial<T[K]> : T[K] };
@@ -1546,8 +1547,11 @@ const realApi = {
       `/prs/rollup?${new URLSearchParams({ root, number: String(number), ...(force ? { force: "1" } : {}) })}`),
   /** `force` skips the server's 60 s copy: after "Update branch", or when the
    *  person pressed Refresh. The panel's own 30 s tick does not need it. */
+  /** GitHub's own status, only worth asking once a pull request has been stuck
+   *  at UNKNOWN for a while. The server caches it for ten minutes. */
+  prGithubStatus: () => get<{ ok: boolean; problem: GithubProblem | null }>("/prs/github-status"),
   prBehind: (root: string, number: number, force = false) =>
-    get<{ ok: boolean; behind?: number; ahead?: number; local?: PrLocalHead; error?: string }>(
+    get<{ ok: boolean; behind?: number; ahead?: number; local?: PrLocalHead; refSha?: string; error?: string }>(
       `/prs/behind?${new URLSearchParams({ root, number: String(number), ...(force ? { force: "1" } : {}) })}`),
   /** Which saved board already holds this card. Local — the server answers from
    *  its cache, so this can be asked before every lookup. */
@@ -2759,6 +2763,7 @@ const demoApi: typeof realApi = {
     local: { branch, exists: false, ahead: 0, behind: 0, dirty: false, sync: "absent" as const },
   }),
   prRollup: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
+  prGithubStatus: () => D({ ok: true, problem: null as GithubProblem | null }),
   prBehind: (_r: string, n: number) => D(n === 461
     ? {
       ok: true, behind: 12, ahead: 3,

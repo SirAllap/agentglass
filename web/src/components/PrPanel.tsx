@@ -56,6 +56,9 @@ import { api, type BranchSpend, type RepoSpend } from "../lib/api.ts";
 import {
   allowedMethods, pickMergeMethod, MERGE_LABEL, MERGE_OPTION, type MergeMethod,
 } from "../../../shared/mergeMethod.ts";
+import { stuckMinutes, STUCK_AFTER_MS, LAGGING_SENTENCE, type GithubProblem } from "../../../shared/githubStatus.ts";
+import { unknownSinceOf, forgetUnknown } from "../lib/unknownSince.ts";
+import { updateStanding, awaitingChecksOf, updateHeld, updateHeldTitle, stalledNote, REQUEST_WINDOW_MS, type UpdateStanding } from "../../../shared/justUpdated.ts";
 import { updateBranchMove, branchNoticeJump, prConflicted, gitSaysClean as cleanMerge, type BranchNotice } from "../lib/updateBranch.ts";
 import { depSpec } from "../../../shared/deps.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
@@ -3663,19 +3666,21 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const commitFiles = useMemo(() => parseUnifiedDiff(commitText).map(toFileChange), [commitText]);
 
   /*
-   * "We just pushed to this branch, so CI is about to start."
+   * "We asked GitHub to update this branch."
    *
-   * The rollup cannot know it: for the seconds between the push landing and
-   * GitHub creating the first run, an empty list of checks is indistinguishable
-   * from a green one — which is how "Update branch" led straight to "Ready to
-   * merge · nothing is standing in the way" over a pull request GitHub was
-   * already running three checks on.
-   *
-   * Held per pull request and with the moment it started, so it clears itself
-   * rather than waiting for a state that may never come: a repository that runs
-   * nothing on this branch would otherwise say "waiting" forever.
+   * Recorded when the request comes back ACCEPTED, with the head it was made
+   * on — not when the button is pressed, and not as proof that anything moved.
+   * `gh pr update-branch` answers 202 (queued) and GitHub can then silently not
+   * do it, so whether the branch was updated is read off the head commit
+   * (shared/justUpdated.ts), and "waiting for the checks" only follows once a
+   * new head is actually seen. Held per pull request.
    */
-  const [pushed, setPushed] = useState<{ number: number; at: number } | null>(null);
+  /* Where the branch really is on GitHub, as the behind answer last read it. */
+  const [branchRef, setBranchRef] = useState<{ number: number; sha: string; at: number } | null>(null);
+  const headSeen = useRef<{ key: string; at: number }>({ key: "", at: 0 });
+  const prevHeadKey = useRef("");
+  const [asked, setAsked] = useState<{ number: number; at: number; headBefore: string; note?: string } | null>(null);
+  const [nowTick, setNowTick] = useState(0);
   /*
    * "Update branch" refused because base and head conflict.
    *
@@ -3686,7 +3691,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * make the refusal untrue.
    */
   const [refusedUpdate, setRefusedUpdate] = useState<{ number: number; updatedAt: string } | null>(null);
-  const AWAIT_CHECKS_MS = 4 * 60_000;
 
   /* `busy` is state: two presses in the same tick both read false. The ref is
      what makes the second one a no-op, the disabled attribute only what shows it. */
@@ -3834,6 +3838,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       const a = behindAnswer(root, n);
       setBehind(a.behind);
       setLocalHead(a.local);
+      setBranchRef(a.refSha ? { number: n, sha: a.refSha, at: a.at } : null);
       setBehindAsking(askingBehind(root, n));
     };
     read();
@@ -4575,7 +4580,68 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * box are two sentences about the same rollup, and "we pushed a moment ago"
    * is the input that decides whether an empty one means "none" or "not yet" —
    * so it cannot be worked out separately in each place. */
-  const awaitingChecks = !!d && !!pushed && pushed.number === d.number && Date.now() - pushed.at < AWAIT_CHECKS_MS;
+  /* The branch ref only counts if it was read AFTER the pull request's head last
+     changed: an ordinary push moves the ref first, and a ref read before the
+     panel saw the new head would read as "the pull request has not caught up". */
+  const headNow = d ? (d.headSha ?? d.commits[d.commits.length - 1]?.oid ?? "") : "";
+  const headKey = d ? `${d.number}:${headNow}` : "";
+  if (headSeen.current.key !== headKey) headSeen.current = { key: headKey, at: Date.now() };
+  const refTrusted = !!d && !!branchRef && branchRef.number === d.number && branchRef.at >= headSeen.current.at;
+  useEffect(() => {
+    // The head changed under an open panel: ask again, so the ref is read after it.
+    if (!root || !d || !prevHeadKey.current || prevHeadKey.current === headKey || !prevHeadKey.current.startsWith(`${d.number}:`)) { prevHeadKey.current = headKey; return; }
+    prevHeadKey.current = headKey;
+    refreshBehind(root, d.number, false);
+  }, [root, d, headKey]);
+  const updateState: UpdateStanding = d
+    ? updateStanding({
+      now: Date.now(), own: asked && asked.number === d.number ? asked : null,
+      headSha: d.headSha ?? d.commits[d.commits.length - 1]?.oid,
+      headCommittedAt: d.commits[d.commits.length - 1]?.committedAt,
+      checksTotal: d.checks?.total ?? 0,
+      refSha: refTrusted ? branchRef!.sha : null,
+    })
+    : "idle";
+  const prLagging = updateState === "pr-lagging";
+  const awaitingChecks = awaitingChecksOf(updateState);
+  /* The window closing is not an event in the data, so it needs a clock: one
+     timeout at the deadline that re-reads the pull request once (the head may
+     have moved without the poll having seen it) and re-renders. Not a poll. */
+  useEffect(() => {
+    if (!asked) return;
+    const left = asked.at + REQUEST_WINDOW_MS - Date.now();
+    if (left <= 0) return;
+    const t = setTimeout(() => { setNowTick((n) => n + 1); if (selected != null) loadDetail(selected, true); }, left + 250);
+    return () => clearTimeout(t);
+  }, [asked, selected, loadDetail]);
+  void nowTick;
+
+  /*
+   * How long GitHub has been saying UNKNOWN for this pull request.
+   *
+   * Remembered across panel opens (module map, memory only) from the first
+   * render that saw it, and forgotten the moment it reads anything else. Past
+   * STUCK_AFTER_MS the sentence stops promising "a few seconds" — see
+   * shared/githubStatus.ts. No poll of its own: the detail refresh already
+   * re-reads mergeability, and one timeout at the threshold re-renders.
+   */
+  const unknownKey = d ? `${root}#${d.number}` : "";
+  if (d && d.mergeState !== "UNKNOWN") forgetUnknown(unknownKey);
+  const unknownSince = d && d.mergeState === "UNKNOWN" ? unknownSinceOf(unknownKey) : null;
+  const stuck = unknownSince != null && stuckMinutes(unknownSince, Date.now()) != null;
+  const [ghProblem, setGhProblem] = useState<GithubProblem | null>(null);
+  useEffect(() => {
+    if (unknownSince == null) { setGhProblem(null); return; }
+    const left = unknownSince + STUCK_AFTER_MS - Date.now();
+    if (left > 0) {
+      const t = setTimeout(() => setNowTick((n) => n + 1), left + 250);
+      return () => clearTimeout(t);
+    }
+    // One ask when it becomes stuck; the server answers from a ten-minute cache.
+    let live = true;
+    api.prGithubStatus().then((r) => { if (live) setGhProblem(r.ok ? r.problem : null); }).catch(() => {});
+    return () => { live = false; };
+  }, [unknownSince, stuck]);
 
   // You cannot review your own pull request — GitHub does not offer it either,
   // and a review control on every row buries the ones actually waiting on you.
@@ -5279,17 +5345,15 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                           onMerge={doMerge} onClose={doClose} onAskReview={doReviewers}
                           method={mergeMethod} onMethod={setMergeMethod}
                           onUpdateBranch={(syncLocal: boolean) => {
-                            // Latched before the call, not after: the refetch
-                            // inside `act` is the first read that could see an
-                            // empty rollup, so the panel has to already know
-                            // why it is empty.
-                            setPushed({ number: d.number, at: Date.now() });
-                            /* Thrown away AFTER it lands, not before: dropped
-                               first, the store simply re-asks GitHub for a
-                               count that has not changed yet and caches the old
-                               one all over again. */
+                            /* Said AFTER GitHub accepts it, with the head it was made
+                               on; the panel waits to SEE a new head before it says the
+                               branch was updated. The refetch inside `act` is the first
+                               read that could see an empty rollup, so the record is made
+                               in the `.then`, before `act` re-reads. */
+                            const headBefore = d.headSha ?? d.commits[d.commits.length - 1]?.oid ?? "";
                             return act("Update branch", () => api.prUpdateBranch(root, d.number, syncLocal).then((r) => {
                               if (r.conflict) setRefusedUpdate({ number: d.number, updatedAt: d.updatedAt });
+                              if (r.ok) setAsked({ number: d.number, at: Date.now(), headBefore, note: r.requested ? undefined : r.detail });
                               return r;
                             }))
                               .finally(() => refreshBehind(root, d.number));
@@ -5338,6 +5402,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                           movedSince={movedHere.length}
                           onGoMoved={() => { setTab("files"); setWantSince((n) => n + 1); }}
                           awaitingChecks={awaitingChecks}
+                          unknownSince={unknownSince} githubProblem={stuck || prLagging ? ghProblem : null} prLagging={prLagging}
+                          updateState={updateState} updateNote={asked && asked.number === d.number ? asked.note : undefined}
                         />
                       ) : (
                         <Conversation
@@ -5697,7 +5763,7 @@ function ConflictActions({ root, number, branch, base, repo, title, disabled }: 
   );
 }
 
-export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, openThreads, conversationCount, behind, behindAsking, localHead, conflictFiles, updateRefused, method, onMethod, onLocalReview, onReviewInTerminal, onMerge, onClose, onUpdateBranch, onRerun, onAutoMerge, onCancelAutoMerge, onDraft, onGoThreads, onGoReview, onAskReview, onGoMoved, movedSince, onEditRequest, onToggleTask, awaitingChecks }: {
+export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, openThreads, conversationCount, behind, behindAsking, localHead, conflictFiles, updateRefused, method, onMethod, onLocalReview, onReviewInTerminal, onMerge, onClose, onUpdateBranch, onRerun, onAutoMerge, onCancelAutoMerge, onDraft, onGoThreads, onGoReview, onAskReview, onGoMoved, movedSince, onEditRequest, onToggleTask, awaitingChecks, updateState, updateNote, unknownSince, githubProblem, prLagging }: {
   d: PrDetail;
   /** The checkout this pull request is being read from — where a conflict would
    *  be prepared. */
@@ -5756,8 +5822,19 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
   /** This panel pushed to the branch a moment ago, so runs are expected — see
    *  the note on `pushed`. */
   awaitingChecks?: boolean;
+  /** Where the last Update branch request stands — see shared/justUpdated.ts. */
+  updateState?: UpdateStanding;
+  /** What the server said about the request, shown if GitHub never moved the branch. */
+  updateNote?: string;
+  /** When mergeability first read UNKNOWN here, and what GitHub's status says once it has lasted. */
+  unknownSince?: number | null;
+  githubProblem?: GithubProblem | null;
+  /** The branch moved on GitHub and the pull request has not followed. */
+  prLagging?: boolean;
 }) {
   const c = d.checks;
+  const upState: UpdateStanding = updateState ?? "idle";
+  const stuckNow = stuckMinutes(unknownSince, Date.now()) != null;
   const [allFiles, setAllFiles] = useState(false);
   /* GitHub's own "mergeable" — see githubWillMerge for why that is not only
      CLEAN. */
@@ -5842,8 +5919,9 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
    * where GitHub's own state reads CLEAN: a merge queue, or a role without
    * merge rights, never shows up in `mergeStateStatus`.
    */
-  const blockers = useMemo(() => mergeBlockers({ ...d, openThreads, conflicted, awaitingChecks }),
-    [d, openThreads, conflicted, awaitingChecks]);
+  const blockers = useMemo(() => mergeBlockers({ ...d, openThreads, conflicted, awaitingChecks, behind, stuckMin: d.mergeState === "UNKNOWN" ? stuckMinutes(unknownSince, Date.now()) ?? (prLagging ? 0 : null) : null, githubProblem, prLagging }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the clock is read inside; `stuck` is what changes it
+    [d, openThreads, conflicted, awaitingChecks, behind, unknownSince, githubProblem, stuckNow, prLagging]);
   const refusal = mergeRefusal(blockers, d.mergeState);
   const autoRefusal = autoMergeRefusal(blockers);
 
@@ -5863,7 +5941,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
     threadAuthors: d.threads.filter((t) => !t.isResolved).map((t) => t.comments[0]?.author ?? ""),
     author: d.author, viewerDidAuthor: d.viewerDidAuthor, viewerRequested: d.viewerRequested,
     checks: c, checksAll: d.checksAll, gate: d.gate, baseRefName: d.baseRefName, openThreads,
-    conflicted, conflictFiles: conflictFiles?.files.length, behind, awaitingChecks, autoArmed: !!d.autoMerge,
+    conflicted, conflictFiles: conflictFiles?.files.length, behind, awaitingChecks, unknownSince, githubProblem, prLagging, autoArmed: !!d.autoMerge,
   });
   const heroHas = (id: PathAction["id"]) => path.hero.primary?.id === id || path.hero.secondary?.id === id || path.hero.also?.id === id;
   const onPathAction = (a: PathAction) => {
@@ -5881,7 +5959,8 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
     }
   };
   const actionDisabled: Partial<Record<PathAction["id"], string>> = {
-    ...(awaitingChecks ? { rerun: "A new run is already starting from the update", "update-branch": "The branch was just updated — waiting for the checks to start. Pushing again would restart them." } : null),
+    ...(awaitingChecks ? { rerun: "A new run is already starting from the update" } : null),
+    ...(updateHeld(upState) ? { "update-branch": updateHeldTitle(upState)! } : null),
     ...(!canUpdate ? { "update-branch": "Nothing to update, or you cannot push to this branch" } : null),
     ...(autoRefusal || autoOff ? { "arm-auto": autoRefusal ?? "Auto-merge is off for this repository — Settings › General › Pull requests › Allow auto-merge" } : null),
   };
@@ -6072,12 +6151,18 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
              * stale in that window, so the second press is usually for a gap
              * that has already been closed.
              */
-            <Btn onClick={() => onUpdateBranch(updateMove.syncLocal)} disabled={busy || !!awaitingChecks} warn hazard={!!updateMove.notice}
+            <Btn onClick={() => onUpdateBranch(updateMove.syncLocal)} disabled={busy || updateHeld(upState)} warn hazard={!!updateMove.notice}
               pending={busyWhat === "Update branch"}
-              title={awaitingChecks
-                ? "The branch was just updated — waiting for the checks to start. Pushing again would restart them."
-                : updateMove.title}>
+              title={updateHeldTitle(upState) ?? updateMove.title}>
               <RefreshIcon size={ICON.xs} />{updateMove.label}</Btn>
+          )}
+          {canUpdate && upState === "pr-lagging" && (
+            <span className="text-[10.5px] min-w-0" style={{ color: "var(--warning-ink)" }}>{LAGGING_SENTENCE}</span>
+          )}
+          {canUpdate && upState === "stalled" && (
+            <span className="text-[10.5px] min-w-0" style={{ color: "var(--warning-ink)" }}>
+              {stalledNote(d.mergeState, updateNote)}
+            </span>
           )}
           {/* Only with something to re-run. `failure > 0` already implies the
               rollup is populated, so this cannot appear over an empty one. */}

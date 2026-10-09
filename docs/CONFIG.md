@@ -84,7 +84,7 @@ are:
   owner-only (`0700` dir, `0600` file) on POSIX; on Windows, which has no POSIX
   mode bits, it falls back to your account's default ACL. Outbound calls are few and all of them are yours to
   switch off: the optional Anthropic plan-usage meter (`api.anthropic.com`,
-  using your own credentials), the update check against the GitHub releases API,
+  using your own credentials), the update check against the GitHub releases API, GitHub's public status page (`githubstatus.com`, no credentials, at most once per ten minutes, and only while a pull request's mergeability has been stuck for minutes),
   the **Pull requests** panel through your own authenticated `gh` CLI, the AI
   **Explain** walkthrough through a local `claude` (or your `ANTHROPIC_API_KEY`),
   and anything *you* configure (webhook alerts).

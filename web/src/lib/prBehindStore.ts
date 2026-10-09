@@ -20,7 +20,7 @@ const TTL_MS = 5 * 60_000;
  *  report — three keeps the queue moving without holding up anything else. */
 const AT_ONCE = 3;
 
-type Entry = { at: number; behind: number | null; local: PrLocalHead | null };
+type Entry = { at: number; behind: number | null; local: PrLocalHead | null; refSha?: string | null };
 
 const seen = new Map<string, Entry>();
 const inflight = new Set<string>();
@@ -47,7 +47,7 @@ function pump(): void {
     running++;
     inflight.add(job.key);
     api.prBehind(job.root, job.number, job.force)
-      .then((r) => { seen.set(job.key, { at: Date.now(), behind: r.ok ? (r.behind ?? 0) : null, local: r.ok ? (r.local ?? null) : null }); })
+      .then((r) => { seen.set(job.key, { at: Date.now(), behind: r.ok ? (r.behind ?? 0) : null, local: r.ok ? (r.local ?? null) : null, refSha: r.ok ? (r.refSha ?? null) : null }); })
       // A failure is remembered too, as "no answer" — otherwise every render
       // queues the same doomed request again.
       .catch(() => { seen.set(job.key, { at: Date.now(), behind: null, local: null }); })
@@ -111,10 +111,10 @@ export function askingBehind(root: string, number: number): boolean {
  * board went and asked again — seconds of nothing, over an answer already in
  * memory. One store, two readers.
  */
-export function behindAnswer(root: string, number: number): { behind: number | null; local: PrLocalHead | null } {
+export function behindAnswer(root: string, number: number): { behind: number | null; local: PrLocalHead | null; refSha: string | null; at: number } {
   const behind = behindOf(root, number);
   const hit = seen.get(keyOf(root, number));
-  return { behind, local: hit?.local ?? null };
+  return { behind, local: hit?.local ?? null, refSha: hit?.refSha ?? null, at: hit?.at ?? 0 };
 }
 
 /**
