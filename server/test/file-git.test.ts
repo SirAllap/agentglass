@@ -89,6 +89,20 @@ describe("fileGitFacts", () => {
     expect(r).toMatchObject({ ok: true, repo: true, status: "clean" });
     expect(existsSync(marker)).toBe(false);
   });
+  step("a filter whose name cannot be switched off by name is not run either", async () => {
+    // `-c filter.a=b.clean=` would set `filter.a`; such a repository gets no answer.
+    const odd = join(dir, "vendor", "odd");
+    mkdirSync(odd, { recursive: true });
+    gitIn(odd, "init", "-q", "-b", "main");
+    writeFileSync(join(odd, "README.md"), "hello\n");
+    gitIn(odd, "add", "."); gitIn(odd, "commit", "-q", "-m", "c");
+    const marker = join(parent, "odd-filter-ran");
+    gitIn(odd, "config", "filter.a=b.clean", `sh -c 'echo ran >> ${marker}; cat'`);
+    writeFileSync(join(odd, ".git", "info", "attributes"), "* filter=a=b\n");
+    utimesSync(join(odd, "README.md"), new Date(2001, 0, 1), new Date(2001, 0, 1));
+    expect(await fileGitFacts(join(odd, "README.md"), true)).toEqual({ ok: true, repo: false });
+    expect(existsSync(marker)).toBe(false);
+  });
   step("a name that looks like pathspec magic is that file and nothing else", async () => {
     // With magic, `:(exclude)…` would ask about every OTHER file, and the
     // first of them (the modified retry.py) would answer for this one.

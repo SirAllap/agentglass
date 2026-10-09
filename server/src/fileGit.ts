@@ -48,18 +48,25 @@ export function statusOf(xy: string): FileGitStatus {
  * per driver, so only drivers from local or worktree config are listed; the
  * user's global ones, git-lfs among them, stay theirs), and a signature check
  * on `log`. Hooks and fsmonitor are already off in `git()`; diff's external
- * driver and textconv are refused by flag at the call. Exported for the test.
+ * driver and textconv are refused by flag at the call. Null when that cannot
+ * be done for certain, and then git is not asked at all. Exported for the test.
  */
-export async function neutralised(root: string): Promise<string[]> {
+export async function neutralised(root: string): Promise<string[] | null> {
   const out = ["-c", "log.showSignature=false"];
   // -z: a subsection may hold a newline, and one missed line is one filter left on.
-  const f = (await gitAsync(root, ["config", "--show-scope", "--includes", "--list", "--name-only", "-z"])).stdout.split("\0");
+  const listed = await gitAsync(root, ["config", "--show-scope", "--includes", "--list", "--name-only", "-z"]);
+  // Fails closed: a listing that did not answer would leave every filter on.
+  if (listed.code !== 0) return null;
+  const f = listed.stdout.split("\0");
   const seen = new Set<string>();
   for (let i = 0; i + 1 < f.length; i += 2) {
     const [scope, key] = [f[i], f[i + 1]];
     if ((scope !== "local" && scope !== "worktree") || !key) continue;
     const m = /^filter\.(.+)\.[^.]+$/.exec(key);
     if (!m || seen.has(m[1]!)) continue;
+    // `-c` splits at the first `=`, so a driver named `a=b` could not be
+    // switched off by name; a name outside the plain set is not read at all.
+    if (!/^[\w.-]+$/.test(m[1]!)) return null;
     seen.add(m[1]!);
     for (const k of ["clean", "smudge", "process"]) out.push("-c", `filter.${m[1]}.${k}=`);
     out.push("-c", `filter.${m[1]}.required=false`);
@@ -84,7 +91,9 @@ export async function fileGitFacts(pathIn: unknown, local = false): Promise<File
   // --literal-pathspecs: a file named `:(exclude)x` is that file, not magic.
   // Awaited, not spawnSync: five git calls on a large repository would hold
   // every other route on the server's one thread for as long as they take.
-  const safe = ["--no-optional-locks", "--literal-pathspecs", ...(await neutralised(root))];
+  const off = await neutralised(root);
+  if (!off) return { ok: true, repo: false };
+  const safe = ["--no-optional-locks", "--literal-pathspecs", ...off];
   const st = await gitAsync(root, [...safe, "status", "--porcelain=v1", "--ignored=matching", "--ignore-submodules=all", "--", rel]);
   out.status = st.code === 0 ? statusOf(st.stdout.slice(0, 2)) : "clean";
 
