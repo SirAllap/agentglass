@@ -4690,11 +4690,66 @@ export async function fastForwardLocal(root: string, st: PrLocalHead): Promise<s
  * The panel used to say "the log itself lives on GitHub — this panel does not
  * download run logs", which meant every red check sent you to a browser. It is
  * one REST call. Capped, because a chatty job runs to megabytes and this is a
- * panel, not a log store: the TAIL is kept, since the failure is at the end.
+ * panel, not a log store.
+ *
+ * `--allow-escape-sequences`: `gh api` refuses to print a body with terminal
+ * escape bytes and exits non-zero, and every bun log has them — measured on a
+ * real 1.15 MB run, where the call failed outright before this flag. The bytes
+ * are stripped below, so what is allowed in is never what reaches the panel.
  */
 const LOG_MAX_BYTES = 400_000;
-const logCache = new Map<string, { at: number; text: string }>();
+const logCache = new Map<string, { at: number; text: string; truncated: boolean }>();
 const LOG_TTL_MS = 5 * 60_000;
+
+/** CSI (colour, cursor, erase), OSC (title, hyperlink), and any other ESC pair. */
+const ANSI = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b\n]*(?:\x07|\x1b\\)?|\x1b[@-Z\\-_]?/g;
+/** Where a failure starts, across the runners this repo meets: bun `(fail)`,
+ *  Actions `##[error]`, python `Traceback` and `E   `, pytest `FAILED`. */
+const FAILURE_MARKER = /\(fail\)|##\[error\]|^Traceback|\bFAILED\b|^E {3}/m;
+
+/**
+ * What the panel shows of a log: no escape bytes, at most `max` characters.
+ *
+ * The tail alone is the wrong end for most runners. Bun prints a failure's
+ * detail where it happens and only a name list at the end — on the real run the
+ * detail sat near 290 KB of 1.15 MB and the 400 KB tail began at 775 KB;
+ * pytest and django print detail before their summary too. So a log that must
+ * be cut keeps the tail AND the region around the FIRST failure marker, half
+ * the cap each, with a line saying how much lies between them. The region
+ * leads the marker as much as it follows it, because the detail comes before
+ * bun's `(fail)` line and after pytest's first `E   `.
+ *
+ * The ceiling: one region, around the first marker only. A second failure far
+ * from both the first and the end is cut, and a first marker that is a false
+ * positive (a test named "FAILED handling") spends the region on the wrong
+ * place. The full excerpt extractor — every failure, by runner — is a later
+ * slice and is not here.
+ */
+export function shapeJobLog(raw: string, max: number = LOG_MAX_BYTES): { text: string; truncated: boolean } {
+  const full = raw.replace(ANSI, "");
+  if (full.length <= max) return { text: full, truncated: false };
+  const tailOnly = () => ({ text: full.slice(full.length - max), truncated: true });
+  const marker = FAILURE_MARKER.exec(full);
+  if (!marker) return tailOnly();
+  const half = Math.floor(max / 2);
+  const lineStart = full.lastIndexOf("\n", marker.index) + 1;
+  let start = lineStart - half / 2;
+  if (start > 0) start = full.indexOf("\n", start) + 1 || 0;
+  else start = 0;
+  // The failure is already inside the tail, with its lead-in: nothing to add.
+  if (start >= full.length - max) return tailOnly();
+  const regionEnd = Math.min(start + half, full.length);
+  const lead = start > 0 ? `… ${start} characters of the log are not shown …\n` : "";
+  const room = max - lead.length - (regionEnd - start);
+  // The tail window starts at full.length - max and the region ends at most
+  // start + half, with start < full.length - max: they cannot meet, so there is
+  // always a gap to announce.
+  const NOTE_ROOM = 80;
+  let tailStart = full.length - (room - NOTE_ROOM);
+  tailStart = full.indexOf("\n", tailStart) + 1 || tailStart;
+  const note = `\n… ${tailStart - regionEnd} characters of the log are not shown …\n`;
+  return { text: lead + full.slice(start, regionEnd) + note + full.slice(tailStart), truncated: true };
+}
 
 export async function jobLog(rootIn: unknown, jobIdIn: unknown): Promise<{ ok: boolean; text?: string; truncated?: boolean; error?: string }> {
   const jobId = String(jobIdIn ?? "");
@@ -4703,13 +4758,11 @@ export async function jobLog(rootIn: unknown, jobIdIn: unknown): Promise<{ ok: b
   if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
   const key = `${repo.key}#${jobId}`;
   const hit = logCache.get(key);
-  if (hit && Date.now() - hit.at < LOG_TTL_MS) return { ok: true, text: hit.text };
-  const r = await gh(["api", `repos/${repo.nameWithOwner}/actions/jobs/${jobId}/logs`]);
+  if (hit && Date.now() - hit.at < LOG_TTL_MS) return { ok: true, text: hit.text, truncated: hit.truncated };
+  const r = await gh(["api", "--allow-escape-sequences", `repos/${repo.nameWithOwner}/actions/jobs/${jobId}/logs`]);
   if (r.code !== 0) return { ok: false, error: (r.stderr || r.stdout).trim().split("\n")[0] || "could not read the log" };
-  const full = r.stdout;
-  const truncated = full.length > LOG_MAX_BYTES;
-  const text = truncated ? full.slice(full.length - LOG_MAX_BYTES) : full;
-  logCache.set(key, { at: Date.now(), text });
+  const { text, truncated } = shapeJobLog(r.stdout);
+  logCache.set(key, { at: Date.now(), text, truncated });
   return { ok: true, text, truncated };
 }
 
