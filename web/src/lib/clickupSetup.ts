@@ -35,6 +35,11 @@ export interface ClickUpSetup {
   /** `ORBIT-`, when a board has been read. Undefined is "unknown", never "none". */
   prefix?: string;
   /**
+   * Cards were read and none carries a custom id, so a bare `ABC-12` cannot be
+   * one of this workspace's. Undefined is "unknown", never "true".
+   */
+  noCustomIds?: boolean;
+  /**
    * May this app change cards at all — the switch in Tasks, or the environment.
    * Undefined is "unknown", never "off": see `writeBlock`.
    */
@@ -59,7 +64,7 @@ export function clickupSetup(): Promise<ClickUpSetup> {
   // link for the next minute.
   inflight ??= api.clickupViews()
     .then((r) => {
-      const value: ClickUpSetup = { connected: r.connected === true, prefix: r.prefix || undefined, writeEnabled: r.writeEnabled === true };
+      const value: ClickUpSetup = { connected: r.connected === true, prefix: r.prefix || undefined, noCustomIds: r.noCustomIds === true, writeEnabled: r.writeEnabled === true };
       held = { at: Date.now(), value };
       return value;
     })

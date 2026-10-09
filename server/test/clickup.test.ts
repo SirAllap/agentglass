@@ -797,6 +797,18 @@ describe("finding a card by the number you remember", () => {
     expect(normaliseCardQuery("20542", "")).toBe(null);
   });
 
+  it("takes ClickUp's own CU- spelling as the plain id with a prefix on it", () => {
+    // `CU-86abc123` is what the GitHub integration writes into a branch. It is
+    // the default id, not a custom one: asking for it WITH the hyphen sent it
+    // through the custom-id lookup, which has never heard of it.
+    expect(normaliseCardQuery("CU-86abc123", "")).toBe("86abc123");
+    expect(normaliseCardQuery("cu-86abc123", "ABC-")).toBe("86abc123");
+    expect(normaliseCardQuery("CU-8695432", "")).toBe("8695432");
+    // Too short for a default id, so it is a custom id whose prefix is CU.
+    expect(normaliseCardQuery("CU-1042", "")).toBe("CU-1042");
+    expect(normaliseCardQuery("CU-utf8-fix", "")).toBe(null);
+  });
+
   it("refuses what is plainly not an id", () => {
     for (const bad of ["", "   ", "the login bug", "12", "https://example.invalid/x"]) {
       expect(normaliseCardQuery(bad, "ABC-"), JSON.stringify(bad)).toBe(null);

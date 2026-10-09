@@ -116,7 +116,7 @@ import { currentRuns, runById, runActivity, startRun, adoptPane, finishRun } fro
 import { failed } from "./refused.ts";
 import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, addClickupFolder, refreshFoldersIfStale, replaceViewUrl, readView } from "./providers.ts";
 import { clickupPrefs, setClickupPrefs, settleFirstRun } from "./clickupPrefs.ts";
-import { savedViews, savedFolders, currentView, setCurrent, removeView, removeFolder, knownCardPrefix, boardHolding, setWritesAllowed, patchCachedTask } from "./clickupviews.ts";
+import { savedViews, savedFolders, currentView, setCurrent, removeView, removeFolder, knownCardPrefix, knownNoCustomIds, boardHolding, setWritesAllowed, patchCachedTask } from "./clickupviews.ts";
 import { assignSelf, setAssignee, setCard, listMembers, setStatus, setPriority, setField, clearField, sprintLists, searchTasks, searchTasksStream, warmBodySweep, taskDetail, tagsForTask, findCard, cardPullRequests, clickupWriteEnabled, commentOn, updateTask, setTag, moveToList, createTask, addChecklist, addChecklistItem, setChecklistItem, editComment as editClickupComment, replyToComment, resolveComment, deleteComment as deleteClickupComment } from "./clickup.ts";
 import { clickupTasks, dropAssignedCache } from "./clickup.ts";
 import type { ProviderId } from "../../shared/providers.ts";
@@ -6223,7 +6223,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
          nobody's problem, and the sidebar must not wait on a request to draw
          the tree it already has. */
       void refreshFoldersIfStale();
-      return json({ views: savedViews(), folders: savedFolders(), connected: hasCredential("clickup"), current: currentView(), prefix: knownCardPrefix(), writeEnabled: clickupWriteEnabled(), writeForced: process.env.AGENTGLASS_CLICKUP_WRITE === "1" });
+      return json({ views: savedViews(), folders: savedFolders(), connected: hasCredential("clickup"), current: currentView(), prefix: knownCardPrefix(), noCustomIds: knownNoCustomIds(), writeEnabled: clickupWriteEnabled(), writeForced: process.env.AGENTGLASS_CLICKUP_WRITE === "1" });
     }
     /* The folder picker's two reads. Spaces first, then one call per space that
        answers with its folders AND the lists inside each of them — which is why
@@ -6338,13 +6338,14 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         url.searchParams.get("card") ?? "",
         url.searchParams.get("field") ?? undefined,
         root,
+        url.searchParams.get("task") ?? "",
       );
       return json(r);
     }
     if (pathname === "/clickup/find") {
       // The prefix comes from what we have already read, so a bare number is
       // enough and nobody has to be asked what their ids look like.
-      const r = await findCard(url.searchParams.get("q") ?? "", knownCardPrefix());
+      const r = await findCard(url.searchParams.get("q") ?? "", knownCardPrefix(), { noCustomIds: knownNoCustomIds() });
       return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error });
     }
     if (pathname === "/clickup/where") {

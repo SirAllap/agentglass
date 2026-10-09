@@ -41,6 +41,7 @@ import { matchIndex, prMatches, stepMatch } from "../lib/prBoardFind.ts";
 import { closeFind, openFind, registerEngine, topScope } from "../lib/findScope.ts";
 import { CloseIcon } from "./CloseButton.tsx";
 import { boardFace } from "../lib/boardFace.ts";
+import { useClickupSetup } from "../lib/clickupSetup.ts";
 
 /** The tracker bar's tint: the app's own accent, the one an unranked card chip already wears. */
 const ACCENT = "var(--accent, var(--primary))";
@@ -207,7 +208,8 @@ export function TriageBoard({
   const cards = useMemo(() => [...lanes.values()].flat(), [lanes]);
   /* Per repository: this board IS one repository's, so the answer is read off
      every card on it. See prCardBlock.ts for the rule and its ceiling. */
-  const repoUses = useMemo(() => repoUsesTracker(cards, hasTaskProvider), [cards, hasTaskProvider]);
+  const noCustomIds = useClickupSetup()?.noCustomIds === true;
+  const repoUses = useMemo(() => repoUsesTracker(cards, hasTaskProvider, noCustomIds), [cards, hasTaskProvider, noCustomIds]);
   const involved = cards.length;
   const canLand = lanes.get("land")?.length ?? 0;
   // Only over the cards in hand. The other few hundred are not loaded here and

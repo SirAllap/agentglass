@@ -40,13 +40,13 @@ import { cardRef, looksLikeOurs } from "./cardRef.ts";
  */
 export function mergeCardRef(
   pr: { headRefName?: string; title?: string; body?: string },
-  setup: { connected: boolean; prefix?: string } | null,
+  setup: { connected: boolean; prefix?: string; noCustomIds?: boolean } | null,
 ): { label: string; query: string } | null {
   if (!setup?.connected) return null;
   const ref = cardRef(pr);
   if (!ref) return null;
   if (ref.from === "url") return { label: ref.label, query: ref.query };
-  if (!looksLikeOurs(ref, setup?.prefix, false)) return null;
+  if (!looksLikeOurs(ref, setup?.prefix, false, setup?.noCustomIds)) return null;
   return { label: ref.label, query: ref.query };
 }
 

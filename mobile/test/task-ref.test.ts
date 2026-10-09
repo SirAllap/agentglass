@@ -220,3 +220,66 @@ describe("finding that item among rows of any shape", () => {
     expect(matchesQuery(["anything"], "   ")).toBe(false);
   });
 });
+
+describe("ClickUp's own spelling of a task id", () => {
+  // The branch ClickUp's GitHub integration cuts is `CU-<id>_<name>_<user>`,
+  // and its ids are lowercase alphanumeric — `CU-86abc123`, not `CU-1042`. The
+  // custom-id reader needs capitals and digits, so every one of these used to
+  // read as nothing at all.
+  const cu = (pr: Parameters<typeof readTaskRef>[0]) => readTaskRef(pr);
+
+  test("a branch the integration cut", () => {
+    expect(cu({ headRefName: "CU-86abc123_retry-on-429_ada" })).toEqual({
+      label: "CU-86abc123", query: "CU-86abc123", from: "branch", tracker: "clickup",
+    });
+  });
+
+  test("a title, and the branch wins when both carry one", () => {
+    expect(cu({ title: "CU-86abc123 Retry on 429" })).toMatchObject({ label: "CU-86abc123", from: "title", tracker: "clickup" });
+    expect(cu({ headRefName: "CU-86abc123_x", title: "CU-86zzz999 other" })).toMatchObject({ label: "CU-86abc123", from: "branch" });
+  });
+
+  test("a branch with a folder in front, and digits only from seven up", () => {
+    expect(cu({ headRefName: "feat/CU-86abc123_x" })).toMatchObject({ query: "CU-86abc123", tracker: "clickup" });
+    expect(cu({ headRefName: "CU-8695432_x" })).toMatchObject({ query: "CU-8695432", tracker: "clickup", from: "branch" });
+  });
+
+  test("a line of its own in the body, once", () => {
+    const body = "Retries the loop.\n\nCU-86abc123\n";
+    expect(cu({ body })).toMatchObject({ label: "CU-86abc123", from: "body", tracker: "clickup" });
+    // Two different ids means the body cannot say which; so it says neither.
+    expect(cu({ body: "CU-86abc123\nCU-86zzz999" })).toBeNull();
+    // The template's own checklist and a quoted reply are not this pull request.
+    expect(cu({ body: "- [ ] CU-86abc123 linked\n> CU-86zzz999" })).toBeNull();
+  });
+
+  test("words that start with cu- are not ids", () => {
+    // Letters only, or too short: a branch is full of both.
+    for (const b of ["CU-utf8-fix", "CU-default", "CU-retry_x", "CU-86ab", "fix/CU-1042x", "CU-86abc123X", "cu-86abc123", "xCU-86abc123"]) {
+      expect(cu({ headRefName: b })).toBeNull();
+    }
+  });
+
+  test("a bare #id is not read", () => {
+    // It collides with pull request numbers; `CU-` is what makes it ours.
+    expect(cu({ headRefName: "fix/#86abc123", title: "Closes #86abc123", body: "#86abc123" })).toBeNull();
+  });
+
+  test("custom ids still read as before", () => {
+    expect(cu({ headRefName: "fix/ORBIT-1042-x" })).toEqual({ label: "ORBIT-1042", query: "ORBIT-1042", from: "branch", tracker: null });
+    expect(cu({ headRefName: "CU-ORBIT-1042-x" })).toMatchObject({ label: "ORBIT-1042", tracker: null });
+  });
+
+  test("an address still beats everything", () => {
+    expect(cu({ headRefName: "CU-86abc123_x", body: "https://app.clickup.com/t/86abc123" }))
+      .toMatchObject({ label: "CU-86abc123", query: "86abc123", from: "url", tracker: "clickup" });
+  });
+
+  test("nothing is still nothing", () => {
+    expect(cu({ headRefName: "main", title: "Update deps", body: "" })).toBeNull();
+  });
+
+  test("the tooltip says where it was read", () => {
+    expect(taskRefTitle(cu({ body: "CU-86abc123" })!)).toContain("body");
+  });
+});

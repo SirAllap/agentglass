@@ -1493,9 +1493,9 @@ const realApi = {
   /** Who can be put on a card, from the list it lives in. */
   clickupMembers: (list: string) =>
     get<{ ok: boolean; error?: string; members?: ListMember[] }>(`/clickup/members?list=${encodeURIComponent(list)}`),
-  clickupPrs: (card: string, field: string, root: string) =>
+  clickupPrs: (card: string, field: string, root: string, task = "") =>
     get<{ ok: boolean; prs: { number: number; title: string; state: string; draft?: boolean; url: string; stated?: boolean }[]; error?: string }>(
-      `/clickup/prs?${new URLSearchParams({ card, field, root })}`),
+      `/clickup/prs?${new URLSearchParams({ card, field, root, task })}`),
   /** Ask the server to read the search's expensive half now. Fire and forget:
    *  it answers at once and does the work behind the answer. */
   clickupWarm: () => get<{ ok: boolean }>("/clickup/warm").catch(() => ({ ok: false })),
@@ -2728,7 +2728,7 @@ const demoApi: typeof realApi = {
   clickupListViews: (_l: string) => D({ ok: true, views: [] as { id: string; name: string }[], links: [] as { id: string; name: string; type: string }[] }),
   clickupList: (_i: string) => D({ ok: false, error: "not available in the demo" }),
   clickupReplaceView: (_i: string, _u: string) => D({ ok: false, error: "not available in the demo" }),
-  clickupPrs: (_c: string, _f: string, _r: string) => D({ ok: true, prs: [] }),
+  clickupPrs: (_c: string, _f: string, _r: string, _t?: string) => D({ ok: true, prs: [] }),
   clickupWarm: () => D({ ok: false }),
   clickupFind: (_q: string) => D({ ok: false, error: "not available in the demo" }),
   // The one pull request in the demo that is behind its base is #461, and it

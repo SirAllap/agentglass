@@ -520,6 +520,12 @@ export interface ClickUpBoards {
    * decide that some id is not one of ours.
    */
   prefix?: string;
+  /**
+   * Cards were read and none of them carries a custom id. Custom ids are a
+   * paid ClickApp, so this workspace has none to wait for. False is "unknown
+   * or has some", never "has some".
+   */
+  noCustomIds?: boolean;
   writeEnabled: boolean;
   /** Forced on by the environment rather than chosen here, so the UI says so
    *  instead of offering a switch that will not stay off. */

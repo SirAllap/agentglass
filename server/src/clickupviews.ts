@@ -287,6 +287,20 @@ export function knownStatuses(): ListStatus[] {
   return out;
 }
 
+/**
+ * Has this machine read cards, and does none of them carry a custom id?
+ *
+ * Custom task ids are a paid ClickApp an admin switches on, so a free
+ * workspace has none and never will. "Nothing read yet" is NOT the same
+ * answer — a board not opened this session says nothing about the workspace —
+ * so this is false until at least one card has been read.
+ */
+export function knownNoCustomIds(): boolean {
+  const s = load();
+  const read = savedViews().flatMap((v) => s.cache[v.id]?.tasks ?? []);
+  return read.length > 0 && !read.some((t) => t.customId);
+}
+
 export function knownCardPrefix(): string {
   const s = load();
   // `savedViews()`, not `s.views`: the built-in board is not in the stored list

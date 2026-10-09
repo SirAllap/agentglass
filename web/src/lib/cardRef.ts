@@ -73,9 +73,19 @@ export function cardRef(pr: { headRefName?: string; title?: string; body?: strin
  * ask this function, so the difference is a named argument instead of two
  * copies of the rule drifting.
  */
-export function looksLikeOurs(ref: CardRef, prefix: string | undefined, whenUnknown = true): boolean {
+export function looksLikeOurs(
+  ref: CardRef, prefix: string | undefined, whenUnknown = true, noCustomIds = false,
+): boolean {
   if (ref.tracker && ref.tracker !== "clickup") return false;
   if (ref.from === "url") return true;
+  /* ClickUp's own `CU-86abc123` is the default id, which every workspace has
+     and no prefix describes: `CU-` is not ORBIT's, and refusing it for that
+     would turn the one spelling that is always ours away. */
+  if (ref.tracker === "clickup") return true;
+  /* Custom ids are a paid ClickApp. Where cards were read and none had one, a
+     bare `ABC-12` is a Jira key or a HOTFIX-12 — and whenUnknown=true would
+     make it a chip that dead-ends in "No card called ABC-12". */
+  if (noCustomIds) return false;
   if (!prefix) return whenUnknown;
   return ref.label.toUpperCase().startsWith(prefix.toUpperCase());
 }
@@ -99,12 +109,12 @@ export function looksLikeOurs(ref: CardRef, prefix: string | undefined, whenUnkn
  */
 export function chipAction(
   ref: CardRef | null,
-  setup: { connected: boolean; prefix?: string } | null,
+  setup: { connected: boolean; prefix?: string; noCustomIds?: boolean } | null,
 ): { in: "tasks" } | { in: "away"; url: string } | null {
   // Null setup is "the answer has not arrived", not "no". Saying nothing until
   // it has is what stops the chip appearing and then vanishing.
   if (!ref || !setup) return null;
-  if (setup.connected && looksLikeOurs(ref, setup.prefix)) return { in: "tasks" };
+  if (setup.connected && looksLikeOurs(ref, setup.prefix, true, setup.noCustomIds)) return { in: "tasks" };
   // Everything else is the shared rule: an address opens, a bare id does not.
   const away = chipFor(ref, false);
   return away && "open" in away ? { in: "away", url: away.open } : null;

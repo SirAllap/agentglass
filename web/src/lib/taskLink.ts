@@ -75,7 +75,7 @@ export function taskLink(
  * wrote the evidence.
  */
 export function fromRef(
-  ref: { label: string; query: string; url?: string; from: "url" | "branch" | "title" },
+  ref: { label: string; query: string; url?: string; from: "url" | "branch" | "title" | "body" },
   hasTaskProvider: boolean,
 ): TaskLink | null {
   const confidence: TaskLink["confidence"] = ref.from === "url" ? "certain" : "convention";

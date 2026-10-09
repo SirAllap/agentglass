@@ -27,12 +27,12 @@ type Reads = { card?: unknown; headRefName?: string; title?: string; body?: stri
  * the branch, title or body that belongs to the connected workspace — an id from
  * another tracker's address does not, which is `looksLikeOurs`.
  */
-export function repoUsesTracker(prs: readonly Reads[], hasTaskProvider: boolean): boolean {
+export function repoUsesTracker(prs: readonly Reads[], hasTaskProvider: boolean, noCustomIds = false): boolean {
   if (!hasTaskProvider) return false;
   return prs.some((p) => {
     if (p.card) return true;
     const ref = cardRef(p);
-    return !!ref && looksLikeOurs(ref, undefined);
+    return !!ref && looksLikeOurs(ref, undefined, true, noCustomIds);
   });
 }
 
