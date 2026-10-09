@@ -65,6 +65,7 @@ import { termOptions, copyOnSelect, rightClickPaste } from "../lib/termPrefs.ts"
 import { useModernWidths } from "../lib/termUnicode.ts";
 import { dragHold } from "../lib/dragHold.ts";
 import { mouseModeGuard, type MouseModeGuard } from "../lib/mouseModeGuard.ts";
+import { gridOk, termShown, termInputGuard } from "../lib/termInputGuard.ts";
 import { CloseButton, CloseIcon } from "./CloseButton.tsx";
 import { FindArrow } from "./FindBar.tsx";
 import { PluckPalette } from "./terminal/PluckPalette.tsx";
@@ -925,7 +926,14 @@ function createSession(root: string, agentTicket?: string): Sess {
   });
   const id = `t${++seq}-${Date.now().toString(36)}`;
   const sess: Sess = { id, root, title: `shell ${sessionsFor(root).length + 1}`, term, fit, search, holder, ws: null, status: "idle", mode: null, shell: "shell", canResize: true, opened: false, tmux: false, openFail: null, agentTicket: agentTicket ?? null, tmuxWindows: [], tmuxSessions: [], tmuxPanes: [], tmuxSession: null, tmuxClient: null, tmuxPrefix: [], tmuxPhones: 0, tmuxPrefixAt: 0, pending: [], createdAt: Date.now(), lastUsed: Date.now(), retries: 0, retryTimer: null, subs: new Set() };
-  term.onData((d) => {
+  // One per shell: it remembers the last press that has not been released.
+  const inputGuard = termInputGuard();
+  term.onData((raw) => {
+    // A mouse report computed while the terminal is off screen is NaN — see
+    // termInputGuard. Dropped here, the one place everything bound for the pty
+    // passes, so no renderer or view switch can leak one into the prompt.
+    const d = inputGuard.filter(raw, termShown(term.element));
+    if (!d) return;
     sess.lastUsed = Date.now();
     /*
      * "tmux is listening."
@@ -957,6 +965,7 @@ function createSession(root: string, agentTicket?: string): Sess {
     else if ((sess.status === "exited" || sess.status === "error") && d.includes("\r")) { sess.retries = 0; connect(sess); } // Enter → new shell, scrollback kept
   });
   term.onResize(({ cols, rows }) => {
+    if (!gridOk(cols, rows)) return;
     if (sess.ws?.readyState === WebSocket.OPEN) sess.ws.send(ptyFrame({ t: "resize", cols, rows }));
   });
   sessions.set(id, sess);

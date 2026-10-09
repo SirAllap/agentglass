@@ -19,6 +19,7 @@ import "@xterm/xterm/css/xterm.css";
 import { FitAddon } from "@xterm/addon-fit";
 import { Portal } from "./Portal.tsx";
 import { LAYER } from "../lib/layers.ts";
+import { termShown, termInputGuard } from "../lib/termInputGuard.ts";
 import { ptyWsUrl, IS_DEMO } from "../lib/api.ts";
 import { showFile } from "../lib/benchStore.ts";
 import { themeFromCss } from "./TerminalPanel.tsx";
@@ -610,7 +611,8 @@ export function PeekFile({ peek, onClose, topPx }: {
     // unmount, and must not be reported as the user finishing with the file.
     ws.onclose = () => { if (!ours) closeRef.current(); };
 
-    const onData = term.onData((d) => send(d));
+    const guard = termInputGuard();
+    const onData = term.onData((d) => { const out = guard.filter(d, termShown(term.element)); if (out) send(out); });
     const ro = new ResizeObserver(() => { fit.fit(); sendSize(); });
     ro.observe(el);
     // The point of opening it is to type in it.

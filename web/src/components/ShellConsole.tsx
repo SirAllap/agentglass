@@ -25,6 +25,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { ptyWsUrl } from "../lib/api.ts";
 import { termOptions } from "../lib/termPrefs.ts";
+import { termShown, termInputGuard } from "../lib/termInputGuard.ts";
 // The panel's own palette reader, reused rather than reimplemented: a console
 // that drew itself in slightly different colours would look like a screenshot
 // pasted into the settings page.
@@ -133,7 +134,8 @@ export function ShellConsole({ command, cwd, onClose }: {
     ws.onerror = () => { if (!disposed) setState("failed"); };
     ws.onclose = () => { if (!disposed) setState((s) => (s === "ready" ? s : "failed")); };
 
-    const off = term.onData((d) => send(d));
+    const guard = termInputGuard();
+    const off = term.onData((d) => { const out = guard.filter(d, termShown(term.element)); if (out) send(out); });
     const ro = new ResizeObserver(() => {
       try { fit.fit(); } catch { /* hidden */ }
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: "resize", cols: term.cols, rows: term.rows }));

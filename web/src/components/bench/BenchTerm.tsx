@@ -18,6 +18,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { ptyWsUrl } from "../../lib/api.ts";
 import { termOptions } from "../../lib/termPrefs.ts";
 import { isAppChord } from "../../lib/termKeys.ts";
+import { termShown, termInputGuard } from "../../lib/termInputGuard.ts";
 import { themeFromCss } from "../TerminalPanel.tsx";
 
 export function BenchTerm({ root, slot, view, line, edit, agent, type, note, active, onTitle, onEnd }: {
@@ -164,7 +165,8 @@ export function BenchTerm({ root, slot, view, line, edit, agent, type, note, act
       onEndRef.current?.();
     };
 
-    const off = term.onData(send);
+    const guard = termInputGuard();
+    const off = term.onData((d) => { const out = guard.filter(d, termShown(term.element)); if (out) send(out); });
     /*
      * Measure again and SAY SO, whatever the observer did.
      *
