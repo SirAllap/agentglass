@@ -3005,8 +3005,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
               moment something does: two boxes scrolled independently put the
               heading over the wrong column. */}
           <div className="agx-scroll flex-1 min-w-0 overflow-auto">
-            <div className={`pr-5 ${EYEBROW} sticky top-0 z-10`}
-                style={{ display: "grid", gridTemplateColumns: grid, gap: 14, color: "var(--text4)",
+            <div className={`pr-4 ${EYEBROW} sticky top-0 z-10`}
+                style={{ display: "grid", gridTemplateColumns: grid, gap: 16, color: "var(--text4)",
                   alignItems: "center", height: HEAD_H,
                   minWidth: TABLE_MIN_W, background: "var(--bg)",
                   borderBottom: LINE }}>
@@ -3016,19 +3016,17 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                   the left of it sits above nothing, and the eye stops pairing the
                   two. `Task` and the rest stay left: they label text that starts
                   at the left. */}
-              {/* Every column boundary wears the same hairline (COL_RULE), header
-                  and rows alike, so the rules run unbroken down the table. It
-                  was two of them, before Cmts and before Pts, and the rows
-                  drew short segments of their own that did not meet the
-                  heading's. */}
+              {/* One hairline per column boundary, header and rows alike (see
+                  COL_RULE). Task|PR is drawn by the frozen Task cell itself;
+                  every cell after PR draws the one on its own left. */}
               <span className="text-center" style={COL_RULE}>PR</span>
-              {anyWho && <span className="text-center" style={COL_RULE}>Who</span>}
-              {!!squadLabel && <span className="text-center" style={COL_RULE} title={squadLabel}><span className="truncate">{squadLabel}</span></span>}
-              {anySprint && <span style={COL_RULE}>Sprint</span>}
-              <span className="text-center" style={COL_RULE}>Cmts</span>
-              <span style={COL_RULE}>Due</span>
-              {anyEst && <span className="text-center" style={COL_RULE}>Est</span>}
-              <span className="text-center" style={COL_RULE}>Pts</span>
+              {anyWho && <span className="text-center agx-colrule" style={COL_RULE}>Who</span>}
+              {!!squadLabel && <span className="text-center agx-colrule" style={COL_RULE} title={squadLabel}><span className="truncate">{squadLabel}</span></span>}
+              {anySprint && <span className="agx-colrule" style={COL_RULE}>Sprint</span>}
+              <span className="text-center agx-colrule" style={COL_RULE}>Cmts</span>
+              <span className="agx-colrule" style={COL_RULE}>Due</span>
+              {anyEst && <span className="text-center agx-colrule" style={COL_RULE}>Est</span>}
+              <span className="text-center agx-colrule" style={COL_RULE}>Pts</span>
               {onLooked && <span />}
             </div>
 
@@ -4277,16 +4275,19 @@ const CU_POLL_SLOW_MS = 300_000;
 const TABLE_MIN_W = 720;
 
 /**
- * The hairline on the left of every column but the first, in the heading and
- * in each row. It sits in the gap (8px of padding, pulled back by the same
- * margin, so the content does not move) and stretches to the row's full
- * height, so the segments of successive rows meet and meet the heading's. A
- * grid with `alignContent` keeps a cell's text vertically centred while it
- * stretches; `LINE` is the house rule, the same one under the rows.
+ * The base of every cell that can wear a column rule, in the heading and in
+ * each row: it stretches to the full height of the row and carries the row's
+ * vertical padding itself, so the hairline (`.agx-colrule`, index.css) runs
+ * from the row's top edge to its bottom edge and meets the next row's and the
+ * heading's. Heading and rows share `cuGrid` and the same right padding, so
+ * the tracks, and so the rules, are at the same x. The hairline is a pseudo
+ * element in the middle of the 16px gap, not a border on the cell: a border
+ * moves the content or the column, and the first attempt at it drew two lines
+ * between Task and PR (the frozen Task cell's own edge, plus this one) and put
+ * the rows' rules 8px off the heading's.
  */
 const COL_RULE: CSSProperties = {
-  borderLeft: LINE, paddingLeft: 8, marginLeft: -8,
-  alignSelf: "stretch", display: "grid", alignContent: "center",
+  alignSelf: "stretch", display: "grid", alignContent: "center", paddingBlock: 6,
 };
 
 /**
@@ -4662,13 +4663,13 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
     <div role="row" tabIndex={0} aria-current={on ? "true" : undefined} onClick={onPick}
       onKeyDown={(e) => { if (e.key === "Enter") onPick(); }}
       onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY }); }}
-      className="agx-row w-full text-left pr-4 py-1.5 hover:bg-white/5 cursor-pointer items-center"
+      className="agx-row w-full text-left pr-4 hover:bg-white/5 cursor-pointer items-center"
       style={{
         /* 8px of gap put a two-character number a hair from the next one, and
            with everything right-aligned the columns read as one ragged block.
-           14 plus the hairlines below is what separates them; the numbers are
+           16 plus the hairlines below is what separates them; the numbers are
            centred in their own track rather than crowded against its edge. */
-        display: "grid", gridTemplateColumns: grid, gap: 14, borderBottom: LINE, position: "relative",
+        display: "grid", gridTemplateColumns: grid, gap: 16, borderBottom: LINE, position: "relative",
         /* Matches the heading above it. Without it the row squeezes while the
            heading scrolls, and the two stop lining up. */
         minWidth: TABLE_MIN_W,
@@ -4789,7 +4790,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
         )}
       </span>
       {showWho && (
-        <span className="flex items-center" style={{ ...COL_RULE, display: "flex" }}>
+        <span className="flex items-center agx-colrule" style={{ ...COL_RULE, display: "flex" }}>
           {(t.people ?? []).slice(0, 3).map((p, n) => <Face key={n} p={p} n={n} />)}
           {(t.people?.length ?? 0) > 3 && (
             <span className="text-[8.5px] ml-1" style={{ color: "var(--text4)" }}>+{(t.people!.length) - 3}</span>
@@ -4804,7 +4805,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
           the value are both on hover, because a colour on its own is only
           learnable by someone who already knows the board. */}
       {showSquad && (
-        <span className="flex items-center justify-center" style={{ ...COL_RULE, display: "flex" }}>
+        <span className="flex items-center justify-center agx-colrule" style={{ ...COL_RULE, display: "flex" }}>
           {sq && (
             <span title={`${sq.name}: ${sq.value}`} aria-label={`${sq.name}: ${sq.value}`}
               style={{
@@ -4817,7 +4818,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
         </span>
       )}
       {showSprint && (
-        <span style={COL_RULE}>
+        <span className="agx-colrule" style={COL_RULE}>
           <span className="truncate text-[10.5px]" style={{ color: t.sprint ? "var(--info)" : "var(--text4)" }}
             title={t.sprint ?? ""}>{t.sprint ?? ""}</span>
         </span>
@@ -4828,7 +4829,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
           on the first sight of a board. Dimmer at zero, because a card nobody
           has commented on is the uninteresting case and should not draw the
           eye the way a thread does. */}
-      <span className="text-[11px] tabular-nums text-center"
+      <span className="text-[11px] tabular-nums text-center agx-colrule"
         title={t.comments == null ? "Not counted yet" : `${t.comments} comment${t.comments === 1 ? "" : "s"}`}
         style={{
           ...COL_RULE,
@@ -4836,18 +4837,18 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
         }}>
         {t.comments ?? ""}
       </span>
-      <span className="text-[11px] tabular-nums" style={{ ...COL_RULE, color: late ? "var(--error)" : now ? "var(--warning)" : "var(--text3)" }}>
+      <span className="text-[11px] tabular-nums agx-colrule" style={{ ...COL_RULE, color: late ? "var(--error)" : now ? "var(--warning)" : "var(--text3)" }}>
         {dueLabel(t.due, today)}
       </span>
       {/* 11px like every other number in the row. It was 10.5, which on a line of
           figures reads as a column somehow less certain than the ones beside it. */}
       {showEst && (
-        <span className="text-[11px] tabular-nums text-center" style={{ ...COL_RULE, color: "var(--text4)" }}
+        <span className="text-[11px] tabular-nums text-center agx-colrule" style={{ ...COL_RULE, color: "var(--text4)" }}
           title={t.estimateHours ? `${t.estimateHours}h estimated${t.spentHours ? `, ${t.spentHours}h logged` : ""}` : ""}>
           {t.estimateHours ? `${t.estimateHours}h` : ""}
         </span>
       )}
-      <span className="text-[11px] tabular-nums text-center"
+      <span className="text-[11px] tabular-nums text-center agx-colrule"
         style={{ ...COL_RULE, color: "var(--text4)" }}>{t.points ?? ""}</span>
       {/* Its own track, not a layer on top of the last cell: a row you can
           forget lives in the grid like every other cell, and only its opacity

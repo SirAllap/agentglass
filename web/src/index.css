@@ -1130,9 +1130,25 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
    * and the rows carry only their right one.
    */
   padding-left: 16px;
+  padding-right: 8px;
+  padding-block: 6px;
   /* And it reads as an edge. Without a line the frozen column and the moving
-     ones are one surface, and the eye cannot tell why the text stopped. */
-  box-shadow: 1px 0 0 color-mix(in srgb, var(--border) 45%, transparent);
+     ones are one surface, and the eye cannot tell why the text stopped.
+     The cell reaches 8px into the 16px gap, so this line is the Task|PR rule
+     at the same x as every `.agx-colrule` after it, and it is the only line
+     at that boundary. */
+  margin-right: -8px;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  box-shadow: 1px 0 0 var(--surface-line);
+}
+/* The hairline on the left of a table cell, centred in the 16px grid gap. */
+.agx-colrule { position: relative; }
+.agx-colrule::before {
+  content: ""; position: absolute; left: -8px; top: 0; bottom: 0; width: 1px;
+  background: var(--surface-line); pointer-events: none;
 }
 .agx-row:hover .agx-stick {
   background: color-mix(in srgb, #fff 5%, var(--bg));
@@ -1148,7 +1164,12 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
   z-index: 7;
   background: var(--bg);
   padding-left: 20px;
-  box-shadow: 1px 0 0 color-mix(in srgb, var(--border) 45%, transparent);
+  padding-right: 8px;
+  margin-right: -8px;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  box-shadow: 1px 0 0 var(--surface-line);
 }
 
 /*
