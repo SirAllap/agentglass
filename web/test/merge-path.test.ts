@@ -298,6 +298,14 @@ describe("only CI is left", () => {
     expect(say(q)).toBe("Waiting on CI. The required check should finish in about 4 min.");
     expect(stage(q, "required").big).toBe("~4 min");
   });
+  test("the ETA is the job's own median over earlier runs, not a guess", () => {
+    const u = { usual: { median: 14 * M, p90: 16 * M, n: 20 } };
+    const q = mergePath(base({ mergeState: "BLOCKED", checksAll: [req("evals", "pending", { startedAt: ago(4 * M), ...u })] }));
+    expect(say(q)).toBe("Waiting on CI. The required check should finish in about 10 min.");
+    // too little history: no number made up from it
+    const few = mergePath(base({ mergeState: "BLOCKED", checksAll: [req("evals", "pending", { startedAt: ago(4 * M), usual: { ...u.usual, n: 3 } })] }));
+    expect(say(few)).toBe("Waiting on CI. The required check is still running.");
+  });
   test("a run that has outlived its earlier duration gets no ETA, not a negative one", () => {
     const q = mergePath(base({ mergeState: "BLOCKED", checksAll: [
       req("build", "pending", { startedAt: ago(9 * M) }),

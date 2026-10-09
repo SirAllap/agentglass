@@ -4,7 +4,7 @@
  * shape of a real pull request with 71 runs (58 successful, 13 skipped).
  */
 import { describe, expect, it } from "bun:test";
-import { applyFilter, checkLabel, checkStatusLine, filterCounts, formatSpan, sectionChecks, shortName, slowest, spanShare, verdictHero, workflowCards } from "../src/lib/prChecksList.ts";
+import { applyFilter, checkLabel, checkStatusLine, filterCounts, formatSpan, sectionChecks, shortName, slowest, spanShare, verdictHero, checkVerdict, usualTip, usualTick, workflowCards } from "../src/lib/prChecksList.ts";
 import type { PrCheck, PrCheckRollup } from "../../shared/types.ts";
 
 const chk = (o: Partial<PrCheck>): PrCheck => ({ name: "Tests", workflow: "CI", state: "success", done: true, ...o });
@@ -49,12 +49,12 @@ describe("the redesigned tab", () => {
     chk({ name: "claude", state: "skipped", event: "pull_request" }),
   ];
   it("counts what each chip would show", () => {
-    expect(filterCounts(all)).toEqual({ all: 5, failed: 1, running: 1, required: 1, slow: 2 });
+    expect(filterCounts(all)).toEqual({ all: 5, failed: 1, running: 1, required: 1, slow: 0 });
   });
   it("filters by chip and by typed text", () => {
     expect(applyFilter(all, "failed", "").map((k) => k.name)).toEqual(["e2e (chat-widget)"]);
     expect(applyFilter(all, "all", "SETTINGS").map((k) => k.name)).toEqual(["e2e (settings)"]);
-    expect(applyFilter(all, "slow", "unit")).toHaveLength(1);
+    expect(applyFilter(all, "slow", "unit")).toHaveLength(0);
   });
   it("shortens a matrix name and scales bars to the slowest run", () => {
     expect(shortName(all[1]!)).toBe("e2e · chat-widget");
@@ -73,5 +73,35 @@ describe("the redesigned tab", () => {
     expect(h.required).toBe("1/1 required passed");
     expect(verdictHero(roll({}), []).required).toBeNull();
     expect(verdictHero(roll({}), []).title).toBe("All checks have passed");
+  });
+});
+
+describe("colour comes from the job's own history", () => {
+  const at = (sec: number) => ({ startedAt: "2026-09-30T09:00:00Z", completedAt: new Date(Date.parse("2026-09-30T09:00:00Z") + sec * 1000).toISOString() });
+  const usual = (medianMin: number, n = 20) => ({ usual: { median: medianMin * 60_000, p90: medianMin * 60_000 * 1.1, n } });
+  it("15m for a job that usually takes 14m is usual, the same 15m for a 4m job is slower", () => {
+    const evals = chk({ name: "evals", ...at(15 * 60), ...usual(14) });
+    const unit = chk({ name: "unit", ...at(15 * 60), ...usual(4) });
+    expect(checkVerdict(evals)).toBe("usual");
+    expect(checkVerdict(unit)).toBe("much-slower");
+    expect(filterCounts([evals, unit]).slow).toBe(1);
+    expect(applyFilter([evals, unit], "slow", "").map((k) => k.name)).toEqual(["unit"]);
+  });
+  it("says what it compared with, or that there is nothing yet", () => {
+    expect(usualTip(chk({ ...at(15 * 60), ...usual(14) }))).toBe("15m · usually 14m (last 20 runs)");
+    expect(usualTip(chk({ ...at(15 * 60), ...usual(14, 4) }))).toBe("15m · not enough history yet");
+    expect(checkVerdict(chk({ ...at(90 * 60), ...usual(14, 4) }))).toBe("unknown");
+  });
+  it("a running job is compared by elapsed time", () => {
+    const now = Date.parse("2026-09-30T09:30:00Z");
+    const run = chk({ state: "pending", done: false, startedAt: "2026-09-30T09:00:00Z", ...usual(14) });
+    expect(checkVerdict(run, now)).toBe("slower");
+    expect(usualTip(run, now)).toContain("running longer than usual");
+    expect(checkVerdict(run, Date.parse("2026-09-30T09:10:00Z"))).toBe("usual");
+  });
+  it("a failed run is not judged, and the tick sits at the median on the bar's scale", () => {
+    expect(checkVerdict(chk({ state: "failure", ...at(10), ...usual(14) }))).toBe("unknown");
+    expect(usualTick(chk({ ...usual(14) }), 28 * 60_000)).toBeCloseTo(0.5);
+    expect(usualTick(chk({}), 28 * 60_000)).toBeNull();
   });
 });

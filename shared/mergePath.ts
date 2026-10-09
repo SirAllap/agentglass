@@ -31,6 +31,7 @@
 // earlier duration gets none either.
 
 import type { PrCheck, PrCheckRollup, PrMergeGate, PrReview, PrReviewer, PrSummary } from "./types.ts";
+import { MIN_SAMPLES, runKey } from "./checkBaseline.ts";
 import { mergeBlockers, staleApproval, type MergeBlocker } from "./mergeBlockers.ts";
 
 export type Mover = "you" | "author" | "reviewer" | "ci" | "wait" | "other" | "fyi";
@@ -232,6 +233,8 @@ export function checkKindLine(c: Pick<PrCheck, "name" | "workflow">, required: b
 
 const WILL_MERGE = new Set(["CLEAN", "UNSTABLE", "HAS_HOOKS"]);
 const key = (c: PrCheck) => `${c.workflow}\u0001${c.name}`;
+/** For durations: the trigger counts, a job that runs on two events is two jobs with two histories. */
+const tkey = (c: PrCheck) => runKey(c.workflow, c.name, c.event);
 
 /** Where a check's workflow is named: `workflow` when GitHub gave one, else the part of a "a / b" name before the job. */
 function workflowOf(c: PrCheck): { workflow: string; job: string } {
@@ -273,6 +276,12 @@ export function mergePath(i: MergePathInput): MergePath {
 
   // -------------------------------------------------------------- durations
   const typical = new Map<string, number>(Object.entries(i.typical ?? {}));
+  /* The job's own history on this repo comes first: the median of its last
+     successful runs, over any pull request. A run earlier on THIS pull request
+     is one sample, and only used when there is no history (or too little). */
+  for (const c of all) {
+    if (c.usual && c.usual.n >= MIN_SAMPLES && c.usual.median > 0) typical.set(tkey(c), c.usual.median);
+  }
   for (const c of all) {
     if (c.done && c.state === "success" && c.startedAt && c.completedAt && !typical.has(key(c))) {
       const ms = Date.parse(c.completedAt) - Date.parse(c.startedAt);
@@ -282,7 +291,7 @@ export function mergePath(i: MergePathInput): MergePath {
   const elapsedOf = (c: PrCheck) => (c.startedAt ? Math.max(0, now - Date.parse(c.startedAt)) : null);
   /** Left for one running check; null when nothing is known or it has run past what it took before. */
   const remainingOf = (c: PrCheck): number | null => {
-    const t = typical.get(key(c));
+    const t = typical.get(tkey(c)) ?? typical.get(key(c));
     if (!t) return null;
     const e = elapsedOf(c);
     if (e === null) return t;
@@ -433,7 +442,7 @@ export function mergePath(i: MergePathInput): MergePath {
       });
     } else {
       const e = elapsedOf(c);
-      const t = typical.get(key(c));
+      const t = typical.get(tkey(c)) ?? typical.get(key(c));
       const left = remainingOf(c);
       const prog = e === null ? "Not started yet."
         : t && left !== null ? `${fmtDuration(e)} of ~${fmtDuration(t)}.`

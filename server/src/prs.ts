@@ -16,6 +16,7 @@
 //    named separately from the rest.
 import { ttlRead, forgetReads } from "./ttlread.ts";
 import { singleFlight } from "./singleflight.ts";
+import { learnFromRead } from "./checkRuns.ts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { failed } from "./refused.ts";
 import { homedir, tmpdir } from "node:os";
@@ -371,6 +372,7 @@ export async function prRollup(rootIn: unknown, numberIn: unknown, fresh = false
     if (!raw) return { ok: false, error: "GitHub would not list its checks" };
     const normalised = raw.map(withWorkflow);
     const r2 = rollupChecks(normalised);
+    learnFromRead(repo.key, number, knownHeadSha(repo.key, number), r2.all);
     if (Number(ctxs?.totalCount ?? 0) <= raw.length) projectChecks(repo, number, r2.rollup, r2.all, began);
     return { ok: true, checks: r2.rollup, all: r2.all, state: typeof pr?.state === "string" ? pr.state : undefined, truncated: Number(ctxs?.totalCount ?? 0) > raw.length };
   }, { fresh, keep: (v) => v.ok });
@@ -3396,6 +3398,7 @@ async function readDetail(rootIn: unknown, number: number, repo: PrRepoId, key: 
     // `rollup.failing` holds these same objects, so it is marked too.
     for (const c of all) c.required = required.has(checkKey(c.workflow, c.name));
   }
+  learnFromRead(repo.key, number, knownHeadSha(repo.key, number), all);
 
   const reviews: PrReview[] = (p.reviews?.nodes || []).map((r: any) => ({
     author: r.author?.login || "",

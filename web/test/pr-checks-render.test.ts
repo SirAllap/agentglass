@@ -44,4 +44,15 @@ describe("Checks tab", () => {
     expect(html).toContain("3 tests failed");
     expect(html.indexOf("Needs attention")).toBeLessThan(html.indexOf("aria-expanded"));
   });
+
+  test("a job that always takes 15m is not amber; one that got slower is (the card's strip is drawn folded)", () => {
+    const u = (m: number) => ({ usual: { median: m * 60_000, p90: m * 66_000, n: 20 } });
+    const html = draw([mk("evals", "success", { workflow: "Evals", ...at(15 * 60), ...u(14) }), mk("unit", "success", { ...at(9 * 60), ...u(4) })]);
+    const strip = (card: string) => html.slice(html.indexOf(`>${card}<`)).match(/<span class="rounded-sm" style="[^"]*background:([^"]*)"/)![1];
+    expect(strip("Evals")).not.toContain("warning");
+    expect(strip("Evals")).not.toContain("error");
+    expect(strip("CI")).toContain("var(--warning)");
+    expect(html).toContain("Slower than usual 1");
+    expect(html).not.toContain("Slow ≥5m");
+  });
 });

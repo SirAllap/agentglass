@@ -8,6 +8,7 @@
  * own result when it wrote one.
  */
 import type { PrCheck, PrCheckRollup } from "../../../shared/types.ts";
+import { durationVerdict, MIN_SAMPLES, type DurationVerdict } from "../../../shared/checkBaseline.ts";
 
 const isSkipped = (k: PrCheck) => k.state === "skipped" || k.state === "neutral";
 
@@ -63,12 +64,48 @@ export function sectionChecks(all: PrCheck[]): CheckSections {
 // The redesigned tab: a verdict, what needs you, then the rest folded.
 // ---------------------------------------------------------------------------
 
-/** A run this long is worth a second look; the chip and the amber bar agree on it. */
-export const SLOW_MS = 5 * 60_000;
-
 export type CheckFilter = "all" | "failed" | "running" | "required" | "slow";
 
-export const isSlow = (k: PrCheck): boolean => (checkSpan(k) ?? 0) >= SLOW_MS;
+/**
+ * Milliseconds to judge: the span of a passed run, or the time a running one
+ * has taken so far. A failed or cancelled run is not judged: it stopped early,
+ * so "faster than usual" would be a lie.
+ */
+export function judgedMs(k: PrCheck, now = Date.now()): number | null {
+  if (k.state === "success") return checkSpan(k);
+  if (k.state === "pending" && k.startedAt && Number.isFinite(Date.parse(k.startedAt))) return Math.max(0, now - Date.parse(k.startedAt));
+  return null;
+}
+
+/** Normal, slower or faster than this job's own history, and "unknown" when it has too little of one. */
+export const checkVerdict = (k: PrCheck, now = Date.now()): DurationVerdict =>
+  durationVerdict(judgedMs(k, now), k.usual, k.state === "pending");
+
+/** The "Slower than usual" chip and the amber bar agree on this. */
+export const isSlow = (k: PrCheck, now = Date.now()): boolean => {
+  const v = checkVerdict(k, now);
+  return v === "slower" || v === "much-slower";
+};
+
+/** "15m · usually 14m (last 20 runs)", or why there is nothing to compare with. */
+export function usualTip(k: PrCheck, now = Date.now()): string {
+  const ms = judgedMs(k, now);
+  const head = ms == null ? "" : k.state === "pending" ? `running ${formatSpan(ms)}` : formatSpan(ms);
+  const u = k.usual;
+  if (k.state !== "success" && k.state !== "pending") return head;
+  if (!u || u.n < MIN_SAMPLES) return `${head ? `${head} · ` : ""}not enough history yet`;
+  const v = checkVerdict(k, now);
+  const word = v === "much-slower" || v === "slower" ? (k.state === "pending" ? " — running longer than usual" : " — slower than usual")
+    : v === "faster" ? " — faster than usual" : "";
+  return `${head} · usually ${formatSpan(u.median)} (last ${u.n} runs)${word}`;
+}
+
+/** Where the job's usual median falls on a bar scaled to `slowestMs`: the tick mark. Null with no verdict-grade history. */
+export function usualTick(k: PrCheck, slowestMs: number): number | null {
+  const u = k.usual;
+  if (!u || u.n < MIN_SAMPLES || slowestMs <= 0) return null;
+  return Math.max(0, Math.min(1, u.median / slowestMs));
+}
 
 const matches = (k: PrCheck, f: CheckFilter): boolean =>
   f === "all" ? true : f === "failed" ? k.state === "failure" : f === "running" ? k.state === "pending"
@@ -91,9 +128,9 @@ export function shortName(k: PrCheck): string {
   return k.name.replace(/\s*\(([^()]*)\)$/, " · $1").replace(/\s+/g, " ").trim();
 }
 
-/** Bar width, as a share of the slowest run on the pull request: 0 when it has no span. */
-export function spanShare(k: PrCheck, slowestMs: number): number {
-  const s = checkSpan(k);
+/** Bar width, as a share of the slowest run on the pull request: 0 when it has no span. A running job draws how long it has been going. */
+export function spanShare(k: PrCheck, slowestMs: number, now = Date.now()): number {
+  const s = checkSpan(k) ?? (k.state === "pending" ? judgedMs(k, now) : null);
   if (s == null || slowestMs <= 0) return 0;
   return Math.max(0.03, Math.min(1, s / slowestMs));
 }

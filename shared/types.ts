@@ -1,6 +1,7 @@
 // Shared event + analytics contract between server and web.
 // Keep this file dependency-free so both sides can import it.
 import type { NotifyKind, NotifyPrefs } from "./notifyPrefs.ts";
+import type { CheckUsual } from "./checkBaseline.ts";
 
 export type HookEventType =
   | "SessionStart"
@@ -3184,6 +3185,9 @@ export interface PrCheck {
   /** GitHub will not merge until this one passes. Absent when GitHub was not
    *  asked, which is not the same as "not required". */
   required?: boolean;
+  /** What this job usually takes on this repository (median and p90 of its last
+   *  successful runs), when the server has seen any. See shared/checkBaseline.ts. */
+  usual?: CheckUsual;
 }
 
 export interface PrCheckRollup {

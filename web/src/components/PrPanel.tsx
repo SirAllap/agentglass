@@ -67,7 +67,7 @@ import { afterViewed, fileAtFloor, stepFileIndex, verticalScrollerOf } from "../
 import { buildFileTree, treeOrder, type TreeNode } from "../lib/prFileTree.ts";
 import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
 import { keepLoadedChecks } from "../lib/prMerge.ts";
-import { applyFilter, checkLabel, checkSpan, checkStatusLine, filterCounts, formatSpan, isSlow, sectionChecks, shortName, slowest, spanShare, verdictHero, workflowCards, type CheckFilter } from "../lib/prChecksList.ts";
+import { applyFilter, checkLabel, checkSpan, checkStatusLine, checkVerdict, filterCounts, formatSpan, sectionChecks, shortName, slowest, spanShare, usualTick, usualTip, verdictHero, workflowCards, type CheckFilter } from "../lib/prChecksList.ts";
 import { askingBehind, behindAnswer, forgetBehind, forgetOneBehind, onBehind, refreshBehind } from "../lib/prBehindStore.ts";
 import { refreshRollup } from "../lib/prRollupStore.ts";
 import { detailWithChecks, rowWithChecks, overlayDetail, reopenedRow, holdReopened, reopenKey, holdEdits, refreshPlan, rowPatch, landedDetail, dropLanded, staleOpen, once, type EditLog, type Landed, type Reopened } from "../lib/prRefresh.ts";
@@ -11928,6 +11928,14 @@ function JobLog({ root, name, jobs }: { root: string; name: string; jobs: PrChec
   );
 }
 
+/** Bar colour by verdict: neutral when usual or unknown, amber slower, red-ish much slower, quiet green faster. A failing run keeps its own red. */
+function durationTint(k: PrCheck, v: ReturnType<typeof checkVerdict>): string {
+  if (k.state === "failure") return CHECK_TINT.failure;
+  return v === "much-slower" ? "var(--error)" : v === "slower" ? "var(--warning)"
+    : v === "faster" ? "color-mix(in srgb, var(--success) 60%, transparent)"
+    : "color-mix(in srgb, var(--text3) 55%, transparent)";
+}
+
 export function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyWhat }: { d: PrDetail; root: string; jobs: PrCheckJob[]; onRerun: () => void; onRerunJobs?: (what: "all" | "failed" | "job", id: string) => void; onAsk?: (check: PrCheck) => void; busy: boolean;
   /** Which request is in flight, so the button that started it is the one that
    *  spins — see Btn `pending`. */
@@ -11960,7 +11968,12 @@ export function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyW
     const quiet = k.state === "skipped" || k.state === "neutral";
     const share = spanShare(k, slowMs);
     const span = checkSpan(k);
-    const slow = isSlow(k);
+    // Colour is the job's own history, not a clock: 15m is fine for a job that
+    // always takes 14m. No history, no colour.
+    const verdict = checkVerdict(k);
+    const tint = durationTint(k, verdict);
+    const tick = usualTick(k, slowMs);
+    const tip = usualTip(k) || checkStatusLine(k);
     // Inside a workflow card the workflow is the header, so the row only says
     // the job; pinned above the cards it has to say both.
     const name = full ? `${k.workflow ? `${k.workflow} / ` : ""}${shortName(k)}` : shortName(k);
@@ -11984,10 +11997,12 @@ export function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyW
           {/* Scaled to the slowest run on this pull request, so a job that
               dominates the wall time is the one you see without reading a
               number. Fixed width and always drawn: the columns stay put. */}
-          <span className="shrink-0 rounded-full overflow-hidden" style={{ width: 72, height: 4, background: "color-mix(in srgb, var(--border) 45%, transparent)" }} aria-hidden>
-            {share > 0 && <span className="block h-full rounded-full" style={{ width: `${share * 100}%`, background: slow ? "var(--warning)" : CHECK_TINT[k.state] }} />}
+          <span className="shrink-0 relative rounded-full" style={{ width: 72, height: 4, background: "color-mix(in srgb, var(--border) 45%, transparent)" }} title={tip} aria-hidden>
+            {share > 0 && <span className="block h-full rounded-full" style={{ width: `${share * 100}%`, background: tint }} />}
+            {/* Where this job usually ends, so the bar reads as "past it" or "short of it". */}
+            {tick != null && <span className="absolute rounded-sm" style={{ left: `calc(${tick * 100}% - 1px)`, top: -2, width: 2, height: 8, background: "var(--text2)" }} />}
           </span>
-          <span className="shrink-0 tabular-nums text-right" style={{ width: 44, color: slow ? "var(--warning-ink)" : "var(--text3)" }} title={checkStatusLine(k)}>
+          <span className="shrink-0 tabular-nums text-right" style={{ width: 44, color: verdict === "much-slower" ? "var(--error-ink)" : verdict === "slower" ? "var(--warning-ink)" : "var(--text3)" }} title={tip}>
             {span != null ? formatSpan(span) : k.state === "pending" ? "running" : quiet ? "skipped" : ""}
           </span>
           {k.url
@@ -12021,7 +12036,7 @@ export function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyW
     );
   };
 
-  const chips = ([["all", "All"], ["failed", "Failed"], ["running", "Running"], ["required", "Required"], ["slow", "Slow ≥5m"]] as const)
+  const chips = ([["all", "All"], ["failed", "Failed"], ["running", "Running"], ["required", "Required"], ["slow", "Slower than usual"]] as const)
     .filter(([f]) => f === "all" || counts[f] > 0)
     .map(([f, label]) => ({ id: f as CheckFilter, label: `${label} ${counts[f]}` }));
 
@@ -12082,7 +12097,7 @@ export function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyW
               <b style={{ color: "var(--text)", fontWeight: 500 }}>{g.name}</b>
               <span className="inline-flex items-center gap-0.5 tabular-nums" style={{ color: "var(--success-ink)" }}>{g.passed}<DoneIcon size={ICON.xs} /></span>
               <span className="ml-auto flex gap-0.5" aria-hidden>
-                {g.checks.slice(0, 12).map((k, i) => <span key={i} className="rounded-sm" style={{ width: 5, height: 12, background: isSlow(k) ? "var(--warning)" : "var(--success)" }} />)}
+                {g.checks.slice(0, 12).map((k, i) => <span key={i} className="rounded-sm" style={{ width: 5, height: 12, background: durationTint(k, checkVerdict(k)) }} />)}
               </span>
             </button>
             {isOpen && g.checks.map((k, i) => row(k, i, false))}

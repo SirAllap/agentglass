@@ -156,6 +156,7 @@ import {
   branchBehind, localHead, prRollup, repoIdFor as prRepoIdFor, subscribeTalkSeen,
   prBranches, prsForBranch, nodeIdOk, locateRepo } from "./prs.ts";
 import { repoSpend } from "./spend.ts";
+import { repoMetrics } from "./checkRuns.ts";
 import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
 import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, lastTmuxTarget, sessionTitle, TERMINAL_ENABLED, PTY_BACKEND, type PtyWsData } from "./terminal.ts";
 import { agentBinFor, mintAgentTicket } from "./agentticket.ts";
@@ -7066,6 +7067,12 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       }
       if (pathname === "/prs/notify-watch/default") return json(setPreset(id.nameWithOwner, b.rules, b.auto === true));
       return json({ ok: false, error: "not found" }, 404);
+    }
+    /* Per check key on this repository: run count, median, p90, failure rate and
+       a 14-day trend, from the history the checks reads already fill. Local: no GitHub call. */
+    if (pathname === "/prs/check-metrics") {
+      const id = await prRepoIdFor(url.searchParams.get("root") || "");
+      return json(id ? { ok: true, repo: id.key, checks: repoMetrics(id.key) } : { ok: false, error: "no GitHub remote here" });
     }
     if (pathname === "/prs/rollup") {
       return json(await prRollup(url.searchParams.get("root") || "", url.searchParams.get("number") || 0, url.searchParams.get("force") === "1"));
