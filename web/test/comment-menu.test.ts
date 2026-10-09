@@ -124,7 +124,9 @@ describe("keyboard", () => {
     expect(body).toContain('addEventListener("keydown", key, true)');
   });
   test("opens on the first row and hands focus back to the trigger on Escape", () => {
-    expect(body).toContain("querySelector<HTMLElement>(ITEMS)?.focus");
+    // A caller may name the row to land on (`focus`); the first menuitem is the default.
+    expect(body).toContain("?? ref.current?.querySelector<HTMLElement>(ITEMS)");
+    expect(body).toContain("first?.focus(");
     expect(body).toContain('anchor.current?.querySelector<HTMLElement>("button")?.focus()');
   });
   test("every row a Menu offers is a menuitem", () => {
