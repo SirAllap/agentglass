@@ -39,6 +39,20 @@ complement, rather than replace, the private reporting path below.
   check, plus a DNS-rebinding guard that refuses a request arriving under a
   `Host` that is not localhost or private (`AGENTGLASS_ALLOWED_HOSTS` allows a
   reverse-proxy name explicitly).
+- **A tokenless server turns away another site's subresource loads.** A simple
+  `GET` from an `<img>` or `<script>` on a page you merely visited carries no
+  `Origin`, so the Origin rule let it through as if it were curl, and the page
+  could make the server spend your ClickUp and GitHub budgets or run a read with
+  side effects. Where there is no `AGENTGLASS_TOKEN`, a request with no `Origin`,
+  `Sec-Fetch-Site: cross-site` and a mode other than a top-level navigation gets
+  a 403. curl, the hooks and the CLIs send no `Sec-Fetch-Site` and are not
+  affected, and a link that opens the UI still works. It is limited to tokenless
+  servers on purpose: with a token such a request carries none and is refused
+  with a 401 anyway, while the desktop renderer, which is cross-site to
+  loopback, loads avatars as `<img>` with the token in the URL and no `Origin`,
+  and would go blank. The ceiling: a desktop app that adopted a server started
+  by hand without a token shows no avatars from it.
+  `server/test/cross-site-get.test.ts` boots one server of each kind.
 - **Token.** `AGENTGLASS_TOKEN` is required on every route except `/health`, the
   pairing handshake, and the local senders' own routes — the telemetry intake
   sinks (`/ingest`, the OTLP receivers) and `/agents/status`, a hooked session
@@ -673,6 +687,20 @@ Three details of the same boundary, because each was once wrong:
 
 The boundary is covered by `server/test/disk-scope.test.ts`; a regression there
 is a hole rather than a bug, and it would not show up in a screenshot.
+
+**A pull request by `gh:owner/name` needs full access.** The pull request
+routes also take a `gh:` root, which is read with the person's own `gh` token
+and so reaches every repository that token can, while every scope above is
+written against the open project. Such a root is answered only for a caller that
+could already do anything here: this machine (no token, or the machine token) or
+a paired device with the `full` grant. A device at `read` or `answer`, a plugin
+whatever its scope, the Clone and a seat get a 403, "a repository outside the
+open project needs full access". The rule is `mayReadForeignRoot` in
+`server/src/auth.ts`, and it applies to the root in the query string and to a
+root in the body of the conflict, nudge, notify-watch, check-on-base and `/prs/`
+POST routes, asked as soon as the body is parsed and before the root is used.
+`server/test/foreign-root-scope.test.ts` unit-tests the rule and fails if a
+handler reads a body root before asking it.
 
 ## Plugins
 
