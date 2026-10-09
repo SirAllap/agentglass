@@ -54,6 +54,7 @@ import { openCard, type CardJump } from "../lib/openCard.ts";
 import type { IssueJump } from "../lib/openIssue.ts";
 import { TASK_SOURCES, shownTaskSources, subscribeTaskSources, type TaskSourceId } from "../lib/taskSources.ts";
 import { CHIP, CTRL_H, EDGE, IconChip, INPUT, INPUT_STYLE, RefreshButton, LINE, TL_AVATAR, TL_CSS } from "./workspace/Chrome.tsx";
+import { SCROLLBAR_CSS } from "./diff/DiffLines.tsx";
 import { useTaskConnected, visibleTaskSources } from "../lib/taskConnected.ts";
 import { landingSource, rememberTaskSource } from "../lib/taskLanding.ts";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
@@ -3338,8 +3339,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
               button beside it — and the width is dragged from the edge now. A
               heading that labels the obvious costs the card its first line, and
               this pane starts level with the table's own heading instead. */}
-          <div className="agx-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 pb-0 text-[11.5px] flex flex-col"
-            style={{ paddingTop: 0 }}>
+          <div className="flex-1 min-h-0 overflow-hidden text-[11.5px] flex flex-col">
             {cardBody}
           </div>
         </aside>
@@ -3376,7 +3376,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
                  that had already been given over to one card. */
               style={{ width: "min(1500px, 92vw)", height: "100%", maxHeight: "100%",
                 background: "var(--bg)", border: EDGE, boxShadow: "0 18px 50px rgba(0,0,0,0.45)" }}>
-              <div className="agx-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 pb-0 text-[11.5px] flex flex-col">
+              <div className="flex-1 min-h-0 overflow-hidden text-[11.5px] flex flex-col">
               {cardBody}
           </div>
             </div>
@@ -5138,6 +5138,12 @@ function CommentAction({ label, title, d, onClick, busy, on, tone, iconOnly }: {
   );
 }
 
+/** The thin bar of SCROLLBAR_CSS, without its arrow buttons. `scrollbar-width`
+ *  makes Chrome ignore the ::-webkit- rules, and its own thin bar still draws a
+ *  ▲ at the top and a ▼ at the bottom (measured in the running app), so this
+ *  pane hands the styling back to the pseudo-elements and hides the buttons. */
+const CARD_SCROLL_CSS = ".agx-scroll.agx-cu-scroll{scrollbar-width:auto;scrollbar-color:auto}.agx-cu-scroll::-webkit-scrollbar-button{display:none;width:0;height:0}";
+
 /** Per card, for the life of the window: see lib/cardTabCache.ts. */
 type PrsRead = { prs: { number: number; title: string; state: string; draft?: boolean; url: string; stated?: boolean }[]; err: boolean };
 const prsCache = swr<PrsRead>(PRS_TTL_MS, (v) => !v.err);
@@ -5956,18 +5962,6 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
    * is any use: at `top: 0` a comment header sticks behind this band, opaque and
    * z-20, and disappears exactly as if it had never stuck at all.
    */
-  const cardHead = useRef<HTMLDivElement>(null);
-  const shell = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const head = cardHead.current;
-    const root = shell.current;
-    if (!head || !root) return;
-    const put = () => root.style.setProperty("--cu-head-h", `${Math.round(head.getBoundingClientRect().height)}px`);
-    put();
-    const ro = new ResizeObserver(put);
-    ro.observe(head);
-    return () => ro.disconnect();
-  }, [t.id, view]);
   useEffect(() => setCommentMenu(null), [t.id]);
 
   const lab = { color: "var(--text4)", width: 62 };
@@ -6032,7 +6026,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
      * showed it, because `bottom-0` holds it to the bottom of that same short
      * box either way.
      */
-    <div ref={shell} className="flex flex-col min-h-full shrink-0">
+    <div className="flex flex-col flex-1 min-h-0 min-w-0">
       {/* The id somebody recognises, first and copyable: it is what goes in a
           branch name, a commit and a message to a colleague. The internal one is
           a fallback, not the headline. */}
@@ -6059,7 +6053,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           touch the modal's top edge, because the scroller carries no top
           padding (see above) and neither did this sticky band. Side and top
           are now the same number instead of one of them being zero. */}
-      <div ref={cardHead} className="sticky top-0 z-20 pt-4 pb-1.5" style={{ background: "var(--bg)" }}>
+      <div className="shrink-0 px-4 pt-4 pb-2" style={{ background: "var(--bg)" }}>
         {/* The card's actions live above its identity, not below its text: they
             are what you reach for after reading, and a long card put them a
             full scroll away. In the sticky band, so they follow the card. */}
@@ -6366,6 +6360,18 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           </div>
         )}
       </div>
+      {/* Only what is below the tabs scrolls, so the scrollbar starts where the
+          content does and the band above it spans the pane edge to edge — with
+          the scroller around the whole card the bar ran alongside the header,
+          where nothing moves, and the header stopped short of it by the
+          scroller's own side padding. */}
+      {/* The app's own thin scrollbar (the panes that mount it say so: this one
+          never did, so the platform's arrowed bar showed), and its 10px kept
+          in reserve so the header's right edge, the cards' and the refresh
+          button's are one line whether or not the card scrolls: 16px of
+          padding on the left, 4 + the 11px bar on the right. */}
+      <style>{SCROLLBAR_CSS + CARD_SCROLL_CSS}</style>
+      <div className="agx-scroll agx-cu-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden pl-4 pr-1 [scrollbar-gutter:stable]">
       {/* One at a time. Unmounting the other half is safe here: what the card
           knows — `full`, the fetch, the status options — lives on CardDetail
           itself, not in this subtree, so switching tabs re-renders and never
@@ -6924,7 +6930,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           because a thread read in the wrong direction is a thread nobody can
           follow and there is nothing else on screen left to say it. */}
       {!!rows.length && (
-        <div className="mb-3 pt-2">
+        <div className="mb-3">
           {/* The timeline's rules are a string in Chrome.tsx, not a stylesheet
               the pull request panel happens to have mounted. */}
           <style>{TL_CSS}</style>
@@ -6994,7 +7000,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                 * card's edges so nothing shows through at the sides.
                 */}
               <div className="sticky z-[5] -mx-3.5 -mt-3 px-3.5 pt-3 pb-2 mb-2 flex items-center gap-2 flex-wrap rounded-t-xl"
-                style={{ top: "var(--cu-head-h, 0px)", background: "var(--surface-card)" }}>
+                style={{ top: 0, background: "var(--surface-card)" }}>
                 <span className="text-[10.5px] font-semibold" style={{ color: "var(--text2)" }}>{c.who || "—"}</span>
                 {!!c.at && (
                   <span className="text-[10px]" style={{ color: "var(--text4)" }}
@@ -7317,6 +7323,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
       </></MarkdownImages>)}
 
       {full === null && <div className="mb-3"><Spinner label="Reading the card…" className="" /></div>}
+      </div>
 
       {dialog}
     </div>
