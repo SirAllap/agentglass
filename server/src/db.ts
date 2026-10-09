@@ -1380,7 +1380,7 @@ CREATE TABLE IF NOT EXISTS understudy_quarantine (
 );
 
 /*
- * Decisions he has already made, in his own words, for the classes to reason
+ * Decisions the person has already made, as they wrote them, for the classes to reason
  * from. Created empty, and stays empty: v1 ingests nothing at all — no
  * transcripts are read, no model is called, and there is no writer for this
  * table anywhere in the server.

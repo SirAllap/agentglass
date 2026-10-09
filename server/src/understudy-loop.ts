@@ -537,9 +537,9 @@ export async function workOne(p: {
   }
 
   /*
-   * THE ONLY VERDICT THAT COUNTS. The agent saying it is done is not evidence;
-   * his own words on this are "compiling is not evidence", after a session that
-   * reported success on a build nobody had run. So the tests run, and their
+   * THE ONLY VERDICT THAT COUNTS. The agent saying it is done is not evidence,
+   * and neither is a build that compiled: a session once reported success on a
+   * build nobody had run. So the tests run, and their
    * result is the outcome regardless of how confident the transcript sounded.
    */
   const checked = await p.verify(cut.path, VERIFY_TIMEOUT_MS);

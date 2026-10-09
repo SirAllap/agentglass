@@ -1101,7 +1101,7 @@ async function runAgentIn(
    *
    * It gets a minted one instead: the understudy's principal, every GET
    * answered and every write refused by `understudyAllows`. That is also what
-   * gives it the views he asked for — the panel, the diff, the branch list —
+   * gives it the views that were asked for — the panel, the diff, the branch list —
    * because a view is a route once you have no screen to look at.
    *
    * Minted per run and revoked in `finally`, so a credential never outlives the

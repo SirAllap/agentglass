@@ -8,7 +8,7 @@
  * finding work is a list of small readers and choosing between them is
  * somebody else's job.
  *
- * EVERY SOURCE IS READ-ONLY, and one of them is read-only twice over. His rule
+ * EVERY SOURCE IS READ-ONLY, and one of them is read-only twice over. The rule
  * about the task tracker is absolute and predates this feature: read it, never
  * write to it, not even a test comment. Nothing here posts, comments, moves a
  * card or changes a state — they list what exists and stop.
@@ -70,7 +70,7 @@ const pendingDupeQ = db.query<{ id: number }, [string, string]>(
 /* Put an unfinished task back at the FRONT of the queue: `taken_at` cleared so
    the source offers it again, and the attempt counted so this cannot loop for
    ever. Deliberately an UPDATE of the original row rather than a new one — the
-   row is the record of what he asked for in his own words, and a copy would
+   row is the record of what the person asked for in their own words, and a copy would
    lose the detail underneath the title. */
 const retryAskedQ = db.query<never, [number]>(
   "UPDATE understudy_asked SET taken_at = NULL, attempts = attempts + 1 WHERE id = ?",
@@ -196,8 +196,8 @@ export function requeue(p: { itemId: string; why: string; runId?: number | null 
  * `taken_at` existed from the first version and nothing ever wrote to it, so
  * the filter that reads it was decoration: an item worked start to finish
  * stayed on the queue as pending. Kept rather than deleted because the row is
- * the only record of what he actually asked for, in his words — the run record
- * has the title and none of the detail he wrote underneath it.
+ * the only record of what the person actually asked for, in their words — the run record
+ * has the title and none of the detail they wrote underneath it.
  */
 function markAskedTaken(id: number): void {
   try { takeAskedQ.run(Date.now(), id); } catch { /* already gone */ }
@@ -282,8 +282,8 @@ addSource({
  * His own cards.
  *
  * READ ONLY, and this is the one place in the codebase where that is a rule
- * rather than a design choice: he lost a comment to a test once and said, in as
- * many words, that touching the tracker could cost him his job. So this lists
+ * rather than a design choice: a person's tracker is usually their employer's
+ * system, and a write there is not one this app can take back. So this lists
  * and nothing else, and the loop's brief tells the agent the same thing.
  */
 addSource({
@@ -296,8 +296,8 @@ addSource({
      * fence rather than tidiness.
      *
      * A card says what to do and never says which checkout it belongs in. Run
-     * live on a real machine, the top task this returned was a ticket from his
-     * company's tracker — and with one open-project repository available, the
+     * live on a real machine, the top task this returned was a ticket from a
+     * company tracker — and with one open-project repository available, the
      * loop's fallback would have cut a worktree in agentglass and set an agent
      * to work on that ticket inside it. Nothing would have reached the
      * company's repository, so not a leak: just a confident, wrong, wasted
@@ -310,12 +310,12 @@ addSource({
      */
     if (!repos.length) return [];
     /*
-     * SILENT UNLESS HE HAS OPENED THE SCOPE, and this is the fence he asked for
-     * in as many words: as long as nothing of the closed side is touched, he
-     * is calm.
+     * SILENT UNLESS THE PERSON HAS OPENED THE SCOPE. The guarantee is that
+     * nothing of the closed side is touched, and selecting its work is the
+     * first step towards touching it.
      *
      * A card names what to do and never names a checkout. While the loop is
-     * scoped to the open project, every card in his tracker is work belonging
+     * scoped to the open project, every card in the tracker is work belonging
      * to a repository the loop may not touch — so the only honest answer this
      * source can give is nothing at all.
      *

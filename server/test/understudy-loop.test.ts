@@ -938,7 +938,7 @@ describe("work he hands it directly", () => {
     expect(block).toContain("it may only work in:");
   });
 
-  step("what he asked for outranks everything a tracker calls urgent", async () => {
+  step("what the person asked for outranks everything a tracker calls urgent", async () => {
     // He asked for this one by hand. No card's own priority outranks that.
     const src = await Bun.file(new URL("../src/understudy-sources-work.ts", import.meta.url)).text();
     const from = src.indexOf('id: "asked"');
@@ -1095,8 +1095,8 @@ describe("it keeps going until there is nothing left", () => {
 
 describe("work-account work is never even selected", () => {
   /*
-   * His own sentence, in substance: as long as nothing of the closed side is
-   * touched, he is calm.
+   * The guarantee: nothing of the closed side is touched, and selecting its
+   * work is the first step towards touching it.
    *
    * Measured live, and that is why this fence sits in the SOURCE rather than in
    * the route. The first call made with an open-project checkout available
@@ -1335,15 +1335,15 @@ describe("a queue he fills by hand drains itself", () => {
     expect(W.runs(1)[0]!.state).toBe("done");
   });
 
-  step("end to end: what he asked for stops being listed once it is taken", async () => {
+  step("end to end: what the person asked for stops being listed once it is taken", async () => {
     const S = await import("../src/understudy-sources-work.ts");
     const repo = join(jail, "repo-t3");
-    const id = S.ask({ title: "Do the thing he asked for", detail: "in his words", repo });
+    const id = S.ask({ title: "Do the thing that was asked for", detail: "in their words", repo });
     expect(id).toBeTruthy();
     expect(S.asked().some((r) => r.id === id)).toBe(true);
     const g = recordingGit();
     await L.workOne({
-      item: { id: `asked:${id}`, source: "asked", title: "Do the thing he asked for", detail: "", repo, weight: 20 },
+      item: { id: `asked:${id}`, source: "asked", title: "Do the thing that was asked for", detail: "", repo, weight: 20 },
       repo,
       shiftId: null,
       git: g.git,

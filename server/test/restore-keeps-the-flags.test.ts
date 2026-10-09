@@ -9,7 +9,7 @@
  *
  * And a desk is not uniform: ten panes started one way and two the other come
  * back with the distinction flattened. That is the app deciding something it
- * was never asked to decide. In his words, it does not even consider it.
+ * was never asked to decide.
  *
  * What is tested here is the rule, not the machine: `agentArgsOf` takes the
  * argv the kernel holds for the process under a pane and says what a restored

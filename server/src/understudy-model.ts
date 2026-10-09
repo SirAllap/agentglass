@@ -5,14 +5,13 @@
  * of them — a two-line rename and a whole-feature audit alike — went to
  * whatever the default was. On this account that is the most expensive model
  * there is, and the weekly budget is shared with the person whose account it
- * is. A clone that empties it by Wednesday is not standing in for him, it is
- * standing in his way.
+ * is. A clone that empties it by Wednesday is not standing in for them, it is
+ * standing in their way.
  *
- * HIS OWN RULE, in his words: haiku when the work is "pretty much a copy and
- * paste, or text with no thinking needed behind it"; sonnet for the middle;
- * opus "for things where I want it to do a really top-level analysis". And one
+ * THE RULE: haiku when the work is close to a copy and paste, or text with no
+ * thinking behind it; sonnet for the middle; opus for a deep analysis. And one
  * prohibition that is not about quality at all — Fable is never used here,
- * because it costs the weekly allowance he needs for his own work.
+ * because it costs the weekly allowance the person needs for their own work.
  *
  * THE BUDGET DECIDES TOO, not just the task. Asking for the best model with
  * 8% of the week left is how a Thursday ends with nothing available; asking

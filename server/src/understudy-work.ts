@@ -7,7 +7,7 @@
  * is not a thing you can leave working on your issues for a day, and no amount
  * of accuracy turns the first into the second — they are different objects.
  *
- * What he asked for: take a card or a pull request, do the work, and when that
+ * What was asked for: take a card or a pull request, do the work, and when that
  * one is finished go and find the next where he would have looked.
  *
  * THE DESIGN MISTAKE THAT WAS BLOCKING IT. Everything before this was built on
