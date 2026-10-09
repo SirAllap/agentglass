@@ -34,6 +34,17 @@ export interface PathSegment {
  * to say where it starts. `/` is the separator between segments and is drawn by
  * the bar, not stored here.
  */
+/**
+ * Whether the finder must ask the machine for its places (and so for the home
+ * directory). The Machine tab always does. Any other tab needs the home
+ * directory only once a `~` is typed, and only until it is known: `~/` on the
+ * Name tab resolved to `/Documents` until the Machine tab had been opened.
+ * One request, then cached by the caller; no poll, nothing per keystroke.
+ */
+export function needsPlaces(tab: string, q: string, homeDir: string): boolean {
+  return tab === "machine" || (!homeDir && q.trimStart().startsWith("~"));
+}
+
 export function pathBar(abs: string, home = ""): PathSegment[] {
   const parts = abs.replace(/\/+$/, "").split("/").filter(Boolean);
   if (!parts.length) return [];

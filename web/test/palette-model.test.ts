@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-  afterJump, canOpenInBrowser, copyLabel, dirsFirst, fileKind, flash, focusSelection, NO_BROWSE, pathBar, pathInputText, pageUrl, placeSections, recentRow, switchTab, type BrowseState,
+  afterJump, canOpenInBrowser, copyLabel, dirsFirst, fileKind, flash, focusSelection, NO_BROWSE, needsPlaces, pathBar, pathInputText, pageUrl, placeSections, recentRow, switchTab, type BrowseState,
 } from "../src/lib/paletteModel.ts";
 
 const HOME = "/home/dev";
@@ -195,5 +195,16 @@ describe("open in browser", () => {
   test("the address carries the path as one encoded value", () => {
     expect(pageUrl("http://127.0.0.1:4000", "/home/u/a b&c/sheet.html"))
       .toBe("http://127.0.0.1:4000/preview/page?path=%2Fhome%2Fu%2Fa%20b%26c%2Fsheet.html");
+  });
+});
+
+describe("when the finder asks the machine for its home directory", () => {
+  test("the Machine tab always does; another tab only for a typed ~ and only until home is known", () => {
+    expect(needsPlaces("machine", "", "")).toBe(true);
+    expect(needsPlaces("names", "~/Documents/", "")).toBe(true);
+    expect(needsPlaces("names", "  ~", "")).toBe(true);
+    expect(needsPlaces("names", "~/Documents/", HOME)).toBe(false);
+    expect(needsPlaces("names", "readme", "")).toBe(false);
+    expect(needsPlaces("contents", "a ~ b", "")).toBe(false);
   });
 });
