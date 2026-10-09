@@ -18,7 +18,7 @@ const plan = (o: Partial<Parameters<typeof cardPlan>[0]>) =>
 describe("what a visit to the card would change", () => {
   it("says nothing when nothing moved", () => {
     // The press is then a GitHub assignment and only that — no write goes to
-    // somebody's company board to leave it exactly as it was.
+    // a shared team board to leave it exactly as it was.
     expect(plan({ on: [1], was: [1] })).toEqual({ add: [], drop: [], status: "", lines: [] });
   });
 

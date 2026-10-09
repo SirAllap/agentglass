@@ -297,10 +297,10 @@ addSource({
      *
      * A card says what to do and never says which checkout it belongs in. Run
      * live on a real machine, the top task this returned was a ticket from a
-     * company tracker — and with one open-project repository available, the
+     * work tracker — and with one open-project repository available, the
      * loop's fallback would have cut a worktree in agentglass and set an agent
-     * to work on that ticket inside it. Nothing would have reached the
-     * company's repository, so not a leak: just a confident, wrong, wasted
+     * to work on that ticket inside it. Nothing would have reached a
+     * work repository, so not a leak: just a confident, wrong, wasted
      * run, which erodes trust faster than an outright failure does.
      *
      * Until something can map a card to a checkout, this source stays quiet

@@ -462,7 +462,7 @@ export function openProjectName(): string {
    *
    * That was the obvious fix — the root the app was launched with, set on
    * purpose, printed at startup as "Project →". Measured on this machine, it
-   * returns the COMPANY'S repository, because the application is pointed at
+   * returns a work repository outside the open project, because the application is pointed at
    * the work being watched, and the fence would have taken its name from it.
    *
    * The fault this replaced opened the fence by accident. That one would have
@@ -490,8 +490,8 @@ export function openProjectName(): string {
    * server runs with cwd `/home/you` — the home directory, not a git
    * checkout — so the open project became `you`, and the matcher below,
    * which is deliberately a segment test, matched `/home/you/anything`.
-   * Every repository on the machine was inside the fence, including his
-   * company's, which is the one thing this must never do.
+   * Every repository on the machine was inside the fence, including the
+   * work ones, which is the one thing this must never do.
    *
    * Measured on the running server rather than reasoned about: the fence
    * listed thirty checkouts of somebody's work.
@@ -572,7 +572,7 @@ function wouldMatchEverything(name: string, checkouts: string[] = []): boolean {
    * comes from the transcript table — which is empty on a fresh install, after
    * a reset, or simply before the first scan. On such a machine
    * `setOpenProject("code")` was accepted, and `code` is a segment of every
-   * repository path here: the fence would have admitted somebody's company's
+   * repository path here: the fence would have admitted a work
    * checkout sitting two directories away.
    *
    * `$HOME/code` and its usual siblings are not project names on any machine,

@@ -699,7 +699,7 @@ describe("several changes to one card", () => {
 
 describe("who can be put on a card", () => {
   it("asks the LIST, not the workspace", async () => {
-    // A workspace here holds the whole company. A picker offering all of them
+    // A workspace here holds the whole organisation. A picker offering all of them
     // to assign one backend card is a picker nobody uses twice.
     C.setCredential("clickup", { token: "pk_1_X", accountId: "7" });
     reply = () => json({ members: [{ id: 9, username: "Ana", initials: "AN", color: "#f0f" }] });

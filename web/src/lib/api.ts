@@ -1383,7 +1383,7 @@ const realApi = {
     get<ProviderTasksResponse>(`/tasks/provider${force ? "?force=1" : ""}`),
 
   /* ClickUp boards. `clickupWrite*` are the only calls in this file that change
-     anything in somebody's company workspace; each one carries the
+     anything in a shared team workspace; each one carries the
      `date_updated` the client was looking at, so a card that moved underneath
      is refused rather than overwritten. */
   /* Recipes — saved commands. `recipesRender` shows what WILL run and never

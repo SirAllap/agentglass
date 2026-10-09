@@ -24,7 +24,7 @@
  * manners, but because these paths differ enormously in what they contain: a
  * conventions file is a page the user wrote on purpose, and a transcript
  * directory is two gigabytes of everything they have said to a machine for a
- * year, most of it about a company's private work. Treating those as one
+ * year, most of it about private work. Treating those as one
  * decision would be the whole feature's worst mistake.
  */
 import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
@@ -249,7 +249,7 @@ function candidates(): Candidate[] {
   }
 
   // Per-project memory, one entry each, because a project is the unit somebody
-  // says yes or no to. Lumping them would make the company's project and a
+  // says yes or no to. Lumping them would make a work project and a
   // hobby project a single checkbox.
   try {
     for (const dir of readdirSync(projects)) {
@@ -327,7 +327,7 @@ function prettyProject(dir: string): string {
  * version tested /agentglass|you/ against the whole path, and every path
  * on the machine contains /home/you/. So the username matched everything,
  * every source was classified as the user's own, and "set this up for me"
- * ticked 646 files and 400 MB of a company's transcripts while labelling
+ * ticked 646 files and 400 MB of work transcripts while labelling
  * them `yours` and `suggested`. Exactly the material the recommendation exists
  * to leave alone.
  *
@@ -391,7 +391,7 @@ function judge(c: Candidate): { sensitive: boolean; recommended: boolean } {
    *
    * The first version returned `recommended: true` for every rules source, on
    * the reasoning that rules are the user's own writing. They are — but rules
-   * recorded while working on a company's project are still about that
+   * recorded while working on a work project are still about that
    * project, and a set that ticks them by default is making a decision that
    * belongs to the person. It can be ticked by hand in one click; being asked
    * is the whole point.

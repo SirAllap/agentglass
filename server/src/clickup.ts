@@ -1063,7 +1063,7 @@ export async function searchTasks(q: string, force = false): Promise<CallResult<
  *
  * The companion to `changedForMe`, and it exists for one case that one cannot
  * see: somebody mentioning you on a card that is not yours. Scoped to the lists
- * behind your saved boards rather than the whole workspace — a company's
+ * behind your saved boards rather than the whole workspace — a shared
  * workspace moves constantly and none of it is yours to be told about.
  *
  * Measured on a real board: one card moved in the last hour. So this is a call
@@ -2060,7 +2060,7 @@ export function refreshCommentCounts(tasks: ProviderTask[], token: string, onCou
  *
  * The local task list ships with writes ENABLED and a switch to turn them off,
  * which is the right default for a store that belongs to you. This is the
- * opposite case: it is somebody's company workspace, a status change fires
+ * opposite case: it is a shared team workspace, a status change fires
  * automations and notifies a team, and there is no undo. So the default is
  * read-only and turning it on is a deliberate act — the same reasoning
  * `TASK_WRITE_ENABLED` uses, pointed the other way.
@@ -2217,7 +2217,7 @@ export function mergeMembers(raw: NonNullable<RawTask["assignees"]>[number][], m
  * Who can be put on a card: the members of the list it lives in.
  *
  * The list rather than the workspace, and that is the whole point — a workspace
- * here has everybody in the company in it, and a picker offering all of them to
+ * here has everybody in the organisation in it, and a picker offering all of them to
  * assign one backend card is a picker nobody uses twice. ClickUp publishes
  * membership per list, which is the team that actually works the board.
  */
@@ -2767,7 +2767,7 @@ export async function setChecklistItem(checklistId: string, itemId: string, done
  * lives in is a different question — measured on a real board, list membership
  * left out most of the people who actually work it (see listMembers).
  *
- * Cached for an hour. A roster changes when somebody joins the company; a
+ * Cached for an hour. A roster changes when somebody joins the organisation; a
  * comment is written far more often than that, and a call per comment on the
  * send path is a delay on the one action that must feel immediate.
  */

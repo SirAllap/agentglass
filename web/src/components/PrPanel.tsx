@@ -7256,7 +7256,7 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
   const [sideFolded, setSideFolded] = useState(true);
   const [plan, setPlan] = useState<{ lines: string[]; run: () => Promise<boolean> }>({ lines: [], run: async () => true });
   /* One button for both halves, and a summary before either happens: the two
-     writes land on two different companies' servers and only one of them can be
+     writes land on two different servers and only one of them can be
      undone from here. */
   const [asking, setAsking] = useState(false);
   const [running, setRunning] = useState(false);
@@ -9000,7 +9000,7 @@ function Masthead({ root, repo, d, busy, local, stackUi, onOpenPr, onShowLocal, 
               <span aria-hidden className="flex" style={{ opacity: 0.7 }}>{copied ? <DoneIcon size={ICON.xs} /> : <CopyIcon size={ICON.xs} />}</span>
             </button>
             {/* Beside the number, not down in the fields: this is the pull
-                request's OTHER identity — the one the rest of the company files
+                request's OTHER identity — the one the rest of the organisation files
                 it under — and it has to stay on screen once the metadata folds
                 away, which is exactly when you are deep enough in a diff to
                 have forgotten what the card asked for. */}

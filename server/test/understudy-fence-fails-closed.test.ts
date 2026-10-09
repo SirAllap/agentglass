@@ -94,7 +94,7 @@ describe("the app's scope is not the fence", () => {
      * AGENTGLASS_ROOT or `root` in the config — set on purpose, printed at
      * startup as "Project →" — so it reads as the one trustworthy answer here.
      *
-     * Measured on this machine: it returns the COMPANY'S repository, because
+     * Measured on a work machine: it returns a work repository, because
      * that is what the application is pointed at, so the fence would have been
      * named after it. The previous fault opened the fence by accident; this
      * one would have aimed it.

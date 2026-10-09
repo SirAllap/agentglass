@@ -2,7 +2,7 @@
  * Which sources are somebody else's, and which we dare suggest.
  *
  * This file exists because the first version of that judgement shipped, was
- * pressed, and ticked 646 files and 400 MB of a company's transcripts while
+ * pressed, and ticked 646 files and 400 MB of work transcripts while
  * labelling them "yours" and "suggested".
  *
  * The cause was one regex against the wrong string: it tested for the project
@@ -18,7 +18,7 @@
  *   off the directory name too.
  *
  *   Nothing sensitive is ever suggested, whatever kind it is. Rules recorded
- *   while working on a company's project are the user's own writing and are
+ *   while working on a work project are the user's own writing and are
  *   still about that project. One click ticks them by hand; being asked is the
  *   entire point of the screen.
  */
@@ -39,7 +39,7 @@ beforeAll(async () => {
 });
 
 /**
- * The shapes that broke it, with the company's name replaced by a fictional
+ * The shapes that broke it, with the real project name replaced by a fictional
  * one — and the substitution is not incidental.
  *
  * The first version of this file used the real directory names, and the
@@ -81,7 +81,7 @@ describe("the username never votes", () => {
    * THIS ASSERTION USED TO SAY THE OPPOSITE, and the change is deliberate.
    *
    * The first version refused to suggest anything marked sensitive, on the
-   * reasoning that a company's project is "somebody else's work". That
+   * reasoning that a work project is "somebody else's work". That
    * reasoning was wrong on the facts. It is one person's machine, the work
    * project is their own work, and it is the densest record of how they
    * actually operate — refusing to learn from it is refusing to learn from most

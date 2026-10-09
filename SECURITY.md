@@ -622,7 +622,7 @@ Reading ClickUp needs only the token. **Changing** anything there — moving a c
 to another status, putting yourself on it — is off unless you set
 `AGENTGLASS_CLICKUP_WRITE=1`, and that default is the opposite of the one the
 local task list uses. The reason is the blast radius rather than the risk of a
-bug: your Taskwarrior store is yours, while a status change on a company board
+bug: your Taskwarrior store is yours, while a status change on a shared team board
 fires automations, notifies a team, and cannot be undone from here.
 
 With it on, each change still asks first — naming the card and what will change

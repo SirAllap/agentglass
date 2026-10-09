@@ -717,8 +717,8 @@ describe("the brief was corrected by reading the runs it produced", () => {
      * sources happened to be walked in. On the brief a run was handed on
      * 2026-08-22, nineteen of the forty were HTTP API guidance out of a
      * third-party skill — idempotency keys and cursor pagination, in a task
-     * about naming a git branch — while the rule forbidding a worktree in his
-     * company's repository sat at index 727 and went nowhere.
+     * about naming a git branch — while the rule forbidding a worktree in a
+     * work repository sat at index 727 and went nowhere.
      */
     const { policyDir } = await import("../src/understudy-ingest.ts");
     const decoys = Array.from({ length: 40 }, (_, i) => ({
@@ -869,7 +869,7 @@ describe("a task it cannot place is never placed anyway", () => {
    * worktree in agentglass and set an agent to work on somebody else's ticket
    * inside it.
    *
-   * Nothing would have reached the company's repository, so not a leak — just
+   * Nothing would have reached a work repository, so not a leak — just
    * a confident, wrong, completely wasted run. That erodes trust faster than an
    * outright failure, because a failure at least looks like one.
    */
@@ -1142,7 +1142,7 @@ describe("work-account work is never even selected", () => {
   step("the loop's own checkout counts, so it is not blind to itself", async () => {
     /*
      * Discovery works from telemetry — work done THROUGH the app — and from
-     * projects opened in it. On this machine both are the company's
+     * projects opened in it. On a work machine both are work
      * repositories, because the open project gets worked on from a terminal. So
      * the loop had nowhere to work and declined everything, while running
      * inside the very checkout it was looking for.

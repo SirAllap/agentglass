@@ -273,8 +273,8 @@ async function openProjectRepos(): Promise<string[]> {
    * THE CHECKOUT THIS SERVER IS RUNNING FROM, which discovery never finds.
    *
    * `discoverRepos` works from telemetry — where work has recently happened
-   * THROUGH the app — and from projects somebody has opened in it. On this
-   * machine both are the company's repositories: the open project gets worked
+   * THROUGH the app — and from projects somebody has opened in it. On a
+   * work machine both are work repositories: the open project gets worked
    * on from a terminal, so the app has never seen it, so the loop concluded it
    * had nowhere to work and declined every task it found.
    *
@@ -288,8 +288,8 @@ async function openProjectRepos(): Promise<string[]> {
    * DELIBERATELY NOT `workspaceRoot()`.
    *
    * It looks like the right answer — the root somebody launched the app with —
-   * and on this machine it is the company's repository, because that is what
-   * the application is pointed at. Adding it here put thirty of their
+   * and on a work machine it is a work repository outside the open project,
+   * because that is what the application is pointed at. Adding it here put thirty of their
    * checkouts one `isOpenProjectPath` call away from being worked in; the only
    * thing that stopped them was the fence name, which is the thing that had
    * just been wrong.
@@ -340,7 +340,7 @@ async function openProjectRepos(): Promise<string[]> {
    * So the projects this machine has actually worked in are consulted — and
    * ONLY the one the fence names. The name is matched before anything is
    * opened: a fence called `agentglass-understudy` looks inside `agentglass`
-   * and nowhere else, so the company's repository next to it is never so much
+   * and nowhere else, so the repository next to it is never so much
    * as listed. Everything found still has to pass `isOpenProjectPath` below,
    * exactly as before. This makes it possible for a name to match something;
    * it never makes a name unnecessary.
@@ -3974,7 +3974,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      *
      * The screen was reported as confusing and it was: twenty rows of equal
      * weight, one holding eight kilobytes of somebody's own conventions and
-     * another four hundred megabytes of their company's work, and a request to
+     * another four hundred megabytes of their work, and a request to
      * choose. This is the answer to "where do I start" — everything the person
      * wrote deliberately about how they work, plus their own project's record,
      * and no raw transcript of anybody else's.
@@ -4185,8 +4185,8 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      * tool he has — a run that goes wrong costs a directory.
      *
      * The repositories are the ones already discovered and then filtered to the
-     * open project. His decision, taken on a Saturday and for a good reason:
-     * prove it where a mistake costs a worktree rather than his job.
+     * open project. The person's decision, and for a good reason:
+     * prove it where a mistake costs a worktree rather than the real repository.
      */
     if (pathname === "/understudy/work/next" && req.method === "GET") {
       const repos = await openProjectRepos();
@@ -4301,11 +4301,11 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
        * version of this line said `item.repo || repos[0]` — take whatever is
        * first if the task does not say.
        *
-       * Found by running it: the top task on a real machine was a card from his
-       * COMPANY'S tracker, and a card carries no checkout. With one open-project
+       * Found by running it: the top task on a real machine was a card from a
+       * work tracker, and a card carries no checkout. With one open-project
        * repository present that fallback would have cut a worktree in agentglass
        * and set an agent to work on somebody else's ticket inside it. Not a
-       * leak — nothing would have reached the company's repository — but a
+       * leak — nothing would have reached a work repository — but a
        * confident, wrong, and completely wasted run, and the kind that erodes
        * trust faster than a failure does.
        *
@@ -4492,7 +4492,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
          *
          * `open-only` keeps the task-tracker sources silent; `everywhere` lets
          * them offer work. There was a route to SET it and none to ask, so the
-         * switch that decides whether the clone reaches somebody's company
+         * switch that decides whether the clone reaches somebody's work
          * could not be seen in the application at all — only changed with curl.
          * A fence whose position is invisible is one nobody can trust, and this
          * is the position people most want to check before walking away.
@@ -6555,7 +6555,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     }
     if (pathname === "/clickup/members") {
       // Who can be put on a card. Scoped to the LIST the card lives in: a
-      // workspace here holds the whole company, and a picker offering all of
+      // workspace here holds the whole organisation, and a picker offering all of
       // them to assign one backend card is a picker nobody uses twice.
       /* No list: the workspace's people, for a setting that names one before a card is open. */
       const r = url.searchParams.has("workspace") ? await workspaceMembers() : await listMembers(url.searchParams.get("list") ?? "");

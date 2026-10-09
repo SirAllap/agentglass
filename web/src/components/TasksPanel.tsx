@@ -2767,7 +2767,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
             <MenuItem onClick={() => { openExternal(menu.v.url); setMenu(null); }}>Open in ClickUp ↗</MenuItem>
           )}
           {/* Named for what it does and, more importantly, for what it does
-              not. "Remove" beside a board that lives in somebody's company
+              not. "Remove" beside a board that lives in a shared team
               workspace is a word worth being precise about: this writes to a
               file on this machine and never calls ClickUp. The line underneath
               says so, because a destructive-looking red item with no

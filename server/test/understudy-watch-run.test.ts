@@ -218,7 +218,7 @@ describe("the fence that could be set and never read", () => {
   /*
    * `propose-scope` decides whether the task-tracker sources may offer work at
    * all. There was a route to CHANGE it and none to ask what it was, so the
-   * switch that governs whether the clone reaches somebody's company could
+   * switch that governs whether the clone reaches somebody's work could
    * not be seen in the application — only set, with curl.
    *
    * That is the setting people most want to check before walking away from it,
