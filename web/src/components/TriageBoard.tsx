@@ -238,13 +238,6 @@ export function TriageBoard({
   const tableLabel = rest > 0 ? `Show all ${total} as a table` : "Show the table";
 
   /*
-   * The keyboard, and why the cursor is a pair rather than an index.
-   *
-   * A board has two axes and a flat index has one, so `j` from the bottom of a
-   * lane would wrap into the top of the next — which reads as the cursor
-   * teleporting. Lane and row, and `j` at the end of a lane simply stops.
-   */
-  /*
    * The columns actually drawn.
    *
    * `LANES` is the policy; this is the screen. Only one lane opts out of being
@@ -372,7 +365,6 @@ export function TriageBoard({
       return next;
     });
   }, [folded]);
-  const [cur, setCur] = useState<{ lane: number; row: number }>({ lane: 0, row: 0 });
   const frame = useRef<HTMLDivElement>(null);
   /*
    * THE KEYS DID NOTHING, AND THE ROW BELOW THE COUNTS SAID THEY DID.
@@ -421,21 +413,6 @@ export function TriageBoard({
       folded: isFolded(id), opened: !!openLanes[id], cap: LANE_CAP,
     });
   }, [lanes, cols, openLanes, isFolded]);
-  const at = shown(cur.lane)[cur.row];
-
-  // Keep the cursor on something. Lanes empty and fill as checks land, and a
-  // cursor left pointing past the end is a keypress that does nothing.
-  useEffect(() => {
-    const n = shown(cur.lane).length;
-    if (n === 0) {
-      const next = cols.findIndex((_, i) => shown(i).length > 0);
-      if (next >= 0) setCur({ lane: next, row: 0 });
-    } else if (cur.row >= n) setCur((c) => ({ ...c, row: n - 1 }));
-  }, [lanes, cur.lane, cur.row, shown, cols]);
-
-  useEffect(() => {
-    frame.current?.querySelector<HTMLElement>("[data-cur=\"1\"]")?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [cur]);
 
   /*
    * The app's find bar, driving this board.
@@ -447,7 +424,7 @@ export function TriageBoard({
    * which the first one cannot see at all.
    *
    * So the bar now runs THIS one. Ctrl+F anywhere on the board sets the same
-   * needle, dims the same cards and steps the same cursor; the box beside the
+   * needle, dims the same cards and steps through the same matches; the box beside the
    * lanes is the visible half of it rather than a second feature. Registered as
    * an engine, which is the seam findScope already has for a view that searches
    * something other than the document (see FindEngine).
@@ -462,8 +439,9 @@ export function TriageBoard({
   shownRef.current = shown;
   const colsRef = useRef(cols);
   colsRef.current = cols;
-  const curRef = useRef(cur);
-  curRef.current = cur;
+  /* Where the last step landed. Not painted: a card that looked chosen read as
+     a pull request state, and nothing else on the board moves it. */
+  const stepAt = useRef({ lane: 0, row: 0 });
   useEffect(() => {
     /** Every card the board is DRAWING, in reading order, with where it sits. */
     const drawn = () => {
@@ -475,7 +453,7 @@ export function TriageBoard({
     };
     const flagsFor = (q: string, list: ReturnType<typeof drawn>) => list.map((x) => prMatches(x.p, q));
     const here = (list: ReturnType<typeof drawn>) =>
-      list.findIndex((x) => x.lane === curRef.current.lane && x.row === curRef.current.row);
+      list.findIndex((x) => x.lane === stepAt.current.lane && x.row === stepAt.current.row);
     let q = "";
     return registerEngine(() => {
       /* Only while this board is the thing on screen. The panel keeps it
@@ -500,7 +478,9 @@ export function TriageBoard({
           const to = stepMatch(flagsFor(q, list), here(list), dir);
           if (to < 0) return;
           const hit = list[to]!;
-          setCur({ lane: hit.lane, row: hit.row });
+          stepAt.current = { lane: hit.lane, row: hit.row };
+          frame.current?.querySelector<HTMLElement>(`[data-pr="${hit.p.number}"]`)
+            ?.scrollIntoView({ block: "nearest", inline: "nearest" });
         },
         at() {
           const list = drawn();
@@ -891,9 +871,8 @@ export function TriageBoard({
                       </div>
                     ) : (
                       <>
-                        {rows.map((p, r) => (
+                        {rows.map((p) => (
                           <CardView key={p.number} p={p} hasTaskProvider={hasTaskProvider} repoUses={repoUses}
-                            cursor={cur.lane === i && cur.row === r}
                             pinned={pinned(p.number)} onOpen={() => onOpen(p.number)} onPin={() => onTogglePin(p)}
                             onAct={onAct} busy={busy} acting={acting}
                             dim={!matches(p) || (onlyLane !== null && onlyLane !== l.id)} root={root}
@@ -1165,11 +1144,11 @@ function cardVerdict(p: PrSummary): {
 const copyEdge = (done: boolean) =>
   `1px solid color-mix(in srgb, ${done ? "var(--success) 50%" : "var(--border) 55%"}, transparent)`;
 
-function CardView({ p, hasTaskProvider, repoUses, pinned, cursor, onOpen, onPin, onAct, busy, acting, dim, root, unread }: {
+function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onPin, onAct, busy, acting, dim, root, unread }: {
   p: Card; hasTaskProvider: boolean;
   /** This repository links work items at all: see prCardBlock.ts. */
   repoUses: boolean;
-  pinned: boolean; cursor?: boolean;
+  pinned: boolean;
   /** Unread remarks on this one, or null. See prUnread.ts. */
   unread?: Unread | null;
   /** The pull request whose action is running, so only its card spins. */
@@ -1239,13 +1218,12 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, cursor, onOpen, onPin,
        a test asking how many landed in a lane, a probe asking which column it
        is measuring. The number is already on screen; this just makes it
        addressable without reading the design. */
-    <div onClick={onOpen} role="button" tabIndex={-1} data-pr={p.number} data-cur={cursor ? "1" : undefined}
+    <div onClick={onOpen} role="button" tabIndex={-1} data-pr={p.number}
       data-dim={dim ? "1" : undefined}
       className="rounded-lg mb-2 cursor-pointer agx-btn agx-prc overflow-hidden"
       style={{
-        border: cursor ? "1px solid color-mix(in srgb, var(--primary) 60%, transparent)" : EDGE,
+        border: EDGE,
         background: "var(--surface-card)",
-        boxShadow: cursor ? "inset 2px 0 0 var(--primary)" : undefined,
         /* Saturation as well as opacity: these cards are read by colour — green
            lane, red checks, amber waiting — and dimming alone leaves a row of
            paler versions of the same signal still competing for the eye.

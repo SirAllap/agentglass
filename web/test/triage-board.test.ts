@@ -13,9 +13,8 @@
  * There is no DOM in these suites — bun test, no jsdom — so the component is
  * rendered to a string with `react-dom/server` and read as markup, the same way
  * server-banner-desktop.test.ts does it. That means no effects run: the keyboard
- * cursor, `scrollIntoView` and the reconciliation that keeps the cursor on
- * something are all effect-borne and cannot be seen from here. They are not
- * asserted, rather than asserted emptily.
+ * `scrollIntoView` on a find step is effect-borne and cannot be seen from
+ * here. It is not asserted, rather than asserted emptily.
  */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "bun:test";
@@ -739,6 +738,17 @@ describe("the shortcuts the legend promises", () => {
     }
     expect(SRC).not.toContain("</K> pin<");
     expect(SRC).not.toContain("</K> open it<");
+  });
+
+  it("no card paints a keyboard cursor", () => {
+    // With the keys gone nothing could move it, so one card always wore a blue
+    // border and a left strip that read as a pull request state.
+    const html = render({ review: [pr(1), pr(2)], mine: [pr(3)], total: 3 });
+    expect(drawn(html, "review")).toBeGreaterThan(0);
+    expect(html).not.toContain("data-cur");
+    expect(html).not.toContain("inset 2px 0 0");
+    expect(SRC).not.toContain("data-cur");
+    expect(SRC).not.toMatch(/\bsetCur\b/);
   });
 });
 
