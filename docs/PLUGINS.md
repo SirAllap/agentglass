@@ -35,9 +35,11 @@ program from it must now declare that. **On Linux**, a host that cannot build
 the box (bubblewrap missing, or Ubuntu's AppArmor limit on user namespaces)
 **does not start** the plugin until you say it may run unboxed anyway — one
 plugin at a time (`POST /plugins/allow-unboxed {"name", "allow": true|false}`,
-revocable the same way; there is no Settings UI for this yet, only the route),
-or `AGENTGLASS_PLUGINS_UNBOXED=1` for every plugin on a host you already trust
-completely. Refused starts show why and how to fix it (install bubblewrap,
+revocable the same way; the plugin's card in Settings → Plugins has the button,
+shown only while the plugin is refused or allowed that way), or
+`AGENTGLASS_PLUGINS_UNBOXED=1` for every plugin on a host you already trust
+completely — Settings → Plugins says so at the top while that is set, since it
+has no switch there to turn off. Refused starts show why and how to fix it (install bubblewrap,
 lift the AppArmor limit, or grant the consent) rather than widening the grant
 silently; there is no per-plugin switch to run outside a box on a Linux host
 that has one. **On macOS and Windows**, where bwrap does not exist at all,
@@ -260,14 +262,15 @@ into the manifest hash, so a plugin that starts drawing somewhere new is asked
 about again. A manifest with no `contributes` hashes exactly as it did before
 drawing existed, so upgrading the app clears no approval.
 
-Four places a plugin can appear:
+Five places a plugin can appear:
 
 | Contribution | Where it shows | What the plugin sends |
 |---|---|---|
-| `panels` | A tab in the **Plugins** view, in the rail's bottom drawer | A tree of nodes (below), redrawn whenever it likes. At most 8, each with an `id`, a `title` of at most 40 characters, and optionally one `icon` from `puzzle`, `review`, `check`, `chart`, `list`, `bell`, `bug`, `book`, `bolt`, `eye` — a word the app maps to its own set, so a plugin ships no image for it |
+| `panels` | A tab in the **Plugins** view, in the rail's bottom drawer | A tree of nodes (below), redrawn whenever it likes; or, with `"canvas": true`, a live scene changed by operations (see *A live panel*). At most 8, each with an `id`, a `title` of at most 40 characters, and optionally one `icon` from `puzzle`, `review`, `check`, `chart`, `list`, `bell`, `bug`, `book`, `bolt`, `eye` — a word the app maps to its own set, so a plugin ships no image for it |
 | `settings` | A page of its own in **Settings**, under Connections | Nothing: the app draws the fields and stores the values |
 | `prNotes` | Inside a pull request: one entry per pass in the conversation's **Local** lane, and each note under its line in the Files tab | Runs and notes, with a severity, a path and a line |
 | `prActions` | A button in every pull request's header, in the plugin's own colour, with the rest of its actions under a caret | Nothing to draw: the button's state is read from the plugin's runs on that pull request |
+| `inboxAnnotations` | A small badge on Inbox rows, and a "Sort: <plugin>" choice in the Inbox's toolbar | A badge, a tip and a number per row (below). It cannot hide a row |
 
 Everything goes through the plugin's own channel, `/plugin/self/…`, over its own
 token. That channel is open at any scope, because drawing is not a power over
@@ -279,12 +282,15 @@ plugin cannot draw into another's panel.
 | `GET /plugin/self` | Its name, its declared contributions and its settings |
 | `GET /plugin/self/events?wait=25000` | Long poll: clicks, submitted forms, settings changes, a note marked resolved, a pull request opened |
 | `POST /plugin/self/panel` `{id, tree}` | Draw a declared panel |
+| `POST /plugin/self/panel/<id>/ops` `{seq?, ops}` | Change a declared live panel (`canvas: true`) |
 | `POST /plugin/self/options` `{key, options}` | Choices for a `select` it could only find at run time |
 | `POST /plugin/self/settings` `{values}` | Fill in its own declared settings — for a box the person edits that has to arrive with something in it |
+| `POST /plugin/self/inbox/annotations` `{items, replace?}` | Badge and order Inbox rows (`inboxAnnotations`) |
 
 `~/.config/agentglass/plugins.json` (mode 0600) is the whole record: what is
 installed and where it came from, the approval on file, the master switch, the
-catalogues added, and the settings values the person typed — which is why a
+catalogues added, and the settings values the person typed (a `secret` field's
+value is the exception: it is in `secrets.json`, below) — which is why a
 prompt written in a settings box never travels with the plugin.
 | `POST /plugin/self/pr/run` | Start or finish a pass over a pull request |
 | `POST /plugin/self/pr/notes` `{notes}` | Add or update notes |
@@ -297,6 +303,42 @@ the counts it found, which open the findings. So a plugin posts its `queued`
 run the moment it accepts the press — before any work starts — or the press
 looks ignored. The event carries the action id and the pull request and
 nothing else; an id the manifest never declared is refused.
+
+**A key or a token** is a settings field of type `secret`. The window draws a
+masked box; once saved the value is shown as *Set, hidden* with **Replace** and
+**Clear**, and it is never sent back to the window. Every read of the settings
+(`GET /plugins/settings`, the plugin list, a plugin holding `full` scope) gets
+`null` in its place and a `set` list naming the secrets that hold a value; only
+the plugin that declared it reads the value, over its own `GET /plugin/self` and
+in its `settings` event. It lives in `~/.config/agentglass/secrets.json`, a 0600 file of its own
+(`{plugin: {field: value}}`, rewritten whole and kept at 0600 on every save), so
+that one code path reads it and `plugins.json`, which more of the app reads, never
+holds a value; a key an older build left in `plugins.json` moves over the first
+time it is read. That is a file only your user can read and not a keyring, so the
+ceiling is plain: **a plugin running outside its box, and any program running as
+you, can read it.** This hides the value from the app's screens and its API, not
+from the disk. When a plugin runs outside its box while another holds a key, the
+plugin's card and `agentglass-plugin list` say so: "<plugin> runs outside its box
+and can read <holder>'s key". A manifest cannot give a
+`secret` a default (a manifest is a public file), an update that turns the field
+into anything else drops the stored value, a removed plugin's secret is never
+kept for a reinstall, and a drawn `form` node never echoes one. From the
+terminal, `agentglass-plugin settings <name> apiKey=-` reads the value from
+standard input, because a value on the command line lands in shell history. The
+review screen says when a plugin asks for one.
+
+**Marking Inbox rows** (`inboxAnnotations: true`) is for a plugin that knows
+something about a notification the list does not. It posts, per row, the thread
+`id` and the `updatedAt` it was made for, and any of: a `score` (0 to 1) or a
+`rank` (any number) to order by, a `badge` `{text, tone}` of at most 24
+characters, and a `tip` of at most 200 (control, zero-width and bidi characters are stripped from both). At most 500 rows a post and 1000 kept per
+plugin, in memory: a plugin posts again when it starts. `replace: true` drops
+what it posted before. The app draws the badge as a chip on the row and adds
+**Sort: <plugin>** beside **Time**, highest number first, rows it gave no number
+after the ones it did. Newest first stays the default until the person picks the
+plugin, and nothing here can remove a row, mark one read or change what it
+says: an annotation for an older version of a row (`updatedAt` is not the row's
+last update) is not shown, and the list has the same rows with or without it.
 
 **The vocabulary** ([shared/pluginUi.ts](../shared/pluginUi.ts)) is a closed set
 of nodes the app draws with its own parts:
@@ -311,6 +353,189 @@ current theme. A link is `https` or nothing. A tree is checked before it is kept
 with limits on depth, node count and string length, and an unknown node is
 refused rather than skipped. A click comes back as the action id and payload the
 plugin put on the control, and nothing else.
+
+**A live panel** is a `panels` entry with `"canvas": true`. Where a tree is a
+document the plugin re-posts, a canvas is a small scene the plugin changes many
+times a second: things arrive in a lane, wait behind a gate, ride a wire to the
+next stage and leave. It exists for boards, flow diagrams and instruments, and
+nothing about it is specific to one plugin.
+
+```json
+{ "contributes": { "panels": [{ "id": "board", "title": "Pipeline", "canvas": true }] } }
+```
+
+It is declared, so the review screen says "Live panel" and the flag is part of
+what was approved: a plugin approved as a static screen cannot start animating
+without asking again. A canvas panel takes operations, not a tree (`POST
+/plugin/self/panel` refuses it, and the operations route refuses a panel that is
+not declared as one):
+
+```
+POST /plugin/self/panel/<id>/ops   {"seq": 12, "ops": [ ... ]}   ->  {"ok": true, "epoch": 3, "version": 41}
+```
+
+| Op | What it does |
+|---|---|
+| `add` | `{node: {id, type, parent?, ...props}, before?}` — one node; `parent` is a container, absent means the root |
+| `set` | `{id, props}` — change props; `null` unsets an optional one. Type, id and parent cannot change here |
+| `move` | `{id, parent?, before?, via?, ms?, easing?}` — re-parent or reorder; `via` is an `edge` id and the node rides that wire |
+| `remove` | `{id}` — the node, what is under it, and every wire that touched any of them |
+| `clear` | drop the scene |
+| `animate` | `{id, kind: "enter" \| "exit" \| "pulse", ms?}` — a one-shot the app plays |
+
+Node types ([shared/pluginCanvas.ts](../shared/pluginCanvas.ts) is the whole
+list, with each one's props): containers `stack`, `row` and `lane` (a stage:
+`title`, `state: open | closed | sealed`, `layout: list | grid | pile`, `icon`,
+`activity`); leaves `token`, `label`, `counter`, `stat`, `badge`, `icon`, `spark`
+(`values`, and `cap`, a limit drawn as a dashed line at that value on the same scale:
+it is counted into the range, so a trend under its limit stays under the line),
+`gauge` (`shape: arc | ring | bar | pips`, `value`, `max`), `countdown` (`until`,
+ticked by the app so a clock is not an op per second) and `edge` (`from`, `to`,
+`activity: idle | busy | flowing`; the app routes it between the two boxes); and
+controls `button`, `segmented` and `disclosure` (plain text in a `<pre>`, for
+"what was sent, exactly"). `grow` (1-4) on a container makes a board fill the
+width. A control's click comes back through the same `/plugin/self/events` as a
+tree's. There is no Markdown, no link, no image and, outside a board, no position: a scene must
+never make the window fetch something on its own, and it cannot overlap.
+
+**A board** is the other way to draw a live panel, for a plugin that draws a
+machine instead of a flow: a stage of fixed size in its own units that the app
+scales as a whole, with parts at fixed places, slots that hold tokens, and traces
+that run under the parts. Nothing is specific to one plugin; a build farm or a
+queue monitor uses the same words. A scene without a board is laid out as above,
+exactly as before.
+
+| Type | Lives in | Props (`*` required) |
+|---|---|---|
+| `board` | the root only, at most 2 per scene | `w`* 320-2400, `h`* 200-1600 (integers), `material: glass \| plain`, `label` |
+| `part` | a `board`, directly | `x`* 0-2400, `y`* 0-1600, `w`* 24-2400, `h`* 24-1600, `depth` 0-4 (default 1), `step` 1-99, `title`, `hint`, `tone`, `action` (the whole part is a button) |
+| `bay` | a `part`, directly; holds only `token`s | `cols`* 1-12, `rows`* 1-8 (`cols * rows` at most 64, also after a `set`), `sealed`, `caption` |
+| `gate` | any container | `state`* `open \| closed`, `value`, `max` 1-60 (its pips), `label`, `tone` |
+| `press` | any container | `activity`, `label`, `tone` |
+| `core` | any container | `title`, `value`, `unit`, `hint`, `hint2`, `activity`, `tone` |
+| `item` | any container | `title`*, `rank` 1-999, `meta`, `badge`, `badgeTone`, `dim`, `selected`, `action` |
+| `lamp` | any container | `tone`, `label`, `on` |
+
+An `edge` may live at the root or directly in a board. Inside a board it may also
+carry `points`, 2 to 12 `[x, y]` pairs of integers in board units (0-2400 by
+0-1600), and `kind: trace | control | seal` (default `trace`); a trace with no
+`points` is drawn as a straight elbow between the two parts. `points` on an edge
+anywhere else is refused, and so is moving an edge that has them out of its
+board. Existing types gain props: `gauge` `shape: needle`, `digits` 0-4 and
+`hideMax`; `counter` `digits` 0-6, `prefix` (at most 4 characters) and `style:
+plain | odometer`; `segmented` `style: chips | lever`; `countdown` `shape: text |
+ring` and `period` 1-86400 seconds (what a ring measures its remainder against).
+A `move` with `via` an edge in a board rides that edge's points.
+
+```json
+[
+  {"op": "add", "node": {"id": "line", "type": "board", "w": 1180, "h": 560, "material": "glass"}},
+  {"op": "add", "node": {"id": "inbox", "type": "part", "parent": "line", "x": 40, "y": 60, "w": 300, "h": 220, "step": 1, "title": "Inbox", "hint": "acme/orbit"}},
+  {"op": "add", "node": {"id": "queue", "type": "part", "parent": "line", "x": 520, "y": 60, "w": 300, "h": 220, "step": 2, "title": "Queue"}},
+  {"op": "add", "node": {"id": "slots", "type": "bay", "parent": "queue", "cols": 4, "rows": 3, "caption": "waiting"}},
+  {"op": "add", "node": {"id": "wire", "type": "edge", "parent": "line", "from": "inbox", "to": "queue", "kind": "trace", "activity": "flowing",
+    "points": [[340, 170], [430, 170], [430, 120], [520, 120]]}},
+  {"op": "add", "node": {"id": "n1", "type": "token", "label": "ORBIT-1042", "parent": "inbox"}},
+  {"op": "move", "id": "n1", "parent": "slots", "via": "wire", "ms": 600}
+]
+```
+
+The window keeps the whole board at one scale (between 0.6 and 1.6 of its own
+size, scrolling sideways below that) and draws the parts over the traces. A
+part's box is not checked against the board's size when it is written, since a
+later `set` on the board could make it wrong; whatever falls outside is clipped.
+A bay draws a slot per cell in scene order, and tokens past the last slot show as
+"+N". There is no rotation, no free drawing (a trace is integer points, never a
+path) and no plugin CSS. A board holds at most 2 per scene, traces at most 12
+points, bays at most 64 slots and gates at most 60 pips; a `core` or `press` that
+is busy counts as two looping animations (a core spins and pulses, a press has two jaws), a busy token as one. A board holds only parts and edges directly; everything else goes in a part or a bay.
+
+**An instrument sheet** is the third way to draw a live panel, for a plugin whose
+subject is a ring: stations round an orbit, a rate limiter's window, a clock that
+counts to the next poll. A `board` is about what is next to what; a sheet is about
+where on a ring. The plugin says what sits at which angle and the app does the
+projection, the depth, the label columns, the paint and the motion. Angles are
+degrees, 0 = right, growing clockwise, and an angle is below 360, never 360. An
+out-of-range prop refuses the op by name; nothing is clamped into a different
+meaning.
+
+| Type | Lives in | Props (`*` required; ranges inclusive unless "below") |
+|---|---|---|
+| `sheet` | the root, a stack, a row or a `fold`; one per `fit` | `w`* 320-1200, `h`* 200-700 (integers), `fit`* `wide \| narrow`, `material: plain \| inset`, `label` (read aloud), `key` up to 4 `{shape: ring \| dot \| diamond, label}` (the legend, top right) |
+| `orb` | a sheet; at most 1 | `cx`* 0-1200, `cy`* 0-700, `r`* 8-300 (integers), `light` 0 to below 360 (where the lit side faces), `bands` 0-8, `terminator`, `tone`, `halo` |
+| `plane` | a sheet; at most 2 | `cx`*, `cy`*, `rx`* 40-600 (integers), `tilt`* 15-90 (the angle it is seen from: 90 is a circle, 27 an ellipse .454 as tall as wide), `roll` -45 to 45, `depth` 0-1 (near moons grow and far ones shrink by up to 35 percent of it), `label` |
+| `band` | a plane; at most 4 | `r0`*, `r1`* (0.2-1.6 of the plane's `rx`, `r1 > r0`), `from`* 0 to below 360, `to`* above `from` and at most `from + 360` (a sector across 0 is `330` to `390`), `layer: back \| front \| all`, `segments` 1-60 and `lit` 0-`segments` (a 30-sector gate is one node; each segment is at least 1 degree), `tone`, `halo` |
+| `ticks` | a plane; at most 1 | `count`* 8-120, `mark` (every nth is longer), `lit` 0-16 (the last marks before the hand), `passed`, `until` (an epoch in ms) with `period` in seconds (1-86400): the window works out the passed marks and the hand once a second, so a clock costs the plugin no operations; `until` wins over `passed`. `side: out \| in`, `numerals` up to 4 `{at, text}` of 1-3 characters, `tone` |
+| `hatch` | a sheet; at most 2 | `of`* (an orb, or a band of that sheet), `from`*, `to`*, `gap`* 6-24, `angle` 0 to below 180. The lines cover the shape, at most 80 |
+| `reticle` | a plane; at most 1 | `of`* (a token of that plane), `chip` (plain text, top left) |
+| `dock` | the root, a stack or a row | `title`*, `value`, `until` (an epoch in ms: the value line becomes the time left as `mm:ss`, redrawn by the window once a second, so a live line costs no operations; `value` is what shows without it), `unit`, `hint`, `hint2`, `tone`, `selected`, `here` (the stop of a journey you are at), `leg: idle \| busy \| flowing` (the trace into it), `action`; holds one `gauge` |
+| `fold` | the root, a stack or a row | `h`* 160-760 and `hNarrow` (the height when the panel is narrow), `open` (the first state), `label`, `action` |
+
+A `token` in a plane gains `at`* (it is refused outside a plane, and a token in a
+plane without it), `size: lg`, `shape: ring \| dot \| diamond`, `halo`, `trail`
+0-12 slices with `trailSpan` 5-120 degrees (a fading tail behind it), `leader:
+left \| right \| below \| above \| none` (its label on a hairline; the app stacks each margin
+column and drops what does not fit, saying how many; `below` and `above` hang the
+label on a short hairline under or over the moon, which is where the top station goes
+when a label under it would run into the body), `value` and `unit` (a second
+line); its `count` is the number in the moon. An `edge` between two tokens of one
+plane follows the plane; `breakAt` 0-1 with `breakGap` 0.02-0.5 cuts a gap with end
+marks, the open breaker. A `gauge` gains `shape: ticks` (`max` 8-120) and
+`segments` (`max` up to 12), `mark` 0-1 (a tick on an arc, ring or bar: a p95, a
+threshold) and `values`, 1-3 concentric arcs on an arc. A `ticks` gauge also takes
+`until` (an epoch in ms) with `period` in seconds, 1-86400: the window lights the
+marks as the period runs, once a second, so an elapsed gauge costs the plugin no
+operations while it runs. `until` wins over `value`, which stays the static
+fallback; a `period` alone, or either on another shape, is refused.
+
+Rules a reviewer can lean on. The window shows the sheet whose `fit` matches the
+PANEL's width (900 px is the line), so build the narrow one rather than hoping the
+wide one scales. A fold's `h`, `hNarrow` and `open` are set when it is added and a
+`set` of them is refused: a control never moves under the pointer because a
+plugin toggled a drawer. Whether it is open is the person's, kept across a
+reconnect; the plugin hears of it only through the fold's `action`. Pressing a
+dock opens the first fold and runs the dock's `action`. A sheet costs what it
+draws: every SVG element is priced (`halo` 1, a trail slice 1, ticks and bands
+and hatches one path each however many marks), at most 320 per sheet, and a `set`
+that would pass it, on this node or on the plane it sits on, is refused with the
+number. What a node points at (a reticle's token, a hatch's shape, an edge's
+ends) is checked on the whole scene after every batch, so a `move` cannot leave
+one dangling, and a `remove` takes what pointed at the node with it. A moon is
+never drawn larger than 24 units. A moon that gets a new `at` travels to it (a
+tween, 420 ms, counted among the 64) and jumps under reduced motion. The props
+that carry a lot of light (`tone`, `lit`, `halo`, `light`, `terminator`,
+`material`, `shape`, `leg`, `selected`, `here`) are drawn at most once per 400 ms
+per node, 1 s under reduced motion, whatever rate they arrive at. In dark `halo` is
+a soft disc behind the thing, in light the same flag is an accent ring: one
+prop, two looks. Nothing in a sheet takes the pointer except a `dock` and a
+`fold`'s bar, and nothing can be placed or painted outside the sheet's box.
+
+What the app does so the plugin does not have to: lays everything out, routes the
+wires, maps `tone` and `icon` (fixed lists) onto the theme, light and dark, and
+draws it all in the house style. Under `prefers-reduced-motion` every duration is
+0, no loop runs and the scene still updates. Only `transform` and `opacity`
+animate, everything pauses when the panel is hidden, at most 64 loops and 64
+one-shots run at once (the rest draw still), and `ms` is at most 2000.
+
+What it holds: 400 nodes, 128 KB of scene, 8 levels deep, labels of at most 120
+characters, a `disclosure` of at most 8000, 100 ops and 64 KB per request (the
+body is cut off at the limit before it is parsed), and a budget of 60 ops a second
+with a burst of 200 (a request costs at least one, so a loop of empty ones is
+not free; past it, `429` with `retryAfterMs`). Ids are `a-z0-9_-`, at most 64. A
+batch is all or nothing: one bad op refuses the batch and the scene is untouched.
+The server owns `version` (+1 per batch) and `epoch` (new whenever the scene
+starts over, e.g. the plugin restarted); `seq` only lets a plugin retry a batch
+it is not sure arrived, and a repeat of the last one answers `applied: false`.
+
+The window watches every live panel it has open over one private WebSocket
+(`/plugins/panels/live`), which needs the desk's credential: a plugin's own token
+is refused there whatever scope its manifest declared, so one plugin cannot watch
+another's scene, and a paired read-only phone cannot either. A window that falls
+behind is sent the scene as it is, not what it missed. The shared `/stream` socket
+carries no scene.
+
+Ceilings, chosen: a canvas cannot draw arbitrary shapes, run code per frame or
+link out; a plugin that needs that is still its own window, as before.
 
 **What a plugin may hold**, because a plugin that writes in a loop is a plugin
 that fills a disk: at most 8 panels and 60 settings fields (each with at most

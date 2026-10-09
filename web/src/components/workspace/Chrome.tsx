@@ -560,19 +560,24 @@ export function Button({
  * a refresh that changed nothing on screen still needs to say that it ran —
  * opt-in, because every other caller has nothing to report back.
  */
-export function RefreshButton({ onRefresh, busy, done, title, disabled }: {
+export function RefreshButton({ onRefresh, busy, spinning, done, title, disabled }: {
   onRefresh: () => void;
   busy?: boolean;
+  /** The refresh's own request is out. `busy` also greys the button for work
+   *  that is not a refresh, so a caller that has both says which is which: the
+   *  icon turns for exactly `spinning` (and for `busy` when this is absent). */
+  spinning?: boolean;
   done?: boolean;
   title: string;
   disabled?: boolean;
 }) {
-  const showDone = !!done && !busy;
+  const turning = spinning ?? busy;
+  const showDone = !!done && !busy && !turning;
   return (
     <button
       type="button"
       onClick={onRefresh}
-      disabled={disabled ?? busy}
+      disabled={disabled ?? (busy || spinning)}
       title={title}
       aria-label={title}
       className="grid place-items-center rounded-lg shrink-0 transition-colors disabled:opacity-60"
@@ -584,7 +589,7 @@ export function RefreshButton({ onRefresh, busy, done, title, disabled }: {
     >
       {showDone
         ? <DoneIcon size={CHIP_ICON} />
-        : <RefreshIcon size={CHIP_ICON} className={busy ? "animate-spin" : undefined} />}
+        : <RefreshIcon size={CHIP_ICON} className={turning ? "agx-turn" : undefined} />}
     </button>
   );
 }

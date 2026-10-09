@@ -6,13 +6,17 @@ import { openSettings } from "../../lib/openSettings.ts";
 import { ICON } from "../../lib/iconSize.ts";
 import { Spinner } from "../Spinner.tsx";
 import { PluginTree } from "./PluginTree.tsx";
+import { PluginCanvas } from "./PluginCanvas.tsx";
+import { PluginNotRunning } from "./PluginNotRunning.tsx";
 import { PanelGlyph } from "./panelGlyph.tsx";
 import { PluginMark } from "./PluginMark.tsx";
 import { Button, LINE, Tabs } from "../workspace/Chrome.tsx";
 
 /**
  * The rail's home for plugins: every panel an enabled plugin declared, one
- * at a time, drawn by PluginTree.
+ * at a time, drawn by PluginTree, or by PluginCanvas when the panel declared
+ * itself a live canvas (a scene the plugin changes many times a second, over
+ * its own socket rather than re-posted as a tree).
  *
  * One view for all of them rather than a rail entry per panel. The rail is a
  * compiled list with hotkeys people already have in their fingers, and a
@@ -146,19 +150,15 @@ export function PluginsView({ active }: { active: boolean }) {
           {error}
         </div>
       )}
-      <div id="plugin-panel" role="tabpanel" className="flex-1 min-h-0 overflow-auto">
+      {/* A live canvas keeps its scrollbar's room: a board scales with the
+          width, and a scrollbar arriving with a longer list below it would
+          shrink the board and move everything under it by a few pixels. */}
+      <div id="plugin-panel" role="tabpanel" className="flex-1 min-h-0 overflow-auto" style={current?.canvas ? { scrollbarGutter: "stable" } : undefined}>
         <div className="p-4 min-h-full flex flex-col">
-          {current && !current.running ? (
-            <Centered>
-              <div className="flex flex-col items-center gap-2 text-center max-w-[48ch]">
-                <div className="text-[13px] font-medium" style={{ color: "var(--text2)" }}>{current.plugin} is not running</div>
-                <div className="text-[12px]" style={{ color: "var(--text3)" }}>
-                  Its panel is drawn by its own process, and there is none right now. Enable it again in Settings; if it
-                  keeps stopping, the plugin exited on its own.
-                </div>
-                <Button onClick={() => openSettings("plugins")} className="mt-1">Open plugin settings</Button>
-              </div>
-            </Centered>
+          {current?.canvas ? (
+            <PluginCanvas key={keyOf(current)} plugin={current.plugin} panel={current.id} running={current.running} onAction={onAction} />
+          ) : current && !current.running ? (
+            <PluginNotRunning plugin={current.plugin} />
           ) : current && !current.tree ? (
             <Centered><Spinner label={`Waiting for ${current.plugin} to draw…`} /></Centered>
           ) : current?.tree ? (

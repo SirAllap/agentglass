@@ -344,6 +344,18 @@ export function showFile(root: string, path: string, o: { line?: number; readonl
 }
 
 /**
+ * The file the reader session is created with — see the reader in
+ * FloatingBench. The one it was built for while that tab is still open (so
+ * moving between file tabs does not reconnect); otherwise the file on screen;
+ * the oldest file tab only when no file is on screen. The oldest tab was the
+ * whole rule once, and it opened a file nobody had just asked for.
+ */
+export function readerSeed(pinned: BenchTab | null, active: BenchTab | null | undefined, files: readonly BenchTab[]): BenchTab | undefined {
+  if (pinned && files.some((f) => f.id === pinned.id)) return pinned;
+  return active?.kind === "file" ? active : files[0];
+}
+
+/**
  * Show a board in the bench: the tab this checkout already has for it, or a new
  * one. One per checkout — there is only one board to put in it.
  */

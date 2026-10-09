@@ -18,6 +18,7 @@ import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-nati
 import type { PrReview } from "../../../shared/types.ts";
 import { conversation, countLanes, inLane, type ConvEntry, type Lane } from "../../../shared/prConversation.ts";
 import { Md } from "../md/Md.tsx";
+import { repoOf } from "../model/prRef.ts";
 import { plainInline } from "../md/parse.ts";
 import { useAgentglass } from "../state/host-context.tsx";
 import { usePaletteTick } from "../state/use-palette.ts";
@@ -75,8 +76,8 @@ function NewDivider({ count }: { count: number }): React.ReactNode {
   );
 }
 
-function Entry({ e, host, now, isNew, onOpenThreads }: {
-  e: ConvEntry; host: Host | null; now: number; isNew: boolean; onOpenThreads: () => void;
+function Entry({ e, host, repo, now, isNew, onOpenThreads }: {
+  e: ConvEntry; host: Host | null; repo?: string; now: number; isNew: boolean; onOpenThreads: () => void;
 }): React.ReactNode {
   const [open, setOpen] = useState(false);
   const author = e.kind === "comment" ? e.comment.author : e.kind === "review" ? e.review.author : e.thread.comments[0]?.author ?? "";
@@ -128,7 +129,7 @@ function Entry({ e, host, now, isNew, onOpenThreads }: {
   return (
     <Card style={{ gap: SPACE.sm }}>
       <Head author={author} isBot={e.isBot} when={e.at} now={now} chip={chip} />
-      {body.trim() ? <Md text={body} host={host} /> : null}
+      {body.trim() ? <Md text={body} host={host} repo={repo} /> : null}
       {e.isBot ? (
         <Pressable accessibilityRole="button" onPress={() => setOpen(false)} style={{ minHeight: TAP, justifyContent: "center" }}>
           <Text style={{ color: C.text3, fontSize: T.small }}>Fold</Text>
@@ -183,7 +184,7 @@ export function Timeline({ number, root, since: lastLooked, onOpenThreads }: {
       {shown.map((e) => (
         <Fragment key={e.key}>
           {fresh && fresh.count > 0 && fresh.dividerBefore === e.key ? <NewDivider count={fresh.count} /> : null}
-          <Entry e={e} host={host} now={now} isNew={!!fresh?.keys.has(e.key)} onOpenThreads={onOpenThreads} />
+          <Entry e={e} host={host} repo={repoOf(detail?.url ?? "") ?? undefined} now={now} isNew={!!fresh?.keys.has(e.key)} onOpenThreads={onOpenThreads} />
         </Fragment>
       ))}
     </ScrollView>

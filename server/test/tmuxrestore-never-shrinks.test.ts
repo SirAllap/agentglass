@@ -22,6 +22,7 @@ import { test, expect, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 const SOCKET = `agx-shrink-test-${process.pid}`;
 process.env.AGENTGLASS_TMUX_SOCKET = SOCKET;
@@ -62,7 +63,9 @@ afterAll(async () => {
   try { rmSync(process.env.AGENTGLASS_STATE_DIR!, { recursive: true, force: true }); } catch { /* never made */ }
 });
 
-test("a session that is not alive right now is NOT forgotten", async () => {
+const step = story();
+
+step("a session that is not alive right now is NOT forgotten", async () => {
   /*
    * THE EXACT MORNING, reproduced: the file lists two sessions and only one is
    * alive. Before the fix this wrote one and the other was gone for good.
@@ -90,14 +93,14 @@ test("a session that is not alive right now is NOT forgotten", async () => {
   expect(names, "A SESSION WAS FORGOTTEN because it was not running").toContain(GONE);
 });
 
-test("and repeated captures never shrink it at boot, however many times they run", async () => {
+step("and repeated captures never shrink it at boot, however many times they run", async () => {
   /* Six launches in twenty minutes is what happened. Ten here, for margin. */
   const start = layout()!.sessions.length;
   for (let i = 0; i < 10; i++) await restore.captureLayout();
   expect(layout()!.sessions.length, "capture shrank the recorded state").toBeGreaterThanOrEqual(start);
 });
 
-test("before the desk is whole, only an explicit close removes an entry", async () => {
+step("before the desk is whole, only an explicit close removes an entry", async () => {
   /*
    * The one subtraction at boot, and it takes a deliberate call. "It is not
    * in the live list" was precisely the inference that lost a day.
@@ -110,7 +113,7 @@ test("before the desk is whole, only an explicit close removes an entry", async 
   expect(layout()!.sessions.map((s) => s.name)).not.toContain(GONE);
 });
 
-test("once this process has put the desk back, a session that leaves is forgotten", async () => {
+step("once this process has put the desk back, a session that leaves is forgotten", async () => {
   /*
    * THE OTHER HALF OF A REPLAYED BRIEF. A session an orchestrator opened for
    * one job finished and was killed on purpose, and stayed in the file for a
@@ -132,7 +135,7 @@ test("once this process has put the desk back, a session that leaves is forgotte
   expect(layout()!.sessions.map((s) => s.name), "the live one is still there").toContain(LIVE);
 });
 
-test("but not a session missing because the engine died: that desk has not been put back yet", async () => {
+step("but not a session missing because the engine died: that desk has not been put back yet", async () => {
   /*
    * The exact morning again, in steady state: the tmux server dies, the
    * engine makes one session again, and the sweep sees one session where
@@ -160,7 +163,7 @@ test("but not a session missing because the engine died: that desk has not been 
   expect(layout()!.sessions.map((s) => s.name)).not.toContain(AGAIN);
 });
 
-test("the file is written atomically, so a crash mid-write cannot truncate it", () => {
+step("the file is written atomically, so a crash mid-write cannot truncate it", () => {
   /*
    * A truncated layout.json parses as nothing at all, which is the same total
    * loss by a different route. `rename` inside one directory is atomic: a
@@ -177,7 +180,7 @@ test("the file is written atomically, so a crash mid-write cannot truncate it", 
   expect(renames, "layout.json is renamed in more than one place").toHaveLength(1);
 });
 
-test("a capture asked for mid-restore is deferred, not taken", () => {
+step("a capture asked for mid-restore is deferred, not taken", () => {
   /*
    * `restoreLayout` rebuilds sessions one subprocess at a time; in "all" mode
    * that is seconds. A capture firing in the middle photographs a half-built
@@ -188,7 +191,7 @@ test("a capture asked for mid-restore is deferred, not taken", () => {
   expect(src, "nothing runs the deferred capture when the restore ends").toContain("if (captureWanted)");
 });
 
-test("boot restores BEFORE it captures", () => {
+step("boot restores BEFORE it captures", () => {
   /*
    * The order was the bug. Capturing first photographs a desk that is by
    * definition not back yet, and that photograph became the new truth.
@@ -200,7 +203,7 @@ test("boot restores BEFORE it captures", () => {
   expect(body).toContain("restoreLayout().then(() => captureLayout())");
 });
 
-test("a crash loop declines to touch the layout at all, and says so", () => {
+step("a crash loop declines to touch the layout at all, and says so", () => {
   /*
    * Six launches in twenty-three minutes. With the merge in place a loop can
    * no longer destroy anything, but running the cycle is pointless churn and a
@@ -233,7 +236,7 @@ test("a crash loop declines to touch the layout at all, and says so", () => {
  */
 const MIRROR = `agx-phone-1-${String(process.pid).slice(-5)}z`;
 
-test("a phone mirror is never written into the layout", async () => {
+step("a phone mirror is never written into the layout", async () => {
   const mk = await pane.tmux(["new-session", "-d", "-s", MIRROR, "-c", "/tmp"]);
   expect(mk.ok).toBe(true);
 
@@ -245,7 +248,7 @@ test("a phone mirror is never written into the layout", async () => {
   expect(names).toContain(LIVE);
 });
 
-test("a layout that ALREADY names one stops carrying it forward", async () => {
+step("a layout that ALREADY names one stops carrying it forward", async () => {
   const dir = join(process.env.AGENTGLASS_STATE_DIR!, "tmux", "restore");
   const before = layout()!;
   writeFileSync(join(dir, "layout.json"), JSON.stringify({
@@ -265,7 +268,7 @@ test("a layout that ALREADY names one stops carrying it forward", async () => {
   }
 });
 
-test("a name that only LOOKS like a mirror is a session like any other", async () => {
+step("a name that only LOOKS like a mirror is a session like any other", async () => {
   /* The regex is the contract, the same one `isPhoneSession` uses. A session
      the user happened to call this is theirs, and losing it would be the very
      failure this file exists to prevent. */
@@ -279,7 +282,7 @@ test("a name that only LOOKS like a mirror is a session like any other", async (
   await pane.tmux(["kill-session", "-t", `=${decoy}`]);
 });
 
-test("a layout.json that will not parse falls back to the generation before it", async () => {
+step("a layout.json that will not parse falls back to the generation before it", async () => {
   /*
    * The failure this closes used to be total: one file, overwritten in place,
    * and a truncated or empty one reads as "nothing was ever captured" — which

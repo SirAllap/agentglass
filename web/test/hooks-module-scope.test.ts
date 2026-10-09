@@ -21,7 +21,9 @@
  * is how the black window of a previous week got in (see hook-tdz.test.ts).
  */
 import { describe, expect, it } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import { Glob } from "bun";
+const stubGlobal = globalStubs();
 
 const ROOT = new URL("../src/", import.meta.url).pathname;
 
@@ -31,14 +33,14 @@ const ROOT = new URL("../src/", import.meta.url).pathname;
    these. */
 if (!("localStorage" in globalThis)) {
   const held = new Map<string, string>();
-  (globalThis as { localStorage?: unknown }).localStorage = {
+  stubGlobal("localStorage", {
     getItem: (k: string) => held.get(k) ?? null,
     setItem: (k: string, v: string) => { held.set(k, String(v)); },
     removeItem: (k: string) => { held.delete(k); },
     clear: () => held.clear(),
     key: (i: number) => [...held.keys()][i] ?? null,
     get length() { return held.size; },
-  };
+  });
 }
 
 /**

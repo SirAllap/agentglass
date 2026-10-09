@@ -28,7 +28,7 @@ import { safeAbs } from "./git.ts";
 import { inScopeReal } from "./config.ts";
 import { diskAllows } from "./disk.ts";
 import { isViewTemp } from "./viewtemp.ts";
-import { benchSessionName, tmux } from "./tmuxpane.ts";
+import { benchSessionName, tmux, tmuxSync } from "./tmuxpane.ts";
 
 /** Big enough for a page of notes, small enough that this is not a file store:
  *  the thing being written is a paragraph you will read tomorrow. */
@@ -220,6 +220,38 @@ export const BENCH_READER_SLOT = 90;
 export function readerSocketPath(root: string): string {
   const hash = createHash("sha1").update(safeAbs(root) ?? root).digest("hex").slice(0, 12);
   return join(tmpdir(), `agx-bench-${hash}.sock`);
+}
+
+/**
+ * What the reader session of this checkout is, before anything attaches to it.
+ *
+ * - `none`: there is no session; the next attach creates one with the editor.
+ * - `editor`: a live pane started with a command — the editor this server
+ *   started. Attaching to it is the whole point of the reader.
+ * - `other`: a session that is NOT the editor, and that nothing will ever turn
+ *   into one. `new-session -A` reattaches to whatever holds the name and
+ *   ignores the command, so a reader session that began as a plain shell (its
+ *   first file was gone, or refused) stayed a shell for every file opened
+ *   after it, and `/bench/edit` had no editor socket to reach. Measured on an
+ *   isolated server: "Edit in nvim" on a valid file showed the checkout's
+ *   prompt, indefinitely. A dead pane is the same case — the engine keeps a
+ *   pane whose command failed.
+ *
+ * A shell's pane has an empty start command; the editor's is its argv. That is
+ * the test, and not the editor socket, so an editor that takes no `--listen`
+ * (vim) is still recognised and not restarted on every attach.
+ */
+export function readerSessionState(root: string): "none" | "editor" | "other" {
+  const r = tmuxSync(["list-panes", "-t", `=${benchSessionName(root, BENCH_READER_SLOT)}:`, "-F", "#{pane_dead}\t#{pane_start_command}"]);
+  if (!r.ok) return "none";
+  const panes = r.stdout.split("\n").filter(Boolean).map((l) => l.split("\t"));
+  if (!panes.length) return "none";
+  return panes.some(([dead, cmd]) => dead !== "1" && !!cmd?.trim()) ? "editor" : "other";
+}
+
+/** End the reader session, synchronously — see readerSessionState. */
+export function endReaderSession(root: string): boolean {
+  return tmuxSync(["kill-session", "-t", `=${benchSessionName(root, BENCH_READER_SLOT)}`]).ok;
 }
 
 /** A path the bench may open: in the project, in your home (the machine tab's

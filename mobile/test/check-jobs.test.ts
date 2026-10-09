@@ -8,8 +8,8 @@
  * ordinary row.
  */
 import { describe, expect, test } from "bun:test";
-import { byUrgency, foldJobLog, looksFailed, standingOf, tailOf } from "../src/model/checkJobs.ts";
-import type { PrCheckJob } from "../../shared/types.ts";
+import { DETAIL_POLL_MS, JOBS_POLL_MS, byUrgency, foldJobLog, looksFailed, checksMoved, nextDetailPoll, nextJobsPoll, standingOf, tailOf } from "../src/model/checkJobs.ts";
+import type { PrCheckJob, PrCheckRollup } from "../../shared/types.ts";
 
 const job = (over: Partial<PrCheckJob> = {}): PrCheckJob => ({
   id: "1", runId: "9", name: "test", status: "completed", conclusion: "success",
@@ -158,5 +158,37 @@ describe("foldJobLog", () => {
 
   test("a group with no title still gets a line, not a blank one lost to trimming", () => {
     expect(foldJobLog("2026-01-01T00:00:00.0000000Z ##[group]").split("\n")).toEqual(["step"]);
+  });
+});
+
+/* The Checks screen read once and stayed on "running" after the run finished:
+ * the phone said 2 failed while GitHub said 7/7. It asks again while something
+ * runs, and stops when nothing does. */
+describe("when to ask again", () => {
+  test("only while a job is running", () => {
+    expect(nextJobsPoll([job(), job({ status: "in_progress", conclusion: null })])).toBe(JOBS_POLL_MS);
+    expect(nextJobsPoll([job(), job({ conclusion: "failure" })])).toBeNull();
+    expect(nextJobsPoll([])).toBeNull();
+    expect(nextJobsPoll(null)).toBeNull();
+  });
+  test("the pull request screen follows its pending count, more slowly", () => {
+    expect(nextDetailPoll(3)).toBe(DETAIL_POLL_MS);
+    expect(DETAIL_POLL_MS).toBeGreaterThan(JOBS_POLL_MS);
+    expect(nextDetailPoll(0)).toBeNull();
+    expect(nextDetailPoll(undefined)).toBeNull();
+  });
+});
+
+describe("did the checks move", () => {
+  const roll = (over: Partial<PrCheckRollup> = {}): PrCheckRollup => ({
+    total: 7, success: 5, failure: 0, skipped: 0, pending: 2, allDone: false, verdict: null, failing: [], ...over,
+  });
+  test("same counts: no full re-read is worth paying for", () => {
+    expect(checksMoved(roll(), roll())).toBe(false);
+  });
+  test("a job finishing, failing or appearing is a move", () => {
+    expect(checksMoved(roll(), roll({ pending: 1, success: 6 }))).toBe(true);
+    expect(checksMoved(roll(), roll({ pending: 1, failure: 1 }))).toBe(true);
+    expect(checksMoved(roll(), roll({ total: 8 }))).toBe(true);
   });
 });

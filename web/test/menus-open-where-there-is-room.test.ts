@@ -53,3 +53,17 @@ describe("the rule is the one BasePicker already had", () => {
     expect(BASE).toContain("const up = below < 220 && above > below;");
   });
 });
+
+describe("Select scrolling", () => {
+  test("re-rendering with a fresh options array does not reset the cursor", () => {
+    /* Callers pass `options` inline, so it changes identity every render. An
+       effect keyed on it re-centred the list on the selected row each time and
+       a long status list could not be scrolled while anything re-rendered. */
+    const start = SELECT.indexOf("const selectedIdx");
+    const end = SELECT.indexOf("}, [open, selectedIdx]);");
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    expect(SELECT.slice(start, end)).toContain("setCursor(selectedIdx)");
+    expect(SELECT).not.toContain("[open, value, options]");
+  });
+});

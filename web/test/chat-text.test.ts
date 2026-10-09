@@ -1,4 +1,9 @@
 import { test, expect, beforeAll } from "bun:test";
+import { globalStubs } from "./stubGlobal";
+import { stubStorage } from "./stubStorage.ts";
+const stubGlobal = globalStubs();
+
+stubStorage();
 
 // A turn is one bubble, but the model reaches it in several frames: a sentence,
 // a tool call, the next sentence. Those arrived concatenated raw, so a turn's
@@ -9,8 +14,7 @@ import { test, expect, beforeAll } from "bun:test";
 let store: typeof import("../src/lib/chatStore.ts");
 let api: typeof import("../src/lib/api.ts")["api"];
 beforeAll(async () => {
-  (globalThis as any).location ??= new URL("http://localhost:5173/");
-  (globalThis as any).localStorage ??= { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+  stubGlobal("location", new URL("http://localhost:5173/"));
   api = (await import("../src/lib/api.ts")).api;
   store = await import("../src/lib/chatStore.ts");
 });

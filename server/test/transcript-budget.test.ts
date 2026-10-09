@@ -8,6 +8,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "agx-budget-"));
 const PROJECTS = join(dir, "projects", "-tmp-budgetproj");
@@ -49,8 +50,10 @@ const write = (sid: string, hoursAgo: number) => {
   utimesSync(path(sid), at, at);
 };
 
+const step = story();
+
 describe("budgeted transcript sweep", () => {
-  test("newest first, one file per chunk, nothing dropped", async () => {
+  step("newest first, one file per chunk, nothing dropped", async () => {
     write("b-old", 30);
     write("b-new", 1);
     write("b-mid", 10);
@@ -70,7 +73,7 @@ describe("budgeted transcript sweep", () => {
     expect(scan.scanBacklog()).toBe(0);
   });
 
-  test("no budget reads everything in one sweep", async () => {
+  step("no budget reads everything in one sweep", async () => {
     await scan.scanOnce(null);
     expect(scan.scanBacklog()).toBe(0);
     expect(count("b-old")).toBe(3);

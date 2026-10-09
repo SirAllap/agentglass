@@ -19,6 +19,7 @@ import { describe, expect, test, beforeAll } from "bun:test";
 import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "agx-seam-"));
 const ROOT = join(dir, "proj");
@@ -127,8 +128,10 @@ beforeAll(async () => {
   db.insertEvent(event({ timestamp: Date.now() - 60_000, session_id: "seam-live" }) as any);
 });
 
+const step = story();
+
 describe("one continuous series across the retention boundary", () => {
-  test("days from both sides are present, in order", () => {
+  step("days from both sides are present, in order", () => {
     const days = db.dailyUsage();
     expect(days.map((d) => d.day)).toEqual([OLD, SPLIT, LIVE]);
     // The rollup alone stops at the boundary — that is what made it unusable
@@ -136,33 +139,33 @@ describe("one continuous series across the retention boundary", () => {
     expect(db.rollupDays().map((d) => d.day)).toEqual([OLD, SPLIT]);
   });
 
-  test("the split day is whole: both halves are added, not chosen between", () => {
+  step("the split day is whole: both halves are added, not chosen between", () => {
     const d = byDay(db.dailyUsage(), SPLIT)!;
     expect(d.events).toBe(5); // 3 folded + 2 live
     expect(d.input_tokens).toBe(500); // 300 folded + 2 × 100 live
     expect(d.cost_usd).toBeGreaterThan(1); // the folded 1.00 plus the live rows'
   });
 
-  test("and a session that ran across the boundary counts once", () => {
+  step("and a session that ran across the boundary counts once", () => {
     // seam-split has a row on each side. Summing the two COUNT(DISTINCT)s would
     // report two sessions where one agent ran.
     expect(byDay(db.dailyUsage(), SPLIT)!.sessions).toBe(1);
   });
 
-  test("two different sessions on the same day still count as two", () => {
+  step("two different sessions on the same day still count as two", () => {
     // The opposite error: deduping so hard that distinct work merges.
     fold({ day: SPLIT, session_id: "seam-other-agent", events: 1 });
     expect(byDay(db.dailyUsage(), SPLIT)!.sessions).toBe(2);
   });
 
-  test("a day the rollup alone knows survives with its numbers", () => {
+  step("a day the rollup alone knows survives with its numbers", () => {
     const d = byDay(db.dailyUsage(), OLD)!;
     expect(d.events).toBe(7);
     expect(d.input_tokens).toBe(700);
     expect(d.cost_usd).toBe(3);
   });
 
-  test("the from bound trims both sources, not just one", () => {
+  step("the from bound trims both sources, not just one", () => {
     const days = db.dailyUsage(SPLIT);
     expect(days.map((d) => d.day)).toEqual([SPLIT, LIVE]);
     // The events half is bounded on `timestamp`, which is a different
@@ -171,7 +174,7 @@ describe("one continuous series across the retention boundary", () => {
     expect(byDay(days, SPLIT)!.events).toBe(6); // 4 folded (3 + the extra) + 2 live
   });
 
-  test("the to bound excludes days after it and keeps the day itself whole", () => {
+  step("the to bound excludes days after it and keeps the day itself whole", () => {
     const days = db.dailyUsage(undefined, SPLIT);
     expect(days.map((d) => d.day)).toEqual([OLD, SPLIT]);
     expect(byDay(days, SPLIT)!.events).toBe(6); // the live half of SPLIT is still in
@@ -179,13 +182,13 @@ describe("one continuous series across the retention boundary", () => {
 });
 
 describe("the rollup is scoped by what the rollup knows", () => {
-  test("another project's folded days stay out", () => {
+  step("another project's folded days stay out", () => {
     // seam-elsewhere folded 99 events on OLD under a path outside this scope.
     expect(byDay(db.dailyUsage(), OLD)!.events).toBe(7);
     expect(db.dailyUsage().every((d) => d.cost_usd < 99)).toBe(true);
   });
 
-  test("a monorepo subdirectory is inside the project, as it is for events", () => {
+  step("a monorepo subdirectory is inside the project, as it is for events", () => {
     // Every fixture above writes project_path = <root>/packages/api, which is
     // where a monorepo's events actually come from. Scoping the rollup by
     // equality against the scope roots matched none of them and reported a
@@ -199,7 +202,7 @@ describe("the export goes as far back as the chart does", () => {
   // /export?kind=daily serialises exactly this, so what the CSV can contain is
   // decided here: a month already pruned has to survive leaving the building,
   // which was the last part of #292 the events-only export could not do.
-  test("every column the CSV writes is present and numeric", () => {
+  step("every column the CSV writes is present and numeric", () => {
     const d = byDay(db.dailyUsage(), OLD)!;
     for (const col of [
       "events", "tool_calls", "tool_errors", "errors",
@@ -211,7 +214,7 @@ describe("the export goes as far back as the chart does", () => {
     }
   });
 
-  test("an unbounded call really is unbounded — that is what the export sends", () => {
+  step("an unbounded call really is unbounded — that is what the export sends", () => {
     // No arguments: the export takes the whole series rather than a window,
     // so a day older than any default `days=` bound still has to come out.
     expect(db.dailyUsage().map((x) => x.day)).toContain(OLD);
@@ -219,7 +222,7 @@ describe("the export goes as far back as the chart does", () => {
 });
 
 describe("saying where the seam is", () => {
-  test("the boundary is reported as a day the chart can mark", () => {
+  step("the boundary is reported as a day the chart can mark", () => {
     // A gap before this day means "not kept in that detail"; a gap after it
     // means the fleet was idle. A chart that cannot tell them apart is worse
     // than one that shows less.

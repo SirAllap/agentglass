@@ -15,7 +15,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
-  closeFind, findChordIsOursToTake, findHidden, findState, openFind, pushScope,
+  closeFind, findChordIsOursToTake, findHidden, findState, onScreen, openFind, pushScope,
   registerEngine, runQuery, scopeHolding as findScopeHolding, stepFind, topScope, type FindEngine,
 } from "../src/lib/findScope.ts";
 
@@ -25,6 +25,15 @@ const el = (name: string, showing = true) => ({
   name,
   childElementCount: showing ? 1 : 0,
   checkVisibility: () => showing,
+} as unknown as HTMLElement);
+
+/** A box inside a view the workspace hid with `visibility: hidden`: it has a
+ *  display and children, so only a caller that asks about the visibility
+ *  property can tell it is not on screen — which is how the real one behaves. */
+const hiddenView = (name: string) => ({
+  name,
+  childElementCount: 1,
+  checkVisibility: (o?: { visibilityProperty?: boolean }) => !o?.visibilityProperty,
 } as unknown as HTMLElement);
 
 /** An engine that answers with a fixed number of matches and remembers what it
@@ -45,6 +54,16 @@ function fake(total: number, label?: string) {
 const offs: (() => void)[] = [];
 const keep = (off: () => void) => { offs.push(off); return off; };
 afterEach(() => { closeFind(); while (offs.length) offs.pop()!(); });
+
+describe("a dialog in a view that is not on screen", () => {
+  it("is not a scope, whatever its rank: the board behind it is what the bar searches", () => {
+    const board = el("board");
+    keep(pushScope(board, 0));
+    // A card dialog left open in the Tasks view, which the workspace has hidden.
+    keep(pushScope(hiddenView("tasks-card-dialog"), 1));
+    expect((topScope() as unknown as { name: string }).name).toBe("board");
+  });
+});
 
 describe("which element the bar searches", () => {
   it("is the view when only a view is open", () => {
@@ -356,5 +375,34 @@ describe("a bar opened for one window", () => {
     off();
     closeFind();
     expect(findHidden()).toBe(false);
+  });
+});
+
+describe("onScreen: the Files tab's own Ctrl+F asks the same question the scopes do", () => {
+  it("a box in a view on screen is on screen", () => {
+    expect(onScreen(el("files"))).toBe(true);
+  });
+  it("a box in a view hidden with visibility is not, though its display is intact", () => {
+    // checkVisibility() with no options says true here: this is the old bug.
+    expect(onScreen(hiddenView("files"))).toBe(false);
+  });
+  it("a box that is not mounted is not", () => {
+    expect(onScreen(null)).toBe(false);
+  });
+  it("without checkVisibility the offsetParent decides", () => {
+    const old = (offsetParent: unknown) => ({ offsetParent } as unknown as HTMLElement);
+    expect(onScreen(old({}))).toBe(true);
+    expect(onScreen(old(null))).toBe(false);
+  });
+});
+
+describe("the Files tab's window Ctrl+F handler", () => {
+  const src = readFileSync(new URL("../src/components/PrPanel.tsx", import.meta.url), "utf8");
+  const at = src.indexOf("const onWinKey = (");
+  const body = src.slice(at, src.indexOf("window.removeEventListener(\"keydown\", onWinKey", at));
+  it("asks onScreen, not a bare checkVisibility() that cannot see visibility: hidden", () => {
+    expect(at).toBeGreaterThan(0);
+    expect(body).toContain("onScreen(frameRef.current)");
+    expect(body.split("\n").filter((l) => !l.trim().startsWith("//")).join("\n")).not.toContain("checkVisibility");
   });
 });

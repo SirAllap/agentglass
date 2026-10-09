@@ -33,16 +33,24 @@ export function usePoll(active: boolean, fn: () => void, ms = 2500) {
 
   useEffect(() => {
     if (!active) return;
-    const looking = () => !document.hidden && document.hasFocus();
-    const tick = () => { if (looking()) saved.current(); };
-    const id = setInterval(tick, ms);
-    const onVisible = () => { if (looking()) saved.current(); };
-    window.addEventListener("focus", onVisible);
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      clearInterval(id);
-      window.removeEventListener("focus", onVisible);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
+    return pollWhileLooking(() => saved.current(), ms);
   }, [active, ms]);
+}
+
+/**
+ * The same gate for a module that is not a component (a store that polls for
+ * the life of the page): `fn` every `ms` while the window is looked at, and
+ * once at each return to it. Returns the function that stops it.
+ */
+export function pollWhileLooking(fn: () => void, ms: number): () => void {
+  const looking = () => !document.hidden && document.hasFocus();
+  const tick = () => { if (looking()) fn(); };
+  const id = setInterval(tick, ms);
+  window.addEventListener("focus", tick);
+  document.addEventListener("visibilitychange", tick);
+  return () => {
+    clearInterval(id);
+    window.removeEventListener("focus", tick);
+    document.removeEventListener("visibilitychange", tick);
+  };
 }

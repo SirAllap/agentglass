@@ -1,16 +1,18 @@
 import { describe, expect, it, beforeAll, beforeEach } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import { ZwjWidthProvider } from "../src/lib/termUnicode.ts";
+const stubGlobal = globalStubs();
 
 // The prefs read the browser's storage at module scope, so it has to exist
 // before the module does — same shape as update-store's stub.
 const mem = new Map<string, string>();
 let prefs: typeof import("../src/lib/termPrefs.ts");
 beforeAll(async () => {
-  (globalThis as never as { localStorage: unknown }).localStorage ??= {
+  stubGlobal("localStorage", {
     getItem: (k: string) => mem.get(k) ?? null,
     setItem: (k: string, v: string) => { mem.set(k, v); },
     removeItem: (k: string) => { mem.delete(k); },
-  };
+  });
   prefs = await import("../src/lib/termPrefs.ts");
 });
 
@@ -144,22 +146,22 @@ describe("which renderer draws the rules", () => {
   beforeAll(async () => { r = await import("../src/lib/termRenderer.ts"); });
   // Through the global, not through `mem`: whichever test file installed the
   // storage stub first owns it, and the module under test reads that one.
-  beforeEach(() => { localStorage.removeItem("agentglass.term.webgl"); });
+  beforeEach(() => { localStorage.removeItem("agentglass.term.webgl"); r.__resetRendererSession(); });
 
   it("draws on canvas wherever the GPU renderer is not used", () => {
-    Object.defineProperty(globalThis, "navigator", { value: { userAgent: "Mozilla/5.0 (X11; Linux x86_64)" }, configurable: true });
+    stubGlobal("navigator", { userAgent: "Mozilla/5.0 (X11; Linux x86_64)" });
     expect(r.wantsWebgl()).toBe(false); // the white-out this file exists to avoid
     expect(r.wantsCanvas()).toBe(true); // …but not at the cost of the rules
   });
 
   it("leaves the GPU renderer alone where it is used", () => {
-    Object.defineProperty(globalThis, "navigator", { value: { userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X)" }, configurable: true });
+    stubGlobal("navigator", { userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X)" });
     expect(r.wantsWebgl()).toBe(true);
     expect(r.wantsCanvas()).toBe(false); // WebGL already draws them itself
   });
 
   it("still honours someone who asked for the DOM renderer", () => {
-    Object.defineProperty(globalThis, "navigator", { value: { userAgent: "Mozilla/5.0 (X11; Linux x86_64)" }, configurable: true });
+    stubGlobal("navigator", { userAgent: "Mozilla/5.0 (X11; Linux x86_64)" });
     localStorage.setItem("agentglass.term.webgl", "dom");
     expect(r.wantsCanvas()).toBe(false);
   });

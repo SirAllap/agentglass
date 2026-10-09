@@ -13,7 +13,7 @@
  * store does with an answer, not what the server answers.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { forgetPrDetail, prDetailNow, readPrDetail } from "../src/state/pr-detail.ts";
+import { STALE_FOLLOW_MS, forgetPrDetail, prDetailNow, readPrDetail } from "../src/state/pr-detail.ts";
 import type { Host } from "../src/lib/host.ts";
 
 const host: Host = {
@@ -128,5 +128,41 @@ describe("a read after a remark landed", () => {
     expect(lastUrl).not.toContain("force=1");
     await readPrDetail(host, "/code/widget", "12", true);
     expect(lastUrl).toContain("force=1");
+  });
+});
+
+/*
+ * The server answers a repeat read with what it already has, marked `stale`,
+ * and refreshes behind it. Drawn as final, that is how a pull request whose CI
+ * had gone green stayed on "2 failed" on the phone for ninety seconds while
+ * the desktop, which asks again a moment later, said 7/7.
+ */
+describe("a stale answer is not the last word", () => {
+  const urls: string[] = [];
+  beforeEach(() => {
+    urls.length = 0;
+    globalThis.fetch = ((url: string | URL | Request) => {
+      urls.push(String(url));
+      const first = urls.length === 1;
+      return Promise.resolve(new Response(JSON.stringify({
+        ok: true, stale: first, detail: { number: 12, title: first ? "from cache" : "fresh", threads: [] },
+      }), { status: 200, headers: { "content-type": "application/json" } }));
+    }) as typeof fetch;
+  });
+
+  test("one forced re-read follows, and what it brings replaces the old", async () => {
+    await readPrDetail(host, "/code/widget", "12");
+    expect(prDetailNow("/code/widget", "12")?.title).toBe("from cache");
+    await new Promise((r) => setTimeout(r, STALE_FOLLOW_MS + 250));
+    expect(urls).toHaveLength(2);
+    expect(urls[1]).toContain("force=1");
+    expect(prDetailNow("/code/widget", "12")?.title).toBe("fresh");
+  });
+
+  test("a fresh answer schedules nothing", async () => {
+    urls.push("already one read");
+    await readPrDetail(host, "/code/widget", "12");
+    await new Promise((r) => setTimeout(r, STALE_FOLLOW_MS + 250));
+    expect(urls).toHaveLength(2);
   });
 });

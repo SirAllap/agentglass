@@ -44,6 +44,8 @@ const MUTATING = [
   `pathname === "/projects/new"`,
   `pathname === "/agents/connect"`,
   `pathname === "/budgets/set"`,
+  // Widens what a plugin process may reach: it lets one run outside its box.
+  `pathname === "/plugins/allow-unboxed"`,
   `pathname === "/gate/decide"`,
   `pathname === "/control"`,
   `pathname === "/browser-use/install"`,

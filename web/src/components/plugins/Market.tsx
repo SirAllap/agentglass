@@ -52,6 +52,7 @@ const DRAWS_WORD: Record<string, string> = {
   settings: "settings page",
   "pr-notes": "notes in pull requests", prNotes: "notes in pull requests",
   "pr-button": "a button in pull requests", prActions: "a button in pull requests",
+  inbox: "badges the Inbox", inboxAnnotations: "badges the Inbox",
 };
 
 /** Cards drawn at once. The list is short today and the server keeps the

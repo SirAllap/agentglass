@@ -109,6 +109,9 @@ describe("reading the store", () => {
     // would be a write, renumbering ids under whatever else has the store open.
     // `rc.gc=0` is what stops it, and this is the assertion that keeps it there.
     const data = join(dir, "data");
+    // The first read of a store opens its WAL, which adds two files beside it
+    // and is not what is being asserted; take the picture after one.
+    await mod.listTasks(true);
     const before = readdirSync(data).map((f) => `${f}:${Bun.file(join(data, f)).size}`).sort().join("|");
     await mod.listTasks(true);
     await mod.listTasks(true);

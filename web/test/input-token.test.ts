@@ -101,6 +101,8 @@ const ALLOWED: { file: string; marker: string; why: string }[] = [
   { file: "PrPanel.tsx", marker: 'placeholder="Filter files…"',
     why: "icon and a clear button share the pill's one border with the input" },
 
+  { file: "FilterPresets.tsx", marker: 'aria-label="Preset name"',
+    why: "a preset's name edited in place, inside the chip itself or a menu row; INPUT's 32px height would not fit either" },
   { file: "TerminalPanel.tsx", marker: "defaultValue={String(w.index)}",
     why: "a 7-character-wide inline rename of a window's position in the tab strip; not a search box" },
   { file: "TerminalPanel.tsx", marker: "defaultValue={w.name}",
@@ -110,6 +112,8 @@ const ALLOWED: { file: string; marker: string; why: string }[] = [
     why: "one of a generative-plugin field's input/textarea/select triad sharing `.agx-input`; converting only the input would split the triad's look back apart" },
   { file: "plugins/PluginTree.tsx", marker: 'className="agx-input" style={style} type="text" inputMode="decimal"',
     why: "same `.agx-input` triad as the field above" },
+  { file: "plugins/PluginTree.tsx", marker: 'className="agx-input" style={style} type="password"',
+    why: "same `.agx-input` triad as the text field above; a masked key box that looks like the field it replaces" },
   { file: "plugins/PluginTree.tsx", marker: 'className="agx-input t-mono w-full"',
     why: "same `.agx-input` family; a borderless search row inside a popover list" },
 

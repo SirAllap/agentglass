@@ -298,11 +298,12 @@ describe("the reviewer picker leads with past reviewers", () => {
  * field existed.
  */
 import { readFileSync as readSrc } from "node:fs";
+import { mergePath, type MergePathInput } from "../../shared/mergePath.ts";
 describe("the Overview and the board agree", () => {
   const panel = readSrc(new URL("../src/components/PrPanel.tsx", import.meta.url), "utf8");
 
-  test("the Overview's band reads `humanReview`, the same field the card does", () => {
-    expect(panel).toContain("p2Verdict(d.humanReview");
+  test("the merge box reads `humanReview`, the same field the card does", () => {
+    expect(panel).toContain("humanReview: d.humanReview");
   });
 
   test("and no longer builds its own verdict from the roster alone", () => {
@@ -311,109 +312,125 @@ describe("the Overview and the board agree", () => {
     expect(panel).not.toContain("const v = reviewVerdict(reviewerRoster(d));");
   });
 
-  test("all four states get the band, not just approved", () => {
+  test("all four verdicts reach the Review stage, not just approved", () => {
     /* "Changes requested" was a grey line with a cross while an approval was a
        coloured band. Same kind of fact — a person decided — drawn as neither. */
-    const fn = panel.slice(panel.indexOf("function p2Verdict("), panel.indexOf("function ReviewChip("));
-    for (const kind of ["approved", "changes", "awaiting"]) {
-      expect(fn, `${kind} has no band`).toContain(`v.kind === "${kind}"`);
-    }
-    expect(fn, "and the fourth is the fallthrough").toContain("Reviewed, no verdict");
+    const run = (over: Partial<MergePathInput>) => mergePath({
+      state: "OPEN", mergeState: "BLOCKED", baseRefName: "main", now: Date.parse("2026-09-30T12:00:00Z"), ...over,
+    }).stages[0]!;
+    expect(run({ reviewDecision: "APPROVED", humanReview: { kind: "approved", who: ["alice"] } }))
+      .toMatchObject({ status: "done", sub: "approved by alice" });
+    expect(run({ reviewDecision: "CHANGES_REQUESTED", viewerDidAuthor: true, humanReview: { kind: "changes", who: ["alice"] } }).status).toBe("blocked");
+    expect(run({ reviewDecision: "REVIEW_REQUIRED", reviewers: [{ login: "alice" }], humanReview: { kind: "awaiting", who: ["alice"] } }).status).toBe("wait");
+    expect(run({ reviewDecision: null, humanReview: { kind: "commented", who: ["alice"] } }).sub).toContain("reviewed, no verdict");
   });
 
-  test("a fully re-asked changes verdict draws amber, not red, and keeps no Go to it of its own", () => {
+  test("a fully re-asked changes verdict is the reviewer's move, not the author's", () => {
     // Screenshot 24's shape: "Waiting on review by X — Changes applied, asked
     // to look again", amber, not the still-blocking red row (screenshot 22).
-    const fn = panel.slice(panel.indexOf("function p2Verdict("), panel.indexOf("function ReviewChip("));
-    expect(fn).toContain("if (v.cleared)");
-    expect(fn).toContain("Changes applied, asked to look again.");
-    // The changes branch's own Go to it moved into the review history below.
-    expect(fn.match(/noGoTo: true/g)?.length).toBe(2);
+    const p = mergePath({
+      state: "OPEN", mergeState: "BLOCKED", baseRefName: "main", reviewDecision: "CHANGES_REQUESTED", viewerDidAuthor: true,
+      humanReview: { kind: "changes", who: ["alice"], askedAgain: true, cleared: true },
+    });
+    expect(p.stages[0]!.status).toBe("wait");
+    expect(p.rows[0]).toMatchObject({ kind: "changes", mover: "reviewer" });
+    expect(p.hero.tone).toBe("wait");
   });
 
-  test("the merge box's verdict band matches the reason rows' own size, not its own", () => {
-    // Reported alongside the Go to it removal: the band sat at 12px/py-2 while
-    // every row below it (Reason, ReviewHistory) reads at 11.5px/py-1.5 — one
-    // taller line in a stack that is otherwise even.
-    const band = panel.slice(panel.indexOf("const v = p2Verdict(d.humanReview"), panel.indexOf("<ReviewHistory reviews={d.reviews}"));
-    expect(band).toContain('px-3 py-1.5 text-[11.5px]');
+  const historyFn = () => panel.slice(panel.indexOf("function ReviewHistory("), panel.indexOf("function Bar("));
+
+  test("the review history is one group per reviewer, drawn from the story and shown for any human review", () => {
+    const fn = historyFn();
+    expect(fn).toContain("buildReviewStory(");
+    expect(fn).toContain("if (!groups.length) return null;");
+    // The author's own COMMENTED replies filled the flat list eight deep before
+    // the one real round anybody needed: the story drops them, so the author
+    // has to be handed to it.
+    expect(fn).toContain("author, you,");
+    expect(fn).toContain("groups.map(");
   });
 
-  test("the merge box's own verdict band carries no Go to it any more", () => {
-    // Review history right below it already has a go-to per round, including
-    // this one — a second button beside the band pointed at the same place.
-    const band = panel.slice(panel.indexOf("const v = p2Verdict(d.humanReview"), panel.indexOf("<ReviewHistory reviews={d.reviews}"));
-    expect(band).not.toContain(">Go to it<");
-    expect(band).not.toContain("onGoReview(node, v.url");
-  });
-
-  test("the review history lists past rounds and is gated on a changes or commented one", () => {
-    const fn = panel.slice(panel.indexOf("function ReviewHistory("), panel.indexOf("function Bar("));
-    expect(fn).toContain('r.state === "CHANGES_REQUESTED" || r.state === "COMMENTED"');
-    expect(fn).toContain("Review history</span>");
-  });
-
-  test("the review history drops the author's own replies — they are not a round", () => {
-    // The author's own COMMENTED replies filled the list eight deep
-    // before the one real round anybody needed.
-    const fn = panel.slice(panel.indexOf("function ReviewHistory("), panel.indexOf("function Bar("));
-    expect(fn).toContain("r.author?.toLowerCase() !== authorLc");
-  });
-
-  test("the review history is a real disclosure — a button, a rotating chevron, a count chip", () => {
-    // "Reads as loose text": the collapsed-by-default section used to be a
-    // native <details><summary>, which draws no hover state and no visible
-    // affordance that the heading is a control.
-    const fn = panel.slice(panel.indexOf("function ReviewHistory("), panel.indexOf("function Bar("));
+  test("the review history has no disclosure of its own — the merge box's button is the disclosure", () => {
+    const fn = historyFn();
     expect(fn).not.toContain("<details");
-    expect(fn).toContain("onClick={() => setOpen((o) => !o)}");
-    expect(fn).toContain("aria-expanded={open}");
-    expect(fn).toContain('transform: open ? "rotate(90deg)" : "none"');
+    expect(fn).not.toContain("aria-expanded");
+    expect(fn).not.toContain("setOpen");
   });
 
-  test("each round is one clickable row, not loose text beside a floating button", () => {
-    const fn = panel.slice(panel.indexOf("function ReviewHistory("), panel.indexOf("function Bar("));
-    // The whole row jumps — onClick on the row's own <button>, not on a
-    // separate control squeezed in at the far edge.
-    expect(fn).toContain("onClick={() => r.url && onGoReview(r.nodeId, r.url)}");
+  test("a round's jump and the jump to what replaced it are buttons, in the house chip", () => {
+    const fn = historyFn();
+    expect(fn).toContain("onGoReview(e.nodeId, e.url!)");
+    expect(fn).toContain("onGoReview(e.replaced!.nodeId, e.replaced!.url!)");
     expect(fn).toContain("hover:bg-white/5");
-    // House chip for the verdict and for "asked again", not ad hoc pills.
-    expect(fn).toContain("<Chip text={kind.word} tint={kind.tint} />");
-    expect(fn).toContain('<Chip text="asked again"');
+    expect(fn).toContain('<Chip text="Asked again"');
+    expect(fn).toContain("<Chip text={REVIEW_ROUND[e.state].word}");
   });
 
-  test("the review history is a flat section on the rows around it, each round on one un-wrapped line", () => {
-    const fn = panel.slice(panel.indexOf("function ReviewHistory("), panel.indexOf("function Bar("));
-    // A boxed, inset panel among full-width rows read as stuck on: the history
-    // takes the same row padding and rule as the Reason rows beside it and
-    // indents its rounds under the heading instead.
+  test("the review history is a flat section on the rows around it, and its rows wrap in a side panel", () => {
+    const fn = historyFn();
+    // A boxed, inset panel among full-width rows read as stuck on.
     expect(fn).not.toContain("var(--surface-inset)");
     expect(fn).not.toContain("rounded-lg");
     expect(fn).toContain("borderBottom: LINE");
-    expect(fn).toContain("pl-9");
-    expect(fn).toContain("whitespace-nowrap");
-    // The trailing "Go to it" affordance sits inside the row at CTRL_H, not a
-    // bare button floating at the far edge of a wide section.
-    expect(fn).toContain("CTRL_H.compact");
+    // A grid of fixed columns broke to one word per line at the panel's width.
+    expect(fn).toContain("flex-wrap");
+    expect(fn).not.toContain("gridTemplateColumns");
+    // The icons are the house sizes, not a number of their own.
+    expect(fn).toContain("ICON.");
   });
 
-  test("a stale approval's note says whose move it is once asked again", () => {
-    /*
-     * The band used to say "Commits landed after that review — it does not
-     * cover what is here now." even after the author had already
-     * re-requested that reviewer's look — reading as a move still left for
-     * the author when the ball had already gone back to the reviewer.
-     */
-    const fn = panel.slice(panel.indexOf("function p2Verdict("), panel.indexOf("function ReviewChip("));
-    expect(fn).toContain("it is with them now");
-    expect(fn).toContain("it is with you now");
-  });
-
-  test("a stale approval GitHub still counts is green, not amber — amber is for a re-request", () => {
+  test("a stale approval GitHub still counts is done, not amber — amber is for a re-request", () => {
     // Reported beside the board card reading the identical fact amber: one
     // truth ("GitHub still counts it"), two colours.
-    const fn = panel.slice(panel.indexOf("function p2Verdict("), panel.indexOf("function ReviewChip("));
-    expect(fn).toContain("const amber = v.askedAgain || !s.counts;");
-    expect(fn).toContain('tint: amber ? "var(--warning)" : "var(--success)"');
+    const at = (over: Partial<MergePathInput>) => mergePath({
+      state: "OPEN", mergeState: "CLEAN", baseRefName: "main", reviewDecision: "APPROVED", ...over,
+    }).stages[0]!;
+    const stale = { kind: "approved" as const, who: ["alice"], stale: true };
+    expect(at({ humanReview: stale })).toMatchObject({ status: "done", sub: "approved by alice — still counts" });
+    expect(at({ humanReview: { ...stale, askedAgain: true } }).status).toBe("wait");
+  });
+});
+
+describe("the author is not a reviewer, and a pending person makes it Awaiting", () => {
+  // The shape that was on screen: the author replied on his own pull request,
+  // a human had just been asked, and the auto-review had approved.
+  const d = {
+    author: "alice",
+    reviewers: [{ login: "bob" }],
+    reviews: [
+      review("alice", "COMMENTED", "2026-09-30T09:00:00Z"),
+      review("claude[bot]", "APPROVED", "2026-09-30T08:00:00Z", true),
+    ],
+  };
+  test("author is left out of the list and the summary is Awaiting", () => {
+    const rows = reviewerRoster(d);
+    expect(rows.map((r) => r.login).sort()).toEqual(["bob", "claude[bot]"]);
+    expect(R.reviewVerdict(rows)).toEqual({ kind: "awaiting", who: ["bob"] });
+  });
+  test("a request naming the author is dropped too", () => {
+    expect(reviewerRoster({ author: "alice", reviewers: [{ login: "alice" }], reviews: [] })).toEqual([]);
+  });
+  test("a bot approval alone is not Approved", () => {
+    expect(R.reviewVerdict(reviewerRoster({ author: "alice", reviews: [review("claude[bot]", "APPROVED", "2026-09-30T08:00:00Z", true)] })).kind).toBe("none");
+  });
+  test("a pending person outranks another person's bare comment, not a change request", () => {
+    const rs = [review("carol", "COMMENTED", "2026-09-30T09:00:00Z")];
+    expect(R.reviewVerdict(reviewerRoster({ author: "alice", reviewers: [{ login: "bob" }], reviews: rs })).kind).toBe("awaiting");
+    const ch = [review("carol", "CHANGES_REQUESTED", "2026-09-30T09:00:00Z")];
+    expect(R.reviewVerdict(reviewerRoster({ author: "alice", reviewers: [{ login: "bob" }], reviews: ch })).kind).toBe("changes");
+  });
+});
+
+describe("a comment after a change request", () => {
+  const ago = (iso: string) => (iso < "2026-09-30" ? "5d" : "15m");
+  const rows = (rs: ReturnType<typeof review>[]) => reviewerRoster({ author: "alice", reviews: rs });
+  test("keeps the state and says a new round happened", () => {
+    const [r] = rows([review("bob", "CHANGES_REQUESTED", "2026-09-25T10:00:00Z"), review("bob", "COMMENTED", "2026-09-30T10:00:00Z")]);
+    expect(r!.state).toBe("changes");
+    expect(R.reviewerTitle(r!, "asked for changes", ago)).toBe("bob — asked for changes 5d · commented again 15m");
+  });
+  test("a comment before the request adds nothing", () => {
+    const [r] = rows([review("bob", "COMMENTED", "2026-09-25T10:00:00Z"), review("bob", "CHANGES_REQUESTED", "2026-09-26T10:00:00Z")]);
+    expect(R.reviewerTitle(r!, "asked for changes", ago)).toBe("bob — asked for changes 5d");
   });
 });

@@ -79,12 +79,3 @@ describe("Escape closes the Machine dialog", () => {
   });
 });
 
-describe("one-off control heights join the ladder", () => {
-  test("the triage card's button is a compact control", () => {
-    const tag = openingTag(triage, "button", 'onAct(p, "open")');
-    expect(tag).not.toBe("");
-    expect(tag).toContain("CTRL_H.compact");
-    expect(tag).not.toMatch(/\bpy-0\.5\b/);
-    expect(tag).toContain("rounded-lg");
-  });
-});

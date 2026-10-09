@@ -29,6 +29,7 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "agx-understudy-terms-"));
 process.env.AGENTGLASS_DB = join(dir, "terms.db");
@@ -82,13 +83,15 @@ beforeAll(async () => {
   u.setEnabled(true);
 });
 
+const step = story();
+
 describe("the gate reports an index and never a term", () => {
-  test("clean text passes", () => {
+  step("clean text passes", () => {
     expect(u.privateTermsGate("two worktrees open, one of them dirty")).toBe(null);
     expect(u.privateTermsGate("")).toBe(null);
   });
 
-  test("a match returns its line, and nothing else at all", () => {
+  step("a match returns its line, and nothing else at all", () => {
     const hit = u.privateTermsGate("the fix for ORBIT-1042 finally landed")!;
     expect(hit).not.toBe(null);
     expect(hit.termIndex).toBe(TICKET_LINE);
@@ -100,16 +103,16 @@ describe("the gate reports an index and never a term", () => {
     expect(asText).not.toContain("1042");
   });
 
-  test("matching is case-insensitive, because a name in a title is the same name", () => {
+  step("matching is case-insensitive, because a name in a title is the same name", () => {
     expect(u.privateTermsGate("rolled out to AcmeCorp")!.termIndex).toBe(CUSTOMER_LINE);
     expect(u.privateTermsGate("rolled out to acmecorp")!.termIndex).toBe(CUSTOMER_LINE);
   });
 
-  test("a commented line is not a term", () => {
+  step("a commented line is not a term", () => {
     expect(u.privateTermsGate("widgetco shipped it")).toBe(null);
   });
 
-  test("a line JavaScript cannot compile falls back to a literal rather than being dropped", () => {
+  step("a line JavaScript cannot compile falls back to a literal rather than being dropped", () => {
     // The file is a list of EXTENDED regexes, and ERE is not quite JavaScript's
     // dialect. A line we cannot compile is a term we promised to catch and
     // silently would not, which is the worst available outcome for this
@@ -118,7 +121,7 @@ describe("the gate reports an index and never a term", () => {
     expect(u.privateTermsGate("a note about zeta[q-a] here")!.termIndex).toBe(UNCOMPILABLE_LINE);
   });
 
-  test("translate replaces the term with its line and leaves the rest alone", () => {
+  step("translate replaces the term with its line and leaves the rest alone", () => {
     const out = u.translate("the fix for ORBIT-1042 shipped to acmecorp");
     expect(out).toBe(`the fix for [private:${TICKET_LINE}] shipped to [private:${CUSTOMER_LINE}]`);
     expect(out).not.toContain("ORBIT");
@@ -136,7 +139,7 @@ describe("the seal refuses the body and keeps the row", () => {
   let id = 0;
   let hash = "";
 
-  test("it does not throw, and the situation is still recorded", () => {
+  step("it does not throw, and the situation is still recorded", () => {
     // The situation genuinely happened. Throwing here would take out the route
     // that was about to answer him, and dropping the row would lose a scored
     // decision because one word in the screen behind it was private.
@@ -148,14 +151,14 @@ describe("the seal refuses the body and keeps the row", () => {
     expect(hash).toHaveLength(64);
   });
 
-  test("the body was never written", () => {
+  step("the body was never written", () => {
     // The gate runs on the way IN. There is no path where the body is stored
     // first and cleaned up afterwards, because a cleanup that fails leaves the
     // thing we promised never to store sitting on disk.
     expect(snapshotFor(hash)).toBe(null);
   });
 
-  test("the quarantine says that it happened, where, and which line — not what", () => {
+  step("the quarantine says that it happened, where, and which line — not what", () => {
     const q = quarantineFor(hash)!;
     expect(q).not.toBe(null);
     expect(q.class).toBe("C11");
@@ -167,7 +170,7 @@ describe("the seal refuses the body and keeps the row", () => {
     expect(JSON.stringify(q)).not.toContain("ORBIT");
   });
 
-  test("nothing anywhere in the understudy's tables holds the text", () => {
+  step("nothing anywhere in the understudy's tables holds the text", () => {
     // The targeted assertions above prove the columns somebody thought of are
     // clean. This one is about the column nobody thought of: every row of every
     // understudy table, as text, scanned for the term.
@@ -185,7 +188,7 @@ describe("the seal refuses the body and keeps the row", () => {
 });
 
 describe("the body is kept for one partition and dropped for the rest", () => {
-  test("a clean situation in this repository keeps its body", () => {
+  step("a clean situation in this repository keeps its body", () => {
     // The negative tests above mean nothing without this one: a seal that never
     // wrote a snapshot for any input would pass all of them.
     const id = u.sealSituation("C11", {
@@ -199,7 +202,7 @@ describe("the body is kept for one partition and dropped for the rest", () => {
     expect(quarantineFor(hash)).toBe(null);
   });
 
-  test("a clean situation anywhere else keeps the hash and drops the body", () => {
+  step("a clean situation anywhere else keeps the hash and drops the body", () => {
     const id = u.sealSituation("C11", {
       subject: "pr-4823",
       repo: "orbit",
@@ -217,7 +220,7 @@ describe("the body is kept for one partition and dropped for the rest", () => {
 });
 
 describe("the key a row is filed under is scrubbed, not dropped", () => {
-  test("a branch carrying a ticket is stored translated", () => {
+  step("a branch carrying a ticket is stored translated", () => {
     // You cannot drop the key you file under — `subject` is how a later actual
     // finds its seal — so it is scrubbed instead.
     const t0 = Date.now();
@@ -228,7 +231,7 @@ describe("the key a row is filed under is scrubbed, not dropped", () => {
     expect(row.subject).not.toContain("ORBIT");
   });
 
-  test("and the decision that follows still finds it", () => {
+  step("and the decision that follows still finds it", () => {
     // Scrubbing is deterministic, so the seal and the actual half an hour later
     // produce the same string and still join. If they did not, every branch
     // with a ticket in its name would score as an unsealed decision and the
@@ -250,7 +253,7 @@ describe("the key a row is filed under is scrubbed, not dropped", () => {
 });
 
 describe("no terms file", () => {
-  test("nothing has been declared private, so nothing is", () => {
+  step("nothing has been declared private, so nothing is", () => {
     u.__setPrivateTermsPath(join(dir, "there-is-no-such-file.txt"));
     expect(u.privateTermsGate("the fix for ORBIT-1042 landed")).toBe(null);
     expect(u.translate("the fix for ORBIT-1042 landed")).toBe("the fix for ORBIT-1042 landed");

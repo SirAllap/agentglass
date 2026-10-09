@@ -14,6 +14,7 @@ import { publishFleet } from "./lib/demoBridge.ts";
 import { publishAgents } from "./lib/fleetAgents.ts";
 import { providerOf } from "./lib/format.ts";
 import { api, IS_DEMO } from "./lib/api.ts";
+import { usePoll } from "./lib/usePoll.ts";
 import { refusalFinal, useCoverHold } from "./lib/cover.ts";
 import { initialTheme, applyTheme, THEMES } from "./lib/themes.ts";
 import { subscribeControl } from "./lib/controlBus.ts";
@@ -26,7 +27,8 @@ import { AlarmCard } from "./components/AlarmCard.tsx";
 import { currentScale } from "./lib/uiScale.ts";
 import { zoomAtPointer, type ZoomResult } from "./lib/zoomTarget.ts";
 import { zoomTaken } from "./lib/zoomOwner.ts";
-import { toggleFullscreen, followDeepLinks } from "./lib/desktop.ts";
+import { toggleFullscreen, followDeepLinks, HAS_BROWSER } from "./lib/desktop.ts";
+import { requestBrowserNav } from "./lib/browserNav.ts";
 import { useAlertSound } from "./lib/useSound.ts";
 import { TopBar } from "./components/TopBar.tsx";
 /*
@@ -60,7 +62,7 @@ import { FilePalette } from "./components/FilePalette.tsx";
 import { onFinderAt, type FinderTarget } from "./lib/finderTarget.ts";
 import { WindowSwitcher } from "./components/terminal/WindowSwitcher.tsx";
 import { FloatingBench } from "./components/bench/FloatingBench.tsx";
-import { benchTakesBoard, toggleBench, showFile } from "./lib/benchStore.ts";
+import { benchTakesBoard, toggleBench, showFile, addTab } from "./lib/benchStore.ts";
 import type { BoardKind } from "./lib/boardHost.ts";
 import { PeekFile, isRenderable, type Peek } from "./components/PeekFile.tsx";
 import { clearPeek, peekRequest, subscribePeek } from "./lib/openPeek.ts";
@@ -160,9 +162,6 @@ export default function App() {
     const t = setTimeout(() => setOpenErr(null), 4000);
     return () => clearTimeout(t);
   }, [openErr]);
-  /** The palette's measured height, so a document it opens starts below it
-   *  instead of underneath it. 0 when the palette is shut. */
-  const [paletteH, setPaletteH] = useState(0);
   const [helpOpen, setHelpOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
@@ -525,13 +524,12 @@ export default function App() {
    * piece of the dashboard that genuinely doesn't need to be live.
    */
   const [sessions, setSessions] = useState<SessionRollup[]>([]);
-  useEffect(() => {
-    const take = keepIfSame(setSessions); // once per effect, not once per poll
-    const load = () => api.sessions(200).then(take).catch(() => { /* labels fall back to the uuid */ });
-    load();
-    const id = setInterval(load, 30_000);
-    return () => clearInterval(id);
-  }, []);
+  const takeSessions = useMemo(() => keepIfSame(setSessions), []); // once, not once per poll
+  const loadSessions = () => api.sessions(200).then(takeSessions).catch(() => { /* labels fall back to the uuid */ });
+  useEffect(() => { void loadSessions(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  /* Only while the window is looked at (89 KB per call with 200 rows, ungated
+     before: 2 a minute for a window nobody had focused). */
+  usePoll(true, () => { void loadSessions(); }, 30_000);
   const titles = useMemo(() => buildTitles(sessions), [sessions]);
   // Same rows, second question: the buffer the cards sum over is a capped
   // window, so cost/tokens/tools come from the session roll-up where there is
@@ -1264,8 +1262,10 @@ export default function App() {
         open={filesOpen}
         onClose={() => setFilesOpen(false)}
         target={finderTarget}
-        docOpen={peek !== null}
-        onHeight={setPaletteH}
+        onBench={(o) => {
+          if (o.tab === "file") showFile(o.root, o.path, { title: o.title });
+          else addTab(o.root, { kind: "term", title: o.title, type: o.type });
+        }}
         onOpenFile={async (root, rel, branch, ref) => {
           /*
            * On this checkout, the division the bench exists for.
@@ -1305,13 +1305,13 @@ export default function App() {
           } finally { setOpening(null); }
         }}
         onRevealDir={(root, dir) => { requestFilesReveal(root, dir); goView("files"); }}
+        onOpenBrowser={HAS_BROWSER ? (url) => { requestBrowserNav(url); goView("browser"); } : undefined}
       />
       {/* The two share the screen rather than stack: the palette stays open on
           purpose, so the document starts below its measured bottom edge — 10px
           of top margin plus a 12px gap. */}
       {peek && (
-        <PeekFile peek={peek} onClose={() => setPeek(null)}
-          topPx={filesOpen && paletteH > 0 ? Math.round(paletteH) + 22 : undefined} />
+        <PeekFile peek={peek} onClose={() => setPeek(null)} />
       )}
       {/* Where the document is about to be, so the answer appears where the eye
           already went. Both of these are one line and neither takes the focus:
@@ -1320,7 +1320,7 @@ export default function App() {
       {(opening || openErr) && !peek && (
         <div className="fixed left-1/2 -translate-x-1/2 z-[60] px-3 py-1.5 rounded-lg text-[11.5px] flex items-center gap-2"
           style={{
-            top: filesOpen && paletteH > 0 ? Math.round(paletteH) + 34 : "12vh",
+            top: "12vh",
             background: "var(--surface-card)", border: EDGE,
             color: openErr ? "var(--error)" : "var(--text2)",
           }}>

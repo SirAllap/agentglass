@@ -85,8 +85,8 @@ export const findState = (): FindState => state;
  * stack at rank 1, all of them beating the view underneath, so every search
  * answered 0 of 0 over a screen full of the word.
  *
- * An element with no children is nobody's screen; one whose box is hidden is
- * not either. Both are cheap to ask and neither can be got wrong by a caller.
+ * An element with no children is nobody's screen; one whose box is hidden — by
+ * `display` or by `visibility`, see `showing` — is not either. Both are cheap to ask and neither can be got wrong by a caller.
  */
 export function topScope(): HTMLElement | null {
   let best: Scope | null = null;
@@ -121,11 +121,34 @@ export function scopeHolding(target: EventTarget | null): HTMLElement | null {
   return hit?.el ?? null;
 }
 
-type MaybeVisible = HTMLElement & { checkVisibility?: () => boolean };
+type MaybeVisible = HTMLElement & { checkVisibility?: (o?: { visibilityProperty?: boolean }) => boolean };
+/*
+ * `visibilityProperty`, and it is the whole fix. The workspace hides a view that
+ * is not on screen with `visibility: hidden` (not `display: none`, which
+ * collapses a terminal's measured size), and `checkVisibility()` with no options
+ * only looks at `display` and `content-visibility`. So a card dialog left open
+ * inside a hidden Tasks view was still "showing", still a scope at rank 1, and
+ * beat the pull-request board it was hiding behind: the board's engine answered
+ * null, the bar fell back to a text walk of the hidden dialog, and typing a
+ * number that was plainly on the board said 0/0. Reproduced with the real board
+ * and a hidden rank-1 scope; with the property on, the same query says 0/1.
+ * mdFind already asks it this way.
+ */
 function showing(el: HTMLElement | null): boolean {
-  if (!el || !el.childElementCount) return false;
+  return !!el && !!el.childElementCount && onScreen(el);
+}
+
+/**
+ * Whether a box is on screen, as the workspace hides views: `visibility: hidden`.
+ * Every window-level Ctrl+F that decides "is this mine" asks it here, because
+ * the Files tab's own handler asked `checkVisibility()` with no options and took
+ * the chord from the board in front of it whenever a PR had been left open in a
+ * hidden view. `offsetParent` is the fallback and catches `display: none` only.
+ */
+export function onScreen(el: HTMLElement | null): boolean {
+  if (!el) return false;
   const e = el as MaybeVisible;
-  return typeof e.checkVisibility === "function" ? e.checkVisibility() : !!el.offsetParent;
+  return typeof e.checkVisibility === "function" ? e.checkVisibility({ visibilityProperty: true }) : !!el.offsetParent;
 }
 
 /**

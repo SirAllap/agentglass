@@ -50,6 +50,9 @@ beforeEach(() => {
   CV.setWritesAllowed(true);
   CU.__setClickUpBase(`http://127.0.0.1:${server.port}`);
   CU.__clearFindCache();
+  // Paced in production (one read per 10 s); the budget is what is asserted here.
+  CU.__resetCounts();
+  CU.__setCountEvery(0);
 });
 afterEach(() => { CU.__reset(); });
 afterAll(() => {

@@ -1,4 +1,9 @@
 import { test, expect, describe, beforeAll } from "bun:test";
+import { globalStubs } from "./stubGlobal";
+import { stubStorage } from "./stubStorage.ts";
+const stubGlobal = globalStubs();
+
+stubStorage();
 
 // A tab that was watched through an outage stopped reconnecting and never
 // started again. The give-up was real and deliberate — don't hammer a server
@@ -8,8 +13,7 @@ import { test, expect, describe, beforeAll } from "bun:test";
 
 let live: typeof import("../src/lib/useLive.ts");
 beforeAll(async () => {
-  (globalThis as any).location ??= new URL("http://localhost:5173/");
-  (globalThis as any).localStorage ??= { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+  stubGlobal("location", new URL("http://localhost:5173/"));
   live = await import("../src/lib/useLive.ts");
 });
 

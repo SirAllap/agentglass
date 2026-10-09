@@ -1,5 +1,10 @@
 import { test, expect, beforeAll } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import type { WatchEvent } from "../../shared/types.ts";
+import { stubStorage } from "./stubStorage.ts";
+const stubGlobal = globalStubs();
+
+stubStorage();
 
 // The chat panel had no live subscription at all: a resumed session was a
 // photograph taken when you clicked. These pin the routing that fixes it — and,
@@ -10,8 +15,7 @@ import type { WatchEvent } from "../../shared/types.ts";
 // chatStore reaches api.ts, which reads `location` at module scope.
 let store: typeof import("../src/lib/chatStore.ts");
 beforeAll(async () => {
-  (globalThis as any).location ??= new URL("http://localhost:5173/");
-  (globalThis as any).localStorage ??= { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+  stubGlobal("location", new URL("http://localhost:5173/"));
   store = await import("../src/lib/chatStore.ts");
 });
 

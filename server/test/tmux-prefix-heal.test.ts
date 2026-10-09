@@ -23,6 +23,7 @@ import { join } from "node:path";
 import { healPrefix, prefixKeys, __resetHeal, type TmuxTarget } from "../src/tmuxctl.ts";
 import { TMUX_ISOLATED } from "./tmuxIsolated.ts";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
+import { story } from "./story.ts";
 
 /* A private socket directory, for this file's spawns and for the code under
    test alike: a bare `-L` lands in /tmp/tmux-<uid> and `kill-server` leaves
@@ -43,8 +44,10 @@ afterAll(() => {
   else process.env.TMUX_TMPDIR = REAL_TMPDIR;
 });
 
+const step = story();
+
 describe("an engine server that never read the config", () => {
-  test("comes up on tmux's own prefix, which is the bug as the user sees it", () => {
+  step("comes up on tmux's own prefix, which is the bug as the user sees it", () => {
     tmux("kill-server");
     // Born WITHOUT `-f`: this is the shape every path that is not the engine's
     // own attach produces, and the reason `-f` on the attach cannot save it.
@@ -52,7 +55,7 @@ describe("an engine server that never read the config", () => {
     expect(prefixKeys({ socket: SOCK } as TmuxTarget)).toEqual(["C-b"]);
   });
 
-  test("the config is put back, and the prefix with it", () => {
+  step("the config is put back, and the prefix with it", () => {
     __resetHeal();
     const t = { socket: SOCK } as TmuxTarget;
     expect(healPrefix(t, "C-f", conf)).toEqual(["C-f"]);
@@ -60,14 +63,14 @@ describe("an engine server that never read the config", () => {
     expect(tmux("show-options", "-gqv", "prefix")).toBe("C-f");
   });
 
-  test("a server that already agrees is left alone", () => {
+  step("a server that already agrees is left alone", () => {
     __resetHeal();
     // null, not `["C-f"]`: the caller keeps what it read, and nothing is sent
     // to a server that is already right. This runs on every attach.
     expect(healPrefix({ socket: SOCK } as TmuxTarget, "C-f", conf)).toBe(null);
   });
 
-  test("the prefix the caller already read is not read again", () => {
+  step("the prefix the caller already read is not read again", () => {
     /* The sweep holds the prefix from its own frame. Re-reading it here was two
        show-options spawns per engine shell every half second. Handed a prefix
        that agrees, it must answer from that alone, whatever tmux would say. */
@@ -78,7 +81,7 @@ describe("an engine server that never read the config", () => {
     tmux("set-option", "-g", "prefix", "C-f");
   });
 
-  test("and a config that cannot take is not re-sourced on every attach", () => {
+  step("and a config that cannot take is not re-sourced on every attach", () => {
     /* Throttled per socket: a conf tmux refuses would otherwise turn every
        attach into a failed re-source for as long as the session lives. */
     __resetHeal();
@@ -89,7 +92,7 @@ describe("an engine server that never read the config", () => {
     expect(healPrefix(t, "M-x", empty)).toBe(null);        // and does not try again
   });
 
-  test("an empty `have` from an aborted frame must not be passed through as a confirmed read", () => {
+  step("an empty `have` from an aborted frame must not be passed through as a confirmed read", () => {
     /* A frame that aborted mid-parse before finishing show-options hands the
        sweep `[]`, not the server's real prefix. Passed straight through as
        `have`, it never equals `want` and keeps forcing a resource on every
@@ -117,7 +120,7 @@ describe("an engine server that never read the config", () => {
  * and the write behind it is throttled per socket.
  */
 describe("where the check lives", () => {
-  test("in the sweep, beside the read it compares against", async () => {
+  step("in the sweep, beside the read it compares against", async () => {
     const src = await Bun.file(new URL("../src/terminal.ts", import.meta.url)).text();
     const sweep = src.slice(src.indexOf("if (frame) session.tmuxPrefix = frame.prefix;"));
     expect(sweep.slice(0, 2000)).toContain(
@@ -125,7 +128,7 @@ describe("where the check lives", () => {
     );
   });
 
-  test("and not only where a client arrives", () => {
+  step("and not only where a client arrives", () => {
     // `followSession` runs on attach and on `prefix s`; neither is a clock.
     return Bun.file(new URL("../src/terminal.ts", import.meta.url)).text().then((src) => {
       const follow = src.slice(src.indexOf("const followSession ="), src.indexOf("Watch for tmux coming and going"));

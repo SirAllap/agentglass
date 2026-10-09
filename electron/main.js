@@ -34,7 +34,7 @@ const {
 const { startEgressProxy, literalRefusal, EGRESS_ENV } = require("./egress-guard.js");
 /* S9: the honest "an agent is driving this" header — see identify-header.js
    for the decision and browser-phase3-plan-2026-09-25.md §S9/D8 for why. */
-const { IDENTIFY_HEADER, shouldIdentify, sanitizeAgentName } = require("./identify-header.js");
+const { IDENTIFY_HEADER, shouldIdentify, createOwnerBook } = require("./identify-header.js");
 
 /**
  * The browser's egress guard, once it is listening — see egress-guard.js for
@@ -2589,9 +2589,9 @@ function registerIpc(win) {
   ipcMain.on("ag:browserGuestOwner", (_e, req) => {
     const guestId = Number(req && req.guestId);
     if (!Number.isInteger(guestId) || guestId <= 0) return;
-    const owner = sanitizeAgentName(req && req.owner);
-    if (owner) guestOwner.set(guestId, owner);
-    else guestOwner.delete(guestId);
+    guestOwner.apply(guestId, req && req.person === true
+      ? { kind: "person" }
+      : { kind: "ask", as: req && req.owner });
   });
 
   /*
@@ -3380,12 +3380,13 @@ const guestFavicons = new WeakMap();
 const FAVICON_URL_CAP = 16;
 
 /** S9: which agent's name to send in `X-Agentglass-Agent`, by webContents id.
- *  A plain `Map`, not a `WeakMap`, because the key the header dispatcher has
+ *  Changed only through `ownerAfter` (identify-header.js). Keyed by a number,
+ *  not a `WeakMap`, because the key the header dispatcher has
  *  at request time (`details.webContentsId`) is a number, not the guest
  *  itself — cleared on `destroyed` below, same as `guestFavicons`. Already
  *  sanitised on the way in, so the dispatcher can use it without checking
- *  again. @type {Map<number, string>} */
-const guestOwner = new Map();
+ *  again. */
+const guestOwner = createOwnerBook();
 
 /** Windows opened as popups from a guest — a sign-in, in practice. The
  *  Cross-Origin-Opener-Policy header is dropped for these and only these; see
@@ -3751,7 +3752,7 @@ function guardWebviews(win, opts = {}) {
     guest.once("destroyed", () => {
       browserGuests.delete(guest);
       guestFavicons.delete(guest);
-      guestOwner.delete(guest.id);
+      guestOwner.drop(guest.id);
       if (browserGuest === guest) browserGuest = [...browserGuests].pop() ?? null;
     });
 

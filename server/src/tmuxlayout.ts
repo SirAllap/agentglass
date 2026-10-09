@@ -89,6 +89,53 @@ export async function windowTree(name: string): Promise<TmuxWindowDetail[]> {
   return out;
 }
 
+/**
+ * Every session's windows and panes in two tmux calls, plus each pane's
+ * born-with command.
+ *
+ * The layout sweep used to ask per session, per window and per pane: 57 spawns
+ * a tick on 8 sessions, 170 on 24, every ten seconds. `-a` lists the whole
+ * server at once; the rows are the ones `listWindows`/`windowPanes` parse, with
+ * the session name in front. A start command can hold a newline, so each pane
+ * row ends in a marker instead of trusting the line break. Null when tmux did
+ * not answer, so the caller can fall back to asking one session at a time.
+ */
+const ROW_END = "~~agx-end~~";
+export async function allWindowTrees(): Promise<{ trees: Map<string, TmuxWindowDetail[]>; starts: Map<string, string> } | null> {
+  const [wr, pr] = await Promise.all([
+    tmux(["list-windows", "-a", "-F", "#{session_name}\t#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{window_flags}\t#{window_layout}"]),
+    tmux(["list-panes", "-a", "-F", `#{session_name}\t#{window_id}\t#{pane_id}\t#{pane_index}\t#{pane_active}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_dead}\t#{pane_pid}\t#{pane_start_command}${ROW_END}`]),
+  ]);
+  if (!wr.ok || !pr.ok) return null;
+  const trees = new Map<string, TmuxWindowDetail[]>();
+  const byWindow = new Map<string, TmuxWindowDetail>();
+  for (const line of wr.stdout.split("\n").filter(Boolean)) {
+    const [sess = "", id = "", index, name_, active, flags, layout] = line.split("\t");
+    if (!WINDOW_RE.test(id)) continue;
+    const w: TmuxWindowDetail = { id, index: Number(index), name: name_ ?? "", active: active === "1", flags: flags ?? "", ...(layout && LAYOUT_RE.test(layout) ? { layout } : {}), panes: [] };
+    if (!trees.has(sess)) trees.set(sess, []);
+    trees.get(sess)!.push(w);
+    byWindow.set(`${sess}\t${id}`, w);
+  }
+  const starts = new Map<string, string>();
+  for (const rec of pr.stdout.split(ROW_END)) {
+    const row = rec.replace(/^\n/, "");
+    if (!row) continue;
+    const f = row.split("\t");
+    const [sess = "", win = "", id = "", index, active, command, path, dead, pid] = f;
+    if (!PANE_RE.test(id)) continue;
+    const w = byWindow.get(`${sess}\t${win}`);
+    if (!w) continue;
+    const n = Number(pid);
+    w.panes.push({
+      id, index: Number(index), active: active === "1", command: command ?? "", path: path ?? "",
+      ...(dead === "1" ? { dead: true } : {}), ...(Number.isInteger(n) && n > 1 ? { pid: n } : {}),
+    });
+    starts.set(id, f.slice(9).join("\t").trim());
+  }
+  return { trees, starts };
+}
+
 /** The command a pane starts with. Same `sh`-wrapped, exit-surviving shape the
  *  chat engine uses (newSessionArgv), so a tool that exits leaves the pane
  *  alive with a line saying so instead of vanishing mid-layout. A named agent

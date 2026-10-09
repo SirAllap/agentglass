@@ -10,12 +10,14 @@
 // deviation in every one, and 0 cells moving on hover. This test is the
 // cheaper guard that keeps it that way.
 import { describe, expect, test } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import { readFileSync } from "node:fs";
+const stubGlobal = globalStubs();
 
 // Importing the panel reaches api.ts, which reads `location` at module scope
 // and throws under bun. The same shim every other web test here uses; without
 // it the failure is a ReferenceError from a file this test never mentions.
-(globalThis as unknown as { location: URL }).location ??= new URL("http://localhost:5173/");
+stubGlobal("location", new URL("http://localhost:5173/"));
 
 const { PORT_GRID } = await import("../src/components/MachinePanel.tsx");
 

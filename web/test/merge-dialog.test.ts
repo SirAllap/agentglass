@@ -28,8 +28,11 @@
  * underneath all of it.
  */
 import { describe, expect, test, mock } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { stubStorage } from "./stubStorage.ts";
+const stubGlobal = globalStubs();
 
 /*
  * Two seams, both mocked for the same reason: they are the parts of this
@@ -76,10 +79,8 @@ mock.module(new URL("../src/components/Portal.tsx", import.meta.url).pathname, (
  * `location.href`/`location.hostname` and localStorage while its module body
  * runs, which is the throw this mock originally existed to dodge.
  */
-(globalThis as any).location ??= { hostname: "localhost", origin: "http://localhost:4000", href: "http://localhost:4000/" };
-(globalThis as any).localStorage ??= {
-  getItem: () => null, setItem: () => {}, removeItem: () => {},
-};
+stubGlobal("location", { hostname: "localhost", origin: "http://localhost:4000", href: "http://localhost:4000/" });
+stubStorage();
 const API_PATH = new URL("../src/lib/api.ts", import.meta.url).pathname;
 const realApiModule = await import(`${API_PATH}?unmocked`);
 mock.module(API_PATH, () => ({

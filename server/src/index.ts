@@ -52,7 +52,7 @@ import { chooseModel, type UsageNow, type Choice } from "./understudy-model.ts";
 import { allProviderUsage } from "./providerusage.ts";
 import { claimPaceAlerts, coerceAlertAt } from "./paceAlert.ts";
 import { refreshCodexUsage } from "./codexusage.ts";
-import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, typedReason, GATE_MAX_MS, gateFailClosed, denyByRule, allowByRule, validGateId } from "./gate.ts";
+import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, onGateChange, typedReason, GATE_MAX_MS, gateFailClosed, denyByRule, allowByRule, validGateId } from "./gate.ts";
 import { budgetHoldFor } from "./budget.ts";
 import { gateCwd, gateRuleFor } from "./gaterules.ts";
 import { parseControlCmd } from "./control.ts";
@@ -73,7 +73,7 @@ import {
   stashRename, stashToBranch, stashPartial, stashApplyOverwrite,
   refs, listSnapshots, createSnapshot, restoreSnapshot, deleteSnapshot,
   applyHunk, logGraph, mergeBranch, rebaseBranch, renameBranch, resetTo,
-  worktreesWithState as gitWorktrees, addWorktree, removeWorktree, worktreeLeftovers, rescueLeftovers, fixWorktreeOwnership, startAutoFetch, syncFromBase, setBase, setGitChangeHook, setMergedVerdictHook, setPrBaseHook,
+  worktreesWithState as gitWorktrees, addWorktree, removeWorktree, worktreeLeftovers, rescueLeftovers, fixWorktreeOwnership, startAutoFetch, setAutoFetchAudience, autoFetchWhenSomeoneComes, syncFromBase, setBase, setGitChangeHook, setMergedVerdictHook, setPrBaseHook,
   conflicts as gitConflicts, resolveWith, conflictBlocks, conflictFile, resolveBlocks, mergeSession, reopenConflict, stoppedRefusal, conflictPreview, mergeAbort, mergeContinue, baseCandidates, undoMerge, mergeInfo,
   cherryPick, cherryPickContinue, cherryPickAbort,
   revertCommit, amendCommit, squashCommits,
@@ -84,7 +84,7 @@ import {
   searchCommits, grepWorkingTree, searchHistory,
   createTag, deleteTag, pushTag, deleteRemoteTag,
   prepareConflictMerge,
-  worktrees as repoWorktrees,
+  worktrees as repoWorktrees, repoNow,
 } from "./gitwork.ts";
 import { sessionsForProject } from "./agentsessions.ts";
 import { changeRows, fileDiff } from "./changerows.ts";
@@ -110,12 +110,12 @@ import { listPortsAsync, listResources, spaceFor, killPort } from "./machine.ts"
 import { gitLocks, removeStaleLock } from "./gitlocks.ts";
 import { procDetail, revealEnv } from "./procdetail.ts";
 import {
-  listIssues, issueDetail, issuePullRequests, startIssue, finishIssue, claimIssue, commentIssue, setIssueState, currentWork,
+  listIssues, issueCounts, issueDetail, issuePullRequests, startIssue, finishIssue, claimIssue, commentIssue, setIssueState, currentWork,
 } from "./issues.ts";
 import { currentRuns, runById, runActivity, startRun, adoptPane, finishRun } from "./runs.ts";
 import { failed } from "./refused.ts";
 import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, addClickupFolder, refreshFoldersIfStale, replaceViewUrl, readView } from "./providers.ts";
-import { savedViews, savedFolders, currentView, setCurrent, removeView, removeFolder, knownCardPrefix, boardHolding, setWritesAllowed } from "./clickupviews.ts";
+import { savedViews, savedFolders, currentView, setCurrent, removeView, removeFolder, knownCardPrefix, boardHolding, setWritesAllowed, patchCachedTask } from "./clickupviews.ts";
 import { assignSelf, setAssignee, setCard, listMembers, setStatus, setPriority, setField, clearField, sprintLists, searchTasks, searchTasksStream, warmBodySweep, taskDetail, tagsForTask, findCard, cardPullRequests, clickupWriteEnabled, commentOn, updateTask, setTag, moveToList, createTask, addChecklist, addChecklistItem, setChecklistItem, editComment as editClickupComment, replyToComment, resolveComment, deleteComment as deleteClickupComment } from "./clickup.ts";
 import { clickupTasks } from "./clickup.ts";
 import type { ProviderId } from "../../shared/providers.ts";
@@ -126,7 +126,8 @@ import {
 } from "./reminders.ts";
 import { fileText, fileToTemp, fileTree, findFiles, grepFiles, listRefs, filesExist, heldBackFrom, heldBackTest, HELD_BACK, filesReach, gitReadRefusal, gitReadTest } from "./files.ts";
 import { diskFind, diskGrep, diskPlaces } from "./disk.ts";
-import { browseDir, fileBytes, fileFacts, openInDesktop } from "./browse.ts";
+import { browseDir, fileBytes, fileFacts, openInDesktop, pagePolicy, revealInFileManager } from "./browse.ts";
+import { fileGitFacts } from "./fileGit.ts";
 import { benchEdit, benchEnd, benchLive, readNote, writeNote } from "./bench.ts";
 import {
   overview as dockerOverview, stats as dockerStats, logs as dockerLogs, inspect as dockerInspect, top as dockerTop,
@@ -139,18 +140,23 @@ import { capBuildCache, removeImages } from "./dockerprune.ts";
 import { inbox, markRead, markRepoRead, unsubscribe } from "./ghinbox.ts";
 import { applyMarks, listMarks, parseMarkOps, talkAlreadyRead, MARK_KINDS } from "./marks.ts";
 import { noteAsk as noteWatchAsk, startPrWatch } from "./prWatch.ts";
+import {
+  listWatches, addWatch, removeWatch, setPreset, applyPreset, sawMine, onTalkSeen as watchOnTalkSeen, pendingFires, ackFire,
+  subscribeWatchChange, subscribeWatchFire, subscribeWatchChecks, startPrNotifyWatch,
+} from "./prNotifyWatch.ts";
 import { measureFile } from "./filemeasure.ts";
 import { editorCursor } from "./editorwhere.ts";
 import {
   listPrs, prDetail, prDiff, prAsset, ghCapability, submitReview, addComment, replyToThread,
-  editComment, deleteComment, hideComment, unhideComment, setFileViewed, setAssignees, setMilestone, viewCounts, jobLog, checkJobs, rerunJobs, addLineComment, mentionables, facetOptions, applySuggestion, fileSlice,
+  editComment, deleteComment, hideComment, unhideComment, setFileViewed, setAssignees, setMilestone, viewCounts, jobLog, checkJobs, checkFailures, cachedCheckFailures, failingTestsFor, rerunJobs, addLineComment, mentionables, facetOptions, applySuggestion, fileSlice,
   setThreadResolved, react, editPr, setLabels, setReviewers, setDraft, updateBranch,
   rerunFailedChecks, mergePr, closePr, filesSince, codeowners, prepareReviewPrompt, pendingReviewFor, branchUrl, subscribeCi, subscribeTalk, commitDiff as prCommitDiff, submitReviewWith, prFileToTemp,
   prBaseOf,
   ghRateLimit,
-  branchBehind, localHead, prRollup,
-  prBranches, prsForBranch, nodeIdOk, locateRepo } from "./prs.ts";
+  branchBehind, localHead, prRollup, repoIdFor as prRepoIdFor, subscribeTalkSeen,
+  prBranches, prsForBranch, nodeIdOk, locateRepo, isForeignRoot } from "./prs.ts";
 import { repoSpend } from "./spend.ts";
+import { repoMetrics } from "./checkRuns.ts";
 import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
 import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, lastTmuxTarget, sessionTitle, TERMINAL_ENABLED, PTY_BACKEND, type PtyWsData } from "./terminal.ts";
 import { agentBinFor, mintAgentTicket } from "./agentticket.ts";
@@ -182,7 +188,7 @@ import { claudeModels } from "./claudemodels.ts";
 import { codexStream, codexModels, codexTranscript, codexCwd, CODEX_ENABLED, CODEX_BYPASS_ALLOWED } from "./codex.ts";
 import { antigravityStream, antigravityModels, ANTIGRAVITY_ENABLED, ANTIGRAVITY_BYPASS_ALLOWED } from "./antigravity.ts";
 import { hermesStream, hermesModels, HERMES_ENABLED, hermesBypassAllowed } from "./hermes.ts";
-import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs, reloadEngineConf, tmuxCapability, engineWindowRunning, engineSessionName, tmux } from "./tmuxpane.ts";
+import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs, reloadEngineConf, tmuxCapability, engineWindowRunning, engineSessionName, tmux, validSessionName } from "./tmuxpane.ts";
 import { takeLease, endLease, leaseHeld, reapLeases } from "./panelease.ts";
 import { runAgentInteractivePane } from "./understudy-pane.ts";
 import { startScanner, ownsSession, knownProjects, projectsKnownAtStart, resyncScope, scanningEnabled } from "./transcripts.ts";
@@ -199,16 +205,18 @@ import { privateHost, resolvePeer, originOf, guardedFetch, hostsOnly } from "./n
 import { DESK_HEADER, claimDesk, deskHeld } from "./desk.ts";
 import { resolveToken, healthProof, tokenOk, isIntake, isAuthExempt, callerFor, allowed, scopeNeeded, pluginOfRequest, answersFromADevice, deskKeyOk, understudyRequiresToken, UNDERSTUDY_NO_TOKEN_ERROR, mintUnderstudyToken, revokeUnderstudyToken, tokenlessWarning, type Caller, type Origin } from "./auth.ts";
 import {
-  listPlugins, masterEnabled, setMaster, installPlugin, installFromCatalogue, updatePlugin, enablePlugin, disablePlugin, removePlugin, setPluginUnboxedConsent,
-  contributesOf, isRunning, pluginSettings, setPluginSettings, resumeEnabledPlugins, stopAllPluginsSync, pluginIcon,
+  listPlugins, masterEnabled, setMaster, installPlugin, installFromCatalogue, updatePlugin, enablePlugin, disablePlugin, removePlugin, setPluginUnboxedConsent, envAllowsUnboxed,
+  contributesOf, isRunning, pluginSettings, pluginOwnSettings, setPluginSettings, resumeEnabledPlugins, stopAllPluginsSync, pluginIcon,
 } from "./plugins.ts";
 import { setPluginSocketHandler, viaPluginSocket } from "./plugin-socket.ts";
+import { CanvasHandle, handleCanvasOps, isCanvasPanel, readBoundedJson, setCanvasResolver } from "./plugin-canvas.ts";
 import {
   setPluginUiHook, setPanel, panelState, setOptions, pushEvent, takeEvents, upsertRun, upsertNotes, notesFor, setNoteStatus, flushPluginNotes,
 } from "./plugin-ui.ts";
-import { validPrRef } from "../../shared/pluginUi.ts";
+import { PANEL_ID_RE, validPrRef } from "../../shared/pluginUi.ts";
 import { readNotifyPrefs, writeNotifyPrefs } from "./notifyPrefs.ts";
 import { fetchCatalogue } from "./plugin-catalogue.ts";
+import { annotate, setAnnotations } from "./inbox-annotations.ts";
 import {
   openStub, settleLedger, recordDecision, recordFence, scorecard,
   setMode, halt, setEnabled, enabled as understudyEnabled, sealSituation,
@@ -236,6 +244,22 @@ let lastUnderstudyLearn: import("./understudy-ingest.ts").IngestResult | null = 
  */
 
 /** Checkouts the loop may work in. The open project, and today only that. */
+/**
+ * The root a pull request route reads or acts through.
+ *
+ * A root out of scope falls back to the open project — right for a stale path,
+ * and a confident wrong answer for `gh:owner/name`, the checkout-less root a
+ * repository with no local copy is read by (see prs.ts): it is not a path, so
+ * it is never "in scope", and the six routes below answered with the OPEN
+ * project's spend, behind-count and conflicts for a pull request of the same
+ * number in another repository. It is passed through as it is; whatever needs a
+ * working tree refuses it there, in a sentence.
+ */
+function prRouteRoot(asked: string): string {
+  if (isForeignRoot(asked)) return asked;
+  return asked && inScopeReal(asked) ? asked : (workspaceRoot() ?? process.cwd());
+}
+
 async function openProjectRepos(): Promise<string[]> {
   const paths = getChanges(300, undefined, false).map((c) => c.file_path);
   const found = await discoverRepos(paths, knownProjects().map((p) => p.path), {});
@@ -1492,7 +1516,7 @@ const BUDGET_WRITE_ENABLED = process.env.AGENTGLASS_BUDGET_WRITE_DISABLED !== "1
 // it, forgetting a device revokes its credential and leaves whatever it is
 // already holding — an event stream, a terminal — running until it disconnects
 // on its own, which is a revoke in the list and not on the wire.
-type WsData = ({ kind: "events" } | { kind: "notify" } | PtyWsData) & { ip?: string | null; deviceId?: string | null };
+type WsData = ({ kind: "events" } | { kind: "notify" } | { kind: "canvas"; handle?: CanvasHandle } | PtyWsData) & { ip?: string | null; deviceId?: string | null };
 /** The docker reads that start a process per request and have no cache or
  *  single-flight in front of them. See spawncap.ts. */
 const DOCKER_SPAWNS = new Set([
@@ -1859,7 +1883,7 @@ async function whileRefsHoldAsync(key: string, root: string, compute: () => Prom
 }
 
 const TREE_TTL_MS = 1_000;
-const treeCache = new Map<string, { at: number; data: WorkingTree }>();
+const treeCache = new Map<string, { at: number; text: string; sig: string }>();
 // The worktree panel is the heaviest git poll (a list plus base/behind/dirty per
 // checkout). Its inner reads are cached and family-shared now, but the assembled
 // answer had no cache of its own — so every poll of every open tab still rebuilt
@@ -2058,6 +2082,9 @@ setTaskChangeHook(() => broadcast({ type: "tasks" }));
 // the panel is not necessarily open — so it is pushed, like everything else
 // that happens without the user asking.
 setReminderHook(() => broadcast({ type: "tasks" }));
+// Every way the pending list changes (a hold arrives, is decided, times out, or a
+// rule answers it) rings the clients, so they re-read it instead of polling.
+onGateChange(() => broadcast({ type: "gate" }));
 // Let the git layer ask what a branch's pull request says its base is. Wired
 // here rather than imported there, because gitwork must not depend on the
 // pull-request layer — same reason as the two hooks above. Reads the PR list
@@ -2335,9 +2362,17 @@ function pushOpenTools() {
   const open = openToolCalls();
   if (!open.length && !lastOpenCount) return;
   lastOpenCount = open.length;
-  broadcast({ type: "openTools", data: withEvidence(open) });
+  const data = withEvidence(open);
+  /* Only when the list, evidence included, differs from the last one sent:
+     with a call open, 15 byte-identical frames a minute went to every client
+     (measured). A client that connects later gets the list in `initial`. */
+  const sig = JSON.stringify(data);
+  if (sig === lastOpenSent) return;
+  lastOpenSent = sig;
+  broadcast({ type: "openTools", data });
 }
 let lastOpenCount = 0;
+let lastOpenSent = "";
 /**
  * How often the verdict is re-read.
  *
@@ -2803,6 +2838,14 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     // so without this any page in the user's browser could open a socket to
     // localhost and read the whole fleet's prompts, paths and errors as they
     // stream — a read this feed is not meant to give to the open web.
+    // Every live panel's scene, over ONE private socket (plugin-canvas.ts).
+    // Gated like /plugins/panels: FULL_GET for scope, a plugin's own token
+    // refused by kind, and the same origin check as /stream.
+    if (pathname === "/plugins/panels/live") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      if (srv.upgrade(req, { data: { kind: "canvas", ip: clientIp ?? null, deviceId: caller?.device?.id ?? null } })) return undefined as unknown as Response;
+      return new Response("upgrade failed", { status: 426 });
+    }
     if (pathname === "/stream") {
       if (!trustedCaller(req, from)) return csrfBlocked();
       if (srv.upgrade(req, { data: { kind: "events", ip: clientIp ?? null, deviceId: caller?.device?.id ?? null } })) return undefined as unknown as Response;
@@ -4979,7 +5022,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      * privileged as git write or docker control, which is what it is.
      */
     if (pathname === "/plugins" && req.method === "GET") {
-      return json({ master: masterEnabled(), plugins: listPlugins() });
+      return json({ master: masterEnabled(), envAllowsUnboxed: envAllowsUnboxed(), plugins: listPlugins({ keyExposure: pluginOfRequest(req, url) === null }) });
     }
 
     if (pathname === "/plugins/master" && req.method === "POST") {
@@ -4987,7 +5030,11 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       let b: { enabled?: unknown };
       try { b = (await req.json()) as { enabled?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       if (typeof b.enabled !== "boolean") return json({ ok: false, error: "enabled must be a boolean" }, 400);
-      await setMaster(b.enabled);
+      try {
+        await setMaster(b.enabled);
+      } catch (e) {
+        return json({ ok: false, error: failed("plugins/master", e, b.enabled ? "the master switch was not changed: it could not be saved, try again" : "plugins are stopped, but the switch-off could not be saved, so they come back at the next start") }, 500);
+      }
       return json({ ok: true, master: b.enabled });
     }
 
@@ -5053,8 +5100,12 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // because a missing or malformed field defaulting to GRANT is the
       // wrong failure direction for exactly this switch.
       if (typeof b.allow !== "boolean") return json({ ok: false, error: "allow must be true or false" }, 400);
-      const r = await setPluginUnboxedConsent(b.name, b.allow);
-      return json(r, r.ok ? 200 : 400);
+      try {
+        const r = await setPluginUnboxedConsent(b.name, b.allow);
+        return json(r, r.ok ? 200 : 400);
+      } catch (e) {
+        return json({ ok: false, error: failed("plugins/allow-unboxed", e, "the plugin could not be started or stopped after the change; refresh to see where it stands") }, 500);
+      }
     }
 
     if (pathname === "/plugins/disable" && req.method === "POST") {
@@ -5062,8 +5113,12 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       let b: { name?: unknown };
       try { b = (await req.json()) as { name?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       if (typeof b.name !== "string" || !b.name) return json({ ok: false, error: "name is required" }, 400);
-      const ok = await disablePlugin(b.name);
-      return json({ ok }, ok ? 200 : 404);
+      try {
+        const ok = await disablePlugin(b.name);
+        return json({ ok }, ok ? 200 : 404);
+      } catch (e) {
+        return json({ ok: false, error: failed("plugins/disable", e, "the plugin is stopped, but the switch-off could not be saved, so it comes back at the next start") }, 500);
+      }
     }
 
     if (pathname === "/plugins/remove" && req.method === "POST") {
@@ -5071,8 +5126,12 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       let b: { name?: unknown; dropSettings?: unknown };
       try { b = (await req.json()) as { name?: unknown; dropSettings?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       if (typeof b.name !== "string" || !b.name) return json({ ok: false, error: "name is required" }, 400);
-      const ok = await removePlugin(b.name, { dropSettings: b.dropSettings === true });
-      return json({ ok }, ok ? 200 : 404);
+      try {
+        const ok = await removePlugin(b.name, { dropSettings: b.dropSettings === true });
+        return json({ ok }, ok ? 200 : 404);
+      } catch (e) {
+        return json({ ok: false, error: failed("plugins/remove", e, "the plugin was not removed: its key could not be revoked or the change could not be saved, try again") }, 500);
+      }
     }
 
     /**
@@ -5089,18 +5148,28 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const self = pluginOfRequest(req, url);
       if (!self) return json({ ok: false, error: "only a running plugin has a self — this needs its own token" }, 403);
       const c = contributesOf(self);
-      const body = async <T,>(): Promise<T | null> => { try { return (await req.json()) as T; } catch { return null; } };
+      // Read with a ceiling before it is parsed, like the canvas routes: the
+      // only cap there used to be Bun's 32 MB for the whole server.
+      const body = async <T,>(): Promise<T | null> => { const r = await readBoundedJson(req, 4 * 1024 * 1024); return r.ok ? (r.value as T) : null; };
 
       if (pathname === "/plugin/self" && req.method === "GET") {
-        return json({ ok: true, name: self, contributes: c, settings: pluginSettings(self)?.values ?? {} });
+        return json({ ok: true, name: self, contributes: c, settings: pluginOwnSettings(self) });
       }
       if (pathname === "/plugin/self/events" && req.method === "GET") {
         const wait = Math.max(0, Math.min(30_000, Number(url.searchParams.get("wait") ?? 25_000) || 0));
         return json({ ok: true, events: await takeEvents(self, wait) });
       }
       if (req.method !== "POST") return json({ ok: false, error: "not found" }, 404);
+      // Operations on a live canvas (plugin-canvas.ts does all of it).
+      const ops = pathname.match(new RegExp(`^/plugin/self/panel/(${PANEL_ID_RE.source.slice(1, -1)})/ops$`));
+      if (ops) {
+        const r = await handleCanvasOps(self, c, ops[1]!, req, () => pluginOfRequest(req, url) === self);
+        return json(r.body, r.status);
+      }
       if (pathname === "/plugin/self/panel") {
-        const b = await body<{ id?: unknown; tree?: unknown }>();
+        const raw = await readBoundedJson(req, 1_000_000);
+        if (!raw.ok) return json({ ok: false, error: raw.error }, raw.status);
+        const b = raw.value as { id?: unknown; tree?: unknown } | null;
         if (!b || typeof b.id !== "string") return json({ ok: false, error: "id and tree are required" }, 400);
         const r = setPanel(self, c, b.id, b.tree);
         return json(r, r.ok ? 200 : 400);
@@ -5109,6 +5178,12 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         const b = await body<{ key?: unknown; options?: unknown }>();
         if (!b || typeof b.key !== "string") return json({ ok: false, error: "key and options are required" }, 400);
         const r = setOptions(self, c, b.key, b.options);
+        return json(r, r.ok ? 200 : 400);
+      }
+      if (pathname === "/plugin/self/inbox/annotations") {
+        const b = await body<{ items?: unknown; replace?: unknown }>();
+        if (!b) return json({ ok: false, error: "invalid json" }, 400);
+        const r = setAnnotations(self, c, b);
         return json(r, r.ok ? 200 : 400);
       }
       if (pathname === "/plugin/self/settings" && req.method === "POST") {
@@ -5387,6 +5462,12 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     // `force=1` is the Recheck button, which is the only reason a caller would
     // want to pay for the probes again inside the cache window.
     if (pathname === "/dependencies") return json(await dependencyReport(url.searchParams.get("force") === "1"));
+    // The focused pane's checkout alone, fresh: the terminal's pill polls this
+    // instead of the list below, whose cache is why it trailed a change by 15 s.
+    if (pathname === "/git/repo") {
+      const root = url.searchParams.get("root") || "";
+      return body(await singleFlight(`repo:${root}`, async () => JSON.stringify({ repo: await repoNow(root) })));
+    }
     if (pathname === "/git/repos") {
       // `all=1` is the project picker: it needs to see past the open projects,
       // or there'd be no way out. It lists what is under the folders the person
@@ -5450,14 +5531,30 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // The 1s cache handles the 2.5s re-poll; single-flight handles the tabs
       // that miss it together. workingTree is four git reads on the loop, so
       // one caller doing them for all is the difference under a fan-out.
-      return body(await singleFlight(`tree:${root}`, async () => {
+      const text = await singleFlight(`tree:${root}`, async () => {
         const hit = treeCache.get(root);
-        if (hit && Date.now() - hit.at < TREE_TTL_MS * backoff()) return JSON.stringify(hit.data);
+        if (hit && Date.now() - hit.at < TREE_TTL_MS * backoff()) return hit.text;
         const data = await workingTree(root);
+        /* A signature of what the tree SAYS, not of when it was read. Every file
+           carries `timestamp: now`, so two reads of an unchanged tree differed
+           byte for byte: measured at 24 requests a minute of 100% identical
+           answers that no ETag or hash could ever match. The stamp stays (the
+           type asks for it) and is left out of the signature. The poll cadence
+           is unchanged: the doorbell does not ring for an edit made on disk, so
+           this poll is the only way such an edit shows up. */
+        const sig = Bun.hash(JSON.stringify(data, (k, v) => (k === "timestamp" ? undefined : v))).toString(36);
+        const out = JSON.stringify({ ...data, sig });
         if (treeCache.size > 40) treeCache.clear();
-        treeCache.set(root, { at: Date.now(), data });
-        return JSON.stringify(data);
-      }));
+        treeCache.set(root, { at: Date.now(), text: out, sig });
+        return out;
+      });
+      const sig = treeCache.get(root)?.sig;
+      if (sig && req.headers.get("if-none-match") === `"${sig}"`) {
+        return new Response(null, { status: 304, headers: { ETag: `"${sig}"`, ...cors } });
+      }
+      return new Response(text, {
+        headers: { "content-type": "application/json", ...cors, ...(sig ? { ETag: `"${sig}"`, "Cache-Control": "no-cache" } : {}) },
+      });
     }
     /*
      * The rebuilt Diff view, in two halves.
@@ -5907,6 +6004,9 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         limit: Number(url.searchParams.get("limit") || 60),
       }));
     }
+    if (pathname === "/issues/counts") {
+      return json(await issueCounts(url.searchParams.get("root") || ""));
+    }
     if (pathname === "/issues/detail") {
       return json(await issueDetail(url.searchParams.get("root") || "", url.searchParams.get("number")));
     }
@@ -6230,7 +6330,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // vets one: a path outside the configured scope is refused rather than
       // corrected, and `gh` then runs where the app already lives.
       const asked = url.searchParams.get("root") ?? "";
-      const root = asked && inScopeReal(asked) ? asked : (workspaceRoot() ?? process.cwd());
+      const root = prRouteRoot(asked);
       const r = await cardPullRequests(
         url.searchParams.get("card") ?? "",
         url.searchParams.get("field") ?? undefined,
@@ -6423,6 +6523,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         : pathname === "/clickup/writes" ? (setWritesAllowed(b.on === true), { ok: true })
         : null;
       if (!r) return json({ ok: false, error: "not found" }, 404);
+      if (r.ok && "task" in r && r.task) patchCachedTask(r.task);
       return json(r, r.ok ? 200 : ("conflict" in r && r.conflict) ? 409 : 400);
     }
     if (pathname === "/tasks/provider") {
@@ -6577,6 +6678,12 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      * Behind the same switch as directory browsing: turning that off must not
      * leave a second door standing. */
     if (pathname === "/browse" || pathname.startsWith("/preview/")) {
+      /* "local" opens dotted folders and the agentglass config folder, so it is judged
+         like the tokenless sinks: a direct loopback socket AND not another OS
+         user on this box (sinkFrom). With a token every route here needs it, but
+         the zero-config server has none, and the token file's 0600 is then the
+         only thing that kept another account out. */
+      const localBrowse = peer.source === "socket" && !!clientIp && isLoopback(clientIp) && sinkFrom === "loopback";
       if (!FS_BROWSE_ENABLED) return json({ error: "directory browsing is disabled (AGENTGLASS_FS_BROWSE_DISABLED=1)" }, 403);
       if (req.method === "GET" && heldBackFrom(caller, [url.searchParams.get("path") || ""].filter(Boolean))) return json(HELD_BACK, 403);
       /* Handing a file to the desktop starts a process, so it takes the same
@@ -6585,14 +6692,25 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         if (!trustedCaller(req, from)) return csrfBlocked();
         let b: { path?: unknown } = {};
         try { b = (await req.json()) as { path?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
-        const r = openInDesktop(b?.path);
+        const r = openInDesktop(b?.path, localBrowse);
         return json(r, r.ok ? 200 : 400);
       }
-      if (pathname === "/browse") return json(browseDir(url.searchParams.get("path") || ""));
-      if (pathname === "/preview/facts") return json(fileFacts(url.searchParams.get("path") || ""));
-      if (pathname === "/preview/raw") {
-        const r = await fileBytes(url.searchParams.get("path") || "");
+      if (pathname === "/preview/reveal" && req.method === "POST") {
+        if (!trustedCaller(req, from)) return csrfBlocked();
+        let b: { path?: unknown } = {};
+        try { b = (await req.json()) as { path?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+        const r = revealInFileManager(b?.path, localBrowse);
+        return json(r, r.ok ? 200 : 400);
+      }
+      if (pathname === "/browse") return json(browseDir(url.searchParams.get("path") || "", url.searchParams.get("hidden") === "1", localBrowse));
+      if (pathname === "/preview/facts") return json(fileFacts(url.searchParams.get("path") || "", localBrowse));
+      if (pathname === "/preview/git") return json(fileGitFacts(url.searchParams.get("path") || "", localBrowse));
+      if (pathname === "/preview/raw" || pathname === "/preview/page") {
+        const r = await fileBytes(url.searchParams.get("path") || "", localBrowse);
         if (!r.ok) return json({ error: r.error }, 404);
+        /* `page` is for a browser tab rather than an <img>: an .html file is
+           served as a page, inert (see pagePolicy), where `raw` calls it text. */
+        const page = pathname === "/preview/page" ? pagePolicy(url.searchParams.get("path") || "") : null;
         return new Response(r.body, {
           headers: {
             /*
@@ -6606,13 +6724,13 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
              * cross-origin response, reported to the page as nothing at all.
              */
             ...cors,
-            "content-type": r.mime,
+            "content-type": page?.mime ?? r.mime,
             // A preview is a picture of a file on this machine at this moment;
             // caching it is how a screenshot you just retook shows the old one.
             "cache-control": "no-store",
             // It is a file the user pointed at, and it is served as bytes to be
             // drawn — never as a document with a script in it.
-            "content-security-policy": "default-src 'none'; img-src 'self' data: blob:; style-src 'unsafe-inline'",
+            "content-security-policy": page?.csp ?? "default-src 'none'; img-src 'self' data: blob:; style-src 'unsafe-inline'",
             "x-content-type-options": "nosniff",
           },
         });
@@ -6623,7 +6741,10 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     // Single-flighted alongside the git reads: `docker ps`/`docker stats` are
     // slow spawns (seconds each) behind a short cache, and several tabs missing
     // that cache together would each launch one. One sample now serves them all.
-    if (pathname === "/docker/overview") return body(await singleFlight("docker:overview", async () => JSON.stringify(await dockerOverview())));
+    if (pathname === "/docker/overview") {
+      const fresh = url.searchParams.get("fresh") === "1";
+      return body(await singleFlight(`docker:overview:${fresh}`, async () => JSON.stringify(await dockerOverview(fresh))));
+    }
     if (pathname === "/docker/stats") {
       // Sample what the panel is showing. The overview is cached and scoped, so
       // this costs nothing extra and keeps the two answers about the same set of
@@ -6920,7 +7041,10 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      * a comment and an issue that is not a pull request.
      */
     if (pathname === "/prs/inbox") {
-      return json(await inbox(url.searchParams.get("unread") !== "1", url.searchParams.get("force") === "1"));
+      const page = await inbox(url.searchParams.get("unread") !== "1", url.searchParams.get("force") === "1");
+      // What plugins say about the rows is added here, after the cache, so a
+      // plugin's word is never frozen into the page GitHub sent.
+      return json({ ...page, items: annotate(page.items) });
     }
     if (pathname === "/prs/inbox/act" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();
@@ -6944,7 +7068,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       if (!trustedCaller(req, from)) return csrfBlocked();
       const b = await req.json().catch(() => ({})) as Record<string, unknown>;
       const asked = String(b.root ?? "");
-      const root = asked && inScopeReal(asked) ? asked : (workspaceRoot() ?? process.cwd());
+      const root = prRouteRoot(asked);
       const number = Number(b.number ?? 0);
       const pr = await prBranches(root, number);
       if (!pr) return json({ ok: false, error: "could not read that pull request's branches" });
@@ -6955,7 +7079,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
        untouched. */
     if (pathname === "/prs/conflict-files") {
       const asked = url.searchParams.get("root") ?? "";
-      const root = asked && inScopeReal(asked) ? asked : (workspaceRoot() ?? process.cwd());
+      const root = prRouteRoot(asked);
       const number = Number(url.searchParams.get("number") ?? 0);
       const pr = await prBranches(root, number);
       if (!pr) return json({ ok: false, conflicts: [], clean: false, error: "could not read that pull request's branches" });
@@ -6968,7 +7092,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
        about an AUTHOR and this question is about a branch. */
     if (pathname === "/prs/for-branch") {
       const asked = url.searchParams.get("root") ?? "";
-      const root = asked && inScopeReal(asked) ? asked : (workspaceRoot() ?? process.cwd());
+      const root = prRouteRoot(asked);
       return json(await prsForBranch(root, url.searchParams.get("branch") ?? ""));
     }
     /*
@@ -6988,8 +7112,40 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     /* The truth about one pull request's checks — see prRollup. The list's own
        rollup counts a re-run's old attempt beside the new one, and a card
        cannot tell without asking. */
+    /* "Tell me when this pull request's CI does X" — the rules and the repo
+       defaults, kept server side so they outlive the window. See prNotifyWatch.ts. */
+    if (pathname === "/prs/notify-watch" && req.method === "GET") return json({ ok: true, ...listWatches() });
+    // Fires decided while no client was there to hear them, oldest first — for the window on connect and for a phone.
+    if (pathname === "/prs/notify-watch/pending" && req.method === "GET") return json({ ok: true, fires: pendingFires() });
+    if (pathname.startsWith("/prs/notify-watch/") && req.method === "POST") {
+      if (!trustedCaller(req, from)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      if (pathname === "/prs/notify-watch/remove") return json(removeWatch(String(b.id ?? "")));
+      if (pathname === "/prs/notify-watch/ack") return json(ackFire(Number(b.seq)));
+      const id = await prRepoIdFor(b.root);
+      if (!id) return json({ ok: false, error: "no GitHub remote here" }, 400);
+      const ctx = { repo: id.nameWithOwner, number: Number(b.number), root: String(b.root), title: String(b.title ?? "") };
+      if (pathname === "/prs/notify-watch/add") {
+        const r = addWatch({ ...ctx, rule: b.rule });
+        if (r.ok) prNotifyKick();
+        return json(r, r.ok ? 200 : 400);
+      }
+      if (pathname === "/prs/notify-watch/apply") {
+        const r = applyPreset(ctx);
+        if (r.ok) prNotifyKick();
+        return json(r, r.ok ? 200 : 400);
+      }
+      if (pathname === "/prs/notify-watch/default") return json(setPreset(id.nameWithOwner, b.rules, b.auto === true));
+      return json({ ok: false, error: "not found" }, 404);
+    }
+    /* Per check key on this repository: run count, median, p90, failure rate and
+       a 14-day trend, from the history the checks reads already fill. Local: no GitHub call. */
+    if (pathname === "/prs/check-metrics") {
+      const id = await prRepoIdFor(url.searchParams.get("root") || "");
+      return json(id ? { ok: true, repo: id.key, checks: repoMetrics(id.key) } : { ok: false, error: "no GitHub remote here" });
+    }
     if (pathname === "/prs/rollup") {
-      return json(await prRollup(url.searchParams.get("root") || "", url.searchParams.get("number") || 0));
+      return json(await prRollup(url.searchParams.get("root") || "", url.searchParams.get("number") || 0, url.searchParams.get("force") === "1"));
     }
     if (pathname === "/prs/local-head") {
       return json({ ok: true, local: await localHead(
@@ -6999,8 +7155,8 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     }
     if (pathname === "/prs/behind") {
       const asked = url.searchParams.get("root") ?? "";
-      const root = asked && inScopeReal(asked) ? asked : (workspaceRoot() ?? process.cwd());
-      return json(await branchBehind(root, Number(url.searchParams.get("number") ?? 0)));
+      const root = prRouteRoot(asked);
+      return json(await branchBehind(root, Number(url.searchParams.get("number") ?? 0), url.searchParams.get("force") === "1"));
     }
     /* What this project's agents have spent, by branch and by checkout — the
        whole repository in one answer, because the board looks its rows up in it
@@ -7009,7 +7165,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
        on a repository the cockpit is not showing. See spend.ts. */
     if (pathname === "/prs/spend") {
       const asked = url.searchParams.get("root") ?? "";
-      const root = asked && inScopeReal(asked) ? asked : (workspaceRoot() ?? process.cwd());
+      const root = prRouteRoot(asked);
       return json(await repoSpend(root));
     }
     /* Where this app keeps things, and for how long — read by Settings →
@@ -7031,14 +7187,17 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // A real client just asked for this — worth re-asking on a timer even
       // while nobody is on this tab. See prWatch.ts.
       noteWatchAsk(root, filter, state);
-      return json(await listPrs(
+      const listed = await listPrs(
         root,
         filter,
         state,
         url.searchParams.get("force") === "1",
         url.searchParams.get("after") || undefined,
         url.searchParams.get("q") || undefined,
-      ));
+      );
+      // Only an unpaged, unfiltered read is the whole list: a later page's PRs are old, not new.
+      if (!url.searchParams.get("after") && !url.searchParams.get("q")) noteMine(root, filter, state, listed);
+      return json(listed);
     }
     /* Which files moved between two commits of this pull request — see filesSince.
        A GET because it reads, and cached by the client against the pair of shas: the
@@ -7071,6 +7230,19 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
     }
     if (pathname === "/prs/job-log") {
       return json(await jobLog(url.searchParams.get("root") || "", url.searchParams.get("job") || ""));
+    }
+    if (pathname === "/prs/failing-tests") {
+      return json(await failingTestsFor(url.searchParams.get("root") || "", url.searchParams.get("refresh") === "1"));
+    }
+    if (pathname === "/prs/check-failures-cached") {
+      return json(await cachedCheckFailures(url.searchParams.get("root") || "", url.searchParams.get("jobs") || ""));
+    }
+    if (pathname === "/prs/check-failures") {
+      return json(await checkFailures(
+        url.searchParams.get("root") || "", url.searchParams.get("job") || "",
+        { attempt: url.searchParams.get("attempt"), step: url.searchParams.get("step") },
+        url.searchParams.get("force") === "1",
+      ));
     }
     if (pathname === "/prs/check-jobs") {
       return json(await checkJobs(url.searchParams.get("root") || "", url.searchParams.get("number") || ""));
@@ -7140,7 +7312,15 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       ));
     }
     if (pathname === "/prs/diff") {
-      return json(await prDiff(url.searchParams.get("root") || "", url.searchParams.get("number") || "", url.searchParams.get("force") === "1"));
+      const d = await prDiff(url.searchParams.get("root") || "", url.searchParams.get("number") || "", url.searchParams.get("force") === "1");
+      /* A diff past its 5 minute copy is re-read and, unchanged, was sent whole
+         again (27.8 KB measured on a 12-file pull request). Its content is its
+         tag, so the browser's own revalidation answers a 304. */
+      const tag = d.ok && d.text ? `"${Bun.hash(d.text).toString(36)}"` : "";
+      if (tag && req.headers.get("if-none-match") === tag) return new Response(null, { status: 304, headers: { ETag: tag, ...cors } });
+      return new Response(JSON.stringify(d), {
+        headers: { "content-type": "application/json", ...cors, ...(tag ? { ETag: tag, "Cache-Control": "no-cache" } : {}) },
+      });
     }
     // Images in a PR body. Not JSON — it streams the bytes back, because
     // GitHub's own attachment URLs 404 without the token this attaches.
@@ -8174,9 +8354,9 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       }
     }
 
-    if (pathname === "/terminal/tmux/windows") {
+    if (pathname === "/terminal/tmux/windows" && req.method === "GET") {
       const name = String(url.searchParams.get("session") ?? "");
-      if (!validPaneName(name)) return json({ ok: false, error: "invalid session" }, 400);
+      if (!validSessionName(name)) return json({ ok: false, error: "invalid session" }, 400);
       return json({ ok: true, windows: await windowTree(name) });
     }
 
@@ -8185,9 +8365,13 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const name = String(b.session ?? "");
-      if (!validPaneName(name)) return json({ ok: false, error: "invalid session" }, 400);
-      const cwd = gitSafeAbs(b.cwd);
-      if (!cwd || !fsExists(cwd)) return json({ ok: false, error: "that directory is not available" }, 400);
+      if (!validSessionName(name)) return json({ ok: false, error: "invalid session" }, 400);
+      // A directory is only for a window or pane that STARTS somewhere. Closing
+      // or renaming one needs none, and asking for it made a window whose
+      // checkout had since been deleted impossible to close.
+      const needsCwd = b.op === "new" || b.op === "split";
+      const cwd = (needsCwd ? gitSafeAbs(b.cwd) : "") ?? "";
+      if (needsCwd && (!cwd || !fsExists(cwd))) return json({ ok: false, error: "that directory is not available" }, 400);
       let res: { ok: boolean; stdout: string; stderr: string };
       switch (b.op) {
         case "new":
@@ -8674,6 +8858,13 @@ const server = Bun.serve<WsData>({
         ptyOpen(ws);
         return;
       }
+      if (ws.data?.kind === "canvas") {
+        // Alive from the start, like the pty: a window that is only listening
+        // sends nothing, and the sweep would otherwise call it frozen.
+        alive.set(ws, Date.now());
+        (ws.data as { handle?: CanvasHandle }).handle = new CanvasHandle({ send: (t) => ws.send(t), buffered: () => ws.getBufferedAmount() });
+        return;
+      }
       if (ws.data?.kind === "notify") {
         notifySubs.set(ws, subscribeNotifications((n) => {
           try { ws.send(JSON.stringify(n)); } catch { /* closing */ }
@@ -8681,6 +8872,7 @@ const server = Bun.serve<WsData>({
         return;
       }
       clients.add(ws);
+      autoFetchWhenSomeoneComes();
       // Alive from the moment it connects, so the first alert after a page load
       // is never mistaken for a frozen peer and answered with notify-send as
       // well. The sweep has 30 seconds to disagree.
@@ -8712,6 +8904,7 @@ const server = Bun.serve<WsData>({
       alive.delete(ws);
       noteSocket(ws.data?.ip, -1);
       if (ws.data?.kind === "pty") { ptyClose(ws); return; }
+      if (ws.data?.kind === "canvas") { (ws.data as { handle?: CanvasHandle }).handle?.close(); return; }
       if (ws.data?.kind === "notify") {
         // Unsubscribing is what stops the monitor process once the last
         // listener goes, so this must run on every close path.
@@ -8729,6 +8922,7 @@ const server = Bun.serve<WsData>({
       // pty this is a keystroke or a resize, not just the event stream.
       alive.set(ws, Date.now());
       if (ws.data?.kind === "pty") { ptyMessage(ws, msg as string | Buffer); return; }
+      if (ws.data?.kind === "canvas") { (ws.data as { handle?: CanvasHandle }).handle?.message(msg as string | Buffer); return; }
       if (ws.data?.kind === "events" && typeof msg === "string" && msg.length < 512 && msg.startsWith("{")) {
         let f: { type?: unknown; clientId?: unknown; browser?: unknown } = {};
         try { f = JSON.parse(msg); } catch { return; }
@@ -8754,6 +8948,10 @@ const server = Bun.serve<WsData>({
      *  also gets this from every keystroke, above. */
     pong(ws: ServerWebSocket<WsData>) {
       alive.set(ws, Date.now());
+    },
+    /** A canvas socket that was behind has emptied its buffer. */
+    drain(ws: ServerWebSocket<WsData>) {
+      if (ws.data?.kind === "canvas") (ws.data as { handle?: CanvasHandle }).handle?.drain();
     },
   },
 });
@@ -9408,14 +9606,41 @@ startPricingRefresh();
 const ws = workspaceRoots();
 console.log(ws.length ? `   Project     → ${ws.join(", ")} (${ws.length === 1 ? "this project" : "these projects"} only)` : "   Project     → every project on this machine");
 // Only meaningful once a project is open — see startAutoFetch().
+setAutoFetchAudience(() => clients.size > 0);
 startAutoFetch();
 // A pull request's checks finished. The latch is on the server so the message
 // arrives once per verdict no matter how many browser tabs are watching, and
 // the frame carries the names of what failed rather than only a count.
 subscribeCi((v) => broadcast({ type: "ci", data: v }));
+/* The notify watches: any change sends the whole (small) list, a firing sends
+   one frame, and the CI tick reads through prRollup — see prNotifyWatch.ts. */
+/** Your open PRs a list read returned — the auto-apply of a repo's default rules. */
+function noteMine(root: string, filter: string, state: string, r: { repo: { nameWithOwner: string } | null; prs: { number: number; title: string }[] }): void {
+  if (filter !== "mine" || state !== "open" || !r.repo) return;
+  try { sawMine(r.repo.nameWithOwner, root, r.prs); } catch { /* a bookkeeping failure must not fail a list */ }
+}
+// A comment watch is a promise to be told: it reads every remark list the poll sees, before any latch or read mark.
+subscribeTalkSeen(watchOnTalkSeen);
+subscribeWatchChange(() => broadcast({ type: "prwatch", data: listWatches() }));
+subscribeWatchFire((f) => broadcast({ type: "prwatchfire", data: f }));
+subscribeWatchChecks((c) => broadcast({ type: "prchecks", data: c }));
+const prNotifyKick = process.env.NODE_ENV === "test" ? () => {} : startPrNotifyWatch(async (root, number) => {
+  const r = await prRollup(root, number);
+  if (!(r.ok && r.checks && r.all)) return null;
+  // Past 100 contexts `all` is only the first page: never conclude "all done" from it.
+  const complete = !r.truncated;
+  return { checks: complete ? r.checks : undefined, allDone: r.checks.allDone && complete, verdict: complete ? r.checks.verdict : null, all: r.all, state: r.state };
+}).kick;
 // A plugin drew something, or wrote notes on a pull request. The frame says
 // only where to look again; what was drawn is fetched over the token.
 setPluginUiHook((f) => broadcast({ type: "plugin", data: f }));
+// Which panels are live canvases of an enabled plugin, for the window's socket
+// (plugin-canvas.ts). Read from the registry each time: an approval that was
+// withdrawn or a plugin that was stopped is the answer, not a cached one.
+setCanvasResolver((plugin, panel) => {
+  const p = listPlugins().find((x) => x.name === plugin);
+  return { canvas: !!p?.enabled && isCanvasPanel(p.contributes, panel), running: !!p && isRunning(plugin) };
+});
 // Plugins that were on before this server went down come back with fresh
 // tokens. After the listener, so their first request finds a server.
 void resumeEnabledPlugins().then((names) => { if (names.length) console.log(`   Plugins     → ${names.join(", ")}`); });
@@ -9470,7 +9695,7 @@ if (process.env.NODE_ENV !== "test") {
   startPrWatch({
     liveClients: () => clients.size,
     // A root that no longer resolves rejects; a timer has nobody to tell.
-    relist: (root, filter) => { void listPrs(root, filter, "open").catch(() => {}); },
+    relist: (root, filter) => { void listPrs(root, filter, "open").then((r) => noteMine(root, filter, "open", r)).catch(() => {}); },
   });
 }
 /* The Lantern's watch: the field re-read every N minutes, a loud word when

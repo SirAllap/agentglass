@@ -4,18 +4,17 @@
 // context drops to canvas — not DOM — so nobody who hit the white-out once is
 // stranded on the slow renderer. These pin that table down by faking
 // navigator.userAgent and localStorage.
-import { test, expect, beforeEach } from "bun:test";
+import { test, expect, beforeEach, afterAll } from "bun:test";
+import { globalStubs } from "./stubGlobal";
+const stubGlobal = globalStubs();
 
 let store: Record<string, string> = {};
 function mockEnv(userAgent: string) {
-  Object.defineProperty(globalThis, "navigator", { value: { userAgent }, configurable: true });
-  Object.defineProperty(globalThis, "localStorage", {
-    configurable: true,
-    value: {
-      getItem: (k: string) => (k in store ? store[k] : null),
-      setItem: (k: string, v: string) => { store[k] = v; },
-      removeItem: (k: string) => { delete store[k]; },
-    },
+  stubGlobal("navigator", { userAgent });
+  stubGlobal("localStorage", {
+    getItem: (k: string) => (k in store ? store[k] : null),
+    setItem: (k: string, v: string) => { store[k] = v; },
+    removeItem: (k: string) => { delete store[k]; },
   });
 }
 
@@ -26,6 +25,8 @@ const MAC = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) AppleWebKit/537.36 Ch
 const WIN = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120";
 
 beforeEach(() => { store = {}; __resetRendererSession(); });
+// The latch is module state, and the last test here may leave it set.
+afterAll(__resetRendererSession);
 
 test("auto turns WebGL off on Linux (canvas takes over, not DOM)", () => {
   mockEnv(LINUX);

@@ -27,6 +27,7 @@ import { test, expect, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 const SOCKET = `agx-wins-test-${process.pid}`;
 process.env.AGENTGLASS_TMUX_SOCKET = SOCKET;
@@ -73,12 +74,14 @@ afterAll(async () => {
   try { rmSync(process.env.AGENTGLASS_STATE_DIR!, { recursive: true, force: true }); } catch { /* never made */ }
 });
 
-test("three windows go into the photograph", async () => {
+const step = story();
+
+step("three windows go into the photograph", async () => {
   await restore.captureLayout();
   expect(windowsRecorded().sort()).toEqual(["one", "three", "two"]);
 });
 
-test("a photograph taken before the restore has run cannot shrink a session", async () => {
+step("a photograph taken before the restore has run cannot shrink a session", async () => {
   /*
    * THE MORNING, REPRODUCED. Two windows disappear — the tmux server died and
    * came back with one — and the sweeper fires before anything has put the
@@ -94,7 +97,7 @@ test("a photograph taken before the restore has run cannot shrink a session", as
     .toEqual(["one", "three", "two"]);
 });
 
-test("and the restore builds the windows the live session is missing", async () => {
+step("and the restore builds the windows the live session is missing", async () => {
   /*
    * `has-session` said yes, so the old code skipped the session whole. The
    * session was there; five sixths of it was not.
@@ -105,7 +108,7 @@ test("and the restore builds the windows the live session is missing", async () 
     .toEqual(["one", "three", "two"]);
 });
 
-test("once the desk has been put back, closing a tab really closes it", async () => {
+step("once the desk has been put back, closing a tab really closes it", async () => {
   /*
    * The other direction, and it matters as much: after the restore has had its
    * go, a shrinking photograph means a person closed something, and bringing
@@ -116,7 +119,7 @@ test("once the desk has been put back, closing a tab really closes it", async ()
   expect(windowsRecorded().sort()).toEqual(["one", "two"]);
 });
 
-test("a boot that says it is not re-capturing does not re-capture", async () => {
+step("a boot that says it is not re-capturing does not re-capture", async () => {
   /*
    * The message printed on a crash-loop boot promises the saved layout is left
    * untouched, and then the ten second sweeper photographed the crash-loop
@@ -136,7 +139,7 @@ test("a boot that says it is not re-capturing does not re-capture", async () => 
   }
 });
 
-test("a restore that blows up leaves the record protected, not settled", async () => {
+step("a restore that blows up leaves the record protected, not settled", async () => {
   /*
    * THE QUESTION THIS ANSWERS, asked in these words: if the restore takes
    * longer than it should, can the photograph every ten seconds overwrite and

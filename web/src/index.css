@@ -496,6 +496,11 @@
 }
 .agx-market-row { transition: background-color 120ms ease; }
 .agx-market-row:hover { background: color-mix(in srgb, var(--text) 3.5%, transparent); }
+/* A row or segment in the file palette that is a button: the same 6% text tint
+   the app's other hovers use, and nothing else moves. */
+.agx-pal-hit { transition: background-color 120ms ease; }
+.agx-pal-hit:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
+@media (prefers-reduced-motion: reduce) { .agx-pal-hit { transition: none; } }
 .agx-market-tile { transition: transform 120ms ease, box-shadow 120ms ease; }
 .agx-market-row:hover .agx-market-tile { transform: translateY(-1px); box-shadow: var(--surface-lift); }
 @media (prefers-reduced-motion: reduce) {
@@ -1285,6 +1290,12 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
 @keyframes agx-breathe { 0%, 100% { opacity: 0.3; } 50% { opacity: 0.85; } }
 @media (prefers-reduced-motion: reduce) {
   .agx-spin { animation: agx-breathe 1.6s ease-in-out infinite; }
+}
+/* An icon that turns while its request is out (the header refresh button). The
+   same reduced-motion answer as the ring: it breathes instead of rotating. */
+.agx-turn { animation: agx-spin 0.8s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .agx-turn { animation: agx-breathe 1.6s ease-in-out infinite; }
 }
 
 /* The notification list behind the top bar's bell.
@@ -2397,4 +2408,107 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
 .agx-rail-grip:hover, .agx-rail-grip:focus-visible { background: color-mix(in srgb, var(--primary) 35%, transparent); }
 @media (prefers-reduced-motion: reduce) {
   .agx-rail-row, .agx-rail-chev { transition: none; }
+}
+
+/* A live plugin canvas (PluginCanvas.tsx). One looping motion, a busy light:
+   opacity only, 1.6s a cycle (about 0.6 Hz, far under the 3 Hz a flash may
+   reach) and never a big luminance step. The window sets data-canvas-loop on
+   the few nodes it lets loop (loopingIds), and stops them while the canvas is
+   hidden or off screen; reduced motion turns them all off here as well. */
+@keyframes agx-canvas-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+[data-canvas-loop="pulse"] { animation: agx-canvas-pulse 1.6s ease-in-out infinite; }
+.agx-canvas[data-paused="true"] [data-canvas-loop] { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) {
+  [data-canvas-loop] { animation: none; }
+}
+
+/*
+ * THE PULL-REQUEST CARD'S LAYOUT.
+ *
+ * A lane is anywhere from 268px to well over a thousand. The card measures
+ * ITSELF (a container, not the viewport — the lane's width is what changes, and
+ * it changes with the window, the fold state and the number of lanes).
+ *
+ * Narrow: identity line, then the title with the link and the pin at its end,
+ * then where it stands, what happened last, and the footer. Past 760px the
+ * standing zone and the footer become a right column, and the link and the pin
+ * move up to the identity line so the title keeps the whole of the left.
+ */
+.agx-prc { container-type: inline-size; container-name: agx-prc; }
+.agx-prc-main {
+  display: grid; align-items: center; gap: 4px 8px; padding: 8px 14px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "id id" "tt ac" "st st" "ev ev";
+}
+.agx-prc-id { grid-area: id; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; min-height: 20px; white-space: nowrap; color: var(--text3); font-size: 10.5px; }
+.agx-prc-title { grid-area: tt; align-self: start; min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.agx-prc-ac { grid-area: ac; align-self: start; display: flex; }
+.agx-prc-stand { grid-area: st; min-width: 0; }
+.agx-prc-event { grid-area: ev; }
+@container agx-prc (min-width: 760px) {
+  .agx-prc-main {
+    grid-template-columns: minmax(0, 1fr) auto 352px;
+    grid-template-areas: "id ac st" "tt tt st" "ev ev st";
+    column-gap: 8px;
+  }
+  .agx-prc-title { -webkit-line-clamp: 2; }
+  .agx-prc-stand { margin-left: 12px; }
+}
+
+/*
+ * THE TRACKER BLOCK on the identity line (CardTracker.tsx).
+ *
+ * 28px tall on one row: the 26px controls the house sizes its buttons at, and
+ * a pixel of edge either side. `margin-left: auto` pushes it to the end of the
+ * line, and when the line is too full for it the line wraps and the block takes
+ * its own, still at the end — the status inside it does not shrink to make
+ * room. In a lane too narrow for the block even alone (a 270px lane against a
+ * block that is ~340px with its faces) the block itself wraps onto a second
+ * row: measured, `flex: none` without this overflowed the card sideways.
+ *
+ * The copy buttons live in `.agx-trk-fz`, a box at least as wide as the two of
+ * them. They are invisible at rest and replace the faces in that same box on
+ * pointer-over or focus-within, so reaching for one moves nothing. Keyboard
+ * focus reaches them while they are invisible, and focus-within then shows
+ * them. Without a hover (coarse pointer) they take an inline slot instead.
+ */
+.agx-trk {
+  position: relative; display: inline-flex; align-items: center; gap: 2px 8px; flex: none; min-width: 0;
+  flex-wrap: wrap; justify-content: flex-end; max-width: 100%;
+  min-height: 28px; margin-left: auto; padding: 2px 4px 2px 8px; font-size: 10px; white-space: nowrap;
+  color: var(--text3); border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--accent, var(--primary)) 26%, transparent);
+  background: color-mix(in srgb, var(--accent, var(--primary)) 8%, var(--surface-card));
+}
+/* A tracker repository whose pull request has no card: the same box, nothing in it that is a brand. */
+.agx-trk[data-quiet] { background: transparent; border-color: transparent; }
+/* The id is a button, and says so: the underline and the stronger tint are the
+   only thing on the card that promises a click goes somewhere inside the app.
+   `!important` because the chip paints its own tint inline, from the priority. */
+.agx-trk-id:hover { text-decoration: underline; text-underline-offset: 2px;
+  background: color-mix(in srgb, currentColor 22%, transparent) !important;
+  border-color: color-mix(in srgb, currentColor 70%, transparent) !important; }
+.agx-trk-fz { position: relative; display: inline-flex; align-items: center; justify-content: flex-end; min-width: 56px; flex: none; }
+.agx-trk-faces { display: inline-flex; align-items: center; transition: opacity .12s; }
+.agx-trk-ovl { position: absolute; inset: 0; display: flex; align-items: center; justify-content: flex-end; opacity: 0; pointer-events: none; transition: opacity .12s; }
+.agx-trk:is(:hover, :focus-within) .agx-trk-faces { opacity: 0; }
+.agx-trk:is(:hover, :focus-within) .agx-trk-ovl { opacity: 1; pointer-events: auto; }
+.agx-trk-cp { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: none; border-radius: 6px; color: var(--text3); }
+.agx-trk-cp:hover { color: var(--text); background: color-mix(in srgb, var(--accent, var(--primary)) 14%, transparent); }
+.agx-trk-cp[data-copied] { color: var(--success); background: color-mix(in srgb, var(--success) 16%, transparent); }
+.agx-trk-tip {
+  display: none; position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); z-index: 5;
+  padding: 4px 8px; border-radius: 6px; font-size: 10px; white-space: nowrap; pointer-events: none;
+  background: var(--text); color: var(--bg); box-shadow: 0 4px 12px -4px rgba(0, 0, 0, .4);
+}
+/* The last button's tip hangs from its right edge: centred, it would leave the card. */
+.agx-trk-cp[data-k="name"] .agx-trk-tip { left: auto; right: 0; transform: none; }
+.agx-trk-cp:is(:hover, :focus-visible) .agx-trk-tip, .agx-trk-cp[data-copied] .agx-trk-tip { display: block; }
+@media (hover: none) and (pointer: coarse) {
+  .agx-trk-fz { min-width: 0; gap: 4px; }
+  .agx-trk-ovl { position: static; opacity: 1; pointer-events: auto; }
+  .agx-trk-faces { opacity: 1 !important; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agx-trk-faces, .agx-trk-ovl { transition: none; }
 }

@@ -1,4 +1,9 @@
 import { test, expect, describe, beforeAll } from "bun:test";
+import { globalStubs } from "./stubGlobal";
+import { stubStorage } from "./stubStorage.ts";
+const stubGlobal = globalStubs();
+
+stubStorage();
 
 // Antigravity's frames, folded into the same conversation the other two build.
 // The interesting cases are the ones where this stream differs from Codex's in
@@ -7,8 +12,7 @@ import { test, expect, describe, beforeAll } from "bun:test";
 
 let frames: typeof import("../src/lib/antigravityFrames.ts");
 beforeAll(async () => {
-  (globalThis as any).location ??= new URL("http://localhost:5173/");
-  (globalThis as any).localStorage ??= { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+  stubGlobal("location", new URL("http://localhost:5173/"));
   frames = await import("../src/lib/antigravityFrames.ts");
 });
 

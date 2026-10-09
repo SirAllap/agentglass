@@ -13,7 +13,9 @@
  * when the scorecard does, and a frame that says nothing new fires nobody.
  */
 import { afterEach, describe, expect, it } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import type { UnderstudyClassRow, UnderstudyFrame } from "../../shared/types.ts";
+const stubGlobal = globalStubs();
 
 // understudyStore reaches api.ts for the origin and the auth headers, and
 // api.ts reads `location` and `localStorage` at module scope. Without these it
@@ -21,15 +23,15 @@ import type { UnderstudyClassRow, UnderstudyFrame } from "../../shared/types.ts"
 // SERVER — which reads as "the store is broken" rather than "the harness has no
 // DOM". Same stubs, and the same reason, as chords.test.ts.
 const store = new Map<string, string>();
-(globalThis as unknown as { localStorage: Storage }).localStorage = {
+stubGlobal("localStorage", {
   getItem: (k: string) => store.get(k) ?? null,
   setItem: (k: string, v: string) => void store.set(k, v),
   removeItem: (k: string) => void store.delete(k),
   clear: () => store.clear(),
   key: () => null,
   length: 0,
-} as unknown as Storage;
-(globalThis as unknown as { location: URL }).location ??= new URL("http://localhost:5173/");
+} as unknown as Storage);
+stubGlobal("location", new URL("http://localhost:5173/"));
 
 const { applyUnderstudy, getUnderstudy, subscribeUnderstudy } = await import("../src/lib/understudyStore.ts");
 const { emitUnderstudy } = await import("../src/lib/understudyBus.ts");

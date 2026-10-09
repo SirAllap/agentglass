@@ -7,7 +7,7 @@
  * somebody actually has on a Monday. Kept out of the component so the
  * composition can be tested without a list on screen.
  */
-import type { InboxItem } from "../../../shared/types.ts";
+import type { InboxItem, InboxTurn, InboxTurnKind } from "../../../shared/types.ts";
 
 export interface InboxFilter {
   /** Only what has not been read. */
@@ -61,6 +61,35 @@ const REASONS: Record<string, string> = {
 };
 
 export const reasonLabel = (reason: string): string => REASONS[reason] ?? reason.replace(/_/g, " ");
+
+/*
+ * Your turn: what waits on the person, as opposed to what merely happened.
+ *
+ * The decision is made where the facts are — the server reads who wrote what
+ * and says so in `turn` (server/src/ghinbox-turn.ts) — so this is only the
+ * two questions a view asks of it. A row with no `turn` is not one of the
+ * things the view is for, and a `bot` turn is news that only a bot wrote:
+ * counted, never a row.
+ */
+export const yourTurn = (n: InboxItem): boolean => !!n.turn && n.turn.kind !== "bot";
+export const botOnly = (n: InboxItem): boolean => n.turn?.kind === "bot";
+
+/** The chip a row on that view wears, instead of GitHub's reason word. */
+export const TURN_CHIP: Record<InboxTurnKind, { label: string; tone: "accent" | "warn" | "neutral" }> = {
+  review: { label: "review requested", tone: "accent" },
+  changes: { label: "changes requested", tone: "warn" },
+  person: { label: "new comment from a person", tone: "neutral" },
+  mention: { label: "mention", tone: "neutral" },
+  bot: { label: "bot only", tone: "neutral" },
+};
+
+/** The quiet second line: who, then what they said — or, for a request, what
+ *  they asked. Empty when GitHub gave neither. */
+export function turnLine(t: InboxTurn): { by: string; text: string } {
+  const by = t.by ?? "";
+  if (t.kind === "review") return { by, text: by ? "asked for your review" : "" };
+  return { by, text: t.snippet ? `\u201c${t.snippet}\u201d` : "" };
+}
 
 /** The unread count for the tab — the only number the panel shows before the
  *  inbox is open, so it is the whole of what it promises. */
@@ -132,4 +161,44 @@ export function searchInbox(items: InboxItem[], q: string): InboxItem[] {
   const num = /^#?(\d+)$/.exec(needle);
   if (num) return items.filter((n) => String(n.number ?? "") === num[1]);
   return items.filter((n) => `${n.title} ${n.repo} #${n.number ?? ""} ${n.reason}`.toLowerCase().includes(needle));
+}
+
+/*
+ * What plugins say about rows: a number to order by, and the plugins that gave
+ * one.
+ *
+ * The order is a CHOICE the person makes — "Sort: <plugin>" — and the default
+ * stays newest first, so installing a plugin never moves a row on its own. It
+ * reorders and nothing else: `orderByAnnotation` returns every row it was
+ * given, and the ceiling is stated here rather than discovered — a row the
+ * plugin gave no number sorts after the ones it did, newest first, so a
+ * plugin that wants an unknown row in the middle says so with a number.
+ */
+
+/** The number a plugin ordered a row by: `rank` when it set one, else `score`. */
+export function annotationKey(item: InboxItem, plugin: string): number | undefined {
+  const a = item.annotations?.find((x) => x.plugin === plugin);
+  return a?.rank ?? a?.score;
+}
+
+/** Plugins that ordered at least one of these rows, in the order first seen. */
+export function sorters(items: InboxItem[]): string[] {
+  const out: string[] = [];
+  for (const n of items) {
+    for (const a of n.annotations ?? []) {
+      if ((a.rank ?? a.score) !== undefined && !out.includes(a.plugin)) out.push(a.plugin);
+    }
+  }
+  return out;
+}
+
+/** Highest number first; ties and unnumbered rows newest first. Never drops a row. */
+export function orderByAnnotation(items: InboxItem[], plugin: string): InboxItem[] {
+  return [...items].sort((a, b) => {
+    const ka = annotationKey(a, plugin);
+    const kb = annotationKey(b, plugin);
+    if (ka !== undefined && kb !== undefined && ka !== kb) return kb - ka;
+    if ((ka === undefined) !== (kb === undefined)) return ka === undefined ? 1 : -1;
+    return b.at - a.at;
+  });
 }

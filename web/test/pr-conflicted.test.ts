@@ -55,13 +55,23 @@ describe("without a refusal, what it did before", () => {
  * Resolve conflicts — the panel saying both things at once. The claim follows
  * the panel's own verdict, not GitHub's alone.
  */
+import { mergePath } from "../../shared/mergePath.ts";
 const panel = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();
 
-describe("the checks line", () => {
-  it("claims no conflicts only when the panel does not think there is one", () => {
-    // The calls that pass a base to name — the others make no such claim.
-    const calls = (panel.match(/checksLine\(c, [^)]*\)/g) ?? []).filter((x) => x.includes("MERGEABLE"));
-    expect(calls.length).toBeGreaterThan(0);
-    for (const call of calls) expect(call).toContain("!conflicted");
+describe("the merge box's claim about conflicts", () => {
+  const base = { state: "OPEN", mergeState: "BLOCKED", baseRefName: "main", checksAll: [{ name: "build", workflow: "CI", state: "success" as const, done: true, required: true }] };
+  it("is made only when the panel does not think there is one", () => {
+    // GitHub says MERGEABLE while git has just found files that conflict: the
+    // panel's own verdict is `conflicted`, and the box must follow it.
+    const p = mergePath({ ...base, mergeState: "UNSTABLE", mergeable: "MERGEABLE", conflicted: true, conflictFiles: 2,
+      checksAll: [...base.checksAll, { name: "e2e", workflow: "CI", state: "pending" as const, done: false }] });
+    expect(p.otherCi!.tail).toBe("Conflicts with main");
+    expect(p.hero.sub ?? "").not.toContain("no conflicts");
+    const clean = mergePath({ ...base, mergeState: "CLEAN", mergeable: "MERGEABLE", conflicted: false });
+    expect(clean.hero.sub).toContain("no conflicts with main");
+  });
+  it("is fed from the panel's `conflicted`, not from GitHub's field alone", () => {
+    expect(panel).toContain("conflicted, conflictFiles: conflictFiles?.files.length");
   });
 });
+

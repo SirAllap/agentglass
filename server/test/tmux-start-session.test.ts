@@ -17,6 +17,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { TMUX_ISOLATED, startSession } from "./tmuxIsolated.ts";
+import { story } from "./story.ts";
 
 const HAVE_TMUX = !!Bun.which("tmux");
 // Short on purpose: a Unix socket path over 107 bytes is refused outright.
@@ -30,8 +31,10 @@ afterAll(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+const step = story();
+
 describe.if(HAVE_TMUX)("a session made on a server that is still going down", () => {
-  test("is there every time, after the last session was killed", () => {
+  step("is there every time, after the last session was killed", () => {
     for (let i = 0; i < 40; i++) {
       startSession([...T, "new-session", "-d", "-s", "fixture", "sleep", "300"], env);
       expect(run("has-session", "-t", "=fixture").exitCode, `lost on round ${i}`).toBe(0);
@@ -39,7 +42,7 @@ describe.if(HAVE_TMUX)("a session made on a server that is still going down", ()
     }
   });
 
-  test("and after the whole server was killed", () => {
+  step("and after the whole server was killed", () => {
     for (let i = 0; i < 40; i++) {
       run("kill-server");
       startSession([...T, "new-session", "-d", "-s", "fixture", "sleep", "300"], env);
@@ -50,14 +53,14 @@ describe.if(HAVE_TMUX)("a session made on a server that is still going down", ()
   // A session that is already there before the first attempt is the last
   // test's, with its windows and options, and a fixture built on it fails
   // later on an assert that has nothing to do with the cause.
-  test("and refuses a session the last test left behind", () => {
+  step("and refuses a session the last test left behind", () => {
     run("kill-server");
     startSession([...T, "new-session", "-d", "-s", "fixture", "sleep", "300"], env);
     expect(() => startSession([...T, "new-session", "-d", "-s", "fixture", "sleep", "300"], env))
       .toThrow(/duplicate session/);
   });
 
-  test("and says so when tmux will never make it, rather than spinning", () => {
+  step("and says so when tmux will never make it, rather than spinning", () => {
     expect(() => startSession([...T, "new-session", "-d", "-s", "fixture", "--no-such-flag"], env, 3))
       .toThrow(/new-session/);
   });

@@ -9,7 +9,7 @@
 import { describe, expect, test } from "bun:test";
 import type { AccessoryKey } from "../src/terminal/keys.ts";
 import {
-  DEFAULT_LAYOUT, apply, canHide, move, parse, reset, rows, serialise, toggle,
+  DEFAULT_LAYOUT, apply, canHide, dropIndex, move, moveTo, parse, reset, rows, serialise, toggle,
 } from "../src/terminal/keyLayout.ts";
 
 const key = (id: string): AccessoryKey => ({ id, label: id, bytes: id, spoken: id });
@@ -172,5 +172,47 @@ describe("what is stored", () => {
     expect(r).toEqual(DEFAULT_LAYOUT);
     r.hidden.push("esc");
     expect(DEFAULT_LAYOUT.hidden).toEqual([]);
+  });
+});
+
+describe("putting a key at a place", () => {
+  test("a key goes where it was dropped, the others keep their order", () => {
+    expect(ids(apply(moveTo(DEFAULT_LAYOUT, CAT, "tab", 1), CAT))).toEqual(["esc", "tab", "ctrlC", "up", "down"]);
+    expect(ids(apply(moveTo(DEFAULT_LAYOUT, CAT, "esc", 3), CAT))).toEqual(["ctrlC", "up", "down", "esc", "tab"]);
+  });
+
+  test("past either end means that end", () => {
+    expect(ids(apply(moveTo(DEFAULT_LAYOUT, CAT, "up", -9), CAT))[0]).toBe("up");
+    expect(ids(apply(moveTo(DEFAULT_LAYOUT, CAT, "up", 99), CAT)).at(-1)).toBe("up");
+  });
+
+  test("dropping where it already is changes nothing, and an unknown key is ignored", () => {
+    expect(moveTo(DEFAULT_LAYOUT, CAT, "up", 2)).toBe(DEFAULT_LAYOUT);
+    expect(moveTo(DEFAULT_LAYOUT, CAT, "nope", 0)).toBe(DEFAULT_LAYOUT);
+  });
+
+  test("a hidden key keeps its place behind the visible run", () => {
+    const hid = { order: ["esc", "ctrlC", "up", "down", "tab"], hidden: ["up"] };
+    const out = moveTo(hid, CAT, "tab", 0);
+    expect(ids(apply(out, CAT))).toEqual(["tab", "esc", "ctrlC", "down"]);
+    expect(out.hidden).toEqual(["up"]);
+    expect(out.order).toContain("up");
+  });
+});
+
+describe("where a dragged row lands", () => {
+  test("by the rows its centre crossed", () => {
+    expect(dropIndex(2, 56 * 2, 56, 8)).toBe(4);
+    expect(dropIndex(2, -56, 56, 8)).toBe(1);
+  });
+
+  test("half a row is where it swaps", () => {
+    expect(dropIndex(2, 27, 56, 8)).toBe(2);
+    expect(dropIndex(2, 29, 56, 8)).toBe(3);
+  });
+
+  test("a finger off the list lands on an end", () => {
+    expect(dropIndex(2, 9999, 56, 8)).toBe(7);
+    expect(dropIndex(2, -9999, 56, 8)).toBe(0);
   });
 });

@@ -9,6 +9,7 @@ import { describe, expect, test, beforeAll } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 // Set before the dynamic import: db.ts opens its Database at module load.
 const dir = mkdtempSync(join(tmpdir(), "agx-opentool-"));
@@ -46,13 +47,15 @@ beforeAll(async () => {
   db = await import("../src/db.ts");
 });
 
+const step = story();
+
 describe("open-tool memo", () => {
-  test("an unchanged read is served from the memo (same array reference)", () => {
+  step("an unchanged read is served from the memo (same array reference)", () => {
     const a = db.openToolCalls();
     expect(db.openToolCalls()).toBe(a); // no write in between → memoized
   });
 
-  test("a PreToolUse write invalidates it and the tool shows on the next read", () => {
+  step("a PreToolUse write invalidates it and the tool shows on the next read", () => {
     const before = db.openToolCalls();
     db.insertEvent(pre("s-open") as any);
     const after = db.openToolCalls();
@@ -60,12 +63,12 @@ describe("open-tool memo", () => {
     expect(after.some((c) => c.session_id === "s-open")).toBe(true);
   });
 
-  test("a PostToolUse write invalidates it and the tool closes", () => {
+  step("a PostToolUse write invalidates it and the tool closes", () => {
     db.insertEvent(post("s-open") as any); // pairs the Pre → no longer open
     expect(db.openToolCalls().some((c) => c.session_id === "s-open")).toBe(false);
   });
 
-  test("invalidateOpenTools() forces a fresh read", () => {
+  step("invalidateOpenTools() forces a fresh read", () => {
     const a = db.openToolCalls();
     db.invalidateOpenTools();
     expect(db.openToolCalls()).not.toBe(a);
@@ -73,7 +76,7 @@ describe("open-tool memo", () => {
 });
 
 describe("open-tool pairing without a tool_use_id (legacy path)", () => {
-  test("a Post closes a Pre by session + tool + a later timestamp", () => {
+  step("a Post closes a Pre by session + tool + a later timestamp", () => {
     const s = "s-legacy";
     const t0 = Date.now();
     db.insertEvent(preNoId(s, t0) as any);
@@ -85,7 +88,7 @@ describe("open-tool pairing without a tool_use_id (legacy path)", () => {
     expect(db.openToolCalls().some((c) => c.session_id === s)).toBe(false); // closed
   });
 
-  test("a Post for a DIFFERENT tool does not close it", () => {
+  step("a Post for a DIFFERENT tool does not close it", () => {
     const s = "s-legacy-2";
     const t0 = Date.now();
     db.insertEvent(preNoId(s, t0) as any); // tool_name Bash
@@ -96,7 +99,7 @@ describe("open-tool pairing without a tool_use_id (legacy path)", () => {
 });
 
 describe("sessions memo", () => {
-  test("an unchanged read of the same key is served from the memo", () => {
+  step("an unchanged read of the same key is served from the memo", () => {
     const a = db.getSessions(50);
     expect(db.getSessions(50)).toBe(a); // same (limit, provider, scope) within the TTL
   });

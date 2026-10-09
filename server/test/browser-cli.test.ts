@@ -23,6 +23,7 @@ import { join } from "node:path";
 import { freePort } from "./freePort.ts";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
+import { story } from "./story.ts";
 
 const CLI = new URL("../../bin/agentglass-browser", import.meta.url).pathname;
 const HAVE_PY = !!Bun.which("python3");
@@ -203,8 +204,10 @@ function verbArgs(i = 0): Record<string, unknown> {
   return rest;
 }
 
+const step = story();
+
 describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
-  test("with no window it fails, quickly, and says which thing is missing", async () => {
+  step("with no window it fails, quickly, and says which thing is missing", async () => {
     await closeWindow(true);
     asked = []; controls = [];
     const r = await cli("read");
@@ -214,7 +217,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     expect(asked).toEqual([]);
   });
 
-  test("an answer is printed as the caller was promised, and exits 0", async () => {
+  step("an answer is printed as the caller was promised, and exits 0", async () => {
     await openWindow();
     answers = { read: { ok: true, value: { url: "https://app.example/x", title: "Billing", text: "Total 41" } } };
     const r = await cli("read");
@@ -225,7 +228,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     expect(r.out).toContain("Total 41");
   });
 
-  test("a refusal from the page exits non-zero with the page's own words", async () => {
+  step("a refusal from the page exits non-zero with the page's own words", async () => {
     await openWindow();
     answers = { click: { ok: false, error: "nothing on the page matches #pay" } };
     const r = await cli("click", "#pay");
@@ -234,7 +237,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     expect(r.out).toBe("");
   });
 
-  test("an argument the server refuses never reaches the window", async () => {
+  step("an argument the server refuses never reaches the window", async () => {
     await openWindow();
     asked = [];
     const bad = await cli("open", "javascript:alert(1)");
@@ -246,7 +249,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     expect(asked).toEqual([]);
   });
 
-  test("call-tool sends the name and the parsed args, and prints the page's answer marked untrusted", async () => {
+  step("call-tool sends the name and the parsed args, and prints the page's answer marked untrusted", async () => {
     await openWindow();
     const marked = { text: "added 1", untrusted: true, source: "page" };
     answers = { "call-tool": { ok: true, value: { tool: "add_to_cart", result: marked } } };
@@ -257,7 +260,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     expect(JSON.parse(r.out).result).toEqual(marked);
   });
 
-  test("call-tool with args that are not a JSON object exits 2 and asks nothing", async () => {
+  step("call-tool with args that are not a JSON object exits 2 and asks nothing", async () => {
     await openWindow();
     asked = [];
     for (const bad of ["{nope", "[1]", '"s"']) {
@@ -267,7 +270,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     expect(asked).toEqual([]);
   });
 
-  test("tools asks the window with no arguments", async () => {
+  step("tools asks the window with no arguments", async () => {
     await openWindow();
     answers = { tools: { ok: true, value: { api: "document.modelContext", tools: [], nlweb: false, total: 0, dropped: 0, llms: null } } };
     asked = []; askedArgs = [];
@@ -276,7 +279,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     expect(asked).toContain("tools");
   });
 
-  test("cookies --set carries --domain/--http-only/--same-site/--insecure only when given", async () => {
+  step("cookies --set carries --domain/--http-only/--same-site/--insecure only when given", async () => {
     await openWindow();
     answers = { cookies: { ok: true, value: { cookies: "", note: "x" } } };
     asked = []; askedArgs = [];
@@ -295,14 +298,14 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     expect(verbArgs(0)).toEqual({ set: { name: "pref", value: "dark", path: "/" } });
   });
 
-  test("scroll insists on exactly one of its three ways", async () => {
+  step("scroll insists on exactly one of its three ways", async () => {
     await openWindow();
     const r = await cli("scroll", "--by", "100", "--to", "top");
     // argparse refuses this one before the server ever sees it.
     expect(r.code).not.toBe(0);
   });
 
-  test("shot --selector/--full-page/--clip are one way at a time, and argparse says so before the server does", async () => {
+  step("shot --selector/--full-page/--clip are one way at a time, and argparse says so before the server does", async () => {
     await openWindow();
     const r = await cli("shot", "--selector", "#e17", "--full-page");
     expect(r.code).not.toBe(0);
@@ -312,7 +315,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
   /* Locators are parsed in the panel, so the CLI and the relay must hand the
      string over exactly as written — a quote, a bracket or an `=` inside it
      mangled on the way is a different element. */
-  test("a locator reaches the window exactly as written, on its own and inside do", async () => {
+  step("a locator reaches the window exactly as written, on its own and inside do", async () => {
     await openWindow();
     asked = []; askedArgs = [];
     answers = { click: { ok: true, value: { clicked: "x", url: "u", title: "t" } } };
@@ -325,7 +328,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     expect(verbArgs().selector).toBe("text=Save changes");
   });
 
-  test("fill splits each field at the = that ends the selector, not the first one", async () => {
+  step("fill splits each field at the = that ends the selector, not the first one", async () => {
     await openWindow();
     asked = []; askedArgs = [];
     answers = { fill: { ok: true, value: { filled: [] } } };
@@ -339,7 +342,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     });
   });
 
-  test("shot --selector reaches the window as the selector the server validates", async () => {
+  step("shot --selector reaches the window as the selector the server validates", async () => {
     await openWindow();
     asked = []; askedArgs = [];
     answers = { shot: { ok: true, value: { url: "u", title: "t", png: "data:image/png;base64,iVBORw0KGgo=" } } };
@@ -348,7 +351,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     expect(verbArgs()).toEqual({ selector: "#e17" });
   });
 
-  test("shot --clip parses x,y,w,h into the rectangle the server expects", async () => {
+  step("shot --clip parses x,y,w,h into the rectangle the server expects", async () => {
     await openWindow();
     asked = []; askedArgs = [];
     answers = { shot: { ok: true, value: { url: "u", title: "t", png: "data:image/png;base64,iVBORw0KGgo=" } } };
@@ -357,7 +360,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     expect(verbArgs()).toEqual({ clip: { x: 10, y: 20, width: 300, height: 150 } });
   });
 
-  test("shot --clip refuses a malformed rectangle before it ever reaches the window", async () => {
+  step("shot --clip refuses a malformed rectangle before it ever reaches the window", async () => {
     await openWindow();
     asked = [];
     const r = await cli("shot", "--clip", "10,20,300");
@@ -370,7 +373,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
    To capture more, make the viewport bigger with `resize` and take an ordinary
    shot: correct at any size, and the caller chooses the framing. */
 
-  test("shot --highlight e17 --label draws a box and a caption, in one call", async () => {
+  step("shot --highlight e17 --label draws a box and a caption, in one call", async () => {
     await openWindow();
     asked = []; askedArgs = [];
     answers = { shot: { ok: true, value: { url: "u", title: "t", png: "data:image/png;base64,iVBORw0KGgo=" } } };
@@ -379,7 +382,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     expect(verbArgs()).toEqual({ highlight: "#e17", label: "still Online" });
   });
 
-  test("--label without --highlight is refused by the CLI, before the server sees it", async () => {
+  step("--label without --highlight is refused by the CLI, before the server sees it", async () => {
     await openWindow();
     asked = [];
     const r = await cli("shot", "--label", "still Online");
@@ -388,7 +391,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     expect(asked).toEqual([]);
   });
 
-  test("a window with no browser pane is a different failure from no window", async () => {
+  step("a window with no browser pane is a different failure from no window", async () => {
     // The regression this pins cost a whole build: with the pane simply not
     // opened yet, the answer said the WINDOW was shut, so the CLI — which knows
     // how to open a pane and not how to open a window — stopped instead of
@@ -418,7 +421,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     expect(controls).toEqual([]);
   });
 
-  test("it waits for a window that is merely starting, but not for long", async () => {
+  step("it waits for a window that is merely starting, but not for long", async () => {
     /*
      * The wait exists because a restart is a second or two of "no window has
      * registered yet", and every call landing in it used to pull the whole app
@@ -455,7 +458,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
    * wrong (see ag:captureBrowser in electron/main.js); what is pinned here is
    * that the CLI no longer papers over it by moving somebody's app.
    */
-  test("a pane that is not showing is reported, not fixed by grabbing the screen", async () => {
+  step("a pane that is not showing is reported, not fixed by grabbing the screen", async () => {
     await openWindow();
     asked = []; controls = [];
     answers = { shot: { ok: false, error: "the browser pane is not on screen, so there was no frame to capture" } };
@@ -467,7 +470,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     expect(controls).toEqual([]);
   });
 
-  test("unless the caller asks for it with --show, which is then opened and retried", async () => {
+  step("unless the caller asks for it with --show, which is then opened and retried", async () => {
     await openWindow();
     asked = []; controls = [];
     /* Twice failing, then success. The plain retry comes FIRST — the panel
@@ -489,7 +492,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     expect(controls).toContainEqual({ cmd: "view", to: "browser" });
   });
 
-  test("--wait-slot queues for a free slot instead of refusing, and only for that refusal", async () => {
+  step("--wait-slot queues for a free slot instead of refusing, and only for that refusal", async () => {
     await openWindow();
     const full = { ok: false, error: "12 pages awake at once is the limit — each one is a live browser" };
     let n = 0;
@@ -511,7 +514,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     expect(asked).toEqual(["newtab"]);
   });
 
-  test("handoff arms once, checks until the person is done, and says so", async () => {
+  step("handoff arms once, checks until the person is done, and says so", async () => {
     await openWindow();
     let checks = 0;
     answers = {
@@ -533,7 +536,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     expect(controls).toContainEqual({ cmd: "view", to: "browser" });
   });
 
-  test("but a refusal a retry cannot fix is not retried", async () => {
+  step("but a refusal a retry cannot fix is not retried", async () => {
     await openWindow();
     asked = []; controls = [];
     answers = { click: { ok: false, error: "nothing on the page matches #gone" } };
@@ -551,7 +554,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
    * the shapes that keep it small.
    */
   describe("the context budget (§14)", () => {
-    test("--since-last remembers a cursor across two separate CLI processes", async () => {
+    step("--since-last remembers a cursor across two separate CLI processes", async () => {
       await openWindow();
       asked = []; askedArgs = [];
       answers = { observe: { ok: true, value: { url: "u", title: "t", now: 1000, tree: [], console: [], network: [] } } };
@@ -568,7 +571,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
       expect(askedArgs[1]?.since).toBe(1000);
     });
 
-    test("observe --delta asks for one, and --summary says what moved rather than counting a tree", async () => {
+    step("observe --delta asks for one, and --summary says what moved rather than counting a tree", async () => {
       await openWindow();
       asked = []; askedArgs = [];
       answers = { observe: { ok: true, value: {
@@ -584,7 +587,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
       expect(askedArgs[1]?.delta, "a plain observe asked for a delta").toBeUndefined();
     });
 
-    test("a look the caller only sees part of says so, so it never becomes a delta's baseline", async () => {
+    step("a look the caller only sees part of says so, so it never becomes a delta's baseline", async () => {
       await openWindow();
       asked = []; askedArgs = [];
       answers = { observe: { ok: true, value: { url: "u", title: "t", tree: [], console: [], network: [] } } };
@@ -595,7 +598,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
       expect(askedArgs.map((x) => x.partial === true)).toEqual([true, true, false, false]);
     });
 
-    test("--max-tokens trims a delta's added nodes the way it trims a tree", async () => {
+    step("--max-tokens trims a delta's added nodes the way it trims a tree", async () => {
       await openWindow();
       const added = Array.from({ length: 150 }, (_, i) => ({ e: `e${i + 10}`, role: "button", name: `Edit order ORBIT-${1000 + i}` }));
       answers = { observe: { ok: true, value: { delta: true, url: "u", title: "t", added, removed: [], changed: [], same: 3, console: [], network: [] } } };
@@ -607,7 +610,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
       expect(v.budgetNote).toContain("added:");
     });
 
-    test("an act verb's --observe looks with a delta", async () => {
+    step("an act verb's --observe looks with a delta", async () => {
       await openWindow();
       asked = []; askedArgs = [];
       answers = {
@@ -621,7 +624,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
       expect(JSON.parse(r.out).after.reason).toBe("new document");
     });
 
-    test("--max-tokens shrinks a large observe by real, measured bytes — viewport first, oldest console dropped first", async () => {
+    step("--max-tokens shrinks a large observe by real, measured bytes — viewport first, oldest console dropped first", async () => {
       await openWindow();
       const tree = Array.from({ length: 200 }, (_, i) => ({
         role: "div", name: `item ${i}`,
@@ -656,7 +659,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
       expect(shrunk.console.at(-1)?.at).toBe(79);
     });
 
-    test("--out writes the full answer to a file and prints the path plus a one-line summary", async () => {
+    step("--out writes the full answer to a file and prints the path plus a one-line summary", async () => {
       await openWindow();
       const value = { url: "https://example.com", title: "Billing", text: "Total 41", now: 7 };
       answers = { read: { ok: true, value } };
@@ -670,7 +673,7 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
       expect(written).toEqual(value);
     });
 
-    test("cdp --out writes the answer to a file instead of dumping it to stdout", async () => {
+    step("cdp --out writes the answer to a file instead of dumping it to stdout", async () => {
       // Measured: `cdp Page.captureScreenshot --params ... --out x.json` printed
       // 70KB of base64 to stdout and left nothing at the path. The `cdp` branch
       // returned before the shared `--out` handling below it ever ran.
@@ -709,13 +712,13 @@ describe("every verb is reachable from outside", () => {
   const NOT_IN_CLI = new Set<string>([]);
   const NOT_IN_MCP = new Set<string>([]);
 
-  test("the CLI has a word for every verb the server knows", () => {
+  step("the CLI has a word for every verb the server knows", () => {
     const missing = BROWSER_OPS.filter((op) =>
       !NOT_IN_CLI.has(op) && !CLI.includes(`"${op}"`));
     expect(missing, `the CLI cannot say: ${missing.join(", ")}`).toEqual([]);
   });
 
-  test("and so does the MCP, which is how agents actually reach it", () => {
+  step("and so does the MCP, which is how agents actually reach it", () => {
     const missing = BROWSER_OPS.filter((op) =>
       !NOT_IN_MCP.has(op) && !MCP.includes(`"browser_${op}"`));
     expect(missing, `no MCP tool for: ${missing.join(", ")}`).toEqual([]);
@@ -736,12 +739,12 @@ describe("the skill an agent reads knows what the browser can do", () => {
    */
   const SKILL = readFileSync(new URL("../../skills/browser-use/SKILL.md", import.meta.url), "utf8");
 
-  test("every verb is named in it", () => {
+  step("every verb is named in it", () => {
     const missing = BROWSER_OPS.filter((op) => !new RegExp(`\\b${op}\\b`).test(SKILL));
     expect(missing, `the skill does not mention: ${missing.join(", ")}`).toEqual([]);
   });
 
-  test("and it does not still say JavaScript is forbidden", () => {
+  step("and it does not still say JavaScript is forbidden", () => {
     // The exact sentence that was there, and the shape of any replacement.
     expect(SKILL).not.toContain("Nothing here runs arbitrary JavaScript");
     expect(SKILL.toLowerCase()).not.toContain("no \"run this javascript\" tool");
@@ -764,7 +767,7 @@ describe("the skill an agent reads knows what the browser can do", () => {
  * lands wherever the last person left the browser.
  */
 describe("an agent has an identity without asking for one", () => {
-  test("`open` carries a profile derived from the session", async () => {
+  step("`open` carries a profile derived from the session", async () => {
     await openWindow();
     answers.open = { ok: true, value: { id: "t9-mine", tabs: [] } };
     askedArgs.length = 0;
@@ -774,7 +777,7 @@ describe("an agent has an identity without asking for one", () => {
     expect(profile, "an agent must never be anonymous by accident").not.toBe("");
   });
 
-  test("and every verb after it names that tab instead of the active one", async () => {
+  step("and every verb after it names that tab instead of the active one", async () => {
     await openWindow();
     answers.open = { ok: true, value: { id: "t9-mine", tabs: [] } };
     answers.read = { ok: true, value: { url: "https://example.com/", title: "x", text: "" } };
@@ -789,7 +792,7 @@ describe("an agent has an identity without asking for one", () => {
     expect(askedArgs.map((x) => x.page)).toEqual(["t9-mine", "t9-mine"]);
   });
 
-  test("`--shared` is the only way into the person's own profile", async () => {
+  step("`--shared` is the only way into the person's own profile", async () => {
     await openWindow();
     answers.open = { ok: true, value: { url: "https://example.com/", title: "x" } };
     askedArgs.length = 0;
@@ -802,7 +805,7 @@ describe("an agent has an identity without asking for one", () => {
     expect(askedArgs[0]?.page).toBeUndefined();
   });
 
-  test("`--as` and `--profile` are the same flag on every verb", async () => {
+  step("`--as` and `--profile` are the same flag on every verb", async () => {
     await openWindow();
     answers.newtab = { ok: true, value: { id: "t9-a", tabs: [] } };
     askedArgs.length = 0;
@@ -811,7 +814,7 @@ describe("an agent has an identity without asking for one", () => {
     expect(askedArgs.map((x) => x.profile)).toEqual(["one", "one"]);
   });
 
-  test("two agents in one shell's worth of state do not take each other's tab", async () => {
+  step("two agents in one shell's worth of state do not take each other's tab", async () => {
     await openWindow();
     answers.open = { ok: true, value: { id: "t-first", tabs: [] } };
     await cliAsMe("open", "--as", "agent-one", "https://example.com/");
@@ -824,7 +827,7 @@ describe("an agent has an identity without asking for one", () => {
     expect(askedArgs.map((x) => x.page)).toEqual(["t-first", "t-second"]);
   });
 
-  test("a second `open` goes to the tab it already has rather than making another", async () => {
+  step("a second `open` goes to the tab it already has rather than making another", async () => {
     await openWindow();
     answers.open = { ok: true, value: { id: "t-once", tabs: [] } };
     await cliAsMe("open", "--as", "agent-three", "https://example.com/");
@@ -836,7 +839,7 @@ describe("an agent has an identity without asking for one", () => {
     expect(askedArgs[0]?.profile).toBeUndefined();
   });
 
-  test("`open --page <id>` navigates THAT tab instead of minting one", async () => {
+  step("`open --page <id>` navigates THAT tab instead of minting one", async () => {
     await openWindow();
     answers.open = { ok: true, value: { id: "t-new", tabs: [] } };
     askedArgs.length = 0;
@@ -853,7 +856,7 @@ describe("an agent has an identity without asking for one", () => {
     expect(askedArgs[0]?.profile, "a profile here makes the panel mint a tab").toBeUndefined();
   });
 
-  test("a tab that has been closed is reopened, not addressed forever", async () => {
+  step("a tab that has been closed is reopened, not addressed forever", async () => {
     await openWindow();
     answers.open = { ok: true, value: { id: "t-gone", tabs: [] } };
     await cliAsMe("open", "--as", "agent-four", "https://example.com/");
@@ -867,7 +870,7 @@ describe("an agent has an identity without asking for one", () => {
   });
 });
 
-test("`tab <id>` makes that tab the one every later verb goes to", async () => {
+step("`tab <id>` makes that tab the one every later verb goes to", async () => {
   /*
    * Selecting a tab and then capturing without `--page` gave the tab this CLI
    * last OPENED, not the one just selected — a valid picture of the wrong page,
@@ -925,7 +928,7 @@ describe.skipIf(!HAVE_PY)("every verb carries the caller's tab, the four early r
     return id;
   }
 
-  test("`do` addresses EVERY step, not the batch body", async () => {
+  step("`do` addresses EVERY step, not the batch body", async () => {
     await openWindow();
     answers.open = { ok: true, value: { url: "u", title: "t" } };
     answers.click = { ok: true, value: { url: "u", title: "t" } };
@@ -944,7 +947,7 @@ describe.skipIf(!HAVE_PY)("every verb carries the caller's tab, the four early r
     expect(askedArgs.map((x) => x.page)).toEqual([tab, tab, tab]);
   });
 
-  test("`do` names the caller on EVERY step — an anonymous step is one the panel lets through", async () => {
+  step("`do` names the caller on EVERY step — an anonymous step is one the panel lets through", async () => {
     await openWindow();
     answers.open = { ok: true, value: { url: "u", title: "t" } };
     answers.click = { ok: true, value: { url: "u", title: "t" } };
@@ -967,7 +970,7 @@ describe.skipIf(!HAVE_PY)("every verb carries the caller's tab, the four early r
     expect(askedArgs.map((x) => x.pageExplicit)).toEqual([undefined, undefined, undefined]);
   });
 
-  test("`--show` reaches the wire on a mint, `--no-show` takes it back, and the default is background", async () => {
+  step("`--show` reaches the wire on a mint, `--no-show` takes it back, and the default is background", async () => {
     await openWindow();
     answers.open = { ok: true, value: { id: "t-shown", url: "u", title: "t" } };
     askedArgs.length = 0;
@@ -985,7 +988,7 @@ describe.skipIf(!HAVE_PY)("every verb carries the caller's tab, the four early r
     expect(askedArgs[0]?.show).toBeUndefined();
   });
 
-  test("a redaction is SAID — the server counts what it masked and the CLI used to drop the count", async () => {
+  step("a redaction is SAID — the server counts what it masked and the CLI used to drop the count", async () => {
     await openWindow();
     await withTab("masked", "tX-mask01");
     answers.read = { ok: true, value: { url: "u", title: "t", text: "token ghp_" + "a".repeat(30) + " in the page" } };
@@ -995,7 +998,7 @@ describe.skipIf(!HAVE_PY)("every verb carries the caller's tab, the four early r
     expect(r.err).toContain("redacted: 1 span(s) in text");
   });
 
-  test("`audit` shows the whole log by default — stamping `as` on it must not scope it to the caller", async () => {
+  step("`audit` shows the whole log by default — stamping `as` on it must not scope it to the caller", async () => {
     await openWindow();
     answers.read = { ok: true, value: { url: "u", title: "t", text: "" } };
     await withTab("auditor-a", "tX-aaa111");
@@ -1016,7 +1019,7 @@ describe.skipIf(!HAVE_PY)("every verb carries the caller's tab, the four early r
     expect([...narrowed]).toEqual(["auditor-b"]);
   });
 
-  test("and a typed `--page` on a `do` batch reaches every step as a deliberate address", async () => {
+  step("and a typed `--page` on a `do` batch reaches every step as a deliberate address", async () => {
     await openWindow();
     answers.read = { ok: true, value: { url: "u", title: "t", text: "" } };
     await withTab("batch-four", "tX-gggggg");
@@ -1029,7 +1032,7 @@ describe.skipIf(!HAVE_PY)("every verb carries the caller's tab, the four early r
     expect(askedArgs.map((x) => x.how)).toEqual(["explicit-page", "explicit-page"]);
   });
 
-  test("`session save` addresses BOTH of its calls — it is the one that dumps the login", async () => {
+  step("`session save` addresses BOTH of its calls — it is the one that dumps the login", async () => {
     await openWindow();
     const tab = await withTab("saver", "tX-bbbbbb");
     answers.cdp = { ok: true, value: { result: { cookies: [] } } };
@@ -1042,7 +1045,7 @@ describe.skipIf(!HAVE_PY)("every verb carries the caller's tab, the four early r
     expect(askedArgs.map((x) => x.page)).toEqual([tab, tab]);
   });
 
-  test("`cdp` issues its DevTools command through the caller's own webview", async () => {
+  step("`cdp` issues its DevTools command through the caller's own webview", async () => {
     await openWindow();
     const tab = await withTab("devtools", "tX-cccccc");
     answers.cdp = { ok: true, value: { product: "probe" } };
@@ -1051,7 +1054,7 @@ describe.skipIf(!HAVE_PY)("every verb carries the caller's tab, the four early r
     expect(askedArgs[0]?.page).toBe(tab);
   });
 
-  test("`permissions` grants through the caller's own debugger session", async () => {
+  step("`permissions` grants through the caller's own debugger session", async () => {
     await openWindow();
     const tab = await withTab("granter", "tX-dddddd");
     answers.cdp = { ok: true, value: {} };
@@ -1061,7 +1064,7 @@ describe.skipIf(!HAVE_PY)("every verb carries the caller's tab, the four early r
     expect(askedArgs[0]?.page).toBe(tab);
   });
 
-  test("`--page` beats the remembered tab on a `do` batch too", async () => {
+  step("`--page` beats the remembered tab on a `do` batch too", async () => {
     await openWindow();
     answers.read = { ok: true, value: { url: "u", title: "t", text: "" } };
     await withTab("batch-two", "tX-eeeeee");
@@ -1070,7 +1073,7 @@ describe.skipIf(!HAVE_PY)("every verb carries the caller's tab, the four early r
     expect(askedArgs.map((x) => x.page)).toEqual(["tOTHER"]);
   });
 
-  test("a --steps-file step that names its OWN page keeps it", async () => {
+  step("a --steps-file step that names its OWN page keeps it", async () => {
     await openWindow();
     answers.read = { ok: true, value: { url: "u", title: "t", text: "" } };
     answers.text = { ok: true, value: { text: "" } };
@@ -1122,7 +1125,7 @@ describe("the dispatcher cannot act before it knows who is asking", () => {
   const region = src.slice(mark("    a = ap.parse_args()"),
     mark("    # ── EVERY VERB GOES TO YOUR OWN TAB"));
 
-  test("identity is resolved before the first branch, not inside them", () => {
+  step("identity is resolved before the first branch, not inside them", () => {
     const resolved = region.indexOf("who = acting_as(a)");
     const firstBranch = region.search(/^ {4}if a\.cmd (?:==|in) /m);
     expect(resolved, "acting_as is not called at the top of main()").toBeGreaterThan(-1);
@@ -1157,12 +1160,12 @@ describe("the dispatcher cannot act before it knows who is asking", () => {
   const actingHelpers = found.filter((name) => name !== "call" && name !== "main");
   const actsRe = new RegExp(`\\b(?:call|${actingHelpers.join("|")})\\(`);
 
-  test("the helper list is read off the source, and it names the session pair", () => {
+  step("the helper list is read off the source, and it names the session pair", () => {
     expect(actingHelpers).toContain("session_save");
     expect(actingHelpers).toContain("session_load");
   });
 
-  test("no early branch reaches the wire without resolving the target", () => {
+  step("no early branch reaches the wire without resolving the target", () => {
     /* Split on the branch heads themselves, so a branch is read from its own
        `if a.cmd ...` to the next one — a landmark, never an offset. */
     const chunks = region.split(/\n(?=[ ]{4}if a\.cmd (?:==|in) )/);
@@ -1201,7 +1204,7 @@ describe("the dispatcher cannot act before it knows who is asking", () => {
  * is an identity with a slot in the tab map like every other.
  */
 describe.skipIf(!HAVE_PY)("`--shared` is the person's container; `--active` is the tab in front", () => {
-  test("`--shared open` mints in the person's OWN container, not one named after it", async () => {
+  step("`--shared open` mints in the person's OWN container, not one named after it", async () => {
     await openWindow();
     const state = freshState();
     answers.open = { ok: true, value: { id: "t-persons-own", tabs: [] } };
@@ -1222,7 +1225,7 @@ describe.skipIf(!HAVE_PY)("`--shared` is the person's container; `--active` is t
     expect(askedArgs[0]?.page).toBeUndefined();
   });
 
-  test("and every `--shared` verb after it names THAT tab, instead of guessing", async () => {
+  step("and every `--shared` verb after it names THAT tab, instead of guessing", async () => {
     await openWindow();
     const state = freshState();
     answers.open = { ok: true, value: { id: "t-persons-own", tabs: [] } };
@@ -1237,7 +1240,7 @@ describe.skipIf(!HAVE_PY)("`--shared` is the person's container; `--active` is t
     expect(askedArgs[0]?.page).toBe("t-persons-own");
   });
 
-  test("`--shared` with no tab open refuses, and names the flag that does mean the front tab", async () => {
+  step("`--shared` with no tab open refuses, and names the flag that does mean the front tab", async () => {
     await openWindow();
     asked.length = 0;
     const r = await cliIn(freshState(), "read", "--shared");
@@ -1247,7 +1250,7 @@ describe.skipIf(!HAVE_PY)("`--shared` is the person's container; `--active` is t
     expect(asked).toEqual([]);
   });
 
-  test("`--active` is the one flag that goes to the tab in front, whoever owns it", async () => {
+  step("`--active` is the one flag that goes to the tab in front, whoever owns it", async () => {
     await openWindow();
     answers.read = { ok: true, value: { url: "u", title: "t", text: "" } };
     askedArgs.length = 0;
@@ -1257,7 +1260,7 @@ describe.skipIf(!HAVE_PY)("`--shared` is the person's container; `--active` is t
     expect(askedArgs[0]?.profile).toBeUndefined();
   });
 
-  test("asking for both is refused rather than silently picking one", async () => {
+  step("asking for both is refused rather than silently picking one", async () => {
     await openWindow();
     asked.length = 0;
     const r = await cliIn(freshState(), "read", "--shared", "--active");
@@ -1289,7 +1292,7 @@ describe.skipIf(!HAVE_PY)("per-verb --help shows the flags the verb accepts", ()
     return plain(r.out);
   }
 
-  test("`open --help` lists --as/--profile, --page, --shared, --active and --show", async () => {
+  step("`open --help` lists --as/--profile, --page, --shared, --active and --show", async () => {
     const h = await help("open");
     // `--as` and `--profile` are one option with two spellings; argparse prints
     // the pair as "--as NAME, --profile NAME" up to Python 3.12 and as
@@ -1299,7 +1302,7 @@ describe.skipIf(!HAVE_PY)("per-verb --help shows the flags the verb accepts", ()
     }
   });
 
-  test("`settings --help` shows the identity flags and NOT --page", async () => {
+  step("`settings --help` shows the identity flags and NOT --page", async () => {
     const h = await help("settings");
     expect(h).toContain("--as");
     expect(h).toContain("--profile");
@@ -1315,14 +1318,14 @@ describe.skipIf(!HAVE_PY)("per-verb --help shows the flags the verb accepts", ()
     expect(h).not.toContain("--page TAB");
   });
 
-  test("`do --help` lists the two flags the batch actually honours", async () => {
+  step("`do --help` lists the two flags the batch actually honours", async () => {
     const h = await help("do");
     expect(h).toContain("--as");
     expect(h).toContain("--profile");
     expect(h).toContain("--page");
   });
 
-  test("a flag after the verb and the same flag before it produce one request", async () => {
+  step("a flag after the verb and the same flag before it produce one request", async () => {
     /* `default=argparse.SUPPRESS` is the load-bearing half and stays: a verb
        that does not carry a flag must leave the global answer alone rather
        than reset it to None. */
@@ -1351,7 +1354,7 @@ describe.skipIf(!HAVE_PY)("per-verb --help shows the flags the verb accepts", ()
  * errors". Always in the under-report direction, which is the dangerous one.
  */
 describe.skipIf(!HAVE_PY)("the --since-last cursor belongs to one identity", () => {
-  test("agent A's ordinary console does not move agent B's floor", async () => {
+  step("agent A's ordinary console does not move agent B's floor", async () => {
     await openWindow();
     const state = freshState();
     answers.open = { ok: true, value: { id: "t-a", tabs: [] } };
@@ -1372,7 +1375,7 @@ describe.skipIf(!HAVE_PY)("the --since-last cursor belongs to one identity", () 
     expect(askedArgs[0]?.since).toBe(1000);
   });
 
-  test("and neither does A's own --since-last, which is the other half", async () => {
+  step("and neither does A's own --since-last, which is the other half", async () => {
     /*
      * The test above bites on the GATE — A asked for nothing, so A must write
      * nothing. This one bites on the KEY: both agents ask for a diff, so both
@@ -1396,7 +1399,7 @@ describe.skipIf(!HAVE_PY)("the --since-last cursor belongs to one identity", () 
     expect(askedArgs[0]?.since).toBe(1000);
   });
 
-  test("a call that did not ask for a diff writes no cursor at all", async () => {
+  step("a call that did not ask for a diff writes no cursor at all", async () => {
     await openWindow();
     const state = freshState();
     answers.open = { ok: true, value: { id: "t-quiet", tabs: [] } };
@@ -1410,7 +1413,7 @@ describe.skipIf(!HAVE_PY)("the --since-last cursor belongs to one identity", () 
     expect(askedArgs[0]?.since ?? 0).toBe(0);
   });
 
-  test("since.json holds a slot per identity", async () => {
+  step("since.json holds a slot per identity", async () => {
     await openWindow();
     const state = freshState();
     for (const [who, id] of [["keeper-one", "t-k1"], ["keeper-two", "t-k2"]]) {
@@ -1424,7 +1427,7 @@ describe.skipIf(!HAVE_PY)("the --since-last cursor belongs to one identity", () 
     expect(held["keeper-one"]).toEqual({ observe: 500 });
   });
 
-  test("a truncated cursor file still answers, with the whole buffer", async () => {
+  step("a truncated cursor file still answers, with the whole buffer", async () => {
     await openWindow();
     const state = freshState();
     answers.open = { ok: true, value: { id: "t-trunc", tabs: [] } };
@@ -1454,7 +1457,7 @@ describe.skipIf(!HAVE_PY)("the --since-last cursor belongs to one identity", () 
  * entry would have removed the victim's only current signal.
  */
 describe.skipIf(!HAVE_PY)("tab-map hygiene", () => {
-  test("`closetab` on your own tab forgets it, so the next `open` mints a fresh one", async () => {
+  step("`closetab` on your own tab forgets it, so the next `open` mints a fresh one", async () => {
     await openWindow();
     const state = freshState();
     answers.open = { ok: true, value: { id: "t-doomed", tabs: [] } };
@@ -1471,7 +1474,7 @@ describe.skipIf(!HAVE_PY)("tab-map hygiene", () => {
     expect(askedArgs[0]?.profile).toBe("closer");
   });
 
-  test("and `closetab` by INDEX forgets it too, when the list comes back empty", async () => {
+  step("and `closetab` by INDEX forgets it too, when the list comes back empty", async () => {
     await openWindow();
     const state = freshState();
     answers.open = { ok: true, value: { id: "t-only", tabs: [] } };
@@ -1490,7 +1493,7 @@ describe.skipIf(!HAVE_PY)("tab-map hygiene", () => {
     expect(askedArgs, "a dead tab went out on the wire").toEqual([]);
   });
 
-  test("`profiles --drop` forgets the tab of the container it dropped", async () => {
+  step("`profiles --drop` forgets the tab of the container it dropped", async () => {
     await openWindow();
     const state = freshState();
     answers.open = { ok: true, value: { id: "t-dropped", tabs: [] } };
@@ -1501,7 +1504,7 @@ describe.skipIf(!HAVE_PY)("tab-map hygiene", () => {
     expect(held.dropper, "the container is gone, so its tab is gone too").toBeUndefined();
   });
 
-  test("an unwritable state dir says so, once, and does not go bare afterwards", async () => {
+  step("an unwritable state dir says so, once, and does not go bare afterwards", async () => {
     await openWindow();
     const state = join(dir, "readonly-state");
     mkdirSync(state, { recursive: true });
@@ -1526,7 +1529,7 @@ describe.skipIf(!HAVE_PY)("tab-map hygiene", () => {
     }
   });
 
-  test("two identities opening at the same time both keep their key", async () => {
+  step("two identities opening at the same time both keep their key", async () => {
     /*
      * `remember_tab` and `forget_tab` are read-modify-write cycles. `os.replace`
      * makes each WRITE atomic; it does not make the cycle atomic. Measured on
@@ -1577,7 +1580,7 @@ describe.skipIf(!HAVE_PY)("checkup, the dev loop in one call", () => {
   }
   const PNG = "data:image/png;base64,iVBORw0KGgo=";
 
-  test("the url, --reload, --no-shot and --settle-ms reach the window, clamped", async () => {
+  step("the url, --reload, --no-shot and --settle-ms reach the window, clamped", async () => {
     await openWindow();
     answers = { checkup: { ok: true, value: { verdict: "ok", url: "u", title: "t" } } };
     askedArgs = []; asked = [];
@@ -1594,7 +1597,7 @@ describe.skipIf(!HAVE_PY)("checkup, the dev loop in one call", () => {
     expect(asked).toEqual(["checkup", "checkup"]);
   });
 
-  test("shot --marks reaches the window as a flag, and the ids come back in the answer", async () => {
+  step("shot --marks reaches the window as a flag, and the ids come back in the answer", async () => {
     await openWindow();
     answers = { shot: { ok: true, value: { url: "u", title: "t", png: PNG, marks: ["e1", "e2"] } } };
     askedArgs = []; asked = [];
@@ -1606,7 +1609,7 @@ describe.skipIf(!HAVE_PY)("checkup, the dev loop in one call", () => {
     expect(r.out).toContain("e2");
   });
 
-  test("dialog: the flags reach the window as booleans, and both sides are refused there", async () => {
+  step("dialog: the flags reach the window as booleans, and both sides are refused there", async () => {
     await openWindow();
     answers = { dialog: { ok: true, value: { armed: null, last: null } } };
     askedArgs = []; asked = [];
@@ -1622,7 +1625,7 @@ describe.skipIf(!HAVE_PY)("checkup, the dev loop in one call", () => {
     expect(asked).toEqual(["dialog", "dialog"]);
   });
 
-  test("a failure's picture is written to a private file and the answer carries its path", async () => {
+  step("a failure's picture is written to a private file and the answer carries its path", async () => {
     await openWindow();
     answers = { checkup: { ok: true, value: { verdict: "1 problem", url: "u", title: "t", errors: ["TypeError: x"], png: PNG } } };
     const cache = mkdtempSync(join(dir, "cache-"));
@@ -1638,7 +1641,7 @@ describe.skipIf(!HAVE_PY)("checkup, the dev loop in one call", () => {
     expect(Object.keys(v)[0]).toBe("verdict");
   });
 
-  test("only the newest 20 pictures are kept", async () => {
+  step("only the newest 20 pictures are kept", async () => {
     await openWindow();
     answers = { checkup: { ok: true, value: { verdict: "1 problem", url: "u", title: "t", errors: ["TypeError: x"], png: PNG } } };
     const cache = mkdtempSync(join(dir, "cache-"));
@@ -1656,7 +1659,7 @@ describe.skipIf(!HAVE_PY)("checkup, the dev loop in one call", () => {
     expect(readdirSync(shots)).toContain("notes.txt");
   });
 
-  test("--max-tokens gives up the issues first, then the oldest errors, and keeps the verdict", async () => {
+  step("--max-tokens gives up the issues first, then the oldest errors, and keeps the verdict", async () => {
     await openWindow();
     const issues = Array.from({ length: 5 }, (_, i) => ({ code: `Issue${i}`, n: 3, about: "https://cdn.orbit.example/" + "x".repeat(150) }));
     const errors = Array.from({ length: 10 }, (_, i) => `TypeError: e${i} ` + "y".repeat(120));
@@ -1673,7 +1676,7 @@ describe.skipIf(!HAVE_PY)("checkup, the dev loop in one call", () => {
     expect(v.budgetNote).toContain("issues: dropped 5");
   });
 
-  test("--summary is one line: the verdict and the counts", async () => {
+  step("--summary is one line: the verdict and the counts", async () => {
     await openWindow();
     answers = { checkup: { ok: true, value: { verdict: "2 problems", url: "u", title: "t", errors: ["a"], failed: ["500 GET /x"], issues: [{ code: "C", n: 1 }] } } };
     const cache = mkdtempSync(join(dir, "cache-"));

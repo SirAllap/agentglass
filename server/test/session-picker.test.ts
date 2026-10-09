@@ -21,6 +21,7 @@ import { setLocked, isLocked } from "../src/tmuxlock.ts";
 import { tmuxStateDir } from "../src/tmuxbin.ts";
 import { rmSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 const SOCK = `agx-picker-${process.pid}`;
 const sock = ["-f", "/dev/null", "-L", SOCK];
@@ -62,7 +63,9 @@ afterAll(() => {
   } catch { /* never made, or already gone */ }
 });
 
-test("the frame carries EVERY session, not only the client's", () => {
+const step = story();
+
+step("the frame carries EVERY session, not only the client's", () => {
   const f = readFrame({ pid: 0, socket: sock, session: "alfa", id: "", tty: tty() } as never);
   const names = (f?.sessions ?? []).map((x) => x.name).sort();
   expect(names, "the picker has nothing to offer without this").toEqual(["alfa", "beta", "gamma"]);
@@ -72,7 +75,7 @@ test("the frame carries EVERY session, not only the client's", () => {
   expect(f?.windows.length, "the strip is still the client's own session").toBe(2);
 });
 
-test("choosing another session moves the client, and back again", () => {
+step("choosing another session moves the client, and back again", () => {
   expect(where()).toBe("alfa");
   expect(switchClientToSession(sock, tty(), "beta")).toBe(true);
   expect(where()).toBe("beta");
@@ -81,13 +84,13 @@ test("choosing another session moves the client, and back again", () => {
   expect(where(), "the way back has to work or this is a trap").toBe("alfa");
 });
 
-test("a session that does not exist moves nobody", () => {
+step("a session that does not exist moves nobody", () => {
   const before = where();
   switchClientToSession(sock, tty(), "not-a-session");
   expect(where()).toBe(before);
 });
 
-test("a dangerous name is refused before it reaches tmux", () => {
+step("a dangerous name is refused before it reaches tmux", () => {
   /* The value comes off a page and ends up in a tmux target. */
   const before = where();
   for (const bad of ["beta; rm -rf /", "beta rm", "", "-beta"]) {
@@ -96,11 +99,11 @@ test("a dangerous name is refused before it reaches tmux", () => {
   expect(where()).toBe(before);
 });
 
-test("no client tty, no switch", () => {
+step("no client tty, no switch", () => {
   expect(switchClientToSession(sock, "", "beta")).toBe(false);
 });
 
-test("ending a session from the picker actually ends it", () => {
+step("ending a session from the picker actually ends it", () => {
   /* "There were two sessions with a tab open in root and that's it… it was a
      real struggle to end that session." A picker that can only take you somewhere is half a
      tool. */
@@ -109,7 +112,7 @@ test("ending a session from the picker actually ends it", () => {
   expect(out(["list-sessions", "-F", "#{session_name}"]).split("\n")).not.toContain("gamma");
 });
 
-test("but NEVER the session the client is on", () => {
+step("but NEVER the session the client is on", () => {
   /* Ending it detaches the terminal somebody is looking at, and tmux decides
      where they land — the same "the app moved me" they were burned by. */
   const on = where();
@@ -117,7 +120,7 @@ test("but NEVER the session the client is on", () => {
   expect(out(["list-sessions", "-F", "#{session_name}"]).split("\n")).toContain(on);
 });
 
-test("and a dangerous name ends nothing", () => {
+step("and a dangerous name ends nothing", () => {
   const before = out(["list-sessions", "-F", "#{session_name}"]).split("\n").length;
   for (const bad of ["beta; rm -rf /", "", "-beta", "bet", "beta:", "beta.0", "beta:0.0"]) {
     expect(killSessionByName(sock, bad, where()), bad).toBe(false);
@@ -138,7 +141,7 @@ test("and a dangerous name ends nothing", () => {
  * calls, because a padlock the UI draws but the server does not honour is a
  * padlock painted on the door.
  */
-test("a locked session cannot be ended, and unlocking lets it go", () => {
+step("a locked session cannot be ended, and unlocking lets it go", () => {
   sh(["new-session", "-d", "-s", "delta", "-c", "/tmp"]);
   const names = () => out(["list-sessions", "-F", "#{session_name}"]).split("\n");
   expect(names()).toContain("delta");
@@ -153,7 +156,7 @@ test("a locked session cannot be ended, and unlocking lets it go", () => {
   expect(names()).not.toContain("delta");
 });
 
-test("the lock is held by NAME, so it survives the session being remade", () => {
+step("the lock is held by NAME, so it survives the session being remade", () => {
   /* The id changes; that is the whole reason the list is of names. */
   sh(["new-session", "-d", "-s", "epsilon", "-c", "/tmp"]);
   setLocked("epsilon", true);
@@ -171,7 +174,7 @@ test("the lock is held by NAME, so it survives the session being remade", () => 
   sh(["kill-session", "-t", "=epsilon"]);
 });
 
-test("an unreadable lock file locks EVERYTHING rather than nothing", () => {
+step("an unreadable lock file locks EVERYTHING rather than nothing", () => {
   const p = join(tmuxStateDir(), "locked-sessions.json");
   const saved = (() => { try { return readFileSync(p, "utf8"); } catch { return null; } })();
   writeFileSync(p, "{ this is not json");

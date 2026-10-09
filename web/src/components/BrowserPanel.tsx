@@ -25,7 +25,7 @@ import { CloseButton } from "./CloseButton.tsx";
 import { LanesRow } from "./LanesRow.tsx";
 import { Portal } from "./Portal.tsx";
 import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
-import { BROWSER_PARTITION, HAS_BROWSER, IS_DESKTOP, applySessionSettings, browserDevtools, browserDevtoolsClose, browserDevtoolsRect, browserDevtoolsZoom, browserCdp, browserZoom, browserShelfRead, captureFullPage, cookieSources, onDevtoolsZoom, onDevtoolsOpen, onBrowserZoom, onBrowserOpenTab, onBrowserKey, onBrowserSearch, onBrowserInspect, setActiveBrowserGuest, openEphemeralTab, closeEphemeralTab } from "../lib/desktop.ts";
+import { BROWSER_PARTITION, HAS_BROWSER, IS_DESKTOP, applySessionSettings, browserDevtools, browserDevtoolsClose, browserDevtoolsRect, browserDevtoolsZoom, browserCdp, browserZoom, browserShelfRead, captureFullPage, cookieSources, onDevtoolsZoom, onDevtoolsOpen, onBrowserZoom, onBrowserOpenTab, onBrowserKey, onBrowserSearch, onBrowserInspect, setActiveBrowserGuest, setGuestOwner, openEphemeralTab, closeEphemeralTab } from "../lib/desktop.ts";
 import { buildSearchUrl, displayUrl, normalizeNavigationUrl } from "../lib/browserUrl.ts";
 import { BLANK, homePage, searchEngine, zoomLevel, setZoomLevel as saveZoom, zoomPercent, stepZoom, ZOOM_MIN, ZOOM_MAX, devtoolsSide, setDevtoolsSide, devtoolsSize, setDevtoolsSize, devtoolsZoom, setDevtoolsZoom, sidebarOpen, setSidebarOpen, sidebarWidth, setSidebarWidth, type DevtoolsSide } from "../lib/browserPrefs.ts";
 import { addTab, closeTab, listable, newTab, patchTab, pruneBlank, sleepingTab, stepTab, tabLabel, wake, withInspected, type BrowserTab } from "../lib/browserTabs.ts";
@@ -1509,6 +1509,9 @@ export function BrowserView({ active: viewOn, scope }: {
     // a verb that reads `tabs` right after a typed navigation saw the OLD url
     // until the guest caught up. Patched here so it never lags.
     patch(active.id, { failed: null, url: next });
+    // The person is driving this tab now: whatever agent named it last no
+    // longer owns the requests it is about to make.
+    try { setGuestOwner(w.getWebContentsId(), "", true); } catch { /* attaching */ }
     w.src = next;
   }, [active, patch, el]);
 
@@ -1689,6 +1692,28 @@ export function BrowserView({ active: viewOn, scope }: {
     };
     w.addEventListener("found-in-page", onFound);
   }, [patch]);
+  /*
+   * ONE ref callback per tab, for the life of the tab.
+   *
+   * `ref={bind(t.id)}` made a new callback on every render, so React called
+   * the old one with null (which forgot the element) and the new one with the
+   * node, and `bind` attached all nine listeners again to the same guest, each
+   * with fresh closures nothing could dedupe. Measured in a harness with a fake
+   * guest: 2 -> 24 -> 47 -> 69 did-stop-loading listeners over three
+   * navigations, so one page load recorded the same visit 23 to 226 times, and
+   * each recording re-rendered the panel and added more. A stable callback is
+   * never re-invoked by a render; React calls it with null only on unmount.
+   */
+  const refCache = useRef(new Map<string, (node: HTMLElement | null) => void>());
+  const bindRef = useCallback((id: string) => {
+    let f = refCache.current.get(id);
+    if (!f) {
+      const attach = bind(id);
+      f = (node) => { attach(node); if (!node) refCache.current.delete(id); };
+      refCache.current.set(id, f);
+    }
+    return f;
+  }, [bind]);
 
   /* ------------------------------------------------------------- keyboard */
 
@@ -2714,7 +2739,13 @@ export function BrowserView({ active: viewOn, scope }: {
                       <div {...pressProps("tab", t.id, tabLabel(t))}
                         data-drop-to="tabs" data-drop-index={String(n)}
                         onContextMenu={(e) => { e.preventDefault(); setMenuAt({ x: e.clientX, y: e.clientY, kind: "tab", id: t.id }); }}
-                        onClick={() => { if (!dragged.current) show(t.id); }}
+                        onClick={() => {
+                          if (dragged.current) return;
+                          // The person picked this tab: it is theirs, not whichever agent drove it last.
+                          const w = els.current.get(t.id);
+                          try { if (w) setGuestOwner(w.getWebContentsId(), "", true); } catch { /* not attached yet */ }
+                          show(t.id);
+                        }}
                         onMouseDown={(e) => { if (e.button === 1) { e.preventDefault(); close(t.id); } }}
                         title={t.url || "New tab"}
                         className="group flex items-center gap-2 rounded-md px-1.5 min-h-[28px] cursor-default min-w-0"
@@ -2975,7 +3006,7 @@ export function BrowserView({ active: viewOn, scope }: {
               ) : (
                 <BornAt url={t.url || BLANK}>{(src) => (
                 <webview
-                  ref={bind(t.id) as unknown as React.Ref<HTMLElement>}
+                  ref={bindRef(t.id) as unknown as React.Ref<HTMLElement>}
                   src={src}
                   /* `newtab --from-template`'s own in-memory jar, when this
                      tab is one — main minted it (`ag:tabEphemeralOpen`) and

@@ -9,42 +9,10 @@
 import { describe, expect, test } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { crumbs, humanBytes, FilePalette } from "../src/components/FilePalette.tsx";
-import { Preview } from "../src/components/finder/Preview.tsx";
-
-describe("a path, as pieces", () => {
-  test("every crumb is somewhere to jump to", () => {
-    expect(crumbs("/home/dev/Documents/projects")).toEqual([
-      { label: "home", path: "/home", last: false },
-      { label: "dev", path: "/home/dev", last: false },
-      { label: "Documents", path: "/home/dev/Documents", last: false },
-      { label: "projects", path: "/home/dev/Documents/projects", last: true },
-    ]);
-  });
-
-  /* `/home/somebody` is four wasted characters and a name nobody needs to read
-     — and this app calls it `~` everywhere else. */
-  test("home folds into ~", () => {
-    expect(crumbs("/home/dev/Documents/projects", "/home/dev").map((c) => c.label))
-      .toEqual(["~", "Documents", "projects"]);
-    expect(crumbs("/home/dev/Documents", "/home/dev")[0]).toMatchObject({ label: "~", path: "/home/dev" });
-  });
-
-  test("the last crumb is where you are", () => {
-    const c = crumbs("/home/dev/Documents", "/home/dev");
-    expect(c[c.length - 1]!.last).toBe(true);
-    expect(c.filter((x) => x.last)).toHaveLength(1);
-  });
-
-  test("a trailing slash is not an empty crumb", () => {
-    expect(crumbs("/home/dev/Documents/", "/home/dev").map((c) => c.label)).toEqual(["~", "Documents"]);
-  });
-
-  test("and nothing at all is no crumbs rather than a crash", () => {
-    expect(crumbs("")).toEqual([]);
-    expect(crumbs("/")).toEqual([]);
-  });
-});
+import { humanBytes, FilePalette } from "../src/components/FilePalette.tsx";
+import { InfoRail } from "../src/components/finder/InfoRail.tsx";
+import { FileView } from "../src/components/finder/FileView.tsx";
+import type { LoadedFile } from "../src/components/finder/useFileSource.ts";
 
 describe("sizes in a listing", () => {
   test("scanned, not audited", () => {
@@ -54,16 +22,28 @@ describe("sizes in a listing", () => {
   });
 });
 
-describe("the pane that shows what a row is", () => {
+/* A file as the panes get it, before anything has arrived. */
+const loaded = (over: Partial<LoadedFile> = {}): LoadedFile => ({
+  source: null, name: "", kind: null, facts: null, text: null, truncated: false, error: null, media: null, mediaError: null, loading: false, ...over,
+});
+const noop = () => {};
+
+describe("the panes that show what a row is", () => {
   test("nothing selected says so instead of drawing an empty box", () => {
-    const html = renderToStaticMarkup(React.createElement(Preview, { path: null }));
-    expect(html).toContain("Nada seleccionado");
+    const rail = renderToStaticMarkup(React.createElement(InfoRail, {
+      file: loaded(), git: null, outline: [], current: -1, home: "", onJump: noop, onBench: noop, onCopyPath: noop }));
+    expect(rail).toContain("Nothing selected");
+    const view = renderToStaticMarkup(React.createElement(FileView, {
+      file: loaded(), jump: null, initialTop: 0, onTop: noop, onBench: noop, canBrowser: false, findSignal: 0, home: "" }));
+    expect(view).toContain("Nothing selected");
   });
 
-  test("a path with no facts yet is a spinner, not a blank", () => {
+  test("a file with no facts yet is a spinner, not a blank", () => {
     // First paint, before the engine has answered. There is no DOM here so the
     // effect never runs, which is exactly the state this asserts.
-    const html = renderToStaticMarkup(React.createElement(Preview, { path: "/home/dev/Documents/a.png" }));
+    const file = loaded({ source: { abs: "/home/dev/Documents/a.png", root: "/home/dev/Documents", rel: "a.png" }, name: "a.png", kind: "image", loading: true });
+    const html = renderToStaticMarkup(React.createElement(FileView, {
+      file, jump: null, initialTop: 0, onTop: noop, onBench: noop, canBrowser: true, findSignal: 0, home: "" }));
     expect(html).toContain("agx-spin");
   });
 });
@@ -73,10 +53,10 @@ describe("the palette still draws", () => {
     // The finder grew a browse mode, a preview pane and a query parser in one
     // pass; this is the assertion that the component still renders at all.
     expect(() => renderToStaticMarkup(React.createElement(FilePalette, {
-      open: false, onClose: () => {}, onOpenFile: () => {}, onRevealDir: () => {},
+      open: false, onClose: () => {}, onOpenFile: () => {}, onBench: () => {}, onRevealDir: () => {},
     }))).not.toThrow();
     expect(() => renderToStaticMarkup(React.createElement(FilePalette, {
-      open: true, onClose: () => {}, onOpenFile: () => {}, onRevealDir: () => {},
+      open: true, onClose: () => {}, onOpenFile: () => {}, onBench: () => {}, onRevealDir: () => {},
     }))).not.toThrow();
   });
 });

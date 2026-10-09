@@ -1,0 +1,42 @@
+/*
+ * A dock and a fold (CanvasDock.tsx). House tokens only: --surface-*, --text*,
+ * --success for a lit leg. Nothing moves except by being redrawn; the one
+ * motion is the fold's height, which is a number set by a requestAnimationFrame
+ * loop that reduced motion skips.
+ */
+.cv-dock {
+  position: relative; flex: 1 1 0; min-width: 118px; display: flex; flex-direction: column; gap: 6px; text-align: left;
+  padding: 0 12px 10px; border: 0; background: var(--surface-card); color: var(--text); cursor: pointer;
+  box-shadow: inset 0 -2px 0 transparent;
+}
+.cv-dock:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 4%, var(--surface-card)); }
+.cv-dock[data-selected="true"] { background: color-mix(in srgb, var(--text) 7%, var(--surface-card)); box-shadow: inset 0 -2px 0 var(--text); }
+.cv-dock:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.cv-dock:disabled { cursor: default; }
+
+.cv-dock-journey { position: relative; height: 26px; margin: 0 -12px; }
+.cv-dock-journey::before { content: ""; position: absolute; left: 0; right: 0; top: 12px; height: 1px; background: var(--surface-line); }
+.cv-dock-leg { position: absolute; left: 0; width: 50%; top: 11px; height: 3px; border-radius: 2px; background: transparent; }
+.cv-dock[data-leg="busy"] .cv-dock-leg, .cv-dock[data-leg="flowing"] .cv-dock-leg { background: var(--success); }
+.cv-dock-node { position: absolute; left: 50%; top: 6px; width: 13px; height: 13px; margin-left: -6.5px; border-radius: 50%; background: var(--surface-card); box-shadow: inset 0 0 0 1.5px var(--text3); }
+.cv-dock[data-here="true"] .cv-dock-node { background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 25%, transparent); }
+.cv-dock[data-selected="true"] .cv-dock-node { box-shadow: inset 0 0 0 2px var(--text); }
+
+.cv-dock-title { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text3); font-weight: 600; }
+.cv-dock-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.cv-dock-value { display: block; font-size: 20px; line-height: 1.1; font-weight: 600; font-variant-numeric: tabular-nums; }
+.cv-dock-unit { display: block; font-size: 10.5px; color: var(--text3); }
+.cv-dock-hint { font-size: 10.5px; color: var(--text3); line-height: 1.35; }
+
+.cv-fold { display: flex; flex-direction: column; min-width: 0; border-radius: 12px; background: var(--surface-card); box-shadow: 0 0 0 1px var(--surface-line); overflow: hidden; }
+.cv-fold-bar { display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 12px; border: 0; background: transparent; color: var(--text2); font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600; text-align: left; cursor: pointer; }
+.cv-fold-bar:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.cv-fold-bar:disabled { cursor: default; }
+.cv-fold-clip { overflow: hidden; }
+.cv-fold-inner > :not(.cv-sheet-host) { min-width: 300px; }
+.cv-fold-inner { display: flex; flex-direction: column; gap: 12px; padding: 0 12px 12px; box-sizing: border-box; overflow: hidden; }
+
+@media (forced-colors: active) {
+  .cv-dock[data-selected="true"] { outline: 2px solid Highlight; }
+  .cv-dock-node { border: 1px solid CanvasText; }
+}

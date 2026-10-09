@@ -13,22 +13,24 @@
  * would have bound the app to readline's previous-command.
  */
 import { beforeEach, describe, expect, it } from "bun:test";
+import { globalStubs } from "./stubGlobal";
+const stubGlobal = globalStubs();
 
 // keybindings.ts reaches views.ts -> desktop.ts -> api.ts, which reads
 // `location` at module scope. Stubbed here rather than relied upon: without it
 // this file passes only when some earlier test file happens to have stubbed it
 // first, which is a suite that goes red when you run one test on its own.
-(globalThis as unknown as { location: unknown }).location = { hostname: "localhost", origin: "http://localhost:4000" };
+stubGlobal("location", { hostname: "localhost", origin: "http://localhost:4000" });
 
 const store = new Map<string, string>();
-// @ts-expect-error — a localStorage good enough for a module that only reads,
-// writes and occasionally finds nothing.
-globalThis.localStorage = {
+// A localStorage good enough for a module that only reads, writes and
+// occasionally finds nothing.
+stubGlobal("localStorage", {
   getItem: (k: string) => store.get(k) ?? null,
   setItem: (k: string, v: string) => { store.set(k, v); },
   removeItem: (k: string) => { store.delete(k); },
   clear: () => store.clear(),
-};
+});
 
 const kb = await import("../src/lib/keybindings.ts");
 

@@ -12,14 +12,25 @@
  * turned the Clone off for twenty other tests. The property is about what this
  * module reads, so it is checked on the module rather than on the environment.
  */
-import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { mkdtempSync } from "node:fs";
+import { afterAll, describe, expect, test } from "bun:test";
+import { readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const dir = mkdtempSync(join(tmpdir(), "agx-recall-"));
+/* The bank is read from `$XDG_CONFIG_HOME/agentglass/policy` at call time, so
+   "empty" is only true if this file says where: a file that ran earlier and
+   compiled rules under its own XDG_CONFIG_HOME would answer for this one. */
+const was = { doctrine: process.env.AGENTGLASS_DOCTRINE, xdg: process.env.XDG_CONFIG_HOME };
 process.env.AGENTGLASS_DOCTRINE = join(dir, "data");
+process.env.XDG_CONFIG_HOME = join(dir, "config");
+
+afterAll(() => {
+  for (const [k, v] of [["AGENTGLASS_DOCTRINE", was.doctrine], ["XDG_CONFIG_HOME", was.xdg]] as const) {
+    if (v === undefined) delete process.env[k]; else process.env[k] = v;
+  }
+  rmSync(dir, { recursive: true, force: true });
+});
 
 const { recall, recallBlock } = await import("../src/seatmemory.ts");
 

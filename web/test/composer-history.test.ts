@@ -5,18 +5,20 @@
 // coming forward past the newest has to return the draft you interrupted rather
 // than an empty box.
 import { test, expect, beforeAll, beforeEach } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import type { ChatMsg } from "../src/lib/chatStore.ts";
+const stubGlobal = globalStubs();
 
 const cell = new Map<string, string>();
 let store: typeof import("../src/lib/chatStore.ts");
 
 beforeAll(async () => {
-  (globalThis as any).location ??= new URL("http://localhost:5173/");
-  (globalThis as any).localStorage = {
+  stubGlobal("location", new URL("http://localhost:5173/"));
+  stubGlobal("localStorage", {
     getItem: (k: string) => cell.get(k) ?? null,
     setItem: (k: string, v: string) => { cell.set(k, v); },
     removeItem: (k: string) => { cell.delete(k); },
-  };
+  });
   store = await import("../src/lib/chatStore.ts");
 });
 

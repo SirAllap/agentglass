@@ -18,11 +18,13 @@
  * replaced by an invitation to keep tapping.
  */
 import { describe, expect, test } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import { readFileSync } from "node:fs";
+const stubGlobal = globalStubs();
 
 // api.ts reads `location` at module scope and pairing.ts imports its `SERVER`.
 // Stubbed before the import, because that read happens on evaluation.
-(globalThis as any).location = { hostname: "localhost", origin: "http://localhost:4000" };
+stubGlobal("location", { hostname: "localhost", origin: "http://localhost:4000" });
 const { pairingBlocked } = await import("../src/lib/pairing.ts");
 
 const src = (p: string) => readFileSync(new URL(p, import.meta.url), "utf8");

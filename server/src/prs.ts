@@ -14,6 +14,11 @@
 // 3. Writes are public. A stray `gh pr merge` is not a UI bug, it is a deploy,
 //    so every mutation goes through `writeGuard` and the irreversible ones are
 //    named separately from the rest.
+import { ttlRead, forgetReads } from "./ttlread.ts";
+import { singleFlight } from "./singleflight.ts";
+import { learnFromRead } from "./checkRuns.ts";
+import { failingTests, refreshFailingTests, type LensSources, type MainRun, type MainJob } from "./ciFailureLens.ts";
+import { readCheckFailures, cachedSummaries, type LogRead, type AnnotationsRead, type OutputRead, type CheckAnnotation } from "./ciFailures.ts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { failed } from "./refused.ts";
 import { homedir, tmpdir } from "node:os";
@@ -27,8 +32,9 @@ import type {
   PrRepoId, PrSummary, PrBranchSummary, PrDetail, PrListResponse, PrActionResult, PrCheck, PrCheckRollup,
   PrCheckState, PrThread, PrReview, PrComment, PrCommit, PrFile, PrChecklistItem, PrMergeState, CiVerdict,
   PrTalk, PrTalkNote,
-  PrAuthored, PrReaction, PrEvent, PrCheckJob, PrReviewer, PrMergePolicy, PrMergeGate, PrMergeMethod, PrLocalHead,
+  PrAuthored, PrReaction, PrEvent, PrCheckJob, PrReviewer, PrMergePolicy, PrMergeGate, PrMergeMethod, PrLocalHead, FailingTests,
 } from "../../shared/types.ts";
+import { CARD_PEOPLE_MAX } from "../../shared/cardPeople.ts";
 
 /** Same escape hatch the git writes use, so one variable disables both. */
 const WRITE_ENABLED = process.env.AGENTGLASS_GIT_WRITE_DISABLED !== "1";
@@ -212,6 +218,17 @@ export async function prBranches(root: string, number: number): Promise<{ base: 
    a row already holding both names: measured at five of them in two and a half
    minutes on an idle board. A row is at most one list refresh old; a base
    retargeted since then is corrected on the next one. */
+function knownHeadSha(repoKey: string, number: number): string {
+  const d = detailCache.get(`${repoKey}#${number}`)?.detail as { headSha?: string } | undefined;
+  if (d?.headSha) return d.headSha;
+  for (const [k, e] of listCache) {
+    if (!k.startsWith(`${repoKey}\u0000`)) continue;
+    const p = e.prs.find((r) => r.number === number);
+    if (p?.headSha) return p.headSha;
+  }
+  return "";
+}
+
 function knownBranches(repoKey: string, number: number): { base: string; head: string } | null {
   const d = detailCache.get(`${repoKey}#${number}`)?.detail;
   if (d?.baseRefName && d.headRefName) return { base: d.baseRefName, head: d.headRefName };
@@ -331,30 +348,58 @@ export async function prsForBranch(root: string, branchIn: unknown): Promise<{
  * time and only when it is on screen. One GraphQL call, the same contexts the
  * detail view already reads.
  */
-export async function prRollup(rootIn: unknown, numberIn: unknown): Promise<{ ok: boolean; checks?: PrCheckRollup; error?: string }> {
+export async function prRollup(rootIn: unknown, numberIn: unknown, fresh = false): Promise<{ ok: boolean; checks?: PrCheckRollup; /** Every check by name — what the notify watches match against. */ all?: PrCheck[];
+  /** OPEN, CLOSED or MERGED — a watch on a PR that is no longer open ends. */
+  state?: string;
+  /** More than the 100 contexts one page holds: `all` is not every check, so nothing may conclude "all done" from it. */
+  truncated?: boolean; error?: string }> {
   const number = Number(numberIn);
   const repo = await repoIdFor(rootIn);
   if (!repo || !Number.isFinite(number)) return { ok: false, error: "no GitHub remote here" };
   const q = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){`
-    + `commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){${SEL_CHECKS}}}}}}`
+    + `state commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100){totalCount ${SEL_CHECKS}}}}}}`
     + `}}}`;
-  const r = await ghJson<any>([
-    "api", "graphql", "-f", `query=${q}`,
-    "-F", `owner=${repo.owner}`, "-F", `name=${repo.name}`, "-F", `number=${number}`,
-  ]);
-  const raw = r?.data?.repository?.pullRequest?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes;
-  if (!raw) return { ok: false, error: "GitHub would not list its checks" };
-  const normalised = raw.map((c: any) => ({ ...c, workflowName: c.checkSuite?.workflowRun?.workflow?.name || "" }));
-  return { ok: true, checks: rollupChecks(normalised).rollup };
+  /* Held for ROLLUP_TTL_MS and shared between callers: a card asks whenever it
+     scrolls into view, and 100% of the repeats measured came back identical.
+     A push or a re-run shows up on the next list read, well inside the window
+     the checks strip already lags GitHub by. */
+  return ttlRead(`rollup\u0000${repo.key}#${number}`, ROLLUP_TTL_MS, async () => {
+    const began = Date.now();
+    const r = await ghJson<any>([
+      "api", "graphql", "-f", `query=${q}`,
+      "-F", `owner=${repo.owner}`, "-F", `name=${repo.name}`, "-F", `number=${number}`,
+    ]);
+    const pr = r?.data?.repository?.pullRequest;
+    const ctxs = pr?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts;
+    const raw = ctxs?.nodes;
+    if (!raw) return { ok: false, error: "GitHub would not list its checks" };
+    const normalised = raw.map(withWorkflow);
+    const r2 = rollupChecks(normalised);
+    // The commit named in this same response, not the cached one: a push since the list read would file these runs under the old commit.
+    learnFromRead(repo.key, number, pr?.commits?.nodes?.[0]?.commit?.oid ?? "", r2.all);
+    if (Number(ctxs?.totalCount ?? 0) <= raw.length) projectChecks(repo, number, r2.rollup, r2.all, began);
+    return { ok: true, checks: r2.rollup, all: r2.all, state: typeof pr?.state === "string" ? pr.state : undefined, truncated: Number(ctxs?.totalCount ?? 0) > raw.length };
+  }, { fresh, keep: (v) => v.ok });
 }
+const ROLLUP_TTL_MS = 30_000;
 
-export async function branchBehind(root: string, number: number): Promise<{ ok: boolean; behind?: number; ahead?: number; local?: PrLocalHead; error?: string }> {
+const BEHIND_TTL_MS = 60_000;
+
+export async function branchBehind(root: string, number: number, fresh = false): Promise<{ ok: boolean; behind?: number; ahead?: number; local?: PrLocalHead; error?: string }> {
   const id = await repoIdFor(root);
   if (!id) return { ok: false, error: "no GitHub remote here" };
   const pr = await prBranches(root, number);
   if (!pr) return { ok: false, error: "could not read the branches" };
-  const cmp = await ghJson<{ behind_by?: number; ahead_by?: number }>(
-    ["api", `repos/${id.owner}/${id.name}/compare/${encodeURIComponent(pr.base)}...${encodeURIComponent(pr.head)}?per_page=1`], root);
+  /* The comparison is what costs a request; the local half below is git only.
+     Keyed by the branches and the head sha when a list or detail read already
+     holds it, so a push is a new key. A base that moved on its own is the one
+     case only the TTL catches, which is why the panel's explicit refresh
+     (`fresh`) skips it. */
+  const sha = knownHeadSha(id.key, number);
+  const cmp = await ttlRead(`behind\u0000${id.key}\u0000${pr.base}\u0000${pr.head}\u0000${sha}`, BEHIND_TTL_MS, () =>
+    ghJson<{ behind_by?: number; ahead_by?: number }>(
+      ["api", `repos/${id.owner}/${id.name}/compare/${encodeURIComponent(pr.base)}...${encodeURIComponent(pr.head)}?per_page=1`], root),
+    { fresh, keep: (v) => v != null });
   if (!cmp) return { ok: false, error: "GitHub would not compare those branches" };
   // Local state rides along. It is git only — no network — so it costs a few
   // milliseconds on a call the panel already makes, rather than a second round
@@ -385,16 +430,33 @@ async function upstreamOf(root: string, branch: string): Promise<{ remote: strin
   return guess.code === 0 ? { remote: "origin", ref: `refs/remotes/origin/${branch}`, remoteBranch: branch } : null;
 }
 
-/** Which worktree has this branch checked out, if any. */
+/** The branch a stopped rebase is rebasing, read from its own state directory:
+ *  HEAD is detached for the whole rebase, so nothing else names it. */
+async function rebasingBranch(dir: string): Promise<string | undefined> {
+  const p = await gitAsync(dir, ["rev-parse", "--git-path", "rebase-merge/head-name", "--git-path", "rebase-apply/head-name"]);
+  if (p.code !== 0) return undefined;
+  for (const rel of p.stdout.split("\n").filter(Boolean)) {
+    const name = await Bun.file(resolve(dir, rel)).text().catch(() => "");
+    if (name) return name.trim();
+  }
+  return undefined;
+}
+
+/** Which worktree has this branch checked out, if any. A worktree stopped in
+ *  the middle of a rebase of it counts: it is detached, but it is still the
+ *  one somebody is standing in. */
 async function worktreeOf(root: string, branch: string): Promise<string | undefined> {
   const r = await gitAsync(root, ["worktree", "list", "--porcelain"]);
   if (r.code !== 0) return undefined;
   let path = "";
+  const detached: string[] = [];
   for (const line of r.stdout.split("\n")) {
     if (line.startsWith("worktree ")) path = line.slice("worktree ".length).trim();
     else if (line.trim() === `branch refs/heads/${branch}`) return path || undefined;
+    else if (line.trim() === "detached") detached.push(path);
   }
-  return undefined;
+  const names = await Promise.all(detached.map(rebasingBranch));
+  return detached[names.indexOf(`refs/heads/${branch}`)];
 }
 
 /** Mid-merge, mid-rebase, mid-cherry-pick: a checkout in the middle of an
@@ -573,7 +635,36 @@ export async function locateRepo(want: string, roots: string[]): Promise<string 
 
 const idInflight = new Map<string, Promise<PrRepoId | null>>();
 
+/**
+ * A root with no directory behind it: `gh:owner/name`.
+ *
+ * Every read here goes through a "root" because that is where a repository's
+ * identity comes from, and an Inbox row can name a pull request in a project
+ * with no checkout on this machine (an upstream the person opened a pull
+ * request against). For those the identity is in the name itself, so reads work
+ * from it — they are GraphQL by owner and name, and `gh` is told `-R` — while
+ * everything that needs a working tree or a write is refused, in a sentence
+ * (`prWriteRefusal`), and `safeAbs` refuses the prefix so no path-taking
+ * function can be handed the server's own repository by mistake.
+ *
+ * github.com only: a GitHub Enterprise host is not in the name, so a
+ * checkout-less pull request on one is not reachable this way.
+ */
+// `.` and `..` are not names: `gh:../..` would aim `gh api repos/../..` at another endpoint.
+const FOREIGN_ROOT = /^gh:(?!\.+\/)([\w.-]+)\/(?!\.+$)([\w.-]+)$/;
+const foreignOf = (root: unknown) => (typeof root === "string" ? FOREIGN_ROOT.exec(root) : null);
+export const isForeignRoot = (root: unknown): boolean => foreignOf(root) !== null;
+
+/** The refusal for a write aimed at a checkout-less root; null for any other root. */
+export function prWriteRefusal(rootIn: unknown): PrActionResult | null {
+  const m = foreignOf(rootIn);
+  if (!m) return null;
+  return { ok: false, error: `Read-only — there is no checkout of ${m[1]}/${m[2]} on this machine. Clone it and add it as a project to act on this pull request.` };
+}
+
 export async function repoIdFor(rootIn: unknown): Promise<PrRepoId | null> {
+  const f = foreignOf(rootIn);
+  if (f) return { key: `github.com/${f[1]}/${f[2]}`, host: "github.com", owner: f[1]!, name: f[2]!, nameWithOwner: `${f[1]}/${f[2]}` };
   const abs = safeAbs(rootIn);
   if (!abs) return null;
   const root = repoRootOf(abs);
@@ -608,12 +699,21 @@ export async function repoIdFor(rootIn: unknown): Promise<PrRepoId | null> {
 type RawCheck = {
   __typename?: string;
   name?: string; workflowName?: string; context?: string;
+  /** The trigger of the workflow run (`pull_request`, `push`, ...). */
+  event?: string; startedAt?: string; completedAt?: string; title?: string;
   status?: string; conclusion?: string; state?: string; detailsUrl?: string; targetUrl?: string;
 };
 
 const TERMINAL_CONCLUSIONS = new Set([
   "SUCCESS", "FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "NEUTRAL", "SKIPPED", "STALE", "STARTUP_FAILURE",
 ]);
+
+/** A GraphQL check node, flattened: the workflow and the event it ran for live two levels down. */
+export const withWorkflow = (c: any): RawCheck => ({
+  ...c,
+  workflowName: c.checkSuite?.workflowRun?.workflow?.name || "",
+  event: c.checkSuite?.workflowRun?.event || "",
+});
 
 function checkState(c: RawCheck): { state: PrCheckState; done: boolean } {
   // Two shapes come back in one array: CheckRun (status + conclusion) and
@@ -636,7 +736,13 @@ function checkState(c: RawCheck): { state: PrCheckState; done: boolean } {
 }
 
 /**
- * One run per check name — the newest.
+ * One run per check name and trigger — the newest.
+ *
+ * The trigger is part of the key. A workflow that listens to both
+ * `pull_request` and `pull_request_review` runs the same job name once for
+ * each, and GitHub lists both: a real pull request had 71 runs on its head
+ * and this function kept 69, because two names were folded together across
+ * events. github.com counts them apart, and so does this.
  *
  * A re-run does not replace the run it repeats: GitHub keeps both, so a check
  * that failed and was re-run comes back twice, once FAILURE and once
@@ -654,7 +760,7 @@ function checkState(c: RawCheck): { state: PrCheckState; done: boolean } {
 export function latestPerName(raw: RawCheck[]): RawCheck[] {
   const by = new Map<string, RawCheck>();
   for (const c of raw) {
-    const name = `${c.workflowName || ""}\u0001${c.name || c.context || "check"}`;
+    const name = `${c.workflowName || ""}\u0001${c.name || c.context || "check"}\u0001${c.event || ""}`;
     const had = by.get(name);
     if (!had) { by.set(name, c); continue; }
     const hadRunning = !checkState(had).done;
@@ -672,8 +778,13 @@ export function rollupChecks(raw: RawCheck[] | null | undefined): { rollup: PrCh
     const check: PrCheck = {
       name: c.name || c.context || "check",
       workflow: c.workflowName || "",
+      ...(c.event ? { event: c.event } : null),
+      ...(c.startedAt ? { startedAt: c.startedAt } : null),
+      ...(c.completedAt ? { completedAt: c.completedAt } : null),
+      ...(c.title ? { title: c.title } : null),
       state, done,
       url: c.detailsUrl || c.targetUrl || undefined,
+      ...((c.conclusion || "").toUpperCase() === "CANCELLED" ? { cancelled: true } : null),
     };
     all.push(check);
     if (state === "success") success++;
@@ -757,7 +868,11 @@ export function noteCi(repo: PrRepoId, pr: PrSummary): void {
     // The poll has this and the notification path does not, so it travels with
     // the verdict rather than being looked up again later against a list that
     // may never have been fetched.
-    approved: pr.reviewDecision === "APPROVED",
+    /* A person's approval, not GitHub's `reviewDecision`: the auto-review bot has
+       write access here, so a pull request nobody had read reported APPROVED and
+       a "checks red" went out over it. `humanReview` already leaves bots (and the
+       author) out and takes each reviewer's latest strong verdict. */
+    approved: pr.humanReview?.kind === "approved",
   };
   for (const fn of ciListeners) { try { fn(v); } catch { /* a listener must not break the poll */ } }
 }
@@ -771,6 +886,13 @@ export function noteCi(repo: PrRepoId, pr: PrSummary): void {
  */
 const talkLatch = new Map<string, number>();
 const talkListeners = new Set<(n: PrTalkNote) => void>();
+/** Every remark list a poll reads, before the latch decides whether it is news: a persisted watch keeps its
+ *  own memory of what it has seen (prNotifyWatch.ts) and must not depend on this process's. */
+const talkSeenListeners = new Set<(repo: string, number: number, title: string, theirs: PrTalk[]) => void>();
+export function subscribeTalkSeen(fn: (repo: string, number: number, title: string, theirs: PrTalk[]) => void): () => void {
+  talkSeenListeners.add(fn);
+  return () => { talkSeenListeners.delete(fn); };
+}
 
 export function subscribeTalk(fn: (n: PrTalkNote) => void): () => void {
   talkListeners.add(fn);
@@ -805,6 +927,7 @@ export function noteTalk(repo: PrRepoId, pr: PrSummary): void {
   if (!pr.talk) return;
   const key = `${repo.key}#${pr.number}`;
   const theirs = pr.talk.filter((t) => !t.mine);
+  for (const fn of talkSeenListeners) { try { fn(repo.nameWithOwner, pr.number, pr.title, theirs); } catch { /* a listener must not break the poll */ } }
   let newest = 0;
   for (const t of theirs) newest = Math.max(newest, Date.parse(t.at) || 0);
   const prev = talkLatch.get(key);
@@ -865,9 +988,10 @@ export function ciNotifiesFor(filter: PrFilter): boolean {
  */
 const LIST_FIELDS_FAST = "number,title,author,state,isDraft,headRefName,baseRefName,url,updatedAt,reviewDecision,additions,deletions,changedFiles,labels,assignees,milestone";
 
-type Entry = { at: number; prs: PrSummary[]; loading: boolean; checksPending: boolean; error?: string; total?: number; hasNext?: boolean; cursor?: string | null; fp?: string };
+type Entry = { at: number; prs: PrSummary[]; loading: boolean; checksPending: boolean; error?: string; total?: number; hasNext?: boolean; cursor?: string | null; fp?: string; began?: number };
 const listCache = new Map<string, Entry>();
-const inflight = new Set<string>();
+/** List key -> when its read began. */
+const inflight = new Map<string, number>();
 
 /**
  * The list cache, kept across restarts.
@@ -1285,7 +1409,7 @@ function cardFor(branch: unknown, title: unknown): PrSummary["card"] | undefined
     /* The people, with their pictures and their colours — the same shape the
        tasks view draws. `assignees` is a list of names and a name is not a
        portrait. */
-    people: Array.isArray(t.people) ? t.people.slice(0, 3) : undefined,
+    people: Array.isArray(t.people) ? t.people.slice(0, CARD_PEOPLE_MAX) : undefined,
     at: held.at || undefined,
   };
 }
@@ -1864,14 +1988,40 @@ function refreshChecks(repo: PrRepoId, filter: PrFilter, state: PrState, rows: P
   })();
 }
 
+/** Lists whose forced refresh arrived while a read was running. */
+const followUp = new Set<string>();
+const SAME_PRESS_MS = 150;
+
+/**
+ * Run `run` once the read in flight has ended, however many callers ask meanwhile.
+ * A forced read pressed while another is running must not be answered by that
+ * one: it began before the press. Exported for its test.
+ */
+export function afterFlight<T>(follows: Map<string, Promise<T>>, key: string, flying: Promise<T>, run: () => Promise<T>): Promise<T> {
+  const asked = follows.get(key);
+  if (asked) return asked;
+  const p: Promise<T> = flying.catch(() => undefined).then(run).finally(() => { if (follows.get(key) === p) follows.delete(key); });
+  follows.set(key,p);
+  return p;
+}
+
 /** Refresh behind the response. Never awaited by a request handler. */
 function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: string, query?: string, force = false): void {
   const key = cacheKey(repo, filter, state, after, query);
-  if (inflight.has(key)) return;
-  inflight.add(key);
+  /* A forced read asked for while one is running is NOT answered by it: that
+     one began before the press, and the change the press was for may be newer.
+     It runs when the current one ends — once, however many presses came. */
+  const began = inflight.get(key);
+  /* Presses of ONE Refresh (the table and the board's two lists ask in the same
+     breath) share the read they started; ceiling: a press within SAME_PRESS_MS
+     of a read that began before it is taken for the same press. */
+  if (began !== undefined) { if (force && Date.now() - began > SAME_PRESS_MS) followUp.add(key); return; }
+  inflight.set(key, Date.now());
+  const epoch = listEpoch.get(repo.key) ?? 0;
   const prev = listCache.get(key);
+  const startedAt = Date.now();
   const keep = (over: Partial<Entry>): Entry => ({
-    at: prev?.at ?? 0, prs: prev?.prs ?? [], loading: true, checksPending: true, error: prev?.error, ...over,
+    at: prev?.at ?? 0, prs: prev?.prs ?? [], loading: true, checksPending: true, error: prev?.error, began: prev?.began, ...over,
   });
   listCache.set(key, keep({}));
 
@@ -1899,7 +2049,7 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
           /* An empty queue is an answer too: its fingerprint carries the
              count, so "still none" is one point, not three. */
           if (fp && prev?.fp === fp && !prev.error) {
-            listCache.set(key, { ...prev, at: Date.now(), loading: false, checksPending: false });
+            listCache.set(key, { ...prev, at: Date.now(), began: startedAt, loading: false, checksPending: false });
             return;
           }
         }
@@ -1933,7 +2083,7 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
          */
         const before = new Map((listCache.get(key)?.prs ?? []).map((p) => [p.number, p]));
         listCache.set(key, {
-          at: Date.now(), prs: early.rows.map((r) => carryOver(before.get(r.number), r)),
+          at: Date.now(), began: readStart, prs: early.rows.map((r) => carryOver(before.get(r.number), r)),
           loading: false, checksPending: true,
           total: early.total, hasNext: early.hasNext, cursor: early.cursor,
         });
@@ -1953,6 +2103,11 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
       listCache.set(key, keep({ loading: false, checksPending: false, error: failed("prs/list", e, "the pull requests could not be read") }));
     } finally {
       inflight.delete(key);
+      /* A write landed while this read ran: what it stored may predate the
+         write (a reopened pull request missing from an open list, kept as
+         "fresh"), so it is dropped and read again. */
+      if ((listEpoch.get(repo.key) ?? 0) !== epoch) { listCache.delete(key); followUp.add(key); }
+      if (followUp.delete(key)) refreshList(repo, filter, state, after, query, true);
     }
   })();
 }
@@ -1971,7 +2126,11 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
  * spend, the tracker card) are not the detail's to say.
  */
 const SHARED_FIELDS = ["title", "state", "isDraft", "reviewDecision", "updatedAt", "additions",
-  "deletions", "changedFiles", "labels", "assignees", "reviewers", "milestone", "checks", "headSha"] as const;
+  "deletions", "changedFiles", "labels", "assignees", "reviewers", "milestone", "checks", "headSha",
+  /* The verdict header on the card ("Approved by ada") and on the detail's
+     Overview: `reviewDecision` alone left one of the two saying "No review
+     asked for yet" after a review landed. */
+  "humanReview"] as const;
 
 /** `row` brought up to date from a detail read, or `row` itself when the
  *  detail is older (its `updatedAt`) or says nothing new. An UNKNOWN
@@ -2004,6 +2163,22 @@ export function projectRowOnDetail(d: PrDetail, row: PrSummary): PrDetail {
   return Object.keys(patch).length ? { ...d, ...patch } as PrDetail : d;
 }
 
+/**
+ * The cached detail after a list row of the same pull request was read.
+ *
+ * A row newer than the detail (its `updatedAt` moved) means something changed
+ * on GitHub that the row can only partly say: the shared fields are copied over
+ * at once, and the entry is made stale so the next open answers instantly AND
+ * re-reads. Threads and comments are the ones a row cannot carry: without this a
+ * detail opened after the board learned that a thread was resolved kept
+ * listing it until the 45 s cache ran out.
+ */
+export function detailAfterRow(hit: { at: number; detail: PrDetail }, row: PrSummary): { at: number; detail: PrDetail } {
+  const detail = projectRowOnDetail(hit.detail, row);
+  const newer = row.updatedAt > hit.detail.updatedAt;
+  return detail === hit.detail && !newer ? hit : { ...hit, detail, at: newer ? 0 : hit.at };
+}
+
 /** Detail reads by pull request, so a list read that STARTED before one cannot
  *  write its older rows over it (same rule as the web's `holdEdits`). */
 const projected = new Map<string, { at: number; detail: PrDetail }>();
@@ -2029,6 +2204,39 @@ function keepNewerDetails(repo: PrRepoId, rows: PrSummary[], since: number, now 
     if (now - p.at > PROJECTED_HOLD_MS) { projected.delete(k); return r; }
     return p.at > since ? projectDetailOnRow(r, p.detail) : r;
   });
+}
+
+/**
+ * A checks read lands: write it into the cached detail and every cached list
+ * row of that pull request.
+ *
+ * Measured on a pull request whose suite had just failed: the CI notifier read
+ * `summary` failed and `coverage-gate` cancelled and raised "checks red", and
+ * the detail opened from that notification still said "1 check still running"
+ * from its own read, up to 45 s old. A check finishing does not bump the pull
+ * request's `updatedAt`, so neither projection above (both gated on it) ever
+ * carried the notifier's fresher answer across, and `prRollup` wrote to nobody.
+ *
+ * `began` is when the read started: a detail stored after that is at least as
+ * new and is left alone. The detail's `required` marks come from its own gate
+ * query, so they are carried over by name.
+ *
+ * Ceiling, named: only reads that hold every check (not truncated at 100).
+ * The board's own second pass (`refreshChecks`) still writes rows alone.
+ */
+export function projectChecks(repo: PrRepoId, number: number, checks: PrCheckRollup, all: PrCheck[], began: number): void {
+  const dk = `${repo.key}#${number}`;
+  const hit = detailCache.get(dk);
+  if (hit && hit.at <= began) {
+    const req = new Map((hit.detail.checksAll ?? []).map((c) => [checkKey(c.workflow, c.name), c.required]));
+    const marked = all.map((c) => (req.get(checkKey(c.workflow, c.name)) === undefined ? c : { ...c, required: req.get(checkKey(c.workflow, c.name)) }));
+    detailCache.set(dk, { ...hit, detail: { ...hit.detail, checks, checksAll: marked } });
+  }
+  for (const [k, e] of listCache) {
+    if (!k.startsWith(`${repo.key}\u0000`) || !e.prs.some((r) => r.number === number)) continue;
+    if (e.at > began) continue;
+    listCache.set(k, { ...e, prs: e.prs.map((r) => (r.number === number ? { ...r, checks, checksLoaded: true } : r)) });
+  }
 }
 
 /** Seconds to wait before each re-ask of a `mergeable` GitHub answered UNKNOWN. */
@@ -2099,7 +2307,7 @@ function storePage(repo: PrRepoId, filter: PrFilter, state: PrState, key: string
      the write `saveDiskCache` persists, so a blank that gets here outlives
      the session that caused it. */
   listCache.set(key, {
-    at: Date.now(), prs: keepNewerDetails(repo, page.rows.map((r) => carryOver(prior.get(r.number), r)), since),
+    at: Date.now(), began: since, prs: keepNewerDetails(repo, page.rows.map((r) => carryOver(prior.get(r.number), r)), since),
     loading: false, checksPending: false,
     total: page.total, hasNext: page.hasNext, cursor: page.cursor, fp,
   });
@@ -2109,8 +2317,8 @@ function storePage(repo: PrRepoId, filter: PrFilter, state: PrState, key: string
   for (const r of listCache.get(key)!.prs) {
     const dk = `${repo.key}#${r.number}`, hit = detailCache.get(dk);
     if (!hit) continue;
-    const next = projectRowOnDetail(hit.detail, r);
-    if (next !== hit.detail) detailCache.set(dk, { ...hit, detail: next });
+    const next = detailAfterRow(hit, r);
+    if (next !== hit) detailCache.set(dk, next);
   }
   // Only open PRs raise CI notifications — a merged or closed PR's checks
   // are history, not something to alert on.
@@ -2331,13 +2539,17 @@ export type PrFacetOptions = {
   cardStatuses?: { status: string; color?: string; type?: string }[];
 };
 const facetCache = new Map<string, { at: number; data: PrFacetOptions }>();
-const FACET_TTL_MS = 5 * 60_000;
+/* Twenty minutes: contributors, labels, milestones and base branches change a
+   few times a day, and the 5-minute copy expired between a reload and the next
+   open, so 7 REST reads and a 68 KB body were repeated for the same lists. */
+const FACET_TTL_MS = 20 * 60_000;
 
 export async function facetOptions(rootIn: unknown): Promise<{ ok: boolean; data?: PrFacetOptions; error?: string }> {
   const repo = await repoIdFor(rootIn);
   if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
   const hit = facetCache.get(repo.key);
   if (hit && Date.now() - hit.at < FACET_TTL_MS) return { ok: true, data: hit.data };
+  return singleFlight(`facets\u0000${repo.key}`, async () => {
   const r = repo.nameWithOwner;
   const [contribs, assignees, labels, milestones, branches] = await Promise.all([
     ghJson<any[]>(["api", `repos/${r}/contributors?per_page=100`]),
@@ -2361,6 +2573,7 @@ export async function facetOptions(rootIn: unknown): Promise<{ ok: boolean; data
   };
   facetCache.set(repo.key, { at: Date.now(), data });
   return { ok: true, data };
+  });
 }
 
 /**
@@ -2433,6 +2646,7 @@ export async function listPrs(rootIn: unknown, filterIn: unknown, stateIn: unkno
     repo,
     prs,
     fetchedAt: cur?.at ?? 0,
+    startedAt: cur?.began ?? 0,
     stale: !cur?.at || Date.now() - (cur?.at ?? 0) > LIST_TTL_MS,
     loading: !!cur?.loading,
     checksPending: !!cur?.checksPending,
@@ -2609,7 +2823,7 @@ async function fillChecks(p: any, repo: PrRepoId, number: number): Promise<void>
   if (!conn?.pageInfo?.hasNextPage) return;
   const query = `query($owner:String!,$name:String!,$number:Int!,$cursor:String!){`
     + `repository(owner:$owner,name:$name){pullRequest(number:$number){`
-    + `commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100, after:$cursor){pageInfo{hasNextPage endCursor} ${SEL_CHECKS}}}}}}`
+    + `commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100, after:$cursor){pageInfo{hasNextPage endCursor} ${SEL_CHECKS}}}}}}`
     + `}}}`;
   let cursor: string | null = conn.pageInfo.endCursor;
   for (let page = 0; page < 3 && cursor; page++) {
@@ -2618,7 +2832,10 @@ async function fillChecks(p: any, repo: PrRepoId, number: number): Promise<void>
       "-F", `owner=${repo.owner}`, "-F", `name=${repo.name}`, "-F", `number=${number}`,
       "-f", `cursor=${cursor}`,
     ]);
-    const got: any = r?.data?.repository?.pullRequest?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts;
+    const node: any = r?.data?.repository?.pullRequest?.commits?.nodes?.[0]?.commit;
+    // A push between two pages: the next page belongs to another commit, and its checks would be filed under the first one's.
+    if (node?.oid !== p.statusCheckRollup.nodes[0].commit.oid) break;
+    const got: any = node?.statusCheckRollup?.contexts;
     if (!got?.nodes?.length) break;
     conn.nodes = [...(conn.nodes || []), ...got.nodes];
     cursor = got.pageInfo?.hasNextPage ? got.pageInfo.endCursor : null;
@@ -2713,7 +2930,7 @@ const SEL_TIMELINE = `nodes{
     }`;
 const SEL_CHECKS = `nodes{
       __typename
-      ... on CheckRun{name status conclusion detailsUrl checkSuite{workflowRun{workflow{name}}}}
+      ... on CheckRun{name status conclusion detailsUrl title startedAt completedAt checkSuite{workflowRun{event workflow{name}}}}
       ... on StatusContext{context state targetUrl}
     }`;
 const TIMELINE_TYPES = `[
@@ -2766,7 +2983,7 @@ export const DETAIL_QUERY = `query($owner:String!,$name:String!,$number:Int!){
     files(first:100){pageInfo{hasNextPage endCursor hasPreviousPage startCursor} ${SEL_FILES}}
     reviewThreads(first:80){pageInfo{hasNextPage endCursor hasPreviousPage startCursor} ${SEL_THREADS}}
     timelineItems(last:80, itemTypes:${TIMELINE_TYPES}){pageInfo{hasNextPage endCursor hasPreviousPage startCursor} ${SEL_TIMELINE}}
-    statusCheckRollup:commits(last:1){nodes{commit{committedDate statusCheckRollup{contexts(first:100){pageInfo{hasNextPage endCursor hasPreviousPage startCursor} ${SEL_CHECKS}}}}}}
+    statusCheckRollup:commits(last:1){nodes{commit{oid committedDate statusCheckRollup{contexts(first:100){pageInfo{hasNextPage endCursor hasPreviousPage startCursor} ${SEL_CHECKS}}}}}}
   } } }`;
 
 /** The reaction tallies, "edited", standing and ownership that ride on
@@ -2881,7 +3098,9 @@ const DETAIL_FILE = join(CACHE_DIR, "pr-detail.json");
 const DETAIL_MAX_ENTRIES = 24;
 let detailWriteTimer: ReturnType<typeof setTimeout> | null = null;
 /** Refreshes already running, so ten glances at a stale card make one call. */
-const detailInflight = new Set<string>();
+const detailFollows = new Map<string, Promise<any>>();
+const detailFlightAt = new Map<string, number>();
+const detailFlights = new Map<string, Promise<{ ok: boolean; detail?: PrDetail; error?: string }>>();
 
 function loadDetailCache(): void {
   try {
@@ -3151,6 +3370,16 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
   const key = `${repo.key}#${number}`;
   const hit = detailCache.get(key);
   if (!force && hit && Date.now() - hit.at < DETAIL_TTL_MS) return { ok: true, detail: hit.detail };
+  /* One read of a pull request at a time. The stale path below starts a refresh
+     and the panel comes back for it 1.2 s later with force=1: measured as two
+     `gh` pairs (4 graphql spawns) for one open, identical answers. A caller
+     that arrives while a read is running joins it. A write drops the entry
+     (see `invalidate`) so a read that began before it is never joined after. */
+  const flying = detailFlights.get(key);
+  if (flying && force && Date.now() - (detailFlightAt.get(key) ?? 0) > SAME_PRESS_MS) {
+    return afterFlight(detailFollows, key, flying, () => prDetail(rootIn, number, true));
+  }
+  if (flying && (force || !hit)) return flying;
   /*
    * Stale, but on screen now.
    *
@@ -3164,13 +3393,16 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
    * rather than trusting a five-minute-old merge state indefinitely.
    */
   if (!force && hit) {
-    if (!detailInflight.has(key)) {
-      detailInflight.add(key);
-      void prDetail(rootIn, number, true).catch(() => {}).finally(() => detailInflight.delete(key));
-    }
+    void prDetail(rootIn, number, true).catch(() => {});
     return { ok: true, detail: hit.detail, stale: true };
   }
 
+  const p = readDetail(rootIn, number, repo, key).finally(() => { if (detailFlights.get(key) === p) { detailFlights.delete(key); detailFlightAt.delete(key); } });
+  detailFlights.set(key, p); detailFlightAt.set(key, Date.now());
+  return p;
+}
+
+async function readDetail(rootIn: unknown, number: number, repo: PrRepoId, key: string): Promise<{ ok: boolean; detail?: PrDetail; error?: string }> {
   const cap = await ghCapability();
   if (!cap.available || !cap.authed) return { ok: false, error: cap.reason };
 
@@ -3209,10 +3441,7 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
   await fillPages(p, repo, number);
 
   const rawChecks = p.statusCheckRollup?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes ?? [];
-  const normalised = rawChecks.map((c: any) => ({
-    ...c,
-    workflowName: c.checkSuite?.workflowRun?.workflow?.name || "",
-  }));
+  const normalised = rawChecks.map(withWorkflow);
   const { rollup, all } = rollupChecks(normalised);
   const gate = mergeGateOf(gateData?.data?.repository) ?? undefined;
   if (gate) {
@@ -3222,6 +3451,7 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
     // `rollup.failing` holds these same objects, so it is marked too.
     for (const c of all) c.required = required.has(checkKey(c.workflow, c.name));
   }
+  learnFromRead(repo.key, number, p.statusCheckRollup?.nodes?.[0]?.commit?.oid ?? "", all);
 
   const reviews: PrReview[] = (p.reviews?.nodes || []).map((r: any) => ({
     author: r.author?.login || "",
@@ -3633,6 +3863,7 @@ export async function prDiff(rootIn: unknown, numberIn: unknown, force = false):
 /** For a test, and for a Refresh that means it. */
 export function __clearDiffCache(): void { diffCache.clear(); diffInflight.clear(); }
 /** For a test: a pull request as if it had just been read. */
+export function __peekDetail(key: string): PrDetail | undefined { return detailCache.get(key)?.detail; }
 export function __seedDetail(key: string, detail: PrDetail): void { detailCache.set(key, { at: Date.now(), detail }); }
 
 // ---------------------------------------------------------------------------
@@ -3825,6 +4056,7 @@ export function assetReply(res: Response): Response {
 // ---------------------------------------------------------------------------
 
 function writeGuard(rootIn: unknown): PrActionResult | null {
+  const foreign = prWriteRefusal(rootIn); if (foreign) return foreign;
   if (!WRITE_ENABLED) return { ok: false, error: "writes are disabled (AGENTGLASS_GIT_WRITE_DISABLED=1)" };
   const abs = safeAbs(rootIn);
   const root = abs ? repoRootOf(abs) : null;
@@ -3833,9 +4065,18 @@ function writeGuard(rootIn: unknown): PrActionResult | null {
   return null;
 }
 
+/** Bumped by every write: a list read that began before it must not be kept. */
+const listEpoch = new Map<string, number>();
+export async function __invalidate(rootIn: unknown): Promise<void> { const repo = await repoIdFor(rootIn); if (repo) invalidate(repo); }
+
 function invalidate(repo: PrRepoId, number?: number): void {
+  listEpoch.set(repo.key, (listEpoch.get(repo.key) ?? 0) + 1);
   for (const k of listCache.keys()) if (k.startsWith(`${repo.key}\u0000`)) listCache.delete(k);
-  if (number !== undefined) detailCache.delete(`${repo.key}#${number}`);
+  if (number !== undefined) {
+    detailCache.delete(`${repo.key}#${number}`);
+    detailFlights.delete(`${repo.key}#${number}`);
+    forgetReads(`pending\u0000${repo.key}#${number}`);
+  }
 }
 
 async function runPr(rootIn: unknown, number: number, args: string[], stdin?: string): Promise<PrActionResult> {
@@ -3848,7 +4089,9 @@ async function runPr(rootIn: unknown, number: number, args: string[], stdin?: st
   if (r.code !== 0) return { ok: false, error: (r.stderr || r.stdout).trim().split("\n")[0] || "gh failed" };
   // The first line, the same as the error path above. This is shown in a toast
   // — a phone-width one — and some of these commands print a paragraph.
-  return { ok: true, detail: r.stdout.trim().split("\n")[0] || undefined };
+  // `at`: the server's own clock at the moment the write settled, the stamp a
+  // list's `startedAt` is compared with (never the browser's clock).
+  return { ok: true, detail: r.stdout.trim().split("\n")[0] || undefined, at: Date.now() };
 }
 
 const REVIEW_FLAG = { approve: "--approve", request_changes: "--request-changes", comment: "--comment" } as const;
@@ -4112,6 +4355,40 @@ export async function prFileToTemp(rootIn: unknown, numberIn: unknown, pathIn: u
   return { ok: true, file, sha };
 }
 
+/* `pulls/{n}` for the two readers that only want the two commit shas, held for
+   PULL_META_TTL_MS and shared. The writers (applySuggestion, addLineComment)
+   keep asking GitHub themselves: they act on the head, so it must be exact. */
+const PULL_META_TTL_MS = 30_000;
+const pullMeta = (repo: PrRepoId, n: number) =>
+  ttlRead(`pull\u0000${repo.key}#${n}`, PULL_META_TTL_MS,
+    () => ghJson<any>(["api", `repos/${repo.nameWithOwner}/pulls/${n}`]), { keep: (v) => v != null });
+
+/* A file at a commit never changes, so this is exact rather than fresh: keyed
+   by repo, path and sha, kept by bytes. Measured: every "expand context" click
+   was two spawns, and the same file at the same sha the click before. */
+const contentCache = new Map<string, { file: any; bytes: number }>();
+const CONTENT_BUDGET = 8 * 1024 * 1024;
+let contentBytes = 0;
+async function contentAt(from: string, path: string, ref: string): Promise<any | null> {
+  const key = `${from}\u0000${path}\u0000${ref}`;
+  const hit = contentCache.get(key);
+  if (hit) { contentCache.delete(key); contentCache.set(key, hit); return hit.file; }
+  const file = await singleFlight(`content\u0000${key}`, () =>
+    ghJson<any>(["api", `repos/${from}/contents/${encodeURI(path)}?ref=${ref}`]));
+  if (file) {
+    const bytes = String(file.content ?? "").length + 200;
+    if (bytes <= CONTENT_BUDGET / 4) {
+      contentCache.set(key, { file, bytes });
+      contentBytes += bytes;
+      for (const [k, e] of contentCache) {
+        if (contentBytes <= CONTENT_BUDGET) break;
+        contentCache.delete(k); contentBytes -= e.bytes;
+      }
+    }
+  }
+  return file;
+}
+
 export async function fileSlice(rootIn: unknown, numberIn: unknown, args: {
   path?: unknown; side?: unknown; from?: unknown; to?: unknown;
 }): Promise<{ ok: boolean; lines?: string[]; start?: number; total?: number; binary?: boolean; url?: string; error?: string }> {
@@ -4120,13 +4397,13 @@ export async function fileSlice(rootIn: unknown, numberIn: unknown, args: {
   if (!Number.isInteger(n) || n <= 0 || !path) return { ok: false, error: "invalid file" };
   const repo = await repoIdFor(rootIn);
   if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
-  const pr = await ghJson<any>(["api", `repos/${repo.nameWithOwner}/pulls/${n}`]);
+  const pr = await pullMeta(repo, n);
   // LEFT is the base — the file as it was; RIGHT is the head — as it is now.
   const left = args.side === "LEFT";
   const ref = left ? pr?.base?.sha : pr?.head?.sha;
   const from = left ? repo.nameWithOwner : (pr?.head?.repo?.full_name ?? repo.nameWithOwner);
   if (!ref) return { ok: false, error: "could not read the pull request's commits" };
-  const file = await ghJson<any>(["api", `repos/${from}/contents/${encodeURI(path)}?ref=${ref}`]);
+  const file = await contentAt(from, path, ref);
   if (!file) return { ok: false, error: `${path} is not on that side` };
   // A file GitHub will not inline is a big one or a binary one; either way the
   // bytes come from `download_url`, which the asset proxy can fetch.
@@ -4415,11 +4692,66 @@ export async function fastForwardLocal(root: string, st: PrLocalHead): Promise<s
  * The panel used to say "the log itself lives on GitHub — this panel does not
  * download run logs", which meant every red check sent you to a browser. It is
  * one REST call. Capped, because a chatty job runs to megabytes and this is a
- * panel, not a log store: the TAIL is kept, since the failure is at the end.
+ * panel, not a log store.
+ *
+ * `--allow-escape-sequences`: `gh api` refuses to print a body with terminal
+ * escape bytes and exits non-zero, and every bun log has them — measured on a
+ * real 1.15 MB run, where the call failed outright before this flag. The bytes
+ * are stripped below, so what is allowed in is never what reaches the panel.
  */
 const LOG_MAX_BYTES = 400_000;
-const logCache = new Map<string, { at: number; text: string }>();
+const logCache = new Map<string, { at: number; text: string; truncated: boolean }>();
 const LOG_TTL_MS = 5 * 60_000;
+
+/** CSI (colour, cursor, erase), OSC (title, hyperlink), and any other ESC pair. */
+const ANSI = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b\n]*(?:\x07|\x1b\\)?|\x1b[@-Z\\-_]?/g;
+/** Where a failure starts, across the runners this repo meets: bun `(fail)`,
+ *  Actions `##[error]`, python `Traceback` and `E   `, pytest `FAILED`. */
+const FAILURE_MARKER = /\(fail\)|##\[error\]|^Traceback|\bFAILED\b|^E {3}/m;
+
+/**
+ * What the panel shows of a log: no escape bytes, at most `max` characters.
+ *
+ * The tail alone is the wrong end for most runners. Bun prints a failure's
+ * detail where it happens and only a name list at the end — on the real run the
+ * detail sat near 290 KB of 1.15 MB and the 400 KB tail began at 775 KB;
+ * pytest and django print detail before their summary too. So a log that must
+ * be cut keeps the tail AND the region around the FIRST failure marker, half
+ * the cap each, with a line saying how much lies between them. The region
+ * leads the marker as much as it follows it, because the detail comes before
+ * bun's `(fail)` line and after pytest's first `E   `.
+ *
+ * The ceiling: one region, around the first marker only. A second failure far
+ * from both the first and the end is cut, and a first marker that is a false
+ * positive (a test named "FAILED handling") spends the region on the wrong
+ * place. The full excerpt extractor — every failure, by runner — is a later
+ * slice and is not here.
+ */
+export function shapeJobLog(raw: string, max: number = LOG_MAX_BYTES): { text: string; truncated: boolean } {
+  const full = raw.replace(ANSI, "");
+  if (full.length <= max) return { text: full, truncated: false };
+  const tailOnly = () => ({ text: full.slice(full.length - max), truncated: true });
+  const marker = FAILURE_MARKER.exec(full);
+  if (!marker) return tailOnly();
+  const half = Math.floor(max / 2);
+  const lineStart = full.lastIndexOf("\n", marker.index) + 1;
+  let start = lineStart - half / 2;
+  if (start > 0) start = full.indexOf("\n", start) + 1 || 0;
+  else start = 0;
+  // The failure is already inside the tail, with its lead-in: nothing to add.
+  if (start >= full.length - max) return tailOnly();
+  const regionEnd = Math.min(start + half, full.length);
+  const lead = start > 0 ? `… ${start} characters of the log are not shown …\n` : "";
+  const room = max - lead.length - (regionEnd - start);
+  // The tail window starts at full.length - max and the region ends at most
+  // start + half, with start < full.length - max: they cannot meet, so there is
+  // always a gap to announce.
+  const NOTE_ROOM = 80;
+  let tailStart = full.length - (room - NOTE_ROOM);
+  tailStart = full.indexOf("\n", tailStart) + 1 || tailStart;
+  const note = `\n… ${tailStart - regionEnd} characters of the log are not shown …\n`;
+  return { text: lead + full.slice(start, regionEnd) + note + full.slice(tailStart), truncated: true };
+}
 
 export async function jobLog(rootIn: unknown, jobIdIn: unknown): Promise<{ ok: boolean; text?: string; truncated?: boolean; error?: string }> {
   const jobId = String(jobIdIn ?? "");
@@ -4428,14 +4760,201 @@ export async function jobLog(rootIn: unknown, jobIdIn: unknown): Promise<{ ok: b
   if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
   const key = `${repo.key}#${jobId}`;
   const hit = logCache.get(key);
-  if (hit && Date.now() - hit.at < LOG_TTL_MS) return { ok: true, text: hit.text };
-  const r = await gh(["api", `repos/${repo.nameWithOwner}/actions/jobs/${jobId}/logs`]);
+  if (hit && Date.now() - hit.at < LOG_TTL_MS) return { ok: true, text: hit.text, truncated: hit.truncated };
+  const r = await gh(["api", "--allow-escape-sequences", `repos/${repo.nameWithOwner}/actions/jobs/${jobId}/logs`]);
   if (r.code !== 0) return { ok: false, error: (r.stderr || r.stdout).trim().split("\n")[0] || "could not read the log" };
-  const full = r.stdout;
-  const truncated = full.length > LOG_MAX_BYTES;
-  const text = truncated ? full.slice(full.length - LOG_MAX_BYTES) : full;
-  logCache.set(key, { at: Date.now(), text });
+  const { text, truncated } = shapeJobLog(r.stdout);
+  logCache.set(key, { at: Date.now(), text, truncated });
   return { ok: true, text, truncated };
+}
+
+/** GitHub's own words for "slow down": a 429, or a 403 that says rate limit. */
+const RATE_LIMITED = /rate limit|HTTP 429|abuse detection/i;
+
+/** When the core budget comes back, in ms. `rate_limit` itself is free, so asking costs nothing. */
+async function coreResetAt(): Promise<number | null> {
+  const r = await gh(["api", "rate_limit", "--jq", ".resources.core.reset"]);
+  const n = Number(r.stdout.trim());
+  return r.code === 0 && Number.isFinite(n) && n > 0 ? n * 1000 : null;
+}
+
+async function ghFailure(stderr: string): Promise<{ ok: false; kind: "budget"; resetAt: number | null } | { ok: false; kind: "error"; error: string }> {
+  if (RATE_LIMITED.test(stderr)) return { ok: false, kind: "budget", resetAt: await coreResetAt() };
+  // GitHub's own line ("gh: Not Found (HTTP 404)") says nothing a person can act on: say what it means.
+  if (/HTTP 403|Resource not accessible/i.test(stderr)) return { ok: false, kind: "error", error: "GitHub refused to show this to this account's token (HTTP 403). The token may lack read access to Actions or checks for this repository." };
+  if (/HTTP 404|Not Found/i.test(stderr)) return { ok: false, kind: "error", error: "GitHub has no record of this check for this account: it may be in a repository this account cannot read, or older than GitHub keeps it." };
+  return { ok: false, kind: "error", error: stderr.trim().split("\n")[0] || "could not read it from GitHub" };
+}
+
+/**
+ * One job's log, whole, or why not. `-i` puts the response headers in front of
+ * the body, and the headers are the ones of the blob the redirect lands on, so
+ * `Content-Length` is known before a byte of the log is: a log over the cap is
+ * stopped there instead of being downloaded to be thrown away. Without a length
+ * the cap is applied as bytes arrive.
+ */
+async function readLogCapped(nameWithOwner: string, jobId: string, maxBytes: number): Promise<LogRead> {
+  const bin = ghBin();
+  if (!bin) return { ok: false, kind: "error", error: "gh not found" };
+  const proc = Bun.spawn([bin, "api", "-i", "--allow-escape-sequences", `repos/${nameWithOwner}/actions/jobs/${jobId}/logs`], {
+    stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env, GH_PROMPT_DISABLED: "1", NO_COLOR: "1" },
+  });
+  const timer = setTimeout(() => { try { proc.kill(); } catch { /* gone */ } }, 90_000);
+  const stderrP = new Response(proc.stderr).text();
+  const chunks: Uint8Array[] = [];
+  let total = 0, bodyAt = -1, status = 0, length = 0, blobMissing = false;
+  let verdict: LogRead | null = null;
+  try {
+    for await (const chunk of proc.stdout as unknown as AsyncIterable<Uint8Array>) {
+      chunks.push(chunk); total += chunk.length;
+      if (bodyAt < 0) {
+        const head = Buffer.concat(chunks).toString("latin1");
+        const end = head.indexOf("\r\n\r\n");
+        if (end < 0) continue;
+        bodyAt = end + 4;
+        status = Number(/^HTTP\/[\d.]+ (\d+)/.exec(head)?.[1] ?? 0);
+        length = Number(/^content-length:\s*(\d+)/im.exec(head.slice(0, end))?.[1] ?? 0);
+        // The redirect landed on storage that has no such blob: the job is real, its log was never written.
+        blobMissing = /^x-ms-error-code:\s*BlobNotFound/im.test(head.slice(0, end));
+        if (status === 200 && length > maxBytes) { verdict = { ok: false, kind: "toolarge", bytes: length }; break; }
+      }
+      if (status === 200 && bodyAt >= 0 && total - bodyAt > maxBytes) { verdict = { ok: false, kind: "toolarge", bytes: total - bodyAt }; break; }
+    }
+  } finally { clearTimeout(timer); }
+  if (verdict) { try { proc.kill(); } catch { /* gone */ } return verdict; }
+  const code = await proc.exited;
+  const stderr = await stderrP;
+  if (status === 410) return { ok: false, kind: "expired" };
+  if (status === 404) return blobMissing ? { ok: false, kind: "missing" } : { ok: false, kind: "notfound" };
+  if (code !== 0 || status !== 200) return ghFailure(stderr || `HTTP ${status}`);
+  return { ok: true, text: Buffer.concat(chunks).subarray(bodyAt).toString("utf8"), bytes: total - bodyAt };
+}
+
+async function readAnnotations(nameWithOwner: string, jobId: string): Promise<AnnotationsRead> {
+  const r = await gh(["api", `repos/${nameWithOwner}/check-runs/${jobId}/annotations?per_page=50`]);
+  // A 404 here is "no such check run": the log read that follows says what that means, so it is not an error yet.
+  if (r.code !== 0 && /HTTP 404/.test(r.stderr + r.stdout)) return { ok: true, items: [] };
+  if (r.code !== 0) return ghFailure(r.stderr || r.stdout);
+  try {
+    const rows = JSON.parse(r.stdout) as any[];
+    const items: CheckAnnotation[] = (Array.isArray(rows) ? rows : []).map((a) => ({
+      level: String(a.annotation_level ?? ""), path: String(a.path ?? ""), line: Number(a.start_line ?? 0), title: a.title ? String(a.title) : undefined, message: String(a.message ?? ""),
+    }));
+    return { ok: true, items };
+  } catch { return { ok: false, kind: "error", error: "GitHub's answer was not readable" }; }
+}
+
+async function readCheckOutput(nameWithOwner: string, jobId: string): Promise<OutputRead> {
+  const r = await gh(["api", `repos/${nameWithOwner}/check-runs/${jobId}`, "--jq", "{title: (.output.title // \"\"), summary: (.output.summary // \"\"), text: (.output.text // \"\")}"]);
+  if (r.code !== 0) {
+    if (/HTTP 404/.test(r.stderr + r.stdout)) return { ok: true, output: null };
+    const f = await ghFailure(r.stderr || r.stdout);
+    return f;
+  }
+  try { return { ok: true, output: JSON.parse(r.stdout) as { title: string; summary: string; text: string } }; }
+  catch { return { ok: false, kind: "error", error: "GitHub's answer was not readable" }; }
+}
+
+/**
+ * The failing part of one failed check, for the panel: what the cache has, else
+ * GitHub's annotations and the job's log, cut down to the failures (see
+ * ciFailures.ts for the order and the reasons). Lazy by construction — nothing
+ * calls this until a failed check is opened — and `force` is "Read it anyway".
+ */
+export async function checkFailures(rootIn: unknown, jobIdIn: unknown, hints: { attempt?: unknown; step?: unknown }, force = false) {
+  const jobId = String(jobIdIn ?? "");
+  if (!/^\d+$/.test(jobId)) return { ok: false as const, kind: "error" as const, error: "invalid job", requests: 0 };
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return { ok: false as const, kind: "error" as const, error: "no GitHub remote on this repository", requests: 0 };
+  const attempt = Number(hints.attempt);
+  return readCheckFailures(repo.key, jobId, {
+    attempt: Number.isInteger(attempt) && attempt > 0 ? attempt : undefined,
+    step: typeof hints.step === "string" && hints.step ? hints.step.slice(0, 200) : undefined,
+  }, {
+    annotations: () => readAnnotations(repo.nameWithOwner, jobId),
+    log: (max) => readLogCapped(repo.nameWithOwner, jobId, max),
+    output: () => readCheckOutput(repo.nameWithOwner, jobId),
+  }, { force });
+}
+
+const defaultBranches = new Map<string, string>();
+const lensRunning = new Map<string, Promise<FailingTests>>();
+
+/**
+ * The newest finished push to the default branch: one request for the run, and
+ * one more for the branch's name only when it is not already known.
+ */
+async function newestMainRun(repo: PrRepoId, known?: string): Promise<{ ok: true; run: MainRun | null; requests: number } | { ok: false; error: string; requests: number }> {
+  let requests = 0;
+  let branch = known || defaultBranches.get(repo.key);
+  if (!branch) {
+    const b = await gh(["api", `repos/${repo.nameWithOwner}`, "--jq", ".default_branch"]); requests++;
+    branch = b.stdout.trim();
+    if (b.code !== 0 || !branch) return { ok: false, error: RATE_LIMITED.test(b.stderr) ? "GitHub's hourly budget is used up" : (b.stderr.trim().split("\n")[0] || "could not read the repository"), requests };
+  }
+  defaultBranches.set(repo.key, branch);
+  const runs = await ghJson<{ workflow_runs?: any[] }>(["api", `repos/${repo.nameWithOwner}/actions/runs?branch=${encodeURIComponent(branch)}&event=push&status=completed&per_page=1`]); requests++;
+  if (!runs) return { ok: false, error: "could not list the newest push to the default branch", requests };
+  const r = runs.workflow_runs?.[0];
+  if (!r) return { ok: true, run: null, requests };
+  return { ok: true, run: { id: String(r.id), sha: String(r.head_sha ?? ""), branch, conclusion: r.conclusion ?? null, at: Date.parse(r.updated_at ?? "") || Date.now() }, requests };
+}
+
+async function mainJobs(repo: PrRepoId, runId: string): Promise<{ ok: true; jobs: MainJob[]; requests: number } | { ok: false; error: string; requests: number }> {
+  const jobs = await ghJson<{ jobs?: any[] }>(["api", `repos/${repo.nameWithOwner}/actions/runs/${runId}/jobs?per_page=100`]);
+  if (!jobs) return { ok: false, error: "could not list the jobs of the newest push", requests: 1 };
+  return {
+    ok: true, requests: 1,
+    jobs: (jobs.jobs ?? []).filter((j) => j.conclusion === "failure").map((j) => ({
+      id: String(j.id), name: String(j.name ?? ""), at: Date.parse(j.completed_at ?? "") || Date.now(),
+      step: (j.steps ?? []).find((st: any) => st?.conclusion === "failure")?.name || undefined,
+    })),
+  };
+}
+
+/**
+ * The CI view's "Failing tests": a table read by default (no request), and with
+ * `refresh` a capped backfill that reads the failed runs it has not read — see
+ * ciFailureLens.ts for what it does and what it costs. One refresh at a time per
+ * repository: a second press while one runs gets that one's answer.
+ */
+export async function failingTestsFor(rootIn: unknown, refresh: boolean): Promise<FailingTests | { ok: false; error: string }> {
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
+  if (!refresh) return failingTests(repo.key);
+  const running = lensRunning.get(repo.key);
+  if (running) return running;
+  const src: LensSources = {
+    newestMainRun: (known) => newestMainRun(repo, known),
+    mainJobs: (runId) => mainJobs(repo, runId),
+    readJob: (job, step) => readCheckFailures(repo.key, job, { step }, { annotations: () => readAnnotations(repo.nameWithOwner, job), log: (max) => readLogCapped(repo.nameWithOwner, job, max), output: () => readCheckOutput(repo.nameWithOwner, job) }),
+  };
+  const p = refreshFailingTests(repo.key, src).finally(() => lensRunning.delete(repo.key));
+  lensRunning.set(repo.key, p);
+  return p;
+}
+
+/** What is already known about these jobs' failures. Reads the cache only: not one GitHub request. */
+export async function cachedCheckFailures(rootIn: unknown, jobsIn: unknown) {
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return { ok: false as const, error: "no GitHub remote on this repository" };
+  return { ok: true as const, summaries: cachedSummaries(repo.key, String(jobsIn ?? "").split(",").filter(Boolean)) };
+}
+
+/**
+ * The runs whose jobs are listed, at most six, the runs of FAILED checks first.
+ * A pull request has dozens of runs and the list is capped; taking them in the
+ * order the checks arrive left the one red check's own run off it on a real pull
+ * request (72 checks, the failing run beyond the sixth), so the row that mattered
+ * had no job to open.
+ */
+export function runsToList(checks: { url?: string; state: string }[], max = 6): string[] {
+  const failed = new Set<string>(), others = new Set<string>();
+  for (const c of checks) {
+    const m = /\/actions\/runs\/(\d+)/.exec(c.url || "");
+    if (m) (c.state === "failure" ? failed : others).add(m[1]!);
+  }
+  return [...failed, ...[...others].filter((r) => !failed.has(r))].slice(0, max);
 }
 
 /**
@@ -4451,13 +4970,9 @@ export async function checkJobs(rootIn: unknown, number: unknown): Promise<{ ok:
   if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
   const det = await prDetail(rootIn, n);
   if (!det.ok || !det.detail) return { ok: false, error: det.error };
-  const runIds = new Set<string>();
-  for (const c of det.detail.checksAll) {
-    const m = /\/actions\/runs\/(\d+)/.exec(c.url || "");
-    if (m) runIds.add(m[1]!);
-  }
+  const runIds = runsToList(det.detail.checksAll);
   const jobs: PrCheckJob[] = [];
-  for (const id of [...runIds].slice(0, 6)) {
+  for (const id of runIds) {
     const r = await ghJson<any>(["api", `repos/${repo.nameWithOwner}/actions/runs/${id}/jobs`, "--paginate"]);
     for (const j of r?.jobs ?? []) {
       jobs.push({
@@ -4469,6 +4984,8 @@ export async function checkJobs(rootIn: unknown, number: unknown): Promise<{ ok:
         startedAt: j.started_at ?? null,
         completedAt: j.completed_at ?? null,
         url: j.html_url ?? "",
+        attempt: Number.isInteger(j.run_attempt) ? j.run_attempt : undefined,
+        failedStep: (j.steps ?? []).find((st: any) => st?.conclusion === "failure")?.name || undefined,
       });
     }
   }
@@ -4568,6 +5085,9 @@ export async function mergePr(rootIn: unknown, number: unknown, method: unknown,
     const hint = autoMergeHint(res.error || "");
     if (hint) return { ...res, error: hint };
   }
+  // Who pressed it, off the login already cached for the list: a merge that
+  // landed is the one answer that says something about the pull request itself.
+  if (res.ok && !auto) return { ...res, mergedBy: ghCapabilityCached()?.login || undefined };
   return res;
 }
 
@@ -5019,9 +5539,15 @@ export async function pendingReviewFor(rootIn: unknown, numberIn: unknown): Prom
   if (!root || !Number.isSafeInteger(n) || n <= 0) return { ok: true, id: null, comments: [] };
   const repo = await repoIdFor(root);
   if (!repo) return { ok: true, id: null, comments: [] };
-  const p = await pendingReview(repo.nameWithOwner, n);
-  return { ok: true, id: p?.id ?? null, comments: p?.comments ?? [] };
+  /* The panel re-reads this on every detail refresh to notice a draft deleted
+     in the browser; measured as one graphql spawn per re-open with nothing new.
+     Held briefly, dropped by every write here that could change it. */
+  return ttlRead(`pending\u0000${repo.key}#${n}`, PENDING_TTL_MS, async () => {
+    const p = await pendingReview(repo.nameWithOwner, n);
+    return { ok: true as const, id: p?.id ?? null, comments: p?.comments ?? [] };
+  });
 }
+const PENDING_TTL_MS = 20_000;
 
 export async function submitReviewWith(
   rootIn: unknown, numberIn: unknown, verb: unknown, body: unknown, commentsIn: unknown,

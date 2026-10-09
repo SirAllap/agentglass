@@ -1,4 +1,9 @@
 import { test, expect, describe, beforeAll } from "bun:test";
+import { globalStubs } from "./stubGlobal";
+import { stubStorage } from "./stubStorage.ts";
+const stubGlobal = globalStubs();
+
+stubStorage();
 
 // The header's provider filter, reported wrong twice: once when Codex sessions
 // were invisible for want of a project, and again when a quiet agent aged out
@@ -6,8 +11,7 @@ import { test, expect, describe, beforeAll } from "bun:test";
 
 let derive: typeof import("../src/lib/derive.ts");
 beforeAll(async () => {
-  (globalThis as any).location ??= new URL("http://localhost:5173/");
-  (globalThis as any).localStorage ??= { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+  stubGlobal("location", new URL("http://localhost:5173/"));
   derive = await import("../src/lib/derive.ts");
 });
 

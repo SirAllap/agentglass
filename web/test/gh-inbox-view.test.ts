@@ -11,19 +11,21 @@
  * either (measured) — so the shelf rules are pinned here too.
  */
 import { beforeEach, describe, expect, test } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import type { InboxItem } from "../../shared/types.ts";
 import { byDay, facetCounts, facetOrder, filterInbox, inFacet, reasonLabel, searchInbox } from "../src/lib/ghInbox.ts";
 import { __resetMarks, isDone, isSaved, onShelf, setDone, setSaved } from "../src/lib/inboxMarks.ts";
+const stubGlobal = globalStubs();
 
 // No DOM under bun, and the shelves are two keys in localStorage. A Map is
 // enough to test what they do with what they find there.
 const store = new Map<string, string>();
-(globalThis as unknown as { localStorage: Storage }).localStorage = {
+stubGlobal("localStorage", {
   getItem: (k: string) => store.get(k) ?? null,
   setItem: (k: string, v: string) => void store.set(k, v),
   removeItem: (k: string) => void store.delete(k),
   clear: () => store.clear(), key: () => null, length: 0,
-} as unknown as Storage;
+} as unknown as Storage);
 
 const note = (over: Partial<InboxItem>): InboxItem => ({
   id: "1", unread: true, reason: "subscribed", type: "PullRequest",

@@ -16,23 +16,34 @@ export type Known = "dir" | "file" | null;
 /*
  * Cached by absolute path, and the in-flight ask is cached too: hovering the
  * same line twice, or a build log that prints one path forty times, is one
- * request. A miss is cached like a hit — the alternative is asking again on
- * every mouse move over `and/or`. The cost is that a file created after the
- * first look stays unlinked until the cache turns over; 30 s is the ceiling.
+ * request. A miss is cached as well — the alternative is asking again on
+ * every mouse move over `and/or` — but not for as long as a hit. Measured: an
+ * agent printed "the file is at ~/notes/today.md" and wrote the file a second
+ * later; with one 30 s TTL for both, the path stayed unclickable for up to
+ * 30 s and only became a link after the cache turned over. A hit is stable
+ * (files rarely vanish), so it keeps 30 s; a miss is the answer most likely
+ * to be overtaken by the next second, so it lives 2 s, which still collapses
+ * the mouse-move storm into about one request per path per 2 s.
  */
-const TTL_MS = 30_000;
-const known = new Map<string, { at: number; kind: Promise<Known> }>();
+const HIT_TTL_MS = 30_000;
+const MISS_TTL_MS = 2_000;
 
-function kindOf(abs: string): Promise<Known> {
-  const hit = known.get(abs);
-  if (hit && Date.now() - hit.at < TTL_MS) return hit.kind;
-  const kind = api.previewFacts(abs).then((f): Known => (!f.ok ? null : f.kind === "dir" ? "dir" : "file"))
+export function makeKindCache(ask: (abs: string) => Promise<Known>, now: () => number = Date.now) {
+  const known = new Map<string, { at: number; kind: Promise<Known>; miss: boolean }>();
+  return function kindOf(abs: string): Promise<Known> {
+    const hit = known.get(abs);
+    if (hit && now() - hit.at < (hit.miss ? MISS_TTL_MS : HIT_TTL_MS)) return hit.kind;
+    const entry = { at: now(), miss: false, kind: null as unknown as Promise<Known> };
     // A failed ask is not an answer: forget it so the next hover asks again.
-    .catch((): Known => { known.delete(abs); return null; });
-  known.set(abs, { at: Date.now(), kind });
-  if (known.size > 500) known.delete(known.keys().next().value!);
-  return kind;
+    entry.kind = ask(abs).then((k) => { entry.miss = k === null; return k; })
+      .catch((): Known => { known.delete(abs); return null; });
+    known.set(abs, entry);
+    if (known.size > 500) known.delete(known.keys().next().value!);
+    return entry.kind;
+  };
 }
+
+const kindOf = makeKindCache((abs) => api.previewFacts(abs).then((f): Known => (!f.ok ? null : f.kind === "dir" ? "dir" : "file")));
 
 let homeCache: Promise<string> | null = null;
 const homeDir = () => (homeCache ??= api.diskPlaces().then((r) => r.home || "").catch(() => { homeCache = null; return ""; }));

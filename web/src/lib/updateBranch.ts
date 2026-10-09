@@ -1,4 +1,6 @@
-import type { PrLocalHead } from "../../../shared/types.ts";
+import type { PrLocalHead, PrLocalSync } from "../../../shared/types.ts";
+import type { WorktreeJumpRequest } from "./worktreeJump.ts";
+import { dirName } from "./worktree.ts";
 
 /**
  * What "Update branch" is actually going to do, said before it does it.
@@ -10,8 +12,8 @@ import type { PrLocalHead } from "../../../shared/types.ts";
  * with the pull request you just read.
  *
  * So the label carries the second half when there is one to carry, and when
- * there is not, the row says why in a sentence rather than doing something
- * clever. Only one state leads to a write here: a local branch that can be
+ * there is not, a notice under the row says why and what would fix it, rather
+ * than doing something clever. Only one state leads to a write here: a local branch that can be
  * fast-forwarded. Divergence, uncommitted work and a checkout in the middle of
  * a merge are all reported and left alone — this machine runs a dozen
  * worktrees with agents inside them, and moving somebody's HEAD to save them a
@@ -21,13 +23,38 @@ export interface UpdateBranchMove {
   label: string;
   /** The tooltip: the whole sentence, including the path when one matters. */
   title: string;
-  /** Shown under the row when the local copy cannot come along. */
-  note?: string;
+  /** Set when the local copy cannot come along. Data, not a sentence: the one
+   *  notice component words all three kinds, so they read alike. */
+  notice?: BranchNotice;
   /** Whether to ask the server for the local fast-forward. */
   syncLocal: boolean;
 }
 
-const tail = (p?: string) => (p ? p.split("/").filter(Boolean).pop() || p : "");
+/**
+ * Why Update branch will only sync GitHub this time.
+ *
+ * All three leave the local copy alone for the same reason — `syncLocal` is
+ * false, so the server runs `gh pr update-branch` and nothing else (prs.ts
+ * `updateBranch`) — and differ only in what is in the way:
+ *
+ *   dirty     the checkout has uncommitted changes
+ *   diverged  the local branch has `ahead` commits GitHub does not; it may not
+ *             be checked out anywhere, so `worktree` can be missing
+ *   busy      the checkout is mid-merge, -cherry-pick or -revert. The server
+ *             checks for a rebase too, but a rebase detaches HEAD and the
+ *             branch's worktree is then not found, so it never arrives as busy
+ *
+ * Diverged says "pull, then push", not "push": pressing Update branch moves
+ * GitHub's branch, so from then on a bare push is rejected.
+ */
+export interface BranchNotice {
+  kind: Exclude<PrLocalSync, "absent" | "ff">;
+  /** Absolute path of the checkout. Always set for dirty and busy. */
+  worktree?: string;
+  branch: string;
+  /** Commits the local branch has that GitHub does not. */
+  ahead: number;
+}
 
 export function updateBranchMove(behind: number | null, base: string, local?: PrLocalHead): UpdateBranchMove {
   const count = behind ? ` · ${behind} behind` : "";
@@ -49,25 +76,34 @@ export function updateBranchMove(behind: number | null, base: string, local?: Pr
     };
   }
 
-  /* What to do about it, not only what will not happen. "It stays put" is true
-     and leaves you nowhere; a local branch that is ahead is one push away from
-     being the easy case, and that is the sentence worth reading. */
-  const why = local.sync === "diverged"
-    ? `your local ${local.branch} has ${local.ahead} commit${local.ahead === 1 ? "" : "s"} GitHub does not have — push ${local.ahead === 1 ? "it" : "them"} and this can pull too`
-    : local.sync === "busy"
-      ? `${tail(local.worktree)} is mid-merge — your local ${local.branch} stays put`
-      : `uncommitted changes in ${tail(local.worktree)} — your local ${local.branch} stays put`;
-
   return {
     label: `Update branch${count}`,
     title: `${far} Your local copy is not touched: ${local.sync === "diverged"
       ? `it has ${local.ahead} commit${local.ahead === 1 ? "" : "s"} that GitHub does not`
       : local.sync === "busy"
-        ? `${local.worktree} is mid-merge or mid-rebase`
+        ? `${local.worktree} has a merge, cherry-pick or revert in progress`
         : `there are uncommitted changes in ${local.worktree}`}.`,
-    note: why,
+    notice: { kind: local.sync, worktree: local.worktree, branch: local.branch, ahead: local.ahead },
     syncLocal: false,
   };
+}
+
+/**
+ * Where the notice's button goes: inside the app, to the place that shows what
+ * is in the way, never a terminal.
+ *
+ *   dirty     File changes, filtered to that worktree — the uncommitted work
+ *   diverged  Git, on that worktree's history, where the commits GitHub lacks
+ *             sit above the remote's ref. Not checked out anywhere, there is
+ *             no worktree to open: the repository's Branches list, whose row
+ *             for it carries the ↑N, is the nearest place that shows them.
+ *   busy      Git, on that worktree's changes, which is where the merge state
+ *             and the conflict resolver are
+ */
+export function branchNoticeJump(n: BranchNotice, repoRoot: string): WorktreeJumpRequest {
+  if (n.kind === "dirty") return { view: "diff", filter: dirName(n.worktree ?? "") };
+  if (n.kind === "diverged") return n.worktree ? { view: "git", root: n.worktree, tab: "log" } : { view: "git", root: repoRoot, tab: "branches" };
+  return { view: "git", root: n.worktree || repoRoot, tab: "changes" };
 }
 
 /** Which files the panel's own merge of the two trees found in conflict, and

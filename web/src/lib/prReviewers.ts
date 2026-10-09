@@ -26,6 +26,10 @@ export interface ReviewerRow {
   state: ReviewerState;
   /** ISO time of the review this state came from. Absent while awaiting. */
   at?: string;
+  /** A COMMENTED review after the verdict in `at`: it never clears a change
+   *  request, so the state stays, and this is how the tooltip says a new round
+   *  has happened since. */
+  commentedAt?: string;
   /** A team, which has no face and no verdict of its own. */
   isTeam?: boolean;
   isBot?: boolean;
@@ -60,24 +64,30 @@ const RANK: Record<ReviewerState, number> = { changes: 0, awaiting: 1, approved:
  * The rule that matters is that a COMMENT does not overwrite an APPROVAL, which
  * is exactly what happens when a reviewer approves and then answers a thread.
  */
-function verdictOf(rs: ReviewLike[]): { state: ReviewerState; at: string } | null {
+function verdictOf(rs: ReviewLike[]): { state: ReviewerState; at: string; commentedAt?: string } | null {
   const said = rs.filter((r) => r.state !== "PENDING")
     .sort((a, b) => (a.submittedAt < b.submittedAt ? -1 : a.submittedAt > b.submittedAt ? 1 : 0));
   if (!said.length) return null;
   const strong = [...said].reverse().find((r) => r.state === "APPROVED" || r.state === "CHANGES_REQUESTED" || r.state === "DISMISSED");
   const last = said[said.length - 1]!;
   if (!strong) return { state: "commented", at: last.submittedAt };
+  const later = last.state === "COMMENTED" && last.submittedAt > strong.submittedAt ? last.submittedAt : undefined;
   return {
     state: strong.state === "APPROVED" ? "approved" : strong.state === "CHANGES_REQUESTED" ? "changes" : "dismissed",
     at: strong.submittedAt,
+    ...(later ? { commentedAt: later } : null),
   };
 }
 
-export function reviewerRoster(d: { reviewers?: RequestedLike[]; reviews?: ReviewLike[] }): ReviewerRow[] {
-  const asked = d.reviewers ?? [];
+export function reviewerRoster(d: { author?: string; reviewers?: RequestedLike[]; reviews?: ReviewLike[] }): ReviewerRow[] {
+  /* The author is never a reviewer of his own pull request. Replying to a
+     thread on it is a COMMENTED review under his name, and drew a comment icon
+     beside the real reviewers and turned the header to "Commented" while a
+     person had still not answered. */
+  const asked = (d.reviewers ?? []).filter((a) => a.login !== d.author);
   const byPerson = new Map<string, ReviewLike[]>();
   for (const r of d.reviews ?? []) {
-    if (!r.author) continue;
+    if (!r.author || r.author === d.author) continue;
     (byPerson.get(r.author) ?? byPerson.set(r.author, []).get(r.author)!).push(r);
   }
 
@@ -88,7 +98,7 @@ export function reviewerRoster(d: { reviewers?: RequestedLike[]; reviews?: Revie
     if (!v) continue;                      // a draft review is nobody's verdict
     seen.add(login);
     rows.push({
-      login, state: v.state, at: v.at,
+      login, state: v.state, at: v.at, ...(v.commentedAt ? { commentedAt: v.commentedAt } : null),
       isBot: rs.some((r) => r.isBot),
       // Asked again after answering: the ↻ GitHub draws beside the tick.
       again: asked.some((a) => a.login === login && !a.isTeam),
@@ -185,13 +195,16 @@ export function reviewVerdict(rows: readonly ReviewerRow[]): ReviewVerdict {
     return { kind: "approved", who: approved.map((r) => r.login),
       askedAgain: approved.some((r) => r.again) };
   }
+  /* A person still being waited on outranks a bare comment: somebody who only
+     commented has not decided, and the request is the thing the author is
+     waiting for. Under a verdict (above) it stays quiet, as before. */
+  const awaiting = of("awaiting").map((r) => r.login);
+  if (awaiting.length) return { kind: "awaiting", who: awaiting };
   const commented = of("commented");
   if (commented.length) {
     return { kind: "commented", who: commented.map((r) => r.login),
       ...(commented.every((r) => r.again) ? { cleared: true } : null) };
   }
-  const awaiting = of("awaiting").map((r) => r.login);
-  if (awaiting.length) return { kind: "awaiting", who: awaiting };
   /* `dismissed` lands here on purpose: a dismissed review is a decision that
      has been taken back, which is the same standing as never having one. */
   return { kind: "none", who: [] };
@@ -211,4 +224,9 @@ export function verdictLine(v: ReviewVerdict): string {
     case "awaiting": return `Waiting on ${who}`;
     default: return "No review yet";
   }
+}
+
+/** The tooltip of an answered row: what they said and when, and a later comment if any. */
+export function reviewerTitle(r: ReviewerRow, said: string, ago: (iso: string) => string): string {
+  return `${r.login} — ${said}${r.at ? ` ${ago(r.at)}` : ""}${r.commentedAt ? ` · commented again ${ago(r.commentedAt)}` : ""}`;
 }

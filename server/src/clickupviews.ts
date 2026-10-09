@@ -349,5 +349,30 @@ export function putCache(entry: CachedView): void {
   save({ ...s, cache: { ...s.cache, [entry.view.id]: entry } });
 }
 
+/**
+ * Fold the card a write answered with into every board that holds it.
+ *
+ * The panel stopped re-reading the whole board after a status change, so the
+ * server's copy has to be right by itself or the next visit to the list would
+ * show the card as it was before the write. Only rows already there are
+ * replaced (a write cannot add a card to a board), the row keeps its counted
+ * comments, and `at` is left alone: the board is no fresher than it was, one
+ * card of it is.
+ */
+export function patchCachedTask(t: ProviderTask): void {
+  const s = load();
+  let changed = false;
+  const next: Record<string, CachedView> = {};
+  for (const [id, entry] of Object.entries(s.cache)) {
+    const i = entry.tasks.findIndex((x) => x.id === t.id);
+    if (i < 0) { next[id] = entry; continue; }
+    const tasks = entry.tasks.slice();
+    tasks[i] = { ...t, ...(tasks[i]!.comments !== undefined ? { comments: tasks[i]!.comments } : {}) };
+    next[id] = { ...entry, tasks };
+    changed = true;
+  }
+  if (changed) save({ ...s, cache: next });
+}
+
 /** For a test's own teardown. */
 export function __clear(): void { cache = { views: [], cache: {} }; }

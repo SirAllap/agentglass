@@ -21,10 +21,10 @@
  */
 import { readdirSync, statSync, lstatSync, readFileSync } from "node:fs";
 import { failed } from "./refused.ts";
-import { basename, dirname, extname, join, resolve } from "node:path";
-import { diskAllows, diskRoots } from "./disk.ts";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { diskAllows, diskEnabled, diskRoots } from "./disk.ts";
 import { safeAbs } from "./git.ts";
-import { agentglassPrivate, inScope, realish, workspaceRoots } from "./config.ts";
+import { agentglassConfigDirs, agentglassPrivate, inScope, realish, workspaceRoots } from "./config.ts";
 
 /** How many entries one folder hands back. A directory with 40,000 files in it
  *  is not a list anybody reads, and the count says what was left. */
@@ -44,10 +44,16 @@ export interface BrowseEntry {
   items: number | null;
   /** Epoch millis. Rendered relative on the client, which is where the clock is. */
   mtime: number;
-  /** True when the name starts with a dot. Never listed today (the boundary
-   *  excludes them) but the field exists so the UI can say so rather than
-   *  quietly showing less than the folder holds. */
+  /** True when the name starts with a dot. Listed only when the caller asks
+   *  for hidden entries; otherwise they are counted in `hiddenSkipped`. */
   hidden: boolean;
+  /** True when the finder may NOT open this entry even though it may name it:
+   *  a dotted entry under the home roots is listed on request, but `diskAllows`
+   *  still refuses to read or enter it. The row says so instead of offering a
+   *  door that answers with an error. */
+  locked: boolean;
+  /** Why it is locked, when the reason is worth a sentence of its own. */
+  why?: string;
 }
 
 export interface BrowseReport {
@@ -71,8 +77,122 @@ export interface BrowseReport {
  * `diskAllows` is the home roots with every dotted path taken out, which is
  * what keeps `~/.ssh` and `~/.aws` out of a file browser.
  */
-export function browseAllows(p: unknown): boolean {
-  return browseReal(p) !== null;
+export function browseAllows(p: unknown, local = false): boolean {
+  return browseReal(p, local) !== null;
+}
+
+/*
+ * The dotted door, for a caller on this machine only.
+ *
+ * `diskAllows` refuses every dotted segment below a home root, which also kept
+ * `~/.config` and `~/.claude` out of a file browser whose owner lives in them.
+ * A local caller may now enter those, EXCEPT the places that keep secrets. The
+ * list is a floor, not a promise that everything else is harmless: it names the
+ * stores that are credentials by design. Paths are measured from the root they
+ * sit under, on the resolved path AND on the spelling, so a link from a friendly
+ * name cannot reach a denied store and a denied name cannot be borrowed.
+ */
+const DENY_TREES: readonly (readonly string[])[] = [
+  [".ssh"], [".gnupg"], [".aws"], [".kube"], [".password-store"], [".azure"], [".gcloud"],
+  [".docker", "config.json"],
+  [".config", "agent-secrets"], [".config", "gh"], [".config", "gcloud"], [".config", "1Password"],
+  [".config", "Bitwarden"], [".config", "keepassxc"], [".config", "google-chrome"], [".config", "chromium"],
+  [".config", "BraveSoftware"], [".config", "microsoft-edge"], [".config", "vivaldi"],
+  [".mozilla"], [".zen"], [".librewolf"], [".config", "mozilla"],
+  [".local", "share", "keyrings"], [".local", "share", "Bitwarden"],
+  [".claude", ".credentials.json"],
+];
+/** File names that are secrets wherever they sit under a dotted path. */
+const DENY_NAMES = /^(\.netrc|_netrc|\.git-credentials|\.npmrc|\.pypirc|\.pgpass|\.env(\..*)?|\.credentials\.json|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?|.*\.(pem|key|kdbx))$/i;
+
+function underDenied(p: string): boolean {
+  const roots = diskRoots();
+  const segs = (r: string) => relative(r, p).split(sep);
+  const hit = roots.some((r) => {
+    const rel = relative(r, p);
+    if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return false;
+    const s = segs(r);
+    return DENY_TREES.some((t) => t.every((seg, i) => s[i] === seg));
+  });
+  return hit || DENY_NAMES.test(basename(p));
+}
+
+/** Home-rooted, dotted, and not a secret store: what the local door adds. */
+function dottedAllows(abs: string, real: string): boolean {
+  if (!diskEnabled()) return false;
+  const roots = diskRoots();
+  const inRoot = (p: string) => roots.some((r) => {
+    const rel = relative(r, p);
+    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  });
+  return inRoot(real) && inRoot(abs) && !underDenied(real) && !underDenied(abs);
+}
+
+/*
+ * The agentglass config folder, for a caller on this machine.
+ *
+ * The folder holds the server's own API token, credentials, the paired
+ * devices and plugin secrets, so it was closed whole. Its owner needs to see
+ * theme.json and config.json in it, so the folder and its ordinary files open,
+ * and everything that is a key stays shut on three independent grounds: a
+ * name on the list (in case permissions drift), a mode that is not readable by
+ * group or other (every secret the server writes is 0600, every private
+ * directory 0700), and a parent that is itself shut. Judged on the resolved
+ * path and on the spelling, so a link from anywhere lands on the same answer.
+ * Data, state, cache and the moved database are not opened by this.
+ */
+const KEY_NAMES = new Set(["token", "credentials.json", "devices.json"]);
+/* What may be READ in there is an allowlist, not "whatever mode says readable":
+ * a plugin or a later version can write a secret with the default 0644. These
+ * are the files agentglass itself writes that hold no secret; config.json is
+ * among them because none of its writers (mergeConfig and the workspace,
+ * hidden-project and budget writers in config.ts) stores a key or token. The
+ * name and mode checks above stay as the second layer. Everything else is
+ * listed, greyed and closed. */
+const OPEN_FILES = new Set([
+  "theme.json", "theme.lua", "theme.tmux.conf", "config.json", "commands.json", "review-prompts.json",
+  "picker.json", "window.json", "usage-last.json", "tmux-last.json", "merge-sessions.json", "understudy.json",
+  "remote.json", "clickup-views.json", "clickup-watch.json", "tmux-override.backup.conf", "git-allowed-signers",
+]);
+const OPEN_DIRS = new Set(["policy", "resurrect", "nvim-plugin"]);
+/** plugins/ opens as far as each plugin's manifest and no further. */
+function readable(segs: string[]): boolean {
+  const [a, b, c] = segs.map((x) => x.toLowerCase());
+  if (segs.length === 1 && OPEN_FILES.has(a!)) return true;
+  if (OPEN_DIRS.has(a!)) return true;
+  return a === "plugins" && (segs.length <= 2 || (segs.length === 3 && c === "plugin.json" && !!b));
+}
+export const KEYS_WHY = "holds agentglass keys — closed";
+
+function configDoor(abs: string, real: string): boolean {
+  const roots = agentglassConfigDirs();
+  const under = (p: string) => roots.find((r) => {
+    const rel = relative(r, p);
+    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  });
+  const ra = under(real), rs = under(abs);
+  if (!ra || !rs) return false;
+  const rel = relative(ra, real);
+  if (rel === "") return true;
+  // Every step from the folder down to the target is judged, so a file inside
+  // a private directory is as shut as the directory.
+  let at = ra;
+  for (const seg of rel.split(sep)) {
+    at = join(at, seg);
+    if (KEY_NAMES.has(seg.toLowerCase())) return false;
+    let st;
+    try { st = statSync(at); } catch (e) { return (e as NodeJS.ErrnoException)?.code === "ENOENT"; }
+    if (st.isDirectory() ? (st.mode & 0o055) === 0 : (st.mode & 0o044) === 0) return false;
+  }
+  return readable(rel.split(sep)) && !relative(rs, abs).split(sep).some((seg) => KEY_NAMES.has(seg.toLowerCase()));
+}
+
+/** What to tell somebody a path was refused for. */
+function refusal(abs: string): string {
+  const real = realish(abs);
+  return agentglassPrivate(real) || agentglassPrivate(abs)
+    ? "closed: this folder holds agentglass's keys"
+    : "outside the places this may look";
 }
 
 /**
@@ -84,14 +204,19 @@ export function browseAllows(p: unknown): boolean {
  * link's spelling says nothing about its target. A link whose target leaves
  * both worlds is refused the same as typing the target would be.
  */
-export function browseReal(p: unknown): string | null {
+export function browseReal(p: unknown, local = false): string | null {
   const abs = safeAbs(p);
   if (!abs) return null;
   const real = realish(abs);
   // Before either door: this app's own directories are never served, even
-  // from a project that contains them.
-  if (agentglassPrivate(real)) return null;
+  // from a project that contains them. The one opening is the config folder,
+  // for a caller on this machine, entry by entry: see configDoor.
+  if (agentglassPrivate(real) || agentglassPrivate(abs)) {
+    return local && dottedAllows(abs, real) && configDoor(abs, real) ? real : null;
+  }
   if (diskAllows(real)) return real;
+  // `local` is true only for a caller the server has resolved to loopback.
+  if (local && dottedAllows(abs, real)) return real;
   /*
    * The checkout door, and it is CLOSED when there is no checkout.
    *
@@ -107,10 +232,10 @@ export function browseReal(p: unknown): string | null {
 }
 
 /** The folder above, unless that would leave everywhere this may look. */
-function parentOf(abs: string): string | null {
+function parentOf(abs: string, local: boolean): string | null {
   const up = dirname(abs);
   if (up === abs) return null;
-  return browseAllows(up) ? up : null;
+  return browseAllows(up, local) ? up : null;
 }
 
 /**
@@ -119,12 +244,21 @@ function parentOf(abs: string): string | null {
  * Sizes and dates come from `lstat`, not `stat`: a symlink's own metadata is
  * what the row is about, and following it is how a browser ends up reporting
  * the size of something in a place it is not allowed to look at.
+ *
+ * `showHidden` widens what is LISTED, never what may be read: the folder itself
+ * was already judged by `browseAllows`, so a dotted entry appears as a name, a
+ * size, a date and an item count, and is marked `locked` when `browseAllows`
+ * would refuse to open it (`~/.ssh` under home). Listing `~` therefore names
+ * `.ssh` and `.aws`; it does not let anybody into them or read what they hold.
  */
-export function browseDir(pathIn: unknown): BrowseReport {
+export function browseDir(pathIn: unknown, showHidden = false, local = false): BrowseReport {
+  showHidden = showHidden && local;
+  // Inside a dotted place every row is judged, not only the dotted ones: `gh` under `.config` is a secret store with an ordinary name.
+  const viaDot = local && !diskAllows(realish(String(safeAbs(pathIn) ?? "")));
   const abs = safeAbs(pathIn);
   const empty = { ok: false, path: String(abs ?? ""), parent: null, entries: [], more: 0, hiddenSkipped: 0 };
   if (!abs) return { ...empty, error: "invalid path" };
-  if (!browseAllows(abs)) return { ...empty, error: "outside the places this may look" };
+  if (!browseAllows(abs, local)) return { ...empty, error: refusal(abs) };
 
   let names: string[];
   try {
@@ -139,7 +273,8 @@ export function browseDir(pathIn: unknown): BrowseReport {
   let hiddenSkipped = 0;
   let more = 0;
   for (const name of names.sort((a, b) => a.localeCompare(b))) {
-    if (name.startsWith(".")) { hiddenSkipped++; continue; }
+    const hidden = name.startsWith(".");
+    if (hidden && !showHidden) { hiddenSkipped++; continue; }
     if (entries.length >= MAX_ENTRIES) { more++; continue; }
     const full = join(abs, name);
     try {
@@ -148,15 +283,18 @@ export function browseDir(pathIn: unknown): BrowseReport {
       // A symlink is followed ONLY to decide whether it behaves as a folder,
       // and only when its target is somewhere this may look. Anything else is
       // shown as what it is.
-      const target = link && browseAllows(realish(full)) ? safeStat(full) : null;
+      const target = link && browseAllows(realish(full), local) ? safeStat(full) : null;
       const dir = st.isDirectory() || (target?.isDirectory() ?? false);
+      const locked = (hidden || viaDot) && !browseAllows(full, local);
       entries.push({
         name,
         kind: link ? "link" : dir ? "dir" : "file",
         bytes: dir ? null : (target ?? st).size,
         items: dir ? countItems(full) : null,
         mtime: st.mtimeMs,
-        hidden: false,
+        hidden,
+        locked,
+        ...(locked && agentglassPrivate(realish(full)) ? { why: KEYS_WHY } : null),
       });
     } catch { /* vanished between readdir and lstat: it is not there, so it is not a row */ }
   }
@@ -167,7 +305,7 @@ export function browseDir(pathIn: unknown): BrowseReport {
     ? a.name.localeCompare(b.name)
     : a.kind === "dir" ? -1 : 1);
 
-  return { ok: true, path: abs, parent: parentOf(abs), entries, more, hiddenSkipped };
+  return { ok: true, path: abs, parent: parentOf(abs, local), entries, more, hiddenSkipped };
 }
 
 const safeStat = (p: string) => { try { return statSync(p); } catch { return null; } };
@@ -356,11 +494,11 @@ export function imageSize(buf: Buffer): { width: number; height: number } | null
  * Including the text itself when it is text: a second round trip to fetch the
  * body of a 3KB note is a spinner nobody needed.
  */
-export function fileFacts(pathIn: unknown): FileFacts {
+export function fileFacts(pathIn: unknown, local = false): FileFacts {
   const abs = safeAbs(pathIn);
   const empty: FileFacts = { ok: false, path: String(abs ?? ""), name: "", kind: "binary", mime: "", bytes: 0, mtime: 0 };
   if (!abs) return { ...empty, error: "invalid path" };
-  if (!browseAllows(abs)) return { ...empty, error: "outside the places this may look" };
+  if (!browseAllows(abs, local)) return { ...empty, error: refusal(abs) };
 
   let st;
   try { st = statSync(abs); } catch { return { ...empty, error: "no such file" }; }
@@ -401,10 +539,10 @@ export function fileFacts(pathIn: unknown): FileFacts {
  * ever installed or downloaded to satisfy a preview — with no tool the panel
  * says so and offers to open it in whatever the desktop uses.
  */
-export async function fileBytes(pathIn: unknown): Promise<{ ok: true; body: Uint8Array | ArrayBuffer; mime: string } | { ok: false; error: string }> {
+export async function fileBytes(pathIn: unknown, local = false): Promise<{ ok: true; body: Uint8Array | ArrayBuffer; mime: string } | { ok: false; error: string }> {
   // What was judged is what is read: the real path, links resolved.
-  const abs = browseReal(pathIn);
-  if (!abs) return { ok: false, error: "outside the places this may look" };
+  const abs = browseReal(pathIn, local);
+  if (!abs) return { ok: false, error: refusal(safeAbs(pathIn) ?? "") };
   let st;
   try { st = statSync(abs); } catch { return { ok: false, error: "no such file" }; }
   if (st.isDirectory()) return { ok: false, error: "that is a folder" };
@@ -455,11 +593,11 @@ export function browseRoots(): string[] {
  * against the same boundary as every other read, and it is only ever a path
  * this server would have shown you anyway.
  */
-export function openInDesktop(pathIn: unknown): { ok: boolean; with?: string; error?: string } {
+export function openInDesktop(pathIn: unknown, local = false): { ok: boolean; with?: string; error?: string } {
   // The desktop opens the real file, the one that was judged — not a link
   // that was judged by its name and points somewhere else.
-  const abs = browseReal(pathIn);
-  if (!abs) return { ok: false, error: "outside the places this may look" };
+  const abs = browseReal(pathIn, local);
+  if (!abs) return { ok: false, error: refusal(safeAbs(pathIn) ?? "") };
   try { statSync(abs); } catch { return { ok: false, error: "no such file" }; }
 
   const opener = process.platform === "darwin"
@@ -477,4 +615,63 @@ export function openInDesktop(pathIn: unknown): { ok: boolean; with?: string; er
   } catch (e) {
     return { ok: false, error: failed("preview/open", e, "the desktop could not open that file") };
   }
+}
+
+/**
+ * The folder a "show in file manager" would open, judged first.
+ *
+ * A folder is shown as itself and a file as the folder that holds it. Both the
+ * path asked for and the folder it lands on go through `browseReal`, the gate
+ * every read here goes through: a file the palette may read but whose folder it
+ * may not would otherwise hand the file manager a listing of siblings the
+ * palette itself refuses to show.
+ */
+export function revealTarget(pathIn: unknown, local = false): { ok: true; dir: string } | { ok: false; error: string } {
+  const abs = browseReal(pathIn, local);
+  if (!abs) return { ok: false, error: refusal(safeAbs(pathIn) ?? "") };
+  let isDir: boolean;
+  try { isDir = statSync(abs).isDirectory(); } catch { return { ok: false, error: "no such file" }; }
+  if (isDir) return { ok: true, dir: abs };
+  const dir = browseReal(dirname(abs), local);
+  return dir ? { ok: true, dir } : { ok: false, error: refusal(dirname(abs)) };
+}
+
+/** The argv that shows a folder, or null where nothing on this machine can.
+ *  An array and never a string: the path is a single argument, so a name with
+ *  spaces, quotes or `;` in it is a name and nothing else. */
+export function revealArgv(platform: string, which: (bin: string) => string | null, dir: string): string[] | null {
+  if (platform === "darwin") { const o = which("open"); return o ? [o, dir] : null; }
+  const x = which("xdg-open");
+  if (x) return [x, dir];
+  const g = which("gio");
+  return g ? [g, "open", dir] : null;
+}
+
+/** Show a file or folder in the desktop's file manager. */
+export function revealInFileManager(pathIn: unknown, local = false): { ok: boolean; with?: string; error?: string } {
+  const t = revealTarget(pathIn, local);
+  if (!t.ok) return t;
+  const argv = revealArgv(process.platform, (b) => Bun.which(b, { PATH: process.env.PATH ?? "" }), t.dir);
+  if (!argv) return { ok: false, error: "no file manager opener on this machine (xdg-open or gio)" };
+  try {
+    Bun.spawn(argv, { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
+    return { ok: true, with: basename(argv[0]!) };
+  } catch (e) {
+    return { ok: false, error: failed("preview/reveal", e, "the file manager could not be opened") };
+  }
+}
+
+/**
+ * How a file is served to a browser TAB, as opposed to a preview pane.
+ *
+ * An .html file is a page, so it is served as one, but a page from disk must
+ * not run: `sandbox` with no allowances gives it an opaque origin, and the rest
+ * of the policy leaves it no scripts and no network, so what opens is what the
+ * file says in markup and inline style, never something that can read this
+ * server's answers. Anything else keeps the preview policy (null).
+ */
+export function pagePolicy(pathIn: string): { mime: string; csp: string } | null {
+  return /\.html?$/i.test(pathIn)
+    ? { mime: "text/html; charset=utf-8", csp: "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:" }
+    : null;
 }

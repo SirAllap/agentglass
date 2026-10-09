@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { freePort } from "./freePort.ts";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
+import { story } from "./story.ts";
 
 const TOKEN = "machine-token-for-this-test";
 let dir: string, base: string, phone = "", proc: ReturnType<typeof Bun.spawn> | null = null;
@@ -112,8 +113,10 @@ const history = () =>
   fetch(base + "/gate/history?limit=50", { headers: as(TOKEN) }).then((r) => r.json() as Promise<Json>);
 const seen = async (id: string): Promise<Json> => (await history()).gates.find((g: Json) => g.id === id);
 
+const step = story();
+
 describe("who answered", () => {
-  test("a paired phone is named, not reduced to the address it is on", async () => {
+  step("a paired phone is named, not reduced to the address it is on", async () => {
     // The question #299 opens with. A phone on DHCP is a different address next
     // week and the same phone; the address was never what anybody wanted.
     const id = nextId();
@@ -127,7 +130,7 @@ describe("who answered", () => {
     expect(g.decided_by).toContain(phoneName);
   });
 
-  test("and the same press lands in the action log under the same name", async () => {
+  step("and the same press lands in the action log under the same name", async () => {
     // Two writers, one actor, resolved once. If they could disagree the log
     // would answer "who" twice and differently, which is worse than not at all.
     const r = await fetch(base + "/actions?limit=20", { headers: as(TOKEN) }).then((x) => x.json() as Promise<Json>);
@@ -136,7 +139,7 @@ describe("who answered", () => {
     expect(line.actor).toContain("Pixel 9");
   });
 
-  test("the dashboard on this machine is still a place, because its token is shared", async () => {
+  step("the dashboard on this machine is still a place, because its token is shared", async () => {
     const id = nextId();
     await hold(id);
     // The shell's own scheme, which is what the desktop app's renderer sends.
@@ -146,12 +149,12 @@ describe("who answered", () => {
 });
 
 describe("what the reader is given", () => {
-  test("the words a person typed", async () => {
+  step("the words a person typed", async () => {
     const g = (await history()).gates.find((x: Json) => x.reason === "not on prod");
     expect(g, "a typed reason did not survive to the history").toBeTruthy();
   });
 
-  test("and not the paragraph written for the stopped model", async () => {
+  step("and not the paragraph written for the stopped model", async () => {
     // Every gate waved through without a comment carries the same three lines,
     // which as a quotation in a list is boilerplate on every row hiding the one
     // row where somebody explained themselves.
@@ -163,7 +166,7 @@ describe("what the reader is given", () => {
 });
 
 describe("what nobody answered", () => {
-  test("expires with an outcome and without an actor", async () => {
+  step("expires with an outcome and without an actor", async () => {
     /*
      * The row this whole column has to get right. A request that ran out while
      * everybody was at lunch still allowed a tool call — it is a real outcome
@@ -187,7 +190,7 @@ describe("what nobody answered", () => {
     throw new Error("the gate never expired into the history");
   });
 
-  test("and deciding it afterwards changes nothing and says so", async () => {
+  step("and deciding it afterwards changes nothing and says so", async () => {
     // Somebody presses deny on their phone on a request the clock already
     // allowed. The row must keep what the agent was actually told — and the
     // press that lost must still be recorded, because it is the single most
@@ -216,7 +219,7 @@ describe("what nobody answered", () => {
     expect(String(lost!.detail), "the failed line does not say why").toContain("too late");
   });
 
-  test("and an id this server never held says that, rather than blaming the clock", async () => {
+  step("and an id this server never held says that, rather than blaming the clock", async () => {
     const r = await decide("00000000-0000-4000-8000-999999999999", phone, "allow");
     expect(r.ok).toBe(false);
     expect(String(r.error)).toContain("not one this server is holding");

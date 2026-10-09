@@ -41,7 +41,7 @@
  * avoid it would be.
  */
 
-import { readdirSync, statSync } from "node:fs";
+import { readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { safeAbs } from "./git.ts";
@@ -168,6 +168,33 @@ export function diskPlaces(): DiskPlaces {
  *  makes the measured walk fast; these are the ones that survive both. */
 const SKIP = new Set(["node_modules", "__pycache__", "Trash"]);
 
+/** A string as a Rust-regex literal: every metacharacter escaped. */
+const reEscape = (s: string): string => s.replace(/[\\.+*?()|[\]{}^$#&~-]/g, "\\$&");
+
+/**
+ * The last arguments of an `fd --full-path` run that looks for `q` in the path
+ * BELOW `root`: the case flag, `--`, and the pattern.
+ *
+ * `--full-path` matches the ABSOLUTE path, root included, so a fixed string
+ * found in the root's own name matched everything under it: `-H` under
+ * `/tmp/agx-home-Hk2j9x` listed every file, and searching "home" from
+ * `/home/orbit` returned the first `limit` files of the disk, most of which
+ * do not say "home" anywhere below the root. Measured on fd 10.5. So the
+ * pattern is a regex anchored after the root's physical path (fd's cwd is the
+ * resolved one), with the query escaped, and the case rule fd's smart-case
+ * would have applied to the query alone.
+ *
+ * After `--`, always: the query is typed by whoever holds the token, and
+ * `q=--search-path=/etc` handed to fd as a bare word was an option, not a
+ * pattern — it listed /etc, and `keep()` let every line through because
+ * `join(root, "/etc/x")` is a path under the root.
+ */
+export function fdPathArgs(root: string, q: string): string[] {
+  const physical = realpathSync(root);
+  const under = physical.endsWith("/") ? physical : physical + "/";
+  return [q === q.toLowerCase() ? "--ignore-case" : "--case-sensitive", "--", `^${reEscape(under)}.*${reEscape(q)}`];
+}
+
 /**
  * Files and folders under `root` whose PATH contains `q`.
  *
@@ -206,14 +233,9 @@ export function diskFind(rootIn: unknown, qIn: unknown, limit = MAX_RESULTS): Fi
     // No --hidden, unlike the checkout search: a dotted path is refused on the
     // way back out anyway, so walking into ~/.cache would only spend time to
     // produce results nobody is allowed to open.
-    const args = [fd, "--full-path", "--fixed-strings", "--max-results", String(limit + 1)];
+    const args = [fd, "--full-path", "--max-results", String(limit + 1)];
     for (const s of SKIP) args.push("--exclude", s);
-    // After `--`, always: the query is typed by whoever holds the token, and
-    // `q=--search-path=/etc` handed to fd as a bare word was an option, not a
-    // pattern — it listed /etc, and `keep()` let every line through because
-    // `join(root, "/etc/x")` is a path under the root. The content search
-    // below already did this for rg; this branch had not.
-    args.push("--", q);
+    args.push(...fdPathArgs(root, q));
     const r = Bun.spawnSync(args, { cwd: root, stdout: "pipe", stderr: "pipe", timeout: 10_000 });
     const all = new TextDecoder().decode(r.stdout).split("\n").map((s) => s.trim()).filter(Boolean);
     const dirs: string[] = [];

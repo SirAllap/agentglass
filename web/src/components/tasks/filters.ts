@@ -151,7 +151,7 @@ function passes<T>(t: T, r: Rule, read: ReadField<T>): boolean {
 
 /** A rule that is doing something. `set`/`unset` need no values; the other two
  *  are still being written until they have some. */
-const isLive = (r: Rule): boolean => !!r.field && (!takesValues(r.op) || r.values.length > 0);
+export const isLive = (r: Rule): boolean => !!r.field && (!takesValues(r.op) || r.values.length > 0);
 
 export function applyWith<T>(rows: T[], f: FilterSet, read: ReadField<T>): T[] {
   const live = f.rules.filter(isLive);

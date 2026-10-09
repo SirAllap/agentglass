@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { freePort } from "./freePort.ts";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
+import { story } from "./story.ts";
 
 const TOKEN = "machine-token-for-this-test";
 const SOCKET = "agx-readscope";
@@ -126,35 +127,37 @@ async function hold(id: string): Promise<void> {
   throw new Error("the gate never appeared in the pending queue");
 }
 
+const step = story();
+
 describe("the notification mirror", () => {
-  test("a read device is refused the socket before it is upgraded", async () => {
+  step("a read device is refused the socket before it is upgraded", async () => {
     const r = await fetch(`${base}/notifications?token=${encodeURIComponent(readPhone)}`, {
       headers: { upgrade: "websocket", connection: "Upgrade", "sec-websocket-version": "13", "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==" },
     });
     expect(r.status).toBe(403);
   });
 
-  test("and the probe; the desk still gets it", async () => {
+  step("and the probe; the desk still gets it", async () => {
     expect((await fetch(base + "/notifications/capability", { headers: as(readPhone) })).status).toBe(403);
     expect((await fetch(base + "/notifications/capability", { headers: as(TOKEN) })).status).toBe(200);
   });
 });
 
 describe("an answer device and the session it speaks to", () => {
-  test("an idle session is not woken by a phone", async () => {
+  step("an idle session is not woken by a phone", async () => {
     const r = await send(phoneA, IDLE);
     expect(r).not.toBe("streaming");
     expect((r as Response).status).toBe(403);
     expect(await (r as Response).text()).toContain("idle");
   });
 
-  test("a running one is answered", async () => {
+  step("a running one is answered", async () => {
     // An open pane, no turn in flight: the process engine takes the turn.
     const r = await send(phoneA, LIVE);
     expect(r === "streaming" ? 200 : r.status).toBe(200);
   });
 
-  test("and the phone that answered cannot allow what it asked for", async () => {
+  step("and the phone that answered cannot allow what it asked for", async () => {
     const id = "00000000-0000-4000-8000-00000000f401";
     await hold(id);
     const self = await post("/gate/decide", phoneA, { id, decision: "allow" });
@@ -164,14 +167,14 @@ describe("an answer device and the session it speaks to", () => {
     expect(((await other.json()) as { ok: boolean }).ok).toBe(true);
   });
 
-  test("a deny from the same phone still lands", async () => {
+  step("a deny from the same phone still lands", async () => {
     const id = "00000000-0000-4000-8000-00000000f402";
     await hold(id);
     const r = await post("/gate/decide", phoneA, { id, decision: "deny" });
     expect(((await r.json()) as { ok: boolean }).ok).toBe(true);
   });
 
-  test("nor press the pane's own prompt, except to cancel it", async () => {
+  step("nor press the pane's own prompt, except to cancel it", async () => {
     expect((await post("/chat/pane/key", phoneA, { session: LIVE, key: "Enter" })).status).toBe(403);
     // Escape passes the check and meets the next one: there is no pane here.
     expect((await post("/chat/pane/key", phoneA, { session: LIVE, key: "Escape" })).status).not.toBe(403);
@@ -180,7 +183,7 @@ describe("an answer device and the session it speaks to", () => {
 });
 
 describe("a prompt the phone raised", () => {
-  test("is not answered by pasting the next turn into it", async () => {
+  step("is not answered by pasting the next turn into it", async () => {
     const first = await send(phoneA, ASKING);
     expect(first === "streaming" ? 200 : first.status).toBe(200);
     const again = await send(phoneA, ASKING);
@@ -193,7 +196,7 @@ describe("a prompt the phone raised", () => {
 });
 
 describe("where a turn runs", () => {
-  test("a link out of the project is out of the project, even for the desk", async () => {
+  step("a link out of the project is out of the project, even for the desk", async () => {
     const r = await fetch(base + "/chat/send", {
       method: "POST", headers: as(TOKEN), signal: turns.signal,
       body: JSON.stringify({ cwd: join(dir, "vendor-link"), message: "carry on" }),

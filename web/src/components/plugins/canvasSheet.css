@@ -1,0 +1,102 @@
+/*
+ * A sheet's paint (CanvasSheet.tsx): one set of variables per scheme, drawn
+ * once. Light is a daylight instrument (warm sheet, ink linework, hatching on
+ * the night side, accent rings, no glow); dark is deep space (rim light, a
+ * soft disc behind what is alive, stars in the empty corners). The window
+ * marks a dark theme with data-scheme="dark" on .agx-canvas, the same rule the
+ * board uses.
+ *
+ * `.cv-halo` is ONE element per thing: in dark it is a translucent disc, in
+ * light the same element is a ring. There is no filter and no blur anywhere in
+ * a sheet, and no animation: a sheet changes by being redrawn.
+ */
+.cv-sheet {
+  --cv-ground: color-mix(in srgb, var(--surface-inset) 70%, var(--surface-card));
+  --cv-ink: var(--text);
+  --cv-ink2: var(--text2);
+  --cv-ink3: var(--text3);
+  --cv-guide: color-mix(in srgb, var(--text) 22%, transparent);
+  --cv-tick: color-mix(in srgb, var(--text) 30%, transparent);
+  --cv-tick-passed: color-mix(in srgb, var(--text) 52%, transparent);
+  --cv-orb-hi: #e4d9ff;
+  --cv-orb-lo: #a690e8;
+  --cv-sheen: #ffffff;
+  --cv-shade: color-mix(in srgb, #2a1d5e 30%, transparent);
+  --cv-orb-line: color-mix(in srgb, #4a3a96 38%, transparent);
+  --cv-hatch: color-mix(in srgb, #2a1d5e 55%, transparent);
+  --cv-stars: transparent;
+  --cv-lit-off: color-mix(in srgb, var(--text) 14%, transparent);
+  position: relative;
+  width: 100%;
+  border-radius: 14px;
+  background: var(--cv-ground);
+  box-shadow: 0 0 0 1px var(--surface-line);
+  overflow: hidden;
+}
+.cv-sheet[data-material="inset"] { box-shadow: 0 0 0 1px var(--surface-line), inset 0 0 28px color-mix(in srgb, var(--primary) 8%, transparent); }
+.agx-canvas[data-scheme="dark"] .cv-sheet {
+  --cv-ground: color-mix(in srgb, #07061a 82%, var(--surface-card));
+  --cv-guide: color-mix(in srgb, #fff 20%, transparent);
+  --cv-tick: color-mix(in srgb, #fff 26%, transparent);
+  --cv-tick-passed: color-mix(in srgb, #fff 48%, transparent);
+  --cv-orb-hi: #cdbcff;
+  --cv-orb-lo: #5b3fb8;
+  --cv-sheen: #ffffff;
+  --cv-shade: color-mix(in srgb, #05030f 55%, transparent);
+  --cv-orb-line: color-mix(in srgb, #fff 16%, transparent);
+  --cv-hatch: transparent;
+  --cv-stars: color-mix(in srgb, #fff 70%, transparent);
+  --cv-lit-off: color-mix(in srgb, #fff 12%, transparent);
+}
+.cv-sheet[data-material="inset"]:where(.agx-canvas[data-scheme="dark"] *) { box-shadow: 0 0 0 1px var(--surface-line), inset 0 0 40px color-mix(in srgb, var(--primary) 14%, transparent); }
+
+.cv-svg { display: block; width: 100%; height: auto; pointer-events: none; overflow: hidden; font-family: var(--font-mono, ui-monospace, monospace); }
+.cv-ground { fill: transparent; }
+.cv-stars { stroke: var(--cv-stars); stroke-width: 1.6; stroke-linecap: round; fill: none; }
+.cv-guide { fill: color-mix(in srgb, var(--primary) 5%, transparent); stroke: var(--cv-guide); stroke-width: 1; stroke-dasharray: 2 4; }
+
+.cv-orb { stroke: var(--cv-orb-line); stroke-width: 1; }
+.cv-orb-bands { fill: none; stroke: var(--cv-orb-line); stroke-width: 1; }
+.cv-orb-sheen { stroke: none; }
+.cv-orb-shade { fill: var(--cv-shade); stroke: none; }
+.cv-orb-edge { fill: none; stroke: var(--cv-orb-line); stroke-width: 1; }
+.cv-hatch { fill: none; stroke: var(--cv-hatch); stroke-width: 0.9; }
+
+.cv-band-line { fill: none; stroke-width: 1; opacity: 0.7; }
+.cv-band-unlit { fill: var(--cv-lit-off); stroke: none; }
+.cv-band-lit { stroke: none; fill-opacity: 0.85; }
+
+.cv-tick { fill: none; stroke: var(--cv-tick); stroke-width: 1; stroke-linecap: round; }
+.cv-tick-passed { stroke: var(--cv-tick-passed); }
+.cv-tick-lit { stroke-width: 1.6; }
+.cv-tick-mark { stroke: var(--cv-ink2); stroke-width: 1.4; }
+.cv-hand { fill: none; stroke-width: 1.6; stroke-linecap: round; }
+.cv-hand-dot { stroke: none; }
+.cv-numeral { fill: var(--cv-ink3); font-size: 9px; }
+
+.cv-edge { fill: none; stroke-linecap: round; }
+.cv-edge-far { stroke-width: 1.1; opacity: 0.6; }
+.cv-edge-near { stroke-width: 2; }
+.cv-edge[data-broken] { stroke-dasharray: 4 4; }
+.cv-edge-marks { fill: none; stroke-width: 2; stroke-linecap: round; }
+
+.cv-trail { fill: none; stroke-width: 3; stroke-linecap: round; }
+
+.cv-moon { stroke-width: 1.5; }
+.cv-moon-ring { fill: var(--cv-ground); }
+.cv-moon-dot { fill: var(--cv-fill); }
+.cv-moon-diamond { fill: var(--cv-ground); stroke-linejoin: round; }
+.cv-count { fill: var(--cv-ink); font-weight: 600; }
+.cv-halo { transform-box: fill-box; transform-origin: center; fill: color-mix(in srgb, var(--cv-tone) 26%, transparent); stroke: none; }
+.agx-canvas[data-scheme="light"] .cv-halo { fill: none; stroke: var(--cv-tone); stroke-width: 2; transform: scale(0.7); }
+.cv-leader { fill: none; stroke: var(--cv-ink3); stroke-width: 0.7; }
+.cv-label { font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600; }
+.cv-value { fill: var(--cv-ink); font-size: 12px; font-weight: 600; }
+.cv-more { fill: var(--cv-ink3); font-size: 10px; }
+
+.cv-reticle { fill: none; stroke: var(--cv-ink); stroke-width: 1.3; stroke-linecap: square; }
+.cv-chip { fill: var(--cv-ink); font-size: 11px; font-weight: 600; }
+.cv-key { fill: var(--cv-ink2); font-size: 9.5px; }
+.cv-key-ring { fill: none; stroke: var(--cv-ink2); stroke-width: 1.4; }
+.cv-key-dot { fill: var(--cv-ink2); }
+.cv-key-diamond { fill: none; stroke: var(--cv-ink2); stroke-width: 1.4; }

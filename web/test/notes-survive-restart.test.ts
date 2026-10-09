@@ -14,15 +14,17 @@
  * how the other half gets lost in a later refactor.
  */
 import { beforeEach, describe, expect, it } from "bun:test";
+import { globalStubs } from "./stubGlobal";
+const stubGlobal = globalStubs();
 
-(globalThis as unknown as { location: unknown }).location = { hostname: "localhost", origin: "http://localhost:4000" };
+stubGlobal("location", { hostname: "localhost", origin: "http://localhost:4000" });
 const store = new Map<string, string>();
-(globalThis as unknown as { localStorage: Storage }).localStorage = {
+stubGlobal("localStorage", {
   getItem: (k: string) => store.get(k) ?? null,
   setItem: (k: string, v: string) => void store.set(k, v),
   removeItem: (k: string) => void store.delete(k),
   clear: () => store.clear(), key: () => null, length: 0,
-} as unknown as Storage;
+} as unknown as Storage);
 
 /** A fresh module is this app being restarted: the store is re-read at import. */
 const restart = async () =>

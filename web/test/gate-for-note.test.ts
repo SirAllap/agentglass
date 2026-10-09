@@ -1,6 +1,8 @@
 import { describe, expect, test, beforeAll } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import { readFileSync } from "node:fs";
 import type { PendingGate } from "../../shared/types.ts";
+const stubGlobal = globalStubs();
 
 /*
  * Which live gate a bell row is about, so it can offer Allow/Deny instead of
@@ -11,12 +13,12 @@ const cell = new Map<string, string>();
 let gateForNote: typeof import("../src/lib/gateStore.ts")["gateForNote"];
 
 beforeAll(async () => {
-  (globalThis as any).localStorage = {
+  stubGlobal("localStorage", {
     getItem: (k: string) => cell.get(k) ?? null,
     setItem: (k: string, v: string) => { cell.set(k, v); },
     removeItem: (k: string) => { cell.delete(k); },
-  };
-  (globalThis as any).location = { hostname: "localhost", origin: "http://localhost:4000" };
+  });
+  stubGlobal("location", { hostname: "localhost", origin: "http://localhost:4000" });
   ({ gateForNote } = await import("../src/lib/gateStore.ts"));
 });
 

@@ -11,6 +11,7 @@
 // One surface, reachable from the dashboard and from inside the workspace,
 // because "is 5173 still up?" is a question you have while looking at anything.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { usePoll } from "../lib/usePoll.ts";
 import { CopyIcon, DiskIcon, IconLabel, RefreshIcon } from "../lib/glyphIcons.tsx";
 import { RefreshButton, Tabs, INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 import { Portal } from "./Portal.tsx";
@@ -92,9 +93,13 @@ function Ports({ onOpenBrowser }: { onOpenBrowser?: () => void }) {
   const [q, setQ] = useState("");
 
   const load = useCallback(() => {
-    api.machinePorts().then((d) => { setData(d); setError(null); }).catch((e) => setError(String(e)));
+    /* Kept as it was when only the age moved: 25 answers a minute of 14 KB
+       differed in nothing else (measured), and each one re-rendered the table.
+       The age is compared as the row spells it, so "up 5m" still ticks over. */
+    api.machinePorts().then((d) => { setData((prev) => (prev && sameShown(prev, d) ? prev : d)); setError(null); }).catch((e) => setError(String(e)));
   }, []);
-  useEffect(() => { load(); const id = setInterval(load, POLL_MS); return () => clearInterval(id); }, [load]);
+  useEffect(() => { load(); }, [load]);
+  usePoll(true, load, POLL_MS);
 
   /** Port, process name, checkout, and what started it — everything the row
    *  actually shows. Searching only the port number would miss "which of these
@@ -288,6 +293,13 @@ export const PORT_GRID_NARROW = "8px 52px minmax(0, 1fr) 76px";
 
 /** "4h41m" — coarse on purpose. The question this answers is "did this start
  *  just now or has it been sitting here", and to the second is noise. */
+/** Two port reports that would draw the same table: everything equal, the age
+ *  compared by the words `forAge` gives it. */
+function sameShown(a: PortsReport, b: PortsReport): boolean {
+  const shown = (r: PortsReport) => JSON.stringify(r, (k, v) => (k === "ageSec" && typeof v === "number" ? forAge(v) : v));
+  return shown(a) === shown(b);
+}
+
 function forAge(sec: number): string {
   if (sec < 60) return `${sec}s`;
   if (sec < 3600) return `${Math.floor(sec / 60)}m`;
@@ -479,10 +491,9 @@ function Resources() {
 
   useEffect(() => {
     load();
-    const id = setInterval(load, POLL_MS);
     api.gitRepos().then(({ repos: r }) => setRepos(r)).catch(() => {});
-    return () => clearInterval(id);
   }, [load]);
+  usePoll(true, load, POLL_MS);
 
   /**
    * Ours, as a tree: project → checkout → process.
@@ -991,7 +1002,8 @@ function Locks() {
   const load = useCallback(() => {
     api.machineLocks().then((d) => { setData(d); setError(null); }).catch((e) => setError(String(e)));
   }, []);
-  useEffect(() => { load(); const id = setInterval(load, POLL_MS); return () => clearInterval(id); }, [load]);
+  useEffect(() => { load(); }, [load]);
+  usePoll(true, load, POLL_MS);
 
   const remove = async (l: GitLock) => {
     setBusy(l.path);

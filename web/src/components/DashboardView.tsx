@@ -16,6 +16,7 @@
 import { useEffect, useState } from "react";
 import type { WatchEvent, SessionRollup, StatsSummary } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
+import { usePoll } from "../lib/usePoll.ts";
 import { Kpis } from "./Kpis.tsx";
 import { Throughput } from "./Throughput.tsx";
 import { ToolMix } from "./ToolMix.tsx";
@@ -83,13 +84,9 @@ export function DashboardView({
    * life of the process, to fill two dropdowns that exist on this screen alone.
    */
   const [opts, setOpts] = useState<{ source_apps: string[]; hook_event_types: string[] }>({ source_apps: [], hook_event_types: [] });
-  useEffect(() => {
-    if (!active) return;
-    const load = () => api.filterOptions().then(setOpts).catch(() => {});
-    load();
-    const id = setInterval(load, 20_000);
-    return () => clearInterval(id);
-  }, [active]);
+  const loadOpts = () => api.filterOptions().then(setOpts).catch(() => {});
+  useEffect(() => { if (active) void loadOpts(); }, [active]); // eslint-disable-line react-hooks/exhaustive-deps
+  usePoll(active, () => { void loadOpts(); }, 20_000);
 
   /* Read once, for the strip and the KPI tiles alike: one screen, one count. */
   const fleet = useFleetVerdict();

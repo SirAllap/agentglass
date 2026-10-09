@@ -157,7 +157,7 @@ describe("how the gate is fetched", () => {
   });
 
   test("beside the detail, and the detail does not wait on it succeeding", () => {
-    const start = src.indexOf("export async function prDetail(");
+    const start = src.indexOf("async function readDetail(");
     expect(start).toBeGreaterThan(-1);
     const body = src.slice(start, src.indexOf("\n}\n", start));
     expect(body).toMatch(/Promise\.all\(\[\s*ghJson<any>\(\["api", "graphql", "-f", `query=\$\{DETAIL_QUERY\}`/);

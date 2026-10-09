@@ -5,20 +5,22 @@
 // whether it fires when you did not mean it — mid-drag, mid-typing, or on a
 // pane nobody is looking at.
 import { describe, expect, it, beforeEach } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import {
   focusFollowsMouse, setFocusFollowsMouse, subscribeFocusFollowsMouse, shouldFocusOnHover,
 } from "../src/lib/termFocusPref.ts";
+const stubGlobal = globalStubs();
 
 /** A hover that should be honoured, so each test can spoil exactly one thing. */
 const OK = { enabled: true, buttons: 0, typing: false, visible: true };
 
 // bun's test environment has no DOM; the module only ever touches these three.
 const store = new Map<string, string>();
-(globalThis as { localStorage?: unknown }).localStorage = {
+stubGlobal("localStorage", {
   getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
   setItem: (k: string, v: string) => { store.set(k, v); },
   removeItem: (k: string) => { store.delete(k); },
-};
+});
 
 beforeEach(() => store.clear());
 

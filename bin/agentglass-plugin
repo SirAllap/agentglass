@@ -143,7 +143,7 @@ VERSION_RE = re.compile(r"^\d{1,4}(\.\d{1,4}){0,2}$")
 ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
 KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*$")
 PANEL_ICONS = ("puzzle", "review", "check", "chart", "list", "bell", "bug", "book", "bolt", "eye")
-FIELD_TYPES = ("string", "text", "number", "boolean", "select", "list", "multi")
+FIELD_TYPES = ("string", "text", "number", "boolean", "select", "list", "multi", "secret")
 SHORT = 400
 
 
@@ -167,6 +167,8 @@ def check_fields(fields):
             return f'field key "{key}" must start with a letter and hold only letters, digits, . _ -'
         if f.get("type") not in FIELD_TYPES:
             return f'field "{key}" has an unknown type'
+        if f.get("type") == "secret" and "default" in f:
+            return f'field "{key}" is a secret and cannot have a default'
         if not _text(f.get("label"), 120):
             return f'field "{key}" label must be 1-120 characters'
         for name, limit in (("description", SHORT), ("placeholder", 120), ("group", 60)):
@@ -204,11 +206,15 @@ def check_contributes(c):
             seen.add(pid)
             if not _text(p.get("title"), 40):
                 return "panel title must be 1-40 characters"
+            if "canvas" in p and not isinstance(p["canvas"], bool):
+                return "panel canvas must be true or false"
             if p.get("icon") is not None and p["icon"] not in PANEL_ICONS:
                 # The app drops an icon it does not know rather than refusing,
                 # so this is a warning's worth of wrong — but a manifest that
                 # names one it does not have is a typo worth catching here.
                 return f'panel icon must be one of {", ".join(PANEL_ICONS)}'
+    if "inboxAnnotations" in c and not isinstance(c["inboxAnnotations"], bool):
+        return "contributes.inboxAnnotations must be true or false"
     if "prNotes" in c and not isinstance(c["prNotes"], bool):
         return "contributes.prNotes must be true or false"
     if "prActions" in c:
@@ -555,6 +561,10 @@ def declaration(plugin):
         draws += [f'a panel, "{p.get("title")}", in the Plugins view' for p in c["panels"]]
     if c.get("settings"):
         draws.append(f'a settings page with {len(c["settings"])} fields')
+    if any(f.get("type") == "secret" for f in c.get("settings") or []):
+        draws.append("a field that asks for a secret, kept in a file only you can read and shown only to the plugin (a plugin running outside its box could read the file)")
+    if c.get("inboxAnnotations"):
+        draws.append("a badge and a sort order on Inbox rows; it cannot hide any")
     if c.get("prNotes"):
         draws.append("notes inside pull requests, never sent to GitHub")
     for a in c.get("prActions") or []:
@@ -592,6 +602,8 @@ def cmd_list(args):
         state = "running" if p.get("running") else ("enabled" if p.get("enabled") else "off")
         draws = ", ".join(sorted(p.get("contributes") or {})) or "nothing"
         print(f"{p['name']:<24} {state:<8} {p.get('scope', '?'):<7} draws {draws}")
+        if p.get("canReadKeysOf"):
+            print(f"  ! {p['name']} runs outside its box and can read {', '.join(p['canReadKeysOf'])}'s key")
     return 0
 
 
@@ -602,11 +614,21 @@ def cmd_simple(path, args):
 def cmd_settings(args):
     if not args.set:
         return emit(call(f"/plugins/settings?name={urllib.parse.quote(args.name)}", method="GET"))
+    fields = {}
+    if any("=" in pair for pair in args.set):
+        current = call(f"/plugins/settings?name={urllib.parse.quote(args.name)}", method="GET")
+        fields = {f.get("key"): f for f in (current.get("fields") or [])} if isinstance(current, dict) else {}
     values = {}
     for pair in args.set:
         if "=" not in pair:
             return emit({"ok": False, "error": f"expected key=value, got {pair!r}"})
         k, v = pair.split("=", 1)
+        if (fields.get(k) or {}).get("type") == "secret":
+            # A value on the command line lands in shell history and in
+            # /proc/<pid>/cmdline for as long as this runs. Read it from stdin.
+            if v != "-":
+                return emit({"ok": False, "error": f"{k} is a secret: pass {k}=- and give the value on standard input"})
+            v = sys.stdin.readline().rstrip("\n")
         values[k] = v
     return emit(call("/plugins/settings", {"name": args.name, "values": values}))
 

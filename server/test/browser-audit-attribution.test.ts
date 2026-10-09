@@ -23,6 +23,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { freePort } from "./freePort.ts";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
+import { story } from "./story.ts";
 
 let dir = "", state = "", base = "";
 let port = 0;
@@ -103,7 +104,9 @@ interface Entry { op: string; ok: boolean; as?: string; tab?: string; owner?: st
 const readAudit = async (body: Record<string, unknown> = {}) =>
   (await (await post("/browser/audit", body)).json() as { value: { entries: Entry[]; note?: string } }).value;
 
-test("a deliberate borrow is recorded with the caller, the tab and the owner", async () => {
+const step = story();
+
+step("a deliberate borrow is recorded with the caller, the tab and the owner", async () => {
   const r = await post("/browser/click", { selector: "#pay", page: "t-b", as: "orbit-a", how: "explicit-page" });
   expect((await r.json() as { ok: boolean }).ok).toBe(true);
 
@@ -122,7 +125,7 @@ test("a deliberate borrow is recorded with the caller, the tab and the owner", a
   expect(click!.args.how).toBeUndefined();
 });
 
-test("the filters narrow to one tab and to one caller, over the wire", async () => {
+step("the filters narrow to one tab and to one caller, over the wire", async () => {
   expect((await readAudit({ tab: "t-b" })).entries.some((e) => e.op === "click")).toBe(true);
   expect((await readAudit({ tab: "t-nobody" })).entries).toHaveLength(0);
   /* `by` narrows to a caller. `as` says who is ASKING and narrows nothing: the
@@ -133,7 +136,7 @@ test("the filters narrow to one tab and to one caller, over the wire", async () 
   expect((await readAudit({ as: "orbit-b" })).entries.some((e) => e.op === "click")).toBe(true);
 });
 
-test("the answer says out loud that `as` is asserted, not authenticated", async () => {
+step("the answer says out loud that `as` is asserted, not authenticated", async () => {
   /* Stated where a caller reading the JSON sees it. `as` is written by a local
      CLI over a loopback endpoint whose only credential is one machine-wide
      token every agent shell already holds: forensics between cooperating
@@ -143,7 +146,7 @@ test("the answer says out loud that `as` is asserted, not authenticated", async 
   expect(note).toContain("not authentication");
 });
 
-test("`events` sends the caller's tab to the window — all three kinds", async () => {
+step("`events` sends the caller's tab to the window — all three kinds", async () => {
   asked.length = 0;
   await post("/browser/events", { kinds: ["console", "network", "cdp"], wait: 1, page: "t-b" });
   const kinds = asked.filter((a) => ["console", "network", "cdp"].includes(a.op));
@@ -155,7 +158,7 @@ test("`events` sends the caller's tab to the window — all three kinds", async 
   expect(kinds.every((a) => a.args.page === "t-b")).toBe(true);
 });
 
-test("and the log is still there after the app restarts", async () => {
+step("and the log is still there after the app restarts", async () => {
   /*
    * The in-memory 2000-entry export dies with the process, and before this the
    * whole log did — reopening the app was enough to lose the evidence of what

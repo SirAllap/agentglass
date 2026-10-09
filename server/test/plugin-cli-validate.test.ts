@@ -33,7 +33,7 @@ const CASES: { what: string; manifest: unknown }[] = [
   { what: "everything it can declare", manifest: {
     ...OK, icon: "icon.svg", color: "#8B5CF6",
     contributes: {
-      panels: [{ id: "main", title: "Reviews", icon: "review" }],
+      panels: [{ id: "main", title: "Reviews", icon: "review" }, { id: "live", title: "Live", canvas: true }],
       prNotes: true,
       prActions: [{ id: "review", label: "Local review" }, { id: "cancel", label: "Stop" }],
       settings: [{ key: "repos", type: "multi", label: "Repositories", options: ["acme/orbit"] }],
@@ -53,6 +53,7 @@ const CASES: { what: string; manifest: unknown }[] = [
   { what: "a panel id with a capital in it", manifest: { ...OK, contributes: { panels: [{ id: "Main", title: "Reviews" }] } } },
   { what: "the same panel twice", manifest: { ...OK, contributes: { panels: [{ id: "a", title: "A" }, { id: "a", title: "B" }] } } },
   { what: "a panel with no title", manifest: { ...OK, contributes: { panels: [{ id: "a" }] } } },
+  { what: "a panel whose canvas is a string", manifest: { ...OK, contributes: { panels: [{ id: "a", title: "A", canvas: "yes" }] } } },
   { what: "prNotes as a string", manifest: { ...OK, contributes: { prNotes: "yes" } } },
   { what: "six pull request actions", manifest: { ...OK, contributes: { prActions: Array.from({ length: 6 }, (_, i) => ({ id: `a${i}`, label: "Go" })) } } },
   { what: "an action label of 29 characters", manifest: { ...OK, contributes: { prActions: [{ id: "a", label: "x".repeat(29) }] } } },

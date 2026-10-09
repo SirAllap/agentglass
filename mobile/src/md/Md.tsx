@@ -21,16 +21,27 @@
  *   directly is a broken box on every phone — see `prAsset` in server/src/prs.ts.
  */
 import { memo, useState } from "react";
-import { Image, Linking, ScrollView, Text, View } from "react-native";
+import { Image, Linking, Pressable, ScrollView, Text, View } from "react-native";
 import type { Host } from "../lib/host.ts";
 import { C, MONO, RADIUS, SPACE, T, ink } from "../theme.ts";
-import { inlineText, parseMarkdown, type Block, type Inline, type ListItem } from "./parse.ts";
+import { foldAt, inlineText, parseMarkdown, type Block, type Inline, type ListItem } from "./parse.ts";
 
 /** GitHub's own attachment addresses, which need the sidecar's token. Anything
  *  else — a badge, a raw file, somebody's blog — is fetched as written. */
 const NEEDS_TOKEN = /^https:\/\/(?:github\.com\/user-attachments|private-user-images\.githubusercontent\.com|user-images\.githubusercontent\.com)\//;
 
 const HEADING_SIZE: Record<number, number> = { 1: T.head, 2: T.title, 3: T.body + 1, 4: T.body, 5: T.body, 6: T.body };
+
+/** shields.io's own colour words, as this app's palette; a hex value as itself. */
+function badgeTint(color: string): string {
+  const word = color.toLowerCase();
+  if (/^[0-9a-f]{6}$|^[0-9a-f]{3}$/.test(word)) return `#${word}`;
+  if (["brightgreen", "green", "success"].includes(word)) return C.success;
+  if (["yellow", "yellowgreen", "orange", "important"].includes(word)) return C.warning;
+  if (["red", "critical"].includes(word)) return C.error;
+  if (["blue", "informational", "lightblue"].includes(word)) return C.primary;
+  return C.text3;
+}
 
 /** Inline spans, as one Text so the line wraps as a line rather than as a row
  *  of boxes that break wherever a span ends. */
@@ -47,20 +58,35 @@ function Spans({ kids, size, color }: { kids: Inline[]; size: number; color: str
             }}> {k.text} </Text>
           );
         }
+        if (k.t === "badge") {
+          /* Two tones, like the real thing: the label on a neutral ground and
+             the value in the colour, so `Coverage 75%` reads as one object. */
+          const tint = badgeTint(k.color);
+          return (
+            <Text key={i} style={{ fontSize: size - 1, fontWeight: "600" }}>
+              {k.label ? <Text style={{ color: C.text2, backgroundColor: C.bg3 }}> {k.label} </Text> : null}
+              <Text style={{ color: ink(tint), backgroundColor: tint }}> {k.value} </Text>
+            </Text>
+          );
+        }
         if (k.t === "strong") {
           return <Text key={i} style={{ fontWeight: "700", color: C.text, fontSize: size }}><Spans kids={k.kids} size={size} color={C.text} /></Text>;
         }
         if (k.t === "em") {
           return <Text key={i} style={{ fontStyle: "italic", color, fontSize: size }}><Spans kids={k.kids} size={size} color={color} /></Text>;
         }
+        /* Only where a block cannot hold a picture (a heading, a table cell):
+           its alt text, linked to the file. */
+        const href = k.t === "image" ? k.src : k.href;
+        const kids: Inline[] = k.t === "image" ? [{ t: "text", text: k.alt || k.src }] : k.kids;
         return (
           <Text
             key={i}
             accessibilityRole="link"
-            onPress={() => { void Linking.openURL(k.href).catch(() => { /* no app for it */ }); }}
+            onPress={() => { void Linking.openURL(href).catch(() => { /* no app for it */ }); }}
             style={{ color: C.primary, fontSize: size }}
           >
-            <Spans kids={k.kids} size={size} color={C.primary} />
+            <Spans kids={kids} size={size} color={C.primary} />
           </Text>
         );
       })}
@@ -143,6 +169,31 @@ function Items({ list, host }: { list: Extract<Block, { t: "list" }>; host: Host
   );
 }
 
+/** A `<details>` fold: closed to begin with, as on GitHub, with the summary as
+ *  the thing to press. The inside is drawn only once it is open. */
+function Fold({ summary, blocks, host }: { summary: string; blocks: Block[]; host: Host | null }): React.ReactNode {
+  const [open, setOpen] = useState(false);
+  return (
+    <View style={{ borderWidth: 1, borderColor: C.border, borderRadius: RADIUS.sm, backgroundColor: C.bg2 }}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        accessibilityLabel={`${summary}, ${open ? "open" : "closed"}`}
+        onPress={() => setOpen((o) => !o)}
+        style={{ flexDirection: "row", gap: SPACE.sm, padding: SPACE.md, alignItems: "center" }}
+      >
+        <Text style={{ color: C.text3, fontSize: T.small, width: 12 }}>{open ? "▾" : "▸"}</Text>
+        <Text style={{ flex: 1, color: C.text, fontSize: T.body, fontWeight: "600" }}>{summary}</Text>
+      </Pressable>
+      {open ? (
+        <View style={{ gap: SPACE.md, paddingHorizontal: SPACE.md, paddingBottom: SPACE.md }}>
+          <Blocks blocks={blocks} host={host} />
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 function Blocks({ blocks, host }: { blocks: Block[]; host: Host | null }): React.ReactNode {
   return (
     <>
@@ -193,6 +244,8 @@ function Blocks({ blocks, host }: { blocks: Block[]; host: Host | null }): React
             return <View key={i} style={{ height: 1, backgroundColor: C.border }} />;
           case "image":
             return <BodyImage key={i} src={b.src} alt={b.alt} host={host} />;
+          case "details":
+            return <Fold key={i} summary={b.summary} blocks={b.blocks} host={host} />;
           case "table":
             return (
               <ScrollView key={i} horizontal showsHorizontalScrollIndicator={false}
@@ -238,13 +291,18 @@ function Blocks({ blocks, host }: { blocks: Block[]; host: Host | null }): React
  * Native spends its time on. The caller decides what "the rest" looks like,
  * because only the caller knows whether there is room for an expander.
  */
-export const Md = memo(function Md({ text, host, limit }: {
+export const Md = memo(function Md({ text, host, limit, repo, pastPicture }: {
   text: string;
   host: Host | null;
   limit?: number;
+  /** Let the fold run on to the first picture — see `foldAt`. */
+  pastPicture?: boolean;
+  /** `owner/name`, so a bare `#123` can be a link. */
+  repo?: string;
 }): React.ReactNode {
-  const blocks = parseMarkdown(text);
-  const shown = limit && blocks.length > limit ? blocks.slice(0, limit) : blocks;
+  const blocks = parseMarkdown(text, { repo });
+  const cut = limit && pastPicture ? foldAt(blocks, limit) : limit;
+  const shown = cut && blocks.length > cut ? blocks.slice(0, cut) : blocks;
   if (!shown.length) return null;
   return (
     <View style={{ gap: SPACE.md }}>
@@ -260,9 +318,9 @@ export const Md = memo(function Md({ text, host, limit }: {
  * it; "Show more" under a hard cut does not. The next heading is the best
  * single word for that, and the count covers a body with no headings at all.
  */
-export function outline(text: string, limit: number): { hidden: number; nextHeading: string | null } {
+export function outline(text: string, limit: number, pastPicture = false): { hidden: number; nextHeading: string | null } {
   const blocks = parseMarkdown(text);
-  const rest = blocks.slice(limit);
+  const rest = blocks.slice(pastPicture ? foldAt(blocks, limit) : limit);
   const heading = rest.find((b) => b.t === "h");
   return {
     hidden: rest.length,

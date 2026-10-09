@@ -1,6 +1,8 @@
 // Shared event + analytics contract between server and web.
 // Keep this file dependency-free so both sides can import it.
 import type { NotifyKind, NotifyPrefs } from "./notifyPrefs.ts";
+import type { CheckUsual } from "./checkBaseline.ts";
+import type { InboxAnnotation } from "./pluginUi.ts";
 
 export type HookEventType =
   | "SessionStart"
@@ -1921,10 +1923,23 @@ export type WsFrame =
    *  rather than the server guessing which of them cares about what. */
   | { type: "git" }
   | { type: "tasks" }
+  /** The list of pending gate holds changed (one arrived, was decided, timed
+   *  out, or was answered by a rule). Carries no payload: the client re-reads
+   *  `/gate/pending`, which replaces a two second poll of it. */
+  | { type: "gate" }
   /** A pull request's checks all finished. One frame per PR per verdict — the
    *  server holds the latch, so a suite of sixty-one checks sends one of these,
    *  not sixty-one. */
   | { type: "ci"; data: CiVerdict }
+  /** The whole list of notify watches, after any change to it. Tiny, so it is
+   *  sent whole: one datum, and the board and the detail both read it. */
+  | { type: "prwatch"; data: PrWatchState }
+  /** A notify watch fired. One frame per firing; the client raises the popup. */
+  | { type: "prwatchfire"; data: PrWatchFire }
+  /** The notify watch read a pull request's checks and they differ from the last
+   *  read it sent. The open detail and the board take them as their own: the
+   *  watch's answer must not be fresher than the screen it sits on. */
+  | { type: "prchecks"; data: PrChecksRead }
   /** Somebody said something on a pull request you have a stake in. One frame
    *  per pull request per poll — the server holds the latch, exactly as it does
    *  for `ci` — and never a bot. See PrTalkNote. */
@@ -2057,6 +2072,62 @@ export interface CardNote {
   url?: string;
 }
 
+/**
+ * What a person asked to be told about on one pull request. A LIST of rules per
+ * PR, so a new kind of rule is one more member of this union and one more case
+ * in `evalRule` (server/src/prNotifyWatch.ts), not a new column.
+ *
+ * `check.match` is a case-insensitive substring of the check's name (or its
+ * workflow's), not an exact name: it must work before the check has started and
+ * on every matrix variant ("evals (py3.12)"). Ceiling: substring only, no regex.
+ */
+export type PrWatchRule =
+  | { type: "ci-pass" }
+  | { type: "ci-fail" }
+  | { type: "check"; match: string; on: "fail" | "pass" | "either" }
+  /** Sticky: comments keep coming, so this one stays on until turned off. */
+  | { type: "comment" };
+
+export interface PrWatch {
+  id: string;
+  repo: string; // owner/name
+  number: number;
+  rule: PrWatchRule;
+  /** Waiting. A fired one-shot rule is kept, inactive, so the button can say
+   *  what happened last. */
+  active: boolean;
+  lastAt?: number;
+  lastText?: string;
+}
+
+export interface PrWatchFire {
+  /** The queue position: acknowledge it (`/prs/notify-watch/ack`) once shown, and it is never sent again. */
+  seq: number;
+  /** Which rule fired, and what kind it is — generic on purpose, so another
+   *  client (the phone) can subscribe to the same events. */
+  ruleId: string;
+  rule: PrWatchRule["type"];
+  repo: string;
+  number: number;
+  title: string;
+  /** "CI passed", "CI failed", "evals failed", "New comment". */
+  summary: string;
+  detail: string;
+  ok: boolean;
+}
+
+export interface PrChecksRead { repo: string; number: number; checks: PrCheckRollup; all: PrCheck[] }
+
+export interface PrWatchState { watches: PrWatch[]; presets: PrWatchPreset[] }
+
+/** A repo's default rules, applied with one click — and, when `auto`, to each
+ *  new PR of yours in that repo. */
+export interface PrWatchPreset {
+  repo: string;
+  rules: PrWatchRule[];
+  auto: boolean;
+}
+
 /** The aggregate outcome of a PR's checks, once every one of them is terminal. */
 export interface CiVerdict {
   repo: string;
@@ -2178,6 +2249,9 @@ export interface WorkingTree {
   clean: boolean;
   writeEnabled: boolean;
   error?: string;
+  /** What the tree says, without the read time: equal signatures mean nothing
+   *  changed, so a caller can keep the object it holds. */
+  sig?: string;
 }
 /** A repo agentglass knows about (from telemetry paths + the server's own cwd). */
 export interface GitRepoRef {
@@ -3095,13 +3169,26 @@ export type PrCheckState = "success" | "failure" | "pending" | "skipped" | "neut
 export interface PrCheck {
   name: string;
   workflow: string;
+  /** What triggered the workflow run (`pull_request`, `pull_request_review`...). The same job name runs once per event. */
+  event?: string;
+  /** ISO times of the run; the duration GitHub prints is their difference. */
+  startedAt?: string;
+  completedAt?: string;
+  /** The title the check wrote about its own result ("No code pitfalls detected"), when it wrote one. */
+  title?: string;
   state: PrCheckState;
   /** Terminal means it will not change without a new push or a re-run. */
   done: boolean;
   url?: string;
+  /** The run was cancelled (a new push, a sync, a concurrency group), not failed: `state` says failure for the
+   *  board, but a watch must neither report it as a failure nor treat it as finished — a rerun is coming. */
+  cancelled?: boolean;
   /** GitHub will not merge until this one passes. Absent when GitHub was not
    *  asked, which is not the same as "not required". */
   required?: boolean;
+  /** What this job usually takes on this repository (median and p90 of its last
+   *  successful runs), when the server has seen any. See shared/checkBaseline.ts. */
+  usual?: CheckUsual;
 }
 
 export interface PrCheckRollup {
@@ -3554,6 +3641,107 @@ export interface PrCheckJob {
   startedAt: string | null;
   completedAt: string | null;
   url: string;
+  /** Which attempt of the run this job belongs to (a re-run is a new attempt with new job ids). */
+  attempt?: number;
+  /** The name of the step that failed ("Tests (server)"), the human title when a log names no test. */
+  failedStep?: string;
+}
+
+import type { TestVerdict } from "./failureVerdict.ts";
+
+/** One failing test (or file, or step) cut out of a CI job. */
+export interface CiFailure {
+  kind: "bun" | "pytest" | "django" | "jest" | "tsc" | "step" | "annotation" | "output";
+  /** The test, the file or the step that failed. */
+  title: string;
+  /** At most 4 KB, redacted, no escape bytes and no timestamps. */
+  excerpt: string;
+  /** The same failure on another run is the same signature: title plus the first message line, volatile parts removed. */
+  signature: string;
+  truncated: boolean;
+}
+
+/** What the client knows about the job and the server only guesses: used to key the cache and to title a step. */
+export interface CheckFailuresHints { attempt?: number; step?: string }
+
+/**
+ * What `/prs/check-failures` answers. `state` is about the LOG: `read` (it was
+ * read), `expired` (GitHub keeps logs 90 days), `toolarge` (over the 25 MB the
+ * panel reads unasked; `sizeBytes` says how big), `unparsed` (read, and nothing in
+ * it names a failure), `nolog` (GitHub has no job log for this id: an app or a
+ * script posted the check), `unlogged` (it IS a job, and GitHub holds no log for it:
+ * a runner that stops mid-job can leave none). `failures` may still hold what GitHub's annotations
+ * or the check's own output kept.
+ * `requests` is what this call cost on GitHub, 0 when it came from the cache.
+ */
+export type CheckFailures =
+  | {
+      ok: true;
+      state: "read" | "expired" | "toolarge" | "unparsed" | "nolog" | "unlogged";
+      source: "log" | "annotations" | "output" | "step" | "none";
+      framework: CiFailure["kind"] | null;
+      failures: CiFailure[];
+      /** Failures found beyond the ten kept. */
+      more: number;
+      /** What each failure's history says (shared/failureVerdict.ts), one per entry of `failures`. Worked out when asked, never stored. */
+      verdicts: TestVerdict[];
+      readBytes: number;
+      sizeBytes?: number;
+      step?: string;
+      at: number;
+      cached: boolean;
+      requests: number;
+    }
+  | { ok: false; kind: "budget"; resetAt: number | null; requests: number }
+  | { ok: false; kind: "error"; error: string; requests: number };
+
+/** One failing test in the CI view's "Failing tests" lens: a signature, counted over everything the app has read. */
+export interface FailingTestRow {
+  /** The test as a log named it (or the step, when no test was named). */
+  title: string;
+  /** What it said, in a few words (the normalised first message line). */
+  gist: string;
+  /** The check it failed in. */
+  check: string;
+  runs: number;
+  prs: number;
+  /** ms since epoch. */
+  firstSeen: number;
+  lastSeen: number;
+  verdict: TestVerdict;
+}
+
+/** What `/prs/failing-tests` answers: the rows, and how much of the history they are counted from. */
+export interface FailingTests {
+  ok: true;
+  rows: FailingTestRow[];
+  /** Failed runs the app knows of in the last 90 days, and how many of them have been read for their tests. */
+  failedRuns: number;
+  readRuns: number;
+  /** Only with `refresh`: what this call did. */
+  refresh?: {
+    /** Failed runs it read now (newest first), the most one refresh will. */
+    read: number;
+    cap: number;
+    /** Left unread after this, for the next refresh. */
+    pending: number;
+    /** GitHub requests this call made: the whole cost. */
+    requests: number;
+    /** The newest push to the default branch, when it could be looked at. */
+    main: "red" | "green" | "unknown";
+    error?: string;
+  };
+}
+
+/** What the cache already knows of a job's failures, for wording a row without asking GitHub. */
+export interface CheckFailureSummary {
+  state: Extract<CheckFailures, { ok: true }>["state"];
+  source: Extract<CheckFailures, { ok: true }>["source"];
+  count: number;
+  more: number;
+  titles: string[];
+  /** One per title: what that failure's history says. */
+  verdicts: TestVerdict[];
 }
 
 export interface PrChecklistItem { checked: boolean; text: string }
@@ -3737,6 +3925,10 @@ export interface PrListResponse {
   /** When the cached copy was taken. The UI shows this rather than pretending
    *  to be live — every number here costs a subprocess. */
   fetchedAt: number;
+  /** When the read behind these rows was SENT, on the server's clock (0 when
+   *  unknown). A write's `at` is on the same clock: the only pair a client may
+   *  compare to know whether a read saw the write. */
+  startedAt?: number;
   stale: boolean;
   loading: boolean;
   /** The rows are here but their check states are still being fetched. */
@@ -3755,6 +3947,11 @@ export interface PrListResponse {
 
 export interface PrActionResult {
   ok: boolean; error?: string; detail?: string;
+  /** A merge that landed: who pressed it, so the screen can say so before the
+   *  next read does. */
+  mergedBy?: string;
+  /** The server's clock when the write settled; see PrListResponse.startedAt. */
+  at?: number;
   /** Update branch only: GitHub refused because base and head conflict — the
    *  one refusal the panel can offer to resolve. */
   conflict?: boolean;
@@ -4328,6 +4525,10 @@ export interface BrowseEntry {
   /** Epoch millis; rendered relative on the client, where the clock is. */
   mtime: number;
   hidden: boolean;
+  /** Listed but not openable: the finder may name a dotted entry, not enter or read it. */
+  locked?: boolean;
+  /** Why it is locked, when that deserves its own sentence. */
+  why?: string;
 }
 
 export interface BrowseReport {
@@ -4361,6 +4562,21 @@ export interface FileFacts {
   /** For an image the browser cannot draw: the tool on this machine that
    *  could convert it, or null when there is none. */
   converter?: string | null;
+  error?: string;
+}
+/** What git knows about one file the finder has selected. Mirrors server/src/fileGit.ts. */
+export type FileGitStatus = "clean" | "modified" | "added" | "deleted" | "renamed" | "untracked" | "ignored" | "conflict";
+export interface FileGitFacts {
+  ok: boolean;
+  /** False for a file that is not inside a repository. */
+  repo: boolean;
+  status?: FileGitStatus;
+  /** The path as the repository names it: the checkout's folder name, then the path inside it. */
+  path?: string;
+  added?: number;
+  removed?: number;
+  branch?: string;
+  commit?: { hash: string; subject: string; at: number };
   error?: string;
 }
 export interface GrepHit { rel: string; line: number; text: string; at: number; len: number }
@@ -4427,6 +4643,8 @@ export interface IssuePr {
 }
 export interface IssuePrsReport { ok: boolean; prs: IssuePr[]; error?: string }
 export interface IssuesReport { ok: boolean; issues: IssueRow[]; error?: string }
+/** What the issue filters count: yours, open, everything. `/issues/counts`. */
+export interface IssueViewCounts { mine: number; open: number; all: number }
 export interface IssueStartResult {
   ok: boolean; error?: string; work?: IssueWork; prompt?: string; cwd?: string;
 }
@@ -4817,6 +5035,19 @@ export interface ReviewRecipesResponse {
   error?: string;
 }
 
+/** What waits on the person: a review somebody asked for, a review that asked
+ *  for changes, a person writing on their own pull request, a mention. `bot` is
+ *  the fifth and it is never a row on that view — see `yourTurn`. */
+export type InboxTurnKind = "review" | "changes" | "person" | "mention" | "bot";
+
+export interface InboxTurn {
+  kind: InboxTurnKind;
+  /** Who wrote it (or, for a review request, who opened the pull request). */
+  by?: string;
+  /** The first words of what they wrote, on one line. */
+  snippet?: string;
+}
+
 /**
  * One row of GitHub's notification inbox.
  *
@@ -4836,6 +5067,14 @@ export interface InboxItem {
   title: string;
   at: number;
   number?: number;
+  /** Why this row waits on the person, when it does. Only ever set by the
+   *  server, from what GitHub said about the thread; absent means "not one of
+   *  the things the Your turn view is for". */
+  turn?: InboxTurn;
+  /** What plugins that declared `inboxAnnotations` say about this row. Only
+   *  ever added by the server, never stored with the notification, and never a
+   *  reason for a row to be missing. */
+  annotations?: InboxAnnotation[];
 }
 
 /**
@@ -4891,7 +5130,8 @@ export interface PublicPlugin {
   icon?: string;
   color?: string;
   /** What it asks to be given inside a box — see shared/pluginSandbox.ts.
-   *  Declared, not yet enforced. */
+   *  Enforced when this host can build a bwrap box; see `boxPlan` for what a
+   *  start does when it cannot. */
   sandbox?: import("./pluginSandbox.ts").PluginSandbox;
   running: boolean;
   pid: number | null;
@@ -4909,13 +5149,26 @@ export interface PublicPlugin {
    *  before a start is ever attempted, so the approval screen can say a box
    *  cannot be built before the person switches the plugin on. */
   sandboxProbe?: { ok: true } | { ok: false; reason: "missing" | "userns-blocked" | "failed"; detail: string };
+  /** What a start does on this host — see `boxPlan` in shared/pluginBoxPlan.ts.
+   *  Present only when `sandbox` is declared. The probe alone cannot draw the
+   *  screen: it says "missing" on every non-Linux host, where the plugin
+   *  starts unboxed all the same. */
+  boxPlan?: import("./pluginBoxPlan.ts").BoxPlan;
+  /** This plugin's own consent to run unboxed on a host that cannot build its
+   *  box (`POST /plugins/allow-unboxed`). Absent or false: not given. */
+  allowUnboxed?: boolean;
   /** The first line bwrap wrote to stderr the last time this plugin's box
    *  died in its opening instant. Set only while nothing is running. */
   lastBoxFailure?: string;
+  /** The other plugins whose key this one can read — see `PublicPlugin` in
+   *  server/src/plugins.ts. Present only while it runs outside its box. */
+  canReadKeysOf?: string[];
 }
 
 export interface PluginsStatus {
   master: boolean;
+  /** `AGENTGLASS_PLUGINS_UNBOXED=1` is set: every plugin may run unboxed. */
+  envAllowsUnboxed?: boolean;
   plugins: PublicPlugin[];
 }
 

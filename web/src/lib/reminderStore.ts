@@ -12,10 +12,11 @@
  * rows — and it stops when the tab is hidden, like everything else here.
  */
 import { api } from "./api.ts";
+import { pollWhileLooking } from "./usePoll.ts";
 import type { Reminder } from "../../../shared/types.ts";
 
 let live: Reminder[] = [];
-let timer: ReturnType<typeof setInterval> | null = null;
+let timer: (() => void) | null = null;
 const subs = new Set<() => void>();
 
 const emit = () => { for (const f of subs) f(); };
@@ -35,7 +36,9 @@ async function refresh(): Promise<void> {
 function ensurePolling(): void {
   if (timer) return;
   void refresh();
-  timer = setInterval(() => { if (!document.hidden) void refresh(); }, 20_000);
+  /* Focus as well as visibility: a desktop window is never `hidden`, so this
+     asked every 20 s of a window nobody was looking at (3 a minute, measured). */
+  timer = pollWhileLooking(() => { void refresh(); }, 20_000);
 }
 
 export function subscribeReminders(fn: () => void): () => void {
@@ -43,7 +46,7 @@ export function subscribeReminders(fn: () => void): () => void {
   ensurePolling();
   return () => {
     subs.delete(fn);
-    if (!subs.size && timer) { clearInterval(timer); timer = null; }
+    if (!subs.size && timer) { timer(); timer = null; }
   };
 }
 

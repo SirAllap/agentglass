@@ -1,8 +1,11 @@
+import { forgetShared, sharedRead } from "./sharedRead.ts";
 import type { UiAction, Field, NoteStatus, PluginPanel, PluginPrNotes } from "./pluginTypes.ts";
 import type { ImportedPlace } from "./desktop.ts";
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest } from "../../../shared/types.ts";
+import type { PrWatchFire, PrWatchRule, PrWatchState } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest } from "../../../shared/types.ts";
 import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember } from "../../../shared/providers.ts";
 import { DEFAULT_NOTIFY_PREFS, type NotifyPrefs } from "../../../shared/notifyPrefs.ts";
+import type { CheckMetric } from "../../../shared/checkBaseline.ts";
 
 /** What every ClickUp write answers with: the card as it now stands, or why not. */
 /* `conflict` and `unauthorised` are the two failures with a remedy the app can
@@ -526,6 +529,10 @@ export function adoptServer(next: { origin?: string | null; token?: string | nul
   WS_URL = withToken(SERVER.replace(/^http/, "ws") + "/stream");
 }
 
+/** The private socket every live plugin canvas shares (server/src/plugin-canvas.ts).
+ *  Read at call time, like `WS_URL`, so a re-adopted server is the next one dialled. */
+export const canvasWsUrl = (): string => withToken(SERVER.replace(/^http/, "ws") + "/plugins/panels/live");
+
 /** WebSocket URL for a real PTY shell in `root` (the in-browser terminal). */
 export const ptyWsUrl = (root: string, cols: number, rows: number, view?: string, edit = false, agent?: string,
   /**
@@ -727,6 +734,10 @@ async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
   throw last;
 }
 
+/** How long callers of `gitRepos` share one answer. Short: the server keeps its
+ *  own for 15 s, and a git write or the server's "git changed" frame drops it. */
+const REPOS_SHARE_MS = 2_000;
+
 async function post<T>(path: string, body: unknown, headers: Record<string, string> = {}): Promise<T> {
   // Gated like GET, and only gated: waiting for a listener changes nothing
   // about what a POST means, where asking twice would. Measured in the real
@@ -734,8 +745,16 @@ async function post<T>(path: string, body: unknown, headers: Record<string, stri
   // `/theme/sync` on boot and `/browser/ready`, which is the panel the maintainer
   // reported as not starting.
   await whenServerUp();
-  const r = await fetch(SERVER + path, { method: "POST", headers: authHeaders({ "content-type": "application/json", ...headers }), body: JSON.stringify(body) });
-  return r.json() as Promise<T>;
+  // A git write changes what /git/repos says (dirty count, branch): drop the
+  // shared copy before AND after, so nothing asks for a stale one meanwhile.
+  const git = path.startsWith("/git/");
+  if (git) forgetShared();
+  try {
+    const r = await fetch(SERVER + path, { method: "POST", headers: authHeaders({ "content-type": "application/json", ...headers }), body: JSON.stringify(body) });
+    return await (r.json() as Promise<T>);
+  } finally {
+    if (git) forgetShared();
+  }
 }
 
 /** The viewer's IANA zone, or null if the runtime cannot say. Memoized: this
@@ -1046,7 +1065,9 @@ const realApi = {
   // always answers it (index.ts's /git/repos) — so the bell can tell "this
   // window's folders" from a whole-machine sweep. See gitNote.ts's
   // notesWorthyRepos.
-  gitRepos: () => get<{ repos: GitRepoRef[]; roots?: string[] }>("/git/repos"),
+  /** One checkout's row, read now — not shared, not cached (see repoPulse.ts). */
+  gitRepo: (root: string) => get<{ repo: GitRepoRef | null }>(`/git/repo?root=${encodeURIComponent(root)}`),
+  gitRepos: () => sharedRead("git/repos", REPOS_SHARE_MS, () => get<{ repos: GitRepoRef[]; roots?: string[] }>("/git/repos")),
   /** Put a PNG somewhere an agent can read it, and say where. A tmux window
    *  takes text; a megabyte of base64 in a prompt is not text. */
   /** Everywhere another browser has been, for the address bar. */
@@ -1239,13 +1260,16 @@ const realApi = {
   /** Installed / daemon-down / OK — so the panel can show install guidance for a
    *  missing binary instead of the overview's daemon message. Mirrors gitCapability. */
   dockerCapability: () => get<DockerCapability>("/docker/capability"),
-  dockerOverview: () => get<DockerOverview>("/docker/overview"),
+  /** `fresh` asks past the server's cache: the Refresh button, not the poll. */
+  dockerOverview: (fresh = false) => get<DockerOverview>(`/docker/overview${fresh ? "?fresh=1" : ""}`),
   dockerStats: () => get<{ stats: DockerStat[] }>("/docker/stats"),
   /* --- the finder: browsing a place and looking at a file ----------------
      One pair for both worlds, because the finder's tabs should not behave
      differently depending on which backend answers them. */
-  browse: (path: string) => get<BrowseReport>(`/browse?path=${encodeURIComponent(path)}`),
+  browse: (path: string, hidden = false) => get<BrowseReport>(`/browse?path=${encodeURIComponent(path)}${hidden ? "&hidden=1" : ""}`),
   previewFacts: (path: string) => get<FileFacts>(`/preview/facts?path=${encodeURIComponent(path)}`),
+  /** Status, +/-, branch and last commit of one file, for the info rail. */
+  previewGit: (path: string) => get<FileGitFacts>(`/preview/git?path=${encodeURIComponent(path)}`),
   /**
    * The bytes of a file, as a blob URL the browser can draw.
    *
@@ -1270,6 +1294,7 @@ const realApi = {
   /** Hand a file to the desktop's own viewer — a picture belongs to the picture
    *  viewer, not to the editor the text files open in. */
   previewOpen: (path: string) => post<{ ok: boolean; with?: string; error?: string }>("/preview/open", { path }),
+  previewReveal: (path: string) => post<{ ok: boolean; with?: string; error?: string }>("/preview/reveal", { path }),
   diskGrep: (root: string, q: string) => get<GrepReport>(`/disk/grep?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}`),
 
   dockerLogs: (id: string, tail = 400) => get<{ ok: boolean; text: string; error?: string }>(`/docker/logs?id=${encodeURIComponent(id)}&tail=${tail}`),
@@ -1494,12 +1519,14 @@ const realApi = {
       `/prs/local-head?${new URLSearchParams({ root, branch })}`),
   /** The latest run per check name for ONE pull request — the list's rollup
    *  counts a re-run's old attempt beside the new one. See prRollupStore. */
-  prRollup: (root: string, number: number) =>
+  prRollup: (root: string, number: number, force = false) =>
     get<{ ok: boolean; checks?: PrCheckRollup; error?: string }>(
-      `/prs/rollup?${new URLSearchParams({ root, number: String(number) })}`),
-  prBehind: (root: string, number: number) =>
+      `/prs/rollup?${new URLSearchParams({ root, number: String(number), ...(force ? { force: "1" } : {}) })}`),
+  /** `force` skips the server's 60 s copy: after "Update branch", or when the
+   *  person pressed Refresh. The panel's own 30 s tick does not need it. */
+  prBehind: (root: string, number: number, force = false) =>
     get<{ ok: boolean; behind?: number; ahead?: number; local?: PrLocalHead; error?: string }>(
-      `/prs/behind?${new URLSearchParams({ root, number: String(number) })}`),
+      `/prs/behind?${new URLSearchParams({ root, number: String(number), ...(force ? { force: "1" } : {}) })}`),
   /** Which saved board already holds this card. Local — the server answers from
    *  its cache, so this can be asked before every lookup. */
   clickupWhere: (id: string) =>
@@ -1820,7 +1847,11 @@ const realApi = {
   pluginEnable: (name: string) =>
     post<{ ok: boolean; error?: string }>("/plugins/enable", { name }),
   pluginDisable: (name: string) =>
-    post<{ ok: boolean }>("/plugins/disable", { name }),
+    post<{ ok: boolean; error?: string }>("/plugins/disable", { name }),
+  /** Consent, or its revocation, to run this plugin without its box on a host
+   *  that cannot build one. Revoking stops it if that consent is why it runs. */
+  pluginAllowUnboxed: (name: string, allow: boolean) =>
+    post<{ ok: boolean; error?: string }>("/plugins/allow-unboxed", { name, allow }),
   /** Its settings are kept for a reinstall unless `dropSettings`. */
   pluginRemove: (name: string, dropSettings = false) =>
     post<{ ok: boolean }>("/plugins/remove", { name, dropSettings }),
@@ -1844,9 +1875,9 @@ const realApi = {
   },
   postMarks: (ops: MarkOp[]) => post<{ ok: boolean; changed?: MarkRow[]; error?: string; needs?: string }>("/marks", { ops }),
   pluginSettings: (name: string) =>
-    get<{ ok: boolean; fields: Field[]; values: Record<string, unknown>; error?: string }>(`/plugins/settings?name=${encodeURIComponent(name)}`),
+    get<{ ok: boolean; fields: Field[]; values: Record<string, unknown>; set?: string[]; error?: string }>(`/plugins/settings?name=${encodeURIComponent(name)}`),
   pluginSettingsSave: (name: string, values: Record<string, unknown>) =>
-    post<{ ok: boolean; values?: Record<string, unknown>; error?: string }>("/plugins/settings", { name, values }),
+    post<{ ok: boolean; values?: Record<string, unknown>; set?: string[]; error?: string }>("/plugins/settings", { name, values }),
   /** Runs and notes plugins wrote on one pull request. Local only. */
   pluginPrNotes: (repo: string, number: number) =>
     get<PluginPrNotes>(`/plugins/pr-notes?repo=${encodeURIComponent(repo)}&number=${number}`),
@@ -1986,6 +2017,17 @@ const realApi = {
   prCheckJobs: (root: string, number: number) =>
     get<{ ok: boolean; jobs?: PrCheckJob[]; error?: string }>(
       `/prs/check-jobs?root=${encodeURIComponent(root)}&number=${number}`),
+  /** The failing part of one failed check: tests, excerpts, or why there are none. Lazy: only when a check is opened. */
+  prCheckFailures: (root: string, job: string, hints: { attempt?: number; step?: string } = {}, force = false) =>
+    get<CheckFailures>(
+      `/prs/check-failures?root=${encodeURIComponent(root)}&job=${encodeURIComponent(job)}${hints.attempt ? `&attempt=${hints.attempt}` : ""}${hints.step ? `&step=${encodeURIComponent(hints.step)}` : ""}${force ? "&force=1" : ""}`),
+  /** The CI view's failing tests. Without `refresh` a table read; with it a capped backfill that reads failed runs from GitHub. */
+  prFailingTests: (root: string, refresh = false) =>
+    get<FailingTests | { ok: false; error: string }>(`/prs/failing-tests?root=${encodeURIComponent(root)}${refresh ? "&refresh=1" : ""}`),
+  /** What was already read of these jobs' failures. The cache only: no request to GitHub. */
+  prCheckFailuresCached: (root: string, jobs: string[]) =>
+    get<{ ok: boolean; summaries?: Record<string, CheckFailureSummary>; error?: string }>(
+      `/prs/check-failures-cached?root=${encodeURIComponent(root)}&jobs=${encodeURIComponent(jobs.join(","))}`),
   /** Re-run everything, only the failures, or a single job. */
   prRerunJobs: (root: string, what: "all" | "failed" | "job", id: string) =>
     post<PrActionResult>("/prs/rerun-jobs", { root, what, id }),
@@ -1996,6 +2038,9 @@ const realApi = {
   /** What this project's agents have spent, by branch and by checkout. One
    *  request for the whole repository — the board looks each row up in it. */
   prSpend: (root: string) => get<RepoSpend>(`/prs/spend?root=${encodeURIComponent(root)}`),
+  /** Every check of this repository against its own history — local, no GitHub call. */
+  prCheckMetrics: (root: string) =>
+    get<{ ok: boolean; repo?: string; checks?: CheckMetric[]; error?: string }>(`/prs/check-metrics?root=${encodeURIComponent(root)}`),
   /** Which checkout on this machine is `owner/name` — so a link to a pull
    *  request in another project opens instead of landing nowhere. */
   prLocate: (repo: string) =>
@@ -2051,6 +2096,19 @@ const realApi = {
   prUpdateBranch: (root: string, number: number, syncLocal = false) =>
     post<PrActionResult>("/prs/update-branch", { root, number, syncLocal }),
   prRerun: (root: string, number: number) => post<PrActionResult>("/prs/rerun", { root, number }),
+  /** "Tell me when this PR's CI does X" — the rules live on the server, see
+   *  server/src/prNotifyWatch.ts. */
+  prWatches: () => get<PrWatchState & { ok: boolean }>("/prs/notify-watch"),
+  prWatchAdd: (root: string, number: number, title: string, rule: PrWatchRule) =>
+    post<{ ok: boolean; error?: string }>("/prs/notify-watch/add", { root, number, title, rule }),
+  /** Fires decided while no client was connected, oldest first; acknowledge each once shown. */
+  prWatchPending: () => get<{ ok: boolean; fires: PrWatchFire[] }>("/prs/notify-watch/pending"),
+  prWatchAck: (seq: number) => post<{ ok: boolean }>("/prs/notify-watch/ack", { seq }),
+  prWatchRemove: (id: string) => post<{ ok: boolean }>("/prs/notify-watch/remove", { id }),
+  prWatchApply: (root: string, number: number, title: string) =>
+    post<{ ok: boolean; applied: number; error?: string }>("/prs/notify-watch/apply", { root, number, title }),
+  prWatchPreset: (root: string, rules: PrWatchRule[], auto: boolean) =>
+    post<{ ok: boolean; error?: string }>("/prs/notify-watch/default", { root, rules, auto }),
   prMerge: (root: string, number: number, method: "squash" | "merge" | "rebase", opts: { deleteBranch?: boolean; auto?: boolean; headSha?: string; subject?: string; body?: string; disableAuto?: boolean }) =>
     post<PrActionResult>("/prs/merge", { root, number, method, ...opts }),
   prClose: (root: string, number: number, reopen = false) => post<PrActionResult>("/prs/close", { root, number, reopen }),
@@ -2250,6 +2308,7 @@ const demoApi: typeof realApi = {
   } as DepsResponse),
   logDigest: () => D({ since: 0, total: 0, groups: [], crashLoops: [], spikes: [], quiet: true } as LogDigest),
   gitRepos: () => D(demo.gitRepos()),
+  gitRepo: (_root: string) => D({ repo: null as GitRepoRef | null }),
   browserPlaces: () => D({ ok: true, places: [] as ImportedPlace[] }),
   browserPlaceCount: () => D({ ok: true, total: 0, bookmarks: 0, sources: [] as string[] }),
   saveBrowserPlaces: (_s: string, _p: ImportedPlace[]) => D({ ok: false, error: "not available in the demo" }),
@@ -2385,8 +2444,10 @@ const demoApi: typeof realApi = {
   dockerStats: () => D(demo.dockerStats()),
   browse: (path: string) => D({ ok: false, path, parent: null, entries: [], more: 0, hiddenSkipped: 0, error: "the demo has no filesystem" } as BrowseReport),
   previewFacts: (path: string) => D({ ok: false, path, name: "", kind: "binary", mime: "", bytes: 0, mtime: 0, error: "the demo has no filesystem" } as FileFacts),
+  previewGit: () => D({ ok: true, repo: false } as FileGitFacts),
   previewBlob: async () => ({ ok: false as const, error: "the demo has no filesystem" }),
   previewOpen: () => D({ ok: false, error: "the demo has no filesystem" }),
+  previewReveal: () => D({ ok: false, error: "the demo has no filesystem" }),
   diskGrep: () => D({ ok: false, hits: [], files: 0, truncated: false, via: "", error: "the demo has no filesystem" } as GrepReport),
   dockerLogs: (id: string, _tail?: number) => D(demo.dockerLogs(id)),
   dockerDisk: () => D({ images: 0, containers: 0, volumes: 0, buildCache: 0, reclaimable: 0, orphans: [], volumes_: [], at: Date.now() } as DockerDisk),
@@ -2406,6 +2467,7 @@ const demoApi: typeof realApi = {
   pluginInstall: (_source: string) => D({ ok: false, error: "not available in the demo" } as { ok: false; error: string }),
   pluginEnable: (_name: string) => D({ ok: false, error: "not available in the demo" }),
   pluginDisable: (_name: string) => D({ ok: false }),
+  pluginAllowUnboxed: (_name: string, _allow: boolean) => D({ ok: false }),
   pluginRemove: (_name: string, _dropSettings?: boolean) => D({ ok: false }),
   pluginPanels: (_plugin?: string, _panel?: string) => D({ ok: true, panels: [] as PluginPanel[] }),
   pluginAction: (_p: string, _panel: string | undefined, _a: UiAction, _v?: Record<string, unknown>) => D({ ok: false, error: "not available in the demo" }),
@@ -2506,8 +2568,12 @@ const demoApi: typeof realApi = {
   prLineComment: () => D(demoPrAction()),
   prJobLog: () => D({ ok: false, error: "not available in the demo" }),
   prCheckJobs: () => D({ ok: false, error: "not available in the demo" } as { ok: boolean; jobs?: PrCheckJob[]; error?: string }),
+  prCheckFailures: () => D({ ok: false, kind: "error", error: "not available in the demo", requests: 0 } as CheckFailures),
+  prFailingTests: () => D({ ok: false, error: "not available in the demo" } as FailingTests | { ok: false; error: string }),
+  prCheckFailuresCached: () => D({ ok: false, error: "not available in the demo" } as { ok: boolean; summaries?: Record<string, CheckFailureSummary>; error?: string }),
   prRerunJobs: () => D(demoPrAction()),
   prCounts: (_r: string, _s: "open" | "closed" | "all") => D({ ok: false, error: "not available in the demo" } as { ok: boolean; counts?: { review: number; mine: number; failing: number; ready: number; all: number }; error?: string }),
+  prCheckMetrics: (_r: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; repo?: string; checks?: CheckMetric[]; error?: string }),
   /* The demo has no local event history, and a spend chip invented for it would
      be the one number on the page that is a fiction. `ok: false` draws nothing. */
   prSpend: (_r: string) => D({ ok: false, error: "not available in the demo", since: 0, seamDay: null, beforeSeamUsd: 0, branches: [], worktrees: [] } as RepoSpend),
@@ -2544,6 +2610,13 @@ const demoApi: typeof realApi = {
   prDraft: (_r: string, _n: number, _d: boolean) => D(demoPrAction()),
   prUpdateBranch: (_r: string, _n: number, _s?: boolean) => D(demoPrAction()),
   prRerun: (_r: string, _n: number) => D(demoPrAction()),
+  prWatches: () => D({ ok: true, watches: [], presets: [] }),
+  prWatchAdd: (_r: string, _n: number, _t: string, _rule: PrWatchRule) => D({ ok: false, error: "not available in the demo" }),
+  prWatchPending: () => D({ ok: true, fires: [] as PrWatchFire[] }),
+  prWatchAck: (_s: number) => D({ ok: true }),
+  prWatchRemove: (_id: string) => D({ ok: true }),
+  prWatchApply: (_r: string, _n: number, _t: string) => D({ ok: false, applied: 0, error: "not available in the demo" }),
+  prWatchPreset: (_r: string, _rules: PrWatchRule[], _a: boolean) => D({ ok: false, error: "not available in the demo" }),
   prMerge: (_r: string, _n: number, _m: "squash" | "merge" | "rebase", _o: { deleteBranch?: boolean; auto?: boolean; headSha?: string; subject?: string; body?: string; disableAuto?: boolean }) => D(demoPrAction()),
   prClose: (_r: string, _n: number, _reopen?: boolean) => D(demoPrAction()),
   prReviewPrompt: (_r: string, _n: number, _recipe?: string, _card?: string) => D({ ok: false, error: "not available in the demo" }),

@@ -6,6 +6,7 @@
 // running job — reopening reattaches to the live session, scrollback intact.
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { usePoll } from "../lib/usePoll.ts";
+import { PILL_POLL_MS, withFreshRepo } from "../lib/repoPulse.ts";
 import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
 import { subscribeTermReview, termReview, clearTermReview } from "../lib/termReview.ts";
 import { subscribeTermIssue, termIssue, clearTermIssue, type TermIssue } from "../lib/termIssue.ts";
@@ -1819,6 +1820,8 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
    * entry cannot survive that check, which is what makes writing it to disk
    * safe.
    */
+  const wtRunRef = useRef<(() => void) | null>(null);
+  const fillRef = useRef<(() => void) | null>(null);
   const wtSeen = useRef(new Map<string, PaneSeen>(readPaneSeen()));
   const rememberSeen = useCallback(() => { writePaneSeen(wtSeen.current); }, []);
   /*
@@ -2084,8 +2087,8 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
       setDetectedWt((prev) => (prev?.root === now?.root ? prev : now ?? null));
     };
     void run();
-    const id = setInterval(() => { void run(); }, 4000);
-    return () => { stopped = true; clearInterval(id); };
+    wtRunRef.current = () => { void run(); };
+    return () => { stopped = true; wtRunRef.current = null; };
   }, [open, focusIdx, paneIds, repos, root, here?.worktreeOf, here?.root, focusKey, focusWin]);
   /**
    * What the header chip and the status bar both name: the worktree the focused
@@ -2109,9 +2112,15 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
       }).catch(() => { /* the per-pane call still answers */ });
     };
     fill();
-    const id = setInterval(fill, 4000);
-    return () => { live = false; clearInterval(id); };
+    fillRef.current = fill;
+    return () => { live = false; fillRef.current = null; };
   }, [open, focusWin, paneIds.length]);
+  /* ONE timer for both reads above, and only while the window is looked at.
+     They were two setIntervals on the same 4 s beat, ungated: 15 identical
+     `pane-dirs?all=1` requests a minute (one `list-panes` each) for a window
+     nobody had focused. The ceiling: an agent that moves worktree while the
+     window is unfocused shows on the next focus, which polls at once. */
+  usePoll(open, () => { wtRunRef.current?.(); fillRef.current?.(); }, 4000);
 
   const chipWt = detectedWt ?? (wtDetecting ? null : here) ?? null;
   useEffect(() => { wtRef.current = chipWt; }, [chipWt]);
@@ -2138,6 +2147,15 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const prRef = useRef<{ repo: string; pr: PrBranchSummary } | null>(null);
   useEffect(() => { prRef.current = chipPr; }, [chipPr]);
   const wtRef = useRef<GitRepoRef | null>(null);
+  /* The pill's own beat: the focused pane's checkout, re-read through the
+     single-row route so a rename or an edit shows in seconds. Same gate as the
+     poll above (the window is looked at); the list the row lives in is held by
+     the server for 15 s and was read once, on open. See repoPulse.ts. */
+  usePoll(open && !IS_DEMO, () => {
+    const at = wtRef.current?.root;
+    if (!at) return;
+    void api.gitRepo(at).then((r) => setRepos((cur) => withFreshRepo(cur, r.repo))).catch(() => { /* the next beat asks again */ });
+  }, PILL_POLL_MS);
   /** Not `cardRef` — that name is the lib function this file already uses to
    *  turn a branch into a card reference. */
   const cardGoRef = useRef<(() => void) | null>(null);

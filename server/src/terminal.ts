@@ -30,7 +30,8 @@ import { inScope, workspaceRoot, terminalDisabledSource, tmuxTerminal, tmuxPrefi
 import { noteNvimArgv } from "./bench.ts";
 import { engineAttachArgv, engineBenchArgv, engineConsoleArgv, engineWindowRunning, engineSplitRunning, engineSessionName } from "./tmuxpane.ts";
 import { confHealth, ensureConf } from "./tmuxconf.ts";
-import { readerSocketPath } from "./bench.ts";
+import { readerSocketPath, readerSessionState, endReaderSession, BENCH_READER_SLOT } from "./bench.ts";
+import { browseReal } from "./browse.ts";
 import { SKIP_DIRS } from "./gitwork.ts";
 
 // The PTY backend is POSIX-only: every strategy below needs a real
@@ -683,6 +684,41 @@ export function chooseRun(o: {
   return { run, ownShell: run === o.shellArgv };
 }
 
+/**
+ * May the bench open this file in an editor?
+ *
+ * The workspace, a copy this server wrote, or anything the finder is allowed
+ * to read. The last one is the regression: the palette's Machine tab lists
+ * ~/Documents and offers the file, but this door only knew the workspace, so
+ * the bench tab opened on a plain shell prompt and nvim never started. One
+ * door per question: if the palette may read it, the editor may show it.
+ */
+export function viewableFile(wanted: string | null, tempCopy: boolean): boolean {
+  return !!wanted && (inScopeReal(wanted) || tempCopy || browseReal(wanted) !== null);
+}
+
+/**
+ * The command that shows one file in an editor: the editor as configured, then
+ * its own flags, then the file as ONE argv element. Pulled out of `ptyOpen` so
+ * the claim "the bench tab runs nvim on that exact file" is a value a test can
+ * hold, not a sentence in a comment.
+ *
+ * - `listen`: a socket, when the editor is neovim. It is the only way anything
+ *   outside the pty can ask where the cursor is, and what makes the bench an
+ *   editor the next file can reach. Ours because we start it.
+ * - `line`: `+N` puts the cursor on the line the caller came for. Clamped and
+ *   integral: it is a number from a URL.
+ */
+export function editorRunArgv(o: { editor: string; listen: string | null; readonlyFlags: string[]; line?: number; file: string }): string[] {
+  return [
+    ...o.editor.split(/\s+/),
+    ...(o.listen ? ["--listen", o.listen] : []),
+    ...o.readonlyFlags,
+    ...(o.line && o.line > 1 ? [`+${Math.floor(o.line)}`] : []),
+    o.file,
+  ];
+}
+
 export function ptyOpen(ws: PtyWs) {
   const d = ws.data as PtyWsData;
   if (!TERMINAL_ENABLED) {
@@ -743,7 +779,7 @@ export function ptyOpen(ws: PtyWs) {
   // In scope, or a copy this server itself wrote: a pull request's file is
   // fetched to a temp path precisely because it is not in the workspace, and
   // the check has to admit that without admitting /tmp in general.
-  const viewable = !!wanted && (inScopeReal(wanted) || tempCopy);
+  const viewable = viewableFile(wanted, tempCopy);
   const editor = viewable && existsSync(wanted!) ? editorFor() : null;
   /*
    * Read-only unless the caller asked for an editor, and never for a copy.
@@ -892,28 +928,43 @@ export function ptyOpen(ws: PtyWs) {
      the whole promise of the bench: close the window, the work is still there
      when it opens again. */
   const editorArgv = editor
-    ? [
-      ...editor.split(/\s+/),
-      /* A socket, when the editor is neovim: it is the only way anything
-         outside the pty can ask where the cursor is, which is what makes the
-         pane's rail a map rather than a menu. Ours because we start it — the
-         client is given an opaque id and never the path. See editorwhere.ts. */
-      ...(editorSock ? ["--listen", editorSock.path] : []),
-      ...readonlyFlags,
-      /* `+N` puts the cursor on the line the caller came for. Every editor this
-         picks takes it — nvim, vim, view, less — and it is the difference
-         between opening a 900-line file at the change you were reading and
-         opening it at the top. Clamped and integral: it is a number from a
-         URL. */
-      ...(d.line && d.line > 1 ? [`+${Math.floor(d.line)}`] : []),
-      wanted!,
-    ]
+    ? editorRunArgv({ editor, listen: editorSock?.path ?? null, readonlyFlags, line: d.line, file: wanted! })
     : null;
   /* The note's editor, on a bench socket only. Null without nvim, which leaves
      a plain shell: the client asked /bench/note first and only sends this when
      it said yes. */
   const noteRun = d.bench && d.note ? noteNvimArgv(cwd) : null;
   const benchRuns = d.bench ? (agentRun.length ? agentRun : noteRun ?? editorArgv) : null;
+  /*
+   * The reader is an editor or it is nothing.
+   *
+   * Every file tab of a checkout shares the reader's session, and `-A` attaches
+   * to whatever already holds that name. Two ways that went wrong, both
+   * measured on an isolated server with the finder's "Edit in nvim":
+   *
+   * - The session was created as a plain SHELL whenever the file it was
+   *   created for could not be opened (gone since, or refused). Nothing ever
+   *   replaced it: every later file, however valid, attached to that prompt,
+   *   and /bench/edit had no editor to hand the file to. So a reader session
+   *   that is not the editor is ended here, and this attach starts the editor
+   *   on the file it names.
+   * - With nothing to open, it does not become a shell: it says why. A prompt
+   *   in the checkout, in a tab named after a file, reads as "nvim did not
+   *   start" and nobody can tell which file it failed on.
+   *
+   * Only with the engine: without tmux there is no session to be wrong about.
+   */
+  if (d.bench === BENCH_READER_SLOT && d.view && !agentRun.length && !noteRun && engineAttachArgv(startIn)) {
+    const held = readerSessionState(startIn);
+    if (held === "other") endReaderSession(startIn);
+    if (held !== "editor" && !editorArgv) {
+      if (wired) wired.dispose();
+      const why = !viewable ? "is not a file the bench may open" : !existsSync(wanted!) ? "is not there any more" : "has no editor to open it (set $EDITOR or install nvim)";
+      ctl(ws, { t: "fatal", error: `${basename(wanted ?? String(d.view))} ${why}` });
+      ws.close(1008, "nothing to edit");
+      return;
+    }
+  }
   const engine = d.bench
     ? engineBenchArgv(startIn, d.bench, benchRuns, ticket?.role ? { AGENTGLASS_ROLE: ticket.role } : undefined)
     : d.console

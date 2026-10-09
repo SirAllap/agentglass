@@ -87,9 +87,12 @@ describe("spawn pool", () => {
   it("reports whether the cap is actually biting", async () => {
     // So `/api/loopwatch` can answer "is the app queueing behind its own
     // limit" without anyone having to guess.
+    // Its own burst: the counters are reset before every test, so one left by
+    // the test above is not there when this one runs first.
+    await Promise.all(Array.from({ length: 20 }, () => pool.withSpawnSlot(() => Bun.sleep(5))));
     const s = pool.spawnPoolStats();
     expect(s.limit).toBe(4);
     expect(s.peakInflight).toBeGreaterThan(1);
-    expect(s.peakWaiting).toBeGreaterThan(0);   // the 60-deep burst above queued
+    expect(s.peakWaiting).toBeGreaterThan(0);   // 20 asked for 4 slots, so the rest queued
   });
 });

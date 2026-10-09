@@ -11,6 +11,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "agx-brief-"));
 process.env.AGENTGLASS_DOCTRINE = join(dir, "data");
@@ -26,13 +27,15 @@ const { db } = await import("../src/db.ts");
 
 const ROOT = join(dir, "orbit");
 
+const step = story();
+
 describe("two files, because they govern two different people", () => {
-  test("the brief sits beside the doctrine and is not the same file", () => {
+  step("the brief sits beside the doctrine and is not the same file", () => {
     expect(briefPath(ROOT)).not.toBe(doctrinePath(ROOT));
     expect(briefPath(ROOT).startsWith(doctrinePath(ROOT).replace(/\.md$/, ""))).toBe(true);
   });
 
-  test("it is seeded once and read back after", () => {
+  step("it is seeded once and read back after", () => {
     const first = readBrief(ROOT);
     expect(first.seeded).toBe(true);
     writeBrief(ROOT, "# mine\n\nonly my rules\n");
@@ -41,7 +44,7 @@ describe("two files, because they govern two different people", () => {
     expect(second.text).toBe("# mine\n\nonly my rules\n");
   });
 
-  test("an empty one is refused, and the file on disk survives the refusal", () => {
+  step("an empty one is refused, and the file on disk survives the refusal", () => {
     const root = join(dir, "empty");
     readBrief(root);
     expect(writeBrief(root, "  ").ok).toBe(false);
@@ -53,47 +56,47 @@ describe("two files, because they govern two different people", () => {
 describe("the rules in it that were paid for", () => {
   const text = briefTemplate("/home/a/code/orbit");
 
-  test("the one rule everything follows from", () => {
+  step("the one rule everything follows from", () => {
     expect(text).toContain("If what a colleague can see changes, it is not yours");
   });
 
-  test("a peer cannot lift the gate", () => {
+  step("a peer cannot lift the gate", () => {
     /* Measured on a real machine: an instruction relayed by another agent was
        refused by the agents it reached, and the owner backed them. */
     expect(text.toLowerCase()).toContain("peer cannot lift that gate");
   });
 
-  test("approved is not a review until you can say who", () => {
+  step("approved is not a review until you can say who", () => {
     expect(text).toContain("not a review until you can say WHO");
   });
 
-  test("check the branch has what the change needs", () => {
+  step("check the branch has what the change needs", () => {
     expect(text).toContain("check the branch actually has what");
   });
 
-  test("an idle agent with a watcher bills like a working one", () => {
+  step("an idle agent with a watcher bills like a working one", () => {
     expect(text).toContain("idle agent with a\n  watcher");
   });
 
-  test("and it names the report shape, once", () => {
+  step("and it names the report shape, once", () => {
     expect(text).toContain(REPORT_SHAPE);
     expect(REPORT_SHAPE).toContain("STATE / BLOCKED / NEED / COST");
   });
 });
 
 describe("the seat is told to hand it out", () => {
-  test("only where it may open agents", () => {
+  step("only where it may open agents", () => {
     /* A chair that may not start anything has nobody to brief, and a rule it
        cannot act on is noise in the most expensive context on the machine. */
     expect(Seat.houseBlock("speak", 4, ROOT)).not.toContain("worker brief");
     expect(Seat.houseBlock("assign", 4, ROOT)).toContain("worker brief");
   });
 
-  test("with the path to this project's own copy", () => {
+  step("with the path to this project's own copy", () => {
     expect(Seat.houseBlock("assign", 4, ROOT)).toContain(briefPath(ROOT));
   });
 
-  test("through the app, never a bare tmux window, so the tab outlives the CLI", () => {
+  step("through the app, never a bare tmux window, so the tab outlives the CLI", () => {
     /* It was told to run `claude … "$(cat brief)"` itself, and did — and ran
        its one-shots with `tmux new-window "cli …"` the same way: a CLI that
        exited 0 closed its tab and took its answer with it. */
@@ -104,7 +107,7 @@ describe("the seat is told to hand it out", () => {
     expect(house).not.toContain("`claude --dangerously-skip-permissions");
   });
 
-  test("a nudge is spelled the way the CLI takes it", () => {
+  step("a nudge is spelled the way the CLI takes it", () => {
     /* `prompt` takes the name as its first argument; `--name` is an argparse
        error, and the seat's first nudge would fail on its own instructions. */
     const house = Seat.houseBlock("nudge", 4, ROOT);
@@ -112,7 +115,7 @@ describe("the seat is told to hand it out", () => {
     expect(house).not.toContain("prompt --name");
   });
 
-  test("and with one report shape, not two spellings of it", () => {
+  step("and with one report shape, not two spellings of it", () => {
     expect(Seat.houseBlock("assign", 4, ROOT)).toContain(REPORT_SHAPE);
   });
 });
@@ -125,14 +128,14 @@ describe("adopting an orchestrator that was already working", () => {
    */
   const ROOT2 = join(dir, "adopt-me");
 
-  test("a pane id that is not one is refused before anything is written", async () => {
+  step("a pane id that is not one is refused before anything is written", async () => {
     const r = await Seat.adoptSeat({ root: ROOT2, session: "s-x", pane: "not-a-pane" });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain("pane id");
     expect(Seat.seatRow(ROOT2)).toBeNull();
   });
 
-  test("a pane nobody can find is refused too", async () => {
+  step("a pane nobody can find is refused too", async () => {
     /* No tmux in a test, so every id is absent — which is the answer this
        check exists to give: adopting a pane that is not there would claim
        somebody is minding a project when nobody is. */
@@ -141,7 +144,7 @@ describe("adopting an orchestrator that was already working", () => {
     if (!r.ok) expect(r.error).toContain("no such pane");
   });
 
-  test("standing down an adopted seat does not kill it", async () => {
+  step("standing down an adopted seat does not kill it", async () => {
     /* Written straight to the row, because the live check needs a tmux this
        test does not have. What is under test is the branch in closeSeat. */
     db.query(`INSERT INTO seat (root, name, powers, adopted_session, adopted_pane, started_at)
@@ -176,13 +179,13 @@ describe("over its shoulder shows work, not furniture", () => {
     "  ⏵⏵ bypass permissions on (shift+tab to cycle)",
   ].join("\n");
 
-  test("keeps what the agent did", () => {
+  step("keeps what the agent did", () => {
     const out = Seat.shoulder(PANE);
     expect(out).toContain("bun test server/test/export.test.ts");
     expect(out).toContain("4 pass, 0 fail");
   });
 
-  test("drops the box, the spinner, the footer and the hook", () => {
+  step("drops the box, the spinner, the footer and the hook", () => {
     const out = Seat.shoulder(PANE);
     expect(out).not.toContain("MEMORY REMINDER");
     expect(out).not.toContain("Billowing");
@@ -190,14 +193,14 @@ describe("over its shoulder shows work, not furniture", () => {
     expect(out).not.toContain("❯");
   });
 
-  test("a pane with nothing but chrome says nothing at all", () => {
+  step("a pane with nothing but chrome says nothing at all", () => {
     /* An empty box is more honest than a box full of furniture, and the view
        does not draw one. */
     expect(Seat.shoulder("❯ \n  ⏵⏵ bypass permissions on\n")).toBe("");
     expect(Seat.shoulder("")).toBe("");
   });
 
-  test("cuts at the LAST box, so a quoted one does not hide the work", () => {
+  step("cuts at the LAST box, so a quoted one does not hide the work", () => {
     const out = Seat.shoulder(["❯ old prompt", "  ⏺ did the thing", "❯ "].join("\n"));
     expect(out).toContain("did the thing");
   });
@@ -214,14 +217,14 @@ describe("an adopted seat's powers are a claim, not a credential", () => {
    * "¿mi orquestador actual seguro que está en speak?" — no, and the view now
    * says so rather than drawing a badge that implies otherwise.
    */
-  test("adopting does not mint a seat token", async () => {
+  step("adopting does not mint a seat token", async () => {
     const { seatTokenCount } = await import("../src/auth.ts");
     const before = seatTokenCount();
     await Seat.adoptSeat({ root: join(dir, "adopt-me"), session: "s-x", pane: "%4242" });
     expect(seatTokenCount()).toBe(before);
   });
 
-  test("and the row says which kind of seat it is", () => {
+  step("and the row says which kind of seat it is", () => {
     const { db } = require("../src/db.ts");
     const root = join(dir, "adopt-me");
     db.query(`INSERT INTO seat (root, name, powers, adopted_pane, started_at)

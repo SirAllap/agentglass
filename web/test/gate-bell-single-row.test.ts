@@ -1,6 +1,8 @@
 import { test, expect, beforeAll, beforeEach, describe } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import { readFileSync } from "node:fs";
 import type { PendingGate } from "../../shared/types.ts";
+const stubGlobal = globalStubs();
 
 /*
  * One bell row per gate hold, retired when it resolves.
@@ -28,13 +30,13 @@ class FakeNotification {
 }
 
 beforeAll(async () => {
-  (globalThis as any).localStorage = {
+  stubGlobal("localStorage", {
     getItem: (k: string) => cell.get(k) ?? null,
     setItem: (k: string, v: string) => { cell.set(k, v); },
     removeItem: (k: string) => { cell.delete(k); },
-  };
-  (globalThis as any).location = { hostname: "localhost", origin: "http://localhost:4000" };
-  (globalThis as any).Notification = FakeNotification;
+  });
+  stubGlobal("location", { hostname: "localhost", origin: "http://localhost:4000" });
+  stubGlobal("Notification", FakeNotification);
   gateStore = await import("../src/lib/gateStore.ts");
   sysNotify = await import("../src/lib/sysNotify.ts");
 });

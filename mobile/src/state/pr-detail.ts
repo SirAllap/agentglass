@@ -49,9 +49,13 @@ function tell(entry: Entry): void {
   for (const listen of entry.listeners) listen();
 }
 
+/** How long after a stale answer the forced re-read goes out: the same 1.2 s
+ *  the desktop waits, which is about how long the server's own refresh takes. */
+export const STALE_FOLLOW_MS = 1_200;
+
 async function read(host: Host, root: string, number: string, entry: Entry, force: boolean): Promise<void> {
   const query = `root=${encodeURIComponent(root)}&number=${encodeURIComponent(number)}${force ? "&force=1" : ""}`;
-  const answer = await ask<{ ok: boolean; detail?: PrDetail; error?: string }>(host, `/prs/detail?${query}`);
+  const answer = await ask<{ ok: boolean; detail?: PrDetail; stale?: boolean; error?: string }>(host, `/prs/detail?${query}`);
   if (!answer.ok) { entry.error = answer.error; tell(entry); return; }
   if (!answer.value.ok || !answer.value.detail) {
     entry.error = answer.value.error || "That pull request could not be read.";
@@ -61,6 +65,16 @@ async function read(host: Host, root: string, number: string, entry: Entry, forc
   entry.error = null;
   entry.detail = answer.value.detail;
   tell(entry);
+  /*
+   * The server hands back what it had and says so (`stale`), refreshing behind
+   * it: a restart opens on the pull request you were reading instead of a
+   * spinner. That answer is minutes old, though, and the CI on it can be the
+   * one that has since turned green — so one forced read follows, which is
+   * what the desktop does. Never after a forced read: that one is the answer.
+   */
+  if (answer.value.stale && !force) {
+    setTimeout(() => { void readPrDetail(host, root, number, true); }, STALE_FOLLOW_MS);
+  }
 }
 
 /**

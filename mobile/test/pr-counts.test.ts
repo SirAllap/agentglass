@@ -12,21 +12,32 @@ import { describe, expect, test } from "bun:test";
 import { sumPrCounts, type PrViewCounts } from "../src/model/prCounts.ts";
 
 const counts = (over: Partial<PrViewCounts>): PrViewCounts =>
-  ({ review: 0, mine: 0, failing: 0, ready: 0, all: 0, ...over });
+  ({ review: 0, mine: 0, ...over });
 
 describe("sumPrCounts", () => {
   test("adds one repository's counts to another's", () => {
     expect(sumPrCounts([
-      counts({ review: 2, mine: 1, all: 7 }),
-      counts({ review: 1, failing: 3, all: 4 }),
-    ])).toEqual(counts({ review: 3, mine: 1, failing: 3, all: 11 }));
+      counts({ review: 2, mine: 1 }),
+      counts({ review: 1, mine: 3 }),
+    ])).toEqual(counts({ review: 3, mine: 4 }));
   });
 
   test("a single repository is not folded into itself twice", () => {
-    expect(sumPrCounts([counts({ review: 5, all: 5 })])).toEqual(counts({ review: 5, all: 5 }));
+    expect(sumPrCounts([counts({ review: 5 })])).toEqual(counts({ review: 5 }));
   });
 
   test("nothing answering yet is null, not a row of zeros", () => {
     expect(sumPrCounts([])).toBeNull();
+  });
+});
+
+/* The chip row read "All NaN": the type promised `all`, `failing` and `ready`,
+ * `/prs/counts` answers `review` and `mine` only, and adding `undefined` to a
+ * number is NaN. A sum now carries exactly what the wire carries. */
+describe("what the wire does not carry", () => {
+  test("a sum has no field the server never sent", () => {
+    const sum = sumPrCounts([{ review: 2, mine: 1 }, { review: 1, mine: 0 }]);
+    expect(Object.keys(sum ?? {}).sort()).toEqual(["mine", "review"]);
+    expect(Object.values(sum ?? {}).every(Number.isFinite)).toBe(true);
   });
 });

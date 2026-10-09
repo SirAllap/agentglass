@@ -295,6 +295,12 @@ function fromWindowsPath(p: string): string {
 
 export function safeAbs(p: unknown): string | null {
   if (typeof p !== "string" || !p || p.includes("\0")) return null;
+  // A pull request root with no directory behind it (`gh:owner/name`, see
+  // prs.ts). Resolved against the server's cwd it would name a path that does
+  // not exist, and `repoRootOf` walks UP from a missing path — to whatever
+  // repository the server happens to be running in. Refused here so nothing
+  // that wants a working tree can ever be handed that one.
+  if (p.startsWith("gh:")) return null;
   const abs = resolve(fromWindowsPath(p));
   // A translated drive path must stay inside the mount it maps to: `\` became
   // a real separator, so `..` in a Windows-recorded path can now climb out —

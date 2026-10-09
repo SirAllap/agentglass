@@ -524,6 +524,8 @@ const FULL_GET = new Set([
   // /plugin/self.
   "/plugins/settings",
   "/plugins/panels",
+  // The live scenes of those panels, over one socket.
+  "/plugins/panels/live",
   // The desktop's notifications, mirrored. Their bodies carry sign-in codes,
   // direct messages and mail previews, and the only switch that turns the
   // mirror off lives in the desk's own UI, so a read-scope credential opening
@@ -657,6 +659,14 @@ export function understudyRequiresToken(token: string | null | undefined): boole
   return !token;
 }
 
+/** `/plugins/panels` (and anything under it: the live socket) and
+ *  `/plugins/settings`. A path prefix, not the exact set FULL_GET holds, so a
+ *  route added under `/plugins/panels/` is private without anybody remembering
+ *  to list it twice. */
+export function isDeskPrivatePluginPath(pathname: string): boolean {
+  return pathname === "/plugins/settings" || pathname === "/plugins/panels" || pathname.startsWith("/plugins/panels/");
+}
+
 /** True when this caller may make this request. */
 export function allowed(caller: Caller, method: string, pathname: string): boolean {
   // First, and returning outright — see `principal` on Caller. The understudy's
@@ -674,6 +684,10 @@ export function allowed(caller: Caller, method: string, pathname: string): boole
   // the handlers check each request against that. Only a plugin token gets
   // here; anybody else asking for `/plugin/self` has no self to be.
   if (caller.kind === "plugin" && (pathname === "/plugin/self" || pathname.startsWith("/plugin/self/"))) return true;
+  // What other plugins drew and what people typed into their settings belongs
+  // to the desk. Refused by KIND, before the scope check: a manifest may
+  // declare `scope: "full"`, and `full` contains every FULL_GET below.
+  if (caller.kind === "plugin" && isDeskPrivatePluginPath(pathname)) return false;
   return scopeAllows(caller.scope, scopeNeeded(method, pathname));
 }
 

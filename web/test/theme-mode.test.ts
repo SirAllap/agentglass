@@ -3,9 +3,11 @@
  * neutral defaults it maps to.
  */
 import { describe, expect, test } from "bun:test";
+import { globalStubs } from "./stubGlobal";
+const stubGlobal = globalStubs();
 
 // themes.ts → api.ts reads `location` at module scope; stub before importing.
-(globalThis as any).location = { hostname: "localhost", origin: "http://localhost:4000" };
+stubGlobal("location", { hostname: "localhost", origin: "http://localhost:4000" });
 const { THEMES, EXPERIMENTAL_THEME_IDS, resolveThemeMode, SERIOUS_DARK, SERIOUS_LIGHT, isDarkTheme } =
   await import("../src/lib/themes.ts");
 

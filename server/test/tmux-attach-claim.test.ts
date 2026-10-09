@@ -34,6 +34,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { TEST_TERM } from "./tmuxTerm.ts";
+import { story } from "./story.ts";
 
 /*
  * Short, for the 108-byte unix socket path limit — a pid is five or six of
@@ -175,8 +176,10 @@ afterAll(() => {
   else process.env.TMUX_TMPDIR = REAL_TMPDIR;
 });
 
+const step = story();
+
 describe.if(HAVE_TMUX)("a mark taken but not yet attached", () => {
-  test("is claimed by this run the moment it is written", () => {
+  step("is claimed by this run the moment it is written", () => {
     expect(mark(win)).toBe("");
     const plan = ctl.attachArgvFor(["-L", SOCK], paneId, "claimtest", true, { cols: 60, rows: 20 });
     expect(plan, "attachArgvFor found no pane — the desk client is the precondition").not.toBeNull();
@@ -207,7 +210,7 @@ describe.if(HAVE_TMUX)("a mark taken but not yet attached", () => {
    * careful. The mark above is what a SIGKILL strands; this is what lets the
    * next boot find it.
    */
-  test("and the server it pinned on goes into the ledger the next boot reads", () => {
+  step("and the server it pinned on goes into the ledger the next boot reads", () => {
     expect(mark(win), "the test above is the one that writes it").toBe("none");
     // Beside the sockets it names — this fixture's own TMUX_TMPDIR, not the
     // developer's data directory. The first full run of this suite wrote
@@ -218,7 +221,7 @@ describe.if(HAVE_TMUX)("a mark taken but not yet attached", () => {
     expect(ctl.pinnedSockets().map(([, p]) => p)).toContain(join(TMPDIR, `tmux-${process.getuid?.() ?? 0}`, SOCK));
   });
 
-  test("survives a second server booting in that gap", () => {
+  step("survives a second server booting in that gap", () => {
     // The second boot really does walk this socket — it has the same
     // TMUX_TMPDIR, so it reads the same ledger the test above just checked, and
     // the ledger says this server is ours. What stops it is the claim, which is
@@ -239,7 +242,7 @@ describe.if(HAVE_TMUX)("a mark whose run is gone", () => {
     tmux("set-option", "-w", "-t", second, "window-size", "manual");
   };
 
-  test("is still swept, which is the whole point of the sweep", () => {
+  step("is still swept, which is the whole point of the sweep", () => {
     /*
      * A bare pid, and one nothing can be running under: Linux `pid_max` is
      * 4194304 by default, so /proc has no entry for this and never will.
@@ -257,7 +260,7 @@ describe.if(HAVE_TMUX)("a mark whose run is gone", () => {
     expect(sizeOpt(second)).toBe("latest");
   });
 
-  test("a pid that has been reused does not inherit the claim", () => {
+  step("a pid that has been reused does not inherit the claim", () => {
     // The pid is this very process, so it is unquestionably alive — and the
     // start time is not its own. Without carrying the start time this window
     // would be protected by a stranger for as long as that pid lived, and the
@@ -268,7 +271,7 @@ describe.if(HAVE_TMUX)("a mark whose run is gone", () => {
     expect(sizeOpt(second)).toBe("latest");
   });
 
-  test("and a claim held by a live run is honoured", () => {
+  step("and a claim held by a live run is honoured", () => {
     // The control for the two above: same window, same owed restore, only the
     // claimant differs. Without this they would pass with the claim check
     // deleted entirely.

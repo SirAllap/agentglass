@@ -42,6 +42,7 @@ const CLICKUP_API = "https://api.clickup.com/api/v2";
 let base = process.env.AGENTGLASS_CLICKUP_BASE || CLICKUP_API;
 export function __setClickUpBase(url: string | null): void {
   base = url ?? process.env.AGENTGLASS_CLICKUP_BASE ?? CLICKUP_API;
+  memo.clear();
   reset();
 }
 
@@ -98,7 +99,33 @@ export interface CallResult<T> {
  * neither is allowed to look like "you have no tasks", which is the wrong
  * answer people act on.
  */
-async function call<T>(pathname: string, token: string, timeoutMs = TIMEOUT_MS): Promise<CallResult<T>> {
+/*
+ * Identical GETs that meet in the air are one request.
+ *
+ * Measured against a stand-in workspace: two same-tick reads of one card cost
+ * six calls instead of three, and the same for member lists and list metadata,
+ * because two callers (two windows, the panel and the watcher) cannot know
+ * about each other. The map holds the promise only while it is pending, so it
+ * is not a cache: the next call after the answer lands asks again. The result
+ * is shared, so callers treat `data` as read-only. Ceiling: it merges only what
+ * overlaps in time; what to remember longer is decided by the caller (see
+ * `teamOnce` and `refreshCommentCounts`).
+ */
+const flying = new Map<string, Promise<CallResult<unknown>>>();
+
+/* `fresh` opts out: a Refresh press exists to get past a read already in the
+   air (see `refresh` in providers.ts), so it must not be merged into it. */
+function call<T>(pathname: string, token: string, timeoutMs = TIMEOUT_MS, fresh = false): Promise<CallResult<T>> {
+  if (fresh) return callOnce<T>(pathname, token, timeoutMs);
+  const key = `${base}${pathname}\n${token}`;
+  const held = flying.get(key);
+  if (held) return held as Promise<CallResult<T>>;
+  const p = callOnce<T>(pathname, token, timeoutMs).finally(() => { flying.delete(key); });
+  flying.set(key, p);
+  return p;
+}
+
+async function callOnce<T>(pathname: string, token: string, timeoutMs: number): Promise<CallResult<T>> {
   if (budget && budget.remaining <= RESERVE && Date.now() < budget.resetAt) {
     return { ok: false, throttled: true, error: "Holding off — ClickUp's rate limit is nearly used up" };
   }
@@ -146,6 +173,31 @@ async function call<T>(pathname: string, token: string, timeoutMs = TIMEOUT_MS):
     clearTimeout(kill);
   }
 }
+
+/*
+ * Answers that hold still for a session, asked once.
+ *
+ * Measured: who is on the team and who is on a list came back byte-identical on
+ * 11 of 12 list switches, at two requests each, and a comment post paid a third
+ * for the roster. Only a success is kept, so a refusal is retried on the next
+ * ask. Ten minutes: a colleague added to the workspace shows up in the picker
+ * inside that, and nothing here is a write, so nothing can go stale from what
+ * this app does. Ceiling: a per-process memo, not shared between two agentglass
+ * processes on one token.
+ */
+const MEMO_TTL_MS = 10 * 60_000;
+const memo = new Map<string, { at: number; r: CallResult<any> }>();
+async function memoOk<T>(key: string, token: string, run: () => Promise<CallResult<T>>): Promise<CallResult<T>> {
+  const k = `${base}|${token}|${key}`;
+  const hit = memo.get(k);
+  if (hit && Date.now() - hit.at < MEMO_TTL_MS) return hit.r;
+  const r = await run();
+  if (r.ok) memo.set(k, { at: Date.now(), r });
+  return r;
+}
+
+type TeamsBody = { teams?: { id?: string; members?: { user?: NonNullable<RawTask["assignees"]>[number] & { email?: string } }[] }[] };
+const teamOnce = (token: string) => memoOk("team", token, () => call<TeamsBody>("/team", token));
 
 // ---------------------------------------------------------------------------
 // identity
@@ -1794,13 +1846,13 @@ export async function listViews(token: string, listId: string): Promise<CallResu
 }
 
 export async function viewTasks(
-  token: string, viewId: string, myId?: string,
+  token: string, viewId: string, myId?: string, fresh = false,
 ): Promise<CallResult<{ tasks: ProviderTask[]; truncated: boolean }>> {
   const out: ProviderTask[] = [];
   let page = 0;
   for (; page < MAX_PAGES; page++) {
     const r = await call<{ tasks?: RawTask[]; last_page?: boolean }>(
-      `/view/${encodeURIComponent(viewId)}/task?page=${page}`, token, LIST_TIMEOUT_MS,
+      `/view/${encodeURIComponent(viewId)}/task?page=${page}`, token, LIST_TIMEOUT_MS, fresh,
     );
     if (!r.ok) return out.length ? { ok: true, data: { tasks: out, truncated: true } } : { ...r, data: undefined };
     for (const raw of r.data?.tasks ?? []) out.push(toTask(raw, myId));
@@ -1829,9 +1881,6 @@ export async function viewTasks(
  * fills in a refresh later — the honest trade for not making it wait.
  */
 const commentCounts = new Map<string, number>();
-const countsInFlight = new Map<string, Promise<void>>();
-/** Comment reads one pass may spend. See refreshCommentCounts. */
-export const COUNT_BUDGET = 30;
 
 /**
  * Take back the counts a previous run already worked out.
@@ -1863,49 +1912,95 @@ export function applyCommentCounts(tasks: ProviderTask[]): ProviderTask[] {
 }
 
 /**
- * Count what has not been counted, behind the request.
+ * Count what has not been counted, slowly, behind the request.
  *
- * Never awaited by one. Five in flight because the workspace rate-limits by the
- * minute, and forty cards at once is a burst that gets everything after it
- * refused — including the board's own next read.
+ * Never awaited by one, and never a burst. It used to count every uncounted
+ * card at once, five in flight: measured against a stand-in workspace, five
+ * cold lists of 12 to 60 cards cost 157 requests in 4 s (117 of them counts)
+ * against a budget of 100 a minute that the owner shares with his real work in
+ * ClickUp. A count is a badge, not content, so it drains through one queue at
+ * one call per COUNT_EVERY_MS, newest card of the latest board first, and stops
+ * asking while the workspace says the budget is nearly used up (`call` refuses
+ * then; the card is simply asked again on the next read of its board). A card
+ * that is opened is counted for free by `taskDetail`.
+ *
+ * Ceiling: a 60-card list takes ten minutes to fill in every badge, and the
+ * first sight of a board still shows blanks. Chosen over counting on demand
+ * per visible row, which needs the panel to say which rows are on screen.
  */
-export async function refreshCommentCounts(tasks: ProviderTask[], token: string): Promise<void> {
-  /*
-   * At most COUNT_BUDGET cards per pass, open ones first, in board order.
-   *
-   * Measured against a mock of a 250-card list: first sight of the board fired
-   * 250 comment reads, which is the whole minute of the workspace's rate limit
-   * and starves the board's own next read. ClickUp puts no comment count on a
-   * task, so the count costs a call per card; what can be chosen is how many
-   * per pass. The rest are counted by the next pass (every read of the board).
-   * A closed card is counted last because nobody is looking at the closed group.
-   *
-   * The ceiling: a board with more than COUNT_BUDGET uncounted open cards shows
-   * "Not counted yet" on the tail for a few reads, not for one.
-   */
-  const need = tasks
-    .filter((t) => !commentCounts.has(`${t.id}:${t.updated}`))
+let COUNT_EVERY_MS = 10_000;
+const COUNT_QUEUE_MAX = 300;
+/** Comment reads one pass may add to the queue, open cards first and in board
+ *  order. Measured against a mock of a 250-card list before it existed: first
+ *  sight fired 250 reads, the whole minute of the rate limit. The rest are
+ *  queued by the next pass (every read of the board). */
+export const COUNT_BUDGET = 30;
+const countQueue: { key: string; id: string; token: string }[] = [];
+let countActive: string | null = null;
+/** A pass's promise resolves when every card it is waiting on has been asked. */
+const countWaiters: { keys: Set<string>; done: () => void }[] = [];
+/** One per board, so reading a board again replaces its listener instead of adding one. */
+const countListeners = new Map<string, () => void>();
+let countTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Test seam: how long between two count calls. */
+export function __setCountEvery(ms: number): void { COUNT_EVERY_MS = ms; }
+export function __resetCounts(): void {
+  countQueue.length = 0; countListeners.clear(); commentCounts.clear(); countActive = null;
+  for (const w of countWaiters.splice(0)) w.done();
+  if (countTimer) clearTimeout(countTimer);
+  countTimer = null;
+}
+
+function settleCount(key: string): void {
+  for (let i = countWaiters.length - 1; i >= 0; i--) {
+    const w = countWaiters[i]!;
+    w.keys.delete(key);
+    if (!w.keys.size) { countWaiters.splice(i, 1); w.done(); }
+  }
+}
+
+function drainOneCount(): void {
+  countTimer = null;
+  const next = countQueue.shift();
+  if (!next) return;
+  countActive = next.key;
+  void call<{ comments?: unknown[] }>(`/task/${encodeURIComponent(next.id)}/comment`, next.token).then((r) => {
+    if (r.ok) {
+      commentCounts.set(next.key, (r.data?.comments ?? []).length);
+      for (const f of [...countListeners.values()]) f();
+    }
+  }).finally(() => {
+    countActive = null;
+    settleCount(next.key);
+    if (countQueue.length) { countTimer = setTimeout(drainOneCount, COUNT_EVERY_MS); countTimer.unref?.(); }
+  });
+}
+
+export function refreshCommentCounts(tasks: ProviderTask[], token: string, onCounted?: { board: string; run: () => void }): Promise<void> {
+  if (onCounted) countListeners.set(onCounted.board, onCounted.run);
+  const keyOf = (t: ProviderTask) => `${t.id}:${t.updated}`;
+  const queued = new Set(countQueue.map((q) => q.key));
+  if (countActive) queued.add(countActive);
+  const uncounted = tasks.filter((t) => !commentCounts.has(keyOf(t)));
+  // Cards an earlier pass already queued are joined, not asked twice.
+  const waitOn = new Set(uncounted.map(keyOf).filter((k) => queued.has(k)));
+  const need = uncounted
+    .filter((t) => !queued.has(keyOf(t)))
     .sort((a, b) => Number(a.statusKind === "done") - Number(b.statusKind === "done"))
     .slice(0, COUNT_BUDGET);
-  const LANES = 5;
-  for (let i = 0; i < need.length; i += LANES) {
-    await Promise.all(need.slice(i, i + LANES).map(async (t) => {
-      const key = `${t.id}:${t.updated}`;
-      // Two passes can overlap (a board read and the recount behind the last
-      // one); the second joins the first's request instead of repeating it.
-      let p = countsInFlight.get(key);
-      if (!p) {
-        p = call<{ comments?: unknown[] }>(`/task/${encodeURIComponent(t.id)}/comment`, token)
-          .then((r) => { if (r.ok) commentCounts.set(key, (r.data?.comments ?? []).length); })
-          .finally(() => countsInFlight.delete(key));
-        countsInFlight.set(key, p);
-      }
-      await p;
-    }));
-  }
+  for (const t of need) waitOn.add(keyOf(t));
+  // In front: the board looked at last is the one whose badges are on screen.
+  countQueue.unshift(...need.map((t) => ({ key: keyOf(t), id: t.id, token })));
+  if (countQueue.length > COUNT_QUEUE_MAX) countQueue.length = COUNT_QUEUE_MAX;
   // Keyed by id+stamp, so an edited card leaves its old entry behind. Cleared
   // wholesale: it is a display count and rebuilding costs one sweep.
   if (commentCounts.size > 2000) commentCounts.clear();
+  // The first one is asked now rather than after a wait, so a board that is
+  // opened and looked at gets its first badges without a dead interval.
+  if (countQueue.length && !countTimer && !countActive) { countTimer = setTimeout(drainOneCount, 0); countTimer.unref?.(); }
+  if (!waitOn.size) return Promise.resolve();
+  return new Promise<void>((done) => { countWaiters.push({ keys: waitOn, done }); });
 }
 
 // ---------------------------------------------------------------------------
@@ -2057,10 +2152,10 @@ export async function listMembers(listId: string): Promise<CallResult<{ members:
    */
   const me2 = me ? redacted("clickup") : null;
   const [fromList, fromTeam] = await Promise.all([
-    call<{ members?: NonNullable<RawTask["assignees"]>[number][] }>(`/list/${encodeURIComponent(listId)}/member`, token),
+    memoOk(`members:${listId}`, token, () => call<{ members?: NonNullable<RawTask["assignees"]>[number][] }>(`/list/${encodeURIComponent(listId)}/member`, token)),
     me2?.workspaceId
-      ? call<{ teams?: { members?: { user?: NonNullable<RawTask["assignees"]>[number] }[] }[] }>(`/team`, token)
-      : Promise.resolve({ ok: false } as CallResult<{ teams?: never[] }>),
+      ? teamOnce(token)
+      : Promise.resolve({ ok: false } as CallResult<TeamsBody>),
   ]);
   if (!fromList.ok && !fromTeam.ok) return { ok: false, error: fromList.error };
   const workspace = (fromTeam.ok ? fromTeam.data?.teams ?? [] : [])
@@ -2089,7 +2184,7 @@ export async function listMembers(listId: string): Promise<CallResult<{ members:
   // silently lose the one thing the old control COULD do, which was put you on
   // the card. So the account is added from `whoAmI` when the list forgot it.
   if (me && !members.some((m) => m.me)) {
-    const who = await whoAmI(token);
+    const who = await memoOk("whoami", token, () => whoAmI(token));
     if (who.ok && who.data) {
       members.unshift({ id: Number(me), name: who.data.name || "you", initials: initialsOf(who.data.name || "you"), me: true });
     }
@@ -2585,7 +2680,7 @@ async function roster(): Promise<MentionPerson[]> {
 async function workspacePeople(token: string): Promise<MentionPerson[]> {
   if (people && Date.now() - people.at < PEOPLE_TTL_MS) return people.who;
   const me = redacted("clickup");
-  const r = await call<{ teams?: { id?: string; members?: { user?: { id?: number | string; username?: string; email?: string; initials?: string } }[] }[] }>("/team", token);
+  const r = await teamOnce(token);
   if (!r.ok) return people?.who ?? [];
   const who = (r.data?.teams ?? [])
     .filter((t) => !me?.workspaceId || String(t.id ?? "") === me.workspaceId)
@@ -2772,6 +2867,9 @@ export async function taskDetail(taskId: string): Promise<CallResult<TaskDetail>
   }[] }>(
     `/task/${encodeURIComponent(taskId)}/comment`, token,
   );
+  // The card's badge on its board, for the price of nothing: this read is
+  // already the count `refreshCommentCounts` would otherwise spend a call on.
+  if (c.ok) commentCounts.set(`${String(d.id)}:${Number(d.date_updated) || 0}`, (c.data?.comments ?? []).length);
   return {
     ok: true,
     data: {
@@ -2895,7 +2993,7 @@ async function commentReplies(commentId: string, token: string, me?: string): Pr
 /** A list's own tasks, for an address that pointed at a list rather than a
  *  view. Same pagination rule as a view: follow to the end, then stop. */
 export async function rawListTasks(
-  token: string, listId: string, myId?: string,
+  token: string, listId: string, myId?: string, fresh = false,
 ): Promise<CallResult<{ tasks: ProviderTask[]; truncated: boolean }>> {
   const out: ProviderTask[] = [];
   for (let page = 0; page < MAX_PAGES; page++) {
@@ -2910,7 +3008,7 @@ export async function rawListTasks(
        * Whether a done group is SHOWN is a separate decision the panel already
        * makes (see `showDone`); this is about whether it can be.
        */
-      `/list/${encodeURIComponent(listId)}/task?page=${page}&include_closed=true`, token, LIST_TIMEOUT_MS,
+      `/list/${encodeURIComponent(listId)}/task?page=${page}&include_closed=true`, token, LIST_TIMEOUT_MS, fresh,
     );
     if (!r.ok) return out.length ? { ok: true, data: { tasks: out, truncated: true } } : { ...r, data: undefined };
     for (const raw of r.data?.tasks ?? []) out.push(toTask(raw, myId));

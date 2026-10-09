@@ -33,6 +33,9 @@ export type ConfirmSpec = {
   node?: ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
+  /** For a question whose easy answer is the wrong one: Cancel takes the focus and
+   *  Enter no longer confirms, so the merge needs a deliberate Tab and press. */
+  cancelFocus?: boolean;
   /** Red confirm button — for anything that destroys work. */
   danger?: boolean;
   /** Turns this into a prompt: the resolved value is the typed string, or null
@@ -45,13 +48,14 @@ type Pending = ConfirmSpec & { resolve: (v: boolean | string | null) => void };
 export function ConfirmDialog({ pending }: { pending: Pending | null }) {
   const [text, setText] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
   const isPrompt = !!pending?.input;
 
   useEffect(() => {
     if (!pending) return;
     setText(pending.input?.initial ?? "");
     // Focus after the entrance frame so the caret doesn't fight the animation.
-    const t = setTimeout(() => { inputRef.current?.focus(); inputRef.current?.select(); }, 40);
+    const t = setTimeout(() => { inputRef.current?.focus(); inputRef.current?.select(); if (pending.cancelFocus) cancelRef.current?.focus(); }, 40);
     return () => clearTimeout(t);
   }, [pending]);
 
@@ -61,7 +65,7 @@ export function ConfirmDialog({ pending }: { pending: Pending | null }) {
       if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); pending.resolve(isPrompt ? null : false); }
       // Enter confirms, but not while a prompt's field is empty — that is the
       // one case where the obvious keystroke would submit nothing.
-      else if (e.key === "Enter" && (!isPrompt || text.trim())) {
+      else if (e.key === "Enter" && !pending.cancelFocus && (!isPrompt || text.trim())) {
         e.preventDefault(); e.stopPropagation();
         pending.resolve(isPrompt ? text.trim() : true);
       }
@@ -105,7 +109,7 @@ export function ConfirmDialog({ pending }: { pending: Pending | null }) {
                 )}
               </div>
               <div className="px-4 py-2.5 flex items-center justify-end gap-2" style={{ borderTop: LINE }}>
-                <button onClick={() => pending.resolve(isPrompt ? null : false)}
+                <button ref={cancelRef} onClick={() => pending.resolve(isPrompt ? null : false)}
                   className="text-[11px] px-2.5 py-1 rounded"
                   style={{ color: "var(--text2)", border: EDGE }}>
                   {pending.cancelLabel ?? "Cancel"}

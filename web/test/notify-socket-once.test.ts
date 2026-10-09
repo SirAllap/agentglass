@@ -1,4 +1,6 @@
 import { test, expect, beforeAll, afterEach } from "bun:test";
+import { globalStubs } from "./stubGlobal";
+const stubGlobal = globalStubs();
 
 // One socket, however many things ask for one.
 //
@@ -30,20 +32,20 @@ class FakeSocket {
 }
 
 beforeAll(async () => {
-  (globalThis as any).localStorage = {
+  stubGlobal("localStorage", {
     getItem: (k: string) => cell.get(k) ?? null,
     setItem: (k: string, v: string) => { cell.set(k, v); },
     removeItem: (k: string) => { cell.delete(k); },
-  };
-  (globalThis as any).location = { hostname: "localhost", origin: "http://localhost:4000" };
-  (globalThis as any).WebSocket = FakeSocket;
+  });
+  stubGlobal("location", { hostname: "localhost", origin: "http://localhost:4000" });
+  stubGlobal("WebSocket", FakeSocket);
   // The probe the race is run against: a promise, so both callers are inside
   // the await when the second one arrives. A resolved-instantly stub would hide
   // the very gap this test exists for.
-  (globalThis as any).fetch = async () => {
+  stubGlobal("fetch", async () => {
     await new Promise((r) => setTimeout(r, 10));
     return { ok: true, json: async () => ({ supported: true }) };
-  };
+  });
   sysNotify = await import("../src/lib/sysNotify.ts");
 });
 

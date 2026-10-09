@@ -681,6 +681,13 @@ function privateBases(): string[] {
   return basesMemo;
 }
 
+/** The one directory the finder may LIST for a local caller: the config dir,
+ *  spelled and resolved. Data, state, cache and the moved database stay shut. */
+export function agentglassConfigDirs(): string[] {
+  const d = resolve(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "agentglass");
+  return [d, realish(d)];
+}
+
 export function agentglassPrivate(path: string): boolean {
   const lexical = resolve(expand(path));
   const paths = [lexical, realish(lexical)];

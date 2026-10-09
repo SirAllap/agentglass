@@ -119,6 +119,40 @@ be its value there.
 | `TL_SPACE` | 16 | `web/src/components/workspace/Chrome.tsx` |
 | `TL_INDENT` | `TL_RAIL * 2 + 4` | `web/src/components/workspace/Chrome.tsx` |
 | `TL_CSS` | the `agx-tl` timeline rules, for a view's own `<style>` | `web/src/components/workspace/Chrome.tsx` |
+| `TONE_COLOR` | a plugin's tone as a fill, a stroke or a dot | `web/src/lib/pluginTones.ts` |
+| `TONE_INK` | the same tones for text, through the `--*-ink` set | `web/src/lib/pluginTones.ts` |
+| `PILE_MAX` | 4 | `web/src/lib/canvasGeometry.ts` |
+| `ENTER_MS` | 180 | `web/src/lib/canvasMotion.ts` |
+| `EXIT_MS` | 160 | `web/src/lib/canvasMotion.ts` |
+| `FLIP_MS` | 220 | `web/src/lib/canvasMotion.ts` |
+| `TRAVEL_MS` | 600 | `web/src/lib/canvasMotion.ts` |
+| `CANVAS_FLOW_MARKS` | 3 | `shared/pluginCanvas.ts` |
+| `DIAL` | 56 | `web/src/components/plugins/PluginCanvas.tsx` |
+| `PIP_MAX` | 40 | `web/src/components/plugins/PluginCanvas.tsx` |
+| `CanvasGlyph` | component: the fixed icon words a live canvas may name | `web/src/components/plugins/panelGlyph.tsx` |
+| `BoardView` | component: a plugin's board, one machine behind glass | `web/src/components/plugins/CanvasBoard.tsx` |
+| `BOARD_SCALE_MIN` | 0.6: under it the board keeps 0.6 and scrolls | `web/src/lib/canvasGeometry.ts` |
+| `BOARD_SCALE_MAX` | 1.6: a small board on a wide screen stops here | `web/src/lib/canvasGeometry.ts` |
+| `SLOT_H` | 22 | `web/src/lib/canvasGeometry.ts` |
+| `SLOT_GAP` | 4 | `web/src/lib/canvasGeometry.ts` |
+| `SEALED_SLOT_H` | 14 | `web/src/lib/canvasGeometry.ts` |
+| `RIDE_GAP_MS` | 220 | `web/src/lib/canvasGeometry.ts` |
+| `RIDE_LATE_MS` | 1200 | `web/src/lib/canvasGeometry.ts` |
+| `rideClearMs` | the measured spacing that keeps two rides a token apart | `web/src/lib/canvasGeometry.ts` |
+| `FLOW_BUSY_MS` | 1100 | `web/src/lib/canvasMotion.ts` |
+| `SETTLE` | `cubic-bezier(0.23, 1, 0.32, 1)`: enters and exits alike | `web/src/lib/canvasMotion.ts` |
+| `MARK_MS` | 1200 | `web/src/lib/canvasMotion.ts` |
+| `DIAL_W` | 66 | `web/src/components/plugins/CanvasBoard.tsx` |
+| `STRIP_MAX` | 3 | `web/src/components/plugins/CanvasBoard.tsx` |
+| `MECH_MIN` | 0.4 of a mechanism's size, when its part is crowded | `web/src/components/plugins/CanvasBoard.tsx` |
+| `ODO_MAX_DIGITS` | 10 | `web/src/lib/canvasGeometry.ts` |
+| `trimStart` | a ride's route, less half a token at its start | `web/src/lib/canvasGeometry.ts` |
+| `--bd-plate-a` | a part's plate, light at its top edge; each `--bd-*` is a house token through color-mix | `web/src/components/plugins/canvasBoard.css` |
+| `--bd-steel` | the dark metal: posts, jaws, bezel, knob, step disc | `web/src/components/plugins/canvasBoard.css` |
+| `--bd-lit` | the machine's light: `--success` 55% into `--info` (teal from house tokens) | `web/src/components/plugins/canvasBoard.css` |
+| `--bd-lit-ink` | `--bd-lit` toward `--text`, for a word that glows | `web/src/components/plugins/canvasBoard.css` |
+| `--bd-light` | the hot core of that light, `--bd-lit` toward white | `web/src/components/plugins/canvasBoard.css` |
+| `PluginNotRunning` | component: what a panel says when its plugin is down | `web/src/components/plugins/PluginNotRunning.tsx` |
 
 The `--*-ink` variables have no line in a stylesheet: `inkTints` writes one for
 each entry of `TINT_KEYS` when a theme is applied, so the test checks that the
@@ -149,6 +183,157 @@ Reach for these before writing a `<button>`, an `<input>` or a colour:
 
 A view that needs something these cannot express adds it to `Chrome.tsx`,
 where the next view will find it, and adds its row to the table above.
+
+### The pull-request card on the triage board
+
+One surface. The identity line carries the forge's mark, the number that copies
+itself, the author and age, and, at its end, a 28px tracker block: the work
+item's mark, its id as a button that opens it inside the app, its status in the
+shared `StatusPill` (never truncated, dimmed with its age when stale) and up to
+five faces, then `+N`. The block is drawn per repository: a repository that
+links no work items gets the plain pull-request card, with nothing reserved and
+no hint; one that does, and a pull request without a card, gets the same box
+with a quiet "No card linked". When the line cannot hold the block it takes a
+line of its own, right aligned; in a lane narrower than the block it wraps onto
+a second row rather than overflow.
+
+The two copy buttons (card id, card name) live in a 56px box inside the block
+and replace the faces on pointer-over or focus-within, so nothing moves; with no
+hover (coarse pointer) they take an inline slot. Under them: the title (cut
+after three lines, two when wide) with the link and the star at `HIT`; where it
+stands (a word, the base, the label and the diff on one wrapping line, a 3px bar;
+colour only on the checks); what happened last. One footer: Open at the left,
+who is on the pull request at the right, in the same place in every state.
+
+The card measures itself (`container-type: inline-size`, `.agx-prc`): from 760px
+the standing zone and the footer become a 352px right column and the link and
+star move up to the identity line. Which block a card gets, and the per-repository
+rule, live in `lib/prCardBlock.ts`; the wording of each zone in
+`lib/prCardZones.ts`; both with tests.
+
+## A plugin's live canvas
+
+`PluginCanvas.tsx` draws a scene a plugin changes many times a second
+(`shared/pluginCanvas.ts`). In the flow layout it is built from the same parts
+as everything else and adds no colour, radius or surface of its own; what it
+decides is layout and motion. A `board` is the one place with materials of its
+own, and they are still house tokens (below).
+
+- **Layout is the app's.** The root fills the panel's width. A lane is a card
+  (`rounded-xl`, `--surface-card`, `EDGE`) that lays its children out by
+  `layout`: a list, an auto-fill grid, or a pile that shows `PILE_MAX` and says
+  "+N". Nothing is positioned by the plugin, so nothing overlaps.
+- **Colour is a tone.** A tone is a word looked up in `TONE_COLOR` (fills,
+  strokes, dots) or `TONE_INK` (text, so it clears 4.5:1). A tinted chip is a
+  ring (`inset 0 0 0 1px`), not a border, so the border ratchet does not count
+  it.
+- **Icons are a fixed list.** `CanvasGlyph` draws each word of `CANVAS_ICONS`
+  at an `ICON` rung; the table is typed over the whole list, so a word added to
+  the contract without a drawing does not compile.
+- **Controls are the house ones.** A button is `Button`; a segmented control is
+  a `radiogroup` of `CHIP`s; a disclosure is a native `<details>` with the text
+  in a `<pre>`. Nothing renders Markdown.
+- **Motion is `transform` and `opacity` only**, through the Web Animations API:
+  enter `ENTER_MS` and exit `EXIT_MS` (shorter), both on `SETTLE`, FLIP `FLIP_MS`, a ride along a wire
+  `TRAVEL_MS` unless the plugin asks for less. Marks on a `flowing` wire are
+  `CANVAS_FLOW_MARKS` small dots translated along the route (a dashed stroke
+  animated with `stroke-dashoffset` would repaint every frame). The one CSS
+  loop is `agx-canvas-pulse`, 1.6s a cycle and an opacity dip to 0.55.
+  At most `CANVAS_LIMITS.tweens` one-shots run at once, past that a change is
+  applied instantly; a loop runs only for the ids `loopingIds` allows.
+  Everything pauses while the window is hidden or the canvas is off screen,
+  and under `prefers-reduced-motion` durations are 0, nothing loops and the
+  scene still updates.
+- **Wires are drawn above the layout**, in one overlay that takes no pointer,
+  routed by `routeEdge` from the rectangles the nodes measure (kept in refs; a
+  scene id never reaches a selector).
+
+### A board
+
+`BoardView` (`CanvasBoard.tsx`, `canvasBoard.css`) draws a stage of `w` x `h`
+board units, scaled uniformly to the panel's width between
+`BOARD_SCALE_MIN` and `BOARD_SCALE_MAX`; under the floor it keeps 0.6 and its
+own wrapper scrolls, because a 1180-unit machine below that has labels under
+7px. Nothing in it is laid out by measuring: a `part` is placed by its props,
+a trace follows its `points` (or an elbow between the centres of the parts at
+its ends, `boardRoutes`), and the whole thing scales together, so nothing
+inside can come to overlap text at another width.
+
+- **Layers, bottom to top**: the ground (a 24-unit grid and etched lines seeded
+  from the board's id, `etching`), the traces, UNDER the parts, the parts, a
+  riding token (lifted by z-index), and the glass (edge, sheen, glint, four
+  screws), which takes no pointer. `material: plain` drops the ground and the
+  glass and draws the slab as a house card.
+- **Materials are derived.** Every `--bd-*` is a house token through
+  color-mix, on the canvas root, so every shipped theme gets its own machine.
+  The window marks a dark theme with `data-scheme="dark"` by the app's own rule
+  (the luminance of `--bg`), and dark is designed: a graphite ground, plates
+  of the raised tone at low alpha with a lighter top edge, light in the traces.
+  Borders are rings (`inset 0 0 0 1px`) and an empty slot is a dashed outline,
+  so the border ratchet counts none of them.
+- **Light is `--bd-lit`, not `--primary`.** Everything that glows — a trace
+  and its marks and joints, a lit pip, a full slot, the scanner, the core's
+  ring and pulse, a ring countdown, an `accent` needle or pill, the glass's
+  edge — is green mixed into blue from the theme's own tokens. The default
+  themes have a neutral grey `--primary`, and a machine lit in grey reads as
+  switched off. `--primary` is kept for focus and selection, and a tone
+  `accent` inside a board means `--bd-lit`.
+- **Depth reads as thickness.** A part's `depth` (0-4) lengthens its shadows
+  in three stepped layers with negative spread, plus a 1px ring; the core, the
+  deepest, reads thickest. A header is a step disc, the title in small caps at
+  +0.09em, and the hint on the right.
+- **Big numbers** are tabular, weight 700, at -0.02em. An odometer rolls at
+  most `ODO_MAX_DIGITS` cells, each one strip of ten digits as a single text
+  node; a longer number is written as text.
+- **The panel keeps its scrollbar's room** (`scrollbar-gutter: stable`): the
+  board scales with the width, and a scrollbar arriving would move everything
+  under the board.
+- **A bay** has `cols` x `rows` fixed slots, `SLOT_H` tall with `SLOT_GAP`
+  between (`SEALED_SLOT_H` sealed). Tokens fill them in scene order; past the
+  last slot, that slot says "+N" (`baySplit`), so two tokens never share one. A
+  token in a bay does not slide when the slots shift: diagonal paths across a
+  grid cross. A token directly in a part sits in one centred strip of
+  `STRIP_MAX`.
+- **A mechanism takes its part's free band** (gate, press, core): the height
+  its part's column leaves between what the plugin put above it and below it.
+  Inside that band it is centred on the PART's centre, where a trace between
+  part centres runs, as far as the band allows; a band too short shrinks it,
+  down to `MECH_MIN` of its size, rather than let it slide under text. A bay
+  in a part with a mechanism is drawn ON the mechanism: a token sits between
+  the blades, between the jaws, on a core's right rim (the face holds text, and a
+  token landing lower crossed it).
+  A token in a bay keeps a chip's width however wide its slot.
+- **Rides** follow the trace in board units. On one trace a ride starts at
+  least `RIDE_GAP_MS` after the last one started, and more when `rideClearMs`
+  measures that the last token has not cleared its own width by then (a short
+  trace with a curve that starts slowly); a ride that would wait past
+  `RIDE_LATE_MS` lands in place. A waiting ride is invisible until it leaves,
+  and a ride leaves from the part's edge (`trimStart`), not centred on it. The
+  spacing runs on the main thread, so it is decided after the cheap refusals
+  (reduced, hidden, budget full, already late), reads a sampled curve and is
+  cached; a ride the budget refuses does not take the trace's turn.
+  Two traces that meet at a point are not spaced against each other: that is
+  the plugin's choreography.
+- **Interruptible state is a transition**, never keyframes: a gate's blades, the
+  lever's knob, a needle (a slight spring), an odometer's cells. Enter curves
+  are `cubic-bezier(0.23, 1, 0.32, 1)`; a press is `:active` scale 0.97 in
+  120ms, and hover exists only under `(hover: hover) and (pointer: fine)`.
+  The loops (a busy core's ring and pulse, a busy press, a trace's marks, one
+  faster mark every `FLOW_BUSY_MS` on a busy trace) run only for ids
+  `loopingIds` allows, and pause with the canvas.
+- **A change from the keys is not animated**: the lever's knob snaps when an
+  arrow key moves it and slides only for a pointer press.
+- **Nothing is said by colour or by a cut-off alone.** A truncated title, hint
+  or token label carries its whole text as its name and its tooltip; a closed
+  gate says "closed"; a lamp is named with "on"/"off" and an off lamp is
+  hollow; a gate's pips are a meter. A pressable part or row is a button with
+  a name (its title, else its step) and a focus ring.
+- **Preferences**: reduced motion snaps every transition and runs no loop, and
+  still shows every step without moving: the part a token arrived in, or what
+  the plugin asked to pulse, is outlined in `--bd-lit` for `MARK_MS`; a busy
+  core's ring, a busy press's scanner and an active trace are drawn lit;
+  reduced transparency makes the plates near-solid and drops the sheen; more
+  contrast makes them solid with a defined ring.
 
 ## Guards
 
@@ -193,6 +378,12 @@ Every one reads source as text; there is no renderer to mount a view.
   outside the allowed indents, and when the scale leaves `tailwind.config.js`.
 - `layers.test.ts` — fails when two `LAYER` entries swap the order the app
   depends on.
+- `canvas-source-guard.test.ts` — fails when a live canvas's files (the board
+  and its stylesheet among them) contain markup injection, a DOM lookup, an
+  image, a link, a frame, a style built as a string, Markdown, code from a
+  string or a fetch, when its motion file or the board's stylesheet animates
+  anything but `transform` and `opacity`, or when a tone table is indexed by
+  anything that did not go through `toneOf`.
 - `design-system-doc.test.ts` — fails when a name in the table above is not
   defined in the file it names, or a number there is not its value.
 

@@ -7,8 +7,12 @@
  * nothing, and a typed value that a framework throws away on its next render.
  */
 import { describe, expect, test } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import { claimAgentZoom, forgetAgentZoom, reapplyZoom, resetBrowserSettings, resetStableIds, runBrowserAsk, type DrivableWebview } from "../src/lib/browserDrive.ts";
 import { cookieSetParams as buildCookie } from "../src/lib/cookieSet.ts";
+const stubGlobal = globalStubs();
+
+const canary = () => (globalThis as unknown as { __canary: { hit: number } }).__canary;
 
 /** Records the code it is asked to run and answers with whatever was queued. */
 /*
@@ -745,13 +749,12 @@ describe("a hostile selector stays data", () => {
     test(`${name} reaches querySelector verbatim and runs nothing`, async () => {
       for (const op of VERBS) {
         const el = fakeGuest(() => false);
-        const g = globalThis as unknown as { __canary: { hit: number } };
-        g.__canary = { hit: 0 };
+        stubGlobal("__canary", { hit: 0 });
         await runBrowserAsk(el, ask(op, { selector: payload, text: payload, submit: false }));
         const code = el.ran.find((c) => c.includes("querySelector"));
         expect(code, `${op} built no querySelector`).toBeDefined();
         expect(run(code!), `${op} did not receive the selector whole`).toEqual([payload]);
-        expect(g.__canary.hit, `${op} let the payload execute`).toBe(0);
+        expect(canary().hit, `${op} let the payload execute`).toBe(0);
         // Nothing that could end a string, a line or a script element survives
         // into the source — the property `jsLit` exists to hold.
         expect(code).not.toContain("\u2028");
@@ -771,8 +774,7 @@ describe("a hostile selector stays data", () => {
    */
   for (const [name, payload] of PAYLOADS) {
     test(`expose's name (${name}) reaches window[...] verbatim and runs nothing`, async () => {
-      const g = globalThis as unknown as { __canary: { hit: number } };
-      g.__canary = { hit: 0 };
+      stubGlobal("__canary", { hit: 0 });
       let source = "";
       const register = async (_n: string, s: string) => { source = s; return { ok: true }; };
       await runBrowserAsk(fakeGuest(), ask("expose", { name: payload }), undefined, undefined, register);
@@ -782,7 +784,7 @@ describe("a hostile selector stays data", () => {
       // would break out.
       new Function("window", `${source}`)(win);
       (win[payload] as (...a: unknown[]) => void)?.("x");
-      expect(g.__canary.hit, `expose let the name execute`).toBe(0);
+      expect(canary().hit, `expose let the name execute`).toBe(0);
       expect(source).not.toContain(" ");
       expect(source).not.toContain(" ");
       expect(source.slice(source.indexOf("window["))).not.toContain("<");
@@ -2210,6 +2212,7 @@ describe("cookies --set with attributes goes through the protocol, not document.
   test("an imported cookie names its own host, so a host-only one is set while the page is elsewhere", async () => {
     // session import sets cookies before the tab is on the site; a host-only
     // cookie must bind to ITS host, not to about:blank's.
+    jar.length = 0; // this one does not go through run(), which is what empties it
     const el = fakeGuest();
     (el as { getURL: () => string }).getURL = () => "about:blank";
     const r = await runBrowserAsk(el, ask("cookies", { set: { name: "s", value: "v", host: "www.orbit.example", secure: true, httpOnly: true } }),

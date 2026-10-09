@@ -7,14 +7,16 @@
  * shape GitHub can hand over has one sentence, and only one of them is loud.
  */
 import { describe, expect, it, beforeEach } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import type { PrTalkNote } from "../../shared/types.ts";
+const stubGlobal = globalStubs();
 
 const cell = new Map<string, string>();
-(globalThis as unknown as { localStorage: unknown }).localStorage = {
+stubGlobal("localStorage", {
   getItem: (k: string) => cell.get(k) ?? null,
   setItem: (k: string, v: string) => { cell.set(k, v); },
   removeItem: (k: string) => { cell.delete(k); },
-};
+});
 
 const {
   talkVerb, talkSummary, talkBody, talkUrgency, talkShouldNotify,

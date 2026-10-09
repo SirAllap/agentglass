@@ -13,22 +13,26 @@
 // for the pill counts — see stakeFrom in prLanes.ts — so the board costs what
 // the pill row cost, and the numbers cannot disagree with their source.
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { ICON, MIN_BOX } from "../lib/iconSize.ts";
+import { HIT, ICON, MIN_BOX } from "../lib/iconSize.ts";
 import { InfoIcon } from "./settingsNavIcons.tsx";
-import { CircleIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, FlagIcon, RefreshIcon, SearchIcon, StarIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import { CircleIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, FlagIcon, LinkIcon, RefreshIcon, SearchIcon, StarIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import { FACES_MAX, eventLine, splitTitle, standing } from "../lib/prCardZones.ts";
 import { ALWAYS_OPEN, foldable, foldedLanes, setFoldedLanes, walkable } from "../lib/boardPrefs.ts";
 import type { PrSummary } from "../../../shared/types.ts";
 import { staleApproval } from "../../../shared/mergeBlockers.ts";
 import { LANES, LANE_CAP, board as fileAll, suggestedAction, ACTION_LABEL, type Filed, type LaneId } from "../lib/prLanes.ts";
-import { taskLink, taskLinkTitle } from "../lib/taskLink.ts";
+import { taskLink } from "../lib/taskLink.ts";
 import { onCard, cardVersion, withCard } from "../lib/prCardStore.ts";
-import { openCard } from "../lib/openCard.ts";
-import { PriorityFlag, CardChip, CardFace, CHIP_H } from "../lib/priority.tsx";
-import { StatusPill } from "./StatusPill.tsx";
+import { CHIP_H } from "../lib/priority.tsx";
+import { CardTracker } from "./CardTracker.tsx";
+import { repoUsesTracker, trackerBlock } from "../lib/prCardBlock.ts";
 import { CTRL_H, EDGE, LINE } from "./workspace/Chrome.tsx";
+import { CODE_FONT_STYLE } from "./diff/DiffLines.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { askingBehind, behindOf, onBehind } from "../lib/prBehindStore.ts";
 import { onRollup, rollupOf } from "../lib/prRollupStore.ts";
+import { failureHint, jobIdOf } from "../lib/prFailureHint.ts";
+import { failureKey, loadCached, summaryOf, useFailureStore } from "../lib/checkFailuresStore.ts";
 import { stamp } from "../lib/whenStamp.ts";
 import { onSeenChange, readSeen } from "../lib/prNew.ts";
 import { unreadOf, type Unread } from "../lib/prUnread.ts";
@@ -36,6 +40,10 @@ import { UnreadBadge } from "./UnreadBadge.tsx";
 import { matchIndex, prMatches, stepMatch } from "../lib/prBoardFind.ts";
 import { closeFind, openFind, registerEngine, topScope } from "../lib/findScope.ts";
 import { CloseIcon } from "./CloseButton.tsx";
+import { boardFace } from "../lib/boardFace.ts";
+
+/** The tracker bar's tint: the app's own accent, the one an unranked card chip already wears. */
+const ACCENT = "var(--accent, var(--primary))";
 
 const TRUNKS = new Set(["main", "master", "trunk", "develop", "development"]);
 
@@ -66,7 +74,7 @@ type Card = PrSummary & { filed: Filed };
 
 export function TriageBoard({
   mine, review, total, hasTaskProvider, pinned,
-  onOpen, onTogglePin, onShowTable, onAct, busy, acting, loading, settling, pinnedList, root, repoKey,
+  onOpen, onTogglePin, onShowTable, onAct, busy, acting, loading, settling, failed, hidden, onRetry, pinnedList, root, repoKey,
   onlyUnread, onOnlyUnread,
 }: {
   /** The `mine` scope, as the panel already has it. */
@@ -129,6 +137,17 @@ export function TriageBoard({
    * never draws.
    */
   settling?: boolean;
+  /**
+   * A list could not be read on the last ask. With no rows to show, "nothing
+   * wants anything from you" would be an answer nobody gave, so the board says
+   * what happened instead. See boardFace.ts.
+   */
+  failed?: boolean;
+  /** Rows that arrived and were hidden by the board's own filters, so an empty
+   *  board can say it is the filters and not the repository. */
+  hidden?: number;
+  /** Ask again, from the failed state. */
+  onRetry?: () => void;
   /** The checkout these pull requests belong to — needed to ask how far behind
    *  each branch is, which is not on the list payload. See prBehindStore. */
   root?: string;
@@ -164,7 +183,7 @@ export function TriageBoard({
    * cards claiming red ask, only while they are on screen, and the answer is
    * remembered for a minute. Everything green is already telling the truth.
    */
-  const [, bumpRollup] = useState(0);
+  const [rollupTick, bumpRollup] = useState(0);
   useEffect(() => onRollup(() => bumpRollup((n) => n + 1)), []);
   const trueChecks = useCallback((p: PrSummary): PrSummary => {
     if (!root || !p.checks || p.checks.failure === 0) return p;
@@ -174,6 +193,18 @@ export function TriageBoard({
     return real ? { ...p, checks: real } : p;
   }, [root]);
 
+  /* WHICH TEST is failing, from what the app already read and kept. One request
+     to this server's own cache, for the red cards on the board; nothing here
+     reaches GitHub, and a card whose failures nobody opened says what it always
+     did. Asked again only when a card's checks move. */
+  const failureTick = useFailureStore();
+  useEffect(() => {
+    if (!root) return;
+    const ids = new Set<string>();
+    for (const p of [...mine, ...review]) for (const c of trueChecks(p).checks?.failing ?? []) { const j = jobIdOf(c); if (j) ids.add(j); }
+    if (ids.size) void loadCached(root, [...ids]);
+  }, [root, mine, review, trueChecks, rollupTick]);
+
   const lanes = useMemo(() => {
     // De-duplicated by number before filing: a pull request that is both yours
     // and asked of you arrives twice, and would otherwise be drawn twice.
@@ -181,11 +212,15 @@ export function TriageBoard({
     for (const p of [...mine, ...review]) if (!by.has(p.number)) by.set(p.number, trueChecks(p));
     const m = new Set(mine.map((p) => p.number));
     const r = new Set(review.map((p) => p.number));
-    return fileAll([...by.values()], (p) => ({ mine: m.has(p.number), asked: r.has(p.number) }));
+    return fileAll([...by.values()], (p) => ({ mine: m.has(p.number), asked: r.has(p.number) }),
+      (p) => (root && p.checks?.failing?.length ? failureHint(p.checks.failing, (job) => summaryOf(failureKey(root, job))) : null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mine, review, trueChecks, bumpRollup]);
+  }, [mine, review, trueChecks, bumpRollup, root, failureTick]);
 
   const cards = useMemo(() => [...lanes.values()].flat(), [lanes]);
+  /* Per repository: this board IS one repository's, so the answer is read off
+     every card on it. See prCardBlock.ts for the rule and its ceiling. */
+  const repoUses = useMemo(() => repoUsesTracker(cards, hasTaskProvider), [cards, hasTaskProvider]);
   const involved = cards.length;
   const canLand = lanes.get("land")?.length ?? 0;
   // Only over the cards in hand. The other few hundred are not loaded here and
@@ -196,7 +231,8 @@ export function TriageBoard({
      previous answer still on screen must not blank it: last minute's board is
      a better answer than a skeleton, and it is about to be right again.
      `settling` is the other half — see the prop. */
-  const waiting = (!!loading && involved === 0) || !!settling;
+  const face = boardFace({ reading: !!loading, settling: !!settling, involved, failed: !!failed, hidden: hidden ?? 0 });
+  const waiting = face === "waiting";
   const rest = total - involved;
   /*
    * Whether `total` can be repeated out loud.
@@ -518,14 +554,16 @@ export function TriageBoard({
           the other three hundred". */}
       <div className="shrink-0 px-4 pt-3 pb-1 text-[12.5px] flex items-start gap-4">
         <div className="min-w-0 flex-1">
-        {waiting ? (
+        {waiting || face === "failed" ? (
           <>
             {/* No number, because there is no number yet. A zero here is the
                 same lie the empty lanes used to tell, in bigger type. */}
-            <b className="text-[17px] font-semibold" style={{ color: "var(--text4)" }}>…</b>
-            <span className="ml-1">Reading the two lists this board is made of</span>
+            <b className="text-[17px] font-semibold" style={{ color: "var(--text4)" }}>{waiting ? "…" : "—"}</b>
+            <span className="ml-1">{waiting ? "Reading the two lists this board is made of" : "Could not read the two lists this board is made of"}</span>
             <span className="block text-[11px] mt-2" style={{ color: "var(--text3)" }}>
-              Yours, and the ones you were asked to look at. Until both are in, an empty lane means nothing.
+              {waiting
+                ? "Yours, and the ones you were asked to look at. Until both are in, an empty lane means nothing."
+                : "Nothing is claimed about them, not even that they are empty."}
             </span>
           </>
         ) : (
@@ -606,7 +644,7 @@ export function TriageBoard({
               */}
             {!find && !onlyUnread && onlyLane === null && (
               <button onClick={() => openFind()}
-                title="Find in these cards — number, title, author, branch, labels, assignees, reviewers"
+                title="Find in these cards — number, title, author, branch, labels, assignees, reviewers, card id, card status, card people"
                 className="agx-btn inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[10.5px]"
                 style={{ color: "var(--text3)", border: EDGE }}>
                 <SearchIcon size={ICON.xs} />Find in these<span style={{ color: "var(--text4)" }}>⌃F</span>
@@ -641,7 +679,7 @@ export function TriageBoard({
         * narrow window, and the counts scrolled off the right edge are exactly
         * what you want before deciding to go and look.
         */}
-      {!waiting && (
+      {!waiting && face !== "failed" && (
         <div className="shrink-0 flex flex-wrap gap-1 px-4 pb-1.5">
           {cols.map((l) => {
             const n = lanes.get(l.id)?.length ?? 0;
@@ -681,7 +719,32 @@ export function TriageBoard({
       {/* Sideways only. The five columns still have to be reachable on a narrow
           window; the up-and-down is each column's own, below. */}
       <div className="flex-1 min-h-0 overflow-x-auto overflow-y-hidden agx-scroll px-4 pb-3">
-        {!waiting && involved === 0 ? (
+        {face === "failed" || face === "filtered" ? (
+          /* Neither is the answer "nothing", and each says which it is: a read
+             that failed has no number to give, and rows the filters hid are
+             still there, one press away. */
+          <div className="h-full grid place-items-center text-center">
+            <div style={{ maxWidth: 400 }}>
+              <div className="text-[13px]" style={{ color: face === "failed" ? "var(--warning-ink)" : "var(--text2)" }}>
+                {face === "failed" ? "The pull requests could not be read." : "Your filters hide every pull request on this board."}
+              </div>
+              <p className="m-0 mt-1.5 text-[11px] leading-snug" style={{ color: "var(--text3)" }}>
+                {face === "failed"
+                  ? "This is not an empty board — the list did not come back. Asking again costs the same two calls."
+                  : `${hidden} came in and none passes the filters above; clear one to see them.`}
+              </p>
+              {face === "failed" && onRetry && (
+                <button onClick={onRetry} className="agx-btn mt-3 rounded px-2 py-1 text-[10.5px]"
+                  style={{ color: "var(--text2)", border: EDGE }}>
+                  Try again
+                </button>
+              )}
+              <div className="mt-4 text-left">
+                <PinnedStrip list={pinnedList} onOpen={onOpen} />
+              </div>
+            </div>
+          </div>
+        ) : face === "empty" ? (
           /* Loaded, and genuinely nothing. Said once, plainly, instead of five
              columns each announcing its own emptiness — which is the same
              sentence five times and reads as a board that failed to load. */
@@ -849,7 +912,7 @@ export function TriageBoard({
                     ) : (
                       <>
                         {rows.map((p, r) => (
-                          <CardView key={p.number} p={p} hasTaskProvider={hasTaskProvider}
+                          <CardView key={p.number} p={p} hasTaskProvider={hasTaskProvider} repoUses={repoUses}
                             cursor={cur.lane === i && cur.row === r}
                             pinned={pinned(p.number)} onOpen={() => onOpen(p.number)} onPin={() => onTogglePin(p)}
                             onAct={onAct} busy={busy} acting={acting}
@@ -947,14 +1010,6 @@ export function TriageBoard({
  * `null` when nobody was asked and nobody looked: a header saying "nothing"
  * steals weight from the ones that say something.
  */
-/** Has nothing moved here in over a week? `updatedAt` is GitHub's own, which it
- *  bumps for a push, a comment or a label — so this is "no activity of any
- *  kind", not merely "no commits". */
-function stalledFor(updatedAt: string): boolean {
-  const at = Date.parse(updatedAt);
-  return Number.isFinite(at) && Date.now() - at > 7 * 86_400_000;
-}
-
 function cardVerdict(p: PrSummary): {
   tint: string; glyph: ReactNode; line: string; aria: string; url?: string; skeleton?: boolean;
 } | null {
@@ -1092,7 +1147,7 @@ function cardVerdict(p: PrSummary): {
      */
     if (v.cleared) {
       const line = v.mine ? "You were asked to look again"
-        : (names ? `Waiting on review by ${names}` : "Waiting on review") + " \u00b7 Changes applied, asked to look again.";
+        : names ? `Waiting on review by ${names}` : "Waiting on review";
       return {
         tint: "var(--warning)", glyph: <CircleIcon size={ICON.xs} />, url: v.url,
         line: line + also,
@@ -1131,8 +1186,11 @@ function cardVerdict(p: PrSummary): {
   };
 }
 
-function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, busy, acting, dim, root, unread }: {
-  p: Card; hasTaskProvider: boolean; pinned: boolean; cursor?: boolean;
+function CardView({ p, hasTaskProvider, repoUses, pinned, cursor, onOpen, onPin, onAct, busy, acting, dim, root, unread }: {
+  p: Card; hasTaskProvider: boolean;
+  /** This repository links work items at all: see prCardBlock.ts. */
+  repoUses: boolean;
+  pinned: boolean; cursor?: boolean;
   /** Unread remarks on this one, or null. See prUnread.ts. */
   unread?: Unread | null;
   /** The pull request whose action is running, so only its card spins. */
@@ -1175,16 +1233,15 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
   const task = taskLink(p, hasTaskProvider);
   const tint = c.pending > 0 ? "var(--warning)" : c.verdict === "red" ? "var(--error)"
     : c.verdict === "green" ? "var(--success)" : "var(--text4)";
-  /*
-   * How much of the suite has reported, as a percentage of the bar.
-   *
-   * Everything that has an answer counts, failures included: a red run that
-   * finished is a finished run, and drawing it half full would say "still
-   * going". `total` can be 0 — nothing has reported at all, which is an empty
-   * track rather than a full one.
-   */
-  const done = c.total > 0 ? Math.round(((c.total - c.pending) / c.total) * 100) : 0;
+  /* What the standing zone says, and how far the bar is filled: see prCardZones. */
+  const st = standing(c);
+  const { pre, rest } = splitTitle(p.title);
+  const ev = eventLine(p.filed.reason, p.updatedAt);
   const verdict = cardVerdict(p);
+  const hr = p.humanReview as unknown;
+  const headerPeople: string[] = hr && typeof hr === "object" && Array.isArray((hr as { who?: unknown }).who)
+    ? ((hr as { who: unknown[] }).who.filter((x): x is string => typeof x === "string" && x !== ""))
+    : [];
   /*
    * THE CARDS THE BOARDS DO NOT HOLD, asked for one at a time.
    *
@@ -1197,6 +1254,7 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
      card this draws and the card a filter reads are the same one. */
   useSyncExternalStore(onCard, cardVersion, () => 0);
   const shown: PrSummary["card"] = withCard(p, hasTaskProvider).card;
+  const block = trackerBlock({ card: !!shown, hasId: !!task, checksLoaded: p.checksLoaded, repoUses });
   return (
     /* `data-pr` because a card is the unit anything outside this file counts —
        a test asking how many landed in a lane, a probe asking which column it
@@ -1204,7 +1262,7 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
        addressable without reading the design. */
     <div onClick={onOpen} role="button" tabIndex={-1} data-pr={p.number} data-cur={cursor ? "1" : undefined}
       data-dim={dim ? "1" : undefined}
-      className="rounded-lg mb-2 cursor-pointer agx-btn overflow-hidden"
+      className="rounded-lg mb-2 cursor-pointer agx-btn agx-prc overflow-hidden"
       style={{
         border: cursor ? "1px solid color-mix(in srgb, var(--primary) 60%, transparent)" : EDGE,
         background: "var(--surface-card)",
@@ -1261,10 +1319,23 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
             <span aria-hidden className="rounded"
               style={{ width: 130, height: 8, background: "color-mix(in srgb, var(--text) 12%, transparent)" }} />
           ) : (
-            <span className="truncate" style={{ color: "var(--text)", fontWeight: 500 }}>
+            <span className="truncate min-w-0" style={{ color: "var(--text)", fontWeight: 500 }}>
               {verdict.line}
             </span>
           )}
+          {/* The people the line names, as faces right after it: who was asked,
+              who approved, who asked for changes. */}
+          {headerPeople.length > 0 && (
+            <span className="shrink-0 flex items-center" aria-hidden>
+              {headerPeople.slice(0, HEADER_FACES).map((login, n) => (
+                <span key={login} className="rounded-full inline-flex"
+                  style={{ marginLeft: n ? -3 : 0, boxShadow: "0 0 0 1.5px var(--surface-card)", position: "relative", zIndex: HEADER_FACES - n }}>
+                  <Avatar login={login} size={16} />
+                </span>
+              ))}
+            </span>
+          )}
+          <span className="flex-1" />
           {/* Open line threads: the number that says whether a "changes
               requested" is one nit or twelve, and whether an approval still
               has something under it. Only when there are any. */}
@@ -1285,449 +1356,225 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
           )}
         </div>
       )}
-      <div className="p-2">
-      <div className="flex gap-1.5 items-start text-[11.5px]" style={{ color: "var(--text)" }}>
-        {/*
-          * The number, and pressing it copies it.
-          *
-          * It is the thing you take away from a board — into a branch name, a
-          * commit, a message to somebody — and copying it meant opening the
-          * pull request to reach the button that does. `stopPropagation`
-          * because the card underneath opens on click, and this press means
-          * "give me the number", not "show me the page".
-          */}
-        {/* The same chip the pull request's own masthead wears — a bordered
-            number with ⧉ after it. Written as plain grey text it was a label,
-            and nobody presses a label; this one says what it does before you
-            try it, and the tick afterwards says it happened. */}
-        <button onClick={(e) => { e.stopPropagation(); copyNumber(p.number); }}
-          aria-live="polite"
-          title={copied === p.number ? "Copied!" : `Copy #${p.number}`}
-          className="agx-btn shrink-0 tabular-nums inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px]"
-          style={{
-            color: copied === p.number ? "var(--success)" : "var(--text3)",
-            border: `1px solid color-mix(in srgb, ${copied === p.number ? "var(--success) 50%" : "var(--border) 55%"}, transparent)`,
-            background: "color-mix(in srgb, var(--border) 14%, transparent)",
-          }}>
-          #{p.number}
-          {/*
-            * ONE SHAPE, ONE SIZE, IN BOTH STATES.
-            *
-            * This was `⧉` at `fontSize: 9` swapped for `✓` at the same size —
-            * the smallest ink in the app, and beside a 14px vector two lines
-            * below it in the same row. A character paints about 60% of what its
-            * size promises, so nine landed near five against fourteen: written
-            * as a 1.56× difference, seen as about 2.5×. That pair is what
-            * "some very big, others very small" was pointing at.
-            *
-            * Swapping one glyph for a different one also moved the row, because
-            * two characters are not the same width. A vector of a fixed size is
-            * not.
-            */}
-          {copied === p.number
-            ? <DoneIcon size={ICON.xs} />
-            : <CopyIcon size={ICON.xs} />}
-        </button>
-        {/* Beside the number, before the title. The title is what a card IS and
-            this is what it WANTS — and a badge filed after the sentence, down
-            among the labels, is one you find rather than one you see. */}
-        {unread && <UnreadBadge u={unread} />}
-        {/* Two lines, then an ellipsis. A four-line title used to push the
-            state, the sentence and the button down by two rows, so a lane of
-            long titles was a lane you had to scroll — and the cards stopped
-            being the same shape, which is what made the column hard to read
-            down. The whole title is on the card's own tooltip. */}
-        <span className="min-w-0 flex-1" title={p.title}
-          style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", overflowWrap: "anywhere" }}>
-          {p.title}
-        </span>
-        {/* Its address, beside the pin and the same size as it.
-            The number copies the number, which is what goes in a branch or a
-            commit; this is the other thing a card gets taken away as — a link
-            to paste into a message. A chain link, because that is what every
-            application on this machine draws for one. */}
-        <button onClick={(e) => { e.stopPropagation(); copyLink(); }}
-          title={copiedLink ? "Copied!" : `Copy the link to #${p.number}`}
-          aria-label={`Copy the link to #${p.number}`}
-          className="agx-btn shrink-0 -mt-0.5 grid place-items-center rounded-md"
-          style={{ width: 26, height: 26, lineHeight: 1,
-            color: copiedLink ? "var(--success)" : "var(--text3)",
-            border: "1px solid transparent", background: "transparent" }}>
-          {/* Was a 13px `✓` standing in for a 14px svg, so the card twitched at
-              the moment you copied — the one moment you are looking at it. */}
-          {copiedLink ? (
-            <DoneIcon size={ICON.sm} />
-          ) : (
-            <svg width={ICON.sm} height={ICON.sm} viewBox="0 0 24 24" fill="none" aria-hidden
-              stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5" />
-              <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5" />
-            </svg>
-          )}
-        </button>
-        <button onClick={(e) => { e.stopPropagation(); onPin(); }}
-          title={pinned ? `Unpin #${p.number}` : `Pin #${p.number} to the bar at the top`}
-          aria-label={pinned ? `Unpin #${p.number}` : `Pin #${p.number}`}
-          aria-pressed={pinned}
-          className="agx-btn shrink-0 -mt-0.5 -mr-0.5 grid place-items-center rounded-md"
-          style={{ width: 26, height: 26, lineHeight: 1,
-            color: pinned ? "var(--primary-hover)" : "var(--text3)",
-            border: pinned ? "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" : "1px solid transparent",
-            background: pinned ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent" }}>
-          {/* `★`/`☆` were two different characters at `fontSize: 15`, and they
-              are not the same width in every font — so the row shifted as it
-              toggled. One shape, filled or not, at the size of the link beside
-              it. */}
-          <StarIcon size={ICON.sm} filled={pinned} />
-        </button>
-      </div>
-
       {/*
-       * The suite as a bar, not as a word.
-       *
-       * "6/14" and "13/14" are the same shape at ten pixels and read as the
-       * same thing at a glance, which is exactly the glance this board is
-       * for. The bar is filled by what has reported: a suite half in looks
-       * half in. Red fills whatever got that far rather than filling to the
-       * end, because a failure is not a finished run — the colour says the
-       * verdict and the length says the progress, and they are two different
-       * questions.
-       *
-       * Nothing has reported: an empty track. Not a hidden bar, which would
-       * make the card a different height, and not a full grey one, which
-       * would read as "done".
-       */}
-      <div className="mt-1.5 rounded-full overflow-hidden" style={{ height: 3, background: "color-mix(in srgb, var(--text) 12%, transparent)" }}>
-        <span className="block h-full rounded-full" style={{ width: `${done}%`, background: tint, transition: "width .25s" }} />
-      </div>
-
-      <div className="flex items-center gap-1.5 mt-1 text-[10px]" style={{ color: "var(--text3)" }}>
-        {/* The verdict in words, in the bar's own colour — colour alone cannot
-            say "red" to somebody who cannot see red. */}
-        <span className="shrink-0 tabular-nums" style={{ color: tint }}>
-          {c.pending > 0 ? `${c.success} of ${c.total} in` : c.verdict === "red" ? `${c.failure} failing`
-            : c.total === 0 ? "no checks" : "green"}
-        </span>
-        {/*
-          * CONFLICTS, beside the checks.
-          *
-          * A green pull request that conflicts with its base reads as ready to
-          * merge, and it is not. The fact already travels on the summary —
-          * `mergeable` was put there because the board files a row by what it
-          * needs and "it conflicts" is a different need from "a check is red" —
-          * and then the card did not draw it.
-          *
-          * `CONFLICTING` only. `UNKNOWN` is GitHub still working it out, and a
-          * conflict warning that flashes on and off is worse than none.
-          */}
-        {p.mergeable === "CONFLICTING" && (
-          <span className="shrink-0 inline-flex items-center gap-1 rounded px-1"
-            style={{
-              color: "var(--error-ink)",
-              background: "color-mix(in srgb, var(--error) 12%, transparent)",
-              border: "1px solid color-mix(in srgb, var(--error) 35%, transparent)",
-            }}
-            title="Conflicts with the base branch — nothing else can move until they are resolved">
-            <WarningIcon size={ICON.xs} />conflicts
-          </span>
-        )}
-        <span style={{ color: "var(--text4)" }}>→</span>
-        {/* Where it lands, tinted when it is not the trunk — a stacked pull
-            request read as a trunk one is a mistake you make once. */}
-        {/* Truncated at 90px, so the one that matters — a stacked branch with a
-            long ticket in its name — is exactly the one you cannot read. The
-            full thing is on hover, both sides of the arrow, because "into
-            what" is only half the question. */}
-        <span className="truncate" title={`${p.headRefName} → ${p.baseRefName}`}
-          style={{ maxWidth: 90, color: TRUNKS.has(p.baseRefName) ? "var(--text4)" : "var(--warning)" }}>{p.baseRefName}</span>
-        {/*
-          * How far behind the base, when somebody has found out.
-          *
-          * The pull request'"'"'s own page has carried this for a while — "Update
-          * branch & pull · 222 behind" — and the board, which is where you
-          * decide what to open, said nothing at all. It is not on the list
-          * payload and cannot be (see prBehindStore), so it arrives late and
-          * lands as a chip on a card that does not move.
-          *
-          * Nothing at all while the answer is unknown, and nothing when it is
-          * zero: a branch that is up to date has no news.
-          */}
-
-        {/* On the right, with the other numbers about the change, rather than
-            wedged against a branch name that is already truncated. */}
-        <span className="ml-auto flex items-center gap-1.5 shrink-0">
-          {behind ? (
-          <span className="shrink-0 inline-flex items-center gap-0.5 tabular-nums px-1 rounded"
-            title={`${behind} commit${behind === 1 ? "" : "s"} on ${p.baseRefName} that this branch does not have — its checks ran against an older base`}
-            style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}>
-            <RefreshIcon size={ICON.xs} />{behind}
-          </span>
-        ) : asking ? (
-          /* The space, held, while the answer is out. Twelve chips arriving one
-             by one over a few seconds is the board rearranging itself in slow
-             motion; the same shape, drawn quiet, is a board that is filling in.
-             It goes away for a branch that turns out to be up to date — that is
-             not news and its space is not owed to it. */
-          <span aria-hidden className="shrink-0 rounded animate-pulse"
-            title="Working out how far behind its base this branch is"
-            style={{ width: 26, height: 11, background: "color-mix(in srgb, var(--text) 10%, transparent)" }} />
-          ) : null}
-          <span className="tabular-nums" style={{ color: "var(--text4)" }}>
-            +{p.additions} −{p.deletions} · {p.changedFiles}f
-          </span>
-        </span>
-      </div>
-
-      <div className="flex items-center gap-1.5 mt-1 text-[10px]" style={{ color: "var(--text3)" }}>
-        <span className="truncate" style={{ maxWidth: 110 }}>{p.author}</span>
-        <span style={{ color: "var(--text4)" }}>·</span>
-        <span className="tabular-nums shrink-0">{ago(p.updatedAt)}</span>
-        {/* Everything that is only sometimes true, on the line that is allowed
-            to be empty. A card with none of these keeps its shape. */}
-        <span className="flex items-center gap-1 min-w-0 text-[9.5px] ml-1">
-          {p.isCurrentBranch && <Tag tint="var(--primary)">here</Tag>}
-          {p.isDraft && <Tag>draft</Tag>}
-          {/*
-            * THE CARD'S STATE, on the same line as its id.
-            *
-            * It had a line of its own, which at the real width of a lane —
-            * around 600px on his screen, not the 268px floor the layout was
-            * written for — left two thirds of that line empty while the card
-            * grew a row taller. "so it doesn't all end up cramped" is not about running
-            * out of room; it is about everything stacking downward when there
-            * is width going spare.
-            */}
-          {/*
-            * ONLY WHEN THE CARD HAS NO LINE OF ITS OWN.
-            *
-            * With both drawn the same id appeared twice on one card, four lines
-            * apart — "don't repeat the clickup card, leave only the new one". The line
-            * below is the better of the two: it carries the state and the
-            * assignee as well as the id.
-            *
-            * This one stays for the case the line cannot cover: a branch that
-            * names a card the saved boards have never seen. Then the id is all
-            * there is, and it is still worth showing.
-            */}
-          {task && !shown && (
-            <CardChip id={task.label} priority={null} title={taskLinkTitle(task)}
-              onOpen={() => openCard(task.query, task.label)} />
-          )}
-          {p.labels.slice(0, 1).map((l) => <Tag key={l.name}>{l.name}</Tag>)}
-          {p.labels.length > 1 && <span title={p.labels.map((l) => l.name).join(", ")}>+{p.labels.length - 1}</span>}
-        </span>
-
-      </div>
-
-
-      {/*
-        * THE CARD, ON A LINE OF ITS OWN.
+        * ONE SURFACE: the pull request, with the work item on its identity line.
         *
-        * Asked for exactly here, twice — "maybe a new line on the PR card
-        * between these two", and then again: "between those two lines should go
-        * everything related to the card: ID, status, assignee, and direct
-        * access from a button". The first attempt put it in the tag row
-        * beside the labels, which is not what was asked and read as one more
-        * label.
-        *
-        * Its own row because it answers a different question. The rest of the
-        * card is about the PULL REQUEST — who reviewed it, whether it builds,
-        * where it lands. This is about the WORK: what state it is in, whose it
-        * is. Those two disagree often enough to be worth seeing together, and a
-        * card in `code review` under a pull request nobody has reviewed is the
-        * pair that starts a conversation.
+        * It was a tracker bar on top and a nested "Pull request" panel under it,
+        * three zones deep — 405px a card at 600 wide, which is two cards on a
+        * screen where the board exists to show twelve. The work item is now one
+        * block at the end of the line the number is already on (CardTracker),
+        * and the panel's header row is gone: the number, the link and the pin
+        * live on the lines that were there anyway.
         *
         * Drawn only when the saved boards already hold the card, which costs no
         * request. Absent means "we have not seen it", not "it has no status".
         */}
-      {/* Same reason as the header: absent and "not read yet" look identical,
-          and a row that quietly drops the tracker card while it loads teaches
-          you not to trust the line at all. */}
-      {!shown && p.checksLoaded !== true && task && (
-        <div className="flex items-center gap-1.5 mt-1.5 text-[10px]" style={{ color: "var(--text4)" }}>
-          <span className="rounded" style={{ width: 74, height: CHIP_H, background: "color-mix(in srgb, var(--text) 8%, transparent)" }} />
-          <span>reading the card…</span>
+      <div className="agx-prc-main">
+        <div className="agx-prc-id">
+          <span className="flex shrink-0" title={`${p.author} opened this pull request`}><Avatar login={p.author} size={20} /></span>
+          {/*
+            * The number, and pressing it copies it.
+            *
+            * It is the thing you take away from a board — into a branch name, a
+            * commit, a message to somebody — and copying it meant opening the
+            * pull request to reach the button that does. `stopPropagation`
+            * because the card underneath opens on click, and this press means
+            * "give me the number", not "show me the page".
+            *
+            * The same chip the pull request's own masthead wears — a bordered
+            * number with ⧉ after it, one shape and one size in both states: a
+            * swapped glyph of another width moved the row at the moment you
+            * were looking at it.
+            */}
+          <button onClick={(e) => { e.stopPropagation(); copyNumber(p.number); }}
+            aria-live="polite"
+            title={copied === p.number ? "Copied!" : `Copy #${p.number}`}
+            className="agx-btn shrink-0 tabular-nums inline-flex items-center gap-1 px-1.5 rounded-md text-[10px]"
+            style={{
+              height: CHIP_H + 2,
+              color: copied === p.number ? "var(--success)" : "var(--text2)",
+              border: `1px solid color-mix(in srgb, ${copied === p.number ? "var(--success) 50%" : "var(--border) 55%"}, transparent)`,
+              background: "var(--surface-inset)",
+            }}>
+            #{p.number}
+            {copied === p.number ? <DoneIcon size={ICON.xs} /> : <CopyIcon size={ICON.xs} />}
+          </button>
+          {/* Beside the number, before the title: the title is what a card IS
+              and this is what it WANTS. */}
+          {unread && <UnreadBadge u={unread} />}
+          {/* No author name: the author is the first face bottom right, and a
+              name here said the same thing in more width. */}
+          <span className="tabular-nums shrink-0">{ago(p.updatedAt)}</span>
+          {/* Everything that is only sometimes true, after what is always true. */}
+          {(p.isCurrentBranch || p.isDraft) && (
+            <span className="flex items-center gap-1 text-[9.5px]">
+              {p.isCurrentBranch && <Tag tint="var(--primary)">here</Tag>}
+              {p.isDraft && <Tag>draft</Tag>}
+            </span>
+          )}
+          {/* At the end of the line, and on a line of its own — still right
+              aligned — when what is before it leaves no room: the status never
+              shrinks to make space. */}
+          <CardTracker block={block} card={shown} task={task} prOpen={p.state === "OPEN"} />
         </div>
-      )}
-      {/* Same reason: the tracker line is second-pass too, and a row that grows
-          one after you have started reading is a row you read twice. */}
-      {/*
-        * A LINE EVEN WITH NO CARD, so every card in a lane is the same shape.
-        *
-        * Cards without a tracker card were a row shorter than the ones with
-        * one, and a column of two heights is a column you re-read. "at least
-        * show something so the cards always have the same layout".
-        *
-        * What goes there is the honest answer to the question the line asks —
-        * "what work is this" — which for a release branch or a chore is "no
-        * card", not silence.
-        */}
-      {!shown && p.checksLoaded !== false && (
-        <div className="flex items-center gap-1.5 mt-1.5 text-[10px]" style={{ color: "var(--text4)" }}>
-          <span aria-hidden className="flex" style={{ opacity: 0.5 }}><FlagIcon size={ICON.xs} /></span>
-          <span>{task ? "card not found on your boards" : "no linked card"}</span>
+
+        {/* WHAT IT IS: three lines of title at most, then the cut. The whole
+            title is on the tooltip and one press away on Open — a lane of long
+            titles must not decide the height of its cards. */}
+        <div title={p.title} className="agx-prc-title font-semibold"
+          style={{ fontSize: 13, lineHeight: 1.4, color: "var(--text)", overflowWrap: "anywhere" }}>
+          {pre && <span className="font-medium" style={{ color: "var(--text3)" }}>{pre} | </span>}{rest}
         </div>
-      )}
-      {!shown && p.checksLoaded === false && (
-        <div aria-hidden className="flex items-center gap-1.5 mt-1.5">
-          <span className="rounded" style={{ width: 96, height: CHIP_H, background: "color-mix(in srgb, var(--text) 8%, transparent)" }} />
-          <span className="rounded" style={{ width: 70, height: CHIP_H, background: "color-mix(in srgb, var(--text) 8%, transparent)" }} />
+        {/* The link and the pin, on the title row on a narrow card and at the end
+            of the identity line on a wide one. The pin is 26px, in the one place
+            every card has in common, and the whole square is the button rather
+            than the star inside it: it used to be a 22px glyph in a corner, a
+            target you aim at rather than one you hit. */}
+        <div className="agx-prc-ac">
+          <button onClick={(e) => { e.stopPropagation(); copyLink(); }}
+            title={copiedLink ? "Copied!" : `Copy the link to #${p.number}`}
+            aria-label={`Copy the link to #${p.number}`}
+            className="agx-btn shrink-0 grid place-items-center rounded-md"
+            style={{ width: HIT, height: HIT, lineHeight: 1,
+              color: copiedLink ? "var(--success)" : "var(--text3)", background: "transparent" }}>
+            {copiedLink ? <DoneIcon size={ICON.md} /> : <LinkIcon size={ICON.md} />}
+          </button>
+          <button onClick={(e) => { e.stopPropagation(); onPin(); }}
+            title={pinned ? `Unpin #${p.number}` : `Pin #${p.number} to the bar at the top`}
+            aria-label={pinned ? `Unpin #${p.number}` : `Pin #${p.number}`}
+            aria-pressed={pinned}
+            className="agx-btn shrink-0 grid place-items-center rounded-md"
+            style={{ width: HIT, height: HIT, lineHeight: 1,
+              color: pinned ? "var(--primary-hover)" : "var(--text3)",
+              border: pinned ? "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" : "none",
+              background: pinned ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent" }}>
+            <StarIcon size={ICON.md} filled={pinned} />
+          </button>
         </div>
-      )}
-      {shown && (() => {
-        const who = shown.people ?? [];
-        /* A card marked done under a pull request still open: the amber dot,
-           with the reason in the tooltip. Not a warning colour on the status
-           itself — that colour is the board's own and means something else. */
-        const odd = shown.statusKind === "done" && p.state === "OPEN";
-        return (
-          <div className="flex items-center gap-1.5 mt-1.5 text-[10px] min-w-0"
-            style={{ color: "var(--text3)" }}>
-            {/* The id, with its priority flag — spaced, not welded to the
-                number, which is how it first shipped. */}
-            <CardChip id={shown.customId ?? shown.id} priority={shown.priority}
-              title={`Open ${shown.customId ?? shown.id} in Tasks — ${shown.status}${shown.priority ? `, ${shown.priority} priority` : ""}`}
-              onOpen={() => openCard(shown!.customId || shown!.id, shown!.customId)} />
-            {odd && (
-              <span aria-hidden className="shrink-0 rounded-full"
-                style={{ width: 5, height: 5, background: "var(--warning)" }}
-                title={`The card says "${shown.status}" while this pull request is still open`} />
+
+        {/*
+          * WHERE IT STANDS: the checks as a word and a bar, never as colour
+          * alone — "red" has to be sayable to somebody who cannot see it.
+          * Colour is spent on the checks and nowhere else in this zone.
+          *
+          * The bar is filled by what has reported: a suite half in looks half
+          * in. Red fills whatever got that far rather than filling to the
+          * end, because a failure is not a finished run. Nothing reported is
+          * an empty track — not a hidden bar, which would make the card a
+          * different height, and not a full grey one, which would read as done.
+          *
+          * The label sits on this line, after the base, and wraps with it: a
+          * row of its own cost 22px on every card that has one.
+          */}
+        <div className="agx-prc-stand grid gap-1">
+          <div className="flex items-center gap-x-2 gap-y-1 flex-wrap min-w-0" style={{ fontSize: 10.5, color: "var(--text3)", minHeight: 20 }}>
+            <span className="shrink-0 font-semibold tabular-nums" style={{ color: st.kind === "none" ? "var(--text3)" : tint }}>{st.word}</span>
+            {/* CONFLICTS, beside the checks. A green pull request that
+                conflicts with its base reads as ready to merge, and it is
+                not. `CONFLICTING` only: `UNKNOWN` is GitHub still working it
+                out, and a warning that flashes on and off is worse than none. */}
+            {p.mergeable === "CONFLICTING" && (
+              <span className="shrink-0 inline-flex items-center gap-1 rounded-md px-1.5"
+                style={{ height: CHIP_H + 2, color: "var(--error-ink)",
+                  background: "color-mix(in srgb, var(--error) 12%, transparent)",
+                  border: "1px solid color-mix(in srgb, var(--error) 35%, transparent)" }}
+                title="Conflicts with the base branch — nothing else can move until they are resolved">
+                <WarningIcon size={ICON.xs} />conflicts
+              </span>
             )}
-            {(() => {
-              /*
-               * THE APP'S OWN STATUS CHIP, not a hand-rolled one.
-               *
-               * This drew the status as coloured uppercase text while the tasks
-               * view drew a bordered chip for the same value on the same
-               * workspace colour — two spellings of one thing, which is the
-               * drift this whole pass exists to stop. `StatusPill` is where
-               * that shape already lives.
-               *
-               * SAID WITH ITS AGE, because the board it came from is refreshed
-               * when somebody opens the tasks view, not on a timer. A cached
-               * reading said "in development, assigned to him" while the
-               * tracker had the card in "code review" on somebody else. Under
-               * an hour it reads as current; older, it dims and carries its age,
-               * so the screen never states as fact something it has not checked.
-               */
-              const age = shown.at ? Date.now() - shown.at : 0;
-              const stale = age > 60 * 60_000;
-              const said = !shown.at ? ""
-                : age < 60_000 ? "just now"
-                  : age < 60 * 60_000 ? `${Math.round(age / 60_000)}m ago`
-                    : `${Math.round(age / 3_600_000)}h ago`;
-              return (
-                <span className="shrink-0 inline-flex items-center gap-1"
-                  title={`The card was in "${shown.status}"${said ? ` when this board was read, ${said}` : ""}`}>
-                  <StatusPill status={shown.status} color={shown.statusColor} dim={stale} />
-                  {stale && <span style={{ color: "var(--text4)" }}>{said}</span>}
-                </span>
-              );
-            })()}
-            {who.length > 0 && (
-              <span className="flex items-center gap-1.5 min-w-0"
-                title={`Card assigned to ${who.map((x) => x.name).join(", ")}`}>
-                <span className="flex items-center shrink-0">
-                  {who.slice(0, 2).map((person, n) => (
-                    <CardFace key={person.id ?? person.name} p={person} n={n} size={14} />
-                  ))}
-                </span>
-                <span className="truncate" style={{ color: "var(--text4)" }}>{who[0]!.name}</span>
+            <span aria-hidden style={{ color: "var(--text4)" }}>→</span>
+            {/* Never truncated: the one that matters — a stacked branch with
+                a long ticket in its name — is exactly the one you could not
+                read. Tinted when it is not the trunk. */}
+            <span className="shrink-0 whitespace-nowrap" title={`${p.headRefName} → ${p.baseRefName}`}
+              style={{ color: TRUNKS.has(p.baseRefName) ? "var(--text3)" : "var(--warning)" }}>{p.baseRefName}</span>
+            {st.failing && (
+              <span className="shrink-0 inline-flex items-center rounded-md px-1.5 whitespace-nowrap"
+                style={{ height: CHIP_H + 2, color: "var(--error-ink)",
+                  background: "color-mix(in srgb, var(--error) 8%, transparent)",
+                  border: "1px solid color-mix(in srgb, var(--error) 35%, transparent)" }}>
+                {st.failing}
+              </span>
+            )}
+            {p.labels.slice(0, 1).map((l) => (
+              <span key={l.name} className="truncate inline-flex items-center rounded-md px-1.5"
+                title={l.name}
+                style={{ height: CHIP_H + 2, maxWidth: 200, color: "var(--text2)", background: "var(--surface-inset)", border: LINE }}>
+                {l.name}
+              </span>
+            ))}
+            {p.labels.length > 1 && (
+              <span className="tabular-nums shrink-0" title={p.labels.map((l) => l.name).join(", ")}>+{p.labels.length - 1}</span>
+            )}
+            <span className="flex-1 min-w-0" />
+            {/* How far behind the base, when somebody has found out. It
+                arrives late and lands as a chip on a card that does not move:
+                the space is held, quiet, while the answer is out. */}
+            {behind ? (
+              <span className="shrink-0 inline-flex items-center gap-0.5 tabular-nums px-1 rounded"
+                title={`${behind} commit${behind === 1 ? "" : "s"} on ${p.baseRefName} that this branch does not have — its checks ran against an older base`}
+                style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}>
+                <RefreshIcon size={ICON.xs} />{behind}
+              </span>
+            ) : asking ? (
+              <span aria-hidden className="shrink-0 rounded animate-pulse"
+                title="Working out how far behind its base this branch is"
+                style={{ width: 26, height: 11, background: "color-mix(in srgb, var(--text) 10%, transparent)" }} />
+            ) : null}
+            <span className="shrink-0 whitespace-nowrap tabular-nums">
+              <span style={{ color: "var(--text)" }}>+{p.additions}</span>{" "}
+              <span>−{p.deletions}</span>{" "}
+              <span aria-hidden style={{ color: "var(--text4)" }}>·</span>{" "}
+              <span>{p.changedFiles}f</span>
+            </span>
+          </div>
+          <div role="img" aria-label={`Checks ${st.word}`} className="rounded-full overflow-hidden"
+            style={{ height: 3, background: "color-mix(in srgb, var(--text) 12%, transparent)" }}>
+            <span className="block h-full rounded-full" style={{ width: `${st.done}%`, background: tint, transition: "width .25s" }} />
+          </div>
+        </div>
+
+        {/* WHAT HAPPENED LAST: the sentence that put it in this lane. Without it a
+            board is a list whose order you have to re-derive every morning.
+            Two lines, then the tooltip; a date beside it for "waiting since
+            when", which is one question with the sentence. */}
+        <div className="agx-prc-event min-w-0"
+          style={{ fontSize: 10.5, lineHeight: 1.5, color: ev.empty || ev.quiet ? "var(--text3)" : "var(--text2)" }}>
+          <div className="flex gap-2 items-baseline min-w-0">
+            <span aria-hidden className="shrink-0" style={{ color: "var(--text4)" }}>↳</span>
+            <span className="flex-1 min-w-0" title={p.filed.reason}
+              style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", overflowWrap: "anywhere" }}>
+              {ev.text}
+            </span>
+            {ev.empty ? (
+              <span className="shrink-0" aria-label="No date" style={{ color: "var(--text3)" }}>–</span>
+            ) : (
+              <span className="shrink-0 tabular-nums whitespace-nowrap" style={{ color: "var(--text3)" }}
+                title={`Last activity on this pull request — ${new Date(p.updatedAt).toString()}`}>
+                {stamp(p.updatedAt)}
               </span>
             )}
           </div>
-        );
-      })()}
-
-      {/* The sentence that put it in this lane. Without it a board is a list
-          whose order you have to re-derive every morning. Two lines, like the
-          title: the longest of these runs to four on a narrow lane, and a card
-          whose height is decided by a sentence cannot be scanned beside one
-          whose sentence is short. */}
-      <div className="flex gap-1.5 mt-1.5 text-[10.5px] leading-snug" style={{ color: "var(--text3)" }}>
-        <span className="shrink-0" style={{ color: "var(--text4)" }}>↳</span>
-        <span title={p.filed.reason}
-          style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", overflowWrap: "anywhere" }}>
-          {p.filed.reason}
-        </span>
-        {/* The moment itself, hard right, on the line that says what the card is
-            waiting for — because "waiting since when" is one question and the
-            two halves of it belong together. It sits after the sentence in the
-            source so a sentence that runs to two lines pushes it down with it
-            rather than floating away from what it dates. */}
-        <span className="ml-auto shrink-0 self-end tabular-nums" style={{ color: "var(--text4)" }}
-          title={`Last activity on this pull request — ${new Date(p.updatedAt).toString()}`}>
-          {/*
-            * AMBER WHEN IT HAS BEEN STILL FOR A WEEK.
-            *
-            * Ten cards saying "8d" read exactly like ten saying "1h", and the
-            * board's whole promise is that you can see what needs you without
-            * reading every row. A week is the point where "it is moving" stops
-            * being true.
-            */}
-          <span style={{ color: stalledFor(p.updatedAt) ? "var(--warning)" : undefined }}
-            title={stalledFor(p.updatedAt) ? "Nothing has moved here in over a week" : undefined}>
-            {stamp(p.updatedAt)}
-          </span>
-        </span>
-      </div>
-
-      <div className="flex items-center gap-1.5 mt-1.5">
-        {/* One button, and it is the one this lane is asking for. A row of five
-            is a row nobody reads; the rest are a click away inside. */}
-        <button onClick={(e) => { e.stopPropagation(); onAct(p, "open"); }} disabled={busy}
-          /* `control, compact`: the in-card button of the canon, 22 tall on the
-             ladder rather than a 24px height of its own from `py-0.5`. */
-          className="agx-btn rounded-lg px-2 text-[10.5px] disabled:opacity-40 inline-flex items-center gap-1"
-          style={{ color: "var(--text2)", border: EDGE, height: CTRL_H.compact }}>
-          {/* `busy` is the panel'''s, and on this board only one card can be
-              acting at a time — the whole surface disables while it runs. So the
-              spinner goes on the card whose action is in flight rather than on
-              all of them: `acting` is the number the panel is working on. */}
-          {acting === p.number && (
-            <span className="agx-spin" aria-hidden
-              style={{ width: 8, height: 8, borderWidth: 1.5,
-                borderColor: act === "merge" ? "color-mix(in srgb, var(--bg) 55%, transparent)" : "currentColor",
-                borderTopColor: "transparent" }} />
+          {/* WHICH TEST, when one was read and kept: the sentence says whose it
+              is, this says what it is. Absent, not blank, when nothing is known. */}
+          {p.filed.test && (
+            <div className="flex items-center gap-1.5 min-w-0" style={{ marginTop: 4, paddingLeft: 18 }}>
+              <span className="truncate rounded-md px-1.5" title={p.filed.test.title}
+                style={{ ...CODE_FONT_STYLE, fontSize: 10, color: "var(--text)", background: "var(--surface-inset)", border: LINE }}>{p.filed.test.title}</span>
+              {p.filed.test.more > 0 && <span className="shrink-0 tabular-nums" style={{ color: "var(--text3)" }}>+{p.filed.test.more}</span>}
+            </div>
           )}
-          {/* One button, and it opens the pull request.
-              It used to perform the lane's action — Merge on a green card,
-              Re-run on a red one — and a board is a place you scan and point
-              at, not a place to press Merge from: a card under the pointer for
-              a different reason took an accidental Re-run, twice over. The
-              verdict still travels: the
-              lane and its sentence say what wants doing, and the page that can
-              do it is one click away. */}
-          Open{act === "merge" ? " to merge" : act === "rerun" ? " to re-run" : ""} →
-        </button>
-
-        {/*
-          * Who is on this pull request, bottom right, where the eye lands last.
-          *
-          * The author and whoever was asked to look at it: those are the two
-          * facts a list row carries, and together they answer "whose is this
-          * and who is holding it". Five at most — past that the card is a
-          * contact sheet, and the pull request itself lists them all.
-          *
-          * Overlapped left to right, the way every other row of people in this
-          * app is drawn, so five of them cost the width of two.
-          */}
-        <span className="ml-auto shrink-0 flex items-center"
-          title={`${p.author}${p.reviewers?.length ? ` · asked: ${p.reviewers.map((r) => r.login).join(", ")}` : ""}`}>
-          {[p.author, ...(p.reviewers ?? []).map((r) => r.login)]
-            .filter((l, n, all) => l && all.indexOf(l) === n)
-            .slice(0, 5)
-            .map((login, n) => (
-              <span key={login} style={{ marginLeft: n ? -5 : 0, zIndex: 5 - n, position: "relative" }}>
-                <Avatar login={login} size={16} />
-              </span>
-            ))}
-        </span>
-      </div>
+          {/* A week of nothing is said in words too: ten cards reading
+              "8d" look exactly like ten reading "1h". */}
+          {ev.quiet && <div className="tabular-nums" style={{ fontSize: 10, marginTop: 2, paddingLeft: 18, color: "var(--text3)" }}>{ev.quiet}</div>}
+        </div>
       </div>
     </div>
   );
 }
+
+/** Faces drawn in a lane header beside the name it says. */
+const HEADER_FACES = 3;
 
 const Tag = ({ children, tint, title }: { children: React.ReactNode; tint?: string; title?: string }) => (
   <span title={title} className="rounded px-1" style={{ color: tint ?? "var(--text3)", border: `1px solid color-mix(in srgb, ${tint ?? "var(--text)"} ${tint ? 34 : 16}%, transparent)` }}>

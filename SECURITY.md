@@ -430,6 +430,7 @@ sessions.
 | `~/.config/agentglass/config.json` | The active project scope and the UI switches. |
 | `~/.config/agentglass/clickup-views.json` | The ClickUp boards you saved, and a copy of the last thing each one returned — task titles, statuses and tags. Not a secret and not `0600`: it is a cache of things you can already see, kept on disk so the panel opens instantly instead of waiting a second and a half after every restart. Delete it and it rebuilds. |
 | `~/.config/agentglass/credentials.json` | **API tokens for services you connected in Settings → Integrations**, `0600`, alongside what the service said about each one — the account name and workspace, so a card can say who you are without a round trip. Only providers with no CLI of their own land here: `gh` keeps GitHub's token in your system keyring and agentglass never reads it. |
+| `~/.config/agentglass/secrets.json` | **The keys plugins asked you for** (a `secret` settings field), `0600`, by plugin name. Handed only to the plugin that declared the field, and never to the window or the API. A plugin running outside its box, or any program running as you, can read it; the plugin list says when one does. |
 
 ### About that credentials file
 
@@ -692,6 +693,36 @@ token sits in a process environment on this machine, readable by any agent
 running as the same user — exactly what the gate holds — so `auth.ts` names the
 kind and refuses it. `answer` for a plugin means replying to a running session,
 not releasing one.
+
+**What a plugin draws never runs.** A panel is a tree of nodes or, for a live
+board, a scene of them changed by operations (`canvas: true` in the manifest,
+folded into what was approved), and both are data the window draws with its own
+parts: no script, no style, no Markdown or image in a scene, nothing loaded by
+URL. Every prop is refused by name if it is not in the table, numbers are finite
+and in range, and a batch is all or nothing. A scene is the desk's: it leaves the
+server only over `/plugins/panels/live` (one private socket, `FULL_GET`, the same
+origin check as `/stream`), never on the shared stream that a read-only phone
+holds, and `allowed()` refuses a plugin's own token there, on `/plugins/panels`
+and on `/plugins/settings` **by the caller's kind and not by scope**: a manifest
+may declare `scope: "full"`, and until that check existed such a plugin read every
+other plugin's screens. Bodies are read with a ceiling of 64 KB before they are
+parsed, a plugin's operations are rate limited (60 a second, a request costs at
+least one) and a scene is capped at 400 nodes and 128 KB. A board (`board`, `part`, `bay`, plus `gate`, `press`, `core`, `item` and
+`lamp`) adds structure and no new way to say anything: parents are enforced on
+`add` and on `move` alike (a board only at the root and at most two per scene, a
+part only directly in a board, a bay only directly in a part and holding only
+tokens, an edge at the root or directly in a board), a bay's `cols * rows` is
+checked on what the node would be after a `set` (64 slots at most), a trace is at
+most 12 pairs of integers inside 0-2400 by 0-1600 rebuilt into a fresh array
+(never a path string, so nothing for the window to parse), and a part's box is
+not checked against its board but clipped by it. No new prop takes a style, a URL
+or a colour. Those rules are in `plugin-canvas-board.test.ts`. The tests are
+`server/test/plugin-token-desk-private.test.ts`, `plugin-canvas.test.ts`,
+`plugin-canvas-vocabulary.test.ts` and `plugin-canvas-e2e.test.ts`, which sends the
+attempts (script, style, URL, Markdown, prototype keys, oversized and chunked
+bodies) to a real server. The ceiling: an `activity` loop and a `pulse` are the
+app's own animation, so a plugin can make a board busy but not draw anything the
+vocabulary lacks.
 
 Two path rules and one network rule hold the install itself. A `name` that is
 `.`, `..` or begins with a dot is refused before anything is copied. Every path

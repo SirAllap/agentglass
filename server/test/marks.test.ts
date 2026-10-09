@@ -6,7 +6,7 @@
  * broadcasts nothing" is a claim about what a second device receives, and only
  * a real socket can show an absence.
  */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,6 +21,11 @@ import type { MarkOp } from "../../shared/types.ts";
 
 const NOW = 1_780_000_000_000;
 const PR = "acme/orbit#42";
+
+// One scratch database for the file, and the marks are rows in it: a test that
+// writes `acme/orbit#7` and expects three new rows needs the table as it found
+// it, which only held when the test before it was the one that happened to run.
+beforeEach(() => { db.query("DELETE FROM read_marks").run(); });
 
 describe("pull request marks only move forward", () => {
   test("a later mark wins, an earlier one is a no-op that returns nothing", () => {

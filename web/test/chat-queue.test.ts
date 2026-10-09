@@ -1,4 +1,9 @@
 import { test, expect, beforeAll } from "bun:test";
+import { globalStubs } from "./stubGlobal";
+import { stubStorage } from "./stubStorage.ts";
+const stubGlobal = globalStubs();
+
+stubStorage();
 
 // A turn is one `claude -p` subprocess reading a single message off stdin, so a
 // message typed mid-reply has to wait for the next one. These pin the waiting:
@@ -8,8 +13,7 @@ import { test, expect, beforeAll } from "bun:test";
 let store: typeof import("../src/lib/chatStore.ts");
 let api: typeof import("../src/lib/api.ts")["api"];
 beforeAll(async () => {
-  (globalThis as any).location ??= new URL("http://localhost:5173/");
-  (globalThis as any).localStorage ??= { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+  stubGlobal("location", new URL("http://localhost:5173/"));
   api = (await import("../src/lib/api.ts")).api;
   store = await import("../src/lib/chatStore.ts");
 });

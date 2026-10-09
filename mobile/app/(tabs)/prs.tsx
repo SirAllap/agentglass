@@ -23,8 +23,8 @@ import { FlatList, Pressable, RefreshControl, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import type { GitRepoRef, PrSummary } from "../../../shared/types.ts";
 import { prRepoKey, unreadOf, unreadTitle, type Unread } from "../../../shared/prUnread.ts";
-import { ask } from "../../src/lib/api.ts";
-import { useAgentglass } from "../../src/state/host-context.tsx";
+import { ask, askCached } from "../../src/lib/api.ts";
+import { useAgentglass, PR_READ_TTL_MS } from "../../src/state/host-context.tsx";
 import { useReloadOnTick, useTalkTick } from "../../src/state/pr-talk.ts";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
 import { useSeenMarks } from "../../src/state/read-marks.ts";
@@ -172,7 +172,7 @@ export default function PrsScreen(): React.ReactNode {
   useEffect(() => {
     if (!host) return;
     void (async () => {
-      const answer = await ask<{ repos: GitRepoRef[] }>(host, "/git/repos");
+      const answer = await askCached<{ repos: GitRepoRef[] }>(host, "/git/repos", PR_READ_TTL_MS);
       if (!answer.ok) { setFailed({ error: answer.error, needsAuth: false }); return; }
       /*
        * One entry per REPOSITORY, not per checkout.
@@ -202,12 +202,15 @@ export default function PrsScreen(): React.ReactNode {
      whatever order GitHub does: without this, a slow answer to the filter you
      left could land after the one you are on and paint the wrong list. */
   const asked = useRef(0);
-  const load = useCallback(async (): Promise<void> => {
+  /* `force`: something changed (a refresh, a live tick, the server still
+     * loading), so ask the computer. Opening the tab or moving a filter reads
+     * what the queue's own pass just read, which is the same URLs. */
+  const load = useCallback(async (force = false): Promise<void> => {
     if (!host || !shown.length) return;
     const mine = ++asked.current;
     const answers = await Promise.all(shown.map(async (repo) => ({
       repo,
-      answer: await ask<PrList>(host, `/prs/list?root=${encodeURIComponent(repo.root)}&filter=${filter}&state=${stateQuery(view)}`),
+      answer: await askCached<PrList>(host, `/prs/list?root=${encodeURIComponent(repo.root)}&filter=${filter}&state=${stateQuery(view)}`, PR_READ_TTL_MS, force),
     })));
     if (mine !== asked.current) return;
     const good = answers.filter((a) => a.answer.ok && a.answer.value.ok);
@@ -234,7 +237,8 @@ export default function PrsScreen(): React.ReactNode {
   useEffect(() => { setGroups(null); void load(); }, [load]);
 
   // A live comment or review landed on one of these pull requests.
-  useReloadOnTick(useTalkTick(), load);
+  const loadFresh = useCallback(() => load(true), [load]);
+  useReloadOnTick(useTalkTick(), loadFresh);
 
   /* Which count read is the latest — same reason `asked` guards `load`: a
    *  pull-to-refresh and a live tick can both ask this while a slower answer
@@ -274,14 +278,14 @@ export default function PrsScreen(): React.ReactNode {
   // the difference between "checks…" forever and the row settling.
   useEffect(() => {
     if (!loading) return;
-    const timer = setTimeout(() => { void load(); }, 2500);
+    const timer = setTimeout(() => { void load(true); }, 2500);
     return () => clearTimeout(timer);
   }, [loading, load]);
 
   const onRefresh = useCallback((): void => {
     setPulling(true);
     void loadCounts();
-    void load().finally(() => setPulling(false));
+    void load(true).finally(() => setPulling(false));
   }, [load, loadCounts]);
 
   /* The state split and the search are both applied here, on what the server
@@ -314,7 +318,7 @@ export default function PrsScreen(): React.ReactNode {
           options={FILTERS.map((id) => ({
             id,
             label: FILTER_LABEL[id],
-            count: counts ? counts[id] : undefined,
+            count: counts && id !== "all" ? counts[id] : undefined,
           }))}
         />
       </View>

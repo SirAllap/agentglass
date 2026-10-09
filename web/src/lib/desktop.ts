@@ -97,7 +97,7 @@ type DesktopBridge = {
   /** All absent on shells built before session-level settings existed. */
   sessionSettings?: (req: Record<string, unknown>) => Promise<{ ok: boolean; applied?: string[]; error?: string; value?: unknown }>;
   /** S9: absent on shells built before the identity header existed. */
-  setGuestOwner?: (guestId: number, owner: string) => void;
+  setGuestOwner?: (guestId: number, owner: string, person?: boolean) => void;
   /** All absent on shells built before cookie import existed. */
   cookieSources?: () => Promise<CookieSourcesReply>;
   importCookies?: (req: { source: string; sites: string[] }) => Promise<CookieImportReply>;
@@ -562,8 +562,8 @@ export async function applySessionSettings(req: Record<string, unknown>): Promis
 /** S9: tell main which agent's requests a guest is making, so the identity
  *  header — off by default, only for a dev origin — has a name to send. A
  *  no-op on a shell that predates it, same as every other bridge call here. */
-export function setGuestOwner(guestId: number, owner: string): void {
-  try { bridge()?.setGuestOwner?.(guestId, owner); } catch { /* nothing to push to */ }
+export function setGuestOwner(guestId: number, owner: string, person?: boolean): void {
+  try { bridge()?.setGuestOwner?.(guestId, owner, person); } catch { /* nothing to push to */ }
 }
 
 /** Whether the app is set to launch at login. Null when not applicable (a

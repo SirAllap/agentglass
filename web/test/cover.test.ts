@@ -10,10 +10,12 @@
  * what that script does with what it reads.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import { readFileSync } from "node:fs";
 import { COVER_CAP_MS, COVER_SETTLE_MS, coverLine, coverStep, shellSettled, springEasing, type CoverState } from "../src/lib/coverStep.ts";
 import { BOOT_PAINT_KEY, bgIsDark, type BootPaint } from "../src/lib/bootPaint.ts";
 import { SPLASH_KEY, setSplashOn, splashOn } from "../src/lib/splashPref.ts";
+const stubGlobal = globalStubs();
 
 const src = (p: string) => readFileSync(new URL(p, import.meta.url), "utf8");
 const HTML = src("../index.html");
@@ -138,10 +140,8 @@ function memoryStorage(store: Map<string, string>) {
 }
 
 describe("the launch animation setting", () => {
-  const real = globalThis.localStorage;
   const store = new Map<string, string>();
-  beforeAll(() => { (globalThis as any).localStorage = memoryStorage(store); });
-  afterAll(() => { (globalThis as any).localStorage = real; });
+  beforeAll(() => { stubGlobal("localStorage", memoryStorage(store)); });
 
   test("is on until it is turned off, and off is the only word for off", () => {
     store.clear();
@@ -369,9 +369,8 @@ describe("the boot script's last word, when the bundle never draws", () => {
 });
 
 describe("what applyTheme leaves for it", () => {
-  // themes.ts → api.ts reads `location` at module scope. Set only if absent:
-  // other files lean on the same stub, and taking it away would break them.
-  if (!(globalThis as any).location) (globalThis as any).location = { hostname: "localhost", origin: "http://localhost:4000" };
+  // themes.ts → api.ts reads `location` at module scope.
+  stubGlobal("location", { hostname: "localhost", origin: "http://localhost:4000" });
   const store = new Map<string, string>();
   const style = new Map<string, string>();
   let told: string[] = [];

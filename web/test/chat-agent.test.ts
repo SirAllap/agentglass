@@ -1,5 +1,10 @@
 import { test, expect, beforeAll, describe } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import { readFileSync } from "node:fs";
+import { stubStorage } from "./stubStorage.ts";
+const stubGlobal = globalStubs();
+
+stubStorage();
 
 // A chat is bound to one CLI for its life. These pin the three places that
 // binding has to survive or be enforced: which agent a session on the radar
@@ -9,8 +14,7 @@ import { readFileSync } from "node:fs";
 let store: typeof import("../src/lib/chatStore.ts");
 let derive: typeof import("../src/lib/derive.ts");
 beforeAll(async () => {
-  (globalThis as any).location ??= new URL("http://localhost:5173/");
-  (globalThis as any).localStorage ??= { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+  stubGlobal("location", new URL("http://localhost:5173/"));
   store = await import("../src/lib/chatStore.ts");
   derive = await import("../src/lib/derive.ts");
 });
@@ -147,11 +151,11 @@ describe("persistence", () => {
       attention: "none", ...over,
     }) as any;
     const cell = new Map<string, string>();
-    (globalThis as any).localStorage = {
+    stubGlobal("localStorage", {
       getItem: (k: string) => cell.get(k) ?? null,
       setItem: (k: string, v: string) => { cell.set(k, v); },
       removeItem: (k: string) => { cell.delete(k); },
-    };
+    });
     persist.saveChats([chat({})], "c1-abc");
     expect(persist.loadChats().chats[0].agent).toBe("codex");
 

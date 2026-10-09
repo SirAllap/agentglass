@@ -19,6 +19,8 @@
  * still ring, or this trades sixty useless interruptions for zero useful ones.
  */
 import { describe, expect, test, beforeAll, beforeEach } from "bun:test";
+import { globalStubs } from "./stubGlobal";
+const stubGlobal = globalStubs();
 
 // The module reads localStorage at import time (`retune` at the bottom of the
 // file), so the stub has to exist before the import does — hence the dynamic
@@ -31,12 +33,12 @@ let notifyUnread: typeof sysNotify.notifyUnread;
 let clearNotes: typeof sysNotify.clearNotes;
 
 beforeAll(async () => {
-  (globalThis as any).localStorage = {
+  stubGlobal("localStorage", {
     getItem: (k: string) => cell.get(k) ?? null,
     setItem: (k: string, v: string) => { cell.set(k, v); },
     removeItem: (k: string) => { cell.delete(k); },
-  };
-  (globalThis as any).location = { hostname: "localhost", origin: "http://localhost:4000" };
+  });
+  stubGlobal("location", { hostname: "localhost", origin: "http://localhost:4000" });
   sysNotify = await import("../src/lib/sysNotify.ts");
   ({ recordNote, notifyHistory, notifyUnread, clearNotes } = sysNotify);
 });

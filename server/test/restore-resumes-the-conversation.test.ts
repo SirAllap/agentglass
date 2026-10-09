@@ -23,6 +23,7 @@
  * the process walk sees. The `runArgs` half is pure.
  */
 import { test, expect, beforeAll, afterAll, describe } from "bun:test";
+import { story } from "./story.ts";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -58,6 +59,8 @@ const fakeClaude = (...args: string[]) =>
  *  that crashed mid-conversation. */
 const fakeCrashingClaude = (stop: string, ...args: string[]) =>
   ["bash", "-c", `exec -a claude /bin/sh -c 'while [ ! -e ${stop} ]; do sleep 0.2; done; exit 1' stub "$@"`, "x", ...args];
+
+const step = story();
 
 beforeAll(async () => {
   mkdirSync(TMPDIR, { recursive: true });
@@ -100,7 +103,7 @@ const photographed = async (win: string) => {
 };
 
 describe("what the photograph says about a pane holding a conversation", () => {
-  test("the id from the hook's note, the flags from the process, and the prompt left out", async () => {
+  step("the id from the hook's note, the flags from the process, and the prompt left out", async () => {
     const mk = await pane.tmux(["new-session", "-d", "-s", S, "-n", "brief", "-c", CWD, ...fakeClaude("--model", "fable", "--dangerously-skip-permissions", BRIEF)]);
     expect(mk.ok, mk.stderr).toBe(true);
     const id = await paneOf("brief");
@@ -119,7 +122,7 @@ describe("what the photograph says about a pane holding a conversation", () => {
     expect(got!.startArgv, "a conversation is not a command line to replay").toBeUndefined();
   }, 20_000);
 
-  test("an agent that has cd'd keeps its conversation: the note is this pane's because it was written while this agent lived", async () => {
+  step("an agent that has cd'd keeps its conversation: the note is this pane's because it was written while this agent lived", async () => {
     /*
      * The hook's cwd follows the Bash tool's `cd` — one session reported
      * thirteen directories over its life — while the process never moves.
@@ -135,7 +138,7 @@ describe("what the photograph says about a pane holding a conversation", () => {
     expect(got!.agentSession, "the conversation of an agent that cd'd").toBe(OTHER);
   }, 20_000);
 
-  test("a note from another tmux server's pane of the same id is somebody else's conversation, however recent", async () => {
+  step("a note from another tmux server's pane of the same id is somebody else's conversation, however recent", async () => {
     /*
      * Hooks fire from every tmux on the machine, and the note is keyed by the
      * pane id alone: a Claude in the person's own tmux on `%2` writes the
@@ -155,7 +158,7 @@ describe("what the photograph says about a pane holding a conversation", () => {
     expect((await photographed("foreign"))!.agentSession).toBe(OTHER);
   }, 20_000);
 
-  test("a note from a previous life of the pane id is somebody else's conversation, not this pane's", async () => {
+  step("a note from a previous life of the pane id is somebody else's conversation, not this pane's", async () => {
     /* Pane ids are reused across a reboot; a note written before this
        agent was born — for an agent in another directory — must not resume
        that agent here. */
@@ -169,7 +172,7 @@ describe("what the photograph says about a pane holding a conversation", () => {
     expect(got!.agentSession).toBeUndefined();
   }, 20_000);
 
-  test("a prompt whose hook has not been ingested yet is still recognised on the next sweep", async () => {
+  step("a prompt whose hook has not been ingested yet is still recognised on the next sweep", async () => {
     /*
      * The first photograph of a new pane can run before the CLI has submitted
      * its command-line prompt — in interactive mode that happens after the
@@ -194,7 +197,7 @@ describe("what the photograph says about a pane holding a conversation", () => {
     expect(later!.agentArgs).toContain("opus");
   }, 20_000);
 
-  test("a flag's value that somebody once typed as a prompt, in another session, before this agent existed, is still a value", async () => {
+  step("a flag's value that somebody once typed as a prompt, in another session, before this agent existed, is still a value", async () => {
     /*
      * The prompt question is asked of every argument that is not a flag,
      * the value after `--model` included. Asked of every session ever, a
@@ -212,7 +215,7 @@ describe("what the photograph says about a pane holding a conversation", () => {
     expect(args[args.indexOf("--model") + 1], "the value after --model").toBe("opus");
   }, 20_000);
 
-  test("a Claude that crashed comes back on its conversation, flags and all", async () => {
+  step("a Claude that crashed comes back on its conversation, flags and all", async () => {
     /*
      * The engine keeps a pane whose command failed, with its status on it;
      * the photograph of that pane used to be a shell, so after a reboot a
@@ -244,7 +247,7 @@ describe("what the photograph says about a pane holding a conversation", () => {
     expect(restore.runArgs("all", dead, "/opt/agentglass/bin/claude")).toEqual(["/opt/agentglass/bin/claude", ...dead!.agentArgs!, "--resume", CRASH]);
   }, 20_000);
 
-  test("and one that died before it was ever photographed comes back by its note, without flags", async () => {
+  step("and one that died before it was ever photographed comes back by its note, without flags", async () => {
     const EARLY = "6b7c8d9e-0f1a-4b2c-9d3e-4f5a6b7c8d9e";
     const stop = join(CWD, "stop-early");
     writeFileSync(stop, "");
@@ -258,7 +261,7 @@ describe("what the photograph says about a pane holding a conversation", () => {
     expect(got!.agentArgs).toBeUndefined();
   }, 20_000);
 
-  test("a dead pane with another server's note, or one not born as the CLI, is a shell", async () => {
+  step("a dead pane with another server's note, or one not born as the CLI, is a shell", async () => {
     const FOREIGN = "8d9e0f1a-2b3c-4d4e-9f5a-6b7c8d9e0f1a";
     const stop = join(CWD, "stop-foreign");
     writeFileSync(stop, "");
@@ -282,7 +285,7 @@ describe("what the photograph says about a pane holding a conversation", () => {
     expect(wrapped!.agentSession, "a wrapper's corpse is not a conversation").toBeUndefined();
   }, 20_000);
 
-  test("a dead pane with a note from a previous life of its id is a shell", async () => {
+  step("a dead pane with a note from a previous life of its id is a shell", async () => {
     const OLD = "7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f";
     const stop = join(CWD, "stop-old");
     writeFileSync(stop, "");
@@ -296,7 +299,7 @@ describe("what the photograph says about a pane holding a conversation", () => {
     expect(got!.agentSession).toBeUndefined();
   }, 20_000);
 
-  test("nor a value that was typed as a prompt in the very conversation it resumes, before this process existed", async () => {
+  step("nor a value that was typed as a prompt in the very conversation it resumes, before this process existed", async () => {
     /* A restored pane resumes a conversation with all its history. "opus",
        typed there once as the answer to a question, is not a prompt on this
        process's command line: that was submitted after the process started. */
@@ -311,7 +314,7 @@ describe("what the photograph says about a pane holding a conversation", () => {
     expect(args[args.indexOf("--model") + 1], "the value after --model").toBe("sonnet");
   }, 20_000);
 
-  test("a no is asked again only when a prompt has arrived since, and never after the pane's own conversation has had one", async () => {
+  step("a no is asked again only when a prompt has arrived since, and never after the pane's own conversation has had one", async () => {
     /*
      * A flag's value is never a prompt, and with only a yes cached its no was
      * asked again every ten seconds, forever, for every value of every Claude
@@ -346,7 +349,7 @@ describe("what the photograph says about a pane holding a conversation", () => {
     expect(args[args.indexOf("--model") + 1]).toBe("haiku");
   }, 20_000);
 
-  test("a pane that was itself restored carries its id on its own line", async () => {
+  step("a pane that was itself restored carries its id on its own line", async () => {
     await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "second", "-c", CWD, ...fakeClaude("--dangerously-skip-permissions", "--resume", OTHER)]);
     const got = await photographed("second");
     expect(got, "the pane is in the picture").not.toBeUndefined();
@@ -366,7 +369,7 @@ describe("a corpse and the photograph it is read from", () => {
     }
   };
 
-  test("a window carried from a server that died is not read for a new pane that reuses its ids", async () => {
+  step("a window carried from a server that died is not read for a new pane that reuses its ids", async () => {
     /*
      * While a desk is not whole, windows missing from the photograph are
      * carried with the ids they had on the server that died, and the new
@@ -392,7 +395,7 @@ describe("a corpse and the photograph it is read from", () => {
     expect(got!.agentArgs ?? []).not.toContain("--dangerously-skip-permissions");
   }, 20_000);
 
-  test("a corpse photographed with a brief on its line, whose hook came in after, comes back without it", async () => {
+  step("a corpse photographed with a brief on its line, whose hook came in after, comes back without it", async () => {
     /* Alive, the brief could not yet be told from a flag; the prompt was
        ingested, and the CLI died before the next sweep. The corpse was
        photographed with the arguments of the last live photograph, brief
@@ -428,12 +431,12 @@ describe("a pane run through the wrapper that keeps it after the CLI exits", () 
    * finished, too; and a Claude in one lost its conversation.
    */
   let layout: typeof import("../src/tmuxlayout.ts");
-  beforeAll(async () => { layout = await import("../src/tmuxlayout.ts"); });
+  step.setup(async () => { layout = await import("../src/tmuxlayout.ts"); });
   const wrapped = (argv: string[]) => ["sh", "-c", layout.paneCommand(argv)];
   const fakeOneShot = (...args: string[]) =>
     ["bash", "-c", `exec -a opencode /bin/sh -c 'while :; do sleep 1; done' stub "$@"`, "x", ...args];
 
-  test("a Claude in it keeps its conversation", async () => {
+  step("a Claude in it keeps its conversation", async () => {
     await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "keptclaude", "-c", CWD, ...wrapped(fakeClaude("--model", "opus", "--resume", OTHER))]);
     const got = await photographed("keptclaude");
     expect(got, "the pane is in the picture").not.toBeUndefined();
@@ -441,7 +444,7 @@ describe("a pane run through the wrapper that keeps it after the CLI exits", () 
     expect(got!.startCommand, "the wrapper line is never replayed").toBe("");
   }, 20_000);
 
-  test("a one-shot in it comes back as itself without its prompt", async () => {
+  step("a one-shot in it comes back as itself without its prompt", async () => {
     await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "keptshot", "-c", CWD, ...wrapped(fakeOneShot("--prompt", BRIEF))]);
     const got = await photographed("keptshot");
     expect(got, "the pane is in the picture").not.toBeUndefined();
@@ -450,7 +453,7 @@ describe("a pane run through the wrapper that keeps it after the CLI exits", () 
     expect(got!.startArgv, "the prompt was said once").not.toContain(BRIEF);
   }, 20_000);
 
-  test("a layout tab's own command comes back as itself while it runs", async () => {
+  step("a layout tab's own command comes back as itself while it runs", async () => {
     /* Not an agent: a dev server, a `tail -f`. Before the wrapper was walked
        through, its line came back and ran the command; photographed as the
        wrapper with no agent under it, it came back a bare shell. */
@@ -466,7 +469,7 @@ describe("a pane run through the wrapper that keeps it after the CLI exits", () 
     expect(loop!.startArgv).toEqual(["sh", "-c", "while :; do sleep 1; done"]);
   }, 20_000);
 
-  test("once the CLI has exited it is a shell, not the line again", async () => {
+  step("once the CLI has exited it is a shell, not the line again", async () => {
     await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "keptdone", "-c", CWD, ...wrapped(["echo", BRIEF])]);
     await Bun.sleep(300);
     const got = await photographed("keptdone");
@@ -476,7 +479,7 @@ describe("a pane run through the wrapper that keeps it after the CLI exits", () 
     expect(restore.runArgs("all", got!, "/opt/agentglass/bin/claude")).toEqual([]);
   }, 20_000);
 
-  test("and a photograph taken before this rule, carrying the wrapper line, is not replayed either", () => {
+  step("and a photograph taken before this rule, carrying the wrapper line, is not replayed either", () => {
     const old = { id: "%1", index: 0, active: true, command: "sleep", path: "/tmp", startCommand: `"'qwen' '-p' '${BRIEF}'; printf '\\n[agentglass] the CLI exited (%s). This pane is kept for inspection.\\n' \"$?\"; exec sleep 86400"` };
     expect(restore.runArgs("all", old, "/opt/agentglass/bin/claude")).toEqual([]);
   });
@@ -484,18 +487,18 @@ describe("a pane run through the wrapper that keeps it after the CLI exits", () 
 
 describe("what the pane is told to run", () => {
   const BIN = "/opt/agentglass/bin/claude";
-  test("a conversation is resumed by its id, whatever line the pane was born from", () => {
+  step("a conversation is resumed by its id, whatever line the pane was born from", () => {
     const born = `"exec claude --model fable --dangerously-skip-permissions '${BRIEF}'"`;
     expect(restore.runArgs("all", { id: "%1", index: 0, active: true, command: "claude", path: "/tmp", startCommand: born, agentSession: ID, agentArgs: ["--model", "fable", "--dangerously-skip-permissions"] }, BIN))
       .toEqual([BIN, "--model", "fable", "--dangerously-skip-permissions", "--resume", ID]);
   });
 
-  test("and with no CLI to resume it, the pane is a shell — never the born-with line", () => {
+  step("and with no CLI to resume it, the pane is a shell — never the born-with line", () => {
     expect(restore.runArgs("all", { id: "%1", index: 0, active: true, command: "claude", path: "/tmp", startCommand: "claude 'do it again'", agentSession: ID }, null))
       .toEqual([]);
   });
 
-  test("the flags are the process's own minus the prompt, and only the prompt", () => {
+  step("the flags are the process's own minus the prompt, and only the prompt", () => {
     const argv = ["claude", "--model", "fable", "--disallowedTools", "Bash(git push:*) Bash(gh pr create:*)", "--dangerously-skip-permissions", BRIEF];
     expect(restore.agentArgsOf(argv, (t) => t === BRIEF))
       .toEqual(["--model", "fable", "--disallowedTools", "Bash(git push:*) Bash(gh pr create:*)", "--dangerously-skip-permissions"]);
@@ -503,7 +506,7 @@ describe("what the pane is told to run", () => {
     expect(restore.agentArgsOf(argv)).toContain(BRIEF);
   });
 
-  test("the events table says which argument was a prompt, exactly", () => {
+  step("the events table says which argument was a prompt, exactly", () => {
     db.db.run(`INSERT INTO events (source_app, session_id, hook_event_type, payload, timestamp) VALUES (?, ?, ?, ?, ?)`,
       ["orbit", OTHER, "UserPromptSubmit", JSON.stringify({ prompt: "fix the failing test" }), Date.now()]);
     expect(db.wasPromptOf(OTHER, "fix the failing test")).toBe(true);

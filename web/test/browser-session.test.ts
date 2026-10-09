@@ -13,22 +13,24 @@
  * not put there does not come back at all.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import { newTab, sleepingTab, wake, __resetTabIds, type BrowserTab } from "../src/lib/browserTabs.ts";
 import { readSession, saveSession, forgetSession, forgetProfileTabs, worthSaving, countFor, setFor, SESSION_KEY } from "../src/lib/browserSession.ts";
+const stubGlobal = globalStubs();
 
 /** localStorage, in a test runner that has none. */
 const store = new Map<string, string>();
 beforeEach(() => {
   store.clear();
   __resetTabIds();
-  (globalThis as unknown as { localStorage: Storage }).localStorage = {
+  stubGlobal("localStorage", {
     getItem: (k: string) => store.get(k) ?? null,
     setItem: (k: string, v: string) => { store.set(k, v); },
     removeItem: (k: string) => { store.delete(k); },
     clear: () => store.clear(),
     key: () => null,
     length: 0,
-  } as unknown as Storage;
+  } as unknown as Storage);
 });
 afterEach(() => store.clear());
 

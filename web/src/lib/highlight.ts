@@ -244,6 +244,13 @@ const EXT: Record<string, string> = {
   sql: "sql", graphql: "graphql", gql: "graphql", proto: "proto",
   lua: "lua", r: "r", ex: "elixir", exs: "elixir", clj: "clojure",
   hs: "haskell", elm: "elm", ml: "ocaml", nim: "nim", zig: "zig",
+  // Prompt and page templates: `reply.md.jinja2`, `page.html.j2`. The LAST
+  // extension names the grammar, so the host format in front of it does not
+  // choose one. Shiki bundles a single jinja grammar and it embeds html/css/js
+  // as its host, so a markdown template gets its tags, expressions and comments
+  // coloured against plain text but no markdown styling: a markdown host
+  // grammar is the next thing after this and is not here.
+  jinja: "jinja", jinja2: "jinja", j2: "jinja",
 };
 /**
  * The language named on a fence, as a grammar id.

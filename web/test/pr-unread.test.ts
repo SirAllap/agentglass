@@ -9,17 +9,19 @@
  * pinned here rather than left to agree by coincidence.
  */
 import { describe, expect, it, beforeEach } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import type { PrTalk } from "../../shared/types.ts";
+const stubGlobal = globalStubs();
 
 /* A real store, and installed before the module is imported — the same reason
    spelled out in pr-new.test.ts: `bun test` runs every suite in one process, so
    a stubbed no-op `setItem` from another file would make these silently pass. */
 const cell = new Map<string, string>();
-(globalThis as unknown as { localStorage: unknown }).localStorage = {
+stubGlobal("localStorage", {
   getItem: (k: string) => cell.get(k) ?? null,
   setItem: (k: string, v: string) => { cell.set(k, v); },
   removeItem: (k: string) => { cell.delete(k); },
-};
+});
 
 const { unreadOf, unreadTitle, weightOf, bootstrapMark } = await import("../src/lib/prUnread.ts");
 const { writeSeen, prSeenKey } = await import("../src/lib/prNew.ts");

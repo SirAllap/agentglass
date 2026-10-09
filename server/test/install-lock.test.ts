@@ -39,10 +39,16 @@ const mains = async (app: string) => (await run(app, "main_pids")).out.split("\n
 
 /** The installer's critical section, with the copy stood in for by killing
  *  whatever runs out of the install while it is being replaced. `before` runs
- *  between the stop and the copy, `after` once the app is reopened. */
+ *  between the stop and the copy, `after` once the app is reopened.
+ *
+ *  Waits for the reopened main only when something was captured to reopen:
+ *  the unlocked second install finds nothing running, so AWAIT_MAIN would poll
+ *  all 200 times (a /proc scan each, ~100 ms idle): 35 s measured, past the
+ *  40 s timeout about one full run in four under load. */
 const INSTALL = (lock: boolean, before = "", after = "") =>
   `${lock ? "take_install_lock || exit 3; " : ""}stop_app || exit 1; ${before} ` +
-  `kill -9 $(app_pids) 2>/dev/null; start_app; ${AWAIT_MAIN}; ${after}`;
+  `kill -9 $(app_pids) 2>/dev/null; start_app; ` +
+  `if [ -n "$APPCTL_RESTART_ARGV" ]; then ${AWAIT_MAIN}; fi; ${after}`;
 /** Wait, bounded, for a file another install touches. */
 const until = (file: string, tenths: number) =>
   `for _ in $(seq ${tenths * 2}); do [ -e "${file}" ] && break; sleep 0.05; done;`;

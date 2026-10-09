@@ -14,6 +14,8 @@ import { clearPluginInstall, pluginInstallRequest, subscribePluginInstall } from
 import { PluginSettingsPane } from "./plugins/PluginSettingsPane.tsx";
 import { Market } from "./plugins/Market.tsx";
 import { PluginDeclaration } from "./plugins/PluginDeclaration.tsx";
+import { UnboxedConsent } from "./plugins/UnboxedConsent.tsx";
+import { envHatchNotice } from "../lib/pluginBoxState.ts";
 import { ICON } from "../lib/iconSize.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { useCallback, useEffect, useState, useMemo, useSyncExternalStore } from "react";
@@ -147,9 +149,11 @@ export function PluginsPane({ open, focus }: {
   const [master, setMasterState] = useState<boolean | null>(null);
   const [plugins, setPlugins] = useState<PublicPlugin[]>([]);
   const [busyMaster, setBusyMaster] = useState(false);
+  const [masterError, setMasterError] = useState<string | null>(null);
+  const [envAllowsUnboxed, setEnvAllowsUnboxed] = useState(false);
 
   const load = useCallback(() => {
-    api.plugins().then((r) => { setMasterState(r.master); setPlugins(r.plugins); }).catch(() => { /* left as last known */ });
+    api.plugins().then((r) => { setMasterState(r.master); setPlugins(r.plugins); setEnvAllowsUnboxed(r.envAllowsUnboxed === true); }).catch(() => { /* left as last known */ });
   }, []);
 
   useEffect(() => { if (open) load(); }, [open, load]);
@@ -160,9 +164,11 @@ export function PluginsPane({ open, focus }: {
   const toggleMaster = async () => {
     if (master === null || busyMaster) return;
     setBusyMaster(true);
+    setMasterError(null);
     const r = await api.pluginMaster(!master);
     setBusyMaster(false);
     if (r.ok) setMasterState(r.master ?? !master);
+    else setMasterError(r.error ?? "the master switch was not changed");
     load();
   };
 
@@ -250,8 +256,10 @@ export function PluginsPane({ open, focus }: {
                 : "Nothing installed runs, no matter what it is enabled to do. Install and review still work."}
               control={<Switch on={!!master} busy={busyMaster || master === null} />}
             />
+            {masterError && <Alert tone="error">{masterError}</Alert>}
           </div>
       </div>
+      {envHatchNotice(envAllowsUnboxed) && <div className="mb-3"><Alert tone="warning">{envHatchNotice(envAllowsUnboxed)}</Alert></div>}
 
       {/* THE BOARD, and it used to be a shelf: a tinted, bordered zone with
           every card stacked one-per-row inside it. That zone was doing the
@@ -304,7 +312,7 @@ export function PluginsPane({ open, focus }: {
            is open in it. Each card owns its own height now. */
         <div className="grid gap-3 items-start" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))" }}>
           {shown.map((p) => (
-            <PluginCard key={p.name} plugin={p} masterOn={!!master} onChanged={load} onSettings={() => setShowing(p.name)} />
+            <PluginCard key={p.name} plugin={p} masterOn={!!master} envAllowsUnboxed={envAllowsUnboxed} onChanged={load} onSettings={() => setShowing(p.name)} />
           ))}
         </div>
       )}
@@ -320,8 +328,8 @@ export function PluginsPane({ open, focus }: {
   );
 }
 
-function PluginCard({ plugin, masterOn, onChanged, onSettings }: {
-  plugin: PublicPlugin; masterOn: boolean; onChanged: () => void;
+function PluginCard({ plugin, masterOn, envAllowsUnboxed, onChanged, onSettings }: {
+  plugin: PublicPlugin; masterOn: boolean; envAllowsUnboxed: boolean; onChanged: () => void;
   /** Opens this plugin's own settings inside the Plugins page. */
   onSettings: () => void;
 }) {
@@ -375,9 +383,10 @@ function PluginCard({ plugin, masterOn, onChanged, onSettings }: {
       if (!ok) return;
     }
     setBusy(true);
-    if (next) await api.pluginEnable(plugin.name);
-    else await api.pluginDisable(plugin.name);
+    setUpdateError(null);
+    const r = next ? await api.pluginEnable(plugin.name) : await api.pluginDisable(plugin.name);
     setBusy(false);
+    if (!r.ok) setUpdateError(r.error ?? "the change was not made");
     onChanged();
   };
 
@@ -515,6 +524,10 @@ function PluginCard({ plugin, masterOn, onChanged, onSettings }: {
           <PluginDeclaration plugin={plugin} />
         </Fold>
       </div>
+
+      {/* Only on the card of a plugin the server refuses to start for lack of a
+          box, or one running on this plugin's own consent — see unboxedControl. */}
+      <UnboxedConsent plugin={plugin} envAllowsAll={envAllowsUnboxed} onChanged={onChanged} />
 
       {updateError && <Alert tone="error">{updateError}</Alert>}
 

@@ -79,9 +79,15 @@ export function Select({
   }, [open]);
 
   // Open on the current value, so ↑/↓ start from where the user already is.
+  /* Keyed on the index, not on `options`: callers build the array inline, so
+     it is a new object on every render, and any re-render while the list was
+     open (a poll, a clock) put the cursor back on the selected row and the
+     scroll effect below dragged the list with it. A long status list could
+     not be scrolled away from its current value. */
+  const selectedIdx = Math.max(0, options.findIndex((o) => o.value === value));
   useEffect(() => {
-    if (open) setCursor(Math.max(0, options.findIndex((o) => o.value === value)));
-  }, [open, value, options]);
+    if (open) setCursor(selectedIdx);
+  }, [open, selectedIdx]);
 
   // Keep the highlighted option in view and focused, so a screen reader
   // announces it and long lists scroll as you move.

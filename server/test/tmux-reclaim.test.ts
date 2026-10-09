@@ -27,6 +27,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { TEST_TERM } from "./tmuxTerm.ts";
+import { story } from "./story.ts";
 
 /** Short, for the 108-byte unix socket path limit. The DIRECTORY carries the
  *  pid and the socket NAME stays fixed — see tmux-attach-claim.test.ts for the
@@ -106,8 +107,10 @@ afterAll(() => {
   else process.env.TMUX_TMPDIR = REAL_TMPDIR;
 });
 
+const step = story();
+
 describe.if(HAVE_TMUX)("a window a phone left pinned", () => {
-  test("a fit records what the window had before it", () => {
+  step("a fit records what the window had before it", () => {
     // The state every window starts in: no size of its own, and nothing of ours
     // on it. This is what the restore has to be able to put back.
     expect(sizeOpt(pinned)).toBe("");
@@ -123,7 +126,7 @@ describe.if(HAVE_TMUX)("a window a phone left pinned", () => {
     expect(mark(pinned)).toBe("none");
   });
 
-  test("a second fit does not overwrite what the first one saw", () => {
+  step("a second fit does not overwrite what the first one saw", () => {
     // The window is `manual` now. A mark taken again here would record THAT,
     // and the restore would faithfully put the squeeze back.
     expect(ctl.fitWindow(OURS, sessionId, pinned, 70, 22)).toBe(true);
@@ -131,7 +134,7 @@ describe.if(HAVE_TMUX)("a window a phone left pinned", () => {
     expect(mark(pinned)).toBe("none");
   });
 
-  test("is not reclaimed the instant it looks free", () => {
+  step("is not reclaimed the instant it looks free", () => {
     // A phone switching tabs closes one socket and opens the next, and between
     // them the window is pinned with nothing on it. Acting there gives the desk
     // its width and takes it away again — two reflows to arrive back where it
@@ -140,7 +143,7 @@ describe.if(HAVE_TMUX)("a window a phone left pinned", () => {
     expect(cols(pinned)).toBe(70);
   });
 
-  test("a phone coming back resets the wait rather than shortening it", async () => {
+  step("a phone coming back resets the wait rather than shortening it", async () => {
     await Bun.sleep(PAST_THE_WAIT);
     // `false` is "a phone is on it": the window is owed to that phone's own
     // teardown, and the clock starts again when it goes.
@@ -149,7 +152,7 @@ describe.if(HAVE_TMUX)("a window a phone left pinned", () => {
     expect(cols(pinned)).toBe(70);
   });
 
-  test("and puts itself back once it has really been left", async () => {
+  step("and puts itself back once it has really been left", async () => {
     await Bun.sleep(PAST_THE_WAIT);
     expect(ctl.reclaimPinnedWindow(OURS, sessionId, pinned, true)).toBe(true);
     // The desk's own client is the largest thing viewing it, which is the whole
@@ -161,7 +164,7 @@ describe.if(HAVE_TMUX)("a window a phone left pinned", () => {
     expect(mark(pinned)).toBe("");
   });
 
-  test("a window narrowed by somebody else is left exactly as it is", async () => {
+  step("a window narrowed by somebody else is left exactly as it is", async () => {
     // No mark: this app has no evidence the size is its to give back, and a
     // window somebody sized themselves is not a bug to be fixed. This is the
     // same proof the boot sweep insists on, asked at a different moment.

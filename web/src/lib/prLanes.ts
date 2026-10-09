@@ -20,6 +20,7 @@
 // flake". That sentence is built here too, from the same facts the lane was
 // decided on, so the two can never disagree.
 
+import type { FailureHint } from "./prFailureHint.ts";
 import type { PrSummary } from "../../../shared/types.ts";
 
 export type LaneId = "review" | "land" | "blocked" | "others" | "flight";
@@ -100,6 +101,8 @@ export interface Filed {
    *  emphasise, and a classifier that returned markup would be deciding how it
    *  looks from where it cannot see. */
   reason: string;
+  /** The failing test, when the app has read one for this card: the board draws it under the sentence. */
+  test?: { title: string; more: number };
 }
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
@@ -110,7 +113,7 @@ const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
  * The order of the tests IS the policy, so it is written as a straight sequence
  * rather than a table: read top to bottom and you have read the rules.
  */
-export function fileInLane(p: PrSummary, stake: Stake): Filed {
+export function fileInLane(p: PrSummary, stake: Stake, hint?: FailureHint | null): Filed {
   const c = p.checks;
   const red = c.failure > 0;
   const running = c.pending > 0;
@@ -253,9 +256,14 @@ export function fileInLane(p: PrSummary, stake: Stake): Filed {
   if (red) {
     const names = c.failing.slice(0, 2).map((f) => f.name).join(", ");
     const rest = c.failing.length > 2 ? ` +${c.failing.length - 2} more` : "";
-    return { lane: stake.mine ? "blocked" : "others",
+    const test = hint ? { title: hint.title, more: hint.more } : undefined;
+    /* "Not yours" only on a fact the app read: every failing test is red on
+       another pull request (or on main). Nothing read, nothing claimed. */
+    const own = hint?.ownership;
+    const elsewhere = own?.notYours ? (own.main ? "red on main" : `red on ${plural(own.prs, "other PR")}`) : null;
+    return { lane: stake.mine ? "blocked" : "others", test,
       reason: names
-        ? `${names}${rest} failing${stake.mine ? " — yours to fix" : ", so reviewing it is wasted work until it moves"}.`
+        ? `${names}${rest} failing${stake.mine ? (elsewhere ? ` — ${elsewhere}, not yours` : " — yours to fix") : ", so reviewing it is wasted work until it moves"}.`
         : `${plural(c.failure, "check")} failing.` };
   }
 
@@ -296,11 +304,11 @@ export function fileInLane(p: PrSummary, stake: Stake): Filed {
 }
 
 /** The whole board, in lane order, from a list and a way to read your stake. */
-export function board(prs: PrSummary[], stakeOf: (p: PrSummary) => Stake): Map<LaneId, (PrSummary & { filed: Filed })[]> {
+export function board(prs: PrSummary[], stakeOf: (p: PrSummary) => Stake, hintOf?: (p: PrSummary) => FailureHint | null): Map<LaneId, (PrSummary & { filed: Filed })[]> {
   const out = new Map<LaneId, (PrSummary & { filed: Filed })[]>();
   for (const l of LANES) out.set(l.id, []);
   for (const p of prs) {
-    const filed = fileInLane(p, stakeOf(p));
+    const filed = fileInLane(p, stakeOf(p), hintOf?.(p));
     out.get(filed.lane)!.push({ ...p, filed });
   }
   return out;

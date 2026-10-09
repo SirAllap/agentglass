@@ -446,6 +446,22 @@ async function repoRef(root: string): Promise<GitRepoRef | null> {
 }
 
 /**
+ * One checkout's row, read now and never from `repoCache`.
+ *
+ * The pill under a terminal pane names a branch and a changed-files count, and
+ * the list it used to read them from is held 15 s (45 while a shell is in use,
+ * see backoff()): measured, a rename or a new file took 13-15 s to show in an
+ * idle server, and the panel never re-asked. This is the one `git status` the
+ * focused pane's checkout costs, which is why asking it every few seconds is
+ * affordable where asking for the whole list is not. The ceiling: it knows one
+ * checkout, so a card elsewhere on the list is as old as that list is.
+ */
+export async function repoNow(rootIn: unknown): Promise<GitRepoRef | null> {
+  const top = repoRoot(rootIn);
+  return top ? repoRef(top) : null;
+}
+
+/**
  * When this checkout was last worked in — what the pickers sort on.
  *
  * `HEAD` and the reflog (`logs/HEAD`) inside the checkout's own git dir,
@@ -1022,10 +1038,31 @@ const AUTO_FETCH_CEILING_MS = 10 * 60_000;
  */
 export const FETCH_ARGV = ["fetch", "--all", "--prune", "--atomic"] as const;
 let fetching = false;
+/**
+ * Whether anybody is there to see the counts. Set by the server, which knows
+ * its window sockets; unset (a test, a bare import) means "yes".
+ *
+ * A server with no window open fetched every project once a minute for nobody
+ * (1 fetch and 2 for-each-ref spawns a minute measured with no client), and the
+ * counts it refreshed were re-read by nobody. The tick is skipped, and the
+ * first window to connect after a skipped tick fetches at once
+ * (`autoFetchWhenSomeoneComes`), so the first look is not a minute stale.
+ * The ceiling: the server cannot tell a focused window from one on a second
+ * monitor, so an open window keeps the minute clock.
+ */
+let anyoneWatching: () => boolean = () => true;
+let skippedForNobody = false;
+export function setAutoFetchAudience(fn: () => boolean): void { anyoneWatching = fn; }
+export function autoFetchWhenSomeoneComes(): void {
+  if (!skippedForNobody) return;
+  skippedForNobody = false;
+  void autoFetchOnce();
+}
 
 async function autoFetchOnce(): Promise<void> {
   // Overlapping fetches would pile up on a slow remote; one in flight is enough.
   if (fetching) return;
+  if (!anyoneWatching()) { skippedForNobody = true; return; }
   // Unscoped means "the whole machine", and fetching every repo on the machine
   // once a minute is exactly the cost this feature must not have. Several open
   // projects are fetched one after another, never at once: the ceiling below

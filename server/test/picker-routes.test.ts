@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { freePort } from "./freePort.ts";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
+import { story } from "./story.ts";
 
 const TOKEN = "test-machine-token-not-a-real-one";
 let dir = "", base = "", A = "", B = "";
@@ -66,14 +67,16 @@ afterAll(() => {
 
 const saved = () => JSON.parse(readFileSync(join(dir, "cfg", "agentglass", "config.json"), "utf8"));
 
+const step = story();
+
 describe("opening several projects", () => {
-  test("a fresh instance is unscoped, and says so as an empty list", async () => {
+  step("a fresh instance is unscoped, and says so as an empty list", async () => {
     const p = await get("/projects");
     expect(p.workspace).toBeNull();
     expect(p.workspaces).toEqual([]);
   });
 
-  test("a list of roots opens all of them, and reads back as a list", async () => {
+  step("a list of roots opens all of them, and reads back as a list", async () => {
     const r = await post("/workspace", { roots: [A, B] });
     expect(r.ok).toBe(true);
     expect(r.workspaces).toEqual([A, B]);
@@ -83,13 +86,13 @@ describe("opening several projects", () => {
     expect(saved().root).toEqual([A, B]);
   });
 
-  test("the one-project body an older client sends still works", async () => {
+  step("the one-project body an older client sends still works", async () => {
     const r = await post("/workspace", { root: B });
     expect(r.ok).toBe(true);
     expect((await get("/projects")).workspaces).toEqual([B]);
   });
 
-  test("a list with a missing folder in it is refused whole", async () => {
+  step("a list with a missing folder in it is refused whole", async () => {
     const r = await post("/workspace", { roots: [A, join(dir, "gone")] });
     expect(r.ok).toBe(false);
     expect((await get("/projects")).workspaces).toEqual([B]);
@@ -99,21 +102,21 @@ describe("opening several projects", () => {
 describe("the folders the picker lists from", () => {
   // Unscoped for these: an open project has its row whatever the folders say,
   // and that would blur what is being asked.
-  test("with no folder added the picker lists nothing — the machine is not swept", async () => {
+  step("with no folder added the picker lists nothing — the machine is not swept", async () => {
     expect((await post("/workspace", { roots: [] })).ok).toBe(true);
     const r = await get("/git/repos?all=1");
     expect(r.repos).toEqual([]);
     expect(r.roots).toEqual([]);
   });
 
-  test("looking for projects is a separate, explicit ask", async () => {
+  step("looking for projects is a separate, explicit ask", async () => {
     // The server runs from inside this checkout, which the sweep has always
     // counted as known; the default list above did not.
     const r = await get("/git/repos?all=1&scan=1");
     expect(r.repos.length).toBeGreaterThan(0);
   });
 
-  test("an added folder is saved and its projects are listed", async () => {
+  step("an added folder is saved and its projects are listed", async () => {
     const code = join(dir, "code");
     for (const p of [A, B]) Bun.spawnSync(["git", "init", "-q", "-b", "main", p]);
     const r = await post("/projects/roots", { path: code, added: true });
@@ -125,12 +128,12 @@ describe("the folders the picker lists from", () => {
     expect(list.repos.map((x: { root: string }) => x.root).sort()).toEqual([B, A].sort());
   });
 
-  test("a folder that is not there is refused", async () => {
+  step("a folder that is not there is refused", async () => {
     const r = await post("/projects/roots", { path: join(dir, "nowhere"), added: true });
     expect(r.ok).toBe(false);
   });
 
-  test("forgetting the folder empties the list again", async () => {
+  step("forgetting the folder empties the list again", async () => {
     const r = await post("/projects/roots", { path: join(dir, "code"), added: false });
     expect(r.ok).toBe(true);
     expect((await get("/git/repos?all=1")).repos).toEqual([]);

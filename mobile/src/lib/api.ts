@@ -205,6 +205,33 @@ export async function ask<T>(
 
 
 /**
+ * A read several screens make, answered once for a while.
+ *
+ * The repository list and the pull-request lists were asked by the queue's slow
+ * pass and again, with the same URLs, by the Pull requests tab each time it
+ * opened: 6 to 13 identical requests per open, bodies byte for byte the same
+ * (measured, gaps of 5 to 170 s). A good answer is kept `ttlMs` and a read
+ * already in flight is shared. `force` is for whoever is asking BECAUSE
+ * something changed (a pull-to-refresh, a live tick, the slow pass itself): it
+ * always goes to the computer and refreshes what the others will read. Only a
+ * successful answer is kept, so a failure is never served twice.
+ * The ceiling: an open tab may show what was true up to `ttlMs` ago.
+ */
+const memo = new Map<string, { at: number; answer: Promise<Answer<unknown>> }>();
+export function askCached<T>(host: Host, path: string, ttlMs: number, force = false): Promise<Answer<T>> {
+  const key = `${host.origin}${path}`;
+  const hit = memo.get(key);
+  if (!force && hit && Date.now() - hit.at < ttlMs) return hit.answer as Promise<Answer<T>>;
+  const answer = ask<T>(host, path);
+  const entry = { at: Date.now(), answer: answer as Promise<Answer<unknown>> };
+  memo.set(key, entry);
+  void answer.then((a) => { if (!a.ok && memo.get(key) === entry) memo.delete(key); });
+  return answer;
+}
+/** For tests, and for a pairing change: nothing remembered about another computer. */
+export function forgetCachedAsks(): void { memo.clear(); }
+
+/**
  * Is anything at this address, and is it us?
  *
  * A 200 is not proof of identity. `:4000` is a popular default — Phoenix ships

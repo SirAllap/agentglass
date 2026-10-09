@@ -131,31 +131,59 @@ export function toggle(layout: KeyLayout, catalogue: readonly AccessoryKey[], id
 }
 
 /**
- * Move a visible key one place earlier or later.
+ * Put a visible key at a place among the visible ones.
  *
  * The order is rewritten in full from what is currently VISIBLE rather than
  * patched, which is what keeps a stored order that was never complete — every
  * layout starts as `[]` — from having to be complete before it can be edited.
  * Hidden ids are carried along at the end so unhiding one does not send it to
  * the back of a bar it used to be near the front of.
+ *
+ * `to` is clamped: a drag that ends past the last row means the last row, and
+ * a caller doing arithmetic on a pixel offset should not have to know the
+ * length of the list.
  */
+export function moveTo(
+  layout: KeyLayout,
+  catalogue: readonly AccessoryKey[],
+  id: string,
+  to: number,
+): KeyLayout {
+  const visible = apply(layout, catalogue).map((k) => k.id);
+  const at = visible.indexOf(id);
+  if (at < 0) return layout;
+  const target = Math.max(0, Math.min(visible.length - 1, to));
+  if (target === at) return layout;
+  const next = visible.filter((v) => v !== id);
+  next.splice(target, 0, id);
+  // Everything hidden keeps whatever place it had, after the visible run.
+  const tail = layout.order.filter((o) => !next.includes(o));
+  return { order: [...next, ...tail], hidden: layout.hidden };
+}
+
+/** Move a visible key one place earlier or later; the ends stay put. */
 export function move(
   layout: KeyLayout,
   catalogue: readonly AccessoryKey[],
   id: string,
   by: -1 | 1,
 ): KeyLayout {
-  const visible = apply(layout, catalogue).map((k) => k.id);
-  const at = visible.indexOf(id);
+  const at = apply(layout, catalogue).findIndex((k) => k.id === id);
   if (at < 0) return layout;
-  const to = at + by;
-  if (to < 0 || to >= visible.length) return layout;
-  const next = [...visible];
-  next[at] = visible[to]!;
-  next[to] = id;
-  // Everything hidden keeps whatever place it had, after the visible run.
-  const tail = layout.order.filter((o) => !next.includes(o));
-  return { order: [...next, ...tail], hidden: layout.hidden };
+  return moveTo(layout, catalogue, id, at + by);
+}
+
+/**
+ * Where a row dropped after a drag belongs: the row it started on plus the
+ * rows its centre travelled over, in a list of equal-height rows.
+ *
+ * Rounded, not floored: a row dragged half way over its neighbour has crossed
+ * its middle, which is when somebody expects it to have swapped. Clamped to
+ * the list so a finger that leaves the screen still lands on an end.
+ */
+export function dropIndex(from: number, dy: number, rowHeight: number, count: number): number {
+  if (count <= 0 || rowHeight <= 0) return from;
+  return Math.max(0, Math.min(count - 1, from + Math.round(dy / rowHeight)));
 }
 
 /** Back to the catalogue's own order with nothing hidden. */

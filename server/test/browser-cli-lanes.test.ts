@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { freePort } from "./freePort.ts";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
+import { story } from "./story.ts";
 
 const CLI = new URL("../../bin/agentglass-browser", import.meta.url).pathname;
 const HAVE_PY = !!Bun.which("python3");
@@ -98,10 +99,12 @@ async function cli(...args: string[]) {
   return { out: out.trim(), err: err.trim(), code };
 }
 
+const step = story();
+
 describe.skipIf(!HAVE_PY)("agentglass-browser lane", () => {
   let id = "";
 
-  test("`lane new` makes a private lane and prints its id", async () => {
+  step("`lane new` makes a private lane and prints its id", async () => {
     const r = await cli("lane", "new");
     expect(r.code).toBe(0);
     id = JSON.parse(r.out).lane.id;
@@ -109,7 +112,7 @@ describe.skipIf(!HAVE_PY)("agentglass-browser lane", () => {
     expect(seen.find((s) => s.to === "mgr")?.args).toMatchObject({ make: id, container: "private" });
   }, 20_000);
 
-  test("`--shared` and `--as` say which container, and only when asked", async () => {
+  step("`--shared` and `--as` say which container, and only when asked", async () => {
     const shared = await cli("lane", "new", "--shared");
     const named = await cli("lane", "new", "--as", "orbit-qa");
     expect(shared.code).toBe(0);
@@ -121,7 +124,7 @@ describe.skipIf(!HAVE_PY)("agentglass-browser lane", () => {
     }
   }, 30_000);
 
-  test("`--lane` reaches the lane's host, without the tab the identity holds in the person's window", async () => {
+  step("`--lane` reaches the lane's host, without the tab the identity holds in the person's window", async () => {
     // The identity holds a tab in the person's window, so a bare verb would be addressed to it.
     expect((await cli("open", "http://localhost/")).code).toBe(0);
     expect((await cli("read")).code).toBe(0);
@@ -137,7 +140,7 @@ describe.skipIf(!HAVE_PY)("agentglass-browser lane", () => {
     expect(seen.map((s) => s.to)).toEqual([`host-${id}`, "visible"]);
   }, 20_000);
 
-  test("a hidden page in a lane is not raised as an alarm, and on the person's window still is", async () => {
+  step("a hidden page in a lane is not raised as an alarm, and on the person's window still is", async () => {
     const inLane = await cli("observe", "--summary", "--lane", id);
     const onScreen = await cli("observe", "--summary", "--active");
     expect(inLane.code).toBe(0);
@@ -145,7 +148,7 @@ describe.skipIf(!HAVE_PY)("agentglass-browser lane", () => {
     expect(onScreen.out).toContain("NOT VISIBLE");
   }, 20_000);
 
-  test("a verb that answers early, the screencast's watch, reaches the lane and is not refused for want of a tab", async () => {
+  step("a verb that answers early, the screencast's watch, reaches the lane and is not refused for want of a tab", async () => {
     seen.length = 0;
     const r = await cli("screencast", "watch", "--seconds", "0.3", "--lane", id);
     expect(r.code).toBe(0);
@@ -156,14 +159,14 @@ describe.skipIf(!HAVE_PY)("agentglass-browser lane", () => {
     expect(seen.every((s) => s.args.page === undefined)).toBe(true);
   }, 20_000);
 
-  test("`lane list` names the lane and who opened it", async () => {
+  step("`lane list` names the lane and who opened it", async () => {
     const lanes = JSON.parse((await cli("lane", "list")).out).lanes;
     expect(lanes).toHaveLength(1);
     expect(lanes[0]).toMatchObject({ id, container: "private" });
     expect(lanes[0].as).toBeTruthy();
   });
 
-  test("a closed lane is refused by name and the visible window is never asked", async () => {
+  step("a closed lane is refused by name and the visible window is never asked", async () => {
     expect((await cli("lane", "close", id)).code).toBe(0);
     // The identity holds a tab in the person's window, so a bare verb would be addressed to it.
     expect((await cli("open", "http://localhost/")).code).toBe(0);
@@ -176,7 +179,7 @@ describe.skipIf(!HAVE_PY)("agentglass-browser lane", () => {
     expect(seen).toHaveLength(0);
   }, 20_000);
 
-  test("`lane close` without an id, and an id that is not one, are refused before any request", async () => {
+  step("`lane close` without an id, and an id that is not one, are refused before any request", async () => {
     expect((await cli("lane", "close")).code).not.toBe(0);
     expect((await cli("read", "--lane", "../x")).code).not.toBe(0);
   });

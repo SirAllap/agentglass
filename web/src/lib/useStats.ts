@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import type { StatsSummary } from "../../../shared/types.ts";
 import { api } from "./api.ts";
+import { usePoll } from "./usePoll.ts";
 
 /**
  * How often to re-poll for a given window.
@@ -50,12 +51,10 @@ export function useStats(windowMs: number, intervalMs?: number, provider = "", e
   }, [windowMs, provider]);
 
   const every = intervalMs ?? pollFor(windowMs);
-  useEffect(() => {
-    if (!enabled) return;
-    load();
-    const id = setInterval(load, every);
-    return () => clearInterval(id);
-  }, [load, every, enabled]);
+  useEffect(() => { if (enabled) load(); }, [load, enabled]);
+  /* Only while the window is looked at: an unfocused dashboard asked 15 times a
+     minute for a summary nobody was reading (measured). */
+  usePoll(enabled, load, every);
 
   return { stats, error };
 }

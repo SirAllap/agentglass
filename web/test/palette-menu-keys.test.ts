@@ -44,7 +44,9 @@ describe("a menu takes its own keys", () => {
     // stopped and every other key went through.
     const fn = src.slice(src.indexOf("const menuKeys ="), src.indexOf("function useMenuField"));
     expect(fn).toContain("e.stopPropagation();");
-    expect(fn.indexOf("e.stopPropagation();")).toBeLessThan(fn.indexOf("if ("));
+    // The one way out is a chord the app answers on window (see
+    // finder-reader-keys.test.ts); the key test still comes after the stop.
+    expect(fn.indexOf("e.stopPropagation();")).toBeLessThan(fn.indexOf("if (e.key"));
     expect(fn).toContain("Escape");
   });
 });

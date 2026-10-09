@@ -19,6 +19,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 let dir = "", cfg = "", gw: typeof import("../src/gitwork.ts"), cf: typeof import("../src/config.ts");
 const ENV0 = { xdg: process.env.XDG_CONFIG_HOME, root: process.env.AGENTGLASS_ROOT, dirs: process.env.AGENTGLASS_REPO_DIRS };
@@ -79,30 +80,32 @@ afterAll(() => {
   try { rmSync(dir, { recursive: true, force: true }); } catch { /* fine */ }
 });
 
+const step = story();
+
 describe("a removed project", () => {
-  it("is on the panels' list until it is removed", async () => {
+  step("is on the panels' list until it is removed", async () => {
     expect(await names()).toEqual(["orbit", "scratch", "scratch-ORBIT-1042"]);
   });
 
-  it("is gone from the panels' list, and takes its checkouts with it", async () => {
+  step("is gone from the panels' list, and takes its checkouts with it", async () => {
     // A worktree of a removed project is the removed project on another branch.
     hide(join(dir, "scratch"));
     expect(await names()).toEqual(["orbit"]);
   });
 
-  it("is still on the picker's list, which is where it can be put back", async () => {
+  step("is still on the picker's list, which is where it can be put back", async () => {
     hide(join(dir, "scratch"));
     expect(await names({ ignoreScope: true })).toContain("scratch");
   });
 
-  it("comes back the moment it is put back, not when a cache expires", async () => {
+  step("comes back the moment it is put back, not when a cache expires", async () => {
     hide(join(dir, "scratch"));
     expect(await names()).toEqual(["orbit"]);
     hide();
     expect(await names()).toContain("scratch");
   });
 
-  it("is still shown when it is the open project — asking for it by name wins", async () => {
+  step("is still shown when it is the open project — asking for it by name wins", async () => {
     hide(join(dir, "scratch"));
     process.env.AGENTGLASS_ROOT = join(dir, "scratch");
     try {

@@ -31,6 +31,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
+import { story } from "./story.ts";
 
 const SOCKET = `agx-noempty-${process.pid}`;
 const REAL_SOCKET = process.env.AGENTGLASS_TMUX_SOCKET;
@@ -65,8 +66,10 @@ const windows = async (): Promise<string[]> => {
   return ls.stdout.trim() ? ls.stdout.trim().split("\n") : [];
 };
 
+const step = story();
+
 describe("the session a run creates", () => {
-  it("has exactly one window, and it is the run", async () => {
+  step("has exactly one window, and it is the run", async () => {
     if (!have) return;
     const w = await engineWindowRunning(dir, "orbit-1042", ["sh", "-c", "sleep 30"]);
     expect(w?.paneId).toMatch(/^%\d+$/);
@@ -77,7 +80,7 @@ describe("the session a run creates", () => {
     expect(all[0]).toStartWith("orbit-1042·");
   });
 
-  it("counts one window per run after that, not one plus one", async () => {
+  step("counts one window per run after that, not one plus one", async () => {
     // The shape that was measured wrong: 3 windows for 2 runs. Two more here,
     // into the session the first one made, so the count is the assertion.
     if (!have) return;
@@ -88,7 +91,7 @@ describe("the session a run creates", () => {
     expect(all, `windows: ${all.join(", ")}`).toHaveLength(3);
   });
 
-  it("leaves no window running a bare login shell", async () => {
+  step("leaves no window running a bare login shell", async () => {
     /* The general form, and the one that still bites if somebody adds another
        creation path: every window here was asked for by name, so a window whose
        command is a shell is a window nobody opened. `sh` is what the runs
@@ -100,7 +103,7 @@ describe("the session a run creates", () => {
     }
   });
 
-  it("still names and places the window the caller asked for", async () => {
+  step("still names and places the window the caller asked for", async () => {
     // The creation path is new; everything the caller relies on has to survive
     // it. A dot is a pane separator in a tmux target, so it is stripped.
     if (!have) return;
@@ -112,7 +115,7 @@ describe("the session a run creates", () => {
     expect(all[0]).toStartWith("app-v2·");
   });
 
-  it("and still passes env to the pane rather than the command line", async () => {
+  step("and still passes env to the pane rather than the command line", async () => {
     /* On the session-creating path too. The understudy hands its agent a minted
        credential this way precisely so it stays out of `ps`, and that guarantee
        is not allowed to depend on whether the session already existed. */

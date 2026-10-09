@@ -14,13 +14,15 @@
  * honestly would "fix" violet and take away the colour somebody chose.
  */
 import { describe, expect, it } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import { railActiveColor } from "../src/lib/railAccent.ts";
 import { contrast, parseColor } from "../src/lib/contrast.ts";
 import { ACCENTS } from "../../shared/palettes.ts";
+const stubGlobal = globalStubs();
 
 // themes.ts imports api.ts, which reads `location` at module scope. Stub it
 // before the import evaluates, exactly as the terminal palette test does.
-(globalThis as any).location = { hostname: "localhost", origin: "http://localhost:4000" };
+stubGlobal("location", { hostname: "localhost", origin: "http://localhost:4000" });
 const { THEMES } = await import("../src/lib/themes.ts");
 
 const ratio = (fg: string, bg: string) => contrast(parseColor(fg)!, parseColor(bg)!);

@@ -4,10 +4,11 @@
  * every state a box can be in, testable without a renderer.
  */
 import type { PublicPlugin } from "../../../shared/types.ts";
+import type { BoxPlan } from "../../../shared/pluginBoxPlan.ts";
 
 export type BoxWording =
   | { tone: "boxed"; text: string; refused?: { path: string; why: string }[] }
-  | { tone: "warning"; text: string; fix?: string }
+  | { tone: "warning"; text: string; fix?: string; willNotStart?: true }
   | { tone: "neutral"; text: string };
 
 /** The one-time fix for Ubuntu's AppArmor limit on unprivileged user
@@ -26,18 +27,39 @@ sudo systemctl reload apparmor`;
 
 type UnboxedReason = "missing" | "userns-blocked" | "failed";
 
-/** The red text for a specific reason the box did not (or could not) build —
- *  shared between "it just failed while running" and "the host can never
- *  build one, before a start was even tried" (see `boxWording` below). */
-function unboxedWording(reason: UnboxedReason, detail: string | undefined): { text: string; fix?: string } {
+/** Why the host cannot build the box, and the one-time fix where there is one. */
+function whyNoBox(reason: UnboxedReason, detail: string | undefined): { cause: string; fix?: string; todo?: string } {
   switch (reason) {
     case "userns-blocked":
-      return { text: "This system blocks the box (Ubuntu's AppArmor limit on user namespaces), so the plugin runs as you.", fix: USERNS_FIX };
+      return { cause: "This system blocks the box (Ubuntu's AppArmor limit on user namespaces)", fix: USERNS_FIX };
     case "missing":
-      return { text: "bubblewrap is not installed, so the plugin runs as you. Install the `bubblewrap` package and restart the plugin." };
+      return { cause: "bubblewrap is not installed", todo: "Install the `bubblewrap` package and restart the plugin." };
     case "failed":
-      return { text: `The box failed to start, so the plugin runs as you: ${detail ?? "no detail"}` };
+      return { cause: `The box failed to start: ${detail ?? "no detail"}` };
   }
+}
+
+/** What a start does is not the same claim at every moment, and "runs as you"
+ *  is only true of two of them. Linux with no box and no consent REFUSES the
+ *  start (server/src/plugins.ts); consent, or `AGENTGLASS_PLUGINS_UNBOXED=1`,
+ *  lets it run unboxed; anywhere but Linux there is no box to build and it
+ *  runs unboxed by design. `plan` is the server's own answer (shared/
+ *  pluginBoxPlan.ts), because the probe alone says "missing" on macOS and
+ *  Windows, where nothing is wrong and nothing can be fixed. */
+const NO_BOX_HERE = "Boxes are built on Linux only, so on this system the plugin runs as you.";
+
+function unboxedWording(
+  reason: UnboxedReason, detail: string | undefined, plan: BoxPlan | undefined, running: boolean,
+): { text: string; fix?: string; willNotStart?: true } {
+  if (plan === "unboxed-platform") return { text: NO_BOX_HERE };
+  const { cause, fix, todo } = whyNoBox(reason, detail);
+  if (running) return { text: `${cause}, so the plugin runs as you.${todo ? ` ${todo}` : ""}`, ...(fix ? { fix } : {}) };
+  // Anything but a recorded consent is a refused start: no plan at all is
+  // read the way Linux's default is, never as a promise that it runs.
+  if (plan !== "unboxed-consented") {
+    return { text: `${cause}, so the plugin will not start until you allow it to run unboxed or fix the host.${todo ? ` ${todo}` : ""}`, ...(fix ? { fix } : {}), willNotStart: true };
+  }
+  return { text: `${cause}. It was allowed to run unboxed, so the plugin runs as you.${todo ? ` ${todo}` : ""}`, ...(fix ? { fix } : {}) };
 }
 
 /**
@@ -53,7 +75,7 @@ function unboxedWording(reason: UnboxedReason, detail: string | undefined): { te
  *    instant last time (a bad grant, a missing dependency inside it).
  */
 export function boxWording(
-  plugin: Pick<PublicPlugin, "sandbox" | "running" | "boxState" | "sandboxProbe" | "lastBoxFailure">,
+  plugin: Pick<PublicPlugin, "sandbox" | "running" | "boxState" | "sandboxProbe" | "boxPlan" | "lastBoxFailure">,
 ): BoxWording | null {
   if (!plugin.sandbox) return null;
 
@@ -69,17 +91,86 @@ export function boxWording(
     // "no-block" is not reachable here: `plugin.sandbox` is set (checked
     // above), and `startProcess` only ever gives that reason when it isn't.
     if (s.reason === "no-block") return { tone: "neutral", text: "Will run in a box when started." };
-    return { tone: "warning", ...unboxedWording(s.reason, s.detail) };
+    return { tone: "warning", ...unboxedWording(s.reason, s.detail, plugin.boxPlan, true) };
   }
 
   // Not running: the probe is what THIS HOST can do, checked before a start
   // is ever attempted — worth a red warning now, not only after the person
   // has already switched the plugin on and watched it run unboxed.
   if (plugin.sandboxProbe && !plugin.sandboxProbe.ok) {
-    return { tone: "warning", ...unboxedWording(plugin.sandboxProbe.reason, plugin.sandboxProbe.detail) };
+    return { tone: "warning", ...unboxedWording(plugin.sandboxProbe.reason, plugin.sandboxProbe.detail, plugin.boxPlan, false) };
   }
   if (plugin.lastBoxFailure) {
-    return { tone: "warning", text: `The box failed to start last time, so the plugin ran as you: ${plugin.lastBoxFailure}` };
+    return { tone: "warning", text: `The box failed to start last time, so the plugin did not start: ${plugin.lastBoxFailure}` };
   }
   return { tone: "neutral", text: "Will run in a box when started." };
+}
+
+/**
+ * Which sentence the "What it runs" block opens with. `neutral` is "will run
+ * in a box when started" — the state of every declared plugin until it is
+ * switched on — so it takes the boxed sentence: the block above it promises a
+ * box, and "runs as you" right beside that promise was two answers to one
+ * question. Only no box block at all, or a box that is known not to be
+ * there, gets the process warning.
+ */
+export function processIsBoxed(box: BoxWording | null): boolean {
+  return box?.tone === "boxed" || box?.tone === "neutral";
+}
+
+/** The box card says the plugin will not start: the process block must not
+ *  say it "runs as you" in the same breath. */
+export function processWillNotStart(box: BoxWording | null): boolean {
+  return box?.tone === "warning" && box.willNotStart === true;
+}
+
+/** The red line for a plugin that runs outside its box while another holds a
+ *  key: a same-user process reads the key file. Generic, any plugin, any key. */
+export function neighbourKeyWording(plugin: Pick<PublicPlugin, "name" | "canReadKeysOf">): string | null {
+  const holders = plugin.canReadKeysOf;
+  if (!holders?.length) return null;
+  return `${plugin.name} runs outside its box and can read ${holders.join(", ")}'s key.`;
+}
+
+/**
+ * The one control a plugin's card may carry about running without its box.
+ * It follows the server's own plan and nothing else: offered only while the
+ * start is REFUSED for lack of a box, and kept (as a revoke) only while this
+ * plugin's own consent is what lets it start. Where a box can be built, where
+ * the platform never has one, or where only the machine-wide hatch lets it
+ * run, there is nothing for the person to decide on this card.
+ */
+export type UnboxedControl =
+  | { kind: "allow"; text: string; button: string }
+  | { kind: "revoke"; text: string; button: string };
+
+export function unboxedControl(
+  plugin: Pick<PublicPlugin, "sandbox" | "boxPlan" | "allowUnboxed">,
+  envAllowsAll: boolean,
+): UnboxedControl | null {
+  if (!plugin.sandbox) return null;
+  if (plugin.boxPlan === "refuse") {
+    return {
+      kind: "allow",
+      text: "This system cannot build the box this plugin asked for, so it does not start. You can allow it to run without one: it then runs as you and can read your files and run programs. Allow that only if you would run its code yourself.",
+      button: "Allow it to run unboxed",
+    };
+  }
+  if (plugin.boxPlan === "unboxed-consented" && plugin.allowUnboxed === true) {
+    return {
+      kind: "revoke",
+      text: envAllowsAll
+        ? "You allowed this plugin to run without its box. Revoking stops it now, and it can start again while the machine-wide setting above is on."
+        : "You allowed this plugin to run without its box, so it runs as you. Revoking stops it, and it will not start again until you allow it or the host can build the box.",
+      button: "Revoke",
+    };
+  }
+  return null;
+}
+
+/** The line shown on the Plugins page while `AGENTGLASS_PLUGINS_UNBOXED=1` is
+ *  set: it has no switch there, so the one thing Settings can do is say it. */
+export function envHatchNotice(envAllowsAll: boolean | undefined): string | null {
+  if (!envAllowsAll) return null;
+  return "AGENTGLASS_PLUGINS_UNBOXED=1 is set for this machine: any plugin whose box cannot be built runs without it, as you, with no per-plugin consent asked. Unset it and restart agentglass to go back to deciding one plugin at a time.";
 }

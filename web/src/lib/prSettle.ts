@@ -22,9 +22,13 @@
  *  panel that emptied it by itself. Refresh is the button for "now". */
 export const POLL_MS = 120_000;
 
-/** How soon to collect on an unfinished answer. The board completes at about
- *  t=1.0s, so this is the first delay that is reliably after it. */
-export const SETTLE_MS = 1_500;
+/** How soon to collect on an unfinished answer. It was 1.5s, picked to land
+ *  after the board's first read; measured with a fake gh (24 pull requests) the
+ *  rows of a read that took 400ms then showed up 1.1s late and one that took
+ *  1.5s, 3s late. The ask is to this server's cache and starts no GitHub read of
+ *  its own (`refreshList` joins the one in flight), so asking early costs one
+ *  local round trip, and a list that is not ready yet keeps the rows on screen. */
+export const SETTLE_MS = 500;
 
 /** Only the two fields that mean "there is more coming". */
 export type Unfinished = { loading?: boolean; checksPending?: boolean };
@@ -42,8 +46,8 @@ export type Settle = {
  *
  * It doubles rather than repeating, and stops at the poll interval. A server
  * that settles — the measured case, and every ordinary one — is asked exactly
- * once more, 1.5s later. A server that is genuinely stuck is asked at 1.5s, 3s,
- * 6s, 12s and then no faster than it would have been polled anyway, instead of
+ * once more, 0.5s later. A server that is genuinely stuck is asked at 0.5s, 1s,
+ * 2s, 4s and then no faster than it would have been polled anyway, instead of
  * every second and a half for as long as the view stays open.
  */
 export function settleAfter(r: Unfinished, current: number = SETTLE_MS): Settle {

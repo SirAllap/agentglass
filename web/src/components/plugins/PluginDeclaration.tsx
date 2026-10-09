@@ -3,7 +3,7 @@ import type { DeviceScope, PublicPlugin } from "../../../../shared/types.ts";
 import { CopyIcon, EyeIcon, NoteIcon, HandIcon } from "../../lib/glyphIcons.tsx";
 import { CommandIcon, PuzzleIcon, ShieldIcon, SlidersIcon } from "../settingsNavIcons.tsx";
 import { describeSandbox, type SandboxGrant } from "../../../../shared/pluginSandbox.ts";
-import { boxWording } from "../../lib/pluginBoxState.ts";
+import { boxWording, neighbourKeyWording, processIsBoxed, processWillNotStart } from "../../lib/pluginBoxState.ts";
 import { HIT, ICON } from "../../lib/iconSize.ts";
 import { EDGE } from "../workspace/Chrome.tsx";
 
@@ -31,11 +31,14 @@ const SCOPE_SENTENCE: Record<DeviceScope, string> = {
 };
 
 /** Whatever the scope: it limits the token, and an UNBOXED process is the
- *  user's. Never shown for a boxed plugin — that would contradict what "What
- *  it asks to be given" says right below it. */
+ *  user's. Never shown beside a box promise, boxed or about to be — that
+ *  would contradict what "What it asks to be given" says right below it. */
 const PROCESS_WARNING = "This plugin runs as you. The scope limits its access to this app, not to your machine: it can still read your files and run programs. Approve it only if you would run its code yourself.";
 /** The boxed equivalent: the scope still limits the token, but the process
  *  itself is contained to the folders in the block below, not the whole machine. */
+/** For a host that refuses the start: nothing runs yet, and what it would run
+ *  as, if the person allows it, is still the user. */
+const REFUSED_PROCESS_NOTE = "This plugin does not start on this system until it can run in a box or you allow it to run without one. Without a box it runs as you: the scope limits its access to this app, not to your machine. Allow that only if you would run its code yourself.";
 const BOXED_PROCESS_NOTE = "This plugin runs in a box: the scope still limits its access to this app, and the box limits what else it can reach — see what it asks to be given, below.";
 
 
@@ -49,14 +52,23 @@ export function surfaces(p: PublicPlugin): Surface[] {
   const c = p.contributes ?? {};
   const out: Surface[] = [];
   for (const panel of c.panels ?? []) {
-    out.push({ icon: <PuzzleIcon size={ICON.sm} />, what: `Panel · ${panel.title}`, where: "in the Plugins view" });
+    out.push({
+      icon: <PuzzleIcon size={ICON.sm} />,
+      what: `${panel.canvas ? "Live panel" : "Panel"} · ${panel.title}`,
+      where: panel.canvas ? "in the Plugins view, drawn as it happens with the app's own parts: it can move things about, never run code or load anything" : "in the Plugins view",
+    });
   }
   if (c.settings?.length) {
     out.push({
       icon: <SlidersIcon size={ICON.sm} />,
       what: `Settings page · ${c.settings.length} ${c.settings.length === 1 ? "field" : "fields"}`,
-      where: "in this window, filled in by you",
+      where: c.settings.some((f) => f.type === "secret")
+        ? "in this window, filled in by you; asks for a secret, kept in a file only you can read (a plugin running outside its box could too)"
+        : "in this window, filled in by you",
     });
+  }
+  if (c.inboxAnnotations) {
+    out.push({ icon: <PuzzleIcon size={ICON.sm} />, what: "Badge and sort order on Inbox rows", where: "it can mark and order rows, never hide one" });
   }
   if (c.prNotes) {
     out.push({ icon: <NoteIcon size={ICON.sm} />, what: "Notes on pull requests", where: "shown here only, never sent to GitHub" });
@@ -77,14 +89,16 @@ export function PluginDeclaration({ plugin }: { plugin: PublicPlugin }) {
   const drawn = surfaces(plugin);
   const d = plugin.sandbox ? describeSandbox(plugin.sandbox) : null;
   const box = boxWording(plugin);
+  const boxed = processIsBoxed(box);
+  const neighbourKey = neighbourKeyWording(plugin);
   return (
     <div className="flex flex-col gap-2.5 min-w-0">
       <Block icon={<EyeIcon size={ICON.sm} />} tint={tint} head="What it sees" chip={SCOPE_WORD[plugin.scope]}>
         <p className="m-0 text-[12px] leading-relaxed" style={{ color: "var(--text2)" }}>{SCOPE_SENTENCE[plugin.scope]}</p>
       </Block>
 
-      <Block icon={<CommandIcon size={ICON.sm} />} tint={box?.tone === "boxed" ? "var(--primary)" : "var(--warning)"} head="What it runs">
-        <p className="m-0 mb-1.5 text-[12px] leading-relaxed" style={{ color: "var(--text2)" }}>{box?.tone === "boxed" ? BOXED_PROCESS_NOTE : PROCESS_WARNING}</p>
+      <Block icon={<CommandIcon size={ICON.sm} />} tint={boxed ? "var(--primary)" : "var(--warning)"} head="What it runs">
+        <p className="m-0 mb-1.5 text-[12px] leading-relaxed" style={{ color: "var(--text2)" }}>{boxed ? BOXED_PROCESS_NOTE : processWillNotStart(box) ? REFUSED_PROCESS_NOTE : PROCESS_WARNING}</p>
         {/* The command, as a command: the one line here that is not prose, and
             the one a reader is most likely to want to recognise. */}
         <code className="block t-mono text-[11.5px] px-2 py-1.5 rounded-md break-all"
@@ -102,6 +116,7 @@ export function PluginDeclaration({ plugin }: { plugin: PublicPlugin }) {
         >
           <p className="m-0 mb-1.5 text-[12px] leading-relaxed" style={{ color: box.tone === "warning" ? "var(--error)" : "var(--text2)" }}>{box.text}</p>
           {box.tone === "warning" && "fix" in box && box.fix && <FixBlock command={box.fix} />}
+          {neighbourKey && <p className="m-0 mb-1.5 text-[12px] leading-relaxed" style={{ color: "var(--error)" }}>{neighbourKey}</p>}
           {box.tone === "boxed" && box.refused && box.refused.length > 0 && (
             <div className="flex flex-col gap-0.5 mb-1.5">
               {box.refused.map((r) => (

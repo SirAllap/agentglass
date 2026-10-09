@@ -425,7 +425,7 @@ export default function CardScreen(): React.ReactNode {
   const body = (detail?.description ?? "").trim();
   /* What the fold hides, named. A specification's next heading is the whole
      of what a reader needs to decide whether to open it. */
-  const bodyRest = useMemo(() => outline(body, BODY_BLOCKS), [body]);
+  const bodyRest = useMemo(() => outline(body, BODY_BLOCKS, true), [body]);
 
   /* Subtasks and checklist items counted as one number, because they are one
      question — what is left underneath this card. A subtask is done when the
@@ -589,7 +589,7 @@ export default function CardScreen(): React.ReactNode {
                 can name what is under it. */}
             {body ? (
               <Card style={{ gap: SPACE.md }}>
-                <Md text={body} host={host} limit={wholeBody ? undefined : BODY_BLOCKS} />
+                <Md text={body} host={host} pastPicture limit={wholeBody ? undefined : BODY_BLOCKS} />
                 {bodyRest.hidden ? (
                   <Pressable
                     accessibilityRole="button"
@@ -727,7 +727,7 @@ export default function CardScreen(): React.ReactNode {
                         <Text style={{ color: C.text3, fontSize: T.eyebrow }}>{since(c.at, now)}</Text>
                       </View>
                       {c.text ? (
-                        <Text style={{ color: C.text2, fontSize: T.body, lineHeight: 20 }}>{c.text}</Text>
+                        <Md text={c.text} host={host} />
                       ) : (
                         /* ClickUp comments can be an attachment and nothing
                            else, which arrives as empty text. Saying so beats a
@@ -743,7 +743,7 @@ export default function CardScreen(): React.ReactNode {
                             <Text style={{ color: C.text2, fontSize: T.eyebrow, fontWeight: "600" }}>{r.who}</Text>
                             <Text style={{ color: C.text3, fontSize: T.eyebrow }}>{since(r.at, now)}</Text>
                           </View>
-                          <Text style={{ color: C.text3, fontSize: T.small, lineHeight: 18 }}>{r.text}</Text>
+                          <Md text={r.text} host={host} />
                         </View>
                       ))}
                       {c.replies && !(c.replyList ?? []).length ? (

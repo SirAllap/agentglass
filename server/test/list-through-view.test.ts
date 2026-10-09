@@ -36,7 +36,7 @@ describe("reading a saved list", () => {
   it("falls back to the raw list when there is no view to use", () => {
     // An older workspace, or a permission: the old behaviour is still better
     // than an empty board.
-    expect(listReader).toContain("rawListTasks(token, listId, me)");
+    expect(listReader).toContain("rawListTasks(token, listId, me, fresh)");
     // …but only on a failure. An empty view is a real answer — a list can be
     // empty — and retrying it as a raw list would put the multi-list cards back
     // out of reach.
@@ -70,7 +70,7 @@ describe("a list board reads BOTH the view and the list", () => {
     const src = require("node:fs").readFileSync(new URL("../src/providers.ts", import.meta.url), "utf8") as string;
     const at = src.indexOf("async function listTasksOf");
     const fn = src.slice(at, src.indexOf("\n}", at));
-    expect(fn).toContain("const raw = await rawListTasks(token, listId, me);");
+    expect(fn).toContain("const raw = await rawListTasks(token, listId, me, fresh);");
     expect(fn, "and both are kept, not one chosen").toContain("mergeById(");
   });
 

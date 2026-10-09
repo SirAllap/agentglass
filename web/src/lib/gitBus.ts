@@ -15,10 +15,14 @@
  * app's own terminal.
  */
 
+import { forgetShared } from "./sharedRead.ts";
+
 const listeners = new Set<() => void>();
 
 /** Called by the live socket when the server reports a mutation. */
 export function gitChanged(): void {
+  // First, so the listeners' own re-reads are not answered from before the change.
+  forgetShared();
   for (const fn of listeners) {
     try { fn(); } catch { /* one bad listener must not stop the rest */ }
   }

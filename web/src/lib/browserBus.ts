@@ -283,15 +283,17 @@ export async function serveBrowserAsk(el: DrivableWebview | null, ask: BrowserAs
   }
   /*
    * S9: which agent this guest's requests should be attributed to, for the
-   * identity header — see identify-header.js. Pushed here, on every ask that
-   * addresses a real guest, rather than once when a tab opens: `as` is who is
-   * asking NOW, and a tab a second agent picks up (or `--lane`, or a tab
-   * nobody named) must not go on carrying the first name in main's map.
-   * Fire-and-forget, same as the rest of `setGuestOwner`'s callers.
+   * identity header — see identify-header.js. Pushed on EVERY ask that
+   * addresses a real guest, with the name it carries or an empty one: `as` is
+   * who is asking NOW, so a tab a second agent picks up, a `--shared` ask that
+   * sends no name, or an ask that names nobody must not go on carrying the
+   * first name in main's map. Main decides what the pair means
+   * (`ownerAfter`). Fire-and-forget, same as the rest of `setGuestOwner`'s
+   * callers.
    */
-  if (el && typeof ask.args.as === "string") {
+  if (el) {
     const owner = guestIdOf(el);
-    if (typeof owner === "number") setGuestOwner(owner, ask.args.as);
+    if (typeof owner === "number") setGuestOwner(owner, typeof ask.args.as === "string" ? ask.args.as : "");
   }
   /* A screenshot is the one verb that needs the pane to be PAINTING, not just
      mounted — everything else talks to the page and does not care whether

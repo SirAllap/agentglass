@@ -445,6 +445,16 @@ export function appActionForChord(chord: string): AppChordId | null {
   return null;
 }
 
+/** Whether a key press is one the app answers on `window`: a view chord, an app
+ *  action (the palette, the bench, the switcher) or a reserved one (⌘K, zoom).
+ *  A surface that swallows keys so they do not reach the list behind it has to
+ *  let these through, or the shortcut works from the box and dies inside it. */
+export function isAppChord(e: Parameters<typeof chordFromEvent>[0]): boolean {
+  const chord = chordFromEvent(e);
+  if (!chord) return false;
+  return CHORD_RESERVED.has(chord) || viewForChord(chord) !== null || appActionForChord(chord) !== null;
+}
+
 export function rebindAppChord(id: AppChordId, chord: string): RebindResult {
   if (!VALID_CHORD.test(chord)) return { ok: false, error: "hold a modifier — Ctrl, Alt or both" };
   if (CHORD_RESERVED.has(chord)) return { ok: false, error: `${chordLabel(chord)} belongs to the app` };

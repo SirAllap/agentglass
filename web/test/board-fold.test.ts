@@ -22,20 +22,20 @@
  * process runs every file in this suite, and a `localStorage` left behind is
  * one the next file inherits.
  */
-import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { PrSummary } from "../../shared/types.ts";
 import { forgetCards } from "../src/lib/prCardStore.ts";
+const stubGlobal = globalStubs();
 
-const priorStorage = (globalThis as { localStorage?: unknown }).localStorage;
 const cell = new Map<string, string>();
-(globalThis as { localStorage?: unknown }).localStorage = {
+stubGlobal("localStorage", {
   getItem: (k: string) => cell.get(k) ?? null,
   setItem: (k: string, v: string) => { cell.set(k, String(v)); },
   removeItem: (k: string) => { cell.delete(k); },
-};
-afterAll(() => { (globalThis as { localStorage?: unknown }).localStorage = priorStorage; });
+});
 
 const { TriageBoard } = await import("../src/components/TriageBoard.tsx");
 const { ALWAYS_OPEN, foldedLanes, setFoldedLanes, walkable } = await import("../src/lib/boardPrefs.ts");
@@ -409,7 +409,7 @@ describe("the verdict a card leads with", () => {
       checks: { total: 3, success: 1, failure: 2, skipped: 0, pending: 0, allDone: true, verdict: "red", failing: [] },
     } as Partial<PrSummary>);
     expect(html).toContain("Approved");
-    expect(html).toContain("2 failing");
+    expect(html).toContain("2 checks failing");
   });
 });
 
@@ -531,14 +531,14 @@ describe("what the card finally says", () => {
     expect(html, "the initials stand in when there is no photo").toContain("AG");
   });
 
-  test("goes amber when nothing has moved in over a week", () => {
+  test("says so in words when nothing has moved in over a week", () => {
     const old = new Date(Date.now() - 9 * 86_400_000).toISOString();
-    expect(inCard({ updatedAt: old })).toContain("Nothing has moved here in over a week");
+    expect(inCard({ updatedAt: old })).toContain("9 days without activity");
   });
 
   test("but not on one that moved yesterday", () => {
     const fresh = new Date(Date.now() - 86_400_000).toISOString();
-    expect(inCard({ updatedAt: fresh })).not.toContain("Nothing has moved here in over a week");
+    expect(inCard({ updatedAt: fresh })).not.toContain("days without activity");
   });
 
   test("the card's id is a button that opens it, with room around the flag", () => {
@@ -662,24 +662,24 @@ describe("how fresh the card's status is", () => {
 });
 
 /*
- * EVERY CARD IS THE SAME SHAPE.
+ * THE TRACKER BLOCK IS DRAWN PER REPOSITORY.
  *
- * A pull request with no tracker card was a row shorter than one with it, so a
- * lane held two heights and the eye had to re-find its place on every card.
- * "at least show something so the cards always have the same layout."
- *
- * What goes in that line is the honest answer to what the line asks — for a
- * release branch or a chore, "no card" is the answer, not silence.
+ * In a repository that links work items, a pull request with no card still
+ * holds the block's place — the honest answer to what the line asks is "no
+ * card", not silence — so a lane does not hold two heights. In a repository
+ * that never links one, nothing is drawn and nothing is held: the card is the
+ * pull request. The rule is prCardBlock.ts; this is that it reaches the screen.
  */
-describe("the card line is always there", () => {
-  const inCard = (o: Partial<PrSummary>) => {
-    const html = render({ mine: [pr(7, o)], total: 1, hasTaskProvider: true });
+describe("the tracker block is there in a tracker repository, and only there", () => {
+  const TRACKED = pr(8, { headRefName: "ORBIT-1042-a-thing" });
+  const inCard = (o: Partial<PrSummary>, others: PrSummary[] = [TRACKED]) => {
+    const html = render({ mine: [pr(7, o), ...others], total: 2, hasTaskProvider: true });
     const i = html.indexOf('data-pr="7"');
-    return i < 0 ? "" : html.slice(html.lastIndexOf("<div", i), html.indexOf("</div></div></div></div>", i));
+    return i < 0 ? "" : html.slice(html.lastIndexOf("<div", i), html.indexOf('data-pr="8"', i) > 0 ? html.indexOf('data-pr="8"', i) : undefined);
   };
 
-  test("says so when the branch names no card at all", () => {
-    expect(inCard({ headRefName: "chore/release-notes" })).toContain("no linked card");
+  test("says so when this pull request names no card but its repository links them", () => {
+    expect(inCard({ headRefName: "chore/release-notes" })).toContain("No card linked");
   });
 
   test("and tells that apart from a card nobody has cached", () => {
@@ -693,7 +693,18 @@ describe("the card line is always there", () => {
     // anything yet.
     const html = inCard({ headRefName: "ORBIT-9999-a-thing", checksLoaded: false } as Partial<PrSummary>);
     expect(html).not.toContain("card not found");
-    expect(html).not.toContain("no linked card");
+    expect(html).not.toContain("No card linked");
+  });
+
+  test("draws nothing, and holds no place, in a repository that links no cards", () => {
+    const html = inCard({ headRefName: "chore/release-notes" }, [pr(8, { headRefName: "fix/retry-worker" })]);
+    expect(html).not.toContain("agx-trk");
+    expect(html).not.toContain("No card linked");
+  });
+
+  test("and not when nothing is connected, whatever the branches say", () => {
+    const html = render({ mine: [pr(7, { headRefName: "ORBIT-1042-a-thing" })], total: 1, hasTaskProvider: false });
+    expect(html).not.toContain('data-block="');
   });
 });
 

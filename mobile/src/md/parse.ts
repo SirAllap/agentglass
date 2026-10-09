@@ -24,12 +24,22 @@
  * each is a rule that can only be wrong in a way nobody would notice.
  */
 
+import { EMOJI, htmlTableCells, matchingClose, parseShieldBadge, stripTags } from "../../../shared/mdHtml.ts";
+
 export type Inline =
   | { t: "text"; text: string }
   | { t: "code"; text: string }
   | { t: "link"; href: string; kids: Inline[] }
   | { t: "strong"; kids: Inline[] }
-  | { t: "em"; kids: Inline[] };
+  | { t: "em"; kids: Inline[] }
+  /** A picture written in a sentence, as `![alt](src)` or as the `<img>` tag
+   *  GitHub writes when a screenshot is pasted. Lifted out of the paragraph into
+   *  its own block (`flow`) wherever a block can hold it; drawn as its alt text
+   *  only where one cannot (a heading, a table cell). */
+  | { t: "image"; src: string; alt: string }
+  /** A shields.io badge, drawn from the words in its address rather than
+   *  fetched — see parseShieldBadge. */
+  | { t: "badge"; label: string; value: string; color: string };
 
 export interface ListItem {
   /** `null` for an ordinary bullet; a task list carries its state. */
@@ -48,7 +58,13 @@ export type Block =
   | { t: "list"; ordered: boolean; start: number; items: ListItem[] }
   | { t: "hr" }
   | { t: "table"; head: Inline[][]; rows: Inline[][][] }
-  | { t: "image"; src: string; alt: string };
+  | { t: "image"; src: string; alt: string }
+  /** A `<details>` fold. The summary is text; the inside is a document of its
+   *  own, so a folded bot comment keeps its lists, tables and code. */
+  | { t: "details"; summary: string; blocks: Block[] };
+
+/** What a body is read against: the repository a bare `#123` belongs to. */
+export interface MdContext { repo?: string }
 
 /**
  * Drop HTML comments.
@@ -157,13 +173,13 @@ const indentOf = (s: string): number => {
  * re-enter here with the outer marker stripped — so a construct behaves the
  * same wherever it appears.
  */
-export function parseMarkdown(src: string): Block[] {
+export function parseMarkdown(src: string, ctx: MdContext = {}): Block[] {
   const text = stripComments(src ?? "");
   const lines = text.replace(/\r\n?/g, "\n").split("\n");
-  return parseLines(lines);
+  return parseLines(lines, ctx.repo);
 }
 
-function parseLines(lines: string[]): Block[] {
+function parseLines(lines: string[], repo?: string): Block[] {
   const out: Block[] = [];
   let i = 0;
 
@@ -193,7 +209,7 @@ function parseLines(lines: string[]): Block[] {
 
     const heading = HEADING.exec(line);
     if (heading) {
-      out.push({ t: "h", level: heading[1]!.length, kids: parseInline(heading[2]!.replace(/\s+#+\s*$/, "")) });
+      out.push({ t: "h", level: heading[1]!.length, kids: parseInline(heading[2]!.replace(/\s+#+\s*$/, ""), repo) });
       i++;
       continue;
     }
@@ -210,25 +226,74 @@ function parseLines(lines: string[]): Block[] {
         body.push(lines[i]!);
         i++;
       }
-      out.push({ t: "quote", blocks: parseLines(body) });
+      out.push({ t: "quote", blocks: parseLines(body, repo) });
       continue;
     }
 
     if (BULLET.test(line) || ORDERED.test(line)) {
-      const [list, next] = parseList(lines, i);
+      const [list, next] = parseList(lines, i, repo);
       out.push(list);
       i = next;
+      continue;
+    }
+
+    // An HTML table, which is how the coverage bots write theirs, and like the
+    // fold below usually on ONE line: break the line at the tag, then take
+    // everything up to `</table>` as one block.
+    const tableAt = line.search(/<table\b/i);
+    if (tableAt > 0) {
+      lines.splice(i, 1, line.slice(0, tableAt), line.slice(tableAt));
+      continue;
+    }
+    if (tableAt === 0) {
+      const rest = lines.slice(i).join("\n");
+      const close = rest.search(/<\/table>/i);
+      const cells = htmlTableCells(close < 0 ? rest : rest.slice(0, close));
+      if (cells) {
+        out.push({
+          t: "table",
+          head: cells.head.map((c) => parseInline(c, repo)),
+          rows: cells.rows.map((r) => r.map((c) => parseInline(c, repo))),
+        });
+      }
+      if (close < 0) break; // never closed: the table took the rest with it
+      i = resume(lines, i, rest, close + "</table>".length);
+      continue;
+    }
+
+    // `<details>`: everything up to the matching `</details>` is a small
+    // document of its own. Scanned as text from the opening tag, not by line:
+    // the opener carries its `<summary>`, the closer sticks to the last word.
+    if (/^\s*<details\b/i.test(line)) {
+      const open = /^\s*<details\b[^>]*>/i.exec(line)!;
+      const rest = [line.slice(open[0].length), ...lines.slice(i + 1)].join("\n");
+      const close = matchingClose(rest);
+      const raw = close ? rest.slice(0, close.start) : rest;
+      // Only THIS fold's summary: one after a nested `<details>` is the inner's.
+      let summary = "";
+      let inner = raw;
+      const sum = /<summary\b[^>]*>([\s\S]*?)<\/summary>/i.exec(raw);
+      const nested = raw.search(/<details\b/i);
+      if (sum && (nested < 0 || sum.index < nested)) {
+        summary = stripTags(sum[1]!).replace(/\s+/g, " ").trim();
+        inner = raw.slice(0, sum.index) + raw.slice(sum.index + sum[0].length);
+      }
+      out.push({ t: "details", summary: summary || "Details", blocks: parseLines(inner.split("\n"), repo) });
+      if (!close) break; // never closed: the fold took the rest of the document
+      // Resume at whatever followed `</details>`: the tail of a line as often
+      // as the next one, so two folds on one line come out as two.
+      i = resume(lines, i, rest, close.end);
       continue;
     }
 
     // A table is only a table with its rule row under the header; without one,
     // a line of pipes is a sentence about pipes.
     if (line.includes("|") && i + 1 < lines.length && isTableRule(lines[i + 1]!)) {
-      const head = splitRow(line);
+      const head = splitRow(line, repo);
       const rows: Inline[][][] = [];
       i += 2;
       while (i < lines.length && lines[i]!.includes("|") && lines[i]!.trim()) {
-        rows.push(splitRow(lines[i]!));
+        rows.push(splitRow(lines[i]!, repo));
         i++;
       }
       out.push({ t: "table", head, rows });
@@ -236,7 +301,7 @@ function parseLines(lines: string[]): Block[] {
     }
 
     const image = IMAGE_ONLY.exec(line.trim());
-    if (image) { out.push({ t: "image", alt: image[1]!, src: image[2]! }); i++; continue; }
+    if (image && !parseShieldBadge(image[2]!)) { out.push({ t: "image", alt: image[1]!, src: image[2]! }); i++; continue; }
 
     // A paragraph runs to the blank line, or to the first line that starts
     // something else — otherwise a list written straight under a sentence, which
@@ -245,19 +310,60 @@ function parseLines(lines: string[]): Block[] {
     while (i < lines.length && lines[i]!.trim()) {
       const at = lines[i]!;
       if (para.length && (HEADING.test(at) || isBreak(at) || FENCE.test(at) || QUOTE.test(at)
-        || BULLET.test(at) || ORDERED.test(at))) break;
+        || BULLET.test(at) || ORDERED.test(at) || /^\s*<(details|table)\b/i.test(at))) break;
       para.push(at.trim());
       i++;
     }
-    out.push({ t: "p", kids: parseInline(para.join(" ")) });
+    out.push(...flow(parseInline(para.join(" "), repo)));
   }
 
   return out;
 }
 
+/** The image an inline span stands for, when it is nothing but one: a bare
+ *  picture, or the `[![badge](img)](href)` a README wraps it in. */
+function loneImage(k: Inline): { src: string; alt: string } | null {
+  if (k.t === "image") return k;
+  const only = k.t === "link" && k.kids.length === 1 ? k.kids[0] : undefined;
+  return only?.t === "image" ? only : null;
+}
+
+/**
+ * A run of spans as blocks, with every picture in its own.
+ *
+ * A phone cannot lay an image out inside a sentence, and the old answer —
+ * the alt text as a link — meant a pasted screenshot arrived as a blue word.
+ * The text on either side stays a paragraph, in order, so the picture sits
+ * where the author put it.
+ */
+function flow(kids: Inline[]): Block[] {
+  const out: Block[] = [];
+  let run: Inline[] = [];
+  const flush = (): void => {
+    const blank = run.every((k) => k.t === "text" && !k.text.trim());
+    if (run.length && !blank) out.push({ t: "p", kids: run });
+    run = [];
+  };
+  for (const k of kids) {
+    const img = loneImage(k);
+    if (img) { flush(); out.push({ t: "image", src: img.src, alt: img.alt }); } else run.push(k);
+  }
+  flush();
+  return out;
+}
+
+/** Where reading goes on after a block that was scanned as text: `rest` is
+ *  the lines from `i` joined, `end` the offset it stopped at. The line it
+ *  stopped in is rewritten to its tail and read again — and is what `i` is. */
+function resume(lines: string[], i: number, rest: string, end: number): number {
+  const eaten = rest.slice(0, end).split("\n").length - 1;
+  lines[i + eaten] = rest.slice(end).split("\n")[0]!;
+  return i + eaten;
+}
+
 /** One list, and where it ends. Items at a deeper indent belong to the item
  *  above them and are parsed as their own blocks. */
-function parseList(lines: string[], from: number): [Block, number] {
+function parseList(lines: string[], from: number, repo?: string): [Block, number] {
   const first = BULLET.exec(lines[from]!) ?? ORDERED.exec(lines[from]!);
   const ordered = !BULLET.test(lines[from]!);
   const baseIndent = indentOf(lines[from]!);
@@ -288,7 +394,7 @@ function parseList(lines: string[], from: number): [Block, number] {
         i++;
       }
       const owner = items[items.length - 1];
-      if (owner) owner.children.push(...parseLines(nested));
+      if (owner) owner.children.push(...parseLines(nested, repo));
       continue;
     }
     // An ordered list cannot become a bullet list halfway down; that is a new
@@ -297,10 +403,12 @@ function parseList(lines: string[], from: number): [Block, number] {
 
     const rest = m[3]!;
     const task = TASK.exec(rest);
+    // A picture in an item goes under it, before any nested list.
+    const [lead, ...below] = flow(parseInline(task ? task[2]! : rest, repo));
     items.push({
       checked: task ? task[1]!.toLowerCase() === "x" : null,
-      kids: parseInline(task ? task[2]! : rest),
-      children: [],
+      kids: lead?.t === "p" ? lead.kids : [],
+      children: lead && lead.t !== "p" ? [lead, ...below] : below,
     });
     i++;
   }
@@ -309,7 +417,7 @@ function parseList(lines: string[], from: number): [Block, number] {
 }
 
 /** The cells of one table row, without the outer pipes. */
-function splitRow(line: string): Inline[][] {
+function splitRow(line: string, repo?: string): Inline[][] {
   const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
   // Split on pipes that are not inside a code span, so `| a \| b |` and
   // `` `a|b` `` both survive.
@@ -324,12 +432,27 @@ function splitRow(line: string): Inline[][] {
     cell += ch;
   }
   cells.push(cell);
-  return cells.map((c) => parseInline(c.trim()));
+  return cells.map((c) => parseInline(c.trim(), repo));
 }
 
 const CODE_SPAN = /^(`+)([\s\S]*?)\1/;
 const LINK = /^\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/;
 const IMAGE_INLINE = /^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/;
+/** `[![alt](img)](href)` — the `[^\]]*` of LINK would close on the image's own
+ *  bracket and call `![alt` a link to the picture. */
+const IMAGE_LINKED = /^\[(!\[[^\]]*\]\([^)\s]+(?:\s+"[^"]*")?\))\]\([^)\s]+(?:\s+"[^"]*")?\)/;
+/** The tag, with nothing in it that can close early: `[^>]*` is one quantifier. */
+const HTML_IMG = /^(?:<a\b[^>]*>\s*)?<img\b[^>]*>(?:\s*<\/a>)?/i;
+const EMOJI_CODE = /^:([a-z0-9_+-]{2,32}):/;
+const ISSUE_REF = /^#(\d{1,7})(?!\w)/;
+/** A picture, or the pill a shields.io address spells out — the badge is read,
+ *  never fetched: a request per comment to a host the proxy does not allow. */
+function pictureOrBadge(src: string, alt: string): Inline {
+  const badge = parseShieldBadge(src);
+  return badge ? { t: "badge", ...badge } : { t: "image", src, alt };
+}
+const HTML_SRC = /\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)')/i;
+const HTML_ALT = /\balt\s*=\s*(?:"([^"]*)"|'([^']*)')/i;
 const AUTOLINK = /^<((?:https?):\/\/[^>\s]+)>/;
 /** A bare address, which is how the CU reference is written in this project's
  *  own template. One quantifier and no lookahead: the two adjacent character
@@ -347,7 +470,7 @@ const EM = /^(\*|_)(?=\S)([\s\S]*?\S)\1/;
  * Code first, always: what is inside a code span is text, and a glob written
  * with two stars in one would otherwise turn the rest of the sentence bold.
  */
-export function parseInline(src: string): Inline[] {
+export function parseInline(src: string, repo?: string): Inline[] {
   const out: Inline[] = [];
   let text = "";
   let i = 0;
@@ -362,15 +485,55 @@ export function parseInline(src: string): Inline[] {
     const code = CODE_SPAN.exec(rest);
     if (code) { flush(); out.push({ t: "code", text: code[2]!.trim() }); i += code[0].length; continue; }
 
-    // An inline image is rare and cannot be laid out inside a sentence, so it
-    // reads as its alt text linked to the file — which is what a reader wants
-    // from `![build status](…)` anyway.
+    // `:tada:` — only the shortcodes that turn up in a body, see EMOJI.
+    if (rest[0] === ":") {
+      const code = EMOJI_CODE.exec(rest);
+      const glyph = code ? EMOJI[code[1]!] : undefined;
+      if (code && glyph) { text += glyph; i += code[0].length; continue; }
+    }
+
+    // `#123` is a link to that issue or pull request in THIS repository, and
+    // only with one known. Not after a word character: `abc#1` and `&#39;` are
+    // not references.
+    if (repo && rest[0] === "#" && !/[\w&]/.test(src[i - 1] ?? " ")) {
+      const ref = ISSUE_REF.exec(rest);
+      if (ref) {
+        flush();
+        out.push({ t: "link", href: `https://github.com/${repo}/issues/${ref[1]}`, kids: [{ t: "text", text: ref[0] }] });
+        i += ref[0].length;
+        continue;
+      }
+    }
+
     const img = IMAGE_INLINE.exec(rest);
-    if (img) {
+    if (img) { flush(); out.push(pictureOrBadge(img[2]!, img[1]!)); i += img[0].length; continue; }
+
+    const linked = IMAGE_LINKED.exec(rest);
+    if (linked) {
       flush();
-      out.push({ t: "link", href: img[2]!, kids: [{ t: "text", text: img[1] || img[2]! }] });
-      i += img[0].length;
+      const inner = IMAGE_INLINE.exec(linked[1]!)!;
+      out.push(pictureOrBadge(inner[2]!, inner[1]!));
+      i += linked[0].length;
       continue;
+    }
+
+    // `<img width="600" src="…">`, which is what GitHub writes for a pasted
+    // screenshot. Raw HTML is dropped everywhere else; a picture is the one tag
+    // whose loss leaves a hole where the evidence was. No http(s) source means
+    // nothing to fetch, so that tag is dropped like the rest.
+    if (rest[0] === "<" || rest.startsWith("<a")) {
+      const tag = HTML_IMG.exec(rest);
+      if (tag) {
+        const src = HTML_SRC.exec(tag[0]);
+        const url = src ? (src[1] ?? src[2] ?? "") : "";
+        flush();
+        if (/^https?:\/\//i.test(url)) {
+          const alt = HTML_ALT.exec(tag[0]);
+          out.push(pictureOrBadge(url.replace(/&amp;/g, "&"), alt ? (alt[1] ?? alt[2] ?? "") : ""));
+        }
+        i += tag[0].length;
+        continue;
+      }
     }
 
     const link = LINK.exec(rest);
@@ -404,10 +567,10 @@ export function parseInline(src: string): Inline[] {
     }
 
     const strong = STRONG.exec(rest);
-    if (strong) { flush(); out.push({ t: "strong", kids: parseInline(strong[2]!) }); i += strong[0].length; continue; }
+    if (strong) { flush(); out.push({ t: "strong", kids: parseInline(strong[2]!, repo) }); i += strong[0].length; continue; }
 
     const em = EM.exec(rest);
-    if (em) { flush(); out.push({ t: "em", kids: parseInline(em[2]!) }); i += em[0].length; continue; }
+    if (em) { flush(); out.push({ t: "em", kids: parseInline(em[2]!, repo) }); i += em[0].length; continue; }
 
     text += rest[0];
     i++;
@@ -420,7 +583,10 @@ export function parseInline(src: string): Inline[] {
 /** The plain text of a run of spans — for a row that has one line to give a
  *  thread, and for tests that care about what was kept rather than how. */
 export function inlineText(kids: Inline[]): string {
-  return kids.map((k) => (k.t === "text" || k.t === "code" ? k.text : inlineText(k.kids))).join("");
+  return kids.map((k) => (k.t === "text" || k.t === "code" ? k.text
+    : k.t === "image" ? k.alt
+    : k.t === "badge" ? [k.label, k.value].filter(Boolean).join(" ")
+    : inlineText(k.kids))).join("");
 }
 
 /**
@@ -434,4 +600,18 @@ export function inlineText(kids: Inline[]): string {
  */
 export function plainInline(text: string): string {
   return inlineText(parseInline(text));
+}
+
+/**
+ * How many blocks a folded body shows.
+ *
+ * The limit, unless the first picture sits just past it: a fold that cuts
+ * between a sentence and the screenshot it introduces hides the one thing the
+ * reader came for, and the expander says "and 3 more" over it. A picture far
+ * down (more than three times the limit) is not chased — that is a document,
+ * not a description with evidence in it.
+ */
+export function foldAt(blocks: Block[], limit: number): number {
+  const at = blocks.findIndex((b) => b.t === "image");
+  return at >= limit && at < limit * 3 ? at + 1 : limit;
 }

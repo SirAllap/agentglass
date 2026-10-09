@@ -146,6 +146,11 @@ here will stop you.
   `process.env.PATH` in a hook does nothing. A stub agent goes in a child
   process with the PATH already set, and the test asserts it ran against the
   stub.
+- A web test that sets a global (`location`, `localStorage`, `document`, `fetch`…)
+  takes it from `globalStubs()` in `web/test/stubGlobal.ts`, which gives it back
+  when the file ends; `web/test/leak-guard.ts` fails the run if one is left
+  behind. `bun test --seed N` also shuffles the tests inside a file, so a test
+  sets up what it asserts on instead of inheriting it from the one above.
 - `bun test` writes its verdict to stderr; read both pipes with `Promise.all`.
 - `beforeAll` gets 5 s by default. Servers boot with `SERVER_BOOT_MS` from
   `server/test/serverBoot.ts` as the hook's second argument.

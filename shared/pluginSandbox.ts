@@ -4,10 +4,14 @@
  * the approval screen (what to draw) and mirrored in `bin/agentglass-plugin`
  * for a plugin's CI.
  *
- * This is the DECLARATION. Nothing enforces it yet: a plugin still runs as the
- * user, and the screen says so. What lives here is what the enforcement will
- * stand on, so a grant that could never be honoured is refused when the
- * manifest is read rather than when the box is built.
+ * This is the DECLARATION, and server/src/plugin-sandbox.ts builds the box
+ * from it: on a host that can build a `bwrap` box the process sees only the
+ * system's read-only folders, its own folders, and what is listed here. Where
+ * the host cannot (bubblewrap missing, Ubuntu's AppArmor limit) the plugin is
+ * refused on Linux until it is allowed to run unboxed, and always runs
+ * unboxed on macOS and Windows — docs/PLUGINS.md has the whole rule. A grant
+ * that could never be honoured is refused when the manifest is read rather
+ * than when the box is built.
  */
 
 export interface PluginSandbox {

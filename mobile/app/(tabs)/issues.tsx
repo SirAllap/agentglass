@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FlatList, Pressable, RefreshControl, Text, View } from "react-native";
 import { useRouter } from "expo-router";
-import type { GitRepoRef, IssueRow, IssuesReport } from "../../../shared/types.ts";
+import type { GitRepoRef, IssueRow, IssueViewCounts, IssuesReport } from "../../../shared/types.ts";
 import { ask } from "../../src/lib/api.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
@@ -29,6 +29,7 @@ import { mainCheckouts } from "../../src/model/prRows.ts";
 import { flatten, type RepoGroup } from "../../src/model/prLook.ts";
 import { IssuesIcon } from "../../src/nav/icons.tsx";
 import { since } from "../../src/lib/dates.ts";
+import { sumIssueCounts } from "../../src/model/issueCounts.ts";
 import { C, SPACE, T } from "../../src/theme.ts";
 
 type Filter = "mine" | "open" | "all";
@@ -93,6 +94,7 @@ export default function IssuesScreen(): React.ReactNode {
   const [groups, setGroups] = useState<RepoGroup<IssueRow>[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pulling, setPulling] = useState(false);
+  const [counts, setCounts] = useState<IssueViewCounts | null>(null);
 
   useEffect(() => {
     if (!host) return;
@@ -144,12 +146,31 @@ export default function IssuesScreen(): React.ReactNode {
 
   useEffect(() => { setGroups(null); void load(); }, [load]);
 
+  /* The numbers on the three filters. They follow the repositories shown and
+     not the filter: all three are one question, so switching tabs does not ask
+     again. A pull-to-refresh asks again without blanking what is on screen —
+     the old numbers stay true until the new ones land. Only the latest ask
+     may paint, for the reason `asked` guards `load`. */
+  const countsAsked = useRef(0);
+  const loadCounts = useCallback(async (): Promise<void> => {
+    if (!host || !shown.length) return;
+    const mine = ++countsAsked.current;
+    const answers = await Promise.all(shown.map((r) =>
+      ask<{ ok: boolean; counts?: IssueViewCounts }>(host, `/issues/counts?root=${encodeURIComponent(r.root)}`)));
+    if (mine !== countsAsked.current) return;
+    const got = answers.flatMap((a) => (a.ok && a.value.ok && a.value.counts ? [a.value.counts] : []));
+    const sum = sumIssueCounts(got);
+    if (sum) setCounts(sum);
+  }, [host, shown]);
+  useEffect(() => { setCounts(null); void loadCounts(); }, [loadCounts]);
+
   const onRefresh = useCallback((): void => {
     setPulling(true);
-    void load().finally(() => setPulling(false));
-  }, [load]);
+    void Promise.all([load(), loadCounts()]).finally(() => setPulling(false));
+  }, [load, loadCounts]);
 
   const rows = useMemo(() => flatten(groups ?? []), [groups]);
+  const filterOptions = useMemo(() => FILTERS.map((f) => ({ ...f, count: counts?.[f.id] })), [counts]);
   const isItem = (r: (typeof rows)[number] | undefined): boolean => !!r && "item" in r;
   const now = Date.now();
 
@@ -160,7 +181,7 @@ export default function IssuesScreen(): React.ReactNode {
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
       <View style={{ paddingHorizontal: SPACE.lg, paddingTop: SPACE.xs, paddingBottom: SPACE.md }}>
-        <Segmented value={filter} onChange={setFilter} options={FILTERS} />
+        <Segmented value={filter} onChange={setFilter} options={filterOptions} />
       </View>
       {(repos?.length ?? 0) > 1 ? <FilterChips label="Repository" options={chips} value={pick} onChange={setPick} /> : null}
 

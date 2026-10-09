@@ -29,6 +29,10 @@ export type WorktreeJump = {
   root?: string;
   /** File-changes text filter — the worktree's folder name. Set for `view: "diff"`. */
   filter?: string;
+  /** Which Git tab to land on, for `view: "git"`. Without it the panel stays
+   *  on whatever tab it was last left on, which is right for a worktree
+   *  switch and wrong for a button that promises to show one thing. */
+  tab?: "changes" | "log" | "branches";
   /** Increments per request, so asking for the same worktree twice is two
    *  requests: each consumer compares it against the last `n` it served, which
    *  is what lets the request survive a view that was still hidden when it
@@ -46,7 +50,9 @@ export function subscribeWorktreeJump(fn: () => void): () => void {
 
 export function worktreeJump(): WorktreeJump | null { return pending; }
 
-export function requestWorktreeJump(req: { view: "git" | "diff" | "term"; root?: string; filter?: string }): void {
+export type WorktreeJumpRequest = Omit<WorktreeJump, "n">;
+
+export function requestWorktreeJump(req: WorktreeJumpRequest): void {
   pending = { ...req, n: (pending?.n ?? 0) + 1 };
   subs.forEach((f) => f());
 }

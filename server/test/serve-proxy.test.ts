@@ -35,6 +35,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { freePort } from "./freePort.ts";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
+import { story } from "./story.ts";
 
 const TOKEN = "test-machine-token-not-a-real-one";
 /** Not this machine's own tailnet address, so it is a device and not "self". */
@@ -164,28 +165,30 @@ const event = (app: string) => ({
 
 // --- the hole ---------------------------------------------------------------
 
-test("through the proxy with no token, /ingest is refused", async () => {
+const step = story();
+
+step("through the proxy with no token, /ingest is refused", async () => {
   // This is the whole blocker in one line. It used to answer 400 — the schema
   // complaining, from inside the handler, having already been let in.
   const r = await post(via, "/ingest", event("through-the-proxy"));
   expect(r.status).toBe(401);
 });
 
-test("through the proxy with no token, the OTel sinks are refused too", async () => {
+step("through the proxy with no token, the OTel sinks are refused too", async () => {
   for (const p of ["/v1/traces", "/otlp/v1/traces", "/v1/logs", "/otlp/v1/logs"]) {
     const r = await post(via, p, { resourceSpans: [] });
     expect(r.status, p).toBe(401);
   }
 });
 
-test("through the proxy with no token, /sessions is refused", async () => {
+step("through the proxy with no token, /sessions is refused", async () => {
   // The control that was already correct, kept so a passing suite means the
   // gate is working rather than the server being down.
   const r = await post(via, "/sessions", {});
   expect(r.status).toBe(401);
 });
 
-test("a client cannot smuggle loopback past the proxy", async () => {
+step("a client cannot smuggle loopback past the proxy", async () => {
   // Two shapes at once. `x-forwarded-for` is what tailscaled overwrites, so
   // the client's value never survives; `x-real-ip` is one it passes through
   // untouched, so the client's value DOES arrive — and must be ignored, which
@@ -198,7 +201,7 @@ test("a client cannot smuggle loopback past the proxy", async () => {
   expect(r.status).toBe(401);
 });
 
-test("a local process cannot become someone else by forging the proxy's headers", async () => {
+step("a local process cannot become someone else by forging the proxy's headers", async () => {
   // Against the server with NO seam, so this is the real check: the uid that
   // owns the connecting socket. Measured on the machine this was written for —
   // through a genuine `tailscale serve` the socket is uid 0, and the identical
@@ -222,7 +225,7 @@ test("a local process cannot become someone else by forging the proxy's headers"
 
 // --- what must keep working -------------------------------------------------
 
-test("straight from loopback with no token, /ingest still succeeds", async () => {
+step("straight from loopback with no token, /ingest still succeeds", async () => {
   // His hooks. They cannot carry a secret, which is the entire reason the
   // exemption exists; breaking this breaks every user's dashboard.
   const r = await post(base, "/ingest", event("a-local-hook"));
@@ -230,7 +233,7 @@ test("straight from loopback with no token, /ingest still succeeds", async () =>
   expect(await r.json()).toMatchObject({ ok: true });
 });
 
-test("an off-box sender that carries the token still gets in", async () => {
+step("an off-box sender that carries the token still gets in", async () => {
   const r = await post(via, "/ingest", event("off-box"), { authorization: `Bearer ${TOKEN}` });
   expect(r.status).toBe(200);
 });
@@ -245,7 +248,7 @@ async function devices(at: string = base): Promise<Row[]> {
   return ((await r.json()) as { devices: Row[] }).devices;
 }
 
-test("a device connecting through the proxy appears in the device list", async () => {
+step("a device connecting through the proxy appears in the device list", async () => {
   // It never did. noteClient drops loopback deliberately — "loopback is the
   // desk itself" — and every phone behind serve arrived as loopback, so the
   // panel showed nothing and there was no row to press Block on.
@@ -255,7 +258,7 @@ test("a device connecting through the proxy appears in the device list", async (
   expect(row!.self, "a tailnet phone was mistaken for this machine").toBeFalsy();
 });
 
-test("Block actually blocks a device that arrives through the proxy", async () => {
+step("Block actually blocks a device that arrives through the proxy", async () => {
   const r = await post(base, "/remote/device", { address: PHONE, blocked: true }, {
     authorization: `Bearer ${TOKEN}`,
   });
@@ -287,7 +290,7 @@ test("Block actually blocks a device that arrives through the proxy", async () =
   })).status).toBe(200);
 });
 
-test("only the desk may disconnect a device, even over the proxy", async () => {
+step("only the desk may disconnect a device, even over the proxy", async () => {
   // Before the fix a phone behind serve looked like loopback here, so it could
   // have cut off the laptop next to it.
   const r = await post(via, "/remote/device", { address: "100.101.102.104", blocked: true }, {
@@ -296,7 +299,7 @@ test("only the desk may disconnect a device, even over the proxy", async () => {
   expect(r.status).toBe(403);
 });
 
-test("/health proves the token to a direct loopback caller and to nobody through the proxy", async () => {
+step("/health proves the token to a direct loopback caller and to nobody through the proxy", async () => {
   // The desktop shell's adoption challenge (electron/server-probe.js). Signed
   // for a caller off the tailnet, it would be a signing service a squatter on
   // the loopback port could relay the shell's challenge to.

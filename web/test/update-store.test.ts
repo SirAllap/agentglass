@@ -1,18 +1,23 @@
 import { beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { globalStubs } from "./stubGlobal";
 import type { UpdateStatus } from "../../shared/types.ts";
+import { stubStorage } from "./stubStorage.ts";
+const stubGlobal = globalStubs();
 
 // updateStore reaches api.ts, which reads `location` at module scope, and it
 // persists the announced tag — so both browser globals are stood up first.
 let store: typeof import("../src/lib/updateStore.ts");
 let notifyHistory: typeof import("../src/lib/sysNotify.ts")["notifyHistory"];
 const mem = new Map<string, string>();
+// Its own, whatever an earlier file left: `??=` kept a do-nothing stub whose
+// setItem drops the write, and the announced-once tests then failed.
+stubStorage({
+  getItem: (k: string) => mem.get(k) ?? null,
+  setItem: (k: string, v: string) => { mem.set(k, v); },
+  removeItem: (k: string) => { mem.delete(k); },
+});
 beforeAll(async () => {
-  (globalThis as any).location ??= new URL("http://localhost:5173/");
-  (globalThis as any).localStorage ??= {
-    getItem: (k: string) => mem.get(k) ?? null,
-    setItem: (k: string, v: string) => { mem.set(k, v); },
-    removeItem: (k: string) => { mem.delete(k); },
-  };
+  stubGlobal("location", new URL("http://localhost:5173/"));
   store = await import("../src/lib/updateStore.ts");
   ({ notifyHistory } = await import("../src/lib/sysNotify.ts"));
 });

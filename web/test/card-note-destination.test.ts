@@ -9,15 +9,17 @@
  * unreachable without anything failing loudly.
  */
 import { beforeEach, describe, expect, it } from "bun:test";
+import { globalStubs } from "./stubGlobal";
+const stubGlobal = globalStubs();
 
-(globalThis as unknown as { location: unknown }).location = { hostname: "localhost", origin: "http://localhost:4000" };
+stubGlobal("location", { hostname: "localhost", origin: "http://localhost:4000" });
 const store = new Map<string, string>();
-(globalThis as unknown as { localStorage: Storage }).localStorage = {
+stubGlobal("localStorage", {
   getItem: (k: string) => store.get(k) ?? null,
   setItem: (k: string, v: string) => void store.set(k, v),
   removeItem: (k: string) => void store.delete(k),
   clear: () => store.clear(), key: () => null, length: 0,
-} as unknown as Storage;
+} as unknown as Storage);
 
 const load = async () =>
   (await import(`../src/lib/sysNotify.ts?t=${Math.random()}`)) as typeof import("../src/lib/sysNotify.ts");

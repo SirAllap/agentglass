@@ -19,6 +19,7 @@ import { test, expect, beforeAll, afterAll, describe } from "bun:test";
 import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 const SOCKET = `agx-argv-${process.pid}`;
 process.env.AGENTGLASS_TMUX_SOCKET = SOCKET;
@@ -63,8 +64,10 @@ const photographed = async (win: string) => {
   return (await restore.captureLayout())?.sessions.find((s) => s.name === S)?.windows.find((w) => w.name === win)?.panes[0];
 };
 
+const step = story();
+
 describe("the photograph", () => {
-  test("a window born from one string is its shell and that string, not a quoted line", async () => {
+  step("a window born from one string is its shell and that string, not a quoted line", async () => {
     const mk = await pane.tmux(["new-session", "-d", "-s", S, "-n", "one", "-x", "120", "-y", "30", "sleep 45 && echo 'a b' \"$HOME\""]);
     expect(mk.ok, mk.stderr).toBe(true);
     const got = await photographed("one");
@@ -73,7 +76,7 @@ describe("the photograph", () => {
     expect(got?.startCommand.startsWith('"')).toBe(true);
   }, 20_000);
 
-  test("a window born from several arguments is those arguments, spaces and all", async () => {
+  step("a window born from several arguments is those arguments, spaces and all", async () => {
     await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "many", "sleep", "45", "x y"]);
     await Bun.sleep(100);
     /* `sleep` refuses a second operand and dies; the engine's default keeps
@@ -83,7 +86,7 @@ describe("the photograph", () => {
     expect(got?.startArgv, "exec replaced the shell: the process is what runs").toEqual(["sleep", "45"]);
   }, 20_000);
 
-  test("a plain shell is nothing to bring back: tmux gives a restored pane one anyway", async () => {
+  step("a plain shell is nothing to bring back: tmux gives a restored pane one anyway", async () => {
     await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "shell"]);
     const got = await photographed("shell");
     expect(got, "the pane is in the picture").not.toBeUndefined();
@@ -93,7 +96,7 @@ describe("the photograph", () => {
 });
 
 describe("the restore", () => {
-  test("runs the argv as it was, and a second photograph is the same argv — never one shell deeper", async () => {
+  step("runs the argv as it was, and a second photograph is the same argv — never one shell deeper", async () => {
     const before = await photographed("one");
     expect(before?.startArgv).toBeDefined();
     await pane.tmux(["kill-session", "-t", `=${S}`]);
@@ -104,7 +107,7 @@ describe("the restore", () => {
     expect(after?.startArgv).toEqual(before!.startArgv!);
   }, 20_000);
 
-  test("hands an argv to tmux as argv — the one `sh -c` left is for a photograph from before argv existed", () => {
+  step("hands an argv to tmux as argv — the one `sh -c` left is for a photograph from before argv existed", () => {
     expect(restore.runArgs("all", { id: "%1", index: 0, active: true, command: "bash", path: "/tmp", startCommand: '"sleep 45"', startArgv: ["bash", "-c", "sleep 45"] }))
       .toEqual(["bash", "-c", "sleep 45"]);
     expect(restore.runArgs("all", { id: "%1", index: 0, active: true, command: "bash", path: "/tmp", startCommand: "sleep 45" }))

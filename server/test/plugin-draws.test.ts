@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { freePort } from "./freePort.ts";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
+import { story } from "./story.ts";
 
 let dir: string, src: string, base: string, port: number, proc: ReturnType<typeof Bun.spawn> | null = null;
 
@@ -160,8 +161,10 @@ afterAll(async () => {
   try { rmSync(dir, { recursive: true, force: true }); } catch { /* fine */ }
 });
 
+const step = story();
+
 describe("a plugin draws in the app", () => {
-  test("its declared panel shows what it drew, under its own name", async () => {
+  step("its declared panel shows what it drew, under its own name", async () => {
     expect(await until(heading, (h) => h !== null)).toBe("hello from orbit-reviewer");
     const p = (await get("/plugins/panels")).panels[0];
     expect(p.plugin).toBe("orbit-reviewer");
@@ -169,26 +172,26 @@ describe("a plugin draws in the app", () => {
     expect(p.running).toBe(true);
   });
 
-  test("a panel it did not declare, and a node the vocabulary does not have, are refused", async () => {
+  step("a panel it did not declare, and a node the vocabulary does not have, are refused", async () => {
     const file = join(dir, "agentglass", "plugins", MANIFEST.name, "refused.json");
     await until(async () => existsSync(file), (x) => x);
     expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ undeclared: 400, script: 400 });
   });
 
-  test("a click in the window reaches the plugin, and it redraws", async () => {
+  step("a click in the window reaches the plugin, and it redraws", async () => {
     const r = await post("/plugins/action", { plugin: MANIFEST.name, panel: "main", action: { id: "ping", payload: { n: 1 } } });
     expect(r.status).toBe(200);
     expect(await until(heading, (h) => h === "pinged 1")).toBe("pinged 1");
   });
 
-  test("without a plugin's own token there is no self to draw as", async () => {
+  step("without a plugin's own token there is no self to draw as", async () => {
     const r = await fetch(base + "/plugin/self/panel", { method: "POST", body: JSON.stringify({ id: "main", tree: { type: "divider" } }) });
     expect(r.status).toBe(403);
   });
 });
 
 describe("its icon", () => {
-  test("is served as an image that cannot run anything", async () => {
+  step("is served as an image that cannot run anything", async () => {
     const r = await fetch(base + `/plugins/icon?name=${MANIFEST.name}`);
     expect(r.status).toBe(200);
     expect(r.headers.get("content-type")).toBe("image/svg+xml");
@@ -197,7 +200,7 @@ describe("its icon", () => {
     expect(await r.text()).toContain("<circle");
   });
 
-  test("a link that leads out of the plugin's folder is not followed", async () => {
+  step("a link that leads out of the plugin's folder is not followed", async () => {
     const installed = join(dir, "agentglass", "plugins", MANIFEST.name, "icon.svg");
     const { rmSync: rm, symlinkSync } = await import("node:fs");
     rm(installed);
@@ -207,14 +210,14 @@ describe("its icon", () => {
 });
 
 describe("notes on a pull request", () => {
-  test("the run and its notes are there for the PR view, and only for that PR", async () => {
+  step("the run and its notes are there for the PR view, and only for that PR", async () => {
     const r = await until(() => get("/plugins/pr-notes?repo=acme/orbit&number=42"), (x) => (x.notes?.length ?? 0) === 2);
     expect(r.runs.map((x: Json) => x.id)).toEqual(["r1"]);
     expect(r.notes.find((n: Json) => n.id === "n1")).toMatchObject({ plugin: MANIFEST.name, severity: "high", path: "src/a.ts", line: 3, status: "open" });
     expect((await get("/plugins/pr-notes?repo=acme/orbit&number=43")).notes).toEqual([]);
   });
 
-  test("resolved by the person stays resolved when the plugin sends the note again", async () => {
+  step("resolved by the person stays resolved when the plugin sends the note again", async () => {
     const r = await post("/plugins/pr-notes/status", { plugin: MANIFEST.name, id: "n1", status: "resolved" });
     expect(r.status).toBe(200);
     // The plugin answers a status change by re-sending n1 as open, retitled.
@@ -228,27 +231,27 @@ describe("notes on a pull request", () => {
 });
 
 describe("a button the plugin put in a pull request", () => {
-  test("carries which pull request to the plugin, which answers with a queued run", async () => {
+  step("carries which pull request to the plugin, which answers with a queued run", async () => {
     const r = await post("/plugins/pr-action", { plugin: MANIFEST.name, id: "review", repo: "acme/orbit", number: 44 });
     expect(r.status).toBe(200);
     const notes = await until(() => get("/plugins/pr-notes?repo=acme/orbit&number=44"), (x) => (x.runs?.length ?? 0) > 0);
     expect(notes.runs[0]).toMatchObject({ id: "r2", state: "queued", plugin: MANIFEST.name });
   });
 
-  test("an action the plugin never declared is refused, whatever the window sends", async () => {
+  step("an action the plugin never declared is refused, whatever the window sends", async () => {
     const r = await post("/plugins/pr-action", { plugin: MANIFEST.name, id: "delete-everything", repo: "acme/orbit", number: 44 });
     expect(r.status).toBe(400);
     expect(((await r.json()) as Json).error).toContain("no such action");
   });
 
-  test("and so is a pull request reference that is not one", async () => {
+  step("and so is a pull request reference that is not one", async () => {
     const r = await post("/plugins/pr-action", { plugin: MANIFEST.name, id: "review", repo: "acme", number: 0 });
     expect(r.status).toBe(400);
   });
 });
 
 describe("settings the manifest declared", () => {
-  test("are typed by the manifest, whatever the form sent", async () => {
+  step("are typed by the manifest, whatever the form sent", async () => {
     const r = await post("/plugins/settings", { name: MANIFEST.name, values: { repos: "acme/orbit\n\n acme/v2 ", junk: 1 } });
     expect(((await r.json()) as Json).values).toEqual({ repos: ["acme/orbit", "acme/v2"] });
     expect((await get(`/plugins/settings?name=${MANIFEST.name}`)).values).toEqual({ repos: ["acme/orbit", "acme/v2"] });
@@ -256,14 +259,14 @@ describe("settings the manifest declared", () => {
 });
 
 describe("a plugin filling in its own settings", () => {
-  test("writes the field it declared, and the window reads it back", async () => {
+  step("writes the field it declared, and the window reads it back", async () => {
     await post("/plugins/settings", { name: MANIFEST.name, values: { repos: "acme/prefill" } });
     const v = await until(() => get(`/plugins/settings?name=${MANIFEST.name}`),
       (r: Json) => (r.values?.repos ?? []).includes("acme/filled-by-the-plugin"));
     expect(v.values.repos).toEqual(["acme/orbit", "acme/filled-by-the-plugin"]);
   });
 
-  test("and cannot write into another plugin, whatever it sends", async () => {
+  step("and cannot write into another plugin, whatever it sends", async () => {
     // The name comes from the token, never from the request: there is no
     // field here to name somebody else with.
     const r = await fetch(base + "/plugin/self/settings", {
@@ -275,7 +278,7 @@ describe("a plugin filling in its own settings", () => {
 });
 
 describe("a restart", () => {
-  test("stops the plugin with the server, brings it back with a fresh token, and its notes are still there", async () => {
+  step("stops the plugin with the server, brings it back with a fresh token, and its notes are still there", async () => {
     const script = "plugin.js agx-draws-marker";
     const before = Bun.spawnSync(["pgrep", "-f", script]).stdout.toString().trim();
     expect(before).not.toBe("");

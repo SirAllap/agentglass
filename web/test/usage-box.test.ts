@@ -14,11 +14,16 @@
  * `location` before importing anything that pulls that chain in.
  */
 import { describe, expect, test, beforeAll } from "bun:test";
+import { globalStubs } from "./stubGlobal";
+import { stubStorage } from "./stubStorage";
+
+stubStorage();
 
 let panelState: typeof import("../src/components/UsageBox.tsx")["panelState"];
 let tightestWindow: typeof import("../src/components/UsageBox.tsx")["tightestWindow"];
 
 import type { ProviderUsage, QuotaWindow } from "../../shared/types.ts";
+const stubGlobal = globalStubs();
 
 const sample: ProviderUsage[] = [
   { provider: "anthropic", label: "Claude Code", available: true, windows: [] },
@@ -28,7 +33,7 @@ const win = (label: string, usedPercent: number): QuotaWindow =>
   ({ label, minutes: 300, usedPercent, resetsAt: null });
 
 beforeAll(async () => {
-  (globalThis as any).location = { hostname: "localhost", origin: "http://localhost:4000" };
+  stubGlobal("location", { hostname: "localhost", origin: "http://localhost:4000" });
   ({ panelState, tightestWindow } = await import("../src/components/UsageBox.tsx"));
 });
 

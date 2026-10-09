@@ -109,20 +109,53 @@ afterAll(() => {
 });
 
 async function talk(messages: unknown[], env: Record<string, string> = {}): Promise<Record<string, any>[]> {
-  const p = Bun.spawn(["python3", MCP], {
+  // Bun 1.3.9 sometimes hands back a Subprocess whose `stdout` is undefined
+  // straight after spawn(), in 5 of 13 full make check runs and never in 400
+  // isolated spawns. The old code read it as an empty reply ("answered 0 of 2",
+  // the child dying on BrokenPipe); the cause is not known. A child without its
+  // pipes is no child: kill it and spawn again, up to three times, and say so.
+  let p = Bun.spawn(["python3", MCP], {
     env: { PATH: process.env.PATH ?? "", AGENTGLASS_SERVER: base, ...env },
     stdin: "pipe", stdout: "pipe", stderr: "pipe",
   });
+  for (let tries = 1; tries < 3 && !(p.stdout && p.stderr); tries++) {
+    console.error(`cockpit mcp: spawn ${tries} came back without its pipes, spawning again`);
+    try { p.kill(); } catch { /* already gone */ }
+    p = Bun.spawn(["python3", MCP], {
+      env: { PATH: process.env.PATH ?? "", AGENTGLASS_SERVER: base, ...env },
+      stdin: "pipe", stdout: "pipe", stderr: "pipe",
+    });
+  }
+  if (!(p.stdout && p.stderr)) throw new Error("cockpit mcp: Bun.spawn returned no stdout/stderr pipes three times in a row");
   const w = p.stdin as { write: (s: string) => void; end: () => void };
+  const asked = messages.filter((m) => (m as { id?: unknown }).id !== undefined).length;
+  const errText = new Response(p.stderr).text();
   for (const m of messages) w.write(`${JSON.stringify(m)}\n`);
+  // Stdin stays OPEN until every answer is in. Closing it straight after the
+  // last write let a loaded full run lose the whole reply: the child died on
+  // "BrokenPipeError flushing stdout" with 0 of 2 answered (4 of 12 full runs,
+  // never in 40 isolated ones). Closing it once the answers are read leaves the
+  // child nothing to race: it has already written them.
+  let out = "";
+  const reader = p.stdout.getReader();
+  const dec = new TextDecoder();
+  while (out.split("\n").filter(Boolean).length < asked) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    out += dec.decode(value, { stream: true });
+  }
   w.end();
-  const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    out += dec.decode(value, { stream: true });
+  }
+  const err = await errText;
   await p.exited;
   // One answer per request. A binary that answered fewer died mid-call, and
   // its stderr is the only place that says why: it used to be read and dropped,
   // which left a red run here with "r is undefined" and nothing to chase.
   const answered = out.split("\n").filter(Boolean).length;
-  const asked = messages.filter((m) => (m as { id?: unknown }).id !== undefined).length;
   if (answered < asked) throw new Error(`cockpit mcp answered ${answered} of ${asked} (exit ${p.exitCode}): ${err.slice(-600)}`);
   return out.split("\n").filter(Boolean).map((l) => JSON.parse(l) as Record<string, any>);
 }
@@ -176,11 +209,13 @@ describe.skipIf(!HAVE_PY)("the cockpit MCP server", () => {
   });
 
   test("cockpit_sessions lists sessions with spend, and filters by project", async () => {
-    const all = await call("cockpit_sessions", { limit: 10 });
+    // Wide enough for the thirty sessions the size-ceiling tests add to this
+    // server, which sort ahead of these two when they run first.
+    const all = await call("cockpit_sessions", { limit: 100 });
     const ids = (all.data.sessions as { session_id: string }[]).map((s) => s.session_id);
     expect(ids).toContain(S1);
     expect(ids).toContain(S2);
-    const orbit = await call("cockpit_sessions", { project: "orbit" });
+    const orbit = await call("cockpit_sessions", { project: "orbit", limit: 100 });
     const rows = orbit.data.sessions as { session_id: string; project_path: string; cost_usd: number; errors: number; input_tokens: number }[];
     expect(rows.map((s) => s.session_id)).not.toContain(S2);
     const s1 = rows.find((s) => s.session_id === S1)!;

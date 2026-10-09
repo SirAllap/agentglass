@@ -24,6 +24,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 
 import { TMUX_ISOLATED } from "./tmuxIsolated.ts";
+import { story } from "./story.ts";
 
 // Own socket AND an empty config — see tmuxIsolated. Unique per run, or a
 // leftover server from a previous one is what this talks to.
@@ -100,8 +101,10 @@ const win = (n: string) => out(["list-windows", "-t", "bartest", "-F", "#{window
 const keyLine = (key: string) => out(["list-keys", "-T", "prefix"]).split("\n")
   .find((l) => ctl.parseBinding(l)?.key === key) ?? "";
 
+const step = story();
+
 describe.if(has)("the status row, taken and given back", () => {
-  test("the row is kept and blanked, because tmux still has messages to draw", () => {
+  step("the row is kept and blanked, because tmux still has messages to draw", () => {
     /*
      * This test used to assert the opposite — `status off`, "a row held open
      * for prompts that no longer arrive there is just a gap" — and the premise
@@ -125,7 +128,7 @@ describe.if(has)("the status row, taken and given back", () => {
     expect(out(["show-options", "-t", target.id, "-v", "@agx-owned"])).toBe("1");
   });
 
-  test("prefix , leaves a note on the window instead of prompting", () => {
+  step("prefix , leaves a note on the window instead of prompting", () => {
     // The binding is run directly rather than by sending the key, because a
     // detached server has no client to press it at — what is under test is the
     // command the binding resolves to, which is the part that could be wrong.
@@ -137,7 +140,7 @@ describe.if(has)("the status row, taken and given back", () => {
     expect(out(["show-options", "-w", "-t", w[1]!, "-v", "@agx-ask"])).toBe("rename");
   });
 
-  test("the note reaches the panel through the frame it already polls", () => {
+  step("the note reaches the panel through the frame it already polls", () => {
     // No extra subprocess: `@agx-ask` rides in the same list-windows format the
     // tab strip is already built from.
     const w = win("two");
@@ -153,14 +156,14 @@ describe.if(has)("the status row, taken and given back", () => {
     expect(ctl.parseWindows(rows2).find((x) => x.id === w[1])?.ask).toBeUndefined();
   });
 
-  test("clearing the note takes it off, so the box opens once and not forever", () => {
+  step("clearing the note takes it off, so the box opens once and not forever", () => {
     const w = win("two");
     raw(["set-option", "-w", "-t", w[1]!, "@agx-ask", "rename"]);
     ctl.clearAsk(target, w[1]!);
     expect(out(["show-options", "-w", "-t", w[1]!, "-v", "@agx-ask"])).toBe("");
   });
 
-  test("move-window takes an index and refuses anything else", () => {
+  step("move-window takes an index and refuses anything else", () => {
     /*
      * The move INSERTS beside that index and renumbers, rather than landing on
      * it. Measured on 3.6a and the reason this changed: a bare move onto an
@@ -181,14 +184,14 @@ describe.if(has)("the status row, taken and given back", () => {
     expect(ctl.runAction(target, "move", two[1]!, "")).toBe(false);
   });
 
-  test("what the key did is written down, so there is something to give back", () => {
+  step("what the key did is written down, so there is something to give back", () => {
     // The take is what this asserts on, not the release: with the answer coming
     // back empty, `@agx-had-rename` was never set and the release below had
     // nothing to restore — silently, because an unset option reads as "".
     expect(out(["show-options", "-t", target.id, "-qv", "@agx-had-rename"])).toContain("command-prompt");
   });
 
-  test("a second take keeps the user's binding, not ours", () => {
+  step("a second take keeps the user's binding, not ours", () => {
     // Key bindings are global and the take runs again on every sweep. Reading
     // the table back now returns OUR binding, and saving that as "what they
     // had" would bury their real one one copy deeper on every pass.
@@ -200,7 +203,7 @@ describe.if(has)("the status row, taken and given back", () => {
     expect(line).toContain("#W"); // and the user's is still the false branch
   });
 
-  test("a server the old build already took gets its keys back", () => {
+  step("a server the old build already took gets its keys back", () => {
     // What a machine that ran the broken query looks like: our binding is
     // installed and nothing was written down, so the release path had nothing
     // to give back and the user's key stayed ours until they killed the server.
@@ -219,7 +222,7 @@ describe.if(has)("the status row, taken and given back", () => {
     ctl.setStatusLine(target, false);
   });
 
-  test("giving it back restores the row and the keys, quotes intact", () => {
+  step("giving it back restores the row and the keys, quotes intact", () => {
     expect(keyLine(",")).toContain("if-shell"); // ours is installed
     expect(ctl.setStatusLine(target, true)).toBe(true);
     // The row is the user's again — unset, not forced to "on", because their
@@ -233,7 +236,7 @@ describe.if(has)("the status row, taken and given back", () => {
     expect(after).toContain("#W");
   });
 
-  test("a session we do not own keeps tmux's own prompt", () => {
+  step("a session we do not own keeps tmux's own prompt", () => {
     // The binding is global to the server; the flag is per session. Someone
     // attached from a real terminal must still get their prompt.
     ctl.setStatusLine(target, false);
@@ -244,7 +247,7 @@ describe.if(has)("the status row, taken and given back", () => {
     ctl.setStatusLine(target, true);
   });
 
-  test("the head of a bind-key line is not a fixed width", () => {
+  step("the head of a bind-key line is not a fixed width", () => {
     // What has to come off the front to leave a command the false branch can
     // run. `-r` and `-N "note"` ride in front of `-T`, the columns are padded,
     // and the key comes back escaped — each of which a split on whitespace or a

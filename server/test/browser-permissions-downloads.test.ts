@@ -12,7 +12,7 @@
  * The decisions live in electron/guest-guard.js, which requires nothing, so
  * they are asserted there. What main.js does with them is a rule about source.
  */
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { createRequire } from "node:module";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -107,6 +107,7 @@ describe("permissionVerdict", () => {
 describe("uniqueSavePath", () => {
   const dir = mkdtempSync(join(tmpdir(), "agx-f2-dl-"));
   const exists = (p: string) => existsSync(p);
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
   test("a free name is used as it is", () => {
     expect(guard.uniqueSavePath(dir, "a.txt", exists)).toBe(join(dir, "a.txt"));
@@ -131,7 +132,6 @@ describe("uniqueSavePath", () => {
       expect(at.startsWith(dir + "/"), evil).toBe(true);
       expect(at.slice(dir.length + 1).includes("/"), evil).toBe(false);
     }
-    rmSync(dir, { recursive: true });
   });
 });
 

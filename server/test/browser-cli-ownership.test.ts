@@ -20,6 +20,7 @@ import { join } from "node:path";
 import { freePort } from "./freePort.ts";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
+import { story } from "./story.ts";
 
 const CLI = new URL("../../bin/agentglass-browser", import.meta.url).pathname;
 const MCP = new URL("../../bin/agentglass-browser-mcp", import.meta.url).pathname;
@@ -139,8 +140,10 @@ const TABS = [
   { id: "t2", title: "Orbit ticket", url: "https://orbit.example/t", active: true, profile: "peer-9f9f9f" },
 ];
 
+const step = story();
+
 describe.skipIf(!HAVE_PY)("what an agent sees before it acts", () => {
-  test("`whoami` prints the pre-flight, on stdout, as JSON, exit 0", async () => {
+  step("`whoami` prints the pre-flight, on stdout, as JSON, exit 0", async () => {
     answers = { tabs: { ok: true, value: TABS } };
     const r = await cli({ AGENTGLASS_PROFILE: "orbit-a1b2c3" }, "whoami");
     expect(r.code).toBe(0);
@@ -154,7 +157,7 @@ describe.skipIf(!HAVE_PY)("what an agent sees before it acts", () => {
     expect(v.activeTab.profile).toBe("peer-9f9f9f");
   });
 
-  test("the no-tab refusal points at `whoami`, so the next move is one call away", async () => {
+  step("the no-tab refusal points at `whoami`, so the next move is one call away", async () => {
     answers = { read: { ok: true, value: { url: "u", title: "t", text: "x" } } };
     asked = [];
     const r = await cli({ AGENTGLASS_PROFILE: "orbit-a1b2c3" }, "read");
@@ -165,7 +168,7 @@ describe.skipIf(!HAVE_PY)("what an agent sees before it acts", () => {
     expect(asked).toEqual([]);
   });
 
-  test("`profiles` keeps `names` and adds who owns the screen", async () => {
+  step("`profiles` keeps `names` and adds who owns the screen", async () => {
     answers = {
       tabs: { ok: true, value: TABS },
       profiles: { ok: true, value: { profiles: ["orbit-a1b2c3", "peer-9f9f9f"] } },
@@ -179,7 +182,7 @@ describe.skipIf(!HAVE_PY)("what an agent sees before it acts", () => {
     expect(owning[0].name).toBe("peer-9f9f9f");
   });
 
-  test("a --as name longer than 24 characters says it was cut, and to what", async () => {
+  step("a --as name longer than 24 characters says it was cut, and to what", async () => {
     answers = { tabs: { ok: true, value: TABS } };
     const long = "orbit-billing-regression-checkout";   // 33 characters
     const r = await cli({}, "--as", long, "whoami");
@@ -196,7 +199,7 @@ describe.skipIf(!HAVE_PY)("what an agent sees before it acts", () => {
     expect(JSON.parse(r.out).you.identity).toBe(long.slice(0, 24));
   });
 
-  test("joining a container that already holds somebody's tabs says so, and still works", async () => {
+  step("joining a container that already holds somebody's tabs says so, and still works", async () => {
     answers = {
       tabs: { ok: true, value: TABS },
       profiles: { ok: true, value: { profiles: ["orbit-a1b2c3", "peer-9f9f9f"] } },
@@ -216,7 +219,7 @@ describe.skipIf(!HAVE_PY)("what an agent sees before it acts", () => {
     expect(JSON.parse(r.out)).toHaveLength(2);
   });
 
-  test("`open --as` into a container somebody is already in says so, from the answer it got", async () => {
+  step("`open --as` into a container somebody is already in says so, from the answer it got", async () => {
     /*
      * The gesture the incident was made of. This shell has never opened a tab
      * in `peer-9f9f9f`, so the CLI sends `profile: peer-9f9f9f` and the panel
@@ -245,7 +248,7 @@ describe.skipIf(!HAVE_PY)("what an agent sees before it acts", () => {
     expect(r.err).toContain("1 tab");
   });
 
-  test("and an `open` that really did mint a fresh container says nothing", async () => {
+  step("and an `open` that really did mint a fresh container says nothing", async () => {
     answers = {
       open: {
         ok: true,
@@ -263,7 +266,7 @@ describe.skipIf(!HAVE_PY)("what an agent sees before it acts", () => {
     expect(r.err).toBe("");
   });
 
-  test("and it stays quiet for a container that is genuinely yours and empty", async () => {
+  step("and it stays quiet for a container that is genuinely yours and empty", async () => {
     answers = { tabs: { ok: true, value: TABS } };
     /* Nobody has a tab in `alone-here`, so there is nothing to warn about.
        A notice that fires when there is no collision is worse than none: it
@@ -273,7 +276,7 @@ describe.skipIf(!HAVE_PY)("what an agent sees before it acts", () => {
     expect(r.err).toBe("");
   });
 
-  test("the MCP reaches both of them, and the answers round-trip", async () => {
+  step("the MCP reaches both of them, and the answers round-trip", async () => {
     answers = {
       tabs: { ok: true, value: TABS },
       profiles: { ok: true, value: { profiles: ["orbit-a1b2c3", "peer-9f9f9f"] } },
@@ -298,7 +301,7 @@ describe.skipIf(!HAVE_PY)("what an agent sees before it acts", () => {
     expect(all.profiles.find((p: any) => p.name === "peer-9f9f9f").ownsActive).toBe(true);
   });
 
-  test("`profiles --drop` on somebody else's container is refused, exit 1, nothing sent", async () => {
+  step("`profiles --drop` on somebody else's container is refused, exit 1, nothing sent", async () => {
     answers = {
       tabs: { ok: true, value: TABS },
       profiles: { ok: true, value: { dropped: "peer-work" } },
@@ -322,14 +325,14 @@ describe.skipIf(!HAVE_PY)("what an agent sees before it acts", () => {
     expect(asked).toEqual(["profiles"]);
   });
 
-  test("dropping your own needs no flag", async () => {
+  step("dropping your own needs no flag", async () => {
     answers = { profiles: { ok: true, value: { dropped: "mine-work" } } };
     await cli({ AGENTGLASS_PROFILE: "orbit-a1b2c3" }, "profiles", "--make", "mine-work");
     const r = await cli({ AGENTGLASS_PROFILE: "orbit-a1b2c3" }, "profiles", "--drop", "mine-work");
     expect(r.code).toBe(0);
   });
 
-  test("dropping a container nobody claimed is allowed, and says that is what happened", async () => {
+  step("dropping a container nobody claimed is allowed, and says that is what happened", async () => {
     answers = { profiles: { ok: true, value: { dropped: "from-before" } } };
     const r = await cli({ AGENTGLASS_PROFILE: "orbit-a1b2c3" }, "profiles", "--drop", "from-before");
     expect(r.code).toBe(0);

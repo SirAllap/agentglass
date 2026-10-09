@@ -14,6 +14,7 @@ import { test, expect, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 const REAL_XDG = process.env.XDG_CONFIG_HOME;
 const HOME = join(tmpdir(), `agx-lantern-settings-${process.pid}`);
@@ -32,14 +33,16 @@ afterAll(() => {
 
 const file = () => join(HOME, "agentglass", "config.json");
 
-test("on by default, at twenty minutes — the board is a list of pane ids without it", () => {
+const step = story();
+
+step("on by default, at twenty minutes — the board is a list of pane ids without it", () => {
   process.env.XDG_CONFIG_HOME = HOME;
   rmSync(file(), { force: true });
   expect(cfg.lanternNudge()).toBe(true);
   expect(cfg.lanternNudgeMinutes()).toBe(cfg.LANTERN_NUDGE_DEFAULT_MIN);
 });
 
-test("saving keeps every other key in the file", () => {
+step("saving keeps every other key in the file", () => {
   process.env.XDG_CONFIG_HOME = HOME;
   writeFileSync(file(), JSON.stringify({ tmuxPrefix: "C-a", budgets: [] }, null, 2));
   const w = cfg.writeLanternSettings({ lanternNudge: false, lanternNudgeMinutes: 45 });
@@ -50,7 +53,7 @@ test("saving keeps every other key in the file", () => {
   expect(cfg.lanternNudgeMinutes()).toBe(45);
 });
 
-test("the interval is clamped, never trusted: a minute of nagging is not a setting", () => {
+step("the interval is clamped, never trusted: a minute of nagging is not a setting", () => {
   process.env.XDG_CONFIG_HOME = HOME;
   expect(cfg.writeLanternSettings({ lanternNudgeMinutes: 1 }).ok).toBe(true);
   expect(cfg.lanternNudgeMinutes()).toBe(cfg.LANTERN_NUDGE_MIN_MIN);
@@ -59,7 +62,7 @@ test("the interval is clamped, never trusted: a minute of nagging is not a setti
   expect(cfg.writeLanternSettings({ lanternNudgeMinutes: Number.NaN }).ok).toBe(false);
 });
 
-test("a hand-edited value that is not a number falls back rather than breaking the read", () => {
+step("a hand-edited value that is not a number falls back rather than breaking the read", () => {
   process.env.XDG_CONFIG_HOME = HOME;
   writeFileSync(file(), JSON.stringify({ lanternNudge: "yes", lanternNudgeMinutes: "twenty" }, null, 2));
   cfg.writeLanternSettings({}); // a no-op write, to drop the cached read

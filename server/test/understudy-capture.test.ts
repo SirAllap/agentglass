@@ -19,6 +19,7 @@
  * the records exist to settle.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { story } from "./story.ts";
 import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -120,13 +121,15 @@ function all(table: string): Record<string, unknown>[] {
   }
 }
 
+const step = story();
+
 const decisions = (cls: string) =>
   all("understudy_ledger").filter((r) => r.kind === "decision" && r.class === cls);
 
 describe("a commit", () => {
   let commit: Json;
 
-  beforeAll(async () => {
+  step.setup(async () => {
     // With an Origin, because the commit box is a page in a browser. Without
     // one the same request is read as an agent's shell and the row lands as
     // `agent-tolerated`, out of the scored denominator — which is the rule, and
@@ -136,7 +139,7 @@ describe("a commit", () => {
     }, ORIGIN);
   });
 
-  test("really happened, message and all", () => {
+  step("really happened, message and all", () => {
     // The premise. Everything below is about what the seam did NOT keep, and
     // that is only a claim if the route did the work.
     expect(commit.ok, JSON.stringify(commit)).toBe(true);
@@ -146,7 +149,7 @@ describe("a commit", () => {
     expect(body).toBe(COMMIT_BODY);
   });
 
-  test("leaves one C2 row, and it is the shape of the decision rather than the words of it", () => {
+  step("leaves one C2 row, and it is the shape of the decision rather than the words of it", () => {
     const rows = decisions("C2");
     expect(rows.length).toBe(1);
     const row = rows[0]!;
@@ -190,7 +193,7 @@ describe("a commit", () => {
     expect(actual.ok).toBe(true);
   });
 
-  test("and the net recorded the same request, with its real status", () => {
+  step("and the net recorded the same request, with its real status", () => {
     // `/git/commit` is not inside the `/git/*` switch and carries no
     // `noteAction`, so the stub is the only record that the route was called at
     // all. That is the case the net exists for.
@@ -205,7 +208,7 @@ describe("a gate decision", () => {
   const gateId = "00000000-0000-4000-8000-000000000001";
   let answered: Json;
 
-  beforeAll(async () => {
+  step.setup(async () => {
     // Hold a call, the way the hook does. The promise is nobody's business
     // here; what matters is that it is queued before it is answered.
     void fetch(base + "/gate", {
@@ -223,7 +226,7 @@ describe("a gate decision", () => {
     answered = await post("/gate/decide", { id: gateId, decision: "allow", reason: "it is a scratch directory" }, ORIGIN);
   });
 
-  test("the command line reached the audit log, which is where it is supposed to be", async () => {
+  step("the command line reached the audit log, which is where it is supposed to be", async () => {
     expect(answered.ok, JSON.stringify(answered)).toBe(true);
     const log = await fetch(base + "/actions?limit=20", { headers }).then((r) => r.json() as Promise<Json>);
     const line = log.actions.find((a: Json) => a.action === "/gate/allow");
@@ -232,7 +235,7 @@ describe("a gate decision", () => {
     expect(String(line.target)).toContain(GATE_CANARY);
   });
 
-  test("the understudy kept the tool name and not the command line", () => {
+  step("the understudy kept the tool name and not the command line", () => {
     const rows = decisions("C6");
     expect(rows.length).toBe(1);
     const row = rows[0]!;
@@ -251,7 +254,7 @@ describe("a gate decision", () => {
     expect(actual.reasoned).toBe(true);
   });
 
-  test("and it names the same actor the action log named", async () => {
+  step("and it names the same actor the action log named", async () => {
     /*
      * The actor lives on the stub the net opened for this request, not on the
      * decision row — a decision is filed under a class and a subject rather
@@ -272,7 +275,7 @@ describe("a gate decision", () => {
 });
 
 describe("neither canary is anywhere in the understudy's tables", () => {
-  test("every column, both writes", () => {
+  step("every column, both writes", () => {
     const tables = ["understudy_ledger", "understudy_snapshots", "understudy_quarantine", "understudy_precedents"];
     let seen = 0;
     for (const table of tables) {

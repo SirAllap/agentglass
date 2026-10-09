@@ -12,7 +12,7 @@
 // Pure functions, so no highlighter, no DOM and no network: shiki's grammars
 // are dynamic chunks and this suite never has to load one.
 import { describe, expect, test } from "bun:test";
-import { langFromTag, guessLang } from "../src/lib/highlight.ts";
+import { langFromTag, langFromPath, guessLang } from "../src/lib/highlight.ts";
 
 describe("the language named on a fence", () => {
   test("takes the word the author wrote", () => {
@@ -81,5 +81,29 @@ describe("guessing at a fence with no language", () => {
     ]) {
       expect(guessLang(prose), prose).toBeNull();
     }
+  });
+});
+
+describe("the grammar for a template file", () => {
+  // A prompt template is prose with logic in it; under no grammar the tags and
+  // the text were the same grey and the file was unreadable.
+  test("every jinja extension gets the jinja grammar", () => {
+    for (const f of ["reply.jinja2", "reply.jinja", "reply.j2"]) expect(langFromPath(f)).toBe("jinja");
+  });
+
+  test("the last extension decides, whatever the host format in front of it", () => {
+    expect(langFromPath("triage.md.jinja2")).toBe("jinja");
+    expect(langFromPath("page.html.j2")).toBe("jinja");
+    expect(langFromPath("deploy/orbit.yaml.jinja")).toBe("jinja");
+  });
+
+  test("the host extension alone still means the host", () => {
+    expect(langFromPath("triage.md")).toBe("markdown");
+    expect(langFromPath("page.html")).toBe("html");
+  });
+
+  test("a fence can say j2 too", () => {
+    expect(langFromTag("jinja")).toBe("jinja");
+    expect(langFromTag("j2")).toBe("jinja");
   });
 });

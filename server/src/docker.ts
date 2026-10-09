@@ -442,20 +442,27 @@ async function networks(): Promise<DockerNetwork[]> {
 // back to back cost more than the interval on a busy daemon, so the poll was
 // never idle — it just queued. They're independent, so they go together, and
 // the result is held long enough to absorb a second viewer or a panel reopen.
-const OVERVIEW_CACHE_MS = 2_000;
+//
+// LONGER THAN THE POLL, not shorter. It was 2 s against a 5 s poll, so no poll
+// ever found the cache warm: every one ran the whole set of CLI round-trips
+// (116 docker spawns a minute at 8 containers, measured). At 5.5 s every second
+// poll is answered from the cache and says so (`freshness: "stale"`). A write
+// drops it (`action`) and the Refresh button asks past it (`fresh`), so the only
+// thing that can be up to one poll late is a container changed from outside.
+const OVERVIEW_CACHE_MS = 5_500;
 // The scope is part of the cache identity: the project picker can switch
 // workspaces mid-poll, and serving the previous project's containers for the
 // next two seconds looks like the switch didn't take.
 let overviewCache: { at: number; root: string; data: DockerOverview } | null = null;
 
-export async function overview(): Promise<DockerOverview> {
+export async function overview(fresh = false): Promise<DockerOverview> {
   // The whole scope, not its first project: opening a second one beside it
   // has to change which containers are this cockpit's.
   const root = scopeKey();
   // Served from cache, and it says so. The data is identical; what changes is
   // that the panel can now tell the difference between "just gathered" and
   // "this is what we had two seconds ago", which is the whole of decision 20.
-  if (overviewCache && overviewCache.root === root && Date.now() - overviewCache.at < OVERVIEW_CACHE_MS * backoff()) {
+  if (!fresh && overviewCache && overviewCache.root === root && Date.now() - overviewCache.at < OVERVIEW_CACHE_MS * backoff()) {
     return { ...overviewCache.data, freshness: "stale" };
   }
   const { version, inconclusive } = await probeDaemon();
@@ -524,7 +531,7 @@ export async function overview(): Promise<DockerOverview> {
  * old has never misled anybody, and a health check that has just failed is
  * already visible in `status`, which is free.
  * ------------------------------------------------------------------------ */
-const FACTS_TTL_MS = 15_000;
+const FACTS_TTL_MS = 30_000; // five times the overview clock (docker-fast-lane.test.ts)
 let factsCache: { at: number; key: string; map: Map<string, ContainerFacts> } | null = null;
 
 /** Test seam: forget the medium lane's answer without waiting for its clock. */
@@ -586,7 +593,7 @@ const pct = (s?: string) => { const n = parseFloat((s || "").replace("%", "")); 
 
 let statsCache: { at: number; key: string; data: DockerStat[] } | null = null;
 /** Long enough that a 5s poll never lands on a cold cache twice in a row. */
-const STATS_TTL_MS = 4000;
+const STATS_TTL_MS = 5500;
 
 /**
  * Live-ish resource stats (a single --no-stream sample).

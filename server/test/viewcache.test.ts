@@ -255,4 +255,39 @@ describe("pressing Refresh while a background read is in the air", () => {
     expect(a.tasks.length).toBe(1);
     expect(b.tasks.length).toBe(1);
   });
+
+  it("does the same on a list opened by its id, whose read has two routes", async () => {
+    const LIST_VIEW = "list:901700000002";
+    V.addView({ id: LIST_VIEW, name: "A list", listId: "901700000002", url: "https://x.clickup.com/1/v/l/" + LIST_VIEW, addedAt: 1 });
+    const base = answerEverything();
+    const answer = (req: Request) => {
+      const p = new URL(req.url).pathname;
+      if (/\/list\/[^/]+\/task$/.test(p)) return json({ tasks: [TASK], last_page: true });
+      return base(req);
+    };
+    reply = answer;
+    await P.readView(LIST_VIEW);
+    await settle();
+    V.putCache({ ...V.cachedFor(LIST_VIEW)!, at: Date.now() - 90_000 - 60_000 });
+    hits = [];
+    const gate: { release: (() => void) | null } = { release: null };
+    reply = (req) => {
+      if (!/\/list\/[^/]+\/task$/.test(new URL(req.url).pathname)) return answer(req);
+      const p = new Promise<void>((r) => { gate.release = r; });
+      return new Response(new ReadableStream({
+        async start(c) { await p; c.enqueue(new TextEncoder().encode("{\"err\":\"nope\"}")); c.close(); },
+      }), { status: 500, headers: { "content-type": "application/json", "x-ratelimit-remaining": "99" } });
+    };
+    const background = P.readView(LIST_VIEW);
+    for (let i = 0; i < 100 && !gate.release; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(gate.release, "the background read reached the stub").not.toBeNull();
+
+    reply = answer;
+    const forced = await P.readView(LIST_VIEW, true);
+    expect(forced.error, "Refresh must not report the other read's failure").toBeUndefined();
+    expect(forced.tasks.length).toBe(1);
+    gate.release?.();
+    await background;
+    await settle();
+  });
 });

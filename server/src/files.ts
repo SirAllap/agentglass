@@ -23,7 +23,7 @@ import { join, resolve, relative, sep } from "node:path";
 import { git, safeAbs } from "./git.ts";
 import { inScopeReal, realish, workspaceRoots } from "./config.ts";
 import type { Caller } from "./auth.ts";
-import { diskAllows } from "./disk.ts";
+import { diskAllows, fdPathArgs } from "./disk.ts";
 import { makeViewTempDir } from "./viewtemp.ts";
 import { FS_BROWSE_ENABLED } from "./fsbrowse.ts";
 
@@ -379,8 +379,8 @@ export function findFiles(rootIn: unknown, queryIn: unknown, limit = MAX_FILES, 
 
   const fd = Bun.which("fd") ?? Bun.which("fdfind");
   if (fd) {
-    // --fixed-strings: a path is typed, not written as a regex, and a stray `.`
-    // or `+` in a filename should find that filename.
+    // fdPathArgs escapes the query: a path is typed, not written as a regex,
+    // and a stray `.` or `+` in a filename should find that filename.
     //
     // Directories in the same breath, and `fd` marks them with a trailing
     // slash so one run answers both. Asking twice would double the walk of a
@@ -391,7 +391,7 @@ export function findFiles(rootIn: unknown, queryIn: unknown, limit = MAX_FILES, 
     // fallback below has always matched the whole path, so the two backends
     // were also giving different answers to the same question depending on
     // what was installed.
-    const r = Bun.spawnSync([fd, "--hidden", "--exclude", ".git", "--full-path", "--fixed-strings", q],
+    const r = Bun.spawnSync([fd, "--hidden", "--exclude", ".git", "--full-path", ...fdPathArgs(at.root, q)],
       { cwd: at.root, stdout: "pipe", stderr: "pipe", timeout: 10_000 });
     const all = lines(r.stdout);
     const dirs = all.filter((p) => p.endsWith("/")).map((p) => p.replace(/\/$/, "")).slice(0, limit);

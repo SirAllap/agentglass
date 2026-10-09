@@ -29,6 +29,8 @@ export type SystemNote = {
   source?: string;
   /** The same situation said again replaces the row with this key. */
   key?: string;
+  /** Armed by the person, so Quiet and mutes do not apply — see deliveryFor. */
+  asked?: boolean;
   /** How many identical notes this row stands for, when more than one. */
   count?: number;
   /** Counted on the badge until the bell is opened. A flag on the row rather
@@ -636,11 +638,60 @@ export function firePopupOnly(a: { title: string; body: string; urgency?: 0 | 1 
   popup(a);
 }
 
-function popup(a: { title: string; body: string; urgency?: 0 | 1 | 2; pane?: string }) {
+/**
+ * A PR notify watch fired — see server/src/prNotifyWatch.ts.
+ *
+ * The one desktop notification that is NOT about an agent blocked on the
+ * person, and it is allowed to be because the person asked for exactly this
+ * one, on this PR, for this outcome; nothing here decides on its own that a PR
+ * is worth an interruption. It rides the `reminders` kind for that reason — a
+ * promise made to oneself, on by default — and goes through the same bell row
+ * and popup as every other alert rather than a path of its own. Clicking it
+ * opens the PR inside the app; the popup closes itself like every popup.
+ */
+const shownFires = new Set<number>();
+type AskedFire = { id: string; ok: boolean; title: string; sub: string };
+const askedFireListeners = new Set<(f: AskedFire) => void>();
+/** The bar's toast lane listens here; a fired watch is shown even with Quiet on. */
+export function subscribeAskedFires(fn: (f: AskedFire) => void): () => void {
+  askedFireListeners.add(fn);
+  return () => { askedFireListeners.delete(fn); };
+}
+
+/** Whatever the server kept while no window was open: shown oldest first, each acknowledged so it is not sent again. */
+export async function deliverPendingWatchFires(): Promise<void> {
+  try {
+    const r = await api.prWatchPending();
+    for (const f of r?.fires ?? []) fireWatchAlert(f);
+  } catch { /* the next connect asks again */ }
+}
+
+export function fireWatchAlert(f: { seq: number; repo: string; number: number; title: string; summary: string; detail: string; ok: boolean }) {
+  // The live frame and the queue can both carry one fire, and so can a second window: one seq is one notification.
+  if (shownFires.has(f.seq)) return;
+  shownFires.add(f.seq);
+  void api.prWatchAck(f.seq).catch(() => {});
+  const title = `${f.summary} — ${f.repo} #${f.number} ${f.title}`.trim();
+  const dest = { kind: "pr" as const, repo: f.repo, number: f.number };
+  const prefs = getNotifyPrefs();
+  if (!notifies(prefs, "reminders", "bell")) return;
+  // Urgency 1, never 2: a 2 is a toast that stays until dismissed and a strip
+  // that stays lit, which is the permanent notification this must not be. The
+  // row is the durable copy; the popup below is what he asked for, and it does
+  // not depend on Quiet, which is about what agentglass volunteers.
+  recordNote({ app: OUR_APP, summary: title, body: f.detail, urgency: 1, source: "ci", goto: dest, asked: true });
+  // The in-app toast too: with Quiet on the row and the OS popup were all
+  // there was, and a person looking at agentglass saw nothing happen.
+  for (const fn of askedFireListeners) fn({ id: `watch-${f.seq}`, ok: f.ok, title: `${f.summary} — #${f.number}`, sub: f.title });
+  if (!notifies(prefs, "reminders", "desktop")) return;
+  popup({ title, body: f.detail, urgency: 1, dest, tag: `pr-watch-${f.seq}` }); // the tag folds the same fire in two windows into one popup
+}
+
+function popup(a: { title: string; body: string; urgency?: 0 | 1 | 2; pane?: string; dest?: NonNullable<SystemNote["goto"]>; tag?: string }) {
   try {
     if (typeof Notification === "undefined") return;
     if (Notification.permission !== "granted") return;
-    const n = new Notification(a.title, { body: a.body, requireInteraction: a.urgency === 2 });
+    const n = new Notification(a.title, { body: a.body, requireInteraction: a.urgency === 2, ...(a.tag ? { tag: a.tag } : null) });
     /*
      * Every popup closes itself.
      *
@@ -653,7 +704,14 @@ function popup(a: { title: string; body: string; urgency?: 0 | 1 | 2; pane?: str
      */
     setTimeout(() => { try { n.close(); } catch { /* already gone */ } },
       a.urgency === 2 ? BLOCKING_POPUP_MS : POPUP_MS);
-    if (a.pane) {
+    if (a.dest) {
+      const dest = a.dest;
+      n.onclick = () => {
+        try { window.focus(); } catch { /* not a window we own */ }
+        goto?.(dest);
+        n.close();
+      };
+    } else if (a.pane) {
       const pane = a.pane;
       n.onclick = () => {
         try { window.focus(); } catch { /* not a window we own */ }
@@ -716,6 +774,8 @@ export async function askNotifyPermission(): Promise<NotificationPermission | nu
 export function recordNote(n: {
   app: string; summary: string; body: string; urgency?: 0 | 1 | 2; goto?: SystemNote["goto"];
   source?: string; key?: string;
+  /** The person armed this by hand (a PR watch): it breaks through Quiet and mutes. */
+  asked?: boolean;
 }): Delivery {
   const note: SystemNote = {
     id: `app-${++localSeq}`,
@@ -727,6 +787,7 @@ export function recordNote(n: {
     ...(n.goto ? { goto: n.goto } : {}),
     ...(n.source ? { source: n.source } : {}),
     ...(n.key ? { key: n.key } : {}),
+    ...(n.asked ? { asked: true } : {}),
   };
   const said = deliveryFor(note, { muted: mutedSources(), quiet: notifyQuiet() });
   // Muted: not kept at all. That is what muting a source means, and the one

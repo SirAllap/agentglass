@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 /**
  * A real conflict, produced the way one actually happens: two branches editing
@@ -33,14 +34,16 @@ beforeAll(async () => {
 
 afterAll(() => { try { rmSync(repo, { recursive: true, force: true }); } catch { /* fine */ } });
 
+const step = story();
+
 describe("merge conflicts", () => {
-  it("reports nothing to resolve on a clean tree", () => {
+  step("reports nothing to resolve on a clean tree", () => {
     const c = gw.conflicts(repo);
     expect(c.state).toBe("clean");
     expect(c.files).toEqual([]);
   });
 
-  it("names the conflicted files once a merge stops", () => {
+  step("names the conflicted files once a merge stops", () => {
     const r = run(repo, "merge", "--no-edit", "feature");
     expect(r.status).not.toBe(0); // it really did conflict
     const c = gw.conflicts(repo);
@@ -48,13 +51,13 @@ describe("merge conflicts", () => {
     expect(c.files).toEqual([join(repo, "shared.txt")]);
   });
 
-  it("refuses to continue while anything is still conflicted", () => {
+  step("refuses to continue while anything is still conflicted", () => {
     const r = gw.mergeContinue(repo);
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/still conflicted/i);
   });
 
-  it("takes one side wholesale and stages it", () => {
+  step("takes one side wholesale and stages it", () => {
     const r = gw.resolveWith(repo, "shared.txt", "theirs");
     expect(r.ok).toBe(true);
     expect(readFileSync(join(repo, "shared.txt"), "utf8")).toBe("from the feature branch\n");
@@ -62,13 +65,13 @@ describe("merge conflicts", () => {
     expect(gw.conflicts(repo).files).toEqual([]);
   });
 
-  it("completes the merge once everything is resolved", () => {
+  step("completes the merge once everything is resolved", () => {
     const r = gw.mergeContinue(repo);
     expect(r.ok).toBe(true);
     expect(gw.conflicts(repo).state).toBe("clean");
   });
 
-  it("gets a repository out of a bisect", () => {
+  step("gets a repository out of a bisect", () => {
     // The fallthrough treated every state that was not a rebase, a cherry-pick
     // or a revert as a merge, so this ran `git merge --abort` and came back
     // with "There is no merge to abort". treeState() named the state and the
@@ -87,7 +90,7 @@ describe("merge conflicts", () => {
     expect(run(repo, "rev-parse", "HEAD").stdout.trim()).toBe(head);
   });
 
-  it("aborts a merge and leaves the tree as it was", () => {
+  step("aborts a merge and leaves the tree as it was", () => {
     const before = readFileSync(join(repo, "shared.txt"), "utf8");
     run(repo, "checkout", "-q", "-b", "second", "HEAD~1");
     writeFileSync(join(repo, "shared.txt"), "a third opinion\n");

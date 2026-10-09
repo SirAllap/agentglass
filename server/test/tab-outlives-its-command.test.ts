@@ -31,6 +31,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 const SOCKET = `agx-tabdies-${process.pid}`;
 process.env.AGENTGLASS_TMUX_SOCKET = SOCKET;
@@ -105,8 +106,10 @@ afterAll(async () => {
   else process.env.AGENTGLASS_STATE_DIR = REAL_STATE;
 });
 
+const step = story();
+
 describe("a tab on the engine", () => {
-  test("stays when its program fails, with the status on it, and closes when the program ends cleanly", async () => {
+  step("stays when its program fails, with the status on it, and closes when the program ends cleanly", async () => {
     const mk = await pane.tmux(["new-session", "-d", "-s", S, "-n", "keeps", "-x", "120", "-y", "30", "sleep", "45"]);
     expect(mk.ok, mk.stderr).toBe(true);
     await pane.tmux(["new-window", "-d", "-t", `=${S}:`, "-n", "crashed", "sh", "-c", "exit 3"]);
@@ -116,7 +119,7 @@ describe("a tab on the engine", () => {
     expect(await show(`=${S}:crashed`, "#{pane_dead} #{pane_dead_status}")).toBe("1 3");
   }, 20_000);
 
-  test("a plain shell that exits with a status closes as it always did", async () => {
+  step("a plain shell that exits with a status closes as it always did", async () => {
     /* An interactive shell exits with the status of its last command, so
        `false` then Ctrl-D would otherwise leave every Terminal tab a corpse
        (measured). A pane born with no command is the shell's own tab: the
@@ -127,7 +130,7 @@ describe("a tab on the engine", () => {
     expect(await until(async () => !(await windowsOf(S)).includes("shell")), "the shell's own tab is not a program that failed").toBe(true);
   }, 20_000);
 
-  test("a dead pane is photographed as a shell, never as the command that failed", async () => {
+  step("a dead pane is photographed as a shell, never as the command that failed", async () => {
     const state = await restore.captureLayout();
     const sess = state?.sessions.find((s) => s.name === S);
     const crashed = sess?.windows.find((w) => w.name === "crashed")?.panes[0];
@@ -136,14 +139,14 @@ describe("a tab on the engine", () => {
     expect(crashed!.agentSession).toBeUndefined();
   }, 20_000);
 
-  test("a dead pane is not a running agent", async () => {
+  step("a dead pane is not a running agent", async () => {
     const dead = await show(`=${S}:crashed`, "#{pane_id}");
     const live = await show(`=${S}:keeps`, "#{pane_id}");
     expect(await ops.paneAlive(live)).toBe(true);
     expect(await ops.paneAlive(dead), "a corpse would otherwise be listed, prompted and waited on").toBe(false);
   }, 20_000);
 
-  test("a window this app leased for a run still closes itself, whatever the status", async () => {
+  step("a window this app leased for a run still closes itself, whatever the status", async () => {
     const r = await pane.tmux(["new-window", "-d", "-P", "-F", "#{window_id}", "-t", `=${S}:`, "-n", "run", "sh", "-c", "sleep 0.6; exit 3"]);
     const wid = r.stdout.trim();
     expect(wid).toMatch(/^@\d+$/);
@@ -164,7 +167,7 @@ describe("a restore on that engine", () => {
     id: `@${name}`, name, panes: [{ id: `%${name}`, index: 0, active: true, path: "/tmp", startCommand }],
   });
 
-  test("a command that will not start leaves a shell in its window, not a corpse", async () => {
+  step("a command that will not start leaves a shell in its window, not a corpse", async () => {
     const name = `${S}r`;
     writeLayout([{ name, windows: [win("dies", "exit 1"), win("keeps", "sleep 45")] }]);
     const r = await restore.restoreLayout("all");

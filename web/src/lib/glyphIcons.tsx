@@ -117,6 +117,11 @@ export function EditIcon({ size = ICON.sm, className }: P) {
   return <svg {...svg(size, className)}><path d="M9.5 2.5l2 2L5 11l-2.6.6L3 9z" /><path d="M8.3 3.7l2 2" /></svg>;
 }
 
+/** A prompt in a window: what "a shell here" looks like. */
+export function TerminalIcon({ size = ICON.sm, className }: P) {
+  return <svg {...svg(size, className)}><rect x="1.6" y="2.4" width="10.8" height="9.2" rx="1.4" /><path d="M4 5.6l2 1.6-2 1.6M7.4 9h2.6" /></svg>;
+}
+
 /** ⚠ */
 export function WarningIcon({ size = ICON.sm, className }: P) {
   return <svg {...svg(size, className)}><path d="M7 1.9l5.4 9.6H1.6z" /><path d="M7 5.6v2.6M7 9.9v.1" /></svg>;
@@ -295,6 +300,16 @@ export function FileIcon({ size = ICON.sm, className }: P) {
   return <svg {...svg(size, className)}><path d="M3.4 1.8h4.7l2.5 2.5v7a1 1 0 0 1-1 1H3.4a1 1 0 0 1-1-1V2.8a1 1 0 0 1 1-1z" /><path d="M8 1.8v2.6h2.6" /></svg>;
 }
 
+/** 🖼 — a picture: a file with a horizon in it. */
+export function ImageFileIcon({ size = ICON.sm, className }: P) {
+  return <svg {...svg(size, className)}><rect x="1.8" y="2.4" width="10.4" height="9.2" rx="1.2" /><circle cx="5" cy="5.6" r="1" /><path d="M2.2 10.6l3.2-2.8 2.4 2 1.8-1.4 2.4 2" /></svg>;
+}
+
+/** </> — source: a file that is code. */
+export function CodeFileIcon({ size = ICON.sm, className }: P) {
+  return <svg {...svg(size, className)}><rect x="1.8" y="2.4" width="10.4" height="9.2" rx="1.2" /><path d="M5.4 5.4L3.8 7l1.6 1.6M8.6 5.4L10.2 7 8.6 8.6" /></svg>;
+}
+
 /** ☰ ⊟ ▣ — put away: a stash, a drawer. */
 export function StashIcon({ size = ICON.sm, className }: P) {
   return <svg {...svg(size, className)}><path d="M2 5.2l1.4-2.6h7.2L12 5.2" /><rect x="2" y="5.2" width="10" height="6.4" rx="1" /><path d="M5.4 7.8h3.2" /></svg>;
@@ -437,4 +452,24 @@ export function InboxIcon({ size = ICON.sm, className }: P) {
 /** ● — set, chosen, weighted. */
 export function DotIcon({ size = ICON.sm, className }: P) {
   return <svg {...svg(size, className)} fill="currentColor" stroke="none"><circle cx="7" cy="7" r="3.4" /></svg>;
+}
+
+/** The forge's own mark, on the header of a pull-request panel. Filled, 16-box. */
+export function GitHubGlyph({ size = ICON.sm, className }: P) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden className={className}>
+      <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
+    </svg>
+  );
+}
+
+/** The tracker's mark (a chevron over a smile), on the header of a card's parent bar. Stroked, 16-box. */
+export function TrackerGlyph({ size = ICON.sm, className }: P) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.7}
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden className={className}>
+      <path d="M2.6 9.2L8 4.8l5.4 4.4" />
+      <path d="M4.6 12.3c2.1 1.6 4.7 1.6 6.8 0" />
+    </svg>
+  );
 }

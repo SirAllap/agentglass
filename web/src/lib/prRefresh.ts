@@ -1,4 +1,4 @@
-import type { PrDetail, PrSummary } from "../../../shared/types.ts";
+import type { PrCheck, PrCheckRollup, PrChecksRead, PrDetail, PrSummary } from "../../../shared/types.ts";
 
 /**
  * What the Refresh button asks GitHub for.
@@ -30,6 +30,13 @@ export function rowPatch(d: PrDetail) {
     updatedAt: d.updatedAt, additions: d.additions, deletions: d.deletions,
     changedFiles: d.changedFiles, labels: d.labels, assignees: d.assignees,
     reviewers: d.reviewers,
+    // The card's verdict header reads this, not `reviewDecision`.
+    ...(d.humanReview ? { humanReview: d.humanReview } : {}),
+    /* The card's "N open" chip: resolving a thread in the detail left it saying
+       "1 open" until the next list read (9.8 s against a stub GitHub). Pending
+       own-review threads are not in the detail's list, so this can read one
+       lower than the list's count until the next read. */
+    ...(Array.isArray(d.threads) ? { openThreads: { open: d.threads.filter((t) => !t.isResolved).length, more: !!d.truncated?.threads } } : {}),
     milestone: d.milestone, checks: d.checks, checksLoaded: true,
     /* The board files a card by these two, and a base that moved changes the
        first without touching `updatedAt`, so the detail can learn it first. An
@@ -49,6 +56,51 @@ export function overlayDetail(rows: PrSummary[], d: PrDetail): PrSummary[] {
   if ((Object.keys(patch) as (keyof typeof patch)[]).every((k) => JSON.stringify(r[k]) === JSON.stringify(patch[k]))) return rows;
   const out = rows.slice();
   out[at] = { ...r, ...patch };
+  return out;
+}
+
+/**
+ * A reopened pull request, written into the lists it left.
+ *
+ * `overlayDetail` only patches a row the list already has, and a closed pull
+ * request is in no open list, so the card came back only after a list read
+ * (3 s against a stub GitHub with a 1.2 s list) while the detail said Open.
+ * The row is built from the detail and HELD for a short while: a list read
+ * that began before the reopen must not take it away again, and one that began
+ * after is GitHub's own. Only the author's own pull requests are held: whose
+ * review queue it belongs to is not something the detail knows, and those
+ * still wait for the read.
+ */
+export const REOPEN_HOLD_MS = 30_000;
+/** Keyed `${root}#${number}`: another repository's pull request of the same number is not this one. `at` is the SERVER's stamp of the reopen; `t` only measures how long it has been held. */
+export type Reopened = Map<string, { n: number; root: string; at: number; t: number; row: PrSummary }>;
+export const reopenKey = (root: string, n: number) => `${root}#${n}`;
+
+export function reopenedRow(d: PrDetail): PrSummary | null {
+  if (!d.viewerDidAuthor) return null;
+  return {
+    number: d.number, author: d.author, headRefName: d.headRefName, baseRefName: d.baseRefName, url: d.url,
+    ...rowPatch(d), state: "OPEN",
+  } as unknown as PrSummary;
+}
+
+/**
+ * `rows` with every held reopen the read behind them cannot have seen.
+ *
+ * `startedAt` is the server's stamp of when that read was sent and `e.at` the
+ * server's stamp of the reopen: both on ONE clock, so a browser clock that is
+ * off (a remote or mobile client) cannot decide it. A read with no stamp
+ * (0 / missing) is not proven newer, so the row stays. The browser's clock is
+ * used only to let a held row expire.
+ */
+export function holdReopened(rows: PrSummary[], held: Reopened, startedAt: number | undefined, root: string, now = Date.now()): PrSummary[] {
+  let out = rows;
+  for (const [k, e] of held) {
+    if (now - e.t > REOPEN_HOLD_MS) { held.delete(k); continue; }
+    if (e.root !== root) continue;
+    if ((startedAt ?? 0) >= e.at || out.some((r) => r.number === e.n)) continue;
+    out = [e.row, ...out];
+  }
   return out;
 }
 
@@ -80,3 +132,70 @@ export function holdEdits(rows: PrSummary[], log: EditLog, fetchedAt: number, no
   }
   return out;
 }
+
+/*
+ * A merge that landed, told to both views at once.
+ *
+ * Measured on the board: after merging in the detail the card stayed in "ready
+ * to land" for as long as the board's own poll took (about a minute), and the
+ * detail itself read "Open / Ready to merge" for 3-4 s until its re-read came
+ * back. The merge response is the freshest thing either view knows, so it is
+ * written to both, and a read that started before it (still saying OPEN) does
+ * not get to undo it. GitHub's answer after LANDED_HOLD_MS is its own again.
+ */
+export const LANDED_HOLD_MS = 2 * 60_000;
+
+/** Pull request number -> when its merge response arrived. */
+export type Landed = Map<number, number>;
+
+export function landedDetail(d: PrDetail, at: string, by?: string): PrDetail {
+  return { ...d, state: "MERGED", mergedAt: at, mergedBy: by || d.mergedBy || null, updatedAt: at, autoMerge: null };
+}
+
+/** What an OPEN list may show: nothing that has stopped being open (a close or
+ *  a merge written from the detail), and nothing whose merge we just saw land
+ *  even when a read that began before it still lists it. */
+export function dropLanded(rows: PrSummary[], landed: Landed, now = Date.now()): PrSummary[] {
+  for (const [n, at] of landed) if (now - at > LANDED_HOLD_MS) landed.delete(n);
+  return rows.some((r) => r.state !== "OPEN" || landed.has(r.number))
+    ? rows.filter((r) => r.state === "OPEN" && !landed.has(r.number))
+    : rows;
+}
+
+/** A detail read that says OPEN for a pull request whose merge we just saw land. */
+export function staleOpen(d: PrDetail, landed: Landed, now = Date.now()): boolean {
+  const at = landed.get(d.number);
+  return at !== undefined && now - at <= LANDED_HOLD_MS && d.state === "OPEN";
+}
+
+/**
+ * Run `fn` unless one is already running under this lock, and release the lock
+ * whether it resolved or threw. A React state flag cannot be this: two presses
+ * in the same tick both read it false. The lock is a ref (`{ current }`), read
+ * and set synchronously before the first await.
+ */
+export async function once<T>(lock: { current: boolean }, fn: () => Promise<T>): Promise<T | undefined> {
+  if (lock.current) return undefined;
+  lock.current = true;
+  try { return await fn(); } finally { lock.current = false; }
+}
+
+/**
+ * A checks read the server made for its notify watch, written into the open
+ * detail: the chip and the strip under it are one datum. The detail's
+ * `required` marks come from its own gate query, so they are carried over by
+ * name. Null when the read is not this pull request or changes nothing.
+ */
+export function detailWithChecks(d: PrDetail, repo: string, r: PrChecksRead): PrDetail | null {
+  if (d.number !== r.number || repo.toLowerCase() !== r.repo.toLowerCase()) return null;
+  const key = (c: PrCheck) => `${c.workflow ?? ""}\u0000${c.name}`;
+  const req = new Map((d.checksAll ?? []).map((c) => [key(c), c.required]));
+  const all = r.all.map((c) => (req.get(key(c)) === undefined ? c : { ...c, required: req.get(key(c)) }));
+  if (JSON.stringify(d.checks) === JSON.stringify(r.checks)) return null;
+  return { ...d, checks: r.checks, checksAll: all };
+}
+
+export const rowWithChecks = (rows: PrSummary[], repo: string, r: PrChecksRead): PrSummary[] =>
+  repo.toLowerCase() !== r.repo.toLowerCase() || !rows.some((x) => x.number === r.number)
+    ? rows
+    : rows.map((x) => (x.number === r.number ? { ...x, checks: r.checks as PrCheckRollup, checksLoaded: true } : x));

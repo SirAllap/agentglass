@@ -1,6 +1,7 @@
 // Regressions from the review of plan pace: each case is a measured wrong
 // answer, and each was watched going red against the code before the fix.
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect } from "bun:test";
+import { story } from "./story.ts";
 import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -16,7 +17,8 @@ const RESET = at(30, 15);
 const WEEK = 10080;
 
 describe("a recent rate is measured over working time", () => {
-  test("evening use after work is not divided by the sliver of the lookback that worked", () => {
+  const step = story();
+  step("evening use after work is not divided by the sliver of the lookback that worked", () => {
     // Thu 21:00, 24 % at 18:00 and 30 % now: 2 %/h of evening use. The lookback
     // (18:00-21:00) holds no working time, so the rate must not be "recent".
     const samples: PaceSample[] = [{ t: at(24, 17), used: 20 }, { t: at(24, 18), used: 24 }, { t: at(24, 20, 30), used: 30 }];
@@ -25,7 +27,7 @@ describe("a recent rate is measured over working time", () => {
     expect(p.burn.source).toBe("week");
   });
 
-  test("a lookback that mostly worked still reads as recent", () => {
+  step("a lookback that mostly worked still reads as recent", () => {
     const samples: PaceSample[] = [{ t: at(24, 10), used: 20 }, { t: at(24, 12), used: 26 }];
     const p = pace({ usedPercent: 26, resetsAt: RESET, windowMinutes: WEEK, now: at(24, 13), cfg: cfg(), samples });
     if (p.state !== "ok") throw new Error("stale");
@@ -35,7 +37,8 @@ describe("a recent rate is measured over working time", () => {
 });
 
 describe("a window with no working time", () => {
-  test("a one-day window resetting on a Sunday is refused, not divided by zero", () => {
+  const step = story();
+  step("a one-day window resetting on a Sunday is refused, not divided by zero", () => {
     const sun = at(27, 10);
     const p = pace({ usedPercent: 10, resetsAt: sun, windowMinutes: 1440, now: sun - 3_600_000, cfg: cfg() });
     expect(p).toEqual({ state: "stale", why: "no-working-time" });
@@ -43,7 +46,8 @@ describe("a window with no working time", () => {
 });
 
 describe("today's spend after a night with the app closed", () => {
-  test("a jump seen by the first reading after midnight is not today's", () => {
+  const step = story();
+  step("a jump seen by the first reading after midnight is not today's", () => {
     // 2 % Wed 20:00, app closed, 16 % Thu 10:05 (a gap reading).
     const samples: PaceSample[] = [{ t: at(23, 20), used: 2 }, { t: at(24, 10, 5), used: 16, gap: true }];
     const p = pace({ usedPercent: 16, resetsAt: RESET, windowMinutes: WEEK, now: at(24, 10, 10), cfg: cfg({ rollover: false }), samples });
@@ -51,14 +55,14 @@ describe("today's spend after a night with the app closed", () => {
     expect(p.today.spent).toBeNull();
   });
 
-  test("the same jump seen live (no gap) is today's", () => {
+  step("the same jump seen live (no gap) is today's", () => {
     const samples: PaceSample[] = [{ t: at(23, 23, 58), used: 2 }, { t: at(24, 10, 5), used: 16 }];
     const p = pace({ usedPercent: 16, resetsAt: RESET, windowMinutes: WEEK, now: at(24, 10, 10), cfg: cfg(), samples });
     if (p.state !== "ok") throw new Error("stale");
     expect(p.today.spent).toBe(14);
   });
 
-  test("a gap reading straight after a recent one still counts", () => {
+  step("a gap reading straight after a recent one still counts", () => {
     const samples: PaceSample[] = [{ t: at(23, 23, 58), used: 2 }, { t: at(24, 0, 1) + GAP_MS, used: 5, gap: true }];
     const p = pace({ usedPercent: 5, resetsAt: RESET, windowMinutes: WEEK, now: at(24, 10), cfg: cfg(), samples });
     if (p.state !== "ok") throw new Error("stale");
@@ -67,13 +71,14 @@ describe("today's spend after a night with the app closed", () => {
 });
 
 describe("the caption on the day the window resets", () => {
-  test("today's share ends at the reset, not at the end of work", () => {
+  const step = story();
+  step("today's share ends at the reset, not at the end of work", () => {
     // Reset Wed 30 Sep 15:00, now 10:00: the share is 09-15, not 09-19.
     const p = pace({ usedPercent: 40, resetsAt: RESET, windowMinutes: WEEK, now: at(30, 10), cfg: cfg() });
     if (p.state !== "ok") throw new Error("stale");
     expect(p.today.endsAtHour).toBe(15);
   });
-  test("on any other day it is the end of work", () => {
+  step("on any other day it is the end of work", () => {
     const p = pace({ usedPercent: 40, resetsAt: RESET, windowMinutes: WEEK, now: at(29, 10), cfg: cfg() });
     if (p.state !== "ok") throw new Error("stale");
     expect(p.today.endsAtHour).toBe(19);
@@ -81,15 +86,16 @@ describe("the caption on the day the window resets", () => {
 });
 
 describe("alertDue", () => {
+  const step = story();
   const now = at(28, 10);
-  test("a window that has already reset never fires", () => {
+  step("a window that has already reset never fires", () => {
     expect(alertDue(93, 90, at(22, 10), WEEK, now, undefined)).toBe(false);
     expect(alertDue(93, 90, now, WEEK, now, undefined)).toBe(false);
   });
-  test("a reset more than a window away belongs to no window", () => {
+  step("a reset more than a window away belongs to no window", () => {
     expect(alertDue(93, 90, now + (WEEK + 5) * 60_000, WEEK, now, undefined)).toBe(false);
   });
-  test("once per window; a wobble of seconds is the same window, a week on is new", () => {
+  step("once per window; a wobble of seconds is the same window, a week on is new", () => {
     expect(alertDue(89, 90, RESET, WEEK, now, undefined)).toBe(false);
     expect(alertDue(90, 90, RESET, WEEK, now, undefined)).toBe(true);
     expect(alertDue(97, 90, RESET + 3_000, WEEK, now, RESET)).toBe(false);
@@ -98,6 +104,7 @@ describe("alertDue", () => {
 });
 
 describe("claimPaceAlerts: one decision for every client", () => {
+  const step = story();
   let dir: string;
   let claim: typeof import("../src/paceAlert.ts");
   let prefs: typeof import("../src/notifyPrefs.ts");
@@ -131,7 +138,7 @@ describe("claimPaceAlerts: one decision for every client", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  test("off by default: nothing is told and nothing is remembered", () => {
+  step("off by default: nothing is told and nothing is remembered", () => {
     usageOff();
     claim.__resetPaceAlerted();
     expect(claim.claimPaceAlerts(rows(96), 90, now)).toEqual([]);
@@ -139,7 +146,7 @@ describe("claimPaceAlerts: one decision for every client", () => {
     expect(claim.claimPaceAlerts(rows(96), 90, now)).toHaveLength(1);
   });
 
-  test("two clients claiming the same window: only the first wins", () => {
+  step("two clients claiming the same window: only the first wins", () => {
     usageOn();
     rmSync(claim.paceAlertedPath(), { force: true });
     claim.__resetPaceAlerted();
@@ -149,24 +156,24 @@ describe("claimPaceAlerts: one decision for every client", () => {
     expect(second).toEqual([]);
   });
 
-  test("a restart does not tell again", () => {
+  step("a restart does not tell again", () => {
     expect(existsSync(claim.paceAlertedPath())).toBe(true);
     claim.__resetPaceAlerted();
     expect(claim.claimPaceAlerts(rows(97, RESET + 2_000), 90, now + 300_000)).toEqual([]);
   });
 
-  test("a window that has already reset never fires, even with a fresh state", () => {
+  step("a window that has already reset never fires, even with a fresh state", () => {
     usageOn();
     rmSync(claim.paceAlertedPath(), { force: true });
     claim.__resetPaceAlerted();
     expect(claim.claimPaceAlerts(rows(93, at(22, 10)), 90, now)).toEqual([]);
   });
 
-  test("the next week's window is told again", () => {
+  step("the next week's window is told again", () => {
     expect(claim.claimPaceAlerts(rows(95, RESET + 7 * 86_400_000), 90, RESET + 86_400_000)).toHaveLength(1);
   });
 
-  test("coerceAlertAt keeps to the range", () => {
+  step("coerceAlertAt keeps to the range", () => {
     expect([claim.coerceAlertAt(80), claim.coerceAlertAt(10), claim.coerceAlertAt("x"), claim.coerceAlertAt(90.5)]).toEqual([80, 90, 90, 90]);
   });
 });

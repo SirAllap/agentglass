@@ -18,6 +18,7 @@ import { mkdtempSync, writeFileSync, realpathSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { localHead, fastForwardLocal } from "../src/prs.ts";
+import { story } from "./story.ts";
 
 const dir = realpathSync(mkdtempSync(join(tmpdir(), "agx-localhead-")));
 const ORIGIN = join(dir, "origin.git");
@@ -76,13 +77,15 @@ beforeAll(() => {
   writeFileSync(join(REPO, "dirty-one.txt"), "edited, not committed");
 });
 
+const step = story();
+
 describe("the local copy of a branch", () => {
-  test("a branch that is not here at all", async () => {
+  step("a branch that is not here at all", async () => {
     const st = await localHead(REPO, "no-such-branch");
     expect(st).toMatchObject({ exists: false, sync: "absent" });
   });
 
-  test("behind its remote, checked out nowhere: a fast-forward", async () => {
+  step("behind its remote, checked out nowhere: a fast-forward", async () => {
     // The nice case — the ref can move with no working tree involved.
     const st = await localHead(REPO, "behind-one");
     expect(st.exists).toBe(true);
@@ -92,21 +95,21 @@ describe("the local copy of a branch", () => {
     expect(st.sync).toBe("ff");
   });
 
-  test("commits the remote has not got: diverged, and left alone", async () => {
+  step("commits the remote has not got: diverged, and left alone", async () => {
     const st = await localHead(REPO, "diverged-one");
     expect(st.ahead).toBe(1);
     expect(st.behind).toBe(1);
     expect(st.sync).toBe("diverged");
   });
 
-  test("checked out with uncommitted work: dirty, and left alone", async () => {
+  step("checked out with uncommitted work: dirty, and left alone", async () => {
     const st = await localHead(REPO, "dirty-one");
     expect(st.worktree).toBe(REPO);
     expect(st.dirty).toBe(true);
     expect(st.sync).toBe("dirty");
   });
 
-  test("checked out and clean: still a fast-forward", async () => {
+  step("checked out and clean: still a fast-forward", async () => {
     // Same branch as the dirty case, once the edit is put away — so this pins
     // the difference to the working tree and nothing else.
     git(REPO, "checkout", "-q", "--", "dirty-one.txt");
@@ -116,7 +119,7 @@ describe("the local copy of a branch", () => {
     expect(st.sync).toBe("ff");
   });
 
-  test("a checkout in the middle of a merge is not somewhere to fast-forward into", async () => {
+  step("a checkout in the middle of a merge is not somewhere to fast-forward into", async () => {
     // A real conflicted merge, left in progress.
     git(REPO, "checkout", "-q", "-b", "conflicted");
     commit(REPO, "clash.txt", "ours");
@@ -129,7 +132,45 @@ describe("the local copy of a branch", () => {
     git(REPO, "merge", "--abort");
   });
 
-  test("moving a branch nobody has checked out touches no working tree", async () => {
+  // A rebase that stops on a conflict leaves HEAD detached, so `git worktree
+  // list` no longer says which branch the checkout belongs to. The branch being
+  // rebased is named only in the rebase's own state directory.
+  step("a checkout stopped in the middle of a rebase is busy, though HEAD is detached", async () => {
+    git(REPO, "checkout", "-q", "main");
+    git(REPO, "checkout", "-q", "-b", "rebasing");
+    commit(REPO, "rb.txt", "ours");
+    git(REPO, "checkout", "-q", "-b", "rebasing-onto", "HEAD~1");
+    commit(REPO, "rb.txt", "theirs");
+    git(REPO, "checkout", "-q", "rebasing");
+    git(REPO, "rebase", "rebasing-onto");
+    expect(git(REPO, "rev-parse", "--abbrev-ref", "HEAD")).toBe("HEAD");
+    const st = await localHead(REPO, "rebasing");
+    expect(st.sync).toBe("busy");
+    expect(st.worktree).toBe(REPO);
+    git(REPO, "rebase", "--abort");
+    git(REPO, "checkout", "-q", "main");
+  });
+
+  step("a cherry-pick or a revert stopped on a conflict is busy too", async () => {
+    git(REPO, "checkout", "-q", "main");
+    git(REPO, "checkout", "-q", "-b", "picking");
+    commit(REPO, "pick.txt", "base");
+    git(REPO, "checkout", "-q", "-b", "picking-other");
+    commit(REPO, "pick.txt", "other");
+    const other = git(REPO, "rev-parse", "HEAD");
+    git(REPO, "checkout", "-q", "picking");
+    commit(REPO, "pick.txt", "mine");
+    git(REPO, "cherry-pick", other);
+    expect((await localHead(REPO, "picking")).sync).toBe("busy");
+    git(REPO, "cherry-pick", "--abort");
+    const base = git(REPO, "rev-parse", "HEAD~1");
+    git(REPO, "revert", "--no-edit", base);
+    expect((await localHead(REPO, "picking")).sync).toBe("busy");
+    git(REPO, "revert", "--abort");
+    git(REPO, "checkout", "-q", "main");
+  });
+
+  step("moving a branch nobody has checked out touches no working tree", async () => {
     // The whole point of the refspec form: `behind-one` is not checked out, so
     // this moves a ref while the checkout stays on whatever it was on.
     const was = git(REPO, "rev-parse", "--abbrev-ref", "HEAD");
@@ -143,7 +184,7 @@ describe("the local copy of a branch", () => {
     expect(await fastForwardLocal(REPO, await localHead(REPO, "behind-one"))).toContain("moved up too");
   });
 
-  test("moving the branch you are standing in is the pull you would have done", async () => {
+  step("moving the branch you are standing in is the pull you would have done", async () => {
     git(REPO, "checkout", "-q", "dirty-one");
     const before = git(REPO, "rev-parse", "HEAD");
     const said = await fastForwardLocal(REPO, await localHead(REPO, "dirty-one"));
@@ -153,7 +194,7 @@ describe("the local copy of a branch", () => {
     git(REPO, "checkout", "-q", "main");
   });
 
-  test("it refuses rather than rewriting when there is no fast-forward", async () => {
+  step("it refuses rather than rewriting when there is no fast-forward", async () => {
     // Belt and braces: `diverged-one` never reaches this call in the app,
     // because the verdict stops it. If it ever did, git — not us — is what
     // stands between a stale button and somebody's unpushed commit.
@@ -164,7 +205,7 @@ describe("the local copy of a branch", () => {
     expect(git(REPO, "rev-parse", "diverged-one")).toBe(before);
   });
 
-  test("a branch with no upstream at all counts as nothing to compare", async () => {
+  step("a branch with no upstream at all counts as nothing to compare", async () => {
     git(REPO, "checkout", "-q", "-b", "orphan-branch");
     git(REPO, "checkout", "-q", "main");
     const st = await localHead(REPO, "orphan-branch");

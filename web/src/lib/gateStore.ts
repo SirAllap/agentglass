@@ -22,7 +22,14 @@ import type { PendingGate } from "../../../shared/types.ts";
  * own, so the request survives whatever the desktop is doing.
  */
 
-const POLL_MS = 2000;
+/*
+ * A safety net, not the mechanism. The server rings a `gate` frame on every
+ * change to the pending list (useLive.ts reads it through `pollGatesNow`), so
+ * this only catches a frame lost with the socket. It was 2 s: 30 identical
+ * requests a minute in every window, measured, for a list that changes a few
+ * times a day.
+ */
+const POLL_MS = 30_000;
 
 const subs = new Set<() => void>();
 

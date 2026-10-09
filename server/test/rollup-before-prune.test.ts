@@ -13,6 +13,7 @@ import { describe, expect, test, beforeAll } from "bun:test";
 import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { story } from "./story.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "agx-rollup-"));
 const ROOT = join(dir, "proj");
@@ -60,8 +61,10 @@ beforeAll(async () => {
   db.insertEvent(event({ timestamp: Date.now() - 60_000, session_id: "s-live" }) as any);
 });
 
+const step = story();
+
 describe("expiring events are summarised before they are deleted", () => {
-  test("the raw rows really do go", () => {
+  step("the raw rows really do go", () => {
     const before = rawCount();
     const { events, rolled } = db.pruneOldRows();
     expect(events).toBeGreaterThan(0);
@@ -69,7 +72,7 @@ describe("expiring events are summarised before they are deleted", () => {
     expect(rawCount()).toBeLessThan(before);
   });
 
-  test("but the day's totals survive them", () => {
+  step("but the day's totals survive them", () => {
     const days = db.rollupDays();
     expect(days.length).toBe(1);
     const d = days[0];
@@ -83,7 +86,7 @@ describe("expiring events are summarised before they are deleted", () => {
     expect(d.sessions).toBe(1);
   });
 
-  test("the live window is untouched", () => {
+  step("the live window is untouched", () => {
     // s-live is a minute old; the prune must not have taken it.
     const n = db.db
       .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM events WHERE session_id = 's-live'")
@@ -91,26 +94,26 @@ describe("expiring events are summarised before they are deleted", () => {
     expect(n).toBe(1);
   });
 
-  test("the rollup is scoped like every other metric", () => {
+  step("the rollup is scoped like every other metric", () => {
     // The other project's event was folded too, but a scoped read must not
     // see it — the same rule the events queries follow.
     const scoped = db.rollupDays()[0];
     expect(scoped.sessions).toBe(1); // s-old only, not s-other
   });
 
-  test("it can say how far back it goes, so a panel need not imply it has everything", () => {
+  step("it can say how far back it goes, so a panel need not imply it has everything", () => {
     expect(db.rollupEarliestDay()).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 });
 
 describe("folding twice does not double-count", () => {
-  test("a second prune adds nothing, because the rows it would fold are gone", () => {
+  step("a second prune adds nothing, because the rows it would fold are gone", () => {
     const before = db.rollupDays()[0].events;
     db.pruneOldRows();
     expect(db.rollupDays()[0].events).toBe(before);
   });
 
-  test("a later day accumulates onto the same row rather than replacing it", () => {
+  step("a later day accumulates onto the same row rather than replacing it", () => {
     // Another event on the SAME day, arriving late (a backfill, a replayed
     // export) and then expiring: its numbers must add to the day, not
     // overwrite it.

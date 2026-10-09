@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   installPlugin, enablePlugin, disablePlugin, listPlugins, __resetPlugins,
-  setPluginUnboxedConsent, setMaster, pluginsPath, MANIFEST_NAME,
+  setPluginUnboxedConsent, envAllowsUnboxed, setMaster, pluginsPath, MANIFEST_NAME,
 } from "../src/plugins.ts";
 import { __resetSandboxProbe } from "../src/plugin-sandbox.ts";
 
@@ -61,6 +61,7 @@ describe("a plugin whose box this host cannot build", () => {
     const rec = listPlugins()[0]!;
     expect(rec.running).toBe(false);
     expect(rec.lastBoxFailure).toContain("refused to run unboxed");
+    expect(rec.boxPlan).toBe("refuse"); // what the approval screen reads, not the probe alone
   });
 
   test("starts when the machine-wide escape hatch is set", async () => {
@@ -68,6 +69,7 @@ describe("a plugin whose box this host cannot build", () => {
     await installPlugin(fixture());
     await enablePlugin("watcher");
     expect(listPlugins()[0]!.running).toBe(true);
+    expect(listPlugins()[0]!.boxPlan).toBe("unboxed-consented");
   });
 
   // On macOS/Windows, bwrap does not exist at all, so sandboxProbe() fails
@@ -81,6 +83,8 @@ describe("a plugin whose box this host cannot build", () => {
       await installPlugin(fixture());
       await enablePlugin("watcher");
       expect(listPlugins()[0]!.running).toBe(true);
+      expect(listPlugins()[0]!.sandboxProbe).toMatchObject({ ok: false }); // no box can be built here (a real macOS host reports "missing")
+      expect(listPlugins()[0]!.boxPlan).toBe("unboxed-platform"); // and the screen must not read that as a refusal
     } finally {
       Object.defineProperty(process, "platform", { value: orig, configurable: true });
     }
@@ -159,5 +163,60 @@ describe("index.ts requires an explicit boolean for /plugins/allow-unboxed", () 
     const block = src.slice(start, end);
     expect(block).toContain('typeof b.allow !== "boolean"');
     expect(block).not.toContain("b.allow !== false");
+  });
+});
+
+// What the Settings card reads: the consent as stored, and the machine-wide
+// hatch as the start path reads it. A card that showed a stale consent would
+// offer "Allow" to a plugin that is already allowed, or "Revoke" to one that
+// is not.
+describe("what the Plugins settings read back", () => {
+  test("the consent shows on the plugin after a grant and clears after a revoke, with the plan following it", async () => {
+    await installPlugin(fixture());
+    await enablePlugin("watcher");
+    expect(listPlugins()[0]!.allowUnboxed).toBeUndefined();
+    expect(listPlugins()[0]!.boxPlan).toBe("refuse");
+
+    await setPluginUnboxedConsent("watcher", true);
+    expect(listPlugins()[0]!.allowUnboxed).toBe(true);
+    expect(listPlugins()[0]!.boxPlan).toBe("unboxed-consented");
+
+    await setPluginUnboxedConsent("watcher", false);
+    expect(listPlugins()[0]!.allowUnboxed).toBe(false);
+    expect(listPlugins()[0]!.boxPlan).toBe("refuse");
+    expect(listPlugins()[0]!.running).toBe(false);
+  });
+
+  test("the machine-wide hatch is read from the environment each time, and only \"1\" opens it", () => {
+    expect(envAllowsUnboxed()).toBe(false);
+    process.env.AGENTGLASS_PLUGINS_UNBOXED = "1";
+    expect(envAllowsUnboxed()).toBe(true);
+    process.env.AGENTGLASS_PLUGINS_UNBOXED = "true";
+    expect(envAllowsUnboxed()).toBe(false);
+  });
+});
+
+describe("index.ts answers for the consent route and its status", () => {
+  async function routeBlock(marker: string): Promise<string> {
+    const src = await Bun.file(new URL("../src/index.ts", import.meta.url)).text();
+    const start = src.indexOf(marker);
+    expect(start).toBeGreaterThan(-1);
+    let depth = 0;
+    for (let i = start; i < src.length; i++) {
+      if (src[i] === "{") depth++;
+      else if (src[i] === "}") { depth--; if (depth === 0) return src.slice(start, i); }
+    }
+    throw new Error("route block never closes");
+  }
+
+  test("a throw while starting or stopping reaches the caller through failed(), never as the exception", async () => {
+    const block = await routeBlock('if (pathname === "/plugins/allow-unboxed" && req.method === "POST") {');
+    expect(block).toContain('failed("plugins/allow-unboxed"');
+    expect(block).not.toMatch(/e\.message|String\(e\)|\$\{e\}/);
+  });
+
+  test("GET /plugins says whether the machine-wide hatch is open", async () => {
+    const block = await routeBlock('if (pathname === "/plugins" && req.method === "GET") {');
+    expect(block).toContain("envAllowsUnboxed: envAllowsUnboxed()");
   });
 });

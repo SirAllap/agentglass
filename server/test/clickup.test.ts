@@ -70,6 +70,9 @@ beforeEach(() => {
   C.__clearAll();
   CU.__setClickUpBase(BASE);
   CV.__setViewsPath(join(dir, "clickup-views.json"));
+  // The write switch is saved to that file, so a test that turned it on left it
+  // on for whichever test ran next; `--seed` found the one that asserts "off".
+  CV.setWritesAllowed(false);
   reply = () => json({});
 });
 afterEach(() => { CU.__reset(); });

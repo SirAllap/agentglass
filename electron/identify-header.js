@@ -47,4 +47,43 @@ function sanitizeAgentName(name) {
   return typeof name === "string" && AGENT_NAME_RE.test(name) ? name : null;
 }
 
-module.exports = { IDENTIFY_HEADER, shouldIdentify, sanitizeAgentName };
+/**
+ * Who a guest's requests are attributed to once `event` has happened — the one
+ * decision about the name, so that nothing else has to remember to clear it.
+ *
+ * The name is a claim by whoever drove the guest LAST, not a property of the
+ * tab. Measured on a tab an agent had driven with `--as orbit-bot`: a later
+ * `--shared` ask (which sends no `as`) and the person typing an address both
+ * left `orbit-bot` in the map, so the next page's requests to a dev server
+ * named an agent that was not there. Only an ask that names itself keeps or
+ * sets a name; anything else — an ask with no `as`, an empty or malformed one,
+ * the person acting on the tab — takes it away. A guest that is destroyed is
+ * dropped by the book below, not by an event.
+ *
+ * @param {string | null | undefined} current
+ * @param {{ kind: "ask", as?: unknown } | { kind: "person" }} event
+ * @returns {string | null} */
+function ownerAfter(current, event) {
+  if (event && event.kind === "ask") return sanitizeAgentName(event.as);
+  return null;
+}
+
+/** The names by guest id, with `ownerAfter` the only way in. A plain object
+ *  a test can build; `main.js` holds one. */
+function createOwnerBook() {
+  /** @type {Map<number, string>} */
+  const names = new Map();
+  return {
+    /** @param {number} guestId @param {Parameters<typeof ownerAfter>[1]} event */
+    apply(guestId, event) {
+      const next = ownerAfter(names.get(guestId), event);
+      if (next) names.set(guestId, next); else names.delete(guestId);
+    },
+    /** @param {number} guestId */
+    get: (guestId) => names.get(guestId),
+    /** @param {number} guestId */
+    drop: (guestId) => { names.delete(guestId); },
+  };
+}
+
+module.exports = { IDENTIFY_HEADER, shouldIdentify, sanitizeAgentName, ownerAfter, createOwnerBook };

@@ -14,7 +14,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { PrTalkNote } from "../../../shared/types.ts";
-import { prMarkKey } from "../../../shared/prUnread.ts";
+import { prMarkKey, prSeenKey } from "../../../shared/prUnread.ts";
 
 let globalTick = 0;
 const globalListeners = new Set<() => void>();
@@ -31,6 +31,17 @@ export function noteTalk(n: PrTalkNote): void {
   for (const listen of globalListeners) listen();
 
   const key = prMarkKey(n);
+  perPr.set(key, (perPr.get(key) ?? 0) + 1);
+  for (const listen of perPrListeners.get(key) ?? []) listen();
+}
+
+/** A `ci` or `prchecks` frame: the checks of this one pull request moved.
+ *  Only its own tick — the open detail re-reads, the list does not, because a
+ *  run sends a frame per change and each would be a list read per repository.
+ *  The key is the one a screen derives from the pull request's url
+ *  (`prMarkKey`), spelled out here because these frames carry `owner/name`. */
+export function noteChecks(repo: string, number: number): void {
+  const key = prSeenKey(`github.com/${repo}`, number);
   perPr.set(key, (perPr.get(key) ?? 0) + 1);
   for (const listen of perPrListeners.get(key) ?? []) listen();
 }
@@ -77,13 +88,26 @@ export function usePrTalkTick(key: string): number {
  */
 export function useReloadOnTick(tick: number, reload: () => unknown, scope = ""): void {
   const seen = useRef({ scope, tick });
+  const latest = useRef(reload);
+  latest.current = reload;
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     const was = seen.current;
     seen.current = { scope, tick };
     if (was.scope !== scope || was.tick === tick) return;
-    void reload();
-  }, [scope, tick, reload]);
+    /* Trailing, not one reload per tick: a review with a dozen comments sends
+       a dozen ticks in a few seconds, and each reload of the list is a request
+       per repository plus one per repository for the counts (5 ticks in 5 s
+       made 30 identical requests, measured). The ceiling: the screen catches
+       up `RELOAD_QUIET_MS` after the last tick of a burst. */
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => { timer.current = null; void latest.current(); }, RELOAD_QUIET_MS);
+  }, [scope, tick]);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
 }
+
+/** How long a burst of ticks must go quiet before the screen reloads (see `useReloadOnTick`). */
+export const RELOAD_QUIET_MS = 1500;
 
 /** The counts, for a test that wants to look without rendering a hook — there
  *  is no renderer in this project, so `noteTalk`'s effect on the store is

@@ -471,7 +471,7 @@ describe("the card carries the suite as a bar", () => {
 
   it("still says the verdict in words", () => {
     // Colour alone cannot say "red" to somebody who cannot see red.
-    expect(render({ mine: [pr(4, { ok: 2, fail: 1 })] })).toContain("1 failing");
+    expect(render({ mine: [pr(4, { ok: 2, fail: 1 })] })).toContain("1 check failing");
     expect(render({ mine: [pr(5, { ok: 6, pend: 8 })] })).toContain("6 of 14 in");
   });
 });
@@ -594,28 +594,23 @@ describe("who is on it", () => {
     expect(board).not.toContain("r.login.slice(0, 2).toUpperCase()");
   });
 
-  it("is the author and whoever was asked, capped", () => {
-    // The two facts a list row carries. Past five the card is a contact sheet,
-    // and the pull request itself lists them all.
-    expect(board).toContain("[p.author, ...(p.reviewers ?? []).map((r) => r.login)]");
-    expect(board).toContain(".slice(0, 5)");
+  it("the author leads the identity line; whoever the lane header names sits beside the name", () => {
+    expect(board).toContain("<Avatar login={p.author} size={20} />");
+    expect(board).toContain("headerPeople.slice(0, HEADER_FACES)");
+    expect(board).not.toContain("agx-prc-foot");
   });
 });
 
 describe("a board is for pointing at, not for pressing", () => {
-  it("opens the pull request instead of performing the lane's action", () => {
+  it("opens the pull request from the card itself: no button row, nothing that performs the lane's action", () => {
     /*
-     * Reported after pressing "Re-run failed" by accident on a card that was
-     * under the pointer for a different reason — and Merge sat in the same
-     * place on the lane next to it.
+     * A Re-run pressed by accident on a card under the pointer for another
+     * reason, and then an Open button nobody used. The whole card is the
+     * button; the lane and its sentence say what wants doing.
      */
-    expect(board).toContain('onAct(p, "open")');
+    expect(board).toContain('<div onClick={onOpen} role="button"');
     expect(board).not.toContain("onAct(p, act)");
-  });
-
-  it("still says what the card is asking for", () => {
-    // The verdict travels; only the press moves.
-    expect(board).toContain('Open{act === "merge" ? " to merge" : act === "rerun" ? " to re-run" : ""}');
+    expect(board).not.toContain('onAct(p, "open")');
   });
 });
 
@@ -677,8 +672,8 @@ describe("taking a card away with you", () => {
        message. */
     expect(board).toContain("copyLink()");
     expect(board).toContain('navigator.clipboard?.writeText(p.url || "")');
-    // Same 26px box as the star it sits next to.
-    expect(board.split("width: 26, height: 26").length - 1).toBe(2);
+    // Same house box (HIT) as the star it sits next to.
+    expect(board.split("width: HIT, height: HIT").length - 1).toBe(2);
   });
 });
 
@@ -761,6 +756,32 @@ describe("the card header strip, cleared", () => {
 
   it("says the same thing the merge box says", () => {
     expect(fn).toContain("Waiting on review by");
-    expect(fn).toContain("Changes applied, asked to look again.");
+    /* The header names who the ball is with; the sentence under it, in the
+       card's own last-event zone, says what happened. Said twice it was one
+       fact on two lines of the same card. */
+    expect(fn).not.toContain("Changes applied, asked to look again.");
+  });
+});
+
+describe("card assignees on a board card", () => {
+  const tracker = readFileSync(new URL("../src/components/CardTracker.tsx", import.meta.url), "utf8");
+
+  it("draws up to five faces and says the rest as +N", () => {
+    expect(tracker).toContain("peopleShown(who.length)");
+    expect(tracker).toContain("who.slice(0, faces)");
+    expect(tracker).toContain("+{more}");
+  });
+
+  it("does not repeat the first assignee's name next to the faces", () => {
+    expect(tracker).not.toContain("who[0]!.name");
+  });
+});
+
+describe("the identity line of a board card", () => {
+  const line = board.slice(board.indexOf("Beside the number, before the title"), board.indexOf("Everything that is only sometimes true"));
+
+  it("does not print the author's name: the first face bottom right is the author", () => {
+    expect(line).toContain("ago(p.updatedAt)");
+    expect(line).not.toContain("{p.author}");
   });
 });

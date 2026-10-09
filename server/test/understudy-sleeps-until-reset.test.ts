@@ -9,7 +9,7 @@
  * resumes nor spends a try while it holds, and the moment it lapses the loop
  * is resumed at once. Persisted, so a restart mid-nap keeps napping.
  */
-import { test, expect, beforeEach, describe } from "bun:test";
+import { test, expect, afterAll, beforeEach, describe } from "bun:test";
 import { db } from "../src/db.ts";
 import * as Work from "../src/understudy-work.ts";
 import { ask } from "../src/understudy-sources-work.ts";
@@ -29,6 +29,11 @@ beforeEach(() => {
   setGitHook(async () => ({ ok: false, out: "" }));
   setResumeHook(null);
 });
+
+// The hold is a row in the process's one database, and "the loop takes nothing
+// while it holds" sets it for an hour: any later file that works a queue would
+// find the loop asleep.
+afterAll(() => { Work.clearHold(); });
 
 describe("the reset hour the CLI announces", () => {
   test("is read as a clock time today — or tomorrow, when that hour is already behind", () => {

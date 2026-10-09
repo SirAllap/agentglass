@@ -7,10 +7,12 @@
  * to read `~/.ssh/id_rsa` from a browser tab.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { browseDir, browseReal, fileBytes, fileFacts, imageSize, kindOf, openInDesktop } from "../src/browse.ts";
+import { dirname, join } from "node:path";
+import { pagePolicy } from "../src/browse.ts";
+import { editorRunArgv, viewableFile } from "../src/terminal.ts";
+import { browseDir, browseReal, fileBytes, fileFacts, imageSize, kindOf, openInDesktop, revealArgv, revealTarget } from "../src/browse.ts";
 
 const made: string[] = [];
 const wasRoots = process.env.AGENTGLASS_DISK_ROOTS;
@@ -78,6 +80,78 @@ describe("what is in this folder", () => {
     expect(r.entries.map((e) => e.name)).toEqual(["visible.txt"]);
     // Said out loud rather than silently showing less than the folder holds.
     expect(r.hiddenSkipped).toBe(2);
+  });
+
+  test("a caller that is not on this machine gets today's rules: dotted names are not listed even when asked", async () => {
+    const d = tmp();
+    writeFileSync(join(d, "visible.txt"), "x");
+    mkdirSync(join(d, ".config"));
+    writeFileSync(join(d, ".config", "prefs.json"), "{}");
+    const r = browseDir(d, true, false);
+    expect(r.entries.map((e) => e.name)).toEqual(["visible.txt"]);
+    expect(r.hiddenSkipped).toBe(1);
+    expect(browseDir(join(d, ".config"), true, false).ok).toBe(false);
+    expect(fileFacts(join(d, ".config", "prefs.json"), false).ok).toBe(false);
+    expect((await fileBytes(join(d, ".config", "prefs.json"), false)).ok).toBe(false);
+  });
+
+  test("a local caller may list and enter a dotted folder", async () => {
+    const d = tmp();
+    mkdirSync(join(d, ".config"));
+    writeFileSync(join(d, ".config", "prefs.json"), "{\"a\":1}");
+    const top = browseDir(d, true, true);
+    expect(top.hiddenSkipped).toBe(0);
+    expect(top.entries.find((e) => e.name === ".config")).toMatchObject({ kind: "dir", hidden: true, items: 1, locked: false });
+    const inside = browseDir(join(d, ".config"), false, true);
+    expect(inside.ok).toBe(true);
+    expect(inside.entries.map((e) => e.name)).toEqual(["prefs.json"]);
+    expect(fileFacts(join(d, ".config", "prefs.json"), true).ok).toBe(true);
+  });
+
+  /* One case per store, each asserted in the read doors and in the listing of
+     the folder that holds it. The names are the credential stores the finder
+     must never open, for a caller on this machine as much as for any other. */
+  const DENIED = [
+    ".ssh/id_x", ".gnupg/pubring.kbx", ".aws/credentials", ".kube/config", ".docker/config.json",
+    ".config/agent-secrets/key", ".config/gh/hosts.yml", ".config/google-chrome/Default/Cookies",
+    ".mozilla/firefox/profile/cookies.sqlite", ".password-store/site.gpg", ".claude/.credentials.json",
+    ".netrc", ".npmrc", ".env", ".env.local", ".git-credentials", ".config/1Password/vault",
+  ];
+  for (const rel of DENIED) {
+    test(`stays locked for a local caller: ${rel}`, async () => {
+      const d = tmp();
+      const file = join(d, rel);
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, "not-a-real-secret");
+      expect(fileFacts(file, true).ok).toBe(false);
+      expect((await fileBytes(file, true)).ok).toBe(false);
+      // Walk down from the root: the first denied step must show as locked in
+      // the listing that holds it, and must not open.
+      const parts = rel.split("/");
+      let at = d;
+      for (let i = 0; i < parts.length; i++) {
+        const row = browseDir(at, true, true).entries.find((e) => e.name === parts[i]);
+        expect(row).toBeDefined();
+        const next = join(at, parts[i]!);
+        if (row!.locked) {
+          if (row!.kind === "dir") expect(browseDir(next, true, true).ok).toBe(false);
+          return;
+        }
+        at = next;
+      }
+      throw new Error(`${rel} was never locked on the way down`);
+    });
+  }
+
+  test("a link out of a dotted folder into a denied store is refused", async () => {
+    const d = tmp();
+    mkdirSync(join(d, ".ssh"));
+    writeFileSync(join(d, ".ssh", "id_x"), "not-a-real-secret");
+    mkdirSync(join(d, ".config"));
+    symlinkSync(join(d, ".ssh"), join(d, ".config", "friendly"));
+    expect(browseDir(join(d, ".config", "friendly"), true, true).ok).toBe(false);
+    expect(fileFacts(join(d, ".config", "friendly", "id_x"), true).ok).toBe(false);
+    expect((await fileBytes(join(d, ".config", "friendly", "id_x"), true)).ok).toBe(false);
   });
 
   test("a symlink is shown as a link, not as what it points at", () => {
@@ -322,4 +396,96 @@ describe("handing a file to the desktop", () => {
     expect(openInDesktop(join(d, "nope.png"))).toMatchObject({ ok: false, error: "no such file" });
   });
 });
+describe("the bench editor door follows the finder's", () => {
+  /* A workspace that is NOT where the file is: the installed cockpit has one,
+     and an empty scope answers "everywhere", which hides the bug. */
+  const wasRoot = process.env.AGENTGLASS_ROOT;
+  const project = mkdtempSync(join(tmpdir(), "agx-project-"));
+  made.push(project);
+  afterEach(() => { if (wasRoot === undefined) delete process.env.AGENTGLASS_ROOT; else process.env.AGENTGLASS_ROOT = wasRoot; });
+
+  test("a file the finder may read opens in the editor even outside any project", () => {
+    const d = tmp();
+    process.env.AGENTGLASS_ROOT = project;
+    writeFileSync(join(d, "sheet.html"), "<p>x</p>");
+    expect(viewableFile(join(d, "sheet.html"), false)).toBe(true);
+  });
+
+  test("a file it may not read is still refused, and nothing is nothing", () => {
+    process.env.AGENTGLASS_ROOT = project;
+    delete process.env.AGENTGLASS_DISK_ROOTS;
+    expect(viewableFile("/etc/passwd", false)).toBe(false);
+    expect(viewableFile(null, false)).toBe(false);
+  });
+});
+
+describe("the bench editor command carries the file", () => {
+  test("nvim, its socket, the line and the exact path as one element", () => {
+    const argv = editorRunArgv({ editor: "nvim", listen: "/run/x.sock", readonlyFlags: [], line: 12.9, file: "/home/u/Documents/my notes.md" });
+    expect(argv).toEqual(["nvim", "--listen", "/run/x.sock", "+12", "/home/u/Documents/my notes.md"]);
+  });
+
+  test("a read-only ask keeps -R -M ahead of the file, and no editor flag is dropped", () => {
+    const argv = editorRunArgv({ editor: "nvim -u NONE", listen: null, readonlyFlags: ["-R", "-M"], file: "/a/b.ts" });
+    expect(argv).toEqual(["nvim", "-u", "NONE", "-R", "-M", "/a/b.ts"]);
+  });
+
+  /* The command is not only shaped right: run as built, nvim has that file. */
+  test.skipIf(!Bun.which("nvim"))("nvim started from it has the file open", async () => {
+    const d = tmp();
+    const file = join(d, "sheet notes.md");
+    const out = join(d, "buffer.txt");
+    writeFileSync(file, "# hi\n");
+    const [bin, ...rest] = editorRunArgv({ editor: "nvim", listen: null, readonlyFlags: [], file });
+    const proc = Bun.spawn([bin!, "--headless", "--clean", ...rest, "-c", `call writefile([expand('%:p')], '${out}')`, "-c", "qa!"], { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
+    expect(await proc.exited).toBe(0);
+    expect(readFileSync(out, "utf8").trim()).toBe(file);
+  });
+});
+
+describe("a page from disk, in a browser tab", () => {
+  test("html is a page with no scripts and no network", () => {
+    const p = pagePolicy("/home/u/Documents/sheet.HTML");
+    expect(p?.mime).toContain("text/html");
+    expect(p?.csp).toContain("sandbox");
+    expect(p?.csp).toContain("default-src 'none'");
+    expect(p?.csp.includes("script-src")).toBe(false);
+  });
+
+  test("anything else keeps the preview policy", () => {
+    expect(pagePolicy("/home/u/shot.png")).toBeNull();
+    expect(pagePolicy("/home/u/notes.txt")).toBeNull();
+    expect(pagePolicy("/home/u/htmlnotes")).toBeNull();
+  });
+});
+
+describe("showing a place in the file manager", () => {
+  test("a folder is shown as itself and a file as the folder that holds it", () => {
+    const d = tmp();
+    writeFileSync(join(d, "notes.txt"), "x");
+    const folder = revealTarget(d);
+    const file = revealTarget(join(d, "notes.txt"));
+    expect(folder.ok && file.ok).toBe(true);
+    if (folder.ok && file.ok) expect(file.dir).toBe(folder.dir);
+  });
+
+  test("outside the boundary, or missing, nothing is opened", () => {
+    noRootsForOpen();
+    expect(revealTarget("/etc")).toMatchObject({ ok: false });
+    expect(revealTarget("/etc/passwd")).toMatchObject({ ok: false });
+    expect(revealTarget(null)).toMatchObject({ ok: false });
+    const d = tmp();
+    expect(revealTarget(join(d, "nope"))).toMatchObject({ ok: false, error: "no such file" });
+  });
+
+  test("the path is one argument, never part of a string a shell would read", () => {
+    const evil = "/home/u/a b; rm -rf ~ $(x)";
+    const which = (b: string) => (b === "xdg-open" ? "/usr/bin/xdg-open" : null);
+    expect(revealArgv("linux", which, evil)).toEqual(["/usr/bin/xdg-open", evil]);
+    expect(revealArgv("linux", (b) => (b === "gio" ? "/usr/bin/gio" : null), evil)).toEqual(["/usr/bin/gio", "open", evil]);
+    expect(revealArgv("darwin", (b) => (b === "open" ? "/usr/bin/open" : null), evil)).toEqual(["/usr/bin/open", evil]);
+    expect(revealArgv("linux", () => null, evil)).toBeNull();
+  });
+});
+
 function noRootsForOpen() { delete process.env.AGENTGLASS_DISK_ROOTS; }
