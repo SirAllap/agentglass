@@ -339,8 +339,10 @@ contextBridge.exposeInMainWorld("agentglass", {
   sessionSettings: (req) => ipcRenderer.invoke("ag:browserSessionSettings", req),
   /** S9: which agent a guest's requests should be attributed to, for the
    *  `identify` header. Fire-and-forget, like `browser-active` — main keeps
-   *  the map, this is just the push. @param {number} guestId @param {string} owner */
-  setGuestOwner: (guestId, owner) => ipcRenderer.send("ag:browserGuestOwner", { guestId, owner }),
+   *  the map, this is just the push. `owner` is the asker's `as`, empty when it
+   *  sent none; `person` says the person acted on the tab instead.
+   *  @param {number} guestId @param {string} owner @param {boolean} [person] */
+  setGuestOwner: (guestId, owner, person) => ipcRenderer.send("ag:browserGuestOwner", { guestId, owner, person: person === true }),
   /** The system folder chooser, for picking a project. Resolves to a path, or
    *  null if it was cancelled. A browser tab has no equivalent, which is why
    *  the picker keeps a path box beside it.

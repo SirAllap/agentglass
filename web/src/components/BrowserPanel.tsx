@@ -25,7 +25,7 @@ import { CloseButton } from "./CloseButton.tsx";
 import { LanesRow } from "./LanesRow.tsx";
 import { Portal } from "./Portal.tsx";
 import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
-import { BROWSER_PARTITION, HAS_BROWSER, IS_DESKTOP, applySessionSettings, browserDevtools, browserDevtoolsClose, browserDevtoolsRect, browserDevtoolsZoom, browserCdp, browserZoom, browserShelfRead, captureFullPage, cookieSources, onDevtoolsZoom, onDevtoolsOpen, onBrowserZoom, onBrowserOpenTab, onBrowserKey, onBrowserSearch, onBrowserInspect, setActiveBrowserGuest, openEphemeralTab, closeEphemeralTab } from "../lib/desktop.ts";
+import { BROWSER_PARTITION, HAS_BROWSER, IS_DESKTOP, applySessionSettings, browserDevtools, browserDevtoolsClose, browserDevtoolsRect, browserDevtoolsZoom, browserCdp, browserZoom, browserShelfRead, captureFullPage, cookieSources, onDevtoolsZoom, onDevtoolsOpen, onBrowserZoom, onBrowserOpenTab, onBrowserKey, onBrowserSearch, onBrowserInspect, setActiveBrowserGuest, setGuestOwner, openEphemeralTab, closeEphemeralTab } from "../lib/desktop.ts";
 import { buildSearchUrl, displayUrl, normalizeNavigationUrl } from "../lib/browserUrl.ts";
 import { BLANK, homePage, searchEngine, zoomLevel, setZoomLevel as saveZoom, zoomPercent, stepZoom, ZOOM_MIN, ZOOM_MAX, devtoolsSide, setDevtoolsSide, devtoolsSize, setDevtoolsSize, devtoolsZoom, setDevtoolsZoom, sidebarOpen, setSidebarOpen, sidebarWidth, setSidebarWidth, type DevtoolsSide } from "../lib/browserPrefs.ts";
 import { addTab, closeTab, listable, newTab, patchTab, pruneBlank, sleepingTab, stepTab, tabLabel, wake, withInspected, type BrowserTab } from "../lib/browserTabs.ts";
@@ -1509,6 +1509,9 @@ export function BrowserView({ active: viewOn, scope }: {
     // a verb that reads `tabs` right after a typed navigation saw the OLD url
     // until the guest caught up. Patched here so it never lags.
     patch(active.id, { failed: null, url: next });
+    // The person is driving this tab now: whatever agent named it last no
+    // longer owns the requests it is about to make.
+    try { setGuestOwner(w.getWebContentsId(), "", true); } catch { /* attaching */ }
     w.src = next;
   }, [active, patch, el]);
 
@@ -2736,7 +2739,13 @@ export function BrowserView({ active: viewOn, scope }: {
                       <div {...pressProps("tab", t.id, tabLabel(t))}
                         data-drop-to="tabs" data-drop-index={String(n)}
                         onContextMenu={(e) => { e.preventDefault(); setMenuAt({ x: e.clientX, y: e.clientY, kind: "tab", id: t.id }); }}
-                        onClick={() => { if (!dragged.current) show(t.id); }}
+                        onClick={() => {
+                          if (dragged.current) return;
+                          // The person picked this tab: it is theirs, not whichever agent drove it last.
+                          const w = els.current.get(t.id);
+                          try { if (w) setGuestOwner(w.getWebContentsId(), "", true); } catch { /* not attached yet */ }
+                          show(t.id);
+                        }}
                         onMouseDown={(e) => { if (e.button === 1) { e.preventDefault(); close(t.id); } }}
                         title={t.url || "New tab"}
                         className="group flex items-center gap-2 rounded-md px-1.5 min-h-[28px] cursor-default min-w-0"
