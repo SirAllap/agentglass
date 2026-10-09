@@ -3364,7 +3364,7 @@ export function mentionsTask(taskId: string, pr: { title?: string; body?: string
  *
  * `mentionsCard` answers "does the text carry the id", and a stacked pull
  * request's body does for both cards it sits between: MEASURED on two stacked
- * pull requests, the second said "Depends on #19748 (ORBIT-24797 ...)" and so
+ * pull requests, the second said "Depends on #1041 (ORBIT-1042 ...)" and so
  * the search for the first card returned it too. Both cards then drew the
  * newer one as their chip, and anybody reading the board asked why two cards
  * had the same pull request.
