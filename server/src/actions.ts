@@ -189,9 +189,14 @@ export function targetOf(pathname: string, b: Record<string, unknown>): string {
  * pressing something, which is tens a day, not the thousands an hour the events
  * table takes.
  *
- * `/control` is not routed through here and is not meant to be: it moves the
- * UI's own focus and grants nothing the keyboard does not already have, so
- * logging it would bury the merges under navigation.
+ * `/control` is routed through here as `/control/<registry id>`, with no body:
+ * it used to be left out because it moves only the UI's own focus and grants
+ * nothing the keyboard does not already have, and a line per button press
+ * would bury the merges. That reasoning held while its only callers were a
+ * Stream Deck and a phone. It is now also the door an agent opens panels by,
+ * and "which agent opened what, and was anyone there to see it" has no other
+ * answer. The id and the verdict are the whole line, so the volume is one short
+ * row per command and the values a command named never reach the log.
  */
 export function noteAction(
   ip: string | null | undefined,

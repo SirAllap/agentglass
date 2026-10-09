@@ -4,6 +4,7 @@ import type { NotifyKind, NotifyPrefs } from "./notifyPrefs.ts";
 import type { AskedAlert, NotifyPayload } from "./notifyPayload.ts";
 import type { CheckUsual } from "./checkBaseline.ts";
 import type { InboxAnnotation } from "./pluginUi.ts";
+import type { UiCmd } from "./uiActions.ts";
 
 export type HookEventType =
   | "SessionStart"
@@ -1175,7 +1176,10 @@ export type ControlCmd =
   | { cmd: "zoom"; dir: 1 | -1 | 0 }
   /** Drive the chat view itself. Unlike the rest, this one needs the chat panel
    *  mounted to run — see web/src/lib/chatIntent.ts. */
-  | { cmd: "chat"; do: "new" };
+  | { cmd: "chat"; do: "new" }
+  /** Any door in shared/uiActions.ts, by id. The older spellings above are
+   *  aliases of entries there; this is the general one. */
+  | UiCmd;
 
 /** An agent asking the built-in browser to do one thing. Answered by whichever
  *  window is showing it, over POST /browser/result — see browserdrive.ts. */

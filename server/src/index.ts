@@ -55,7 +55,7 @@ import { refreshCodexUsage } from "./codexusage.ts";
 import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, onGateChange, typedReason, GATE_MAX_MS, gateFailClosed, denyByRule, allowByRule, validGateId } from "./gate.ts";
 import { budgetHoldFor } from "./budget.ts";
 import { gateCwd, gateRuleFor } from "./gaterules.ts";
-import { parseControlCmd } from "./control.ts";
+import { parseControlCmd, controlId } from "./control.ts";
 import { outwardAction, outwardLine } from "./outward.ts";
 import { listLanes } from "./lanes.ts";
 import { gateLane, dropBrowserTarget, askBrowser, browserReadyCount, exportAudit, noteBrowserManager, noteBrowserReady, parseAsk, setBrowserSink, settleBrowser, type BrowserOp, runSteps, waitForEvents, recordFrames, traceRecording, auditAsScript, downloadFile, runLanes, withObservation, parseScrape, runScrape } from "./browserdrive.ts";
@@ -3694,8 +3694,30 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const cmd = parseControlCmd(b);
       if (!cmd) return json({ ok: false, error: "unknown control command" }, 400);
+      /*
+       * Delivery, said truthfully. The command rides the same sockets every
+       * window holds, and with none attached it used to be dropped while the
+       * caller was told ok, so a Stream Deck button and an agent could not tell
+       * "shown" from "nobody was there". `clients` is the audience broadcast()
+       * writes to, so zero here means zero would receive it. What this cannot
+       * know is whether a window RAN it: the frame is fire-and-forget, so `ok`
+       * still means accepted and sent to N windows, not applied.
+       *
+       * One audit line per command, the id and the verdict and nothing else:
+       * the path or row a command named is a value, and the log records that a
+       * door was opened, not what was looked at. Refused-for-no-window is a
+       * line too, since an agent that keeps asking is worth seeing.
+       */
+      const pageOrigin = req.headers.get("origin");
+      const who = caller ? { ...asActor(caller)!, fromPage: !!pageOrigin && vouchedOrigin(pageOrigin) } : caller;
+      const audit = (ok: boolean, error?: string) => noteAction(clientIp, `/control/${controlId(cmd) ?? "unknown"}`, {}, { ok, error }, who);
+      if (clients.size === 0) {
+        audit(false, "no window");
+        return json({ ok: false, error: "no window" }, 503);
+      }
       broadcast({ type: "control", data: cmd });
-      return json({ ok: true });
+      audit(true);
+      return json({ ok: true, windows: clients.size });
     }
 
     /*

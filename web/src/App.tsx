@@ -18,8 +18,7 @@ import { usePoll } from "./lib/usePoll.ts";
 import { refusalFinal, useCoverHold } from "./lib/cover.ts";
 import { initialTheme, applyTheme, THEMES } from "./lib/themes.ts";
 import { subscribeControl } from "./lib/controlBus.ts";
-import { latchChatIntent } from "./lib/chatIntent.ts";
-import type { ControlCmd } from "../../shared/types.ts";
+import { runControl, type UiCtx } from "./lib/uiActions.ts";
 import { actionFor } from "./lib/keybindings.ts";
 import { claimFind, findChordIsOursToTake, openFind, scopeHolding } from "./lib/findScope.ts";
 import { FindBar } from "./components/FindBar.tsx";
@@ -59,7 +58,7 @@ import DbNoticeBanner from "./components/DbNoticeBanner.tsx";
 import { chordFromEvent, viewForChord, appActionForChord } from "./lib/keybindings.ts";
 import { openFocusedPaneDoor, type PaneDoor } from "./components/TerminalPanel.tsx";
 import { FilePalette } from "./components/FilePalette.tsx";
-import { finderFromControl, onFinderAt, openFinderAt, type FinderTarget } from "./lib/finderTarget.ts";
+import { onFinderAt, type FinderTarget } from "./lib/finderTarget.ts";
 import { WindowSwitcher } from "./components/terminal/WindowSwitcher.tsx";
 import { FloatingBench } from "./components/bench/FloatingBench.tsx";
 import { benchTakesBoard, toggleBench, showFile, addTab } from "./lib/benchStore.ts";
@@ -1028,63 +1027,42 @@ export default function App() {
   // React guarantees stable; theme/zoom use functional updates so the current
   // value is read at apply time, not captured in this closure.
   useEffect(() => {
-    const nextThemeId = (cur: string, cmd: Extract<ControlCmd, { cmd: "theme" }>): string => {
-      if (cmd.name) return THEMES.some((t) => t.id === cmd.name) ? cmd.name : cur;
-      const i = THEMES.findIndex((t) => t.id === cur);
-      const n = THEMES.length;
-      return THEMES[(((i < 0 ? 0 : i) + (cmd.dir ?? 1)) % n + n) % n]!.id;
+    // One handler table for both spellings of a command (lib/uiActions.ts);
+    // this only hands it the state App owns.
+    const ctx: UiCtx = {
+      goView,
+      // No overlay to toggle any more: an external controller asking for "the
+      // workspace" gets the last view that was not the dashboard, which is what
+      // it was asking to see.
+      workspace: () => setWsView((cur) => (cur === "dash" ? lastNonDash.current : cur)),
+      // The same peel Escape does, minus the focus guards — a remote command
+      // isn't typed into a field or a shell, so nothing has to be spared.
+      peel: () => {
+        setSelected(null);
+        setPaletteOpen(false);
+        setHelpOpen(false);
+        setStatsOpen(false);
+        setSkillsOpen(false);
+        setSearchOpen(false);
+        setSessionView(null);
+      },
+      panel: (what) => {
+        if (what === "stats") setStatsOpen(true);
+        else if (what === "skills") setSkillsOpen(true);
+        else if (what === "search") setSearchOpen(true);
+        else if (what === "help") setHelpOpen(true);
+        else setPaletteOpen(true);
+      },
+      setTheme,
+      // Through the same door as the keys, so a remote controller and a
+      // keystroke cannot disagree about what "zoom" means. There is no pointer
+      // in a remote command, so it lands on the window.
+      zoom,
+      setMachine,
+      setProjectOpen,
+      setWindowsOpen,
     };
-    return subscribeControl((cmd) => {
-      switch (cmd.cmd) {
-        case "view":
-          goView(cmd.to);
-          break;
-        case "workspace":
-          // No overlay to toggle any more: an external controller asking for
-          // "the workspace" gets the last view that was not the dashboard,
-          // which is what it was asking to see.
-          setWsView((cur) => (cur === "dash" ? lastNonDash.current : cur));
-          break;
-        case "esc":
-          // The same peel Escape does, minus the focus guards — a remote command
-          // isn't typed into a field or a shell, so nothing has to be spared.
-          setSelected(null);
-          setPaletteOpen(false);
-          setHelpOpen(false);
-          setStatsOpen(false);
-          setSkillsOpen(false);
-          setSearchOpen(false);
-          setSessionView(null);
-          break;
-        case "open":
-          if (cmd.what === "stats") setStatsOpen(true);
-          else if (cmd.what === "skills") setSkillsOpen(true);
-          else if (cmd.what === "search") setSearchOpen(true);
-          else if (cmd.what === "help") setHelpOpen(true);
-          else if (cmd.what === "palette") setPaletteOpen(true);
-          else if (cmd.what === "finder") {
-            const at = finderFromControl(cmd);
-            if (at) openFinderAt(at.path, at.kind);
-          }
-          break;
-        case "theme":
-          setTheme((cur) => nextThemeId(cur, cmd));
-          break;
-        case "zoom":
-          // Through the same door as the keys, so a remote controller and a
-          // keystroke cannot disagree about what "zoom" means. There is no
-          // pointer in a remote command, so it lands on the window — which is
-          // what an external controller can sensibly mean by it.
-          zoom(cmd.dir);
-          break;
-        case "chat":
-          // Latch before opening: the panel drains the mailbox on mount, so
-          // this works whether or not the chat view is already up.
-          latchChatIntent(cmd.do);
-          goView("chat");
-          break;
-      }
-    });
+    return subscribeControl((cmd) => { runControl(cmd, ctx); });
   }, []);
 
   // /stats carries the server's process start; fall back to page mount for

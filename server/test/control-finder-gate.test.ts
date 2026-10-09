@@ -10,12 +10,17 @@
  * mutating-routes-guard.test.ts, which does go red without it; this file pins
  * the behaviour a caller sees, whichever layer gives it.
  *
+ * Also pinned here, because it needs a running server: with no window attached
+ * the command is turned away with a 503 instead of a false ok, with a window it
+ * is delivered and answers how many, and each command leaves one audit line
+ * that names the door and not the path.
+ *
  * A page on another origin must be refused outright (it is the one caller that
  * could otherwise show somebody a file without being asked), a loopback caller
  * with no Origin is the agent this exists for, and a bad path is a 400 that
  * never reaches a window.
  */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -53,6 +58,27 @@ beforeAll(async () => {
   throw new Error("the server did not come up: " + (await new Response(proc.stderr as ReadableStream).text()).slice(0, 400));
 }, SERVER_BOOT_MS);
 
+const sockets: WebSocket[] = [];
+/** A dashboard window: a /stream client that records the control frames. */
+async function window_(): Promise<{ frames: any[]; ws: WebSocket }> {
+  const ws = new WebSocket(base.replace("http", "ws") + "/stream");
+  sockets.push(ws);
+  const frames: any[] = [];
+  ws.addEventListener("message", (ev) => {
+    try { const f = JSON.parse(String((ev as MessageEvent).data)); if (f.type === "control") frames.push(f.data); } catch { /* not json */ }
+  });
+  await new Promise((r) => ws.addEventListener("open", r));
+  await Bun.sleep(100);
+  return { frames, ws };
+}
+
+/* Every test starts with no window attached, so the one that asserts on that
+   does not depend on running first. */
+afterEach(async () => {
+  for (const w of sockets.splice(0)) try { w.close(); } catch { /* gone */ }
+  await Bun.sleep(150);
+});
+
 afterAll(() => {
   try { proc?.kill(); } catch { /* already gone */ }
   try { rmSync(dir, { recursive: true, force: true }); } catch { /* fine */ }
@@ -62,11 +88,26 @@ const post = (body: unknown, headers: Record<string, string> = {}) =>
   fetch(base + "/control", { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
 const finder = (path: string) => ({ cmd: "open", what: "finder", path });
 
+describe("POST /control with no window attached", () => {
+  test("is a 503 'no window', not a false ok", async () => {
+    const r = await post(finder("/home/ana/notes/plan.md"));
+    expect(r.status).toBe(503);
+    expect(await r.json()).toEqual({ ok: false, error: "no window" });
+  });
+
+  test("a malformed command is still a 400, not a 503", async () => {
+    expect((await post({ cmd: "ui", do: "nope.nothing" })).status).toBe(400);
+  });
+});
+
 describe("POST /control open finder", () => {
-  test("a caller on this machine with no Origin is accepted", async () => {
+  test("a caller on this machine with no Origin is accepted, and the window gets the frame", async () => {
+    const w = await window_();
     const r = await post(finder("/home/ana/notes/plan.md"));
     expect(r.status).toBe(200);
-    expect(await r.json()).toEqual({ ok: true });
+    expect(await r.json()).toMatchObject({ ok: true });
+    await Bun.sleep(150);
+    expect(w.frames).toContainEqual({ cmd: "open", what: "finder", path: "/home/ana/notes/plan.md", kind: "file" });
   });
 
   test("a page on another origin is refused, and the same body from this machine is not", async () => {
@@ -79,5 +120,28 @@ describe("POST /control open finder", () => {
       const r = await post(finder(p));
       expect(r.status).toBe(400);
     }
+  });
+});
+
+describe("POST /control with the ui wire shape", () => {
+  test("is delivered as a ui frame, and a deny-by-default id never is", async () => {
+    const w = await window_();
+    const r = await post({ cmd: "ui", do: "settings.open", args: { page: "appearance", row: "theme" } });
+    expect(r.status).toBe(200);
+    expect(await post({ cmd: "ui", do: "settings.set", args: { id: "x", value: 1 } }).then((x) => x.status)).toBe(400);
+    await Bun.sleep(150);
+    expect(w.frames).toContainEqual({ cmd: "ui", do: "settings.open", args: { page: "appearance", row: "theme" } });
+    expect(w.frames.some((f) => f.do === "settings.set")).toBe(false);
+  });
+
+  test("each command leaves one audit line: the door and the verdict, never the path", async () => {
+    await window_();
+    await post({ cmd: "ui", do: "peek.file", args: { root: "/home/ana/code/orbit", path: "docs/secret-plan.md" } });
+    const log = await (await fetch(base + "/actions?limit=50")).json() as { actions: { action: string; ok: boolean; target: string | null; detail: string | null }[] };
+    const mine = log.actions.filter((a) => a.action === "/control/peek.file");
+    expect(mine.length).toBe(1);
+    expect(mine[0]!.ok).toBe(true);
+    expect(JSON.stringify(log.actions)).not.toContain("secret-plan");
+    expect(JSON.stringify(log.actions)).not.toContain("orbit");
   });
 });

@@ -1021,7 +1021,10 @@ the full list and defaults:
 
 One thing is **not** individually switchable, and it is worth knowing which:
 the `/control` UI-navigation endpoint, which is unswitchable by design — it
-grants no capability the keyboard does not already have.
+grants no capability the keyboard does not already have. Every door it opens is
+a level-1 entry (look or open) in a closed registry, an unknown id is refused,
+and each command leaves one line in the action log, the door and not the
+value it named.
 
 Beyond the knobs, **scope is itself a boundary**: with a project open, git
 writes and git reads, the terminal, chat, pull-request actions and editor opens

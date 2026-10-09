@@ -473,6 +473,33 @@ agentglass-browser shot --with-inspector both.png   # page and inspector, joined
 
 `inspect shot` never writes a file it cannot fill. A view that has never been drawn hands back a full-size rectangle of one flat colour, which is not a picture of anything — that is checked, and you get an error and no file instead of evidence that turns out to be a grey square.
 
+## Opening the app's own panels
+
+The browser verbs drive pages. The app's own screen (Settings, the machine panel,
+the project picker, the bench, the Git modals) has a door of its own, one
+call, and it only ever opens or shows something:
+
+```bash
+curl -sS http://localhost:4000/control \
+  -H "Authorization: Bearer $AGENTGLASS_TOKEN" -H 'content-type: application/json' \
+  -d '{"cmd":"ui","do":"settings.open","args":{"page":"appearance"}}'
+```
+
+`do` is one of `view.open` (`to`), `panel.open` (`what`: stats, skills, search,
+help, palette), `finder.open` (`path`), `settings.open` (`page`, optional `row`),
+`machine.open` (`tab`: ports, resources, locks), `project.picker`,
+`windows.switcher`, `bench.toggle`, `bench.file` and `peek.file` (`root`, `path`
+under it), `bench.board` (`root`, `kind`: pr, tasks, files), `git.modal`
+(`which`: insights, bisect), `git.compare` (`base`), `git.blame` (`path`),
+`chat.new`, `theme.set`, `zoom.step`, `workspace.toggle`, `esc.peel`. The list is
+`shared/uiActions.ts`; an id that is not in it is a `400`, and so is an argument
+outside its shape.
+
+`200 {"ok":true,"windows":N}` means the command was sent to N windows, not that
+one ran it. `503 {"error":"no window"}` means no window was attached, so nothing
+was shown. Each command leaves one line in `GET /actions` (`/control/<id>`),
+naming the door and never the path.
+
 ## Guardrails, and why they are there
 
 `AGENTGLASS_BROWSER_ORIGINS` limits where the browser may be pointed.

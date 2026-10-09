@@ -364,7 +364,7 @@ Every route is behind the token and the origin/Host gates described in [Security
 | `GET /health` | Liveness plus `service: "agentglass"`, so a client can tell this server from a stranger on the port. Token-exempt. |
 | `POST /gate` · `GET /gate/{pending,status?id=,history}` · `POST /gate/decide` | The `PreToolUse` gate: hold a call, read the queue, long-poll a decision, the history; answer one. `decide` needs a paired device with `answer` or a vouched origin — a plugin or machine token alone cannot. |
 | `GET /actions?limit=&before=` | Every write the cockpit performed — git, docker, pull requests, gate decisions — with the address it came from. Append-only; unscoped on purpose. |
-| `POST /control` | Drive the dashboard's own UI (view, theme, zoom, new chat, the file finder on a path) from outside. Validated, rebroadcast on `/stream`; grants nothing the keyboard lacks. See [`docs/EXTENDING.md`](EXTENDING.md). |
+| `POST /control` | Drive the dashboard's own UI from outside: open a view, Settings on a page, the machine panel, the bench, a Git modal, the file finder (`{"cmd":"ui","do":"settings.open","args":{"page":"appearance"}}`, with `Authorization: Bearer $AGENTGLASS_TOKEN`). Validated against a closed registry, rebroadcast on `/stream`, one `/actions` line per command; `503` when no window is attached. Grants nothing the keyboard lacks. See [`docs/EXTENDING.md`](EXTENDING.md). |
 | `GET /export?format=csv\|json` · `?kind=daily` | Download all events (bounded by retention), or the daily totals with the rollup included. |
 | `WS /stream` | Live frames — `initial` · `openTools` · `event` · `session` · `git` · `ci` · `alert` · `control`. Read-only: the socket never accepts commands. |
 

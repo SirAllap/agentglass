@@ -3,10 +3,11 @@
  *
  * docs/EXTENDING.md spells the four out — the id in `ViewId`, the entry in
  * `VIEWS`, the arm in Workspace's `Body`, and the id in the server's
- * `VIEW_IDS` — and the fourth is duplicated at the trust boundary ON PURPOSE:
- * a POST /control body is untrusted input, so it is matched against a closed
- * set rather than against whatever the UI happens to export. Duplication that
- * is deliberate still drifts, and the way it drifts is silent: the rail grows
+ * `VIEW_IDS` in shared/uiActions.ts (it was a list in the server's control.ts
+ * until the UI-action registry) — and the fourth is a list of its own ON
+ * PURPOSE: a POST /control body is untrusted input, so it is matched against a
+ * closed set rather than against whatever the UI happens to export. Duplication
+ * that is deliberate still drifts, and the way it drifts is silent: the rail grows
  * a tab, the keyboard reaches it, and `POST /control {cmd:"view"}` answers 400
  * for a view that plainly exists. Nothing throws and no type complains, because
  * every other ViewId consumer is a Partial<Record<…>> or a cast.
@@ -28,7 +29,7 @@ const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
 const typesSrc = read("shared/types.ts");
 const viewsSrc = read("web/src/components/workspace/views.ts");
 const workspaceSrc = read("web/src/components/workspace/Workspace.tsx");
-const controlSrc = read("server/src/control.ts");
+const registrySrc = read("shared/uiActions.ts");
 const iconsSrc = read("web/src/components/workspace/icons.tsx");
 const settingsSrc = read("web/src/components/SettingsModal.tsx");
 
@@ -59,7 +60,7 @@ const bodyIds = (() => {
 
 /** The server's allowlist. */
 const controlIds = (() => {
-  const m = /const VIEW_IDS: readonly ViewId\[\] = \[([^\]]*)\]/.exec(controlSrc);
+  const m = /export const VIEW_IDS = \[([^\]]*)\]/.exec(registrySrc);
   expect(m).not.toBeNull();
   return [...m![1].matchAll(/"([a-z]+)"/g)].map((x) => x[1]!);
 })();
@@ -109,7 +110,8 @@ describe("the Clone view is retired, and left nothing dangling", () => {
   });
 
   it("is off the server's allowlist, so POST /control refuses it", () => {
-    expect(controlSrc).not.toContain('"understudy"');
+    // The VIEW_IDS list, not the file: `understudy` is still a Settings page id.
+    expect(controlIds).not.toContain("understudy");
   });
 
   it("but its settings page and its art are still here", () => {

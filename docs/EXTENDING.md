@@ -259,10 +259,19 @@ command changes only what is *shown* (which view, whether the workspace is open,
 the theme), never the fleet, so it needs no gate beyond the `localOrigin` +
 token checks the whole surface already carries.
 
-The server validates the body against a closed set (`server/src/control.ts`)
-and rebroadcasts it as a `control` frame on `/stream`; every open tab runs it
-through the very setters the keyboard handler uses (`web/src/lib/controlBus.ts`
-→ `App.tsx`), so external and keyboard navigation are one path, not two.
+The server validates the body against a closed registry (`shared/uiActions.ts`,
+applied by `server/src/control.ts`) and rebroadcasts it as a `control` frame on
+`/stream`; every open tab runs it through the very setters the keyboard handler
+uses (`web/src/lib/controlBus.ts` → `web/src/lib/uiActions.ts` → `App.tsx`), so
+external and keyboard navigation are one path, not two.
+
+Every door is one registry entry (`id`, argument shapes, `level`, `kind`) and the
+window keeps a handler for each (`Record<UiActionId, Handler>`, so `tsc` fails
+for an entry without one). The general spelling is
+`{"cmd":"ui","do":"<id>","args":{…}}`; the `cmd` bodies in the table below are
+older spellings of the same entries and keep working. An id that is not in the
+registry is `400` (deny by default), as is an entry above level 1 (look or open;
+nothing that changes a setting or reaches outside the app is built).
 
 ```bash
 # open the workspace on the git view
@@ -275,7 +284,7 @@ curl -sS http://localhost:4000/control \
 
 | `cmd` | Fields | Effect |
 | --- | --- | --- |
-| `view` | `to`: `dash`\|`git`\|`diff`\|`pr`\|`tasks`\|`docker`\|`term`\|`chat`\|`browser`\|`files`\|`understudy` | switch the window to that view |
+| `view` | `to`: `dash`\|`git`\|`diff`\|`pr`\|`tasks`\|`docker`\|`term`\|`chat`\|`browser`\|`files`\|`seat`\|`lantern`\|`plugins` | switch the window to that view |
 | `workspace` | `open?`: boolean | toggle (absent) or set — swaps between the dashboard and the last view, the way `Ctrl+\` does |
 | `esc` | — | close panels / workspace, as Escape does |
 | `open` | `what`: `stats`\|`skills`\|`search`\|`help`\|`palette` | open that panel |
@@ -283,6 +292,36 @@ curl -sS http://localhost:4000/control \
 | `theme` | `name?`: id, or `dir?`: `1`\|`-1` | pin a palette, or step the list |
 | `zoom` | `dir`: `1`\|`-1`\|`0` | zoom in / out / reset — **desktop app only**; in a browser tab it is accepted and does nothing, because the browser's own zoom already covers it |
 | `chat` | `do`: `new` | open the chat view on a fresh tab |
+| `ui` | `do`: a registry id, `args`: its fields | any door in the second table below |
+
+```bash
+curl -sS http://localhost:4000/control \
+  -H "Authorization: Bearer $AGENTGLASS_TOKEN" -H 'content-type: application/json' \
+  -d '{ "cmd": "ui", "do": "settings.open", "args": { "page": "appearance", "row": "theme" } }'
+```
+
+| `do` | `args` | Opens |
+| --- | --- | --- |
+| `view.open` | `to` | a view (old: `view`) |
+| `panel.open` | `what` | stats, skills, search, help, palette (old: `open`) |
+| `finder.open` | `path` | the file finder (old: `open finder`) |
+| `settings.open` | `page`, `row?` | Settings on a page, scrolled to a row. The plugin market is inside `page: "plugins"` |
+| `machine.open` | `tab`: `ports`\|`resources`\|`locks` | the machine panel |
+| `project.picker`, `windows.switcher`, `bench.toggle` | — | the project picker, the window switcher, the bench |
+| `bench.file`, `peek.file` | `root`: absolute, `path`: under it | a file on the bench / in the viewer (reading) |
+| `bench.board` | `root`, `kind`: `pr`\|`tasks`\|`files` | a board as a bench tab |
+| `git.modal` | `which`: `insights`\|`bisect` | that modal of the Git view |
+| `git.compare`, `git.blame` | `base` (a ref), `path` (under the checkout) | those modals |
+| `chat.new`, `theme.set`, `zoom.step`, `workspace.toggle`, `esc.peel` | as the old `chat`/`theme`/`zoom`/`workspace`/`esc` | |
+
+With no window attached the answer is `503 {"ok":false,"error":"no window"}`;
+otherwise `200 {"ok":true,"windows":N}`, which says the command was sent, not that
+a window ran it. Each command leaves one line in `GET /actions`
+(`/control/<id>`, the verdict, never the path or row it named).
+
+**Adding a panel is adding its door.** A new view, Settings page or app chord
+without a registry entry (or a reasoned line in `NOT_AGENT_DOOR`) fails
+`web/test/ui-registry-guard.test.ts`.
 
 `open finder` is the one command that names a path. The server checks only its
 spelling — absolute, no `.`/`..`/empty segment, no control characters, at most
@@ -350,7 +389,7 @@ That list is not quite the whole story. A view id is validated on the server too
 | `shared/types.ts` | the id in the `ViewId` union |
 | `web/src/components/workspace/views.ts` | the `VIEWS` entry above — rail, hotkey and tooltip all read it |
 | `web/src/components/workspace/Workspace.tsx` | the body to render for that id |
-| `server/src/control.ts` | the id in `VIEW_IDS`, or `POST /control` rejects it with `400` |
+| `shared/uiActions.ts` | the id in `VIEW_IDS`, or `POST /control` rejects it with `400` |
 
 The list is deliberately duplicated at the trust boundary rather than imported
 from the UI: a `/control` body is untrusted input, and it is checked against a
