@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api.ts";
+import { listMembers } from "../lib/listMembers.ts";
 import { Select } from "./Select.tsx";
 import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 import { fillTemplate, planOf, type Placeholder } from "../../../shared/stepBlocks.ts";
@@ -28,7 +29,7 @@ export function AskedExtras({ blocks, fields, ctx, listId, onChange }: {
   useEffect(() => {
     if (!listId || !plan.comment || !plan.comment.text.includes("{me}")) return;
     let live = true;
-    void api.clickupMembers(listId).then((r) => { if (live && r?.ok) setMe(r.members?.find((m) => m.me)?.name); }).catch(() => {});
+    void listMembers(listId).then((r) => { if (live && r?.ok) setMe(r.members?.find((m) => m.me)?.name); }).catch(() => {});
     return () => { live = false; };
   }, [listId, plan.comment?.text]);
   const full = useMemo(() => (me ? { ...ctx, me } : ctx), [JSON.stringify(ctx), me]);

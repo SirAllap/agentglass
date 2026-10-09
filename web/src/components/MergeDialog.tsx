@@ -4,6 +4,7 @@ import { preparedLine, useStageHold } from "../lib/stageHold.ts";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { Select } from "./Select.tsx";
+import { listMembers } from "../lib/listMembers.ts";
 import { AssignPicker, useAskAssign } from "./AssignPicker.tsx";
 import { hasExtras, planOf } from "../../../shared/stepBlocks.ts";
 import { AskedExtras } from "./AskedExtras.tsx";
@@ -208,7 +209,7 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
          holds members for; "me" and a named person need no read at all. */
       const [meta, team] = await Promise.all([
         task.listId ? api.clickupList(task.listId).catch(() => null) : null,
-        mergeAssign?.who === "author" && task.listId ? api.clickupMembers(task.listId).catch(() => null) : null,
+        mergeAssign?.who === "author" && task.listId ? listMembers(task.listId).catch(() => null) : null,
       ]);
       if (!alive()) return;
       setEnsure(resolveEnsure(mergeAssign, { author: pending?.author, members: team?.ok ? (team.members ?? []) : null }));
@@ -447,11 +448,9 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
                         )}
                         {card.kind === "readonly" ? (
                           <>
-                            <select disabled value={LEAVE_ALONE} title="This app is read-only on ClickUp"
-                              className="text-[11px] px-2 py-1 rounded outline-none opacity-50"
-                              style={FIELD}>
-                              <option value={LEAVE_ALONE}>Leave it there</option>
-                            </select>
+                            <Select disabled value={LEAVE_ALONE} onChange={() => {}} title="This app is read-only on ClickUp"
+                              className="text-[11px]" style={FIELD}
+                              options={[{ value: LEAVE_ALONE, label: "Leave it there" }]} />
                             <button onClick={allowWrites}
                               title="Let this app change cards on your ClickUp board. The same switch the Tasks panel owns."
                               className="text-[10.5px] px-2 py-1 rounded"

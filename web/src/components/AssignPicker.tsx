@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api } from "../lib/api.ts";
+import { listMembers } from "../lib/listMembers.ts";
 import { PeoplePick } from "./PeoplePick.tsx";
 import { CaretIcon, DoneIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
@@ -41,7 +41,7 @@ export function useAskAssign(o: {
   useEffect(() => {
     if (!o.on || o.members !== undefined || !o.listId) return;
     let live = true;
-    void api.clickupMembers(o.listId).then((r) => { if (live) setRead(r?.ok ? (r.members ?? []) : "none"); }).catch(() => { if (live) setRead("none"); });
+    void listMembers(o.listId).then((r) => { if (live) setRead(r?.ok ? (r.members ?? []) : "none"); }).catch(() => { if (live) setRead("none"); });
     return () => { live = false; };
   }, [o.on, o.listId, o.members]);
   const members = o.members !== undefined ? o.members : read === "none" ? [] : read;
@@ -56,7 +56,7 @@ export function useAskAssign(o: {
   return { model, members, pick, setPick: setChosen, ensure: pickToEnsure(pick), ready };
 }
 
-export function Face({ m }: { m: Pick<ListMember, "avatar" | "color" | "initials"> }) {
+export function Face({ m }: { m: { avatar?: string; color?: string; initials?: string } }) {
   return m.avatar
     ? <img src={m.avatar} alt="" loading="lazy" referrerPolicy="no-referrer" style={{ width: 16, height: 16, borderRadius: 999, objectFit: "cover", flexShrink: 0 }} />
     : <span className="shrink-0 rounded-full inline-flex items-center justify-center" style={{ width: 16, height: 16, background: m.color || "var(--bg4)", color: "#fff", fontSize: 8 }}>{m.initials}</span>;

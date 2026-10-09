@@ -78,7 +78,7 @@ import { authorOf, assignedNote, ensureIds, resolveEnsure, stepChanges, type Ens
 import { blocksOf, hasExtras, planOf, touchesPeople } from "../../../shared/stepBlocks.ts";
 import { AskedExtras, sendExtras } from "./AskedExtras.tsx";
 import { prContext, type ExtraItem } from "../lib/stepExtras.ts";
-import { AssignPicker, useAskAssign, useAskTakeOff } from "./AssignPicker.tsx";
+import { AssignPicker, Face, useAskAssign, useAskTakeOff } from "./AssignPicker.tsx";
 import { blocksSentence, peopleButtonLabel } from "../lib/stepBlocksView.ts";
 import { mergeCardRef, mergeNote, statusColor, readyForQaStatus, reviewStatus, cardNoteText, whoToTell } from "../lib/cardMove.ts";
 import { useClickupPrefs, clickupPrefs } from "../lib/clickupPrefs.ts";
@@ -86,6 +86,7 @@ import { cardPlan, cardPlanNote } from "../lib/cardPlan.ts";
 import { cardOf, askingCard, onCard, putCard, forgetCards, cardVersion, withCard } from "../lib/prCardStore.ts";
 import { askInChatVisible, slackReach } from "../lib/askInChat.ts";
 import { PeoplePick } from "./PeoplePick.tsx";
+import { listMembers } from "../lib/listMembers.ts";
 import { orderMembers } from "../lib/peopleOrder.ts";
 import { SCROLLBAR_CSS, LINEBTN_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, LineMenuCtx, type LinePick, type LineSel } from "./diff/DiffLines.tsx";
 import { Toggle } from "./diff/DiffControls.tsx";
@@ -7585,7 +7586,7 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
       if (!t.listId) return;
       const [meta, mem, prefs] = await Promise.all([
         api.clickupList(t.listId).catch(() => null),
-        api.clickupMembers(t.listId).catch(() => null),
+        listMembers(t.listId).catch(() => null),
         clickupPrefs(),
       ]);
       if (!live) return;
@@ -7698,13 +7699,8 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
    */
   if (!ref || (!stepOn && !assignReviewer)) return null;
 
-  const people = (members ?? []).filter((m) => m.name && (!q.trim() || m.name.toLowerCase().includes(q.trim().toLowerCase())))
-    .sort((a, b) => {
-      const ah = effective.has(a.id) ? 0 : 1, bh = effective.has(b.id) ? 0 : 1;
-      if (ah !== bh) return ah - bh;
-      if (a.me !== b.me) return a.me ? -1 : 1;
-      return a.name.localeCompare(b.name);
-    });
+  /* The app's one ordering (lib/peopleOrder): who is ticked, then you, then everyone by name. */
+  const people = orderMembers(members, effective, q);
   if (folded) {
     return (
       <button onClick={() => onFold(false)} title={`Also move ${ref.label} in ClickUp`}
@@ -8074,12 +8070,9 @@ function CardStatusPick({ task, query, onSaid }: { task: ProviderTask; query: st
 }
 
 /** One person's face, the same 16px everywhere this section draws one. */
+/** One face, drawn once for the whole app (AssignPicker's Face): the picture, or the person's colour and initials. */
 function memberFace(p: { avatar?: string; color?: string; initials?: string }) {
-  return p.avatar
-    ? <img src={p.avatar} alt="" loading="lazy" referrerPolicy="no-referrer"
-        style={{ width: 16, height: 16, borderRadius: 999, objectFit: "cover", flexShrink: 0 }} />
-    : <span className="shrink-0 rounded-full inline-flex items-center justify-center"
-        style={{ width: 16, height: 16, background: p.color || "var(--bg4)", color: "#fff", fontSize: 8 }}>{p.initials}</span>;
+  return <Face m={p} />;
 }
 
 /**
@@ -8098,7 +8091,7 @@ function CardPeoplePick({ task, query, onSaid }: { task: ProviderTask; query: st
   );
   const load = useCallback(() => {
     if (members !== null || !task.listId) return;
-    void api.clickupMembers(task.listId)
+    void listMembers(task.listId)
       .then((r) => setMembers(r?.ok ? (r.members ?? []) : []))
       .catch(() => setMembers([]));
   }, [members, task.listId]);
@@ -8344,7 +8337,7 @@ function CardReadyForQaButton({ task, query, onSaid, ask, author, pr }: {
      this list: no request when it is warm); "me" is answered by the server from the connected account, a
      named person is already an id. */
   const readMembers = () => (plan.assign.who === "author" && task.listId
-    ? api.clickupMembers(task.listId).then((r) => (r?.ok ? (r.members ?? []) : null)).catch(() => null)
+    ? listMembers(task.listId).then((r) => (r?.ok ? (r.members ?? []) : null)).catch(() => null)
     : Promise.resolve(null));
 
   /* The one write, whichever way the choices were made. One request: the same write the status picker and the

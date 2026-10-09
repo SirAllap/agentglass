@@ -11,6 +11,7 @@ import type { FieldChoice } from "./StepExtraRows.tsx";
 import { allStatuses, countedIds, isActive, moments, movesNothing, resolveImplicit, withCounted, type MapSpace, type StepKind } from "../lib/workflowMap.ts";
 import { eyeIds, pageState, partitionUnits, type Partition } from "../lib/workflowLayout.ts";
 import { openSettings } from "../lib/openSettings.ts";
+import { __forgetListMembers } from "../lib/listMembers.ts";
 import { assignWords } from "../lib/stepAssign.ts";
 import { setting } from "../lib/settingsRegistry.ts";
 import { DEFAULT_SPRINT_LIST_PATTERN, DEFAULT_READ_ONLY_FIELD_PATTERN, type ClickUpPrefs, type ProviderStatus } from "../../../shared/providers.ts";
@@ -151,7 +152,7 @@ export function ConnectCard({ refused, error, onDone }: { refused: boolean; erro
     const r = await api.providerConnect("clickup", token.trim()).catch(() => ({ ok: false, error: "Could not reach the server" }));
     setBusy(false);
     if (!r.ok) { setErr(r.error ?? `${n.name} refused this token`); return; }
-    __forgetClickupSetup(); __forgetClickupPrefs(); __forgetClickupSpaces();
+    __forgetClickupSetup(); __forgetClickupPrefs(); __forgetClickupSpaces(); __forgetListMembers();
     onDone();
   };
   const reasons: [ReactNode, string, string][] = [

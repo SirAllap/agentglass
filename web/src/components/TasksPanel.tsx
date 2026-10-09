@@ -45,6 +45,8 @@ import { useDismiss } from "../lib/useDismiss.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import { Portal } from "./Portal.tsx";
 import { PeoplePick } from "./PeoplePick.tsx";
+import { listMembers } from "../lib/listMembers.ts";
+import { Select } from "./Select.tsx";
 import { orderMembers } from "../lib/peopleOrder.ts";
 import { Markdown, MarkdownImages } from "../lib/markdown.tsx";
 import { fmtAgo } from "../lib/format.ts";
@@ -1877,7 +1879,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
     if (faceOnBoard || !listForFace || askedFace.current === listForFace) return;
     askedFace.current = listForFace;
     let live = true;
-    api.clickupMembers(listForFace)
+    listMembers(listForFace)
       .then((r) => { if (live && r.ok) setMyAvatar(r.members?.find((m) => m.me)?.avatar ?? ""); })
       .catch(() => { /* no face is a fine answer — the chip keeps its word */ });
     return () => { live = false; };
@@ -4083,11 +4085,11 @@ function FolderPicker({ folders, busy, onAdd, onAddList }: {
 
   return (
     <div className="flex flex-col gap-1.5">
-      <select value={space} onChange={(e) => setSpace(e.target.value)}
-        className="text-[11.5px] px-2 py-1.5 rounded-lg self-start min-w-[200px]"
-        style={{ background: "var(--surface-inset)", border: EDGE, color: "var(--text)" }}>
-        {spaces.map((sp) => <option key={sp.id} value={sp.id}>{sp.name}</option>)}
-      </select>
+      <div className="self-start min-w-[200px]">
+        <Select value={space} onChange={setSpace} title="Space" className="text-[11.5px] px-2 py-1.5 rounded-lg w-full justify-between"
+          style={{ background: "var(--surface-inset)", border: EDGE, color: "var(--text)" }}
+          options={spaces.map((sp) => ({ value: sp.id, label: sp.name }))} />
+      </div>
       {!found ? (
         <div className="text-[11px] py-1" style={{ color: "var(--text4)" }}>Reading its folders…</div>
       ) : !found.length ? (
@@ -5787,7 +5789,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
     const forCard = t.id;
     asked.current = forCard;
     setMembersBusy(true);
-    api.clickupMembers(t.listId)
+    listMembers(t.listId)
       .then((r) => { if (asked.current === forCard) setMembers(r.ok ? (r.members ?? []) : []); })
       .catch(() => { if (asked.current === forCard) setMembers([]); })
       .finally(() => { if (asked.current === forCard) setMembersBusy(false); });

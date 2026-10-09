@@ -5,6 +5,8 @@ import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { LAYER } from "../lib/layers.ts";
 import { StatusPill } from "./StatusPill.tsx";
 import { EDGE } from "./workspace/Chrome.tsx";
+import { CaretIcon } from "../lib/glyphIcons.tsx";
+import { ICON } from "../lib/iconSize.ts";
 
 /**
  * A themed replacement for a native <select>.
@@ -36,12 +38,14 @@ export type SelectOption = {
 };
 
 export function Select({
-  value, options, onChange, disabled, title, className, style, placeholder, align = "left",
+  value, options, onChange, disabled, busy, title, className, style, placeholder, align = "left",
 }: {
   value: string;
   options: SelectOption[];
   onChange: (v: string) => void;
   disabled?: boolean;
+  /** A write for this value is in flight: a spinner on the trigger, and no second open. */
+  busy?: boolean;
   title?: string;
   className?: string;
   style?: React.CSSProperties;
@@ -147,7 +151,7 @@ export function Select({
         ref={btnRef}
         title={title}
         disabled={disabled}
-        onClick={() => !disabled && (open ? close() : setOpen(true))}
+        onClick={() => !disabled && !busy && (open ? close() : setOpen(true))}
         role="combobox"
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -158,7 +162,9 @@ export function Select({
         {current?.pill
           ? <StatusPill status={current.label} color={current.tint} dim={current.dim} />
           : <span className="truncate">{current?.label ?? placeholder ?? value}</span>}
-        <span className="text-[10px] shrink-0 opacity-70">▼</span>
+        {busy
+          ? <span className="agx-spin shrink-0" aria-label="Applying" style={{ width: 10, height: 10, borderWidth: 1.5, borderColor: "var(--text3)", borderTopColor: "transparent" }} />
+          : <span className="shrink-0 opacity-70 flex"><CaretIcon size={ICON.xs} /></span>}
       </button>
       {/* Numbered rather than trusting mount order. This took Portal's default
           and landed on top only because a dropdown's container is appended when

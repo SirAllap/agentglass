@@ -229,12 +229,12 @@ describe("the places that press it", () => {
   test("the hand-off button writes once, and reads the team only for the author", async () => {
     const body = code(fn(await read("components/PrPanel.tsx"), "function CardReadyForQaButton("));
     expect(body.match(/api\.clickupCard\(/g)?.length).toBe(1);
-    expect(body.match(/api\.clickupMembers\(/g)?.length).toBe(1);
+    expect(body.match(/listMembers\(/g)?.length).toBe(1);
     expect(body).toContain('plan.assign.who === "author"');
   });
   test("the merge dialog reads the team only for the author, and sends the person in the card's own write", async () => {
     const dialog = code(await read("components/MergeDialog.tsx"));
-    expect(dialog.match(/api\.clickupMembers\(/g)?.length).toBe(1);
+    expect(dialog.match(/listMembers\(/g)?.length).toBe(1);
     expect(dialog).toContain('mergeAssign?.who === "author"');
     const panel = await read("components/PrPanel.tsx");
     const run = panel.slice(panel.indexOf("const runMerge = async"), panel.indexOf("const doAutoMerge"));
