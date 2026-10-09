@@ -57,7 +57,7 @@ describe("sizes in a listing", () => {
 describe("the pane that shows what a row is", () => {
   test("nothing selected says so instead of drawing an empty box", () => {
     const html = renderToStaticMarkup(React.createElement(Preview, { path: null }));
-    expect(html).toContain("Nada seleccionado");
+    expect(html).toContain("Nothing selected");
   });
 
   test("a path with no facts yet is a spinner, not a blank", () => {

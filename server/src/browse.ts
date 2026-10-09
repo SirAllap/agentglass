@@ -24,7 +24,7 @@ import { failed } from "./refused.ts";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { diskAllows, diskEnabled, diskRoots } from "./disk.ts";
 import { safeAbs } from "./git.ts";
-import { agentglassPrivate, inScope, realish, workspaceRoots } from "./config.ts";
+import { agentglassConfigDirs, agentglassPrivate, inScope, realish, workspaceRoots } from "./config.ts";
 
 /** How many entries one folder hands back. A directory with 40,000 files in it
  *  is not a list anybody reads, and the count says what was left. */
@@ -52,6 +52,8 @@ export interface BrowseEntry {
    *  still refuses to read or enter it. The row says so instead of offering a
    *  door that answers with an error. */
   locked: boolean;
+  /** Why it is locked, when the reason is worth a sentence of its own. */
+  why?: string;
 }
 
 export interface BrowseReport {
@@ -126,6 +128,53 @@ function dottedAllows(abs: string, real: string): boolean {
   return inRoot(real) && inRoot(abs) && !underDenied(real) && !underDenied(abs);
 }
 
+/*
+ * The agentglass config folder, for a caller on this machine.
+ *
+ * The folder holds the server's own API token, credentials, the paired
+ * devices and plugin secrets, so it was closed whole. Its owner needs to see
+ * theme.json and config.json in it, so the folder and its ordinary files open,
+ * and everything that is a key stays shut on three independent grounds: a
+ * name on the list (in case permissions drift), a mode that is not readable by
+ * group or other (every secret the server writes is 0600, every private
+ * directory 0700), and a parent that is itself shut. Judged on the resolved
+ * path and on the spelling, so a link from anywhere lands on the same answer.
+ * Data, state, cache and the moved database are not opened by this.
+ */
+const KEY_NAMES = new Set(["token", "credentials.json", "devices.json"]);
+export const KEYS_WHY = "holds agentglass keys — closed";
+
+function configDoor(abs: string, real: string): boolean {
+  const roots = agentglassConfigDirs();
+  const under = (p: string) => roots.find((r) => {
+    const rel = relative(r, p);
+    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  });
+  const ra = under(real), rs = under(abs);
+  if (!ra || !rs) return false;
+  const rel = relative(ra, real);
+  if (rel === "") return true;
+  // Every step from the folder down to the target is judged, so a file inside
+  // a private directory is as shut as the directory.
+  let at = ra;
+  for (const seg of rel.split(sep)) {
+    at = join(at, seg);
+    if (KEY_NAMES.has(seg.toLowerCase())) return false;
+    let st;
+    try { st = statSync(at); } catch (e) { return (e as NodeJS.ErrnoException)?.code === "ENOENT"; }
+    if (st.isDirectory() ? (st.mode & 0o055) === 0 : (st.mode & 0o044) === 0) return false;
+  }
+  return !relative(rs, abs).split(sep).some((seg) => KEY_NAMES.has(seg.toLowerCase()));
+}
+
+/** What to tell somebody a path was refused for. */
+function refusal(abs: string): string {
+  const real = realish(abs);
+  return agentglassPrivate(real) || agentglassPrivate(abs)
+    ? "closed: this folder holds agentglass's keys"
+    : "outside the places this may look";
+}
+
 /**
  * The REAL path this may look at, or null.
  *
@@ -140,8 +189,11 @@ export function browseReal(p: unknown, local = false): string | null {
   if (!abs) return null;
   const real = realish(abs);
   // Before either door: this app's own directories are never served, even
-  // from a project that contains them.
-  if (agentglassPrivate(real)) return null;
+  // from a project that contains them. The one opening is the config folder,
+  // for a caller on this machine, entry by entry: see configDoor.
+  if (agentglassPrivate(real) || agentglassPrivate(abs)) {
+    return local && dottedAllows(abs, real) && configDoor(abs, real) ? real : null;
+  }
   if (diskAllows(real)) return real;
   // `local` is true only for a caller the server has resolved to loopback.
   if (local && dottedAllows(abs, real)) return real;
@@ -186,7 +238,7 @@ export function browseDir(pathIn: unknown, showHidden = false, local = false): B
   const abs = safeAbs(pathIn);
   const empty = { ok: false, path: String(abs ?? ""), parent: null, entries: [], more: 0, hiddenSkipped: 0 };
   if (!abs) return { ...empty, error: "invalid path" };
-  if (!browseAllows(abs, local)) return { ...empty, error: "outside the places this may look" };
+  if (!browseAllows(abs, local)) return { ...empty, error: refusal(abs) };
 
   let names: string[];
   try {
@@ -213,6 +265,7 @@ export function browseDir(pathIn: unknown, showHidden = false, local = false): B
       // shown as what it is.
       const target = link && browseAllows(realish(full), local) ? safeStat(full) : null;
       const dir = st.isDirectory() || (target?.isDirectory() ?? false);
+      const locked = (hidden || viaDot) && !browseAllows(full, local);
       entries.push({
         name,
         kind: link ? "link" : dir ? "dir" : "file",
@@ -220,7 +273,8 @@ export function browseDir(pathIn: unknown, showHidden = false, local = false): B
         items: dir ? countItems(full) : null,
         mtime: st.mtimeMs,
         hidden,
-        locked: (hidden || viaDot) && !browseAllows(full, local),
+        locked,
+        ...(locked && agentglassPrivate(realish(full)) ? { why: KEYS_WHY } : null),
       });
     } catch { /* vanished between readdir and lstat: it is not there, so it is not a row */ }
   }
@@ -424,7 +478,7 @@ export function fileFacts(pathIn: unknown, local = false): FileFacts {
   const abs = safeAbs(pathIn);
   const empty: FileFacts = { ok: false, path: String(abs ?? ""), name: "", kind: "binary", mime: "", bytes: 0, mtime: 0 };
   if (!abs) return { ...empty, error: "invalid path" };
-  if (!browseAllows(abs, local)) return { ...empty, error: "outside the places this may look" };
+  if (!browseAllows(abs, local)) return { ...empty, error: refusal(abs) };
 
   let st;
   try { st = statSync(abs); } catch { return { ...empty, error: "no such file" }; }
@@ -468,7 +522,7 @@ export function fileFacts(pathIn: unknown, local = false): FileFacts {
 export async function fileBytes(pathIn: unknown, local = false): Promise<{ ok: true; body: Uint8Array | ArrayBuffer; mime: string } | { ok: false; error: string }> {
   // What was judged is what is read: the real path, links resolved.
   const abs = browseReal(pathIn, local);
-  if (!abs) return { ok: false, error: "outside the places this may look" };
+  if (!abs) return { ok: false, error: refusal(safeAbs(pathIn) ?? "") };
   let st;
   try { st = statSync(abs); } catch { return { ok: false, error: "no such file" }; }
   if (st.isDirectory()) return { ok: false, error: "that is a folder" };
@@ -523,7 +577,7 @@ export function openInDesktop(pathIn: unknown, local = false): { ok: boolean; wi
   // The desktop opens the real file, the one that was judged — not a link
   // that was judged by its name and points somewhere else.
   const abs = browseReal(pathIn, local);
-  if (!abs) return { ok: false, error: "outside the places this may look" };
+  if (!abs) return { ok: false, error: refusal(safeAbs(pathIn) ?? "") };
   try { statSync(abs); } catch { return { ok: false, error: "no such file" }; }
 
   const opener = process.platform === "darwin"

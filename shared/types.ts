@@ -4402,6 +4402,8 @@ export interface BrowseEntry {
   hidden: boolean;
   /** Listed but not openable: the finder may name a dotted entry, not enter or read it. */
   locked?: boolean;
+  /** Why it is locked, when that deserves its own sentence. */
+  why?: string;
 }
 
 export interface BrowseReport {

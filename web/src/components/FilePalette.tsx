@@ -64,8 +64,8 @@ const TABS: { id: PaletteTab; label: string; placeholder: string }[] = [
 /** One row of the result list, whatever produced it. Kept as data rather than
  *  as JSX so the keyboard can index into it without asking the DOM. */
 type Row =
-  | { kind: "dir"; rel: string; abs?: string; items?: number | null; mtime?: number; locked?: boolean }
-  | { kind: "file"; rel: string; hits?: GrepHit[]; abs?: string; bytes?: number | null; mtime?: number; locked?: boolean }
+  | { kind: "dir"; rel: string; abs?: string; items?: number | null; mtime?: number; locked?: boolean; why?: string }
+  | { kind: "file"; rel: string; hits?: GrepHit[]; abs?: string; bytes?: number | null; mtime?: number; locked?: boolean; why?: string }
   /* A recent carries its own checkout. It is a memory of somewhere you have
      been, and the palette may be pointed somewhere else by the time you come
      back to it — opening it against the current chip would build a path in the
@@ -490,8 +490,8 @@ export function FilePalette({
       if (!d?.ok) return [];
       const base = at.replace(/\/+$/, "");
       return d.entries.map((e): Row => e.kind === "dir"
-        ? { kind: "dir", rel: e.name, abs: `${base}/${e.name}`, items: e.items, mtime: e.mtime, locked: e.locked }
-        : { kind: "file", rel: e.name, abs: `${base}/${e.name}`, bytes: e.bytes, mtime: e.mtime, locked: e.locked });
+        ? { kind: "dir", rel: e.name, abs: `${base}/${e.name}`, items: e.items, mtime: e.mtime, locked: e.locked, why: e.why }
+        : { kind: "file", rel: e.name, abs: `${base}/${e.name}`, bytes: e.bytes, mtime: e.mtime, locked: e.locked, why: e.why });
     }
     if (tab === "machine") {
       const d = onDisk.data;
@@ -1171,7 +1171,7 @@ function RowView({ row, i, on, onHover, onPick, onDouble }: {
   const icon = iconFor(name, row.kind === "dir");
   return (
     <button data-row={i} onMouseEnter={() => onHover(i)} onClick={() => onPick(row)} onDoubleClick={() => onDouble(row)}
-      className="w-full text-left px-3 py-2" title={row.kind !== "recent" && row.locked ? `${row.rel} — listed, but kept closed: it holds credentials or is off-limits from here` : row.rel}
+      className="w-full text-left px-3 py-2" title={row.kind !== "recent" && row.locked ? `${row.rel} — ${row.why ?? "listed, but kept closed: it holds credentials or is off-limits from here"}` : row.rel}
       style={{
         ...(on ? { background: "color-mix(in srgb, var(--primary) 16%, transparent)" } : null),
         ...((row.kind === "recent" && row.gone) || (row.kind !== "recent" && row.locked) ? { opacity: 0.55 } : null),

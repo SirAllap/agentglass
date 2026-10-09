@@ -105,7 +105,7 @@ export function Preview({ path, onOpen, onCopyPath, compact }: {
   if (!path) {
     return (
       <div className="flex-1 grid place-items-center text-[11px] t-dim2 px-4 text-center">
-        Nada seleccionado
+        Nothing selected
       </div>
     );
   }
