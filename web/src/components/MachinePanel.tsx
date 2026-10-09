@@ -380,7 +380,7 @@ function Row({ p, actions, dim, selected, onSelect, narrow }: {
       {p.publicBind && (
         <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap"
           title={`Listening on every interface (${p.addr}), not just this machine — anything that can reach you on the network can reach this port.`}
-          style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>
+          style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>
           on the network
         </span>
       )}
@@ -400,7 +400,7 @@ function Row({ p, actions, dim, selected, onSelect, narrow }: {
       {p.cwdGone && (
         <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap"
           title="Its working directory no longer exists — the checkout it was serving has been removed."
-          style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}>
+          style={{ color: "var(--error-ink)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}>
           checkout gone
         </span>
       )}
@@ -410,21 +410,21 @@ function Row({ p, actions, dim, selected, onSelect, narrow }: {
       {p.tmpLeftover && (
         <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap"
           title={`It is serving from ${p.dir}, a scratch directory. Whatever it was for, nobody is likely to look at it again.`}
-          style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>
+          style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>
           tmp leftover
         </span>
       )}
       {p.duplicate && (
         <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap"
           title={`Another ${p.proc} is serving the same folder (${p.dir}). One of them is probably left over.`}
-          style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>
+          style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>
           duplicate
         </span>
       )}
       {p.idleSec != null && (
         <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap"
           title={`Nothing has connected for ${forAge(p.idleSec!)}.`}
-          style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>
+          style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>
           idle
         </span>
       )}
@@ -433,7 +433,7 @@ function Row({ p, actions, dim, selected, onSelect, narrow }: {
       {(p.dir ?? p.cwd) && (
         <span className="min-w-0 truncate text-[10px] px-1.5 py-0.5 rounded-full max-w-full"
           title={p.dir && p.dir !== p.cwd ? `Serving ${p.dir}\nStarted in ${p.cwd ?? "?"}` : p.dir ?? p.cwd ?? ""}
-          style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
+          style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
           {(p.dir ?? p.cwd)!.split("/").filter(Boolean).pop()}
         </span>
       )}
@@ -623,7 +623,7 @@ function Resources() {
                     {!kShut && k.procs.length > shown.length && (
                       <button onClick={() => setShowAll((c) => new Set(c).add(k.key))}
                         className="w-full text-left px-3.5 py-1 text-[10px] hover:bg-white/5"
-                        style={{ paddingLeft: 3.5 * 4 + 2 * 16, color: "var(--primary)" }}>
+                        style={{ paddingLeft: 3.5 * 4 + 2 * 16, color: "var(--primary-ink)" }}>
                         show {k.procs.length - shown.length} more in this checkout
                       </button>
                     )}
@@ -764,7 +764,7 @@ function Space({ repos }: { repos: GitRepoRef[] }) {
         {data && !data.error && (
           <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>
             <b style={{ color: "var(--text2)", fontWeight: 500 }}>{mb(data.bytes)}</b>
-            {data.freeable > 0 && <> · <b style={{ color: "var(--success)", fontWeight: 500 }}>{mb(data.freeable)}</b> rebuildable</>}
+            {data.freeable > 0 && <> · <b style={{ color: "var(--success-ink)", fontWeight: 500 }}>{mb(data.freeable)}</b> rebuildable</>}
           </span>
         )}
         <span className="ml-auto flex items-center gap-1.5 shrink-0">
@@ -776,7 +776,7 @@ function Space({ repos }: { repos: GitRepoRef[] }) {
             className="agx-btn text-[10.5px] px-2 py-0.5 rounded disabled:opacity-50"
             style={busy
               ? { color: "var(--text3)", border: edge(20) }
-              : { color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}>
+              : { color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}>
             {busy ? "Measuring…" : <IconLabel icon={<RefreshIcon size={ICON.xs} />}>{data ? "Measure again" : "Measure"}</IconLabel>}
           </button>
         </span>
@@ -787,7 +787,7 @@ function Space({ repos }: { repos: GitRepoRef[] }) {
           Nothing is measured until you ask — `du` reads every file under the checkout, which takes seconds.
         </div>
       )}
-      {data?.error && <div className="px-3.5 pb-2 text-[10.5px]" style={{ color: "var(--error)" }}>{data.error}</div>}
+      {data?.error && <div className="px-3.5 pb-2 text-[10.5px]" style={{ color: "var(--error-ink)" }}>{data.error}</div>}
 
       {data && !data.error && open && (
         <div className="px-3.5 pb-2.5">
@@ -889,7 +889,7 @@ function DetailPane({ pid, onClose }: { pid: number; onClose: () => void }) {
 
       {!d ? <Note>Reading /proc…</Note> : d.error ? <Note tint="var(--warning)">{d.error}</Note> : (
         <div className="px-3 py-2 flex flex-col gap-3 text-[10.5px]">
-          {note && <div style={{ color: "var(--warning)" }}>{note}</div>}
+          {note && <div style={{ color: "var(--warning-ink)" }}>{note}</div>}
 
           <Field label="Command">
             {/* Wrapped and selectable, unlike everywhere else in this panel:
@@ -936,7 +936,7 @@ function DetailPane({ pid, onClose }: { pid: number; onClose: () => void }) {
                   // detail, and one that must not travel to a phone.
                   <button onClick={() => void reveal(v.key)} className="shrink-0 hover:opacity-70"
                     title="Hidden because it looks like a secret. Click to reveal — the desktop app only."
-                    style={{ color: "var(--text4)" }}>•••••••• <span style={{ color: "var(--primary)" }}>show</span></button>
+                    style={{ color: "var(--text4)" }}>•••••••• <span style={{ color: "var(--primary-ink)" }}>show</span></button>
                 ) : (
                   <span className="min-w-0 break-all" style={{ color: "var(--text2)", userSelect: "text" }}>{v.value}</span>
                 )}
@@ -1070,7 +1070,7 @@ function LockRow({ l, busy, onRemove, selected, onSelect }: {
       <span className="flex items-center justify-end min-w-0 overflow-hidden">
         <span className="min-w-0 truncate text-[10px] px-1.5 py-0.5 rounded-full max-w-full"
           title={l.repo}
-          style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
+          style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
           {l.repo.split("/").filter(Boolean).pop()}
         </span>
       </span>

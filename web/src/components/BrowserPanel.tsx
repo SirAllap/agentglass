@@ -2748,7 +2748,7 @@ export function BrowserView({ active: viewOn, scope }: {
                             because it is the same thing — a second drawing for
                             one idea is how a vocabulary stops being one. */}
                         {inspected.has(t.id) && (
-                          <span className="shrink-0" title="the inspector is open on this page" style={{ color: "var(--warning)" }}><CodeIcon size={ICON.xs} /></span>
+                          <span className="shrink-0" title="the inspector is open on this page" style={{ color: "var(--warning-ink)" }}><CodeIcon size={ICON.xs} /></span>
                         )}
                         {/* Same size and the same reddish box as the shelf's ×: one glyph,
                             one meaning, one target big enough to aim at. */}
@@ -2896,7 +2896,7 @@ export function BrowserView({ active: viewOn, scope }: {
       )}
 
       {active?.failed && (
-        <div className="px-3 py-2 text-[11px] shrink-0" style={{ color: "var(--warning)" }}>{active.failed}</div>
+        <div className="px-3 py-2 text-[11px] shrink-0" style={{ color: "var(--warning-ink)" }}>{active.failed}</div>
       )}
 
       {/* The page and the inspector share what is left of the window: a row when
@@ -2936,7 +2936,7 @@ export function BrowserView({ active: viewOn, scope }: {
         )}
         {note && (
           <div className="agx-zoom-in absolute bottom-3 right-3 text-[10px] px-2.5 py-1.5 rounded-md shadow-lg pointer-events-none"
-            style={{ zIndex: 20, color: "var(--warning)", background: "var(--bg2)",
+            style={{ zIndex: 20, color: "var(--warning-ink)", background: "var(--bg2)",
               border: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)" }}>{note}</div>
         )}
         {tabs.map((t) => (

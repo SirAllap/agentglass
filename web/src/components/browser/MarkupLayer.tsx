@@ -235,7 +235,7 @@ export function MarkupLayer({ view, url, onNote, onDone }: {
           <button onClick={() => setState(redo)} disabled={!state.undone.length} title="Redo (Ctrl+Shift+Z)"
             className="agx-btn rounded-lg disabled:opacity-25" style={{ width: 24, height: 24, fontSize: 12, color: "var(--text3)" }}>↷</button>
           <button onClick={() => setState(emptyMarkup())} disabled={!state.shapes.length} title="Clear it all"
-            className="agx-btn rounded-lg disabled:opacity-25" style={{ width: 24, height: 24, fontSize: 12, color: "var(--error)" }}>⌫</button>
+            className="agx-btn rounded-lg disabled:opacity-25" style={{ width: 24, height: 24, fontSize: 12, color: "var(--error-ink)" }}>⌫</button>
         </div>
 
         <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-xl shadow-2xl"

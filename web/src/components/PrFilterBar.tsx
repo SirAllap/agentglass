@@ -135,7 +135,7 @@ export function PrFilterBar({
               : `${unread.count} of the loaded pull requests have something said on them since you last looked. Counted here rather than on GitHub — the mark is this browser\u2019s.`}
             className="agx-btn inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded tabular-nums"
             style={{
-              color: "var(--warning)",
+              color: "var(--warning-ink)",
               border: `1px solid color-mix(in srgb, var(--warning) ${unread.on ? 70 : 40}%, transparent)`,
               background: unread.on ? "color-mix(in srgb, var(--warning) 16%, transparent)" : "transparent",
             }}>

@@ -148,12 +148,12 @@ function TidyView({ report, root, busy }: { report: TidyReport | null; root: str
   const [armed, setArmed] = useState<string | null>(null);
   if (busy && !report) return <Empty what="clutter" busy />;
   if (!report) return null;
-  if (report.error) return <div className="p-4 text-[11.5px]" style={{ color: "var(--error)" }}>{report.error}</div>;
+  if (report.error) return <div className="p-4 text-[11.5px]" style={{ color: "var(--error-ink)" }}>{report.error}</div>;
   if (!report.findings.length) {
     return (
       <div className="grid place-items-center gap-1.5 py-14 px-6 text-center">
         <div className="grid place-items-center rounded-full mb-1"
-          style={{ width: 34, height: 34, background: "color-mix(in srgb, var(--success) 14%, transparent)", color: "var(--success)" }}><DoneIcon size={ICON.sm} /></div>
+          style={{ width: 34, height: 34, background: "color-mix(in srgb, var(--success) 14%, transparent)", color: "var(--success-ink)" }}><DoneIcon size={ICON.sm} /></div>
         <div className="text-[12.5px]" style={{ color: "var(--text)" }}>Nothing has piled up</div>
         <div className="text-[10.5px]" style={{ color: "var(--text3)", maxWidth: 340 }}>
           No stale branches, no dangling worktrees, no loose objects worth packing.
@@ -334,12 +334,12 @@ function BranchChip({ branch, onCopied }: { branch: GitBranchInfo; onCopied?: (n
       }}
       title={`${branch.name}${upstream ? `\ntracking ${upstream}` : "\nno upstream — nothing to compare against"}\n\nclick to copy the branch name`}>
       <span className="truncate min-w-0"><BranchIcon size={ICON.xs} className="inline-block align-[-2px] mr-1" />{branch.name}</span>
-      {busy && <span style={{ color: "var(--warning)" }}>({busy})</span>}
+      {busy && <span style={{ color: "var(--warning-ink)" }}>({busy})</span>}
       {/* Behind first, then ahead — it reads as "pull this many, push that many",
           and it's the order lazygit uses, so the shape is already familiar. */}
-      {behind > 0 && <span style={{ color: "var(--warning)" }}>↓{behind}</span>}
-      {ahead > 0 && <span style={{ color: "var(--success)" }}>↑{ahead}</span>}
-      {upstream && !ahead && !behind && <span className="flex" style={{ color: "var(--success)" }} title="in sync with upstream"><DoneIcon size={ICON.xs} /></span>}
+      {behind > 0 && <span style={{ color: "var(--warning-ink)" }}>↓{behind}</span>}
+      {ahead > 0 && <span style={{ color: "var(--success-ink)" }}>↑{ahead}</span>}
+      {upstream && !ahead && !behind && <span className="flex" style={{ color: "var(--success-ink)" }} title="in sync with upstream"><DoneIcon size={ICON.xs} /></span>}
     </span>
   );
 }
@@ -686,8 +686,8 @@ function FileRow({ c, root, active, writeEnabled, desc, onSelect, action, onActi
         {desc && <span className="block truncate text-[10px] leading-normal t-dim2 mt-0.5" title={desc}>{desc}</span>}
       </span>
       <span className="shrink-0 self-start mt-0.5 text-[9.5px] tabular-nums flex items-center gap-1 opacity-80">
-        {c.additions > 0 && <span style={{ color: "var(--success)" }}>+{c.additions}</span>}
-        {c.deletions > 0 && <span style={{ color: "var(--error)" }}>−{c.deletions}</span>}
+        {c.additions > 0 && <span style={{ color: "var(--success-ink)" }}>+{c.additions}</span>}
+        {c.deletions > 0 && <span style={{ color: "var(--error-ink)" }}>−{c.deletions}</span>}
       </span>
       {/*
         One named button, not two glyphs.
@@ -748,7 +748,7 @@ function BlockResolver({ blocks, error, picks, onPick, onApply, busy }: {
   onApply: () => void;
   busy: boolean;
 }) {
-  if (error) return <div className="text-[10.5px] px-2 py-1.5 rounded" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>{error}</div>;
+  if (error) return <div className="text-[10.5px] px-2 py-1.5 rounded" style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>{error}</div>;
   if (!blocks) return <div className="text-[10.5px] t-dim2 flex items-center gap-2 px-2 py-1.5"><span className="agx-spin" aria-hidden="true" />Reading the file…</div>;
   if (!blocks.length) return <div className="text-[10.5px] t-dim2 px-2 py-1.5">No conflict markers left in this file</div>;
 
@@ -802,7 +802,7 @@ function BlockResolver({ blocks, error, picks, onPick, onApply, busy }: {
         <span className="text-[9.5px] t-dim2">{left ? `${left} still to choose` : "Every conflict answered"}</span>
         <button onClick={onApply} disabled={busy || left > 0}
           className="ml-auto px-2 py-0.5 rounded text-[10px] font-medium"
-          style={{ color: "var(--success)", border: "1px solid color-mix(in srgb, var(--success) 40%, transparent)", opacity: left ? 0.4 : 1 }}
+          style={{ color: "var(--success-ink)", border: "1px solid color-mix(in srgb, var(--success) 40%, transparent)", opacity: left ? 0.4 : 1 }}
           title={left ? "Choose a side for every conflict first" : "Write these choices and stage the file"}>
           Apply and stage
         </button>
@@ -2828,7 +2828,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       <button
                         onClick={() => setBisectOpen(true)}
                         className="text-[11px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg whitespace-nowrap shrink-0"
-                        style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}
+                        style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}
                         title="A bisect is in progress — mark the checked-out commit good or bad"
                       ><IconLabel icon={<TargetIcon size={ICON.xs} />}>bisect</IconLabel></button>
                     )}
@@ -2881,7 +2881,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       <button
                         onClick={() => openPr(prChip.repo, prChip.pr.number)}
                         className="text-[11px] px-2.5 min-h-[28px] rounded-lg whitespace-nowrap flex items-center gap-1.5"
-                        style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}
+                        style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}
                         title={`${prChip.pr.title} — open it in Pull requests`}>
                         {/* The state as a dot rather than a word: the row is
                             already dense and the colour is the whole message. */}
@@ -2946,7 +2946,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                           onClick={() => act(() => api.gitSyncBase(root), `merged ${branch.base}`, "sync")}
                           disabled={!writeEnabled || busy || !tree?.clean || twinBehind}
                           className="text-[11px] px-2 py-1 rounded-l-lg whitespace-nowrap"
-                          style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)", borderRight: "none", opacity: (!writeEnabled || busy || !tree?.clean || twinBehind) ? 0.45 : 1 }}
+                          style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)", borderRight: "none", opacity: (!writeEnabled || busy || !tree?.clean || twinBehind) ? 0.45 : 1 }}
                           title={!tree?.clean
                             ? "Commit or stash your changes first — merging over uncommitted work is how you lose it"
                             : twinBehind
@@ -2968,7 +2968,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                           onPick={(name) => setBaseFor(branch.name, name)}
                           disabled={!writeEnabled || busy}
                           className="text-[11px] px-1.5 py-1 rounded-r-lg"
-                          style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}
+                          style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}
                           title={`Merging from ${branch.base} — pick a different base`} />
                       </div>
                     )}
@@ -3012,7 +3012,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                   <div className="shrink-0 px-4 py-2 border-b flex flex-col gap-1.5"
                     style={{ borderColor: "color-mix(in srgb, var(--warning) 45%, transparent)", background: "color-mix(in srgb, var(--warning) 8%, transparent)" }}>
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-[11px] font-semibold whitespace-nowrap" style={{ color: "var(--warning)" }}>
+                      <span className="text-[11px] font-semibold whitespace-nowrap" style={{ color: "var(--warning-ink)" }}>
                         {mergeState} — {conflicts.length} conflicted file{conflicts.length === 1 ? "" : "s"}
                       </span>
                       {/* Abort first, and always available: it is the only move
@@ -3020,11 +3020,11 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                           when you did not mean to start this. */}
                       <button onClick={() => act(() => api.gitMergeAbort(root), "merge aborted", "abort")} disabled={busy}
                         className="text-[10.5px] px-2 py-0.5 rounded-lg whitespace-nowrap"
-                        style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}
+                        style={{ color: "var(--error-ink)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}
                         title="Throw the merge away and put the tree back exactly as it was">abort</button>
                       <button onClick={() => act(() => api.gitMergeContinue(root), "merge completed", "continue")} disabled={busy || conflicts.length > 0}
                         className="text-[10.5px] px-2 py-0.5 rounded-lg whitespace-nowrap"
-                        style={{ color: "var(--success)", border: "1px solid color-mix(in srgb, var(--success) 40%, transparent)", opacity: conflicts.length ? 0.4 : 1 }}
+                        style={{ color: "var(--success-ink)", border: "1px solid color-mix(in srgb, var(--success) 40%, transparent)", opacity: conflicts.length ? 0.4 : 1 }}
                         title={conflicts.length ? "resolve every file first" : "commit the merge"}>continue</button>
                       {conflicts.length > 0 && (
                         <>
@@ -3128,7 +3128,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     {tree?.clean && (
                       <div className="grid place-items-center gap-1.5 py-10 px-4 text-center">
                         <div className="grid place-items-center rounded-full mb-1"
-                          style={{ width: 34, height: 34, background: "color-mix(in srgb, var(--success) 14%, transparent)", color: "var(--success)" }}><DoneIcon size={ICON.sm} /></div>
+                          style={{ width: 34, height: 34, background: "color-mix(in srgb, var(--success) 14%, transparent)", color: "var(--success-ink)" }}><DoneIcon size={ICON.sm} /></div>
                         <div className="text-[12.5px]" style={{ color: "var(--text)" }}>Working tree clean</div>
                         <div className="text-[10.5px]" style={{ color: "var(--text3)" }}>
                           {branch?.ahead ? `${branch.ahead} commit${branch.ahead === 1 ? "" : "s"} waiting to push` : "nothing to commit here"}
@@ -3157,7 +3157,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                                   className="w-full flex items-center gap-2 px-2.5 py-1 text-left hover:bg-white/5"
                                   style={on ? { background: "color-mix(in srgb, var(--warning) 14%, transparent)" } : undefined}
                                   title={f}>
-                                  <span className="w-3.5 text-center text-[11px] font-bold shrink-0" style={{ color: "var(--warning)" }}>!</span>
+                                  <span className="w-3.5 text-center text-[11px] font-bold shrink-0" style={{ color: "var(--warning-ink)" }}>!</span>
                                   <span className="text-[11.5px] truncate" style={{ color: on ? "var(--text)" : "var(--text2)" }}>{relPath}</span>
                                 </button>
                               );
@@ -3207,9 +3207,9 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       {blockFile ? (
                         <>
                           <div className="flex items-center gap-2 px-4 py-2 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
-                            <span className="w-3.5 text-center text-[11px] font-bold shrink-0" style={{ color: "var(--warning)" }}>!</span>
+                            <span className="w-3.5 text-center text-[11px] font-bold shrink-0" style={{ color: "var(--warning-ink)" }}>!</span>
                             <span className="text-[12px] font-medium truncate" style={{ color: "var(--text)" }} title={blockFile}>{blockFile}</span>
-                            <span className="text-[10.5px] shrink-0" style={{ color: "var(--warning)" }}>in conflict</span>
+                            <span className="text-[10.5px] shrink-0" style={{ color: "var(--warning-ink)" }}>in conflict</span>
                             <div className="ml-auto flex items-center gap-1.5 shrink-0">
                               <button onClick={() => act(() => api.gitResolve(root, [blockFile], "ours"), `kept ours for ${blockFile}`)} disabled={busy}
                                 className="text-[10.5px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
@@ -3239,8 +3239,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                             <span className="w-3.5 text-center text-[11px] font-bold shrink-0" style={{ color: STATUS_TINT[selected.status] }}>{STATUS_LETTER[selected.status]}</span>
                             <span className="text-[12px] font-medium truncate" style={{ color: "var(--text)" }} title={selected.file_path}>{rel(selected)}</span>
                             <span className="shrink-0 text-[10.5px] tabular-nums flex items-center gap-1.5">
-                              {selected.additions > 0 && <span style={{ color: "var(--success)" }}>+{selected.additions}</span>}
-                              {selected.deletions > 0 && <span style={{ color: "var(--error)" }}>−{selected.deletions}</span>}
+                              {selected.additions > 0 && <span style={{ color: "var(--success-ink)" }}>+{selected.additions}</span>}
+                              {selected.deletions > 0 && <span style={{ color: "var(--error-ink)" }}>−{selected.deletions}</span>}
                             </span>
                             <div className="ml-auto flex items-center gap-1.5 shrink-0">
                               {/* `e` has always done this; the button is for the
@@ -3462,7 +3462,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         */}
                         {writeEnabled && goneMerged.length > 0 && (
                           <button onClick={deleteGone} disabled={busy} className="text-[10.5px] px-2.5 py-1 rounded-lg font-medium"
-                            style={{ background: "color-mix(in srgb, var(--error) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)", color: "var(--error)", opacity: busy ? 0.55 : 1 }}
+                            style={{ background: "color-mix(in srgb, var(--error) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)", color: "var(--error-ink)", opacity: busy ? 0.55 : 1 }}
                             title={`${goneMerged.map((b) => b.name).slice(0, 8).join("\n")}${goneMerged.length > 8 ? `\n…and ${goneMerged.length - 8} more` : ""}`}>
                             {busy ? `${pending ?? "working"}…` : `Delete ${goneMerged.length} branch${goneMerged.length === 1 ? "" : "es"} already in ${branchData.trunk ?? "the trunk"}`}
                           </button>
@@ -3489,7 +3489,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                           if (goneUnmerged.length) parts.push(
                             branchData.checking
                               ? <span style={{ color: "var(--text2)" }}>Checking {goneUnmerged.length} more…</span>
-                              : <span style={{ color: "var(--warning)" }}>{goneUnmerged.length} not merged — kept</span>,
+                              : <span style={{ color: "var(--warning-ink)" }}>{goneUnmerged.length} not merged — kept</span>,
                           );
                           return <span className="text-[9.5px] t-dim2">{parts.map((p, i) => <Fragment key={i}>{i > 0 && " · "}{p}</Fragment>)}</span>;
                         })()}
@@ -3537,7 +3537,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         style={{ background: "color-mix(in srgb, var(--bg2) 96%, black)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
                         <span className="text-[10.5px]" style={{ color: "var(--text)" }}>{picked.size} ticked</span>
                         {bulk.held.length > 0 && (
-                          <span className="text-[9.5px]" style={{ color: "var(--warning)" }}
+                          <span className="text-[9.5px]" style={{ color: "var(--warning-ink)" }}
                             title={bulk.held.map((b) => b.name).join("\n")}>
                             {bulk.held.length} cannot be deleted — checked out
                           </span>
@@ -3545,7 +3545,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         {writeEnabled && bulk.can.length > 0 && (
                           <button onClick={() => void deletePicked()}
                             className="text-[10.5px] px-2.5 py-1 rounded-lg font-medium"
-                            style={{ background: "color-mix(in srgb, var(--error) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)", color: "var(--error)" }}
+                            style={{ background: "color-mix(in srgb, var(--error) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)", color: "var(--error-ink)" }}
                             title={bulk.can.map((b) => b.name).join("\n")}>
                             Delete {bulk.can.length}
                           </button>
@@ -3598,13 +3598,13 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                           {snapshots.map((s) => (
                             <div key={s.ref} className="group px-2.5 py-1.5 rounded-md" style={{ background: "color-mix(in srgb, var(--info) 7%, transparent)", border: "1px solid color-mix(in srgb, var(--info) 18%, transparent)" }}>
                               <div className="flex items-center gap-2">
-                                <span className="text-[9.5px] tabular-nums font-mono" style={{ color: "var(--info)" }}>{s.sha.slice(0, 7)}</span>
+                                <span className="text-[9.5px] tabular-nums font-mono" style={{ color: "var(--info-ink)" }}>{s.sha.slice(0, 7)}</span>
                                 <span className="min-w-0 flex-1 truncate text-[11.5px]" style={{ color: "var(--text)" }}>{s.label || "untitled snapshot"}</span>
                                 <span className="shrink-0 text-[9.5px] t-dim2">{s.time}</span>
                                 {writeEnabled && (
                                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
-                                    <button onClick={() => act(() => api.gitSnapshotRestore(root, s.sha), "Restored snapshot")} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--success)", border: "1px solid color-mix(in srgb, var(--success) 30%, transparent)" }} title="Apply the snapshot's tree onto the current one">restore</button>
-                                    <button onClick={async () => { if (await ask({ title: "Delete this snapshot?", body: "The checkpoint is gone for good.", danger: true, confirmLabel: "Delete" })) act(() => api.gitSnapshotDelete(root, s.sha), "Deleted snapshot"); }} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--error)" }}>delete</button>
+                                    <button onClick={() => act(() => api.gitSnapshotRestore(root, s.sha), "Restored snapshot")} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--success-ink)", border: "1px solid color-mix(in srgb, var(--success) 30%, transparent)" }} title="Apply the snapshot's tree onto the current one">restore</button>
+                                    <button onClick={async () => { if (await ask({ title: "Delete this snapshot?", body: "The checkpoint is gone for good.", danger: true, confirmLabel: "Delete" })) act(() => api.gitSnapshotDelete(root, s.sha), "Deleted snapshot"); }} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--error-ink)" }}>delete</button>
                                   </div>
                                 )}
                               </div>
@@ -3683,7 +3683,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                               {/* Only worth showing when they differ — the fork
                                   setup, where you fetch from upstream and push
                                   to your own. */}
-                              {r.pushUrl && r.pushUrl !== r.fetchUrl && <span className="shrink-0 text-[10px] px-1 py-px rounded" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 12%, transparent)" }}>push ≠ fetch</span>}
+                              {r.pushUrl && r.pushUrl !== r.fetchUrl && <span className="shrink-0 text-[10px] px-1 py-px rounded" style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 12%, transparent)" }}>push ≠ fetch</span>}
                             </button>
                           );
                         })}

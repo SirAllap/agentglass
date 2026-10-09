@@ -537,10 +537,10 @@ export function TriageBoard({
             <span className="block text-[11px] mt-2" style={{ color: "var(--text3)" }}>
               Yours, and the ones you were asked to look at. The board never shows more than that
               {" — "}
-              <button onClick={onShowTable} style={{ color: "var(--primary)" }}>
+              <button onClick={onShowTable} style={{ color: "var(--primary-ink)" }}>
                 {rest > 0 ? `the other ${rest} are a table` : "the rest are a table"}
               </button>.
-              {canLand > 0 && <> <span style={{ color: "var(--success)" }}>{canLand}</span> can land right now.</>}
+              {canLand > 0 && <> <span style={{ color: "var(--success-ink)" }}>{canLand}</span> can land right now.</>}
             </span>
           </>
         )}
@@ -1271,7 +1271,7 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
           {(p.openThreads?.open ?? 0) > 0 && (
             <span className="shrink-0 inline-flex items-center rounded-full px-1.5 tabular-nums"
               title={`${p.openThreads!.open}${p.openThreads!.more ? "+" : ""} review thread${p.openThreads!.open === 1 ? "" : "s"} still unresolved`}
-              style={{ fontSize: 9.5, lineHeight: "14px", color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 30%, transparent)" }}>
+              style={{ fontSize: 9.5, lineHeight: "14px", color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 30%, transparent)" }}>
               {p.openThreads!.open}{p.openThreads!.more ? "+" : ""} open
             </span>
           )}
@@ -1423,7 +1423,7 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
         {p.mergeable === "CONFLICTING" && (
           <span className="shrink-0 inline-flex items-center gap-1 rounded px-1"
             style={{
-              color: "var(--error)",
+              color: "var(--error-ink)",
               background: "color-mix(in srgb, var(--error) 12%, transparent)",
               border: "1px solid color-mix(in srgb, var(--error) 35%, transparent)",
             }}
@@ -1459,7 +1459,7 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
           {behind ? (
           <span className="shrink-0 inline-flex items-center gap-0.5 tabular-nums px-1 rounded"
             title={`${behind} commit${behind === 1 ? "" : "s"} on ${p.baseRefName} that this branch does not have — its checks ran against an older base`}
-            style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}>
+            style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}>
             <RefreshIcon size={ICON.xs} />{behind}
           </span>
         ) : asking ? (

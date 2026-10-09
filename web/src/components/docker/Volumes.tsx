@@ -70,7 +70,7 @@ export function Volumes({ volumes }: { volumes: DockerVolume[] }) {
   return (
     <div className="flex-1 min-h-0 flex flex-col">
       <div className="agx-scroll flex-1 min-h-0 overflow-auto p-4">
-        {sizeErr && <div className="text-[11px] mb-2" style={{ color: "var(--warning)" }}>{sizeErr}</div>}
+        {sizeErr && <div className="text-[11px] mb-2" style={{ color: "var(--warning-ink)" }}>{sizeErr}</div>}
         <table className="w-full text-[11px]" style={{ color: "var(--text2)" }}>
           <thead className="text-[9.5px] uppercase tracking-wider t-dim2 text-left">
             <tr>
@@ -171,7 +171,7 @@ export function Volumes({ volumes }: { volumes: DockerVolume[] }) {
             </div>
 
             {peek && !peek.ok && (
-              <div className="text-[10.5px]" style={{ color: "var(--warning)" }}>
+              <div className="text-[10.5px]" style={{ color: "var(--warning-ink)" }}>
                 {peek.error}
                 {peek.hint && <div className="mt-1 t-dim2 break-all" style={{ fontFamily: "ui-monospace, monospace" }}>{peek.hint}</div>}
               </div>

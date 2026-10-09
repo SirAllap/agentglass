@@ -99,7 +99,7 @@ export function PluginSettingsPane({ name, open }: { name: string; open: boolean
   return (
     <div className="flex flex-col gap-4 px-1 pb-6">
       {error && (
-        <div className="text-[11.5px] rounded-md px-3 py-2" style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 8%, transparent)" }}>{error}</div>
+        <div className="text-[11.5px] rounded-md px-3 py-2" style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 8%, transparent)" }}>{error}</div>
       )}
       {groupsOf(fields).map((g) => (
         <Group key={g.name ?? ""} name={g.name} count={g.fields.length}>
@@ -108,7 +108,7 @@ export function PluginSettingsPane({ name, open }: { name: string; open: boolean
               <FieldRow field={f} value={values[f.key]}
                 onChange={(v) => setValues((s) => ({ ...s, [f.key]: v }))}
                 onCommit={(v) => { void commit(f.key, v); }} />
-              <div className="h-3 text-[10.5px]" style={{ color: "var(--success)" }} aria-live="polite">{saved === f.key ? "Saved" : ""}</div>
+              <div className="h-3 text-[10.5px]" style={{ color: "var(--success-ink)" }} aria-live="polite">{saved === f.key ? "Saved" : ""}</div>
             </div>
           ))}
         </Group>

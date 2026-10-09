@@ -57,10 +57,10 @@ export function ToolFeed({ tools, streaming, children }: {
             {toolLabel(latest)}
           </span>
         )}
-        {running && <span className="text-[10px] shrink-0" style={{ color: "var(--info)" }}>·</span>}
+        {running && <span className="text-[10px] shrink-0" style={{ color: "var(--info-ink)" }}>·</span>}
         {/* A failure never folds silently. */}
         {failed > 0 && (
-          <span className="text-[10px] tabular-nums ml-auto shrink-0" style={{ color: "var(--error)" }}>
+          <span className="text-[10px] tabular-nums ml-auto shrink-0" style={{ color: "var(--error-ink)" }}>
             <IconLabel icon={<CrossIcon size={ICON.xs} />}>{failed} failed</IconLabel>
           </span>
         )}

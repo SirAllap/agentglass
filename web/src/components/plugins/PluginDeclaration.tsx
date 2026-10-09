@@ -104,7 +104,7 @@ export function PluginDeclaration({ plugin }: { plugin: PublicPlugin }) {
           {box.tone === "boxed" && box.refused && box.refused.length > 0 && (
             <div className="flex flex-col gap-0.5 mb-1.5">
               {box.refused.map((r) => (
-                <p key={r.path} className="m-0 text-[11.5px] leading-snug" style={{ color: "var(--error)" }}>
+                <p key={r.path} className="m-0 text-[11.5px] leading-snug" style={{ color: "var(--error-ink)" }}>
                   Refused <span className="t-mono">{r.path}</span> — {r.why}
                 </p>
               ))}
@@ -127,7 +127,7 @@ export function PluginDeclaration({ plugin }: { plugin: PublicPlugin }) {
           <div className="flex flex-col gap-1">
             {drawn.map((s) => (
               <div key={s.what} className="flex items-start gap-2 min-w-0">
-                <span className="shrink-0 mt-px" style={{ color: "var(--primary)" }}>{s.icon}</span>
+                <span className="shrink-0 mt-px" style={{ color: "var(--primary-ink)" }}>{s.icon}</span>
                 <span className="min-w-0 text-[12px] leading-snug">
                   <span style={{ color: "var(--text)" }}>{s.what}</span>
                   <span className="t-dim"> — {s.where}</span>
@@ -176,7 +176,7 @@ function Grants({ label, grants }: { label: string; grants: SandboxGrant[] }) {
       <span className="flex flex-col gap-0.5">
         {grants.map((g) => (
           <span key={g.path} className="t-mono text-[11.5px]" style={{ color: g.secret ? "var(--error)" : "var(--text)" }}>
-            {g.path}{g.secret && <span className="t-dim" style={{ color: "var(--error)" }}> · {g.secret}</span>}
+            {g.path}{g.secret && <span className="t-dim" style={{ color: "var(--error-ink)" }}> · {g.secret}</span>}
           </span>
         ))}
       </span>

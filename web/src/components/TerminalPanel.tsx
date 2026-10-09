@@ -11,7 +11,7 @@ import { subscribeTermReview, termReview, clearTermReview } from "../lib/termRev
 import { subscribeTermIssue, termIssue, clearTermIssue, type TermIssue } from "../lib/termIssue.ts";
 import { dirName } from "../lib/worktree.ts";
 import { requestWorktreeJump } from "../lib/worktreeJump.ts";
-import { ICON, MIN_BOX } from "../lib/iconSize.ts";
+import { ICON } from "../lib/iconSize.ts";
 import { GearIcon } from "./workspace/icons.tsx";
 import { openSettings } from "../lib/openSettings.ts";
 import { CaretIcon, ExpandIcon, GridIcon, IconLabel, LockIcon, PinIcon, SearchIcon } from "../lib/glyphIcons.tsx";
@@ -102,11 +102,11 @@ export function consoleRoot(): string {
  *  richer one that names the shell; this is the shared minimum. */
 const SESS_DOT: Record<SessStatus, { color: string; label: string }> = {
   idle: { color: "var(--text2)", label: "Idle" },
-  connecting: { color: "var(--warning)", label: "Connecting…" },
+  connecting: { color: "var(--warning-ink)", label: "Connecting…" },
   live: { color: "var(--success, #98c379)", label: "Live" },
   exited: { color: "var(--text2)", label: "Exited" },
-  error: { color: "var(--error)", label: "Disconnected" },
-  unauthorized: { color: "var(--error)", label: "Unauthorized" },
+  error: { color: "var(--error-ink)", label: "Disconnected" },
+  unauthorized: { color: "var(--error-ink)", label: "Unauthorized" },
 };
 const repoName = (p: string) => p.split("/").pop() || p;
 
@@ -2762,9 +2762,9 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
           aria-expanded={groupMenu?.key === g.key}
           aria-label={`${g.label}, ${g.windows.length} ${g.windows.length === 1 ? "window" : "windows"}${says ? `: ${says}` : ""}`}
           title={`${g.label}: ${g.windows.length} ${g.windows.length === 1 ? "window" : "windows"}${says ? ` — ${says}` : ""}. Click to list them, Shift+click to keep the group open, drop a tab here to move it in.`}
-          className="shrink-0 flex items-center gap-1 px-1.5 py-px rounded-md text-[10.5px] transition-colors"
+          className="shrink-0 flex items-center gap-1 px-1.5 py-px min-h-[28px] rounded-md text-[10.5px] transition-colors"
           style={{
-            color: "var(--text3)", minHeight: MIN_BOX,
+            color: "var(--text3)",
             // The most urgent state inside tints the edge, so
             // a folded group still says a question is waiting.
             border: `1px solid ${urgent
@@ -2981,7 +2981,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                   ? "This server needs an access token — click to enter it"
                   : "The shell is not connected — click to attach again"}
                 className="flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-lg"
-                style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 45%, transparent)" }}>
+                style={{ color: "var(--error-ink)", border: "1px solid color-mix(in srgb, var(--error) 45%, transparent)" }}>
                 <span aria-hidden>●</span>
                 {status === "unauthorized" ? "Token needed" : "Reconnect"}
               </button>
@@ -3158,7 +3158,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         apply. Reported as precisely that, twice. */}
                     <span className="shrink-0 px-2.5 min-h-[28px] inline-flex items-center rounded-lg text-[9.5px] uppercase tracking-wider"
                       style={sess?.tmuxEngine
-                        ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 13%, transparent)" }
+                        ? { color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 13%, transparent)" }
                         : { color: "var(--text4)", background: "color-mix(in srgb, var(--text) 8%, transparent)" }}
                       title={sess?.tmuxEngine
                         ? "agentglass's own tmux — the Pane engine. Its prefix, config and restore are in Settings ▸ Pane engine."
@@ -3251,7 +3251,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                                     className="rounded px-1.5 py-0.5 text-[10px]"
                                     style={{
                                       border: 0, cursor: "pointer", fontWeight: 600,
-                                      color: "var(--error)",
+                                      color: "var(--error-ink)",
                                       background: "color-mix(in srgb, var(--error) 16%, transparent)",
                                     }}
                                     onClick={() => {
@@ -3982,7 +3982,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                   */}
                 {tmuxActive && hiddenRows > 0 && (
                   <div className="shrink-0 flex items-center gap-3 px-4 py-1.5 border-t text-[9.5px]" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
-                    <span style={{ color: "var(--warning)" }}>
+                    <span style={{ color: "var(--warning-ink)" }}>
                       {hiddenRows} row{hiddenRows === 1 ? "" : "s"} of this pane are below the panel —
                       a bigger client is attached, so the last line (an editor's status bar) is off-screen
                     </span>
@@ -3993,7 +3993,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       })}
                       title="Size this tmux window to this panel. The other client keeps working; it just stops deciding the size."
                       className="agx-btn px-2 py-0.5 rounded"
-                      style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>
+                      style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>
                       Fit to this window
                     </button>
                   </div>

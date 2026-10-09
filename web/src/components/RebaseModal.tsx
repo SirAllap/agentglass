@@ -96,14 +96,14 @@ export function RebaseModal({ root, base, branch, onClose, onDone }: {
           >
             <div className="flex items-center gap-2.5 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
               <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>Rebase</span>
-              <span className="chip text-[10px]" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}><IconLabel icon={<BranchIcon size={ICON.xs} />}>{branch}</IconLabel></span>
+              <span className="chip text-[10px]" style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}><IconLabel icon={<BranchIcon size={ICON.xs} />}>{branch}</IconLabel></span>
               <span className="min-w-0 truncate text-[10.5px] t-dim2 font-mono" title={base}>{base.slice(0, 7)}…</span>
               <CloseButton onClick={onClose} className="ml-auto" />
             </div>
 
             <div className="flex-1 min-h-0 overflow-y-auto px-5 py-3">
               {err && !steps?.length && (
-                <div className="text-[11.5px] px-3 py-2 rounded-lg" style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 12%, transparent)" }}>{err}</div>
+                <div className="text-[11.5px] px-3 py-2 rounded-lg" style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 12%, transparent)" }}>{err}</div>
               )}
               {steps === null && <div className="t-dim2 text-center py-12 text-[12px]">Reading commits…</div>}
               {steps && steps.length > 0 && (
@@ -140,13 +140,13 @@ export function RebaseModal({ root, base, branch, onClose, onDone }: {
               {steps && steps.length > 0 && (
                 <div className="mt-2.5 text-[10px] t-dim2 flex items-center gap-3">
                   <span>{steps.length} commits above the base</span>
-                  {after !== steps.length && <span style={{ color: "var(--warning)" }}>{drops} dropped → {after} in the result</span>}
+                  {after !== steps.length && <span style={{ color: "var(--warning-ink)" }}>{drops} dropped → {after} in the result</span>}
                   {rewords > 0 && <span style={{ color: "var(--primary-hover)" }}>{rewords} reworded</span>}
                   <span className="ml-auto">conflict → resolve, then Continue; Abort puts the branch back</span>
                 </div>
               )}
               {err && steps && steps.length > 0 && (
-                <div className="mt-2 text-[11px] px-3 py-2 rounded-lg font-mono" style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 12%, transparent)" }}>{err}</div>
+                <div className="mt-2 text-[11px] px-3 py-2 rounded-lg font-mono" style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 12%, transparent)" }}>{err}</div>
               )}
             </div>
 

@@ -44,7 +44,7 @@ function Entry({ e }: { e: ChangelogEntry }) {
   return (
     <li className="flex items-baseline gap-2 text-[11.5px] leading-relaxed">
       <span className="shrink-0 font-mono text-[9.5px] t-dim2">{e.hash}</span>
-      {e.scope && <span className="shrink-0 rounded px-1 text-[9.5px] font-mono" style={{ color: "var(--info)", border: "1px solid color-mix(in srgb, var(--info) 30%, transparent)" }}>{e.scope}</span>}
+      {e.scope && <span className="shrink-0 rounded px-1 text-[9.5px] font-mono" style={{ color: "var(--info-ink)", border: "1px solid color-mix(in srgb, var(--info) 30%, transparent)" }}>{e.scope}</span>}
       <span className="min-w-0" style={{ color: "var(--text)" }}>{e.subject}</span>
     </li>
   );
@@ -102,7 +102,7 @@ export function InsightsModal({ root, onClose }: { root: string; onClose: () => 
             {busy && !stats ? (
               <div className="py-10 text-center text-[11.5px] t-dim2">Reading the log…</div>
             ) : stats?.error ? (
-              <div className="py-10 text-center text-[11.5px]" style={{ color: "var(--error)" }}>{stats.error}</div>
+              <div className="py-10 text-center text-[11.5px]" style={{ color: "var(--error-ink)" }}>{stats.error}</div>
             ) : (
               <div className="space-y-5">
                 <div className="grid grid-cols-4 gap-2">
@@ -163,7 +163,7 @@ export function InsightsModal({ root, onClose }: { root: string; onClose: () => 
                     )}
                   </div>
                   {changelog?.error ? (
-                    <div className="text-[11px]" style={{ color: "var(--error)" }}>{changelog.error}</div>
+                    <div className="text-[11px]" style={{ color: "var(--error-ink)" }}>{changelog.error}</div>
                   ) : changelog?.sections.length ? (
                     <div className="space-y-3">
                       {changelog.sections.map((s) => (

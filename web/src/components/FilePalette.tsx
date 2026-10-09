@@ -939,7 +939,7 @@ export function FilePalette({
                 <button key={t.id} onClick={() => { setTab(t.id); inputRef.current?.focus(); }}
                   className="text-[11px] px-3 py-1.5 rounded-t-md"
                   style={t.id === tab
-                    ? { background: "var(--bg2)", border: edge(18), borderBottom: "none", color: "var(--primary)" }
+                    ? { background: "var(--bg2)", border: edge(18), borderBottom: "none", color: "var(--primary-ink)" }
                     : { border: "1px solid transparent", color: "var(--text3)" }}>
                   {t.label}
                 </button>
@@ -969,7 +969,7 @@ export function FilePalette({
             <div className="px-2.5 py-2.5 shrink-0" style={{ borderTop: edge(18), borderBottom: edge(18) }}>
             <div className="flex items-center gap-2.5 px-2.5 py-2 rounded-md"
               style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: edge(14) }}>
-              <span className="flex" style={{ color: "var(--primary)" }}><SearchIcon size={ICON.xs} /></span>
+              <span className="flex" style={{ color: "var(--primary-ink)" }}><SearchIcon size={ICON.xs} /></span>
               <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)}
                 spellCheck={false} autoComplete="off" placeholder={active.placeholder}
                 className="flex-1 min-w-0 bg-transparent outline-none text-[12.5px]" style={{ color: "var(--text)" }} />
@@ -1176,7 +1176,7 @@ function RowView({ row, i, on, onHover, onPick, onDouble }: {
           </span>
         ) : row.kind === "dir" ? (
           <span className="ml-auto shrink-0 text-[9px] px-1.5 rounded"
-            style={{ color: "var(--info)", border: "1px solid color-mix(in srgb, var(--info) 30%, transparent)" }}>folder</span>
+            style={{ color: "var(--info-ink)", border: "1px solid color-mix(in srgb, var(--info) 30%, transparent)" }}>folder</span>
         ) : null}
         {row.kind === "recent" && (
           <span className="ml-auto shrink-0 flex items-baseline gap-2">
@@ -1184,7 +1184,7 @@ function RowView({ row, i, on, onHover, onPick, onDouble }: {
                 it is the difference between a broken app and a checkout that
                 moved under you. Pressing it forgets the entry. */}
             {row.gone && (
-              <span className="text-[9px] px-1.5 rounded" style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 32%, transparent)" }}>
+              <span className="text-[9px] px-1.5 rounded" style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 32%, transparent)" }}>
                 not here now · ⏎ forgets
               </span>
             )}
@@ -1196,7 +1196,7 @@ function RowView({ row, i, on, onHover, onPick, onDouble }: {
         <div className="mt-1 flex flex-col gap-px">
           {row.hits.slice(0, 4).map((h, n) => (
             <div key={n} className="flex items-baseline gap-2 text-[11px]">
-              <span className="shrink-0 tabular-nums w-[42px] text-right" style={{ color: "var(--info)", opacity: 0.75 }}>{h.line}</span>
+              <span className="shrink-0 tabular-nums w-[42px] text-right" style={{ color: "var(--info-ink)", opacity: 0.75 }}>{h.line}</span>
               <span className="flex-1 min-w-0 truncate" style={{ color: "var(--text2)" }}>
                 {h.len > 0 ? (
                   <>
@@ -1328,7 +1328,7 @@ function RepoChip({ repo, repos, openState, onPick }: {
                     <span className="truncate" style={{ color: "var(--text)" }}>{shortPath(r.root)}</span>
                     {r.worktreeOf && (
                       <span className="shrink-0 text-[8.5px] px-1 rounded"
-                        style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }}>WT</span>
+                        style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }}>WT</span>
                     )}
                   </span>
                   <span className="text-[9.5px] truncate" style={{ color: "var(--text4)" }}>on {r.branch}</span>
@@ -1448,7 +1448,7 @@ function PlaceChip({ place, places, recents, error, openState, onPick }: {
               className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
               style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: edge(20), color: "var(--text)" }} />
             <div className="agx-scroll overflow-y-auto overflow-x-hidden py-1.5" style={{ minHeight: 0 }}>
-              {error && <div className="px-3 py-2" style={{ color: "var(--error)" }}>{error}</div>}
+              {error && <div className="px-3 py-2" style={{ color: "var(--error-ink)" }}>{error}</div>}
               {sugg.map((e) => <Row key={e.path} path={e.path} primary={e.name} secondary={e.path} />)}
               {isPath(typed.trim()) && !sugg.length && (
                 <div className="px-3 py-2" style={{ color: "var(--text3)" }}>Nothing under that path yet — ⏎ searches it anyway.</div>
@@ -1529,7 +1529,7 @@ function ScopeChip({ repo, repos, ref_, refs, openState, onPickRoot, onPickRef }
           ? `Searching ${repo.root}${ref_ ? ` at ${ref_}` : " — what is on disk now"}`
           : "Pick something to search"}
         style={ref_
-          ? { background: "color-mix(in srgb, var(--info) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--info) 45%, transparent)", color: "var(--info)" }
+          ? { background: "color-mix(in srgb, var(--info) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--info) 45%, transparent)", color: "var(--info-ink)" }
           : { background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: edge(20), color: "var(--text2)" }}>
         {/* The folder always, and the version only when it is not the disk —
             a bare folder name is the ordinary case and needs no second word. */}
@@ -1578,7 +1578,7 @@ function ScopeChip({ repo, repos, ref_, refs, openState, onPickRoot, onPickRef }
                     <span className="truncate" style={{ color: "var(--text)" }}>{shortPath(r.root)}</span>
                     {r.worktreeOf && (
                       <span className="shrink-0 text-[8.5px] px-1 rounded"
-                        style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }}>WT</span>
+                        style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }}>WT</span>
                     )}
                   </span>
                   <span className="text-[9.5px] truncate" style={{ color: "var(--text4)" }}>on {r.branch}</span>
@@ -1658,7 +1658,7 @@ function RefChip({ value, refs, openState, onPick }: {
           ? `Searching ${value} — read from the object store, nothing is checked out`
           : "Searching this working tree. Pick a branch to search one you are not on."}
         style={on
-          ? { background: "color-mix(in srgb, var(--info) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--info) 45%, transparent)", color: "var(--info)" }
+          ? { background: "color-mix(in srgb, var(--info) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--info) 45%, transparent)", color: "var(--info-ink)" }
           : { background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: edge(20), color: "var(--text3)" }}>
         <span className="truncate min-w-0">{on ? value : "working tree"}</span>
         <span className="shrink-0" style={{ color: on ? "var(--info)" : "var(--text3)" }}>▾</span>
@@ -1770,7 +1770,7 @@ function RefRow({ name, on, head, remote, onPick }: {
           next to each other with no heading in between. */}
       <span className="shrink-0 text-[8px] w-[22px] text-center rounded"
         style={remote
-          ? { color: "var(--info)", border: "1px solid color-mix(in srgb, var(--info) 30%, transparent)" }
+          ? { color: "var(--info-ink)", border: "1px solid color-mix(in srgb, var(--info) 30%, transparent)" }
           : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)" }}>
         {remote ? "RM" : "LO"}
       </span>

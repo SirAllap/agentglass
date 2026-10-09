@@ -50,7 +50,7 @@ export const CostByModel = memo(function CostByModel({ stats }: { stats: StatsSu
               </>
             ) : (
               <>
-                <span className="text-[17px] font-semibold tabular-nums" style={{ color: "var(--success)" }}>{fmtUsd(total)}</span>
+                <span className="text-[17px] font-semibold tabular-nums" style={{ color: "var(--success-ink)" }}>{fmtUsd(total)}</span>
                 <span className="text-[10px] t-dim2">Total spend</span>
               </>
             )}
@@ -81,7 +81,7 @@ export const CostByModel = memo(function CostByModel({ stats }: { stats: StatsSu
                 {m.unpriced && (
                   <span
                     className="t-dim2"
-                    style={{ color: "var(--warning)", fontSize: 10 }}
+                    style={{ color: "var(--warning-ink)", fontSize: 10 }}
                     title={`agentglass has no rate for ${m.model_name}. Any cost here that the provider did not report exactly is estimated at the fallback $3/$15 per million tokens — set AGENTGLASS_PRICING to a table with this model to fix it.`}
                   >
                     ~
@@ -92,7 +92,7 @@ export const CostByModel = memo(function CostByModel({ stats }: { stats: StatsSu
                 <span className="t-dim2" title={eqTitle(m.equiv_tokens ?? m.input_tokens + m.output_tokens)}>
                   {fmtEq(m.equiv_tokens ?? m.input_tokens + m.output_tokens)}
                 </span>
-                <span style={{ color: "var(--success)" }}>{fmtUsd(m.cost_usd)}</span>
+                <span style={{ color: "var(--success-ink)" }}>{fmtUsd(m.cost_usd)}</span>
               </span>
             </motion.div>
           ))}

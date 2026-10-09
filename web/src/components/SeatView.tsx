@@ -242,7 +242,7 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
           {unread ? "could not read the seat" : live ? "Somebody is minding this project" : "Nobody is minding this project"}
         </span>
         {root && <span className="text-[10.5px] truncate" style={{ color: "var(--text4)" }} title={root}>· {here(root)}</span>}
-        {error && <span className="text-[10.5px]" style={{ color: "var(--error)" }}>{error}</span>}
+        {error && <span className="text-[10.5px]" style={{ color: "var(--error-ink)" }}>{error}</span>}
       </ViewHeader>
 
       {/*
@@ -363,7 +363,7 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
                         {r.needsYou ? fmtAgo(r.needsYou.since) : ""}
                         {r.paneId && (
                           <button type="button" onClick={() => jumpToPane(r.paneId!)}
-                            className="agx-btn text-[10px] rounded px-1.5 py-0.5" style={{ color: "var(--primary)", border: edge(14) }}>Go</button>
+                            className="agx-btn text-[10px] rounded px-1.5 py-0.5" style={{ color: "var(--primary-ink)", border: edge(14) }}>Go</button>
                         )}
                       </span>
                     </li>
@@ -398,7 +398,7 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
                   <span className="flex-1" />
                   {data?.agent?.paneId && (
                     <button type="button" onClick={() => jumpToPane(data.agent!.paneId)}
-                      className="agx-btn text-[10.5px]" style={{ color: "var(--primary)" }}>Open it</button>
+                      className="agx-btn text-[10.5px]" style={{ color: "var(--primary-ink)" }}>Open it</button>
                   )}
                 </div>
                 {/* No sideways scroll: a pane is 200 columns and this box is
@@ -552,8 +552,8 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
                         </span>
                         <span className="shrink-0 flex items-center gap-2 text-[11px] whitespace-nowrap pt-0.5" style={{ color: "var(--text3)" }}>
                           {t.doneAt ? fmtAgo(t.doneAt)
-                            : t.takenAt ? <><span style={{ color: "var(--primary)" }}>{t.takenBy || "unnamed"}</span>, {fmtAgo(t.takenAt)}</>
-                            : beaten ? <span style={{ color: "var(--warning)" }}>needs you</span> : "waiting"}
+                            : t.takenAt ? <><span style={{ color: "var(--primary-ink)" }}>{t.takenBy || "unnamed"}</span>, {fmtAgo(t.takenAt)}</>
+                            : beaten ? <span style={{ color: "var(--warning-ink)" }}>needs you</span> : "waiting"}
                           <button type="button" disabled={!!busy} onClick={() => void act("drop", () => api.seatTaskDrop(root, t.id))}
                             className="agx-btn text-[10px] rounded px-1.5 py-0.5 disabled:opacity-50"
                             style={{ color: "var(--text4)", border: edge(12) }} title="Take it off the list">Drop</button>
@@ -565,7 +565,7 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
               )}
               {done.length > 1 && (
                 <button type="button" onClick={() => setShowDone((v) => !v)}
-                  className="agx-btn self-start text-[11px] pl-3" style={{ color: "var(--primary)" }}>
+                  className="agx-btn self-start text-[11px] pl-3" style={{ color: "var(--primary-ink)" }}>
                   {showDone ? "Hide what landed" : `${done.length - 1} more landed`}
                 </button>
               )}
@@ -633,9 +633,9 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
               <h2 className="text-[12.5px] font-medium" style={{ color: "var(--text)" }}>The field it keeps</h2>
               <p className="text-[10.5px] pb-1.5" style={{ color: "var(--text3)" }}>
                 {reachable.length
-                  ? <>{reachable.length} in this project, and the last hour of each.{need.length ? <> <span style={{ color: "var(--error)" }}>{need.length} stopped on you.</span></> : null}</>
+                  ? <>{reachable.length} in this project, and the last hour of each.{need.length ? <> <span style={{ color: "var(--error-ink)" }}>{need.length} stopped on you.</span></> : null}</>
                   : "Nobody is working in this project right now."}
-                {onLantern && <> <button type="button" onClick={onLantern} className="agx-btn" style={{ color: "var(--primary)" }}>Lantern →</button></>}
+                {onLantern && <> <button type="button" onClick={onLantern} className="agx-btn" style={{ color: "var(--primary-ink)" }}>Lantern →</button></>}
               </p>
               {/*
                 * ONE MESSAGE, EVERYBODY.
@@ -770,7 +770,7 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
               </select>
               <span>· {data?.floorHours ?? 4} h floor</span>
               {adopted
-                ? <span style={{ color: "var(--warning)" }} title="Powers are enforced with a credential handed out when this app opens a seat. An adopted one already had the machine's.">· stated, not enforced</span>
+                ? <span style={{ color: "var(--warning-ink)" }} title="Powers are enforced with a credential handed out when this app opens a seat. An adopted one already had the machine's.">· stated, not enforced</span>
                 : live ? <span style={{ color: "var(--text4)" }}>· changes apply at the next seating</span> : null}
             </section>
           </div>

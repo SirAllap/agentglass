@@ -172,7 +172,7 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
               <Fragment key={r.id}>
               <SettingRow
                 label={<span className="flex items-center gap-1.5">
-                  {r.skill && <span className="text-[10px] px-1 rounded" style={{ color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}>skill</span>}
+                  {r.skill && <span className="text-[10px] px-1 rounded" style={{ color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}>skill</span>}
                   {r.title}
                 </span>}
                 hint={<>
@@ -192,7 +192,7 @@ export function ReviewPromptsPane({ open }: { open: boolean }) {
                   )}
                   <button onClick={() => void drop(r)} title={r.builtIn ? "Take it out of the menu" : "Delete it"}
                     className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-                    style={{ border: edge(20), color: "var(--error)" }}>{r.builtIn ? "Hide" : "Delete"}</button>
+                    style={{ border: edge(20), color: "var(--error-ink)" }}>{r.builtIn ? "Hide" : "Delete"}</button>
                 </span>}
               />
               {/* Under the row it belongs to, not at the foot of the page.

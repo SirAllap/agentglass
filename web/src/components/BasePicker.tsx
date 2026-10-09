@@ -168,7 +168,7 @@ export function BasePicker({
                           the `origin/master` next to it. */}
                       <span className="shrink-0 text-[8.5px] px-1 py-px rounded"
                         style={b.remote
-                          ? { color: "var(--info)", border: "1px solid color-mix(in srgb, var(--info) 35%, transparent)" }
+                          ? { color: "var(--info-ink)", border: "1px solid color-mix(in srgb, var(--info) 35%, transparent)" }
                           : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
                         {b.remote ? "REMOTE" : "LOCAL"}
                       </span>

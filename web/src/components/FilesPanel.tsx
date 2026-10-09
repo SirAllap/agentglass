@@ -300,7 +300,7 @@ function Tree({ root, active, onOpen, reveal }: {
     return () => cancelAnimationFrame(id);
   }, [active]);
 
-  if (error) return <div className="p-5 text-[11.5px]" style={{ color: "var(--error)" }}>{error}</div>;
+  if (error) return <div className="p-5 text-[11.5px]" style={{ color: "var(--error-ink)" }}>{error}</div>;
   if (loading && !levels[""]) return <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>Reading the checkout…</div>;
 
   const top = levels[""] ?? [];
@@ -449,7 +449,7 @@ function ContentHits({ root, q, onOpen }: { root: string; q: string; onOpen: (re
               <div key={i} className="flex items-baseline gap-2 text-[11px]">
                 {/* The line number is a coordinate, not prose — its own tint,
                     so the eye can run down the column without reading it. */}
-                <span className="shrink-0 tabular-nums w-[46px] text-right" style={{ color: "var(--info)", opacity: .75 }}>{h.line}</span>
+                <span className="shrink-0 tabular-nums w-[46px] text-right" style={{ color: "var(--info-ink)", opacity: .75 }}>{h.line}</span>
                 <span className="flex-1 min-w-0 truncate" style={{ color: "var(--text2)" }}>
                   {h.len > 0 ? (
                     <>

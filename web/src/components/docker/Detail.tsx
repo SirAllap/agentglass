@@ -97,7 +97,7 @@ export function Detail({
           {c.owner && (
             <span className="text-[9.5px] px-1.5 py-0.5 rounded-md shrink-0" title={ownerTitle(c.owner)}
               style={c.owner.foreign
-                ? { color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }
+                ? { color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }
                 : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
               {c.owner.worktree}{c.owner.branch ? ` · ${c.owner.branch}` : ""}
             </span>
@@ -126,7 +126,7 @@ export function Detail({
           <Fact label="up" title={c.startedAt ? `started ${c.startedAt}` : c.status}>{c.uptime || c.status}</Fact>
           {!!c.restarts && (
             <Fact label="restarts" title="Docker has restarted this container this many times since it was created">
-              <span style={{ color: "var(--warning)" }}>{c.restarts}</span>
+              <span style={{ color: "var(--warning-ink)" }}>{c.restarts}</span>
             </Fact>
           )}
           {stat && c.state === "running" && (
@@ -140,7 +140,7 @@ export function Detail({
                 return url ? (
                   <button key={i} onClick={() => onOpenPort(url)} title={`Open ${url}`}
                     className="text-[9.5px] px-1.5 py-0.5 rounded-md min-h-[20px]"
-                    style={{ color: "var(--info)", border: "1px solid color-mix(in srgb, var(--info) 40%, transparent)", background: "color-mix(in srgb, var(--info) 8%, transparent)" }}>
+                    style={{ color: "var(--info-ink)", border: "1px solid color-mix(in srgb, var(--info) 40%, transparent)", background: "color-mix(in srgb, var(--info) 8%, transparent)" }}>
                     {portLabel(p)} ↗
                   </button>
                 ) : (
@@ -157,7 +157,7 @@ export function Detail({
         {/* The probe's own words, where they belong: next to the state they
             explain. Reading this used to mean going to `docker inspect`. */}
         {c.health === "unhealthy" && c.healthError && (
-          <div className="text-[10px] truncate" style={{ color: "var(--error)" }} title={c.healthError}>{c.healthError}</div>
+          <div className="text-[10px] truncate" style={{ color: "var(--error-ink)" }} title={c.healthError}>{c.healthError}</div>
         )}
       </div>
 
@@ -264,7 +264,7 @@ function EnvCompare({ c, others }: { c: DockerContainer; others: DockerContainer
         )}
       </div>
 
-      {err && <div className="text-[10.5px]" style={{ color: "var(--warning)" }}>{err}</div>}
+      {err && <div className="text-[10.5px]" style={{ color: "var(--warning-ink)" }}>{err}</div>}
       {rows && !differ.length && <div className="text-[10.5px] t-dim2">Identical, variable for variable.</div>}
 
       {shown.map((r) => (
@@ -279,7 +279,7 @@ function EnvCompare({ c, others }: { c: DockerContainer; others: DockerContainer
                  does. */
               ? <span className="t-dim2">{r.change === "same" ? "•••• identical" : "•••• differs"}</span>
               : r.change === "changed"
-                ? <><span style={{ color: "var(--error)" }}>{r.a || "∅"}</span> → <span style={{ color: "var(--success)" }}>{r.b || "∅"}</span></>
+                ? <><span style={{ color: "var(--error-ink)" }}>{r.a || "∅"}</span> → <span style={{ color: "var(--success-ink)" }}>{r.b || "∅"}</span></>
                 : <span>{r.a ?? r.b}</span>}
           </span>
         </div>

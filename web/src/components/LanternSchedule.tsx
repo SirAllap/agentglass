@@ -117,7 +117,7 @@ export function ScheduleDialog({ open, checkouts, onClose, onAdded }: {
                     <span className="text-[10.5px]" style={{ color: "var(--text4)" }}>Only if Settings allow it — checked again when it fires.</span>
                   </span>
                 </label>
-                {err && <div className="text-[11px]" style={{ color: "var(--error)" }}>{err}</div>}
+                {err && <div className="text-[11px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
                 <div className="flex items-center justify-end gap-2 pt-1">
                   <button type="button" onClick={onClose} className="agx-btn text-[11px] px-2.5 py-1 rounded-md" style={{ color: "var(--text2)", border: edge(16) }}>Cancel</button>
                   <button type="submit" disabled={busy || !name.trim() || !cwd.trim() || !when.trim()}

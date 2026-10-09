@@ -58,7 +58,7 @@ export const Sessions = memo(function Sessions({ provider = "", active = true }:
                   <span className="truncate" style={{ color: "var(--text2)" }}>{fmtEq(s.equiv_tokens ?? s.input_tokens + s.output_tokens)}</span>
                 </motion.div>
               </div>
-              <div className="w-14 shrink-0 text-right tabular-nums" style={{ color: "var(--success)" }}>{fmtUsd(s.cost_usd)}</div>
+              <div className="w-14 shrink-0 text-right tabular-nums" style={{ color: "var(--success-ink)" }}>{fmtUsd(s.cost_usd)}</div>
             </div>
           );
         })}

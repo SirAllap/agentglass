@@ -44,7 +44,7 @@ export function ThemePicker({ value, onChange, error }: { value: string; onChang
       style={{ background: value === id ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent", color: value === id ? "var(--text)" : "var(--text2)" }}
     >
       <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none" aria-hidden className="shrink-0"
-        style={{ opacity: value === id ? 1 : 0, color: "var(--primary)" }}>
+        style={{ opacity: value === id ? 1 : 0, color: "var(--primary-ink)" }}>
         <path d="M2.5 6.4l2.4 2.4L9.5 3.6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
       <span className="truncate">{name}</span>

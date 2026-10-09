@@ -243,7 +243,7 @@ export function Header({
           <Logo size={26} title="agentglass" />
         </motion.span>
         <div className="leading-none pointer-events-none">
-          <div className="text-[16px] font-bold tracking-tight" style={{ color: "var(--text)" }}>agent<span style={{ color: "var(--primary)" }}>glass</span></div>
+          <div className="text-[16px] font-bold tracking-tight" style={{ color: "var(--text)" }}>agent<span style={{ color: "var(--primary-ink)" }}>glass</span></div>
         </div>
         {/* The project defines what every other number on screen means, so it
             reads as a control in its own right rather than a caption under the
@@ -278,7 +278,7 @@ export function Header({
             rel="noreferrer"
             title="This is a live demo with sample data — nothing here is real. Click for the repo."
             className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold"
-            style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}
+            style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}
           >
             <SparkleIcon size={ICON.xs} className="inline-block align-[-2px] mr-1" />DEMO<span className="hidden sm:inline"> · sample data</span>
           </a>
@@ -335,7 +335,7 @@ export function Header({
       {providers.length > 1 && (
         <Select value={filter.provider} style={selStyle} options={[{ value: "", label: "All providers" }, ...providers.map((p) => ({ value: p, label: providerLabel(p) }))]} onChange={(v) => onFilter({ ...filter, provider: v })} />
       )}
-      {hasFilter && <button onClick={onClear} className="text-[11px] px-2 py-1 rounded-lg shrink-0 whitespace-nowrap" style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}><span className="inline-flex items-center gap-1">Clear<CrossIcon size={ICON.xs} /></span></button>}
+      {hasFilter && <button onClick={onClear} className="text-[11px] px-2 py-1 rounded-lg shrink-0 whitespace-nowrap" style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}><span className="inline-flex items-center gap-1">Clear<CrossIcon size={ICON.xs} /></span></button>}
       </div>{/* middle scroll zone */}
 
       <div className="shrink-0 flex items-center gap-1.5 sm:gap-2 ml-auto sm:ml-0 max-w-full overflow-x-auto agw-noscrollbar">

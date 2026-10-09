@@ -13,6 +13,13 @@
 
 export type Rgb = { r: number; g: number; b: number };
 
+/** The eight ANSI colours a palette can name twice, normal and bright. */
+export type Shades = Partial<Record<
+  "red" | "green" | "yellow" | "blue" | "magenta" | "cyan"
+  | "brightRed" | "brightGreen" | "brightYellow" | "brightBlue" | "brightMagenta" | "brightCyan",
+  string
+>>;
+
 /** `#abc`, `#aabbcc`, `rgb(1 2 3)` — the shapes the themes actually use, plus
  *  the shape `getComputedStyle` hands back. Null for anything else, so an
  *  unparseable colour is left exactly as the theme wrote it. */
@@ -96,6 +103,101 @@ export const TIER_TARGET: Record<string, number> = {
   "--text3": 5,
   "--text4": 4,
 };
+
+const PAIRS: Array<[keyof Shades, keyof Shades]> = [
+  ["red", "brightRed"], ["green", "brightGreen"], ["yellow", "brightYellow"],
+  ["blue", "brightBlue"], ["magenta", "brightMagenta"], ["cyan", "brightCyan"],
+];
+
+/**
+ * The other shade of a semantic colour the desktop already named — normal for
+ * bright, bright for normal — checked by value rather than by key, since a
+ * theme's `--warning` may have come from `yellow` or from `orange` and this
+ * only needs to find its ANSI twin, not its origin.
+ */
+export function altShade(tint: string, ansi?: Shades): string | undefined {
+  if (!ansi) return undefined;
+  for (const [n, b] of PAIRS) {
+    if (ansi[n] === tint) return ansi[b];
+    if (ansi[b] === tint) return ansi[n];
+  }
+  return undefined;
+}
+
+/**
+ * A tinted chip's text colour, guaranteed to clear `target` against the
+ * ground it actually sits on (a chip's own fill is a translucent mix of this
+ * same tint over that ground, so the ground is the honest thing to measure
+ * against rather than each chip's own percentage).
+ *
+ * Tried in order: the tint itself (a theme that already got it right is left
+ * alone); the tint's other ANSI shade, when the palette names one, because
+ * swapping normal for bright (or back) keeps the theme's own colour rather
+ * than diluting it toward grey; and only then a mix toward `text`.
+ */
+export function inkFor(tint: string, text: string, bg: string, target: number, ansi?: Shades): string {
+  const t = parseColor(tint), b = parseColor(bg);
+  if (t && b && contrast(t, b) >= target) return tint;
+  const alt = altShade(tint, ansi);
+  if (alt) {
+    const a = parseColor(alt);
+    if (a && b && contrast(a, b) >= target) return alt;
+  }
+  return liftToContrast(tint, text, bg, target);
+}
+
+/** Semantic tints a chip, label, banner or button paints its text with. */
+export const TINT_KEYS = ["--success", "--warning", "--error", "--info", "--primary"] as const;
+
+const dataInkCache = new Map<string, string>();
+
+/**
+ * `inkFor`, live: a colour a *label or status* names rather than a theme —
+ * a GitHub label's hex, a ClickUp status's hex — checked against the ground
+ * it is actually painted on right now.
+ *
+ * These never go through `inkTints`, because they are not theme data: they
+ * arrive per-row from an API, one value per label rather than one per theme,
+ * and a theme switch does not touch them. Read `--text`/`--bg3` off the live
+ * document instead, the same way `cardPrPick.ts`'s `mergedInk` already reads
+ * the GitHub "Merged" purple's ink — this generalises that to any hex a label
+ * or status pill hands the app, cached per (colour, text, bg) triple rather
+ * than recomputed every render.
+ */
+export function dataInk(hex: string, bg?: string): string {
+  if (typeof document === "undefined") return hex;
+  const cs = getComputedStyle(document.documentElement);
+  const text = cs.getPropertyValue("--text").trim();
+  const ground = bg ?? (cs.getPropertyValue("--bg3").trim() || cs.getPropertyValue("--bg").trim());
+  if (!text || !ground) return hex;
+  const key = `${hex}|${text}|${ground}`;
+  const cached = dataInkCache.get(key);
+  if (cached) return cached;
+  const ink = inkFor(hex, text, ground, 4.5);
+  dataInkCache.set(key, ink);
+  return ink;
+}
+
+/**
+ * `--success-ink` etc. alongside the tint they are read off — one pass per
+ * theme rather than per screen, the same shape as `floorTiers`.
+ *
+ * Measured against `--bg3`, the same worst-case surface `floorTiers` uses: a
+ * tinted chip's fill is that tint mixed over whatever ground sits under it,
+ * and `--bg3` is the ground where that mix is palest — the fill most likely
+ * to fail. A key with no ink target is passed through unchanged.
+ */
+export function inkTints(vars: Record<string, string>, ansi?: Shades): Record<string, string> {
+  const text = vars["--text"], bg = vars["--bg3"] || vars["--bg2"] || vars["--bg"];
+  const out = { ...vars };
+  if (!text || !bg) return out;
+  for (const key of TINT_KEYS) {
+    const v = vars[key];
+    if (!v) continue;
+    out[`${key}-ink`] = inkFor(v, text, bg, 4.5, ansi);
+  }
+  return out;
+}
 
 /**
  * The tiers, floored and still in order.

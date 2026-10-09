@@ -5,7 +5,7 @@
  * within a state the newer number leads.
  */
 import { describe, expect, it } from "bun:test";
-import { pickCardPr, sortedCardPrs, cardPrTint, type CardPr } from "../src/lib/cardPrPick.ts";
+import { pickCardPr, sortedCardPrs, cardPrTint, cardPrInk, type CardPr } from "../src/lib/cardPrPick.ts";
 
 const pr = (over: Partial<CardPr> = {}): CardPr => ({
   number: 100, title: "Round the checkout total once, at the end", state: "OPEN", url: "https://github.example/acme/widgets/pull/100",
@@ -87,7 +87,29 @@ describe("cardPrTint", () => {
 
   it("matches the colours TasksPanel's own pull-request list already draws", async () => {
     const src = await Bun.file(new URL("../src/components/TasksPanel.tsx", import.meta.url)).text();
-    expect(src).toContain('{ color: "#a371f7", background: "#a371f721" }');
-    expect(src).toContain('{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 13%, transparent)" }');
+    // The merged badge there is the same literal purple, and its TEXT reads
+    // through the same lift `cardPrInk` gives this file's own merged case —
+    // `#a371f7` is 3.35:1 on white, which fails a chip's 4.5:1.
+    expect(src).toContain('{ color: mergedInk(), background: "#a371f721" }');
+    expect(src).toContain('{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 13%, transparent)" }');
+  });
+});
+
+describe("cardPrInk", () => {
+  it("is cardPrTint for the two cases already backed by a theme floor", () => {
+    expect(cardPrInk(pr({ state: "OPEN", draft: true }))).toBe("var(--text3)");
+  });
+
+  it("swaps a raw tint for its 4.5:1 floor on the coloured cases", () => {
+    expect(cardPrInk(pr({ state: "OPEN" }))).toBe("var(--success-ink)");
+    expect(cardPrInk(pr({ state: "CLOSED" }))).toBe("var(--error-ink)");
+  });
+
+  it("lifts the merged purple too, since it is a literal no theme can reach", () => {
+    // `#a371f7`, GitHub's own "Merged" purple, is 3.35:1 on white — this test
+    // runs with no DOM, where cardPrInk has no --bg/--text to read and falls
+    // back to the literal unlifted, which is the case pinned here rather than
+    // a specific lifted value a browser environment would give instead.
+    expect(cardPrInk(pr({ state: "MERGED" }))).toBe("#a371f7");
   });
 });

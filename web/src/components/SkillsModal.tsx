@@ -58,12 +58,12 @@ function SkillCard({ s, isNew, isTop, expanded, onToggle }: { s: SkillInfo; isNe
       }}
     >
       <div className="flex items-center gap-2 min-w-0">
-        <span className="font-semibold text-[12.5px] truncate" style={{ color: "var(--primary)" }}>{invoke}</span>
+        <span className="font-semibold text-[12.5px] truncate" style={{ color: "var(--primary-ink)" }}>{invoke}</span>
         <button
           onClick={copy}
           title={`Copy ${invoke} to clipboard`}
           className="chip shrink-0 cursor-pointer"
-          style={copied ? { color: "var(--success)", borderColor: "color-mix(in srgb, var(--success) 45%, transparent)" } : { color: "var(--text4)" }}
+          style={copied ? { color: "var(--success-ink)", borderColor: "color-mix(in srgb, var(--success) 45%, transparent)" } : { color: "var(--text4)" }}
         >
           {copied ? <span className="inline-flex items-center gap-1">Copied<DoneIcon size={ICON.xs} /></span> : "Copy"}
         </button>
@@ -83,14 +83,14 @@ function SkillCard({ s, isNew, isTop, expanded, onToggle }: { s: SkillInfo; isNe
         <span className="chip">{s.source}</span>
         <span>Added {fmtAgo(s.added)} ago</span>
         {s.copies > 1 && <span>· ×{s.copies} copies</span>}
-        {perRun > 0 && <span className="tabular-nums" style={{ color: "var(--success)" }}>· ~{fmtUsd(perRun)}/run</span>}
+        {perRun > 0 && <span className="tabular-nums" style={{ color: "var(--success-ink)" }}>· ~{fmtUsd(perRun)}/run</span>}
       </div>
       {/* The "reach for this when…" line — the answer to "which skill do I use here?" */}
       {s.when_to_use && (
         <div
           className="mt-1.5 text-[10.5px] leading-snug"
           style={{
-            color: "var(--info)",
+            color: "var(--info-ink)",
             ...(expanded ? {} : { display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as const, overflow: "hidden" }),
           }}
         >
@@ -115,7 +115,7 @@ function SkillCard({ s, isNew, isTop, expanded, onToggle }: { s: SkillInfo; isNe
           </div>
           {s.cost_usd > 0 && (
             <div className="t-dim2">
-              Attributed cost: <span className="tabular-nums" style={{ color: "var(--success)" }}>{fmtUsd(s.cost_usd)}</span> total · ~{fmtUsd(perRun)}/run
+              Attributed cost: <span className="tabular-nums" style={{ color: "var(--success-ink)" }}>{fmtUsd(s.cost_usd)}</span> total · ~{fmtUsd(perRun)}/run
             </div>
           )}
           <div className="t-dim2 truncate" title={s.path}>{s.path}</div>

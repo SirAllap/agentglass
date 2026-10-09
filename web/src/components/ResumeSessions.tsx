@@ -167,7 +167,7 @@ export function ResumeSessions({ root, disabled, onOpen, onGo }: {
                   {rows === null && !err && (
                     <p className="m-0 px-1 py-2 text-[10.5px]" style={{ color: "var(--text4)" }}>Reading the transcripts…</p>
                   )}
-                  {err && <p className="m-0 px-1 py-2 text-[10.5px]" style={{ color: "var(--warning)" }}>{err}</p>}
+                  {err && <p className="m-0 px-1 py-2 text-[10.5px]" style={{ color: "var(--warning-ink)" }}>{err}</p>}
                   {rows !== null && !err && shown.length === 0 && (
                     <p className="m-0 px-1 py-2 text-[10.5px]" style={{ color: "var(--text4)" }}>
                       {rows.length ? "Nothing matches that." : "No agent sessions in this project yet."}
@@ -203,7 +203,7 @@ export function ResumeSessions({ root, disabled, onOpen, onGo }: {
                               <button onClick={() => { onGo(at); close(); }}
                                 title={`Running in ${at.session}:${at.windowIndex} ${at.windowName}`}
                                 className="agx-btn text-[10px] px-1.5 py-0.5 rounded"
-                                style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
+                                style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
                                 Go →
                               </button>
                             ) : (
@@ -231,7 +231,7 @@ export function ResumeSessions({ root, disabled, onOpen, onGo }: {
                           <span>·</span>
                           <span>{weight(s.size)}</span>
                           {at && (
-                            <span className="ml-auto truncate" style={{ color: "var(--primary)" }}
+                            <span className="ml-auto truncate" style={{ color: "var(--primary-ink)" }}
                               title={`${at.session}:${at.windowIndex} ${at.windowName} · ${at.paneId}`}>
                               open in {at.windowIndex} {at.windowName}
                             </span>

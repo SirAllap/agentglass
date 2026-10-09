@@ -284,7 +284,7 @@ export function Radar({ agents, onSelect }: { agents: AgentCard[]; onSelect?: (a
             text is worth less than the room the readout needs. */}
         {(wide || !target) && (
           <p className="text-center text-[10px] t-dim2 mt-1 px-2">
-            center = fresh context · <span style={{ color: "var(--warning)" }}>edge = about to compact</span>
+            center = fresh context · <span style={{ color: "var(--warning-ink)" }}>edge = about to compact</span>
           </p>
         )}
         <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 mt-1 text-[10px] t-dim2">

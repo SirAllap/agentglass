@@ -217,7 +217,7 @@ export function FacetMenu({
                     );
                   })}
                 </div>
-                {note && <div className="px-2.5 pt-1.5 text-[9.5px]" style={{ color: "var(--warning)" }}>{note}</div>}
+                {note && <div className="px-2.5 pt-1.5 text-[9.5px]" style={{ color: "var(--warning-ink)" }}>{note}</div>}
                 {mode === "multi" && n > 0 && (
                   <button onClick={() => { onClear(); }}
                     className="mt-1 px-2.5 py-1 rounded-lg text-[10.5px] text-left hover:bg-white/5"

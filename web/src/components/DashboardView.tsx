@@ -137,7 +137,7 @@ export function DashboardView({
         )}
         {hasFilter && (
           <button onClick={onClearFilter} className="text-[10.5px] px-2 py-1 rounded-lg shrink-0 whitespace-nowrap"
-            style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}><span className="inline-flex items-center gap-1">Clear<CrossIcon size={ICON.xs} /></span></button>
+            style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}><span className="inline-flex items-center gap-1">Clear<CrossIcon size={ICON.xs} /></span></button>
         )}
       </div>
 

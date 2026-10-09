@@ -60,7 +60,7 @@ export function EventModal({ event, onClose }: { event: WatchEvent | null; onClo
                       every class that is non-zero. */}
                   <Row k="Tokens" v={<TokenBreakdown e={event} />} />
                   <Row k="Session" v={event.session_id} />
-                  <Row k="Error" v={event.is_error ? <span style={{ color: "var(--error)" }}>{event.error_text ?? "Yes"}</span> : "No"} />
+                  <Row k="Error" v={event.is_error ? <span style={{ color: "var(--error-ink)" }}>{event.error_text ?? "Yes"}</span> : "No"} />
                 </div>
                 <div className="text-[10px] uppercase tracking-wider t-dim2 mb-1">payload</div>
                 <pre className="text-[10.5px] leading-relaxed rounded-lg p-3 overflow-auto max-h-[38vh]"

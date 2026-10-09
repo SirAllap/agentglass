@@ -132,12 +132,12 @@ function Where({ r }: { r: LanternRow }) {
     <div className="flex items-baseline gap-1.5 min-w-0 text-[10.5px]" style={{ color: "var(--text4)" }}>
       {r.worktree && <span className="truncate" title={r.worktree}>{here(r.worktree)}</span>}
       {r.worktree && r.branch && <span aria-hidden className="shrink-0">·</span>}
-      {r.branch && <span className="truncate" style={{ color: "var(--primary)" }} title={`branch ${r.branch}`}>{r.branch}</span>}
+      {r.branch && <span className="truncate" style={{ color: "var(--primary-ink)" }} title={`branch ${r.branch}`}>{r.branch}</span>}
       {r.branch && r.landed === true && (
-        <span className="shrink-0" style={{ color: "var(--success)" }} title={`already merged into ${r.landedInto || "the base"}`}>· in {r.landedInto || "the base"}</span>
+        <span className="shrink-0" style={{ color: "var(--success-ink)" }} title={`already merged into ${r.landedInto || "the base"}`}>· in {r.landedInto || "the base"}</span>
       )}
       {r.branch && r.landed === false && (
-        <span className="shrink-0" style={{ color: "var(--warning)" }} title={`nobody has merged this into ${r.landedInto || "the base"}`}>· not in {r.landedInto || "the base"}</span>
+        <span className="shrink-0" style={{ color: "var(--warning-ink)" }} title={`nobody has merged this into ${r.landedInto || "the base"}`}>· not in {r.landedInto || "the base"}</span>
       )}
     </div>
   );
@@ -216,7 +216,7 @@ function HandOff({ session, kinds }: { session: string; kinds: { id: string; tit
           {busy === k.id ? "…" : k.title.replace(/ Code$/, "")}
         </button>
       ))}
-      {err && <span className="text-[10px]" style={{ color: "var(--error)" }}>{err}</span>}
+      {err && <span className="text-[10px]" style={{ color: "var(--error-ink)" }}>{err}</span>}
     </span>
   );
 }
@@ -352,7 +352,7 @@ export function AgentCard({ r, onJump, onClear, quiet, cacheTtlMs, kinds }: { r:
           {f && f.cost > 0 && <Fact n={money(f.cost)} word="" title="what this session has cost so far" />}
           {f?.permissionMode === "bypassPermissions" && <Pill tone="var(--warning)" title="running with permission prompts off">yolo</Pill>}
           {cache && !quiet && (cache.warm
-            ? <span className="tabular-nums" style={{ color: "var(--success)" }} title="The prompt cache is still warm: a turn sent now is the cheap one (Settings → Agents → Lantern sets the window)">cache {mmss(cache.leftMs)}</span>
+            ? <span className="tabular-nums" style={{ color: "var(--success-ink)" }} title="The prompt cache is still warm: a turn sent now is the cheap one (Settings → Agents → Lantern sets the window)">cache {mmss(cache.leftMs)}</span>
             : <span style={{ color: "var(--text4)" }} title="The prompt cache has gone cold: the next turn pays to rebuild it">cache cold</span>)}
           {f?.startedAt && !quiet && <span style={{ color: "var(--text4)" }} title={new Date(f.startedAt).toLocaleString()}>started {agoSentence(f.startedAt)}</span>}
           {!quiet && r.session && r.role !== "lantern" && kinds && kinds.length > 0 && <HandOff session={r.session} kinds={kinds} />}
@@ -439,7 +439,7 @@ export function LanternView({ active }: { active: boolean }) {
       <ViewHeader label="Lantern"
         actions={
           <>
-            {failed && <span className="text-[10.5px]" style={{ color: "var(--warning)" }} title="The last read failed; this is the previous answer">stale</span>}
+            {failed && <span className="text-[10.5px]" style={{ color: "var(--warning-ink)" }} title="The last read failed; this is the previous answer">stale</span>}
             <RefreshButton onRefresh={() => { void refreshLantern(); }} title="Read the field again now" />
             <button type="button" onClick={() => openSettings("lantern")} aria-label="Lantern settings…" title="Lantern settings…"
                 className="shrink-0 grid place-items-center rounded hover:bg-white/10"
@@ -456,7 +456,7 @@ export function LanternView({ active }: { active: boolean }) {
                 {asking === "opening…" ? "Opening…" : lanternOpen ? "Back to the chat" : "Ask about the agents"}
               </button>
             )}
-            {asking && asking !== "opening…" && <span className="text-[10.5px]" style={{ color: "var(--error)" }}>{asking}</span>}
+            {asking && asking !== "opening…" && <span className="text-[10.5px]" style={{ color: "var(--error-ink)" }}>{asking}</span>}
           </>
         }>
         {/*
@@ -471,7 +471,7 @@ export function LanternView({ active }: { active: boolean }) {
             : "Nobody is around"}
         </span>
         {finished.length > 0 && (
-          <span className="text-[10.5px]" style={{ color: "var(--warning)" }} title="Turns that ended and are waiting for whatever you say next">
+          <span className="text-[10.5px]" style={{ color: "var(--warning-ink)" }} title="Turns that ended and are waiting for whatever you say next">
             {finished.length} finished, waiting for you
           </span>
         )}
@@ -504,7 +504,7 @@ export function LanternView({ active }: { active: boolean }) {
 
         {need.length > 0 && (
           <section className="flex flex-col gap-2">
-            <div className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--error)" }}>Needs you · {need.length}</div>
+            <div className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--error-ink)" }}>Needs you · {need.length}</div>
             <div style={GRID}>
               {need.map((r) => <AgentCard key={r.paneId ?? r.name} r={r} onJump={jump} cacheTtlMs={cacheTtlMs} kinds={kinds} />)}
             </div>
@@ -513,7 +513,7 @@ export function LanternView({ active }: { active: boolean }) {
 
         {finished.length > 0 && (
           <section className="flex flex-col gap-2">
-            <div className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--warning)" }}>Finished · waiting for you · {finished.length}</div>
+            <div className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--warning-ink)" }}>Finished · waiting for you · {finished.length}</div>
             <div style={GRID}>
               {finished.map((r) => <AgentCard key={r.paneId ?? r.name} r={r} onJump={jump} cacheTtlMs={cacheTtlMs} kinds={kinds} />)}
             </div>

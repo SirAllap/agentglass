@@ -5,7 +5,7 @@ import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
 import { fmtUsd, fmtTokens, fmtEq, eqTitle, typeColor } from "../lib/format.ts";
 import { CloseButton } from "./CloseButton.tsx";
-import { subscribeProviderUsage, providerUsage, usageLoaded, usedColor, resetLabel, ageLabel } from "../lib/usageStore.ts";
+import { subscribeProviderUsage, providerUsage, usageLoaded, usedTextColor, resetLabel, ageLabel } from "../lib/usageStore.ts";
 import { panelState } from "./UsageBox.tsx";
 
 const WINDOW_LABELS: [number, string][] = [
@@ -197,7 +197,7 @@ function UsageSection() {
               ? u.windows.map((w) => (
                   <div key={w.label} className="flex items-center gap-2 text-[10.5px]">
                     <span className="w-12 t-dim2">{w.label}</span>
-                    <span className="tabular-nums font-semibold" style={{ color: usedColor(w.usedPercent) }}>
+                    <span className="tabular-nums font-semibold" style={{ color: usedTextColor(w.usedPercent) }}>
                       {w.usedPercent}%
                     </span>
                     {w.resetsAt && <span className="t-dim2">resets {resetLabel(w.resetsAt)}</span>}
@@ -419,7 +419,7 @@ export function StatsModal({ open, onClose, stats, windowMs }: { open: boolean; 
                           <span className="truncate text-[11px]" style={{ color: "var(--text2)" }} title={a.source_app}>{a.source_app}</span>
                           <span className="text-[11px] tabular-nums text-right t-dim">{a.sessions}</span>
                           <span className="text-[11px] tabular-nums text-right t-dim" title={eqTitle(a.tokens)}>{fmtEq(a.tokens)}</span>
-                          <span className="text-[11px] tabular-nums text-right" style={{ color: "var(--success)" }}>{fmtUsd(a.cost_usd)}</span>
+                          <span className="text-[11px] tabular-nums text-right" style={{ color: "var(--success-ink)" }}>{fmtUsd(a.cost_usd)}</span>
                         </div>
                       ))}
                     </div>

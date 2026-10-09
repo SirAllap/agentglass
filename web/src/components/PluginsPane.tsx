@@ -282,7 +282,7 @@ export function PluginsPane({ open, focus }: {
               empty list was the only thing there and read as a stray box. */}
           <button onClick={() => setInstalling(true)} disabled={installing}
             className="text-[12px] px-2.5 py-1.5 rounded-lg whitespace-nowrap hover:opacity-80 disabled:opacity-50"
-            style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}>
+            style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}>
             Install a plugin
           </button>
         </div>
@@ -543,7 +543,7 @@ function PluginCard({ plugin, masterOn, onChanged, onSettings }: {
           <span className="flex items-center gap-1.5">
             <button onClick={remove} disabled={busy}
               className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap font-medium"
-              style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 44%, transparent)", opacity: busy ? 0.5 : 1 }}>
+              style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 44%, transparent)", opacity: busy ? 0.5 : 1 }}>
               {busy ? "Removing…" : "Remove"}
             </button>
             <button onClick={() => { setConfirmRemove(false); setDropSettings(false); }} disabled={busy}
@@ -584,7 +584,7 @@ function PluginCard({ plugin, masterOn, onChanged, onSettings }: {
             )}
             <button onClick={() => setConfirmRemove(true)} disabled={busy}
               className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80"
-              style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 32%, transparent)", opacity: busy ? 0.5 : 1 }}>
+              style={{ color: "var(--error-ink)", border: "1px solid color-mix(in srgb, var(--error) 32%, transparent)", opacity: busy ? 0.5 : 1 }}>
               Remove
             </button>
           </span>

@@ -98,7 +98,7 @@ export function SavedRepliesPane({ open }: { open: boolean }) {
               <button onClick={() => void remove(r.id)} disabled={busy}
                 title="Delete this saved reply"
                 className="agx-btn shrink-0 px-2 py-0.5 rounded text-[10.5px]"
-                style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 35%, transparent)" }}>Delete</button>
+                style={{ color: "var(--error-ink)", border: "1px solid color-mix(in srgb, var(--error) 35%, transparent)" }}>Delete</button>
             </div>
           ))}
         </div>
@@ -116,7 +116,7 @@ export function SavedRepliesPane({ open }: { open: boolean }) {
           placeholder="What goes in the box. Markdown works here."
           className="px-2 py-1.5 rounded text-[11px] outline-none resize-y"
           style={{ background: "var(--bg2)", color: "var(--text)", border: edge(16), fontFamily: "var(--diff-font, ui-monospace, monospace)" }} />
-        {err && <div className="text-[10.5px]" style={{ color: "var(--error)" }}>{err}</div>}
+        {err && <div className="text-[10.5px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
         <div className="flex items-center gap-1.5">
           <button onClick={() => void save()} disabled={busy || !text.trim()}
             className="agx-btn px-2 py-1 rounded text-[10.5px] disabled:opacity-40"

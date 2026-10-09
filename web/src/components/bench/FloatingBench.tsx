@@ -665,7 +665,7 @@ export function FloatingBench() {
                           title={tabTitle(t, root, cold(t, liveSlots))}>
                           <span className="shrink-0 flex" style={{ color: on ? "var(--text2)" : "var(--text3)" }}><Glyph size={ICON.sm} /></span>
                           <span className="truncate" style={cold(t, liveSlots) ? { opacity: 0.6 } : undefined}>{t.title}</span>
-                          {t.readonly && <span className="shrink-0 text-[9px]" style={{ color: "var(--warning)" }}>ro</span>}
+                          {t.readonly && <span className="shrink-0 text-[9px]" style={{ color: "var(--warning-ink)" }}>ro</span>}
                         </button>
                         {/* × only on the active tab — the tab bar's own rule
                             elsewhere in this app, and the reason there are no
@@ -866,7 +866,7 @@ function BenchFab() {
           width: 38, height: 38,
           background: "var(--bg3)",
           border: `1px solid color-mix(in srgb, var(--primary) ${st.open ? 60 : 34}%, transparent)`,
-          color: "var(--primary)",
+          color: "var(--primary-ink)",
           boxShadow: "0 14px 30px -10px #000",
         }}>
         <svg viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -878,7 +878,7 @@ function BenchFab() {
           <span className="absolute rounded-full tabular-nums text-[8.5px] flex items-center justify-center"
             style={{
               right: -4, top: -4, minWidth: 15, height: 15, padding: "0 4px",
-              background: "var(--bg)", color: "var(--primary)",
+              background: "var(--bg)", color: "var(--primary-ink)",
               border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)",
             }}
             title={`${live} tab${live === 1 ? "" : "s"} on the bench`}>{live}</span>
@@ -1087,11 +1087,11 @@ function BenchChip({ repo, repos, root, elsewhere, openState, onPick }: {
                       <span className="truncate" style={{ color: "var(--text)" }}>{shortPath(r.root)}</span>
                       {r.worktreeOf && (
                         <span className="shrink-0 text-[8.5px] px-1 rounded"
-                          style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }}>WT</span>
+                          style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }}>WT</span>
                       )}
                       {n > 0 && (
                         <span className="ml-auto shrink-0 text-[9px] px-1.5 rounded"
-                          style={{ color: "var(--info)", border: "1px solid color-mix(in srgb, var(--info) 30%, transparent)" }}>
+                          style={{ color: "var(--info-ink)", border: "1px solid color-mix(in srgb, var(--info) 30%, transparent)" }}>
                           {n} open
                         </span>
                       )}
@@ -1106,7 +1106,7 @@ function BenchChip({ repo, repos, root, elsewhere, openState, onPick }: {
               {elsewhere.filter((e) => !repos.some((r) => r.root === e.root)).map((e) => (
                 <button key={e.root} onClick={() => onPick(e.root)} className="w-full text-left px-3 py-1.5 flex flex-col gap-1">
                   <span className="truncate" style={{ color: "var(--text2)" }}>{shortPath(e.root)}</span>
-                  <span className="text-[9.5px]" style={{ color: "var(--warning)" }}>{e.n} open · this checkout is not in the list any more</span>
+                  <span className="text-[9.5px]" style={{ color: "var(--warning-ink)" }}>{e.n} open · this checkout is not in the list any more</span>
                 </button>
               ))}
             </div>

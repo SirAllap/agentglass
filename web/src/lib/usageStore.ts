@@ -131,11 +131,22 @@ async function maybeRefreshCodex(): Promise<void> {
   for (const l of listeners) l();
 }
 
-/** Colour escalates with consumption — the "used" mental model. */
+/** Colour escalates with consumption — the "used" mental model.
+ *  For a FILL (a bar, a dot) — the raw tint, which is what a fill is supposed
+ *  to be. Text reads `usedTextColor` instead: the same tint, painted directly
+ *  as text on a plain surface, fails 4.5:1 on light themes ("76% used" amber
+ *  on cream), which a chip's own colour-mixed background never exposed. */
 export function usedColor(used: number): string {
   if (used >= 85) return "var(--error)";
   if (used >= 60) return "var(--warning)";
   return "var(--success)";
+}
+
+/** `usedColor`, lifted for text — see the note there. */
+export function usedTextColor(used: number): string {
+  if (used >= 85) return "var(--error-ink)";
+  if (used >= 60) return "var(--warning-ink)";
+  return "var(--success-ink)";
 }
 
 /**

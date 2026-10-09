@@ -137,7 +137,7 @@ export function LogView({ id, tail, running }: { id: string; tail: number; runni
           title={ended ?? (running ? "following this container" : "the container is not running")}
           style={ended
             ? { color: "var(--text4)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }
-            : { color: "var(--success)", border: "1px solid color-mix(in srgb, var(--success) 40%, transparent)", background: "color-mix(in srgb, var(--success) 10%, transparent)" }}>
+            : { color: "var(--success-ink)", border: "1px solid color-mix(in srgb, var(--success) 40%, transparent)", background: "color-mix(in srgb, var(--success) 10%, transparent)" }}>
           {ended ? (snapshot !== null ? "snapshot" : "ended") : "live"}
         </span>
 
@@ -169,7 +169,7 @@ export function LogView({ id, tail, running }: { id: string; tail: number; runni
             className="text-[9.5px] px-2 py-0.5 rounded-md min-h-[20px] disabled:opacity-40"
             title={paused ? "Show what has arrived since" : "Hold the view still — the log keeps arriving"}
             style={paused
-              ? { color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)", background: "color-mix(in srgb, var(--warning) 12%, transparent)" }
+              ? { color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)", background: "color-mix(in srgb, var(--warning) 12%, transparent)" }
               : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
             {paused ? (waiting ? `resume · ${waiting}` : "resume") : "pause"}
           </button>

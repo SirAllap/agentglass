@@ -303,12 +303,12 @@ export function Inbox({ repo, onFlash, onUnread }: {
               <button className="agx-btn rounded px-2 py-0.5 text-[10.5px]" style={{ color: "var(--text2)", border: edge(14) }}
                 disabled={busy}
                 onClick={() => { for (const id of picked) setDone(id, true); void act([...picked], "read"); }}>Done</button>
-              <button className="agx-btn rounded px-2 py-0.5 text-[10.5px]" style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)" }}
+              <button className="agx-btn rounded px-2 py-0.5 text-[10.5px]" style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)" }}
                 disabled={busy} onClick={() => void act([...picked], "unsubscribe")}>Unsubscribe</button>
             </>
           )}
           <span className="flex-1" />
-          {err && <span className="text-[10.5px]" style={{ color: "var(--warning)" }} title={err}>GitHub: {err.slice(0, 60)}</span>}
+          {err && <span className="text-[10.5px]" style={{ color: "var(--warning-ink)" }} title={err}>GitHub: {err.slice(0, 60)}</span>}
         </div>
 
         <div className="flex-1 min-h-0 overflow-y-auto agx-scroll">

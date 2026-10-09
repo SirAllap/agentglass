@@ -309,13 +309,13 @@ export function ConflictMode(p: ConflictModeProps) {
           that is not of your own base, and the wrong commit for every rebase. */}
       <div className="shrink-0 px-4 py-2 border-b flex items-center gap-3 flex-wrap"
         style={{ borderColor: "color-mix(in srgb, var(--border) 45%, transparent)", background: "var(--bg2)" }}>
-        <span className="text-[11px] font-semibold" style={{ color: "var(--warning)" }}>
+        <span className="text-[11px] font-semibold" style={{ color: "var(--warning-ink)" }}>
           {merge?.state === "rebasing" ? "Rebasing" : merge?.state === "cherry-picking" ? "Cherry-picking"
             : merge?.state === "reverting" ? "Reverting" : "Merging"}
         </span>
         <span className="text-[11px] font-mono truncate" style={{ color: "var(--primary-hover)" }}>{labels.ours}</span>
         <span className="text-[10px]" style={{ color: "var(--text3)" }}>← incoming</span>
-        <span className="text-[11px] font-mono truncate" style={{ color: "var(--warning)" }}>{labels.theirs}</span>
+        <span className="text-[11px] font-mono truncate" style={{ color: "var(--warning-ink)" }}>{labels.theirs}</span>
         {step && (
           <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
             title="A rebase replays your commits one at a time and stops on each one that conflicts. It is not over when this file is.">{step}</span>
@@ -348,7 +348,7 @@ export function ConflictMode(p: ConflictModeProps) {
                   {!isLeft && (
                     <button onClick={() => void reopen(rel)} disabled={busy || !writeEnabled}
                       className="shrink-0 text-[10px] opacity-0 group-hover:opacity-100 px-1 rounded"
-                      style={{ color: "var(--error)" }}
+                      style={{ color: "var(--error-ink)" }}
                       title="Put git's original conflict back. This deletes the resolution.">undo</button>
                   )}
                 </div>
@@ -387,7 +387,7 @@ export function ConflictMode(p: ConflictModeProps) {
 
           <div className="flex-1 min-h-0 overflow-auto agx-scroll font-mono text-[11.5px]" style={{ lineHeight: 1.7 }}>
             {fileErr && (
-              <div className="m-3 px-3 py-2 rounded-lg text-[11px]" style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 35%, transparent)" }}>
+              <div className="m-3 px-3 py-2 rounded-lg text-[11px]" style={{ color: "var(--error-ink)", border: "1px solid color-mix(in srgb, var(--error) 35%, transparent)" }}>
                 {fileErr}
                 <div className="mt-1.5" style={{ color: "var(--text3)" }}>
                   Take one side for the whole file with the buttons above, or open it in your editor.
@@ -405,7 +405,7 @@ export function ConflictMode(p: ConflictModeProps) {
             )}
             {file && tooMany && (
               <div className="m-3 px-3 py-2 rounded-lg text-[11px]" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)" }}>
-                <b style={{ color: "var(--warning)" }}>{blocks.length} conflicts in one file.</b> Working through them one at a time here
+                <b style={{ color: "var(--warning-ink)" }}>{blocks.length} conflicts in one file.</b> Working through them one at a time here
                 would take longer than it is worth — this is usually a lockfile or something generated, where one side is simply right.
                 Take a side for the whole file above, or open it in your editor.
               </div>
@@ -479,7 +479,7 @@ export function ConflictMode(p: ConflictModeProps) {
         <div className="ml-auto flex items-center gap-2">
           {left > 0
             ? <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>{left} file{left === 1 ? "" : "s"} still to resolve</span>
-            : <span className="text-[10.5px]" style={{ color: "var(--success)" }}>every conflict answered</span>}
+            : <span className="text-[10.5px]" style={{ color: "var(--success-ink)" }}>every conflict answered</span>}
           <Btn tone="go" disabled={left > 0 || busy || !writeEnabled} onClick={() => setReview(true)}
             title={left > 0 ? "Resolve every file first" : "See everything this commit would carry, then commit"}>
             Review and {merge?.state === "rebasing" ? "continue" : "commit"}{step ? ` — ${step}` : ""}
@@ -565,7 +565,7 @@ function Body({ file, picks, labels, cursor, opened, editing, onCursor, onPick, 
             <button key={i} onClick={() => onPick(b.index, chosen)} onDoubleClick={() => onEdit(b)}
               className="w-full text-left my-1 px-[5ch] py-1 text-[10.5px] flex items-center gap-2"
               style={{ color: "var(--text3)", background: "color-mix(in srgb, var(--success) 7%, transparent)", borderLeft: "2px solid color-mix(in srgb, var(--success) 55%, transparent)" }}>
-              <span className="flex" style={{ color: "var(--success)" }}><DoneIcon size={ICON.xs} /></span>
+              <span className="flex" style={{ color: "var(--success-ink)" }}><DoneIcon size={ICON.xs} /></span>
               <span>line {b.line} — {choiceLabel(chosen, labels)}</span>
               <span className="ml-auto" style={{ textDecoration: "underline", textUnderlineOffset: 2 }}>change</span>
             </button>
@@ -592,7 +592,7 @@ function Body({ file, picks, labels, cursor, opened, editing, onCursor, onPick, 
               </>
             )}
 
-            <div className="px-[5ch] pt-1 text-[9.5px] tracking-wider uppercase" style={{ color: "var(--warning)" }}>
+            <div className="px-[5ch] pt-1 text-[9.5px] tracking-wider uppercase" style={{ color: "var(--warning-ink)" }}>
               theirs · {labels.theirs}
             </div>
             <div style={{ background: "color-mix(in srgb, var(--warning) 8%, transparent)", borderLeft: "2px solid color-mix(in srgb, var(--warning) 55%, transparent)" }}>
@@ -672,10 +672,10 @@ function Review({ root, staged, files, busy, writeEnabled, act, ask, merge, step
           <div key={r.path} className="flex items-center gap-2 px-4 py-1 text-[11px] font-mono">
             <span className="shrink-0 w-[1ch]" style={{ color: r.decided ? "var(--warning)" : "var(--text3)" }}>{r.decided ? <DoneIcon size={ICON.xs} /> : "·"}</span>
             <span className="min-w-0 truncate" style={{ color: r.decided ? "var(--text)" : "var(--text2)" }}>{r.path}</span>
-            {r.decided && <span className="shrink-0 text-[10px] px-1 rounded" style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)" }}>you decided this</span>}
+            {r.decided && <span className="shrink-0 text-[10px] px-1 rounded" style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)" }}>you decided this</span>}
             <span className="ml-auto shrink-0 tabular-nums text-[10px]" style={{ color: "var(--text3)" }}>
               {r.change
-                ? <><span style={{ color: "var(--success)" }}>+{r.change.additions ?? 0}</span> <span style={{ color: "var(--error)" }}>−{r.change.deletions ?? 0}</span></>
+                ? <><span style={{ color: "var(--success-ink)" }}>+{r.change.additions ?? 0}</span> <span style={{ color: "var(--error-ink)" }}>−{r.change.deletions ?? 0}</span></>
                 /* Resolved to exactly what this branch already had, so it adds
                    nothing to the tree. Still a decision, and still in the
                    commit — saying "no change" beats leaving it off the list. */

@@ -121,15 +121,15 @@ function EventRowInner({ row, onSelect, compact }: { row: Row; onSelect?: (e: Wa
       )}
       <span className="shrink-0 font-medium" style={{ color: f.color }}>{f.verb}</span>
       {e.tool_name && (
-        <span className="chip shrink-0" style={{ color: "var(--info)", background: "color-mix(in srgb, var(--info) 10%, transparent)" }}>{e.tool_name}</span>
+        <span className="chip shrink-0" style={{ color: "var(--info-ink)", background: "color-mix(in srgb, var(--info) 10%, transparent)" }}>{e.tool_name}</span>
       )}
       {d && <span className="truncate min-w-0" style={{ color: "var(--text2)" }} title={d}>{d}</span>}
       {running && <span className="shrink-0 t-dim2 animate-pulse">…</span>}
       {count > 1 && (
-        <span className="chip shrink-0" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>×{count}</span>
+        <span className="chip shrink-0" style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>×{count}</span>
       )}
       {e.duration_ms != null && <span className="t-dim2 shrink-0">{fmtMs(e.duration_ms)}</span>}
-      {e.cost_usd > 0 && <span className="shrink-0" style={{ color: "var(--success)" }}>{fmtUsd(e.cost_usd)}</span>}
+      {e.cost_usd > 0 && <span className="shrink-0" style={{ color: "var(--success-ink)" }}>{fmtUsd(e.cost_usd)}</span>}
       {/* in a lane the column header already names the agent — the per-row tag is noise there */}
       {!compact && <span className="ml-auto shrink-0 truncate max-w-[120px]" style={{ color: `color-mix(in srgb, ${aColor} 75%, var(--text4))` }} title={aKey}>{aKey}</span>}
     </motion.div>
@@ -256,8 +256,8 @@ function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }:
     if (follow && ref.current) ref.current.scrollTop = ref.current.scrollHeight;
   }, [rows.length, rows[rows.length - 1]?.key, follow, full]);
 
-  const live = { color: "var(--success)", background: "color-mix(in srgb, var(--success) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 42%, transparent)" };
-  const attn = { color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 15%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" };
+  const live = { color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 42%, transparent)" };
+  const attn = { color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 15%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" };
   const paused = { color: "var(--text4)", background: "color-mix(in srgb, var(--bg3) 35%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" };
   const followToggle = (
     <motion.button
@@ -341,7 +341,7 @@ function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }:
                 className="chip cursor-pointer"
                 style={
                   cat === c.key
-                    ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", borderColor: "color-mix(in srgb, var(--primary) 50%, transparent)" }
+                    ? { color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", borderColor: "color-mix(in srgb, var(--primary) 50%, transparent)" }
                     : { color: "var(--text4)" }
                 }
               >
@@ -354,7 +354,7 @@ function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }:
               className="chip cursor-pointer"
               style={
                 lanes
-                  ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", borderColor: "color-mix(in srgb, var(--primary) 50%, transparent)" }
+                  ? { color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", borderColor: "color-mix(in srgb, var(--primary) 50%, transparent)" }
                   : { color: "var(--text4)" }
               }
             >

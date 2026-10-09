@@ -14,6 +14,8 @@
  * cardPrStore.ts.
  */
 
+import { inkFor } from "./contrast.ts";
+
 export interface CardPr {
   number: number;
   title: string;
@@ -63,4 +65,36 @@ export function cardPrTint(p: CardPr): string {
   if (p.state === "MERGED") return "#a371f7";
   if (p.state === "CLOSED") return "var(--error)";
   return "var(--success)";
+}
+
+let mergedInkCache: { key: string; ink: string } | null = null;
+
+/** `#a371f7` on a light theme's chip fill is 3.35:1 — GitHub's own "Merged"
+ *  purple, chosen for a dark background and never checked against a light
+ *  one. The green and red chips are theme tokens already lifted once per
+ *  theme in contrast.ts's inkTints; this literal is not, so it is lifted
+ *  here instead, cached per background/text pair rather than per read. */
+/** Exported for the two spots that draw the merged badge directly rather
+ *  than through `cardPrTint`/`cardPrInk` (TasksPanel's own issue-linked pull
+ *  request list). */
+export function mergedInk(): string {
+  if (typeof document === "undefined") return "#a371f7";
+  const cs = getComputedStyle(document.documentElement);
+  const bg = cs.getPropertyValue("--bg").trim();
+  const text = cs.getPropertyValue("--text").trim();
+  const key = `${bg}|${text}`;
+  if (mergedInkCache?.key === key) return mergedInkCache.ink;
+  const ink = bg && text ? inkFor("#a371f7", text, bg, 4.5) : "#a371f7";
+  mergedInkCache = { key, ink };
+  return ink;
+}
+
+/** The chip's TEXT colour — `cardPrTint`, guaranteed to clear 4.5:1 against
+ *  the page it sits on. Fills stay `cardPrTint` as they are; only text reads
+ *  through this. */
+export function cardPrInk(p: CardPr): string {
+  if (p.draft) return "var(--text3)";
+  if (p.state === "MERGED") return mergedInk();
+  if (p.state === "CLOSED") return "var(--error-ink)";
+  return "var(--success-ink)";
 }

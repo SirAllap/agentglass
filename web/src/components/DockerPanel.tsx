@@ -227,7 +227,7 @@ function ContainerRow({ c, stat, active, writeEnabled, busy, dense, onSelect, on
             {c.image}
             {/* A restart count is only news when it is not zero, and then it is
                 the most important thing on the row. */}
-            {c.restarts ? <span style={{ color: "var(--warning)" }}> · {c.restarts} restarts</span> : null}
+            {c.restarts ? <span style={{ color: "var(--warning-ink)" }}> · {c.restarts} restarts</span> : null}
           </span>
         )}
       </span>
@@ -250,7 +250,7 @@ function ContainerRow({ c, stat, active, writeEnabled, busy, dense, onSelect, on
           onClick={(e) => { e.stopPropagation(); onOpenPort(url); }}
           title={`Open ${url}${HAS_BROWSER ? " in the browser tab" : ""}`}
           className="text-[10px] tabular-nums truncate text-left rounded px-1 -mx-1 min-h-[20px]"
-          style={{ color: "var(--info)" }}>
+          style={{ color: "var(--info-ink)" }}>
           {portLabel(port!)} ↗
         </button>
       ) : (
@@ -312,7 +312,7 @@ function DockerMissing({ reason }: { reason?: string }) {
   return (
     <div className="flex-1 grid place-items-center px-6 text-center">
       <div className="max-w-md flex flex-col items-center gap-2">
-        <span className="text-[13px] font-semibold" style={{ color: "var(--warning)" }}>Docker isn't installed</span>
+        <span className="text-[13px] font-semibold" style={{ color: "var(--warning-ink)" }}>Docker isn't installed</span>
         <span className="text-[11.5px]" style={{ color: "var(--text2)" }}>
           {reason || "The docker CLI isn't on your PATH"}. Containers, images, volumes and logs stay empty until it is.
         </span>
@@ -630,7 +630,7 @@ export function DockerView({ active, onOpenBrowser }: {
                       ? `No container is labelled for ${ov.scope.project} (${ov.scope.workspace}) — showing every container on this host`
                       : `Showing containers for ${ov.scope.workspace}`}
                       style={ov.scope.showingAll
-                        ? { background: "color-mix(in srgb, var(--warning) 16%, transparent)", color: "var(--warning)" }
+                        ? { background: "color-mix(in srgb, var(--warning) 16%, transparent)", color: "var(--warning-ink)" }
                         : { background: "color-mix(in srgb, var(--primary) 14%, transparent)", color: "var(--text2)" }}>
                       {ov.scope.showingAll ? `No ${ov.scope.project} containers · showing all` : ov.scope.project}
                     </span>
@@ -714,7 +714,7 @@ export function DockerView({ active, onOpenBrowser }: {
                                 showing up". */}
                             {st.foreign && st.owner && (
                               <span className="text-[9px] px-1 py-0.5 rounded shrink-0" title={ownerTitle(st.owner)}
-                                style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>
+                                style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>
                                 {st.owner.worktree}
                               </span>
                             )}

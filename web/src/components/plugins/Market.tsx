@@ -284,7 +284,7 @@ function TypeChip({ label, count, on, onClick }: { label: string; count: number;
     <button onClick={onClick} aria-pressed={on}
       className="text-[11.5px] px-2.5 py-1 rounded-full whitespace-nowrap hover:opacity-80 flex items-center gap-1.5"
       style={on
-        ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }
+        ? { color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }
         : { color: "var(--text2)", background: "transparent", border: "1px solid var(--surface-line)" }}>
       {label}
       <span className="tabular-nums" style={{ color: on ? "var(--primary)" : "var(--text4)" }}>{count}</span>
@@ -363,7 +363,7 @@ export function Offer({ entry, owner, onInstalled, mode, was = null }: {
             and asks again if what it declares has changed.
           </div>
         )}
-        {error && <div className="mt-2 text-[11.5px]" style={{ color: "var(--error)" }}>{error}</div>}
+        {error && <div className="mt-2 text-[11.5px]" style={{ color: "var(--error-ink)" }}>{error}</div>}
       </div>
 
       <div className="shrink-0 flex items-center gap-2">

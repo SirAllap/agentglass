@@ -14,9 +14,9 @@ import { fmtAgo } from "../lib/format.ts";
 import { nobodyDecidedWhy } from "../lib/activity.ts";
 
 const LEVEL: Record<Alert["level"], { color: string; icon: ReactNode }> = {
-  error: { color: "var(--error)", icon: <CrossIcon size={ICON.xs} /> },
-  warn: { color: "var(--warning)", icon: <ClockIcon size={ICON.xs} /> },
-  info: { color: "var(--info)", icon: <InfoIcon size={ICON.xs} /> },
+  error: { color: "var(--error-ink)", icon: <CrossIcon size={ICON.xs} /> },
+  warn: { color: "var(--warning-ink)", icon: <ClockIcon size={ICON.xs} /> },
+  info: { color: "var(--info-ink)", icon: <InfoIcon size={ICON.xs} /> },
 };
 const SEV: Record<Insight["severity"], string> = { bad: "var(--error)", warn: "var(--warning)", info: "var(--info)" };
 const KIND_ICON: Record<Insight["kind"], ReactNode> = { loop: <RefreshIcon size={ICON.xs} />, spend: <FireIcon size={ICON.xs} />, errors: <CrossIcon size={ICON.xs} />, burn: <BoltIcon size={ICON.xs} />, cache: <DiskIcon size={ICON.xs} /> };
@@ -152,7 +152,7 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump, active = true }
               style={{ background: "color-mix(in srgb, var(--warning) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 50%, transparent)" }}
             >
               <div className="flex items-center gap-2">
-                <span className="flex" style={{ color: "var(--warning)" }}><HandIcon size={ICON.xs} /></span>
+                <span className="flex" style={{ color: "var(--warning-ink)" }}><HandIcon size={ICON.xs} /></span>
                 <span className="text-[11.5px] font-semibold" style={{ color: "var(--text)" }}>Approve {g.tool_name}?</span>
                 <span className="ml-auto text-[9.5px] t-dim2">{g.source_app}:{g.session_id.slice(0, 8)}</span>
               </div>
@@ -172,7 +172,7 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump, active = true }
                   onClick={() => decide(g, "deny")}
                   disabled={acting[g.id]}
                   className="flex-1 rounded-lg py-1.5 text-[11px] font-semibold cursor-pointer"
-                  style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 45%, transparent)" }}
+                  style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 45%, transparent)" }}
                 >
                   <IconLabel icon={<CrossIcon size={ICON.xs} />}>Deny</IconLabel>
                 </button>

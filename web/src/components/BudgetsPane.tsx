@@ -142,7 +142,7 @@ export function BudgetsPane({ open }: { open: boolean }) {
       <SettingRow
         label="Add a budget"
         hint={<>
-          {err ? <span style={{ color: "var(--error)" }}>{err}</span> : <>
+          {err ? <span style={{ color: "var(--error-ink)" }}>{err}</span> : <>
             Counted from the daily rollup as well as live events, so a monthly budget really means a month —
             raw events are only kept for <span className="t-mono">AGENTGLASS_RETENTION_DAYS</span> (8 by
             default). You are warned at 80% rather than only when you cross it.

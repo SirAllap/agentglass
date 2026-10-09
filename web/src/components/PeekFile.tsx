@@ -162,7 +162,7 @@ function ChangeRail({ groups, fileLines, cursor, onGo }: {
         </span>
         <span className="ml-auto text-[9.5px] tabular-nums flex gap-1">
           {totals.added > 0 && <span style={{ color: "var(--success, #98c379)" }}>+{totals.added}</span>}
-          {totals.removed > 0 && <span style={{ color: "var(--error)" }}>−{totals.removed}</span>}
+          {totals.removed > 0 && <span style={{ color: "var(--error-ink)" }}>−{totals.removed}</span>}
         </span>
       </div>
 
@@ -212,7 +212,7 @@ function ChangeRail({ groups, fileLines, cursor, onGo }: {
                   <span className="text-[10.5px] tabular-nums" style={{ color: i === at ? "var(--text)" : "var(--text2)" }}>{groupLabel(g)}</span>
                   <span className="ml-auto text-[9.5px] tabular-nums shrink-0">
                     {g.added > 0 && <span style={{ color: "var(--success, #98c379)" }}>+{g.added}</span>}
-                    {g.removed > 0 && <span style={{ color: "var(--error)" }}> −{g.removed}</span>}
+                    {g.removed > 0 && <span style={{ color: "var(--error-ink)" }}> −{g.removed}</span>}
                   </span>
                 </span>
                 {g.symbol && (
@@ -620,13 +620,13 @@ export function PeekFile({ peek, onClose, topPx }: {
               part of the claim. */}
           <span className="shrink-0 text-[9.5px] px-1.5 py-0.5 rounded-full"
             style={peek.edit
-              ? { color: "var(--success)", border: "1px solid color-mix(in srgb, var(--success) 50%, transparent)" }
+              ? { color: "var(--success-ink)", border: "1px solid color-mix(in srgb, var(--success) 50%, transparent)" }
               : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)" }}>
             {peek.edit ? "editable" : "⌦ read-only"}
           </span>
           <span className="min-w-0 truncate" style={{ color: "var(--text)" }}>{peek.label ?? peek.path}</span>
           {peek.branch && (
-            <span className="shrink-0 text-[9.5px] px-1.5 py-0.5 rounded-full truncate" style={{ maxWidth: 220, color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}>
+            <span className="shrink-0 text-[9.5px] px-1.5 py-0.5 rounded-full truncate" style={{ maxWidth: 220, color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}>
               {peek.branch}
             </span>
           )}
@@ -713,7 +713,7 @@ export function PeekFile({ peek, onClose, topPx }: {
           {atRef && (
             <span className="shrink-0 text-[10px] px-2 py-0.5 rounded ml-auto"
               title={`Read from ${peek.ref} — this checkout is not on that branch`}
-              style={{ color: "var(--info)", border: "1px solid color-mix(in srgb, var(--info) 32%, transparent)" }}>
+              style={{ color: "var(--info-ink)", border: "1px solid color-mix(in srgb, var(--info) 32%, transparent)" }}>
               read-only · {peek.ref}
             </span>
           )}
@@ -772,7 +772,7 @@ export function PeekFile({ peek, onClose, topPx }: {
           <CloseButton onClick={onClose} title="Close" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 18%, transparent)" }} className="agx-btn shrink-0 rounded" />
         </div>
         {error ? (
-          <div className="p-4 text-[11.5px]" style={{ color: "var(--error)" }}>{error}</div>
+          <div className="p-4 text-[11.5px]" style={{ color: "var(--error-ink)" }}>{error}</div>
         ) : reading ? (
           <>
           {findOpen && (
@@ -798,7 +798,7 @@ export function PeekFile({ peek, onClose, topPx }: {
                  66 mean sixty-six characters rather than sixty-six of some
                  other face's. See .agx-prose in index.css. */
               style={{ maxWidth: width ? `${width}ch` : "none", fontSize: size }}>
-              {textErr && <div className="text-[12px]" style={{ color: "var(--error)" }}>{textErr}</div>}
+              {textErr && <div className="text-[12px]" style={{ color: "var(--error-ink)" }}>{textErr}</div>}
               {text === null && !textErr && <div className="text-[12px] t-dim">Reading…</div>}
               {/* Markdown only for markdown. A caller that lands anything else
                   in reading mode gets it as it is: the renderer collapses
@@ -812,7 +812,7 @@ export function PeekFile({ peek, onClose, topPx }: {
                 : <pre className="text-[12.5px] leading-relaxed whitespace-pre overflow-x-auto agx-scroll"
                     style={{ fontFamily: "var(--mono, ui-monospace, monospace)" }}>{text}</pre>)}
               {truncated && (
-                <div className="mt-4 text-[11.5px]" style={{ color: "var(--warning)" }}>
+                <div className="mt-4 text-[11.5px]" style={{ color: "var(--warning-ink)" }}>
                   This file is longer than a megabyte and is shown up to there. Open it in the editor
                   for the rest.
                 </div>

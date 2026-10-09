@@ -226,7 +226,7 @@ export function SearchModal({
                 </div>
 
                 <div className="flex-1 min-h-0 overflow-y-auto">
-                  {gErr && <div className="t-dim2 text-center py-10 text-[12px]" style={{ color: "var(--error)" }}>{gErr}</div>}
+                  {gErr && <div className="t-dim2 text-center py-10 text-[12px]" style={{ color: "var(--error-ink)" }}>{gErr}</div>}
                   {mode === "fleet" && (
                     <>
                       {hits === null && <div className="t-dim2 text-center py-14 text-[12px]">{fleetSearchIntro(days, windowMs)}</div>}
@@ -244,10 +244,10 @@ export function SearchModal({
                             <div className="flex items-center gap-2 text-[10px] mb-1">
                               <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ background: f.color }} />
                               <span className="font-medium shrink-0" style={{ color: f.color }}>{f.verb}</span>
-                              {h.tool_name && <span className="chip shrink-0" style={{ color: "var(--info)", background: "color-mix(in srgb, var(--info) 14%, transparent)" }}>{h.tool_name}</span>}
+                              {h.tool_name && <span className="chip shrink-0" style={{ color: "var(--info-ink)", background: "color-mix(in srgb, var(--info) 14%, transparent)" }}>{h.tool_name}</span>}
                               <span className="ml-auto flex items-center gap-2.5 shrink-0 t-dim2 tabular-nums">
                                 {h.duration_ms != null && <span>{fmtMs(h.duration_ms)}</span>}
-                                {h.cost_usd > 0 && <span style={{ color: "var(--success)" }}>{fmtUsd(h.cost_usd)}</span>}
+                                {h.cost_usd > 0 && <span style={{ color: "var(--success-ink)" }}>{fmtUsd(h.cost_usd)}</span>}
                                 <span>{who}</span>
                                 <span>{fmtTime(h.timestamp)}</span>
                               </span>
@@ -268,8 +268,8 @@ export function SearchModal({
                           className="px-4 py-2.5 border-b cursor-pointer transition-colors hover:bg-white/[0.03]"
                           style={{ borderColor: "color-mix(in srgb, var(--border) 22%, transparent)" }}>
                           <div className="flex items-center gap-2 text-[10px] mb-1">
-                            <span className="shrink-0 font-mono" style={{ color: "var(--info)" }}>{c.hash}</span>
-                            <span className="chip shrink-0" style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 12%, transparent)" }}>{mode === "history" ? "pickaxe" : "commit"}</span>
+                            <span className="shrink-0 font-mono" style={{ color: "var(--info-ink)" }}>{c.hash}</span>
+                            <span className="chip shrink-0" style={{ color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 12%, transparent)" }}>{mode === "history" ? "pickaxe" : "commit"}</span>
                             <span className="ml-auto flex items-center gap-2.5 shrink-0 t-dim2 tabular-nums">
                               <span>{c.author}</span>
                               <span>{fmtTime(c.time)}</span>
@@ -282,7 +282,7 @@ export function SearchModal({
                         <div key={`${h.path}:${h.line}:${i}`} onClick={() => void openFileDiff(repo, h.path)}
                           className="px-4 py-2.5 border-b cursor-pointer transition-colors hover:bg-white/[0.03] font-mono text-[11px]"
                           style={{ borderColor: "color-mix(in srgb, var(--border) 22%, transparent)" }}>
-                          <span className="shrink-0" style={{ color: "var(--info)" }}>{h.path}:{h.line}</span>
+                          <span className="shrink-0" style={{ color: "var(--info-ink)" }}>{h.path}:{h.line}</span>
                           <span className="ml-2" style={{ color: "var(--text2)" }}><GrepText text={h.text} q={q} /></span>
                         </div>
                       ))}

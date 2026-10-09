@@ -32,7 +32,7 @@ export function Logo({ size = 22, className, style, title }: {
       role="img"
       aria-label={title ?? "agentglass"}
       className={className}
-      style={{ color: "var(--primary)", display: "block", ...style }}
+      style={{ color: "var(--primary-ink)", display: "block", ...style }}
     >
       {title ? <title>{title}</title> : null}
       {/* logo:start */}

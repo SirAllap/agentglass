@@ -81,7 +81,7 @@ function StaleTag() {
   return (
     <span className="shrink-0 px-1.5 rounded text-[10px]"
       title="The code at this line has changed since the comment was written. The review still sends the code it was written against."
-      style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>
+      style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>
       stale
     </span>
   );
@@ -150,7 +150,7 @@ export function ReviewTray({ where, review, staleIds, staleFiles, checking, targ
         </div>
       )}
       {staleFiles && (
-        <div role="alert" className="px-4 pt-2 flex flex-col gap-0.5 text-[11px]" style={{ color: "var(--warning)" }}>
+        <div role="alert" className="px-4 pt-2 flex flex-col gap-0.5 text-[11px]" style={{ color: "var(--warning-ink)" }}>
           <span>Changed since you commented — the review says so beside each stale comment:</span>
           {staleFiles.map((f) => (
             <span key={`${f.mode}\0${f.path}`} className="truncate pl-2">
@@ -166,7 +166,7 @@ export function ReviewTray({ where, review, staleIds, staleFiles, checking, targ
           className="agx-btn min-w-0 flex items-center gap-1.5 rounded px-1.5 py-0.5" style={{ color: "var(--text)" }}>
           <span aria-hidden style={{ color: "var(--text3)" }}>{open ? "▾" : "▸"}</span>
           <span className="truncate">Review · {n} {n === 1 ? "comment" : "comments"} in {where}</span>
-          {stale > 0 && <span className="shrink-0" style={{ color: "var(--warning)" }}>· {stale} stale</span>}
+          {stale > 0 && <span className="shrink-0" style={{ color: "var(--warning-ink)" }}>· {stale} stale</span>}
         </button>
         <span className="ml-auto flex items-center gap-1.5 shrink-0">
           <Btn small onClick={() => { if (armed) { setArmed(false); onDiscard(); } else setArmed(true); }}

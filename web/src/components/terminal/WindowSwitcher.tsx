@@ -156,7 +156,7 @@ export function WindowSwitcher({ open, onClose, onGone }: {
         <div className="px-2.5 py-2.5 shrink-0" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 10%, transparent)" }}>
           <div className="flex items-center gap-2.5 px-2.5 py-2 rounded-md"
             style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 14%, transparent)" }}>
-            <span className="flex" style={{ color: "var(--primary)" }}><SearchIcon size={ICON.xs} /></span>
+            <span className="flex" style={{ color: "var(--primary-ink)" }}><SearchIcon size={ICON.xs} /></span>
             <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)}
               spellCheck={false} autoComplete="off"
               placeholder="Go to a window — its name, folder or session"

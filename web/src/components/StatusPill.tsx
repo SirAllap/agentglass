@@ -1,4 +1,5 @@
 import { CHIP_H } from "../lib/priority.tsx";
+import { dataInk } from "../lib/contrast.ts";
 /**
  * A tracker status, as its board draws it.
  *
@@ -15,6 +16,12 @@ import { CHIP_H } from "../lib/priority.tsx";
 export function StatusPill({ status, color, dim }: { status: string; color?: string; dim?: boolean }) {
   if (!status) return null;
   const c = color || "var(--text3)";
+  // `color` is the tracker's own hex for this status — ClickUp's, not a theme
+  // token — painted on straight for years, which is why "READY FOR QA" reads
+  // as faint pink on a light theme's cream: that pink was never checked
+  // against anything but ClickUp's own dark board. Only the TEXT is lifted;
+  // the fill and border stay the tracker's real colour.
+  const ink = color ? dataInk(c) : c;
   return (
     /* `CHIP_H` and `leading-none`: this let its line-height set its height and
        came out three pixels taller than the id chip beside it on the board's
@@ -24,7 +31,7 @@ export function StatusPill({ status, color, dim }: { status: string; color?: str
       title={status}
       style={{
         height: CHIP_H,
-        color: dim ? "var(--text4)" : c,
+        color: dim ? "var(--text4)" : ink,
         background: `color-mix(in srgb, ${c} ${dim ? 8 : 15}%, transparent)`,
         border: `1px solid color-mix(in srgb, ${c} ${dim ? 18 : 34}%, transparent)`,
       }}>

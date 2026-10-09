@@ -80,8 +80,8 @@ export function AlarmCard(
 
       <div className="p-3.5 flex flex-col gap-2.5">
         <div className="flex items-center gap-2">
-          <span aria-hidden className="flex" style={{ color: "var(--warning)" }}>{deputy ? <HandIcon size={ICON.md} /> : <ClockIcon size={ICON.md} />}</span>
-          <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--warning)" }}>{deputy ? "Clone" : "Reminder"}</span>
+          <span aria-hidden className="flex" style={{ color: "var(--warning-ink)" }}>{deputy ? <HandIcon size={ICON.md} /> : <ClockIcon size={ICON.md} />}</span>
+          <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--warning-ink)" }}>{deputy ? "Clone" : "Reminder"}</span>
           <span className="text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>{alarm.when}</span>
           {/* Closing the card is not answering it: the reminder stays live and
               the list still shows it. Anything else would make the reflex that
@@ -148,7 +148,7 @@ export function AlarmCard(
             <button
               onClick={() => { stopRinging(); onOpenTasks(); }}
               className="ml-auto text-[11px] px-2 py-1 rounded-lg"
-              style={{ color: "var(--primary)" }}
+              style={{ color: "var(--primary-ink)" }}
             >Open the task →</button>
           )}
         </div>

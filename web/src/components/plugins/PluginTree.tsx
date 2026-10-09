@@ -228,7 +228,7 @@ function Node({ node, ctx }: { node: UiNode; ctx: Ctx }): ReactNode {
     case "link":
       return (
         <a href={node.href} onClick={(e) => { e.preventDefault(); openExternal(node.href); }}
-          className="text-[12px] hover:underline" style={{ color: "var(--primary)" }} title={node.href}>
+          className="text-[12px] hover:underline" style={{ color: "var(--primary-ink)" }} title={node.href}>
           {node.text} ↗
         </a>
       );
@@ -350,7 +350,7 @@ function Form({ node, ctx }: { node: Extract<UiNode, { type: "form" }>; ctx: Ctx
       <div>
         <button type="submit" disabled={pending}
           className="agx-btn rounded inline-flex items-center gap-1.5 leading-none text-[11px] px-3 h-[28px] disabled:opacity-40"
-          style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 55%, transparent)", background: "color-mix(in srgb, var(--primary) 10%, transparent)" }}>
+          style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 55%, transparent)", background: "color-mix(in srgb, var(--primary) 10%, transparent)" }}>
           {pending && <Spinner />}{node.submit.label}
         </button>
       </div>

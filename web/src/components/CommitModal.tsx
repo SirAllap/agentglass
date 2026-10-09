@@ -132,7 +132,7 @@ export function CommitModal({ open, onClose, paths }: { open: boolean; onClose: 
                 {/* header */}
                 <div className="flex items-center gap-2.5 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                   <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>Commit</span>
-                  {repo && <span className="chip text-[10px]" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}><IconLabel icon={<BranchIcon size={ICON.xs} />}>{repo.branch}</IconLabel></span>}
+                  {repo && <span className="chip text-[10px]" style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}><IconLabel icon={<BranchIcon size={ICON.xs} />}>{repo.branch}</IconLabel></span>}
                   {repo && <span className="text-[10.5px] t-dim2 truncate" title={repo.root}>{repo.root}</span>}
                   <CloseButton onClick={onClose} className="ml-auto" />
                 </div>
@@ -145,10 +145,10 @@ export function CommitModal({ open, onClose, paths }: { open: boolean; onClose: 
 
                   {result?.ok ? (
                     <div className="flex flex-col items-center justify-center py-10 gap-3">
-                      <div className="flex justify-center" style={{ color: "var(--success)" }}><DoneIcon size={ICON.xl} /></div>
+                      <div className="flex justify-center" style={{ color: "var(--success-ink)" }}><DoneIcon size={ICON.xl} /></div>
                       <div className="text-[14px] font-semibold" style={{ color: "var(--text)" }}>{amending ? "Amended" : "Committed"}</div>
                       <div className="text-[12px] t-dim2 tabular-nums">
-                        <span className="font-mono" style={{ color: "var(--primary)" }}>{result.shortSha}</span> · {result.summary}
+                        <span className="font-mono" style={{ color: "var(--primary-ink)" }}>{result.shortSha}</span> · {result.summary}
                       </div>
                       <div className="flex items-center gap-2 mt-2">
                         <button onClick={load} className="px-3 py-1.5 rounded-lg text-[11px]" style={{ background: "color-mix(in srgb, var(--bg3) 45%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }}>Commit more</button>
@@ -203,12 +203,12 @@ export function CommitModal({ open, onClose, paths }: { open: boolean; onClose: 
                       </div>
 
                       {!enabled && (
-                        <div className="text-[11px] px-3 py-2 rounded-lg" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 12%, transparent)" }}>
+                        <div className="text-[11px] px-3 py-2 rounded-lg" style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 12%, transparent)" }}>
                           Committing is disabled on this server (AGENTGLASS_COMMIT_DISABLED=1).
                         </div>
                       )}
                       {result && !result.ok && (
-                        <div className="text-[11px] px-3 py-2 rounded-lg font-mono" style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 12%, transparent)" }}>
+                        <div className="text-[11px] px-3 py-2 rounded-lg font-mono" style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 12%, transparent)" }}>
                           {result.error}
                         </div>
                       )}
@@ -232,7 +232,7 @@ export function CommitModal({ open, onClose, paths }: { open: boolean; onClose: 
                     </button>
                     {amending && <span className="text-[10px] t-dim2">rewrites HEAD — unpushed work only</span>}
                     <span className="text-[10.5px] t-dim2 tabular-nums ml-auto">
-                      {selPaths.length} file{selPaths.length === 1 ? "" : "s"} → <span className="inline-flex items-center gap-1" style={{ color: "var(--warning)" }}><BranchIcon size={ICON.xs} />{repo.branch}</span>
+                      {selPaths.length} file{selPaths.length === 1 ? "" : "s"} → <span className="inline-flex items-center gap-1" style={{ color: "var(--warning-ink)" }}><BranchIcon size={ICON.xs} />{repo.branch}</span>
                     </span>
                     <div className="flex items-center gap-2">
                       {confirming ? (

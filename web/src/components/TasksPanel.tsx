@@ -13,7 +13,7 @@
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { BlockedIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, DotIcon, IconLabel, KeyboardIcon, LockIcon, MonitorIcon, NoteIcon, PlusIcon, PullRequestIcon, RefreshIcon, SearchIcon } from "../lib/glyphIcons.tsx";
-import { pickCardPr, cardPrTint, sortedCardPrs, type CardPr } from "../lib/cardPrPick.ts";
+import { pickCardPr, cardPrTint, cardPrInk, mergedInk, sortedCardPrs, type CardPr } from "../lib/cardPrPick.ts";
 import { cardPrsOf, onCardPrs, cardPrVersion } from "../lib/cardPrStore.ts";
 import { api } from "../lib/api.ts";
 import { FilterBuilder } from "./tasks/FilterBuilder.tsx";
@@ -342,7 +342,7 @@ function IssuesBody({ root, active, jump }: { root: string; active: boolean; jum
         </span>
         <button onClick={() => setMine((m) => !m)} className="text-[10.5px] px-2.5 py-1 rounded-md"
           style={mine
-            ? { color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }
+            ? { color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }
             : { color: "var(--text3)", border: edge(20) }}>Assigned to me</button>
         <span className="flex items-center gap-1.5 flex-1 min-w-0 px-2 py-1 rounded-md" style={{ background: "var(--bg)", border: edge(20) }}>
           <span className="flex" style={{ color: "var(--text3)" }}><SearchIcon size={ICON.xs} /></span>
@@ -357,7 +357,7 @@ function IssuesBody({ root, active, jump }: { root: string; active: boolean; jum
 
       <div className="flex-1 min-h-0 flex">
         <div className="flex flex-col min-w-0" style={{ width: "48%", borderRight: edge(12) }}>
-          {error && <div className="p-4 text-[11.5px]" style={{ color: "var(--error)" }}>{error}</div>}
+          {error && <div className="p-4 text-[11.5px]" style={{ color: "var(--error-ink)" }}>{error}</div>}
           {!rows && !error && <div className="p-4"><Spinner label="Asking GitHub…" className="" /></div>}
           {rows?.length === 0 && <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>Nothing matches.</div>}
           <div className="flex-1 min-h-0 overflow-y-auto agx-scroll">
@@ -421,7 +421,7 @@ function Row({ i, on, work, onPick, onStart }: {
           </span>
           <span className="truncate text-[11.5px]" style={{ color: "var(--text)" }}>{i.title}</span>
           {work && <span className="shrink-0 text-[10px] px-1.5 rounded-full"
-            style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>in progress</span>}
+            style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>in progress</span>}
         </div>
         <div className="flex items-center gap-1.5 mt-1 flex-wrap">
           {i.labels.slice(0, 4).map((l) => (
@@ -436,12 +436,12 @@ function Row({ i, on, work, onPick, onStart }: {
       <div className="relative shrink-0 flex items-center" ref={ref}>
         <button onClick={() => onStart(MODES[0].id)} title={MODES[0].hint}
           className="agx-btn text-[9.5px] px-2 py-1 rounded-l"
-          style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}>
+          style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}>
           Start →
         </button>
         <button onClick={() => setMenu((m) => !m)} aria-label="Other ways to start"
           className="agx-btn text-[9.5px] px-1 py-1 rounded-r"
-          style={{ color: "var(--primary)", borderTop: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", borderRight: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}>▾</button>
+          style={{ color: "var(--primary-ink)", borderTop: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", borderRight: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}>▾</button>
         {menu && (
           <div className="absolute right-0 top-full mt-1 rounded-lg overflow-hidden shadow-2xl"
             style={{ zIndex: 40, background: "var(--bg2)", border: edge(28), minWidth: 260 }}>
@@ -497,7 +497,7 @@ function Detail({ root, number, onSay, onChanged }: {
     if (r.ok) { load(); onChanged(); }
   };
 
-  if (err) return <div className="p-5 text-[11.5px]" style={{ color: "var(--error)" }}>{err}</div>;
+  if (err) return <div className="p-5 text-[11.5px]" style={{ color: "var(--error-ink)" }}>{err}</div>;
   if (!d) return <div className="p-5"><Spinner label="Reading…" className="" /></div>;
 
   return (
@@ -529,22 +529,22 @@ function Detail({ root, number, onSay, onChanged }: {
         <div className="rounded-lg p-3 mb-4"
           style={{ border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)", background: "color-mix(in srgb, var(--warning) 8%, transparent)" }}>
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[10px]" style={{ color: "var(--warning)" }}>in progress</span>
+            <span className="text-[10px]" style={{ color: "var(--warning-ink)" }}>in progress</span>
             <span className="text-[10.5px]" style={{ color: "var(--text)" }}>{d.work.branch}</span>
             <span className="text-[9.5px] truncate" style={{ color: "var(--text3)" }}>{d.work.path}</span>
             <button disabled={busy} onClick={() => void act(() => api.issueFinish(root, number, false))}
               className="agx-btn ml-auto text-[10px] px-2 py-1 rounded-lg"
-              style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 50%, transparent)" }}>
+              style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 50%, transparent)" }}>
               Finish & clean up
             </button>
           </div>
           {confirm && (
-            <div className="mt-2 text-[10px]" style={{ color: "var(--error)" }}>
+            <div className="mt-2 text-[10px]" style={{ color: "var(--error-ink)" }}>
               {confirm.length} uncommitted change{confirm.length === 1 ? "" : "s"} there — {confirm.slice(0, 4).join(", ")}
               {confirm.length > 4 ? "…" : ""}.
               <button onClick={() => { setConfirm(null); void act(() => api.issueFinish(root, number, true)); }}
                 className="agx-btn ml-2 px-2 py-0.5 rounded"
-                style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 50%, transparent)" }}>
+                style={{ color: "var(--error-ink)", border: "1px solid color-mix(in srgb, var(--error) 50%, transparent)" }}>
                 Throw them away and remove it
               </button>
               <button onClick={() => setConfirm(null)} className="agx-btn ml-1.5 px-2 py-0.5 rounded"
@@ -583,7 +583,7 @@ function Detail({ root, number, onSay, onChanged }: {
         <div className="mb-4 pt-3" style={{ borderTop: edge(10) }}>
           <div className={`${EYEBROW} mb-1.5 flex items-center gap-2`} style={{ color: "var(--text4)" }}>
             Pull requests {!!prs.length && <span>{prs.length}</span>}
-            {prsErr && <span style={{ color: "var(--warning)" }}>· could not ask GitHub — this is not “none”</span>}
+            {prsErr && <span style={{ color: "var(--warning-ink)" }}>· could not ask GitHub — this is not “none”</span>}
           </div>
           {prs.map((p) => (
             <div key={p.number} className="flex items-center gap-2 py-1">
@@ -598,13 +598,13 @@ function Detail({ root, number, onSay, onChanged }: {
               }}
                 className="text-left flex-1 min-w-0 rounded px-1 -mx-1 hover:bg-white/5"
                 title="Open this pull request">
-                <span className="tabular-nums" style={{ color: "var(--primary)" }}>#{p.number}</span>
+                <span className="tabular-nums" style={{ color: "var(--primary-ink)" }}>#{p.number}</span>
                 <span className="ml-1.5 text-[10px] tracking-[0.06em] px-1.5 rounded"
                   style={p.state === "MERGED"
-                    ? { color: "#a371f7", background: "#a371f721" }
+                    ? { color: mergedInk(), background: "#a371f721" }
                     : p.state === "CLOSED"
-                    ? { color: "var(--error)", background: "color-mix(in srgb, var(--error) 13%, transparent)" }
-                    : { color: "var(--success)", background: "color-mix(in srgb, var(--success) 13%, transparent)" }}>
+                    ? { color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 13%, transparent)" }
+                    : { color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 13%, transparent)" }}>
                   {p.draft ? "DRAFT" : p.state}
                 </span>
                 {/* Said only of the ones it is true of. A row with nothing here
@@ -698,10 +698,10 @@ function NowBand({ onChanged }: { onChanged: () => void }) {
   const act = async (fn: Promise<unknown>) => { await fn; await nudgeReminders(); onChanged(); };
   return (
     <div className="shrink-0" style={{ borderBottom: edge(12), background: "color-mix(in srgb, var(--error) 8%, transparent)" }}>
-      <div className={`${EYEBROW} px-5 pt-2.5 pb-1`} style={{ color: "var(--error)" }}>Now</div>
+      <div className={`${EYEBROW} px-5 pt-2.5 pb-1`} style={{ color: "var(--error-ink)" }}>Now</div>
       {live.map((r) => (
         <div key={r.id} className="flex items-center gap-2.5 px-5 py-2">
-          <span className="tabular-nums shrink-0 text-[12px] font-semibold" style={{ color: "var(--error)" }}>
+          <span className="tabular-nums shrink-0 text-[12px] font-semibold" style={{ color: "var(--error-ink)" }}>
             {hhmm(r.firedAt ?? r.due)}
           </span>
           <span className="flex-1 min-w-0 truncate text-[11.5px]" style={{ color: "var(--text)" }} title={r.title}>{r.title}</span>
@@ -2461,7 +2461,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           title={boards.writeForced ? "Forced on by AGENTGLASS_CLICKUP_WRITE=1" : boards.writeEnabled ? "Changes are allowed — click to stop that" : "Let this app change cards on your board"}
           className="text-[10px] px-2 py-0.5 rounded-full"
           style={boards.writeEnabled
-            ? { color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }
+            ? { color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }
             : { color: "var(--text4)", border: edge(12) }}>
           read-only
         </button>}
@@ -2478,7 +2478,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                 and next to their age, which is the thing it is about to fix —
                 not as a spinner over content nobody asked to have taken away. */}
             {data.revalidating
-              ? <span className="animate-pulse" style={{ color: "var(--primary)" }}>· refreshing</span>
+              ? <span className="animate-pulse" style={{ color: "var(--primary-ink)" }}>· refreshing</span>
               /* A poll that did not land, said where the age of the answer is
                  already stated and in the same quiet hand. This used to be an amber
                  strip across the board, and it worried somebody weekly for a thing
@@ -2579,7 +2579,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
         <div className="px-5 py-2 shrink-0 flex items-center gap-3 flex-wrap"
           style={{ background: "color-mix(in srgb, var(--warning) 9%, transparent)", borderBottom: edge(10) }}>
           <div className="text-[11.5px]" style={{ color: "var(--text2)" }}>
-            <b style={{ color: "var(--warning)" }}>Allow changes to this board?</b>
+            <b style={{ color: "var(--warning-ink)" }}>Allow changes to this board?</b>
             <div className="text-[10.5px]" style={{ color: "var(--text3)" }}>
               Moving a card or assigning yourself fires your workspace's automations and notifies your
               team. Each change still asks first. There is no undo from here.
@@ -2789,7 +2789,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
         */}
       {data?.error && alarming && (
         <div className="px-5 py-1 text-[10.5px] shrink-0 flex items-center gap-2"
-          style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>
+          style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>
           <span className="min-w-0">
             {tasks.length
               ? `Nothing has been read since ${stamp(data.at)} — ${data.error.replace(/\.$/, "")}. These rows may have moved.`
@@ -2805,7 +2805,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
           <button onClick={() => void load(data.view?.id, true, true)} disabled={busy}
             className="shrink-0 text-[10px] px-1.5 py-0.5 rounded"
             style={{ border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)",
-              color: "var(--warning)", opacity: busy ? 0.5 : 1 }}>
+              color: "var(--warning-ink)", opacity: busy ? 0.5 : 1 }}>
             {busy ? <RefreshIcon size={ICON.xs} className="animate-spin" /> : "Try now"}
           </button>
         </div>
@@ -2949,7 +2949,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                           <path d="M6 3.5 10.5 8 6 12.5Z" />
                         </svg>
                       </span>
-                      <span aria-hidden className="shrink-0 grid place-items-center" style={{ width: 14, color: "var(--primary)" }}>
+                      <span aria-hidden className="shrink-0 grid place-items-center" style={{ width: 14, color: "var(--primary-ink)" }}>
                         <svg viewBox="0 0 16 16" width={ICON.sm} height={ICON.sm} fill="none" stroke="currentColor"
                           strokeWidth={1.5} strokeLinejoin="round" aria-hidden>
                           <path d="M1.75 4.25A1.5 1.5 0 0 1 3.25 2.75h2.4l1.3 1.5h5.8a1.5 1.5 0 0 1 1.5 1.5v6a1.5 1.5 0 0 1-1.5 1.5H3.25a1.5 1.5 0 0 1-1.5-1.5Z" />
@@ -3041,7 +3041,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
               <button onClick={() => void reveal()} disabled={finding}
                 className="w-full text-left px-5 py-3 hover:bg-white/5"
                 style={{ borderBottom: edge(8) }}>
-                <span className="text-[11.5px]" style={{ color: "var(--primary)" }}>
+                <span className="text-[11.5px]" style={{ color: "var(--primary-ink)" }}>
                   {finding ? `Looking for ${q.trim()}…` : `Fetch card ${q.trim()} from ClickUp →`}
                 </span>
                 <span className="block text-[10px]" style={{ color: "var(--text4)" }}>
@@ -3096,7 +3096,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                   : !showDone && counts.done > 0 ? (
                     <>
                       Nothing open here — {counts.done} card{counts.done === 1 ? " is" : "s are"} done or dropped.{" "}
-                      <button onClick={() => setShowDone(true)} style={{ color: "var(--primary)" }}>Show them</button>
+                      <button onClick={() => setShowDone(true)} style={{ color: "var(--primary-ink)" }}>Show them</button>
                     </>
                   )
                   : "This board has nothing open."}
@@ -3182,7 +3182,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
               : <span>{rows.length} of {data?.tasks.length ?? 0}</span>}
             {/* Said, rather than left as a list that stops. */}
             {data?.truncated && (
-              <span style={{ color: "var(--warning)" }}
+              <span style={{ color: "var(--warning-ink)" }}
                 title="More than this was waiting. Open the board in ClickUp to see the rest.">
                 · and more behind it
               </span>
@@ -3478,7 +3478,7 @@ function FieldValue({ f }: { f: CardFieldValue }) {
     return (
       <a href={externalUrl(f.href) || undefined} target="_blank" rel="noreferrer noopener"
         className="text-[11.5px] truncate inline-block max-w-full align-bottom"
-        style={{ color: "var(--primary)" }} title={f.href}>
+        style={{ color: "var(--primary-ink)" }} title={f.href}>
         {f.value} <span aria-hidden style={{ color: "var(--text4)" }}>↗</span>
       </a>
     );
@@ -3764,7 +3764,7 @@ function AboutValue({ text }: { text: string }) {
         if (pr) {
           return (
             <button key={i} onClick={() => openPr(pr.repo, pr.number)} title={`Open #${pr.number} here`}
-              className="underline underline-offset-2" style={{ color: "var(--primary)" }}>
+              className="underline underline-offset-2" style={{ color: "var(--primary-ink)" }}>
               #{pr.number} <span style={{ color: "var(--text4)" }}>{pr.repo}</span>
             </button>
           );
@@ -3772,7 +3772,7 @@ function AboutValue({ text }: { text: string }) {
         if (/^https?:\/\//.test(p)) {
           return (
             <button key={i} onClick={() => openExternal(p)} title={p}
-              className="underline underline-offset-2 break-all" style={{ color: "var(--primary)" }}>{p}</button>
+              className="underline underline-offset-2 break-all" style={{ color: "var(--primary-ink)" }}>{p}</button>
           );
         }
         /* A card id, or a branch that carries one. Both open the card: a branch
@@ -3782,7 +3782,7 @@ function AboutValue({ text }: { text: string }) {
           const id = p.match(/^[A-Z][A-Z0-9]+-\d+/)?.[0] ?? p;
           return (
             <button key={i} onClick={() => openCard(id, id)} title={p.length > id.length ? `${p} — open ${id}` : `Open ${id}`}
-              className="underline underline-offset-2" style={{ color: "var(--primary)" }}>{p}</button>
+              className="underline underline-offset-2" style={{ color: "var(--primary-ink)" }}>{p}</button>
           );
         }
         return <span key={i}>{p}</span>;
@@ -3822,7 +3822,7 @@ function Breadcrumb({ place, className, onList }: {
               ? (
                 <button onClick={go} title={`Open ${p}`}
                   className="agx-btn truncate rounded px-1 -mx-1 hover:underline"
-                  style={{ color: "var(--primary)" }}>{p}</button>
+                  style={{ color: "var(--primary-ink)" }}>{p}</button>
               )
               : <span className="truncate" style={{ color: last ? "var(--text2)" : "var(--text4)" }}>{p}</span>}
           </span>
@@ -3955,7 +3955,7 @@ function FolderPicker({ folders, busy, onAdd, onAddList }: {
   const on = new Set(folders.map((f) => f.id));
   const spaceName = spaces?.find((x) => x.id === space)?.name ?? "";
 
-  if (err) return <div className="text-[11px] py-1" style={{ color: "var(--error)" }}>{err}</div>;
+  if (err) return <div className="text-[11px] py-1" style={{ color: "var(--error-ink)" }}>{err}</div>;
   if (!spaces) return <div className="text-[11px] py-1" style={{ color: "var(--text4)" }}>Reading your workspace…</div>;
 
   return (
@@ -4047,7 +4047,7 @@ function ListViews({ listId, busy, onPick }: { listId: string; busy: boolean; on
     return () => { live = false; };
   }, [listId]);
 
-  if (err) return <div className="text-[11px] py-1" style={{ color: "var(--error)" }}>{err}</div>;
+  if (err) return <div className="text-[11px] py-1" style={{ color: "var(--error-ink)" }}>{err}</div>;
   if (!views) return <div className="text-[11px] py-1" style={{ color: "var(--text4)" }}>Reading its views…</div>;
 
   const ql = q.trim().toLowerCase();
@@ -4140,7 +4140,7 @@ function AddFirstBoard({ value, onValue, onAdd, busy, note, why }: {
   return (
     <div className="flex flex-col items-center justify-center flex-1 gap-3 p-8 text-center">
       <div className="text-[13px]" style={{ color: "var(--text)" }}>Nothing to read yet</div>
-      {why && <div className="text-[11.5px]" style={{ color: "var(--warning)" }}>{why}</div>}
+      {why && <div className="text-[11.5px]" style={{ color: "var(--warning-ink)" }}>{why}</div>}
       <div className="text-[11.5px] max-w-[52ch]" style={{ color: "var(--text3)" }}>
         Once ClickUp is connected, <b style={{ color: "var(--text2)" }}>Assigned to me</b> is here
         without adding anything. To work from a particular board as well, open it in ClickUp and
@@ -4675,7 +4675,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
           {!!blocked.length && (
             <span className={`${ROW_CHIP} tracking-[0.06em] shrink-0 tabular-nums`}
               title={`Waiting on ${blocked.map((b) => `${shortName(b.title, b.customId ?? b.id)} — ${b.title}`).join("\n")}`}
-              style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 14%, transparent)" }}>
+              style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 14%, transparent)" }}>
               <BlockedIcon size={ICON.xs} className="inline-block align-[-2px] mr-1" />{shortName(blocked[0]!.title, blocked[0]!.customId ?? blocked[0]!.id)}
               {blocked.length > 1 ? ` +${blocked.length - 1}` : ""}
             </span>
@@ -4738,13 +4738,14 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
           const shown = prPick.kind === "one" ? prPick.pr : prPick.primary;
           const restCount = prPick.kind === "many" ? prPick.rest.length : 0;
           const tint = cardPrTint(shown);
+          const ink = cardPrInk(shown);
           const label = shown.draft ? "Draft" : shown.state === "MERGED" ? "Merged" : shown.state === "CLOSED" ? "Closed" : "Open";
           return (
             <button type="button"
               onClick={(e) => { e.stopPropagation(); if (prPick.kind === "many") { const r = e.currentTarget.getBoundingClientRect(); setPrMenu({ x: r.left, y: r.bottom + 4 }); } else { openCardPr(shown); } }}
               className="agx-onrow inline-flex items-center gap-1 rounded-full shrink-0 whitespace-nowrap px-1.5 py-0.5 hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1"
               style={{
-                color: tint, background: `color-mix(in srgb, ${tint} 13%, transparent)`,
+                color: ink, background: `color-mix(in srgb, ${tint} 13%, transparent)`,
                 border: `1px solid color-mix(in srgb, ${tint} 40%, transparent)`,
                 outlineColor: tint,
               }}
@@ -4884,7 +4885,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
         /* Out of the grid: this row's columns are measured across every row on
            the board, and a fifth child would shift them all for a second. */
         <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[9.5px] px-1.5 py-0.5 rounded pointer-events-none"
-          style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 16%, var(--bg2))" }}>
+          style={{ color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 16%, var(--bg2))" }}>
           {said} copied
         </span>
       )}
@@ -5124,7 +5125,7 @@ function EditText({ value, empty, title, width, busy, parse, onSave }: {
         }}
         className="text-[11.5px] px-1.5 py-0.5 rounded outline-none"
         style={{ background: "var(--bg)", color: "var(--text)", border: edge(22), width: width ?? 90 }} />
-      {why && <span className="text-[10px]" style={{ color: "var(--error)" }}>{why}</span>}
+      {why && <span className="text-[10px]" style={{ color: "var(--error-ink)" }}>{why}</span>}
     </span>
   );
 }
@@ -5201,7 +5202,7 @@ function SprintPick({ t, busy, onApply }: {
         <div className="agx-scroll absolute left-0 mt-1 rounded-lg shadow-2xl flex flex-col overflow-y-auto py-1"
           style={{ zIndex: 30, background: "var(--bg2)", border: edge(28), minWidth: 210, maxHeight: 300 }}>
           {loading && <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>Reading the sprints…</div>}
-          {!loading && why && <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--warning)" }}>{why}</div>}
+          {!loading && why && <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--warning-ink)" }}>{why}</div>}
           {(lists ?? []).map((l) => (
             <button key={l.id} className="text-left px-2.5 py-1.5 hover:bg-white/5 text-[11px] truncate"
               style={{ color: l.id === currentSprint?.id ? "var(--info)" : "var(--text2)" }}
@@ -5367,7 +5368,7 @@ function TagEdit({ t, busy, onApply, board }: {
                   onMouseDown={(e) => { e.preventDefault(); add(name); }}
                   className="text-left px-2.5 py-1.5 text-[11px] truncate flex items-center gap-1.5"
                   style={{ background: i === hot ? "color-mix(in srgb, var(--text) 8%, transparent)" : "transparent" }}>
-                  {isNew && <span className="shrink-0 text-[10px]" style={{ color: "var(--info)" }}>+</span>}
+                  {isNew && <span className="shrink-0 text-[10px]" style={{ color: "var(--info-ink)" }}>+</span>}
                   <span className="truncate" style={{ color: isNew ? "var(--info)" : "var(--text2)" }}>{name}</span>
                   {isNew && <span className="shrink-0 text-[9.5px]" style={{ color: "var(--text4)" }}>new tag</span>}
                 </button>
@@ -5441,7 +5442,7 @@ function CardHop({ list, id, onGo }: { list: ProviderTask[]; id: string; onGo: (
                 <button key={c.id} onClick={() => { setOpen(false); onGo(c.id); }}
                   className="text-left px-2.5 py-1.5 flex items-center gap-2 hover:bg-white/5"
                   style={c.id === id ? { background: "color-mix(in srgb, var(--primary) 12%, transparent)" } : undefined}>
-                  <span className="text-[10px] tabular-nums shrink-0" style={{ color: "var(--primary)" }}>{c.customId || c.id}</span>
+                  <span className="text-[10px] tabular-nums shrink-0" style={{ color: "var(--primary-ink)" }}>{c.customId || c.id}</span>
                   <span className="truncate text-[11px]" style={{ color: "var(--text2)" }}>{c.title}</span>
                 </button>
               ))}
@@ -5860,7 +5861,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
         <div className="flex items-center gap-1.5 flex-wrap pb-1.5 mb-1.5" style={{ borderBottom: edge(10) }}>
         <div className="relative">
           <button onClick={() => setAskOpen((o) => !o)} className="text-[10.5px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg"
-            style={{ border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)", color: "var(--warning)" }}>
+            style={{ border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)", color: "var(--warning-ink)" }}>
             Hand to Claude ▾
           </button>
           {askOpen && (
@@ -5905,7 +5906,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                       )}
                       <div className="px-2.5 py-1.5 hover:bg-white/5">
                         <button className="text-left w-full" title={sk.description} onClick={() => run()}>
-                          <div style={{ color: "var(--warning)" }}>
+                          <div style={{ color: "var(--warning-ink)" }}>
                             /{sk.name.replace(/^\//, "")} <span style={{ color: "var(--text3)" }}>{t.customId || t.id}</span>
                           </div>
                           {sk.description && (
@@ -6044,7 +6045,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
             drift because there is only one number. */}
         <div className="flex items-center gap-1.5 flex-wrap" style={{ minHeight: HEAD_H }}>
           <button onClick={() => void copyIt(t.customId || t.id, "human")} className={`${ID_CHIP} tabular-nums`}
-            style={{ color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}
+            style={{ color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}
             title={`Copy ${t.customId || t.id} — the id for a branch, a commit or a colleague`}>
             {copied === "human" ? <span className="inline-flex items-center gap-1">copied<DoneIcon size={ICON.xs} /></span> : (t.customId || t.id)}
           </button>
@@ -6060,7 +6061,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           {t.priority && <PriorityChip p={t.priority} />}
           {t.mine && (
             <span className={`${ID_CHIP} tracking-[0.08em]`}
-              style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 15%, transparent)" }}>YOURS</span>
+              style={{ color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 15%, transparent)" }}>YOURS</span>
           )}
           {/* Pushed to the right of the same band rather than laid over the
               header: an overlay would sit on top of a title long enough to
@@ -6076,7 +6077,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
             <button onClick={onClose} aria-label="Close the card"
               title="Close the card (Esc)"
               className={`shrink-0 grid place-items-center rounded-md text-[13px] leading-none ${nav ? "" : "ml-auto"}`}
-              style={{ width: 26, height: 26, color: "var(--error)",
+              style={{ width: 26, height: 26, color: "var(--error-ink)",
                 background: "color-mix(in srgb, var(--error) 14%, transparent)",
                 border: "1px solid color-mix(in srgb, var(--error) 34%, transparent)" }}>
               {/* The house's own glyph rather than a bare ✕ character: the lock
@@ -6325,7 +6326,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           <CardField label="Sprint">
             {writable
               ? <SprintPick t={t} busy={saving("sprint")} onApply={(p) => onApply("sprint", p)} />
-              : <span style={{ color: "var(--info)" }}>{t.sprint}</span>}
+              : <span style={{ color: "var(--info-ink)" }}>{t.sprint}</span>}
           </CardField>
         )}
         {(writable || t.points != null) && (
@@ -6640,7 +6641,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           <div className={`${EYEBROW} mb-1.5 flex items-center gap-2`} style={{ color: "var(--text4)" }}>
             Pull requests {!!prs.length && <span>{prs.length}</span>}
             {prsErr && (
-              <span style={{ color: "var(--warning)" }}>
+              <span style={{ color: "var(--warning-ink)" }}>
                 {prs.length ? "· search failed, showing what the card states" : "· could not search GitHub — this is not “none”"}
               </span>
             )}
@@ -6654,14 +6655,14 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
               }}
                 className="text-left flex-1 min-w-0 rounded px-1 -mx-1 hover:bg-white/5"
                 title="Open this pull request">
-                <span className="tabular-nums" style={{ color: "var(--primary)" }}>#{p.number}</span>
+                <span className="tabular-nums" style={{ color: "var(--primary-ink)" }}>#{p.number}</span>
                 {p.state && (
                   <span className="ml-1.5 text-[10px] tracking-[0.06em] px-1.5 rounded"
                     style={p.state === "MERGED"
-                      ? { color: "#a371f7", background: "#a371f721" }
+                      ? { color: mergedInk(), background: "#a371f721" }
                       : p.state === "CLOSED"
-                      ? { color: "var(--error)", background: "color-mix(in srgb, var(--error) 13%, transparent)" }
-                      : { color: "var(--success)", background: "color-mix(in srgb, var(--success) 13%, transparent)" }}>
+                      ? { color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 13%, transparent)" }
+                      : { color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 13%, transparent)" }}>
                     {p.draft ? "DRAFT" : p.state}
                   </span>
                 )}
@@ -6776,7 +6777,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                     disabled={!c.replyList?.length}
                     title={c.replyList?.length ? "Show the replies" : "This thread could not be loaded"}
                     className="text-[10px] px-1.5 py-0.5 rounded inline-flex items-center gap-1.5 hover:opacity-80 disabled:opacity-50"
-                    style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
+                    style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
                     <span style={{ transform: openThreads.has(c.id) ? "none" : "rotate(-90deg)", display: "inline-block" }}>▾</span>
                     {c.replies} {c.replies === 1 ? "reply" : "replies"}
                     {/* The faces, before anything is expanded. Most of what the
@@ -7054,7 +7055,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
                 else setSayErr(r.error ?? "ClickUp refused the comment");
               }).catch(() => setSayErr("Could not reach ClickUp")).finally(() => setSaying(false));
             }} />
-          {sayErr && <div className="text-[10.5px] mt-1" style={{ color: "var(--error)" }}>{sayErr}</div>}
+          {sayErr && <div className="text-[10.5px] mt-1" style={{ color: "var(--error-ink)" }}>{sayErr}</div>}
         </div>
       )}
       </></MarkdownImages>)}
@@ -7604,7 +7605,7 @@ function TaskRow({ t, today, on, onPick, marked, onMark, reminder, remindOpen, o
           here rather than stealing a column nobody would recognise. */}
       {marked ? (
         <button onClick={(e) => { e.stopPropagation(); onMark?.(); }} aria-label="Unmark"
-          className="flex justify-center" style={{ color: "var(--primary)" }}><DoneIcon size={ICON.xs} /></button>
+          className="flex justify-center" style={{ color: "var(--primary-ink)" }}><DoneIcon size={ICON.xs} /></button>
       ) : onToggle && writable ? (
         <button onClick={(e) => { e.stopPropagation(); onToggle(); }}
           title={isDone ? "Reopen" : "Mark done"}
@@ -7628,9 +7629,9 @@ function TaskRow({ t, today, on, onPick, marked, onMark, reminder, remindOpen, o
             {t.priority && (
               <span className="text-[8.5px] tracking-[0.08em] px-1.5 rounded"
                 style={t.priority === "H"
-                  ? { color: "var(--error)", background: "color-mix(in srgb, var(--error) 13%, transparent)" }
+                  ? { color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 13%, transparent)" }
                   : t.priority === "M"
-                  ? { color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 13%, transparent)" }
+                  ? { color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 13%, transparent)" }
                   : { color: "var(--text3)", background: "color-mix(in srgb, var(--text) 8%, transparent)" }}>
                 {t.priority === "H" ? "HIGH" : t.priority === "M" ? "MED" : "LOW"}
               </span>
@@ -7644,7 +7645,7 @@ function TaskRow({ t, today, on, onPick, marked, onMark, reminder, remindOpen, o
             {progress.total > 0 && (
               <span className={`${TAG_PILL} tabular-nums`}
                 style={progress.done === progress.total
-                  ? { color: "var(--success)", background: "color-mix(in srgb, var(--success) 13%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 30%, transparent)" }
+                  ? { color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 13%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 30%, transparent)" }
                   : { color: "var(--text3)", background: TAG_FILL, border: TAG_EDGE }}>
                 {progress.done}/{progress.total}
               </span>
@@ -7656,7 +7657,7 @@ function TaskRow({ t, today, on, onPick, marked, onMark, reminder, remindOpen, o
       <span className="truncate text-[11px]">
         {t.project && (
           <button onClick={(e) => { e.stopPropagation(); onFilter?.("project", t.project!); }}
-            className="truncate max-w-full" style={{ color: "var(--info)" }}
+            className="truncate max-w-full" style={{ color: "var(--info-ink)" }}
             title={`Only @${t.project}`}>{t.project}</button>
         )}
       </span>
@@ -7782,7 +7783,7 @@ function Drop({ label, value, options, onPick, onClear }: {
           ? { background: "color-mix(in srgb, var(--primary) 14%, transparent)",
               border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }
           : { border: edge(14), color: "var(--text2)" }}>
-        {label}{on && <span style={{ color: "var(--primary)" }}>{value}</span>}
+        {label}{on && <span style={{ color: "var(--primary-ink)" }}>{value}</span>}
         <span style={{ color: "var(--text4)" }}>▾</span>
       </button>
       {open && (
@@ -8151,11 +8152,11 @@ function TaskDetail({ t, today, reminder, onCancel, writable, onToggleNote, onSh
         : (
           <div className="flex flex-wrap items-center gap-1.5 mb-2">
             {t.priority && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--warning)", border: edge(16) }}>
+              <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--warning-ink)", border: edge(16) }}>
                 {t.priority === "H" ? "High" : t.priority === "M" ? "Medium" : "Low"}
               </span>
             )}
-            {t.project && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--info)", border: edge(16) }}>@{t.project}</span>}
+            {t.project && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--info-ink)", border: edge(16) }}>@{t.project}</span>}
             {t.tags.map((tag) => (
               <span key={tag} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: edge(16) }}>{tag}</span>
             ))}
@@ -8215,7 +8216,7 @@ function TaskDetail({ t, today, reminder, onCancel, writable, onToggleNote, onSh
           <div className={`${EYEBROW} mt-4 mb-1.5`} style={{ color: "var(--text3)" }}>Links</div>
           {t.urls.map((u) => (
             <a key={u} href={u} target="_blank" rel="noreferrer"
-              className="block text-[10px] break-all mb-1" style={{ color: "var(--info)" }}>{u}</a>
+              className="block text-[10px] break-all mb-1" style={{ color: "var(--info-ink)" }}>{u}</a>
           ))}
         </>
       )}
@@ -8280,7 +8281,7 @@ function ParseStrip({ input }: { input: string }) {
     p.due ? seg(`→ ${p.due.slice(5)}`, "var(--text3)") : null,
   ].filter(Boolean);
   if (!p.description && bits.length) {
-    return <span className="text-[10px] shrink-0" style={{ color: "var(--error)" }}>That is all labels and no task.</span>;
+    return <span className="text-[10px] shrink-0" style={{ color: "var(--error-ink)" }}>That is all labels and no task.</span>;
   }
   return (
     <span className="text-[10px] shrink-0 flex items-center gap-2 overflow-hidden whitespace-nowrap">
@@ -8415,7 +8416,7 @@ function SearchHits({ asked, rows, looking, onAsk, onPick, onClose }: {
             className="text-left px-3 py-2 flex items-center gap-2 min-w-0"
             style={{ background: i === hot ? "color-mix(in srgb, var(--text) 8%, transparent)" : "transparent" }}>
             <span className="shrink-0 text-[9.5px] px-1 rounded tabular-nums"
-              style={{ color: "var(--primary)", border: edge(22) }}>{t.customId ?? t.id}</span>
+              style={{ color: "var(--primary-ink)", border: edge(22) }}>{t.customId ?? t.id}</span>
             <span className="min-w-0 flex-1 truncate text-[12px]" style={{ color: "var(--text)" }}>{t.title}</span>
             <span className="shrink-0 text-[10px] truncate" style={{ color: "var(--text4)", maxWidth: 160 }}>{t.list}</span>
             {/* The reason it is on this list, which is the thing a plain list of

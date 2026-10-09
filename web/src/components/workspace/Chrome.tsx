@@ -163,13 +163,13 @@ export function Chip({
     ? {
       background: "color-mix(in srgb, var(--primary) 18%, transparent)",
       border: "1px solid color-mix(in srgb, var(--primary) 34%, transparent)",
-      color: "var(--primary)",
+      color: "var(--primary-ink)",
     }
     : danger
       ? {
         background: "color-mix(in srgb, var(--error) 10%, transparent)",
         border: "1px solid color-mix(in srgb, var(--error) 30%, transparent)",
-        color: "var(--error)",
+        color: "var(--error-ink)",
       }
       : { ...chipBody(hasState, !!resting), ...chipTone(!!on) };
   return (
@@ -274,7 +274,7 @@ export function Tabs<T extends string>({ value, options, onChange, label, panelI
             onKeyDown={(e) => move(e, i)}
             className="agx-tab text-[12px] px-3 min-h-[32px] inline-flex items-center whitespace-nowrap transition-colors"
             style={on
-              ? { color: "var(--primary)", fontWeight: 700, boxShadow: "inset 0 -2px 0 0 var(--primary)" }
+              ? { color: "var(--primary-ink)", fontWeight: 700, boxShadow: "inset 0 -2px 0 0 var(--primary)" }
               : { color: "var(--text3)" }}
           >
             {o.label}

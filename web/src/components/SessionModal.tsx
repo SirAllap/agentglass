@@ -191,7 +191,7 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                     )}
                     {d && shared && (
                       <span className="chip" title={SHARED_TREE_TOOLTIP}
-                        style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}>
+                        style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}>
                         {SHARED_TREE_LABEL}
                       </span>
                     )}
@@ -210,7 +210,7 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                       ) : sessionCwd(d) ? (
                         <button onClick={() => { onResume(d); onClose(); }} className="chip cursor-pointer"
                           title={`Continue this conversation in ${sessionCwd(d)} — claude keeps the full context`}
-                          style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 12%, transparent)", borderColor: "color-mix(in srgb, var(--success) 45%, transparent)" }}>
+                          style={{ color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 12%, transparent)", borderColor: "color-mix(in srgb, var(--success) 45%, transparent)" }}>
                           ↩ Resume in chat
                         </button>
                       ) : (
@@ -312,8 +312,8 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                               <button key={c.id} onClick={() => { setDiffPath(c.file_path); setDiffOpen(true); }} title={`Open diff · ${c.file_path}`} className="w-full text-left flex items-center gap-2 text-[10.5px] rounded px-1 -mx-1 py-0.5 transition-colors hover:bg-[color-mix(in_srgb,var(--primary)_12%,transparent)]">
                                 <span className="truncate" style={{ color: "var(--text3)" }}>{c.file_path.split("/").pop()}</span>
                                 <span className="ml-auto shrink-0 tabular-nums">
-                                  {c.additions > 0 && <span style={{ color: "var(--success)" }}>+{c.additions} </span>}
-                                  {c.deletions > 0 && <span style={{ color: "var(--error)" }}>−{c.deletions}</span>}
+                                  {c.additions > 0 && <span style={{ color: "var(--success-ink)" }}>+{c.additions} </span>}
+                                  {c.deletions > 0 && <span style={{ color: "var(--error-ink)" }}>−{c.deletions}</span>}
                                 </span>
                               </button>
                             ))}
@@ -343,7 +343,7 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                             <button onClick={toBottom}
                               className="text-[9.5px] px-1.5 py-0.5 rounded-full"
                               title="Jump to the newest turn and follow again"
-                              style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 15%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 45%, transparent)" }}>
+                              style={{ color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 15%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 45%, transparent)" }}>
                               ↓ Resume live
                             </button>
                           )}

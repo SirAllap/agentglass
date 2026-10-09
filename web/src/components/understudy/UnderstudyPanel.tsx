@@ -580,7 +580,7 @@ export function UnderstudyView({ active }: { active: boolean }) {
         {(standing?.stuck ?? 0) > 0 && (
           <button
             className="chip"
-            style={{ color: "var(--warning)", background: wash("--warning", 14), cursor: "pointer", border: 0 }}
+            style={{ color: "var(--warning-ink)", background: wash("--warning", 14), cursor: "pointer", border: 0 }}
             title="It stopped on something and needs an answer"
             onClick={() => setTab("work")}
           >
@@ -618,7 +618,7 @@ export function UnderstudyView({ active }: { active: boolean }) {
         // role="alert": this only ever appears because something you pressed
         // was refused, and it used to appear silently.
         <div role="alert" className="px-4 py-2 text-[11.5px] shrink-0"
-          style={{ color: "var(--error)", background: wash("--error", 8), borderBottom: edge(8) }}>
+          style={{ color: "var(--error-ink)", background: wash("--error", 8), borderBottom: edge(8) }}>
           {problem}
         </div>
       )}
@@ -676,7 +676,7 @@ export function UnderstudyView({ active }: { active: boolean }) {
               </span>
               <span className="block text-[11.5px] mt-0.5" style={{ color: "var(--text4)" }}>
                 {frame.seals.sealed.toLocaleString()} sealed
-                {frame.seals.unsealed > 0 && <> · <span style={{ color: "var(--error)" }}>{frame.seals.unsealed} with no seal</span></>}
+                {frame.seals.unsealed > 0 && <> · <span style={{ color: "var(--error-ink)" }}>{frame.seals.unsealed} with no seal</span></>}
               </span>
               <Chip className="mt-1.5" onClick={() => openSettings("understudy")}
                 title="Change how it looks — Settings → Clone">

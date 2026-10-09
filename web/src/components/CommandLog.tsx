@@ -72,7 +72,7 @@ export function CommandLog({ open, onClose }: { open: boolean; onClose: () => vo
             <span className="shrink-0 tabular-nums t-dim2" style={{ minWidth: 44, textAlign: "right" }}>{e.ms < 1 ? "<1ms" : `${Math.round(e.ms)}ms`}</span>
             <span className="min-w-0" style={{ color: e.exitCode === 0 ? (e.write ? "var(--text)" : "var(--text3)") : "var(--error)" }}>
               git {e.args.join(" ")}
-              {e.error && <span style={{ color: "var(--error)" }}> — {e.error}</span>}
+              {e.error && <span style={{ color: "var(--error-ink)" }}> — {e.error}</span>}
             </span>
           </div>
         ))}

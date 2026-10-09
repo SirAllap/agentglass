@@ -272,7 +272,7 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
                 <div className="px-4 py-2.5 text-[11.5px] leading-relaxed flex items-start gap-2"
                   style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--warning) 10%, transparent)",
                     borderBottom: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)" }}>
-                  <span aria-hidden className="flex" style={{ height: 18, alignItems: "center", color: "var(--warning)" }}><WarningIcon size={ICON.sm} /></span>
+                  <span aria-hidden className="flex" style={{ height: 18, alignItems: "center", color: "var(--warning-ink)" }}><WarningIcon size={ICON.sm} /></span>
                   <span>
                     <b style={{ color: "var(--text)", fontWeight: 500 }}>
                       {pending.awaitingReview!.slice(0, 3).join(", ")}
@@ -379,7 +379,7 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
                             <button onClick={allowWrites}
                               title="Let this app change cards on your ClickUp board. The same switch the Tasks panel owns."
                               className="text-[10.5px] px-2 py-1 rounded"
-                              style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}>
+                              style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}>
                               Allow ClickUp changes
                             </button>
                             <span className="text-[10px]" style={{ color: "var(--text4)" }}>— read-only until you do</span>

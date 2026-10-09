@@ -195,7 +195,7 @@ function Thinking({ text, streaming }: { text: string; streaming: boolean }) {
         className="w-full flex items-center gap-1.5 px-2 py-1 text-left hover:opacity-80">
         <span className="text-[10px] t-dim2 transition-transform" style={{ transform: open ? "none" : "rotate(-90deg)" }}>▼</span>
         <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>thinking</span>
-        {streaming && <span className="text-[10px]" style={{ color: "var(--info)" }}>·</span>}
+        {streaming && <span className="text-[10px]" style={{ color: "var(--info-ink)" }}>·</span>}
         {/* A length cue, so a fold is an informed choice rather than a mystery. */}
         {!open && <span className="text-[10px] t-dim2 ml-auto tabular-nums">{lines.length} line{lines.length === 1 ? "" : "s"}</span>}
       </button>
@@ -266,7 +266,7 @@ function Inspector({ chat }: { chat: Chat }) {
       {u.costUsd > 0 && (
         <div className="flex items-baseline gap-2 pt-1 mt-0.5 border-t" style={{ borderColor: "color-mix(in srgb, var(--border) 20%, transparent)" }}>
           <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>cost</span>
-          <span className="ml-auto text-[11px] tabular-nums font-medium" style={{ color: "var(--success)" }}>{fmtUsd(u.costUsd)}</span>
+          <span className="ml-auto text-[11px] tabular-nums font-medium" style={{ color: "var(--success-ink)" }}>{fmtUsd(u.costUsd)}</span>
         </div>
       )}
     </div>
@@ -330,11 +330,11 @@ function ChatRow({ chat, active, onPick, onClose }: { chat: Chat; active: boolea
         <div className="flex items-center gap-1.5 min-w-0 mt-1.5">
           <span className="truncate text-[9.5px] t-dim2">{repoName(chat.cwd) || "No repo"}</span>
           {chat.sending
-            ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--success)" }}>· Running</span>
+            ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--success-ink)" }}>· Running</span>
             : chat.attention === "blocked"
-            ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--warning)" }}>· Needs you</span>
+            ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--warning-ink)" }}>· Needs you</span>
             : chat.attention === "done"
-            ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--primary)" }}>· Done</span>
+            ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--primary-ink)" }}>· Done</span>
             : null}
           {/* How full this chat's context is, per row. With several open it's
               the number that decides which one you go back to first — the one
@@ -567,7 +567,7 @@ function ResumeRow({ s, openChatId, onPick }: { s: SessionRollup; openChatId?: s
         </div>
       </div>
       {live
-        ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--success)" }}>● Running</span>
+        ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--success-ink)" }}>● Running</span>
         : why === "no-dir"
         ? <span className="text-[9.5px] shrink-0 t-dim2">No dir</span>
         : openChatId
@@ -1338,7 +1338,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                       </div>
                     )}
                     {noRepo && (
-                      <div className="px-2.5 py-2 text-[11px]" style={{ color: "var(--warning)" }}>
+                      <div className="px-2.5 py-2 text-[11px]" style={{ color: "var(--warning-ink)" }}>
                         Nowhere to run a chat: no git repository was found
                       </div>
                     )}
@@ -1618,7 +1618,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                       <button onClick={toBottom}
                         title="Jump to the newest message and follow again"
                         className="pointer-events-auto mb-2 text-[10px] px-2.5 py-1 rounded-full font-medium shadow-lg"
-                        style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 18%, var(--bg2))", border: "1px solid color-mix(in srgb, var(--success) 45%, transparent)" }}>
+                        style={{ color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 18%, var(--bg2))", border: "1px solid color-mix(in srgb, var(--success) 45%, transparent)" }}>
                         ↓ Jump to latest
                       </button>
                     </div>
@@ -1706,7 +1706,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                             update(active.id, (c) => { c.blockedTool = undefined; });
                           }}
                           className="shrink-0 px-2 py-1 rounded-md text-[10.5px] font-medium"
-                          style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>
+                          style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>
                           Allow {active.blockedTool}
                         </button>
                         <CloseButton onClick={() => update(active.id, (c) => { c.blockedTool = undefined; })} title="Dismiss" className="shrink-0" />
@@ -1814,7 +1814,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                           keep. */}
                       {active?.sending && (
                         <button onClick={() => stop(active.id)} title="Interrupt the turn and clear anything queued"
-                          className="shrink-0 px-3.5 rounded-lg text-[11.5px] font-semibold self-stretch" style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}>■ Stop</button>
+                          className="shrink-0 px-3.5 rounded-lg text-[11.5px] font-semibold self-stretch" style={{ color: "var(--error-ink)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}>■ Stop</button>
                       )}
                       <button onClick={submit} disabled={!hasTurn || !active?.cwd || !usable} className="shrink-0 px-4 rounded-lg text-[11.5px] font-semibold self-stretch" style={{ color: "var(--text)", background: "color-mix(in srgb, var(--primary) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", opacity: (!hasTurn || !active?.cwd) ? 0.45 : 1 }}>
                         {active?.sending ? "Queue ↵" : "Send ↵"}
@@ -1822,9 +1822,9 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                     </div>
                     <div className="mt-1.5 text-[9.5px] t-dim2">
                       {hint
-                        ? <span style={{ color: "var(--warning)" }}>{hint}</span>
+                        ? <span style={{ color: "var(--warning-ink)" }}>{hint}</span>
                         : <>Runs {cliName(active?.agent ?? "claude")} in {active ? repoName(active.cwd) || "the repo" : "the repo"} · {modesFor(active?.agent ?? "claude").find((x) => x.id === active?.mode)?.label} · tool calls fold away, click to open</>}
-                      {active && active.mode === bypassMode(active.agent) && <span className="inline-flex items-center gap-1" style={{ color: "var(--warning)" }}> · <BoltIcon size={ICON.xs} />runs tools unattended</span>}
+                      {active && active.mode === bypassMode(active.agent) && <span className="inline-flex items-center gap-1" style={{ color: "var(--warning-ink)" }}> · <BoltIcon size={ICON.xs} />runs tools unattended</span>}
                     </div>
                   </div>
                 </div>

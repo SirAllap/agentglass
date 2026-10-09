@@ -48,14 +48,14 @@ type StateLook = {
 };
 
 const STATUS: Record<string, StateLook> = {
-  working: { color: "var(--success)", label: "Working", mark: "disc", rail: "solid", hint: "Working" },
-  waiting: { color: "var(--warning)", label: "Waiting", mark: "ring", rail: "solid", hint: "Waiting on you" },
+  working: { color: "var(--success-ink)", label: "Working", mark: "disc", rail: "solid", hint: "Working" },
+  waiting: { color: "var(--warning-ink)", label: "Waiting", mark: "ring", rail: "solid", hint: "Waiting on you" },
   stalled: {
-    color: "var(--warning)", label: "Stalled", mark: "bars", rail: "broken",
+    color: "var(--warning-ink)", label: "Stalled", mark: "bars", rail: "broken",
     hint: "Open, and nothing has moved since it started",
   },
-  errored: { color: "var(--error)", label: "Errored", mark: "wedge", rail: "solid", hint: "Errored" },
-  failed: { color: "var(--error)", label: "Failed", mark: "cross", rail: "faint", hint: "Ended badly" },
+  errored: { color: "var(--error-ink)", label: "Errored", mark: "wedge", rail: "solid", hint: "Errored" },
+  failed: { color: "var(--error-ink)", label: "Failed", mark: "cross", rail: "faint", hint: "Ended badly" },
   idle: { color: "var(--text4)", label: "Idle", mark: "hollow", rail: "faint", hint: "Idle" },
 };
 // `waiting` above `errored`: an agent stopped on a question needs a person, and
@@ -149,9 +149,9 @@ function evidenceNote(a: AgentCard): string | undefined {
  * without colour.
  */
 const OUTCOME: Record<AgentOutcome, { glyph: ReactNode; color: string; title: string } | null> = {
-  settled: { glyph: <DoneIcon size={ICON.xs} />, color: "var(--success)", title: "Finished with nothing left trailing" },
-  faulted: { glyph: <CrossIcon size={ICON.xs} />, color: "var(--error)", title: "Ended on an error, or stopped mid-tool" },
-  unanswered: { glyph: <ClockIcon size={ICON.xs} />, color: "var(--warning)", title: "Stopped on a question nobody answered" },
+  settled: { glyph: <DoneIcon size={ICON.xs} />, color: "var(--success-ink)", title: "Finished with nothing left trailing" },
+  faulted: { glyph: <CrossIcon size={ICON.xs} />, color: "var(--error-ink)", title: "Ended on an error, or stopped mid-tool" },
+  unanswered: { glyph: <ClockIcon size={ICON.xs} />, color: "var(--warning-ink)", title: "Stopped on a question nobody answered" },
   // Nothing. No terminal event ever arrived, and the absence of a mark is the
   // accurate report — inventing a glyph here would be a guess wearing a badge.
   unclear: null,
@@ -246,7 +246,7 @@ function SessionCard({ a, selected, onSelect, collisions, branch, shared }: {
           )}
           {shared && (
             <span className="chip shrink-0" title={SHARED_TREE_TOOLTIP}
-              style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}>
+              style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}>
               {SHARED_TREE_LABEL}
             </span>
           )}
@@ -262,7 +262,7 @@ function SessionCard({ a, selected, onSelect, collisions, branch, shared }: {
             {OUTCOME[a.outcome]!.glyph}
           </span>
         )}
-        <span className="chip shrink-0" style={{ color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }}>{model}</span>
+        <span className="chip shrink-0" style={{ color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }}>{model}</span>
       </div>
       <div className="mt-1 flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 min-w-0">
@@ -272,7 +272,7 @@ function SessionCard({ a, selected, onSelect, collisions, branch, shared }: {
               read out of commands and not proven. */}
           {collide.length > 0 && (
             <span className="chip shrink-0" title={collisionTitle(collide)}
-              style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}>
+              style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}>
               <WarningIcon size={ICON.xs} className="inline-block align-[-2px] mr-1" />{collisionChip(collide)}
             </span>
           )}
@@ -284,7 +284,7 @@ function SessionCard({ a, selected, onSelect, collisions, branch, shared }: {
       {a.subagents > 0 && (() => {
         const named = a.subagentTypes.filter(([t]) => t !== "subagent");
         return (
-          <div className="mt-1.5 flex items-center gap-1.5 text-[10px]" style={{ color: "var(--info)" }}>
+          <div className="mt-1.5 flex items-center gap-1.5 text-[10px]" style={{ color: "var(--info-ink)" }}>
             <span aria-hidden className="flex"><AgentIcon size={ICON.xs} /></span>
             <span className="tabular-nums font-medium">{a.subagents} subagent{a.subagents > 1 ? "s" : ""}</span>
             {named.length > 0 && (
@@ -307,9 +307,9 @@ function SessionCard({ a, selected, onSelect, collisions, branch, shared }: {
       )}
       <div className="mt-1.5 flex items-center gap-3 text-[10px] t-dim2 tabular-nums">
         <span>{a.tools} tools</span>
-        {a.errors > 0 && <span style={{ color: "var(--error)" }}>{a.errors} err</span>}
+        {a.errors > 0 && <span style={{ color: "var(--error-ink)" }}>{a.errors} err</span>}
         <span className="t-dim" title={eqTitle(a.tokens)}>{fmtEq(a.tokens)}</span>
-        <span style={{ color: "var(--success)" }}>{fmtUsd(a.cost)}</span>
+        <span style={{ color: "var(--success-ink)" }}>{fmtUsd(a.cost)}</span>
         <span className="ml-auto">{ago(a.lastSeen)}</span>
       </div>
     </motion.div>
@@ -444,7 +444,7 @@ export function Fleet({ agents, activeApp, onSelect, active = true }: { agents: 
                 <span className="text-[11px] font-semibold tracking-wide uppercase" style={{ letterSpacing: "0.06em" }}>{app}</span>
                 {live > 0 && <span className="h-1.5 w-1.5 rounded-full" style={{ background: "var(--success)", boxShadow: "0 0 6px var(--success)" }} />}
                 <span className="ml-auto flex items-center gap-2 text-[9.5px] t-dim2 tabular-nums">
-                  {subs > 0 && <span className="inline-flex items-center gap-0.5" style={{ color: "var(--info)" }}><AgentIcon size={ICON.xs} />{subs}</span>}
+                  {subs > 0 && <span className="inline-flex items-center gap-0.5" style={{ color: "var(--info-ink)" }}><AgentIcon size={ICON.xs} />{subs}</span>}
                   <span>{list.length} session{list.length > 1 ? "s" : ""}</span>
                 </span>
               </button>

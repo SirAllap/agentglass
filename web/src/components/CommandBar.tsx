@@ -243,7 +243,7 @@ function CommandRow({ c, font, on, full, onRun, onPin }: {
         <span className="min-w-0 flex-1 truncate t-dim2">{c.desc || "—"}</span>
         {/* Marked, because a saved command and a found one behave differently:
             one is a line, the other can be four and can ask you a question. */}
-        {r && <span className="shrink-0 text-[10px] px-1 rounded" style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>{r.params?.length ? "asks" : "yours"}</span>}
+        {r && <span className="shrink-0 text-[10px] px-1 rounded" style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>{r.params?.length ? "asks" : "yours"}</span>}
       </button>
       {/* Pinned stars stay lit; the rest appear on hover, so a list of 300 rows
           is not 300 competing controls. */}
@@ -572,7 +572,7 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
                     aria-label="Custom command" className="px-2 py-1 rounded outline-none min-w-0"
                     style={{ background: "var(--bg3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
                   <button type="submit" className="px-2 py-1 rounded" style={{ color: "var(--text)", background: "color-mix(in srgb, var(--primary) 18%, transparent)" }}>Pin</button>
-                  {customError && <span className="col-span-3 text-[10px]" style={{ color: "var(--error)" }}>{customError}</span>}
+                  {customError && <span className="col-span-3 text-[10px]" style={{ color: "var(--error-ink)" }}>{customError}</span>}
                 </form>
               )}
             </div>

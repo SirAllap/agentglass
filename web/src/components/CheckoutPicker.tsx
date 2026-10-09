@@ -187,7 +187,7 @@ export function CheckoutPicker({
         style={{ maxWidth: triggerMaxWidth, ...CHIP_SURFACE }}
         title={title ?? (here ? `${here.name}\n${here.root}` : unlisted ? `${unlisted}\nnot in the current list` : undefined)}
       >
-        <span className="font-medium truncate min-w-0" style={unlisted ? { color: "var(--warning)" } : undefined}>
+        <span className="font-medium truncate min-w-0" style={unlisted ? { color: "var(--warning-ink)" } : undefined}>
           {here?.name ?? (unlisted ? leafOf(unlisted) : placeholder)}
         </span>
         {(() => {
@@ -232,8 +232,8 @@ export function CheckoutPicker({
           <div ref={rowsRef} className="agx-scroll overflow-y-auto overflow-x-hidden pb-1" style={{ minHeight: 0 }}>
             {unlisted && (
               <div className="px-2.5 py-1.5 flex items-center gap-2" style={{ background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>
-                <span className="shrink-0 text-[8.5px] leading-none px-1 py-0.5 rounded" style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>SET</span>
-                <span className="min-w-0 flex-1 truncate" style={{ color: "var(--warning)" }} title={unlisted}>{unlisted}</span>
+                <span className="shrink-0 text-[8.5px] leading-none px-1 py-0.5 rounded" style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>SET</span>
+                <span className="min-w-0 flex-1 truncate" style={{ color: "var(--warning-ink)" }} title={unlisted}>{unlisted}</span>
                 <span className="shrink-0 t-dim2 text-[9.5px]">not in this list</span>
               </div>
             )}
@@ -259,7 +259,7 @@ export function CheckoutPicker({
                   className="shrink-0 text-[8.5px] leading-none px-1 py-0.5 rounded"
                   title={r.worktreeOf ? `worktree of ${r.worktreeOf}` : "main checkout"}
                   style={r.worktreeOf
-                    ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }
+                    ? { color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }
                     : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
                 >{r.worktreeOf ? "WT" : "REPO"}</span>
                 {/* A worktree IS its branch — that's the whole point of one per
@@ -275,9 +275,9 @@ export function CheckoutPicker({
                 {!r.worktreeOf
                   ? <span className="shrink-0 truncate t-dim2 text-[9.5px]" style={{ maxWidth: 150 }} title={r.branch}>{r.branch}</span>
                   : r.name !== r.branch && <span className="shrink-0 truncate t-dim2 text-[9.5px]" style={{ maxWidth: 150 }} title={r.root}>{r.name}</span>}
-                {r.dirty > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--warning)" }} title={`${r.dirty} changed file${r.dirty === 1 ? "" : "s"}`}>●{r.dirty}</span>}
-                {r.behind > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--warning)" }} title={`${r.behind} behind upstream`}>↓{r.behind}</span>}
-                {r.ahead > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--success)" }} title={`${r.ahead} ahead of upstream`}>↑{r.ahead}</span>}
+                {r.dirty > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--warning-ink)" }} title={`${r.dirty} changed file${r.dirty === 1 ? "" : "s"}`}>●{r.dirty}</span>}
+                {r.behind > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--warning-ink)" }} title={`${r.behind} behind upstream`}>↓{r.behind}</span>}
+                {r.ahead > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--success-ink)" }} title={`${r.ahead} ahead of upstream`}>↑{r.ahead}</span>}
               </button>
             ))}
 
@@ -302,7 +302,7 @@ export function CheckoutPicker({
                     >
                       <span className="shrink-0 text-[8.5px] leading-none px-1 py-0.5 rounded" title="local branch — checked out in the current directory" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>BR</span>
                       <span className="min-w-0 flex-1 truncate font-medium" style={{ color: "var(--text)" }} title={b.name}>{b.name}</span>
-                      {branches?.gone?.(b) && <span className="shrink-0 text-[10px] px-1 rounded" style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 12%, transparent)" }}>gone</span>}
+                      {branches?.gone?.(b) && <span className="shrink-0 text-[10px] px-1 rounded" style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 12%, transparent)" }}>gone</span>}
                     </button>
                   );
                 })}

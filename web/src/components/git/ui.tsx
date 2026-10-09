@@ -272,7 +272,7 @@ export function RowAction({ label, danger, disabled, onClick, title }: {
       <button onClick={(e) => { e.stopPropagation(); onClick(e); }} disabled={disabled} title={title}
         className={`${CHIP} font-medium`}
         style={danger
-          ? { color: "var(--error)", border: `1px solid ${wash("--error", 45)}`, background: wash("--error", 8) }
+          ? { color: "var(--error-ink)", border: `1px solid ${wash("--error", 45)}`, background: wash("--error", 8) }
           : { color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)" }}>
         {label}
       </button>

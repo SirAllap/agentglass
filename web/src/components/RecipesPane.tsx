@@ -233,7 +233,7 @@ function Editor({ r, repos, onChange, onSave, onDrop, onCancel }: {
         <button onClick={onCancel} className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text3)" }}>Cancel</button>
         <span className="flex-1" />
         {r.id && <button onClick={() => onDrop(r)} className="text-[11px] px-2 py-1 rounded-lg"
-          style={{ border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)", color: "var(--error)" }}>Delete</button>}
+          style={{ border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)", color: "var(--error-ink)" }}>Delete</button>}
       </div>
     </div>
   );
@@ -419,7 +419,7 @@ export function RunDialog({ r, repos, onClose, onNote, onRunStep, targetInTmux }
       </div>
 
       {preview?.confirm && (
-        <div className="text-[10.5px] px-2 py-1 rounded" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>
+        <div className="text-[10.5px] px-2 py-1 rounded" style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>
           This one is not easily undone. Read the lines above before you run it.
         </div>
       )}
@@ -427,7 +427,7 @@ export function RunDialog({ r, repos, onClose, onNote, onRunStep, targetInTmux }
         <div className="text-[10.5px]" style={{ color: "var(--text4)" }}>Still needs: {preview.missing.join(", ")}</div>
       )}
       {inTmux && (
-        <div className="text-[10.5px] px-2 py-1 rounded" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>
+        <div className="text-[10.5px] px-2 py-1 rounded" style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>
           {where === "the shell" ? "This shell" : "The console"} is inside tmux, so this would type into the pane's program, not a prompt. It runs from a plain shell — detach it (Ctrl-b d) or reopen the app first.
         </div>
       )}

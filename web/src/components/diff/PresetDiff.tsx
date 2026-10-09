@@ -117,8 +117,8 @@ function Inner({ changes, title, path, onBack, backLabel, onClose }: Omit<Preset
         <p className="min-w-0 text-[12px] truncate" style={{ color: "var(--text)" }}>{title || "Changes"}</p>
         <span className="shrink-0 text-[11px] tabular-nums" style={{ color: "var(--text3)" }}>
           {changes.length} {changes.length === 1 ? "file" : "files"}
-          {" · "}<span style={{ color: "var(--success)" }}>+{totals.add}</span>
-          {" "}<span style={{ color: "var(--error)" }}>−{totals.del}</span>
+          {" · "}<span style={{ color: "var(--success-ink)" }}>+{totals.add}</span>
+          {" "}<span style={{ color: "var(--error-ink)" }}>−{totals.del}</span>
         </span>
         <div className="ml-auto flex items-center gap-2">
           <Toggle on={split} onClick={() => { setSplit(!split); setDiffSplit(!split); }} title="Side by side">split</Toggle>
@@ -168,8 +168,8 @@ function Inner({ changes, title, path, onBack, backLabel, onClose }: Omit<Preset
                     </span>
                   ) : null}
                   <span className="shrink-0 text-[10px] tabular-nums">
-                    {c.additions > 0 && <span style={{ color: "var(--success)" }}>+{c.additions}</span>}
-                    {c.deletions > 0 && <span style={{ color: "var(--error)" }}> −{c.deletions}</span>}
+                    {c.additions > 0 && <span style={{ color: "var(--success-ink)" }}>+{c.additions}</span>}
+                    {c.deletions > 0 && <span style={{ color: "var(--error-ink)" }}> −{c.deletions}</span>}
                   </span>
                 </div>
               );

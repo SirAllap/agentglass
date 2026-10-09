@@ -153,7 +153,7 @@ function Menu({ items, onPick, selected, current }: {
               {!selected && on && (
                 <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3}
                   strokeLinecap="round" strokeLinejoin="round" aria-hidden
-                  className="ml-auto shrink-0" style={{ color: "var(--primary)" }}>
+                  className="ml-auto shrink-0" style={{ color: "var(--primary-ink)" }}>
                   <path d="M20 6 9 17l-5-5" />
                 </svg>
               )}
@@ -298,7 +298,7 @@ export function FilterBuilder({ fields, value, onChange }: {
           background: n ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent",
         }}>
         <span>Filters</span>
-        {n > 0 && <span className="tabular-nums text-[10px]" style={{ color: "var(--primary)" }}>{n}</span>}
+        {n > 0 && <span className="tabular-nums text-[10px]" style={{ color: "var(--primary-ink)" }}>{n}</span>}
       </button>
 
       {open && at && (
@@ -352,7 +352,7 @@ export function FilterBuilder({ fields, value, onChange }: {
                 {value.rules.length > 0 && (
                   <button onClick={() => onChange(EMPTY)}
                     className="ml-auto text-[11.5px] px-2 py-1 rounded-lg"
-                    style={{ border: "1px solid color-mix(in srgb, var(--error) 30%, transparent)", color: "var(--error)" }}>
+                    style={{ border: "1px solid color-mix(in srgb, var(--error) 30%, transparent)", color: "var(--error-ink)" }}>
                     Clear all
                   </button>
                 )}

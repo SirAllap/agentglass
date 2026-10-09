@@ -176,7 +176,7 @@ export function PairPanel({ baseUrl, variant = "hero", onPaired }: {
               browser", which is what pair-secure-context.test.ts pins — the
               clause that keeps this from sliding back to blaming the phone. */}
           <div>
-            <span style={{ color: "var(--error)" }}>The cockpit in a browser cannot pair over this address.</span>{" "}
+            <span style={{ color: "var(--error-ink)" }}>The cockpit in a browser cannot pair over this address.</span>{" "}
             A plain-HTTP page gets no WebCrypto, and pairing has to encrypt the credential to the
             phone — so the handshake can't even start. The agentglass app pairs over it fine: it
             makes its own key. The traffic is still readable by anything else on this network.
@@ -291,7 +291,7 @@ export function PairPanel({ baseUrl, variant = "hero", onPaired }: {
         </div>
       )}
 
-      {err && <div className="text-[10.5px]" style={{ color: "var(--error)" }}>{err}</div>}
+      {err && <div className="text-[10.5px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
 
       <Paired devices={state.devices} busy={busy} onForget={forget} />
     </div>
@@ -360,12 +360,12 @@ function Request({ req, busy, onDecide }: {
       <div className="flex items-center gap-2">
         <button onClick={() => onDecide(req, scope)} disabled={busy}
           className="text-[11.5px] px-3 py-1.5 rounded-lg font-medium"
-          style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 44%, transparent)" }}>
+          style={{ color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 44%, transparent)" }}>
           Accept
         </button>
         <button onClick={() => onDecide(req, null)} disabled={busy}
           className="text-[11.5px] px-3 py-1.5 rounded-lg hover:opacity-80"
-          style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 38%, transparent)" }}>
+          style={{ color: "var(--error-ink)", border: "1px solid color-mix(in srgb, var(--error) 38%, transparent)" }}>
           Decline
         </button>
       </div>
@@ -411,7 +411,7 @@ function Paired({ devices, busy, onForget }: {
             <span className="flex items-center gap-1.5">
               <button onClick={() => { setConfirming(null); onForget(d); }} disabled={busy}
                 className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
-                style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}>
+                style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}>
                 Forget it
               </button>
               <button onClick={() => setConfirming(null)}

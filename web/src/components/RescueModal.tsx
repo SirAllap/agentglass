@@ -166,7 +166,7 @@ export function RescueModal({ reports, progress, onCancel, onConfirm }: {
                       <Tick on={ticked} dim={risky} />
                       <span className="text-[11.5px] truncate" style={{ color: ticked ? "var(--text)" : "var(--text3)" }}>{r.entry.path}</span>
                       {risky && (
-                        <span className="text-[10px] px-1 rounded shrink-0" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 15%, transparent)" }}>
+                        <span className="text-[10px] px-1 rounded shrink-0" style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 15%, transparent)" }}>
                           Overwrites the main checkout
                         </span>
                       )}

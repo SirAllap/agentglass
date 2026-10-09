@@ -222,7 +222,7 @@ export function Ask({ active }: { active: boolean }) {
       </div>
 
       {problem && (
-        <div className="px-4 py-2 text-[11.5px]" style={{ color: "var(--error)", background: wash("--error", 8) }}>
+        <div className="px-4 py-2 text-[11.5px]" style={{ color: "var(--error-ink)", background: wash("--error", 8) }}>
           {problem}
         </div>
       )}
@@ -279,7 +279,7 @@ export function Ask({ active }: { active: boolean }) {
               {/* The certification. Every line above is quoted from the
                   operator's own material, and when nothing of theirs covers
                   the question the finding says exactly that. */}
-              <div className="agx-stamp mt-1.5 inline-block" style={{ color: "var(--success)" }}>
+              <div className="agx-stamp mt-1.5 inline-block" style={{ color: "var(--success-ink)" }}>
                 nothing written by it
               </div>
             </div>

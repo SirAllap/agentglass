@@ -395,7 +395,7 @@ export function FileRail({
                 {threads.slice(0, THREAD_CAP).map((t) => (
                   <button key={t.id} onClick={onGoConversation}
                     className="block w-full text-left mb-2 last:mb-0 text-[11px]">
-                    <span style={{ color: "var(--primary)" }}>{t.line ? lines(t.line, t.startLine) : "Comment"}</span>
+                    <span style={{ color: "var(--primary-ink)" }}>{t.line ? lines(t.line, t.startLine) : "Comment"}</span>
                     <span className="ml-1.5 text-[9.5px]" style={{ color: "var(--text4)" }}>
                       {t.comments[0]?.author}
                       {/* Kept, not hidden: the lines moved, the argument did
@@ -450,14 +450,14 @@ export function FileRail({
                      second place to read the same output. */
                   <button key={check.name} onClick={onGoChecks} title="Open the log"
                     className="flex w-full items-baseline gap-1.5 text-left text-[11px] mb-1 last:mb-0">
-                    <span className="flex" style={{ color: "var(--error)" }}><CrossIcon size={ICON.xs} /></span>
+                    <span className="flex" style={{ color: "var(--error-ink)" }}><CrossIcon size={ICON.xs} /></span>
                     <span className="min-w-0 truncate" style={{ color: "var(--text2)" }}>{check.name}</span>
                     {/* Said only when it is true. A check carries a name and no
                         log, so most of the time we cannot know which file broke
                         it — and claiming otherwise is how a panel starts lying
                         quietly. */}
                     {namesFile && <span className="shrink-0 text-[9px] px-1 rounded"
-                      style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 32%, transparent)" }}>names this file</span>}
+                      style={{ color: "var(--error-ink)", border: "1px solid color-mix(in srgb, var(--error) 32%, transparent)" }}>names this file</span>}
                   </button>
                 ))}
               </>
@@ -484,7 +484,7 @@ export function FileRail({
                   </p>
                   {queued.map((q, i) => (
                     <div key={i} className="mb-2 last:mb-0 text-[11px]">
-                      <span style={{ color: "var(--warning)" }}>{lines(q.line, q.startLine)}</span>
+                      <span style={{ color: "var(--warning-ink)" }}>{lines(q.line, q.startLine)}</span>
                       {/* Yours and not yet sent, so this is the one body with
                           no bot in its history — read the same way anyway,
                           because the moment it goes out GitHub will render it
@@ -510,7 +510,7 @@ export function FileRail({
               {heldHere.map((h, i) => (
                 <div key={i} className="mb-2 last:mb-0 text-[11px] flex items-start gap-1.5">
                   <span className="min-w-0">
-                    <span style={{ color: "var(--primary)" }}>
+                    <span style={{ color: "var(--primary-ink)" }}>
                       {h.line == null ? "Outdated" : lines(h.line)}
                     </span>
                     <Quote body={h.body} max={90} />
@@ -518,7 +518,7 @@ export function FileRail({
                   {h.url && (
                     <button onClick={() => openExternal(h.url!)} title="Edit this comment on GitHub"
                       className="agx-btn shrink-0 ml-auto text-[9.5px] px-1 rounded"
-                      style={{ color: "var(--primary)" }}>Edit ↗</button>
+                      style={{ color: "var(--primary-ink)" }}>Edit ↗</button>
                   )}
                 </div>
               ))}
@@ -570,7 +570,7 @@ export function FileRail({
           </p>
         )}
         {d.viewerRequested && (
-          <p className="m-0 mb-1.5 text-[10.5px]" style={{ color: "var(--warning)" }}>
+          <p className="m-0 mb-1.5 text-[10.5px]" style={{ color: "var(--warning-ink)" }}>
             {mine ? "They have asked you to look again." : "You were asked to look at this."}
           </p>
         )}
@@ -697,7 +697,7 @@ function Sec({ title, action, children }: {
       <div className="flex items-baseline gap-2 mb-1.5">
         <h4 className="m-0 text-[9px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>{title}</h4>
         {action && (
-          <button onClick={action.on} className="ml-auto text-[9.5px]" style={{ color: "var(--primary)" }}>{action.label}</button>
+          <button onClick={action.on} className="ml-auto text-[9.5px]" style={{ color: "var(--primary-ink)" }}>{action.label}</button>
         )}
       </div>
       {children}

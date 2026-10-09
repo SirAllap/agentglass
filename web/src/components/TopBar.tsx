@@ -19,7 +19,7 @@ import type { ProviderUsage } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { api } from "../lib/api.ts";
-import { subscribeProviderUsage, usageOf, busiestOf, providerUsage, resetShort, resetLabel, usedColor, ageLabel, refreshProviderUsage } from "../lib/usageStore.ts";
+import { subscribeProviderUsage, usageOf, busiestOf, providerUsage, resetShort, resetLabel, usedColor, usedTextColor, ageLabel, refreshProviderUsage } from "../lib/usageStore.ts";
 import { providerInContext } from "../lib/providerContext.ts";
 import { windowLabel } from "../../../shared/quota.ts";
 import { stalenessLabel } from "../lib/usageAge.ts";
@@ -334,7 +334,7 @@ function PlanPanel({ u, age, at, onClose, onRefresh, busy }: {
                 <div className="flex items-baseline gap-2">
                   <span className="text-[11.5px]" style={{ color: "var(--text)" }}>{w.label}</span>
                   <span className="ml-auto text-[11px] tabular-nums"
-                    style={{ color: usedColor(w.usedPercent) }}>{w.usedPercent}% used</span>
+                    style={{ color: usedTextColor(w.usedPercent) }}>{w.usedPercent}% used</span>
                 </div>
                 <span className="block rounded-full mt-1.5 relative" style={{ height: 4, background: "color-mix(in srgb, var(--text) 14%, transparent)" }}>
                   <span className="block h-full rounded-full" style={{
@@ -390,7 +390,7 @@ function PlanStrip({ u, age, dim, onOpen, btn }: {
           {i > 0 && <span className="text-[9.5px] hidden md:inline" style={{ color: "var(--text4)" }}>·</span>}
           <span className={`text-[9.5px] tabular-nums whitespace-nowrap ${i === 0 ? "" : "hidden md:inline"}`}
             style={{ color: "var(--text3)", opacity: age ? 0.55 : 1 }}>
-            <b style={{ color: p.hot ? "var(--error)" : "var(--text2)" }}>{p.pct}%</b> used {p.suffix}
+            <b style={{ color: p.hot ? "var(--error-ink)" : "var(--text2)" }}>{p.pct}%</b> used {p.suffix}
           </span>
         </Fragment>
       ))}
@@ -680,7 +680,7 @@ export function TopBar({
         */}
       {waiting > 0 && (
         <Item cap="chats" dim={quiet} title="Chats that replied while you were elsewhere">
-          <b className="text-[10.5px] tabular-nums" style={{ color: "var(--success)" }}>{waiting}</b>
+          <b className="text-[10.5px] tabular-nums" style={{ color: "var(--success-ink)" }}>{waiting}</b>
         </Item>
       )}
 
@@ -706,7 +706,7 @@ export function TopBar({
             aria-label="What needs you" aria-expanded={needsOpen}
             className="flex items-center gap-2 px-2.5 py-px rounded-full min-w-0"
             style={{
-              color: "var(--warning)",
+              color: "var(--warning-ink)",
               border: "1px solid color-mix(in srgb, var(--warning) 50%, transparent)",
               background: "color-mix(in srgb, var(--warning) 14%, transparent)",
               maxWidth: "min(52vw, 520px)",
@@ -766,7 +766,7 @@ export function TopBar({
           style={{ display: metersHidden ? "none" : undefined }}>
         {unread ? (
           <Item cap="plan" title={u?.note ?? `No plan reading for ${u?.label ?? "this agent"} right now`}>
-            <span className="text-[9.5px]" style={{ color: "var(--warning)" }}>no reading</span>
+            <span className="text-[9.5px]" style={{ color: "var(--warning-ink)" }}>no reading</span>
           </Item>
         ) : (
           <>
@@ -818,7 +818,7 @@ export function TopBar({
           {/* 14, not 11. On a narrow window this collapses to the glyph alone,
               and a glyph standing in for a whole control is the one thing on a
               bar that cannot be read at the size of a label. */}
-          <span className="flex" style={{ color: "var(--primary)" }}><SearchIcon size={ICON.xs} /></span>
+          <span className="flex" style={{ color: "var(--primary-ink)" }}><SearchIcon size={ICON.xs} /></span>
           <span className="hidden md:block text-[10px] whitespace-nowrap leading-none" style={{ color: "var(--text3)" }}>
             Find a file…
           </span>

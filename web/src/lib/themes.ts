@@ -1,5 +1,5 @@
 // Applied as CSS custom properties on :root by applyTheme().
-import { floorTiers } from "./contrast.ts";
+import { floorTiers, inkTints } from "./contrast.ts";
 //
 // The list leads with community-proven palettes — the ones people already read
 // code in all day (Catppuccin, GitHub, Tokyo Night, Dracula, One Dark, Gruvbox,
@@ -132,7 +132,7 @@ export function applyTheme(id: string, { sync = false } = {}) {
      road. */
   if (id === DESKTOP_ID && desktop) {
     const root = document.documentElement;
-    const floored = floorTiers(desktop.vars);
+    const floored = inkTints(floorTiers(desktop.vars), desktop.ansi);
     for (const [k, v] of Object.entries(floored)) root.style.setProperty(k, v);
     root.setAttribute("data-theme", DESKTOP_ID);
     applyAccent();
@@ -147,7 +147,7 @@ export function applyTheme(id: string, { sync = false } = {}) {
   // picked --text2/3/4 by eye, and 555 places in this app ask for one of them —
   // including plenty of text that is not chrome. A theme that already clears
   // its target comes through untouched; see floorTiers.
-  const vars = floorTiers(t.vars as Record<string, string>);
+  const vars = inkTints(floorTiers(t.vars as Record<string, string>), t.ansi);
   for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
   root.setAttribute("data-theme", t.id);
   // Lay the chosen accent over the theme's primary, so it survives a switch.

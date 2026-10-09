@@ -23,7 +23,7 @@ export const Latency = memo(function Latency({ stats }: { stats: StatsSummary | 
               <div className="flex items-center justify-between text-[11px] mb-0.5">
                 <span style={{ color: "var(--text2)" }}>
                   {t.tool_name}
-                  {t.errors > 0 && <span className="ml-1.5 inline-flex items-center gap-0.5" style={{ color: "var(--error)" }}>{t.errors}<CrossIcon size={ICON.xs} /></span>}
+                  {t.errors > 0 && <span className="ml-1.5 inline-flex items-center gap-0.5" style={{ color: "var(--error-ink)" }}>{t.errors}<CrossIcon size={ICON.xs} /></span>}
                   {/* The percentile sample, said out loud when it is not the
                       call count. A Post with no paired Pre is an invocation
                       with no duration, so "200 calls · p95 5ms" could be five
@@ -45,9 +45,9 @@ export const Latency = memo(function Latency({ stats }: { stats: StatsSummary | 
                     <span className="t-dim2" title="no call had a paired start, so there is nothing to measure">—</span>
                   ) : (
                     <>
-                      <span style={{ color: "var(--info)" }}>{fmtMs(t.p50_ms)}</span>
+                      <span style={{ color: "var(--info-ink)" }}>{fmtMs(t.p50_ms)}</span>
                       <span className="t-dim2"> / </span>
-                      <span style={{ color: "var(--warning)" }}>{fmtMs(t.p95_ms)}</span>
+                      <span style={{ color: "var(--warning-ink)" }}>{fmtMs(t.p95_ms)}</span>
                     </>
                   )}
                 </span>

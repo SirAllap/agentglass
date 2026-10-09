@@ -118,17 +118,17 @@ export function UpdateToast() {
                     .catch(() => setNotesText({ text: "", error: "Could not read the notes" }));
                 }
               }}
-              className="text-[11px] mt-1.5 underline" style={{ color: "var(--primary)" }}>
+              className="text-[11px] mt-1.5 underline" style={{ color: "var(--primary-ink)" }}>
               See what changes
             </button>
             {/* Orca can promise your sessions survive because it swaps a
                 downloaded binary. This compiles here and its own script says
                 "this stops the running app", so the card says that instead —
                 twice, and the second time is while it is happening. */}
-            <div className="text-[10.5px] mt-2" style={{ color: "var(--warning)" }}>
+            <div className="text-[10.5px] mt-2" style={{ color: "var(--warning-ink)" }}>
               Built on this machine. The window will close and come back on its own.
             </div>
-            {error && <div className="text-[10.5px] mt-1.5" style={{ color: "var(--error)" }}>{error}</div>}
+            {error && <div className="text-[10.5px] mt-1.5" style={{ color: "var(--error-ink)" }}>{error}</div>}
             <button onClick={() => void start()}
               className="block w-full text-center text-[11.5px] mt-2.5 py-1.5 rounded-lg font-medium"
               style={{ background: "color-mix(in srgb, var(--primary) 18%, transparent)",
@@ -178,7 +178,7 @@ export function UpdateToast() {
             </div>
             {error && (
               <div className="mt-2">
-                <div className="text-[10.5px]" style={{ color: "var(--error)" }}>{error}</div>
+                <div className="text-[10.5px]" style={{ color: "var(--error-ink)" }}>{error}</div>
                 {p?.tail && (
                   <pre className="mt-1 text-[10px] whitespace-pre-wrap break-all m-0 max-h-[90px] overflow-y-auto agx-scroll"
                     style={{ color: "var(--text4)" }}>{p.tail}</pre>

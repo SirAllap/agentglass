@@ -189,7 +189,7 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
                 three seconds, and a number that moves inside prose is noise. */}
             {enabled && st.clients.liveCount > 0 && (
               <span className="chip t-mono whitespace-nowrap" style={{
-                color: "var(--success)",
+                color: "var(--success-ink)",
                 background: "color-mix(in srgb, var(--success) 12%, transparent)",
                 borderColor: "color-mix(in srgb, var(--success) 34%, transparent)",
               }}>
@@ -335,7 +335,7 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
       {enabled !== null && st.tokenRequired && (
         <SettingRow
           align={confirming ? "start" : "center"}
-          label={<span style={{ color: "var(--error)" }}>Revoke this link</span>}
+          label={<span style={{ color: "var(--error-ink)" }}>Revoke this link</span>}
           hint={confirming
             ? "Every device that has this link stops working, including the ones you cannot reach. A new code is generated and the phones you still want will need to scan it again."
             : "Rotates the access code. This is the revoke that reaches a device you no longer have in your hand."}
@@ -343,7 +343,7 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
             <span className="flex items-center gap-2">
               <button onClick={revoke} disabled={busy}
                 className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap font-medium"
-                style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 44%, transparent)", opacity: busy ? 0.5 : 1 }}>
+                style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 44%, transparent)", opacity: busy ? 0.5 : 1 }}>
                 {busy ? "Revoking…" : "Revoke"}
               </button>
               <button onClick={() => setConfirming(false)} disabled={busy}
@@ -355,7 +355,7 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
           ) : (
             <button onClick={() => { setConfirming(true); setRevokeNote(null); }} disabled={busy}
               className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80"
-              style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 32%, transparent)", opacity: busy ? 0.5 : 1 }}>
+              style={{ color: "var(--error-ink)", border: "1px solid color-mix(in srgb, var(--error) 32%, transparent)", opacity: busy ? 0.5 : 1 }}>
               Revoke
             </button>
           )}

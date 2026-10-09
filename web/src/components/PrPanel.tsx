@@ -19,6 +19,7 @@
 //
 // 4. Nothing waits on the network. `gh` costs a second or more per call and the
 //    server has one thread; every read is a cached answer with its age shown.
+import { dataInk } from "../lib/contrast.ts";
 import { PluginPrActions } from "./plugins/PluginPrActions.tsx";
 import { useLocalNotes, groupByRun, RunCard, NoteCard, LocalMark, LocalGlyph, LocalStrip, sortNotes, type LocalNotes, type LocalNote } from "./plugins/LocalReview.tsx";
 import { createContext, Fragment, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
@@ -285,9 +286,14 @@ function Dot({ tint, title }: { tint: string; title?: string }) {
 }
 
 function Chip({ text, tint, title }: { text: string; tint: string; title?: string }) {
+  // `tint` is a label's OWN colour — GitHub's hex, not a theme token — so it
+  // never passed through `inkTints` and was painted on straight: GitHub picks
+  // these against its own dark default, and half of them fail on a light
+  // theme's near-white surfaces. `dataInk` runs the same lift `inkTints` runs
+  // for theme tints, just read off the live page instead of a theme object.
   return (
     <span title={title} className="shrink-0 text-[10px] px-1.5 py-px rounded-full uppercase tracking-wide"
-      style={{ color: tint, background: `color-mix(in srgb, ${tint} 10%, transparent)` }}>{text}</span>
+      style={{ color: dataInk(tint), background: `color-mix(in srgb, ${tint} 10%, transparent)` }}>{text}</span>
   );
 }
 
@@ -344,7 +350,7 @@ function CardPill({ label, onClick, title, external, className, priority, status
   return (
     <span className={`align-middle inline-flex items-center gap-1 ${className ?? ""}`}>
       <CardChip id={label} priority={priority ?? null} status={status} title={title} onOpen={onClick} />
-      {external && <span aria-hidden style={{ fontSize: 10, opacity: 0.7, color: "var(--primary)" }}>↗</span>}
+      {external && <span aria-hidden style={{ fontSize: 10, opacity: 0.7, color: "var(--primary-ink)" }}>↗</span>}
     </span>
   );
 }
@@ -706,7 +712,7 @@ export function Btn({ children, onClick, disabled, danger, primary, ok, warn, ti
         // things — so "Comment" sat at the contrast of a caption next to the
         // button it competes with. It is a control: it reads at full strength,
         // and the border is what says it is the quieter of the two.
-        color: primary ? "var(--bg)" : danger ? "var(--error)" : ok ? "var(--success)" : warn ? "var(--warning)" : "var(--text)",
+        color: primary ? "var(--bg)" : danger ? "var(--error-ink)" : ok ? "var(--success-ink)" : warn ? "var(--warning-ink)" : "var(--text)",
         background: primary ? "var(--primary)" : warn ? "color-mix(in srgb, var(--warning) 16%, transparent)"
           // A quiet button still needs an edge you can find. Transparent on a
           // panel, with a border mixed at half strength, was a label with a
@@ -1653,7 +1659,7 @@ function PinnedCapsule({ pinned, pinState, selected, current, onOpen }: {
             className="text-[10px] px-2 py-px rounded-full shrink-0 inline-flex items-center gap-1"
             style={currentPinned
               ? { color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }
-              : { color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 32%, transparent)", background: "color-mix(in srgb, var(--warning) 8%, transparent)" }}>
+              : { color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 32%, transparent)", background: "color-mix(in srgb, var(--warning) 8%, transparent)" }}>
             <StarIcon size={ICON.xs} filled={currentPinned} />{currentPinned ? "Pinned" : `Pin #${current.number}`}
           </button>
         )}
@@ -1889,7 +1895,7 @@ function PrRow({ p, active, onSelect, onReview, pinned, onTogglePin, q, unread, 
             <span style={{ color: "var(--text4)" }}>→</span>
             <span style={isTrunk(p.baseRefName)
               ? { color: "var(--text3)" }
-              : { color: "var(--warning)" }}>{p.baseRefName}</span>
+              : { color: "var(--warning-ink)" }}>{p.baseRefName}</span>
           </span>
           {/* Beside the branch it is about, and set in the row's own dim tone
               rather than a colour: this is a fact about the pull request, not a
@@ -4387,7 +4393,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                   one is on its way. Said quietly and in passing — the
                   alternative was an empty pane, which said nothing at all for
                   a whole second. */}
-              {detailStale && <span className="animate-pulse" style={{ color: "var(--primary)" }}>· refreshing</span>}
+              {detailStale && <span className="animate-pulse" style={{ color: "var(--primary-ink)" }}>· refreshing</span>}
             </button>
           </>
         )}
@@ -4481,7 +4487,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       {away && (
         <div className="flex items-center gap-2 px-2.5 py-1.5 shrink-0 text-[11px] border-b"
           style={{ borderColor: "color-mix(in srgb, var(--warning) 30%, transparent)", background: "color-mix(in srgb, var(--warning) 8%, transparent)" }}>
-          <span style={{ color: "var(--warning)" }}>Showing {away.repo} on top of {away.back.repo}</span>
+          <span style={{ color: "var(--warning-ink)" }}>Showing {away.repo} on top of {away.back.repo}</span>
           <span className="ml-auto">
             <Btn onClick={() => { setAway(null); setSelected(null); setRoot(away.back.root); }} small>
               Back to {away.back.repo}
@@ -4679,7 +4685,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 }} />
             ) : listState.needsAuth ? (
               <div className="p-3 text-[11px]" style={{ color: "var(--text3)" }}>
-                <div style={{ color: "var(--warning)" }}>{listState.error || "The GitHub CLI is not set up"}</div>
+                <div style={{ color: "var(--warning-ink)" }}>{listState.error || "The GitHub CLI is not set up"}</div>
                 {/* Two steps, and the second is the one people miss: an
                     installed gh that has never logged in reads exactly like a
                     missing one from here. The link is the project's own page,
@@ -4705,7 +4711,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             ) : visiblePrs.length === 0 ? (
               <div className="p-3 text-[11px] flex flex-col items-start gap-1.5" style={{ color: "var(--text3)" }}>
                 <span>No pull requests match {activeCount(filters) === 1 ? "this filter" : "these filters"}.</span>
-                <button onClick={() => setQuery("")} className="text-[10.5px] px-2 py-0.5 rounded hover:bg-white/5" style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)" }}>Clear filters</button>
+                <button onClick={() => setQuery("")} className="text-[10.5px] px-2 py-0.5 rounded hover:bg-white/5" style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)" }}>Clear filters</button>
               </div>
             ) : (
               // Dimmed, not blanked, while the next scope loads: you can still
@@ -4780,7 +4786,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
              * and it now carries the one thing it never had: a way to try again.
              */
             detailErr ? (
-              <div className="p-4 flex items-baseline gap-2 flex-wrap text-[11.5px]" style={{ color: "var(--error)" }}>
+              <div className="p-4 flex items-baseline gap-2 flex-wrap text-[11.5px]" style={{ color: "var(--error-ink)" }}>
                 <span>{detailErr}</span>
                 <button onClick={() => { setDetailErr(""); if (selected != null) loadDetail(selected, true); }}
                   className="agx-btn px-2 py-0.5 rounded text-[10.5px]"
@@ -4834,13 +4840,13 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                         something is amber at the number people already read
                         rather than only at a mark beside it. */}
                     {t.n != null && (
-                      <span className="ml-1 tabular-nums" style={t.warn ? { color: "var(--warning)" } : { opacity: .6 }}>{t.n}</span>
+                      <span className="ml-1 tabular-nums" style={t.warn ? { color: "var(--warning-ink)" } : { opacity: .6 }}>{t.n}</span>
                     )}
                     {/* And the dot stays. Colour alone cannot say "amber" to
                         somebody who cannot see it, and Review is often warn
                         with no count at all — a verdict is owed and nothing is
                         queued — which is a tint with nothing to tint. */}
-                    {t.warn && <span className="ml-1" style={{ color: "var(--warning)" }}>●</span>}
+                    {t.warn && <span className="ml-1" style={{ color: "var(--warning-ink)" }}>●</span>}
                     {/* Said as a number, not a dot: "somebody replied" and
                         "seven people replied while you were at lunch" are
                         different sizes of the same news, and the second is why
@@ -4848,7 +4854,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                     {!!t.hot && (
                       <span className="ml-1.5 text-[9.5px] px-1.5 rounded-full tabular-nums align-middle"
                         title={`${t.hot} new since you last looked`}
-                        style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 18%, transparent)",
+                        style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 18%, transparent)",
                           border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>
                         {t.hot} new
                       </span>
@@ -4856,7 +4862,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                     {t.one && (
                       <span className="ml-1.5 text-[10px] px-1 rounded align-middle"
                         title="The tree, the diff and what the rest of the pull request says about the file you are on — all at once"
-                        style={{ color: "var(--primary)", border: "1px dashed color-mix(in srgb, var(--primary) 55%, transparent)" }}>
+                        style={{ color: "var(--primary-ink)", border: "1px dashed color-mix(in srgb, var(--primary) 55%, transparent)" }}>
                         one screen
                       </span>
                     )}
@@ -5094,7 +5100,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                                     {c.checks === "SUCCESS" ? <DoneIcon size={ICON.xs} /> : c.checks === "FAILURE" || c.checks === "ERROR" ? <CrossIcon size={ICON.xs} /> : <CircleIcon size={ICON.xs} />}
                                   </span>
                                 )}
-                                <span className="tabular-nums shrink-0 px-1.5 py-0.5 rounded" style={{ ...CODE_FONT_STYLE, fontSize: "10px", color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}>{c.short}</span>
+                                <span className="tabular-nums shrink-0 px-1.5 py-0.5 rounded" style={{ ...CODE_FONT_STYLE, fontSize: "10px", color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}>{c.short}</span>
                               </button>
                               {selCommit === c.oid && (
                                 <div className="my-2">
@@ -5109,7 +5115,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                       </div>
                     ))}
                     {d.truncated?.commits && (
-                      <div className="text-[10px] px-1" style={{ color: "var(--warning)" }}>
+                      <div className="text-[10px] px-1" style={{ color: "var(--warning-ink)" }}>
                         Showing the most recent {d.truncated.commits} commits — a branch with more history than that is only listed in full on GitHub.
                       </div>
                     )}
@@ -5519,14 +5525,14 @@ function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, open
         */}
       {movedSince > 0 && (
         <Reason tint="var(--warning)" glyph={<RefreshIcon size={ICON.xs} />}
-          action={<button onClick={onGoMoved} style={{ color: "var(--primary)" }}>Show them</button>}>
-          <b style={{ color: "var(--warning)" }}>{movedSince}</b>
+          action={<button onClick={onGoMoved} style={{ color: "var(--primary-ink)" }}>Show them</button>}>
+          <b style={{ color: "var(--warning-ink)" }}>{movedSince}</b>
           {movedSince === 1 ? " file has" : " files have"} changed since your review
         </Reason>
       )}
 
       {d.forcePushedSinceReview && (
-        <div className="text-[10.5px] px-2.5 py-2 rounded" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>
+        <div className="text-[10.5px] px-2.5 py-2 rounded" style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>
           The author force-pushed after the last review — that review was for code that is no longer here.
         </div>
       )}
@@ -5664,7 +5670,7 @@ const v = p2Verdict(d.humanReview, reviewerRoster(d), d.reviewDecision, d.gate);
           })()}
           <ReviewHistory reviews={d.reviews} pending={d.reviewers} author={d.author} onGoReview={onGoReview} />
           {openThreads > 0 && (
-            <Reason tint={blockers.some((b) => b.kind === "threads") ? "var(--error)" : "var(--warning)"} glyph={<CircleIcon size={ICON.xs} />} action={<button onClick={onGoThreads} style={{ color: "var(--primary)" }}>Go to thread</button>}>
+            <Reason tint={blockers.some((b) => b.kind === "threads") ? "var(--error)" : "var(--warning)"} glyph={<CircleIcon size={ICON.xs} />} action={<button onClick={onGoThreads} style={{ color: "var(--primary-ink)" }}>Go to thread</button>}>
               {openThreads} review thread{openThreads === 1 ? "" : "s"} still open — <span style={{ color: "var(--text3)" }}>
                 {blockers.some((b) => b.kind === "threads") ? "this branch requires them resolved before merging" : "a reply is not a resolve"}
               </span>
@@ -5757,7 +5763,7 @@ const v = p2Verdict(d.humanReview, reviewerRoster(d), d.reviewDecision, d.gate);
             <Reason tint={conflictFiles.resolvedLocally ? "var(--text3)" : "var(--error)"}
               glyph={conflictFiles.resolvedLocally ? "·" : "!"}
               action={conflictFiles.files.length > 5
-                ? <button onClick={() => setAllFiles((v) => !v)} style={{ color: "var(--primary)" }}>
+                ? <button onClick={() => setAllFiles((v) => !v)} style={{ color: "var(--primary-ink)" }}>
                     {allFiles ? "Show less" : `+${conflictFiles.files.length - 5} more`}
                   </button>
                 : undefined}>
@@ -6007,7 +6013,7 @@ const v = p2Verdict(d.humanReview, reviewerRoster(d), d.reviewDecision, d.gate);
           <span className="block text-[10px] uppercase tracking-[.13em]" style={{ color: "var(--text3)" }}>Next</span>
           <span className="block text-[12.5px]" style={{ color: "var(--text)" }}>Conversation</span>
         </span>
-        <span className="ml-auto text-[10.5px] shrink-0" style={{ color: "var(--primary)" }}>
+        <span className="ml-auto text-[10.5px] shrink-0" style={{ color: "var(--primary-ink)" }}>
           {conversationCount === 0 ? "Nothing said yet" : `${conversationCount} comment${conversationCount === 1 ? "" : "s"} and thread${conversationCount === 1 ? "" : "s"}`} →
         </span>
       </button>
@@ -6177,7 +6183,7 @@ function BodyEditor({ prNumber, initial, busy, onSave, onCancel, onOpenGithub }:
         style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
         <span className="text-[11px] font-semibold" style={{ color: "var(--text)" }}>Editing description</span>
         <span className="text-[10.5px] tabular-nums" style={{ color: "var(--text3)" }}>· #{prNumber}</span>
-        {dirty && <span className="text-[8.5px] uppercase tracking-[.13em]" style={{ color: "var(--warning)" }}>unsaved</span>}
+        {dirty && <span className="text-[8.5px] uppercase tracking-[.13em]" style={{ color: "var(--warning-ink)" }}>unsaved</span>}
         <span className="ml-auto flex gap-1">
           <Btn onClick={() => setPreview(false)} small primary={!preview}>Write</Btn>
           <Btn onClick={() => setPreview(true)} small primary={preview}>Preview</Btn>
@@ -6206,10 +6212,10 @@ function BodyEditor({ prNumber, initial, busy, onSave, onCancel, onOpenGithub }:
 
       {attachNote && (
         <div className="flex items-center gap-2 px-3 py-1.5 text-[10.5px] shrink-0"
-          style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+          style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
           <span className="min-w-0 truncate"><b>{attachNote}</b> can't be attached from here — GitHub has no public upload API for attachments.</span>
           <button onClick={onOpenGithub} className="agx-btn ml-auto shrink-0 px-2 py-0.5 rounded"
-            style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>Attach on GitHub ↗</button>
+            style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>Attach on GitHub ↗</button>
           <button onClick={() => setAttachNote(null)} className="agx-btn shrink-0 grid place-items-center w-5 h-5 rounded" style={{ color: "var(--text3)" }} aria-label="Dismiss"><CloseIcon size={ICON.xs} /></button>
         </div>
       )}
@@ -6467,7 +6473,7 @@ function ReviewMenu({ d, onPick, canTerm, primary = true }: {
                 title={top.skill || top.title}
                 className="agx-mi w-full flex items-center gap-2 px-3 py-1.5 text-[11px] cursor-pointer" style={{ color: "var(--text)" }}>
                 <span className="min-w-0 truncate flex-1">
-                  {top.skill && <span style={{ color: "var(--primary)" }}>/ </span>}
+                  {top.skill && <span style={{ color: "var(--primary-ink)" }}>/ </span>}
                   {top.title}
                 </span>
                 <ChatInstead onChat={() => { close(); onPick(top.id, "chat"); }} />
@@ -6493,7 +6499,7 @@ function ReviewMenu({ d, onPick, canTerm, primary = true }: {
                     title={r.skill || r.title}
                     className="agx-mi w-full flex items-center gap-2 px-3 py-1.5 text-[11px] cursor-pointer" style={{ color: "var(--text2)" }}>
                     <span className="min-w-0 truncate flex-1">
-                      {r.skill && <span style={{ color: "var(--primary)" }}>/ </span>}
+                      {r.skill && <span style={{ color: "var(--primary-ink)" }}>/ </span>}
                       {r.title}
                     </span>
                     <ChatInstead onChat={() => { close(); onPick(r.id, "chat"); }} />
@@ -6880,7 +6886,7 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
             {failed && (
               /* Said here rather than only in the toast: the menu is still open
                  over it, and the toast is behind the menu. */
-              <div className="px-1 text-[10.5px]" style={{ color: "var(--warning)" }}>{failed}</div>
+              <div className="px-1 text-[10.5px]" style={{ color: "var(--warning-ink)" }}>{failed}</div>
             )}
             <div className="flex items-center gap-2">
               {asking && (
@@ -7128,7 +7134,7 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
         </div>
       </div>
       {err ? (
-        <div className="px-3 py-3 text-[11px]" style={{ color: "var(--warning)" }}>{err}</div>
+        <div className="px-3 py-3 text-[11px]" style={{ color: "var(--warning-ink)" }}>{err}</div>
       ) : !card ? (
         <div className="px-3 py-3 text-[11px]" style={{ color: "var(--text3)" }}>Looking it up…</div>
       ) : (
@@ -7198,7 +7204,7 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
                 <span className="truncate" style={{ color: on.has(m.id) ? "var(--success)" : "var(--text2)" }}>
                   {m.name}{m.me ? " · you" : ""}
                 </span>
-                {on.has(m.id) && <span className="ml-auto flex" style={{ color: "var(--success)" }}><DoneIcon size={ICON.xs} /></span>}
+                {on.has(m.id) && <span className="ml-auto flex" style={{ color: "var(--success-ink)" }}><DoneIcon size={ICON.xs} /></span>}
               </button>
             ))}
           </div>
@@ -7672,7 +7678,7 @@ function CardFacts({ d, root }: { d: PrDetail; root: string }) {
                     {tell === "slack" ? `an agent writes it${whoToTell(task) ? ` to ${whoToTell(task)!.name}` : ""}, in the words that chat is written in` : `on ${whoToTell(task) ? `the card, to ${whoToTell(task)!.name}` : "the card"}`}
                   </span>
                   <button disabled={sending || (tell === "card" && !msg.trim())} className="agx-btn ml-auto shrink-0 text-[10.5px] px-2 py-0.5 rounded disabled:opacity-40"
-                    style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}
+                    style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}
                     onClick={async () => {
                       const target = whoToTell(task);
                       if (tell === "slack") {
@@ -7900,7 +7906,7 @@ function PrSidebar({ d, root, spend, onEditField }: {
               <span key={i.number} className="flex items-center gap-1 min-w-0">
                 <button onClick={() => openIssue(i.number)}
                   className="agx-btn text-[11px] truncate text-left min-w-0"
-                  style={{ color: "var(--primary)" }}
+                  style={{ color: "var(--primary-ink)" }}
                   title={`Open #${i.number} in Tasks — ${i.title}`}>#{i.number} {i.title}</button>
                 <a href={externalUrl(i.url)} target="_blank" rel="noreferrer noopener"
                   className="agx-btn text-[9px] shrink-0" style={{ color: "var(--text4)" }}
@@ -7922,7 +7928,7 @@ function PrSidebar({ d, root, spend, onEditField }: {
       <CardFacts d={d} root={root} />
       {d.autoMerge && (
         <SidebarSection title="Auto-merge">
-          <span className="text-[10.5px]" style={{ color: "var(--warning)" }}>
+          <span className="text-[10.5px]" style={{ color: "var(--warning-ink)" }}>
             Armed by {d.autoMerge.enabledBy} ({d.autoMerge.method.toLowerCase()})
           </span>
         </SidebarSection>
@@ -8235,7 +8241,7 @@ function Masthead({ d, busy, local, onShowLocal, onEditTitle, onDraft, onClose, 
                     the answer here is a yes or no (see PrLocalHead.dirty), so it
                     says that and no more rather than inventing a number. */}
                 {wt.dirty && (
-                  <span title="That worktree has uncommitted changes" style={{ color: "var(--warning)" }}>●</span>
+                  <span title="That worktree has uncommitted changes" style={{ color: "var(--warning-ink)" }}>●</span>
                 )}
                 {/* The two trips worth offering, and the same two the terminal
                     offers, through the same request — so a press here and a press
@@ -8259,8 +8265,8 @@ function Masthead({ d, busy, local, onShowLocal, onEditTitle, onDraft, onClose, 
           </Field>
         )}
         <Field label="Changes">
-          <span className="tabular-nums" style={{ color: "var(--success)" }}>+{d.additions}</span>
-          <span className="tabular-nums" style={{ color: "var(--error)" }}>−{d.deletions}</span>
+          <span className="tabular-nums" style={{ color: "var(--success-ink)" }}>+{d.additions}</span>
+          <span className="tabular-nums" style={{ color: "var(--error-ink)" }}>−{d.deletions}</span>
           <span style={{ color: "var(--text3)" }}>· {d.changedFiles} file{d.changedFiles === 1 ? "" : "s"}</span>
         </Field>
         <Field label="Assignee" max={190}>
@@ -8355,8 +8361,8 @@ function DiffToolbar({ path, add, del, split, wrap, onSplit, onWrap, right }: {
     <div className="flex items-center gap-2 px-2.5 py-1.5 text-[10.5px] shrink-0"
       style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 10%, transparent)" }}>
       {path && <span className="truncate" style={{ color: "var(--text)" }}>{path}</span>}
-      {add != null && <span className="tabular-nums shrink-0" style={{ color: "var(--success)" }}>+{add}</span>}
-      {del != null && <span className="tabular-nums shrink-0" style={{ color: "var(--error)" }}>−{del}</span>}
+      {add != null && <span className="tabular-nums shrink-0" style={{ color: "var(--success-ink)" }}>+{add}</span>}
+      {del != null && <span className="tabular-nums shrink-0" style={{ color: "var(--error-ink)" }}>−{del}</span>}
       <span className="ml-auto flex items-center gap-1 shrink-0">
         {right}
         <Toggle on={split} onClick={() => onSplit(!split)} title="Split / unified">{split ? "Split" : "Unified"}</Toggle>
@@ -8599,9 +8605,9 @@ function FileTree({ node, sel, onPick, onPeek, seen, drafts, pending, moved, dep
                 </svg>
               </span>
             )}
-            {n > 0 && <span className="ml-auto text-[10px] shrink-0" style={{ color: "var(--warning)" }}>{n}</span>}
-            {f.comments > 0 && <span className="ml-auto text-[10px] shrink-0" style={{ color: "var(--primary)" }}>{f.comments}</span>}
-            {seen(f.path) && <span className="ml-auto shrink-0 flex" style={{ color: "var(--success)" }}><DoneIcon size={ICON.xs} /></span>}
+            {n > 0 && <span className="ml-auto text-[10px] shrink-0" style={{ color: "var(--warning-ink)" }}>{n}</span>}
+            {f.comments > 0 && <span className="ml-auto text-[10px] shrink-0" style={{ color: "var(--primary-ink)" }}>{f.comments}</span>}
+            {seen(f.path) && <span className="ml-auto shrink-0 flex" style={{ color: "var(--success-ink)" }}><DoneIcon size={ICON.xs} /></span>}
           </button>
         );
       })}
@@ -8738,7 +8744,7 @@ function FindBar({ value, onChange, inputRef, listRef, hits, groups, at, onGo, o
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center gap-2 px-2 py-1.5 rounded-md"
         style={{ background: "var(--bg)", border: edge }}>
-        <span className="shrink-0 flex" style={{ color: "var(--primary)" }}><SearchIcon size={ICON.xs} /></span>
+        <span className="shrink-0 flex" style={{ color: "var(--primary-ink)" }}><SearchIcon size={ICON.xs} /></span>
         <input
           ref={inputRef} value={value} onChange={(e) => onChange(e.target.value)}
           placeholder={`Search the code of ${fileCount} file${fileCount === 1 ? "" : "s"}…`}
@@ -8818,7 +8824,7 @@ function FindBar({ value, onChange, inputRef, listRef, hits, groups, at, onGo, o
               {/* findInDiffs stops at 500. A list that quietly ended early is
                   how you conclude a symbol is used nowhere else. */}
               {hits.length >= 500 && (
-                <div className="px-2.5 py-1.5 text-[10px]" style={{ color: "var(--warning)" }}>
+                <div className="px-2.5 py-1.5 text-[10px]" style={{ color: "var(--warning-ink)" }}>
                   First 500 matches — narrow the search to see the rest.
                 </div>
               )}
@@ -9846,7 +9852,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
       {/* A file list that quietly disagreed with the header count is how nobody
           noticed the hundred-and-first file was missing. Say it. */}
       {d.truncated?.files ? (
-        <div className="text-[10px] px-1 py-1" style={{ color: "var(--warning)" }}>
+        <div className="text-[10px] px-1 py-1" style={{ color: "var(--warning-ink)" }}>
           {/* Nine pages of names are fetched now, so this line means a branch of
               nine hundred files and more — a vendor drop or a generated tree,
               not a review somebody is reading top to bottom. */}
@@ -9964,8 +9970,8 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
                     : undefined;
                   return (
                     <span className="ml-auto shrink-0 flex items-center gap-1.5" title={t}>
-                      <span className="tabular-nums" style={{ color: "var(--success)" }}>+{add}</span>
-                      <span className="tabular-nums" style={{ color: "var(--error)" }}>−{del}</span>
+                      <span className="tabular-nums" style={{ color: "var(--success-ink)" }}>+{add}</span>
+                      <span className="tabular-nums" style={{ color: "var(--error-ink)" }}>−{del}</span>
                     </span>
                   );
                 })()}
@@ -10025,7 +10031,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
                     /* Said, not spun. GitHub refuses the whole-diff endpoint
                        past 20,000 lines, and a refusal drawn as a spinner is a
                        pane somebody waits at for ever. */
-                    <div className="text-[11px] p-3" style={{ color: "var(--warning)" }}>
+                    <div className="text-[11px] p-3" style={{ color: "var(--warning-ink)" }}>
                       {diffErr}
                     </div>
                   ) : !loaded ? <Loading label="Loading the diff…" size={18} />
@@ -10086,11 +10092,11 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
                                       sent. A solid card would read as posted,
                                       which is the one thing it is not. */}
                                   <div className="px-2.5 py-1 flex items-center gap-2 text-[10px]"
-                                    style={{ background: "color-mix(in srgb, var(--warning) 14%, transparent)", color: "var(--warning)" }}>
+                                    style={{ background: "color-mix(in srgb, var(--warning) 14%, transparent)", color: "var(--warning-ink)" }}>
                                     <span>Pending — sent when you submit the review</span>
                                     <button onClick={() => onDropDraft(dc)} title="Discard this pending comment"
                                       className="agx-btn ml-auto px-1.5 py-0.5 rounded text-[10px]"
-                                      style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 45%, transparent)" }}>Drop</button>
+                                      style={{ color: "var(--error-ink)", border: "1px solid color-mix(in srgb, var(--error) 45%, transparent)" }}>Drop</button>
                                   </div>
                                   <div className="px-2.5 py-2"><Md body={dc.body} /></div>
                                 </div>
@@ -10121,7 +10127,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
                                       <button onClick={() => openExternal(h.url!)}
                                         title="Edit this pending comment on GitHub"
                                         className="agx-btn shrink-0 text-[10px] px-1.5 py-0.5 rounded"
-                                        style={{ color: "var(--primary)" }}>Edit ↗</button>
+                                        style={{ color: "var(--primary-ink)" }}>Edit ↗</button>
                                     )}
                                   </div>
                                   <div className="px-2.5 py-2"><Md body={h.body} /></div>
@@ -10242,7 +10248,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
                         <button onClick={() => openExternal(h.url!)}
                           title="Edit this pending comment on GitHub"
                           className="agx-btn shrink-0 text-[10px] px-1.5 py-0.5 rounded"
-                          style={{ color: "var(--primary)" }}>Edit ↗</button>
+                          style={{ color: "var(--primary-ink)" }}>Edit ↗</button>
                       )}
                     </div>
                     <div className="px-2.5 py-2"><Md body={h.body} /></div>
@@ -10509,7 +10515,7 @@ function Card({ who, chip, when, tone, url, edited, assoc, nodeId, reactions, on
         {chip}
         {fresh && (
           <span className="text-[9px] px-1.5 rounded-full"
-            style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 16%, transparent)" }}>new</span>
+            style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 16%, transparent)" }}>new</span>
         )}
         <span className="ml-auto flex items-center gap-1.5 shrink-0">
           {when && <span className="text-[10px]" style={{ color: "var(--text3)" }}>{when}</span>}
@@ -10698,7 +10704,7 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline, newSet, cameFrom
             {open ? "▾" : "▸"}
           </button>
         )}
-        <span className="truncate" style={{ color: "var(--primary)" }}>
+        <span className="truncate" style={{ color: "var(--primary-ink)" }}>
           {inline
             ? (t.startLine && t.line && t.startLine !== t.line ? `Lines ${t.startLine}–${t.line}` : t.line ? `Line ${t.line}` : "Comment")
             : `${t.path}${t.line ? `:${t.line}` : ""}`}
@@ -10721,7 +10727,7 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline, newSet, cameFrom
           )}
           {hot.size > 0 && (
             <span className="text-[9.5px] px-1.5 rounded-full tabular-nums"
-              style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 16%, transparent)",
+              style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 16%, transparent)",
                 border: "1px solid color-mix(in srgb, var(--warning) 42%, transparent)" }}>
               {hot.size} new
             </span>
@@ -10783,7 +10789,7 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline, newSet, cameFrom
             <b style={{ color: "var(--text)", fontWeight: 500 }}>{c.author}</b>
             {newSet?.has(`${t.id}:${c.id}`) && (
               <span className="text-[9px] px-1.5 rounded-full"
-                style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 16%, transparent)" }}>
+                style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 16%, transparent)" }}>
                 new
               </span>
             )}
@@ -11244,7 +11250,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   }
   for (const [i, r] of lanes.botReviews.entries()) {
     entries.push({
-      at: r.submittedAt, ms: ms(r.submittedAt), key: `br${i}`, lane: "bot", node: <span style={{ color: "var(--info)" }}><AgentIcon size={ICON.xs} /></span>,
+      at: r.submittedAt, ms: ms(r.submittedAt), key: `br${i}`, lane: "bot", node: <span style={{ color: "var(--info-ink)" }}><AgentIcon size={ICON.xs} /></span>,
       body: <Card who={r.author} when={ago(r.submittedAt)} url={r.url} tone="bot"
         nodeId={r.nodeId} reactions={r.reactions} onReact={onReact}
         chip={<Chip text="automation" tint="var(--info)" />}><Md body={r.body} /></Card>,
@@ -11253,7 +11259,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   for (const c of lanes.bots) {
     entries.push({
       at: c.createdAt, ms: ms(c.createdAt), key: `b${c.id}`, lane: "bot", hot: hotOf([`c${c.id}`]),
-      node: <span style={{ color: "var(--info)" }}><AgentIcon size={ICON.xs} /></span>,
+      node: <span style={{ color: "var(--info-ink)" }}><AgentIcon size={ICON.xs} /></span>,
       body: (
         <Card who={c.author} when={ago(c.createdAt)} url={c.url} tone="bot" chip={<Chip text="automation" tint="var(--info)" />}
           nodeId={c.nodeId} reactions={c.reactions} onReact={onReact}>
@@ -11290,7 +11296,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
     for (const g of groupByRun(local)) {
       entries.push({
         at: new Date(g.ms).toISOString(), ms: g.ms, key: g.key, lane: "local",
-        node: <span style={{ color: "var(--primary)" }}><LocalGlyph size={ICON.xs} /></span>,
+        node: <span style={{ color: "var(--primary-ink)" }}><LocalGlyph size={ICON.xs} /></span>,
         body: g.run
           ? <RunCard run={g.run} notes={g.notes} publisher={local.publishers[g.run.plugin]} onStatus={local.setStatus} onOpenFile={onOpenFile} md={localMd} />
           : <div className="flex flex-col gap-1.5">{g.notes.map((n) => <NoteCard key={`${n.plugin}/${n.id}`} n={n} md={localMd} onStatus={(st) => local.setStatus(n, st)} onOpenFile={onOpenFile} />)}</div>,
@@ -11349,7 +11355,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   const opened = (
     <div key="opened" className="agx-tiny">
       <span className="agx-node"><PlusIcon size={ICON.xs} /></span>
-      <span><b>{d.author}</b> opened this pull request from <code style={{ ...CODE_FONT_STYLE, color: "var(--primary)" }}>{d.headRefName}</code> into <code style={{ ...CODE_FONT_STYLE, color: "var(--text2)" }}>{d.baseRefName}</code></span>
+      <span><b>{d.author}</b> opened this pull request from <code style={{ ...CODE_FONT_STYLE, color: "var(--primary-ink)" }}>{d.headRefName}</code> into <code style={{ ...CODE_FONT_STYLE, color: "var(--text2)" }}>{d.baseRefName}</code></span>
     </div>
   );
   /* The real force-push events now come from the timeline with their own
@@ -11357,8 +11363,8 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
      review — a judgement the raw event cannot make. */
   const forced = d.forcePushedSinceReview ? (
     <div key="forced" className="agx-tiny">
-      <span className="agx-node" style={{ color: "var(--warning)" }}><RefreshIcon size={ICON.xs} /></span>
-      <span style={{ color: "var(--warning)" }}>The last review was for code that is no longer here — it was force-pushed over</span>
+      <span className="agx-node" style={{ color: "var(--warning-ink)" }}><RefreshIcon size={ICON.xs} /></span>
+      <span style={{ color: "var(--warning-ink)" }}>The last review was for code that is no longer here — it was force-pushed over</span>
     </div>
   ) : null;
 
@@ -11403,7 +11409,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
          * the band you get a strip of moving text above a pinned bar.
          */
         <div className="flex items-center gap-2 mb-3 px-2.5 py-1.5 rounded-lg text-[10.5px] flex-wrap sticky"
-          style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 14%, var(--bg))",
+          style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 14%, var(--bg))",
             border: "1px solid color-mix(in srgb, var(--warning) 34%, transparent)",
             position: "sticky", top: 0, zIndex: 8, boxShadow: "0 -12px 0 0 var(--bg)" }}>
           <span aria-hidden>●</span>
@@ -11446,7 +11452,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
       <div className="flex items-center gap-2 mb-3 text-[10px]" style={{ color: "var(--text3)" }}>
         <span>One timeline — reviews, comments, threads and events in the order they happened</span>
         {d.truncated?.comments ? (
-          <span style={{ color: "var(--warning)" }}>· showing the most recent {d.truncated.comments}</span>
+          <span style={{ color: "var(--warning-ink)" }}>· showing the most recent {d.truncated.comments}</span>
         ) : null}
         <span className="flex-1" />
         {lanes.bots.length > 0 && (
@@ -11761,20 +11767,20 @@ function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOp
       </div>
       {imageNote && (
         <div className="flex items-center gap-2 px-2.5 py-1.5 text-[10.5px]"
-          style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+          style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
           <span className="min-w-0 truncate">
             <b>{imageNote}</b> can't be attached from here — GitHub has no public upload API for attachments.
           </span>
           {onOpenGithub && (
             <button onClick={onOpenGithub} className="agx-btn ml-auto shrink-0 px-2 py-0.5 rounded"
-              style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>Attach on GitHub ↗</button>
+              style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>Attach on GitHub ↗</button>
           )}
           <button onClick={() => setImageNote(null)} className="agx-btn shrink-0 grid place-items-center w-5 h-5 rounded" style={{ color: "var(--text3)" }} aria-label="Dismiss"><CloseIcon size={ICON.xs} /></button>
         </div>
       )}
       {restored && (
         <div className="flex items-center gap-2 px-2.5 py-1 text-[10px]"
-          style={{ color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 10%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+          style={{ color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 10%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
           <span>Picked up where you left off — this was never sent.</span>
           <button onClick={() => setRestored(false)} className="agx-btn ml-auto shrink-0 grid place-items-center w-5 h-5 rounded" style={{ color: "var(--text3)" }} aria-label="Dismiss"><CloseIcon size={ICON.xs} /></button>
         </div>
@@ -11927,7 +11933,7 @@ function JobLog({ root, name, jobs }: { root: string; name: string; jobs: PrChec
       </button>
       {open && (
         <div className="mt-1.5 rounded overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
-          {err ? <div className="p-2 text-[10.5px]" style={{ color: "var(--error)" }}>{err}</div>
+          {err ? <div className="p-2 text-[10.5px]" style={{ color: "var(--error-ink)" }}>{err}</div>
             : text === null ? <div className="p-2 text-[10.5px]" style={{ color: "var(--text3)" }}>Reading the log…</div>
             : steps.length === 0 ? <div className="p-2 text-[10.5px]" style={{ color: "var(--text3)" }}>The log is empty.</div>
             : steps.map((st, i) => {
@@ -12016,8 +12022,8 @@ function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyWhat }: 
               style={{ background: "color-mix(in srgb, var(--border) 14%, transparent)" }}>
               <span style={{ color: "var(--text3)" }}>{isOpen ? "▾" : "▸"}</span>
               <b style={{ color: "var(--text)", fontWeight: 500 }}>{name}</b>
-              {bad > 0 && <span className="inline-flex items-center gap-0.5" style={{ color: "var(--error)" }}>{bad}<CrossIcon size={ICON.xs} /></span>}
-              {good > 0 && <span className="inline-flex items-center gap-0.5" style={{ color: "var(--success)" }}>{good}<DoneIcon size={ICON.xs} /></span>}
+              {bad > 0 && <span className="inline-flex items-center gap-0.5" style={{ color: "var(--error-ink)" }}>{bad}<CrossIcon size={ICON.xs} /></span>}
+              {good > 0 && <span className="inline-flex items-center gap-0.5" style={{ color: "var(--success-ink)" }}>{good}<DoneIcon size={ICON.xs} /></span>}
               <span className="ml-auto tabular-nums" style={{ color: "var(--text3)" }}>{list.length}</span>
             </button>
             {isOpen && list.map((k, i) => {
@@ -12167,7 +12173,7 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
           {drafts.length > 0 ? (
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-1.5 flex-wrap">
-                <span className="text-[10px] uppercase tracking-wider shrink-0 mr-1" style={{ color: "var(--warning)" }}>Pending</span>
+                <span className="text-[10px] uppercase tracking-wider shrink-0 mr-1" style={{ color: "var(--warning-ink)" }}>Pending</span>
                 {drafts.map((c, i) => {
                   const on = openDraft === i;
                   const where = `${c.path.split("/").pop()}:${c.startLine && c.startLine !== c.line ? `${c.startLine}–${c.line}` : c.line}`;
@@ -12179,7 +12185,7 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
                       title={`${c.path}:${c.line}`}
                       className="agx-btn text-[10.5px] px-2 py-0.5 rounded-full shrink-0"
                       style={{
-                        color: "var(--warning)",
+                        color: "var(--warning-ink)",
                         border: `1px ${on ? "solid" : "dashed"} color-mix(in srgb, var(--warning) 55%, transparent)`,
                         background: on ? "color-mix(in srgb, var(--warning) 16%, transparent)" : "transparent",
                         ...CODE_FONT_STYLE,
@@ -12195,7 +12201,7 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
                   border: "1px dashed color-mix(in srgb, var(--warning) 55%, transparent)",
                 }}>
                   <div className="px-2.5 py-1 flex items-center gap-2 text-[10px]"
-                    style={{ background: "color-mix(in srgb, var(--warning) 14%, transparent)", color: "var(--warning)" }}>
+                    style={{ background: "color-mix(in srgb, var(--warning) 14%, transparent)", color: "var(--warning-ink)" }}>
                     <span className="min-w-0 truncate" style={{ ...CODE_FONT_STYLE }}>
                       {drafts[openDraft].path}:{drafts[openDraft].startLine && drafts[openDraft].startLine !== drafts[openDraft].line
                         ? `${drafts[openDraft].startLine}–${drafts[openDraft].line}` : drafts[openDraft].line}
@@ -12203,7 +12209,7 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
                     <button onClick={() => { const i = openDraft; setOpenDraft(null); onDrop(i); }}
                       title="Discard this pending comment"
                       className="agx-btn ml-auto shrink-0 px-1.5 py-0.5 rounded text-[10px]"
-                      style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 45%, transparent)" }}>Drop</button>
+                      style={{ color: "var(--error-ink)", border: "1px solid color-mix(in srgb, var(--error) 45%, transparent)" }}>Drop</button>
                   </div>
                   <div className="px-2.5 py-2"><Md body={drafts[openDraft].body} /></div>
                 </div>
@@ -12217,7 +12223,7 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
                   contradicting it. */}
               {held.length > 0
                 ? <>Nothing queued from here — {held.length} comment{held.length === 1 ? " is" : "s are"} already drafted on GitHub, below.</>
-                : <>No line comments queued here. Open <button onClick={onGoFiles} style={{ color: "var(--primary)" }}>files</button> and
+                : <>No line comments queued here. Open <button onClick={onGoFiles} style={{ color: "var(--primary-ink)" }}>files</button> and
                   use the “+” on a line to attach one.</>}
             </div>
           )}
@@ -12247,7 +12253,7 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
                     {c.url && (
                       <button onClick={() => openExternal(c.url!)} title="Edit this comment on GitHub"
                         className="agx-btn shrink-0 ml-auto px-1.5 py-0.5 rounded"
-                        style={{ color: "var(--primary)" }}>Edit ↗</button>
+                        style={{ color: "var(--primary-ink)" }}>Edit ↗</button>
                     )}
                   </div>
                   <div className="mt-1"><Md body={c.body} /></div>

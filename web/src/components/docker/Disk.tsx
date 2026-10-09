@@ -98,7 +98,7 @@ export function Disk({ writeEnabled, ask, onDone }: {
           <span className="text-[12px]" style={{ color: "var(--text)" }}>{humanSize(total)}</span>
           <span className="text-[10px] t-dim2">on this machine</span>
           {d.reclaimable > 0 && (
-            <span className="text-[10px] ml-auto" style={{ color: "var(--success)" }}>{humanSize(d.reclaimable)} reclaimable</span>
+            <span className="text-[10px] ml-auto" style={{ color: "var(--success-ink)" }}>{humanSize(d.reclaimable)} reclaimable</span>
           )}
         </div>
         <div className="h-2 rounded-full overflow-hidden flex" style={{ background: "var(--bg3)" }}>
@@ -148,7 +148,7 @@ export function Disk({ writeEnabled, ask, onDone }: {
           <button onClick={dropOrphans} disabled={!writeEnabled || !!busy}
             className="text-left px-3 py-2 rounded-lg disabled:opacity-40"
             style={{ border: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)", background: "color-mix(in srgb, var(--warning) 7%, transparent)" }}>
-            <span className="text-[11.5px]" style={{ color: "var(--warning)" }}>
+            <span className="text-[11.5px]" style={{ color: "var(--warning-ink)" }}>
               {d.orphans.length} image{d.orphans.length === 1 ? "" : "s"} from worktrees that are gone · {humanSize(orphanBytes)}
             </span>
             <span className="block text-[10px] t-dim2 break-all">{d.orphans.map((o) => o.tag).slice(0, 4).join(", ")}{d.orphans.length > 4 ? "…" : ""}</span>

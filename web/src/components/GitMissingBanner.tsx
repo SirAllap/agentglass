@@ -37,7 +37,7 @@ export default function GitMissingBanner() {
         color: "var(--text)",
       }}
     >
-      <span className="font-semibold" style={{ color: "var(--warning)" }}>git not found</span>
+      <span className="font-semibold" style={{ color: "var(--warning-ink)" }}>git not found</span>
       <span>
         {cap.reason || "git is not installed"}. The source-control, diff and pull-request panels stay empty, and the
         terminal cannot open, until it is on your <code>PATH</code>.

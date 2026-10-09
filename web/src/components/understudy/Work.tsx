@@ -748,7 +748,7 @@ export function Work({ active, standing, goTo }: {
         <div className="px-4 py-3 flex items-center gap-3 flex-wrap"
           style={{ borderBottom: edge(10), background: wash("--error", 8), boxShadow: "inset 2px 0 0 var(--error)" }}>
           <div className="flex-1 min-w-[240px]">
-            <span className="text-[12.5px]" style={{ color: "var(--error)" }}>
+            <span className="text-[12.5px]" style={{ color: "var(--error-ink)" }}>
               It has nowhere to work, so it will decline every task — including the ones you add below.
             </span>
             {/* The why and the one action that ends it, under the line that
@@ -782,7 +782,7 @@ export function Work({ active, standing, goTo }: {
               <span className="agx-revtag"><span>{i + 1}</span></span>
               <div className="flex-1 min-w-0">
                 <div className="text-[12.5px]" style={{ fontWeight: 600 }}>{h.title}</div>
-                <div className="text-[12px] mt-0.5" style={{ color: "var(--error)" }}>{h.question}</div>
+                <div className="text-[12px] mt-0.5" style={{ color: "var(--error-ink)" }}>{h.question}</div>
                 {openHelp && h.tried && (
                   <pre className="m-0 mt-1.5 p-1.5 overflow-auto agx-scroll text-[10.5px] leading-snug whitespace-pre-wrap"
                     style={{ background: wash("--text", 4), border: edge(8), borderRadius: 4, maxHeight: 150, color: "var(--text3)" }}>
@@ -815,7 +815,7 @@ export function Work({ active, standing, goTo }: {
 
       {!answered && (
         <div className="px-4 py-3" style={{ borderBottom: edge(10), background: wash("--error", 8) }}>
-          <span className="text-[12.5px]" style={{ color: "var(--error)" }}>
+          <span className="text-[12.5px]" style={{ color: "var(--error-ink)" }}>
             The server did not answer, so nothing here is current.
           </span>
         </div>
@@ -992,14 +992,14 @@ export function Work({ active, standing, goTo }: {
 
       {problem && (
         <p role="alert" className="m-0 px-4 py-2 text-[11.5px]"
-          style={{ color: "var(--error)", background: wash("--error", 8), borderBottom: edge(10) }}>
+          style={{ color: "var(--error-ink)", background: wash("--error", 8), borderBottom: edge(10) }}>
           {problem}
         </p>
       )}
 
       {busy && (
         <p role="status" className="m-0 px-4 py-2 text-[11.5px]"
-          style={{ color: "var(--primary)", background: wash("--primary", 8), borderBottom: edge(10) }}>
+          style={{ color: "var(--primary-ink)", background: wash("--primary", 8), borderBottom: edge(10) }}>
           {busy} You can close this — it does not stop when the tab does.
         </p>
       )}
@@ -1026,7 +1026,7 @@ export function Work({ active, standing, goTo }: {
         <div className="px-4 py-2.5" style={{ borderBottom: edge(10) }}>
           <div className="flex items-baseline gap-2 flex-wrap" style={{ marginBottom: 6 }}>
             <span className="panel-eyebrow" style={{ margin: 0 }}>Over its shoulder</span>
-            <span className="chip" style={{ color: "var(--primary)" }}>{pane}</span>
+            <span className="chip" style={{ color: "var(--primary-ink)" }}>{pane}</span>
             <span className="flex-1" />
             <code className="text-[10.5px]" style={{ color: "var(--text4)" }}>
               tmux select-pane -t {pane}
@@ -1087,7 +1087,7 @@ export function Work({ active, standing, goTo }: {
         <div className="text-[10px] pb-1.5 tracking-wide uppercase" style={{ color: "var(--text4)" }}>
           Register of issued sheets
           {runs.length > 0 && <>
-            {" · "}<span style={{ color: "var(--success)" }}>{runs.filter((r) => r.state === "done").length} approved</span>
+            {" · "}<span style={{ color: "var(--success-ink)" }}>{runs.filter((r) => r.state === "done").length} approved</span>
             {runs.some((r) => r.state === "failed" || r.state === "empty" || r.state === "uncommitted") && <>
               {" · "}<span>{runs.filter((r) => r.state === "failed" || r.state === "empty" || r.state === "uncommitted").length} void</span>
             </>}
@@ -1141,7 +1141,7 @@ export function Work({ active, standing, goTo }: {
                   // the work is real and it is sitting right there uncommitted.
                   // No discard chip here — unlike `failed`, there is no commit
                   // yet, so the worktree is the ONLY copy of what it did.
-                  <div className="text-[11px]" style={{ color: "var(--warning)" }}>
+                  <div className="text-[11px]" style={{ color: "var(--warning-ink)" }}>
                     Tests pass, but it never committed. Nothing pushed either — go commit it by hand, or look at why it stopped.
                   </div>
                 )}
@@ -1149,7 +1149,7 @@ export function Work({ active, standing, goTo }: {
                   // No commit, nothing uncommitted either — the tree was clean
                   // because nothing was ever written to it. Say that plainly
                   // rather than let it read like a quiet success.
-                  <div className="text-[11px]" style={{ color: "var(--warning)" }}>
+                  <div className="text-[11px]" style={{ color: "var(--warning-ink)" }}>
                     It finished having produced nothing — no commit, and its own last words did not say why that was the right answer.
                   </div>
                 )}

@@ -217,7 +217,7 @@ function PluginAction({ p, actions, run, notes, pending, error, onPress, onShowL
           </span>
         ))}
         {state === "done" && counts.length === 0 && (
-          <span className="text-[9px] uppercase tracking-wide" style={{ color: "var(--success)" }}>clean</span>
+          <span className="text-[9px] uppercase tracking-wide" style={{ color: "var(--success-ink)" }}>clean</span>
         )}
       </button>
       <Menu align="right" title={`More from ${p.name}`} label={<CaretIcon />} bare>

@@ -103,7 +103,7 @@ export function PluginsView({ active }: { active: boolean }) {
           </div>
           <button type="button" onClick={() => openSettings("plugins")}
             className="agx-btn rounded inline-flex items-center leading-none text-[11px] px-3 h-[28px] mt-1"
-            style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 55%, transparent)", background: "color-mix(in srgb, var(--primary) 10%, transparent)" }}>
+            style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 55%, transparent)", background: "color-mix(in srgb, var(--primary) 10%, transparent)" }}>
             Browse plugins
           </button>
         </div>
@@ -153,7 +153,7 @@ export function PluginsView({ active }: { active: boolean }) {
         )}
       </header>
       {error && (
-        <div className="px-4 py-1.5 text-[11px] shrink-0" style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 8%, transparent)" }}>
+        <div className="px-4 py-1.5 text-[11px] shrink-0" style={{ color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 8%, transparent)" }}>
           {error}
         </div>
       )}

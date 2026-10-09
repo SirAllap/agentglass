@@ -389,7 +389,7 @@ export function Appearance({ value, onChange, classes }: {
                 key={i.id}
                 title={`Sealed — ${i.what}. ${sealedWhy}`}
                 className="text-[11.5px] px-2 py-1 rounded-lg whitespace-nowrap inline-flex items-center gap-1"
-                style={{ color: "var(--error)", background: wash("--error", 8), border: `1px solid ${wash("--error", 26)}` }}
+                style={{ color: "var(--error-ink)", background: wash("--error", 8), border: `1px solid ${wash("--error", 26)}` }}
               >
                 <Padlock />
                 {i.label}
