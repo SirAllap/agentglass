@@ -6,13 +6,12 @@ import { openExternal } from "../../lib/externalUrl.ts";
 import { ago } from "../../lib/fileRecents.ts";
 import { Select } from "../Select.tsx";
 import { Switch } from "../SettingRow.tsx";
-import { Spinner } from "../Spinner.tsx";
 import { useDialogs, type ConfirmSpec } from "../ConfirmDialog.tsx";
 import { Row, Chip, type Tone as RowTone } from "../git/ui.tsx";
 import { DoneIcon } from "../../lib/glyphIcons.tsx";
 import { CloseIcon } from "../CloseButton.tsx";
 import { ICON } from "../../lib/iconSize.ts";
-import { EDGE, LINE } from "../workspace/Chrome.tsx";
+import { EDGE, LINE, Button as HouseButton } from "../workspace/Chrome.tsx";
 
 /**
  * A plugin's screen, drawn with this app's own parts.
@@ -315,22 +314,15 @@ function usePending(version: number): [boolean, (p: Promise<unknown>) => void] {
 
 function Button({ node, ctx }: { node: Extract<UiNode, { type: "button" }>; ctx: Ctx }) {
   const [pending, run] = usePending(ctx.version);
-  const edge = node.tone === "danger" ? "var(--error)" : node.tone === "primary" ? "var(--primary)" : "var(--border)";
   const press = async () => {
     if (node.confirm && !(await ctx.ask({ title: node.label, body: node.confirm, confirmLabel: node.label, danger: node.tone === "danger" }))) return;
     run(ctx.onAction(node.action));
   };
   return (
-    <button type="button" onClick={() => { void press(); }} disabled={node.disabled || pending} aria-busy={pending || undefined}
-      className="agx-btn rounded inline-flex items-center justify-center gap-1.5 whitespace-nowrap leading-none disabled:opacity-40 text-[11px] px-2.5 h-[28px]"
-      style={{
-        color: node.tone === "primary" ? "var(--primary)" : node.tone === "danger" ? "var(--error)" : "var(--text)",
-        border: `1px solid color-mix(in srgb, ${edge} 55%, transparent)`,
-        background: node.tone === "primary" ? "color-mix(in srgb, var(--primary) 10%, transparent)" : "transparent",
-      }}>
-      {pending && <Spinner />}
+    <HouseButton onClick={() => { void press(); }} disabled={node.disabled} pending={pending}
+      tone={node.tone === "default" ? "plain" : node.tone}>
       {node.label}
-    </button>
+    </HouseButton>
   );
 }
 
@@ -349,11 +341,7 @@ function Form({ node, ctx }: { node: Extract<UiNode, { type: "form" }>; ctx: Ctx
         <FieldRow key={f.key} field={f} value={values[f.key]} onChange={(v) => setValues((s) => ({ ...s, [f.key]: v }))} />
       ))}
       <div>
-        <button type="submit" disabled={pending}
-          className="agx-btn rounded inline-flex items-center gap-1.5 leading-none text-[11px] px-3 h-[28px] disabled:opacity-40"
-          style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 55%, transparent)", background: "color-mix(in srgb, var(--primary) 10%, transparent)" }}>
-          {pending && <Spinner />}{node.submit.label}
-        </button>
+        <HouseButton type="submit" tone="primary" pending={pending}>{node.submit.label}</HouseButton>
       </div>
     </form>
   );
