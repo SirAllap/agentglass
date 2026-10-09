@@ -249,6 +249,15 @@ describe("the OpenCode lock, as OpenCode merged it", () => {
 /*
  * Against the real CLI, under scratch XDG dirs and HOME: the project config
  * that undid the lock, and the start that must now refuse it.
+ *
+ * The scratch dirs exist before OpenCode is asked, OPENCODE_CONFIG_DIR
+ * included, so nothing of the developer's (global config, agents, a config dir
+ * named in their environment) is a layer here. Where `opencode` on PATH is a
+ * version manager's shim (mise), the shim resolves the tool under that HOME
+ * too: with HOME a path that did not exist, the first call worked and every
+ * later one exited 1 ("No such file or directory"), so three of these failed
+ * on that machine as "would not show its build agent's rules" while the start
+ * passed for the wrong reason. With the dirs made, 24 of 24 there and here.
  */
 const OPENCODE = Bun.which("opencode");
 describe.skipIf(!OPENCODE)("the OpenCode lock, checked by OpenCode itself when a worker starts", () => {
@@ -257,7 +266,9 @@ describe.skipIf(!OPENCODE)("the OpenCode lock, checked by OpenCode itself when a
   const scratch = {
     HOME: join(ROOT, "home"), XDG_CONFIG_HOME: join(ROOT, "cfg"), XDG_DATA_HOME: join(ROOT, "data"),
     XDG_CACHE_HOME: join(ROOT, "cache"), XDG_STATE_HOME: join(ROOT, "state"),
+    OPENCODE_CONFIG_DIR: join(ROOT, "oc-config"),
   };
+  beforeAll(() => { for (const d of Object.values(scratch)) mkdirSync(d, { recursive: true }); });
   const project = (name: string, config?: unknown) => {
     const dir = join(ROOT, name);
     mkdirSync(dir, { recursive: true });
@@ -297,5 +308,7 @@ describe.skipIf(!OPENCODE)("the OpenCode lock, checked by OpenCode itself when a
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.error).toBe("lock-loosened");
+    // Refused because OpenCode named the push, not because it would not answer.
+    expect((r as { detail?: string }).detail).toContain("git push");
   }, 30_000);
 });
