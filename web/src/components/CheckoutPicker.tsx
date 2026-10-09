@@ -211,7 +211,7 @@ export function CheckoutPicker({
           role="listbox"
           onKeyDown={onKey}
           style={{
-            zIndex: 30, background: "var(--bg2)",
+            zIndex: 30, background: "var(--surface-card)",
             border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)",
             minWidth: 320, maxWidth: "min(86vw, 760px)", maxHeight: 420, overflow: "hidden",
           }}

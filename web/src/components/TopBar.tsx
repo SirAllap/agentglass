@@ -309,7 +309,7 @@ function PlanPanel({ u, age, at, onClose, onRefresh, busy }: {
       <div className="fixed flex flex-col rounded-xl overflow-hidden"
         style={{
           top: at.top, right: at.right, width: 300,
-          background: "var(--bg2)",
+          background: "var(--surface-card)",
           border: "1px solid var(--border)",
           boxShadow: "0 22px 48px -20px var(--shadow)",
         }}>
@@ -615,7 +615,7 @@ export function TopBar({
         // system, so the first control starts after them. The old header did
         // the same for the same reason; it is not a Mac tax on other platforms.
         paddingLeft: IS_MAC_DESKTOP ? 78 : undefined,
-        background: alarm ? "color-mix(in srgb, var(--warning) 10%, var(--bg2))" : "var(--bg2)",
+        background: alarm ? "color-mix(in srgb, var(--warning) 10%, var(--bg2))" : "var(--surface-card)",
         borderBottom: alarm ? "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" : edge(13),
         transition: "background .18s, border-color .18s",
         // This strip IS the title bar: the window is frameless (see

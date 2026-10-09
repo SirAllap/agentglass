@@ -774,7 +774,7 @@ export function NotifyBell({ noDrag, onGoto }: {
             className="fixed flex flex-col rounded-xl overflow-hidden"
             style={{
               top: at.top, right: at.right, width: 360,
-              background: "var(--bg2)",
+              background: "var(--surface-card)",
               border: "1px solid var(--border)",
               boxShadow: "0 22px 48px -20px var(--shadow)",
             }}

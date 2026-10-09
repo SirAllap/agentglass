@@ -54,7 +54,7 @@ export function MachinePanel({ tab, onTab, onClose, onOpenBrowser }: {
           // At 760 the flexible column got 218px and truncated the ancestry
           // chain; at 1020 the pane was 340 and wrapped a command line and a
           // long path over three lines each. `96vw` still caps it on a laptop.
-          width: "min(1320px, 96vw)", background: "var(--bg2)", border: edge(20),
+          width: "min(1320px, 96vw)", background: "var(--surface-card)", border: edge(20),
           boxShadow: "0 40px 90px -24px var(--shadow)",
         }}>
         <div className="flex items-center gap-2 px-3 py-2 shrink-0" style={{ borderBottom: edge(16) }}>

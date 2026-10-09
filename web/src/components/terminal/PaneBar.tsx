@@ -127,7 +127,7 @@ const PRIO: Record<string, string> = {
 const PLATE = {
   // Opaque, not frosted: this sits over a terminal that repaints constantly,
   // and a backdrop-filter here is a per-frame cost for the whole rectangle.
-  background: "var(--bg2)",
+  background: "var(--surface-card)",
   border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)",
   boxShadow: "0 14px 34px -12px var(--shadow)",
 } as const;

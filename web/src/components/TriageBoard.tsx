@@ -844,7 +844,7 @@ export function TriageBoard({
                       <div aria-hidden>
                         {[0, 1].map((k) => (
                           <div key={k} className="rounded-lg mb-2 animate-pulse"
-                            style={{ height: 74, background: "var(--bg2)", border: edge(16), animationDelay: `${(i * 2 + k) * 0.08}s` }} />
+                            style={{ height: 74, background: "var(--surface-card)", border: edge(16), animationDelay: `${(i * 2 + k) * 0.08}s` }} />
                         ))}
                       </div>
                     ) : (
@@ -1208,7 +1208,7 @@ function CardView({ p, hasTaskProvider, pinned, cursor, onOpen, onPin, onAct, bu
       className="rounded-lg mb-2 cursor-pointer agx-btn overflow-hidden"
       style={{
         border: cursor ? "1px solid color-mix(in srgb, var(--primary) 60%, transparent)" : edge(16),
-        background: "var(--bg2)",
+        background: "var(--surface-card)",
         boxShadow: cursor ? "inset 2px 0 0 var(--primary)" : undefined,
         /* Saturation as well as opacity: these cards are read by colour — green
            lane, red checks, amber waiting — and dimming alone leaves a row of

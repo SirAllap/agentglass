@@ -420,7 +420,7 @@ function Details({ entry, owner, tint, repo, open, busy, onClose, onInstall }: {
       <div className="fixed inset-0 flex items-center justify-center p-4 pointer-events-none">
         <div role="dialog" aria-modal="true" aria-label={entry.title || entry.id}
           className="w-[620px] max-w-[95vw] rounded-xl flex flex-col pointer-events-auto overflow-hidden"
-          style={{ maxHeight: "min(78vh, 620px)", background: "var(--bg2)", border: "1px solid var(--surface-line)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
+          style={{ maxHeight: "min(78vh, 620px)", background: "var(--surface-card)", border: "1px solid var(--surface-line)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
 
           <div className="flex items-center gap-3 px-5 py-4 border-b shrink-0" style={{ borderColor: "var(--surface-line)" }}>
             <span className="shrink-0 grid place-items-center rounded-lg text-[15px] font-semibold" style={{

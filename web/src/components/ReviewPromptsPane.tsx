@@ -266,7 +266,7 @@ function Editor({ r, skills, projects, presets, onChange, onSave, onCancel }: {
     first.current?.focus();
   }, []);
   const inp = "w-full text-[11.5px] px-2 py-1.5 rounded-lg outline-none";
-  const style = { background: "var(--bg2)", border: edge(22), color: "var(--text)" };
+  const style = { background: "var(--surface-inset)", border: edge(22), color: "var(--text)" };
 
   /* Skills whose name suggests they belong on a pull request go first: this
      list is 60 entries on a real machine and the four that matter here are

@@ -233,7 +233,7 @@ export function AppearancePane({ current, onChange, onAccent }: {
                 title={m === "desktop" && desk ? `Wear ${desk.name}, your desktop's theme, and follow it when you switch` : undefined}
                 className="px-3 py-1 rounded-md text-[12px] transition-colors"
                 style={on
-                  ? { background: "var(--bg2)", color: "var(--text)", boxShadow: "0 1px 2px rgba(0,0,0,0.25)" }
+                  ? { background: "var(--surface-card)", color: "var(--text)", boxShadow: "0 1px 2px rgba(0,0,0,0.25)" }
                   : { color: "var(--text3)" }}>
                 {m === "desktop" && desk ? <DesktopMark source={desk.source} /> : label}
               </button>

@@ -223,7 +223,7 @@ export function SkillsModal({ open, onClose }: { open: boolean; onClose: () => v
               initial={{ opacity: 0, scale: 0.95, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 8 }}
               transition={{ type: "spring", stiffness: 330, damping: 30 }}
               className="w-[min(1320px,96vw)] h-[min(960px,92vh)] rounded-xl flex flex-col pointer-events-auto"
-              style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
+              style={{ background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
             >
               <div className="flex items-center justify-between px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                 <div className="flex items-baseline gap-2.5 flex-wrap">
@@ -292,7 +292,7 @@ export function SkillsModal({ open, onClose }: { open: boolean; onClose: () => v
                 {sections ? (
                   sections.map(({ category: c, items }) => (
                     <div key={c} className="mb-4">
-                      <div className="flex items-baseline gap-2 mb-2 sticky top-0 py-1" style={{ background: "var(--bg2)", zIndex: 1 }}>
+                      <div className="flex items-baseline gap-2 mb-2 sticky top-0 py-1" style={{ background: "var(--surface-card)", zIndex: 1 }}>
                         <span className="panel-eyebrow">{c}</span>
                         <span className="text-[9.5px] t-dim2 tabular-nums">{items.length}</span>
                       </div>

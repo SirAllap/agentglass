@@ -454,7 +454,7 @@ function EffortDial({ chat }: { chat: Chat }) {
       </button>
       {open && (
         <div role="listbox" className="absolute z-20 mt-1 right-0 rounded-lg py-1 min-w-[150px]"
-          style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 8px 24px rgba(0,0,0,.35)" }}>
+          style={{ background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 8px 24px rgba(0,0,0,.35)" }}>
           <button onClick={() => pick(undefined)} role="option" aria-selected={!chat.effort}
             className="w-full text-left px-2.5 py-1 text-[11px] hover:bg-white/5"
             style={{ color: !chat.effort ? "var(--text)" : "var(--text3)" }}>Default</button>

@@ -444,7 +444,7 @@ function Row({ i, on, work, onPick, onStart }: {
           style={{ color: "var(--primary-ink)", borderTop: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", borderRight: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}>▾</button>
         {menu && (
           <div className="absolute right-0 top-full mt-1 rounded-lg overflow-hidden shadow-2xl"
-            style={{ zIndex: 40, background: "var(--bg2)", border: edge(28), minWidth: 260 }}>
+            style={{ zIndex: 40, background: "var(--surface-card)", border: edge(28), minWidth: 260 }}>
             {MODES.map((m) => (
               <button key={m.id} onClick={() => { setMenu(false); onStart(m.id); }}
                 className="w-full text-left px-3 py-1.5 hover:bg-white/5">
@@ -762,7 +762,7 @@ function RemindPopover({ task, anchor, onClose, onSet }: {
           facet menus use. */}
       <div className="fixed inset-0" style={{ zIndex: 9998 }} onClick={onClose} />
       <div ref={ref} className="fixed rounded-lg text-[11px] shadow-2xl flex flex-col"
-        style={{ top, right, zIndex: 9999, background: "var(--bg2)", border: edge(28), minWidth: 240, padding: 4 }}>
+        style={{ top, right, zIndex: 9999, background: "var(--surface-card)", border: edge(28), minWidth: 240, padding: 4 }}>
       {presetTimes().map((p) => (
         <button key={p.label} onClick={() => onSet(civilOf(p.at))}
           className="text-left px-2.5 py-1.5 rounded hover:bg-white/5" style={{ color: "var(--text2)" }}>
@@ -2340,7 +2340,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
         <div className="flex-1 flex justify-center min-w-0 px-3">
           <div className="w-full max-w-[560px]">
         <div className="flex items-center gap-2 w-full rounded-lg pl-2.5 py-1 overflow-hidden"
-          style={{ background: "var(--bg2)", border: edge(14) }}>
+          style={{ background: "var(--surface-card)", border: edge(14) }}>
           {/* The house floor for an icon-only glyph, which this was well under:
               a text ⌕ at 11px. */}
           <span className="shrink-0 grid place-items-center" style={{ width: 20, height: 20, color: "var(--text3)" }}>
@@ -3157,7 +3157,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                   that looks like a rendering fault. The card settles it whatever
                   happens to be underneath. */}
               <div className="flex flex-col items-center gap-3 text-center rounded-xl px-6 py-5"
-                style={{ background: "var(--bg2)", border: edge(20), boxShadow: "0 8px 30px rgba(0,0,0,0.28)" }}>
+                style={{ background: "var(--surface-card)", border: edge(20), boxShadow: "0 8px 30px rgba(0,0,0,0.28)" }}>
                 <span className="agx-spin" aria-hidden style={{ width: 26, height: 26, borderWidth: 2.5 }} />
                 <div className="text-[12px]" style={{ color: "var(--text)" }}>
                   Reading {boards.views.find((v) => v.id === wanted)?.name ?? "that board"}…
@@ -3593,7 +3593,7 @@ function FieldPick({ t, f, spec, busy, onApply }: {
       </button>
       {open && (
         <div className="agx-scroll absolute left-0 mt-1 rounded-lg shadow-2xl flex flex-col overflow-y-auto py-1"
-          style={{ zIndex: 30, background: "var(--bg2)", border: edge(28), minWidth: 180, maxHeight: 280 }}>
+          style={{ zIndex: 30, background: "var(--surface-card)", border: edge(28), minWidth: 180, maxHeight: 280 }}>
           {(spec.options ?? []).map((o) => (
             <button key={o.id} className="text-left px-2 py-1.5 hover:bg-white/5"
               onClick={() => {
@@ -3962,7 +3962,7 @@ function FolderPicker({ folders, busy, onAdd, onAddList }: {
     <div className="flex flex-col gap-1.5">
       <select value={space} onChange={(e) => setSpace(e.target.value)}
         className="text-[11.5px] px-2 py-1.5 rounded-lg self-start min-w-[200px]"
-        style={{ background: "var(--bg2)", border: edge(18), color: "var(--text)" }}>
+        style={{ background: "var(--surface-inset)", border: edge(18), color: "var(--text)" }}>
         {spaces.map((sp) => <option key={sp.id} value={sp.id}>{sp.name}</option>)}
       </select>
       {!found ? (
@@ -4054,7 +4054,7 @@ function ListViews({ listId, busy, onPick }: { listId: string; busy: boolean; on
   const shown = ql ? views.filter((v) => v.name.toLowerCase().includes(ql)) : views;
 
   return (
-    <div className="flex flex-col gap-1.5 mt-1 p-2 rounded-lg" style={{ border: edge(18), background: "var(--bg2)" }}>
+    <div className="flex flex-col gap-1.5 mt-1 p-2 rounded-lg" style={{ border: edge(18), background: "var(--surface-card)" }}>
       <div className="flex items-center gap-2">
         <span className="text-[10px] uppercase tracking-[0.12em]" style={{ color: "var(--text4)" }}>views in this list</span>
         <span className="tabular-nums text-[10px]" style={{ color: "var(--text4)" }}>{views.length}</span>
@@ -4572,7 +4572,7 @@ function PriorityPick({ t, writable, busy, onApply }: {
       </button>
       {open && (
         <div className="absolute left-0 mt-1 rounded-lg shadow-2xl flex flex-col overflow-hidden"
-          style={{ zIndex: 30, background: "var(--bg2)", border: edge(28), minWidth: 150 }}>
+          style={{ zIndex: 30, background: "var(--surface-card)", border: edge(28), minWidth: 150 }}>
           {[...PRIOS, { id: "", label: "None", c: "var(--text4)" } as const]
             .filter((o) => o.id !== (t.priority ?? ""))
             .map((o) => (
@@ -4850,7 +4850,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
       {onForget && (
         <CloseButton onClick={(e) => { e.stopPropagation(); onForget(); }} title="Forget this one"
           className="agx-onrow justify-self-end"
-          style={{ color: "var(--text3)", background: "var(--bg2)", border: edge(14) }} />
+          style={{ color: "var(--text3)", background: "var(--surface-card)", border: edge(14) }} />
       )}
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
@@ -4946,7 +4946,7 @@ function StatusFilter({ statuses, tasks, picked, onPick }: {
       </button>
       {open && (
         <div className="agx-scroll absolute left-0 mt-1 rounded-lg shadow-2xl flex flex-col overflow-y-auto"
-          style={{ zIndex: 30, background: "var(--bg2)", border: edge(28), minWidth: 236, maxHeight: 380 }}>
+          style={{ zIndex: 30, background: "var(--surface-card)", border: edge(28), minWidth: 236, maxHeight: 380 }}>
           {!!picked.length && (
             <button onClick={() => { onPick([]); setOpen(false); }}
               className="text-left px-2.5 py-1.5 text-[10.5px] hover:bg-white/5" style={{ color: "var(--text3)" }}>
@@ -5200,7 +5200,7 @@ function SprintPick({ t, busy, onApply }: {
       </button>
       {open && (
         <div className="agx-scroll absolute left-0 mt-1 rounded-lg shadow-2xl flex flex-col overflow-y-auto py-1"
-          style={{ zIndex: 30, background: "var(--bg2)", border: edge(28), minWidth: 210, maxHeight: 300 }}>
+          style={{ zIndex: 30, background: "var(--surface-card)", border: edge(28), minWidth: 210, maxHeight: 300 }}>
           {loading && <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>Reading the sprints…</div>}
           {!loading && why && <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--warning-ink)" }}>{why}</div>}
           {(lists ?? []).map((l) => (
@@ -5349,7 +5349,7 @@ function TagEdit({ t, busy, onApply, board }: {
               title="Add a tag" disabled={busy} onClick={() => { setAdding(true); setHot(0); }}>+ tag</button>}
         {adding && (
           <div className="agx-scroll absolute left-0 mt-1 rounded-lg shadow-2xl flex flex-col overflow-y-auto py-1"
-            style={{ zIndex: 30, background: "var(--bg2)", border: edge(28), minWidth: 190, maxHeight: 260 }}>
+            style={{ zIndex: 30, background: "var(--surface-card)", border: edge(28), minWidth: 190, maxHeight: 260 }}>
             {!rows.length && (
               <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>
                 {/* "in this space", not "on this board": the list is the whole
@@ -5422,7 +5422,7 @@ function CardHop({ list, id, onGo }: { list: ProviderTask[]; id: string; onGo: (
               backdrop is outside this dialog, so a click here must not reach it. */}
           <div className="fixed inset-0" style={{ zIndex: 40 }} onClick={() => setOpen(false)} />
           <div className="absolute right-0 mt-1 rounded-lg shadow-2xl flex flex-col overflow-hidden"
-            style={{ zIndex: 41, background: "var(--bg2)", border: edge(28), width: 380, maxHeight: 360 }}>
+            style={{ zIndex: 41, background: "var(--surface-card)", border: edge(28), width: 380, maxHeight: 360 }}>
             <input autoFocus value={q} onChange={(e) => setQ(e.target.value)}
               placeholder="Filter by id or title"
               /* Escape closes the picker and stops there. Without this it reaches
@@ -5866,7 +5866,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
           </button>
           {askOpen && (
             <div className="agx-scroll absolute left-0 top-full mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col overflow-y-auto"
-              style={{ zIndex: 30, background: "var(--bg2)", border: edge(28), minWidth: 260, maxHeight: 340 }}>
+              style={{ zIndex: 30, background: "var(--surface-card)", border: edge(28), minWidth: 260, maxHeight: 340 }}>
               {/* Your own skills first, because running one is the thing being
                   reached for — the plain hand-offs below are the fallback for a
                   card no skill covers. */}
@@ -6194,7 +6194,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
             </button>
             {statusOpen && (
               <div className="agx-scroll absolute left-0 mt-1 rounded-lg shadow-2xl flex flex-col overflow-y-auto"
-                style={{ zIndex: 30, background: "var(--bg2)", border: edge(28), minWidth: 210, maxHeight: 300 }}>
+                style={{ zIndex: 30, background: "var(--surface-card)", border: edge(28), minWidth: 210, maxHeight: 300 }}>
                 {options.map((o) => (
                   <button key={o.status} className="text-left px-2 py-1.5 hover:bg-white/5"
                     onClick={() => {
@@ -7426,7 +7426,7 @@ function LocalBody({ active, repos, here, onOpenChatWith }: {
 
       <div className="flex items-center gap-2 px-5 pb-1.5 shrink-0">
         <div className="flex items-center gap-2 flex-1 min-w-0 rounded-lg px-2.5 py-1"
-          style={{ background: "var(--bg2)", border: edge(14) }}>
+          style={{ background: "var(--surface-card)", border: edge(14) }}>
           <span className="shrink-0 flex" style={{ color: "var(--text3)" }}><SearchIcon size={ICON.xs} /></span>
           <input ref={barRef} value={input} onChange={(e) => setInput(e.target.value)}
             onKeyDown={async (e) => {
@@ -7788,7 +7788,7 @@ function Drop({ label, value, options, onPick, onClear }: {
       </button>
       {open && (
         <div className="absolute left-0 mt-1 rounded-lg text-[11.5px] shadow-2xl flex flex-col overflow-auto"
-          style={{ zIndex: 30, background: "var(--bg2)", border: edge(28), minWidth: 160, maxHeight: 300 }}>
+          style={{ zIndex: 30, background: "var(--surface-card)", border: edge(28), minWidth: 160, maxHeight: 300 }}>
           {onClear && (
             <button onClick={() => { onClear(); setOpen(false); }}
               className="text-left px-2.5 py-1.5 hover:bg-white/5" style={{ color: "var(--text3)" }}>
@@ -8028,7 +8028,7 @@ function TaskFields({ t, today, projects, tags, onEdit }: {
   const [editingDue, setEditingDue] = useState(false);
 
   const lab = { color: "var(--text4)", width: 62 };
-  const field = { background: "var(--bg2)", border: edge(18), color: "var(--text)" };
+  const field = { background: "var(--surface-card)", border: edge(18), color: "var(--text)" };
   /* A value you can change looks like one: quiet until the pointer is on it,
      then it shows its edge. A row of boxed inputs reads as a settings screen,
      which is what this pane looked like. */
@@ -8368,7 +8368,7 @@ function SearchHits({ asked, rows, looking, onAsk, onPick, onClose }: {
       style={{ background: "color-mix(in srgb, var(--bg) 55%, transparent)" }}
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="agx-scroll w-full max-w-[720px] max-h-[70%] overflow-y-auto rounded-lg shadow-2xl flex flex-col"
-        style={{ background: "var(--bg2)", border: edge(28) }}>
+        style={{ background: "var(--surface-card)", border: edge(28) }}>
         {/* The box, at the top of the list, the way every command palette does
             it: what you typed is here, and typing again searches again. */}
         <div className="px-3 pt-2.5 pb-2 flex items-center gap-2 shrink-0" style={{ borderBottom: edge(18) }}>

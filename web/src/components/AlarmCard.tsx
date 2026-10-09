@@ -68,7 +68,7 @@ export function AlarmCard(
       className="fixed rounded-xl overflow-hidden"
       style={{
         top: 56, right: 16, width: 340, zIndex: LAYER.alarm,
-        background: "var(--bg2)",
+        background: "var(--surface-card)",
         border: "1px solid color-mix(in srgb, var(--warning) 55%, transparent)",
         boxShadow: "0 24px 60px -18px rgba(0,0,0,0.75)",
       }}

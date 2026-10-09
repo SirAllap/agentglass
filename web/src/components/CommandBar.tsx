@@ -548,7 +548,7 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
           // yours to type in while the menu is open). The input itself is
           // excluded by the handler, so it can still be clicked into.
           <div onMouseDown={keepTermFocus} className="absolute rounded-lg text-[11px] shadow-2xl flex flex-col"
-            style={{ zIndex: 40, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", width: MENU_W, maxHeight: 420, overflow: "hidden", ...(side === "right" ? { right: 0 } : { left: 0 }), ...(dropUp ? { bottom: "calc(100% + 4px)" } : { top: "calc(100% + 4px)" }) }}>
+            style={{ zIndex: 40, background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", width: MENU_W, maxHeight: 420, overflow: "hidden", ...(side === "right" ? { right: 0 } : { left: 0 }), ...(dropUp ? { bottom: "calc(100% + 4px)" } : { top: "calc(100% + 4px)" }) }}>
             {/* A real project has more targets than fit on a screen — the repo
                 this was built against has 316 — so scrolling to find `migrate`
                 was the only way to run it. Matches the name and what the target

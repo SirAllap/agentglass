@@ -98,7 +98,7 @@ export function UpdateToast() {
       <div className="fixed rounded-xl text-left"
         style={{
           right: 16, bottom: 16, width: 320, zIndex: 60,
-          background: "var(--bg2)", border: edge(14), boxShadow: "0 12px 34px #000a",
+          background: "var(--surface-card)", border: edge(14), boxShadow: "0 12px 34px #000a",
           padding: "12px 14px",
         }}
         role="status" aria-live="polite">

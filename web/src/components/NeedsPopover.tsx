@@ -241,7 +241,7 @@ export function NeedsPopover({ anchorRef, avoidRef, open, items, onClose, onChat
         className="fixed flex flex-col rounded-xl overflow-hidden"
         style={{
           top: at.top, left: at.left, width: NEEDS_PANEL_W,
-          background: "var(--bg2)",
+          background: "var(--surface-card)",
           border: "1px solid var(--border)",
           boxShadow: "0 22px 48px -20px var(--shadow)",
         }}

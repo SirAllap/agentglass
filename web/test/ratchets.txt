@@ -1,0 +1,6 @@
+# Ceilings for counts that are being migrated away, read by
+# web/test/surface-ratchet.test.ts. A number here only ever goes DOWN: the
+# test fails when the count rises above it, and also when it falls below it,
+# so a migration lowers the line in the same commit and nothing can creep
+# back into the room it freed.
+bg2-fill 0

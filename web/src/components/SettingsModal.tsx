@@ -186,7 +186,7 @@ function SetupCard({ title, steps, note, error }: {
   const done = known.filter((s) => s.done).length;
   const all = known.length > 0 && done === known.length;
   return (
-    <div className="agx-inset mb-5 rounded-xl overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", background: "var(--bg2)" }}>
+    <div className="agx-inset mb-5 rounded-xl overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", background: "var(--surface-card)" }}>
       <div className="flex items-center gap-3 px-4 py-2.5" style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
         <span className="text-[13.5px] font-medium" style={{ color: "var(--text)" }}>{title}</span>
         <span className="ml-auto text-[11.5px] tabular-nums px-2 py-0.5 rounded-full"
@@ -5075,7 +5075,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                went — so the first press says what the second one does, and
                says it where the eye already is when it wants out. */
             <div className="fixed bottom-6 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-lg text-[12.5px] pointer-events-none"
-              style={{ zIndex: 10002, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", color: "var(--text2)", boxShadow: "0 10px 30px -12px rgba(0,0,0,0.7)" }}>
+              style={{ zIndex: 10002, background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", color: "var(--text2)", boxShadow: "0 10px 30px -12px rgba(0,0,0,0.7)" }}>
               Press Escape again to leave settings
             </div>
           )}

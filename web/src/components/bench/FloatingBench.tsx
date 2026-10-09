@@ -593,7 +593,7 @@ export function FloatingBench() {
                 top: st.grown ? GROWN_TOP : `${st.geom.y}%`,
                 width: st.grown ? `calc(100% - ${RAIL_W + 2 * GROWN_GAP}px)` : `${st.geom.w}%`,
                 height: st.grown ? `calc(100% - ${GROWN_TOP + GROWN_GAP}px)` : `${st.geom.h}%`,
-                background: "var(--bg2)",
+                background: "var(--surface-card)",
                 border: "1px solid color-mix(in srgb, var(--primary) 38%, transparent)",
                 boxShadow: "0 30px 70px -18px #000",
                 // The bench is freely positioned and can land over the TopBar's
@@ -656,7 +656,7 @@ export function FloatingBench() {
                     return (
                       <span key={t.id} className="shrink-0 flex items-center rounded-md overflow-hidden"
                         style={on
-                          ? { background: "var(--bg2)", border: edge(18) }
+                          ? { background: "var(--surface-card)", border: edge(18) }
                           : { background: "color-mix(in srgb, var(--text) 4%, transparent)", border: edge(10) }}>
                         <button
                           onClick={() => activateTab(root, t.id)}
@@ -963,7 +963,7 @@ function BenchMenu({ root, onClose, onTerm, onNote, onWeb, onAgent, onBoard }: {
   return (
     <>
       <div ref={panel} className="absolute left-2 top-9 rounded-lg overflow-hidden"
-        style={{ zIndex: 50, width: 300, background: "var(--bg2)", border: edge(26), boxShadow: "0 22px 50px -16px #000" }}
+        style={{ zIndex: 50, width: 300, background: "var(--surface-card)", border: edge(26), boxShadow: "0 22px 50px -16px #000" }}
         onKeyDown={(e) => {
           /* A React portal bubbles through the REACT tree, so keys pressed in
              here reach the window's handler too. Stopped at the door, like the
@@ -1068,7 +1068,7 @@ function BenchChip({ repo, repos, root, elsewhere, openState, onPick }: {
           <div ref={panel} className="fixed rounded-lg text-[11px] flex flex-col overflow-hidden"
             style={{
               top: box.top, right: box.right, width: "min(520px, calc(100vw - 16px))", maxHeight: "min(420px, 60vh)",
-              background: "var(--bg2)", border: edge(30), boxShadow: "0 22px 50px -16px #000",
+              background: "var(--surface-card)", border: edge(30), boxShadow: "0 22px 50px -16px #000",
             }}
             onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Escape") setOpen(false); }}>
             <div className="px-3 pt-2 pb-1.5 flex flex-col gap-1" style={{ borderBottom: edge(12) }}>

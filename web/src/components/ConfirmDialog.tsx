@@ -83,7 +83,7 @@ export function ConfirmDialog({ pending }: { pending: Pending | null }) {
             <motion.div
               initial={{ opacity: 0, scale: 0.98, y: 6 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.98 }}
               className="pointer-events-auto w-full max-w-[520px] rounded-xl overflow-hidden"
-              style={{ background: "var(--bg2)", border: "1px solid var(--border)", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}
+              style={{ background: "var(--surface-card)", border: "1px solid var(--border)", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}
               role="dialog" aria-modal="true"
             >
               <div className="px-4 py-3.5">

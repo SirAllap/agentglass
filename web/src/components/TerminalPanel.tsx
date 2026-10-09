@@ -3892,7 +3892,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         // Opaque rather than blurred: this sits over a terminal
                         // that repaints constantly, and a backdrop-filter here
                         // is a per-frame cost for the whole rectangle.
-                        background: "var(--bg2)",
+                        background: "var(--surface-card)",
                         border: "1px solid color-mix(in srgb, var(--phone) 45%, transparent)",
                         boxShadow: "0 18px 40px -18px var(--shadow)",
                         animation: "agx-zoom-in .12s ease-out",
@@ -4032,7 +4032,7 @@ function MoreMenu({ children }: { children: React.ReactNode }) {
       </button>
       {open && (
         <div className="absolute right-0 top-full mt-1 rounded-lg p-1.5 flex flex-col gap-1 agx-menu"
-          style={{ zIndex: 60, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", boxShadow: "0 12px 30px -10px #000" }}>
+          style={{ zIndex: 60, background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", boxShadow: "0 12px 30px -10px #000" }}>
           {children}
         </div>
       )}

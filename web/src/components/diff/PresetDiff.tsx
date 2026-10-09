@@ -59,7 +59,7 @@ export function PresetDiff({ open, onClose, changes, title, path, onBack, backLa
                 initial={{ opacity: 0, scale: 0.95, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 8 }}
                 transition={{ type: "spring", stiffness: 330, damping: 30 }}
                 className="w-[95vw] h-[95vh] rounded-xl flex flex-col pointer-events-auto outline-none overflow-hidden"
-                style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
+                style={{ background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
               >
                 <Inner changes={changes} title={title} path={path} onBack={onBack} backLabel={backLabel} onClose={onClose} />
               </motion.div>

@@ -22,7 +22,7 @@ export const MissionTimeline = memo(function MissionTimeline({ stats }: { stats:
             <Tooltip
               labelFormatter={(t) => fmtTime(Number(t))}
               formatter={(v: number, n: string) => (n === "cost" ? fmtUsd(v) : v)}
-              contentStyle={{ background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12, color: "var(--text)" }}
+              contentStyle={{ background: "var(--surface-card)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12, color: "var(--text)" }}
             />
             <Area type="monotone" dataKey="events" stroke="var(--primary)" strokeWidth={1.5} fill="url(#mt)" name="events" isAnimationActive={false} />
             <Line type="monotone" dataKey="errors" stroke="var(--error)" strokeWidth={2} dot={false} name="errors" isAnimationActive={false} />

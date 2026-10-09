@@ -19,7 +19,7 @@ export function HealthRing({ value, size = 46 }: { value: number; size?: number 
       <motion.div className="rounded-full" style={{ width: size, height: size, background: bg }} />
       <div
         className="absolute rounded-full flex items-center justify-center"
-        style={{ inset: 4, background: "var(--bg2)" }}
+        style={{ inset: 4, background: "var(--surface-card)" }}
       >
         <motion.span className="text-[12px] font-semibold" style={{ color: "var(--text)" }}>
           {label}

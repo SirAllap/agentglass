@@ -104,7 +104,7 @@ function Stack({ id, label, n, open, active, onToggle, onActivate, children }: {
       <button
         onClick={() => { onActivate(id); onToggle(id); }}
         className="w-full flex items-center gap-2 px-2.5 py-1 sticky top-0 z-20 text-left"
-        style={{ background: "var(--bg2)", borderLeft: `2px solid ${active ? "var(--primary)" : "transparent"}` }}
+        style={{ background: "var(--surface-card)", borderLeft: `2px solid ${active ? "var(--primary)" : "transparent"}` }}
         aria-expanded={open}>
         <span className="text-[10px] t-dim2 w-2 shrink-0">{open ? "▾" : "▸"}</span>
         <span className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: active ? "var(--text)" : "var(--text2)" }}>{label}</span>
@@ -692,7 +692,7 @@ export function DockerView({ active, onOpenBrowser }: {
                               used to be a heading with a ratio next to it,
                               which meant "is my stack up?" was answered by
                               reading twelve lines. */}
-                          <div className="flex items-center gap-2 px-2.5 py-1 sticky top-0 z-10" style={{ background: "var(--bg2)" }}>
+                          <div className="flex items-center gap-2 px-2.5 py-1 sticky top-0 z-10" style={{ background: "var(--surface-card)" }}>
                             <button onClick={() => toggleStack(st.project)} title={open ? "Collapse" : "Expand"}
                               className="text-[10px] t-dim2 w-3 shrink-0 min-h-[20px] text-left" aria-expanded={open}>{open ? "▾" : "▸"}</button>
                             <span className="text-[10px] uppercase tracking-wider font-semibold truncate" style={{ color: "var(--text2)" }}>{st.project}</span>

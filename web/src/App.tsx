@@ -1320,7 +1320,7 @@ export default function App() {
         <div className="fixed left-1/2 -translate-x-1/2 z-[60] px-3 py-1.5 rounded-lg text-[11.5px] flex items-center gap-2"
           style={{
             top: filesOpen && paletteH > 0 ? Math.round(paletteH) + 34 : "12vh",
-            background: "var(--bg2)", border: "1px solid var(--border)",
+            background: "var(--surface-card)", border: "1px solid var(--border)",
             color: openErr ? "var(--error)" : "var(--text2)",
           }}>
           {/* Bare: `.agx-spin` carries its own size, border and accent, and the

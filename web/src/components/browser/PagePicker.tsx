@@ -189,7 +189,7 @@ export function PagePicker({ view, url, title, mode, onNote, onDone }: {
         className="absolute rounded-xl shadow-2xl flex flex-col gap-2 p-3"
         style={{
           left, top, width: 360,
-          background: "var(--bg2)",
+          background: "var(--surface-card)",
           border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)",
         }}>
         <div className="flex items-baseline gap-2 min-w-0">

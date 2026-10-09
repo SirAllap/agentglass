@@ -126,7 +126,7 @@ export function RescueModal({ reports, progress, onCancel, onConfirm }: {
           <motion.div
             initial={{ opacity: 0, scale: 0.98, y: 6 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.98 }}
             className="pointer-events-auto w-full max-w-[760px] max-h-[80vh] flex flex-col rounded-xl overflow-hidden"
-            style={{ background: "var(--bg2)", border: "1px solid var(--border)", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}
+            style={{ background: "var(--surface-card)", border: "1px solid var(--border)", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}
           >
             <div className="px-4 py-3" style={{ borderBottom: "1px solid var(--border)" }}>
               <div className="text-[13px] font-medium" style={{ color: "var(--text)" }}>

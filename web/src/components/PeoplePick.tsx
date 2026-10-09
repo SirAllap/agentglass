@@ -67,7 +67,7 @@ export function PeoplePick(p: PeoplePickProps) {
       <div data-menu-layer className="fixed inset-0" style={{ zIndex: 9998 }} onClick={p.onClose} />
       <div ref={box} data-menu-layer data-people-pick
         className="agx-scroll fixed rounded-lg shadow-2xl flex flex-col overflow-y-auto py-1"
-        style={{ ...pos, zIndex: 9999, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--text) 28%, transparent)", width: PICK_W, maxHeight: PICK_H }}>
+        style={{ ...pos, zIndex: 9999, background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--text) 28%, transparent)", width: PICK_W, maxHeight: PICK_H }}>
         {!p.busy && all.length > (p.filterOver ?? 12) && (
           <input value={q} onChange={(e) => setQ(e.target.value)} autoFocus
             placeholder="Filter people…" spellCheck={false}

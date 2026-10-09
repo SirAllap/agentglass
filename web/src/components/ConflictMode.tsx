@@ -308,7 +308,7 @@ export function ConflictMode(p: ConflictModeProps) {
           checkout's base — that deduction names the wrong branch for any merge
           that is not of your own base, and the wrong commit for every rebase. */}
       <div className="shrink-0 px-4 py-2 border-b flex items-center gap-3 flex-wrap"
-        style={{ borderColor: "color-mix(in srgb, var(--border) 45%, transparent)", background: "var(--bg2)" }}>
+        style={{ borderColor: "color-mix(in srgb, var(--border) 45%, transparent)", background: "var(--surface-card)" }}>
         <span className="text-[11px] font-semibold" style={{ color: "var(--warning-ink)" }}>
           {merge?.state === "rebasing" ? "Rebasing" : merge?.state === "cherry-picking" ? "Cherry-picking"
             : merge?.state === "reverting" ? "Reverting" : "Merging"}
@@ -329,7 +329,7 @@ export function ConflictMode(p: ConflictModeProps) {
 
         {/* The files, and only the files. What entered cleanly is a line at the
             bottom, not four hundred rows to scroll past. */}
-        <div className="shrink-0 flex flex-col border-r" style={{ width: 236, borderColor: "color-mix(in srgb, var(--border) 45%, transparent)", background: "var(--bg2)" }}>
+        <div className="shrink-0 flex flex-col border-r" style={{ width: 236, borderColor: "color-mix(in srgb, var(--border) 45%, transparent)", background: "var(--surface-card)" }}>
           <div className="px-3 pt-2.5 pb-1.5 text-[10px] tracking-[0.14em] uppercase" style={{ color: "var(--text3)" }}>In conflict</div>
           <div className="agx-scroll overflow-y-auto overflow-x-hidden flex-1 min-h-0">
             {(session?.files.length ? session.files : rels).map((rel) => {
@@ -447,7 +447,7 @@ export function ConflictMode(p: ConflictModeProps) {
       {/* The ways out. Abort is always here and always first: it is the only
           move that is guaranteed safe. */}
       <div className="shrink-0 px-3 py-2 border-t flex items-center gap-2"
-        style={{ borderColor: "color-mix(in srgb, var(--border) 45%, transparent)", background: "var(--bg2)" }}>
+        style={{ borderColor: "color-mix(in srgb, var(--border) 45%, transparent)", background: "var(--surface-card)" }}>
         <Btn tone="danger" disabled={busy}
           onClick={async () => {
             if (!(await p.ask({
@@ -659,7 +659,7 @@ function Review({ root, staged, files, busy, writeEnabled, act, ask, merge, step
   return (
     <div className="flex-1 min-h-0 flex flex-col">
       <div className="shrink-0 px-4 py-2 border-b flex items-center gap-3"
-        style={{ borderColor: "color-mix(in srgb, var(--border) 45%, transparent)", background: "var(--bg2)" }}>
+        style={{ borderColor: "color-mix(in srgb, var(--border) 45%, transparent)", background: "var(--surface-card)" }}>
         <button onClick={onBack} className="text-[11px]" style={{ color: "var(--text2)" }}>← Back to the conflicts</button>
         <span className="text-[11px] font-semibold ml-2" style={{ color: "var(--text)" }}>
           What this {rebase ? "commit" : "merge"} carries
@@ -687,7 +687,7 @@ function Review({ root, staged, files, busy, writeEnabled, act, ask, merge, step
       </div>
 
       <div className="shrink-0 px-3 py-2 border-t flex items-center gap-2"
-        style={{ borderColor: "color-mix(in srgb, var(--border) 45%, transparent)", background: "var(--bg2)" }}>
+        style={{ borderColor: "color-mix(in srgb, var(--border) 45%, transparent)", background: "var(--surface-card)" }}>
         <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>
           {files.length} of these you decided; the other {Math.max(0, rows.length - files.length)} git merged on its own.
           {step && ` This is ${step} — the ${rebase ? "rebase" : "operation"} continues after it.`}

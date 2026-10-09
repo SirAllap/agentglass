@@ -139,7 +139,7 @@ function Editor({ r, repos, onChange, onSave, onDrop, onCancel }: {
    *  front rather than letting the save be the first to find out. */
   const cannotBoot = !!(r.params?.length) || !!r.confirm;
   const inp = "w-full text-[11.5px] px-2 py-1.5 rounded-lg outline-none";
-  const style = { background: "var(--bg2)", border: edge(22), color: "var(--text)" };
+  const style = { background: "var(--surface-card)", border: edge(22), color: "var(--text)" };
   return (
     <div className="rounded-xl p-3 flex flex-col gap-2.5" style={{ border: edge(28), background: "color-mix(in srgb, var(--bg3) 25%, transparent)" }}>
       <div className="flex gap-2 flex-wrap">
@@ -384,7 +384,7 @@ export function RunDialog({ r, repos, onClose, onNote, onRunStep, targetInTmux }
     onClose();
   };
 
-  const style = { background: "var(--bg2)", border: edge(22), color: "var(--text)" };
+  const style = { background: "var(--surface-card)", border: edge(22), color: "var(--text)" };
   return (
     <div className="rounded-xl p-3 flex flex-col gap-2.5" style={{ border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
       <div className="text-[12px] font-semibold" style={{ color: "var(--text)" }}>Run {r.name}</div>

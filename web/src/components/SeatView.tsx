@@ -392,7 +392,7 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
                  real one. */
               <section className="rounded-md overflow-hidden" style={{ border: edge(14), background: "var(--bg)" }}>
                 <div className="flex items-center gap-2 px-3 py-1.5 text-[10.5px]"
-                  style={{ color: "var(--text3)", borderBottom: `1px solid var(--border)`, background: "var(--bg2)" }}>
+                  style={{ color: "var(--text3)", borderBottom: `1px solid var(--border)`, background: "var(--surface-card)" }}>
                   <span aria-hidden style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--success)" }} />
                   <span>over its shoulder</span>
                   <span style={{ color: "var(--text4)" }}>· pane {data?.agent?.paneId ?? ""}</span>
@@ -611,14 +611,14 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
               {openRules && (editing === null
                 ? (
                   <pre className="rounded-md px-3 py-2.5 text-[11px] leading-relaxed whitespace-pre-wrap max-h-[52vh] overflow-y-auto agx-scroll"
-                    style={{ background: "var(--bg2)", border: edge(14), color: "var(--text3)" }}>
+                    style={{ background: "var(--surface-inset)", border: edge(14), color: "var(--text3)" }}>
                     {data?.doctrineText || "…"}
                   </pre>
                 )
                 : (
                   <textarea value={editing} onChange={(e) => setEditing(e.target.value)} spellCheck={false}
                     className="rounded-md px-3 py-2.5 text-[11px] leading-relaxed font-mono w-full h-[52vh]"
-                    style={{ background: "var(--bg2)", border: edge(26), color: "var(--text2)" }} />
+                    style={{ background: "var(--surface-inset)", border: edge(26), color: "var(--text2)" }} />
                 ))}
             </section>
           </div>
@@ -628,7 +628,7 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
               chair may do, which model and how often it is woken are settings
               you touch twice a month — they belong where a person can always
               find them, not twenty agents down a list. */}
-          <div className="flex flex-col min-w-0 min-h-0" style={{ background: "var(--bg2)" }}>
+          <div className="flex flex-col min-w-0 min-h-0" style={{ background: "var(--surface-card)" }}>
           <div className="flex flex-col gap-5 px-5 py-4 min-w-0 min-h-0 flex-1 overflow-y-auto agx-scroll">
             <section className="flex flex-col gap-1">
               <h2 className="text-[12.5px] font-medium" style={{ color: "var(--text)" }}>The field it keeps</h2>
@@ -742,7 +742,7 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
           </div>
 
             <section className="flex flex-wrap items-center gap-2 text-[10.5px] px-5 py-3 shrink-0"
-              style={{ color: "var(--text3)", borderTop: "1px solid var(--border)", background: "var(--bg2)" }}>
+              style={{ color: "var(--text3)", borderTop: "1px solid var(--border)", background: "var(--surface-card)" }}>
               <span title={adopted
                 ? "This session was already running when it took the chair, so it holds the machine's credential like any other. These are its stated rules; what actually holds the line is the gate on anything that leaves the machine, and its own doctrine."
                 : "Enforced by the server: a seat set to Speaks is refused if it tries to prompt an agent."}>

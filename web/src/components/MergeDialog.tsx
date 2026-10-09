@@ -244,7 +244,7 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
               // longer than any 520px box. Capped at the viewport so a long
               // squash body scrolls inside the dialog, not off the screen.
               className="pointer-events-auto w-full max-w-[760px] max-h-[86vh] flex flex-col rounded-xl overflow-hidden"
-              style={{ background: "var(--bg2)", border: "1px solid var(--border)", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}
+              style={{ background: "var(--surface-card)", border: "1px solid var(--border)", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}
               role="dialog" aria-modal="true" aria-label={`${how.label} #${pending.number}`}
             >
               {/* What is landing, and where. GitHub says this above its own

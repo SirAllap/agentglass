@@ -2408,7 +2408,7 @@ export function BrowserView({ active: viewOn, scope }: {
     <Portal>
       <div className="fixed inset-0" style={{ zIndex: 40 }} onClick={() => setMenuOpen(false)} />
       <div className="fixed rounded-lg text-[11px] py-1 shadow-2xl"
-        style={{ top: menuAtXY.top, right: menuAtXY.right, zIndex: 41, width: Math.max(230, Math.min(320, sideW - 8)), background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }}>
+        style={{ top: menuAtXY.top, right: menuAtXY.right, zIndex: 41, width: Math.max(230, Math.min(320, sideW - 8)), background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }}>
         {[
           { key: "home", node: menuRow(<HomeIcon size={14} />, "Home"), hint: "", run: () => go(homePage()) },
           { key: "new", node: menuRow(<span style={{ fontSize: 13, lineHeight: 1 }}>+</span>, "New tab"), hint: "Ctrl+T", run: () => setOmni("new") },
@@ -2905,7 +2905,7 @@ export function BrowserView({ active: viewOn, scope }: {
           inspector is NOT a layer over the page — it takes room, and the page
           reflows into what is left, which is the whole point of docking it. */}
       <div className="flex-1 min-h-0 flex" style={{ flexDirection: dt && dtSide === "right" ? "row" : "column" }}>
-      <div className="flex-1 min-h-0 relative" style={{ background: "var(--bg2)" }}>
+      <div className="flex-1 min-h-0 relative" style={{ background: "var(--surface-card)" }}>
         {/*
          * What just happened, over the page rather than above it.
          *
@@ -2930,14 +2930,14 @@ export function BrowserView({ active: viewOn, scope }: {
           */}
         {hover && (
           <div className="absolute bottom-0 left-0 max-w-[70%] truncate text-[10.5px] px-2 py-1 rounded-tr-md pointer-events-none"
-            style={{ zIndex: 20, color: "var(--text2)", background: "var(--bg2)",
+            style={{ zIndex: 20, color: "var(--text2)", background: "var(--surface-card)",
               borderTop: "1px solid color-mix(in srgb, var(--text) 12%, transparent)",
               borderRight: "1px solid color-mix(in srgb, var(--text) 12%, transparent)" }}
             title={hover}>{displayUrl(hover)}</div>
         )}
         {note && (
           <div className="agx-zoom-in absolute bottom-3 right-3 text-[10px] px-2.5 py-1.5 rounded-md shadow-lg pointer-events-none"
-            style={{ zIndex: 20, color: "var(--warning-ink)", background: "var(--bg2)",
+            style={{ zIndex: 20, color: "var(--warning-ink)", background: "var(--surface-card)",
               border: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)" }}>{note}</div>
         )}
         {tabs.map((t) => (
@@ -3040,9 +3040,9 @@ export function BrowserView({ active: viewOn, scope }: {
               <button onClick={() => { const other = splitId!; setSplitId(activeId); show(other); }}
                 title="Put the bar on this side" aria-label="Swap the sides"
                 className="grid place-items-center rounded-md"
-                style={{ width: 24, height: 24, background: "var(--bg2)", color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }}><SwapIcon size={ICON.sm} /></button>
+                style={{ width: 24, height: 24, background: "var(--surface-card)", color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }}><SwapIcon size={ICON.sm} /></button>
               <CloseButton onClick={() => setSplitId(null)} title="Close the split" hit={24}
-                style={{ background: "var(--bg2)", color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }} />
+                style={{ background: "var(--surface-card)", color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }} />
             </div>
           </>
         )}
@@ -3137,7 +3137,7 @@ export function BrowserView({ active: viewOn, scope }: {
                 does not have here, so the two that mean anything are drawn
                 where they work. */}
             <div className="flex items-center gap-1 px-1.5 shrink-0"
-              style={{ height: 24, background: "var(--bg2)", borderBottom: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+              style={{ height: 24, background: "var(--surface-card)", borderBottom: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
               <span className="text-[9.5px] tracking-[0.12em] uppercase mr-auto" style={{ color: "var(--text4)" }}>Inspector</span>
               {/* Its own zoom, and only its own. The gesture works inside the
                   pane too (Ctrl+wheel, Ctrl+plus) — these are here because a
@@ -3246,7 +3246,7 @@ export function BrowserView({ active: viewOn, scope }: {
             <div className="absolute rounded-xl shadow-2xl p-3 flex flex-col gap-2"
               style={{
                 zIndex: 49, left: "50%", top: 90, transform: "translateX(-50%)", width: 420,
-                background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)",
+                background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)",
               }}>
               <div className="text-[12px]" style={{ color: "var(--text)" }}>Import from {bringing.label}</div>
               {sh.spaces.length > 1 && (
@@ -3301,7 +3301,7 @@ export function BrowserView({ active: viewOn, scope }: {
         <div className="fixed rounded-md px-2 py-1 text-[10.5px] shadow-2xl pointer-events-none truncate"
           style={{
             left: carry.x + 12, top: carry.y + 12, zIndex: 60, maxWidth: 220,
-            background: "var(--bg2)", color: "var(--text)",
+            background: "var(--surface-card)", color: "var(--text)",
             border: `1px solid color-mix(in srgb, var(--primary) ${carry.at ? 70 : 30}%, transparent)`,
           }}>
           {carry.label}
@@ -3328,7 +3328,7 @@ export function BrowserView({ active: viewOn, scope }: {
             onMouseEnter={() => setPeep(peep)} onMouseLeave={() => setPeep(null)}
             style={{
               top: peep.top, right: peep.right, width: 200, maxHeight: 320, overflowY: "auto", zIndex: 45,
-              background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)",
+              background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)",
             }}>
             <div className="px-1.5 pt-0.5 pb-1 text-[9px] uppercase tracking-[0.12em] flex items-center gap-1.5" style={{ color: "var(--text4)" }}>
               <FolderIcon size={ICON.xs} /> {f.name} <span className="ml-auto tabular-nums">{folderCount(f)}</span>
@@ -3530,7 +3530,7 @@ export function BrowserView({ active: viewOn, scope }: {
             onClick={() => { setOmni(null); setTyped(null); setHint(-1); }} />
           <div className="absolute rounded-xl shadow-2xl p-1.5 flex flex-col gap-0.5"
             style={{
-              zIndex: 39, background: "var(--bg2)",
+              zIndex: 39, background: "var(--surface-card)",
               border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)",
               ...(omni === "new"
                 ? { left: "14%", right: (sideOpen ? sideW : 0) + 40, top: 120 }

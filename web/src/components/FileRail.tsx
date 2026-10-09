@@ -603,7 +603,7 @@ export function FileRail({
               <textarea value={body ?? ""} onChange={(e) => onBody(e.target.value)} rows={2}
                 placeholder="Summary — optional for an approval, markdown works"
                 className="w-full mt-1.5 rounded-md p-2 text-[10.5px] resize-y"
-                style={{ background: "var(--bg2)", color: "var(--text)", border: edge(18) }} />
+                style={{ background: "var(--surface-inset)", color: "var(--text)", border: edge(18) }} />
             )}
             <p className="m-0 mt-1.5 text-[10px]" style={{ color: "var(--text4)" }}>{goesWith}</p>
             {onSubmit && (

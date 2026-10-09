@@ -202,7 +202,7 @@ export function MarkupLayer({ view, url, onNote, onDone }: {
       <div className="absolute left-1/2 -translate-x-1/2 bottom-4 flex flex-col items-center gap-1.5"
         style={{ pointerEvents: "auto" }}>
         <div className="flex items-center gap-1 px-1.5 py-1 rounded-xl shadow-2xl"
-          style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }}>
+          style={{ background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }}>
           {TOOLS.map((t) => (
             <button key={t.id} onClick={() => setTool(t.id)} title={t.label}
               className="agx-btn rounded-lg flex items-center justify-center"
@@ -239,7 +239,7 @@ export function MarkupLayer({ view, url, onNote, onDone }: {
         </div>
 
         <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-xl shadow-2xl"
-          style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }}>
+          style={{ background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }}>
           <span className="text-[10.5px] mr-1" style={{ color: "var(--text3)" }}>
             Draw on the page, then
           </span>

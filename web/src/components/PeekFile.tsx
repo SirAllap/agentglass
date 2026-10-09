@@ -614,7 +614,7 @@ export function PeekFile({ peek, onClose, topPx }: {
           boxShadow: "0 40px 90px -24px var(--shadow)",
         }}>
         <div className="flex items-center gap-2 px-3 py-1.5 shrink-0 text-[11px]"
-          style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", background: "var(--bg2)" }}>
+          style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", background: "var(--surface-card)" }}>
           {/* Which of the two this is, said at a glance rather than discovered
               by trying to type. A writable editor open on the wrong worktree is
               the failure worth making impossible to walk into, so the branch is
@@ -868,7 +868,7 @@ function FindBar({ inputRef, value, onValue, hit, hits, onStep, onClose }: {
   const none = value.trim().length > 0 && hits === 0;
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 shrink-0 text-[11px]"
-      style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", background: "var(--bg2)" }}>
+      style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", background: "var(--surface-card)" }}>
       <span className="flex" style={{ color: "var(--text3)" }}><SearchIcon size={ICON.xs} /></span>
       <input ref={inputRef} value={value} onChange={(e) => onValue(e.target.value)}
         spellCheck={false} autoComplete="off" placeholder="Find in this document…"

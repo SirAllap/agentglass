@@ -259,7 +259,7 @@ export function Composer({ value, onChange, onSend, onCancel, busy, placeholder,
         <div data-mention-menu className="absolute left-2 right-2 rounded-lg shadow-2xl overflow-y-auto agx-scroll"
           style={{
             ...(place.up ? { bottom: "calc(100% - 30px)" } : { top: "calc(100% - 30px)" }),
-            zIndex: 40, background: "var(--bg2)", border: edge(28), maxHeight: place.maxHeight,
+            zIndex: 40, background: "var(--surface-card)", border: edge(28), maxHeight: place.maxHeight,
           }}>
           {!people && <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>Reading who is on this list…</div>}
           {people && !rows.length && <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>Nobody matches that.</div>}

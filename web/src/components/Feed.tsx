@@ -424,7 +424,7 @@ function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }:
                   initial={{ opacity: 0, scale: 0.97, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.98, y: 8 }}
                   transition={{ type: "spring", stiffness: 330, damping: 30 }}
                   className="w-[92vw] h-[90vh] rounded-xl flex flex-col pointer-events-auto"
-                  style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
+                  style={{ background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
                 >
                   <div className="flex items-center justify-between px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                     <div>

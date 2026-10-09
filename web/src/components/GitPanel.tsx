@@ -562,7 +562,7 @@ function HelpSheet({ view, onClose }: { view: View; onClose: () => void }) {
   ));
   return (
     <div onClick={onClose} className="absolute inset-0 grid place-items-center" style={{ zIndex: 50, background: "color-mix(in srgb, #000 55%, transparent)" }}>
-      <div onClick={(e) => e.stopPropagation()} className="rounded-xl px-5 py-4 shadow-2xl" style={{ minWidth: 420, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }}>
+      <div onClick={(e) => e.stopPropagation()} className="rounded-xl px-5 py-4 shadow-2xl" style={{ minWidth: 420, background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }}>
         <div className="flex items-center gap-2 mb-3">
           <span className="text-[12px] font-semibold" style={{ color: "var(--text)" }}>Keys</span>
           <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "color-mix(in srgb, var(--primary) 14%, transparent)", color: "var(--primary-hover)" }}>{VIEW_LABEL[view]}</span>
@@ -715,7 +715,7 @@ function FileRow({ c, root, active, writeEnabled, desc, onSelect, action, onActi
 function Section({ title, count, tint, action, onAll, children }: { title: string; count: number; tint: string; action?: string; onAll?: () => void; children: React.ReactNode }) {
   return (
     <div className="mb-1">
-      <div className="flex items-center gap-2 px-2 py-1 sticky top-0 z-10" style={{ background: "var(--bg2)" }}>
+      <div className="flex items-center gap-2 px-2 py-1 sticky top-0 z-10" style={{ background: "var(--surface-card)" }}>
         <span className="w-1.5 h-1.5 rounded-full" style={{ background: tint }} />
         <span className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: "var(--text2)" }}>{title}</span>
         <span className="text-[9.5px] t-dim2 tabular-nums">{count}</span>

@@ -1536,7 +1536,7 @@ function PrTableHead() {
         // The workspace panel this lives in is painted --bg2; a sticky heading
         // in --bg would read as a band of the wrong colour sliding over the
         // rows rather than as the table's own header.
-        background: "var(--bg2)",
+        background: "var(--surface-card)",
         color: "var(--text3)",
         fontSize: 10,
         letterSpacing: ".07em",
@@ -9693,7 +9693,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
           draws a scrollbar — one ran the whole width of the app. The column is
           flush now, so there is nothing to pull out of. */}
       <div ref={barRef} className="flex flex-col gap-1 sticky top-0 z-30 px-3 py-2"
-        style={{ background: "var(--bg2)", borderBottom: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+        style={{ background: "var(--surface-card)", borderBottom: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
       <div className="flex items-center gap-2 flex-wrap">
         <span className="flex items-center gap-1.5 px-2 py-1 rounded shrink-0"
           style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
@@ -10083,7 +10083,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
                               {ln.map((n) => <NoteCard key={`${n.plugin}/${n.id}`} n={n} compact md={localMd} onStatus={(st) => { void local?.setStatus(n, st); }} />)}
                               {pend.map((dc, i) => (
                                 <div key={`p${i}`} className="rounded-lg overflow-hidden text-[11.5px]" style={{
-                                  background: "var(--bg2)",
+                                  background: "var(--surface-card)",
                                   border: "1px dashed color-mix(in srgb, var(--warning) 55%, transparent)",
                                 }}>
                                   {/* Dashed and amber: this is written and not
@@ -10137,7 +10137,7 @@ function FilesTab({ d, root, byPath, loaded, diffErr, seenFiles, onSeen, onSeenM
                                   // on a tint of its own, and lifted off the
                                   // diff by a shadow the way every other
                                   // floating surface in this app is.
-                                  background: "var(--bg2)",
+                                  background: "var(--surface-card)",
                                   border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)",
                                   boxShadow: "0 12px 30px -14px var(--shadow)",
                                 }}>
@@ -12195,7 +12195,7 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
               </div>
               {openDraft != null && drafts[openDraft] && (
                 <div className="rounded-lg overflow-hidden text-[11.5px]" style={{
-                  background: "var(--bg2)",
+                  background: "var(--surface-card)",
                   border: "1px dashed color-mix(in srgb, var(--warning) 55%, transparent)",
                 }}>
                   <div className="px-2.5 py-1 flex items-center gap-2 text-[10px]"

@@ -116,7 +116,7 @@ export function SavedRepliesPane({ open }: { open: boolean }) {
         <textarea value={text} onChange={(e) => setText(e.target.value)} rows={5}
           placeholder="What goes in the box. Markdown works here."
           className="px-2 py-1.5 rounded text-[11px] outline-none resize-y"
-          style={{ background: "var(--bg2)", color: "var(--text)", border: edge(16), fontFamily: "var(--diff-font, ui-monospace, monospace)" }} />
+          style={{ background: "var(--surface-inset)", color: "var(--text)", border: edge(16), fontFamily: "var(--diff-font, ui-monospace, monospace)" }} />
         {err && <div className="text-[10.5px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
         <div className="flex items-center gap-1.5">
           <button onClick={() => void save()} disabled={busy || !text.trim()}

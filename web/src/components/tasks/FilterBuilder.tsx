@@ -96,7 +96,7 @@ function Pick({ label, muted, children, width, lead }: {
       </button>
       {open && (
         <span className="absolute z-10 top-full left-0 mt-1 rounded-lg overflow-hidden flex flex-col"
-          style={{ background: "var(--bg2)", border: "1px solid var(--border)", boxShadow: "0 18px 40px -22px var(--shadow)", minWidth: 220 }}>
+          style={{ background: "var(--surface-card)", border: "1px solid var(--border)", boxShadow: "0 18px 40px -22px var(--shadow)", minWidth: 220 }}>
           {children(() => setOpen(false))}
         </span>
       )}
@@ -312,7 +312,7 @@ export function FilterBuilder({ fields, value, onChange }: {
         <span data-agx-filters="" className="fixed rounded-xl p-3 flex flex-col gap-2"
           style={{
             top: at.top, left: at.left, minWidth: PANEL_MIN, maxWidth: "min(94vw, 720px)",
-            background: "var(--bg2)", border: "1px solid var(--border)",
+            background: "var(--surface-card)", border: "1px solid var(--border)",
             boxShadow: "0 22px 48px -20px var(--shadow)",
           }}>
           {!fields.length ? (

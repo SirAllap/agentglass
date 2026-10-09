@@ -926,7 +926,7 @@ export function FilePalette({
                */
               ...(docOpen ? { left: "8vw", right: "8vw" } : { width: showPreview ? "min(1040px, 96vw)" : "min(720px, 92vw)" }),
               maxHeight: docOpen ? "38vh" : "72vh",
-              background: "var(--bg2)",
+              background: "var(--surface-card)",
               border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)",
               boxShadow: "0 30px 70px -20px #000",
             }}
@@ -940,7 +940,7 @@ export function FilePalette({
                 <button key={t.id} onClick={() => { setTab(t.id); inputRef.current?.focus(); }}
                   className="text-[11px] px-3 py-1.5 rounded-t-md"
                   style={t.id === tab
-                    ? { background: "var(--bg2)", border: edge(18), borderBottom: "none", color: "var(--primary-ink)" }
+                    ? { background: "var(--surface-card)", border: edge(18), borderBottom: "none", color: "var(--primary-ink)" }
                     : { border: "1px solid transparent", color: "var(--text3)" }}>
                   {t.label}
                 </button>
@@ -1287,7 +1287,7 @@ function RepoChip({ repo, repos, openState, onPick }: {
               top: box.top, right: box.right,
               // Wide enough for a branch name, and never wider than the window.
               width: "min(520px, calc(100vw - 16px))", maxHeight: "min(420px, 60vh)",
-              background: "var(--bg2)", border: edge(30),
+              background: "var(--surface-card)", border: edge(30),
             }}
             onKeyDown={menuKeys(() => setOpen(false))}>
             {/* Said once, at the top: the pair of chips is only unambiguous
@@ -1430,7 +1430,7 @@ function PlaceChip({ place, places, recents, error, openState, onPick }: {
             style={{
               top: box.top, right: box.right,
               width: "min(520px, calc(100vw - 16px))", maxHeight: "min(420px, 60vh)",
-              background: "var(--bg2)", border: edge(30),
+              background: "var(--surface-card)", border: edge(30),
             }}
             onKeyDown={menuKeys(() => setOpen(false))}>
             <div className="px-3 pt-2 pb-1.5 shrink-0 flex flex-col gap-1" style={{ borderBottom: edge(12) }}>
@@ -1543,7 +1543,7 @@ function ScopeChip({ repo, repos, ref_, refs, openState, onPickRoot, onPickRef }
           <div className="fixed rounded-lg text-[11px] shadow-2xl flex flex-col overflow-hidden"
             style={{
               top: box.top, right: box.right, width: "min(560px, calc(100vw - 16px))",
-              maxHeight: "min(460px, 66vh)", background: "var(--bg2)", border: edge(30),
+              maxHeight: "min(460px, 66vh)", background: "var(--surface-card)", border: edge(30),
             }}
             onKeyDown={menuKeys(() => setOpen(false))}>
             <div className="px-3 pt-2 pb-1.5 shrink-0 flex flex-col gap-1" style={{ borderBottom: edge(12) }}>
@@ -1670,7 +1670,7 @@ function RefChip({ value, refs, openState, onPick }: {
           <div className="fixed rounded-lg text-[11px] shadow-2xl flex flex-col overflow-hidden"
             style={{
               top: box.top, right: box.right, width: "min(420px, calc(100vw - 16px))",
-              maxHeight: "min(360px, 55vh)", background: "var(--bg2)", border: edge(30),
+              maxHeight: "min(360px, 55vh)", background: "var(--surface-card)", border: edge(30),
             }}
             onKeyDown={menuKeys(() => setOpen(false))}>
             {/* Only once there are enough to hunt through. Below that the list

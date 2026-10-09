@@ -80,7 +80,7 @@ export function ThemePicker({ value, onChange, error }: { value: string; onChang
           /* Must beat the diff's sticky hunk headers, which are also z-20: on a
              tie the later-painted element wins, and those headers striped grey
              bars across this list wherever a `@@ … @@` line sat behind it. */
-          style={{ zIndex: 40, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", minWidth: 178, maxHeight: 340, overflowY: "auto" }}
+          style={{ zIndex: 40, background: "var(--surface-card)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", minWidth: 178, maxHeight: 340, overflowY: "auto" }}
         >
           <Row id="auto" name="Auto (app theme)" />
           <div className="px-2.5 pt-1.5 pb-0.5 text-[9px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>Dark</div>

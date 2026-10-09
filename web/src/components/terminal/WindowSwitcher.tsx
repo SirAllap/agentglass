@@ -148,7 +148,7 @@ export function WindowSwitcher({ open, onClose, onGone }: {
         className="fixed inset-x-0 mx-auto flex flex-col overflow-hidden rounded-xl"
         style={{
           zIndex: 2, top: "12vh", width: "min(620px, calc(100vw - 32px))", maxHeight: "64vh",
-          background: "var(--bg2)",
+          background: "var(--surface-card)",
           border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)",
           boxShadow: "0 30px 70px -20px #000",
         }}

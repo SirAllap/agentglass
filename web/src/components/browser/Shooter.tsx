@@ -328,10 +328,10 @@ export function Shooter({ view, onNote, onDone }: {
         {sel ? (
           <>
             <CloseButton onClick={onDone} title="Cancel (Esc)" hit={30}
-              style={{ background: "var(--bg2)", color: "var(--text3)", border: BORDER }} />
+              style={{ background: "var(--surface-card)", color: "var(--text3)", border: BORDER }} />
             <button onClick={() => void doCopy()} disabled={!!busy}
               className="px-3 py-1.5 rounded-lg text-[11.5px] disabled:opacity-50"
-              style={{ background: "var(--bg2)", color: "var(--text)", border: BORDER }}>
+              style={{ background: "var(--surface-card)", color: "var(--text)", border: BORDER }}>
               {busy === "copy" ? "Copying…" : "Copy"}
             </button>
             <button onClick={() => void doSave()} disabled={!!busy}
@@ -344,7 +344,7 @@ export function Shooter({ view, onNote, onDone }: {
           <>
             <button onClick={() => { setSel({ x: 0, y: 0, width: box.current?.clientWidth ?? 0, height: box.current?.clientHeight ?? 0 }); }}
               className="px-2.5 py-1.5 rounded-lg text-[11px]"
-              style={{ background: "var(--bg2)", color: "var(--text)", border: BORDER }}>Visible</button>
+              style={{ background: "var(--surface-card)", color: "var(--text)", border: BORDER }}>Visible</button>
             {/* WHOLE PAGE IS GONE, and the reason is worth keeping.
                 `captureBeyondViewport` paints the page in strips and repaints
                 anything `position: fixed` in EVERY strip, so a page with a
@@ -357,7 +357,7 @@ export function Shooter({ view, onNote, onDone }: {
                 for anyway. */}
             <button onClick={onDone}
               className="px-2.5 py-1.5 rounded-lg text-[11px]"
-              style={{ background: "var(--bg2)", color: "var(--text3)", border: BORDER }}>Cancel</button>
+              style={{ background: "var(--surface-card)", color: "var(--text3)", border: BORDER }}>Cancel</button>
           </>
         )}
       </div>
