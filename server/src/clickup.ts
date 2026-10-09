@@ -3293,12 +3293,14 @@ export function prNumberFromUrl(url: string): number | null {
   let m: RegExpExecArray | null = null;
   try {
     const u = new URL((url || "").trim());
-    if ((u.protocol === "https:" || u.protocol === "http:") && /^(www\.)?github\.com$/i.test(u.hostname) && !u.username && !u.password) {
-      m = /^\/[^/]+\/[^/]+\/pull\/(\d+)/i.exec(u.pathname);
+    // https only, the host exactly (no port, no userinfo), and the number runs
+    // to the end of its path segment: `/pull/10<U+200B>65` is not PR 10.
+    if (u.protocol === "https:" && /^(www\.)?github\.com$/i.test(u.hostname) && !u.port && !u.username && !u.password) {
+      m = /^\/[^/]+\/[^/]+\/pull\/(\d+)(?:\/|$)/i.exec(u.pathname);
     }
   } catch { /* not an absolute URL: GitLab below, or nothing */ }
   const n = m ? Number(m[1]) : NaN;
-  return Number.isFinite(n) && n > 0 ? n : mergeRequestNumber(url);
+  return Number.isSafeInteger(n) && n > 0 ? n : mergeRequestNumber(url);
 }
 
 /** GitHub links on a card that are not pull requests; see shared/githubLinks.ts. */

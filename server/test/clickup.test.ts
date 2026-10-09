@@ -949,3 +949,32 @@ describe("mergeMembers", () => {
     expect(out[0]).toMatchObject({ id: 7, name: "Ada Lin", initials: "AL", color: "#123456", me: true });
   });
 });
+
+describe("card link parsing is strict about what it reads as a number", () => {
+  const { prNumberFromUrl } = CU;
+  it("reads the plain link, with a trailing slash, query or fragment", () => {
+    expect(prNumberFromUrl("https://github.com/acme/orbit/pull/1042")).toBe(1042);
+    expect(prNumberFromUrl("https://github.com/acme/orbit/pull/1042/")).toBe(1042);
+    expect(prNumberFromUrl("https://github.com/acme/orbit/pull/1042?diff=split#files")).toBe(1042);
+  });
+
+  it("a hidden character inside the number is not a shorter number", () => {
+    expect(prNumberFromUrl("https://github.com/acme/orbit/pull/10​65")).toBe(null);
+  });
+
+  it("a port, plain http, or a number past the safe integers is not a pull request", () => {
+    expect(prNumberFromUrl("https://github.com:8443/acme/orbit/pull/1042")).toBe(null);
+    expect(prNumberFromUrl("http://github.com/acme/orbit/pull/1042")).toBe(null);
+    expect(prNumberFromUrl("https://github.com/acme/orbit/pull/12345678901234567890")).toBe(null);
+  });
+
+  it("a GitLab look-alike host is refused; gitlab.com and a self-hosted one are kept", () => {
+    expect(prNumberFromUrl("https://gitlab.com.evil.example/acme/orbit/-/merge_requests/8")).toBe(null);
+    expect(prNumberFromUrl("https://gitlab.com/acme/orbit/-/merge_requests/8")).toBe(8);
+    expect(prNumberFromUrl("https://gitlab.acme.example/acme/orbit/-/merge_requests/8")).toBe(8);
+    expect(prNumberFromUrl("https://code.gitlab.acme.example/acme/orbit/-/merge_requests/8")).toBe(8);
+    expect(prNumberFromUrl("https://x.gitlab.com.evil.example/acme/orbit/-/merge_requests/8")).toBe(null);
+    expect(prNumberFromUrl("https://gitlab.com:8443/acme/orbit/-/merge_requests/8")).toBe(null);
+    expect(prNumberFromUrl("https://gitlab.com/acme/orbit/-/merge_requests/8​1")).toBe(null);
+  });
+});
