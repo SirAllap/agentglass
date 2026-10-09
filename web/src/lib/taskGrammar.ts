@@ -190,18 +190,7 @@ export function checkProgress(notes: string[]): { done: number; total: number } 
  * opening a shell in an arbitrary directory because we had to pick one is worse
  * than saying there is nowhere to open it.
  */
-export function rootForTask(
-  project: string | null, repos: { root: string; name: string }[], fallback: string | null,
-): string | null {
-  const want = (project ?? "").trim().toLowerCase();
-  if (want) {
-    const tail = want.split(".").pop()!;
-    const hit = repos.find((r) => r.name.toLowerCase() === want)
-      ?? repos.find((r) => r.name.toLowerCase() === tail);
-    if (hit) return hit.root;
-  }
-  return fallback || null;
-}
+export { rootForTask } from "../../../shared/rootForTask.ts";
 
 /**
  * What to hand an agent that is being asked about a task.

@@ -4718,6 +4718,13 @@ export interface AgentPane {
    *  so every worktree of a repository answers the same (see TmuxWindow.repo).
    *  Null in no repository; absent while the server is still finding out. */
   repo?: string | null;
+  /** The group its window was put in by hand — tmux's `@agx-group` option,
+   *  the same answer `TmuxWindow.group` gives the desk. Absent means "by its
+   *  project". Read-only here: nothing on the phone writes it. */
+  group?: string;
+  /** Its window is pinned first in its group (`@agx-pin`) — where the
+   *  orchestrator's window sits. Absent when not. */
+  pinned?: boolean;
   /**
    * This pane is on the tmux server agentglass itself works on.
    *

@@ -64,7 +64,7 @@ export const NO_BROWSE: BrowseState = { q: "", browsePath: null };
  * Each tab owns the folder it was looking at.
  *
  * The folder used to be one variable shared by all four tabs, so after walking
- * into ~/brain/memory in Machine, Name still drew that breadcrumb and listing
+ * into ~/notes/memory in Machine, Name still drew that breadcrumb and listing
  * beside a scope pill that said something else. Leaving a tab files its state
  * away; arriving on one takes out ITS state, or the default when it has none.
  */

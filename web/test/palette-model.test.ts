@@ -7,11 +7,11 @@ const HOME = "/home/dev";
 
 describe("the path bar", () => {
   test("home is the first segment and the rest follow it", () => {
-    expect(pathBar("/home/dev/brain/memory/orbit", HOME)).toEqual([
+    expect(pathBar("/home/dev/notes/memory/orbit", HOME)).toEqual([
       { label: "Home", path: "/home/dev", home: true, last: false },
-      { label: "brain", path: "/home/dev/brain", last: false },
-      { label: "memory", path: "/home/dev/brain/memory", last: false },
-      { label: "orbit", path: "/home/dev/brain/memory/orbit", last: true },
+      { label: "notes", path: "/home/dev/notes", last: false },
+      { label: "memory", path: "/home/dev/notes/memory", last: false },
+      { label: "orbit", path: "/home/dev/notes/memory/orbit", last: true },
     ]);
   });
 
@@ -38,7 +38,7 @@ describe("the path bar", () => {
 });
 
 describe("each tab owns its folder", () => {
-  const machine: BrowseState = { q: "", browsePath: "/home/dev/brain/memory/orbit" };
+  const machine: BrowseState = { q: "", browsePath: "/home/dev/notes/memory/orbit" };
 
   test("leaving Machine does not carry its folder to Name", () => {
     const r = switchTab<string>({}, "machine", machine, "names");
@@ -68,8 +68,8 @@ describe("each tab owns its folder", () => {
 
 describe("the box says where you are", () => {
   test("a folder is its path, home folded to ~, ending in a slash", () => {
-    expect(pathInputText("/home/dev/brain/orbit", HOME)).toBe("~/brain/orbit/");
-    expect(pathInputText("/home/dev/brain/orbit/", HOME)).toBe("~/brain/orbit/");
+    expect(pathInputText("/home/dev/notes/orbit", HOME)).toBe("~/notes/orbit/");
+    expect(pathInputText("/home/dev/notes/orbit/", HOME)).toBe("~/notes/orbit/");
     expect(pathInputText(HOME, HOME)).toBe("~/");
     expect(pathInputText("/srv/data", HOME)).toBe("/srv/data/");
     expect(pathInputText("/", HOME)).toBe("/");
@@ -80,7 +80,7 @@ describe("the box says where you are", () => {
   });
 
   test("a path is edited from its end, a last query is replaced whole", () => {
-    expect(focusSelection("~/brain/orbit/")).toBe("end");
+    expect(focusSelection("~/notes/orbit/")).toBe("end");
     expect(focusSelection("/srv/data/")).toBe("end");
     expect(focusSelection("guest-checkout")).toBe("all");
     expect(focusSelection("")).toBe("all");
@@ -144,17 +144,17 @@ describe("the where menu as a sidebar", () => {
   });
 
   test("a recent is its last segment in bold and its parent muted", () => {
-    expect(recentRow(`${HOME}/brain/memory/orbit/`, HOME)).toMatchObject({ name: "orbit", sub: "~/brain/memory", recent: true });
+    expect(recentRow(`${HOME}/notes/memory/orbit/`, HOME)).toMatchObject({ name: "orbit", sub: "~/notes/memory", recent: true });
     expect(recentRow("/srv", HOME)).toMatchObject({ name: "srv", sub: "/" });
   });
 
   test("recents leave out places and the folder you are in", () => {
-    const s = placeSections(places, [`${HOME}/code`, `${HOME}/brain/orbit`, `${HOME}/here`], `${HOME}/here`, "", HOME);
-    expect(s.recent.map((r) => r.path)).toEqual([`${HOME}/brain/orbit`]);
+    const s = placeSections(places, [`${HOME}/code`, `${HOME}/notes/orbit`, `${HOME}/here`], `${HOME}/here`, "", HOME);
+    expect(s.recent.map((r) => r.path)).toEqual([`${HOME}/notes/orbit`]);
   });
 
   test("the filter narrows both sections and the flat list is places then recent", () => {
-    const s = placeSections(places, [`${HOME}/brain/orbit`, `${HOME}/brain/docs`], "", "doc", HOME);
+    const s = placeSections(places, [`${HOME}/notes/orbit`, `${HOME}/notes/docs`], "", "doc", HOME);
     expect(s.places.map((r) => r.name)).toEqual(["Documents"]);
     expect(s.recent.map((r) => r.name)).toEqual(["docs"]);
     expect(s.flat.map((r) => r.name)).toEqual(["Documents", "docs"]);

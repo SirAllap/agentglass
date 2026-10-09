@@ -103,8 +103,8 @@ describe("what the bench is asked to open", () => {
 
 describe("a click in the centre goes by the file-manager model", () => {
   test("an entry of a folder's preview lists that folder and selects the entry", () => {
-    expect(goTo(previewChild("/home/u/brain", "notes"))).toEqual({ browsePath: "/home/u/brain", name: "notes" });
-    expect(goTo(previewChild("/home/u/brain/", "a.md"))).toEqual({ browsePath: "/home/u/brain", name: "a.md" });
+    expect(goTo(previewChild("/home/u/notes", "notes"))).toEqual({ browsePath: "/home/u/notes", name: "notes" });
+    expect(goTo(previewChild("/home/u/notes/", "a.md"))).toEqual({ browsePath: "/home/u/notes", name: "a.md" });
   });
   test("a top-level entry lists the root", () => {
     expect(goTo("/etc")).toEqual({ browsePath: "/", name: "etc" });

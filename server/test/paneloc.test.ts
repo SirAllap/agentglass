@@ -17,13 +17,14 @@ const APP = "/home/dev/code/orbit";
 const WT = "/home/dev/code/orbit-WEB-1042";
 
 // session_name, session_id, window_id, window_index, window_name, pane_id,
-// pane_current_path, pane_pid — as PANE_FORMAT asks for them.
+// @agx-group, @agx-pin, pane_current_path, pane_pid — as PANE_FORMAT asks for
+// them. The window options are empty unless somebody set them.
 const OUT = [
-  ["0", "$0", "@0", "1", "Editor", "%1", APP, "10811"],
-  ["0", "$0", "@1", "2", "AI00", "%2", APP, "10858"],
-  ["0", "$0", "@2", "3", "AI01", "%3", APP, "10892"],
-  ["scratch", "$1", "@5", "1", "AI", "%10", APP, "155873"],
-  ["scratch", "$1", "@6", "2", "lazygit", "%8", APP, "11246"],
+  ["0", "$0", "@0", "1", "Editor", "%1", "", "", APP, "10811"],
+  ["0", "$0", "@1", "2", "AI00", "%2", "ops", "1", APP, "10858"],
+  ["0", "$0", "@2", "3", "AI01", "%3", "", "", APP, "10892"],
+  ["scratch", "$1", "@5", "1", "AI", "%10", "", "", APP, "155873"],
+  ["scratch", "$1", "@6", "2", "lazygit", "%8", "", "", APP, "11246"],
 ].map((r) => r.join("\t")).join("\n");
 
 /** Only %10 has agents, and the one that matters is in the worktree — not in
@@ -37,9 +38,13 @@ describe("reading the pane list", () => {
   test("the format and the parser agree on the field order", () => {
     // If someone adds a field to one and not the other, this is where it shows
     // up rather than as a mysteriously empty window name in the UI.
-    expect(PANE_FORMAT.split("\t")).toEqual([
+    // The two free-text options are wrapped so tmux flattens a tab or newline in
+    // them; unwrap those to compare the field order.
+    const unwrapped = PANE_FORMAT.replace(/#\{s\/\t\/ \/:#\{s\/\n\/ \/:(#\{@agx-[a-z]+\})\}\}/g, "$1");
+    expect(unwrapped.split("\t")).toEqual([
       "#{session_name}", "#{session_id}", "#{window_id}", "#{window_index}",
-      "#{window_name}", "#{pane_id}", "#{pane_current_path}", "#{pane_pid}",
+      "#{window_name}", "#{pane_id}", "#{@agx-group}", "#{@agx-pin}",
+      "#{pane_current_path}", "#{pane_pid}",
     ]);
   });
 
@@ -50,6 +55,13 @@ describe("reading the pane list", () => {
       session: "scratch", sessionId: "$1", windowId: "@5", windowIndex: "1",
       windowName: "AI", paneId: "%10", path: APP, agentCwds: [APP, WT],
     });
+  });
+
+  test("a window's hand-set group and pin ride along, and absent stays absent", () => {
+    const rows = parsePanes(OUT, walk);
+    expect(rows[1]).toMatchObject({ group: "ops", pinned: true, path: APP });
+    expect("group" in rows[0]!).toBe(false);
+    expect("pinned" in rows[0]!).toBe(false);
   });
 
   test("a pane with no agent under it says so rather than guessing", () => {
@@ -67,7 +79,7 @@ describe("reading the pane list", () => {
     // Split from both ends: the pid is last and the path is everything between
     // the pane id and it. A naive index would have read the pid as part of the
     // path and dropped the row.
-    const weird = ["0", "$0", "@9", "9", "w", "%99", "/home/dev/od\td", "4242"].join("\t");
+    const weird = ["0", "$0", "@9", "9", "w", "%99", "", "", "/home/dev/od\td", "4242"].join("\t");
     const [row] = parsePanes(weird, () => []);
     expect(row!.paneId).toBe("%99");
     expect(row!.path).toBe("/home/dev/od\td");
@@ -76,7 +88,7 @@ describe("reading the pane list", () => {
   test("a truncated or empty answer yields nothing, not a half-row", () => {
     expect(parsePanes("", walk)).toEqual([]);
     expect(parsePanes("0\t$0\t@0", walk)).toEqual([]);
-    expect(parsePanes(["0", "$0", "@0", "1", "w", "%1", APP, "not-a-pid"].join("\t"), walk)).toEqual([]);
+    expect(parsePanes(["0", "$0", "@0", "1", "w", "%1", "", "", APP, "not-a-pid"].join("\t"), walk)).toEqual([]);
   });
 });
 

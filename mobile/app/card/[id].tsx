@@ -43,11 +43,16 @@ import {
 } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
-import type { CardPr, ProviderId, ProviderTask, TaskDetail } from "../../../shared/providers.ts";
+import type { CardPr, ListMember, ProviderId, ProviderTask, TaskDetail } from "../../../shared/providers.ts";
 import type { GitRepoRef, SkillInfo } from "../../../shared/types.ts";
-import { ask } from "../../src/lib/api.ts";
+import { ask, askCached } from "../../src/lib/api.ts";
 import { announceCard } from "../../src/state/card-edits.ts";
-import { useAgentglass } from "../../src/state/host-context.tsx";
+import { AVATAR, Avatar, AvatarStack } from "../../src/Avatar.tsx";
+import { Bubble, Rail } from "../../src/review/Bubble.tsx";
+import { cardPrsQuery, needsFoundNote, prLine } from "../../src/model/cardPrs.ts";
+import { noteCardPrs } from "../../src/state/card-links.ts";
+import { CARD_FRESH_MS, LIST_FRESH_MS, cardKey, cards, lists, members, writes } from "../../src/state/card-cache.ts";
+import { useAgentglass, PR_READ_TTL_MS } from "../../src/state/host-context.tsx";
 import { Md, outline } from "../../src/md/Md.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
 import { providerTitle } from "../../src/model/taskProviders.ts";
@@ -56,10 +61,19 @@ import { requestHandoff } from "../../src/terminal/handoff.ts";
 import { mainCheckouts } from "../../src/model/prRows.ts";
 import { cardSkills, namedForIt, skillCommand, skillModes, windowName } from "../../../shared/cardSkills.ts";
 import { dueIn, since } from "../../src/lib/dates.ts";
-import { Btn, Card, Chip, Group, GroupTitle, Label, LabelChip, Note, Row, Sheet, SheetRow, Switch, TAP } from "../../src/ui.tsx";
+import { Btn, Card, Chip, Group, GroupTitle, Label, LabelChip, Note, Row, Sheet, SheetRow, TAP } from "../../src/ui.tsx";
+import { FieldRow } from "../../src/cards/FieldRow.tsx";
+import { AssigneeSheet } from "../../src/cards/AssigneeSheet.tsx";
+import { Snackbar } from "../../src/cards/Snackbar.tsx";
+import { StatusConflict } from "../../src/cards/StatusConflict.tsx";
+import { StatusSheet } from "../../src/cards/StatusSheet.tsx";
+import { commentAccess, conflictDialog, moveOutcome, statusAccess, statusInk, undoTarget, type ConflictDialog } from "../../src/model/cardStatus.ts";
+import {
+  appliedDiff, assigneeAccess, assigneeConflict, assigneeLine, currentIds, nameIn, summaryText, undoDiff, type AssigneeConflict, type Diff,
+} from "../../src/model/cardAssignees.ts";
 import { ChevronIcon, PrsIcon } from "../../src/nav/icons.tsx";
 import { Glyph } from "../../src/nav/glyphs.tsx";
-import { C, MONO, RADIUS, SPACE, T, tint } from "../../src/theme.ts";
+import { C, MONO, RADIUS, SPACE, T } from "../../src/theme.ts";
 
 /**
  * Where this card lives. Every route this screen reads is `/clickup/…`, so
@@ -95,14 +109,6 @@ const BODY_BLOCKS = 5;
 /** One status the card can be moved to, as the list defines it. */
 interface Status { status: string; color?: string; type?: string }
 
-/** The workspace's colour, with a floor: some boards pick a status colour that
- *  is legible on their own white background and vanishes on this one. The same
- *  rule, and the same reason, as the list's. */
-function statusInk(color?: string): string {
-  return color && color !== "#ffffff" ? color : C.text3;
-}
-
-
 export default function CardScreen(): React.ReactNode {
   usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
   const { host } = useAgentglass();
@@ -110,23 +116,47 @@ export default function CardScreen(): React.ReactNode {
   const { id } = useLocalSearchParams<{ id: string }>();
   const mayWrite = host?.scope === "full";
 
-  const [card, setCard] = useState<ProviderTask | null>(null);
-  const [statuses, setStatuses] = useState<Status[]>([]);
+  /* What was held from the last look, drawn at once while a read, if one is
+     due, goes out — see state/card-cache.ts. */
+  const held = host && id ? cards.get(cardKey(host.origin, id)) : null;
+  const [card, setCard] = useState<ProviderTask | null>(held?.value.task ?? null);
+  const [statuses, setStatuses] = useState<Status[]>(() => (card?.listId ? lists.get(card.listId)?.value ?? [] : []));
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [said, setSaid] = useState<{ ok: boolean; text: string } | null>(null);
   /** The last successful move: what it was on before, so "Undo" has
    *  somewhere to send it back to. Its own state rather than folded into
-   *  `said` — the confirmation belongs beside the chips that caused it, not
-   *  buried under the assignee row where a one-tap board write used to leave
-   *  its only trace, with no way back short of tapping through the other
-   *  status again by hand. */
-  const [moved, setMoved] = useState<{ from: string; to: string } | null>(null);
+   *  `said`: it is the snackbar's, and it goes away with it. `undone` is the
+   *  move Undo itself made, which is not undone in its turn. */
+  const [moved, setMoved] = useState<{ from: string; to: string; undone?: boolean } | null>(null);
+  /** The answer to "does the computer let ClickUp be written to", held per
+   *  computer (see writes in card-cache.ts); null until it is known. */
+  const [writeEnabled, setWriteEnabled] = useState<boolean | null>(() => (host ? writes.get(host.origin)?.value ?? null : null));
+  const [choosing, setChoosing] = useState(false);
+  /** The last successful change of assignees, for "Undo". Like `moved`, it
+   *  goes away with the snackbar, and the change Undo itself made is not undone
+   *  in its turn. */
+  const [assigned, setAssigned] = useState<{ diff: Diff; undone?: boolean } | null>(null);
+  const [assigning, setAssigning] = useState(false);
+  /** Who the list offers; null while it is being read. */
+  const [roster, setRoster] = useState<ListMember[] | null>(() => (host && card?.listId ? members.get(cardKey(host.origin, card.listId))?.value ?? null : null));
+  const [rosterError, setRosterError] = useState<string | null>(null);
+  /** Set when assignees were refused because the card changed underneath. */
+  const [assignConflict, setAssignConflict] = useState<{ dialog: AssigneeConflict; diff: Diff; stamp: number } | null>(null);
+  /** Set when a move was refused because the card changed underneath it. */
+  const [conflict, setConflict] = useState<{ dialog: ConflictDialog; wanted: string; stamp: number } | null>(null);
+  /** The height of the bar at the foot, so the snackbar sits above it. */
+  const [barH, setBarH] = useState(76);
   const [busy, setBusy] = useState<string | null>(null);
   /** Everything on the card that is not the card's own row. Null until the
    *  first read lands — an empty description and "not read yet" are different
    *  things and the screen draws them differently. */
-  const [detail, setDetail] = useState<Omit<TaskDetail, "task"> | null>(null);
+  const [detail, setDetail] = useState<Omit<TaskDetail, "task"> | null>(held ? {
+    description: held.value.description ?? "",
+    subtasks: held.value.subtasks ?? [],
+    checklists: held.value.checklists ?? [],
+    comments: held.value.comments ?? [],
+  } : null);
   /** Whether the whole description is showing. A ClickUp description is often
    *  a specification, and a screen that opens on eight hundred words has
    *  buried the status and the buttons under them. */
@@ -168,15 +198,18 @@ export default function CardScreen(): React.ReactNode {
    * true statement about `ProviderTask` and a false one about what had just
    * been read. The board's own page was the only place to see any of it.
    */
-  const load = useCallback(async (): Promise<void> => {
-    if (!host || !id) return;
+  const load = useCallback(async (force = true): Promise<ProviderTask | null> => {
+    if (!host || !id) return null;
+    // Young enough to trust: drawn already, and a read is three requests and a
+    // fourth per thread of replies.
+    if (!force && cards.fresh(cardKey(host.origin, id), CARD_FRESH_MS)) return null;
     const answer = await ask<{ ok?: boolean; error?: string } & Partial<TaskDetail>>(
       host, `/clickup/task?id=${encodeURIComponent(id)}`,
     );
-    if (!answer.ok) { setError(answer.error); return; }
+    if (!answer.ok) { setError(answer.error); return null; }
     if (!answer.value.task) {
       setError(answer.value.error || "That card could not be read.");
-      return;
+      return null;
     }
     setError(null);
     setDetail({
@@ -186,9 +219,11 @@ export default function CardScreen(): React.ReactNode {
       comments: answer.value.comments ?? [],
     });
     setCard(answer.value.task);
+    cards.put(cardKey(host.origin, id), answer.value as TaskDetail);
+    return answer.value.task;
   }, [host, id]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load(false); }, [load]);
 
   /*
    * The statuses of the card's OWN list, not the board's.
@@ -202,20 +237,40 @@ export default function CardScreen(): React.ReactNode {
     if (!host || !card?.listId) return;
     let gone = false;
     void (async () => {
+      // A list's statuses almost never change: held ten minutes, and the two
+      // requests a read costs are spent once per list, not once per card.
+      if (lists.fresh(card.listId!, LIST_FRESH_MS)) { setStatuses(lists.get(card.listId!)!.value); return; }
       const answer = await ask<{ ok?: boolean; statuses?: Status[] }>(
         host, `/clickup/list?id=${encodeURIComponent(card.listId!)}`,
       );
-      if (!gone && answer.ok) setStatuses(answer.value.statuses ?? []);
+      if (gone || !answer.ok) return;
+      lists.put(card.listId!, answer.value.statuses ?? []);
+      setStatuses(answer.value.statuses ?? []);
     })();
     return () => { gone = true; };
   }, [host, card?.listId]);
+
+  // Whether the computer lets ClickUp be written to, asked once per computer:
+  // the Cards tab has usually answered it already (writes in card-cache.ts).
+  useEffect(() => {
+    if (!host || host.scope !== "full") return;
+    if (writes.fresh(host.origin, CARD_FRESH_MS)) { setWriteEnabled(writes.get(host.origin)!.value); return; }
+    let gone = false;
+    void (async () => {
+      const answer = await ask<{ writeEnabled?: boolean }>(host, "/clickup/views");
+      if (gone || !answer.ok) return;
+      writes.put(host.origin, answer.value.writeEnabled === true);
+      setWriteEnabled(answer.value.writeEnabled === true);
+    })();
+    return () => { gone = true; };
+  }, [host]);
 
   // Only when there is something to hand it to.
   useEffect(() => {
     if (!host || !mayWrite) return;
     let gone = false;
     void (async () => {
-      const answer = await ask<{ repos: GitRepoRef[] }>(host, "/git/repos");
+      const answer = await askCached<{ repos: GitRepoRef[] }>(host, "/git/repos", PR_READ_TTL_MS);
       if (!gone && answer.ok) {
         setRepos(mainCheckouts(Array.isArray(answer.value.repos) ? answer.value.repos : []));
       }
@@ -236,38 +291,52 @@ export default function CardScreen(): React.ReactNode {
     if (!task) return;
     setCard(task);
     announceCard(task);
-  }, []);
+    // The held copy follows, or going back in would draw the old column.
+    const key = host && id ? cardKey(host.origin, id) : "";
+    const was = key ? cards.get(key) : null;
+    if (was) cards.put(key, { ...was.value, task }, was.at);
+  }, [host, id]);
 
-  const move = useCallback(async (status: string): Promise<void> => {
+  /**
+   * Move the card, with the stamp it was read at. Two requests on the board:
+   * the server re-reads the card to compare the stamp, then writes.
+   *
+   * `updated` rides along so the server's stale-write guard runs: two people
+   * dragging one card to different columns must not both win. A refusal for
+   * that reason is a 409, which `ask` reports as a failed answer with its
+   * status — `moveOutcome` knows it — and the dialog it opens is how the
+   * person decides between the other change and their own. `stamp` is the
+   * one exception: "move it anyway" sends the stamp of the card as it was just
+   * re-read, so it overwrites what the dialog described and nothing newer.
+   */
+  const move = useCallback(async (status: string, how: { stamp?: number; undo?: boolean } = {}): Promise<void> => {
     if (!host || !card) return;
     const from = card.status;
     setMoved(null);
-    setBusy(status);
+    setAssigned(null);
+    setSaid(null);
+    setBusy("move");
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    /*
-     * `updated` rides along, as it does on `claim` below and did not here: the
-     * server's stale-write guard only runs when it is given the stamp the
-     * screen read, so a move without it was the one write on this screen that
-     * two people could both win. The comment on `comment` said this write
-     * sent the stamp; the code did not.
-     */
     const answer = await ask<{ ok: boolean; error?: string; conflict?: boolean; task?: ProviderTask }>(
-      host, "/clickup/status", { method: "POST", body: { id: card.id, status, updated: card.updated } },
+      host, "/clickup/status", { method: "POST", body: { id: card.id, status, updated: how.stamp ?? card.updated } },
     );
     setBusy(null);
-    if (!answer.ok) { setSaid({ ok: false, text: answer.error }); return; }
-    if (!answer.value.ok) {
-      setSaid({
-        ok: false,
-        text: answer.value.conflict
-          ? "The card moved on the board while this was open — reopen it and try again."
-          : answer.value.error ?? "The board refused that.",
-      });
+    const outcome = moveOutcome(answer);
+    if (outcome.kind === "conflict") {
+      // The card is read again: it is what the dialog describes, and what the
+      // screen should show whichever button is pressed.
+      const theirs = await load();
+      if (!theirs) { setSaid({ ok: false, text: "The card changed on the board while this was open — reopen it and try again." }); return; }
+      setConflict({ dialog: conflictDialog({ theirs, opened: from, wanted: status, now: Date.now() }), wanted: status, stamp: theirs.updated });
       return;
     }
-    landed(answer.value.task);
-    setMoved({ from, to: status });
-    await load();
+    if (outcome.kind === "failed") { setSaid({ ok: false, text: outcome.text }); return; }
+    landed(outcome.task);
+    setMoved({ from, to: status, undone: how.undo });
+    // The write answered with the card as it stands; the description and the
+    // comments did not change, so they are not read again (3 requests + 1 per
+    // thread). Only an answer with no card falls back to a read.
+    if (!outcome.task) await load();
   }, [host, card, load, landed]);
 
   /**
@@ -298,64 +367,100 @@ export default function CardScreen(): React.ReactNode {
   }, [host, card, say, load]);
 
   /**
-   * Take it, or put it down.
+   * Put people on the card and take people off it, as one write: two requests
+   * on the board (the stale-write guard, then the change), and the answer is
+   * the card, so nothing is re-read.
    *
-   * `/clickup/assign` with no `user` is the self-assign toggle — the server
-   * chooses between `assignSelf` and `setAssignee` on that field alone, and a
-   * phone has no business naming somebody else: picking a colleague needs the
-   * member list, a picker and a reason, and none of those belong on the screen
-   * you open in a corridor.
+   * `/clickup/card` takes `add` and `rem` together because the stamp is the
+   * precondition and the first write moves it: two calls in a row would have
+   * the second refused by the first. A refusal is a 409, which `moveOutcome`
+   * reads from the status; the dialog it opens is how the person decides
+   * between the other change and this one. `stamp` is the one exception: "apply
+   * anyway" sends the stamp of the card as it was just re-read, so it
+   * overwrites what the dialog described and nothing newer. The ids are
+   * relative (add these, remove those), so applying them over the other
+   * person's card does what the dialog said and no more.
    */
-  const claim = useCallback(async (on: boolean): Promise<void> => {
+  const apply = useCallback(async (diff: Diff, how: { stamp?: number; undo?: boolean } = {}): Promise<void> => {
     if (!host || !card) return;
+    setMoved(null);
+    setAssigned(null);
+    setSaid(null);
     setBusy("assign");
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    const answer = await ask<{ ok: boolean; error?: string; conflict?: boolean; task?: ProviderTask }>(host, "/clickup/assign", {
+    const answer = await ask<{ ok: boolean; error?: string; conflict?: boolean; task?: ProviderTask }>(host, "/clickup/card", {
       method: "POST",
-      body: { id: card.id, on, updated: card.updated },
+      body: { id: card.id, updated: how.stamp ?? card.updated, add: diff.add, rem: diff.rem },
     });
     setBusy(null);
-    if (!answer.ok) { setSaid({ ok: false, text: answer.error }); return; }
-    if (!answer.value.ok) {
-      setSaid({
-        ok: false,
-        // The board distinguishes these and so does this: "somebody else
-        // changed it" is a reason to look, not a reason to try again.
-        text: answer.value.conflict
-          ? "The card moved on the board while this was open — reopen it and try again."
-          : answer.value.error ?? "The board refused that.",
+    const outcome = moveOutcome(answer);
+    if (outcome.kind === "conflict") {
+      const theirs = await load();
+      if (!theirs) { setSaid({ ok: false, text: "The card changed on the board while this was open — reopen it and try again." }); return; }
+      const known = [...(roster ?? []), ...(card.people ?? []), ...(theirs.people ?? [])];
+      setAssignConflict({
+        dialog: assigneeConflict({ theirs, diff, nameOf: (n) => nameIn(known, n), now: Date.now() }),
+        diff,
+        stamp: theirs.updated,
       });
       return;
     }
-    landed(answer.value.task);
-    setSaid({ ok: true, text: on ? "Assigned to you." : "Taken off you." });
-    await load();
-  }, [host, card, load, landed]);
+    if (outcome.kind === "failed") { setSaid({ ok: false, text: outcome.text }); return; }
+    landed(outcome.task);
+    // After "Apply anyway" `card` is the re-read one: Undo gets only this write's share.
+    setAssigned({ diff: how.stamp ? appliedDiff(diff, card.people) : diff, undone: how.undo });
+    if (!outcome.task) await load(); // see `move`: the write carried the card
+  }, [host, card, roster, load, landed]);
+
+  /**
+   * Who the sheet lists: the card's list's members, asked for when the sheet
+   * opens (not with the card: most cards are never re-assigned) and held ten
+   * minutes per list. Two requests on the board.
+   */
+  const readRoster = useCallback(async (force = false): Promise<void> => {
+    if (!host || !card?.listId) return;
+    const key = cardKey(host.origin, card.listId);
+    setRosterError(null);
+    if (!force && members.fresh(key, LIST_FRESH_MS)) { setRoster(members.get(key)!.value); return; }
+    const answer = await ask<{ ok?: boolean; error?: string; members?: ListMember[] }>(
+      host, `/clickup/members?list=${encodeURIComponent(card.listId)}`,
+    );
+    if (!answer.ok) { setRosterError(answer.error); return; }
+    if (!answer.value.ok) { setRosterError(answer.value.error ?? "The board would not say who is on the team."); return; }
+    members.put(key, answer.value.members ?? []);
+    setRoster(answer.value.members ?? []);
+  }, [host, card?.listId]);
 
   /* After the card, and only once it has an id to search for. A failure is
      left as an empty list rather than an error on the screen: "no pull request
      mentions this card" and "GitHub could not be asked" look the same to a
      reader, so the section simply does not appear, and the card is still
      readable on a machine with no `gh`. */
+  // The query, not the card: a reload, a write or a comment hands over a new
+  // card object that asks the same question, and each one was a GitHub search.
+  const cardId = card?.id;
+  const prsQuery = card ? cardPrsQuery(card, repos) : null;
   useEffect(() => {
-    if (!host || !card) return;
+    if (!host || !cardId || prsQuery === null) return;
     let gone = false;
     void (async () => {
-      const query = `card=${encodeURIComponent(card.customId || card.id)}`;
-      const answer = await ask<{ ok: boolean; prs?: CardPr[] }>(host, `/clickup/prs?${query}`);
+      const answer = await ask<{ ok: boolean; prs?: CardPr[] }>(host, `/clickup/prs?${prsQuery}`);
       if (gone) return;
       setPrs(answer.ok ? answer.value.prs ?? [] : []);
+      // Only a real answer: a failed search is "not known", not "none".
+      if (answer.ok) noteCardPrs(host, cardId, (answer.value.prs ?? []).length);
     })();
     return () => { gone = true; };
-  }, [host, card]);
+  }, [host, cardId, prsQuery]);
 
   /* Asked once the card is on screen, not on opening the sheet: the list is a
      hundred-odd entries on a real machine and filtering it is instant, but
      fetching it while somebody watches a sheet appear is a sheet that appears
      empty. A failure leaves it null and the sheet says so — the plain hand-off
      does not depend on this and stays available either way. */
+  const hasCard = !!card;
   useEffect(() => {
-    if (!host || !card) return;
+    if (!hasCard || !host) return;
     let gone = false;
     void (async () => {
       const answer = await ask<{ skills?: SkillInfo[] }>(host, "/skills");
@@ -363,7 +468,7 @@ export default function CardScreen(): React.ReactNode {
       setSkills(answer.ok ? cardSkills(answer.value.skills ?? []) : null);
     })();
     return () => { gone = true; };
-  }, [host, card]);
+  }, [host, hasCard]);
 
   /**
    * Leave the window request and go to the terminal.
@@ -444,9 +549,15 @@ export default function CardScreen(): React.ReactNode {
   const now = Date.now();
 
   const when = useMemo(() => (card ? dueIn(card.due, new Date()) : null), [card]);
-  // A card is never moved to the status it is already in — the picker offers
-  // the others, which is also what stops a no-op write.
-  const moves = statuses.filter((s) => s.status && s.status !== card?.status);
+  const access = statusAccess(host?.scope, writeEnabled);
+  const assign = assigneeAccess(host?.scope, writeEnabled, card?.listId);
+  const mayComment = commentAccess(host?.scope, writeEnabled);
+  const moving = busy === "move";
+  const assignBusy = busy === "assign";
+  const undoPeople = undoDiff(assigned && !assigned.undone ? assigned.diff : null, currentIds(card?.people));
+  const undo = undoTarget(moved && !moved.undone ? moved : null, card?.status ?? "");
+  const snackDone = useCallback(() => { setMoved(null); setAssigned(null); }, []);
+  const peopleKnown = [...(roster ?? []), ...(card?.people ?? [])];
 
   return (
     /* `padding`, both platforms, never Platform-conditional — the measurement
@@ -470,8 +581,8 @@ export default function CardScreen(): React.ReactNode {
               <Text style={{ color: C.text, fontSize: T.head, fontWeight: "600", lineHeight: 26 }}>
                 {card.title}
               </Text>
+              {when || card.priority || card.tags.length ? (
               <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                <LabelChip name={card.status} color={card.statusColor} />
                 {when ? (
                   <Chip
                     label={when.late && when.text !== "today" ? when.text : `Due ${when.text}`}
@@ -482,99 +593,52 @@ export default function CardScreen(): React.ReactNode {
                 {card.priority ? <Chip label={card.priority[0]!.toUpperCase() + card.priority.slice(1)} /> : null}
                 {card.tags.map((t) => <Chip key={t} label={t} />)}
               </View>
-              {card.list || card.sprint ? (
-                <Text style={{ color: C.text3, fontSize: T.small }}>
-                  {[card.list, card.sprint].filter(Boolean).join(" · ")}
-                </Text>
               ) : null}
             </View>
 
             {/*
-              Where it goes next, straight under what it is. A card is moved far
-              more often than it is read to the end, and the statuses were below
-              the description and a comment box, a scroll away from the status
-              they change.
+              The card's fields, in one block whose rows keep their place in
+              every state. Status is where a card is moved from, straight under
+              what it is — it was a strip of chips below the description, a
+              scroll away from the status it changed. A phone that may not
+              write sees the same row with a lock where the chevron would be,
+              and tapping it does nothing. Assignees is the row under Status, in
+              the same slot: faces and every name, not a switch for yourself.
             */}
-            {mayWrite && moves.length ? (
-              <>
-                <GroupTitle text="Move to" />
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={{ gap: SPACE.sm }}>
-                  {moves.map((m) => {
-                    const ink = statusInk(m.color);
-                    return (
-                      <Pressable
-                        key={m.status}
-                        accessibilityRole="button"
-                        accessibilityLabel={`Move to ${m.status}`}
-                        disabled={!!busy}
-                        onPress={() => { void move(m.status); }}
-                        hitSlop={{ top: 4, bottom: 4 }}
-                        style={({ pressed }) => ({
-                          flexDirection: "row", alignItems: "center", gap: 6, height: 40, paddingHorizontal: 14,
-                          borderRadius: 20, borderWidth: 1, borderColor: tint(ink, 0.5),
-                          opacity: busy && busy !== m.status ? 0.4 : 1,
-                          transform: [{ scale: pressed ? 0.97 : 1 }],
-                        })}
-                      >
-                        {busy === m.status
-                          ? <ActivityIndicator color={ink} size="small" />
-                          : <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: ink }} />}
-                        <Text style={{ color: C.text, fontSize: 13, fontWeight: "500" }}>{m.status}</Text>
-                      </Pressable>
-                    );
-                  })}
-                </ScrollView>
-                {/* Beside the chips that caused it, not under the assignee row
-                    a scroll away: the one thing a one-tap board write needs is
-                    a way back, next to where the tap happened. */}
-                {moved ? (
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.md, paddingTop: SPACE.sm }}>
-                    <Text style={{ color: C.text3, fontSize: T.small, flexShrink: 1 }}>Moved to {moved.to}</Text>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={`Undo, move back to ${moved.from}`}
-                      disabled={!!busy}
-                      onPress={() => { const from = moved.from; void move(from); }}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    >
-                      <Text style={{ color: C.primary, fontSize: T.small, fontWeight: "600" }}>Undo</Text>
-                    </Pressable>
-                  </View>
-                ) : null}
-              </>
-            ) : null}
-
-            {/*
-              Taking it, as a switch: on is yours. It was a box beside a
-              sentence whose wording changed with the state.
-
-              `mine` is the server's answer, not a search of `assignees` for a
-              name the phone would have to know. Its own comment says why:
-              "resolved server-side against the connected account, because the
-              client has no business knowing your user id".
-            */}
-            {mayWrite ? (
-              <View style={{ paddingTop: SPACE.md }}>
-                <Group>
-                  <Row
-                    title="Assigned to you"
-                    sub={(() => {
-                      const others = card.assignees.length - (card.mine ? 1 : 0);
-                      if (card.mine) return others > 0 ? `Also on it: ${others} more` : "Nobody else is on it";
-                      return card.assignees.length ? `On it: ${card.assignees.join(", ")}` : "Nobody is on it";
-                    })()}
-                    checked={card.mine === true}
-                    trail={<Switch on={card.mine === true} disabled={busy !== null} />}
-                    disabled={busy !== null}
-                    onPress={() => { void claim(card.mine !== true); }}
-                  />
-                </Group>
-              </View>
-            ) : card.assignees.length ? (
-              <Text style={{ color: C.text3, fontSize: T.small, paddingHorizontal: SPACE.xs }}>
-                On it: {card.assignees.join(", ")}
-              </Text>
-            ) : null}
+            <Group>
+              <FieldRow
+                label="Status"
+                trail={moving ? "busy" : access.can ? "chevron" : access.why ? "lock" : null}
+                onPress={access.can && statuses.length && !busy ? () => setChoosing(true) : undefined}
+                accessibilityLabel={`Status, ${card.status}${access.why ? ", locked" : ""}`}
+              >
+                <LabelChip name={card.status} color={statusInk(card.statusColor)} />
+              </FieldRow>
+              <FieldRow
+                label="Assignees"
+                trail={assignBusy ? "busy" : assign.can ? "chevron" : assign.why ? "lock" : null}
+                onPress={assign.can && !busy ? () => { setAssigning(true); void readRoster(); } : undefined}
+                accessibilityLabel={`Assignees, ${assigneeLine(card)}${assign.why ? ", locked" : ""}`}
+              >
+                {card.people?.length ? <AvatarStack people={card.people} size={AVATAR.stack} /> : null}
+                <Text
+                  numberOfLines={2}
+                  style={{
+                    flex: 1, marginLeft: card.people?.length ? SPACE.sm : 0, fontSize: T.body,
+                    color: card.people?.length || card.assignees.length ? C.text : C.text3,
+                    fontWeight: card.people?.length || card.assignees.length ? "600" : "400",
+                  }}
+                >{assigneeLine(card)}</Text>
+              </FieldRow>
+              {card.list || card.sprint ? (
+                <FieldRow label="List" trail={null}>
+                  <Text numberOfLines={1} style={{ color: C.text, fontSize: T.body }}>
+                    {[card.list, card.sprint].filter(Boolean).join(" · ")}
+                  </Text>
+                </FieldRow>
+              ) : null}
+            </Group>
+            {assign.why ? <Note>{assign.why}</Note> : null}
 
             {said ? (
               <Note tone={said.ok ? "quiet" : "bad"}>{said.text}</Note>
@@ -639,7 +703,7 @@ export default function CardScreen(): React.ReactNode {
                     >
                       <Glyph
                         name={sub.statusKind === "done" ? "ok_circle" : "circle"}
-                        color={statusInk(sub.statusColor)}
+                        color={statusInk(sub.statusColor) ?? C.text3}
                         size={18}
                       />
                       <Text
@@ -693,7 +757,7 @@ export default function CardScreen(): React.ReactNode {
                     <Row
                       key={pr.number}
                       title={`#${pr.number} ${pr.title || pr.url}`}
-                      sub={`${pr.draft ? "Draft" : pr.state[0] + pr.state.slice(1).toLowerCase()}${pr.stated ? "" : " · found by search"}`}
+                      sub={prLine(pr)}
                       lead={<PrsIcon color={prInk(pr)} size={20} />}
                       chevron
                       // In the app when the computer has a checkout of it — see
@@ -702,7 +766,7 @@ export default function CardScreen(): React.ReactNode {
                     />
                   ))}
                 </Group>
-                {prs.some((pr) => !pr.stated) ? (
+                {needsFoundNote(prs) ? (
                   <View style={{ paddingHorizontal: SPACE.xs, paddingTop: SPACE.xs }}>
                     <Note>
                       Found by searching GitHub for this card&apos;s id, so one of these may belong to
@@ -719,39 +783,44 @@ export default function CardScreen(): React.ReactNode {
             {detail?.comments.length ? (
               <View style={{ gap: SPACE.sm }}>
                 <Label text={`Said on the board · ${detail.comments.length}`} />
-                <Card style={{ gap: SPACE.md }}>
-                  {detail.comments.map((c) => (
-                    <View key={c.id} style={{ gap: 2 }}>
-                      <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm }}>
-                        <Text style={{ color: C.text, fontSize: T.small, fontWeight: "600" }}>{c.who}</Text>
-                        <Text style={{ color: C.text3, fontSize: T.eyebrow }}>{since(c.at, now)}</Text>
-                      </View>
-                      {c.text ? (
-                        <Md text={c.text} host={host} />
-                      ) : (
-                        /* ClickUp comments can be an attachment and nothing
-                           else, which arrives as empty text. Saying so beats a
-                           blank row that reads as a rendering fault. */
-                        <Note>An attachment, with nothing written.</Note>
-                      )}
+                {/* The same rail and bubble as a pull request's conversation
+                    (review/Bubble.tsx): a face, who and when, the words. */}
+                <View style={{ paddingTop: SPACE.xs }}>
+                  {detail.comments.map((c, i) => (
+                    <Rail
+                      key={c.id}
+                      lead={<Avatar name={c.who} avatar={c.avatar} initials={c.initials} color={c.color} size={AVATAR.rail} />}
+                      size={AVATAR.rail} first={i === 0} last={i === detail.comments.length - 1}
+                    >
+                      <Bubble
+                        author={c.who} badge={c.mine ? "YOU" : null} when={since(c.at, now)} dim={c.resolved}
+                        chips={c.resolved ? <Chip label="Resolved" tone="good" /> : undefined}
+                      >
+                        {c.text ? (
+                          <Md text={c.text} host={host} />
+                        ) : (
+                          /* ClickUp comments can be an attachment and nothing
+                             else, which arrives as empty text. Saying so beats a
+                             blank row that reads as a rendering fault. */
+                          <Note>An attachment, with nothing written.</Note>
+                        )}
+                      </Bubble>
                       {(c.replyList ?? []).map((r) => (
-                        <View key={r.id} style={{
-                          paddingLeft: SPACE.md, borderLeftWidth: 2, borderLeftColor: C.border,
-                          marginTop: SPACE.xs, gap: 2,
-                        }}>
-                          <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm }}>
-                            <Text style={{ color: C.text2, fontSize: T.eyebrow, fontWeight: "600" }}>{r.who}</Text>
-                            <Text style={{ color: C.text3, fontSize: T.eyebrow }}>{since(r.at, now)}</Text>
+                        <View key={r.id} style={{ flexDirection: "row", gap: SPACE.sm, marginTop: SPACE.sm, alignItems: "flex-start" }}>
+                          <Avatar name={r.who} avatar={r.avatar} initials={r.initials} color={r.color} size={AVATAR.field} />
+                          <View style={{ flex: 1, minWidth: 0 }}>
+                            <Bubble author={r.who} badge={r.mine ? "YOU" : null} when={since(r.at, now)}>
+                              <Md text={r.text} host={host} />
+                            </Bubble>
                           </View>
-                          <Md text={r.text} host={host} />
                         </View>
                       ))}
                       {c.replies && !(c.replyList ?? []).length ? (
                         <Note>{c.replies} {c.replies === 1 ? "reply" : "replies"}, on the board.</Note>
                       ) : null}
-                    </View>
+                    </Rail>
                   ))}
-                </Card>
+                </View>
               </View>
             ) : null}
 
@@ -768,12 +837,13 @@ export default function CardScreen(): React.ReactNode {
       </ScrollView>
 
       {card && mayWrite ? (
-        <View style={{
+        <View onLayout={(e) => setBarH(e.nativeEvent.layout.height)} style={{
           paddingHorizontal: SPACE.lg, paddingTop: SPACE.md, paddingBottom: SPACE.lg,
           borderTopWidth: 1, borderTopColor: C.border, backgroundColor: C.bg2,
         }}>
+          {mayComment.why ? <Note>{mayComment.why}</Note> : null}
           <View style={{ flexDirection: "row", gap: SPACE.sm }}>
-            <Btn label="Comment" style={{ flex: 1 }} onPress={() => setCommenting(true)} />
+            <Btn label="Comment" disabled={!mayComment.can} style={{ flex: 1 }} onPress={() => setCommenting(true)} />
             <Btn
               label="Start with Claude"
               tone="primary"
@@ -782,6 +852,67 @@ export default function CardScreen(): React.ReactNode {
             />
           </View>
         </View>
+      ) : null}
+
+      {/* The status sheet closes as the write starts: the row shows the spinner,
+          and a dialog may open over the screen a moment later (two modals at once
+          is what the review screen's own comment warns about). */}
+      {card ? (
+        <StatusSheet
+          open={choosing}
+          onClose={() => setChoosing(false)}
+          list={card.list}
+          statuses={statuses}
+          current={card.status}
+          onMove={(status) => { setChoosing(false); void move(status); }}
+        />
+      ) : null}
+
+      {/* Like the status sheet, it closes as the write starts. */}
+      {card ? (
+        <AssigneeSheet
+          open={assigning}
+          onClose={() => setAssigning(false)}
+          id={card.customId || card.id}
+          members={roster}
+          error={rosterError}
+          onRetry={() => { void readRoster(true); }}
+          current={card.people}
+          onApply={(diff) => { setAssigning(false); void apply(diff); }}
+        />
+      ) : null}
+
+      <StatusConflict
+        dialog={conflict?.dialog ?? assignConflict?.dialog ?? null}
+        busy={busy !== null}
+        onKeep={() => { setConflict(null); setAssignConflict(null); }}
+        onOverwrite={() => {
+          const c = conflict, a = assignConflict;
+          setConflict(null);
+          setAssignConflict(null);
+          if (c) void move(c.wanted, { stamp: c.stamp });
+          else if (a) void apply(a.diff, { stamp: a.stamp });
+        }}
+      />
+
+      {moved ? (
+        <Snackbar
+          text={moved.undone ? "Moved back to " : "Moved to "}
+          strong={moved.to}
+          action={undo ? "Undo" : undefined}
+          onAction={undo ? () => { void move(undo, { undo: true }); } : undefined}
+          onDone={snackDone}
+          bottom={card && mayWrite ? barH : 0}
+        />
+      ) : assigned ? (
+        <Snackbar
+          text={assigned.undone ? "Assignees restored" : "Assignees updated · "}
+          strong={assigned.undone ? undefined : summaryText(assigned.diff, (n) => nameIn(peopleKnown, n))}
+          action={undoPeople ? "Undo" : undefined}
+          onAction={undoPeople ? () => { void apply(undoPeople, { undo: true }); } : undefined}
+          onDone={snackDone}
+          bottom={card && mayWrite ? barH : 0}
+        />
       ) : null}
 
       {/* Saying something, in a sheet from the bar. It was a box open in the

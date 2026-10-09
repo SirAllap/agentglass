@@ -349,7 +349,7 @@ function Arrow({ label, glyph, disabled, onPress }: {
       accessibilityRole="button"
       accessibilityLabel={label}
       style={({ pressed }) => ({
-        width: 40, height: TAP, borderRadius: 20, alignItems: "center", justifyContent: "center",
+        width: TAP, height: TAP, borderRadius: TAP / 2, alignItems: "center", justifyContent: "center",
         opacity: disabled ? 0.25 : 1, backgroundColor: pressed ? C.bg3 : "transparent",
       })}
     >

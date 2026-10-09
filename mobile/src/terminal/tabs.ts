@@ -28,6 +28,7 @@
  * filters on. See the note on `AgentPane.attached`.
  */
 import type { AgentPane, PanesResponse } from "../../../shared/types.ts";
+import type { WindowStatus } from "../../../shared/windowStatus.ts";
 
 export interface Tab {
   /** tmux's pane id — what the socket is opened with. */
@@ -40,11 +41,24 @@ export interface Tab {
   where: string;
   /** An agent is running under this pane. The reason to open it. */
   agent: boolean;
+  /** The window's own name, without tmux's index: what a tab on the strip says.
+   *  Suffixed `·p2` where a split needs it, like `label`. */
+  name: string;
+  /** What the agent in it is doing, where the server said (absent: no agent). */
+  status?: WindowStatus;
+  /** The window's hand-set group (`@agx-group`); absent means "by project". */
+  group?: string;
+  /** Pinned first in its group (`@agx-pin`) — where the orchestrator sits. */
+  pinned?: true;
+  /** The project's main-checkout root; null in no repository, absent while the
+   *  server is still finding out. */
+  repo?: string | null;
   /** tmux's id for the window this pane is in (`@3`) — what rename and close
    *  address. Empty for a pane the strip has not listed yet, which has nothing
    *  to rename. */
   windowId: string;
-  /** The window's own name, without the index the label leads with. */
+  /** The window's own name exactly as tmux has it: no index, no `·pN`. What rename
+   *  starts from and the close sentence quotes; `name` is the tab's, suffix and all. */
   windowName: string;
   /** How many panes the window has: closing a window closes all of them, and
    *  the confirmation says so. */
@@ -87,25 +101,14 @@ function tabsOf(panes: readonly AgentPane[], keepOwnDetached: boolean): Tab[] {
   for (const pane of panes) {
     if (OURS.test(pane.session)) continue;
     /*
-     * A scratchpad is not a destination — while nobody is in it.
+     * A scratchpad is not a destination while nobody is in it, and is the
+     * whole point while someone is: the popup is open on the desk and the phone
+     * is the only way to read it.
      *
-     * It used to be dropped outright, and the rule read well: you open it over
-     * your work and dismiss it, so offering it beside the windows you keep is
-     * offering to go somewhere nobody meant to be. What it missed is the one
-     * case the phone exists for. The popup is open on the desk, with something
-     * in it, and you are not at the desk — and the companion was the only way
-     * to read it, except this was the line that made that impossible. Reported
-     * from a phone, with the scratch up on the computer at the time.
-     *
-     * `attached` is what tells the two apart, and it is exact rather than a
-     * heuristic: the scratch is `display-popup -E "tmux attach -t scratch"`, so
-     * a client is on that session for precisely as long as the popup is up.
-     * Closed, it goes back to being a session nobody is looking at and drops
-     * out again — by this rule, not by a second one.
-     *
-     * `!== true` and not `=== false`: absent is a third answer, as it is
-     * everywhere else on this wire, and a build too old to say is one that
-     * keeps the behaviour it had.
+     * `attached` tells the two apart exactly: the scratch is `display-popup -E
+     * "tmux attach -t scratch"`, so a client is on that session for as long as
+     * the popup is up. `!== true` and not `=== false`: absent is a third answer
+     * on this wire, and a build too old to say keeps the old behaviour.
      */
     if (pane.popup && pane.attached !== true) continue;
     /*
@@ -177,11 +180,17 @@ function tabsOf(panes: readonly AgentPane[], keepOwnDetached: boolean): Tab[] {
     const first = group[0]!;
     const name = `${first.windowIndex} ${first.windowName}`.trim();
     group.forEach((pane, i) => {
+      const suffix = group.length > 1 ? `·p${i + 1}` : "";
       tabs.push({
         paneId: pane.paneId,
         // The suffix appears only when it distinguishes something. A lone pane
         // labelled `·p1` reads as "there is a p2 somewhere", and there is not.
-        label: group.length > 1 ? `${name}·p${i + 1}` : name,
+        label: `${name}${suffix}`,
+        name: `${first.windowName.trim() || first.windowIndex}${suffix}`,
+        ...(pane.status ? { status: pane.status } : {}),
+        ...(pane.group ? { group: pane.group } : {}),
+        ...(pane.pinned ? { pinned: true as const } : {}),
+        ...(pane.repo !== undefined ? { repo: pane.repo } : {}),
         session: pane.session,
         // The whole directory. It used to be the last segment, which is what a
         // person calls a checkout, and Source control and Files sent that as
@@ -204,13 +213,6 @@ function tabsOf(panes: readonly AgentPane[], keepOwnDetached: boolean): Tab[] {
   });
 }
 
-/** The sessions present, in the order their tabs appear. For the picker: a
- *  machine with four tmux sessions has four strips' worth of tabs, and all of
- *  them at once is not a strip anybody reads. */
-export function sessionsOf(tabs: readonly Tab[]): string[] {
-  return [...new Set(tabs.map((t) => t.session))];
-}
-
 /** A pane this phone itself just asked the server to open, held until the
  *  poll lists it for real. See `pendingTab`. */
 export interface PendingTab {
@@ -222,26 +224,17 @@ export interface PendingTab {
 
 /**
  * The tab for a pane this phone itself just opened, before the next poll
- * lists it — bridging the gap `paneTabs` leaves ON PURPOSE two comments up:
- * a session with no tmux client on it and no agent under it is filtered out,
- * forever, and a plain shell this screen just asked the server to create is
- * exactly that case until something attaches to it.
- *
- * Reported from a real device: the empty state's "Open a shell in <name>"
- * button made the window on the computer — one pane, one window, zero
- * clients — and the phone sat on "Nothing open" through repeated presses of
- * "Look again", because nothing ever attached to make the session's `attached`
- * true. This is the bridge: the screen renders a terminal for the pane it was
- * just told exists, which is what makes the WebSocket attach in the first
- * place — `TerminalView` needs only a pane id, never `strip` membership (see
- * its own comment). Once that attach lands, the next poll lists the pane for
- * real and `paneTabs`'s own answer takes over; this is never consulted again
- * for a pane already found there, which is `null` FIRST and the only reason
- * this function ever runs.
+ * lists it. `paneTabs` filters a session with no tmux client and no agent
+ * under it, and a plain shell the server was just asked to create is exactly
+ * that until something attaches: without this bridge the empty state's "Open a
+ * shell in <name>" left the phone on "Nothing open" through repeated "Look
+ * again", because only the attach makes `attached` true and only a tab makes
+ * the WebSocket attach. Once the poll lists the pane for real, `paneTabs`
+ * answers first and this is never consulted again for it.
  */
 export function pendingTab(pending: PendingTab | null, active: string | null): Tab | null {
   if (!pending || !active || pending.paneId !== active) return null;
-  return { paneId: pending.paneId, label: pending.label, session: pending.session, where: pending.where, agent: false, windowId: "", windowName: "", windowPanes: 1 };
+  return { paneId: pending.paneId, label: pending.label, name: pending.label, session: pending.session, where: pending.where, agent: false, windowId: "", windowName: "", windowPanes: 1 };
 }
 
 /** Either the strip moved, and here is the whole of it, or it did not and there
@@ -253,36 +246,23 @@ export type StripRead =
 /**
  * Read an answer against the last one, and say whether anything MOVED.
  *
- * This is the half of the phone's auto-sync that is not the timer, and it is
- * the half that is worth a test. The screen re-reads `/terminal/panes` every
- * couple of seconds while it is on screen, and the answer is a fresh array
- * every time — so adopting it unconditionally is a re-render twice a second
- * for ever. A strip that repaints on every tick is a strip that eats the tap
- * you were making: React Native hands a Pressable's touch to a view that the
- * next commit replaces, and the release lands on nothing.
+ * The screen re-reads `/terminal/panes` every couple of seconds and the answer
+ * is a fresh array each time, so adopting it unconditionally is a re-render
+ * twice a second for ever, and a strip that repaints eats the tap you were
+ * making: React Native hands a Pressable's touch to a view the next commit
+ * replaces, and the release lands on nothing. The desk's tmux sweep compares
+ * `JSON.stringify([session, client, windows])` for the same reason; the phone
+ * has no such frame, so it compares at this end.
  *
- * The same trick the desk already uses, one layer up. The server's tmux sweep
- * runs at 500ms and compares `JSON.stringify([session, client, windows])`
- * against what it last sent, and only speaks when that differs — for exactly
- * this reason, written in its own comment. The phone has no such frame, so it
- * does the comparison itself, at this end.
- *
- * Compared on the TABS rather than on the panes, and on the WHOLE tab rather
- * than on the handful of its fields that are drawn today. `/terminal/panes`
- * carries a great deal the strip is not made of — the full path, the window id,
- * the session id, one row per pane of this phone's own grouped session — and
- * `paneTabs` has already thrown all of it away, so somebody typing `cd` at the
- * desk cannot repaint anything here. Picking out only the fields that reach a
- * `<Text>` would be tighter by one field and would go quietly wrong the day a
- * tab starts showing one more. `canAttach` is in the shape because it draws the
+ * Compared on the WHOLE tab, not on the fields drawn today: `paneTabs` has
+ * already thrown away the path, window id and grouped-session rows, so a `cd`
+ * at the desk repaints nothing, and a tab that starts showing one more field
+ * cannot go quietly stale. `canAttach` is in the shape because it draws the
  * stale-server line above the composer.
- */
-/*
- * `Partial<PanesResponse>` and not `PanesResponse`: this is a phone, and the
- * server on the other end can be older than it is. A missing `canAttach` is the
- * case `stale` exists for, and `panes` is still checked with `Array.isArray`
- * rather than trusted — the type says what the wire is meant to be, the guard
- * says what this build will do when it is not.
+ *
+ * `Partial<PanesResponse>`: the server can be older than the phone. A missing
+ * `canAttach` is what `stale` is for, and `panes` is still checked with
+ * `Array.isArray` rather than trusted.
  */
 export function readStrip(previous: string | null, answer: Partial<PanesResponse>): StripRead {
   const list = Array.isArray(answer.panes) ? answer.panes : [];

@@ -709,6 +709,21 @@ describe("who can be put on a card", () => {
     expect(r.data!.members[0]).toMatchObject({ id: 9, name: "Ana", initials: "AN", color: "#f0f" });
   });
 
+  it("carries each member's email, so two people called alike can be told apart", async () => {
+    // Two "Ana"s on one board were indistinguishable in the picker: the route
+    // dropped the email ClickUp sends with every member, the account added
+    // from whoAmI included.
+    C.setCredential("clickup", { token: "pk_1_X", accountId: "7" });
+    reply = (req) => new URL(req.url).pathname === "/user"
+      ? json({ user: { id: 7, username: "You", email: "you@acme.test" } })
+      : json({ members: [{ id: 9, username: "Ana", email: "ana@acme.test" }, { id: 10, username: "Ana" }] });
+    const r = await CU.listMembers("L1");
+    const by = (id: number) => r.data!.members.find((m) => m.id === id)!;
+    expect(by(9).email).toBe("ana@acme.test");
+    expect(by(10).email).toBeUndefined();
+    expect(by(7).email).toBe("you@acme.test");
+  });
+
   it("puts you first, then everybody else by name", async () => {
     // The commonest assignment on any board is your own, and a list that makes
     // you hunt for yourself is a list that gets used once.

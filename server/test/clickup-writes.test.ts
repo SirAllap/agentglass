@@ -115,6 +115,46 @@ describe("the card's own fields", () => {
   });
 });
 
+describe("a pre-read that fails is not a conflict", () => {
+  // The precondition reads the card before it writes. When THAT read failed
+  // (ClickUp down, rate-limited, slow) every guarded write answered with the
+  // conflict flag and "somebody changed this card", which sent people looking
+  // for a colleague who had done nothing.
+  const writes: [string, () => Promise<CU.WriteOutcome>][] = [
+    ["status", () => CU.setStatus("t1", "in progress", 1754300000000)],
+    ["assignee", () => CU.setAssignee("t1", 9, true, 1754300000000)],
+    ["self", () => CU.assignSelf("t1", true, 1754300000000)],
+    ["priority", () => CU.setPriority("t1", "high", 1754300000000)],
+    ["fields", () => CU.updateTask("t1", { points: 1 }, 1754300000000)],
+  ];
+  for (const [name, write] of writes) {
+    test(`${name}: an unreachable card says so, changes nothing, and is no conflict`, async () => {
+      reply = () => new Response("{}", { status: 500 });
+      const r = await write();
+      expect(r.ok).toBe(false);
+      expect(r.conflict).toBeFalsy();
+      expect(r.error).toContain("Nothing was changed");
+      expect(r.error).not.toContain("Somebody");
+      // The read happened; the write did not go blind after it.
+      expect(seen.every((x) => x.method === "GET")).toBe(true);
+    });
+  }
+
+  test("a refused token on the pre-read is a reconnect, not a conflict", async () => {
+    reply = () => new Response("{}", { status: 401 });
+    const r = await CU.setStatus("t1", "done", 1754300000000);
+    expect(r.conflict).toBeFalsy();
+    expect(r.unauthorised).toBe(true);
+  });
+
+  test("a card that really moved is still a conflict", async () => {
+    reply = () => ok({ id: "t1", date_updated: "1754300009999" });
+    const r = await CU.setStatus("t1", "done", 1754300000000);
+    expect(r.conflict).toBe(true);
+    expect(r.error).toContain("Somebody");
+  });
+});
+
 describe("custom fields", () => {
   test("each kind goes on the wire in the shape ClickUp accepts", () => {
     expect(CU.fieldWire("drop_down", "opt-1")).toBe("opt-1");

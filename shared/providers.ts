@@ -599,6 +599,8 @@ export interface ListMember {
   initials: string;
   color?: string;
   avatar?: string;
+  /** Drawn under the name so two people called alike can be told apart. */
+  email?: string;
   /** The connected account, which the picker floats to the top. */
   me?: boolean;
 }

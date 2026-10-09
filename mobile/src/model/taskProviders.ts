@@ -47,7 +47,7 @@ const TASK_IDS = new Set(PROVIDERS.filter((p) => p.kind === "task").map((p) => p
  * `missing-tool` (the CLI is not installed) and `needs-auth` (installed, never
  * signed in).
  */
-const setUp = (state: ProviderState): boolean => state === "connected" || state === "error";
+export const setUp = (state: ProviderState): boolean => state === "connected" || state === "error";
 
 /**
  * Does this machine track work anywhere?

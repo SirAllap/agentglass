@@ -6,8 +6,10 @@
  * the same name and the strip did not look like the strip it was mirroring.
  */
 import { describe, expect, test } from "bun:test";
-import { bestSession, paneTabs, sessionsOf } from "../src/terminal/tabs.ts";
+import { bestSession, paneTabs } from "../src/terminal/tabs.ts";
 import type { AgentPane } from "../../shared/types.ts";
+
+const sessionsOf = (tabs: readonly { session: string }[]): string[] => [...new Set(tabs.map((t) => t.session))];
 
 const pane = (over: Partial<AgentPane>): AgentPane => ({
   session: "orbit", sessionId: "$1", windowId: "@1", windowIndex: "1",

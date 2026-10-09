@@ -37,6 +37,8 @@ const SHAPES = {
   qr: <><Rect x="4" y="4" width="6" height="6" rx="1" /><Rect x="14" y="4" width="6" height="6" rx="1" /><Rect x="4" y="14" width="6" height="6" rx="1" /><Path d="M14 14h2.5v2.5H14zM17.5 17.5H20V20h-2.5zM14 20h1.5M20 14v1.5" /></>,
   link: <><Path d="M10.3 13.7a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><Path d="M13.7 10.3a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></>,
   grip: <><Circle cx="9" cy="7" r="1.3" fill="currentColor" stroke="none" /><Circle cx="15" cy="7" r="1.3" fill="currentColor" stroke="none" /><Circle cx="9" cy="12" r="1.3" fill="currentColor" stroke="none" /><Circle cx="15" cy="12" r="1.3" fill="currentColor" stroke="none" /><Circle cx="9" cy="17" r="1.3" fill="currentColor" stroke="none" /><Circle cx="15" cy="17" r="1.3" fill="currentColor" stroke="none" /></>,
+  filter: <><Path d="M4 5.5h16l-6.2 7.2v5.6l-3.6 1.7v-7.3z" /></>,
+  people: <><Circle cx="9" cy="8.5" r="3.2" /><Path d="M3.5 19.5c.4-3.3 2.7-5 5.5-5s5.1 1.7 5.5 5" /><Path d="M15.5 5.6a3.2 3.2 0 0 1 0 5.8M17.5 14.8c1.7.6 2.8 2.2 3 4.7" /></>,
   search: <><Circle cx="11" cy="11" r="6.5" /><Path d="M16 16l4.5 4.5" /></>,
   computer: <><Rect x="3" y="4.5" width="18" height="12" rx="2" /><Path d="M8.5 20h7M12 16.5V20" /></>,
   comment: <><Path d="M5 5.5h14A1.5 1.5 0 0 1 20.5 7v8a1.5 1.5 0 0 1-1.5 1.5h-8.5l-4.5 3.5v-3.5H5A1.5 1.5 0 0 1 3.5 15V7A1.5 1.5 0 0 1 5 5.5z" /></>,
@@ -52,8 +54,16 @@ const SHAPES = {
   history: <><Path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3" /><Path d="M4.5 4.5v3.7h3.7" /><Path d="M12 8v4.3l2.8 1.7" /></>,
   expand: <><Path d="M12 4v5M9.5 6.5 12 4l2.5 2.5M12 20v-5M9.5 17.5 12 20l2.5-2.5" /></>,
   fit: <><Path d="M4 9V5.5A1.5 1.5 0 0 1 5.5 4H9M15 4h3.5A1.5 1.5 0 0 1 20 5.5V9M20 15v3.5a1.5 1.5 0 0 1-1.5 1.5H15M9 20H5.5A1.5 1.5 0 0 1 4 18.5V15" /></>,
+  wrap: <><Path d="M4 6.5h16M4 12h11.5a3 3 0 0 1 0 6H11" /><Path d="M13.5 15.5 11 18l2.5 2.5M4 18h3" /></>,
   type: <><Path d="M5 6.5V5h14v1.5M12 5v14M9.5 19h5" /></>,
+  pin: <><Path d="M9 4.5h6l-1 5 3 3v1.5H7V12.5l3-3z" /><Path d="M12 14v6" /></>,
+  sliders: <><Path d="M4 7h9M17 7h3M4 17h3M11 17h9" /><Circle cx="15" cy="7" r="2" /><Circle cx="9" cy="17" r="2" /></>,
+  bot: <><Rect x="5" y="8.5" width="14" height="10.5" rx="3" /><Path d="M12 8.5V5" /><Circle cx="12" cy="4.2" r="1.1" fill="currentColor" stroke="none" /><Circle cx="9.2" cy="13.5" r="1.1" fill="currentColor" stroke="none" /><Circle cx="14.8" cy="13.5" r="1.1" fill="currentColor" stroke="none" /></>,
+  tag: <><Path d="M3.5 4.5h7.6l9 9a1.5 1.5 0 0 1 0 2.1l-4.5 4.5a1.5 1.5 0 0 1-2.1 0l-9-9z" /><Circle cx="8" cy="9" r="1.2" fill="currentColor" stroke="none" /></>,
   camera: <><Path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16" /></>,
+  list: <><Path d="M8.5 6.5H20M8.5 12H20M8.5 17.5H20" /><Circle cx="4.6" cy="6.5" r="1" fill="currentColor" stroke="none" /><Circle cx="4.6" cy="12" r="1" fill="currentColor" stroke="none" /><Circle cx="4.6" cy="17.5" r="1" fill="currentColor" stroke="none" /></>,
+  folder: <><Path d="M3.5 7A1.5 1.5 0 0 1 5 5.5h4l2 2.2h8A1.5 1.5 0 0 1 20.5 9.2V17a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 17z" /></>,
+  pr: <><Circle cx="6.5" cy="5.5" r="2.2" /><Circle cx="6.5" cy="18.5" r="2.2" /><Circle cx="17.5" cy="18.5" r="2.2" /><Path d="M6.5 7.7v8.6" /><Path d="M17.5 16.3v-5.8A3.5 3.5 0 0 0 14 7h-2.5M14 4.5 11.5 7 14 9.5" /></>,
 } as const;
 
 export type GlyphName = keyof typeof SHAPES;

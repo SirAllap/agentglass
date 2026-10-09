@@ -18,37 +18,24 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator, FlatList, KeyboardAvoidingView, Pressable, RefreshControl, ScrollView, Text, TextInput, View,
+  type RefreshControlProps,
 } from "react-native";
 import * as Haptics from "expo-haptics";
 import { useHeaderHeight } from "expo-router/react-navigation";
-import type { GitBranch, GitCommit, GitFileStatus, GitRepoRef, GitStash, PrBranchSummary, RepoStatus } from "../../../shared/types.ts";
+import type { GitBranch, GitCommit, GitRepoRef, GitStash, PrBranchSummary, RepoStatus } from "../../../shared/types.ts";
 import { ask } from "../../src/lib/api.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
-import { Btn, Card, Chip, Label, Note, Segmented, TAP, groupEdge } from "../../src/ui.tsx";
+import { Btn, Card, Chip, Label, Note, Segmented, Sheet, TAP, groupEdge } from "../../src/ui.tsx";
 import { C, MONO, RADIUS, SPACE, T, ink, tint } from "../../src/theme.ts";
-import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { ChevronIcon } from "../../src/nav/icons.tsx";
 import { branchLookup, checkoutFor } from "../../src/model/checkout.ts";
 import { keepOrder, newBranchProblem, orderBranches, scmSuccessText, stashTitle, trackWords, VIEWS, type ScmView } from "../../src/model/scm.ts";
 import { Glyph } from "../../src/nav/glyphs.tsx";
 import { ReposIcon } from "../../src/nav/icons.tsx";
-
-/** What happened to a file, as a letter on a tint of its colour. A letter as
- *  well as a colour: at small sizes outdoors, colour alone is not a signal to
- *  rely on, and for a good number of people it is not a signal at all. The
- *  letters are git's own, so the phone and `git status` say the same thing. */
-function mark(file: GitFileStatus): { letter: string; ink: string; says: string } {
-  switch (file.status) {
-    case "added": return { letter: "A", ink: C.success, says: "Added" };
-    case "untracked": return { letter: "U", ink: C.success, says: "Untracked" };
-    case "deleted": return { letter: "D", ink: C.error, says: "Deleted" };
-    case "unmerged": return { letter: "!", ink: C.error, says: "Conflicted" };
-    case "renamed": return { letter: "R", ink: C.info, says: "Renamed" };
-    case "copied": return { letter: "C", ink: C.info, says: "Copied" };
-    default: return { letter: "M", ink: C.warning, says: "Modified" };
-  }
-}
+import { PullHint, StatusBadge, mark } from "../../src/git-ui.tsx";
+import { parseRefs, pushState, switchWarning, unpushedHashes } from "../../src/model/gitReview.ts";
 
 /** One pull request, as a row that opens the detail this app already has.
  *
@@ -152,6 +139,8 @@ export default function ReposScreen(): React.ReactNode {
   const [branches, setBranches] = useState<GitBranch[] | null>(null);
   const [stashes, setStashes] = useState<GitStash[] | null>(null);
   const [newName, setNewName] = useState("");
+  /** The branch a switch is waiting to confirm, while the tree has changes. */
+  const [switching, setSwitching] = useState<string | null>(null);
   const [branchPrs, setBranchPrs] = useState<BranchPrs | null>(null);
 
   const mayWrite = host?.scope === "full";
@@ -181,7 +170,39 @@ export default function ReposScreen(): React.ReactNode {
     setRepos((prev) => (prev ? keepOrder(prev, fresh) : fresh));
   }, [host]);
 
-  const load = useCallback(async (): Promise<void> => {
+  /** The checkout the answers below belong to. A late answer for the one you
+   *  just left must not fill the list of the one you are on. */
+  const at = useRef(root);
+  at.current = root;
+
+  const loadLog = useCallback(async (): Promise<void> => {
+    if (!host || !root) return;
+    const answer = await ask<{ commits?: GitCommit[] }>(
+      host, `/git/log?root=${encodeURIComponent(root)}&limit=40`,
+    );
+    if (at.current !== root) return;
+    setCommits(answer.ok ? answer.value.commits ?? [] : []);
+  }, [host, root]);
+
+  /** The branches, and with them what the header needs to say whether the
+   *  current one has anywhere to push to. A branch that was never pushed has no
+   *  upstream and reads as 0 ahead, so for that one — and only that one — the
+   *  log is read too: what a push would send is the commits no remote has. */
+  const loadBranches = useCallback(async (): Promise<void> => {
+    if (!host || !root) return;
+    const answer = await ask<{ branches?: GitBranch[] }>(host, `/git/branches?root=${encodeURIComponent(root)}`);
+    if (at.current !== root) return;
+    if (!answer.ok) { setSaid({ ok: false, text: answer.error }); setBranches([]); return; }
+    const list = answer.value.branches ?? [];
+    setBranches(list);
+    const here = list.find((b) => b.current);
+    if (here && (!here.upstream || /gone/.test(here.track))) await loadLog();
+  }, [host, root, loadLog]);
+
+  /** The head of the checkout, read from git itself. The branch on the header
+   *  used to come from the repository list — a cache that a checkout made at
+   *  the computer, or by an agent, left a minute out of date. */
+  const loadStatus = useCallback(async (): Promise<void> => {
     if (!host || !root) return;
     const answer = await ask<{ repos: RepoStatus[]; commitEnabled: boolean }>(host, "/git/status", {
       method: "POST",
@@ -190,6 +211,7 @@ export default function ReposScreen(): React.ReactNode {
       // repository the worktree belongs to.
       body: { paths: [root] },
     });
+    if (at.current !== root) return;
     if (!answer.ok) { setSaid({ ok: false, text: answer.error }); return; }
     setCommitEnabled(answer.value.commitEnabled !== false);
     const first = Array.isArray(answer.value.repos) ? answer.value.repos[0] ?? null : null;
@@ -197,75 +219,54 @@ export default function ReposScreen(): React.ReactNode {
     setNoRepo(first === null);
   }, [host, root]);
 
-  useEffect(() => { setStatus(null); setNoRepo(false); setTitle(""); void load(); }, [load]);
+  const load = useCallback(async (): Promise<void> => {
+    await Promise.all([loadStatus(), loadBranches()]);
+  }, [loadStatus, loadBranches]);
+
+  useEffect(() => { setStatus(null); setNoRepo(false); setTitle(""); }, [root]);
+  useEffect(() => { setCommits(null); setBranches(null); setStashes(null); setBranchPrs(null); setNewName(""); }, [root]);
+  /* On focus, not on mount: a tab stays mounted behind the diff and the
+     terminal, so a branch checked out or a file committed while you were away
+     would otherwise be what this screen goes on saying until a write of its own. */
+  useFocusEffect(useCallback(() => { void load(); void refreshRepos(); }, [load, refreshRepos]));
 
   /*
-   * The other two views, fetched only when they are LOOKED at.
+   * The other views, fetched only when they are LOOKED at.
    *
-   * Both cost a round trip and neither is the view this screen opens on, so
-   * asking for all three up front would spend two requests per checkout switch
+   * Each costs a round trip and none is the view this screen opens on, so
+   * asking for all of them up front would spend requests per checkout switch
    * to fill panels nobody has turned to. They are cleared when the checkout
    * changes, because a commit list belonging to another worktree drawn under
    * this one's name is the worst kind of wrong here: it is plausible.
    */
-  useEffect(() => { setCommits(null); setBranches(null); setStashes(null); setBranchPrs(null); setNewName(""); }, [root]);
 
-  useEffect(() => {
-    if (!host || !root || view !== "log" || commits !== null) return;
-    let gone = false;
-    void (async () => {
-      const answer = await ask<{ commits?: GitCommit[] }>(
-        host, `/git/log?root=${encodeURIComponent(root)}&limit=40`,
-      );
-      if (gone) return;
-      setCommits(answer.ok ? answer.value.commits ?? [] : []);
-    })();
-    return () => { gone = true; };
-  }, [host, root, view, commits]);
+  useEffect(() => { if (view === "log" && commits === null) void loadLog(); }, [view, commits, loadLog]);
+  useEffect(() => { if (view === "branches" && branches === null) void loadBranches(); }, [view, branches, loadBranches]);
 
-  useEffect(() => {
-    if (!host || !root || view !== "branches" || branches !== null) return;
-    let gone = false;
-    void (async () => {
-      const answer = await ask<{ branches?: GitBranch[] }>(host, `/git/branches?root=${encodeURIComponent(root)}`);
-      if (gone) return;
-      if (!answer.ok) { setSaid({ ok: false, text: answer.error }); setBranches([]); return; }
-      setBranches(answer.value.branches ?? []);
-    })();
-    return () => { gone = true; };
-  }, [host, root, view, branches]);
+  const loadStashes = useCallback(async (): Promise<void> => {
+    if (!host || !root) return;
+    const answer = await ask<{ stashes?: GitStash[] }>(host, `/git/stashes?root=${encodeURIComponent(root)}`);
+    if (at.current !== root) return;
+    if (!answer.ok) { setSaid({ ok: false, text: answer.error }); setStashes([]); return; }
+    setStashes(answer.value.stashes ?? []);
+  }, [host, root]);
+  useEffect(() => { if (view === "stash" && stashes === null) void loadStashes(); }, [view, stashes, loadStashes]);
 
-  useEffect(() => {
-    if (!host || !root || view !== "stash" || stashes !== null) return;
-    let gone = false;
-    void (async () => {
-      const answer = await ask<{ stashes?: GitStash[] }>(host, `/git/stashes?root=${encodeURIComponent(root)}`);
-      if (gone) return;
-      if (!answer.ok) { setSaid({ ok: false, text: answer.error }); setStashes([]); return; }
-      setStashes(answer.value.stashes ?? []);
-    })();
-    return () => { gone = true; };
-  }, [host, root, view, stashes]);
-
-  useEffect(() => {
-    if (!host || !root || view !== "pr" || branchPrs !== null) return;
+  const loadPrs = useCallback(async (): Promise<void> => {
+    if (!host || !root) return;
     const look = branchLookup(status?.branch);
     if (!look.ask) {
       if (look.reason) setBranchPrs({ ok: false, into: [], local: true, error: look.reason });
       return;
     }
-    const branch = look.branch;
-    let gone = false;
-    void (async () => {
-      const answer = await ask<BranchPrs>(
-        host,
-        `/prs/for-branch?root=${encodeURIComponent(root)}&branch=${encodeURIComponent(branch)}`,
-      );
-      if (gone) return;
-      setBranchPrs(answer.ok ? answer.value : { ok: false, into: [], error: answer.error });
-    })();
-    return () => { gone = true; };
-  }, [host, root, view, branchPrs, status?.branch]);
+    const answer = await ask<BranchPrs>(
+      host,
+      `/prs/for-branch?root=${encodeURIComponent(root)}&branch=${encodeURIComponent(look.branch)}`,
+    );
+    if (at.current !== root) return;
+    setBranchPrs(answer.ok ? answer.value : { ok: false, into: [], error: answer.error });
+  }, [host, root, status?.branch]);
+  useEffect(() => { if (view === "pr" && branchPrs === null) void loadPrs(); }, [view, branchPrs, loadPrs]);
 
   /** Every git write goes through here so there is one place that reports, one
    *  that re-reads, and one that cannot be pressed twice. */
@@ -282,19 +283,47 @@ export default function ReposScreen(): React.ReactNode {
     if (!answer.value.ok) { setSaid({ ok: false, text: answer.value.error ?? "git refused that" }); return; }
     const text = successInfo ? scmSuccessText(path, successInfo) : null;
     setSaid(text ? { ok: true, text } : null);
-    // What a write can have moved. Cleared, not patched, so the view that is
-    // open asks again. Staging moves neither the head line nor the pull request
-    // (a GitHub round trip), so those are left alone for it.
-    setBranches(null); setStashes(null); setCommits(null);
-    if (path === "/git/stage" || path === "/git/unstage") { await load(); return; }
-    setBranchPrs(null);
+    // Staging moves neither the branches, the log, the stash nor the pull
+    // request (a GitHub round trip), so it re-reads only the file list — and
+    // leaves the log alone, which is what Push's count is made from.
+    if (path === "/git/stage" || path === "/git/unstage") { await loadStatus(); return; }
+    // What any other write can have moved. Cleared, not patched, so the view
+    // that is open asks again.
+    setBranches(null); setStashes(null); setCommits(null); setBranchPrs(null);
     await Promise.all([load(), refreshRepos()]);
-  }, [host, load, refreshRepos]);
+  }, [host, load, loadStatus, refreshRepos]);
 
   const files = useMemo(() => status?.files ?? [], [status]);
   const staged = useMemo(() => files.filter((f) => f.staged), [files]);
+  /** Null until git has answered: the confirm treats that as unknown, not as clean. */
+  const dirtyCount = status ? files.length : null;
 
   const repo = repos?.find((r) => r.root === root) ?? null;
+  /** The branch as git said it just now; the repository list's copy is only
+   *  the fallback for the moment before the first answer. */
+  const branchName = status?.branch ?? repo?.branch ?? null;
+  const here = useMemo(() => branches?.find((b) => b.current) ?? null, [branches]);
+  /** What Push can do. Until the branches have been read it cannot say, and a
+   *  button that guesses "enabled" is the one that pushes the wrong thing. */
+  const push = useMemo(() => pushState(here, commits), [here, commits]);
+  const unpushed = useMemo(() => (here && !here.upstream && commits ? unpushedHashes(commits) : null), [here, commits]);
+  /** What the dim Commit and Push buttons are waiting for, said once. The Push
+   *  line is only for when it is the ONLY thing missing, so "nothing to push"
+   *  does not crowd out what Commit needs while a commit is being written. */
+  const commitNeeds = !staged.length ? "Stage a file to commit it."
+    : !title.trim() ? "Write what this commit does." : null;
+  const pushNeeds = branches && !push.canPush && push.ahead === 0 && !commitNeeds
+    ? "Nothing to push: no commits ahead of the remote." : null;
+
+  /** One refresh for every tab: the pull gesture, the spinner and the reset
+   *  live here so a fifth list cannot be added without one. */
+  const pullWith = (fn: () => Promise<unknown>): React.ReactElement<RefreshControlProps> => (
+    <RefreshControl
+      refreshing={pulling}
+      onRefresh={() => { setPulling(true); void fn().finally(() => setPulling(false)); }}
+      tintColor={C.text3}
+    />
+  );
 
   /* Browsing the checkout, from the screen that already knows which one you
      are in. In the header rather than as a fourth segment: the three segments
@@ -351,9 +380,9 @@ export default function ReposScreen(): React.ReactNode {
               accessibilityState={{ checked: on }}
               accessibilityLabel={`${r.name}${r.dirty ? ", has changes" : ""}`}
               onPress={() => { revealed.current = r.root; setRoot(r.root); reveal(r.root, true); }}
-              hitSlop={{ top: 8, bottom: 8 }}
+              hitSlop={{ top: 6, bottom: 6 }}
               style={({ pressed }) => ({
-                flexDirection: "row", alignItems: "center", gap: 6, height: 32, paddingHorizontal: 12,
+                flexDirection: "row", alignItems: "center", gap: 6, height: 36, paddingHorizontal: 12,
                 borderRadius: RADIUS.sm, backgroundColor: on ? tint(C.primary, 0.16) : "transparent",
                 borderWidth: 1, borderColor: on ? "transparent" : C.border2,
                 transform: [{ scale: pressed ? 0.97 : 1 }],
@@ -406,14 +435,26 @@ export default function ReposScreen(): React.ReactNode {
       {/* Where you are in it: the branch, and what is waiting to go up or come
           down. It was the second line of every chip, which made each chip two
           lines tall and the strip the tallest thing on the screen. */}
-      {repo ? (
-        <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm, paddingHorizontal: 20, paddingVertical: SPACE.md }}>
-          <Glyph name="branch" color={C.text3} size={18} />
-          <Text numberOfLines={1} style={{ color: C.text, fontSize: 13, fontWeight: "500", fontFamily: MONO, flexShrink: 1 }}>
-            {repo.branch}
-          </Text>
-          {repo.ahead ? <Chip label={`↑${repo.ahead} to push`} tone="accent" /> : null}
-          {repo.behind ? <Chip label={`↓${repo.behind} behind`} tone="warn" /> : null}
+      {branchName ? (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm, paddingHorizontal: SPACE.lg, paddingVertical: SPACE.md }}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`On branch ${branchName}. Show the branches`}
+            hitSlop={{ top: 6, bottom: 6 }}
+            onPress={() => { setSaid(null); setView("branches"); }}
+            style={({ pressed }) => ({
+              flexShrink: 1, flexDirection: "row", alignItems: "center", gap: SPACE.sm, height: 36,
+              paddingHorizontal: SPACE.md, borderRadius: RADIUS.md, borderWidth: 1, borderColor: C.border2,
+              backgroundColor: pressed ? C.bg3 : C.bg2,
+            })}
+          >
+            <Glyph name="branch" color={C.text3} size={16} />
+            <Text numberOfLines={1} style={{ color: C.text, fontSize: 13, fontWeight: "500", fontFamily: MONO, flexShrink: 1 }}>
+              {branchName}
+            </Text>
+          </Pressable>
+          {push.chip ? <Chip label={push.chip} tone="accent" icon={<Glyph name="up" color={C.primary} size={13} weight={2.4} />} /> : null}
+          {repo?.behind ? <Chip label={`↓${repo.behind} behind`} tone="warn" /> : null}
         </View>
       ) : null}
 
@@ -441,13 +482,7 @@ export default function ReposScreen(): React.ReactNode {
         /* No gap: the changed files are one card divided by hairlines, the same
            as every other list in the app. See groupEdge in src/ui.tsx. */
         contentContainerStyle={{ padding: SPACE.lg, paddingBottom: SPACE.xl }}
-        refreshControl={
-          <RefreshControl
-            refreshing={pulling}
-            onRefresh={() => { setPulling(true); void load().finally(() => setPulling(false)); }}
-            tintColor={C.text3}
-          />
-        }
+        refreshControl={pullWith(() => Promise.all([load(), refreshRepos()]))}
         ListHeaderComponent={
           <View style={{ flexDirection: "row", alignItems: "center", paddingBottom: SPACE.sm, paddingLeft: SPACE.xs }}>
             <Text style={{ color: C.text2, fontSize: 13, fontWeight: "600", flex: 1 }}>
@@ -463,11 +498,13 @@ export default function ReposScreen(): React.ReactNode {
                   void act("stage:all", "/git/stage", { root, paths: files.filter((f) => !f.staged).map((f) => f.path) });
                 }}
                 style={({ pressed }) => ({
-                  minHeight: TAP, justifyContent: "center", paddingHorizontal: SPACE.sm,
-                  transform: [{ scale: pressed ? 0.97 : 1 }],
+                  minHeight: TAP, justifyContent: "center", paddingHorizontal: SPACE.md,
+                  borderRadius: RADIUS.sm, backgroundColor: pressed ? C.bg3 : "transparent",
                 })}
               >
-                <Text style={{ color: C.primary, fontSize: T.body, fontWeight: "600" }}>Stage all</Text>
+                {busy === "stage:all"
+                  ? <ActivityIndicator color={C.primary} />
+                  : <Text style={{ color: C.primary, fontSize: T.body, fontWeight: "600" }}>Stage all</Text>}
               </Pressable>
             ) : null}
           </View>
@@ -475,66 +512,63 @@ export default function ReposScreen(): React.ReactNode {
         ListEmptyComponent={
           status === null ? <ActivityIndicator color={C.text3} /> : null
         }
+        ListFooterComponent={<PullHint text="Pull down to refresh. The box stages a file; the rest of the row opens its diff." />}
         renderItem={({ item, index }) => {
-          const m = mark(item);
+          const m = mark(item.status);
           return (
             <View style={[groupEdge(index === 0, index === files.length - 1), { flexDirection: "row", alignItems: "center" }]}>
-            <Pressable
-              disabled={!mayWrite || !!busy}
-              onPress={() => {
-                // The switch IS the staging. One tap, one git call, one re-read.
-                void act(
-                  `stage:${item.path}`,
-                  item.staged ? "/git/unstage" : "/git/stage",
-                  { root, paths: [item.path] },
-                );
-              }}
-              accessibilityRole="checkbox"
-              accessibilityState={{ checked: item.staged, disabled: !mayWrite }}
-              accessibilityLabel={`${m.says}: ${item.path}`}
-              style={({ pressed }) => ({
-                flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: SPACE.md,
-                minHeight: 52, paddingLeft: SPACE.lg, backgroundColor: pressed ? C.bg3 : "transparent",
-              })}
-            >
-              {/* A box, because staging is choosing — which files go in the
-                  commit — and not turning something on. */}
-              <View style={{
-                width: 22, height: 22, borderRadius: 6,
-                borderWidth: item.staged ? 0 : 2, borderColor: C.text4,
-                backgroundColor: item.staged ? C.primary : "transparent",
-                opacity: mayWrite ? 1 : 0.4,
-                alignItems: "center", justifyContent: "center",
-              }}>
-                {item.staged ? <Glyph name="check" color={ink(C.primary)} size={16} weight={2.6} /> : null}
-              </View>
-              <View style={{
-                width: 22, height: 22, borderRadius: 6, alignItems: "center", justifyContent: "center",
-                backgroundColor: tint(m.ink, 0.16),
-              }}>
-                <Text style={{ color: m.ink, fontSize: T.small, fontWeight: "600", fontFamily: MONO }}>{m.letter}</Text>
-              </View>
-              <Text
-                style={{ color: C.text, fontSize: 13, fontFamily: MONO, flex: 1 }}
-                numberOfLines={1}
-                ellipsizeMode="head"
+              {/* The box stages and nothing else. It is the small target on the
+                  left because staging is choosing — which files go in the
+                  commit — and a mis-tap on the NAME used to do it: the one
+                  thing a finger lands on when it means to read the file. */}
+              <Pressable
+                disabled={!mayWrite || !!busy}
+                onPress={() => {
+                  void act(
+                    `stage:${item.path}`,
+                    item.staged ? "/git/unstage" : "/git/stage",
+                    { root, paths: [item.path] },
+                  );
+                }}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: item.staged, disabled: !mayWrite }}
+                accessibilityLabel={`${item.staged ? "Unstage" : "Stage"} ${item.path}`}
+                style={({ pressed }) => ({
+                  width: TAP, minHeight: 56, alignItems: "center", justifyContent: "center",
+                  backgroundColor: pressed ? C.bg3 : "transparent",
+                })}
               >
-                {item.path}
-              </Text>
-            </Pressable>
-            {/* What changed in it: its own control, so staging stays one tap on
-                the name and reading the change is one tap on the chevron. */}
-            <Pressable
-              onPress={() => router.push({ pathname: "/git-diff", params: { root, path: item.path } })}
-              accessibilityRole="button"
-              accessibilityLabel={`See what changed in ${item.path}`}
-              style={({ pressed }) => ({
-                width: TAP, minHeight: 52, alignItems: "center", justifyContent: "center",
-                backgroundColor: pressed ? C.bg3 : "transparent",
-              })}
-            >
-              <ChevronIcon color={C.text3} size={16} />
-            </Pressable>
+                <View style={{
+                  width: 24, height: 24, borderRadius: 7,
+                  borderWidth: item.staged ? 0 : 2, borderColor: C.text4,
+                  backgroundColor: item.staged ? C.primary : "transparent",
+                  opacity: mayWrite ? 1 : 0.4,
+                  alignItems: "center", justifyContent: "center",
+                }}>
+                  {item.staged ? <Glyph name="check" color={ink(C.primary)} size={17} weight={2.6} /> : null}
+                </View>
+              </Pressable>
+              {/* The rest of the row is the diff. */}
+              <Pressable
+                onPress={() => router.push({ pathname: "/git-diff", params: { root, path: item.path } })}
+                accessibilityRole="button"
+                accessibilityLabel={`See what changed in ${item.path}`}
+                style={({ pressed }) => ({
+                  flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: SPACE.md,
+                  minHeight: 56, paddingRight: SPACE.md, backgroundColor: pressed ? C.bg3 : "transparent",
+                })}
+              >
+                <StatusBadge status={item.status} />
+                <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+                  <Text style={{ color: C.text, fontSize: 13.5, fontFamily: MONO, fontWeight: "500" }} numberOfLines={1} ellipsizeMode="head">
+                    {item.path}
+                  </Text>
+                  <Text numberOfLines={1} style={{ color: C.text3, fontSize: T.small }}>
+                    {`${m.says}${item.staged ? " · staged" : ""} · tap to see the diff`}
+                  </Text>
+                </View>
+                <ChevronIcon color={C.text3} size={16} />
+              </Pressable>
             </View>
           );
         }}
@@ -543,42 +577,71 @@ export default function ReposScreen(): React.ReactNode {
 
       {/* ── the commits ────────────────────────────────────────────────── */}
       {view === "log" ? (
-        <ScrollView contentContainerStyle={{ padding: SPACE.lg, paddingBottom: SPACE.xl }}>
+        <ScrollView
+          contentContainerStyle={{ padding: SPACE.lg, paddingBottom: SPACE.xl }}
+          refreshControl={pullWith(() => Promise.all([loadLog(), load()]))}
+        >
           {commits === null ? (
             <View style={{ padding: SPACE.xl }}><ActivityIndicator color={C.text3} /></View>
           ) : commits.length === 0 ? (
             <Card><Note>No commits here yet.</Note></Card>
           ) : (
             commits.map((c, i) => (
-              <View
+              /* A row opens its commit: the files it changed, then each file's
+                 diff. It was a dead row, and the log is where a review starts. */
+              <Pressable
                 key={c.hash}
-                style={[
+                accessibilityRole="button"
+                accessibilityLabel={`Open commit ${c.shortHash}: ${c.subject}`}
+                onPress={() => router.push({
+                  pathname: "/git-commit",
+                  params: { root, hash: c.hash, short: c.shortHash, subject: c.subject, author: c.author, date: c.date },
+                })}
+                style={({ pressed }) => [
                   groupEdge(i === 0, i === commits.length - 1),
-                  { flexDirection: "row", gap: SPACE.md, paddingHorizontal: SPACE.lg, paddingVertical: SPACE.md },
+                  {
+                    flexDirection: "row", alignItems: "center", gap: SPACE.md, minHeight: 64,
+                    paddingHorizontal: SPACE.lg, paddingVertical: SPACE.md,
+                    backgroundColor: pressed ? C.bg3 : "transparent",
+                  },
                 ]}
               >
-                <View style={{ paddingTop: 1 }}><Glyph name="commit" color={C.text3} size={20} /></View>
+                <View style={{ width: 36, height: 36, borderRadius: RADIUS.md, backgroundColor: C.bg3, alignItems: "center", justifyContent: "center" }}>
+                  <Glyph name="commit" color={C.text2} size={20} />
+                </View>
                 <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
-                  <Text numberOfLines={2} style={{ color: C.text, fontSize: 14.5, fontWeight: "500", lineHeight: 20 }}>{c.subject}</Text>
+                  <Text numberOfLines={2} style={{ color: C.text, fontSize: 14.5, fontWeight: "600", lineHeight: 20 }}>{c.subject}</Text>
                   <Text numberOfLines={1} style={{ color: C.text3, fontSize: T.small, fontFamily: MONO }}>
                     {c.shortHash} · {c.author} · {c.date}
                   </Text>
-                  {/* The decorations, when git gave any. A tag or a branch head
-                      on a commit is the thing that tells you WHERE you are in a
-                      log of forty otherwise identical lines. */}
-                  {c.refs ? (
-                    <View style={{ flexDirection: "row" }}><Chip label={c.refs} tone="accent" /></View>
+                  {/* Where this commit is: the branch heads and tags git put
+                      on it, and — for the ones no remote has — "not pushed".
+                      A tag or a head on a commit is the thing that tells you
+                      WHERE you are in a log of forty otherwise identical lines. */}
+                  {c.refs || unpushed?.has(c.hash) ? (
+                    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: SPACE.xs }}>
+                      {parseRefs(c.refs).map((r) => (
+                        <Chip key={`${r.kind}:${r.label}`} label={r.kind === "head" ? `HEAD → ${r.label}` : r.label} tone={r.kind === "head" ? "accent" : "neutral"} />
+                      ))}
+                      {unpushed?.has(c.hash) ? <Chip label="not pushed" tone="accent" /> : null}
+                    </View>
                   ) : null}
                 </View>
-              </View>
+                <ChevronIcon color={C.text4} size={16} />
+              </Pressable>
             ))
           )}
+          <PullHint text="Pull down to refresh. Each row opens that commit's files." />
         </ScrollView>
       ) : null}
 
       {/* ── the branches ───────────────────────────────────────────────── */}
       {view === "branches" ? (
-        <ScrollView contentContainerStyle={{ padding: SPACE.lg, gap: SPACE.md, paddingBottom: SPACE.xl }} keyboardShouldPersistTaps="handled">
+        <ScrollView
+          contentContainerStyle={{ padding: SPACE.lg, gap: SPACE.md, paddingBottom: SPACE.xl }}
+          keyboardShouldPersistTaps="handled"
+          refreshControl={pullWith(() => Promise.all([load(), refreshRepos()]))}
+        >
           {mayWrite ? (
             <View style={{ gap: SPACE.sm }}>
               <Label text="New branch, from here" />
@@ -622,7 +685,11 @@ export default function ReposScreen(): React.ReactNode {
                 <Pressable
                   key={b.name}
                   disabled={!mayWrite || !!busy || b.current}
-                  onPress={() => { void act(`branch:${b.name}`, "/git/checkout", { root, name: b.name }, { branch: b.name }); }}
+                  onPress={() => {
+                    // Work in the tree comes along on a switch; say so first.
+                    if (switchWarning(dirtyCount, b.name)) setSwitching(b.name);
+                    else void act(`branch:${b.name}`, "/git/checkout", { root, name: b.name }, { branch: b.name });
+                  }}
                   accessibilityRole="button"
                   accessibilityState={{ selected: b.current, disabled: !mayWrite || b.current }}
                   accessibilityLabel={b.current ? `${b.name}, checked out` : `Switch to ${b.name}`}
@@ -648,12 +715,16 @@ export default function ReposScreen(): React.ReactNode {
               ))}
             </View>
           )}
+          <PullHint />
         </ScrollView>
       ) : null}
 
       {/* ── the stash ──────────────────────────────────────────────────── */}
       {view === "stash" ? (
-        <ScrollView contentContainerStyle={{ padding: SPACE.lg, paddingBottom: SPACE.xl }}>
+        <ScrollView
+          contentContainerStyle={{ padding: SPACE.lg, paddingBottom: SPACE.xl }}
+          refreshControl={pullWith(loadStashes)}
+        >
           {stashes === null ? (
             <View style={{ padding: SPACE.xl }}><ActivityIndicator color={C.text3} /></View>
           ) : stashes.length === 0 ? (
@@ -687,12 +758,16 @@ export default function ReposScreen(): React.ReactNode {
               );
             })
           )}
+          <PullHint />
         </ScrollView>
       ) : null}
 
       {/* ── the pull request for this branch ───────────────────────────── */}
       {view === "pr" ? (
-        <ScrollView contentContainerStyle={{ padding: SPACE.lg, gap: SPACE.md, paddingBottom: SPACE.xl }}>
+        <ScrollView
+          contentContainerStyle={{ padding: SPACE.lg, gap: SPACE.md, paddingBottom: SPACE.xl }}
+          refreshControl={pullWith(async () => { await loadStatus(); await loadPrs(); })}
+        >
           {branchPrs === null ? (
             <View style={{ padding: SPACE.xl }}><ActivityIndicator color={C.text3} /></View>
           ) : branchPrs.needsAuth ? (
@@ -742,14 +817,18 @@ export default function ReposScreen(): React.ReactNode {
               ) : null}
             </>
           )}
+          <PullHint />
         </ScrollView>
       ) : null}
 
-      {mayWrite && commitEnabled && view === "changes" && files.length > 0 ? (
+      {/* Push outlives the dirty tree: once every file is committed `files` is
+          empty and a branch that was never published still needs its button. */}
+      {mayWrite && commitEnabled && view === "changes" && (files.length > 0 || push.canPush) ? (
         <View style={{
           gap: SPACE.sm, padding: SPACE.lg,
           borderTopWidth: 1, borderTopColor: C.border, backgroundColor: C.bg2,
         }}>
+          {files.length > 0 ? (
           <TextInput
             value={title}
             onChangeText={setTitle}
@@ -761,7 +840,9 @@ export default function ReposScreen(): React.ReactNode {
               paddingHorizontal: SPACE.md, fontSize: T.body,
             }}
           />
+          ) : null}
           <View style={{ flexDirection: "row", gap: SPACE.sm }}>
+            {files.length > 0 ? (
             <Btn
               label={staged.length ? `Commit ${staged.length} ${staged.length === 1 ? "file" : "files"}` : "Nothing staged"}
               tone="primary"
@@ -781,13 +862,20 @@ export default function ReposScreen(): React.ReactNode {
                 }, { files: staged.length }).then(() => setTitle(""));
               }}
             />
+            ) : null}
             <Btn
-              label={repo?.ahead ? `Push ${repo.ahead}` : "Push"}
+              label={push.label}
               style={{ flex: 1 }}
+              disabled={!push.canPush}
               busy={busy === "push"}
-              onPress={() => { void act("push", "/git/push", { root }, { branch: repo?.branch }); }}
+              onPress={() => { void act("push", "/git/push", { root }, { branch: branchName ?? undefined }); }}
             />
           </View>
+          {/* Why a button is dim, in words: two grey buttons that say nothing
+              are the ones somebody taps again to see if they are broken. */}
+          {commitNeeds || pushNeeds ? (
+            <Note>{[commitNeeds, pushNeeds].filter(Boolean).join(" ")}</Note>
+          ) : null}
         </View>
       ) : null}
 
@@ -799,6 +887,27 @@ export default function ReposScreen(): React.ReactNode {
           </Note>
         </View>
       ) : null}
+
+      {/* Switching with work in the tree. git would carry it across, or stop if a
+          file clashed; neither is something to find out after the tap. */}
+      <Sheet open={switching !== null} onClose={() => setSwitching(null)} title={`Switch to ${switching ?? ""}?`}>
+        <Text style={{ color: C.text2, fontSize: T.body, lineHeight: 20, paddingBottom: SPACE.lg }}>
+          {switching ? switchWarning(dirtyCount, switching) : ""}
+        </Text>
+        <View style={{ flexDirection: "row", gap: SPACE.sm }}>
+          <Btn label="Cancel" style={{ flex: 1 }} onPress={() => setSwitching(null)} />
+          <Btn
+            label="Switch anyway"
+            tone="primary"
+            style={{ flex: 1 }}
+            onPress={() => {
+              const name = switching;
+              setSwitching(null);
+              if (name) void act(`branch:${name}`, "/git/checkout", { root, name }, { branch: name });
+            }}
+          />
+        </View>
+      </Sheet>
     </KeyboardAvoidingView>
   );
 }

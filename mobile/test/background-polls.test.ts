@@ -22,7 +22,12 @@ test("the pull-request pass runs only in the foreground and catches up on return
 });
 
 test("the terminal tab's pane read follows AppState as well as focus", () => {
-  expect(terminal).toMatch(/setInterval\(\(\) => \{ if \(AppState\.currentState === "active"\) void load\(true\); \}, 2000\)/);
+  expect(terminal).toMatch(/if \(busy \|\| AppState\.currentState !== "active"\) return;\s*busy = true;\s*void load\(true\)\.finally\(\(\) => \{ busy = false; \}\);\s*\}, 2000\)/);
+});
+
+test("the dirty dot's read is foreground-only and never stacks", () => {
+  expect(terminal).toMatch(/if \(busy \|\| AppState\.currentState !== "active"\) return;\s*busy = true;\s*void look\(\)\.finally/);
+  expect(terminal).toContain("setInterval(tick, 4000)");
 });
 
 test("the queue's pass and the Pull requests tab read the same lists through one memo", () => {

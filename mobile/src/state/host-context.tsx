@@ -39,6 +39,7 @@ import { loadKeepAlivePref, syncKeepAlive, wantKeepAlive } from "../notification
 import { noteChecks, noteTalk } from "./pr-talk.ts";
 import { talkPref } from "../notifications/talkPref.ts";
 import { applyMarks, loadPrMarks, resetMarks } from "./read-marks.ts";
+import { setDeskTheme } from "../theme.ts";
 
 /** The backstop, not the mechanism. Long enough that a phone sitting in a
  *  pocket with the screen on is not talking to the network every few seconds. */
@@ -473,6 +474,8 @@ export function HostProvider({ children }: { children: ReactNode }): ReactNode {
       syncKeepAlive(false);
       await forgetHost();
       forgetCachedAsks();
+      // The next computer paired must not start in this one's colours.
+      setDeskTheme(null);
       setFleet(EMPTY);
       setHost(null);
     },

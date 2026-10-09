@@ -1,7 +1,7 @@
 /*
  * Nothing new gets to be smaller than a thumb.
  *
- * `TAP` is 44 in src/ui.tsx and the comment over it explains what the number is
+ * `TAP` is 48 in src/ui.tsx and the comment over it explains what the number is
  * for: "the cost of a mis-tap here is an agent stopped or a command allowed
  * that should not have been". It was a floor the shared components held and
  * the screens did not.
@@ -31,10 +31,20 @@ import { join } from "node:path";
  *  pull react-native into a test that only wants to read text — the same
  *  reason theme.ts requires its native modules lazily. If TAP moves, this
  *  number is meant to be looked at rather than to follow silently. */
-const TAP = 44;
+const TAP = 48;
+
+/** What a literal `minHeight:` is held to: the full TAP. */
+const LITERAL_FLOOR = TAP;
+
+/** The one file still written against 44: the pull request screens, with one
+ *  literal at that height (`app/pr/[number].tsx`), which belongs to another
+ *  branch. It is held to 44 here until that branch follows, and nothing else is
+ *  — a new control at 44 elsewhere (the diff's expander was one) fails. */
+const STILL_44 = "app/pr/[number].tsx";
+const floorOf = (path: string): number => (path === STILL_44 ? 44 : LITERAL_FLOOR);
 
 /**
- * The two that were already under it, each with the argument that put it there.
+ * The ones that were already under it, each with the argument that put it there.
  *
  * Named as `file:line` is deliberately NOT the shape — a line number moves the
  * moment anything above it does, and a lock that fails on an unrelated edit is
@@ -42,24 +52,6 @@ const TAP = 44;
  * has to be argued for.
  */
 const ALLOWED: { file: string; height: number; because: string }[] = [
-  {
-    file: "app/(tabs)/terminal.tsx",
-    height: 40,
-    because:
-      "the accessory key bar. Sixteen keys have to reach the fold on a 360dp "
-      + "phone, and the measured trade is written over it: below 40 the seventh "
-      + "key goes behind a swipe, which is where Ctrl+C would end up.",
-  },
-
-  {
-    file: "app/(tabs)/settings.tsx",
-    height: 36,
-    because:
-      "a value picked on a settings row (Theme, Width), drawn as a pill at the "
-      + "end of a 56-point row where a switch would sit. The pill is 36 so it "
-      + "fits the row with its own padding; each option carries 4 points of "
-      + "hitSlop above and below, so what a thumb can land on is 44.",
-  },
   {
     file: "src/review/FilesPane.tsx",
     height: 22,
@@ -107,20 +99,84 @@ const files = [...sources(join(root, "app")), ...sources(join(root, "src"))]
 const heights = files.flatMap(({ path, source }) =>
   [...source.matchAll(/minHeight:\s*(\d+)/g)].map((m) => ({ path, height: Number(m[1]) })));
 
+/** Body of `export function <name>(` up to its own closing brace at column 0,
+ *  never a fixed window. */
+function bodyOf(source: string, name: string): string {
+  const start = source.indexOf(`export function ${name}(`);
+  expect(start, `${name} is gone from src/ui.tsx`).toBeGreaterThan(-1);
+  const end = source.indexOf("\n}\n", start);
+  return source.slice(start, end + 3);
+}
+
+describe("the shared controls", () => {
+  // `heights` above reads literals only, and Btn / Row / SheetRow write theirs
+  // as `TAP` or as a ternary (`sub ? 56 : 48`), so that scan never saw them —
+  // which is how Btn sat at 44 while the audit measured it as the floor.
+  const ui = files.find((f) => f.path === "src/ui.tsx")!.source;
+  const declared = Number(/export const TAP = (\d+)/.exec(ui)?.[1]);
+
+  test("TAP itself is the floor", () => {
+    expect(declared).toBeGreaterThanOrEqual(TAP);
+  });
+
+  for (const name of ["Btn", "Row", "SheetRow"]) {
+    test(`${name} is never drawn under ${TAP}`, () => {
+      const expressions = [...bodyOf(ui, name).matchAll(/minHeight:\s*([^,}\n]+)/g)].map((m) => m[1]!);
+      expect(expressions.length, `${name} has no minHeight to check`).toBeGreaterThan(0);
+      for (const expression of expressions) {
+        // Every value the expression can take: a ternary's two arms both count.
+        const values = [...expression.matchAll(/TAP|\d+/g)].map((m) => (m[0] === "TAP" ? declared : Number(m[0])));
+        expect(values.length, `minHeight: ${expression} in ${name} is not a number or TAP`).toBeGreaterThan(0);
+        expect(Math.min(...values), `${name}: minHeight: ${expression}`).toBeGreaterThanOrEqual(TAP);
+      }
+    });
+  }
+});
+
+describe("what a press says back", () => {
+  const terminal = files.find((f) => f.path === "app/(tabs)/terminal.tsx")!.source;
+  const issue = files.find((f) => f.path === "app/issue/[number].tsx")!.source;
+  const ui = files.find((f) => f.path === "src/ui.tsx")!.source;
+
+  test("the comment sheet closes only when the post went through", () => {
+    // `act` used to return nothing, so `.then(() => setCommenting(false))` ran
+    // after a refusal too and the red line was left on the screen behind.
+    expect(issue).not.toMatch(/act\("(?:comment|claim)"\)\.then\(\(\) =>/);
+    expect(issue).toMatch(/act\("comment"\)\.then\(\(ok\) => \{ if \(ok\) setCommenting\(false\)/);
+  });
+
+  test("a row that cannot be used is disabled, not a silent no-op", () => {
+    expect(bodyOf(ui, "SheetRow")).toMatch(/disabled/);
+    expect(terminal).toMatch(/disabled=\{!a\.installed\}/);
+    expect(terminal).not.toMatch(/if \(a\.installed\) openAgent/);
+  });
+
+  test("Push waits for something to push", () => {
+    const repos = files.find((f) => f.path === "app/(tabs)/repos.tsx")!.source;
+    // Not `repo.ahead`: a never-pushed branch reads 0 there. See model/gitReview.ts.
+    expect(repos).toMatch(/disabled=\{!push\.canPush\}/);
+  });
+
+  test("the copy buttons say they copied", () => {
+    expect(files.find((f) => f.path === "app/files.tsx")!.source).toMatch(/Path copied/);
+    expect(bodyOf(ui, "CommandLine")).toMatch(/Copied/);
+  });
+});
+
 describe("the tap floor", () => {
   test("there are heights to check at all", () => {
     // A regex that stops matching is a test that passes for the wrong reason.
     expect(heights.length).toBeGreaterThan(0);
   });
 
-  test("nothing is under 44 without an argument for it", () => {
-    const under = heights.filter((h) => h.height < TAP);
+  test("nothing is under the floor without an argument for it", () => {
+    const under = heights.filter((h) => h.height < floorOf(h.path));
     const unexplained = under.filter(
       (h) => !ALLOWED.some((a) => a.file === h.path && a.height === h.height),
     );
     expect(
       unexplained.map((u) => `${u.path} at ${u.height}`),
-      "under the 44 floor and not in ALLOWED. Either raise it, or add it there "
+      "under the floor (TAP, or 44 in STILL_44) and not in ALLOWED. Either raise it, or add it there "
       + "with the reason — a smaller target is a decision, not an oversight.",
     ).toEqual([]);
   });

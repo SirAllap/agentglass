@@ -35,6 +35,11 @@ export interface PaneRow {
   windowIndex: string;
   windowName: string;
   paneId: string;
+  /** The window's `@agx-group` option, as tmux holds it — the desk's "put this
+   *  window in that group by hand". Raw: the route cleans it (`sanitizeGroupName`). */
+  group?: string;
+  /** The window's `@agx-pin` option is `1`. */
+  pinned?: true;
   /** The shell's directory. Kept for display; deliberately not the join key. */
   path: string;
   /** Every agent found under this pane, by the directory it is running in.
@@ -183,23 +188,36 @@ export function parsePanes(out: string, agentsOf: (pid: number) => string[] = ag
     if (!line.trim()) continue;
     // Tab-separated with the path LAST but one and the pid last, so a path with
     // a tab in it cannot shift the fields that matter. Split from both ends.
+    // The two window options sit before the path for the same reason: a
+    // free-text field goes where a stray tab can only spoil itself.
     const f = line.split("\t");
-    if (f.length < 8) continue;
+    if (f.length < 10) continue;
     const pid = Number(f[f.length - 1]);
-    const path = f.slice(6, f.length - 1).join("\t");
+    const path = f.slice(8, f.length - 1).join("\t");
     if (!Number.isFinite(pid)) continue;
+    const group = f[6]!.trim();
     rows.push({
       session: f[0]!, sessionId: f[1]!, windowId: f[2]!, windowIndex: f[3]!,
-      windowName: f[4]!, paneId: f[5]!, path,
+      windowName: f[4]!, paneId: f[5]!,
+      ...(group ? { group } : {}),
+      ...(f[7]!.trim() === "1" ? { pinned: true as const } : {}),
+      path,
       agentCwds: agentsOf(pid),
     });
   }
   return rows;
 }
 
+/** A window option with its tabs and newlines turned into spaces by tmux itself.
+ *  The options are free text that anyone can `set -w`, and the parser splits on
+ *  exactly those two characters: a tab added a field (the pin and the path were
+ *  lost) and a newline cut the row in two (the window vanished). Measured on
+ *  tmux 3.7c; `s/a/b/:` with a fixed pattern is older than the 3.4 CI pins. */
+const flat = (option: string): string => `#{s/\t/ /:#{s/\n/ /:#{${option}}}}`;
+
 /** The format string the parser above expects. One place, so they cannot drift. */
 export const PANE_FORMAT =
-  "#{session_name}\t#{session_id}\t#{window_id}\t#{window_index}\t#{window_name}\t#{pane_id}\t#{pane_current_path}\t#{pane_pid}";
+  `#{session_name}\t#{session_id}\t#{window_id}\t#{window_index}\t#{window_name}\t#{pane_id}\t${flat("@agx-group")}\t${flat("@agx-pin")}\t#{pane_current_path}\t#{pane_pid}`;
 
 /**
  * The pane an agent running in `cwd` is in.

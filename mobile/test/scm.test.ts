@@ -103,7 +103,7 @@ describe("the screen, read", () => {
     // commit footer's only feedback was silence. `ok: true` is what makes the
     // same line that shows an error show a landed write instead.
     expect(repos).toContain("setSaid(text ? { ok: true, text } : null)");
-    expect(repos).toContain('void act("push", "/git/push", { root }, { branch: repo?.branch });');
+    expect(repos).toContain('void act("push", "/git/push", { root }, { branch: branchName ?? undefined });');
   });
 });
 
