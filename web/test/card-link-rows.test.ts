@@ -17,14 +17,16 @@ const block = (from: string, to: string) => {
   expect(b).toBeGreaterThan(a);
   return src.slice(a, b);
 };
-const prRows = block("{prs.map((p) => (", "No pull request names this card yet.");
+const prRows = block("<CardPrDetailRow", "No pull request names this card yet.");
+const chipSrc = await Bun.file(new URL("../src/components/CardPrChip.tsx", import.meta.url)).text();
+const detailRow = chipSrc.slice(chipSrc.indexOf("export function CardPrDetailRow("));
 const otherRows = block("{others.map((l) => (", "</>)}");
 
 describe("card link rows", () => {
   it("draw both kinds of row from the one row class", () => {
-    expect(prRows).toContain("className={LINK_ROW}");
+    expect(detailRow).toContain("className={LINK_ROW}");
     expect(otherRows).toContain("className={LINK_ROW}");
-    expect(src).toContain('const LINK_ROW = "flex items-start gap-2 py-1"');
+    expect(chipSrc).toContain('export const LINK_ROW = "flex items-start gap-2 py-1"');
   });
   it("end both in the same square, arrow last so the columns line up", () => {
     expect(prRows).toContain("<RowSquare href={p.url}");

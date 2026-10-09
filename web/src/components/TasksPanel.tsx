@@ -13,8 +13,9 @@
 import { putCard } from "../lib/prCardStore.ts";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import { Fragment, type CSSProperties, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { BlockedIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, DotIcon, IconLabel, KeyboardIcon, LockIcon, MonitorIcon, NoteIcon, PlusIcon, PullRequestIcon, RefreshIcon, SearchIcon } from "../lib/glyphIcons.tsx";
-import { pickCardPr, cardPrTint, cardPrInk, mergedInk, sortedCardPrs, type CardPr } from "../lib/cardPrPick.ts";
+import { BlockedIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, DotIcon, IconLabel, KeyboardIcon, LockIcon, MonitorIcon, NoteIcon, PlusIcon, RefreshIcon, SearchIcon } from "../lib/glyphIcons.tsx";
+import { pickCardPr, mergedInk, isRelated, type CardPr } from "../lib/cardPrPick.ts";
+import { CardPrChip, CardPrDetailRow, LINK_ROW } from "./CardPrChip.tsx";
 import { cardPrsOf, onCardPrs, cardPrVersion } from "../lib/cardPrStore.ts";
 import { paintThenRevalidate, PRS_TTL_MS, swr, THREAD_TTL_MS } from "../lib/cardTabCache.ts";
 import { api } from "../lib/api.ts";
@@ -4794,7 +4795,6 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
   const prCwd = rootForTask(t.list, repos, here) ?? here;
   const prEntry = cardPrsOf(t.id, t.customId || "", prField, prCwd);
   const prPick = pickCardPr(prEntry?.prs);
-  const [prMenu, setPrMenu] = useState<{ x: number; y: number } | null>(null);
   const openCardPr = (p: CardPr) => {
     const ref = prRefFromUrl(p.url);
     if (ref) openPr(ref.repo, p.number);
@@ -4889,47 +4889,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
       {/* The pull request, own track beside the title. Empty when there is
           none — like Cmts and Pts — rather than shifting its neighbours. */}
       <span className="flex items-center min-w-0 overflow-hidden" style={{ ...COL_RULE, display: "flex" }}>
-        {prPick.kind !== "none" && (() => {
-          const shown = prPick.kind === "one" ? prPick.pr : prPick.primary;
-          const restCount = prPick.kind === "many" ? prPick.rest.length : 0;
-          const tint = cardPrTint(shown);
-          const ink = cardPrInk(shown);
-          const label = shown.draft ? "Draft" : shown.state === "MERGED" ? "Merged" : shown.state === "CLOSED" ? "Closed" : "Open";
-          return (
-            <button type="button"
-              onClick={(e) => { e.stopPropagation(); if (prPick.kind === "many") { const r = e.currentTarget.getBoundingClientRect(); setPrMenu({ x: r.left, y: r.bottom + 4 }); } else { openCardPr(shown); } }}
-              className="agx-onrow inline-flex items-center gap-1 rounded-full shrink-0 whitespace-nowrap px-1.5 py-0.5 hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1"
-              style={{
-                color: ink, background: `color-mix(in srgb, ${tint} 13%, transparent)`,
-                border: `1px solid color-mix(in srgb, ${tint} 40%, transparent)`,
-                outlineColor: tint,
-              }}
-              title={`${label} pull request #${shown.number}${shown.author ? (shown.mine ? ", yours" : ` by @${shown.author}`) : ""}${restCount ? ` (+${restCount} more)` : ""} — ${shown.title}`}>
-              <PullRequestIcon size={ICON.xs} />
-              <span className="text-[10.5px] tabular-nums font-mono leading-none">#{shown.number}</span>
-              {restCount > 0 && <span className="text-[9.5px] leading-none" style={{ opacity: 0.85 }}>+{restCount}</span>}
-            </button>
-          );
-        })()}
-        {prMenu && prPick.kind === "many" && (
-          <ContextMenu x={prMenu.x} y={prMenu.y} onClose={() => setPrMenu(null)}>
-            {sortedCardPrs([prPick.primary, ...prPick.rest]).map((p) => (
-              <MenuItem key={p.number} onClick={() => { setPrMenu(null); openCardPr(p); }}>
-                <span className="flex items-center gap-1.5 min-w-0 w-full">
-                  <span className="shrink-0" style={{ width: 7, height: 7, borderRadius: 999, background: cardPrTint(p) }} />
-                  <span className="tabular-nums font-mono shrink-0">#{p.number}</span>
-                  <span className="truncate" style={{ color: "var(--text3)" }}>{p.title}</span>
-                  {p.author && (
-                    <span className="shrink-0 ml-auto pl-3 font-mono text-[10.5px]"
-                      style={{ color: p.mine ? "var(--primary)" : "var(--text4)" }}>
-                      {p.mine ? "you" : `@${p.author}`}
-                    </span>
-                  )}
-                </span>
-              </MenuItem>
-            ))}
-          </ContextMenu>
-        )}
+        <CardPrChip pick={prPick} onOpen={openCardPr} />
       </span>
       {showWho && (
         <span className="flex items-center agx-colrule" style={{ ...COL_RULE, display: "flex" }}>
@@ -5179,14 +5139,13 @@ const COMPOSER_SHARE = 0.3;
 const CARD_SCROLL_CSS = ".agx-scroll.agx-cu-scroll{scrollbar-width:auto;scrollbar-color:auto}.agx-cu-scroll::-webkit-scrollbar-button{display:none;width:0;height:0}";
 
 /** Per card, for the life of the window: see lib/cardTabCache.ts. */
-type PrsRead = { prs: { number: number; title: string; state: string; draft?: boolean; url: string; stated?: boolean }[]; err: boolean };
+type PrsRead = { prs: (CardPr & { stated?: boolean })[]; err: boolean };
 const prsCache = swr<PrsRead>(PRS_TTL_MS, (v) => !v.err);
 const threadCache = swr<Awaited<ReturnType<typeof api.clickupTask>>>(THREAD_TTL_MS, (r) => !!r.ok);
 
 /** One row of the card's GitHub tab, pull request or other link. The text takes
  *  the room and the buttons sit at the row's right edge, top-aligned with the
  *  title line, so both kinds of row put their buttons in the same place. */
-const LINK_ROW = "flex items-start gap-2 py-1";
 const LINK_BUTTONS = "flex items-start gap-1 shrink-0";
 const ROW_SQUARE: CSSProperties = { width: HIT, height: HIT, border: EDGE, color: "var(--text3)" };
 function RowSquare({ href, onClick, title, children }: { href?: string; onClick?: () => void; title: string; children: ReactNode }) {
@@ -6916,33 +6875,16 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
               </span>
             )}
           </div>
-          {prs.map((p) => (
-            <div key={p.number} className={LINK_ROW}>
-              <button onClick={() => {
+          {/* The card's own first; a pull request that only names it comes
+              after, marked, so two stacked cards never read as sharing one. */}
+          {[...prs].sort((a, b) => Number(isRelated(a)) - Number(isRelated(b))).map((p) => (
+            <CardPrDetailRow key={p.number} p={p}
+              onOpen={() => {
                 const ref = prRefFromUrl(p.url);
                 if (ref) openPr(ref.repo, p.number);
                 else openPrs(String(p.number), p.state === "OPEN" || !p.state ? "open" : "all");
               }}
-                className="text-left flex-1 min-w-0 rounded px-1 -mx-1 hover:bg-white/5"
-                title="Open this pull request">
-                <span className="tabular-nums" style={{ color: "var(--primary-ink)" }}>#{p.number}</span>
-                {p.state && (
-                  <span className="ml-1.5 text-[10px] tracking-[0.06em] px-1.5 rounded"
-                    style={p.state === "MERGED"
-                      ? { color: mergedInk(), background: "#a371f721" }
-                      : p.state === "CLOSED"
-                      ? { color: "var(--error-ink)", background: "color-mix(in srgb, var(--error) 13%, transparent)" }
-                      : { color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 13%, transparent)" }}>
-                    {p.draft ? "DRAFT" : p.state}
-                  </span>
-                )}
-                {p.stated && (
-                  <span className="ml-1.5 text-[10px]" style={{ color: "var(--text4)" }} title="named on the card itself">on the card</span>
-                )}
-                <div className="truncate text-[10.5px]" style={{ color: "var(--text3)" }}>{p.title || p.url}</div>
-              </button>
-              <div className={LINK_BUTTONS}><RowSquare href={p.url} title="Open on GitHub">↗</RowSquare></div>
-            </div>
+              trailing={<div className={LINK_BUTTONS}><RowSquare href={p.url} title="Open on GitHub">↗</RowSquare></div>} />
           ))}
         </div>
       )}

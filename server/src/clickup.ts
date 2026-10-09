@@ -18,7 +18,7 @@
  */
 import { singleFlight } from "./singleflight.ts";
 import { cardIdDigits, mentionsCardId } from "../../shared/cardRef.ts";
-import { matchesQuery, mergeRequestNumber } from "../../shared/taskref.ts";
+import { matchesQuery, mergeRequestNumber, readTaskRef } from "../../shared/taskref.ts";
 import * as Index from "./clickupindex.ts";
 import { writesAllowed } from "./clickupviews.ts";
 import { clickupPrefs, matchPref, DEFAULT_SPRINT_LIST_PATTERN, DEFAULT_READ_ONLY_FIELD_PATTERN } from "./clickupPrefs.ts";
@@ -3319,6 +3319,53 @@ export function mentionsTask(taskId: string, pr: { title?: string; body?: string
   return re.test(`${pr.headRefName ?? ""} ${pr.title ?? ""} ${pr.body ?? ""}`);
 }
 
+/**
+ * Is this pull request FOR the card, or does it only name it?
+ *
+ * `mentionsCard` answers "does the text carry the id", and a stacked pull
+ * request's body does for both cards it sits between: MEASURED on two stacked
+ * pull requests, the second said "Depends on #19748 (ORBIT-24797 ...)" and so
+ * the search for the first card returned it too. Both cards then drew the
+ * newer one as their chip, and anybody reading the board asked why two cards
+ * had the same pull request.
+ *
+ * The item a pull request was cut for is the one `readTaskRef` already reads
+ * for the pull request's own screen (branch first, then title, then a lone
+ * address in the body), so the board and the detail cannot disagree:
+ *
+ *   the card is that item                      own
+ *   that item is a different one               mention
+ *   it names no item at all (lower-case branch, id only in prose): the id
+ *     in the branch or title                   own
+ *     in the body only, and no other id anywhere  own, nothing else claims it
+ *     in the body only, next to another id    mention
+ *
+ * Null when the text does not carry the card at all. Ceiling: a pull request
+ * genuinely cut for two cards at once is own for the first one written and a
+ * mention for the second.
+ */
+export function prLinkKind(
+  card: { cardId: string; taskId?: string },
+  pr: { title?: string; body?: string; headRefName?: string },
+): "own" | "mention" | null {
+  const { cardId, taskId = "" } = card;
+  if (!mentionsCard(cardId, pr) && !mentionsTask(taskId, pr)) return null;
+  const owner = readTaskRef(pr);
+  const names = [cardId, taskId, taskId && `CU-${taskId}`].filter(Boolean).map((x) => String(x).toLowerCase());
+  if (owner) {
+    // A native id in the branch while the caller did not hand over the task's
+    // own id (the card pane asks without it): nothing here can say it is
+    // someone else's, so the card keeps it.
+    if (!taskId && owner.query.startsWith("CU-")) return "own";
+    return names.includes(owner.query.toLowerCase()) || names.includes(owner.label.toLowerCase()) ? "own" : "mention";
+  }
+  const head = { title: pr.title, headRefName: pr.headRefName };
+  if (mentionsCard(cardId, head) || mentionsTask(taskId, head)) return "own";
+  const others = new Set(`${pr.headRefName ?? ""} ${pr.title ?? ""} ${pr.body ?? ""}`.match(/\b[A-Z]{2,10}-\d{2,}\b/gi)?.map((x) => x.toLowerCase()));
+  for (const n of names) others.delete(n);
+  return others.size ? "mention" : "own";
+}
+
 // Who `gh` is signed in as, asked once per process: it does not change under a
 // running server, and asking per card would double every lookup.
 let ghLogin: Promise<string> | null = null;
@@ -3337,7 +3384,7 @@ export async function cardPullRequests(
 
   const stated = prNumberFromUrl(fieldUrl ?? "");
   if (stated) {
-    out.set(stated, { number: stated, title: "", state: "", url: fieldUrl!, stated: true });
+    out.set(stated, { number: stated, title: "", state: "", url: fieldUrl!, stated: true, link: "own" });
   }
 
   // The custom id when the card has one; otherwise ClickUp's default id, which
@@ -3370,6 +3417,11 @@ export async function cardPullRequests(
       out.set(p.number, {
         number: p.number, title: p.title, state: p.state, draft: p.isDraft, url: p.url,
         stated: had?.stated, author: p.author?.login,
+        // What the card's own field says outranks any reading of the text.
+        ...(() => {
+          const link = had?.stated ? "own" : prLinkKind({ cardId, taskId }, p) ?? "mention";
+          return link === "own" ? { link } : { link, belongsTo: readTaskRef(p)?.label };
+        })(),
         mine: !!me && p.author?.login?.toLowerCase() === me,
       });
     }

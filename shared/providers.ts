@@ -820,6 +820,14 @@ export interface CardPr {
   author?: string;
   /** Authored by the account `gh` is signed in as. */
   mine?: boolean;
+  /** Whose pull request this is: "own" when the card is the item it was cut
+   *  for (branch, title, a lone address, or the card's own field), "mention"
+   *  when it merely names the card (a stacked pull request saying it depends
+   *  on another card's). Absent from an older server, read as own. */
+  link?: "own" | "mention";
+  /** For a mention: the item the pull request was actually cut for, when it
+   *  names one ("ORBIT-24798"). */
+  belongsTo?: string;
 }
 
 /** One reply in a comment thread. */
