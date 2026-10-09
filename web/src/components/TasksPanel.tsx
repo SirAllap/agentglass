@@ -11,7 +11,7 @@
 // second half is the half nobody builds, and it is the reason a machine ends up
 // with fourteen checkouts nobody can name.
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, type CSSProperties, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { BlockedIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, DotIcon, IconLabel, KeyboardIcon, LockIcon, MonitorIcon, NoteIcon, PlusIcon, PullRequestIcon, RefreshIcon, SearchIcon } from "../lib/glyphIcons.tsx";
 import { pickCardPr, cardPrTint, cardPrInk, mergedInk, sortedCardPrs, type CardPr } from "../lib/cardPrPick.ts";
 import { cardPrsOf, onCardPrs, cardPrVersion } from "../lib/cardPrStore.ts";
@@ -3011,27 +3011,24 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
                   minWidth: TABLE_MIN_W, background: "var(--bg)",
                   borderBottom: LINE }}>
               <span className="agx-stick-head">Task</span>
-              <span className="text-center">PR</span>
-              {anyWho && <span className="text-center">Who</span>}
-              {!!squadLabel && <span className="text-center truncate" title={squadLabel}>{squadLabel}</span>}
-              {anySprint && <span>Sprint</span>}
               {/* Centred over the columns they label, because those columns hold
                   two-character numbers in a 30px track — a heading hard against
                   the left of it sits above nothing, and the eye stops pairing the
                   two. `Task` and the rest stay left: they label text that starts
                   at the left. */}
-              {/* Hairlines before Cmts and before Pts, and only there. A rule
-                  between every column stripes the table and reads as a grid you
-                  are meant to study; two of them just say "the numbers start
-                  here" and "this one is not that one" — which is the whole
-                  complaint, since a count and a point score are the same shape.
-                  `LINE` is the same rule as the row separators, so it reads as
-                  part of the table rather than as decoration. */}
-              <span className="text-center" style={{ borderLeft: LINE, paddingLeft: 8, marginLeft: -8 }}>Cmts</span>
-              <span>Due</span>
-              {anyEst && <span className="text-center">Est</span>}
-              <span className="text-center" style={{ borderLeft: LINE, paddingLeft: 8, marginLeft: -8 }}>Pts</span>
-              <span />
+              {/* Every column boundary wears the same hairline (COL_RULE), header
+                  and rows alike, so the rules run unbroken down the table. It
+                  was two of them, before Cmts and before Pts, and the rows
+                  drew short segments of their own that did not meet the
+                  heading's. */}
+              <span className="text-center" style={COL_RULE}>PR</span>
+              {anyWho && <span className="text-center" style={COL_RULE}>Who</span>}
+              {!!squadLabel && <span className="text-center" style={COL_RULE} title={squadLabel}><span className="truncate">{squadLabel}</span></span>}
+              {anySprint && <span style={COL_RULE}>Sprint</span>}
+              <span className="text-center" style={COL_RULE}>Cmts</span>
+              <span style={COL_RULE}>Due</span>
+              {anyEst && <span className="text-center" style={COL_RULE}>Est</span>}
+              <span className="text-center" style={COL_RULE}>Pts</span>
               {onLooked && <span />}
             </div>
 
@@ -4280,6 +4277,19 @@ const CU_POLL_SLOW_MS = 300_000;
 const TABLE_MIN_W = 720;
 
 /**
+ * The hairline on the left of every column but the first, in the heading and
+ * in each row. It sits in the gap (8px of padding, pulled back by the same
+ * margin, so the content does not move) and stretches to the row's full
+ * height, so the segments of successive rows meet and meet the heading's. A
+ * grid with `alignContent` keeps a cell's text vertically centred while it
+ * stretches; `LINE` is the house rule, the same one under the rows.
+ */
+const COL_RULE: CSSProperties = {
+  borderLeft: LINE, paddingLeft: 8, marginLeft: -8,
+  alignSelf: "stretch", display: "grid", alignContent: "center",
+};
+
+/**
  * The height both headers share.
  *
  * The rail's filter box and the table's column titles start at the same line
@@ -4308,17 +4318,16 @@ const cuGrid = (who: boolean, squad: boolean, sprint: boolean, est: boolean, for
   // to have been told, and this column is the one thing on the row that is pure
   // colour — so it pays for the label that says which field it is.
   // Looked-up rows carry a "forget this one" control the board rows do not.
-  // Its own track, not a floating overlay on top of the last column: a button
-  // with nothing under it is easy, a button on top of the ↗ chip is the thing
-  // this table stopped doing.
+  // Its own track, not a floating overlay on top of the last column.
+  // There is no per-row "open in ClickUp" track: the card's sidebar has Open ↗
+  // and the row menu has Open in ClickUp, so a column of arrows was a second
+  // way in that cost 40px of every row.
   // PR sits right after the title, its own track rather than a layer on top of
-  // it: the arrow at ↗ is the rarely-pressed ClickUp escape hatch, and putting
-  // the pull request beside it would bury the one people actually want under
-  // the one they almost never press. Fixed width and always present — like
+  // it. Fixed width and always present — like
   // Cmts and Pts, a card with none draws an empty cell rather than shifting
   // its neighbours. 92px holds the widest chip, "#NNNNN +N"; at 58 it ran
   // into the avatars.
-  ["1fr", "92px", who ? "50px" : "", squad ? "36px" : "", sprint ? "88px" : "", "34px", "72px", est ? "38px" : "", "30px", "40px", forget ? "30px" : ""].filter(Boolean).join(" ");
+  ["1fr", "92px", who ? "50px" : "", squad ? "36px" : "", sprint ? "88px" : "", "34px", "72px", est ? "38px" : "", "30px", forget ? "30px" : ""].filter(Boolean).join(" ");
 
 /**
  * The one custom field worth a column of its own: a coloured drop-down.
@@ -4735,10 +4744,8 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
         </div>
       </div>
       {/* The pull request, own track beside the title. Empty when there is
-          none — like Cmts and Pts — rather than shifting ↗ to its left, which
-          is the rarely-pressed ClickUp escape hatch and stays where it always
-          was. */}
-      <span className="flex items-center min-w-0 overflow-hidden">
+          none — like Cmts and Pts — rather than shifting its neighbours. */}
+      <span className="flex items-center min-w-0 overflow-hidden" style={{ ...COL_RULE, display: "flex" }}>
         {prPick.kind !== "none" && (() => {
           const shown = prPick.kind === "one" ? prPick.pr : prPick.primary;
           const restCount = prPick.kind === "many" ? prPick.rest.length : 0;
@@ -4782,7 +4789,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
         )}
       </span>
       {showWho && (
-        <span className="flex items-center pl-1">
+        <span className="flex items-center" style={{ ...COL_RULE, display: "flex" }}>
           {(t.people ?? []).slice(0, 3).map((p, n) => <Face key={n} p={p} n={n} />)}
           {(t.people?.length ?? 0) > 3 && (
             <span className="text-[8.5px] ml-1" style={{ color: "var(--text4)" }}>+{(t.people!.length) - 3}</span>
@@ -4797,7 +4804,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
           the value are both on hover, because a colour on its own is only
           learnable by someone who already knows the board. */}
       {showSquad && (
-        <span className="flex items-center justify-center">
+        <span className="flex items-center justify-center" style={{ ...COL_RULE, display: "flex" }}>
           {sq && (
             <span title={`${sq.name}: ${sq.value}`} aria-label={`${sq.name}: ${sq.value}`}
               style={{
@@ -4810,8 +4817,10 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
         </span>
       )}
       {showSprint && (
-        <span className="truncate text-[10.5px]" style={{ color: t.sprint ? "var(--info)" : "var(--text4)" }}
-          title={t.sprint ?? ""}>{t.sprint ?? ""}</span>
+        <span style={COL_RULE}>
+          <span className="truncate text-[10.5px]" style={{ color: t.sprint ? "var(--info)" : "var(--text4)" }}
+            title={t.sprint ?? ""}>{t.sprint ?? ""}</span>
+        </span>
       )}
       {/* Blank when the count is not known, 0 when it is known to be zero. The
           two are different facts and the workspace does not report either on a
@@ -4821,35 +4830,26 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
           eye the way a thread does. */}
       <span className="text-[11px] tabular-nums text-center"
         title={t.comments == null ? "Not counted yet" : `${t.comments} comment${t.comments === 1 ? "" : "s"}`}
-        // The rule runs the height of the table because every row draws its own
-        // segment; the heading draws the top one.
         style={{
-          borderLeft: LINE, paddingLeft: 8, marginLeft: -8,
+          ...COL_RULE,
           color: t.comments ? "var(--text3)" : "var(--text4)", opacity: t.comments ? 1 : 0.55,
         }}>
         {t.comments ?? ""}
       </span>
-      <span className="text-[11px] tabular-nums" style={{ color: late ? "var(--error)" : now ? "var(--warning)" : "var(--text3)" }}>
+      <span className="text-[11px] tabular-nums" style={{ ...COL_RULE, color: late ? "var(--error)" : now ? "var(--warning)" : "var(--text3)" }}>
         {dueLabel(t.due, today)}
       </span>
       {/* 11px like every other number in the row. It was 10.5, which on a line of
           figures reads as a column somehow less certain than the ones beside it. */}
       {showEst && (
-        <span className="text-[11px] tabular-nums text-center" style={{ color: "var(--text4)" }}
+        <span className="text-[11px] tabular-nums text-center" style={{ ...COL_RULE, color: "var(--text4)" }}
           title={t.estimateHours ? `${t.estimateHours}h estimated${t.spentHours ? `, ${t.spentHours}h logged` : ""}` : ""}>
           {t.estimateHours ? `${t.estimateHours}h` : ""}
         </span>
       )}
       <span className="text-[11px] tabular-nums text-center"
-        style={{ color: "var(--text4)", borderLeft: LINE, paddingLeft: 8, marginLeft: -8 }}>{t.points ?? ""}</span>
-      <span className="text-right">
-        {t.url && (
-          <a href={t.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
-            className={`agx-onrow ${ROW_CHIP} inline-block`}
-            style={{ border: EDGE, color: "var(--text2)" }}>↗</a>
-        )}
-      </span>
-      {/* Its own track, not a layer on top of the ↗ chip above: a row you can
+        style={{ ...COL_RULE, color: "var(--text4)" }}>{t.points ?? ""}</span>
+      {/* Its own track, not a layer on top of the last cell: a row you can
           forget lives in the grid like every other cell, and only its opacity
           — never its position — answers the hover. */}
       {onForget && (
@@ -4870,7 +4870,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
               only way to get it was to open the card in a browser and read it
               out of the bar. Next to the ids because it is the third thing this
               row can hand you, and above "Open" because copying is what you
-              came to the menu for; opening has a ↗ on the row itself. */}
+              came to the menu for; opening from the card is the sidebar's Open ↗. */}
           {t.url && (
             <MenuItem onClick={() => copy(t.url, "the card link")}>Copy card URL</MenuItem>
           )}
