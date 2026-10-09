@@ -8621,12 +8621,16 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const name = String(b.session ?? "");
       if (!validSessionName(name)) return json({ ok: false, error: "invalid session" }, 400);
+      // A new window or pane runs a command (a shell when argv is empty), which
+      // is the terminal by another door: refused while it is switched off, as
+      // /run/start is. Closing, selecting and renaming run nothing and stay.
+      const starts = b.op === "new" || b.op === "split";
+      if (starts && !TERMINAL_ENABLED) return json({ ok: false, error: "the terminal is disabled here" }, 403);
       // A directory is only for a window or pane that STARTS somewhere. Closing
       // or renaming one needs none, and asking for it made a window whose
       // checkout had since been deleted impossible to close.
-      const needsCwd = b.op === "new" || b.op === "split";
-      const cwd = (needsCwd ? gitSafeAbs(b.cwd) : "") ?? "";
-      if (needsCwd && (!cwd || !fsExists(cwd))) return json({ ok: false, error: "that directory is not available" }, 400);
+      const cwd = (starts ? gitSafeAbs(b.cwd) : "") ?? "";
+      if (starts && (!cwd || !fsExists(cwd))) return json({ ok: false, error: "that directory is not available" }, 400);
       let res: { ok: boolean; stdout: string; stderr: string };
       switch (b.op) {
         case "new":
