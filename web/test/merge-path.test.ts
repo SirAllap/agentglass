@@ -152,7 +152,7 @@ describe("a locked base, and GitHub not saying why", () => {
   test("a lock the viewer may merge past is a note, and the merge is live", () => {
     const p = mergePath(base({ gate: gate({ locked: true, canBypass: true }) }));
     expect(p.ready).toBe(true);
-    expect(p.rows.map((r) => [r.kind, r.mover, r.counted])).toEqual([["locked", "fyi", false]]);
+    expect(p.rows.map((r) => [r.kind, r.mover, r.counted])).toEqual([["locked", "fyi", false], ["approved", "done", false]]);
   });
   test("BLOCKED with nothing visible says so in GitHub's words", () => {
     const p = mergePath(base({ mergeState: "BLOCKED", gate: undefined, checksAll: [req("build", "success")], reviewDecision: "APPROVED" }));
@@ -397,5 +397,71 @@ describe("the words for a check", () => {
   test("an ETA is said the way a person says it", () => {
     expect(fmtEta(30 * S)).toBe("under a minute");
     expect(fmtEta(4 * M)).toBe("about 4 min");
+  });
+});
+
+describe("review history is offered whatever the headline", () => {
+  // Two people reviewed, one approved and one asked for changes and was asked
+  // again; the headline is the open threads, not the changes row.
+  const input = base({
+    reviewDecision: "CHANGES_REQUESTED",
+    humanReview: { kind: "changes", who: ["carol"], askedAgain: true, cleared: true, at: ago(29 * H) },
+    reviews: [review("alice", "APPROVED", ago(3 * H)), review("carol", "CHANGES_REQUESTED", ago(29 * H))],
+    reviewers: [{ login: "carol" }], askedAt: { carol: ago(3 * H) },
+    openThreads: 2,
+  });
+  const p = mergePath(input);
+  test("the headline is the threads and the history button is still there", () => {
+    expect(say(p)).toContain("2 review threads still open");
+    expect(p.hero.secondary).toEqual({ id: "history", label: "Review history (2)" });
+  });
+  test("an approval alone is a review too", () => {
+    const q = mergePath(base({ reviewDecision: "REVIEW_REQUIRED", openThreads: 1 }));
+    expect(q.historyCount).toBe(1);
+    expect(q.hero.secondary?.id).toBe("history");
+  });
+  test("no reviews, no history", () => {
+    const q = mergePath({ ...input, reviews: [], humanReview: undefined, reviewDecision: "REVIEW_REQUIRED" });
+    expect(q.historyCount).toBe(0);
+    expect(q.hero.secondary?.id).not.toBe("history");
+    expect(q.hero.also).toBeUndefined();
+  });
+  test("a busy secondary slot keeps its action and history moves beside it", () => {
+    const q = mergePath({ ...input, openThreads: 0, checksAll: [req("build", "failure", { url: "https://example.test/run/1" })] });
+    expect(q.hero.secondary?.id).toBe("rerun");
+    expect(q.hero.also).toEqual({ id: "history", label: "Review history (2)" });
+  });
+  test("re-requested: the row says when and on whom", () => {
+    const row = p.rows.find((r) => r.kind === "changes")!;
+    expect(row.sub).toBe("re-requested 3h ago · waiting on carol");
+  });
+});
+
+describe("what the review side already decided is said", () => {
+  // alice approved 25 minutes ago; carol asked for changes and was asked again.
+  const input = base({
+    reviewDecision: "CHANGES_REQUESTED",
+    humanReview: { kind: "changes", who: ["carol"], askedAgain: true, cleared: true, at: ago(29 * H) },
+    reviews: [
+      review("alice", "APPROVED", ago(25 * M)), review("carol", "CHANGES_REQUESTED", ago(29 * H)),
+      { ...review("ci-bot", "APPROVED", ago(20 * M)), isBot: true },
+    ],
+    reviewers: [{ login: "carol" }], openThreads: 0,
+  });
+  const p = mergePath(input);
+  test("a quiet DONE row per current human approval, after the blockers, no bots", () => {
+    const done = p.rows.filter((r) => r.kind === "approved");
+    expect(done.map((r) => [r.title, r.mover, r.moverLabel, r.counted])).toEqual([["Approved by alice · 25m ago", "done", "DONE", false]]);
+    expect(p.rows[p.rows.length - 1].kind).toBe("approved");
+    expect(p.count).toBe(rowKinds(p).length);
+  });
+  test("the Review cell says how far it got and who it waits on", () => {
+    expect(stage(p, "review").sub).toBe("1 of 2 approved · waiting on carol");
+  });
+  test("an approval that was asked again, or overtaken by changes, is not current", () => {
+    const q = mergePath({ ...input, reviewers: [{ login: "carol" }, { login: "alice" }] });
+    expect(q.rows.some((r) => r.kind === "approved")).toBe(false);
+    const r = mergePath({ ...input, reviews: [review("alice", "APPROVED", ago(2 * H)), review("alice", "CHANGES_REQUESTED", ago(1 * H))] });
+    expect(r.rows.some((x) => x.kind === "approved")).toBe(false);
   });
 });

@@ -481,9 +481,7 @@ function ReviewHistory({ reviews, pending, author, onGoReview, forceOpen }: {
   const rounds = (reviews ?? [])
     .filter((r) => !r.isBot && r.author?.toLowerCase() !== authorLc && REVIEW_ROUND[r.state])
     .sort((a, b) => (b.submittedAt || "").localeCompare(a.submittedAt || ""));
-  // Nothing to look back on unless a round once asked for changes or just
-  // commented — an all-approvals pull request has no "history" worth a box.
-  if (!rounds.some((r) => r.state === "CHANGES_REQUESTED" || r.state === "COMMENTED")) return null;
+  if (!rounds.length) return null;
 
   const pendingLogins = new Set((pending ?? []).filter((p) => !p.isTeam).map((p) => p.login.toLowerCase()));
   const seenAuthor = new Set<string>();
@@ -5563,14 +5561,16 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
    * merge button and its state, the conflict resolver, the branch actions —
    * handed in as nodes so each exists once.
    */
+  const askedAt: Record<string, string> = {};
+  for (const e of d.timeline ?? []) if (e.kind === "review-requested" && e.detail && (!askedAt[e.detail.toLowerCase()] || e.at > askedAt[e.detail.toLowerCase()])) askedAt[e.detail.toLowerCase()] = e.at;
   const path = mergePath({
     state: d.state, mergeState: d.mergeState, mergeable: d.mergeable, isDraft: d.isDraft,
-    reviewDecision: d.reviewDecision, humanReview: d.humanReview, reviewers: d.reviewers, reviews: d.reviews,
+    reviewDecision: d.reviewDecision, humanReview: d.humanReview, reviewers: d.reviewers, reviews: d.reviews, askedAt,
     author: d.author, viewerDidAuthor: d.viewerDidAuthor, viewerRequested: d.viewerRequested,
     checks: c, checksAll: d.checksAll, gate: d.gate, baseRefName: d.baseRefName, openThreads,
     conflicted, conflictFiles: conflictFiles?.files.length, behind, awaitingChecks, autoArmed: !!d.autoMerge,
   });
-  const heroHas = (id: PathAction["id"]) => path.hero.primary?.id === id || path.hero.secondary?.id === id;
+  const heroHas = (id: PathAction["id"]) => path.hero.primary?.id === id || path.hero.secondary?.id === id || path.hero.also?.id === id;
   const onPathAction = (a: PathAction) => {
     switch (a.id) {
       case "open-log": openExternal(a.url); break;

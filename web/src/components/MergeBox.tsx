@@ -51,7 +51,7 @@ const TONE = {
 const heroTone = (t: Hero["tone"]) => (t === "ready" ? TONE.ok : t === "wait" ? TONE.wait : TONE.you);
 const wash = (tint: string, pct: number) => `color-mix(in srgb, ${tint} ${pct}%, transparent)`;
 
-const moverTone = (m: Mover) => (m === "you" || m === "author" || m === "other" ? TONE.you : m === "fyi" ? TONE.idle : TONE.wait);
+const moverTone = (m: Mover) => (m === "you" || m === "author" || m === "other" ? TONE.you : m === "fyi" || m === "done" ? TONE.idle : TONE.wait);
 
 function Bubble({ n, tone, filled, done }: { n: number; tone: { tint: string; ink: string }; filled: boolean; done?: boolean }) {
   return (
@@ -98,7 +98,7 @@ function Who({ row }: { row: Pick<PathRow, "mover" | "moverLabel"> }) {
   const m = row.mover;
   const tone = moverTone(m);
   const solid = m === "you";
-  const style: CSSProperties = m === "fyi"
+  const style: CSSProperties = m === "fyi" || m === "done"
     ? { background: wash("var(--text)", 8), color: "var(--text2)" }
     : solid
     ? { background: tone.tint, color: "var(--bg)" }
@@ -208,10 +208,11 @@ export function MergeBox({
           {hero.parts.map((p, k) => p.em ? <span key={k} style={{ color: tone.ink }}>{p.text}</span> : <span key={k}>{p.text}</span>)}
         </h2>
         {hero.sub && <p className="text-[11.5px] leading-snug mt-1.5" style={{ color: "var(--text3)" }}>{hero.sub}</p>}
-        {(hero.primary || hero.secondary || hero.after) && (
+        {(hero.primary || hero.secondary || hero.also || hero.after) && (
           <div className="flex items-center gap-2 flex-wrap mt-3">
             {hero.primary && action(hero.primary, true)}
             {hero.secondary && action(hero.secondary, false)}
+            {hero.also && action(hero.also, false)}
             {hero.after && <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>{hero.after}</span>}
           </div>
         )}
@@ -239,7 +240,8 @@ export function MergeBox({
             return (
               <div key={r.id} className="agx-mb-row px-4 py-3" style={{ borderBottom: LINE, background: onPerson && r.counted ? wash(TONE.you.tint, 7) : undefined }}>
                 <span className="pt-0.5">
-                  {!r.counted ? <span aria-hidden className="grid place-items-center rounded-full" style={{ width: 22, height: 22, color: "var(--text3)" }}><WarningIcon size={ICON.sm} /></span>
+                  {r.mover === "done" ? <span aria-hidden className="grid place-items-center rounded-full" style={{ width: 22, height: 22, color: "var(--text3)" }}><DoneIcon size={ICON.sm} /></span>
+                    : !r.counted ? <span aria-hidden className="grid place-items-center rounded-full" style={{ width: 22, height: 22, color: "var(--text3)" }}><WarningIcon size={ICON.sm} /></span>
                     : r.mover === "ci" || r.mover === "wait" ? <Ring mode={r.ring?.mode ?? "queued"} fraction={r.ring?.fraction} tint={TONE.wait.tint} />
                     : <Bubble n={r.n} tone={t} filled />}
                 </span>

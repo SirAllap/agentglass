@@ -337,9 +337,10 @@ describe("the Overview and the board agree", () => {
     expect(p.hero.tone).toBe("wait");
   });
 
-  test("the review history lists past rounds and is gated on a changes or commented one", () => {
+  test("the review history lists past rounds and is shown for any human review", () => {
     const fn = panel.slice(panel.indexOf("function ReviewHistory("), panel.indexOf("function Bar("));
-    expect(fn).toContain('r.state === "CHANGES_REQUESTED" || r.state === "COMMENTED"');
+    expect(fn).toContain("if (!rounds.length) return null;");
+    expect(fn).not.toContain('r.state === "CHANGES_REQUESTED" || r.state === "COMMENTED"');
     expect(fn).toContain("Review history</span>");
   });
 

@@ -34,19 +34,19 @@ import type { PrCheck, PrCheckRollup, PrMergeGate, PrReview, PrReviewer, PrSumma
 import { MIN_SAMPLES, runKey } from "./checkBaseline.ts";
 import { mergeBlockers, staleApproval, type MergeBlocker } from "./mergeBlockers.ts";
 
-export type Mover = "you" | "author" | "reviewer" | "ci" | "wait" | "other" | "fyi";
+export type Mover = "you" | "author" | "reviewer" | "ci" | "wait" | "other" | "fyi" | "done";
 export type StageKey = "review" | "required" | "other" | "merge";
 export type StageStatus = "done" | "blocked" | "wait" | "idle";
 
 export const MOVER_LABEL: Record<Mover, string> = {
-  you: "YOU", author: "AUTHOR", reviewer: "REVIEWER", ci: "CI · WAIT", wait: "WAIT", other: "SOMEONE ELSE", fyi: "FYI",
+  you: "YOU", author: "AUTHOR", reviewer: "REVIEWER", ci: "CI · WAIT", wait: "WAIT", other: "SOMEONE ELSE", fyi: "FYI", done: "DONE",
 };
 
 export type RowKind =
   | "draft" | "locked" | "no-permission" | "restricted" | "conflicts"
   | "check-failing" | "check-running" | "check-queued" | "check-cancelled" | "required-missing"
   | "changes" | "review-required" | "threads" | "behind" | "unexplained" | "computing" | "awaiting"
-  | "note";
+  | "note" | "approved";
 
 export type ActionId =
   | "merge" | "open-log" | "rerun" | "go-thread" | "go-review" | "history" | "mark-ready"
@@ -71,6 +71,8 @@ export interface Hero {
   sub?: string;
   primary?: PathAction;
   secondary?: PathAction;
+  /** Review history, when the secondary slot is already taken by something else. */
+  also?: PathAction;
   /** A small line beside the actions: what comes after them. */
   after?: string;
 }
@@ -151,6 +153,9 @@ export interface MergePathInput {
   /** Reviewers still asked. */
   reviewers?: PrReviewer[];
   reviews?: PrReview[];
+  /** When each still-asked reviewer was last asked (login lowercased → ISO),
+   *  from the timeline's review-requested events. */
+  askedAt?: Record<string, string>;
   author?: string;
   viewerDidAuthor?: boolean;
   viewerRequested?: boolean;
@@ -245,7 +250,7 @@ function workflowOf(c: PrCheck): { workflow: string; job: string } {
     : { workflow: "", job: c.name };
 }
 
-const rankOf = (m: Mover) => (m === "you" || m === "author" || m === "other" ? 0 : m === "reviewer" ? 1 : 2);
+const rankOf = (m: Mover) => (m === "you" || m === "author" || m === "other" ? 0 : m === "reviewer" ? 1 : m === "done" ? 3 : 2);
 const STAGE_ORDER: StageKey[] = ["review", "required", "other", "merge"];
 
 export function mergePath(i: MergePathInput): MergePath {
@@ -316,7 +321,10 @@ export function mergePath(i: MergePathInput): MergePath {
   const changesRef = changesBy[0];
   const asked = (i.reviewers ?? []).map((r) => r.login);
   const rounds = humans.filter((r) => r.state === "APPROVED" || r.state === "CHANGES_REQUESTED" || r.state === "COMMENTED");
-  const historyCount = rounds.some((r) => r.state === "CHANGES_REQUESTED" || r.state === "COMMENTED") ? rounds.length : 0;
+  // Any human review is history worth opening, whatever the headline says: the
+  // button once hid behind "still wants changes" and vanished when a thread
+  // count took the headline over.
+  const historyCount = rounds.length;
 
   const b = (kind: MergeBlocker["kind"]) => blockers.find((x) => x.kind === kind);
 
@@ -345,9 +353,12 @@ export function mergePath(i: MergePathInput): MergePath {
         const again = !!(hv?.kind === "changes" && (hv.askedAgain || hv.cleared));
         const who = nameList(changesWho) || "A reviewer";
         const when = agoShort(now, changesRef?.submittedAt ?? hv?.at);
+        const askedWhen = agoShort(now, changesWho.map((w) => i.askedAt?.[w.toLowerCase()]).filter(Boolean).sort().pop());
         add({
           id: "changes", kind: "changes", stage: "review", title: "Changes requested",
-          sub: `by ${who}${when ? ` · ${when}` : ""}`,
+          sub: again
+            ? `re-requested${askedWhen ? ` ${askedWhen}` : ""} · waiting on ${who}`
+            : `by ${who}${when ? ` · ${when}` : ""}`,
           why: again
             ? `${who} was asked to look again; it clears when they approve.`
             : `Clears only when ${who} approves or the request is dismissed.`,
@@ -466,6 +477,26 @@ export function mergePath(i: MergePathInput): MergePath {
     });
   }
 
+  // What is already decided on the review side: each human's latest verdict,
+  // when it is an approval nobody has asked to be redone. Not a blocker, so
+  // never counted; a bot's approval is not a person's and is not listed.
+  const latest = new Map<string, PrReview>();
+  for (const r of [...humans].sort((a, c) => (a.submittedAt || "").localeCompare(c.submittedAt || ""))) {
+    if (r.state === "APPROVED" || r.state === "CHANGES_REQUESTED") latest.set(r.author.toLowerCase(), r);
+  }
+  const askedLc = new Set(asked.map((a) => a.toLowerCase()));
+  const approvals = [...latest.values()].filter((r) => r.state === "APPROVED" && !askedLc.has(r.author.toLowerCase()))
+    .sort((a, c) => (c.submittedAt || "").localeCompare(a.submittedAt || ""));
+  const reviewers = new Set([...latest.keys(), ...(i.reviewers ?? []).filter((r) => !r.isTeam).map((r) => r.login.toLowerCase())]);
+  for (const r of approvals) {
+    const when = agoShort(now, r.submittedAt);
+    add({
+      id: `approved-${r.author.toLowerCase()}`, kind: "approved", stage: "review",
+      title: `Approved by ${r.author}${when ? ` · ${when}` : ""}`,
+      why: "Already done; it counts unless new commits or a dismissal undo it.", mover: "done", counted: false,
+    });
+  }
+
   // Order: what needs a person, then a reviewer, then time. Stable inside.
   const ordered = rows
     .map((r, idx) => ({ r, idx }))
@@ -549,6 +580,8 @@ export function mergePath(i: MergePathInput): MergePath {
       if (currentKey === "review" && first?.mover === "you") bits.push("you are here");
       else bits.push(chg.mover === "reviewer" ? "waiting on a second look" : `${nameList(changesWho) || "a reviewer"} wants changes`);
       if (openThreads > 0) bits.push(plural(openThreads, "thread"));
+      if (approvals.length) bits.unshift(`${approvals.length} of ${reviewers.size} approved`);
+      if (approvals.length && chg.mover === "reviewer") bits[1] = `waiting on ${nameList(changesWho) || "a reviewer"}`;
       return { status: chg.mover === "reviewer" ? "wait" : "blocked", sub: bits.join(" · ") };
     }
     const req = revRows.find((r) => r.kind === "review-required");
@@ -750,6 +783,10 @@ export function mergePath(i: MergePathInput): MergePath {
       }
     }
   })();
+  // Whatever the headline, a pull request with reviews can show them.
+  if (historyAction && hero.secondary?.id !== "history") {
+    if (hero.secondary) hero.also = historyAction; else hero.secondary = historyAction;
+  }
 
   // --------------------------------------------------------------- callout
   const people = primaryNeedsPerson.length + counted.filter((r) => r.mover === "reviewer").length;
