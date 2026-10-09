@@ -13,9 +13,10 @@ import { feedbackWindowName } from "../../lib/pageRef.ts";
 import { api } from "../../lib/api.ts";
 import type { GitRepoRef } from "../../../../shared/types.ts";
 import { CheckoutPicker } from "../CheckoutPicker.tsx";
-import { ArrowIcon, BoxIcon, CircleIcon, EditIcon } from "../../lib/glyphIcons.tsx";
+import { ArrowIcon, BoxIcon, CircleIcon, EditIcon, IconLabel } from "../../lib/glyphIcons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { Button, EDGE } from "../workspace/Chrome.tsx";
+import { TerminalIcon } from "../workspace/icons.tsx";
 
 type Guest = { capturePage(): Promise<{ toDataURL(): string }> } | null;
 
@@ -244,12 +245,12 @@ export function MarkupLayer({ view, url, onNote, onDone }: {
               title="Which checkout the agent works in" triggerMaxWidth={180} />
           )}
           <Button onClick={() => void hand()} disabled={busy || !state.shapes.length} size="compact" tone="primary">
-            ▸_ Hand it to Claude
+            <IconLabel icon={<TerminalIcon size={ICON.xs} />}>Hand it to Claude</IconLabel>
           </Button>
           <Button onClick={() => void copy()} disabled={busy || !state.shapes.length} size="compact">
             Copy it
           </Button>
-          <button onClick={onDone} className="text-[10px] px-1" style={{ color: "var(--text3)" }}>Done</button>
+          <Button onClick={onDone} size="compact">Done</Button>
         </div>
       </div>
     </div>

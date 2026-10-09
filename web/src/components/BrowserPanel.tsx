@@ -66,7 +66,7 @@ import {
   SpinnerIcon, StopIcon, TargetIcon, FolderIcon, ContainerIcon, SpaceIcon, CameraIcon, PanelIcon, UpIcon, DownIcon, SplitIcon,
 } from "./browser/icons.tsx";
 import { CheckboxIcon, DoneIcon, SwapIcon } from "../lib/glyphIcons.tsx";
-import { Button, INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
+import { Button, Chip, CTRL_H, INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 
 /** Electron's `<webview>` is not in React's JSX catalogue, and its methods are
  *  not on HTMLElement. Narrowed to the handful actually called here rather than
@@ -118,7 +118,7 @@ export function Tool({ on, label, onClick, disabled, tint, children }: {
 }) {
   return (
     <button onClick={onClick} disabled={disabled} title={label} aria-label={label}
-      className="agx-btn shrink-0 rounded-md flex items-center justify-center disabled:opacity-25"
+      className="agx-btn shrink-0 rounded-lg flex items-center justify-center disabled:opacity-25"
       style={{
         width: 30, height: 30,
         color: tint ?? (on ? "var(--primary-hover)" : "var(--text2)"),
@@ -2296,7 +2296,7 @@ export function BrowserView({ active: viewOn, scope }: {
           /* Bigger, and in a box: at 20px with a 12px glyph it read as a speck
              on a row of text, and this is the control that changes what the
              sidebar holds. */
-          className="agx-x shrink-0 grid place-items-center opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 rounded-md"
+          className="agx-x shrink-0 grid place-items-center opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 rounded-lg"
           style={{ width: CLOSE_CELL, height: CLOSE_CELL }}><CloseIcon size={ICON.md} /></button>
       </div>
     );
@@ -2493,9 +2493,9 @@ export function BrowserView({ active: viewOn, scope }: {
               setMenuAtXY(r ? { top: r.bottom + 6, right: 6 } : null);
               setMenuOpen((v) => !v);
             }}
-            className="agx-btn shrink-0 rounded-md flex items-center justify-center"
+            className="agx-btn shrink-0 rounded-lg flex items-center justify-center"
             style={{
-              width: 24, height: 24,
+              width: CTRL_H.compact, height: CTRL_H.compact,
               color: menuOpen ? "var(--primary-hover)" : "var(--text3)",
               background: menuOpen ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent",
             }}><MoreIcon /></button>
@@ -2698,7 +2698,7 @@ export function BrowserView({ active: viewOn, scope }: {
                   title={rows.length
                     ? `Close ${name} — its ${rows.length} page${rows.length === 1 ? "" : "s"} close with it`
                     : `Close ${name} — it has no pages open`}
-                  className="agx-x shrink-0 self-center grid place-items-center opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 rounded-md"
+                  className="agx-x shrink-0 self-center grid place-items-center opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 rounded-lg"
                   style={{ width: CLOSE_CELL, height: CLOSE_CELL }}><CloseIcon size={ICON.md} /></button>
               ) : <span className="shrink-0" style={{ width: CLOSE_CELL }} aria-hidden="true" />}
               </div>
@@ -2750,7 +2750,7 @@ export function BrowserView({ active: viewOn, scope }: {
                             one meaning, one target big enough to aim at. */}
                         <button onClick={(e) => { e.stopPropagation(); close(t.id); }} aria-label={`Close ${tabLabel(t)}`}
                           title="Close this page"
-                          className="agx-x shrink-0 grid place-items-center opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 rounded-md ml-1"
+                          className="agx-x shrink-0 grid place-items-center opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 rounded-lg ml-1"
                           style={{ width: CLOSE_CELL, height: CLOSE_CELL }}><CloseIcon size={ICON.md} /></button>
                       </div>
                     </div>
@@ -2773,13 +2773,13 @@ export function BrowserView({ active: viewOn, scope }: {
       <div className="shrink-0 flex items-center gap-1 px-1.5 pt-1"
         style={{ borderTop: LINE }}>
         <button onClick={() => setOmni("new")} title="New tab (Ctrl+T)"
-          className="flex-1 min-w-0 flex items-center gap-1.5 px-1.5 py-1 rounded-md text-[10.5px]"
-          style={{ color: "var(--text3)" }}>
+          className="flex-1 min-w-0 flex items-center gap-1.5 px-1.5 rounded-lg text-[10.5px]"
+          style={{ height: CTRL_H.compact, color: "var(--text3)" }}>
           <span style={{ fontSize: 12, lineHeight: 1 }}>+</span> New tab
         </button>
         <button onClick={() => newFolder()} title="New folder" aria-label="New folder"
-          className="shrink-0 grid place-items-center rounded-md"
-          style={{ width: 22, height: 22, color: "var(--text3)" }}><FolderIcon size={13} /></button>
+          className="shrink-0 grid place-items-center rounded-lg"
+          style={{ width: CTRL_H.compact, height: CTRL_H.compact, color: "var(--text3)" }}><FolderIcon size={13} /></button>
       </div>
 
       {/* THE STRIP OF SPACES ALONG THE FOOT IS GONE.
@@ -2866,9 +2866,9 @@ export function BrowserView({ active: viewOn, scope }: {
               {find.trim() ? `${found?.at ?? 0}/${found?.of ?? 0}` : ""}
             </span>
             <button onClick={() => step(false)} title="Previous match (Shift+Enter)" aria-label="Previous match"
-              className="shrink-0 grid place-items-center rounded" style={{ width: 24, height: 24, color: "var(--text3)" }}><UpIcon /></button>
+              className="shrink-0 grid place-items-center rounded-lg" style={{ width: CTRL_H.compact, height: CTRL_H.compact, color: "var(--text3)" }}><UpIcon /></button>
             <button onClick={() => step(true)} title="Next match (Enter)" aria-label="Next match"
-              className="shrink-0 grid place-items-center rounded" style={{ width: 24, height: 24, color: "var(--text3)" }}><DownIcon /></button>
+              className="shrink-0 grid place-items-center rounded-lg" style={{ width: CTRL_H.compact, height: CTRL_H.compact, color: "var(--text3)" }}><DownIcon /></button>
             <CloseButton onClick={closeFind} title="Close the search" />
           </div>
           <div className="flex items-center gap-4 px-0.5">
@@ -3034,9 +3034,9 @@ export function BrowserView({ active: viewOn, scope }: {
             <div className="absolute flex items-center gap-1" style={{ left: `calc(${splitAt * 100}% + 8px)`, top: 8, zIndex: 13 }}>
               <button onClick={() => { const other = splitId!; setSplitId(activeId); show(other); }}
                 title="Put the bar on this side" aria-label="Swap the sides"
-                className="grid place-items-center rounded-md"
-                style={{ width: 24, height: 24, background: "var(--surface-card)", color: "var(--text3)", border: EDGE }}><SwapIcon size={ICON.sm} /></button>
-              <CloseButton onClick={() => setSplitId(null)} title="Close the split" hit={24}
+                className="grid place-items-center rounded-lg"
+                style={{ width: CTRL_H.compact, height: CTRL_H.compact, background: "var(--surface-card)", color: "var(--text3)", border: EDGE }}><SwapIcon size={ICON.sm} /></button>
+              <CloseButton onClick={() => setSplitId(null)} title="Close the split" hit={CTRL_H.compact}
                 style={{ background: "var(--surface-card)", color: "var(--text3)", border: EDGE }} />
             </div>
           </>
@@ -3247,12 +3247,7 @@ export function BrowserView({ active: viewOn, scope }: {
               {sh.spaces.length > 1 && (
                 <div className="flex items-center gap-1 flex-wrap">
                   {sh.spaces.map((sp) => (
-                    <button key={sp.id} onClick={() => setBringing({ ...bringing, space: sp.id })}
-                      className="px-2 py-1 rounded-md text-[10.5px]"
-                      style={{
-                        color: sp.id === bringing.space ? "var(--text)" : "var(--text3)",
-                        background: sp.id === bringing.space ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "color-mix(in srgb, var(--text) 6%, transparent)",
-                      }}>{sp.name}</button>
+                    <Chip key={sp.id} on={sp.id === bringing.space} onClick={() => setBringing({ ...bringing, space: sp.id })}>{sp.name}</Chip>
                   ))}
                 </div>
               )}
@@ -3267,7 +3262,7 @@ export function BrowserView({ active: viewOn, scope }: {
                 </span>
               </div>
               <div className="flex items-center gap-1.5">
-                <button onClick={() => {
+                <Button size="compact" tone="primary" onClick={() => {
                   let said = "";
                   editShelf((cur) => {
                     const r = mergeImported(cur, sh, bringing.space);
@@ -3278,11 +3273,8 @@ export function BrowserView({ active: viewOn, scope }: {
                   });
                   setBringing(null);
                   if (said) say(said);
-                }}
-                  className="px-2.5 py-1 rounded-md text-[11px]"
-                  style={{ color: "var(--text)", background: "color-mix(in srgb, var(--primary) 26%, transparent)" }}>Import</button>
-                <button onClick={() => setBringing(null)}
-                  className="px-2.5 py-1 rounded-md text-[11px]" style={{ color: "var(--text3)" }}>Cancel</button>
+                }}>Import</Button>
+                <Button size="compact" onClick={() => setBringing(null)}>Cancel</Button>
               </div>
             </div>
           </>

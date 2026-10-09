@@ -24,6 +24,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CloseButton } from "../CloseButton.tsx";
+import { Button, CTRL_H, EDGE } from "../workspace/Chrome.tsx";
 
 export interface Rect { x: number; y: number; width: number; height: number }
 
@@ -327,24 +328,19 @@ export function Shooter({ view, onNote, onDone }: {
           : { right: 8, top: 8 }}>
         {sel ? (
           <>
-            <CloseButton onClick={onDone} title="Cancel (Esc)" hit={30}
-              style={{ background: "var(--surface-card)", color: "var(--text3)", border: BORDER }} />
-            <button onClick={() => void doCopy()} disabled={!!busy}
-              className="px-3 py-1.5 rounded-lg text-[11.5px] disabled:opacity-50"
-              style={{ background: "var(--surface-card)", color: "var(--text)", border: BORDER }}>
+            <CloseButton onClick={onDone} title="Cancel (Esc)" hit={CTRL_H.regular}
+              style={{ background: "var(--surface-card)", color: "var(--text3)", border: EDGE }} />
+            <Button onClick={() => void doCopy()} disabled={!!busy} style={{ background: "var(--surface-card)" }}>
               {busy === "copy" ? "Copying…" : "Copy"}
-            </button>
-            <button onClick={() => void doSave()} disabled={!!busy}
-              className="px-3 py-1.5 rounded-lg text-[11.5px] disabled:opacity-50"
-              style={{ background: "color-mix(in srgb, var(--primary) 30%, var(--surface-card))", color: "var(--text)", border: BORDER }}>
+            </Button>
+            <Button tone="primary" onClick={() => void doSave()} disabled={!!busy}>
               {busy === "save" ? "Saving…" : "Download"}
-            </button>
+            </Button>
           </>
         ) : (
           <>
-            <button onClick={() => { setSel({ x: 0, y: 0, width: box.current?.clientWidth ?? 0, height: box.current?.clientHeight ?? 0 }); }}
-              className="px-2.5 py-1.5 rounded-lg text-[11px]"
-              style={{ background: "var(--surface-card)", color: "var(--text)", border: BORDER }}>Visible</button>
+            <Button onClick={() => { setSel({ x: 0, y: 0, width: box.current?.clientWidth ?? 0, height: box.current?.clientHeight ?? 0 }); }}
+              style={{ background: "var(--surface-card)" }}>Visible</Button>
             {/* WHOLE PAGE IS GONE, and the reason is worth keeping.
                 `captureBeyondViewport` paints the page in strips and repaints
                 anything `position: fixed` in EVERY strip, so a page with a
@@ -355,24 +351,20 @@ export function Shooter({ view, onNote, onDone }: {
                 that is simply wrong, and a button that produces it is worth
                 less than no button. `Visible` does what people were reaching
                 for anyway. */}
-            <button onClick={onDone}
-              className="px-2.5 py-1.5 rounded-lg text-[11px]"
-              style={{ background: "var(--surface-card)", color: "var(--text3)", border: BORDER }}>Cancel</button>
+            <Button onClick={onDone} style={{ background: "var(--surface-card)", color: "var(--text3)" }}>Cancel</Button>
           </>
         )}
       </div>
 
       {!sel && (
         <div className="absolute left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-lg text-[11.5px] pointer-events-none"
-          style={{ bottom: 16, background: "rgba(6,4,12,0.9)", color: "var(--text2)", border: BORDER }}>
+          style={{ bottom: 16, background: "rgba(6,4,12,0.9)", color: "var(--text2)", border: EDGE }}>
           Drag a region, or click an element · Esc to cancel
         </div>
       )}
     </div>
   );
 }
-
-const BORDER = "1px solid color-mix(in srgb, var(--border) 60%, transparent)";
 
 const HANDLES = [
   { id: "nw", fx: 0, fy: 0, cursor: "nwse-resize" },
