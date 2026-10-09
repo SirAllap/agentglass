@@ -611,7 +611,6 @@ describe("a board is for pointing at, not for pressing", () => {
      */
     expect(board).toContain('onAct(p, "open")');
     expect(board).not.toContain("onAct(p, act)");
-    expect(board).toContain('if (k === "a") { e.preventDefault(); onAct(at, "open"); return; }');
   });
 
   it("still says what the card is asking for", () => {
@@ -727,18 +726,13 @@ describe("the shortcuts the legend promises", () => {
     expect(bare).toContain("preventScroll: true");
   });
 
-  it("the legend still names the keys it claims", () => {
-    // If a shortcut is ever removed, this row has to lose it in the same
-    // commit — a legend is a promise, and that is what made this a bug.
-    for (const k of ["lane", "card", "across", "open", "pin"]) {
-      expect(SRC, `the legend lost "${k}"`).toContain(`</K> ${k}<`);
-    }
-  });
-
-  it("and every key it names is handled", () => {
-    // The other half of the same promise, from the other end.
+  it("the board answers no card keys, and prints none", () => {
+    // Ctrl+Alt+A closes and opens the bench; the board's `a` read it as "open
+    // this card" and opened whatever the cursor rested on. The keys went.
     for (const k of ['"j"', '"k"', '"h"', '"l"', '"p"', '"a"']) {
-      expect(bare, `no handler for ${k}`).toContain(k);
+      expect(bare, `the board still handles ${k}`).not.toContain(`k === ${k}`);
     }
+    expect(SRC).not.toContain("</K> pin<");
+    expect(SRC).not.toContain("</K> open it<");
   });
 });

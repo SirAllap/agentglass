@@ -492,33 +492,9 @@ export function TriageBoard({
       openFind(find);
       return;
     }
-    // Never while somebody is typing in the filter above.
-    if ((e.target as HTMLElement)?.closest?.("input,textarea")) return;
-    const k = e.key;
-    if (k >= "1" && k <= String(cols.length)) {
-      const i = Number(k) - 1;
-      const id = cols[i]?.id;
-      /* The digit of a folded lane UNFOLDS it rather than doing nothing. The
-         alternative is a number printed in the legend that answers to nobody,
-         which is the bug the focus fix above exists for — twice in one row
-         would be careless. */
-      if (id && isFolded(id)) { e.preventDefault(); toggleFold(id, lanes.get(id)?.length ?? 0); setCur({ lane: i, row: 0 }); return; }
-      if (shown(i).length) { e.preventDefault(); setCur({ lane: i, row: 0 }); }
-      return;
-    }
-    if (k === "j" || k === "ArrowDown") { e.preventDefault(); setCur((c) => ({ ...c, row: Math.min(c.row + 1, Math.max(0, shown(c.lane).length - 1)) })); return; }
-    if (k === "k" || k === "ArrowUp") { e.preventDefault(); setCur((c) => ({ ...c, row: Math.max(0, c.row - 1) })); return; }
-    if (k === "h" || k === "ArrowLeft") { e.preventDefault(); setCur((c) => ({ lane: Math.max(0, c.lane - 1), row: 0 })); return; }
-    if (k === "l" || k === "ArrowRight") { e.preventDefault(); setCur((c) => ({ lane: Math.min(cols.length - 1, c.lane + 1), row: 0 })); return; }
-    if (!at) return;
-    if (k === "Enter") { e.preventDefault(); onOpen(at.number); return; }
-    if (k === "p") { e.preventDefault(); onTogglePin(at); return; }
-    // One key for "do the thing this card is asking for", whatever that is in
-    // this lane — the same button the card draws, so the two cannot drift.
-    /* `a` opens it too. It used to perform the lane's action from the keyboard,
-       which is the same loaded gun as the button — worse, because a cursor you
-       cannot see decides which card it points at. */
-    if (k === "a") { e.preventDefault(); onAct(at, "open"); return; }
+    /* No other keys. The board used to answer 1-4, j/k/h/l, Enter, p and a; the
+       last one fired on Ctrl+Alt+A, the chord that closes and opens the bench,
+       and opened whatever card the cursor was resting on. Nobody used them. */
   };
 
   return (
@@ -698,17 +674,6 @@ export function TriageBoard({
           </span>
         </div>
       )}
-
-      {/* The keys, printed. A board with a keyboard nobody is told about is a
-          board with no keyboard. */}
-      <div className="shrink-0 flex gap-3 flex-wrap px-4 pb-1.5 text-[9.5px]" style={{ color: "var(--text4)" }}>
-        <span><K>1</K>–<K>{cols.length}</K> lane</span>
-        <span><K>j</K><K>k</K> card</span>
-        <span><K>h</K><K>l</K> across</span>
-        <span><K>⏎</K> open</span>
-        <span><K>a</K> open it</span>
-        <span><K>p</K> pin</span>
-      </div>
 
       {/* Sideways only. The five columns still have to be reachable on a narrow
           window; the up-and-down is each column's own, below. */}
