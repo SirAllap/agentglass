@@ -23,6 +23,7 @@
  * shape is load-bearing rather than incidental.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { repoOf } from "../../src/model/prRef.ts";
 import { checksMoved, nextDetailPoll } from "../../src/model/checkJobs.ts";
 import { ActivityIndicator, Linking, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
@@ -691,7 +692,7 @@ export default function PrScreen(): React.ReactNode {
                     A cut at 1,200 characters landed mid-word and mid-checkbox;
                     a cut after six blocks lands between two things somebody
                     wrote, and the expander below can say what the rest is. */}
-                <Md text={detail.body.trim()} host={host} limit={bodyOpen ? undefined : BODY_BLOCKS} />
+                <Md text={detail.body.trim()} host={host} repo={repoOf(detail.url) ?? undefined} limit={bodyOpen ? undefined : BODY_BLOCKS} />
                 {rest.hidden ? (
                   <Pressable
                     accessibilityRole="button"

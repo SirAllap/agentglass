@@ -425,7 +425,7 @@ export default function CardScreen(): React.ReactNode {
   const body = (detail?.description ?? "").trim();
   /* What the fold hides, named. A specification's next heading is the whole
      of what a reader needs to decide whether to open it. */
-  const bodyRest = useMemo(() => outline(body, BODY_BLOCKS), [body]);
+  const bodyRest = useMemo(() => outline(body, BODY_BLOCKS, true), [body]);
 
   /* Subtasks and checklist items counted as one number, because they are one
      question — what is left underneath this card. A subtask is done when the
@@ -589,7 +589,7 @@ export default function CardScreen(): React.ReactNode {
                 can name what is under it. */}
             {body ? (
               <Card style={{ gap: SPACE.md }}>
-                <Md text={body} host={host} limit={wholeBody ? undefined : BODY_BLOCKS} />
+                <Md text={body} host={host} pastPicture limit={wholeBody ? undefined : BODY_BLOCKS} />
                 {bodyRest.hidden ? (
                   <Pressable
                     accessibilityRole="button"
