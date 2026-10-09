@@ -4316,8 +4316,9 @@ const cuGrid = (who: boolean, squad: boolean, sprint: boolean, est: boolean, for
   // the pull request beside it would bury the one people actually want under
   // the one they almost never press. Fixed width and always present — like
   // Cmts and Pts, a card with none draws an empty cell rather than shifting
-  // its neighbours.
-  ["1fr", "58px", who ? "50px" : "", squad ? "36px" : "", sprint ? "88px" : "", "34px", "72px", est ? "38px" : "", "30px", "40px", forget ? "30px" : ""].filter(Boolean).join(" ");
+  // its neighbours. 92px holds the widest chip, "#NNNNN +N"; at 58 it ran
+  // into the avatars.
+  ["1fr", "92px", who ? "50px" : "", squad ? "36px" : "", sprint ? "88px" : "", "34px", "72px", est ? "38px" : "", "30px", "40px", forget ? "30px" : ""].filter(Boolean).join(" ");
 
 /**
  * The one custom field worth a column of its own: a coloured drop-down.
@@ -4733,7 +4734,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
           none — like Cmts and Pts — rather than shifting ↗ to its left, which
           is the rarely-pressed ClickUp escape hatch and stays where it always
           was. */}
-      <span className="flex items-center">
+      <span className="flex items-center min-w-0 overflow-hidden">
         {prPick.kind !== "none" && (() => {
           const shown = prPick.kind === "one" ? prPick.pr : prPick.primary;
           const restCount = prPick.kind === "many" ? prPick.rest.length : 0;
@@ -4742,7 +4743,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
           return (
             <button type="button"
               onClick={(e) => { e.stopPropagation(); if (prPick.kind === "many") { const r = e.currentTarget.getBoundingClientRect(); setPrMenu({ x: r.left, y: r.bottom + 4 }); } else { openCardPr(shown); } }}
-              className="agx-onrow inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1"
+              className="agx-onrow inline-flex items-center gap-1 rounded-full shrink-0 whitespace-nowrap px-1.5 py-0.5 hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1"
               style={{
                 color: tint, background: `color-mix(in srgb, ${tint} 13%, transparent)`,
                 border: `1px solid color-mix(in srgb, ${tint} 40%, transparent)`,
