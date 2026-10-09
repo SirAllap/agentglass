@@ -4,7 +4,7 @@ import { unboxedControl } from "../../lib/pluginBoxState.ts";
 import { api } from "../../lib/api.ts";
 import { ShieldIcon } from "../settingsNavIcons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
-import { Button } from "../workspace/Chrome.tsx";
+import { Button, EDGE } from "../workspace/Chrome.tsx";
 
 /**
  * The per-plugin consent to run without a box, drawn on the card of the
@@ -34,7 +34,7 @@ export function UnboxedConsent({ plugin, envAllowsAll, onChanged }: {
   return (
     <div role="group" aria-label="Run without a box" className="mt-1.5 px-3 py-2 rounded-lg" style={{
       background: `color-mix(in srgb, ${tint} 9%, transparent)`,
-      border: `1px solid color-mix(in srgb, ${tint} 32%, transparent)`,
+      border: EDGE,
     }}>
       <div className="flex items-start gap-2 min-w-0">
         <span className="shrink-0 mt-px flex" style={{ color: tint }}><ShieldIcon size={ICON.sm} /></span>
