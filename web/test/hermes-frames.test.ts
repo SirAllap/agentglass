@@ -1,4 +1,9 @@
 import { beforeAll, describe, expect, test } from "bun:test";
+import { globalStubs } from "./stubGlobal";
+import { stubStorage } from "./stubStorage.ts";
+const stubGlobal = globalStubs();
+
+stubStorage();
 
 // Hermes's frames, folded into the same conversation the other three build.
 // The interesting cases are the ones where this stream differs from Codex's in
@@ -7,8 +12,7 @@ import { beforeAll, describe, expect, test } from "bun:test";
 
 let frames: typeof import("../src/lib/hermesFrames.ts");
 beforeAll(async () => {
-  (globalThis as any).location ??= new URL("http://localhost:5173/");
-  (globalThis as any).localStorage ??= { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+  stubGlobal("location", new URL("http://localhost:5173/"));
   frames = await import("../src/lib/hermesFrames.ts");
 });
 
