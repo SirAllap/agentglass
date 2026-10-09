@@ -15,8 +15,8 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
-  closeFind, findChordIsOursToTake, findState, openFind, pushScope,
-  registerEngine, runQuery, stepFind, topScope, type FindEngine,
+  closeFind, findChordIsOursToTake, findHidden, findState, openFind, pushScope,
+  registerEngine, runQuery, scopeHolding as findScopeHolding, stepFind, topScope, type FindEngine,
 } from "../src/lib/findScope.ts";
 
 /* A stand-in for an element that is on screen: something in it, and a box.
@@ -275,5 +275,86 @@ describe("the chord this app is allowed to take", () => {
 
   it("is NOT ours inside the browser's webview — Chromium's find lives there", () => {
     expect(findChordIsOursToTake(target("webview"))).toBe(false);
+  });
+});
+
+describe("the chord pressed inside one of two views on screen", () => {
+  // The bench open over a terminal: two rank-0 views, and the one that mounted
+  // last is not necessarily the one being typed in.
+  const inside = { nodeType: 1 } as unknown as Node;
+  const view = (name: string, holds: Node[] = []) => ({
+    ...(el(name) as object),
+    contains: (n: Node) => holds.includes(n),
+  } as unknown as HTMLElement);
+
+  it("searches the view holding the focus, not the one that mounted last", () => {
+    const bench = view("bench", [inside]);
+    const terminal = view("terminal");
+    const offB = pushScope(bench, 0);
+    const offT = pushScope(terminal, 0);
+    try {
+      expect(topScope()).toBe(terminal);
+      openFind("", findScopeHolding(inside));
+      expect(topScope()).toBe(bench);
+      closeFind();
+      expect(topScope()).toBe(terminal);
+    } finally { offT(); offB(); }
+  });
+
+  it("still yields to a dialog opened over that view", () => {
+    const bench = view("bench", [inside]);
+    const card = el("card");
+    const offB = pushScope(bench, 0);
+    const offC = pushScope(card, 1);
+    try {
+      openFind("", bench);
+      expect(topScope()).toBe(card);
+      closeFind();
+    } finally { offC(); offB(); }
+  });
+
+  it("finds no view for a target outside every scope", () => {
+    const offB = pushScope(view("bench"), 0);
+    try { expect(findScopeHolding(inside)).toBeNull(); } finally { offB(); }
+  });
+});
+
+describe("a bar opened for one window", () => {
+  it("hides while that window is away and comes back with it, never on the view behind", () => {
+    const bench = el("bench");
+    const view = el("view");
+    const offV = pushScope(view, 0);
+    let offB = pushScope(bench, 0);
+    try {
+      openFind("", bench);
+      expect(findHidden()).toBe(false);
+      offB();
+      expect(findState().open).toBe(true);
+      expect(findHidden()).toBe(true);
+      offB = pushScope(bench, 0);
+      expect(findHidden()).toBe(false);
+      expect(topScope()).toBe(bench);
+    } finally { offB(); offV(); closeFind(); }
+  });
+
+  it("follows the bench around the scope it was opened in, though that inner scope stays", () => {
+    const bench = el("bench");
+    const inner = { ...(el("inner") as object), closest: () => bench } as unknown as HTMLElement;
+    const offB = pushScope(bench, 0);
+    const offI = pushScope(inner, 1);
+    try {
+      openFind("", inner);
+      offB();
+      expect(findHidden()).toBe(true);
+    } finally { offI(); closeFind(); }
+  });
+
+  it("is not hidden after it is closed", () => {
+    const bench = el("bench");
+    const off = pushScope(bench, 0);
+    openFind("", bench);
+    off();
+    closeFind();
+    expect(findHidden()).toBe(false);
   });
 });

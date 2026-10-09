@@ -26,7 +26,7 @@
  * those two changes except which key opens them.
  */
 
-import { useEffect } from "react";
+import { useEffect, useLayoutEffect } from "react";
 import { domFinder } from "./domFind.ts";
 import { clear as clearHighlights } from "./mdFind.ts";
 
@@ -94,7 +94,31 @@ export function topScope(): HTMLElement | null {
     if (!showing(s.el)) continue;
     if (!best || s.rank >= best.rank) best = s;
   }
+  // The screen the chord was pressed in, while it is still up and nothing has
+  // opened over it — see `openFind`'s `from`.
+  const pref = preferred ? scopes.find((s) => s.el === preferred) : undefined;
+  if (pref && best && showing(pref.el) && pref.rank >= best.rank) return pref.el;
   return best?.el ?? null;
+}
+
+/** Set by `openFind(seed, from)` for as long as the bar is open. */
+let preferred: HTMLElement | null = null;
+/** The window the bar belongs to: `preferred`, or the bench around it. The bar
+ *  lives exactly as long as this stays a scope. */
+let owner: HTMLElement | null = null;
+let hidden = false;
+/** True while the window the bar belongs to is away. */
+export const findHidden = (): boolean => hidden;
+
+/** The innermost scope holding `target`: two views on screen at once (the
+ *  bench over a terminal) are both rank 0, and which one mounted last is not
+ *  which one you are typing in. */
+export function scopeHolding(target: EventTarget | null): HTMLElement | null {
+  const n = target as Node | null;
+  if (!n || typeof (n as Node).nodeType !== "number") return null;
+  let hit: Scope | null = null;
+  for (const s of scopes) if (s.el.contains(n) && (!hit || hit.el.contains(s.el))) hit = s;
+  return hit?.el ?? null;
 }
 
 type MaybeVisible = HTMLElement & { checkVisibility?: () => boolean };
@@ -130,7 +154,9 @@ export function pushScope(el: HTMLElement, rank = 0): () => void {
  * is every one of them repeating the same effect.
  */
 export function useFindScope(ref: { current: HTMLElement | null }, active: boolean, rank = 1): void {
-  useEffect(() => {
+  // Layout, not passive: a window that closes must stop being a scope in the
+  // same commit, not a frame later — the bar hides with it instead of lingering.
+  useLayoutEffect(() => {
     if (!active || !ref.current) return;
     return pushScope(ref.current, rank);
   }, [ref, active, rank]);
@@ -223,6 +249,17 @@ let liveEngines = -1;
  *  same question about the new screen. */
 function syncEngine(): void {
   if (!state.open) return;
+  // A bar opened for one window belongs to it: while the window is away the
+  // bar is hidden and the highlights are gone, and when it comes back the same
+  // query runs again. Never handed to the view behind.
+  if (owner) {
+    const here = scopes.some((s) => s.el === owner);
+    if (!here) {
+      if (!hidden) { hidden = true; live?.clear(); clearHighlights(); emit(); }
+      return;
+    }
+    if (hidden) { hidden = false; liveScope = null; }
+  }
   const scope = topScope();
   if (scope === liveScope && live && liveEngines === enginesAt) return;
   liveEngines = enginesAt;
@@ -237,7 +274,9 @@ function syncEngine(): void {
   emit();
 }
 
-export function openFind(seed = ""): void {
+export function openFind(seed = "", from: HTMLElement | null = null): void {
+  preferred = from && scopes.some((s) => s.el === from) ? from : null;
+  owner = preferred ? (((preferred as HTMLElement).closest?.("[data-find-anchor]") as HTMLElement | null) ?? preferred) : null;
   live = engine();
   liveScope = topScope();
   // Built here, so the next sync knows this one is current — without it the
@@ -250,6 +289,9 @@ export function openFind(seed = ""): void {
 }
 
 export function closeFind(): void {
+  preferred = null;
+  owner = null;
+  hidden = false;
   live?.clear();
   /*
    * And unconditionally, whatever the engine did or is.

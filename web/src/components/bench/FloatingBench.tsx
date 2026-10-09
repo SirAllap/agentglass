@@ -31,6 +31,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType } from "react";
 import { motion } from "motion/react";
 import { Portal } from "../Portal.tsx";
+import { openFind, useFindScope } from "../../lib/findScope.ts";
 import { LAYER } from "../../lib/layers.ts";
 import { api } from "../../lib/api.ts";
 import { isLanternTab } from "../../lib/lanternAsk.ts";
@@ -50,7 +51,7 @@ import { RAIL_W } from "../workspace/ViewRail.tsx";
 import { TOP_BAR_H } from "../TopBar.tsx";
 import type { GitRepoRef } from "../../../../shared/types.ts";
 import { ICON } from "../../lib/iconSize.ts";
-import { AgentIcon, ExpandIcon, FileIcon, NoteIcon } from "../../lib/glyphIcons.tsx";
+import { AgentIcon, ExpandIcon, FileIcon, NoteIcon, SearchIcon } from "../../lib/glyphIcons.tsx";
 import { BrowserIcon, IssuesIcon, PrIcon, TerminalIcon } from "../workspace/icons.tsx";
 import { CloseIcon } from "../CloseButton.tsx";
 
@@ -184,6 +185,10 @@ export function FloatingBench() {
      click, and a timer cannot fail to fire. */
   const [away, setAway] = useState(false);
   if (st.open && away) setAway(false);
+  // A find scope of its own while it is up, at the views' rank: it sits over
+  // a view without covering it, so Ctrl+F follows where it was pressed — see
+  // `scopeHolding` — rather than the bench taking every search.
+  useFindScope(winRef, st.open, 0);
   useEffect(() => {
     if (st.open) return;
     const t = setTimeout(() => setAway(true), FADE_MS);
@@ -571,6 +576,7 @@ export function FloatingBench() {
           <Portal z={away ? UNDER_THE_APP : LAYER.bench}>
             <motion.div
               ref={winRef}
+              data-find-anchor=""
               initial={HIDDEN}
               animate={st.open ? SHOWN : HIDDEN}
               transition={{ duration: FADE_MS / 1000, ease: [0.16, 1, 0.3, 1] }}
@@ -689,6 +695,10 @@ export function FloatingBench() {
                     {Math.round(st.zoom * 100)}%
                   </button>
                 )}
+                <button onClick={() => { if (winRef.current) { const sel = window.getSelection?.()?.toString().trim() ?? ""; openFind(sel.length && sel.length <= 80 && !sel.includes("\n") ? sel : "", winRef.current); } }}
+                  title="Find in this window (Ctrl+F with the pointer over it)"
+                  className="agx-bench-hit shrink-0 rounded-md flex items-center justify-center"
+                  style={{ width: 28, height: 28, color: "var(--text2)" }}><SearchIcon size={ICON.sm} /></button>
                 <button onClick={() => setBenchGrown(!st.grown)} title={st.grown ? "Back to size" : "Fill the window"}
                   className="agx-bench-hit shrink-0 rounded-md text-[14px] leading-none flex items-center justify-center"
                   style={{ width: 28, height: 28, color: "var(--text2)" }}><ExpandIcon size={ICON.sm} shrink={st.grown} /></button>
@@ -946,7 +956,7 @@ function BenchMenu({ root, onClose, onTerm, onNote, onWeb, onAgent, onBoard }: {
   return (
     <>
       <div ref={panel} className="absolute left-2 top-9 rounded-lg overflow-hidden"
-        style={{ zIndex: 2, width: 300, background: "var(--bg2)", border: edge(26), boxShadow: "0 22px 50px -16px #000" }}
+        style={{ zIndex: 50, width: 300, background: "var(--bg2)", border: edge(26), boxShadow: "0 22px 50px -16px #000" }}
         onKeyDown={(e) => {
           /* A React portal bubbles through the REACT tree, so keys pressed in
              here reach the window's handler too. Stopped at the door, like the

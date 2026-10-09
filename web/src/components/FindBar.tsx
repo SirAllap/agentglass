@@ -11,8 +11,8 @@
  * you are searching. GitHub, VS Code and Chromium all put it top-right, out of
  * the way of the text that starts at the top-left.
  */
-import { useEffect, useRef, useSyncExternalStore } from "react";
-import { closeFind, findState, runQuery, stepFind, subscribeFind } from "../lib/findScope.ts";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { closeFind, findHidden, findState, runQuery, stepFind, subscribeFind, topScope } from "../lib/findScope.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { clear as clearHighlights } from "../lib/mdFind.ts";
 import { SearchIcon } from "../lib/glyphIcons.tsx";
@@ -36,12 +36,35 @@ export function FindBar() {
      painted on a board with no bar in sight. */
   useEffect(() => () => clearHighlights(), []);
 
-  if (!st.open) return null;
-
+  // The window can be dragged or resized while the bar is up: follow it. Only a
+  // changed rectangle sets state, so a still window costs a read per frame.
+  const [, moved] = useState("");
+  const anchor = topScope()?.closest<HTMLElement>("[data-find-anchor]") ?? null;
+  useEffect(() => {
+    if (!anchor) return;
+    let raf = 0, last = "";
+    const tick = () => {
+      const b = anchor.getBoundingClientRect();
+      const k = `${b.top}|${b.right}`;
+      if (k !== last) { last = k; moved(k); }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [anchor]);
+  // After every hook: returning before one changes how many run (React #310).
+  if (!st.open || findHidden()) return null;
   const nothing = !!st.query && st.total === 0;
+  // A floating window being searched gets the bar in its own corner, not the
+  // app's: the bar belongs over what it searches.
+  const scope = topScope();
+  // `closest`, not the scope itself: a card opened inside the bench is its
+  // own scope, and it still lives in the bench.
+  const r = scope?.closest<HTMLElement>("[data-find-anchor]")?.getBoundingClientRect() ?? null;
+  const at = r ? { top: r.top + 8, right: Math.max(12, window.innerWidth - r.right + 12) } : { top: 8, right: 12 };
   return (
     <div className="fixed z-[10050] flex items-center gap-1.5 rounded-lg px-2 py-1.5 agx-menu"
-      style={{ top: 8, right: 12, boxShadow: "0 8px 24px rgba(0,0,0,0.35)" }}
+      style={{ ...at, boxShadow: "0 8px 24px rgba(0,0,0,0.35)" }}
       role="search" aria-label="Find on this screen">
       <span aria-hidden className="flex" style={{ color: "var(--text3)" }}><SearchIcon size={ICON.xs} /></span>
       <input ref={box} value={st.query} spellCheck={false} autoComplete="off"

@@ -20,7 +20,7 @@ import { subscribeControl } from "./lib/controlBus.ts";
 import { latchChatIntent } from "./lib/chatIntent.ts";
 import type { ControlCmd } from "../../shared/types.ts";
 import { actionFor } from "./lib/keybindings.ts";
-import { claimFind, findChordIsOursToTake, openFind } from "./lib/findScope.ts";
+import { claimFind, findChordIsOursToTake, openFind, scopeHolding } from "./lib/findScope.ts";
 import { FindBar } from "./components/FindBar.tsx";
 import { AlarmCard } from "./components/AlarmCard.tsx";
 import { currentScale } from "./lib/uiScale.ts";
@@ -85,6 +85,12 @@ import { requestPrJump } from "./lib/prJump.ts";
 import { requestPluginInstall } from "./lib/installPlugin.ts";
 import { subscribeGates, listGates } from "./lib/gateStore.ts";
 import { startMarksSync, syncMarks } from "./lib/marksSync.ts";
+
+/** What the pointer is over. Ctrl+F searches the view under the pointer first:
+ *  with the bench floating over another view, the one you are looking at is
+ *  the one the mouse is on, whatever still holds the focus. */
+let pointerOver: EventTarget | null = null;
+if (typeof window !== "undefined") window.addEventListener("pointerover", (e) => { pointerOver = e.target; }, true);
 
 /** The last segment of a path — a project's name as anyone says it out loud. */
 const leafOf = (p: string): string => p.split("/").filter(Boolean).pop() ?? p;
@@ -791,11 +797,16 @@ export default function App() {
         /* A view with a find of its own — the terminal, the browser — takes it
            from here and opens theirs. One key, several engines; see
            `registerClaim`. */
-        if (claimFind()) return;
+        /* …unless the focus is in a view with no terminal or browser in it:
+           the bench open over a terminal is two views on screen, and the
+           terminal's claim answered a Ctrl+F pressed in the bench. */
+        const own = scopeHolding(pointerOver) ?? scopeHolding(e.target);
+        const ownIsDom = !!own && !own.querySelector(".xterm, webview");
+        if (!ownIsDom && claimFind()) return;
         const sel = window.getSelection?.()?.toString().trim() ?? "";
         // Seeded with the selection, the way every find bar does it — and only
         // when it is short enough to be a word rather than a paragraph.
-        openFind(sel.length && sel.length <= 80 && !sel.includes("\n") ? sel : "");
+        openFind(sel.length && sel.length <= 80 && !sel.includes("\n") ? sel : "", ownIsDom ? own : null);
         return;
       }
 
