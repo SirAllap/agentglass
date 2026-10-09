@@ -277,7 +277,12 @@ owner's (it does not say how to move it).
 The levels: 1 looks or opens (kinds `open`, `read`), 2 changes a local setting
 (kind `change`) and 3 **stages** (kind `stage`): a level 3 entry opens a dialog
 with its fields filled in and never calls a route that writes, so the person's
-click is the effect. No kind performs an external effect, and no setting, door
+click is the effect. Four ship, all on one pull request (`pr.merge.stage`,
+`pr.comment.stage`, `pr.review.stage`, `card.move.stage`): each opens the screen's
+own dialog filled in, marked as written by the caller and editable, with its
+confirm held back for a second (`agentglass-ui stage <id> --arg k=v`, or the
+`ui_pr_merge_stage`-style MCP tools). Text arguments are the `text` spec:
+bounded, no hidden or control characters, no HTML comment. No kind performs an external effect, and no setting, door
 or argument can change the level. A new door states its level; one with none
 counts as 3, and a name that smells of a credential or of consent (token, key,
 secret, password, credential, remote, trust, gate, consent) must be level 3 or
@@ -320,12 +325,13 @@ curl -sS http://localhost:4000/control \
 | `project.picker`, `windows.switcher`, `bench.toggle` | — | the project picker, the window switcher, the bench |
 | `bench.file`, `peek.file` | `root`: absolute, `path`: under it | a file on the bench / in the viewer (reading) |
 | `bench.board` | `root`, `kind`: `pr`\|`tasks`\|`files` | a board as a bench tab |
-| `git.modal` | `which`: `insights`\|`bisect`\|`palette` | that modal of the Git view |
+| `git.modal` | `which`: `insights`\|`bisect`\|`palette` | that modal, over the current view (the view does not change) |
 | `git.compare`, `git.blame`, `git.rebase` | `base` (a ref), `path` (under the checkout), `base` | those modals. The rebase editor only draws the plan: nothing moves until the person presses Start |
 | `event.open` | `id`: a whole number | the event modal, for an event in the window's feed or the server's recent list (otherwise `ok:false`, "no recent event has that id") |
 | `session.open` | `id`, `app?` | the session modal |
 | `whatsnew.open` | — | the release notes of the running version; never marks them seen |
 | `lantern.schedule`, `terminal.resume` | — | the Lantern schedule dialog (a schedule exists only when the person submits it) and the Terminal's Resume sessions list |
+| `pr.unstick` (level 3, a `stage`) | `root`, `number` | the Unstick dialog on one pull request: close, reopen and sync one GitHub has lost track of. Opening runs nothing; the dialog says in words whether the pull request qualifies and only the person's confirm click closes it. Offered only when the owner allows level 3 |
 | `settings.plugin` | `name` | Settings on one plugin's page |
 | `pane.open` | `which`: `git`\|`diff`\|`pr`\|`card` | what the pane chords open for the focused terminal pane (`ok:false` when no pane has one) |
 | `chat.new`, `workspace.toggle`, `esc.peel` | as the old `chat`/`workspace`/`esc` | |
@@ -366,8 +372,12 @@ A `settings.set` is always answered, like a read: `{ok, applied, value:
 handle the chip offers (empty, with `unchanged: true`, when the setting already
 had that value). A refused value or an id that is not exposed is `{ok:false,
 applied:false, error}`, and the audit line then says failed. `settings.get` and
-`settings.list` answer with the value and the exposed list; a secret answers
-`{set:true}` and nothing else. (`ui.read settings.diff` and the other
+`settings.list` answer with the value and the exposed list. Each setting says
+the `type` it stores (`string`, `number` or `boolean`: a string setting whose
+value is digits, like a list of ids, is still a string, and `agentglass-ui`
+sends it as typed), and carries `display`, the value as a person would read it
+(a space's name, "on", "the spaces my cards live in"), next to the raw `value`
+you write back. A secret answers `{set:true}` and nothing else. (`ui.read settings.diff` and the other
 `settings.*` panels describe a pane read-only; `settings.get` is the one that
 pairs with `settings.set`.)
 
@@ -513,8 +523,7 @@ server can list tools only while the app is running.
 dialog (any component that draws through a `Portal`) without a registry entry (a
 `modals: [file]` on the entry that opens it) or a reasoned line in
 `NOT_AGENT_DOOR` fails `web/test/ui-registry-guard.test.ts`. Left out on purpose,
-each with its reason in that file: the merge dialog (it would stage a merge, which
-is level 3), the people picker (choosing writes an assignment), the Rescue modal
+each with its reason in that file: the people picker (choosing writes an assignment), the Rescue modal
 (it only exists inside the worktree-removal flow), and the menus and pickers that
 open from a click on a panel's own subject.
 

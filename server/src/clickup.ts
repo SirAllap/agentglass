@@ -16,6 +16,7 @@
  * unusual enough to be worth stating: ClickUp's personal tokens are sent bare,
  * and adding `Bearer` produces a 401 that looks exactly like a wrong token.
  */
+import { statusSpaces, type CardsRead, type StatusSpaces } from "../../shared/statusSpaces.ts";
 import { singleFlight } from "./singleflight.ts";
 import { cardIdDigits, mentionsCardId } from "../../shared/cardRef.ts";
 import { matchesQuery, mergeRequestNumber, readTaskRef } from "../../shared/taskref.ts";
@@ -248,6 +249,7 @@ interface RawTask {
   priority?: { priority?: string } | null;
   tags?: { name?: string }[];
   list?: { id?: string; name?: string } | null;
+  space?: { id?: string | number } | null;
   assignees?: { id?: string | number; username?: string; email?: string; initials?: string; color?: string; profilePicture?: string }[];
   locations?: { id?: string; name?: string }[];
   points?: number | null;
@@ -390,6 +392,7 @@ export function toTask(raw: RawTask, myId?: string): ProviderTask {
     tags: (raw.tags ?? []).map((t) => t.name ?? "").filter(Boolean),
     list: raw.list?.name ?? null,
     listId: raw.list?.id ? String(raw.list.id) : undefined,
+    ...(raw.space?.id ? { spaceId: String(raw.space.id) } : null),
     /* Free — it rides on the same response, on every endpoint that returns a
        task — and it is the difference between "this card is in Defects" and
        "this card is in Defects and in the two lists you actually work from". */
@@ -2268,6 +2271,26 @@ export async function listMembers(listId: string): Promise<CallResult<{ members:
 }
 
 /**
+ * Everybody in the workspace who can be put on a card, for a setting that names
+ * a person before any card is open. The workspace answer is the one the member
+ * picker already asks for and holds, so this is no new kind of request: zero
+ * when it is warm, one when it is not.
+ */
+export async function workspaceMembers(): Promise<CallResult<{ members: ListMember[] }>> {
+  const token = secretFor("clickup");
+  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  const me = redacted("clickup");
+  const team = await teamOnce(token);
+  if (!team.ok) return { ok: false, error: team.error, unauthorised: team.unauthorised };
+  const raw = (team.data?.teams ?? [])
+    .filter((t) => !me?.workspaceId || String(t.id) === me.workspaceId)
+    .flatMap((t) => (t.members ?? []).map((m) => m.user).filter((u): u is NonNullable<typeof u> => !!u));
+  const members = mergeMembers(raw, me?.accountId);
+  members.sort((a, b) => Number(!!b.me) - Number(!!a.me) || a.name.localeCompare(b.name));
+  return { ok: true, data: { members } };
+}
+
+/**
  * Put somebody on a card, or take them off.
  *
  * `assignSelf` did this for one person — you — because that was the whole
@@ -2311,13 +2334,21 @@ export async function setAssignee(taskId: string, userId: number, on: boolean, e
  */
 export async function setCard(
   taskId: string,
-  changes: { add?: number[]; rem?: number[]; status?: string },
+  changes: { add?: number[]; rem?: number[]; status?: string; addMe?: boolean },
   expectUpdated?: number,
 ): Promise<WriteOutcome> {
   const token = secretFor("clickup");
   if (!token) return { ok: false, error: "ClickUp is not connected" };
   if (!clickupWriteEnabled()) return { ok: false, error: "Writing to ClickUp is switched off" };
   const add = (changes.add ?? []).filter((n) => Number.isFinite(n));
+  /* "Whoever is pressing", answered here from the connected account: the page
+     would otherwise have to read the member list (up to three requests) only to
+     learn an id this side already holds. */
+  if (changes.addMe) {
+    const mine = Number(redacted("clickup")?.accountId);
+    if (!Number.isFinite(mine)) return { ok: false, error: "This ClickUp account has no id to assign" };
+    if (!add.includes(mine)) add.push(mine);
+  }
   const rem = (changes.rem ?? []).filter((n) => Number.isFinite(n));
   const status = (changes.status ?? "").trim();
   // A no-op is a mistake upstream, not a write: sending one dates somebody
@@ -3477,6 +3508,34 @@ export async function clickupSpaces(fresh = false): Promise<CallResult<{ spaces:
       })),
     },
   };
+}
+
+/** How long a settings read waits for the first look at the cards. ClickUp's own floor for that
+ *  query is ten to twelve seconds (see fetchTasks), so most of one is spent here and the rest comes
+ *  back as `pending`, which the page asks about again. */
+export const CARDS_WAIT_MS = 9_000;
+
+/**
+ * The same spaces, led by where this person's cards live — see `statusSpaces`.
+ *
+ * The cards are the assigned-to-me snapshot. When it already exists it is read from memory and
+ * nothing is asked. When it does not (the server has just started, nobody has opened the board) the
+ * answer is not "every space": it waits for the first look, which the board needs anyway, joins it
+ * if one is under way (single flight), and says `pending` if it is not back in `waitMs`. Nothing
+ * waits when the person has chosen their spaces: the cards then only order them.
+ */
+export async function clickupStatusSpaces(fresh = false, waitMs = CARDS_WAIT_MS): Promise<CallResult<StatusSpaces>> {
+  const r = await clickupSpaces(fresh);
+  if (!r.ok) return { ...r, data: undefined };
+  const chosen = clickupPrefs().statusSpaces.counted;
+  if (!clickupCached() && chosen.length === 0) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([clickupTasks().catch(() => null), new Promise((res) => { timer = setTimeout(res, waitMs); })]);
+    clearTimeout(timer);
+  }
+  const snapNow = clickupCached();
+  const read: CardsRead = !snapNow ? "loading" : snapNow.tasks.length ? "loaded" : "none";
+  return { ok: true, data: statusSpaces(r.data?.spaces ?? [], snapNow?.tasks ?? [], chosen, read) };
 }
 
 export interface ClickUpFolder {

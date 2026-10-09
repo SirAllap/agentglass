@@ -27,6 +27,7 @@
  * screen; the components below it are what connect.
  */
 import type { BoardKind } from "./boardHost.ts";
+import { announceHidden, BENCH_OWNER } from "./layerOwner.ts";
 
 /** `pr`, `tasks` and `files` are the boards, which are not this checkout's — they
  *  are the same board the view shows, moved here while this tab is on screen.
@@ -198,9 +199,13 @@ export function clampFab(f: { x: number; y: number }): { x: number; y: number } 
 let state: BenchState = read();
 
 function commit(next: BenchState): void {
+  const hidden = state.open && !next.open;
   state = next;
   try { localStorage.setItem(KEY, JSON.stringify(state)); } catch { /* non-fatal */ }
   for (const fn of listeners) fn();
+  /* Once, on the toggle itself: every menu, picker and dialog opened from in
+     here is a portal the window's opacity does not reach. See layerOwner.ts. */
+  if (hidden) announceHidden(BENCH_OWNER);
 }
 
 export const benchState = (): BenchState => state;

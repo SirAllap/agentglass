@@ -95,6 +95,25 @@ describe("the real registry at each level", () => {
     for (const l of LEVELS) expect(parseControlCmd({ cmd: "ui", do: "dialog.prepare", args: {} }, l)).toBeNull();
   });
 
+  test("pr.unstick, the first real stage entry: level 3 only, a number and a path, nothing else", () => {
+    const body = { cmd: "ui", do: "pr.unstick", args: { root: "/home/dev/orbit", number: 1042 } };
+    expect(UI_ACTIONS["pr.unstick"].level).toBe(3);
+    expect(UI_ACTIONS["pr.unstick"].kind).toBe("stage");
+    for (const l of [1, 2] as UiLevel[]) {
+      expect(parseControlCmd(body, l), `level ${l}`).toBeNull();
+      expect(ids(l)).not.toContain("pr.unstick");
+    }
+    expect(parseControlCmd(body, 3)).not.toBeNull();
+    expect(ids(3)).toContain("pr.unstick");
+    // No argument smuggles a verb in: an unknown one is dropped, and a negative number, a relative path,
+    // text where a number goes and a missing one are refused.
+    expect(parseControlCmd({ cmd: "ui", do: "pr.unstick", args: { ...body.args, run: true } }, 3)).toEqual(body as never);
+    for (const args of [
+      { root: "/home/dev/orbit", number: -1 },
+      { root: "orbit", number: 1 }, { root: "/home/dev/orbit", number: "1042; close" }, { root: "/home/dev/orbit" },
+    ]) expect(parseControlCmd({ cmd: "ui", do: "pr.unstick", args }, 3), JSON.stringify(args)).toBeNull();
+  });
+
   test("the old spellings obey the level too: a view is a look, a palette and a zoom persist and are level 2", () => {
     expect(parseControlCmd({ cmd: "view", to: "git" }, 1)).not.toBeNull();
     for (const old of [{ cmd: "theme", dir: 1 }, { cmd: "theme", name: "nord" }, { cmd: "zoom", dir: 1 }]) {

@@ -316,7 +316,7 @@ function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }:
       <button
         onClick={onClearFilter}
         className="ml-auto flex items-center gap-1 rounded-md px-2 py-0.5 font-semibold cursor-pointer"
-        style={{ color: "var(--bg2)", background: "var(--primary)" }}
+        style={{ color: "var(--on-primary)", background: "var(--primary)" }}
       >
         <span className="inline-flex items-center gap-1">Clear<CrossIcon size={ICON.xs} /></span>
       </button>

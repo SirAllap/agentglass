@@ -13,6 +13,7 @@
  * composer sits in clips whatever is drawn inside it.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCloseWithOwner } from "../../lib/layerOwner.ts";
 import { LAYER } from "../../lib/layers.ts";
 import { CATEGORIES, EMOJI, emojiOf, moveInGrid, popoverPlace, searchEmoji, type Anchor } from "../../lib/emojiData.ts";
 import { ICON, HIT } from "../../lib/iconSize.ts";
@@ -73,6 +74,7 @@ export function EmojiPicker({ anchor, recent, onPick, onClose }: {
 
   useEffect(() => { root.current?.querySelector("input")?.focus(); }, [place !== null]);
 
+  useCloseWithOwner(onClose, { from: anchor });
   useEffect(() => {
     const down = (e: MouseEvent) => {
       const t = e.target as Node;

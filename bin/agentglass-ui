@@ -12,6 +12,8 @@ registry of doors a Stream Deck button does (POST /control).
     agentglass-ui settings list                 # the settings an agent may read and write
     agentglass-ui settings get diff.wrap
     agentglass-ui settings set diff.wrap true   # the answer carries `prev`: set that back to undo
+    agentglass-ui stage pr.comment.stage --arg repo=acme/orbit --arg number=42 --arg body="Looks right."
+                                                # level 3: the comment box opens filled in; the person presses Comment
 
 Every answer is one JSON object on stdout, {"ok": true, ...} or
 {"ok": false, "error": "one sentence"}; the exit code is 0 when ok and 1
@@ -132,6 +134,10 @@ def coerce(spec, text):
         return None, "an absolute path"
     if t == "relpath" and (text.startswith("/") or not text):
         return None, "a path relative to the root"
+    if t == "repo" and not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}", text):
+        return None, "a repository as owner/name"
+    if t == "text" and (not text.strip() or len(text) > spec.get("max", 0)):
+        return None, f"non-empty text of at most {spec.get('max', 0)} characters"
     return text, None
 
 
@@ -202,10 +208,43 @@ def build_command(actions, level, id, given, as_name=None, label="cli", present=
     if present is not None:
         if present not in ("now", "quiet"):
             return None, "present is now or quiet"
-        if entry["kind"] != "open":
-            return None, f"{id} is a {entry['kind']}: only an open has a present mode (--now / --quiet)"
+        if entry["kind"] not in ("open", "stage"):
+            return None, f"{id} is a {entry['kind']}: only an open or a stage has a present mode (--now / --quiet)"
         body["present"] = present
     return body, None
+
+
+def setting_type(id, as_name=None, listing=None):
+    """What kind of value the app's setting `id` stores ("string", "number" or "boolean"), read
+    from settings.list; None when it cannot be told (no window, an older app, an unknown id).
+    The kind matters because a value arrives as text: "90170067734" is a number to look at and a
+    space id to the setting, and reading it as a number is what refused it."""
+    res = run_door("settings.list", {}, as_name, listing)
+    rows = res.get("value") if res.get("ok") else None
+    row = next((r for r in rows if isinstance(r, dict) and r.get("id") == id), None) if isinstance(rows, list) else None
+    t = row.get("type") if row else None
+    return t if t in ("string", "number", "boolean") else None
+
+
+def setting_value(id, value, as_name=None, listing=None):
+    """The value to send for `settings.set`. Text from the command line is read as true/false or a
+    number only when the setting stores one; a setting that stores a string gets it as typed, and
+    so does one whose kind could not be read (the app then judges it, as it always did)."""
+    if not isinstance(value, str):
+        return value
+    if setting_type(id, as_name, listing) == "string":
+        return value
+    return coerce({"t": "scalar"}, value)[0]
+
+
+def typed_given(id, given, as_name=None, listing=None):
+    """`given` as a caller that already holds typed values (MCP) should send it: a number for a
+    setting that stores text ("90170067734", a space id written without quotes) is that text.
+    Python keeps the whole integer, so nothing is lost on the way."""
+    v = given.get("value") if id == "settings.set" else None
+    if isinstance(v, int) and not isinstance(v, bool) and setting_type(given.get("id"), as_name, listing) == "string":
+        return {**given, "value": str(v)}
+    return given
 
 
 def _describe(spec):
@@ -213,7 +252,8 @@ def _describe(spec):
     if t in ("enum", "num"):
         return "one of " + ", ".join(str(v) for v in spec["values"])
     return {"bool": "true or false", "slug": "an id", "ref": "a git ref", "abspath": "an absolute path",
-            "relpath": "a relative path", "pathKind": "file or dir", "scalar": "a value", "int": "a whole number"}.get(t, "a value")
+            "relpath": "a relative path", "pathKind": "file or dir", "scalar": "a value", "int": "a whole number",
+            "repo": "a repository as owner/name", "text": "text"}.get(t, "a value")
 
 
 # ── answers: what the server said, as a sentence (pure) ─────────────────────
@@ -357,13 +397,19 @@ def main(argv=None):
                     help="show it at once: ONLY when the person just asked you to show them this")
     pm.add_argument("--quiet", action="store_true",
                     help="never raise the window or take the keyboard; wait behind a chip if the person is typing (the default)")
+    p = sub.add_parser("stage", help="prepare a dialog for the person to finish, by registry id (level 3): it opens filled in and sends nothing")
+    p.add_argument("id")
+    p.add_argument("--arg", "-a", action="append", default=[], metavar="NAME=VALUE")
+    pm = p.add_mutually_exclusive_group()
+    pm.add_argument("--now", action="store_true", help="open it at once: ONLY when the person just asked you to prepare this")
+    pm.add_argument("--quiet", action="store_true", help="wait behind a chip if the person is typing (the default)")
     p = sub.add_parser("settings", help="list, read or change the settings an agent may touch")
     ss = p.add_subparsers(dest="verb", required=True)
     ss.add_parser("list")
     ss.add_parser("get").add_argument("id")
     q = ss.add_parser("set")
     q.add_argument("id")
-    q.add_argument("value", help="true/false and numbers are read as such; anything else is text")
+    q.add_argument("value", help="true/false and numbers are read as such, unless the setting stores text (settings list says which); anything else is text")
     a = ap.parse_args(argv)
 
     if a.as_name and not NAME.match(a.as_name):
@@ -375,7 +421,7 @@ def main(argv=None):
         return emit(run_door("ui.state", {}, a.as_name))
     if a.cmd == "read":
         return emit(run_door("ui.read", {"panel": a.panel}, a.as_name))
-    if a.cmd == "open":
+    if a.cmd in ("open", "stage"):
         kv, why = parse_kv(a.arg)
         if why:
             print(f"agentglass-ui: {why}", file=sys.stderr)
@@ -385,9 +431,10 @@ def main(argv=None):
         if bad:
             return emit({"ok": False, "error": bad})
         entry = next((x for x in actions if x["id"] == a.id), None)
-        if entry is not None and entry["kind"] != "open":
-            verb = {"read": "`agentglass-ui state`, `read <panel>` or `settings get|list`", "change": "`agentglass-ui settings set`"}.get(entry["kind"], "its own verb")
-            return emit({"ok": False, "error": f"{a.id} is a {entry['kind']}, not an open: use {verb}"})
+        if entry is not None and entry["kind"] != a.cmd:
+            verb = {"read": "`agentglass-ui state`, `read <panel>` or `settings get|list`", "change": "`agentglass-ui settings set`",
+                    "open": "`agentglass-ui open`", "stage": "`agentglass-ui stage`"}.get(entry["kind"], "its own verb")
+            return emit({"ok": False, "error": f"{a.id} is a {entry['kind']}, not {'an' if a.cmd == 'open' else 'a'} {a.cmd}: use {verb}"})
         typed = {}
         for k, text in kv.items():
             spec = (entry or {}).get("args", {}).get(k)
@@ -405,8 +452,7 @@ def main(argv=None):
     if a.verb == "get":
         return emit(run_door("settings.get", {"id": a.id}, a.as_name))
     # A value starting with "-" would be read as an option; "--" before it is the way.
-    value, _ = coerce({"t": "scalar"}, a.value)
-    return emit(run_door("settings.set", {"id": a.id, "value": value}, a.as_name))
+    return emit(run_door("settings.set", {"id": a.id, "value": setting_value(a.id, a.value, a.as_name)}, a.as_name))
 
 
 if __name__ == "__main__":

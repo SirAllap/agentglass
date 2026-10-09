@@ -1,12 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useOwnedQuestion } from "../lib/layerOwner.ts";
+import { preparedLine, useStageHold } from "../lib/stageHold.ts";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { Select } from "./Select.tsx";
+import { listMembers } from "../lib/listMembers.ts";
+import { AssignPicker, useAskAssign } from "./AssignPicker.tsx";
+import { hasExtras, planOf } from "../../../shared/stepBlocks.ts";
+import { AskedExtras } from "./AskedExtras.tsx";
+import { prContext, type ExtraItem } from "../lib/stepExtras.ts";
 import { StatusPill } from "./StatusPill.tsx";
 import { Spinner } from "./Spinner.tsx";
 import { MERGE_OPTION, mergeBody, mergeSubject, type MergeMethod, type MergeCommit } from "../../../shared/mergeMethod.ts";
 import { LEAVE_ALONE, mergePreselect, movesCard, statusColor, statusOptions, type CardMove } from "../lib/cardMove.ts";
 import { useClickupPrefs } from "../lib/clickupPrefs.ts";
+import { resolveEnsure, stepChanges, type CardWrite, type Ensure, type PrAuthor } from "../lib/stepAssign.ts";
 import { api } from "../lib/api.ts";
 import { __forgetClickupSetup } from "../lib/clickupSetup.ts";
 import { MOD_KEY } from "../lib/format.ts";
@@ -42,6 +50,8 @@ import { INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 
 export type MergeSpec = {
   number: number;
+  /** The pull request's address, for a comment's {pr_url}. */
+  url?: string;
   title: string;
   method: MergeMethod;
   baseRefName: string;
@@ -54,6 +64,8 @@ export type MergeSpec = {
    *  dialog resolves it against ClickUp itself, because the panel should not
    *  pay a round trip before it can open. */
   card?: { label: string; query: string } | null;
+  /** Who opened the pull request, for the merge option's "Also assign: the pull request's author". */
+  author?: PrAuthor | null;
   /**
    * Who was asked for a review and has not answered.
    *
@@ -76,6 +88,11 @@ export type MergeSpec = {
    *  built from it alone told the reader a bot had signed off on a pull request
    *  no one had looked at. */
   botApproved?: boolean;
+  /** Set when an agent staged this merge: the text it wrote and the name it gave
+   *  itself. The fields open on it, editable, under a "prepared by" line, and the
+   *  merge button (and the chord) stay dead for a moment. Nothing merges until the
+   *  person presses it; the method on the spec is the one the agent named. */
+  prefill?: { by: string; subject?: string; body?: string };
 };
 
 /** What the dialog resolves to. `null` is a cancel. */
@@ -83,9 +100,17 @@ export type MergeChoice = {
   subject?: string;
   body?: string;
   deleteBranch: boolean;
+  /** A step's comment and fields, as the dialog showed them, to send after the merge (each is a request of its own). */
+  extras?: { id: string; label: string; items: ExtraItem[] };
   /** Set only when a status other than the card's own was picked. Absent means
    *  "leave the board alone", which is what the dialog opens on. */
-  card?: { id: string; label: string; to: string; updated: number };
+  card?: {
+    id: string; label: string; to: string; updated: number;
+    /** What "Also assign" adds to the status write. Absent: the status alone is sent, as before. */
+    write?: CardWrite;
+    /** Said after the write: who was put on, and why nobody was when the author could not be told. */
+    note?: string;
+  };
 };
 
 type Pending = MergeSpec & { resolve: (v: MergeChoice | null) => void };
@@ -117,8 +142,23 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
   const mergePrefs = useClickupPrefs()?.merge;
   const mergeOn = mergePrefs?.enabled === true;
   const mergeNames = mergePrefs?.statusNames.join("\u0000") ?? "";
+  const mergeAssign = mergePrefs?.assign;
+  const assignKey = JSON.stringify(mergeAssign ?? null);
+  /* Who "Also assign" means for this card, worked out while the form opens so the press itself is one write. */
+  const [fixedEnsure, setEnsure] = useState<Ensure>({ kind: "none" });
+  /* An assign block that asks when it runs: the picker starts where Settings says and the person chooses here. */
+  const askAssign = mergePrefs ? planOf("merge", mergePrefs).askAssign : null;
+  const readyCard = card.kind === "ready" ? card.card : null;
+  const asked = useAskAssign({ on: mergeOn && !!askAssign && !!readyCard, ...(readyCard?.listId ? { listId: readyCard.listId } : null), ...(askAssign ? { start: askAssign } : null), author: pending?.author ?? null, onCard: readyCard?.people });
+  const ensure: Ensure = askAssign ? asked.ensure : fixedEnsure;
+  /* A comment or a field: shown here, asked where it asks, sent after the merge. */
+  const [extraItems, setExtraItems] = useState<ExtraItem[]>([]);
+  useEffect(() => { setExtraItems([]); }, [pending]);
+  const mergeExtras = !!mergePrefs && mergeOn && hasExtras(planOf("merge", mergePrefs));
   const subjectRef = useRef<HTMLInputElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
   const rebase = pending?.method === "rebase";
+  const held = useStageHold(!!pending?.prefill, pending);
 
   // The commits are what a squash quotes, and the count is what the header
   // states. Computed once per question rather than per keystroke.
@@ -126,13 +166,19 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
 
   useEffect(() => {
     if (!pending) return;
-    setSubject(mergeSubject(pending.method, pending) ?? "");
-    setBody(mergeBody(pending.method, pending, pending.commits) ?? "");
+    setSubject(pending.prefill?.subject ?? mergeSubject(pending.method, pending) ?? "");
+    setBody(pending.prefill?.body ?? mergeBody(pending.method, pending, pending.commits) ?? "");
     // Only offered when the repository is not already doing it — and then on
     // by default, which is what this app has always done. The difference is
     // that now it says so.
     setDeleteBranch(!pending.repoDeletesBranch);
-    const t = setTimeout(() => { subjectRef.current?.focus(); subjectRef.current?.select(); }, 40);
+    // A prepared dialog opens on Cancel: the subject is the agent's to be read, and a
+    // selected subject is one keystroke from being replaced by whatever the person
+    // was typing when it arrived.
+    const t = setTimeout(() => {
+      if (pending.prefill) { cancelRef.current?.focus(); return; }
+      subjectRef.current?.focus(); subjectRef.current?.select();
+    }, 40);
     return () => clearTimeout(t);
   }, [pending]);
 
@@ -159,12 +205,20 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
       if (!alive()) return;
       const task = found?.ok ? found.task : undefined;
       if (!task) { setCard({ kind: "failed", why: found?.error || "ClickUp could not find it" }); return; }
-      const meta = task.listId ? await api.clickupList(task.listId).catch(() => null) : null;
+      /* The team is read only for the author choice, and from the list the server already
+         holds members for; "me" and a named person need no read at all. */
+      const [meta, team] = await Promise.all([
+        task.listId ? api.clickupList(task.listId).catch(() => null) : null,
+        mergeAssign?.who === "author" && task.listId ? listMembers(task.listId).catch(() => null) : null,
+      ]);
       if (!alive()) return;
+      setEnsure(resolveEnsure(mergeAssign, { author: pending?.author, members: team?.ok ? (team.members ?? []) : null }));
       const move: CardMove = {
-        id: task.id, label: ref.label, title: task.title,
+        id: task.id, label: ref.label, title: task.title, ...(task.listId ? { listId: task.listId } : null),
         status: task.status, statusColor: task.statusColor, updated: task.updated,
         statuses: meta?.ok ? (meta.statuses ?? []) : [],
+        ...(meta?.ok && meta.fields ? { fields: meta.fields } : null),
+        people: task.people ?? [],
       };
       setStatus(mergePreselect(move.statuses, move.status, mergeNames ? mergeNames.split("\u0000") : []));
       // Read-only is not a failure and not a thing to hide: the card and where
@@ -182,7 +236,7 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
     void lookUp(ref, () => live);
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pending, mergeOn, mergeNames]);
+  }, [pending, mergeOn, mergeNames, assignKey]);
 
   /**
    * Turn ClickUp writes on from here.
@@ -206,12 +260,21 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
    *  The card travels only when the pick actually moves it — see movesCard. */
   const answer = (): MergeChoice => {
     const on = card.kind === "ready" ? card.card : null;
+    const moves = !!on && movesCard(on.status, status);
+    /* Only when the card actually moves: the assignment rides on the move, never on its own. */
+    const plan = moves ? stepChanges({ status, people: on.people, unassign: "none", ensure }) : null;
+    const note = plan?.named ? `assigned ${plan.named}` : ensure.kind === "unmapped" ? ensure.why : undefined;
     return {
       subject: rebase ? undefined : subject.trim() || undefined,
       body: rebase ? undefined : body.trim() || undefined,
       deleteBranch,
-      card: on && movesCard(on.status, status)
-        ? { id: on.id, label: on.label, to: status, updated: on.updated }
+      ...(on && extraItems.length ? { extras: { id: on.id, label: on.label, items: extraItems } } : null),
+      card: on && moves
+        ? {
+          id: on.id, label: on.label, to: status, updated: on.updated,
+          ...(plan?.named ? { write: plan.write } : null),
+          ...(note ? { note } : null),
+        }
         : undefined,
     };
   };
@@ -226,14 +289,14 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
       // box uses, and it works from anywhere in the dialog.
       if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault(); e.stopPropagation();
-        if (rebase || subject.trim()) submit();
+        if (!held && (rebase || subject.trim())) submit();
       }
     };
     // Capture, because the panel's single-letter shortcuts listen on window
     // too and a dialog owns the keyboard until it is answered.
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [pending, subject, body, deleteBranch, rebase, card, status]);
+  }, [pending, subject, body, deleteBranch, rebase, card, status, ensure, held]);
 
   const how = pending ? MERGE_OPTION[pending.method] : null;
 
@@ -276,6 +339,11 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
                   <Ref>{pending.baseRefName}</Ref>
                 </div>
               </div>
+
+              {pending.prefill && (
+                <div className="px-4 py-2 text-[11.5px]" data-prepared-by="" role="status"
+                  style={{ color: "var(--warning-ink)", borderBottom: LINE }}>{preparedLine(pending.prefill.by)}</div>
+              )}
 
               {(pending.awaitingReview?.length ?? 0) > 0 && (
                 <div className="px-4 py-2.5 text-[11.5px] leading-relaxed flex items-start gap-2"
@@ -380,11 +448,9 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
                         )}
                         {card.kind === "readonly" ? (
                           <>
-                            <select disabled value={LEAVE_ALONE} title="This app is read-only on ClickUp"
-                              className="text-[11px] px-2 py-1 rounded outline-none opacity-50"
-                              style={FIELD}>
-                              <option value={LEAVE_ALONE}>Leave it there</option>
-                            </select>
+                            <Select disabled value={LEAVE_ALONE} onChange={() => {}} title="This app is read-only on ClickUp"
+                              className="text-[11px]" style={FIELD}
+                              options={[{ value: LEAVE_ALONE, label: "Leave it there" }]} />
                             <button onClick={allowWrites}
                               title="Let this app change cards on your ClickUp board. The same switch the Tasks panel owns."
                               className="text-[10.5px] px-2 py-1 rounded"
@@ -421,6 +487,23 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
                             ]}
                           />
                         )}
+                        {card.kind === "ready" && mergeExtras && (
+                          <div className="basis-full">
+                            <AskedExtras blocks={mergePrefs?.blocks ?? []} fields={card.card.fields ?? null} listId={card.card.listId} onChange={setExtraItems}
+                              ctx={prContext({ pr: { number: pending.number, title: pending.title, ...(pending.url ? { url: pending.url } : null) }, author: pending.author, status: movesCard(card.card.status, status) ? status : card.card.status })} />
+                          </div>
+                        )}
+                        {card.kind === "ready" && movesCard(card.card.status, status) && askAssign && (
+                          <span className="basis-full flex items-center gap-2 text-[10.5px]" data-merge-ask="" style={{ color: "var(--text3)" }}>
+                            <span>Assign to</span><AssignPicker state={asked} label="Assign to" />
+                          </span>
+                        )}
+                        {card.kind === "ready" && movesCard(card.card.status, status) && ensure.kind !== "none" && (
+                          <span className="basis-full text-[10.5px]" data-merge-assign="" role="status"
+                            style={{ color: ensure.kind === "unmapped" ? "var(--warning-ink)" : "var(--text3)" }}>
+                            {ensure.kind === "unmapped" ? ensure.why : assignLine(ensure, card.card.people)}
+                          </span>
+                        )}
                       </div>
                     )}
                   </div>
@@ -430,14 +513,14 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
               <div className="px-4 py-2.5 flex items-center gap-2" style={{ borderTop: LINE }}>
                 <span className="text-[10px]" style={{ color: "var(--text4)" }}>{MOD_KEY}↵ to confirm · Esc to cancel</span>
                 <span className="ml-auto flex items-center gap-2">
-                  <button onClick={() => pending.resolve(null)}
+                  <button ref={cancelRef} onClick={() => pending.resolve(null)}
                     className="text-[11px] px-2.5 py-1 rounded"
                     style={{ color: "var(--text2)", border: EDGE }}>Cancel</button>
                   <button
                     onClick={() => pending.resolve(answer())}
-                    disabled={!rebase && !subject.trim()}
+                    disabled={(!rebase && !subject.trim()) || held}
                     className="text-[11px] px-2.5 py-1 rounded font-medium disabled:opacity-40"
-                    style={{ color: "var(--bg)", background: "var(--primary)" }}>{how.label}</button>
+                    style={{ color: "var(--on-primary)", background: "var(--primary)" }}>{how.label}</button>
                 </span>
               </div>
             </motion.div>
@@ -446,6 +529,17 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
       )}
     </AnimatePresence>
   );
+}
+
+/** What the move will do about "Also assign", said before it is pressed. */
+function assignLine(e: Ensure, people: { id?: number | null; me?: boolean }[] | undefined): string {
+  if (e.kind === "me") return people?.some((p) => p.me) ? "You are already on the card." : "and puts you on the card.";
+  if (e.kind === "person") return people?.some((p) => p.id === e.id) ? `${e.name} is already on the card.` : `and puts ${e.name} on the card.`;
+  if (e.kind === "many") {
+    const missing = e.list.filter((x) => (x.kind === "me" ? !people?.some((p) => p.me) : !people?.some((p) => p.id === x.id))).map((x) => (x.kind === "me" ? "you" : x.name));
+    return missing.length ? `and puts ${missing.length === 1 ? missing[0] : `${missing.slice(0, -1).join(", ")} and ${missing[missing.length - 1]}`} on the card.` : "Everyone picked is already on the card.";
+  }
+  return "";
 }
 
 /** A branch name, set in the code face so it cannot be mistaken for prose —
@@ -475,8 +569,17 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
  */
 export function useMergeDialog() {
   const [pending, setPending] = useState<Pending | null>(null);
+  const open = useRef<Pending | null>(null);
+  // Cancelled, never merged, when the bench it was asked from is hidden.
+  const noteAsker = useOwnedQuestion(pending, () => open.current?.resolve(null));
   const askMerge = (spec: MergeSpec): Promise<MergeChoice | null> =>
-    new Promise<MergeChoice | null>((resolve) =>
-      setPending({ ...spec, resolve: (v) => { setPending(null); resolve(v); } }));
-  return { askMerge, dialog: <MergeDialog pending={pending} /> };
+    new Promise<MergeChoice | null>((resolve) => {
+      // A question on screen is answered "no" before another takes its place.
+      open.current?.resolve(null);
+      noteAsker();
+      const next: Pending = { ...spec, resolve: (v) => { open.current = null; setPending(null); resolve(v); } };
+      open.current = next;
+      setPending(next);
+    });
+  return { askMerge, open: pending !== null, dialog: <MergeDialog pending={pending} /> };
 }

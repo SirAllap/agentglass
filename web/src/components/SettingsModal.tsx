@@ -782,8 +782,8 @@ function MiniBtn({ label, disabled, onClick, children }: { settingId?: string; a
 /** Panes whose content is a grid of cards, not a column of rows. */
 const WIDE_PANES = new Map<string, string>([
   ["plugins", "1180px"],
-  /* The workflow map is three columns (steps, the lines, the statuses) and needs this much to keep a sentence on two lines. */
-  ["clickup", "980px"],
+  /* The workflow map is a column of step cards beside a column of statuses, with the lines running between them; this is the width that keeps a card's header on two lines. */
+  ["clickup", "1100px"],
 ]);
 
 const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -1189,6 +1189,7 @@ const VERBS: Record<string, string> = {
   "/docker/start": "started container", "/docker/stop": "stopped container",
   "/docker/restart": "restarted container", "/docker/rm": "removed container",
   "/prs/merge": "merged pull request", "/prs/close": "closed pull request",
+  "/prs/unstick-close": "closed (unstick) pull request", "/prs/unstick-reopen": "reopened (unstick) pull request",
   "/prs/review": "reviewed", "/prs/comment": "commented on",
   "/prs/rerun": "re-ran the checks on", "/prs/draft": "changed draft state of",
   "/chat/send": "started a chat in",

@@ -37,6 +37,8 @@ import type {
 import { CARD_PEOPLE_MAX } from "../../shared/cardPeople.ts";
 import { cardIdIn } from "../../shared/cardRef.ts";
 import { hasCredential } from "./credentials.ts";
+import { problemFromSummary, STATUS_SUMMARY_URL, type GithubProblem } from "../../shared/githubStatus.ts";
+import { factsOf, unstickLive, NO_WORDS, type Look } from "../../shared/unstick.ts";
 
 /** Same escape hatch the git writes use, so one variable disables both. */
 const WRITE_ENABLED = process.env.AGENTGLASS_GIT_WRITE_DISABLED !== "1";
@@ -454,7 +456,7 @@ const ROLLUP_TTL_MS = 30_000;
 
 const BEHIND_TTL_MS = 60_000;
 
-export async function branchBehind(root: string, number: number, fresh = false): Promise<{ ok: boolean; behind?: number; ahead?: number; local?: PrLocalHead; error?: string }> {
+export async function branchBehind(root: string, number: number, fresh = false): Promise<{ ok: boolean; behind?: number; ahead?: number; local?: PrLocalHead; refSha?: string; error?: string }> {
   const id = await repoIdFor(root);
   if (!id) return { ok: false, error: "no GitHub remote here" };
   const pr = await prBranches(root, number);
@@ -474,7 +476,10 @@ export async function branchBehind(root: string, number: number, fresh = false):
   // milliseconds on a call the panel already makes, rather than a second round
   // trip for the one thing the button was never telling anybody.
   const local = await localHead(root, pr.head);
-  return { ok: true, behind: Number(cmp.behind_by ?? 0), ahead: Number(cmp.ahead_by ?? 0), local };
+  /* Where the branch really is on GitHub (git only, no API budget). The pull
+     request can lag behind it after an Update branch; the panel compares. */
+  const refSha = (await remoteHeadOf(root, pr.head)) ?? undefined;
+  return { ok: true, behind: Number(cmp.behind_by ?? 0), ahead: Number(cmp.ahead_by ?? 0), local, refSha };
 }
 
 /** The upstream this branch tracks, as a remote name and the ref that follows
@@ -3076,7 +3081,7 @@ export const DETAIL_QUERY = `query($owner:String!,$name:String!,$number:Int!){
     baseRefName headRefName body
     headRepositoryOwner{login}
     mergeable mergeStateStatus reviewDecision viewerDidAuthor viewerCanUpdate
-    author{login}
+    author{login ... on User{name email}}
     mergedBy{login}
     reactionGroups{content viewerHasReacted users{totalCount}}
     labels(first:50){nodes{name color}}
@@ -3673,6 +3678,8 @@ async function readDetail(rootIn: unknown, number: number, repo: PrRepoId, key: 
     number: p.number,
     title: p.title || "",
     author: p.author?.login || "",
+    ...(p.author?.name ? { authorName: String(p.author.name) } : null),
+    ...(p.author?.email ? { authorEmail: String(p.author.email) } : null),
     state: p.state,
     isDraft: !!p.isDraft,
     headRefName: p.headRefName || "",
@@ -4706,6 +4713,12 @@ export function updateBranchRefusal(raw: string): PrActionResult | null {
   // Only the word "conflict" earns the mark: the mark takes the update and
   // merge buttons away, and "not mergeable" is not sure enough of the reason
   // to do that — it keeps the better sentence and nothing else.
+  // GitHub already moved the branch and its pull request has not followed, so
+  // the head the request names is no longer the branch's: the raw GraphQL text
+  // ("head sha didn't match the current head ref") reads as a bug in the app.
+  if (/head sha didn'?t match|current head ref/i.test(raw)) {
+    return { ok: false, prLagging: true, error: "GitHub updated the branch but the pull request has not caught up yet. Updating again would be refused until it does." };
+  }
   if (/conflict/i.test(raw)) return { ok: false, conflict: true, error: conflicts };
   if (/mergeable/i.test(raw)) return { ok: false, error: conflicts };
   if (/lock|protect|not authoriz|forbidden|permission|\b403\b/i.test(raw)) {
@@ -4717,16 +4730,80 @@ export function updateBranchRefusal(raw: string): PrActionResult | null {
 /** Merge the base into the PR branch — the button whose absence is why half a
  *  branch list carries hand-made "Merge origin/master into …" commits. */
 export async function updateBranch(rootIn: unknown, number: unknown, syncLocal?: unknown): Promise<PrActionResult> {
-  const r = await runPr(rootIn, Number(number), ["pr", "update-branch", String(Number(number))]);
-  if (!r.ok) return updateBranchRefusal(r.error || "") ?? r;
-  if (!(syncLocal === true || syncLocal === "true")) return r;
   const abs = safeAbs(rootIn);
   const root = abs ? repoRootOf(abs) : null;
-  if (!root) return r;
+  const wantLocal = syncLocal === true || syncLocal === "true";
+  /* The head GitHub has now, read from git (`ls-remote`: no API budget) before
+     asking. `gh pr update-branch` answers 202 — queued — and the merge can then
+     not happen at all, so "ok" says nothing about the branch having moved. */
+  const pr = root ? await prBranches(root, Number(number)) : null;
+  const before = root && pr ? await remoteHeadOf(root, pr.head) : null;
+  const r = await runPr(rootIn, Number(number), ["pr", "update-branch", String(Number(number))]);
+  if (!r.ok) return updateBranchRefusal(r.error || "") ?? r;
+  let landed: UpdateLanded = "unknown";
+  if (root && pr && before) {
+    landed = updateLanded(before, await remoteHeadOf(root, pr.head));
+    if (landed === "unmoved") {
+      // Once more after a moment: the usual queue time is a second or two.
+      await new Promise((res) => setTimeout(res, 3000));
+      landed = updateLanded(before, await remoteHeadOf(root, pr.head));
+    }
+  }
+  if (landed === "unmoved") {
+    return { ...r, requested: true, detail: "Update requested — GitHub has not moved the branch yet. Your local copy was left as it is." };
+  }
+  if (!wantLocal || !root) return r;
   /* "Synced" first, because what somebody wants to know is whether it worked;
      the two halves follow, in the order they happened. The old wording opened
-     with "updated on GitHub", which reads as a report rather than an answer. */
+     with "updated on GitHub", which reads as a report rather than an answer.
+     It also said so, and fast-forwarded, straight after the 202, when nothing
+     had moved: "your local branch moved up too" over a branch that did not. */
   return { ...r, detail: `Synced — updated on GitHub, and ${await syncLocalHead(root, Number(number))}` };
+}
+
+/**
+ * GitHub's own status page, for a pull request whose mergeability will not
+ * settle. Asked only on demand (the panel asks once it has been stuck for a
+ * while), and at most once per STATUS_TTL_MS whatever the number of askers or
+ * pull requests: a failure is kept for as long as an answer, so being offline
+ * costs one attempt per window, not one per look. No credentials, no cookies.
+ */
+const STATUS_TTL_MS = 10 * 60_000;
+let statusMemo: { at: number; problem: GithubProblem | null } | null = null;
+export const __resetStatusMemo = () => { statusMemo = null; };
+
+export async function githubStatusCached(
+  now = Date.now(),
+  fetcher: (url: string, init: { signal: AbortSignal; headers: Record<string, string> }) => Promise<{ ok: boolean; json(): Promise<unknown> }> = fetch,
+): Promise<{ ok: true; problem: GithubProblem | null; cached: boolean }> {
+  if (statusMemo && now - statusMemo.at < STATUS_TTL_MS) return { ok: true, problem: statusMemo.problem, cached: true };
+  let problem: GithubProblem | null = null;
+  try {
+    const res = await fetcher(STATUS_SUMMARY_URL, { signal: AbortSignal.timeout(5_000), headers: { accept: "application/json", "user-agent": "agentglass" } });
+    if (res.ok) problem = problemFromSummary(await res.json());
+  } catch { /* offline or blocked: no news is not a problem */ }
+  statusMemo = { at: now, problem };
+  return { ok: true, problem, cached: false };
+}
+
+export type UpdateLanded = "moved" | "unmoved" | "unknown";
+
+/** Whether the remote head changed between two reads. Either read failing is
+ *  "unknown", never "unmoved": a failed read is not evidence the merge did not happen. */
+export function updateLanded(before: string | null, after: string | null): UpdateLanded {
+  if (!before || !after) return "unknown";
+  return before === after ? "unmoved" : "moved";
+}
+
+/** The sha of a branch on the remote it tracks, or null when that cannot be read. */
+async function remoteHeadOf(root: string, branch: string): Promise<string | null> {
+  // No upstream (a branch fetched by somebody else's tooling): origin is the guess.
+  const up = await upstreamOf(root, branch);
+  const remote = up?.remote ?? "origin";
+  const name = up?.remoteBranch ?? branch;
+  const r = await gitAsync(root, ["ls-remote", remote, `refs/heads/${name}`]);
+  const sha = r.code === 0 ? r.stdout.trim().split(/\s+/)[0] : "";
+  return sha && /^[0-9a-f]{40}$/.test(sha) ? sha : null;
 }
 
 /**
@@ -5203,6 +5280,82 @@ export async function mergePr(rootIn: unknown, number: unknown, method: unknown,
 
 export async function closePr(rootIn: unknown, number: unknown, reopen = false): Promise<PrActionResult> {
   return runPr(rootIn, Number(number), ["pr", reopen ? "reopen" : "close", String(Number(number))]);
+}
+
+// ---------------------------------------------------------------------------
+// Unstick: close, reopen, sync (shared/unstick.ts says when and why)
+// ---------------------------------------------------------------------------
+
+/* The cheap read the run polls with: one GraphQL point, no check or review detail.
+   `headRef` is the branch as it is on GitHub right now (null when the branch is
+   gone), `headRefOid` is the head the pull request still points at. */
+const UNSTICK_LOOK_QUERY = `query($owner:String!,$name:String!,$number:Int!){
+  repository(owner:$owner,name:$name){pullRequest(number:$number){state mergeStateStatus headRefOid headRef{target{oid}}}}
+}`;
+
+export interface UnstickServerDeps {
+  look(rootIn: unknown, number: number, full: boolean): Promise<UnstickLook>;
+  act(rootIn: unknown, number: number, reopen: boolean): Promise<PrActionResult>;
+}
+export type UnstickLook = Look;
+
+/** One fresh read. `full` adds the facts the gate needs, taken from the same detail the panel shows. */
+export async function unstickLook(rootIn: unknown, number: number, full: boolean): Promise<UnstickLook> {
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
+  const light = await ghJson<any>(["api", "graphql", "-f", `query=${UNSTICK_LOOK_QUERY}`,
+    "-F", `owner=${repo.owner}`, "-F", `name=${repo.name}`, "-F", `number=${number}`]);
+  const pr = light?.data?.repository?.pullRequest;
+  if (!pr || typeof pr.state !== "string") return { ok: false, error: "GitHub did not answer" };
+  const refSha: string | null = typeof pr.headRef?.target?.oid === "string" ? pr.headRef.target.oid : null;
+  const base = { ok: true as const, state: pr.state as string, headSha: String(pr.headRefOid ?? ""), refSha, mergeState: String(pr.mergeStateStatus ?? "") };
+  if (!full) return base;
+  const det = await prDetail(rootIn, number, true);
+  if (!det.ok || !det.detail) return { ok: false, error: det.error || "could not read the pull request" };
+  /* The detail's own head and mergeability would be a second opinion on the same
+     facts; the light read just taken is the fresher of the two, so it wins. */
+  const facts = factsOf({ ...det.detail, headSha: base.headSha || det.detail.headSha, mergeState: base.mergeState || det.detail.mergeState, state: base.state }, refSha, repo.owner);
+  return { ...base, facts };
+}
+
+const unstickDefaults: UnstickServerDeps = {
+  look: unstickLook,
+  act: (rootIn, number, reopen) => closePr(rootIn, number, reopen),
+};
+
+/**
+ * Close, for Unstick only. The server asks GitHub again and runs the same hard
+ * list the panel ran, because the panel's copy can be minutes old and a close
+ * fires automations somewhere else. Refusals are sentences, and nothing is called
+ * before they pass.
+ */
+export async function unstickClose(rootIn: unknown, numberIn: unknown, deps: UnstickServerDeps = unstickDefaults): Promise<PrActionResult> {
+  const number = Number(numberIn);
+  if (!Number.isInteger(number) || number <= 0) return { ok: false, error: "invalid pull request number" };
+  const g = writeGuard(rootIn); if (g) return g;
+  const look = await deps.look(rootIn, number, true);
+  if (!look.ok) return { ok: false, error: `could not read the pull request, so nothing was closed: ${look.error}` };
+  if (!look.facts) return { ok: false, error: "GitHub did not give the details needed to check it, so nothing was closed" };
+  const live = unstickLive(look.facts);
+  if (!live.ok) return { ok: false, error: `${NO_WORDS[live.reason]} Nothing was closed.` };
+  return deps.act(rootIn, number, false);
+}
+
+/**
+ * Reopen, for Unstick only: the pull request must be closed (not merged) and its
+ * branch must still exist, or the reopen is refused with the reason and nothing is
+ * called. Reopening is also the recovery when a run stopped after the close.
+ */
+export async function unstickReopen(rootIn: unknown, numberIn: unknown, deps: UnstickServerDeps = unstickDefaults): Promise<PrActionResult> {
+  const number = Number(numberIn);
+  if (!Number.isInteger(number) || number <= 0) return { ok: false, error: "invalid pull request number" };
+  const g = writeGuard(rootIn); if (g) return g;
+  const look = await deps.look(rootIn, number, false);
+  if (!look.ok) return { ok: false, error: `could not read the pull request, so nothing was reopened: ${look.error}` };
+  if (look.state === "MERGED") return { ok: false, error: "the pull request is merged; it cannot be reopened" };
+  if (look.state === "OPEN") return { ok: true, detail: "already open", at: Date.now() };
+  if (!look.refSha) return { ok: false, error: "the branch is gone from GitHub, so the pull request cannot be reopened" };
+  return deps.act(rootIn, number, true);
 }
 
 // ---------------------------------------------------------------------------

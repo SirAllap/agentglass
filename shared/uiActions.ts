@@ -56,6 +56,11 @@ export const MACHINE_TABS = ["ports", "resources", "locks"] as const;
 export const GIT_MODALS = ["insights", "bisect", "palette"] as const;
 export const BOARD_KINDS = ["pr", "tasks", "files"] as const;
 export const PANE_DOORS = ["git", "diff", "pr", "card"] as const;
+export const STAGE_MERGE_METHODS = ["squash", "merge", "rebase"] as const;
+export const STAGE_REVIEW_VERDICTS = ["approve", "request_changes", "comment"] as const;
+/** The longest staged body: a commit message or a comment, never a document. */
+export const STAGE_BODY_MAX = 8000;
+export const STAGE_SUBJECT_MAX = 256;
 /**
  * What `ui.read` can be asked about. Each one has exactly one provider in
  * web/src/lib/uiSnapshots.ts, keyed by these ids, so a panel named here with no
@@ -119,6 +124,14 @@ export type ArgSpec =
   | { t: "int"; max: number; optional?: true }
   | { t: "abspath"; optional?: true }
   | { t: "relpath"; optional?: true }
+  /** A repository as GitHub spells it, `owner/name`. Spelling only, like a path. */
+  | { t: "repo"; optional?: true }
+  /** Text a person will read and may edit before it goes anywhere: a commit
+   *  message, a comment. Bounded, one line when `line`, and free of what hides:
+   *  no control character but a newline and a tab, no bidirectional or
+   *  zero-width character, no HTML comment (GitHub does not draw one, so it
+   *  would be text the sender sees and the person does not). */
+  | { t: "text"; max: number; line?: true; optional?: true }
   /** Whether another argument's absolute path is a folder: said by the caller
    *  as "file" or "dir", else read from the spelling (a trailing slash). A
    *  validated command carries it already, so the window's second look over a
@@ -155,6 +168,11 @@ interface UiActionBody {
 }
 
 const def = <const D extends UiActionDef>(d: D): D => d;
+
+// A pull request's number: a whole number from 1. `int` starts at 0, so the
+// entries that take one refuse 0 in `refine`.
+const PR_NUMBER = { t: "int", max: 999_999_999 } as const;
+const prNumberOk = (a: Record<string, unknown>): Record<string, unknown> | null => ((a.number as number) >= 1 ? a : null);
 
 export const UI_ACTIONS = {
   "view.open": def({ level: 1, kind: "open", surface: "a workspace view", legacy: { cmd: "view" }, args: { to: { t: "enum", values: VIEW_IDS } } }),
@@ -203,7 +221,7 @@ export const UI_ACTIONS = {
   "bench.file": def({ level: 1, kind: "open", surface: "a file on the bench, read-write as the bench always is", args: { root: { t: "abspath" }, path: { t: "relpath" } } }),
   "bench.board": def({ level: 1, kind: "open", surface: "a board (pull requests, tasks, files) as a bench tab", args: { root: { t: "abspath" }, kind: { t: "enum", values: BOARD_KINDS } } }),
   "peek.file": def({ modals: ["PeekFile.tsx"], level: 1, kind: "open", surface: "the file viewer, reading", args: { root: { t: "abspath" }, path: { t: "relpath" } } }),
-  "git.modal": def({ modals: ["InsightsModal.tsx", "BisectModal.tsx", "GitPalette.tsx"], level: 1, kind: "open", surface: "Insights, Bisect or the git command palette over the checkout the Git view is on", args: { which: { t: "enum", values: GIT_MODALS } } }),
+  "git.modal": def({ modals: ["InsightsModal.tsx", "BisectModal.tsx", "GitPalette.tsx", "GitPanel.tsx"], level: 1, kind: "open", surface: "Insights, Bisect or the git command palette over the checkout the Git view is on", args: { which: { t: "enum", values: GIT_MODALS } } }),
   "git.compare": def({ modals: ["CompareModal.tsx"], level: 1, kind: "open", surface: "the Compare modal against one ref", args: { base: { t: "ref" } } }),
   "git.blame": def({ modals: ["BlameModal.tsx"], level: 1, kind: "open", surface: "the Blame modal on one file of the checkout", args: { path: { t: "relpath" } } }),
   // Opening shows a plan and moves nothing: the rebase starts only when the owner
@@ -231,10 +249,50 @@ export const UI_ACTIONS = {
     level: 1, kind: "open", surface: "the git, diff, pull request or card view of the focused terminal pane's branch (the pane chords)",
     chords: ["pane.git", "pane.diff", "pane.pr", "pane.card"], args: { which: { t: "enum", values: PANE_DOORS } },
   }),
+  // The first level 3 door. It opens the Unstick dialog on one pull request and
+  // nothing else: the dialog runs nothing by being open, it says in words whether
+  // the pull request qualifies (shared/unstick.ts), and the close and reopen
+  // start only when the owner presses its confirm button.
+  "pr.unstick": def({ modals: ["UnstickDialog.tsx"],
+    level: 3, kind: "stage", surface: "the Unstick dialog (close, reopen and sync a pull request GitHub has lost track of) on one pull request; nothing runs until the owner confirms in it",
+    args: { root: { t: "abspath" }, number: { t: "int", max: 1_000_000 } },
+  }),
   // Reads. They answer and show nothing: no view changes, no window rises, no
   // focus moves. The answer is `{state, untrusted}` (see UiSnapshot below).
   "ui.state": def({ level: 1, kind: "read", surface: "what is open in the window now, and which panels ui.read can describe", args: {} }),
   "ui.read": def({ level: 1, kind: "read", surface: "one panel's state, read from the stores and pref modules (never from the DOM)", args: { panel: { t: "enum", values: READ_PANELS } } }),
+  // Level 3, stage only. Each one opens the dialog the UI itself opens, filled in,
+  // on one pull request, and does nothing else: the merge, the comment, the review
+  // and the card's new status happen when the person presses the dialog's own
+  // button, never from here. The window shows what arrived as written by the
+  // caller (its `as` name) and editable, and holds the confirm button back for a
+  // moment so a reflex keystroke cannot complete what nobody read.
+  "pr.merge.stage": def({
+    modals: ["MergeDialog.tsx", "ConfirmDialog.tsx"], level: 3, kind: "stage",
+    surface: "the merge dialog of one pull request, with the method and the commit message filled in (nothing merges until the person presses Merge)",
+    args: {
+      repo: { t: "repo" }, number: PR_NUMBER, method: { t: "enum", values: STAGE_MERGE_METHODS },
+      subject: { t: "text", max: STAGE_SUBJECT_MAX, line: true, optional: true }, body: { t: "text", max: STAGE_BODY_MAX, optional: true },
+    },
+    refine: prNumberOk,
+  }),
+  "pr.comment.stage": def({
+    level: 3, kind: "stage", surface: "the comment box of one pull request, with the text filled in (nothing is posted until the person presses Comment)",
+    args: { repo: { t: "repo" }, number: PR_NUMBER, body: { t: "text", max: STAGE_BODY_MAX } },
+    refine: prNumberOk,
+  }),
+  "pr.review.stage": def({
+    level: 3, kind: "stage", surface: "the review form of one pull request, with the verdict and the text filled in (nothing is submitted until the person presses Submit)",
+    args: { repo: { t: "repo" }, number: PR_NUMBER, verdict: { t: "enum", values: STAGE_REVIEW_VERDICTS }, body: { t: "text", max: STAGE_BODY_MAX, optional: true } },
+    // GitHub takes a bare approval; a request for changes or a comment says why.
+    refine: (a) => (prNumberOk(a) && (a.verdict === "approve" || a.body !== undefined) ? a : null),
+  }),
+  "card.move.stage": def({
+    modals: ["ConfirmDialog.tsx"], level: 3, kind: "stage",
+    surface: "the move dialog for the card of one pull request, with the new status filled in (nothing moves until the person presses Move)",
+    args: { repo: { t: "repo" }, number: PR_NUMBER, status: { t: "text", max: 80, line: true } },
+    refine: prNumberOk,
+  }),
 } as const satisfies Record<string, UiActionDef>;
 
 export type UiActionId = keyof typeof UI_ACTIONS;
@@ -301,10 +359,13 @@ export type UiPresent = "quiet" | "now";
  * and get `now`; that is an annoyance and not a privilege, so declaring
  * yourself is the safe direction. An explicit value that is neither word is
  * refused (null) rather than guessed at, because the guess decides whether a
- * dialog lands on somebody who is typing.
+ * dialog lands on somebody who is typing. A `stage` is quiet even for an unnamed
+ * caller: it puts a filled-in dialog in front of the person, and the one thing
+ * worse than a late dialog is one that arrives under their hands.
  */
-export function presentOf(raw: unknown, as: string | null): UiPresent | null {
-  if (raw === undefined || raw === null) return as ? "quiet" : "now";
+export function presentOf(raw: unknown, as: string | null, kind?: UiKind): UiPresent | null {
+  // A stage is never shown by default over somebody who may be typing, named caller or not.
+  if (raw === undefined || raw === null) return as || kind === "stage" ? "quiet" : "now";
   return raw === "quiet" || raw === "now" ? raw : null;
 }
 /** The most a reply may weigh on the wire; larger is refused by the server. */
@@ -430,6 +491,52 @@ export function relPath(raw: unknown): string | null {
 const MAX_SCALAR = 200;
 
 const SLUG = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+// owner/name the way GitHub spells it: neither half is empty, `.` or `..`.
+const REPO = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}\/(?!\.+$)[A-Za-z0-9_.-]{1,100}$/;
+/*
+ * What `text` refuses, as a whole: the C0 controls (a newline and a tab stay), DEL
+ * and the C1 range, line and paragraph separators, and every character Unicode
+ * calls default-ignorable, format, private-use, unassigned or a lone surrogate.
+ * Those are the ones that make a string say one thing on screen and another to
+ * whatever reads it: bidirectional controls reorder what is drawn, zero-width,
+ * soft-hyphen and filler characters draw nothing, variation selectors and the
+ * tag block can carry a whole message in nothing visible, and a blank braille
+ * cell is a space nobody can count. A staged text is read by a person before they
+ * press anything; this keeps the reading honest. The denylist this replaced
+ * missed variation selectors, Hangul fillers and braille blank, so this is the
+ * categories and not a list of examples.
+ *
+ * Two characters emoji need are let through, a variation selector-16 and a zero
+ * width joiner, but only right after a non-ASCII character and at most
+ * MAX_EMOJI_GLUE of them: enough for a heart or a family, sixteen bits for
+ * anything smuggled.
+ */
+const HIDDEN_TEXT = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029\u2800\ufffc]|[\p{Default_Ignorable_Code_Point}\p{Variation_Selector}\p{Cf}\p{Co}\p{Cn}\p{Cs}]/u;
+const EMOJI_GLUE = /(?<=[^\x00-\x7f])[\ufe0f\u200d]/gu;
+const MAX_EMOJI_GLUE = 16;
+/*
+ * What the field would hide or GitHub would not draw. `<!--` opens a comment;
+ * a link reference definition (`[x]: # (note)`) renders nothing; `<details>`
+ * collapses what is inside it; three newlines in a row push text below the
+ * four rows the box shows, where GitHub collapses the gap and draws it under
+ * the person's name.
+ */
+const HIDDEN_MARKUP = /<!--|<details\b|^[ \t]*\[[^\]\n]*\]:[ \t]/mi;
+
+/** `owner/name`, or null. */
+export function repoName(raw: unknown): string | null {
+  return typeof raw === "string" && raw.length <= 201 && REPO.test(raw) ? raw : null;
+}
+
+/** A staged text: non-empty once trimmed, within `max`, one line when asked, nothing hidden. */
+export function plainText(raw: unknown, max: number, line = false): string | null {
+  if (typeof raw !== "string" || !raw.trim() || raw.length > max) return null;
+  const glue = raw.match(EMOJI_GLUE)?.length ?? 0;
+  if (glue > MAX_EMOJI_GLUE || HIDDEN_TEXT.test(raw.replace(EMOJI_GLUE, ""))) return null;
+  if (!raw.isWellFormed() || HIDDEN_MARKUP.test(raw) || /\n[ \t]*\n[ \t]*\n/.test(raw)) return null;
+  if (line && (/[\n\t]/.test(raw) || /  /.test(raw))) return null;
+  return raw;
+}
 // A ref the way git spells one. Never starts with `-`, so it cannot be read as
 // an option by anything it is later handed to, and has no `..` range syntax.
 const REF = /^[A-Za-z0-9][A-Za-z0-9._/@+-]{0,199}$/;
@@ -444,6 +551,8 @@ function one(spec: ArgSpec, v: unknown): unknown {
     case "int": return typeof v === "number" && Number.isSafeInteger(v) && v >= 0 && v <= spec.max ? v : undefined;
     case "abspath": return absPath(v)?.path;
     case "relpath": return relPath(v) ?? undefined;
+    case "repo": return repoName(v) ?? undefined;
+    case "text": return plainText(v, spec.max, spec.line === true) ?? undefined;
     case "scalar":
       return typeof v === "boolean" || (typeof v === "number" && Number.isFinite(v)) || (typeof v === "string" && v.length <= MAX_SCALAR && !CONTROL_CHARS.test(v)) ? v : undefined;
     case "pathKind": return undefined;
@@ -490,6 +599,8 @@ export function specAccepts(spec: ArgSpec): string {
     case "int": return `a whole number from 0 to ${spec.max}`;
     case "abspath": return "an absolute path without . or .. segments";
     case "relpath": return "a relative path without . or .. segments";
+    case "repo": return "a repository as owner/name";
+    case "text": return `${spec.line ? "one line of" : "plain"} text (at most ${spec.max} characters, not empty, no hidden or control characters, no HTML comment)`;
     case "pathKind": return "file or dir";
     case "scalar": return "a string, number or boolean";
   }

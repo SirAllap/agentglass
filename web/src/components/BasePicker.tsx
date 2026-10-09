@@ -1,4 +1,5 @@
 import { useLayoutEffect, useEffect, useRef, useState } from "react";
+import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { DoneIcon } from "../lib/glyphIcons.tsx";
@@ -48,6 +49,7 @@ export function BasePicker({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const btnRef = useRef<HTMLButtonElement>(null);
+  useCloseWithOwner(() => setOpen(false), { open, from: btnRef });
   const [pos, setPos] = useState<{ top?: number; bottom?: number; right: number; maxHeight: number }>({ right: 0, maxHeight: 320 });
 
   useLayoutEffect(() => {

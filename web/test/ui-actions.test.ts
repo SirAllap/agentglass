@@ -163,10 +163,10 @@ describe("the doors, each through its own seam", () => {
     expect(p!.edit).toBeFalsy();
   });
 
-  it("git modals latch for the Git view and bring it up", () => {
+  it("git modals latch for the Git view and leave the view where it is", () => {
     const k = ctx();
     runControl(ui("git.modal", { which: "insights" }), k.c);
-    expect(k.calls).toEqual([["goView", "git"]]);
+    expect(k.calls).toEqual([]);
     expect(takeGitModal()).toEqual({ which: "insights" });
     runControl(ui("git.compare", { base: "origin/main" }), k.c);
     expect(takeGitModal()).toEqual({ which: "compare", base: "origin/main" });
@@ -176,13 +176,13 @@ describe("the doors, each through its own seam", () => {
 });
 
 describe("the doors of the second batch", () => {
-  it("the rebase editor and the git palette latch for the Git view", () => {
+  it("the rebase editor and the git palette latch for the Git view, no view switch", () => {
     const k = ctx();
     runControl(ui("git.rebase", { base: "origin/main" }), k.c);
     expect(takeGitModal()).toEqual({ which: "rebase", base: "origin/main" });
     runControl(ui("git.modal", { which: "palette" }), k.c);
     expect(takeGitModal()).toEqual({ which: "palette" });
-    expect(k.calls).toEqual([["goView", "git"], ["goView", "git"]]);
+    expect(k.calls).toEqual([]);
   });
 
   it("an event opens only if a feed has it, and the agent hears when none does", async () => {

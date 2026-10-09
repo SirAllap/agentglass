@@ -1,5 +1,5 @@
 // Applied as CSS custom properties on :root by applyTheme().
-import { floorTiers, inkTints } from "./contrast.ts";
+import { floorTiers, inkTints, onPrimaryInk, paintDesktop } from "./contrast.ts";
 //
 // The list leads with community-proven palettes — the ones people already read
 // code in all day (Catppuccin, GitHub, Tokyo Night, Dracula, One Dark, Gruvbox,
@@ -132,7 +132,7 @@ export function applyTheme(id: string, { sync = false } = {}) {
      road. */
   if (id === DESKTOP_ID && desktop) {
     const root = document.documentElement;
-    const floored = inkTints(floorTiers(desktop.vars), desktop.ansi);
+    const floored = paintDesktop(desktop.vars, desktop.ansi);
     for (const [k, v] of Object.entries(floored)) root.style.setProperty(k, v);
     root.setAttribute("data-theme", DESKTOP_ID);
     applyAccent();
@@ -195,6 +195,8 @@ function paintOf(id: string): Record<string, string> {
   if (vars["--primary"]) vars["--theme-primary"] = vars["--primary"];
   const a = ACCENTS.find((x) => x.id === currentAccent());
   if (a && a.primary) { vars["--primary"] = a.primary; vars["--primary-hover"] = a.hover; }
+  const on = vars["--primary"] && onPrimaryInk(vars["--primary"], vars["--bg"], vars["--text"]);
+  if (on) vars["--on-primary"] = on;
   return vars;
 }
 

@@ -20,6 +20,9 @@ import { openFinderAt } from "./finderTarget.ts";
 import { latchChatIntent } from "./chatIntent.ts";
 import { latchGitModal } from "./gitModalIntent.ts";
 import { latchViewModal } from "./viewModalIntent.ts";
+import { latchStage } from "./stageIntent.ts";
+import { requestPrJump } from "./prJump.ts";
+import { latchUnstick } from "./unstickIntent.ts";
 import { showWhatsNew } from "./whatsNew.ts";
 import { toggleBench, showFile, showBoard } from "./benchStore.ts";
 import { openPeek } from "./openPeek.ts";
@@ -118,10 +121,12 @@ export const UI_HANDLERS: { [Id in UiActionId]: Handler<Id> } = {
   "bench.file": (a) => { showFile(a.root, `${a.root}/${a.path}`, { title: baseName(a.path) }); },
   "bench.board": (a) => { showBoard(a.root, a.kind); },
   "peek.file": (a) => openPeek({ root: a.root, path: `${a.root}/${a.path}`, label: a.path }),
-  "git.modal": (a, c) => { latchGitModal({ which: a.which }); c.goView("git"); },
-  "git.compare": (a, c) => { latchGitModal({ which: "compare", base: a.base }); c.goView("git"); },
-  "git.blame": (a, c) => { latchGitModal({ which: "blame", path: a.path }); c.goView("git"); },
-  "git.rebase": (a, c) => { latchGitModal({ which: "rebase", base: a.base }); c.goView("git"); },
+  // The Git modals draw over the current view (they are portals); the Git view
+  // is mounted hidden for them, never switched to. See lib/gitModalIntent.ts.
+  "git.modal": (a) => { latchGitModal({ which: a.which }); },
+  "git.compare": (a) => { latchGitModal({ which: "compare", base: a.base }); },
+  "git.blame": (a) => { latchGitModal({ which: "blame", path: a.path }); },
+  "git.rebase": (a) => { latchGitModal({ which: "rebase", base: a.base }); },
   "event.open": async (a, c) => { if (!(await c.openEvent(a.id))) throw new Error("no recent event has that id"); },
   "session.open": (a, c) => c.openSession(a.id, a.app),
   "whatsnew.open": () => showWhatsNew(),
@@ -131,6 +136,18 @@ export const UI_HANDLERS: { [Id in UiActionId]: Handler<Id> } = {
   // The chords' own seam. The chord lets the key fall through when nothing
   // answers; an agent is told instead, since silence reads as success.
   "pane.open": (a, c) => { if (!c.paneDoor(a.which)) throw new Error("no focused terminal pane has a " + a.which + " to open"); },
+  // Level 3, stage only. Each leaves the draft for the pull request panel and
+  // opens the pull request view, as a notification does; the panel opens its own
+  // dialog filled in once the pull request has loaded. Nothing here sends. Written
+  // out in each handler rather than behind a helper, so the stage guard
+  // (web/test/ui-level-guards.test.ts) reads the seams every one of them calls.
+  "pr.merge.stage": (a, c) => { latchStage({ id: "pr.merge.stage", a }, c.as); requestPrJump(a.repo, a.number); c.goView("pr"); },
+  "pr.comment.stage": (a, c) => { latchStage({ id: "pr.comment.stage", a }, c.as); requestPrJump(a.repo, a.number); c.goView("pr"); },
+  "pr.review.stage": (a, c) => { latchStage({ id: "pr.review.stage", a }, c.as); requestPrJump(a.repo, a.number); c.goView("pr"); },
+  "card.move.stage": (a, c) => { latchStage({ id: "card.move.stage", a }, c.as); requestPrJump(a.repo, a.number); c.goView("pr"); },
+  // Stage: selects the pull request and opens the dialog. The dialog decides for
+  // itself whether it qualifies and runs nothing until the owner confirms.
+  "pr.unstick": (a, c) => { latchUnstick({ root: a.root, number: a.number }); c.goView("pr"); },
   // Reads: stores and pref modules only, nothing is shown, raised or focused.
   "ui.state": (_a, c) => uiState(sourcesOf(c)),
   "ui.read": (a, c) => readPanel(a.panel, sourcesOf(c)),

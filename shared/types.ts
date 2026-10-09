@@ -3904,6 +3904,10 @@ export interface PrMergeGate {
 }
 
 export interface PrDetail extends PrSummary {
+  /** The author's profile name and public email, when GitHub has them: what a
+   *  tracker member is matched against. Absent for a bot or a private profile. */
+  authorName?: string;
+  authorEmail?: string;
   body: string;
   mergeState: PrMergeState;
   /** Parsed out of the body — unchecked boxes are a merge signal on repos
@@ -4004,6 +4008,12 @@ export interface PrActionResult {
   /** Update branch only: GitHub refused because base and head conflict — the
    *  one refusal the panel can offer to resolve. */
   conflict?: boolean;
+  /** Update branch only: GitHub accepted the request (it answers 202, queued)
+   *  but the branch had not moved when last read, so nothing was synced here. */
+  requested?: boolean;
+  /** Update branch only: GitHub refused because its pull request has not caught up
+   *  with the branch it already updated ("head sha didn't match"). */
+  prLagging?: boolean;
 }
 
 /** State of the Claude Code hook wiring (#187), read from ~/.claude/settings.json. */

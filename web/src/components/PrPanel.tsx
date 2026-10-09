@@ -38,6 +38,9 @@ import { MergeBox } from "./MergeBox.tsx";
 import { mergePath, type PathAction } from "../../../shared/mergePath.ts";
 import { buildReviewStory, relative, stamp, type StoryVerdict } from "../../../shared/reviewStory.ts";
 import { subscribePrJump, prJump, clearPrJump } from "../lib/prJump.ts";
+import { preparedLine, useStageHold } from "../lib/stageHold.ts";
+import { planStage } from "../lib/stagePlan.ts";
+import { clearPrepared, clearStage, markPrepared, markedAt, peekStage, preparedFor, preparedSnapshot, subscribePrepared, subscribeStage } from "../lib/stageIntent.ts";
 import { findMention, selectorFor } from "../lib/prMention.ts";
 import { fileSection } from "../lib/patchLines.ts";
 import { groupPatch } from "../lib/changeGroups.ts";
@@ -45,7 +48,7 @@ import { flashElement } from "../lib/flash.ts";
 import { shaFromHref } from "../lib/commitLink.ts";
 import { isShortRef, openInApp, wantsExternal } from "../lib/linkRouter.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
-import { Button, FilterField, RefreshButton, ScopeChip, Segmented, Tabs, CTRL_H, EDGE, CHIP_SURFACE, INPUT, INPUT_STYLE, LINE, TL_AVATAR, TL_CSS } from "./workspace/Chrome.tsx";
+import { Button, FilterField, RefreshButton, ScopeChip, Segmented, Tabs, CHIP, CTRL_H, EDGE, CHIP_SURFACE, tintEdge, INPUT, INPUT_STYLE, LINE, TL_AVATAR, TL_CSS } from "./workspace/Chrome.tsx";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import type {
   PrSummary, PrDetail, PrRepoId, PrThread, PrComment, PrReview, PrReviewer, PrCheck, GitRepoRef, FileChange,
@@ -56,17 +59,34 @@ import { api, type BranchSpend, type RepoSpend } from "../lib/api.ts";
 import {
   allowedMethods, pickMergeMethod, MERGE_LABEL, MERGE_OPTION, type MergeMethod,
 } from "../../../shared/mergeMethod.ts";
+import { stuckMinutes, STUCK_AFTER_MS, LAGGING_SENTENCE, type GithubProblem } from "../../../shared/githubStatus.ts";
+import { unknownSinceOf, forgetUnknown } from "../lib/unknownSince.ts";
+import { UnstickDialog } from "./UnstickDialog.tsx";
+import { observeUnstick, noteUpdateTrial, unstickGateFor, lagMature } from "../lib/unstickWatch.ts";
+import { takeUnstick, subscribeUnstick, UNSTICK_TTL_MS } from "../lib/unstickIntent.ts";
+import type { UnstickCard } from "./UnstickDialog.tsx";
+import type { UnstickFacts, UnstickGate } from "../../../shared/unstick.ts";
+import { factsOf } from "../../../shared/unstick.ts";
+import { updateStanding, awaitingChecksOf, updateHeld, updateHeldTitle, stalledNote, REQUEST_WINDOW_MS, type UpdateStanding } from "../../../shared/justUpdated.ts";
 import { updateBranchMove, branchNoticeJump, prConflicted, gitSaysClean as cleanMerge, type BranchNotice } from "../lib/updateBranch.ts";
 import { depSpec } from "../../../shared/deps.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
+import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { confirmMergeGuard } from "../lib/mergeGuard.ts";
 import { useMergeDialog } from "./MergeDialog.tsx";
-import { mergeCardRef, mergeNote, statusColor, readyForQaStatus, handoffRemovals, handoffChanges, reviewStatus, cardNoteText, whoToTell } from "../lib/cardMove.ts";
+import { authorOf, assignedNote, ensureIds, resolveEnsure, stepChanges, type Ensure, type PrAuthor } from "../lib/stepAssign.ts";
+import { blocksOf, hasExtras, planOf, touchesPeople } from "../../../shared/stepBlocks.ts";
+import { AskedExtras, sendExtras } from "./AskedExtras.tsx";
+import { prContext, type ExtraItem } from "../lib/stepExtras.ts";
+import { AssignPicker, Face, useAskAssign, useAskTakeOff } from "./AssignPicker.tsx";
+import { blocksSentence, peopleButtonLabel } from "../lib/stepBlocksView.ts";
+import { mergeCardRef, mergeNote, statusColor, readyForQaStatus, reviewStatus, cardNoteText, whoToTell } from "../lib/cardMove.ts";
 import { useClickupPrefs, clickupPrefs } from "../lib/clickupPrefs.ts";
 import { cardPlan, cardPlanNote } from "../lib/cardPlan.ts";
 import { cardOf, askingCard, onCard, putCard, forgetCards, cardVersion, withCard } from "../lib/prCardStore.ts";
 import { askInChatVisible, slackReach } from "../lib/askInChat.ts";
 import { PeoplePick } from "./PeoplePick.tsx";
+import { listMembers } from "../lib/listMembers.ts";
 import { orderMembers } from "../lib/peopleOrder.ts";
 import { SCROLLBAR_CSS, LINEBTN_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, LineMenuCtx, type LinePick, type LineSel } from "./diff/DiffLines.tsx";
 import { Toggle } from "./diff/DiffControls.tsx";
@@ -124,18 +144,20 @@ import { useClickupSetup } from "../lib/clickupSetup.ts";
 import { writeBlock } from "../lib/cardWrites.ts";
 import type { ListStatus as CuStatus, ListMember as CuMember, ProviderTask, HandoffUnassign } from "../../../shared/providers.ts";
 import { CloseButton, CloseIcon } from "./CloseButton.tsx";
-import { ICON } from "../lib/iconSize.ts";
+import { HIT, ICON, MIN_BOX } from "../lib/iconSize.ts";
+import { EDGE_FADE_PX, edgeMask, stepX, useTabStripScroll } from "../lib/tabStrip.ts";
 import { isTrunkBranch, type Stack } from "../lib/prStack.ts";
 import { usePrStacks } from "../lib/usePrStacks.ts";
 import { factsReader, laneMap, rungReader } from "../lib/prStackFacts.ts";
 import { BaseToken, StackControl, type Neighbour } from "./StackMarks.tsx";
 import { wordOf, type Facts, type Rung } from "../lib/prStackWords.ts";
-import { AgentIcon, ArrowIcon, AttachIcon, BlockedIcon, BoltIcon, BranchIcon, CaretIcon, ChartIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CommitIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, EditIcon, EyeIcon, FileIcon, FlagIcon, IconLabel, LinkIcon, MergeIcon, MoreIcon, PinIcon, PlusIcon, RefreshIcon, SearchIcon, SparkleIcon, TagIcon, UndoIcon, UserIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import { AgentIcon, ArrowIcon, AttachIcon, BlockedIcon, BoltIcon, BranchIcon, CaretIcon, ChartIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CommitIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, EditIcon, EyeIcon, FileIcon, FlagIcon, IconLabel, LinkIcon, MarkdownIcon, MergeIcon, MoreIcon, PinIcon, PlusIcon, RefreshIcon, SearchIcon, SparkleIcon, TagIcon, UndoIcon, UserIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { PrIcon } from "./workspace/icons.tsx";
 import { PrWatchMenu } from "./PrWatchMenu.tsx";
 import { onChecksRead } from "../lib/prWatchStore.ts";
 import { CardChip } from "../lib/priority.tsx";
-import { ColumnsIcon, InboxIcon, QuoteIcon } from "./settingsNavIcons.tsx";
+import { BellIcon, ColumnsIcon, InboxIcon, QuoteIcon } from "./settingsNavIcons.tsx";
+import { AnchoredMenu } from "./AnchoredMenu.tsx";
 import { pins, isPinned, togglePin, subscribePins, type Pin } from "../lib/prPins.ts";
 import { TriageBoard } from "./TriageBoard.tsx";
 import { Inbox } from "./prs/Inbox.tsx";
@@ -675,8 +697,10 @@ ${TL_CSS}
 /* menus — .agx-menu itself now lives in index.css: it was defined HERE, in a
    <style> this component injects, so a menu in any other panel had no
    background until somebody had opened a pull request. See index.css. */
+.agx-mi{border-radius:8px}
 .agx-mi:hover{background:color-mix(in srgb,var(--primary) 12%,transparent);color:var(--text)}
-.agx-mi:focus-visible{outline:2px solid var(--primary);outline-offset:-2px}
+.agx-mi:active{background:color-mix(in srgb,var(--primary) 22%,transparent)}
+.agx-mi:focus-visible{outline:2px solid var(--primary);outline-offset:-2px;background:color-mix(in srgb,var(--primary) 12%,transparent);color:var(--text)}
 /* the "＋" that adds a reviewer or a label, inline with the values it extends */
 .agx-inline-add{font-size:10px;padding:1px 6px;border-radius:5px;color:var(--text3);border:1px solid color-mix(in srgb,var(--text) 24%,transparent);transition:color .13s,border-color .13s,background .13s}
 .agx-inline-add:hover:not(:disabled){color:var(--primary);border-color:var(--primary);background:color-mix(in srgb,var(--primary) 10%,transparent)}
@@ -740,7 +764,7 @@ ${TL_CSS}
 .agx-md .agx-task{list-style:none;padding-left:0}
 .agx-md .agx-task li{display:flex;gap:.55em;align-items:flex-start}
 .agx-md .agx-box{flex:none;width:13px;height:13px;margin-top:.28em;border-radius:3px;border:1px solid color-mix(in srgb,var(--text) 24%,transparent);display:inline-flex;align-items:center;justify-content:center;font-size:9px;line-height:1}
-.agx-md .agx-box[data-on="1"]{background:var(--primary);border-color:var(--primary);color:var(--bg)}
+.agx-md .agx-box[data-on="1"]{background:var(--primary);border-color:var(--primary);color:var(--on-primary)}
 /* Interactive checkboxes are a button carrying agx-box and agx-btn, so the
    base button chrome — its own background, padding, border and font — has
    to give way to the same 13px square a read-only box already draws. */
@@ -1487,14 +1511,10 @@ function PinnedCapsule({ pinned, pinState, selected, current, onOpen }: {
   return (
     <div className="absolute left-1/2 -translate-x-1/2 flex items-center pointer-events-none"
       style={{ maxWidth: "40%" }}>
-      <div className="flex items-center gap-1.5 rounded-full pl-2.5 pr-1 py-0.5 min-w-0 overflow-x-auto agx-scroll pointer-events-auto"
-        style={{
-          background: "color-mix(in srgb, var(--bg3) 85%, transparent)",
-          border: EDGE,
-        }}>
+      <div className="flex items-center gap-1.5 min-w-0 pointer-events-auto">
         {/* The tack is the label: it says "pinned" without taking the width a
             word would, and it is the same glyph as the button that put the
-            pull request here. */}
+            pull request here. It stays put while the chips scroll. */}
         {pinned.length === 0
           ? <span className="text-[10px] shrink-0 inline-flex items-center gap-1" style={{ color: "var(--text4)" }}><PinIcon size={ICON.xs} />nothing pinned</span>
           : (
@@ -1502,6 +1522,84 @@ function PinnedCapsule({ pinned, pinState, selected, current, onOpen }: {
               <PinIcon size={ICON.xs} filled />
             </span>
           )}
+        {pinned.length > 0 && (
+          <PinScroller pinned={pinned} pinState={pinState} selected={selected} onOpen={onOpen} />
+        )}
+        {/* The control sits IN the bar it feeds, so pressing it explains the bar
+            the first time — a pin button somewhere else and a strip of numbers
+            up here are two features until you happen to press one and watch the
+            other change. Outside the scroller: it is the one chip that must not
+            slide away with the others. */}
+        {current && (
+          <button
+            onClick={() => togglePin(current.repo, current.number, current.title)}
+            title={currentPinned
+              ? `#${current.number} is on the bar — click to take it off`
+              : `Keep #${current.number} on this bar, one click away from anywhere in this panel`}
+            className={`${CHIP} shrink-0`}
+            style={currentPinned
+              ? { color: "var(--primary-hover)", border: tintEdge("var(--primary)", 45) }
+              : { color: "var(--warning-ink)", border: tintEdge("var(--warning)", 32), background: "color-mix(in srgb, var(--warning) 8%, transparent)" }}>
+            <PinIcon size={ICON.xs} filled={currentPinned} />{currentPinned ? "Pinned" : `Pin #${current.number}`}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Room an arrow takes at an edge of the pin strip, and the fade after it. */
+const PIN_ARROW_W = CTRL_H.compact;
+
+/**
+ * The pinned chips, in a row that scrolls without showing it.
+ *
+ * The native bar drew a thick track inside a header that is 48px tall, and
+ * nothing in the row said what it was for. Here it is hidden (`agw-noscrollbar`,
+ * the terminal tab strip's way) and the three things it did are done by hand:
+ * the wheel moves the row sideways, a lit chip is kept on screen, and a side
+ * with chips past it fades out and shows an arrow that pages that way. The
+ * arrow is drawn over the faded edge, in a zone the mask holds fully
+ * transparent, so it covers no chip and takes no width: the strip is the same
+ * size with or without it, and a chip is never in two places. Both arrows are
+ * always mounted; an edge with nothing hidden only disables its arrow.
+ *
+ * A chip is a `rounded-lg` control at `CTRL_H.regular`, the shape `CHIP` and
+ * `ScopeChip` give the rest of this header. The strip has no box of its own,
+ * as `Segmented` has none: a second outline around chips that already have one
+ * was the capsule.
+ */
+function PinScroller({ pinned, pinState, selected, onOpen }: {
+  pinned: Pin[];
+  pinState: Map<number, PrSummary>;
+  selected: number | null;
+  onOpen: (n: number) => void;
+}) {
+  const hold = PIN_ARROW_W;
+  const strip = useTabStripScroll(selected == null ? null : String(selected), pinned.map((p) => p.number).join(","), hold + EDGE_FADE_PX);
+  const mask = edgeMask(strip.edges, hold);
+  const page = (dir: -1 | 1) => {
+    const el = strip.el;
+    if (!el) return;
+    const to = stepX(el, dir);
+    if (to !== null) el.scrollTo({ left: to, behavior: "smooth" });
+  };
+  const arrow = (dir: -1 | 1) => {
+    const shown = dir < 0 ? strip.edges.start : strip.edges.end;
+    return (
+      <button type="button" onClick={() => page(dir)} disabled={!shown} tabIndex={shown ? 0 : -1} aria-hidden={!shown}
+        aria-label={dir < 0 ? "Show earlier pinned pull requests" : "Show later pinned pull requests"}
+        title={dir < 0 ? "Earlier" : "Later"}
+        className={`absolute top-1/2 -translate-y-1/2 grid place-items-center rounded-lg transition-opacity ${shown ? "opacity-100 agx-chip" : "opacity-0 pointer-events-none"}`}
+        style={{ [dir < 0 ? "left" : "right"]: 0, width: PIN_ARROW_W, height: CTRL_H.compact, color: "var(--text2)" }}>
+        <span style={{ display: "grid", transform: `rotate(${dir < 0 ? 90 : -90}deg)` }}><CaretIcon size={ICON.xs} /></span>
+      </button>
+    );
+  };
+  return (
+    <div className="relative min-w-0 flex">
+      <div ref={strip.ref} className="min-w-0 flex items-center gap-1.5 overflow-x-auto agw-noscrollbar"
+        style={{ maskImage: mask, WebkitMaskImage: mask }}>
         {/*
          * Two actions on one chip: the body opens it, the × takes it off.
          * Taking a pin off used to mean opening the pull request first, which
@@ -1512,61 +1610,46 @@ function PinnedCapsule({ pinned, pinState, selected, current, onOpen }: {
          * one stops receiving clicks in some engines.
          *
          * The title is cut at 96px and only drawn from 1024px up (`lg`): a chip is
-         * number-first, and the bar is 40% of the header, so with six pins it
-         * scrolls sideways (the bar is the scroller) rather than wrapping or
-         * reaching the refresh button.
+         * number-first, and the bar is 40% of the header, so with six pins the
+         * row scrolls sideways rather than wrapping or reaching the refresh
+         * button.
          */}
         {pinned.map((p) => {
           const open = p.number === selected;
           const sum = pinState.get(p.number);
           return (
-            <span key={p.number}
-              className="group flex items-center rounded-full shrink-0"
-              style={open
-                ? { background: "color-mix(in srgb, var(--primary) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }
-                : { border: EDGE }}>
+            <span key={p.number} data-window={String(p.number)}
+              className={`group flex items-center rounded-lg shrink-0 ${open ? "" : "agx-chip"}`}
+              style={{ minHeight: CTRL_H.regular, ...(open
+                ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: tintEdge("var(--primary)", 45) }
+                : { background: CHIP_SURFACE.background, border: EDGE }) }}>
               <button onClick={() => onOpen(p.number)}
                 title={`#${p.number} — ${p.title}`}
                 aria-current={open ? "page" : undefined}
-                className="flex items-center gap-1 min-w-0 rounded-full pl-1.5 pr-1 py-px text-[10px]"
-                style={{ color: open ? "var(--text)" : "var(--text2)" }}>
+                className="flex items-center gap-1.5 min-w-0 rounded-lg pl-2 pr-1 text-[11px] self-stretch"
+                style={{ color: open ? "var(--primary-ink)" : "var(--text2)", fontWeight: open ? 700 : undefined }}>
                 {/* A dot, not a coloured number. Colour alone cannot say "green" to
                     somebody who cannot see green, and the same dot is what the rows
                     in the list use — so the bar and the list agree rather than
                     being two vocabularies. */}
                 {sum && <Dot tint={stateTint(sum)} title={`#${p.number} — ${checksSentence(sum)}`} />}
                 <span className="tabular-nums shrink-0">#{p.number}</span>
-                <span className="hidden lg:inline truncate" style={{ maxWidth: 96, color: "var(--text3)" }}>{p.title}</span>
+                <span className="hidden lg:inline truncate" style={{ maxWidth: 96, color: "var(--text3)", fontWeight: 400 }}>{p.title}</span>
               </button>
               <button
                 onClick={(e) => { e.stopPropagation(); togglePin(p.repo, p.number, p.title); }}
                 title={`Unpin #${p.number}`}
                 aria-label={`Unpin #${p.number}`}
-                className={`leading-none grid place-items-center shrink-0 rounded-full ${open ? "" : "opacity-0 group-hover:opacity-100 focus:opacity-100"}`}
-                style={{ color: "var(--text3)", width: 18, height: 18 }}>
+                className={`leading-none grid place-items-center shrink-0 rounded-md mr-1 ${open ? "" : "opacity-0 group-hover:opacity-100 focus:opacity-100"}`}
+                style={{ color: "var(--text3)", width: MIN_BOX, height: MIN_BOX }}>
                 <CloseIcon size={ICON.xs} />
               </button>
             </span>
           );
         })}
-        {/* The control sits IN the bar it feeds, so pressing it explains the bar
-            the first time — a pin button somewhere else and a strip of numbers
-            up here are two features until you happen to press one and watch the
-            other change. */}
-        {current && (
-          <button
-            onClick={() => togglePin(current.repo, current.number, current.title)}
-            title={currentPinned
-              ? `#${current.number} is on the bar — click to take it off`
-              : `Keep #${current.number} on this bar, one click away from anywhere in this panel`}
-            className="text-[10px] px-2 py-px rounded-full shrink-0 inline-flex items-center gap-1"
-            style={currentPinned
-              ? { color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }
-              : { color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 32%, transparent)", background: "color-mix(in srgb, var(--warning) 8%, transparent)" }}>
-            <PinIcon size={ICON.xs} filled={currentPinned} />{currentPinned ? "Pinned" : `Pin #${current.number}`}
-          </button>
-        )}
       </div>
+      {arrow(-1)}
+      {arrow(1)}
     </div>
   );
 }
@@ -1853,8 +1936,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   /** Hand the review to the user's own tmux instead of to the chat. */
   onReviewInTerminal?: (root: string, number: number, recipe?: string, card?: string) => void;
 }) {
-  const { ask, askText, dialog } = useDialogs();
-  const { askMerge, dialog: mergeDialog } = useMergeDialog();
+  const { ask, askText, open: askOpen, dialog } = useDialogs();
+  const { askMerge, open: mergeOpen, dialog: mergeDialog } = useMergeDialog();
   // The same test the card chip uses: a ClickUp move is only offered for a
   // reference that is actually ClickUp's. A Jira shop's `ABC-12-thing` branch
   // looks identical, and offering to move a card that does not exist is worse
@@ -3599,19 +3682,21 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const commitFiles = useMemo(() => parseUnifiedDiff(commitText).map(toFileChange), [commitText]);
 
   /*
-   * "We just pushed to this branch, so CI is about to start."
+   * "We asked GitHub to update this branch."
    *
-   * The rollup cannot know it: for the seconds between the push landing and
-   * GitHub creating the first run, an empty list of checks is indistinguishable
-   * from a green one — which is how "Update branch" led straight to "Ready to
-   * merge · nothing is standing in the way" over a pull request GitHub was
-   * already running three checks on.
-   *
-   * Held per pull request and with the moment it started, so it clears itself
-   * rather than waiting for a state that may never come: a repository that runs
-   * nothing on this branch would otherwise say "waiting" forever.
+   * Recorded when the request comes back ACCEPTED, with the head it was made
+   * on — not when the button is pressed, and not as proof that anything moved.
+   * `gh pr update-branch` answers 202 (queued) and GitHub can then silently not
+   * do it, so whether the branch was updated is read off the head commit
+   * (shared/justUpdated.ts), and "waiting for the checks" only follows once a
+   * new head is actually seen. Held per pull request.
    */
-  const [pushed, setPushed] = useState<{ number: number; at: number } | null>(null);
+  /* Where the branch really is on GitHub, as the behind answer last read it. */
+  const [branchRef, setBranchRef] = useState<{ number: number; sha: string; at: number } | null>(null);
+  const headSeen = useRef<{ key: string; at: number }>({ key: "", at: 0 });
+  const prevHeadKey = useRef("");
+  const [asked, setAsked] = useState<{ number: number; at: number; headBefore: string; note?: string } | null>(null);
+  const [nowTick, setNowTick] = useState(0);
   /*
    * "Update branch" refused because base and head conflict.
    *
@@ -3622,7 +3707,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * make the refusal untrue.
    */
   const [refusedUpdate, setRefusedUpdate] = useState<{ number: number; updatedAt: string } | null>(null);
-  const AWAIT_CHECKS_MS = 4 * 60_000;
 
   /* `busy` is state: two presses in the same tick both read false. The ref is
      what makes the second one a no-op, the disabled attribute only what shows it. */
@@ -3770,6 +3854,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       const a = behindAnswer(root, n);
       setBehind(a.behind);
       setLocalHead(a.local);
+      setBranchRef(a.refSha ? { number: n, sha: a.refSha, at: a.at } : null);
       setBehindAsking(askingBehind(root, n));
     };
     read();
@@ -4018,6 +4103,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       // the panel, switching tabs, a rebuild — leaves the draft where it was.
       setReviews((cur) => { const next = { ...cur }; delete next[key]; saveMap(REVIEW_KEY, next); return next; });
       setTab("conversation");
+      clearPrepared(`review|${detail.url}`);
     }
   };
 
@@ -4052,13 +4138,13 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   /* One merge at a time, from the press to the settled answer — the dialog
      included. `mergeWork` only greys the button after a re-render; this is what
      makes a second press in the same tick send nothing. */
-  const doMerge = (method: MergeMethod) => once(merging, () => runMerge(method));
-  const runMerge = async (method: MergeMethod) => {
+  const doMerge = (method: MergeMethod, prefill?: { by: string; subject?: string; body?: string }) => once(merging, () => runMerge(method, prefill));
+  const runMerge = async (method: MergeMethod, prefill?: { by: string; subject?: string; body?: string }) => {
     if (!detail) return;
     const head = detail.commits[detail.commits.length - 1]?.oid;
-    if (!(await confirmMergeGuard(detail, ask))) return;
+    if (!(await confirmMergeGuard(detail, ask, prefill?.by))) return;
     const choice = await askMerge({
-      number: detail.number, title: detail.title, method,
+      number: detail.number, title: detail.title, url: detail.url, method,
       baseRefName: detail.baseRefName, headRefName: detail.headRefName, headRepoOwner: detail.headRepoOwner,
       commits: detail.commits,
       repoDeletesBranch: !!detail.mergePolicy?.deletesBranch,
@@ -4068,6 +4154,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       humanApproved: detail.reviews.some((r) => !r.isBot && r.state === "APPROVED"),
       botApproved: detail.reviews.some((r) => r.isBot && r.state === "APPROVED"),
       card: mergeCardRef(detail, clickup),
+      author: authorOf(detail),
+      prefill,
     });
     if (!choice) return;
     /*
@@ -4097,19 +4185,33 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
         return res;
       });
       const move = choice.card;
-      if (!merged || !move) return;
+      /* A comment or a field the merge step carries: one request each, after the merge, whether or not the card moves. */
+      const sendMergeExtras = async () => {
+        if (!choice.extras) return null;
+        const r = await sendExtras(choice.extras.id, choice.extras.items);
+        return r;
+      };
+      if (!merged) return;
+      if (!move) {
+        const ex = await sendMergeExtras();
+        if (ex) flash(ex.ok, ex.ok ? `Merged · ${ex.done.join(" · ")}` : `Merged — but ${ex.error}`);
+        return;
+      }
       setMergeWork(MOVING_CARD);
       // `updated` is the precondition, not decoration: somebody else moving the
       // card while the merge form was open should come back as a conflict rather
       // than quietly winning.
-      const r = await api.clickupStatus(move.id, move.to, move.updated)
+      /* Without "Also assign" this is the status write it always was; with it, the same single
+         write carries the person too (one card, one request), never a second call racing `updated`. */
+      const r = await (move.write ? api.clickupCard(move.id, move.write, move.updated) : api.clickupStatus(move.id, move.to, move.updated))
         .catch((e) => ({ ok: false, error: String(e) }));
       // The chip and the board's row read the status from the store: hand it the
       // write's own answer rather than wait out its minute.
       const query = mergeCardRef(detail, clickup)?.query;
       if (r.ok && query) putCard(query, "task" in r ? r.task : undefined);
-      flash(r.ok, mergeNote(true, {
-        asked: true, ok: r.ok, to: move.to,
+      const ex = r.ok ? await sendMergeExtras() : null;
+      flash(r.ok && (!ex || ex.ok), mergeNote(true, {
+        asked: true, ok: r.ok, to: move.to, extra: [move.note, ex?.ok ? ex.done.join(" · ") : ex ? `but ${ex.error}` : ""].filter(Boolean).join(" · ") || undefined,
         unauthorised: "unauthorised" in r ? r.unauthorised : undefined,
         error: r.ok ? undefined : ("conflict" in r && r.conflict ? "somebody moved it while this was open" : r.error),
       }));
@@ -4134,6 +4236,78 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       () => api.prMerge(root, detail.number, mergeMethod, { auto: true, deleteBranch: !detail.mergePolicy?.deletesBranch }),
       "Auto-merge did not arm", "auto");
   };
+
+  /**
+   * A dialog an agent asked for, opened filled in (stageIntent.ts, stagePlan.ts).
+   *
+   * Nothing in this block sends. The merge goes through `doMerge`, so the guard and
+   * the merge dialog ask exactly what they ask for a click; the comment and the
+   * review only fill in the boxes the person already has; the card move asks its own
+   * question first and writes only on a yes. What the agent wrote is marked as its
+   * own (markPrepared) and is editable. web/test/ui-stage-guard.test.ts holds this
+   * block to that: no writer is called before an answer.
+   */
+  const stageReq = useSyncExternalStore(subscribeStage, peekStage, () => null);
+  /* The review mark, read here as well as in the Review tab: the Files rail submits the
+     same draft, and it does not draw the line. */
+  useSyncExternalStore(subscribePrepared, preparedSnapshot, () => 0);
+  const stageCardMove = async (want: string, by: string) => {
+    if (!detail) return;
+    const ref = mergeCardRef(detail, clickup);
+    if (!ref) { flash(false, `#${detail.number} has no card to move`); return; }
+    const blocked = writeBlock(clickup);
+    if (blocked) { flash(false, blocked); return; }
+    const found = await api.clickupFind(ref.query).catch(() => null);
+    if (!found?.ok || !found.task) { flash(false, found?.error || "ClickUp could not find the card"); return; }
+    const task = found.task;
+    const meta = task.listId ? await api.clickupList(task.listId).catch(() => null) : null;
+    const target = (meta?.ok ? (meta.statuses ?? []) : []).find((st) => st.status.toLowerCase() === want.toLowerCase());
+    if (!target) { flash(false, `${ref.label}: its list has no status called "${want}"`); return; }
+    if (target.status === task.status) { flash(true, `${ref.label} is already ${target.status}`); return; }
+    const said = await ask({
+      title: `Move to ${target.status}?`, preparedBy: by, confirmLabel: `Move to ${target.status}`,
+      body: `${ref.label}\n${task.status} \u2192 ${target.status}`,
+    });
+    if (!said) return;
+    const r = await api.clickupCard(task.id, { status: target.status }, task.updated).catch(() => ({ ok: false, error: "Could not reach the server", task: undefined }));
+    flash(r.ok, r.ok ? `${ref.label} is now ${target.status}` : (r.error || "ClickUp refused that"));
+    if (r.ok) putCard(ref.query, r.task);
+  };
+  useEffect(() => {
+    const r = stageReq;
+    if (!r || !detail || !repo) return;
+    // Only for the pull request it named, and only while this view is the one on
+    // screen with nothing else being asked: a dialog opened under the terminal, or
+    // in place of a question the person is answering, is somebody else's moment.
+    if (!active || detailStale || askOpen || mergeOpen) return;
+    const mine = /\/([^/]+\/[^/]+)\/pull\/(\d+)(?:[/?#]|$)/.exec(detail.url);
+    if (!mine || mine[1]!.toLowerCase() !== r.a.repo.toLowerCase() || Number(mine[2]) !== r.a.number || detail.number !== r.a.number) return;
+    clearStage();
+    if (readOnly) { flash(false, "This pull request is read-only here, so nothing was prepared"); return; }
+    const plan = planStage(r, detail);
+    if (!plan.ok) { flash(false, plan.why); return; }
+    const x = plan.request;
+    if (x.id === "pr.merge.stage") {
+      void doMerge(x.a.method, { by: x.by, subject: x.a.subject, body: x.a.body });
+    } else if (x.id === "pr.comment.stage") {
+      // Never merged into what the person already typed: their words and the
+      // agent's would share one mark.
+      const k = `say|${detail.url}`;
+      if (readStash(k).trim()) { flash(false, `${x.by} prepared a comment, but the comment box already has your text, so nothing was put in it`); setTab("conversation"); return; }
+      writeStash(k, x.a.body);
+      markPrepared(k, x.by);
+      setTab("conversation");
+    } else if (x.id === "pr.review.stage") {
+      // The same, and a verdict the person already chose is not flipped.
+      if (hasReviewDraft) { flash(false, `${x.by} prepared a review, but you already have one in progress, so nothing was changed`); setTab("review"); return; }
+      setMyReview({ verb: x.a.verdict, body: x.a.body ?? "" });
+      markPrepared(`review|${detail.url}`, x.by);
+      setTab("review");
+    } else {
+      void stageCardMove(x.a.status, x.by);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stageReq, detail, repo, active, detailStale, askOpen, mergeOpen]);
 
   /**
    * Close, or reopen a closed one.
@@ -4508,7 +4682,144 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * box are two sentences about the same rollup, and "we pushed a moment ago"
    * is the input that decides whether an empty one means "none" or "not yet" —
    * so it cannot be worked out separately in each place. */
-  const awaitingChecks = !!d && !!pushed && pushed.number === d.number && Date.now() - pushed.at < AWAIT_CHECKS_MS;
+  /* The branch ref only counts if it was read AFTER the pull request's head last
+     changed: an ordinary push moves the ref first, and a ref read before the
+     panel saw the new head would read as "the pull request has not caught up". */
+  const headNow = d ? (d.headSha ?? d.commits[d.commits.length - 1]?.oid ?? "") : "";
+  const headKey = d ? `${d.number}:${headNow}` : "";
+  if (headSeen.current.key !== headKey) headSeen.current = { key: headKey, at: Date.now() };
+  const refTrusted = !!d && !!branchRef && branchRef.number === d.number && branchRef.at >= headSeen.current.at;
+  useEffect(() => {
+    // The head changed under an open panel: ask again, so the ref is read after it.
+    if (!root || !d || !prevHeadKey.current || prevHeadKey.current === headKey || !prevHeadKey.current.startsWith(`${d.number}:`)) { prevHeadKey.current = headKey; return; }
+    prevHeadKey.current = headKey;
+    refreshBehind(root, d.number, false);
+  }, [root, d, headKey]);
+  const updateState: UpdateStanding = d
+    ? updateStanding({
+      now: Date.now(), own: asked && asked.number === d.number ? asked : null,
+      headSha: d.headSha ?? d.commits[d.commits.length - 1]?.oid,
+      headCommittedAt: d.commits[d.commits.length - 1]?.committedAt,
+      checksTotal: d.checks?.total ?? 0,
+      refSha: refTrusted ? branchRef!.sha : null,
+    })
+    : "idle";
+  const prLagging = updateState === "pr-lagging";
+  const awaitingChecks = awaitingChecksOf(updateState);
+  /* The window closing is not an event in the data, so it needs a clock: one
+     timeout at the deadline that re-reads the pull request once (the head may
+     have moved without the poll having seen it) and re-renders. Not a poll. */
+  useEffect(() => {
+    if (!asked) return;
+    const left = asked.at + REQUEST_WINDOW_MS - Date.now();
+    if (left <= 0) return;
+    const t = setTimeout(() => { setNowTick((n) => n + 1); if (selected != null) loadDetail(selected, true); }, left + 250);
+    return () => clearTimeout(t);
+  }, [asked, selected, loadDetail]);
+  void nowTick;
+
+  /*
+   * How long GitHub has been saying UNKNOWN for this pull request.
+   *
+   * Remembered across panel opens (module map, memory only) from the first
+   * render that saw it, and forgotten the moment it reads anything else. Past
+   * STUCK_AFTER_MS the sentence stops promising "a few seconds" — see
+   * shared/githubStatus.ts. No poll of its own: the detail refresh already
+   * re-reads mergeability, and one timeout at the threshold re-renders.
+   */
+  const unknownKey = d ? `${root}#${d.number}` : "";
+  if (d && d.mergeState !== "UNKNOWN") forgetUnknown(unknownKey);
+  const unknownSince = d && d.mergeState === "UNKNOWN" ? unknownSinceOf(unknownKey) : null;
+  const stuck = unknownSince != null && stuckMinutes(unknownSince, Date.now()) != null;
+  const [ghProblem, setGhProblem] = useState<GithubProblem | null>(null);
+  useEffect(() => {
+    if (unknownSince == null) { setGhProblem(null); return; }
+    const left = unknownSince + STUCK_AFTER_MS - Date.now();
+    if (left > 0) {
+      const t = setTimeout(() => setNowTick((n) => n + 1), left + 250);
+      return () => clearTimeout(t);
+    }
+    // One ask when it becomes stuck; the server answers from a ten-minute cache.
+    let live = true;
+    api.prGithubStatus().then((r) => { if (live) setGhProblem(r.ok ? r.problem : null); }).catch(() => {});
+    return () => { live = false; };
+  }, [unknownSince, stuck]);
+
+  /*
+   * Unstick: close, reopen and sync (shared/unstick.ts). Offered almost never.
+   *
+   * The facts come from the detail this panel already holds, with the branch ref
+   * only when it was read after the head last changed (refTrusted). Each refresh
+   * is folded into the memory of how long the signal has held and by how many
+   * separate looks; the gate then wants a normal Update branch to have been tried.
+   * Nothing is requested for this: no poll, no extra call until the dialog opens.
+   */
+  const unstickKey = d ? `${root}#${d.number}` : "";
+  const unstickFacts = useMemo(
+    () => d ? factsOf(d, refTrusted ? branchRef!.sha : null, repo?.nameWithOwner?.split("/")[0] ?? "") : null,
+    [d, refTrusted, branchRef, repo?.nameWithOwner]);
+  const [unstickTick, setUnstickTick] = useState(0);
+  useEffect(() => {
+    if (!unstickFacts || !unstickKey) return;
+    observeUnstick(unstickKey, unstickFacts);
+    setUnstickTick((n) => n + 1);
+  }, [unstickFacts, unstickKey]);
+  void unstickTick;
+  const unstickGate = unstickFacts ? unstickGateFor(unstickKey, unstickFacts) : null;
+  /* Said AFTER GitHub accepts it, with the head it was made on; the panel waits to
+     SEE a new head before it says the branch was updated. The refetch inside `act`
+     is the first read that could see an empty rollup, so the record is made in the
+     `.then`, before `act` re-reads. */
+  const doUpdateBranch = (syncLocal: boolean) => {
+    if (!d) return;
+    const headBefore = d.headSha ?? d.commits[d.commits.length - 1]?.oid ?? "";
+    return act("Update branch", () => api.prUpdateBranch(root, d.number, syncLocal).then((r) => {
+      if (r.conflict) setRefusedUpdate({ number: d.number, updatedAt: d.updatedAt });
+      // What the normal way did, for the Unstick gate: refused as "not caught up", or accepted and left waiting.
+      if (r.prLagging) noteUpdateTrial(unstickKey, { kind: "refused", at: Date.now() });
+      else if (r.ok && r.requested) noteUpdateTrial(unstickKey, { kind: "requested", at: Date.now(), headBefore });
+      if (r.ok) setAsked({ number: d.number, at: Date.now(), headBefore, note: r.requested ? undefined : r.detail });
+      return r;
+    }))
+      .finally(() => refreshBehind(root, d.number));
+  };
+
+  /* What the dialog was opened on, taken once when it opens. It does not follow `d`: the run's own
+     refresh can make the detail read fail or change what the gate says, and a dialog that vanished
+     or rewrote its title after the pull request was closed would hide the one thing it has to say. */
+  const [unstickShown, setUnstickShown] = useState<UnstickShown | null>(null);
+  const unstickShownRef = useRef<UnstickShown | null>(null);
+  unstickShownRef.current = unstickShown;
+  const cardForUnstick = useMemo(() => d ? mergeCardRef(d, clickup) : null, [d?.headRefName, d?.title, d?.body, clickup]); // eslint-disable-line react-hooks/exhaustive-deps
+  const openUnstick = () => {
+    if (!d || !unstickGate || !unstickFacts || unstickShownRef.current) return;
+    setUnstickShown({
+      root, number: d.number, url: d.url, gate: unstickGate, facts: unstickFacts, baseRefName: d.baseRefName,
+      card: cardForUnstick ? { query: cardForUnstick.query, label: cardForUnstick.label } : null,
+    });
+  };
+  // An agent's `pr.unstick` door: select the pull request, then open the dialog on it. Never runs it.
+  const [wantUnstick, setWantUnstick] = useState<{ root: string; number: number; at: number } | null>(null);
+  useEffect(() => {
+    // A request while a dialog is up (maybe mid-run) is dropped, not queued behind it.
+    const drain = () => { const w = takeUnstick(); if (w && !unstickShownRef.current) setWantUnstick({ ...w, at: Date.now() }); };
+    drain();
+    return subscribeUnstick(drain);
+  }, []);
+  useEffect(() => {
+    if (!wantUnstick) return;
+    // A request that never found its pull request does not wait for the person's next selection.
+    if (Date.now() - wantUnstick.at > UNSTICK_TTL_MS) { setWantUnstick(null); return; }
+    if (wantUnstick.root !== root) { setRoot(wantUnstick.root); return; }
+    if (selected !== wantUnstick.number) { setSelected(wantUnstick.number); return; }
+    if (d && d.number === wantUnstick.number) { openUnstick(); setWantUnstick(null); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- openUnstick reads the same values it is keyed on
+  }, [wantUnstick, root, selected, d, unstickGate]);
+  useEffect(() => {
+    if (!wantUnstick) return;
+    const t = setTimeout(() => setWantUnstick(null), UNSTICK_TTL_MS);
+    return () => clearTimeout(t);
+  }, [wantUnstick]);
 
   // You cannot review your own pull request — GitHub does not offer it either,
   // and a review control on every row buries the ones actually waiting on you.
@@ -5211,22 +5522,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                           onReviewInTerminal={onReviewInTerminal && d && !readOnly ? (recipe) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "") : undefined}
                           onMerge={doMerge} onClose={doClose} onAskReview={doReviewers}
                           method={mergeMethod} onMethod={setMergeMethod}
-                          onUpdateBranch={(syncLocal: boolean) => {
-                            // Latched before the call, not after: the refetch
-                            // inside `act` is the first read that could see an
-                            // empty rollup, so the panel has to already know
-                            // why it is empty.
-                            setPushed({ number: d.number, at: Date.now() });
-                            /* Thrown away AFTER it lands, not before: dropped
-                               first, the store simply re-asks GitHub for a
-                               count that has not changed yet and caches the old
-                               one all over again. */
-                            return act("Update branch", () => api.prUpdateBranch(root, d.number, syncLocal).then((r) => {
-                              if (r.conflict) setRefusedUpdate({ number: d.number, updatedAt: d.updatedAt });
-                              return r;
-                            }))
-                              .finally(() => refreshBehind(root, d.number));
-                          }}
+                          onUpdateBranch={doUpdateBranch}
                           onRerun={() => act("Re-run checks", () => api.prRerun(root, d.number))}
                           onAutoMerge={doAutoMerge}
                           onCancelAutoMerge={() => { void field(autoMergePatch(d.number, null), () => api.prMerge(root, d.number, mergeMethod, { disableAuto: true }), "Auto-merge was not cancelled", "auto"); }}
@@ -5271,6 +5567,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                           movedSince={movedHere.length}
                           onGoMoved={() => { setTab("files"); setWantSince((n) => n + 1); }}
                           awaitingChecks={awaitingChecks}
+                          unknownSince={unknownSince} githubProblem={stuck || prLagging ? ghProblem : null} prLagging={prLagging}
+                          updateState={updateState} updateNote={asked && asked.number === d.number ? asked.note : undefined}
+                          unstickOffer={!!unstickGate?.show} onUnstick={openUnstick}
+                          lagTryable={prLagging && lagMature(unstickKey)}
                         />
                       ) : (
                         <Conversation
@@ -5495,6 +5795,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                      * notification that asks somebody to guess.
                      */
                     onSubmit={canReview ? () => {
+                      if (preparedFor(`review|${detail.url}`)) {
+                        setTab("review");
+                        flash(false, "An agent prepared this review: read it on the Review tab and send it from there");
+                        return;
+                      }
                       if (myReview.verb !== "approve" && !myReview.body.trim() && myDrafts.length === 0) {
                         setTab("review");
                         flash(false, "Say something or queue a line first — only an approval can go on its own");
@@ -5534,6 +5839,14 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
         )}
       </div>
       {peek && <PeekFile peek={peek} onClose={() => setPeek(null)} />}
+      {unstickShown && (
+        <UnstickDialog root={unstickShown.root} number={unstickShown.number} url={unstickShown.url} gate={unstickShown.gate}
+          facts={unstickShown.facts} card={unstickShown.card}
+          behind={() => behindAnswer(unstickShown.root, unstickShown.number).behind}
+          refresh={() => { loadList(true); loadDetail(unstickShown.number, true); refreshBehind(unstickShown.root, unstickShown.number, true); }}
+          onUpdateBranch={() => void doUpdateBranch(updateBranchMove(behind, unstickShown.baseRefName, localHead ?? undefined).syncLocal)}
+          onClose={() => setUnstickShown(null)} />
+      )}
       {dialog}
       {mergeDialog}
     </div>
@@ -5541,6 +5854,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     </ViewerCtx.Provider>
     </RepoCtx.Provider>
   );
+}
+
+/** What the Unstick dialog was opened on. */
+interface UnstickShown {
+  root: string; number: number; url: string; gate: UnstickGate; facts: UnstickFacts; baseRefName: string; card: UnstickCard | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -5630,7 +5948,7 @@ function ConflictActions({ root, number, branch, base, repo, title, disabled }: 
   );
 }
 
-export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, openThreads, conversationCount, behind, behindAsking, localHead, conflictFiles, updateRefused, method, onMethod, onLocalReview, onReviewInTerminal, onMerge, onClose, onUpdateBranch, onRerun, onAutoMerge, onCancelAutoMerge, onDraft, onGoThreads, onGoReview, onAskReview, onGoMoved, movedSince, onEditRequest, onToggleTask, awaitingChecks }: {
+export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, openThreads, conversationCount, behind, behindAsking, localHead, conflictFiles, updateRefused, method, onMethod, onLocalReview, onReviewInTerminal, onMerge, onClose, onUpdateBranch, onRerun, onAutoMerge, onCancelAutoMerge, onDraft, onGoThreads, onGoReview, onAskReview, onGoMoved, movedSince, onEditRequest, onToggleTask, awaitingChecks, updateState, updateNote, unknownSince, githubProblem, prLagging, unstickOffer, onUnstick, lagTryable }: {
   d: PrDetail;
   /** The checkout this pull request is being read from — where a conflict would
    *  be prepared. */
@@ -5689,8 +6007,26 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
   /** This panel pushed to the branch a moment ago, so runs are expected — see
    *  the note on `pushed`. */
   awaitingChecks?: boolean;
+  /** Where the last Update branch request stands — see shared/justUpdated.ts. */
+  updateState?: UpdateStanding;
+  /** What the server said about the request, shown if GitHub never moved the branch. */
+  updateNote?: string;
+  /** When mergeability first read UNKNOWN here, and what GitHub's status says once it has lasted. */
+  unknownSince?: number | null;
+  githubProblem?: GithubProblem | null;
+  /** The branch moved on GitHub and the pull request has not followed. */
+  prLagging?: boolean;
+  /** The Unstick gate said yes (shared/unstick.ts): the stuck row gets its button. */
+  unstickOffer?: boolean;
+  onUnstick?: () => void;
+  /** The pull request has been behind its branch long enough that pressing Update branch to see what GitHub says is the next move. */
+  lagTryable?: boolean;
 }) {
   const c = d.checks;
+  /* Held only while "not caught up" is news. Once it has lasted, the press is released: it is refused
+     with a sentence, and that refusal is what Unstick needs to have seen before it will exist. */
+  const upState: UpdateStanding = updateState === "pr-lagging" && lagTryable ? "idle" : (updateState ?? "idle");
+  const stuckNow = stuckMinutes(unknownSince, Date.now()) != null;
   const [allFiles, setAllFiles] = useState(false);
   /* GitHub's own "mergeable" — see githubWillMerge for why that is not only
      CLEAN. */
@@ -5775,8 +6111,9 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
    * where GitHub's own state reads CLEAN: a merge queue, or a role without
    * merge rights, never shows up in `mergeStateStatus`.
    */
-  const blockers = useMemo(() => mergeBlockers({ ...d, openThreads, conflicted, awaitingChecks }),
-    [d, openThreads, conflicted, awaitingChecks]);
+  const blockers = useMemo(() => mergeBlockers({ ...d, openThreads, conflicted, awaitingChecks, behind, stuckMin: d.mergeState === "UNKNOWN" ? stuckMinutes(unknownSince, Date.now()) ?? (prLagging ? 0 : null) : null, githubProblem, prLagging }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the clock is read inside; `stuck` is what changes it
+    [d, openThreads, conflicted, awaitingChecks, behind, unknownSince, githubProblem, stuckNow, prLagging]);
   const refusal = mergeRefusal(blockers, d.mergeState);
   const autoRefusal = autoMergeRefusal(blockers);
 
@@ -5796,7 +6133,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
     threadAuthors: d.threads.filter((t) => !t.isResolved).map((t) => t.comments[0]?.author ?? ""),
     author: d.author, viewerDidAuthor: d.viewerDidAuthor, viewerRequested: d.viewerRequested,
     checks: c, checksAll: d.checksAll, gate: d.gate, baseRefName: d.baseRefName, openThreads,
-    conflicted, conflictFiles: conflictFiles?.files.length, behind, awaitingChecks, autoArmed: !!d.autoMerge,
+    conflicted, conflictFiles: conflictFiles?.files.length, behind, awaitingChecks, unknownSince, githubProblem, prLagging, autoArmed: !!d.autoMerge, unstickOffer,
   });
   const heroHas = (id: PathAction["id"]) => path.hero.primary?.id === id || path.hero.secondary?.id === id || path.hero.also?.id === id;
   const onPathAction = (a: PathAction) => {
@@ -5809,12 +6146,14 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
       case "mark-ready": onDraft(); break;
       case "open-github": openExternal(d.url); break;
       case "update-branch": onUpdateBranch(updateMove.syncLocal); break;
+      case "unstick": onUnstick?.(); break;
       case "arm-auto": onAutoMerge(); break;
       default: break;
     }
   };
   const actionDisabled: Partial<Record<PathAction["id"], string>> = {
-    ...(awaitingChecks ? { rerun: "A new run is already starting from the update", "update-branch": "The branch was just updated — waiting for the checks to start. Pushing again would restart them." } : null),
+    ...(awaitingChecks ? { rerun: "A new run is already starting from the update" } : null),
+    ...(updateHeld(upState) ? { "update-branch": updateHeldTitle(upState)! } : null),
     ...(!canUpdate ? { "update-branch": "Nothing to update, or you cannot push to this branch" } : null),
     ...(autoRefusal || autoOff ? { "arm-auto": autoRefusal ?? "Auto-merge is off for this repository — Settings › General › Pull requests › Allow auto-merge" } : null),
   };
@@ -5869,7 +6208,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
                     background: HAZARD_STRIPE,
                     color: "var(--bg)", fontWeight: 600,
                   }
-                : { background: "var(--primary)", color: "var(--bg)", fontWeight: 500 }}>
+                : { background: "var(--primary)", color: "var(--on-primary)", fontWeight: 500 }}>
               {mergeWork
                 ? (
                   /* The ring the rest of the app spins, sized to a 10.5px
@@ -5896,7 +6235,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
                 disabled={busy || !!mergeWork}
                 align="right"
                 className="text-[10.5px] px-1.5 py-1 outline-none"
-                style={{ background: "var(--primary)", color: "var(--bg)", borderLeft: "1px solid color-mix(in srgb, var(--bg) 35%, transparent)" }}
+                style={{ background: "var(--primary)", color: "var(--on-primary)", borderLeft: "1px solid color-mix(in srgb, var(--on-primary) 35%, transparent)" }}
                 placeholder=""
               />
             )}
@@ -6005,12 +6344,18 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
              * stale in that window, so the second press is usually for a gap
              * that has already been closed.
              */
-            <Btn onClick={() => onUpdateBranch(updateMove.syncLocal)} disabled={busy || !!awaitingChecks} warn hazard={!!updateMove.notice}
+            <Btn onClick={() => onUpdateBranch(updateMove.syncLocal)} disabled={busy || updateHeld(upState)} warn hazard={!!updateMove.notice}
               pending={busyWhat === "Update branch"}
-              title={awaitingChecks
-                ? "The branch was just updated — waiting for the checks to start. Pushing again would restart them."
-                : updateMove.title}>
+              title={updateHeldTitle(upState) ?? updateMove.title}>
               <RefreshIcon size={ICON.xs} />{updateMove.label}</Btn>
+          )}
+          {canUpdate && prLagging && (
+            <span className="text-[10.5px] min-w-0" style={{ color: "var(--warning-ink)" }}>{LAGGING_SENTENCE}</span>
+          )}
+          {canUpdate && upState === "stalled" && (
+            <span className="text-[10.5px] min-w-0" style={{ color: "var(--warning-ink)" }}>
+              {stalledNote(d.mergeState, updateNote)}
+            </span>
           )}
           {/* Only with something to re-run. `failure > 0` already implies the
               rollup is populated, so this cannot appear over an empty one. */}
@@ -6151,7 +6496,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
         <section className="rounded-lg overflow-hidden" style={{ border: EDGE }}>
           <div className="flex gap-2.5 items-start p-3">
             <span className="shrink-0 rounded-full flex items-center justify-center text-[13px]"
-              style={{ width: 26, height: 26, background: d.state === "MERGED" ? "var(--primary)" : "color-mix(in srgb, var(--text3) 60%, transparent)", color: "var(--bg)" }}>
+              style={{ width: 26, height: 26, background: d.state === "MERGED" ? "var(--primary)" : "color-mix(in srgb, var(--text3) 60%, transparent)", color: d.state === "MERGED" ? "var(--on-primary)" : "var(--bg)" }}>
               {d.state === "MERGED" ? <MergeIcon size={ICON.sm} /> : <BlockedIcon size={ICON.sm} />}
             </span>
             <span className="min-w-0">
@@ -6474,14 +6819,7 @@ export function Menu({ label, title, children, align = "right", primary, bare }:
 }) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
-    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
-    document.addEventListener("mousedown", away);
-    document.addEventListener("keydown", esc);
-    return () => { document.removeEventListener("mousedown", away); document.removeEventListener("keydown", esc); };
-  }, [open]);
+  const closeMenu = useCallback(() => setOpen(false), []);
   // `flex`, and not for layout: a block wrapper around an inline-flex button
   // builds a line box, and the leading above the baseline made this 26.6px tall
   // around a 24px button. Beside a bare Btn with no wrapper, that showed up as
@@ -6498,24 +6836,30 @@ export function Menu({ label, title, children, align = "right", primary, bare }:
           </button>
         )
         : <Btn onClick={() => setOpen((v) => !v)} title={title} small primary={primary}>{label}</Btn>}
-      {open && (
-        <div className="absolute z-50 mt-1.5 rounded-lg overflow-hidden agx-menu" style={{ [align]: 0, minWidth: 216 }}>
-          {children(() => setOpen(false))}
-        </div>
-      )}
+      {/* Drawn on the body, not inside this wrapper: a comment card is
+          `overflow: hidden`, and the list used to be cut off at its edge. */}
+      {open && <AnchoredMenu anchor={box} align={align} onClose={closeMenu}>{children(closeMenu)}</AnchoredMenu>}
     </div>
   );
 }
 
 export function MenuItem({ children, onClick, danger, kbd, icon }: {
   children: React.ReactNode; onClick: () => void; danger?: boolean; kbd?: string;
-  /** Drawn before the words, in the words' own colour. */
+  /** Drawn before the words, in the words' own colour. Pass it HERE and not as a
+   *  child: the label is a truncating box, and an svg put inside it (they are
+   *  `display: block` under the reset) took a line to itself, so the eye sat
+   *  above the word Hide. */
   icon?: React.ReactNode;
 }) {
+  // One row, one height: HIT, whatever the row holds. The rows used to be as
+  // tall as their glyph's fallback font made them, and the column was uneven.
   return (
-    <button onClick={onClick} className="agx-mi w-full text-left flex items-center gap-2 px-3 py-1.5 text-[11px]"
-      style={{ color: danger ? "var(--error)" : "var(--text2)" }}>
-      {icon && <span className="shrink-0 flex">{icon}</span>}
+    <button type="button" role="menuitem" onClick={onClick} className="agx-mi w-full text-left flex items-center gap-2 px-2.5 text-[11px] whitespace-nowrap"
+      style={{ minHeight: HIT, color: danger ? "var(--error)" : "var(--text2)" }}>
+      {/* Its own box at the icon's size, so a row with an icon and a row
+          without keep the label on the same line, and an icon of 12 and one of 14 do not
+          shift the words. */}
+      {icon && <span className="shrink-0 grid place-items-center" style={{ width: ICON.sm, height: ICON.sm }}>{icon}</span>}
       <span className="min-w-0 truncate">{children}</span>
       {kbd && <span className="ml-auto text-[9.5px] shrink-0" style={{ color: "var(--text3)" }}>{kbd}</span>}
     </button>
@@ -6670,7 +7014,7 @@ function ReviewMenu({ d, onPick, canTerm, primary = true }: {
                   destination lines it used to be: one shape to learn, and the
                   suggestion is a prompt like the rest — it is just the one this
                   pull request calls for. */}
-              <div role="button" tabIndex={0}
+              <div role="menuitem" tabIndex={0}
                 onClick={() => { close(); onPick(top.id, canTerm ? "term" : "chat"); }}
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); close(); onPick(top.id, canTerm ? "term" : "chat"); } }}
                 title={top.skill || top.title}
@@ -6696,7 +7040,7 @@ function ReviewMenu({ d, onPick, canTerm, primary = true }: {
                      nothing at all. And it runs in a terminal, because that is
                      where a review belongs — a real agent in tmux that survives
                      this app, which you can attach to and keep working in. */
-                  <div key={r.id} role="button" tabIndex={0}
+                  <div key={r.id} role="menuitem" tabIndex={0}
                     onClick={() => { close(); onPick(r.id, canTerm ? "term" : "chat"); }}
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); close(); onPick(r.id, canTerm ? "term" : "chat"); } }}
                     title={r.skill || r.title}
@@ -6923,6 +7267,8 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
   const [q, setQ] = useState("");
   const selRef = useRef(sel); selRef.current = sel;
   const box = useRef<HTMLDivElement>(null);
+  // Abandons, like Escape: nothing is written on the way out.
+  useCloseWithOwner(onClose, { from: box });
   const filterInput = useRef<HTMLInputElement>(null);
 
   /*
@@ -7122,8 +7468,8 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
                 }}
                 disabled={running}
                 className="agx-btn ml-auto px-2.5 py-1 rounded text-[10.5px] inline-flex items-center gap-1.5 disabled:opacity-50"
-                style={{ background: "var(--primary)", color: "var(--bg)" }}>
-                {running && <span className="agx-spin" aria-hidden style={{ width: 8, height: 8, borderWidth: 1.5, borderColor: "color-mix(in srgb, var(--bg) 55%, transparent)", borderTopColor: "transparent" }} />}
+                style={{ background: "var(--primary)", color: "var(--on-primary)" }}>
+                {running && <span className="agx-spin" aria-hidden style={{ width: 8, height: 8, borderWidth: 1.5, borderColor: "color-mix(in srgb, var(--on-primary) 55%, transparent)", borderTopColor: "transparent" }} />}
                 {/* The button names what it is about to do. "Done · and
                     ClickUp" over a menu where only the card changed claimed a
                     GitHub write that was not going to happen. */}
@@ -7194,11 +7540,16 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
   const label = ref?.label ?? "";
   const [card, setCard] = useState<{ id: string; title: string; status: string; updated?: number; listId?: string } | null>(null);
   const [statuses, setStatuses] = useState<CuStatus[]>([]);
+  /* The card's list's custom fields, from the same read as its statuses, for a step's "Set a field". */
+  const [fields, setFields] = useState<import("../../../shared/providers.ts").ListField[] | null>(null);
+  /* A step's comment and fields as the menu showed them, sent with Done (a request each). */
+  const [menuExtras, setMenuExtras] = useState<ExtraItem[]>([]);
   const [members, setMembers] = useState<CuMember[] | null>(null);
   const [on, setOn] = useState<Set<number>>(new Set());
   const [was, setWas] = useState<Set<number>>(new Set());
   const [pick, setPick] = useState<string>("");
-  const [q, setQ] = useState("");
+  const peopleBtn = useRef<HTMLButtonElement>(null);
+  const [peopleOpen, setPeopleOpen] = useState(false);
   /* Folded away, and it comes back.
      This is the optional half of the errand and most presses of this menu are
      only about the reviewer — so it can be put away to a strip, which leaves
@@ -7210,11 +7561,17 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
      Settings says so, and unknown reads as off. */
   const reviewPrefs = useClickupPrefs()?.review;
   const assignReviewer = reviewPrefs?.assignReviewer === true;
-  /* The move item is a step like the others: absent until it is added. */
-  const moveOn = reviewPrefs?.enabled === true;
+  /* The menu's item is a step like the others: absent until it is added, and built from blocks.
+     With a move block it shows the status to move to; with only an assign block it moves nothing
+     and says what it assigns. With no blocks it does nothing and is not drawn. */
+  const menuPlan = reviewPrefs ? planOf("menu", reviewPrefs) : null;
+  const stepOn = reviewPrefs?.enabled === true && !!menuPlan && (!!menuPlan.move || touchesPeople(menuPlan) || hasExtras(menuPlan));
+  const menuHasExtras = stepOn && !!menuPlan && hasExtras(menuPlan);
+  const extraLines = menuExtras.map((i) => (i.kind === "comment" ? "comment on the card" : `set ${i.name} to ${i.shown}`));
+  const moveOn = stepOn && !!menuPlan?.move;
 
   /* Nothing to read for a menu that will draw nothing: neither step added. Unknown prefs read as off. */
-  const wanted0 = moveOn || assignReviewer;
+  const wanted0 = stepOn || assignReviewer;
   useEffect(() => {
     if (!query || !wanted0) return;
     let live = true;
@@ -7230,18 +7587,20 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
       if (!t.listId) return;
       const [meta, mem, prefs] = await Promise.all([
         api.clickupList(t.listId).catch(() => null),
-        api.clickupMembers(t.listId).catch(() => null),
+        listMembers(t.listId).catch(() => null),
         clickupPrefs(),
       ]);
       if (!live) return;
       const st = meta?.ok ? (meta.statuses ?? []) : [];
       setStatuses(st);
+      setFields(meta?.ok ? (meta.fields ?? []) : []);
       setMembers(mem?.ok ? (mem.members ?? []) : []);
       /* Code review by default, found by asking the LIST rather than by
          knowing the word: the workspace's own names first (Settings), else any
          open status with "review" in it, else leave it exactly where it is.
          Prefs not known yet read as no names, which is the shipped guess. */
-      setPick(prefs?.review.enabled ? reviewStatus(st, t.status, prefs.review.statusNames) : "");
+      const rp = prefs?.review ? planOf("menu", prefs.review) : null;
+      setPick(prefs?.review.enabled && rp?.move && (rp.move.names.length > 0 || rp.move.fallback) ? reviewStatus(st, t.status, rp.move.names) : "");
       if (blocked) setPick("");
     })();
     return () => { live = false; };
@@ -7259,17 +7618,39 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
    * and leaving yourself on it is not an assignment. With none of them this half
    * is silent and the press is a GitHub assignment, which is exactly what it is.
    */
+  /*
+   * "Also assign" on the move item: whoever it names is on the card once the
+   * card moves. Worked out from the people this menu already read, so it costs
+   * no request; with the status left where it is, it adds nobody.
+   */
+  const assignPref = menuPlan?.assign;
+  const author = useMemo(() => authorOf(d), [d.author, d.authorName, d.authorEmail]);
+  const fixedEnsure = useMemo<Ensure>(
+    () => (members === null ? { kind: "none" } : resolveEnsure(assignPref, { author, members })),
+    [assignPref, author, members],
+  );
+  /* An assign block that asks when it runs: the menu has the members already, so the picker reads nothing. */
+  const askAssign = stepOn ? (menuPlan?.askAssign ?? null) : null;
+  const asked = useAskAssign({ on: !!askAssign, members, ...(askAssign ? { start: askAssign } : null), author, onCard: [...was].map((id) => ({ id })) });
+  const ensure: Ensure = askAssign ? asked.ensure : fixedEnsure;
+  const movesStatus = !!pick && pick !== (card?.status ?? "");
+  /* A move block only assigns when the card moves; with no move block the assignment is the whole step. */
+  const ensuredKey = (stepOn && (!moveOn || movesStatus) ? ensureIds(ensure, members) : []).join(",");
+  const ensuredIds = useMemo(() => (ensuredKey ? ensuredKey.split(",").map(Number) : []), [ensuredKey]);
+  const base = assignReviewer ? on : was;
+  const effective = useMemo(() => (ensuredIds.some((id) => !base.has(id)) ? new Set([...base, ...ensuredIds]) : base), [base, ensuredIds]);
   const wanted = useMemo(
-    () => cardPlan({ label, pick, statusNow: card?.status, on: assignReviewer ? on : was, was, nameOf }),
-    [label, pick, card?.status, on, was, nameOf, assignReviewer],
+    () => cardPlan({ label, pick, statusNow: card?.status, on: effective, was, nameOf }),
+    [label, pick, card?.status, effective, was, nameOf],
   );
   const plan = useMemo(
     () => blocked ? cardPlan({ label, pick: "", statusNow: card?.status, on: was, was, nameOf }) : wanted,
     [blocked, wanted, label, card?.status, was, nameOf],
   );
+  const unmappedNote = stepOn && (!moveOn || movesStatus) && ensure.kind === "unmapped" ? ensure.why : "";
 
   const run = useCallback(async () => {
-    if (folded || !card || !plan.lines.length) return true;
+    if (folded || !card || (!plan.lines.length && !menuExtras.length)) return true;
     /*
      * One write, not three.
      *
@@ -7280,14 +7661,16 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
      * the card would move to Code Review, gain Ana and lose him, and what
      * happened was only the first of the three.
      */
-    const r = await api.clickupCard(
+    const r = plan.lines.length ? await api.clickupCard(
       card.id,
       { add: plan.add, rem: plan.drop, status: plan.status || undefined },
       card.updated,
-    ).catch(() => ({ ok: false, error: "Could not reach the server", task: undefined }));
-    note(r.ok, r.ok ? cardPlanNote(plan, label) : (r.error || `${label} did not move`));
-    if (r.ok) {
-      setWas(new Set(on));
+    ).catch(() => ({ ok: false, error: "Could not reach the server", task: undefined })) : { ok: true as const, error: undefined, task: undefined };
+    /* A comment and a field are requests of their own, sent once the card's own write has gone through. */
+    const ex = r.ok && menuExtras.length ? await sendExtras(card.id, menuExtras) : null;
+    note(r.ok && (!ex || ex.ok), r.ok ? `${plan.lines.length ? cardPlanNote(plan, label) : label}${ex ? (ex.ok ? ` · ${ex.done.join(" · ")}` : ` — but ${ex.error}`) : ""}` : (r.error || `${label} did not move`));
+    if (r.ok && plan.lines.length) {
+      setWas(new Set(effective));
       setPick("");
       const moved = plan.status;
       setCard((c) => c ? { ...c, status: moved || c.status, updated: r.task?.updated ?? c.updated } : c);
@@ -7297,14 +7680,14 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
          replaces it, so the board's row agrees too. */
       putCard(query, r.task);
     }
-    return r.ok;
-  }, [folded, card, plan, on, label, note, query]);
+    return r.ok && (!ex || ex.ok);
+  }, [folded, card, plan, effective, label, note, query, menuExtras]);
 
   /* Folded means "not this time": the plan it publishes is empty, so the button
      downstairs goes back to plain Done. It was still announcing its changes
      while put away, which left "Done · and ClickUp" on a menu with nothing
      showing. */
-  useEffect(() => { onPlan({ lines: folded ? [] : plan.lines, run }); }, [folded, plan, run, onPlan]);
+  useEffect(() => { onPlan({ lines: folded ? [] : [...plan.lines, ...extraLines], run }); }, [folded, plan, run, onPlan, extraLines.join("|")]);
 
   /*
    * Every hook above this line, and that is not a style rule.
@@ -7315,15 +7698,11 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
    * renders ran a different number of hooks, React threw, and the window went
    * black. That is the blank app in his screenshot.
    */
-  if (!ref || (!moveOn && !assignReviewer)) return null;
+  if (!ref || (!stepOn && !assignReviewer)) return null;
 
-  const people = (members ?? []).filter((m) => m.name && (!q.trim() || m.name.toLowerCase().includes(q.trim().toLowerCase())))
-    .sort((a, b) => {
-      const ah = on.has(a.id) ? 0 : 1, bh = on.has(b.id) ? 0 : 1;
-      if (ah !== bh) return ah - bh;
-      if (a.me !== b.me) return a.me ? -1 : 1;
-      return a.name.localeCompare(b.name);
-    });
+  /* The app's one ordering (lib/peopleOrder): who is ticked, then you, then everyone by name. */
+  const people = orderMembers(members, effective);
+  const onPeople = people.filter((m) => effective.has(m.id));
   if (folded) {
     return (
       <button onClick={() => onFold(false)} title={`Also move ${ref.label} in ClickUp`}
@@ -7398,6 +7777,7 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
               ]}
             />
             {blocked && <div className="mt-1 text-[9.5px]" style={{ color: "var(--text3)" }}>{blocked}</div>}
+            {unmappedNote && <div className="mt-1 text-[9.5px]" role="status" style={{ color: "var(--warning-ink)" }}>{unmappedNote}</div>}
             {(blocked || !pick) && (
               <div className="mt-1 text-[9.5px] flex items-center gap-2" style={{ color: "var(--text4)" }}>
                 <span>now</span>
@@ -7407,36 +7787,51 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
             )}
           </div>
           )}
-          {assignReviewer && <>
-          <div className="px-2 pt-2 shrink-0">
-            <div className="text-[9px] uppercase tracking-[0.16em] mb-1" style={{ color: "var(--text4)" }}>Assigned</div>
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter people…" spellCheck={false}
-              className={`w-full ${INPUT}`}
-              style={INPUT_STYLE} />
-          </div>
-          <div className="overflow-y-auto agx-scroll flex-1 min-h-0 py-1">
-            {members === null && <div className="px-3 py-2 text-[11px]" style={{ color: "var(--text3)" }}>Reading the team…</div>}
-            {people.map((m) => (
-              <button key={m.id} onClick={() => setOn((cur) => { const n = new Set(cur); if (n.has(m.id)) n.delete(m.id); else n.add(m.id); return n; })}
-                disabled={!!blocked} title={blocked ?? undefined}
-                className="agx-mi w-full text-left flex items-center gap-2 px-2.5 py-1.5 text-[11px] disabled:opacity-60 disabled:cursor-default" style={{ color: "var(--text2)" }}>
-                {/* The face, as everywhere else people are drawn in this app.
-                    Two initials is a puzzle in a workspace of five hundred. */}
-                {m.avatar
-                  ? <img src={m.avatar} alt="" loading="lazy" referrerPolicy="no-referrer"
-                      style={{ width: 16, height: 16, borderRadius: 999, objectFit: "cover", flexShrink: 0 }} />
-                  : <span className="shrink-0 rounded-full inline-flex items-center justify-center"
-                      style={{ width: 16, height: 16, background: m.color || "var(--bg4)", color: "#fff", fontSize: 8 }}>
-                      {m.initials}
-                    </span>}
-                <span className="truncate" style={{ color: on.has(m.id) ? "var(--success)" : "var(--text2)" }}>
-                  {m.name}{m.me ? " · you" : ""}
+          {menuHasExtras && card && (
+            <div className="px-3 pb-2 shrink-0" data-menu-extras="">
+              <AskedExtras blocks={reviewPrefs?.blocks ?? []} fields={fields} listId={card.listId} onChange={setMenuExtras}
+                ctx={prContext({ pr: { number: d.number, title: d.title, url: d.url }, author: authorOf(d), status: pick || card.status })} />
+            </div>
+          )}
+          {askAssign && (
+            <div className="px-3 pb-2 shrink-0 flex items-center gap-2 text-[10.5px]" data-menu-ask="" style={{ color: "var(--text3)" }}>
+              <span>Assign to</span><AssignPicker state={asked} label="Assign to" />
+            </div>
+          )}
+          {stepOn && !moveOn && reviewPrefs && (
+            <div className="px-3 py-2 text-[10.5px] shrink-0" style={{ color: "var(--text3)" }} data-menu-assign="">
+              {blocksSentence({ lead: "Done:", trigger: "menu", blocks: blocksOf("menu", reviewPrefs), item: "card", status: null })}
+              {unmappedNote && <div className="mt-1 text-[9.5px]" role="status" style={{ color: "var(--warning-ink)" }}>{unmappedNote}</div>}
+            </div>
+          )}
+          {assignReviewer && (
+            <div className="px-2 pt-2 pb-2 shrink-0" data-menu-people="">
+              <div className="text-[9px] uppercase tracking-[0.16em] mb-1" style={{ color: "var(--text4)" }}>Assigned</div>
+              {/* The app's one people picker (components/PeoplePick), opened from a trigger that says who is on:
+                  the same control the card's Assigned select is, with the filter box, the ticks and the ordering. */}
+              <button ref={peopleBtn} onClick={() => setPeopleOpen((v) => !v)} disabled={!!blocked}
+                className="agx-btn w-full text-left rounded px-1.5 py-1 text-[11px] flex items-center gap-1.5 min-w-0 hover:bg-white/5 disabled:opacity-60 disabled:cursor-default" style={{ border: EDGE }}>
+                {!!onPeople.length && (
+                  <span className="inline-flex items-center shrink-0">
+                    {onPeople.slice(0, 4).map((m, n) => <span key={m.id} className="inline-flex rounded-full" style={{ marginLeft: n ? -4 : 0, boxShadow: "0 0 0 1.5px var(--surface-card)" }}>{memberFace(m)}</span>)}
+                  </span>
+                )}
+                <span className="min-w-0 truncate" style={{ color: onPeople.length ? "var(--text2)" : "var(--text4)" }}>
+                  {members === null ? "Reading the team…" : onPeople.map((m) => (m.me ? "you" : m.name)).join(", ") || "nobody"}
                 </span>
-                {on.has(m.id) && <span className="ml-auto flex" style={{ color: "var(--success-ink)" }}><DoneIcon size={ICON.xs} /></span>}
+                <span className="ml-auto shrink-0" style={{ color: "var(--text4)" }}><CaretIcon size={ICON.xs} /></span>
               </button>
-            ))}
-          </div>
-          </>}
+              {peopleOpen && !blocked && (
+                <PeoplePick anchor={peopleBtn} members={people} busy={members === null}
+                  isOn={(m) => effective.has(m.id)}
+                  locked={(m) => (ensuredIds.includes(m.id) ? "Put on the card by the move item’s “Also assign” setting" : undefined)}
+                  dividerBefore={(m, prev) => effective.has(m.id) !== effective.has(prev.id)}
+                  onPick={(m) => setOn((cur) => { const n = new Set(cur); if (n.has(m.id)) n.delete(m.id); else n.add(m.id); return n; })}
+                  onClose={() => setPeopleOpen(false)}
+                  face={memberFace} />
+              )}
+            </div>
+          )}
         </>
       )}
     </div>
@@ -7675,12 +8070,9 @@ function CardStatusPick({ task, query, onSaid }: { task: ProviderTask; query: st
 }
 
 /** One person's face, the same 16px everywhere this section draws one. */
+/** One face, drawn once for the whole app (AssignPicker's Face): the picture, or the person's colour and initials. */
 function memberFace(p: { avatar?: string; color?: string; initials?: string }) {
-  return p.avatar
-    ? <img src={p.avatar} alt="" loading="lazy" referrerPolicy="no-referrer"
-        style={{ width: 16, height: 16, borderRadius: 999, objectFit: "cover", flexShrink: 0 }} />
-    : <span className="shrink-0 rounded-full inline-flex items-center justify-center"
-        style={{ width: 16, height: 16, background: p.color || "var(--bg4)", color: "#fff", fontSize: 8 }}>{p.initials}</span>;
+  return <Face m={p} />;
 }
 
 /**
@@ -7699,7 +8091,7 @@ function CardPeoplePick({ task, query, onSaid }: { task: ProviderTask; query: st
   );
   const load = useCallback(() => {
     if (members !== null || !task.listId) return;
-    void api.clickupMembers(task.listId)
+    void listMembers(task.listId)
       .then((r) => setMembers(r?.ok ? (r.members ?? []) : []))
       .catch(() => setMembers([]));
   }, [members, task.listId]);
@@ -7759,13 +8151,80 @@ function CardPeoplePick({ task, query, onSaid }: { task: ProviderTask; query: st
 /** What the hand-off will do, drawn inside the confirm: the card, the status
  *  it leaves and enters, and who comes off it. A bare "are you sure" asked
  *  people to trust a sentence about a write they could not see. */
-export function ReadyForQaSummary({ task, target, targetColor, unassign = "all" }: {
-  task: ProviderTask; target: string; targetColor?: string;
+/**
+ * What the hand-off dialog shows when its blocks ask when they run: the status to move to and/or the person
+ * to put on the card, each starting where Settings says, and the summary below reads the choice live.
+ * What was chosen goes back through `onChange` on every change, so the press that confirms writes exactly
+ * what the dialog shows.
+ */
+export function AskedHandoff({ task, statuses, start, author, askStatus, askAssign, askUnassign, fixed, unassign, takeOff, extras, onChange }: {
+  task: ProviderTask; statuses: CuStatus[];
+  /** The status the dialog starts at, or "" for leaving the card where it is. */
+  start: string;
+  author: PrAuthor | null;
+  askStatus: boolean;
+  /** Where the person picker starts; null when the assignment is fixed. */
+  askAssign: import("../../../shared/providers.ts").StepAssign | null;
+  /** The assignment when it is fixed. */
+  fixed: Ensure;
+  unassign: HandoffUnassign;
+  /** The take-off asks: where its picker starts (among the people on the card). Null when it is fixed. */
+  askUnassign: { who: HandoffUnassign | "people"; people: { id: number; name: string }[] } | null;
+  /** Named people the step takes off, when that is fixed. */
+  takeOff?: number[];
+  /** The step's comment and field blocks, shown (and asked, where they ask) beside the rest. */
+  extras?: { blocks: import("../../../shared/providers.ts").StepBlock[]; fields: import("../../../shared/providers.ts").ListField[] | null; pr: { number: number; title: string; url: string }; ctxAuthor: PrAuthor | null };
+  onChange: (c: { status: string; ensure: Ensure; takeOff?: number[]; extras: ExtraItem[] }) => void;
+}) {
+  const [extraItems, setExtraItems] = useState<ExtraItem[]>([]);
+  const [status, setStatus] = useState(start);
+  const cardPeople: CuMember[] = (task.people ?? []).filter((p): p is typeof p & { id: number } => p.id != null).map((p) => ({ id: p.id, name: p.name ?? "", initials: p.initials ?? "", ...(p.color ? { color: p.color } : null), ...(p.avatar ? { avatar: p.avatar } : null), ...(p.me ? { me: true } : null) }));
+  const off = useAskTakeOff({ on: !!askUnassign, cardPeople, ...(askUnassign ? { start: askUnassign } : null) });
+  const takeOffIds = askUnassign ? off.ids : takeOff;
+  const a = useAskAssign({ on: !!askAssign, ...(task.listId ? { listId: task.listId } : null), ...(askAssign ? { start: askAssign } : null), author, onCard: task.people });
+  const ensure = askAssign ? a.ensure : fixed;
+  useEffect(() => { onChange({ status, ensure, ...(takeOffIds ? { takeOff: takeOffIds } : null), extras: extraItems }); }, [status, JSON.stringify(ensure), JSON.stringify(takeOffIds ?? null), JSON.stringify(extraItems)]);
+  const key = { color: "var(--text3)", fontSize: 10.5, textTransform: "uppercase" as const, letterSpacing: "0.04em" };
+  return (
+    <div className="flex flex-col gap-2">
+      {(askStatus || askAssign || askUnassign) && (
+        <div className="mt-3 grid items-center gap-y-2" style={{ gridTemplateColumns: "84px 1fr" }} data-asked="">
+          {askStatus && <>
+            <div style={key}>Move to</div>
+            <Select value={status} onChange={setStatus} align="left" title="Where the card goes"
+              options={[{ value: "", label: "leave it where it is" }, ...statuses.filter((x) => x.status !== task.status).map((x) => ({ value: x.status, label: x.status, tint: x.color, pill: true, dim: x.type === "done" || x.type === "closed" }))]} />
+          </>}
+          {askUnassign && <>
+            <div style={key}>Take off</div>
+            <AssignPicker state={off} label="Take off" nobody="take nobody off" />
+          </>}
+          {askAssign && <>
+            <div style={key}>Assign to</div>
+            <AssignPicker state={a} />
+          </>}
+        </div>
+      )}
+      {extras && <AskedExtras blocks={extras.blocks} fields={extras.fields} listId={task.listId} onChange={setExtraItems}
+        ctx={prContext({ pr: extras.pr, author: extras.ctxAuthor, status: status || task.status })} />}
+      <ReadyForQaSummary task={task} {...(status ? { target: status, targetColor: statusColor(statuses, status) } : null)} unassign={unassign} {...(takeOffIds ? { takeOff: takeOffIds } : null)} ensure={ensure} />
+    </div>
+  );
+}
+
+export function ReadyForQaSummary({ task, target, targetColor, unassign = "all", takeOff, ensure = { kind: "none" } }: {
+  /** `target` is absent for a step with no move block: the status stays and only the people change. */
+  task: ProviderTask; target?: string; targetColor?: string;
   /** Who the workspace's hand-off setting takes off; everybody when not said. */
   unassign?: HandoffUnassign;
+  /** Named people taken off instead of the rule above. */
+  takeOff?: number[];
+  /** Who "Also assign" makes sure is on the card afterwards. */
+  ensure?: Ensure;
 }) {
   const people = task.people ?? [];
-  const off = new Set(handoffRemovals(people, unassign));
+  /* The same decision the press makes: whoever is ensured never comes off. */
+  const plan = stepChanges({ status: target, people, unassign, ...(takeOff ? { takeOff } : null), ensure });
+  const off = new Set(plan.write.rem ?? []);
   const comesOff = people.filter((p) => p.id != null && off.has(p.id));
   const stays = people.filter((p) => !(p.id != null && off.has(p.id)));
   const key = { color: "var(--text3)", fontSize: 10.5, textTransform: "uppercase" as const, letterSpacing: "0.04em" };
@@ -7781,8 +8240,7 @@ export function ReadyForQaSummary({ task, target, targetColor, unassign = "all" 
         <div style={key}>Status</div>
         <div className="flex items-center gap-1.5 min-w-0">
           <StatusPill status={task.status} color={task.statusColor} />
-          <span style={{ color: "var(--text3)" }}>→</span>
-          <StatusPill status={target} color={targetColor} />
+          {target ? <><span style={{ color: "var(--text3)" }}>→</span><StatusPill status={target} color={targetColor} /></> : <span style={{ color: "var(--text3)" }}>stays</span>}
         </div>
         <div style={key}>Unassign</div>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -7792,6 +8250,17 @@ export function ReadyForQaSummary({ task, target, targetColor, unassign = "all" 
               ))
             : <span style={{ color: "var(--text3)" }}>{people.length ? "nobody comes off" : "nobody assigned"}</span>}
         </div>
+        {ensure.kind !== "none" && (
+          <>
+            <div style={key}>Assign</div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              {ensure.kind === "unmapped"
+                ? <span style={{ color: "var(--warning-ink)" }}>{ensure.why}</span>
+                : plan.named ? <span>{plan.named === "you" ? "you" : plan.named}</span>
+                : <span style={{ color: "var(--text3)" }}>already on the card</span>}
+            </div>
+          </>
+        )}
         {stays.length > 0 && (
           <>
             <div style={key}>Stays on</div>
@@ -7805,7 +8274,9 @@ export function ReadyForQaSummary({ task, target, targetColor, unassign = "all" 
       </div>
       <div className="mt-3 text-[11px] leading-relaxed" style={{ color: "var(--text3)" }}>
         One write to ClickUp.{" "}
-        {unassign === "all" ? "Nobody stays on the card until QA picks it up."
+        {plan.named ? `${plan.named === "you" ? "You are" : /,| and /.test(plan.named) ? `${plan.named} are` : `${plan.named} is`} put on the card${unassign === "none" ? "; everyone else stays." : "."}`
+          : unassign === "all" && ensure.kind !== "none" ? "Everyone else comes off the card."
+          : unassign === "all" ? "Nobody stays on the card until QA picks it up."
           : unassign === "me" ? "Only you come off the card."
           : "Everyone assigned stays on the card."}
       </div>
@@ -7824,54 +8295,109 @@ export function ReadyForQaSummary({ task, target, targetColor, unassign = "all" 
  * picker's is: hover cannot decide whether to show a button at all. One extra
  * read per card the sidebar already opened for.
  */
-function CardReadyForQaButton({ task, query, onSaid, ask }: {
+function CardReadyForQaButton({ task, query, onSaid, ask, author, pr }: {
   task: ProviderTask; query: string; onSaid: (s: string) => void;
+  /** The pull request, for a comment's {pr} and {pr_url}. */
+  pr: { number: number; title: string; url: string };
+  /** The pull request's author, for "Also assign: the pull request's author". */
+  author: PrAuthor | null;
   ask: (spec: { title: string; body?: string; node?: React.ReactNode; confirmLabel?: string; danger?: boolean }) => Promise<boolean>;
 }) {
   const blocked = writeBlock(useClickupSetup());
   const [statuses, setStatuses] = useState<CuStatus[] | null>(null);
+  /* The list's custom fields, from the same read as its statuses (one request), for a "Set a field" block. */
+  const [fields, setFields] = useState<import("../../../shared/providers.ts").ListField[] | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     let live = true;
     if (!task.listId) { setStatuses([]); return; }
     void api.clickupList(task.listId)
-      .then((r) => { if (live) setStatuses(r?.ok ? (r.statuses ?? []) : []); })
+      .then((r) => { if (live) { setStatuses(r?.ok ? (r.statuses ?? []) : []); setFields(r?.ok ? (r.fields ?? []) : []); } })
       .catch(() => { if (live) setStatuses([]); });
     return () => { live = false; };
   }, [task.listId]);
 
   const handoff = useClickupPrefs()?.handoff;
   // Unknown prefs read as off, so the button never flashes on and away.
+  const plan = handoff ? planOf("move", handoff) : null;
   const target = statuses && handoff ? readyForQaStatus(statuses, task.status, handoff) : undefined;
-  if (!target || !handoff) return null;
+  /* A step with no move block keeps its button when it still changes who is on the card. */
+  const peopleOnly = !!handoff?.enabled && !!plan && !plan.move && touchesPeople(plan);
+  /* A move that asks when it runs has its button even where the default status is not in this list: the person picks one. */
+  const askStatus = !!handoff?.enabled && plan?.move?.ask === true && !!statuses?.length;
+  const askAssign = plan?.askAssign ?? null;
+  const askUnassign = plan?.askUnassign ?? null;
+  const fixedTakeOff = plan && plan.takeOff.length ? plan.takeOff.map((p) => p.id) : undefined;
+  /* A comment or a field is a step of its own kind: the button is there for it even with nothing to move. */
+  const extras = !!handoff?.enabled && !!plan && hasExtras(plan);
+  if (!handoff || !plan || (!target && !peopleOnly && !askStatus && !extras)) return null;
+  const label = target ? `Move to ${target}` : askStatus ? "Move card…" : peopleOnly ? peopleButtonLabel(plan) : plan.field && !plan.comment ? `Set ${plan.field.field}` : plan.comment && !plan.field ? "Comment on card" : "Update card…";
+
+  /* Who "Assign" means. Only the author needs the team read (the member list the server already holds for
+     this list: no request when it is warm); "me" is answered by the server from the connected account, a
+     named person is already an id. */
+  const readMembers = () => (plan.assign.who === "author" && task.listId
+    ? listMembers(task.listId).then((r) => (r?.ok ? (r.members ?? []) : null)).catch(() => null)
+    : Promise.resolve(null));
+
+  /* The one write, whichever way the choices were made. One request: the same write the status picker and the
+     people picker each make half of — see cardMove's note on the three-call version racing its own `updated` stamp. */
+  const send = async (to: string | undefined, ensure: Ensure, takeOff?: number[], extraItems: ExtraItem[] = []) => {
+    const { write, named } = stepChanges({ ...(to ? { status: to } : null), people: task.people, unassign: plan.unassign, ...(takeOff ? { takeOff } : null), ensure });
+    const nothingOnCard = !write.status && !write.add && !write.rem && !write.addMe;
+    /* A step whose answer is already true has nothing to send. */
+    if (nothingOnCard && !extraItems.length) { onSaid(ensure.kind === "unmapped" ? `!${ensure.why}` : "nothing to change: the card is already as asked"); return; }
+    setBusy(true);
+    onSaid(to ? "moving…" : "updating…");
+    /* The status and the people are one request; each field and a comment is one more (see lib/stepExtras). */
+    const r = nothingOnCard ? { ok: true as const, task: undefined, error: undefined } : await api.clickupCard(task.id, write, task.updated)
+      .catch(() => ({ ok: false, error: "Could not reach the server", task: undefined }));
+    const ex = r.ok && extraItems.length ? await sendExtras(task.id, extraItems) : null;
+    setBusy(false);
+    onSaid(!r.ok ? `!${r.error || "ClickUp refused that"}` : ex && !ex.ok ? `!${nothingOnCard ? "" : "card updated, but "}${ex.error}` : `${nothingOnCard ? "done" : to ? `now ${to}` : "card updated"}${write.rem ? " · unassigned" : ""}${assignedNote(named)}${ex?.done.length ? ` · ${ex.done.join(" · ")}` : ""}${ensure.kind === "unmapped" ? ` · ${ensure.why}` : ""}`);
+    if (r.ok && r.task) putCard(query, r.task);
+  };
+
+  /* When a block asks when it runs, the dialog carries the question, starting where Settings says; what was
+     chosen is what is written. */
+  const runAsked = async () => {
+    const members = await readMembers();
+    const chosen = { current: { status: target ?? "", ensure: resolveEnsure(plan.assign, { author, members }), takeOff: fixedTakeOff, extras: [] } as { status: string; ensure: Ensure; takeOff?: number[]; extras: ExtraItem[] } };
+    const said = await ask({
+      title: `${label.replace("…", "")}?`,
+      node: <AskedHandoff task={task} statuses={statuses ?? []} start={target ?? ""} author={author} askStatus={askStatus} askAssign={askAssign} askUnassign={askUnassign}
+        fixed={chosen.current.ensure} unassign={plan.unassign} {...(fixedTakeOff ? { takeOff: fixedTakeOff } : null)}
+        {...(extras ? { extras: { blocks: handoff.blocks ?? [], fields, pr, ctxAuthor: author } } : null)} onChange={(c) => { chosen.current = c; }} />,
+      confirmLabel: "Confirm",
+    });
+    if (!said) return;
+    const { status, ensure, takeOff, extras: extraItems } = chosen.current;
+    await send(status && status !== task.status ? status : undefined, ensure, takeOff, extraItems);
+  };
 
   const move = async () => {
     if (busy || blocked) return;
+    if (askStatus || askAssign || askUnassign || extras) { await runAsked(); return; }
+    const members = await readMembers();
+    const ensure = resolveEnsure(plan.assign, { author, members });
+    const { write } = stepChanges({ ...(target ? { status: target } : null), people: task.people, unassign: plan.unassign, ...(fixedTakeOff ? { takeOff: fixedTakeOff } : null), ensure });
+    /* A people-only step whose answer is already true has nothing to send. */
+    if (!write.status && !write.add && !write.rem && !write.addMe) { onSaid(ensure.kind === "unmapped" ? `!${ensure.why}` : "nothing to change: the card is already as asked"); return; }
     const said = await ask({
-      title: `Move to ${target}?`,
-      node: <ReadyForQaSummary task={task} target={target} targetColor={statusColor(statuses ?? [], target)} unassign={handoff.unassign} />,
-      confirmLabel: `Move to ${target}`,
+      title: `${label}?`,
+      node: <ReadyForQaSummary task={task} {...(target ? { target, targetColor: statusColor(statuses ?? [], target) } : null)} unassign={plan.unassign} {...(fixedTakeOff ? { takeOff: fixedTakeOff } : null)} ensure={ensure} />,
+      confirmLabel: label,
     });
     if (!said) return;
-    setBusy(true);
-    onSaid("moving…");
-    // One request: the same write the status picker and the people picker each
-    // make half of — see cardMove's note on the three-call version racing its
-    // own `updated` stamp.
-    const changes = handoffChanges(target, task.people, handoff.unassign);
-    const r = await api.clickupCard(task.id, changes, task.updated)
-      .catch(() => ({ ok: false, error: "Could not reach the server", task: undefined }));
-    setBusy(false);
-    onSaid(r.ok ? `now ${target}${changes.rem ? " · unassigned" : ""}` : `!${r.error || "ClickUp refused that"}`);
-    if (r.ok) putCard(query, r.task);
+    await send(target, ensure, fixedTakeOff);
   };
 
   return (
     <button onClick={() => { void move(); }} disabled={busy || !!blocked}
       className="agx-btn text-[10.5px] px-2 py-0.5 rounded disabled:opacity-50"
-      title={blocked ?? `Move to ${target}${handoff.unassign === "all" ? " and unassign everyone" : handoff.unassign === "me" ? " and take yourself off" : ""}`}
+      title={blocked ?? blocksSentence({ lead: "This button:", trigger: "move", blocks: blocksOf("move", handoff), item: "card", status: target ?? null })}
       style={{ color: "var(--text2)", border: EDGE }}>
-      Move to {target}
+      {label}
     </button>
   );
 }
@@ -7955,7 +8481,7 @@ function CardFacts({ d }: { d: PrDetail }) {
                   Note on card
                 </button>
               )}
-              <CardReadyForQaButton task={task} query={query} onSaid={setSaid} ask={ask} />
+              <CardReadyForQaButton task={task} query={query} onSaid={setSaid} ask={ask} author={authorOf(d)} pr={{ number: d.number, title: d.title, url: d.url }} />
               {said && <span className="text-[10px]" style={{ color: said.startsWith("!") ? "var(--warning)" : "var(--success)" }}>{said.replace(/^!/, "")}</span>}
             </div>
             {blocked && <div className="text-[10px]" style={{ color: "var(--text3)" }}>{blocked}</div>}
@@ -8532,22 +9058,22 @@ function Masthead({ root, repo, d, busy, local, stackUi, onOpenPr, onShowLocal, 
                   only reason the column looked ragged — a colour pictogram next
                   to line art reads as a different size whatever its em box says.
                   ⧉ for copy is the one the machine panel already uses. */}
-              <MenuItem onClick={() => { close(); onEditTitle(); }}>&#9998; Edit title</MenuItem>
+              <MenuItem icon={<EditIcon size={ICON.sm} />} onClick={() => { close(); onEditTitle(); }}>Edit title</MenuItem>
               {/* Requesting a review or flipping the draft flag are things you do
                   to a pull request that is still going. On a merged one GitHub
                   does not offer them either. */}
               {d.state === "OPEN" && <>
-                <MenuItem onClick={() => { close(); onReviewers(); }}>&#9673; Request a review</MenuItem>
-                <MenuItem icon={<DraftIcon size={ICON.xs} />} onClick={() => { close(); onDraft(); }}>{d.isDraft ? "Mark ready for review" : "Convert to draft"}</MenuItem>
+                <MenuItem icon={<UserIcon size={ICON.sm} />} onClick={() => { close(); onReviewers(); }}>Request a review</MenuItem>
+                <MenuItem icon={<DraftIcon size={ICON.sm} />} onClick={() => { close(); onDraft(); }}>{d.isDraft ? "Mark ready for review" : "Convert to draft"}</MenuItem>
               </>}
-              <MenuItem icon={<TagIcon size={ICON.xs} />} onClick={() => { close(); onLabels(); }}>Edit labels</MenuItem>
+              <MenuItem icon={<TagIcon size={ICON.sm} />} onClick={() => { close(); onLabels(); }}>Edit labels</MenuItem>
               <MenuSep />
               {onNudge && d.state === "OPEN" && (
-                <MenuItem onClick={() => { close(); onNudge(); }}>&#128276; Nudge the reviewers</MenuItem>
+                <MenuItem icon={<BellIcon size={ICON.sm} />} onClick={() => { close(); onNudge(); }}>Nudge the reviewers</MenuItem>
               )}
               {d.state !== "MERGED" && <>
                 <MenuSep />
-                <MenuItem icon={d.state === "CLOSED" ? <UndoIcon size={ICON.xs} /> : <CrossIcon size={ICON.xs} />} onClick={() => { close(); onClose(); }} danger={d.state !== "CLOSED"}>
+                <MenuItem icon={d.state === "CLOSED" ? <UndoIcon size={ICON.sm} /> : <CrossIcon size={ICON.sm} />} onClick={() => { close(); onClose(); }} danger={d.state !== "CLOSED"}>
                   {d.state === "CLOSED" ? "Reopen pull request" : "Close pull request"}
                 </MenuItem>
               </>}
@@ -9069,6 +9595,7 @@ function FilesFilterMenu({ facets, hiddenExts, onToggleExt, onClearExts, showVie
 }) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
+  useCloseWithOwner(() => setOpen(false), { open, from: btnRef });
   const [pos, setPos] = useState({ top: 0, left: 0 });
   useLayoutEffect(() => {
     if (open && btnRef.current) {
@@ -9078,7 +9605,7 @@ function FilesFilterMenu({ facets, hiddenExts, onToggleExt, onClearExts, showVie
     }
   }, [open]);
   const active = hiddenExts.length > 0 || !showViewed;
-  const box = (on: boolean) => ({ width: 14, height: 14, borderRadius: 4, border: `1px solid ${on ? "var(--primary)" : "color-mix(in srgb, var(--border) 70%, transparent)"}`, background: on ? "var(--primary)" : "transparent", color: "var(--bg)" });
+  const box = (on: boolean) => ({ width: 14, height: 14, borderRadius: 4, border: `1px solid ${on ? "var(--primary)" : "color-mix(in srgb, var(--border) 70%, transparent)"}`, background: on ? "var(--primary)" : "transparent", color: "var(--on-primary)" });
   return (
     <>
       <button ref={btnRef} onClick={() => setOpen((o) => !o)} title="Filter changed files"
@@ -10825,6 +11352,7 @@ function Reactions({ nodeId, reactions, onReact }: {
 }) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
+  useCloseWithOwner(() => setOpen(false), { open, from: btnRef });
   const [pos, setPos] = useState({ top: 0, left: 0 });
   // Eight emoji at ~26px plus the padding; enough to keep the row on screen
   // when the button sits near the right edge.
@@ -10979,22 +11507,22 @@ function Card({ who, chip, when, url, edited, assoc, nodeId, reactions, onReact,
               {(close) => (
                 <>
                   {url && (
-                    <MenuItem onClick={() => { close(); void navigator.clipboard?.writeText(url).catch(() => {}); }}>
-                      &#9033; Copy link
+                    <MenuItem icon={<LinkIcon size={ICON.sm} />} onClick={() => { close(); void navigator.clipboard?.writeText(url).catch(() => {}); }}>
+                      Copy link
                     </MenuItem>
                   )}
                   {body && (
-                    <MenuItem onClick={() => { close(); void navigator.clipboard?.writeText(body).catch(() => {}); }}>
-                      &#9033; Copy Markdown
+                    <MenuItem icon={<MarkdownIcon size={ICON.sm} />} onClick={() => { close(); void navigator.clipboard?.writeText(body).catch(() => {}); }}>
+                      Copy Markdown
                     </MenuItem>
                   )}
                   {body && onQuote && (
-                    <MenuItem onClick={() => { close(); onQuote(body); }}>&#8221; Quote reply</MenuItem>
+                    <MenuItem icon={<QuoteIcon size={ICON.sm} />} onClick={() => { close(); onQuote(body); }}>Quote reply</MenuItem>
                   )}
-                  {mine && onEdit && <><MenuSep /><MenuItem onClick={() => { close(); onEdit(); }}>&#9998; Edit</MenuItem></>}
+                  {mine && onEdit && <><MenuSep /><MenuItem icon={<EditIcon size={ICON.sm} />} onClick={() => { close(); onEdit(); }}>Edit</MenuItem></>}
                   {onHide && (
-                    <MenuItem onClick={() => { close(); onHide(!minimized); }}>
-                      <EyeIcon size={ICON.xs} />{minimized ? "Unhide" : "Hide"}
+                    <MenuItem icon={<EyeIcon size={ICON.sm} />} onClick={() => { close(); onHide(!minimized); }}>
+                      {minimized ? "Unhide" : "Hide"}
                     </MenuItem>
                   )}
                 </>
@@ -11785,7 +12313,9 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   /* `key` so a quote lands: the composer reads its stash when it mounts, which is
      the same mechanism that restores a half-written comment, and remounting is how a
      quote written into that stash reaches the box somebody is about to type in. */
-  const composer = <Composer key={composerKey} onSend={onComment} busy={busy} placeholder="Leave a comment — markdown works here" sendLabel="Comment" onOpenGithub={() => openExternal(d.url)} stash={`say|${d.url}`} />;
+  const stashKey = `say|${d.url}`;
+  const prep = useSyncExternalStore(subscribePrepared, () => preparedFor(stashKey)?.n ?? 0, () => 0) ? preparedFor(stashKey) : null;
+  const composer = <Composer key={`${composerKey}|${markedAt(stashKey)}`} preparedBy={prep} onSend={onComment} busy={busy} placeholder="Leave a comment — markdown works here" sendLabel="Comment" onOpenGithub={() => openExternal(d.url)} stash={stashKey} />;
 
   if (entries.length === 0) {
     return (
@@ -11988,7 +12518,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
  * Write, preview, send. Shared by the conversation and by anywhere else that
  * takes markdown, so the two never drift into behaving differently.
  */
-function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOpenGithub, initial, autoFocus, secondary, stash }: {
+function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOpenGithub, initial, autoFocus, secondary, stash, preparedBy }: {
   onSend: (body: string) => Promise<boolean>; busy: boolean; placeholder: string; sendLabel: string;
   /** What the main button promises, when the label alone cannot say it. */
   sendTitle?: string;
@@ -12010,7 +12540,11 @@ function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOp
    *  here survives the box being closed, the tab being changed and the app
    *  being rebuilt, and comes back the next time this same box is opened. */
   stash?: string;
+  /** An agent left text in this box: its name for itself. A line says so, and
+   *  the send buttons and the chord stay dead for a moment (stageHold.ts). */
+  preparedBy?: { by: string; n: number } | null;
 }) {
+  const held = useStageHold(!!preparedBy, preparedBy?.n);
   const [text, setText] = useState(() => (stash ? readStash(stash) : "") || initial || "");
   const [preview, setPreview] = useState(false);
   const [sending, setSending] = useState(false);
@@ -12028,7 +12562,7 @@ function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOp
   };
   /** Was there something here when the box opened? Worth saying — text that
    *  reappears without explanation reads as a bug, not as a rescue. */
-  const [restored, setRestored] = useState(() => !!(stash && readStash(stash).trim()));
+  const [restored, setRestored] = useState(() => !!(stash && readStash(stash).trim()) && !preparedBy);
   useEffect(() => { if (stash) writeStash(stash, text); }, [stash, text]);
 
   // `initial` can arrive AFTER the box is open: "± Suggest" prefills a
@@ -12138,11 +12672,17 @@ function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOp
    *  guard, the spinner, the clear-on-success — instead of a copy of it that
    *  drifts. */
   const send = async (which: (body: string) => Promise<boolean> = onSend) => {
-    if (!text.trim() || sending) return;
+    if (!text.trim() || sending || held) return;
     setSending(true);
     const ok = await which(text);
     setSending(false);
-    if (ok) { setText(""); setPreview(false); }
+    if (ok) {
+      setText(""); setPreview(false);
+      // Empty the stash first: clearing the mark can remount this box before its own
+      // effect writes the empty text, and the new one would read the text just sent
+      // and offer it back as "never sent".
+      if (stash) { writeStash(stash, ""); clearPrepared(stash); }
+    }
   };
 
   return (
@@ -12175,7 +12715,7 @@ function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOp
                   <MenuItem key={r.id} onClick={() => { close(); insertAtCaret(r.text); }}>{r.title}</MenuItem>
                 ))}
                 <MenuSep />
-                <MenuItem onClick={() => { close(); openSettings("saved-replies"); }}>&#9998; Edit saved replies…</MenuItem>
+                <MenuItem icon={<EditIcon size={ICON.sm} />} onClick={() => { close(); openSettings("saved-replies"); }}>Edit saved replies…</MenuItem>
               </>
             )}
           </Menu>
@@ -12192,6 +12732,13 @@ function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOp
               style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>Attach on GitHub ↗</button>
           )}
           <button onClick={() => setImageNote(null)} className="agx-btn shrink-0 grid place-items-center w-5 h-5 rounded" style={{ color: "var(--text3)" }} aria-label="Dismiss"><CloseIcon size={ICON.xs} /></button>
+        </div>
+      )}
+      {preparedBy && (
+        <div className="flex items-center gap-2 px-2.5 py-1 text-[10px]" data-prepared-by="" role="status"
+          style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", borderBottom: LINE }}>
+          <span>{preparedLine(preparedBy.by)}</span>
+          <button onClick={() => { if (stash) clearPrepared(stash); }} className="agx-btn ml-auto shrink-0 grid place-items-center w-5 h-5 rounded" style={{ color: "var(--text3)" }} aria-label="Dismiss"><CloseIcon size={ICON.xs} /></button>
         </div>
       )}
       {restored && (
@@ -12249,12 +12796,12 @@ function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOp
         </span>
         <span className="ml-auto flex items-center gap-1.5">
           {secondary && (
-            <Btn onClick={() => send(secondary.onSend)} disabled={sending || busy || !text.trim()} small
+            <Btn onClick={() => send(secondary.onSend)} disabled={sending || busy || held || !text.trim()} small
               title={!text.trim() ? "Write something first" : secondary.title}>
               {secondary.label}
             </Btn>
           )}
-          <Btn onClick={() => send()} disabled={sending || busy || !text.trim()} primary={!quiet} small
+          <Btn onClick={() => send()} disabled={sending || busy || held || !text.trim()} primary={!quiet} small
             title={!text.trim() ? "Write something first" : sendTitle}>
             {sending ? "Sending…" : sendLabel}
           </Btn>
@@ -12625,6 +13172,11 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
   const body = draft.body;
   const setBody = (b: string) => onDraft({ body: b });
   const [preview, setPreview] = useState(false);
+  /* An agent filled this form in (stageIntent.ts): say so, and keep Submit dead for a moment. */
+  const reviewMark = `review|${d.url}`;
+  useSyncExternalStore(subscribePrepared, preparedSnapshot, () => 0);
+  const preparedBy = preparedFor(reviewMark);
+  const holdReview = useStageHold(!!preparedBy, preparedBy?.n);
   /** Which queued comment is open. One at a time on purpose: the row of chips
    *  is the thing that has to stay a row, and opening every remark at once is
    *  the layout this replaced. */
@@ -12666,6 +13218,13 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
           </button>
         </div>
 
+        {preparedBy && (
+          <div className="flex items-center gap-2 px-3 py-1.5 text-[10.5px]" data-prepared-by="" role="status"
+            style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", borderBottom: LINE }}>
+            <span>{preparedLine(preparedBy.by)}</span>
+            <button onClick={() => clearPrepared(reviewMark)} className="agx-btn ml-auto shrink-0 grid place-items-center w-5 h-5 rounded" style={{ color: "var(--text3)" }} aria-label="Dismiss"><CloseIcon size={ICON.xs} /></button>
+          </div>
+        )}
         <div className="p-3 flex flex-col gap-2.5">
           {/* Queued comments as chips, one open at a time.
               Listed in full, this panel grew with the review: eleven cards and
@@ -12792,7 +13351,7 @@ function ReviewTab({ d, root, held, drafts, seen, busy, busyWhat, draft, onDraft
               })}
             </div>
             <span className="ml-auto">
-              <Btn onClick={() => onSubmit(verb, body)} disabled={busy || (verb !== "approve" && nothing)} primary
+              <Btn onClick={() => onSubmit(verb, body)} disabled={busy || holdReview || (verb !== "approve" && nothing)} primary
                 pending={busyWhat === "Review"}
                 title={verb !== "approve" && nothing ? "Say something, or queue a line comment" : undefined}>Submit review</Btn>
             </span>

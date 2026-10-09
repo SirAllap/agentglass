@@ -236,3 +236,49 @@ export function reapOrphanRuns(root = "/tmp"): number {
   return reaped;
 }
 try { reapOrphanRuns(); } catch { /* best-effort */ }
+
+/**
+ * `kill-server` that has finished killing, for a test that starts the same
+ * server again straight after.
+ *
+ * `kill-server` returns when the server has been TOLD to go, not when it has
+ * gone. A `new-session` or `new-window` sent in that gap connects to the
+ * server on its way out and gets `server exited unexpectedly`, which a caller
+ * reads as "tmux refused the window" and returns null. Measured on tmux 3.6a
+ * with ten busy loops on a 20-core machine, a kill-server followed at once by
+ * a new-session: 212 failures in 1500 cycles (14 %); idle, none in 200, which
+ * is how it passed alone and failed inside a full `make check`.
+ *
+ * Two waits, and neither is enough alone:
+ *
+ *   the server's process   `#{pid}` is read BEFORE the kill, and the process
+ *                          is polled until it is gone. Still 3 failures in
+ *                          2500 under the same load.
+ *   its socket file        `kill-server` leaves the file behind, so the next
+ *                          client takes tmux's stale-socket path (connect
+ *                          refused, lock, unlink, start) instead of the plain
+ *                          one. Removed too: 0 failures in 5000.
+ *
+ * A server that will not die in `ms` throws rather than letting the next call
+ * fail for a reason that looks like something else.
+ *
+ * `run` is the caller's own tmux, so this works on whichever socket it names;
+ * `socket` is that socket's name, to find the file under TMUX_TMPDIR.
+ */
+export async function killServerAndWait(
+  run: (args: string[]) => Promise<{ ok: boolean; stdout: string }>,
+  socket: string,
+  ms = 5000,
+): Promise<void> {
+  const pid = Number((await run(["display-message", "-p", "#{pid}"])).stdout.trim());
+  await run(["kill-server"]);
+  if (Number.isInteger(pid) && pid > 1) {
+    const until = Date.now() + ms;
+    for (;;) {
+      try { process.kill(pid, 0); } catch { break; }
+      if (Date.now() > until) throw new Error(`tmux server ${pid} still running ${ms} ms after kill-server`);
+      await Bun.sleep(2);
+    }
+  }
+  rmSync(join(socketDirUnder(process.env.TMUX_TMPDIR ?? TMUX_TEST_TMPDIR), socket), { force: true });
+}

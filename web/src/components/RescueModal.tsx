@@ -34,7 +34,7 @@ function Tick({ on, dim }: { on: boolean; dim?: boolean }) {
     <span
       className="shrink-0 w-3.5 h-3.5 rounded flex items-center justify-center text-[10px] leading-none"
       style={{
-        color: on ? "var(--bg)" : "transparent",
+        color: on ? (dim ? "var(--bg)" : "var(--on-primary)") : "transparent",
         background: on ? (dim ? "var(--warning)" : "var(--primary)") : "transparent",
         border: `1px solid ${on ? (dim ? "var(--warning)" : "var(--primary)") : "color-mix(in srgb, var(--border) 60%, transparent)"}`,
       }}
@@ -196,7 +196,7 @@ export function RescueModal({ reports, progress, onCancel, onConfirm }: {
                 {totals.differs > 0 && ` · ${totals.differs} would overwrite`}
               </span>
               <button onClick={onCancel} className="text-[11px] px-2.5 py-1 rounded" style={{ color: "var(--text2)", border: EDGE }}>Cancel</button>
-              <button onClick={submit} className="text-[11px] px-2.5 py-1 rounded font-medium" style={{ color: "var(--bg)", background: "var(--primary)" }}>
+              <button onClick={submit} className="text-[11px] px-2.5 py-1 rounded font-medium" style={{ color: "var(--on-primary)", background: "var(--primary)" }}>
                 {totals.n ? `Keep ${totals.n} & remove` : "Remove, keep nothing"}
               </button>
               </>

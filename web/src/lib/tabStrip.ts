@@ -89,22 +89,44 @@ export const EDGE_FADE_PX = 24;
  * background is — the panel's, a theme's, a translucent one — without having
  * to know it.
  */
-export function edgeMask(edges: { start: boolean; end: boolean }): string | undefined {
+export function edgeMask(edges: { start: boolean; end: boolean }, hold = 0): string | undefined {
   if (!edges.start && !edges.end) return undefined;
-  const a = edges.start ? `transparent 0, #000 ${EDGE_FADE_PX}px` : "#000 0";
-  const b = edges.end ? `#000 calc(100% - ${EDGE_FADE_PX}px), transparent 100%` : "#000 100%";
+  // `hold` keeps the first pixels of a hidden edge fully transparent before
+  // the fade starts: room for an arrow button drawn over the edge, so it sits
+  // on empty space instead of on half a chip.
+  const a = edges.start ? `transparent 0, ${hold ? `transparent ${hold}px, ` : ""}#000 ${hold + EDGE_FADE_PX}px` : "#000 0";
+  const b = edges.end ? `#000 calc(100% - ${hold + EDGE_FADE_PX}px), ${hold ? `transparent calc(100% - ${hold}px), ` : ""}transparent 100%` : "#000 100%";
   return `linear-gradient(to right, ${a}, ${b})`;
+}
+
+/**
+ * Where an arrow button sends the strip: a page's worth minus a sliver of the
+ * last chip, so the eye keeps its place. Null when that side has nothing
+ * hidden. Clamped to the ends — `scrollTo` would clamp it too, but a pure
+ * answer is one a test can read.
+ */
+export function stepX(
+  view: { scrollLeft: number; clientWidth: number; scrollWidth: number },
+  dir: -1 | 1,
+): number | null {
+  const edges = overflowEdges(view.scrollLeft, view.clientWidth, view.scrollWidth);
+  if (dir < 0 ? !edges.start : !edges.end) return null;
+  const max = Math.max(0, view.scrollWidth - view.clientWidth);
+  const page = Math.max(1, view.clientWidth * 0.75);
+  return Math.min(max, Math.max(0, view.scrollLeft + dir * page));
 }
 
 /**
  * The strip's scroller: wheel to sideways, the active tab kept on screen, and
  * the edges it has hidden. Tabs mark themselves with `data-window="<id>"`.
+ * `pad` is how far inside the edge a lit tab is kept: the fade, or the fade
+ * plus an arrow button drawn over it.
  *
  * The wheel is a native listener because React binds `onWheel` passively and a
  * passive listener cannot `preventDefault` — without which the same notch
  * would also scroll whatever is behind the strip.
  */
-export function useTabStripScroll(activeId: string | null, shapeKey: string) {
+export function useTabStripScroll(activeId: string | null, shapeKey: string, pad = EDGE_FADE_PX) {
   const [el, setEl] = useState<HTMLDivElement | null>(null);
   const [edges, setEdges] = useState({ start: false, end: false });
   const ref = useCallback((node: HTMLDivElement | null) => setEl(node), []);
@@ -143,11 +165,11 @@ export function useTabStripScroll(activeId: string | null, shapeKey: string) {
     if (!tab) return;
     const box = el.getBoundingClientRect();
     const r = tab.getBoundingClientRect();
-    const to = revealX(el, { left: r.left - box.left + el.scrollLeft, width: r.width }, EDGE_FADE_PX);
+    const to = revealX(el, { left: r.left - box.left + el.scrollLeft, width: r.width }, pad);
     if (to !== null) el.scrollLeft = to;
     const next = overflowEdges(el.scrollLeft, el.clientWidth, el.scrollWidth);
     setEdges((cur) => (cur.start === next.start && cur.end === next.end ? cur : next));
-  }, [el, activeId, shapeKey]);
+  }, [el, activeId, shapeKey, pad]);
 
-  return { ref, edges };
+  return { ref, edges, el };
 }

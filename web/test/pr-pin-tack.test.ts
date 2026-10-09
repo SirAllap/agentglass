@@ -53,7 +53,8 @@ describe("the pinned bar", () => {
   /** The capsule's own source, to its closing brace. */
   const capsule = (() => {
     const a = panel.indexOf("function PinnedCapsule(");
-    const b = panel.indexOf("\n}\n", a);
+    // The capsule and the scroller under it: the chips live in the second.
+    const b = panel.indexOf("\n}\n", panel.indexOf("function PinScroller(", a));
     expect(a).toBeGreaterThanOrEqual(0);
     expect(b).toBeGreaterThan(a);
     return code(panel.slice(a, b));

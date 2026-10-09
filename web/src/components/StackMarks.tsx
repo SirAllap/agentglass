@@ -7,6 +7,7 @@
 // related, only how that looks. The numbers (16px boxes, a 20px token, a 150px
 // control) are the approved mockup's and are written down in docs/design-system.md.
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { ICON, MIN_BOX } from "../lib/iconSize.ts";
 import { BlockedIcon, CaretIcon, CircleIcon, CrossIcon, DoneIcon, DraftIcon, MergeIcon, PullRequestIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import type { BaseRef, Box, SpineItem, Stack } from "../lib/prStack.ts";
@@ -138,6 +139,7 @@ export function StackControl({ stack, prev, next, onOpen, rungs, factsOf }: {
 }) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLSpanElement>(null);
+  useCloseWithOwner(() => setOpen(false), { open, from: box });
   useEffect(() => {
     if (!open) return;
     const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };

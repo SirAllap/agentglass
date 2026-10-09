@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
+import { preparedLine, useStageHold } from "../lib/stageHold.ts";
+import { useOwnedQuestion } from "../lib/layerOwner.ts";
 
 /**
  * The app's own confirm/prompt, because the browser's belong to the browser.
@@ -36,6 +38,10 @@ export type ConfirmSpec = {
   /** For a question whose easy answer is the wrong one: Cancel takes the focus and
    *  Enter no longer confirms, so the merge needs a deliberate Tab and press. */
   cancelFocus?: boolean;
+  /** Set when an agent opened this dialog: the name it gave itself. Shows the
+   *  "prepared by" line, takes the focus off the confirm button (Enter does not
+   *  confirm, as with `cancelFocus`) and keeps the button dead for a moment. */
+  preparedBy?: string;
   /** Red confirm button — for anything that destroys work. */
   danger?: boolean;
   /** Turns this into a prompt: the resolved value is the typed string, or null
@@ -50,12 +56,13 @@ export function ConfirmDialog({ pending }: { pending: Pending | null }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const isPrompt = !!pending?.input;
+  const held = useStageHold(!!pending?.preparedBy, pending);
 
   useEffect(() => {
     if (!pending) return;
     setText(pending.input?.initial ?? "");
     // Focus after the entrance frame so the caret doesn't fight the animation.
-    const t = setTimeout(() => { inputRef.current?.focus(); inputRef.current?.select(); if (pending.cancelFocus) cancelRef.current?.focus(); }, 40);
+    const t = setTimeout(() => { inputRef.current?.focus(); inputRef.current?.select(); if (pending.cancelFocus || pending.preparedBy) cancelRef.current?.focus(); }, 40);
     return () => clearTimeout(t);
   }, [pending]);
 
@@ -65,7 +72,7 @@ export function ConfirmDialog({ pending }: { pending: Pending | null }) {
       if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); pending.resolve(isPrompt ? null : false); }
       // Enter confirms, but not while a prompt's field is empty — that is the
       // one case where the obvious keystroke would submit nothing.
-      else if (e.key === "Enter" && !pending.cancelFocus && (!isPrompt || text.trim())) {
+      else if (e.key === "Enter" && !pending.cancelFocus && !pending.preparedBy && (!isPrompt || text.trim())) {
         e.preventDefault(); e.stopPropagation();
         pending.resolve(isPrompt ? text.trim() : true);
       }
@@ -92,6 +99,9 @@ export function ConfirmDialog({ pending }: { pending: Pending | null }) {
             >
               <div className="px-4 py-3.5">
                 <div className="text-[13px] font-medium" style={{ color: "var(--text)" }}>{pending.title}</div>
+                {pending.preparedBy && (
+                  <div className="mt-1.5 text-[10.5px]" data-prepared-by="" role="status" style={{ color: "var(--warning-ink)" }}>{preparedLine(pending.preparedBy)}</div>
+                )}
                 {pending.node && <div className="mt-2.5">{pending.node}</div>}
                 {pending.body && (
                   <div className="text-[11.5px] mt-2 whitespace-pre-wrap leading-relaxed" style={{ color: "var(--text3)" }}>{pending.body}</div>
@@ -115,9 +125,9 @@ export function ConfirmDialog({ pending }: { pending: Pending | null }) {
                   {pending.cancelLabel ?? "Cancel"}
                 </button>
                 <button onClick={() => pending.resolve(isPrompt ? text.trim() : true)}
-                  disabled={isPrompt && !text.trim()}
+                  disabled={(isPrompt && !text.trim()) || held}
                   className="text-[11px] px-2.5 py-1 rounded font-medium disabled:opacity-40"
-                  style={{ color: "var(--bg)", background: pending.danger ? "var(--error)" : "var(--primary)" }}>
+                  style={{ color: pending.danger ? "var(--bg)" : "var(--on-primary)", background: pending.danger ? "var(--error)" : "var(--primary)" }}>
                   {pending.confirmLabel ?? (pending.danger ? "Delete" : "Ok")}
                 </button>
               </div>
@@ -135,13 +145,26 @@ export function ConfirmDialog({ pending }: { pending: Pending | null }) {
  */
 export function useDialogs() {
   const [pending, setPending] = useState<Pending | null>(null);
-  const done = (resolve: (v: never) => void) => (v: never) => { setPending(null); resolve(v); };
+  /* The question on screen, outside React state, so a second one can answer it
+     before it takes the place. Replacing it without answering left its caller
+     awaiting for ever (a merge that holds a lock until its guard question is
+     answered never released it), and an answer nobody gave is a "no". */
+  const open = useRef<Pending | null>(null);
+  const noteAsker = useOwnedQuestion(pending, () => open.current?.resolve(open.current.input ? null : false));
+  const done = (resolve: (v: never) => void) => (v: never) => { open.current = null; setPending(null); resolve(v); };
+  const put = (spec: ConfirmSpec, resolve: (v: never) => void) => {
+    open.current?.resolve(open.current.input ? null : false);
+    noteAsker();
+    const next = { ...spec, resolve: done(resolve) as never } as Pending;
+    open.current = next;
+    setPending(next);
+  };
 
   const ask = (spec: ConfirmSpec): Promise<boolean> =>
-    new Promise<boolean>((resolve) => setPending({ ...spec, resolve: done(resolve as never) as never }));
+    new Promise<boolean>((resolve) => put(spec, resolve as never));
 
   const askText = (spec: ConfirmSpec & { input: NonNullable<ConfirmSpec["input"]> }): Promise<string | null> =>
-    new Promise<string | null>((resolve) => setPending({ ...spec, resolve: done(resolve as never) as never }));
+    new Promise<string | null>((resolve) => put(spec, resolve as never));
 
-  return { ask, askText, dialog: <ConfirmDialog pending={pending} /> };
+  return { ask, askText, open: pending !== null, dialog: <ConfirmDialog pending={pending} /> };
 }

@@ -1,9 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
+import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { LAYER } from "../lib/layers.ts";
 import { StatusPill } from "./StatusPill.tsx";
 import { EDGE } from "./workspace/Chrome.tsx";
+import { CaretIcon } from "../lib/glyphIcons.tsx";
+import { ICON } from "../lib/iconSize.ts";
 
 /**
  * A themed replacement for a native <select>.
@@ -32,15 +35,27 @@ export type SelectOption = {
   pill?: boolean;
   /** A pill a board files under done or closed: quieter, still legible. */
   dim?: boolean;
+  /** A mark drawn before the label, here and on the closed trigger (a priority's flag). */
+  icon?: React.ReactNode;
+  /** The row drawn as this instead of a label (a coloured chip): the label still names it for the keyboard and a screen reader. */
+  node?: React.ReactNode;
 };
 
 export function Select({
-  value, options, onChange, disabled, title, className, style, placeholder, align = "left",
+  value, options, onChange, disabled, busy, loading, onOpen, trigger, title, className, style, placeholder, align = "left",
 }: {
   value: string;
   options: SelectOption[];
   onChange: (v: string) => void;
   disabled?: boolean;
+  /** A write for this value is in flight: a spinner on the trigger, and no second open. */
+  busy?: boolean;
+  /** The options are still being read (sprints load when the list is first opened): the list says so instead of being empty. */
+  loading?: boolean;
+  /** The list was just opened: where the options are read from on demand. */
+  onOpen?: () => void;
+  /** What the closed control shows, when it is not the chosen option's own label (a field's value chip). */
+  trigger?: React.ReactNode;
   title?: string;
   className?: string;
   style?: React.CSSProperties;
@@ -136,6 +151,9 @@ export function Select({
   // user has to tab in from the top of the page again.
   const close = () => { setOpen(false); btnRef.current?.focus(); };
   const pick = (v: string) => { onChange(v); close(); };
+  /* No focus handed back: the trigger is in a window that is being hidden, and
+     a hidden window refuses focus. */
+  useCloseWithOwner(() => setOpen(false), { open, from: btnRef });
 
   return (
     <>
@@ -143,7 +161,7 @@ export function Select({
         ref={btnRef}
         title={title}
         disabled={disabled}
-        onClick={() => !disabled && (open ? close() : setOpen(true))}
+        onClick={() => { if (disabled || busy) return; if (open) close(); else { setOpen(true); onOpen?.(); } }}
         role="combobox"
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -151,10 +169,12 @@ export function Select({
         className={`${className ?? "rounded-lg px-2 py-1 text-[11px] outline-none max-w-[160px]"} shrink-0 flex items-center gap-1 ${disabled ? "opacity-60 cursor-default" : ""}`}
         style={{ ...style, ...(open ? { borderColor: "color-mix(in srgb, var(--primary) 55%, transparent)" } : null) }}
       >
-        {current?.pill
+        {trigger ?? (current?.pill
           ? <StatusPill status={current.label} color={current.tint} dim={current.dim} />
-          : <span className="truncate">{current?.label ?? placeholder ?? value}</span>}
-        <span className="text-[10px] shrink-0 opacity-70">▼</span>
+          : <>{current?.icon}<span className="truncate" style={current?.icon && current.tint ? { color: current.tint } : undefined}>{current?.label ?? placeholder ?? value}</span></>)}
+        {busy
+          ? <span className="agx-spin shrink-0" aria-label="Applying" style={{ width: 10, height: 10, borderWidth: 1.5, borderColor: "var(--text3)", borderTopColor: "transparent" }} />
+          : <span className="shrink-0 opacity-70 flex"><CaretIcon size={ICON.xs} /></span>}
       </button>
       {/* Numbered rather than trusting mount order. This took Portal's default
           and landed on top only because a dropdown's container is appended when
@@ -192,6 +212,7 @@ export function Select({
                   backdropFilter: "blur(18px)",
                 }}
               >
+                {loading && !options.length && <div className="px-2.5 py-1.5 text-[11px]" style={{ color: "var(--text3)" }}>Reading…</div>}
                 {options.map((o, i) => (
                   <button key={o.value} onClick={() => pick(o.value)}
                     role="option"
@@ -206,7 +227,7 @@ export function Select({
                       : { color: o.tint || "var(--text3)" }}>
                     {o.pill
                       ? <span className="flex-1"><StatusPill status={o.label} color={o.tint} dim={o.dim} /></span>
-                      : <span className="flex-1">{o.label}</span>}
+                      : <span className="flex-1 flex items-center gap-2">{o.node ?? <>{o.icon}{o.label}</>}</span>}
                     {o.hint && <span className="text-[9.5px] opacity-60">{o.hint}</span>}
                   </button>
                 ))}

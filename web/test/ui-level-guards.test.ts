@@ -24,8 +24,10 @@
  * two modules away is not followed, and a writer reached through a computed name
  * is not seen. What the guard does hold is the shape a staging handler has today
  * (latch an intent, open a modal) and every import of a writer into the files it
- * leans on. There are no level 3 entries yet; the guard is built, and broken on
- * purpose below, before the first one is.
+ * leans on. The four stage doors (pr.merge.stage and its siblings) are the level 3
+ * entries; the guard read them from the day they landed, and is broken on purpose
+ * below. It cannot see the pull request panel that serves a staged request: that
+ * half is web/test/ui-stage-guard.test.ts.
  */
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -40,7 +42,7 @@ stubGlobal("window", new EventTarget());
 stubGlobal("document", { documentElement: { getAttribute: () => "graphite", setAttribute: () => {}, style: { setProperty: () => {}, getPropertyValue: () => "" } } });
 const { SETTING_DEFS, NOT_EXPOSED_ON_PURPOSE } = await import("../src/lib/settingsRegistry.ts");
 
-/** The registry as the wider type: it holds no stage entry yet, and the guards must read one when it does. */
+/** The registry as the wider type, so a stage entry (there are four) is read like any other. */
 const ENTRIES = Object.entries(UI_ACTIONS) as [string, UiActionDef][];
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -166,6 +168,8 @@ describe("a level 3 entry only stages", () => {
   });
 
   it("no level 3 handler writes, calls a writer, names a mutating route, or leans on a module that does", () => {
+    // Vacuous when the loop has nothing to read: the four stage doors are what it reads.
+    expect(level3.length).toBeGreaterThanOrEqual(4);
     for (const [id] of level3) {
       const h = handlerText(uiSrc, id);
       expect(h, `${id} has no handler`).not.toBeNull();

@@ -19,6 +19,7 @@
 import { useEffect, useState } from "react";
 import { api } from "./api.ts";
 import { clickupSetup } from "./clickupSetup.ts";
+import { recountSpaces, spaceNamesNow } from "./clickupSpaces.ts";
 import type { ClickUpPrefs } from "../../../shared/providers.ts";
 
 const TTL = 60_000;
@@ -63,4 +64,40 @@ export function useClickupPrefs(): ClickUpPrefs | null {
     return () => { live = false; listeners.delete(setPrefs); };
   }, []);
   return prefs;
+}
+
+/**
+ * Which spaces count for statuses, as the held settings say. Synchronous, because a
+ * SettingDef reads synchronously: when nothing is held yet it answers the default (none
+ * chosen) and starts the one local read that will say, so the next ask is true.
+ */
+export function countedSpacesNow(): string[] {
+  if (!held) { void clickupPrefs(); return []; }
+  return held.value.statusSpaces?.counted ?? [];
+}
+
+/**
+ * Save the pick of counted spaces: the held settings change at once (the row, the lane and an
+ * agent's read agree before the save lands), the same /clickup/prefs path every other ClickUp
+ * setting takes does the saving, and a refusal puts the old pick back. No ClickUp request: the
+ * spaces are re-answered from what the server already holds.
+ */
+export function setCountedSpaces(ids: string[]): void {
+  const before = held;
+  if (held) clickupPrefsSaved({ ...held.value, statusSpaces: { counted: ids } });
+  void api.clickupSetPrefs({ statusSpaces: { counted: ids } })
+    .then((r) => {
+      if (r.ok && r.prefs) clickupPrefsSaved(r.prefs);
+      else if (before) clickupPrefsSaved(before.value);
+    })
+    .catch(() => { if (before) clickupPrefsSaved(before.value); })
+    .finally(() => recountSpaces());
+}
+
+/** The pick of counted spaces as a person says it: the names, or what the default means. An id whose space
+ *  has not been read is shown as the id; nothing is invented. */
+export function countedSpacesText(ids: readonly string[]): string {
+  if (!ids.length) return "the spaces my cards live in";
+  const names = spaceNamesNow();
+  return ids.map((id) => names.get(id) ?? id).join(", ");
 }

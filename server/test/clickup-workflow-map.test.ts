@@ -62,7 +62,7 @@ describe("the review menu and the merge choice are steps", () => {
   test("a fresh machine has neither: both are off and the merge choice names no status", () => {
     const p = P.clickupPrefs();
     expect(p.review.enabled).toBe(false);
-    expect(p.merge).toEqual({ enabled: false, statusNames: [] });
+    expect(p.merge).toEqual({ enabled: false, blocks: [], statusNames: [], assign: { who: "none" } });
   });
 
   test("a file from before the key existed keeps the review item it always had", () => {
@@ -72,7 +72,7 @@ describe("the review menu and the merge choice are steps", () => {
     expect(p.review.enabled).toBe(true);
     expect(p.review.statusNames).toEqual(["In review"]);
     /* The merge dialog's card row was always there too: it stays, with no status, which is "Leave it there". */
-    expect(p.merge).toEqual({ enabled: true, statusNames: [] });
+    expect(p.merge).toEqual({ enabled: true, blocks: [], statusNames: [], assign: { who: "none" } });
   });
 
   test("the marker an older start wrote for a machine with no token is not a user: connecting later turns nothing on", () => {
@@ -114,7 +114,7 @@ describe("the review menu and the merge choice are steps", () => {
   test("a save of one merge key leaves the other, and a typo is refused rather than dropped", () => {
     expect(P.setClickupPrefs({ merge: { enabled: true } }).ok).toBe(true);
     const r = P.setClickupPrefs({ merge: { statusNames: ["done"] } });
-    expect(r.ok && r.prefs.merge).toEqual({ enabled: true, statusNames: ["done"] });
+    expect(r.ok && r.prefs.merge).toEqual({ enabled: true, blocks: [{ type: "move", statusNames: ["done"] }], statusNames: ["done"], assign: { who: "none" } });
     expect(P.setClickupPrefs({ merge: { status: "done" } }).ok).toBe(false);
     expect(P.setClickupPrefs({ review: { enabled: "yes" } }).ok).toBe(false);
   });

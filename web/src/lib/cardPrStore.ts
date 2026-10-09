@@ -19,7 +19,8 @@
  * its own.
  */
 import { api } from "./api.ts";
-import type { CardPr } from "./cardPrPick.ts";
+import { pickCardPr, type CardPr } from "./cardPrPick.ts";
+import { digitMetrics, forgetDigitMetrics, prChipWidth } from "./tasksColumnFit.ts";
 
 /** Ten minutes, no longer the board's own poll interval (`BOARD_POLL_MS` in
  *  lib/boardPoll.ts). Each answer is a `gh pr list --search`, a GraphQL request
@@ -43,6 +44,34 @@ let version = 0;
 
 function tell(): void { version++; for (const l of listeners) l(); }
 
+/*
+ * The widest chip any answer so far needs, for the board's PR track: see
+ * tasksColumnFit.ts for why a number and not a layout. Kept here, as the answers
+ * land, so the board reads one number instead of looking at every row, and a
+ * snapshot that is a number only re-renders the board when the column really
+ * has to grow. It never shrinks until the cache is forgotten: a chip going away
+ * should not make the column jump back under the one beside it.
+ */
+let widest = 0;
+let watchingFonts = false;
+
+/** Width in px of the widest chip seen, 0 while none has an answer. */
+export function widestCardPrChip(): number { return widest; }
+
+function widen(prs: readonly CardPr[]): void {
+  widest = Math.max(widest, prChipWidth(pickCardPr(prs), digitMetrics()));
+  // The probe only counts once the fonts are in; measure again when they are.
+  if (!watchingFonts && typeof document !== "undefined" && document.fonts?.status === "loading") {
+    watchingFonts = true;
+    void document.fonts.ready.then(() => {
+      forgetDigitMetrics();
+      widest = 0;
+      for (const e of seen.values()) widest = Math.max(widest, prChipWidth(pickCardPr(e.prs), digitMetrics()));
+      tell();
+    });
+  }
+}
+
 /** Changes when any answer lands — the snapshot for `useSyncExternalStore`. */
 export function cardPrVersion(): number { return version; }
 
@@ -57,7 +86,7 @@ function pump(): void {
     running++;
     inflight.add(key);
     api.clickupPrs(card, field, cwd, key)
-      .then((r) => { seen.set(key, { at: Date.now(), prs: r.ok ? (r.prs ?? []) : [], error: !r.ok }); })
+      .then((r) => { const prs = r.ok ? (r.prs ?? []) : []; seen.set(key, { at: Date.now(), prs, error: !r.ok }); widen(prs); })
       .catch(() => { seen.set(key, { at: Date.now(), prs: [], error: true }); })
       .finally(() => { running--; inflight.delete(key); tell(); pump(); });
   }
@@ -90,6 +119,7 @@ export function cardPrsOf(taskId: string, card: string, field: string, cwd: stri
  *  `prCardStore.forgetCards`. */
 export function forgetCardPrs(): void {
   seen.clear();
+  widest = 0;
   waiting.length = 0;
   tell();
 }

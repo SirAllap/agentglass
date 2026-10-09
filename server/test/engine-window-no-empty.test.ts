@@ -30,7 +30,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
+import { killServerAndWait, TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 import { story } from "./story.ts";
 
 const SOCKET = `agx-noempty-${process.pid}`;
@@ -106,8 +106,9 @@ describe("the session a run creates", () => {
   step("still names and places the window the caller asked for", async () => {
     // The creation path is new; everything the caller relies on has to survive
     // it. A dot is a pane separator in a tmux target, so it is stripped.
+    // Killed and WAITED for: see killServerAndWait for the 14 % it measured.
     if (!have) return;
-    await tmux(["kill-server"]);
+    await killServerAndWait(tmux, SOCKET);
     const w = await engineWindowRunning(dir, "app.v2", ["sh", "-c", "sleep 30"]);
     expect(w).not.toBeNull();
     const all = await windows();
@@ -120,7 +121,7 @@ describe("the session a run creates", () => {
        credential this way precisely so it stays out of `ps`, and that guarantee
        is not allowed to depend on whether the session already existed. */
     if (!have) return;
-    await tmux(["kill-server"]);
+    await killServerAndWait(tmux, SOCKET);
     const out = join(dir, "env.txt");
     const w = await engineWindowRunning(
       dir, "orbit-1077",

@@ -4,10 +4,12 @@
 // renderer as the telemetry view.
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { diffSplit, diffWrap } from "../lib/diffPrefs.ts";
-import { subscribeGitModal, takeGitModal } from "../lib/gitModalIntent.ts";
+import { GIT_MODAL_TTL_MS, hasGitModal, subscribeGitModal, takeGitModal } from "../lib/gitModalIntent.ts";
 import { conflictBriefing, conflictHandoff } from "../lib/conflictBrief.ts";
 import { ConflictMode } from "./ConflictMode.tsx";
 import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
+import { LAYER } from "../lib/layers.ts";
+import { Portal } from "./Portal.tsx";
 import { RebaseModal } from "./RebaseModal.tsx";
 import { CompareModal } from "./CompareModal.tsx";
 import { InsightsModal } from "./InsightsModal.tsx";
@@ -704,7 +706,7 @@ function FileRow({ c, root, active, writeEnabled, desc, onSelect, action, onActi
           <button onClick={(e) => { e.stopPropagation(); onAction(); }}
             title={action === "stage" ? "Stage this file — right-click for the rest" : "Unstage this file — right-click for the rest"}
             className="text-[10px] px-2 py-0.5 rounded-md font-medium whitespace-nowrap"
-            style={{ color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)" }}>
+            style={{ color: "var(--on-primary)", background: "var(--primary)", border: "1px solid var(--primary)" }}>
             {action === "stage" ? "Stage" : "Unstage"}
           </button>
         </div>
@@ -812,8 +814,23 @@ function BlockResolver({ blocks, error, picks, onPick, onApply, busy }: {
   );
 }
 
+/** The panel's flash message. `floating` is for when the view is not on screen
+ *  and the message has to draw over the one that is. */
+function GitToast({ toast, floating }: { toast: { ok: boolean; msg: string }; floating?: boolean }) {
+  const c = toast.ok ? "success" : "error";
+  return (
+    <div className={`${floating ? "fixed" : "absolute"} bottom-4 left-1/2 -translate-x-1/2 px-3.5 py-2 rounded-lg text-[11px] shadow-xl`}
+      style={{ zIndex: floating ? LAYER.palette : 40, background: "var(--bg3)", border: `1px solid color-mix(in srgb, var(--${c}) 50%, transparent)`, color: `var(--${c})` }}>{toast.msg}</div>
+  );
+}
+
 export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: () => void }) {
-  const open = active;
+  /** A modal asked for through /control while this view is not on screen. The
+   *  view then loads its checkout and lists as if it were open, for as long as
+   *  the modal is up, and nothing else: the person stays on the view they were
+   *  on. See lib/gitModalIntent.ts. */
+  const [asked, setAsked] = useState(hasGitModal);
+  const open = active || asked;
   const sidebarW = useSidebarWidth();
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [root, setRoot] = useState<string>("");
@@ -1151,6 +1168,21 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     run();
     return subscribeGitModal(run);
   }, [root]);
+  const modalUp = !!(rebaseBase || compareTarget || insightsOpen || bisectOpen || blamePath || paletteOpen);
+  const modalSeen = useRef(false);
+  useEffect(() => {
+    // A request wakes the view even before it has a checkout to drain into
+    // (and even after another subscriber took it: the modal is up, not pending).
+    const wake = () => setAsked(true);
+    const off = subscribeGitModal(wake);
+    // One nobody could serve (no checkout) expires with the mailbox itself.
+    const t = asked && !modalUp ? setTimeout(() => setAsked(false), GIT_MODAL_TTL_MS + 1000) : null;
+    return () => { off(); if (t) clearTimeout(t); };
+  }, [asked, modalUp]);
+  useEffect(() => {
+    if (modalUp) modalSeen.current = true;
+    else if (modalSeen.current) { modalSeen.current = false; setAsked(false); }
+  }, [modalUp]);
   const [walk, setWalk] = useState<WalkthroughResult | null>(null);
   const [walkLoading, setWalkLoading] = useState(false);
   const walkReqSig = useRef<string | null>(null);
@@ -1267,7 +1299,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   /* On screen at launch, Git holds the launch cover until the working tree has
      been read once — answered or failed — so it arrives with its files listed
      instead of "Reading the working tree…". */
-  useCoverHold("git", open && !IS_DEMO && !treeRead);
+  useCoverHold("git", active && !IS_DEMO && !treeRead);
   const rel = (c: GitFileChange) => (c.file_path.startsWith(root + "/") ? c.file_path.slice(root.length + 1) : c.file_path);
 
   useEffect(() => {
@@ -1303,7 +1335,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
       setTreeRead(true);
     });
     void readRepos();
-    requestAnimationFrame(() => frameRef.current?.focus());
+    if (active) requestAnimationFrame(() => frameRef.current?.focus());
     return () => { live = false; if (retry) clearTimeout(retry); };
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1429,8 +1461,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
    * reload through act(). So this only needs to catch changes made outside the
    * app, which 10s covers with room to spare.
    */
-  usePoll(open && !!root && !busy, () => loadTree(root));
-  usePoll(open && !!root && !busy, loadView, 10_000);
+  usePoll(active && !!root && !busy, () => loadTree(root));
+  usePoll(active && !!root && !busy, loadView, 10_000);
 
 
   /**
@@ -3389,7 +3421,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         <span className="min-w-0 flex-1 truncate text-[10.5px] t-dim2">cherry-pick: oldest first, one run</span>
                         <button onClick={() => void runCherryPick()} disabled={busy || !writeEnabled}
                           className="agx-btn text-[10.5px] px-2.5 py-1 rounded-md font-medium whitespace-nowrap"
-                          style={{ color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)", opacity: busy || !writeEnabled ? 0.5 : 1 }}
+                          style={{ color: "var(--on-primary)", background: "var(--primary)", border: "1px solid var(--primary)", opacity: busy || !writeEnabled ? 0.5 : 1 }}
                           title="Replay the picked commits onto this branch in one run — a conflict pauses the series, and Continue finishes it">
                           {pending === `pick:${pickSet.size}` ? "picking…" : `cherry-pick ${pickSet.size}`}
                         </button>
@@ -3823,7 +3855,11 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                 </>
                 )}
                 {helpOpen && !inConflict && <HelpSheet view={view} onClose={() => setHelpOpen(false)} />}
-                {toast && <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-3.5 py-2 rounded-lg text-[11px] shadow-xl" style={{ zIndex: 40, background: "var(--bg3)", border: `1px solid ${toast.ok ? "color-mix(in srgb, var(--success) 50%, transparent)" : "color-mix(in srgb, var(--error) 50%, transparent)"}`, color: toast.ok ? "var(--success)" : "var(--error)" }}>{toast.msg}</div>}
+                {toast && (active
+                  ? <GitToast toast={toast} />
+                  // Hidden view (a modal asked for from another one): the toast
+                  // is the only answer to what the palette just ran, so it floats.
+                  : <Portal z={LAYER.palette}><GitToast toast={toast} floating /></Portal>)}
       {/* A commit's diff, reusing the full file-changes viewer. Still a modal:
           it's a drill-down from a row you clicked, not a place you navigate
           to — the rail's views are the destinations, this is a detour. */}

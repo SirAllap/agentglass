@@ -145,7 +145,6 @@ function chipButtons(src: string, exempt: string[] = []): { line: number; cls: s
 const KNOWN: { file: string; cls: string; what: string }[] = [
   { file: "ChatPanel.tsx", cls: "mt-1.5 text-[10px] px-2 py-0.5 rounded-full", what: "the fold's cost" },
   { file: "ChatPanel.tsx", cls: "text-[11.5px]", what: "a chip a size off the ladder" },
-  { file: "PrPanel.tsx", cls: "text-[10px] px-2 py-px rounded-full", what: "Pin #n" },
   { file: "PrPanel.tsx", cls: "agx-btn text-[10px] px-1.5 py-0.5 rounded-full", what: "the reaction chips" },
   { file: "PrPanel.tsx", cls: "agx-btn text-[10.5px] px-2 py-0.5 rounded-full", what: "reviewer and base pickers" },
   { file: "TasksPanel.tsx", cls: "rounded-full", what: "ten chips across its two bars" },

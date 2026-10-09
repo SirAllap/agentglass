@@ -54,6 +54,7 @@ import { ciOnlyApproved, setCiOnlyApproved, CI_ONLY_APPROVED_DEFAULT } from "./c
 import { talkNotify, setTalkNotify, TALK_NOTIFY_DEFAULT, type TalkNotify } from "./talkNotify.ts";
 import { searchEngine, setSearchEngine } from "./browserPrefs.ts";
 import { DEFAULT_SEARCH_ENGINE, SEARCH_ENGINE_LABELS, type SearchEngine } from "./browserUrl.ts";
+import { countedSpacesNow, countedSpacesText, setCountedSpaces } from "./clickupPrefs.ts";
 import { taskLanding, setTaskLanding, type TaskLanding } from "./taskLanding.ts";
 import { TASK_SOURCES, taskSourceShown, setTaskSourceShown, shownTaskSources, type TaskSourceId } from "./taskSources.ts";
 import { bindings, rebind, DEFAULTS as DEFAULT_BINDINGS, LABELS as KEY_LABELS, type ActionId } from "./keybindings.ts";
@@ -75,7 +76,7 @@ export type AgentSetResult =
   | { ok: false; error: string };
 
 export type AgentGetResult =
-  | { ok: true; id: string; value: SettingValue }
+  | { ok: true; id: string; value: SettingValue; display: string }
   | { ok: true; id: string; set: boolean }
   | { ok: false; error: string };
 
@@ -89,12 +90,24 @@ export interface SettingDef {
   level?: 1 | 2 | 3;
   secret?: true;
   default: SettingValue;
+  /** What kind of value it stores, which is the kind of its default. A caller that
+   *  holds the value as text needs it: "90170067734" is a string here, not a number. */
+  type: SettingType;
+  /** The value as a person would say it ("the spaces my cards live in", a list of names), for the chip
+   *  that announces a change and for `display` next to the raw value in settings.list and settings.get.
+   *  The raw value stays what is stored and what is written back; this is only for reading. */
+  display(v: SettingValue): string;
   get(): SettingValue;
   /** The value as it should be stored, or null when it is not a valid one. */
   validate(raw: unknown): SettingValue | null;
   /** Validate, apply through the pref module's own setter, announce. */
   set(raw: unknown): SetResult;
 }
+
+export type SettingType = "string" | "number" | "boolean";
+
+/** A value as a sentence would say it: nothing stored is "default". What a def shows when it has no words of its own. */
+export const say = (v: SettingValue): string => (v === "" ? "default" : typeof v === "boolean" ? (v ? "on" : "off") : String(v));
 
 interface DefSpec {
   id: string; page: string; section: string; label: string;
@@ -110,6 +123,8 @@ interface DefSpec {
    *  forgets which palette it was on). Defaults to the value. */
   capture?(): unknown;
   restore?(token: unknown): void;
+  /** How a value reads to a person; absent, `say`. */
+  display?(v: SettingValue): string;
 }
 
 // ── change announcements ────────────────────────────────────────────────────
@@ -131,6 +146,8 @@ function defineSetting(s: DefSpec): SettingDef {
   const get = () => s.read();
   const def: SettingDef = {
     id: s.id, page: s.page, section: s.section, label: s.label, level: s.level, secret: s.secret, default: s.default,
+    type: typeof s.default as SettingType,
+    display: s.display ?? say,
     get,
     validate: s.validate,
     set(raw) {
@@ -407,6 +424,28 @@ const tasks: SettingDef[] = [
   })),
 ];
 
+// ── clickup: the part of the page that is not the connection ────────────────
+
+/** Space ids as one comma-separated string (a def's value is a scalar), "" for none chosen. Digits only:
+ *  an id is the one thing this can name, and anything else is refused rather than saved to match nothing. */
+const spaceIds = accepting((raw: unknown): string | null => {
+  if (typeof raw !== "string") return null;
+  const ids = raw.split(",").map((x) => x.trim()).filter(Boolean);
+  if (ids.length > 200 || ids.some((x) => !/^[0-9]{1,20}$/.test(x))) return null;
+  return [...new Set(ids)].join(",");
+}, "comma-separated space ids, digits only (up to 200), or \"\" for none");
+const splitIds = (v: SettingValue): string[] => String(v).split(",").filter(Boolean);
+
+const clickup: SettingDef[] = [
+  defineSetting({
+    id: "clickup.statusSpaces.counted", page: "clickup", section: "", label: "Spaces that count for statuses", level: 2, default: "",
+    read: () => countedSpacesNow().join(","), validate: spaceIds,
+    // The same save the page's buttons make, through /clickup/prefs; the pick is re-read locally, never from ClickUp.
+    write: (v) => { setCountedSpaces(splitIds(v)); },
+    display: (v) => countedSpacesText(splitIds(v)),
+  }),
+];
+
 // ── keys: the single-letter shortcuts ───────────────────────────────────────
 
 // Not here: the view chords and the "even inside a shell" app chord. Those are
@@ -423,7 +462,7 @@ const keys: SettingDef[] = (Object.keys(KEY_LABELS) as ActionId[]).map((a) => de
 
 // ── the registry ────────────────────────────────────────────────────────────
 
-export const SETTING_DEFS: readonly SettingDef[] = [...appearance, ...diff, ...terminal, ...terminalMore, ...rail, ...notifications, ...browser, ...tasks, ...keys];
+export const SETTING_DEFS: readonly SettingDef[] = [...appearance, ...diff, ...terminal, ...terminalMore, ...rail, ...notifications, ...browser, ...tasks, ...clickup, ...keys];
 
 /** Which panes (and, for Terminal, which groups) have been migrated. A row in
  *  here must carry a settingId or be marked agentExempt; a guard test reads this. */
@@ -435,6 +474,8 @@ export const MIGRATED: Readonly<Record<string, "all" | readonly string[]>> = {
   notifications: "all",
   browser: "all",
   tasks: "all",
+  /* Only what is not the connection: the page's own refusals are in NEVER_ON_PAGE. */
+  clickup: [""],
   keys: "all",
 };
 
@@ -442,7 +483,7 @@ export const MIGRATED: Readonly<Record<string, "all" | readonly string[]>> = {
  *  the two lists, so adding a page forces a decision rather than a silent gap. */
 export const NOT_YET_MIGRATED = [
   "prefs", "hooks", "lantern", "understudy", "budgets", "recipes",
-  "review-prompts", "saved-replies", "connections", "clickup", "remote", "plugins", "tmux", "privacy", "about", "log", "onboarding",
+  "review-prompts", "saved-replies", "connections", "remote", "plugins", "tmux", "privacy", "about", "log", "onboarding",
 ] as const;
 
 /**
@@ -452,7 +493,6 @@ export const NOT_YET_MIGRATED = [
  */
 export const NOT_EXPOSED_ON_PURPOSE: Readonly<Record<string, string>> = {
   connections: "tokens and credentials of the services the app talks to: an agent never reads or writes them",
-  clickup: "a ClickUp token and workspace link: a credential pane",
   remote: "reaching this machine from outside: who may pair and how is the owner's alone, at any level",
   plugins: "plugin trust and consent: approving what a plugin may do cannot be something another agent does for the owner",
   hooks: "the gate and the hook install decide what an agent may do without asking: no agent edits its own leash",
@@ -463,6 +503,19 @@ export const NOT_EXPOSED_ON_PURPOSE: Readonly<Record<string, string>> = {
 };
 
 
+
+/**
+ * Pages that carry a def AND something an agent must never reach. The page is
+ * migrated for what is not secret-class; what is, is held here with the reason,
+ * and a test refuses a def on the page that is a secret or whose id names one of
+ * these words (token, connection, workspace, account, credential, remote).
+ */
+export const NEVER_ON_PAGE: Readonly<Record<string, { pattern: RegExp; why: string }>> = {
+  clickup: {
+    pattern: /token|connect|workspace|account|credential|secret|remote|writes?\b/i,
+    why: "the ClickUp token, the workspace link and the switch that lets agentglass write to a board: what the app is allowed to do with the owner's account is the owner's alone",
+  },
+};
 
 /** The highest level of write an agent may make from this window. */
 export const AGENT_MAX_LEVEL = 2;
@@ -503,7 +556,9 @@ const KEPT = 20;
 export const AGENT_CHANGES_KEPT = KEPT;
 
 export interface SettingsApi {
-  list(serverLevel?: number): { id: string; page: string; section: string; label: string; writable: boolean; secret: boolean; value?: SettingValue }[];
+  list(serverLevel?: number): { id: string; page: string; section: string; label: string; writable: boolean; secret: boolean; type: SettingType; value?: SettingValue; display?: string }[];
+  /** A value of one setting as a person would read it (the chip's words). The id as typed when it is not exposed. */
+  display(id: string, v: SettingValue): string;
   get(id: unknown): AgentGetResult;
   set(id: unknown, value: unknown, as?: string): AgentSetResult;
   undo(handle: string): boolean;
@@ -534,13 +589,14 @@ export function makeSettings(defs: readonly SettingDef[], now: () => number = Da
       // server it is attached to holds, so a read-only server lists nothing writable.
       writable: !d.secret && (d.level ?? 3) <= Math.min(AGENT_MAX_LEVEL, serverLevel ?? AGENT_MAX_LEVEL),
       secret: !!d.secret,
-      ...(d.secret ? {} : { value: d.get() }),
+      type: d.type,
+      ...(d.secret ? {} : { value: d.get(), display: d.display(d.get()) }),
     })),
     get(id) {
       const d = find(id);
       if (!d) return { ok: false, error: "not exposed" };
       if (d.secret) return { ok: true, id: d.id, set: !!d.get() };
-      return { ok: true, id: d.id, value: d.get() };
+      return { ok: true, id: d.id, value: d.get(), display: d.display(d.get()) };
     },
     set(id, value, as) {
       const d = find(id);
@@ -575,6 +631,7 @@ export function makeSettings(defs: readonly SettingDef[], now: () => number = Da
       const c = log.find((x) => x.handle === handle);
       if (c && c.shown) { c.shown = false; touch(); }
     },
+    display: (id, v) => { const d = find(id); return d && !d.secret ? d.display(v) : say(v); },
     changes: () => log,
     subscribeChanges: (fn) => { watchers.add(fn); return () => { watchers.delete(fn); }; },
   };

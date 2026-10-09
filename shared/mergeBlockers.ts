@@ -17,6 +17,7 @@
 // so for everybody else a lock arrives as BLOCKED with no reason attached.
 // That case is a reason of its own ("unexplained") rather than a silence.
 
+import { stuckDetail, type GithubProblem } from "./githubStatus.ts";
 import type { PrCheck, PrCheckRollup, PrMergeGate, PrMergeState } from "./types.ts";
 
 export type BlockerWeight = "blocks" | "waits" | "warns";
@@ -56,7 +57,30 @@ export interface BlockerInput {
   /** The branch was pushed a moment ago, so runs are expected and may not
    *  exist yet — see checksStanding in mergeReason.ts. */
   awaitingChecks?: boolean;
+  /** Commits the head is behind its base, when known. */
+  behind?: number | null;
+  /** Whole minutes mergeability has read UNKNOWN, once past the "stuck" threshold. */
+  stuckMin?: number | null;
+  /** What GitHub's own status page says, asked only when stuck. */
+  githubProblem?: GithubProblem | null;
+  /** The branch ref on GitHub is not the pull request's head. */
+  prLagging?: boolean;
 }
+
+/** What to say while GitHub has not decided mergeability. Updating a branch
+ *  that is behind its base usually makes GitHub recompute, so say so instead of
+ *  only "wait"; past the stuck threshold say how long, and what GitHub says. */
+export function computingDetail(behind?: number | null, stuckMin?: number | null, problem?: GithubProblem | null, lagging = false): string {
+  if (lagging) return stuckDetail(stuckMin ?? 0, behind, problem, true);
+  if (stuckMin != null) return stuckDetail(stuckMin, behind, problem);
+  return behind && behind > 0
+    ? "GitHub computes mergeability lazily and has not settled. The branch is behind its base, and updating it usually makes GitHub recompute."
+    : "It computes mergeability lazily; this settles in a few seconds.";
+}
+
+/** The title of that row. */
+export const computingTitle = (stuckMin?: number | null, lagging = false) =>
+  lagging ? "The pull request has not caught up with its branch" : stuckMin != null ? `GitHub has not decided for ${stuckMin} min` : "GitHub is still working it out";
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
@@ -219,7 +243,7 @@ export function mergeBlockers(i: BlockerInput): MergeBlocker[] {
   }
 
   if (i.mergeState === "UNKNOWN" && !conflicted && !i.isDraft) {
-    out.push({ kind: "computing", weight: "waits", title: "GitHub is still working it out", detail: "It computes mergeability lazily; this settles in a few seconds." });
+    out.push({ kind: "computing", weight: "waits", title: computingTitle(i.stuckMin, i.prLagging), detail: computingDetail(i.behind, i.stuckMin, i.githubProblem, i.prLagging) });
   }
 
   // Pushed a moment ago and nothing has reported: the checks are the reason,

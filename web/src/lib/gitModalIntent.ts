@@ -9,6 +9,12 @@
  * and opens the view, and the view drains it when it has a checkout, which
  * covers both orderings without a timing assumption.
  *
+ * The request does not switch the view. The modals are portals, so they draw
+ * over whichever view is up, and the Git view only has to be MOUNTED for them
+ * (Workspace mounts it hidden when a request arrives, GitView loads its
+ * checkout while one is open). An agent showing Insights from the terminal
+ * therefore leaves the terminal, and the chat in it, where it was.
+ *
  * Rebase is here because its editor only draws a plan: nothing moves until the
  * owner presses Start, and the server re-validates the plan then. Rescue is not:
  * it is the end of a worktree-removal flow, a promise that flow settles, and has
@@ -41,6 +47,11 @@ export function takeGitModal(now: number = Date.now()): GitModalIntent | null {
   const p = pending;
   pending = null;
   return p && now - p.at <= GIT_MODAL_TTL_MS ? p.intent : null;
+}
+
+/** Whether a fresh request is waiting, without taking it. */
+export function hasGitModal(now: number = Date.now()): boolean {
+  return pending !== null && now - pending.at <= GIT_MODAL_TTL_MS;
 }
 
 export function subscribeGitModal(fn: () => void): () => void {

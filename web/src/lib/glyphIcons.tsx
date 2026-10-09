@@ -112,6 +112,18 @@ export function SearchIcon({ size = ICON.sm, className }: P) {
   return <svg {...svg(size, className)}><circle cx="6" cy="6" r="3.8" /><path d="M8.9 8.9L12 12" /></svg>;
 }
 
+/** The Markdown mark: a framed M with a down arrow, the one GitHub draws for
+ *  "this is markdown source". */
+export function MarkdownIcon({ size = ICON.sm, className }: P) {
+  return (
+    <svg {...svg(size, className)} strokeWidth={1.3}>
+      <rect x="1.2" y="2.8" width="11.6" height="8.4" rx="1.6" />
+      <path d="M3.6 9V5l1.8 2 1.8-2v4" />
+      <path d="M10 5v4M8.7 7.8L10 9.1l1.3-1.3" />
+    </svg>
+  );
+}
+
 /** ✎ */
 export function EditIcon({ size = ICON.sm, className }: P) {
   return <svg {...svg(size, className)}><path d="M9.5 2.5l2 2L5 11l-2.6.6L3 9z" /><path d="M8.3 3.7l2 2" /></svg>;
@@ -240,6 +252,11 @@ export function UserIcon({ size = ICON.sm, className }: P) {
 /** 👁 */
 export function EyeIcon({ size = ICON.sm, className }: P) {
   return <svg {...svg(size, className)}><path d="M1.4 7S3.6 3 7 3s5.6 4 5.6 4-2.2 4-5.6 4S1.4 7 1.4 7z" /><circle cx="7" cy="7" r="1.8" /></svg>;
+}
+
+/** 👁 crossed out: the same eye, hidden. */
+export function EyeOffIcon({ size = ICON.sm, className }: P) {
+  return <svg {...svg(size, className)}><path d="M1.4 7S3.6 3 7 3s5.6 4 5.6 4-2.2 4-5.6 4S1.4 7 1.4 7z" /><circle cx="7" cy="7" r="1.8" /><path d="M2.4 12L11.6 2" /></svg>;
 }
 
 /** 🏷 */
@@ -472,4 +489,23 @@ export function TrackerGlyph({ size = ICON.sm, className }: P) {
       <path d="M4.6 12.3c2.1 1.6 4.7 1.6 6.8 0" />
     </svg>
   );
+}
+
+/** ⋮⋮ — the handle a list item is dragged by. */
+export function GripIcon({ size = ICON.md, className }: P) {
+  return (
+    <svg {...svg(size, className)} fill="currentColor" stroke="none">
+      <circle cx="5" cy="3.2" r="1" /><circle cx="9" cy="3.2" r="1" /><circle cx="5" cy="7" r="1" /><circle cx="9" cy="7" r="1" /><circle cx="5" cy="10.8" r="1" /><circle cx="9" cy="10.8" r="1" />
+    </svg>
+  );
+}
+
+/** A person with a plus: put somebody on. */
+export function UserPlusIcon({ size = ICON.sm, className }: P) {
+  return <svg {...svg(size, className)}><circle cx="5.6" cy="4.8" r="2.2" /><path d="M1.6 12a4 4 0 0 1 8 0M11 3.4v3.4M9.3 5.1h3.4" /></svg>;
+}
+
+/** A person with a minus: take somebody off. */
+export function UserMinusIcon({ size = ICON.sm, className }: P) {
+  return <svg {...svg(size, className)}><circle cx="5.6" cy="4.8" r="2.2" /><path d="M1.6 12a4 4 0 0 1 8 0M9.3 5.1h3.4" /></svg>;
 }

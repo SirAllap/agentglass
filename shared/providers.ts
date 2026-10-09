@@ -187,6 +187,8 @@ export interface ProviderTask {
   /** The list, board or project it sits in — its HOME, in ClickUp's words. */
   list: string | null;
   listId?: string;
+  /** The space the list sits in; the task payload carries it, so it costs no call. */
+  spaceId?: string;
   /**
    * The other lists it also appears in.
    *
@@ -547,12 +549,71 @@ export interface ListStatus {
  */
 export type HandoffUnassign = "none" | "me" | "all";
 
+/**
+ * Who a step that moves a card also makes sure is on it. `none` touches no one,
+ * `me` is whoever presses the control, `author` is the pull request's author as
+ * the tracker knows them, `person` is one member chosen in settings. Ensured, not
+ * replaced: the person is added when missing and everybody else stays.
+ */
+export type AssignWho = "none" | "me" | "author" | "person";
+
+/**
+ * Is a pull request's author the same person as a member of this tracker? Only where the tracker's
+ * accounts are GitHub accounts (GitHub Issues would be). ClickUp's are not: a GitHub login and a ClickUp
+ * member are different systems and never the same identity, so nothing here guesses one from the other
+ * and "the pull request's author" is not a choice ClickUp offers.
+ */
+export const AUTHOR_IS_MEMBER: Record<string, boolean> = { clickup: false };
+export interface StepAssign {
+  who: AssignWho;
+  /** Only with `who: "person"`: the member's tracker id, and the name it had when chosen. */
+  person?: { id: number; name: string };
+}
+
+/**
+ * What a step does, as a list the person builds: each block is one action, and the
+ * list's order is the order it reads in. The kinds are in shared/stepBlocks.ts
+ * (BLOCK_INFO); a new kind is a new member here, not a new field on every step.
+ * A step is sent to the tracker as one write whatever its blocks.
+ */
+export type StepBlock =
+  /**
+   * Move the card. No names with `fallback` is the built-in guess; with neither, a status still to be picked.
+   * With `ask` the names are the starting choice, and the person picks the status when it runs.
+   */
+  | { type: "move"; statusNames: string[]; fallback?: boolean; ask?: true }
+  /**
+   * Take people off the card. `who: "people"` names them (`people`); `none`, `me` and `all` are the fixed
+   * choices. With `ask` the person ticks who comes off when it runs, starting at this value.
+   */
+  | { type: "unassign"; who: HandoffUnassign | "people"; people?: { id: number; name: string }[]; ask?: true }
+  /**
+   * Assign the card. With `ask` the person is picked when it runs, and `who` is where the picker starts
+   * (`none` is "nobody"; without `ask` that is not a block, it is the absence of one).
+   */
+  | ({ type: "assign"; ask?: true; /** More people the question starts with, beside `person` (only with `ask`). */ also?: { id: number; name: string }[] } & StepAssign)
+  /**
+   * Comment on the card. `text` is a template (see PLACEHOLDERS in shared/stepBlocks.ts). With `ask` it is
+   * the text the person edits when it runs, prefilled with the template filled in.
+   */
+  | { type: "comment"; text: string; ask?: true }
+  /**
+   * Set a custom field of the card, by the field's NAME (ids differ per list; the name is what a person
+   * reads) and the value as a person writes it: an option's name, text, a number, a date as YYYY-MM-DD.
+   * With `ask` the value is where the question starts.
+   */
+  | { type: "field"; field: string; value: string; ask?: true };
+
 export interface HandoffConfig {
   /** Off until a workspace says it has a QA column. */
   enabled: boolean;
+  /** What the step does, in order. Absent in a file from before blocks: read from the three keys below. */
+  blocks?: StepBlock[];
   /** Status names to look for, in order; the first one the card's list has wins. */
   statusNames: string[];
   unassign: HandoffUnassign;
+  /** Who is made sure to be on the card after the move (after `unassign` has run). */
+  assign: StepAssign;
 }
 
 /** The kinds of note the card bell can raise. */
@@ -583,11 +644,15 @@ export interface ClickUpPrefs {
     enabled: boolean;
     /** Status names the review menu moves a card to; empty falls back to /review/i, then leaves it alone. */
     statusNames: string[];
+    /** What the move item does, in order (see HandoffConfig.blocks). */
+    blocks?: StepBlock[];
     assignReviewer: boolean;
+    /** Who the move item also makes sure is on the card. */
+    assign: StepAssign;
   };
   /** The card choice in the merge dialog. Off until a workspace adds it; the first of
    *  `statusNames` the card's list has is preselected, none means "Leave it there". */
-  merge: { enabled: boolean; statusNames: string[] };
+  merge: { enabled: boolean; statusNames: string[]; assign: StepAssign; blocks?: StepBlock[] };
   flows: { noteOnCard: boolean };
   /** Custom field that holds a PR link; empty means the guess (a name containing "github"). */
   prLinkField: string;
@@ -601,12 +666,40 @@ export interface ClickUpPrefs {
   /** Which custom fields are shown but never written. */
   readOnlyFieldPattern: string;
   bell: { kinds: ClickUpBellKind[] };
+  /** Which spaces count for statuses, by id. Empty: the spaces where this person's cards live
+   *  (every space until a card has been read). The rest are ignored, never deleted. */
+  statusSpaces: { counted: string[] };
 }
 
 /** One status of a space, as Get Spaces carries it. */
 export interface SpaceStatus { status: string; type: string; color?: string }
 /** A space and the statuses its lists inherit; a list may override them. */
-export interface ClickUpSpace { id: string; name: string; statuses: SpaceStatus[] }
+export interface ClickUpSpace {
+  id: string;
+  name: string;
+  statuses: SpaceStatus[];
+  /** The folder a list sits in, said under its name in the settings page. Get Spaces carries none; a source that knows it sets it. */
+  group?: string;
+  /** Where the cards the app already read for this person live. Absent on a bare
+   *  Get Spaces answer; set by `statusSpaces` once cards are known. */
+  mine?: boolean;
+  /** How many of those cards sit here, to put the busiest first. */
+  cards?: number;
+  /** Whether this space counts for statuses. Absent (an older answer) means it does;
+   *  `false` is an ignored space: kept in the answer, out of the pickers and the coverage. */
+  counted?: boolean;
+  /** For a list place, the space it sits in; counting follows the space. */
+  spaceId?: string;
+  /** A list whose cards wear statuses its space does not have: the set is only
+   *  the ones SEEN on those cards, not the list's full set (that would be a
+   *  request of its own). Named "Space / List". */
+  fromList?: boolean;
+  /** A space that says in its own name that nobody should use it. */
+  legacy?: boolean;
+  /** The person's cards are still being read, so whether this space counts is not known yet
+   *  (it is not "ignored", and it is not counted either). */
+  pending?: boolean;
+}
 
 /** Somebody who can be put on a card: the members of the list it lives in.
  *  Same shape as an assignee, because they become one. */

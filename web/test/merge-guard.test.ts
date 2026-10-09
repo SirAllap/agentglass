@@ -54,7 +54,7 @@ const code = (s: string) => s.split("\n").filter((l) => !/^\s*(\/\/|\/?\*)/.test
 describe("the panel's merge paths go through the guard", () => {
   test("Merge pull request asks before the merge form", () => {
     const b = code(body("const runMerge = async ("));
-    expect(b).toContain("confirmMergeGuard(detail, ask)");
+    expect(b).toMatch(/confirmMergeGuard\(detail, ask[,)]/);
     expect(b.indexOf("confirmMergeGuard(")).toBeLessThan(b.indexOf("askMerge("));
   });
   test("Merge when green asks before it arms", () => {

@@ -11,12 +11,14 @@
 // second half is the half nobody builds, and it is the reason a machine ends up
 // with fourteen checkouts nobody can name.
 import { putCard } from "../lib/prCardStore.ts";
+import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import { Fragment, type CSSProperties, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { BlockedIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, DotIcon, IconLabel, KeyboardIcon, LockIcon, MonitorIcon, NoteIcon, PlusIcon, RefreshIcon, SearchIcon } from "../lib/glyphIcons.tsx";
 import { pickCardPr, mergedInk, isRelated, type CardPr } from "../lib/cardPrPick.ts";
 import { CardPrChip, CardPrDetailRow, LINK_ROW } from "./CardPrChip.tsx";
-import { cardPrsOf, onCardPrs, cardPrVersion } from "../lib/cardPrStore.ts";
+import { cardPrsOf, onCardPrs, cardPrVersion, widestCardPrChip } from "../lib/cardPrStore.ts";
+import { digitMetrics, trackPx, whoCellWidth, PR_FLOOR, WHO_FLOOR } from "../lib/tasksColumnFit.ts";
 import { paintThenRevalidate, PRS_TTL_MS, swr, THREAD_TTL_MS } from "../lib/cardTabCache.ts";
 import { api } from "../lib/api.ts";
 import { __forgetClickupSetup } from "../lib/clickupSetup.ts";
@@ -43,6 +45,8 @@ import { useDismiss } from "../lib/useDismiss.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import { Portal } from "./Portal.tsx";
 import { PeoplePick } from "./PeoplePick.tsx";
+import { listMembers } from "../lib/listMembers.ts";
+import { Select } from "./Select.tsx";
 import { orderMembers } from "../lib/peopleOrder.ts";
 import { Markdown, MarkdownImages } from "../lib/markdown.tsx";
 import { fmtAgo } from "../lib/format.ts";
@@ -1875,7 +1879,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
     if (faceOnBoard || !listForFace || askedFace.current === listForFace) return;
     askedFace.current = listForFace;
     let live = true;
-    api.clickupMembers(listForFace)
+    listMembers(listForFace)
       .then((r) => { if (live && r.ok) setMyAvatar(r.members?.find((m) => m.me)?.avatar ?? ""); })
       .catch(() => { /* no face is a fine answer — the chip keeps its word */ });
     return () => { live = false; };
@@ -2277,7 +2281,15 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
      field, since `swatch` picks by name across every card. */
   const cuPrefs = useClickupPrefs();
   const squadLabel = tasks.map((t) => swatch(t, cuPrefs?.swatchField)).find(Boolean)?.name ?? "";
-  const grid = cuGrid(anyWho, !!squadLabel, anySprint, anyEst, onLooked);
+  /* The PR and Who tracks fit the widest chip and the longest stack of faces, as
+     plain pixels worked out here and handed to the heading and every row alike
+     (see lib/tasksColumnFit.ts for why a measured max and not `max-content`).
+     The chip number is the store's, so this re-renders when the column has to
+     grow and not on every answer. */
+  const prFit = useSyncExternalStore(onCardPrs, widestCardPrChip, () => 0);
+  const whoMost = useMemo(() => tasks.reduce((n, t) => Math.max(n, t.people?.length ?? 0), 0), [tasks]);
+  const whoFit = whoMost ? whoCellWidth(whoMost, digitMetrics()) : 0;
+  const grid = cuGrid(anyWho, !!squadLabel, anySprint, anyEst, onLooked, trackPx(PR_FLOOR, prFit), trackPx(WHO_FLOOR, whoFit));
 
   /* The looked-up cards, by where each one lives. The search box filters these
      too — it is the only chip that still means anything on this board. */
@@ -3685,53 +3697,36 @@ function FieldPick({ t, f, spec, busy, onApply }: {
   t: ProviderTask; f: CardFieldValue; spec: ListField; busy: boolean;
   onApply: (p: { done: string; optimistic?: Partial<ProviderTask>; go: (stamp?: number) => Promise<{ ok: boolean; error?: string; conflict?: boolean; task?: ProviderTask }> }) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const box = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
-    document.addEventListener("mousedown", away);
-    return () => document.removeEventListener("mousedown", away);
-  }, [open]);
+  /* The app's one dropdown, the value chip as its face and each option in its own colour. Only the control changed; a pick
+     is the same optimistic chip and the same write. */
+  const opts = spec.options ?? [];
+  const now = opts.find((o) => o.name === f.value)?.id ?? "";
   return (
-    <div className="relative inline-block max-w-full" ref={box}>
-      <button onClick={() => !busy && setOpen((v) => !v)} disabled={busy}
-        className="agx-btn inline-flex items-center gap-1 max-w-full rounded"
-        title={busy ? `Setting ${spec.name}…` : `Set ${spec.name}`}>
-        <FieldValue f={f} />
-        {busy
-          ? <span className="agx-spin shrink-0" aria-label="Applying" style={{ width: 10, height: 10, borderWidth: 1.5, borderColor: "var(--text3)", borderTopColor: "transparent" }} />
-          : <span className="shrink-0 text-[9px]" style={{ color: "var(--text4)" }}>▾</span>}
-      </button>
-      {open && (
-        <div className="agx-scroll absolute left-0 mt-1 rounded-lg shadow-2xl flex flex-col overflow-y-auto py-1"
-          style={{ zIndex: 30, background: "var(--surface-card)", border: edge(28), minWidth: 180, maxHeight: 280 }}>
-          {(spec.options ?? []).map((o) => (
-            <button key={o.id} className="text-left px-2 py-1.5 hover:bg-white/5"
-              onClick={() => {
-                setOpen(false);
-                onApply({
-                  done: `${spec.name} → ${o.name}`,
-                  /* The chip changes on the press, in the option's own colour — the
-                     card is read by those colours, and a value that arrives a second
-                     later reads as a press that did nothing. */
-                  optimistic: {
-                    custom: (t.custom ?? []).map((x) => (x.id === f.id
-                      ? { ...x, value: o.name, ...(o.color ? { color: o.color } : { color: undefined }) }
-                      : x)),
-                  },
-                  go: () => api.clickupField(t.id, spec.id, o.id),
-                });
-              }}>
-              {o.color
-                ? <span className="text-[10.5px] px-1.5 py-0.5 rounded-md"
-                    style={{ color: o.color, background: `color-mix(in srgb, ${o.color} 15%, transparent)`, border: `1px solid color-mix(in srgb, ${o.color} 34%, transparent)` }}>{o.name}</span>
-                : <span className="text-[11px]" style={{ color: "var(--text2)" }}>{o.name}</span>}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+    <Select value={now} busy={busy} title={busy ? `Setting ${spec.name}…` : `Set ${spec.name}`}
+      className="agx-btn inline-flex items-center gap-1 max-w-full rounded" trigger={<FieldValue f={f} />}
+      onChange={(id) => {
+        const o = opts.find((x) => x.id === id);
+        if (!o || o.id === now) return;
+        onApply({
+          done: `${spec.name} → ${o.name}`,
+          /* The chip changes on the press, in the option's own colour — the
+             card is read by those colours, and a value that arrives a second
+             later reads as a press that did nothing. */
+          optimistic: {
+            custom: (t.custom ?? []).map((x) => (x.id === f.id
+              ? { ...x, value: o.name, ...(o.color ? { color: o.color } : { color: undefined }) }
+              : x)),
+          },
+          go: () => api.clickupField(t.id, spec.id, o.id),
+        });
+      }}
+      options={opts.map((o) => ({
+        value: o.id, label: o.name,
+        node: o.color
+          ? <span className="text-[10.5px] px-1.5 py-0.5 rounded-md"
+              style={{ color: o.color, background: `color-mix(in srgb, ${o.color} 15%, transparent)`, border: `1px solid color-mix(in srgb, ${o.color} 34%, transparent)` }}>{o.name}</span>
+          : <span className="text-[11px]" style={{ color: "var(--text2)" }}>{o.name}</span>,
+      }))} />
   );
 }
 
@@ -4072,11 +4067,11 @@ function FolderPicker({ folders, busy, onAdd, onAddList }: {
 
   return (
     <div className="flex flex-col gap-1.5">
-      <select value={space} onChange={(e) => setSpace(e.target.value)}
-        className="text-[11.5px] px-2 py-1.5 rounded-lg self-start min-w-[200px]"
-        style={{ background: "var(--surface-inset)", border: EDGE, color: "var(--text)" }}>
-        {spaces.map((sp) => <option key={sp.id} value={sp.id}>{sp.name}</option>)}
-      </select>
+      <div className="self-start min-w-[200px]">
+        <Select value={space} onChange={setSpace} title="Space" className="text-[11.5px] px-2 py-1.5 rounded-lg w-full justify-between"
+          style={{ background: "var(--surface-inset)", border: EDGE, color: "var(--text)" }}
+          options={spaces.map((sp) => ({ value: sp.id, label: sp.name }))} />
+      </div>
       {!found ? (
         <div className="text-[11px] py-1" style={{ color: "var(--text4)" }}>Reading its folders…</div>
       ) : !found.length ? (
@@ -4382,7 +4377,7 @@ const LOOKED_MAX = 12;
  * the same way the app marks a pressed control everywhere else.
  */
 const ON_CHIP = {
-  background: "var(--primary)", border: "1px solid var(--primary)", color: "var(--bg)", fontWeight: 600,
+  background: "var(--primary)", border: "1px solid var(--primary)", color: "var(--on-primary)", fontWeight: 600,
 } as const;
 const ON_CHIP_OK = {
   background: "var(--success)", border: "1px solid var(--success)", color: "var(--bg)", fontWeight: 600,
@@ -4443,7 +4438,7 @@ const COL_RULE: CSSProperties = {
  */
 const HEAD_H = 34;
 
-const cuGrid = (who: boolean, squad: boolean, sprint: boolean, est: boolean, forget: boolean) =>
+const cuGrid = (who: boolean, squad: boolean, sprint: boolean, est: boolean, forget: boolean, prPx = 92, whoPx = 50) =>
   // The comments column is unconditional, unlike Who and Sprint. Those come and
   // go because a board where nobody is assigned has nothing to put in them; a
   // count of zero is a real answer and worth the 30px — "nobody has said
@@ -4465,9 +4460,11 @@ const cuGrid = (who: boolean, squad: boolean, sprint: boolean, est: boolean, for
   // PR sits right after the title, its own track rather than a layer on top of
   // it. Fixed width and always present — like
   // Cmts and Pts, a card with none draws an empty cell rather than shifting
-  // its neighbours. 92px holds the widest chip, "#NNNNN +N"; at 58 it ran
-  // into the avatars.
-  ["1fr", "92px", who ? "50px" : "", squad ? "36px" : "", sprint ? "88px" : "", "34px", "72px", est ? "38px" : "", "30px", forget ? "30px" : ""].filter(Boolean).join(" ");
+  // its neighbours. The PR and Who tracks are a floor plus whatever the widest
+  // chip and stack of faces in view need, in pixels (tasksColumnFit.ts): the
+  // floor (92 and 50, the defaults) is what the cell was drawn for, so an empty
+  // board or chips still on their way move nothing.
+  ["1fr", `${prPx}px`, who ? `${whoPx}px` : "", squad ? "36px" : "", sprint ? "88px" : "", "34px", "72px", est ? "38px" : "", "30px", forget ? "30px" : ""].filter(Boolean).join(" ");
 
 /**
  * The one custom field worth a column of its own: a coloured drop-down.
@@ -4699,49 +4696,26 @@ function PriorityPick({ t, writable, busy, onApply }: {
   t: ProviderTask; writable: boolean; busy: boolean;
   onApply: (key: string, p: Pending) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  useEffect(() => { setOpen(false); }, [t.id]);
   const look = prioLook(t.priority);
   const choose = (id: string, label: string) => {
-    setOpen(false);
     onApply("priority", {
       done: id ? `Priority set to ${label}` : "Priority cleared",
       optimistic: { priority: (id || null) as ProviderTask["priority"] },
       go: (stamp) => api.clickupPriority(t.id, id || null, stamp),
     });
   };
+  /* The app's one dropdown, with the flag as the option's mark. Only the control changed; the write is the one it always was. */
+  const all = [...PRIOS, { id: "", label: "Clear", c: "var(--text4)" } as const];
+  const now = t.priority ?? "";
   return (
-    <div className="relative">
-      <button onClick={() => writable && !busy && setOpen((o) => !o)}
-        disabled={!writable || busy}
-        title={busy ? "Moving the flag…" : writable ? "Set this card's priority" : undefined}
-        className="text-left rounded flex items-center gap-1.5 px-1.5 py-0.5 -mx-1.5 hover:bg-white/5 disabled:cursor-default disabled:hover:bg-transparent"
-        style={{ color: look.c }}>
-        <Flag c={look.c} on={!!t.priority} />
-        <span className="text-[11px]" style={{ color: t.priority ? look.c : "var(--text4)" }}>{look.label}</span>
-        {busy
-          ? <span className="agx-spin shrink-0" aria-label="Applying" style={{ width: 10, height: 10, borderWidth: 1.5, borderColor: "var(--text3)", borderTopColor: "transparent" }} />
-          : writable ? <span className="shrink-0" style={{ color: "var(--text4)" }}>▾</span> : null}
-      </button>
-      {open && (
-        <div className="absolute left-0 mt-1 rounded-lg shadow-2xl flex flex-col overflow-hidden"
-          style={{ zIndex: 30, background: "var(--surface-card)", border: edge(28), minWidth: 150 }}>
-          {[...PRIOS, { id: "", label: "Clear", c: "var(--text4)" } as const]
-            .map((o) => {
-              const now = o.id === (t.priority ?? "");
-              return (
-                <button key={o.id || "none"} className="text-left px-2 py-1.5 flex items-center gap-2 hover:bg-white/5"
-                  aria-current={now ? "true" : undefined}
-                  onClick={() => (now ? setOpen(false) : choose(o.id, o.label))}>
-                  <Flag c={o.c} on={!!o.id} />
-                  <span className="text-[11px]" style={{ color: o.id ? o.c : "var(--text3)" }}>{o.label}</span>
-                  {now && <span className="ml-auto shrink-0" style={{ color: "var(--success)" }}><DoneIcon size={ICON.xs} /></span>}
-                </button>
-              );
-            })}
-        </div>
-      )}
-    </div>
+    <Select value={now} busy={busy} disabled={!writable} title={busy ? "Moving the flag…" : writable ? "Set this card's priority" : "Priority"}
+      className="text-left rounded flex items-center gap-1.5 px-1.5 py-0.5 -mx-1.5 hover:bg-white/5 disabled:cursor-default text-[11px]"
+      style={{ color: look.c }}
+      onChange={(id) => { if (id === now) return; const o = all.find((x) => x.id === id); if (o) choose(o.id, o.label); }}
+      options={[
+        ...(now ? [] : [{ value: "", label: look.label, icon: <Flag c={look.c} on={false} />, tint: "var(--text4)" }]),
+        ...all.filter((o) => (o.id !== "" || !!now)).map((o) => ({ value: o.id, label: o.label, icon: <Flag c={o.c} on={!!o.id} />, tint: o.id ? o.c : "var(--text3)" })),
+      ]} />
   );
 }
 
@@ -5315,25 +5289,17 @@ function SprintPick({ t, busy, onApply }: {
   t: ProviderTask; busy: boolean;
   onApply: (p: Pending) => void;
 }) {
-  const [open, setOpen] = useState(false);
   const [lists, setLists] = useState<{ id: string; name: string }[] | null>(null);
   const [why, setWhy] = useState("");
   const [loading, setLoading] = useState(false);
-  const box = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
-    document.addEventListener("mousedown", away);
-    return () => document.removeEventListener("mousedown", away);
-  }, [open]);
 
   /* The list it is LEAVING. Without it the card ends up in the new sprint and
      the old one at the same time, which is how a board grows cards that are in
      two sprints and nobody knows which. */
   const currentSprint = (t.alsoIn ?? []).find((l) => /^\s*sprint\b/i.test(l.name));
 
-  const openMenu = () => {
-    setOpen((v) => !v);
+  /* Read when the list is first opened, never with the card. */
+  const read = () => {
     if (lists || loading) return;
     setLoading(true);
     void api.clickupSprints(t.id).then((r) => {
@@ -5342,39 +5308,26 @@ function SprintPick({ t, busy, onApply }: {
     }).catch(() => setWhy("could not read the sprints")).finally(() => setLoading(false));
   };
 
+  /* The app's one dropdown. Only the control changed: the choice is the same move, with the same optimistic patch. */
+  const now = currentSprint?.id ?? "";
   return (
-    <div className="relative inline-block max-w-full" ref={box}>
-      <button className="agx-btn inline-flex items-center gap-1 max-w-full rounded" disabled={busy}
-        onClick={openMenu} title={busy ? "Moving…" : "Move this card to another sprint"}>
-        <span className="truncate" style={{ color: t.sprint ? "var(--info)" : "var(--text4)" }}>{t.sprint ?? "None"}</span>
-        {busy
-          ? <span className="agx-spin shrink-0" aria-label="Moving" style={{ width: 10, height: 10, borderWidth: 1.5, borderColor: "var(--text3)", borderTopColor: "transparent" }} />
-          : <span className="shrink-0 text-[9px]" style={{ color: "var(--text4)" }}>▾</span>}
-      </button>
-      {open && (
-        <div className="agx-scroll absolute left-0 mt-1 rounded-lg shadow-2xl flex flex-col overflow-y-auto py-1"
-          style={{ zIndex: 30, background: "var(--surface-card)", border: edge(28), minWidth: 210, maxHeight: 300 }}>
-          {loading && <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>Reading the sprints…</div>}
-          {!loading && why && <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--warning-ink)" }}>{why}</div>}
-          {(lists ?? []).map((l) => (
-            <button key={l.id} className="text-left px-2.5 py-1.5 hover:bg-white/5 text-[11px] truncate"
-              style={{ color: l.id === currentSprint?.id ? "var(--info)" : "var(--text2)" }}
-              title={l.name}
-              onClick={() => {
-                setOpen(false);
-                if (l.id === currentSprint?.id) return;
-                onApply({
-                  done: `Moved to ${sprintShort(l.name)}`,
-                  optimistic: { sprint: sprintShort(l.name) },
-                  go: () => api.clickupMove(t.id, l.id, currentSprint?.id),
-                });
-              }}>
-              {sprintShort(l.name)}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+    <Select value={now} busy={busy} loading={loading} onOpen={read} title={busy ? "Moving…" : "Move this card to another sprint"}
+      className="agx-btn inline-flex items-center gap-1 max-w-full rounded text-[11px]" style={{ color: t.sprint ? "var(--info)" : "var(--text4)" }}
+      placeholder={t.sprint ?? "None"}
+      onChange={(id) => {
+        const l = (lists ?? []).find((x) => x.id === id);
+        if (!l || l.id === currentSprint?.id) return;
+        onApply({
+          done: `Moved to ${sprintShort(l.name)}`,
+          optimistic: { sprint: sprintShort(l.name) },
+          go: () => api.clickupMove(t.id, l.id, currentSprint?.id),
+        });
+      }}
+      options={[
+        ...(!why && (lists ?? []).some((l) => l.id === now) ? [] : currentSprint ? [{ value: now, label: sprintShort(currentSprint.name) }] : []),
+        ...(lists ?? []).map((l) => ({ value: l.id, label: sprintShort(l.name), tint: l.id === now ? "var(--info)" : "var(--text2)" })),
+        ...(why ? [{ value: "__why", label: why, tint: "var(--warning-ink)" }] : []),
+      ]} />
   );
 }
 
@@ -5408,6 +5361,7 @@ function TagEdit({ t, busy, onApply, board }: {
   const [draft, setDraft] = useState("");
   const [hot, setHot] = useState(0);
   const box = useRef<HTMLDivElement>(null);
+  useCloseWithOwner(() => { setAdding(false); setDraft(""); }, { open: adding, from: box });
 
   useEffect(() => {
     if (!adding) return;
@@ -5537,6 +5491,7 @@ function TagEdit({ t, busy, onApply, board }: {
 function CardHop({ list, id, onGo }: { list: ProviderTask[]; id: string; onGo: (id: string) => void }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
+  useCloseWithOwner(() => { setOpen(false); setQ(""); }, { open });
   useEffect(() => { setOpen(false); setQ(""); }, [id]);
   const hop = useMemo(() => neighbours(list, id), [list, id]);
   const shown = useMemo(() => list.filter((t) => hopMatches(t, q)), [list, q]);
@@ -5706,7 +5661,6 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
   /** Which comment threads are open, by comment id. Closed by default: a card
    *  with five threaded comments would otherwise open as a wall. */
   const [openThreads, setOpenThreads] = useState<Set<string>>(new Set());
-  const [statusOpen, setStatusOpen] = useState(false);
   /**
    * The assignee picker, and the people it offers.
    *
@@ -5768,7 +5722,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
     const forCard = t.id;
     asked.current = forCard;
     setMembersBusy(true);
-    api.clickupMembers(t.listId)
+    listMembers(t.listId)
       .then((r) => { if (asked.current === forCard) setMembers(r.ok ? (r.members ?? []) : []); })
       .catch(() => { if (asked.current === forCard) setMembers([]); })
       .finally(() => { if (asked.current === forCard) setMembersBusy(false); });
@@ -5897,7 +5851,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
   useEffect(() => {
     let live = true;
     const hit = threadCache.peek(t.id);
-    setFull(hit ?? null); setStatusOpen(false); setAskOpen(false);
+    setFull(hit ?? null); setAskOpen(false);
     void paintThenRevalidate(threadCache, t.id, () => {
       const ticket = layers.readStarted();
       return api.clickupTask(t.id).then((r) => { if (r.ok) layers.readLanded(ticket); return r; })
@@ -6411,38 +6365,27 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
         style={{ gap: "14px 20px", background: "color-mix(in srgb, var(--text) 4%, transparent)", border: EDGE }}>
         <div className="flex flex-col gap-1 min-w-0">
           <span className={`${EYEBROW}`} style={{ color: "var(--text4)" }}>status</span>
-          <div className="relative">
-            <button onClick={() => writable && !statusSaving && setStatusOpen((o) => !o)}
-              disabled={!writable || !options.length || statusSaving}
-              title={statusSaving ? `Moving this card to ${t.status}…` : undefined}
-              className="text-left rounded flex items-center gap-2 disabled:cursor-default">
-              <StatusPill status={t.status} color={t.statusColor} />
-              {statusSaving
-                ? <span className="agx-spin shrink-0" aria-label="Applying" style={{ width: 10, height: 10, borderWidth: 1.5, borderColor: "var(--text3)", borderTopColor: "transparent" }} />
-                : writable && options.length ? <span className="shrink-0" style={{ color: "var(--text4)" }}>▾</span> : null}
-            </button>
-            {statusOpen && (
-              <div className="agx-scroll absolute left-0 mt-1 rounded-lg shadow-2xl flex flex-col overflow-y-auto"
-                style={{ zIndex: 30, background: "var(--surface-card)", border: edge(28), minWidth: 210, maxHeight: 300 }}>
-                {options.map((o) => (
-                  <button key={o.status} className="text-left px-2 py-1.5 hover:bg-white/5"
-                    onClick={() => {
-                      setStatusOpen(false);
-                      onApply("status", {
-                        done: `Moved to ${o.status}`,
-                        optimistic: {
-                          status: o.status, statusColor: o.color,
-                          ...(o.type === "done" || o.type === "closed" ? { statusKind: "done" as const } : { statusKind: "open" as const }),
-                        },
-                        go: (stamp) => api.clickupStatus(t.id, o.status, stamp),
-                      });
-                    }}>
-                    <StatusPill status={o.status} color={o.color} dim={o.type === "done" || o.type === "closed"} />
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+          {/* The app's one dropdown (Select, with the status as a pill): it opens in a portal so the card's scroll
+              cannot clip it, flips up near the bottom, and answers the keyboard. Only the control changed; the write is
+              the one it always was. */}
+          <Select value={t.status} busy={statusSaving} disabled={!writable || !options.length}
+            title={statusSaving ? `Moving this card to ${t.status}…` : "Status"} className="text-left rounded"
+            onChange={(v) => {
+              const o = options.find((x) => x.status === v);
+              if (!o || o.status === t.status) return;
+              onApply("status", {
+                done: `Moved to ${o.status}`,
+                optimistic: {
+                  status: o.status, statusColor: o.color,
+                  ...(o.type === "done" || o.type === "closed" ? { statusKind: "done" as const } : { statusKind: "open" as const }),
+                },
+                go: (stamp) => api.clickupStatus(t.id, o.status, stamp),
+              });
+            }}
+            options={[
+              { value: t.status, label: t.status, pill: true, tint: t.statusColor, dim: t.statusKind === "done" },
+              ...options.filter((o) => o.status !== t.status).map((o) => ({ value: o.status, label: o.status, pill: true, tint: o.color, dim: o.type === "done" || o.type === "closed" })),
+            ]} />
         </div>
         {/* The flag, beside the status — ClickUp's own two card-level fields, in
             the order ClickUp puts them. Drawn even when the card has no

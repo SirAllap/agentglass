@@ -36,7 +36,7 @@ export function CardPrChip({ pick, onOpen }: { pick: CardPrPick; onOpen: (p: Car
     <>
       <button type="button"
         onClick={(e) => { e.stopPropagation(); if (pick.kind === "many") { const r = e.currentTarget.getBoundingClientRect(); setMenu({ x: r.left, y: r.bottom + 4 }); } else { onOpen(shown); } }}
-        className="agx-onrow inline-flex items-center gap-1 rounded-full shrink-0 whitespace-nowrap px-1.5 py-0.5 hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1"
+        className="agx-onrow inline-flex items-center gap-1 rounded-full shrink-0 min-w-0 max-w-full whitespace-nowrap px-1.5 py-0.5 hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1"
         style={{
           color: ink, background: `color-mix(in srgb, ${tint} 13%, transparent)`,
           border: `1px ${relatedChip ? "dashed" : "solid"} color-mix(in srgb, ${tint} 40%, transparent)`,
@@ -45,7 +45,7 @@ export function CardPrChip({ pick, onOpen }: { pick: CardPrPick; onOpen: (p: Car
         aria-label={relatedChip ? `${label} pull request #${shown.number}, ${relatedNote(shown)}` : undefined}
         title={`${relatedChip ? `${relatedNote(shown)} — ` : ""}${label} pull request #${shown.number}${shown.author ? (shown.mine ? ", yours" : ` by @${shown.author}`) : ""}${restCount ? ` (${plusN ? `+${plusN} more` : ""}${plusN && plusRelated ? ", " : ""}${plusRelated ? `${plusRelated} related, only names this card` : ""})` : ""} — ${shown.title}`}>
         {relatedChip ? <LinkIcon size={ICON.xs} /> : <PullRequestIcon size={ICON.xs} />}
-        <span className="text-[10.5px] tabular-nums font-mono leading-none">#{shown.number}</span>
+        <span className="text-[10.5px] tabular-nums font-mono leading-none truncate">#{shown.number}</span>
         {plusN > 0 && <span className="text-[9.5px] leading-none" style={{ opacity: 0.85 }}>+{plusN}</span>}
         {plusRelated > 0 && (
           <span className="inline-flex items-center gap-px text-[9.5px] leading-none" style={{ opacity: 0.85 }}>

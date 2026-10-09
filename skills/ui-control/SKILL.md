@@ -35,9 +35,9 @@ session the window holds (`event.open`, `session.open`), the running version's
 release notes (`whatsnew.open`), the Lantern schedule dialog, the Terminal's
 Resume list, and what the pane chords open for the focused terminal pane
 (`pane.open`). Opening only shows: starting a rebase, saving a schedule,
-resuming a session is the person's click. Not doors, on purpose: the merge dialog
-(a merge is level 3), the people picker, the Rescue modal and the menus inside a
-panel; `agentglass-ui list` is the truth.
+resuming a session is the person's click. Not doors, on purpose: the people
+picker, the Rescue modal and the menus inside a panel; `agentglass-ui list` is
+the truth.
 
 What you can read: `agentglass-ui read <panel>` for view, chat, bench, gates and
 the Settings panes (diff, terminal, browser, notifications, prefs, rail, keys,
@@ -58,8 +58,14 @@ Read the sentence and do what it says; do not retry the same call.
 2. **Change a local setting.** `settings set`, and only for the settings
    `settings list` shows (appearance, diff, rail, the terminal, quiet mode and two
    pull-request notices, the search engine, what Tasks shows, single-key
-   shortcuts). Not notification kinds, channels or voices, the home page, tokens,
-   remote access, plugin trust or the gate: those are the person's. The
+   shortcuts, and which ClickUp spaces count for statuses:
+   `settings set clickup.statusSpaces.counted 901,902` (`settings list` says each
+   setting's `type`; one that stores a string takes digits as text, and `display` is
+   its value in words), a comma-separated list of
+   space ids, empty for "the spaces my cards live in"; the rest are ignored, not
+   deleted, and the page lists them to count again; a read before the ClickUp page
+   was ever opened may say empty until the first local read lands). Not notification kinds, channels or voices, the home page, tokens,
+   remote access, the ClickUp token, workspace and write switch, plugin trust or the gate: those are the person's. The
    person gets a "<your --as name> changed X" chip with Undo, on screen for a minute (so
    keep the name: without one it says "An agent"). A refused value says what IS
    accepted ("accepted: one of split, inline"): correct it from that sentence in
@@ -71,7 +77,31 @@ Read the sentence and do what it says; do not retry the same call.
    one through this channel: a level 3 door only **stages**, opening the dialog
    with its fields filled in, and the person's own click is the effect. There is
    no grant that makes it automatic. It is offered only when the owner has allowed level 3. If the task needs one and no door
-   stages it, say so and let the person do it.
+   stages it, say so and let the person do it. The one that exists is `pr.unstick` (level 3): it opens the Unstick dialog on a pull request and
+   nothing else; never offer it on a pull request that is merely slow, the dialog refuses one that is not stuck.
+
+   The stage doors are `pr.merge.stage` (repo, number, method, optional subject
+   and body), `pr.comment.stage` (repo, number, body), `pr.review.stage` (repo,
+   number, verdict `approve`/`request_changes`/`comment`, body: required unless
+   approving) and `card.move.stage` (repo, number, status: one the card's list
+   has). Use `agentglass-ui stage <id> --arg repo=acme/orbit --arg number=42 ...`
+   (or the MCP tool of the same name). Say what you did in those words: *I
+   prepared the merge dialog; it is yours to read and press*. Never say you
+   merged, posted, reviewed or moved anything. The text you send is shown to the
+   person as written by you, so write it as a draft they will edit: plain text,
+   no hidden or control characters and no HTML comment (they are refused), at
+   most 8000 characters (a subject: one line, 256). A stage opens the pull
+   request in the app, so it is quiet like an open (it waits behind a chip while
+   the person types; `--now` only when they just asked you to prepare it). It
+   is declined on screen when the screen's own button would not be there (the
+   pull request is closed, not mergeable, yours to review, or the repository does
+   not allow that method) and when the person already has text in that comment
+   box or a review in progress. `applied: true` only means the window took the
+   request: a refusal, or a pull request that never loads, shows on screen and is
+   not reported back to you, so do not tell the person it is open until they
+   say so. The text may not hide anything: no invisible or control characters, no
+   HTML comment, no link reference definition, no `<details>`, no run of blank
+   lines; a refused text is a `400` that names the argument.
 
 The level is the owner's, set when the server starts. No door, setting or
 argument can change it, so do not try to find one or to work out how: a refusal
@@ -97,18 +127,20 @@ naming a level is the answer, not a puzzle. Ask the person.
   me the diff settings"): that runs at once, even over their typing. A call that
   carries no name (`--as`) is `now` too, so keep the name.
 - **Show me without taking the chat away.** `view.open`, `pane.open`,
-  `workspace.toggle` (and the doors that land on a view: `chat.new`, `git.*`,
-  `lantern.schedule`, `terminal.resume`) replace the whole window, and the person
+  `workspace.toggle` (and the doors that land on a view: `chat.new`,
+  `lantern.schedule`, `terminal.resume`, `pr.unstick`) replace the whole window, and the person
   loses the conversation where you are talking to them. For "show me" prefer what
   floats over the current view and leaves the chat where it is: `panel.open`,
   `machine.open`, `peek.file`, the bench (`bench.toggle`, `bench.file`,
-  `bench.board`), `settings.open`. (`git.modal` is not one of these: it lands on
-  the Git view first.) Use a view switch only when what they asked to see is that
-  view. Then say in chat, BEFORE you switch, what you are about to show and where
-  you are putting them; and when you have shown it, switch back with `view.open`
-  to where they were (`agentglass-ui read view` tells you). The window also leaves
-  them a "Back to <view> · <your name>" chip for a minute, one click, so keep
-  the name on the call.
+  `bench.board`), `settings.open`, and the Git modals (`git.modal` for Insights,
+  Bisect and the git palette, `git.compare`, `git.blame`, `git.rebase`). A Git
+  modal opens over the view they are on, on the checkout the Git view is on, and
+  the person closes it from the modal itself; the view does not change. Use a
+  view switch only when what they asked to see is that view. Then say in chat, BEFORE you switch, what you are
+  about to show and where you are putting them; and when you have shown it, you
+  switch back with `view.open` to where they were (`agentglass-ui read view` tells you).
+  The window also leaves them a "Back to <view> · <your name>" chip for a minute,
+  one click, so keep the name on the call.
 - **Do not change a setting you were not asked to.** A setting is the person's
   taste, and "this would look better" is not a request.
 - **Undo a change** by setting the value back to `prev`, which the answer

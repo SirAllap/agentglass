@@ -249,7 +249,7 @@ describe("deny by default", () => {
   const stub = (over: Partial<import("../src/lib/settingsRegistry.ts").SettingDef>) => {
     let v: string | number | boolean = "stored";
     const d: import("../src/lib/settingsRegistry.ts").SettingDef = {
-      id: "x.thing", page: "x", section: "", label: "Thing", default: "", get: () => v,
+      id: "x.thing", page: "x", section: "", label: "Thing", default: "", type: "string", display: R.say, get: () => v,
       validate: (raw) => (typeof raw === "string" ? raw : null),
       set: (raw) => { if (typeof raw !== "string") return { ok: false, error: "bad" }; const prev = v; v = raw; return { ok: true, prev, value: raw, revert: () => { v = prev; } }; },
       ...over,
@@ -302,5 +302,53 @@ describe("no def hides a secret by accident", () => {
     const offenders = ids.filter((i) => SENSITIVE.test(i.replace(/id: "keys\.binding\./, 'id: "')));
     // A sensitive-looking literal must sit next to `secret: true` on the same def.
     for (const o of offenders) expect(lines.join("\n")).toMatch(new RegExp(`${o.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[^\\n]*secret: true`));
+  });
+});
+
+describe("the kind of value each setting stores is listed", () => {
+  it("is the kind of its default, so a caller holding text knows whether it is a string", () => {
+    const l = R.settings.list();
+    const kind = (id: string) => l.find((x) => x.id === id)?.type;
+    expect(kind("clickup.statusSpaces.counted")).toBe("string");
+    expect(kind("terminal.fontSize")).toBe("number");
+    expect(kind("diff.wrap")).toBe("boolean");
+    for (const d of R.SETTING_DEFS) expect(l.find((x) => x.id === d.id)?.type).toBe(typeof d.default as import("../src/lib/settingsRegistry.ts").SettingType);
+  });
+  it("a string setting that stores digits takes them as a string and refuses the same digits as a number", () => {
+    const d = R.setting("clickup.statusSpaces.counted");
+    expect(d.validate("90170067734")).toBe("90170067734");
+    expect(d.validate(90170067734)).toBeNull();
+  });
+});
+
+describe("a value as a person says it", () => {
+  const def = (over: Partial<import("../src/lib/settingsRegistry.ts").SettingDef> = {}) => ({
+    id: "x.pick", page: "x", section: "", label: "Pick", level: 2 as const, default: "", type: "string" as const, display: R.say, get: () => "b",
+    validate: (raw: unknown) => (typeof raw === "string" ? raw : null), set: () => ({ ok: false as const, error: "n/a" }), ...over,
+  });
+  it("a def with no words of its own says its value plainly: nothing stored is 'default', a flag is on or off", () => {
+    expect(R.say("")).toBe("default");
+    expect(R.say(true)).toBe("on");
+    expect(R.say(14)).toBe("14");
+    expect(R.settings.display("diff.wrap", false)).toBe("off");
+  });
+  it("list and get carry `display` next to the raw value, from the def's own formatter", () => {
+    const s = R.makeSettings([def({ display: (v) => `the choice ${v}` })]);
+    expect(s.list()[0]).toMatchObject({ value: "b", display: "the choice b" });
+    expect(s.get("x.pick")).toEqual({ ok: true, id: "x.pick", value: "b", display: "the choice b" });
+    expect(s.display("x.pick", "z")).toBe("the choice z");
+  });
+  it("a secret has no display, and an id that is not exposed is said plainly", () => {
+    const s = R.makeSettings([def({ secret: true, display: () => "LEAK" })]);
+    expect("display" in s.list()[0]!).toBe(false);
+    expect(s.display("x.pick", "abc")).toBe("abc");
+    expect(s.display("nope", true)).toBe("on");
+  });
+  it("the chip says it through the setting, on one line that is cut with the whole sentence as its tooltip", async () => {
+    const src = await Bun.file(new URL("../src/components/AgentChangeChip.tsx", import.meta.url)).text();
+    expect(src).toContain("settings.display(c.id, c.prev)");
+    expect(src).toContain("settings.display(c.id, c.value)");
+    expect(src).toMatch(/className="text-\[12px\] mt-1 truncate" title=\{line\}/);
+    expect(src).not.toMatch(/\bsay\(c\./);
   });
 });

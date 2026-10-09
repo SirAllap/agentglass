@@ -140,6 +140,54 @@ describe("a level 2 write against a server started at each level", () => {
     }, SERVER_BOOT_MS);
   }
 
+  // The stage doors (level 3): prepared dialogs, never an effect. Refused below
+  // level 3 with the same sentence as any door above the level, delivered at 3.
+  const STAGE = { cmd: "ui", do: "pr.merge.stage", args: { repo: "acme/orbit", number: 42, method: "squash", subject: "Add the thing", body: "Why it is needed." }, as: "tester" };
+  for (const [name, env] of [["the default (2)", {}], ["LEVEL=2", { AGENTGLASS_CONTROL_LEVEL: "2" }], ["LEVEL=1", { AGENTGLASS_CONTROL_LEVEL: "1" }], ["READONLY=1 + LEVEL=3", { AGENTGLASS_CONTROL_READONLY: "1", AGENTGLASS_CONTROL_LEVEL: "3" }]] as [string, Record<string, string>][]) {
+    test(`${name}: a stage door is refused as a level 3 door, no window is told, and the registry leaves it out`, async () => {
+      const s = await boot(env);
+      const w = await window_(s);
+      const r = await post(s, STAGE);
+      expect(r.status).toBe(403);
+      const body = (await r.json()) as { error: string };
+      expect(body.error).toContain("pr.merge.stage");
+      expect(body.error).toContain("level 3");
+      expect(body.error).not.toMatch(/AGENTGLASS_|Fixes the thing/);
+      await Bun.sleep(150);
+      expect(w.frames.length).toBe(0);
+      const ids = (await actions(s)).actions.map((x) => x.id);
+      expect(ids.filter((id) => id.endsWith(".stage"))).toEqual([]);
+      w.close();
+    }, SERVER_BOOT_MS);
+  }
+
+  test("LEVEL=3: every stage door reaches the window as a frame carrying its arguments, and nothing else is sent", async () => {
+    const s = await boot({ AGENTGLASS_CONTROL_LEVEL: "3" });
+    const w = await window_(s);
+    const bodies = [
+      STAGE,
+      { cmd: "ui", do: "pr.comment.stage", args: { repo: "acme/orbit", number: 42, body: "Looks right." }, as: "tester" },
+      { cmd: "ui", do: "pr.review.stage", args: { repo: "acme/orbit", number: 42, verdict: "request_changes", body: "Please add a test." }, as: "tester" },
+      { cmd: "ui", do: "card.move.stage", args: { repo: "acme/orbit", number: 42, status: "Ready for QA" }, as: "tester" },
+    ];
+    for (const b of bodies) expect((await post(s, b)).status, b.do).toBe(200);
+    for (const b of bodies) expect(w.frames.some((f) => f.data?.do === b.do && f.data?.args?.number === 42), b.do).toBe(true);
+    const ids = (await actions(s)).actions.map((x) => x.id);
+    expect(ids.filter((id) => id.endsWith(".stage")).sort()).toEqual(["card.move.stage", "pr.comment.stage", "pr.merge.stage", "pr.review.stage"]);
+    // Arguments outside the closed shapes are a 400, not a frame: hidden text, a comment that hides, a number that is not one.
+    const before = w.frames.length;
+    for (const bad of [
+      { ...STAGE, args: { ...STAGE.args, body: "fine\u202Ehidden" } },
+      { ...STAGE, args: { ...STAGE.args, body: "x <!-- not shown --> y" } },
+      { ...STAGE, args: { ...STAGE.args, number: 0 } },
+      { ...STAGE, args: { ...STAGE.args, repo: "../orbit" } },
+      { ...STAGE, args: { ...STAGE.args, method: "force" } },
+    ]) expect((await post(s, bad)).status, JSON.stringify(bad.args)).toBe(400);
+    await Bun.sleep(100);
+    expect(w.frames.length).toBe(before);
+    w.close();
+  }, SERVER_BOOT_MS);
+
   test("a bad value says so once at boot, naming the value and the level held", async () => {
     const s = await boot({ AGENTGLASS_CONTROL_LEVEL: "banana" });
     expect((await actions(s)).level).toBe(1);

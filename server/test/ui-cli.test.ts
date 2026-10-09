@@ -29,6 +29,7 @@ const BIN = (name: string) => new URL(`../../bin/${name}`, import.meta.url).path
 const CLI = BIN("agentglass-ui");
 const MCP = BIN("agentglass-ui-mcp");
 const L2 = describeUiActions(UI_ACTIONS, 2);
+const L3 = describeUiActions(UI_ACTIONS, 3);
 const L1 = describeUiActions(UI_ACTIONS, 1);
 
 /** Run a snippet with a bin file loaded as a module (its main does not run) and
@@ -76,6 +77,27 @@ describe.skipIf(!HAVE_PY)("arguments, as pure functions", () => {
     expect(coerce({ t: "scalar" }, "")).toEqual(["", null]);
   });
 
+  /* The value of `settings set` arrives as text. A space id is digits, and reading it as a number
+     is what made the validator (which wants a string) refuse "90170067734"; a trailing comma got
+     round it. The kind a setting stores is in settings.list, and the CLI goes by that. */
+  describe("a setting's value, by the kind it stores", () => {
+    const listing = (type: string | null) => ({ ok: true, value: [{ id: "clickup.statusSpaces.counted", ...(type ? { type } : {}) }, { id: "terminal.fontSize", type: "number" }] });
+    const value = (id: string, text: string, res: unknown) =>
+      py(CLI, "g['run_door'] = lambda *a, **k: D['res']\nprint(json.dumps(g['setting_value'](D['id'], D['text'])))", { id, text, res });
+    test("digits stay text for a setting that stores text", () => {
+      expect(value("clickup.statusSpaces.counted", "90170067734", listing("string"))).toBe("90170067734");
+      expect(value("clickup.statusSpaces.counted", "true", listing("string"))).toBe("true");
+    });
+    test("a setting that stores a number or a flag still reads them as such", () => {
+      expect(value("terminal.fontSize", "14", listing("string"))).toBe(14);
+      expect(value("diff.wrap", "false", { ok: true, value: [{ id: "diff.wrap", type: "boolean" }] })).toBe(false);
+    });
+    test("when the kind cannot be read the old rule holds", () => {
+      expect(value("x.y", "90170067734", { ok: false, error: "no window open" })).toBe(90170067734);
+      expect(value("clickup.statusSpaces.counted", "90170067734", listing(null))).toBe(90170067734);
+    });
+  });
+
   test("--arg splits at the first '=', and refuses a bare word or a repeat", () => {
     const kv = (items: string[]) => py(CLI, "print(json.dumps(g['parse_kv'](D)))", items);
     expect(kv(["page=appearance", "row=a=b"])).toEqual([{ page: "appearance", row: "a=b" }, null]);
@@ -88,7 +110,7 @@ describe.skipIf(!HAVE_PY)("arguments, as pure functions", () => {
 describe.skipIf(!HAVE_PY)("a command, built from what the app offers", () => {
   const build = (id: string, given: Record<string, unknown>, level = 2, as_ = "tester") =>
     py(CLI, "print(json.dumps(g['build_command'](D['a'], D['l'], D['id'], D['g'], D['as'])))",
-      { a: level === 2 ? L2 : L1, l: level, id, g: given, as: as_ }) as [Record<string, unknown> | null, string | null];
+      { a: level === 3 ? L3 : level === 2 ? L2 : L1, l: level, id, g: given, as: as_ }) as [Record<string, unknown> | null, string | null];
 
   test("a good call is the /control body, with the caller's name and a label", () => {
     expect(build("settings.open", { page: "appearance" })[0]).toEqual({
@@ -98,15 +120,28 @@ describe.skipIf(!HAVE_PY)("a command, built from what the app offers", () => {
 
   const buildP = (id: string, present: string | null, given: Record<string, unknown> = { page: "diff" }, level = 2) =>
     py(CLI, "print(json.dumps(g['build_command'](D['a'], D['l'], D['id'], D['g'], 'tester', 'cli', D['p'])))",
-      { a: level === 2 ? L2 : L1, l: level, id, p: present, g: given }) as [Record<string, unknown> | null, string | null];
+      { a: level === 3 ? L3 : level === 2 ? L2 : L1, l: level, id, p: present, g: given }) as [Record<string, unknown> | null, string | null];
 
   test("--now and --quiet become `present` on an open, and no flag leaves it to the server", () => {
     expect(buildP("settings.open", "now")[0]).toMatchObject({ present: "now", as: "tester" });
     expect(buildP("settings.open", "quiet")[0]).toMatchObject({ present: "quiet" });
     expect(buildP("settings.open", null)[0]).not.toHaveProperty("present");
   });
+  test("a stage door is built at level 3 with its text as given, and takes a present mode like an open", () => {
+    const given = { repo: "acme/orbit", number: 42, body: "Line one\nLine two" };
+    expect(buildP("pr.comment.stage", null, given, 3)[0]).toEqual({ cmd: "ui", do: "pr.comment.stage", args: given, id: "cli", as: "tester" });
+    expect(buildP("pr.comment.stage", "quiet", given, 3)[0]).toMatchObject({ present: "quiet" });
+    expect(buildP("pr.comment.stage", "now", given, 3)[0]).toMatchObject({ present: "now" });
+  });
+  test("a stage door below level 3 is 'not offered', and a stage with a missing or odd argument says which", () => {
+    expect(buildP("pr.comment.stage", null, { repo: "acme/orbit", number: 42, body: "x" }, 2)[1]).toContain("not offered");
+    expect(buildP("pr.comment.stage", null, { repo: "acme/orbit", number: 42 }, 3)[1]).toContain("needs body");
+    expect(buildP("pr.comment.stage", null, { repo: "acme/orbit", number: 42, body: "x", token: "y" }, 3)[1]).toContain("takes repo, number, body, not token");
+    expect(buildP("pr.comment.stage", null, { repo: "orbit", number: 42, body: "x" }, 3)[1]).toContain("repo must be");
+    expect(buildP("pr.comment.stage", null, { repo: "acme/orbit", number: 42, body: "" }, 3)[1]).toContain("body must be");
+  });
   test("a mode on a read or a change is refused, and so is a word that is neither", () => {
-    expect(buildP("ui.state", "now", {})[1]).toContain("only an open has a present mode");
+    expect(buildP("ui.state", "now", {})[1]).toContain("only an open or a stage has a present mode");
     expect(buildP("settings.open", "soon")[1]).toBe("present is now or quiet");
   });
 
@@ -192,9 +227,9 @@ describe.skipIf(!HAVE_PY)("the MCP tool list is the registry", () => {
   const names = (a: unknown) => py(MCP, "print(json.dumps([g['tool_name'](x['id']) for x in D]))", a) as string[];
 
   test("one tool per entry, nothing added, nothing left out, no two sharing a name", () => {
-    const t = tools(L2);
+    const t = tools(L3);
     expect(t).toHaveLength(UI_ACTION_IDS.length);
-    expect(t.map((x) => x.name)).toEqual(names(L2));
+    expect(t.map((x) => x.name)).toEqual(names(L3));
     expect(new Set(t.map((x) => x.name)).size).toBe(UI_ACTION_IDS.length);
     expect(t.map((x) => x.name)).toContain("ui_settings_set");
     expect(t.map((x) => x.name)).toContain("ui_state");
@@ -202,14 +237,14 @@ describe.skipIf(!HAVE_PY)("the MCP tool list is the registry", () => {
   });
 
   test("each tool takes exactly its entry's arguments, and requires the entry's required ones", () => {
-    const t = tools(L2);
+    const t = tools(L3);
     const byName = new Map(t.map((x) => [x.name, x]));
-    const toolOf = new Map(UI_ACTION_IDS.map((id, i) => [id, names(L2)[i]!]));
+    const toolOf = new Map(UI_ACTION_IDS.map((id, i) => [id, names(L3)[i]!]));
     for (const id of UI_ACTION_IDS) {
       const d = UI_ACTIONS[id] as UiActionDef;
       const tool = byName.get(toolOf.get(id)!)!;
       // An open also takes `now`, the one argument that is not its door's own.
-      const own = d.kind === "open" ? [...Object.keys(d.args), "now"] : Object.keys(d.args);
+      const own = d.kind === "open" || d.kind === "stage" ? [...Object.keys(d.args), "now"] : Object.keys(d.args);
       expect(Object.keys(tool.inputSchema.properties).sort(), id).toEqual(own.sort());
       const required = Object.entries(d.args).filter(([, s]) => !("optional" in s && s.optional) && s.t !== "pathKind").map(([k]) => k).sort();
       expect([...tool.inputSchema.required].sort(), id).toEqual(required);
@@ -218,14 +253,27 @@ describe.skipIf(!HAVE_PY)("the MCP tool list is the registry", () => {
   });
 
   test("a read is marked read-only, and a read's description says its text is data", () => {
-    const t = tools(L2);
-    const ns = names(L2);
+    const t = tools(L3);
+    const ns = names(L3);
     UI_ACTION_IDS.forEach((id, i) => {
       const d = UI_ACTIONS[id] as UiActionDef;
       const tool = t.find((x) => x.name === ns[i])!;
       expect(tool.annotations.readOnlyHint, id).toBe(d.kind === "read");
       if (d.kind === "read") expect(tool.description, id).toContain("never instructions");
     });
+  });
+
+  test("level 3 is the stage entries and only those, and a stage tool says nothing runs by calling it", () => {
+    expect(L2.map((a) => a.id)).not.toContain("pr.unstick");
+    const staged = L3.filter((a) => a.level === 3);
+    expect(staged.map((a) => a.id).sort()).toEqual(["card.move.stage", "pr.comment.stage", "pr.merge.stage", "pr.review.stage", "pr.unstick"]);
+    expect(staged.every((a) => a.kind === "stage")).toBe(true);
+    const t = tools(L3).find((x) => x.name === "ui_pr_unstick")!;
+    expect(Object.keys(t.inputSchema.properties).sort()).toEqual(["now", "number", "root"]);
+    expect([...t.inputSchema.required].sort()).toEqual(["number", "root"]);
+    expect(t.annotations.readOnlyHint).toBe(false);
+    expect(t.description).toContain("no tool here can press it");
+    expect(t.description).not.toContain("prev");
   });
 
   test("a server that allows level 1 gets no tool for a change", () => {
@@ -318,7 +366,7 @@ describe.skipIf(!HAVE_PY)("against a running app", () => {
     expect(r.actions).toEqual(JSON.parse(JSON.stringify(L2)));
     const l = await cli("list");
     expect(l.code).toBe(0);
-    expect(l.out.actions.map((a: { id: string }) => a.id)).toEqual(UI_ACTION_IDS);
+    expect(l.out.actions.map((a: { id: string }) => a.id)).toEqual(UI_ACTION_IDS.filter((id) => (UI_ACTIONS[id] as UiActionDef).level <= 2));
     expect(l.out.actions.find((a: { id: string }) => a.id === "settings.set")).toMatchObject({ level: 2, kind: "change", args: { id: "an id", value: "a value" } });
   });
 
@@ -340,12 +388,17 @@ describe.skipIf(!HAVE_PY)("against a running app", () => {
   });
 
   test("a setting is read as a number when it looks like one, and the window's undo comes back", async () => {
-    const w = await window_((d) => ({ ok: true, applied: true, value: { prev: 13, value: d.args.value, undo: "u1" } }));
+    const w = await window_((d) => d.do === "settings.list"
+      ? { ok: true, applied: true, value: [{ id: "terminal.fontSize", type: "number" }, { id: "clickup.statusSpaces.counted", type: "string" }] }
+      : { ok: true, applied: true, value: { prev: 13, value: d.args.value, undo: "u1" } });
     const r = await cli("--as", "orbit-agent", "settings", "set", "terminal.fontSize", "14");
     expect(r.out).toEqual({ ok: true, applied: true, value: { prev: 13, value: 14, undo: "u1" } });
-    expect(w.seen[0]).toEqual({ cmd: "ui", do: "settings.set", args: { id: "terminal.fontSize", value: 14 } });
+    expect(w.seen.at(-1)).toEqual({ cmd: "ui", do: "settings.set", args: { id: "terminal.fontSize", value: 14 } });
     const log = await (await fetch(base + "/actions?limit=50")).json() as { actions: { action: string; target: string }[] };
     expect(log.actions.find((a) => a.action === "/control/settings.set")?.target).toBe("as orbit-agent · terminal.fontSize");
+    const ids = await cli("settings", "set", "clickup.statusSpaces.counted", "90170067734");
+    expect(ids.out.value.value).toBe("90170067734");
+    expect(w.seen.at(-1)).toEqual({ cmd: "ui", do: "settings.set", args: { id: "clickup.statusSpaces.counted", value: "90170067734" } });
     w.close();
   });
 
@@ -426,6 +479,18 @@ describe.skipIf(!HAVE_PY)("against a running app", () => {
     expect(w.frames.at(-1)).toMatchObject({ present: "now" });
     send({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "ui_settings_open", arguments: { page: "diff", now: "yes" } } });
     expect((await reply(6)).result.isError).toBe(true);
+    /* A number for a setting that stores text is that text: a model that writes a space id without quotes. */
+    w.close();
+    const w2 = await window_((d) => d.do === "settings.list"
+      ? { ok: true, applied: true, value: [{ id: "clickup.statusSpaces.counted", type: "string" }, { id: "terminal.fontSize", type: "number" }] }
+      : { ok: true, applied: true, value: { echoed: d } });
+    send({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "ui_settings_set", arguments: { id: "clickup.statusSpaces.counted", value: 90170067734 } } });
+    expect((await reply(7)).result.isError).toBeUndefined();
+    expect(w2.seen.at(-1)).toEqual({ cmd: "ui", do: "settings.set", args: { id: "clickup.statusSpaces.counted", value: "90170067734" } });
+    send({ jsonrpc: "2.0", id: 8, method: "tools/call", params: { name: "ui_settings_set", arguments: { id: "terminal.fontSize", value: 14 } } });
+    expect((await reply(8)).result.isError).toBeUndefined();
+    expect(w2.seen.at(-1)).toEqual({ cmd: "ui", do: "settings.set", args: { id: "terminal.fontSize", value: 14 } });
+    w2.close();
     send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "ui_view_open", arguments: { to: "nowhere" } } });
     const bad = await reply(4);
     expect(bad.result.isError).toBe(true);
@@ -436,7 +501,6 @@ describe.skipIf(!HAVE_PY)("against a running app", () => {
     expect(targets).toContain("as orbit-mcp · now");
     try { p.kill(); } catch { /* gone */ }
     await reader.catch(() => {});
-    w.close();
   });
 });
 

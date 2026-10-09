@@ -23,6 +23,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCloseWithOwner } from "../../lib/layerOwner.ts";
 import type { ChangeRow } from "../../../../shared/types.ts";
 import {
   diffStateKey, filterRows, groupRows, reviewKeyOf, rowByKey, statusWord, totalsOf, useChangeRows, useFileDiff,
@@ -493,6 +494,7 @@ function Menu({
   onClose: () => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
+  useCloseWithOwner(onClose, { from: box });
   useEffect(() => {
     const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) onClose(); };
     const esc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };

@@ -303,7 +303,7 @@ export function TickBox({ on, onClick, title }: { on: boolean; onClick: (e: Reac
       <svg width={ICON.sm} height={ICON.sm} viewBox="0 0 14 14" fill="none" aria-hidden>
         <rect x="1.75" y="1.75" width="10.5" height="10.5" rx="3"
           fill={on ? "var(--primary)" : "transparent"} stroke="currentColor" strokeWidth="1.5" />
-        {on && <path d="M4.2 7.1l2 2 3.6-4" stroke="var(--bg)" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />}
+        {on && <path d="M4.2 7.1l2 2 3.6-4" stroke="var(--on-primary)" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />}
       </svg>
     </button>
   );

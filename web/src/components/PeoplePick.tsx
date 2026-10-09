@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
 import { Portal } from "./Portal.tsx";
+import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { menuUnder, PICK_W, PICK_H } from "../lib/menuPos.ts";
 import type { ListMember } from "../../../shared/providers.ts";
 import { DoneIcon } from "../lib/glyphIcons.tsx";
@@ -43,6 +44,14 @@ export interface PeoplePickProps {
   /** Drawn for each row: the app's own face, whichever component that is where
    *  this is used. */
   face: (m: ListMember) => ReactNode;
+  /** A heading to draw before this row, when it opens a group ("Suggested", "Everyone"). */
+  groupBefore?: (m: ListMember, prev: ListMember | undefined) => string | undefined;
+  /** A row that cannot be changed from here, and why (the person is put on by another setting): drawn as it is, disabled. */
+  locked?: (m: ListMember) => string | undefined;
+  /** A few words after a name, for why somebody is up the list ("pull request author · on the card"). */
+  note?: (m: ListMember) => string | undefined;
+  /** After the list, outside the scroll: a choice that is not a person ("Nobody"). */
+  footer?: ReactNode;
   /** Below this many names the filter box is noise. */
   filterOver?: number;
   empty?: string;
@@ -52,6 +61,7 @@ export function PeoplePick(p: PeoplePickProps) {
   const [pos, setPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const [q, setQ] = useState("");
   const box = useRef<HTMLDivElement>(null);
+  useCloseWithOwner(p.onClose, { from: p.anchor });
   /* Measured on open AND when the window changes size: a position taken once is
      the one a resized window keeps, and it left the box hanging off the bottom
      right edge with its last rows out of reach. */
@@ -90,16 +100,19 @@ export function PeoplePick(p: PeoplePickProps) {
           const on = p.isOn(m);
           const saving = p.isSaving?.(m) ?? false;
           const divide = i > 0 && !!p.dividerBefore?.(m, shown[i - 1]!);
+          const heading = p.groupBefore?.(m, shown[i - 1]);
           return (
             <div key={m.id}>
               {divide && <div className="my-1" style={{ borderTop: LINE }} />}
+              {heading && <div className="px-2 pt-1.5 pb-0.5 text-[9.5px] uppercase tracking-[0.1em]" style={{ color: "var(--text4)" }}>{heading}</div>}
               <button className="w-full text-left px-2 py-1.5 hover:bg-white/5 flex items-center gap-2 disabled:opacity-70"
-                disabled={saving} onClick={() => p.onPick(m)}>
+                disabled={saving || !!p.locked?.(m)} title={p.locked?.(m)} onClick={() => p.onPick(m)}>
                 {p.face(m)}
                 <span className="flex-1 min-w-0 truncate text-[11.5px]" title={m.name}
                   style={{ color: on ? "var(--success)" : "var(--text2)" }}>
                   {m.name}{m.me ? " · you" : ""}
                 </span>
+                {p.note?.(m) && <span className="shrink-0 text-[10px]" style={{ color: "var(--text3)" }}>{p.note(m)}</span>}
                 {saving
                   ? <span className="agx-spin shrink-0" aria-label="Applying" style={{ width: 10, height: 10, borderWidth: 1.5, borderColor: "var(--text3)", borderTopColor: "transparent" }} />
                   : on ? <span className="flex" style={{ color: "var(--success-ink)" }}><DoneIcon size={ICON.xs} /></span> : null}
@@ -110,6 +123,7 @@ export function PeoplePick(p: PeoplePickProps) {
         {!p.busy && !shown.length && all.length > 0 && (
           <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>Nobody matches that.</div>
         )}
+        {p.footer && <div className="mt-1 pt-1" style={{ borderTop: LINE }}>{p.footer}</div>}
       </div>
     </Portal>
   );

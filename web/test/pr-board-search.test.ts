@@ -693,7 +693,7 @@ describe("assigning on GitHub, and the card on the other board", () => {
        change, and leaving yourself on it is not an assignment. An empty plan
        skips the confirmation entirely and the press is a GitHub assignment. */
     expect(src).toContain("if (!plan.lines.length) { void onCommit(selRef.current); onClose(); return; }");
-    expect(src).toContain("if (folded || !card || !plan.lines.length) return true;");
+    expect(src).toContain("if (folded || !card || (!plan.lines.length && !menuExtras.length)) return true;");
   });
 
   it("does GitHub first and ClickUp only after it", () => {
@@ -710,7 +710,7 @@ describe("assigning on GitHub, and the card on the other board", () => {
     // name because that is all a status has, and the fallback is to leave it.
     // The match itself moved to `reviewStatus` in cardMove.ts (same rule, now
     // with the workspace's own names first); the panel only asks it.
-    expect(src).toContain("setPick(prefs?.review.enabled ? reviewStatus(st, t.status, prefs.review.statusNames) : \"\");");
+    expect(src).toContain("reviewStatus(st, t.status, rp.move.names)");
   });
 
   it("moves the people and the status together, or not at all", () => {
@@ -746,8 +746,11 @@ describe("the ClickUp half, as its own controls", () => {
   });
 
   it("draws people as faces, with their own colour when there is no picture", () => {
-    expect(src).toContain("referrerPolicy=\"no-referrer\"");
-    expect(src).toContain("background: m.color || \"var(--bg4)\"");
+    /* One face for the whole app (AssignPicker's Face, which the panel's memberFace draws). */
+    const face = require("node:fs").readFileSync(new URL("../src/components/AssignPicker.tsx", import.meta.url), "utf8") as string;
+    expect(face).toContain("referrerPolicy=\"no-referrer\"");
+    expect(face).toContain("background: m.color || \"var(--bg4)\"");
+    expect(src).toContain("return <Face m={p} />;");
   });
 
   it("stacks under the people rather than widening the menu", () => {
@@ -783,8 +786,8 @@ describe("folding it away", () => {
     /* It was still announcing its changes while put away, which left "Done ·
        and ClickUp" on a menu with nothing showing. Folded means "not this
        time". */
-    expect(src).toContain("onPlan({ lines: folded ? [] : plan.lines, run })");
-    expect(src).toContain("if (folded || !card || !plan.lines.length) return true;");
+    expect(src).toContain("onPlan({ lines: folded ? [] : [...plan.lines, ...extraLines], run })");
+    expect(src).toContain("if (folded || !card || (!plan.lines.length && !menuExtras.length)) return true;");
   });
 
   it("drops a summary that no longer has anything to summarise", () => {

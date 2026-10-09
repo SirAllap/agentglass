@@ -56,7 +56,7 @@ import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, onGateCh
 import { budgetHoldFor } from "./budget.ts";
 import { gateCwd, gateRuleFor } from "./gaterules.ts";
 import { parseControlCmd, controlId, awaitControl, settleControl, parseReply, nextControlRid, callerRequestId, CONTROL_TIMEOUT_ERROR, changedSetting, makeWriteLimiter, makeRefusalThrottle, controlSwitch, controlRefusal } from "./control.ts";
-import { isReadAction, isWriteKind, describeUiActions, presentOf, argsRefusal, entryOfBody, levelAllows, UI_ACTIONS } from "../../shared/uiActions.ts";
+import { isReadAction, isWriteKind, describeUiActions, presentOf, argsRefusal, entryOfBody, levelAllows, UI_ACTIONS, type UiKind } from "../../shared/uiActions.ts";
 import { outwardAction, outwardLine } from "./outward.ts";
 import { listLanes } from "./lanes.ts";
 import { gateLane, dropBrowserTarget, askBrowser, browserReadyCount, exportAudit, noteBrowserManager, noteBrowserReady, parseAsk, setBrowserSink, settleBrowser, type BrowserOp, runSteps, waitForEvents, recordFrames, traceRecording, auditAsScript, downloadFile, runLanes, withObservation, parseScrape, runScrape } from "./browserdrive.ts";
@@ -118,7 +118,7 @@ import { failed } from "./refused.ts";
 import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, addClickupFolder, refreshFoldersIfStale, replaceViewUrl, readView } from "./providers.ts";
 import { clickupPrefs, setClickupPrefs, settleFirstRun } from "./clickupPrefs.ts";
 import { savedViews, savedFolders, currentView, setCurrent, removeView, removeFolder, knownCardPrefix, knownNoCustomIds, boardHolding, setWritesAllowed, patchCachedTask } from "./clickupviews.ts";
-import { assignSelf, setAssignee, setCard, listMembers, setStatus, setPriority, setField, clearField, sprintLists, searchTasks, searchTasksStream, warmBodySweep, taskDetail, tagsForTask, findCard, cardPullRequests, clickupWriteEnabled, commentOn, updateTask, setTag, moveToList, createTask, addChecklist, addChecklistItem, setChecklistItem, editComment as editClickupComment, replyToComment, resolveComment, deleteComment as deleteClickupComment } from "./clickup.ts";
+import { assignSelf, setAssignee, setCard, listMembers, workspaceMembers, setStatus, setPriority, setField, clearField, sprintLists, searchTasks, searchTasksStream, warmBodySweep, taskDetail, tagsForTask, findCard, cardPullRequests, clickupWriteEnabled, commentOn, updateTask, setTag, moveToList, createTask, addChecklist, addChecklistItem, setChecklistItem, editComment as editClickupComment, replyToComment, resolveComment, deleteComment as deleteClickupComment } from "./clickup.ts";
 import { clickupTasks, dropAssignedCache } from "./clickup.ts";
 import type { ProviderId } from "../../shared/providers.ts";
 import { listTasks, taskCapability, setTaskChangeHook, startTaskSweep, addTask, completeTask, reopenTask, deleteTask, cyclePriority, editTask, addTags, replaceNote, bulkApply, TASK_WRITE_ENABLED, type BulkAction } from "./tasks.ts";
@@ -153,11 +153,11 @@ import {
   listPrs, prDetail, prDiff, prAsset, ghCapability, submitReview, addComment, replyToThread,
   editComment, deleteComment, hideComment, unhideComment, setFileViewed, setAssignees, setMilestone, viewCounts, jobLog, checkJobs, checkFailures, cachedCheckFailures, failingTestsFor, rerunJobs, addLineComment, mentionables, facetOptions, applySuggestion, fileSlice,
   setThreadResolved, react, editPr, setLabels, setReviewers, setDraft, updateBranch,
-  rerunFailedChecks, mergePr, closePr, filesSince, codeowners, prepareReviewPrompt, pendingReviewFor, branchUrl, subscribeCi, subscribeTalk, commitDiff as prCommitDiff, submitReviewWith, prFileToTemp,
+  rerunFailedChecks, mergePr, closePr, unstickLook, unstickClose, unstickReopen, filesSince, codeowners, prepareReviewPrompt, pendingReviewFor, branchUrl, subscribeCi, subscribeTalk, commitDiff as prCommitDiff, submitReviewWith, prFileToTemp,
   prBaseOf,
   ghRateLimit,
   branchBehind, localHead, prRollup, repoIdFor as prRepoIdFor, subscribeTalkSeen,
-  prBranches, prsForBranch, prForHead, nodeIdOk, locateRepo, isForeignRoot } from "./prs.ts";
+  prBranches, githubStatusCached, prsForBranch, prForHead, nodeIdOk, locateRepo, isForeignRoot } from "./prs.ts";
 import { planCheckOnBase, startCheckOnBase, checkOnBaseStatus, cancelCheckOnBase } from "./checkOnBasePr.ts";
 import { repoSpend } from "./spend.ts";
 import { repoMetrics } from "./checkRuns.ts";
@@ -3789,7 +3789,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // How it is shown: quiet for a caller that named itself, now for one that
       // did not, or what the body says. An unknown word is a refusal, since a
       // guess here decides whether a dialog lands on somebody who is typing.
-      const present = presentOf((b as { present?: unknown }).present, as);
+      const present = presentOf((b as { present?: unknown }).present, as, (UI_ACTIONS[controlId(cmd) as keyof typeof UI_ACTIONS] as { kind?: UiKind } | undefined)?.kind);
       if (!present) return json({ ok: false, error: "present is quiet or now" }, 400);
       // The mode is a fact about an open; a read or a settings change shows
       // nothing, so its line does not carry one.
@@ -6401,6 +6401,12 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const r = await clickupSpaces(url.searchParams.get("fresh") === "1");
       return json(r.ok ? { ok: true, spaces: r.data?.spaces ?? [] } : { ok: false, error: r.error, throttled: r.throttled === true, unauthorised: r.unauthorised === true });
     }
+    /* The picker's spaces: the ones this person's cards live in first, the rest after. */
+    if (pathname === "/clickup/status-spaces") {
+      const { clickupStatusSpaces } = await import("./clickup.ts");
+      const r = await clickupStatusSpaces(url.searchParams.get("fresh") === "1");
+      return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error, throttled: r.throttled === true, unauthorised: r.unauthorised === true });
+    }
     /* The tabs a list has in ClickUp, for the sidebar to hang under it. Read on
        demand — one call, and only for a list somebody actually opened. */
     /*
@@ -6527,7 +6533,8 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // Who can be put on a card. Scoped to the LIST the card lives in: a
       // workspace here holds the whole company, and a picker offering all of
       // them to assign one backend card is a picker nobody uses twice.
-      const r = await listMembers(url.searchParams.get("list") ?? "");
+      /* No list: the workspace's people, for a setting that names one before a card is open. */
+      const r = url.searchParams.has("workspace") ? await workspaceMembers() : await listMembers(url.searchParams.get("list") ?? "");
       return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error });
     }
     /* Whether the agent here can post to Slack. A route rather than a build-time
@@ -6661,6 +6668,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
             add: Array.isArray(b.add) ? (b.add as unknown[]).map(Number) : undefined,
             rem: Array.isArray(b.rem) ? (b.rem as unknown[]).map(Number) : undefined,
             status: b.status != null ? String(b.status) : undefined,
+            addMe: b.addMe === true,
           }, seen)
         : pathname === "/clickup/status" ? await setStatus(id, String(b.status ?? ""), seen)
         // The flag, ClickUp's own field. `null` clears it, which is why the
@@ -7353,6 +7361,18 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         url.searchParams.get("branch") || "",
       ) });
     }
+    /* GitHub's public status, cached ten minutes server-side (see prs.ts). */
+    if (pathname === "/prs/github-status") {
+      return json(await githubStatusCached());
+    }
+    /* One fresh read for Unstick: the branch as it is on GitHub now, the head the
+       pull request points at, its state. `full=1` adds the facts the gate needs. */
+    if (pathname === "/prs/unstick-look") {
+      const root = prRouteRoot(url.searchParams.get("root") ?? "");
+      const n = Number(url.searchParams.get("number") ?? 0);
+      if (!Number.isInteger(n) || n <= 0) return json({ ok: false, error: "invalid pull request number" }, 400);
+      return json(await unstickLook(root, n, url.searchParams.get("full") === "1"));
+    }
     if (pathname === "/prs/behind") {
       const asked = url.searchParams.get("root") ?? "";
       const root = prRouteRoot(asked);
@@ -7615,6 +7635,10 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         case "/prs/apply-suggestion": res = await applySuggestion(root, n, b); break;
         case "/prs/merge": res = await mergePr(root, n, b.method, { deleteBranch: b.deleteBranch, auto: b.auto, headSha: b.headSha, subject: b.subject, body: b.body, disableAuto: b.disableAuto }); break;
         case "/prs/close": res = await closePr(root, n, b.reopen === true); break;
+        /* Unstick's two writes, each re-checked on the server against a fresh read
+           (see shared/unstick.ts) and each its own audit line. */
+        case "/prs/unstick-close": res = await unstickClose(root, n); break;
+        case "/prs/unstick-reopen": res = await unstickReopen(root, n); break;
         case "/prs/review-prompt": res = await prepareReviewPrompt(root, n, b.recipe, b.card); break;
         case "/prs/pending-review": res = await pendingReviewFor(root, n); break;
         default: res = null;

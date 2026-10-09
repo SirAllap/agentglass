@@ -26,6 +26,7 @@
   --border: #30363d;
   --border2: #444c56;
   --primary: #58a6ff;
+  --on-primary: #0d1117;
   --primary-hover: #79c0ff;
   --success: #3fb950;
   --warning: #d29922;
@@ -1621,7 +1622,7 @@ textarea.bg-transparent:focus-visible { outline: none !important; }
   min-height: 46px;
   border-radius: 12px;
   font-size: 14px; font-weight: 600;
-  color: var(--primary-contrast, #fff);
+  color: var(--on-primary);
   background: var(--primary);
   border: 1px solid color-mix(in srgb, var(--primary) 70%, transparent);
 }
@@ -2604,7 +2605,7 @@ textarea.agx-input { line-height: 1.45; resize: vertical; }
   box-shadow: inset 0 0 0 1px var(--c);
 }
 .agx-stk-fork .agx-stk-b { font-size: 8.5px; letter-spacing: -0.4px; }
-.agx-stk-b[data-k="cur"] { background: var(--c); color: var(--bg); }
+.agx-stk-b[data-k="cur"] { background: var(--c); color: var(--on-primary); }
 .agx-stk-b[data-k="off"] { background: transparent; box-shadow: none; outline: 1px dashed var(--text3); outline-offset: -1px; color: var(--text2); }
 .agx-stk-b[data-k="merged"] { --c: var(--primary); background: color-mix(in srgb, var(--c) 28%, transparent); }
 .agx-stk-b[data-k="closed"] { --c: var(--text3); --ci: var(--text2); background: transparent; box-shadow: none; outline: 1px dashed var(--text3); outline-offset: -1px; }

@@ -30,6 +30,7 @@ import { subscribe as subscribeChats, attentionCount, listChats, newChat, reques
 import { FilesView } from "../FilesPanel.tsx";
 import { TasksView } from "../TasksPanel.tsx";
 import { subscribeReminders, firedCount } from "../../lib/reminderStore.ts";
+import { hasGitModal, subscribeGitModal } from "../../lib/gitModalIntent.ts";
 import { GitView } from "../GitPanel.tsx";
 import { DiffPage } from "../diff/DiffPage.tsx";
 import { PrView } from "../PrPanel.tsx";
@@ -44,6 +45,7 @@ import { requestTermReview } from "../../lib/termReview.ts";
 import { benchWants, boardActive, boardNode, boardPlace, subscribeBoards, type BoardKind } from "../../lib/boardHost.ts";
 import { BoardSlot } from "./BoardSlot.tsx";
 import { PortalFloor } from "../Portal.tsx";
+import { BENCH_OWNER, LayerOwner } from "../../lib/layerOwner.ts";
 import { LAYER } from "../../lib/layers.ts";
 
 /**
@@ -172,6 +174,17 @@ export function Workspace({
     const want = [benchPr && "pr", benchTasks && "tasks", benchFiles && "files"].filter(Boolean) as ViewId[];
     setVisited((cur) => (want.every((k) => cur.has(k)) ? cur : new Set([...cur, ...want])));
   }, [benchPr, benchTasks, benchFiles]);
+
+  /* A Git modal asked for through /control mounts the Git view without showing
+     it: the modals are portals over whatever view is up, so the person stays
+     where the conversation is. Same shape as the boards above. */
+  useEffect(() => {
+    const mountGit = () => {
+      if (hasGitModal()) setVisited((cur) => (cur.has("git") ? cur : new Set(cur).add("git")));
+    };
+    mountGit();
+    return subscribeGitModal(mountGit);
+  }, []);
 
   const mounted = useMemo(
     () => VIEWS.filter((v) => visited.has(v.id) || KEEP_RUNNING.has(v.id)),
@@ -331,9 +344,11 @@ function BoardInstance({ kind, ...props }: Omit<BoardBodyProps, "active">) {
   if (!node) return null;
   return createPortal(
     <PortalFloor.Provider value={inBench ? LAYER.benchOverlay : 0}>
-      <ViewBoundary label={VIEWS.find((v) => v.id === kind)?.label ?? kind}>
-        <BoardBody kind={kind} active={active} {...props} />
-      </ViewBoundary>
+      <LayerOwner.Provider value={inBench ? BENCH_OWNER : null}>
+        <ViewBoundary label={VIEWS.find((v) => v.id === kind)?.label ?? kind}>
+          <BoardBody kind={kind} active={active} {...props} />
+        </ViewBoundary>
+      </LayerOwner.Provider>
     </PortalFloor.Provider>,
     node,
   );

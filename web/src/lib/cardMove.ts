@@ -14,6 +14,7 @@
  * "PR up". Nothing here may branch on the words.
  */
 import type { HandoffConfig, HandoffUnassign, ListStatus } from "../../../shared/providers.ts";
+import { planOf } from "../../../shared/stepBlocks.ts";
 import type { ReviewRecipeContext } from "../../../shared/types.ts";
 import { expandRecipe } from "../../../shared/recipeText.ts";
 import { cardRef, looksLikeOurs } from "./cardRef.ts";
@@ -67,6 +68,12 @@ export type CardMove = {
    *  this read and the merge should be a conflict, not a silent overwrite. */
   updated: number;
   statuses: ListStatus[];
+  /** The list it lives in, for reading who can be put on it. */
+  listId?: string;
+  /** The list's custom fields, from the read that gave its statuses, for a step's "Set a field". */
+  fields?: import("../../../shared/providers.ts").ListField[];
+  /** Who is on the card now: what "Also assign" is decided against. */
+  people?: { id?: number | null; me?: boolean; name?: string }[];
 };
 
 /**
@@ -115,13 +122,19 @@ const eqStatus = (a: string, b: string) => a.trim().toLowerCase() === b.trim().t
  *
  * `cfg` is the workspace's hand-off setting. Names are tried in the order they
  * were written and the first one the list HAS wins, compared without regard to
- * case; an empty list means the one name this app shipped with. Without a
+ * case; an empty list means the one name this app shipped with, unless the
+ * step's move block is still waiting for a status (nothing is moved then).
+ * A step with no move block moves nothing, so there is no status to find. Without a
  * `cfg` the answer is that shipped behaviour, which is what callers that have
  * not read the settings yet get.
  */
 export function readyForQaStatus(statuses: ListStatus[], current: string, cfg?: HandoffConfig): string | undefined {
   if (cfg && !cfg.enabled) return undefined;
-  const names = cfg?.statusNames.length ? cfg.statusNames : ["ready for qa"];
+  /* Blocks say whether the step moves at all, and whether it names a status or is waiting for one. */
+  const plan = cfg ? planOf("move", cfg) : null;
+  if (plan && !plan.move) return undefined;
+  const named = plan?.move?.names ?? [];
+  const names = named.length ? named : plan && !plan.move!.fallback ? [] : ["ready for qa"];
   for (const name of names) {
     const hit = statuses.find((s) => eqStatus(s.status, name));
     if (hit) return eqStatus(hit.status, current) ? undefined : hit.status;
@@ -227,11 +240,11 @@ export function statusColor(statuses: ListStatus[], status: string): string | un
  */
 export function mergeNote(
   merged: boolean,
-  move: { asked: boolean; ok?: boolean; to?: string; error?: string; unauthorised?: boolean },
+  move: { asked: boolean; ok?: boolean; to?: string; error?: string; unauthorised?: boolean; extra?: string },
 ): string {
   if (!merged) return "Merge failed";
   if (!move.asked) return "Merged";
-  if (move.ok) return `Merged · card moved to ${move.to}`;
+  if (move.ok) return `Merged · card moved to ${move.to}${move.extra ? ` · ${move.extra}` : ""}`;
   /*
    * A refused token is the one failure here that pressing the button again
    * cannot fix, and the sentence has to say so — otherwise "ClickUp refused

@@ -65,13 +65,14 @@ describe("the tracker card's chip", () => {
     expect(fn).not.toContain("var(--accent");
   });
 
-  test("the priority menu lists all five, ticks the current one and calls the empty one Clear", async () => {
+  test("the priority menu lists all five, marks the current one and calls the empty one Clear: it is the app's Select", async () => {
     const src = await Bun.file(new URL("../src/components/TasksPanel.tsx", import.meta.url)).text();
-    const menu = src.slice(src.indexOf('{[...PRIOS, { id: "", label: "Clear"'));
-    expect(menu.length, "the menu should list Clear last").toBeGreaterThan(0);
-    const body = menu.slice(0, menu.indexOf("</div>\n      )}"));
-    expect(body).not.toMatch(/\.filter\(/);
-    expect(body).toContain("<DoneIcon");
+    const at = src.indexOf("function PriorityPick(");
+    const body = src.slice(at, src.indexOf("function ClickUpRow(", at));
+    expect(body).toContain('const all = [...PRIOS, { id: "", label: "Clear", c: "var(--text4)" } as const];');
+    expect(body).toContain("<Select value={now}");
+    expect(body).toContain("<Flag c={o.c} on={!!o.id} />");
+    expect(body).toContain('api.clickupPriority(t.id, id || null, stamp)');
   });
 
   test("and each priority has a colour of its own", () => {
