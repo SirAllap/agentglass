@@ -377,33 +377,6 @@ describe("the summary bar", () => {
   });
 });
 
-describe("the pinned strip", () => {
-  /*
-   * A pin is a fact about YOU; a lane is a fact about what a pull request
-   * needs. The strip exists because the two do not overlap — you can pin a
-   * colleague's pull request, and no lane on this board will ever hold it.
-   */
-  it("is absent when nothing is pinned, rather than an empty heading", () => {
-    const html = render({ pinnedList: [] });
-    expect(html).not.toContain("Pinned");
-  });
-
-  it("lists what is pinned, whoever opened it", () => {
-    const html = render({ pinnedList: [{ number: 375, title: "Somebody else's work" }] });
-    expect(html).toContain("#375");
-    // The apostrophe is escaped by the renderer; assert on a fragment that is
-    // not, so the test is about the strip rather than about HTML entities.
-    expect(html).toContain("Somebody else");
-  });
-
-  it("does not appear while the board is still reading", () => {
-    // A strip over a skeleton reads as "these are your lanes", which is the one
-    // thing it is not.
-    const html = render({ loading: true, mine: [], review: [], pinnedList: [{ number: 1, title: "x" }] });
-    expect(html).not.toContain("Pinned");
-  });
-});
-
 describe("the lane headings line up", () => {
   /*
    * Reported from the app: the cards of each column started at a different

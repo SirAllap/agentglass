@@ -122,7 +122,7 @@ import { useClickupSetup } from "../lib/clickupSetup.ts";
 import type { ListStatus as CuStatus, ListMember as CuMember, ProviderTask } from "../../../shared/providers.ts";
 import { CloseButton, CloseIcon } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { AgentIcon, ArrowIcon, AttachIcon, BlockedIcon, BoltIcon, BranchIcon, CaretIcon, ChartIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CommitIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, EditIcon, EyeIcon, FileIcon, FlagIcon, IconLabel, LinkIcon, MergeIcon, MoreIcon, PlusIcon, RefreshIcon, SearchIcon, SparkleIcon, StarIcon, TagIcon, UndoIcon, UserIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import { AgentIcon, ArrowIcon, AttachIcon, BlockedIcon, BoltIcon, BranchIcon, CaretIcon, ChartIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CommitIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, EditIcon, EyeIcon, FileIcon, FlagIcon, IconLabel, LinkIcon, MergeIcon, MoreIcon, PinIcon, PlusIcon, RefreshIcon, SearchIcon, SparkleIcon, TagIcon, UndoIcon, UserIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { PrIcon } from "./workspace/icons.tsx";
 import { PrWatchMenu } from "./PrWatchMenu.tsx";
 import { onChecksRead } from "../lib/prWatchStore.ts";
@@ -312,6 +312,13 @@ function FoldCaret({ open }: { open: boolean }) {
     </span>
   );
 }
+
+/** What the dot on a pinned pull request means, in words. */
+const checksSentence = ({ checks: c }: PrSummary): string =>
+  c.pending > 0 ? `${c.pending} still running`
+  : c.verdict === "red" ? `${c.failure} failing`
+  : c.verdict === "green" ? "all checks passed"
+  : "nothing has reported";
 
 function Dot({ tint, title }: { tint: string; title?: string }) {
   return <span title={title} className="inline-block shrink-0 rounded-full" style={{ width: 6, height: 6, background: tint }} />;
@@ -1477,55 +1484,63 @@ function PinnedCapsule({ pinned, pinState, selected, current, onOpen }: {
           background: "color-mix(in srgb, var(--bg3) 85%, transparent)",
           border: EDGE,
         }}>
+        {/* The tack is the label: it says "pinned" without taking the width a
+            word would, and it is the same glyph as the button that put the
+            pull request here. */}
         {pinned.length === 0
-          ? <span className="text-[10px] shrink-0 inline-flex items-center gap-1" style={{ color: "var(--text4)" }}><StarIcon size={ICON.xs} />nothing pinned</span>
+          ? <span className="text-[10px] shrink-0 inline-flex items-center gap-1" style={{ color: "var(--text4)" }}><PinIcon size={ICON.xs} />nothing pinned</span>
           : (
-            <span className="text-[10px] uppercase tracking-wider shrink-0" style={{ color: "var(--text4)" }}>Pinned</span>
+            <span className="flex shrink-0" style={{ color: "var(--text4)" }} role="img" aria-label="Pinned" title="Pinned pull requests">
+              <PinIcon size={ICON.xs} filled />
+            </span>
           )}
         {/*
-         * Two actions on one chip: the number opens it, the × takes it off.
+         * Two actions on one chip: the body opens it, the × takes it off.
          * Taking a pin off used to mean opening the pull request first, which
-         * is the trip this bar exists to save. The × is revealed on hover and
-         * held open on the one you are reading, so at rest this is a row of
-         * numbers rather than a row of numbers and crosses. A span rather than
-         * a nested button: a button inside a button is invalid markup and the
-         * inner one stops receiving clicks in some engines.
+         * is the trip this bar exists to save. The × has a slot of its own at
+         * the end of the chip at every width, so showing it on hover or focus
+         * moves nothing; the one you are reading keeps it showing. Siblings,
+         * not nested: a button inside a button is invalid markup and the inner
+         * one stops receiving clicks in some engines.
+         *
+         * The title is cut at 96px and only drawn from 1024px up (`lg`): a chip is
+         * number-first, and the bar is 40% of the header, so with six pins it
+         * scrolls sideways (the bar is the scroller) rather than wrapping or
+         * reaching the refresh button.
          */}
-        {pinned.map((p) => (
-          <span key={p.number}
-            className="group flex items-center gap-1 rounded-full shrink-0 overflow-hidden pl-1.5"
-            style={p.number === selected
-              ? { background: "color-mix(in srgb, var(--primary) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }
-              : { border: EDGE }}>
-            {/* A dot, not a coloured number. Colour alone cannot say "green" to
-                somebody who cannot see green, and the same dot is what the rows
-                in the list use — so the bar and the list agree rather than
-                being two vocabularies. */}
-            {(() => {
-              const sum = pinState.get(p.number);
-              if (!sum) return null;
-              const c = sum.checks;
-              const what = c.pending > 0 ? `${c.pending} still running`
-                : c.verdict === "red" ? `${c.failure} failing`
-                : c.verdict === "green" ? "all checks passed"
-                : "nothing has reported";
-              return <Dot tint={stateTint(sum)} title={`#${p.number} — ${what}`} />;
-            })()}
-            <button onClick={() => onOpen(p.number)} title={p.title}
-              className="text-[10px] pr-1 py-px tabular-nums"
-              style={{ color: p.number === selected ? "var(--text)" : "var(--text2)" }}>
-              #{p.number}
-            </button>
-            <button
-              onClick={(e) => { e.stopPropagation(); togglePin(p.repo, p.number, p.title); }}
-              title={`Unpin #${p.number}`}
-              aria-label={`Unpin #${p.number}`}
-              className={`leading-none grid place-items-center ${p.number === selected ? "" : "opacity-0 group-hover:opacity-100 focus:opacity-100"}`}
-              style={{ color: "var(--text3)", width: 18, height: 18 }}>
-              <CloseIcon size={ICON.xs} />
-            </button>
-          </span>
-        ))}
+        {pinned.map((p) => {
+          const open = p.number === selected;
+          const sum = pinState.get(p.number);
+          return (
+            <span key={p.number}
+              className="group flex items-center rounded-full shrink-0"
+              style={open
+                ? { background: "color-mix(in srgb, var(--primary) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }
+                : { border: EDGE }}>
+              <button onClick={() => onOpen(p.number)}
+                title={`#${p.number} — ${p.title}`}
+                aria-current={open ? "page" : undefined}
+                className="flex items-center gap-1 min-w-0 rounded-full pl-1.5 pr-1 py-px text-[10px]"
+                style={{ color: open ? "var(--text)" : "var(--text2)" }}>
+                {/* A dot, not a coloured number. Colour alone cannot say "green" to
+                    somebody who cannot see green, and the same dot is what the rows
+                    in the list use — so the bar and the list agree rather than
+                    being two vocabularies. */}
+                {sum && <Dot tint={stateTint(sum)} title={`#${p.number} — ${checksSentence(sum)}`} />}
+                <span className="tabular-nums shrink-0">#{p.number}</span>
+                <span className="hidden lg:inline truncate" style={{ maxWidth: 96, color: "var(--text3)" }}>{p.title}</span>
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); togglePin(p.repo, p.number, p.title); }}
+                title={`Unpin #${p.number}`}
+                aria-label={`Unpin #${p.number}`}
+                className={`leading-none grid place-items-center shrink-0 rounded-full ${open ? "" : "opacity-0 group-hover:opacity-100 focus:opacity-100"}`}
+                style={{ color: "var(--text3)", width: 18, height: 18 }}>
+                <CloseIcon size={ICON.xs} />
+              </button>
+            </span>
+          );
+        })}
         {/* The control sits IN the bar it feeds, so pressing it explains the bar
             the first time — a pin button somewhere else and a strip of numbers
             up here are two features until you happen to press one and watch the
@@ -1540,7 +1555,7 @@ function PinnedCapsule({ pinned, pinState, selected, current, onOpen }: {
             style={currentPinned
               ? { color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }
               : { color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 32%, transparent)", background: "color-mix(in srgb, var(--warning) 8%, transparent)" }}>
-            <StarIcon size={ICON.xs} filled={currentPinned} />{currentPinned ? "Pinned" : `Pin #${current.number}`}
+            <PinIcon size={ICON.xs} filled={currentPinned} />{currentPinned ? "Pinned" : `Pin #${current.number}`}
           </button>
         )}
       </div>
@@ -1732,7 +1747,7 @@ function PrRow({ p, active, onSelect, onReview, pinned, onTogglePin, q, unread, 
               color: pinned ? "var(--primary-hover)" : "var(--text3)",
               fontSize: 15, width: 22, height: 22,
             }}>
-            <StarIcon size={ICON.sm} filled={pinned} />
+            <PinIcon size={ICON.sm} filled={pinned} />
           </button>
         )}
         <span title={st.title} style={{ color: st.tint }}>⇅</span>#{p.number}
@@ -4847,10 +4862,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                    builds for them. A different spelling of the same repository
                    would give every card a badge for ever. */
                 repoKey={repo.key}
-                /* Whoever opened them. A pinned pull request of a colleague's
-                   is in no lane on this board, which is exactly why the strip
-                   exists. */
-                pinnedList={pinned}
                 onAct={(p, what) => {
                   // Only what this app can really do. `merge` uses the method
                   // the panel already remembers, so the board never quietly

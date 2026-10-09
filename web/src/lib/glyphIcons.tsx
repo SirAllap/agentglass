@@ -213,8 +213,8 @@ export function MoreIcon({ size = ICON.sm, className }: P) {
 }
 
 /** 📌 */
-export function PinIcon({ size = ICON.sm, className }: P) {
-  return <svg {...svg(size, className)}><path d="M8.6 1.8l3.6 3.6-1.5.7-2.3 2.3.3 2.3-.9.9-5.4-5.4.9-.9 2.3.3 2.3-2.3z" /><path d="M4.4 9.6L1.8 12.2" /></svg>;
+export function PinIcon({ size = ICON.sm, className, filled }: P & { filled?: boolean }) {
+  return <svg {...svg(size, className)} fill={filled ? "currentColor" : "none"}><path d="M8.6 1.8l3.6 3.6-1.5.7-2.3 2.3.3 2.3-.9.9-5.4-5.4.9-.9 2.3.3 2.3-2.3z" /><path d="M4.4 9.6L1.8 12.2" /></svg>;
 }
 
 /** 📁 🗀 */
