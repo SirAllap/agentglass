@@ -137,6 +137,49 @@ const repoName = (p: string) => p.split("/").pop() || p;
 const selCls = "text-[10.5px] px-2 py-1 rounded-md outline-none";
 const selStyle = { background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: EDGE, color: "var(--text2)" };
 
+/*
+ * The conversation drawn as a rail, not a phone app's two-sided bubbles.
+ *
+ * Every other conversation this workspace shows — a pull request, a tracker
+ * card — puts the speaker's face in a column of its own, outside a neutral
+ * card, on a rail that runs behind the cards (`TL_*` in PrPanel.tsx). This was
+ * the one view still doing it the messenger way: a filled bubble on the right
+ * for you, a tinted one on the left for the model. Next to a panel that reads
+ * like GitHub, that read like a different product.
+ *
+ * The four numbers below are literal copies of PrPanel's TL_AVATAR / TL_GAP /
+ * TL_RAIL / TL_SPACE, not a second definition of that token — this batch's
+ * scope is this file alone, and exporting them from PrPanel.tsx is the next
+ * thing after this, not done here.
+ */
+const CHAT_TL_AVATAR = 40;
+const CHAT_TL_GAP = 12;
+const CHAT_TL_RAIL = 16;
+const CHAT_TL_SPACE = 16;
+const CHAT_TL_CSS = `
+.agx-chat-tl{position:relative;padding-left:${CHAT_TL_AVATAR + CHAT_TL_GAP}px}
+.agx-chat-tl::before{content:"";position:absolute;left:${CHAT_TL_AVATAR + CHAT_TL_GAP + CHAT_TL_RAIL - 1}px;top:0;bottom:0;width:2px;background:var(--surface-line)}
+.agx-chat-ev{position:relative;margin-bottom:${CHAT_TL_SPACE}px}
+.agx-chat-ev:last-child{margin-bottom:0}
+.agx-chat-av{position:absolute;left:-${CHAT_TL_AVATAR + CHAT_TL_GAP}px;top:0;display:flex}
+`;
+
+/** Who is speaking, on the rail. A chat role is not a GitHub login — there is
+ *  no picture to fetch, only "you" or the agent — so this is initials on a
+ *  filled circle rather than `Avatar.tsx`, which exists for the pull request
+ *  panel's real avatars. */
+function RoleAvatar({ role, agent }: { role: "user" | "assistant"; agent: AgentKind }) {
+  const label = role === "user" ? "You" : agentLabel(agent);
+  const initials = label.slice(0, 2).toUpperCase();
+  const tone = role === "user" ? "var(--primary)" : "var(--info)";
+  return (
+    <span className="shrink-0 rounded-full inline-flex items-center justify-center" aria-hidden
+      style={{ width: CHAT_TL_AVATAR, height: CHAT_TL_AVATAR, background: tone, color: "var(--bg)", fontSize: CHAT_TL_AVATAR * 0.36, fontWeight: 600 }}>
+      {initials}
+    </span>
+  );
+}
+
 /** One row in the chat list. */
 /**
  * The model's reasoning, folded away.
@@ -1494,6 +1537,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                   <div ref={scrollRef} onScroll={onScroll}
                     className="agx-scroll flex-1 min-h-0 overflow-y-auto px-5 py-4">
                     <div ref={contentRef} className="min-h-full flex flex-col justify-end gap-3">
+                      {active && <style>{CHAT_TL_CSS}</style>}
                       {active && !active.messages.length && (
                         <div className="grid place-items-center text-center t-dim2 text-[12px] py-10">
                           {usable
@@ -1501,111 +1545,90 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                             : <div>No local <code>{cliName(active.agent)}</code> CLI found — install it to chat.</div>}
                         </div>
                       )}
-                      {active?.messages.map((m, i) => (
-                        <div key={i}>
-                          {/* The seam between what was said before this panel
-                              adopted the session and what is being said in it
-                              now — without it, replayed history reads as though
-                              you had typed it here. */}
-                          {m.historical && !active.messages[i + 1]?.historical && (
-                            <div className="flex items-center gap-2 my-3 text-[9.5px] uppercase tracking-wider t-dim2">
-                              <span className="flex-1 h-px" style={{ background: "color-mix(in srgb, var(--border) 45%, transparent)" }} />
-                              <span>resumed here</span>
-                              <span className="flex-1 h-px" style={{ background: "color-mix(in srgb, var(--border) 45%, transparent)" }} />
-                            </div>
-                          )}
-                          <div className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-                          <div className="max-w-[86%] min-w-0 rounded-xl px-3.5 py-2.5 text-[12px] leading-relaxed break-words"
-                            style={{
-                              // Resumed history reads at full strength, same as
-                              // live: the "resumed here" divider already marks the
-                              // seam, so dimming the bubbles on top of it only made
-                              // a restored conversation look degraded next to the
-                              // console it mirrors.
-                              ...CODE_FONT_STYLE, fontFamily: undefined,
-                              // Stronger than the old 16%/45% wash: at that
-                              // strength every bubble was the same violet as the
-                              // panel behind it, and on some themes the two roles
-                              // were indistinguishable. The left border is what
-                              // survives a theme that flattens the fills.
-                              // Filled, not tinted. At 26% over the panel every
-                              // user bubble was within a shade of the surface
-                              // behind it, so on the darker themes the two
-                              // speakers read as one voice. A filled accent is
-                              // the one treatment that survives every palette,
-                              // and it is what puts a conversation on screen
-                              // instead of a transcript.
-                              // Half the accent rather than a quarter of it, and
-                              // no further: past about this the body text stops
-                              // being reliably legible on it across the themes,
-                              // and a bubble you cannot read is a worse problem
-                              // than two that look alike.
-                              background: m.role === "user"
-                                ? "color-mix(in srgb, var(--primary) 50%, var(--bg2))"
-                                : "color-mix(in srgb, var(--bg3) 85%, var(--bg))",
-                              border: EDGE,
-                              borderLeft: `3px solid ${m.role === "user" ? "var(--primary)" : "color-mix(in srgb, var(--info) 70%, transparent)"}`,
-                              color: "var(--text)",
-                            }}>
-                            {/* Role and time, the way the session view has always
-                                shown them — their absence is most of why the two
-                                read as different products. */}
-                            {/* On the filled user bubble the old
-                                `--primary-hover` label sat on its own colour and
-                                vanished; the agent's still gets the accent it
-                                always had, because its bubble is a surface. */}
-                            <div className="text-[10px] uppercase tracking-wider mb-1 flex items-center gap-2"
-                              style={{ color: m.role === "user" ? "var(--text)" : "var(--info)", opacity: m.role === "user" ? 0.75 : 1 }}>
-                              <span>{m.role}</span>
-                              <span className="t-dim2 normal-case tracking-normal">{fmtTime(m.ts)}</span>
-                            </div>
-                            {m.thinking && <Thinking text={m.thinking} streaming={!!m.streaming && !m.text} />}
-                            {/* Behind a fold, not in front of the answer. The
-                                summary line carries the running call and any
-                                failure; the feed itself is one click away. */}
-                            <ToolFeed tools={m.tools} streaming={!!m.streaming}>
-                              {/* Folded the same way the session timeline
-                                  folds it: a subagent's work nests under the
-                                  call that spawned it rather than being
-                                  interleaved with the main thread's. */}
-                              {buildRows(m.tools.map((t) => ({
-                                kind: "tool" as const, ts: t.ts, tool: t.name, target: t.target,
-                                is_error: t.error, output: t.output, note: t.note,
-                                agent_id: t.agentId, agent_type: t.agentType, tool_use_id: t.id,
-                              }))).map((r) => r.kind === "tool" && (
-                                <ToolRow key={r.key} e={r.e} sub={r.children} />
-                              ))}
-                            </ToolFeed>
-                            {!!m.images?.length && (
-                              <div className="flex flex-wrap gap-1.5 mb-1.5">
-                                {m.images.map((img, j) => (
-                                  <img key={j} src={`data:${img.mediaType};base64,${img.data}`} alt="Attached image"
-                                    className="block max-h-40 max-w-full rounded-lg"
-                                    style={{ border: EDGE }} />
-                                ))}
+                      {!!active?.messages.length && (
+                        <div className="agx-chat-tl">
+                          {active.messages.map((m, i) => (
+                            <div key={i}>
+                              {/* The seam between what was said before this panel
+                                  adopted the session and what is being said in it
+                                  now — without it, replayed history reads as though
+                                  you had typed it here. */}
+                              {m.historical && !active.messages[i + 1]?.historical && (
+                                <div className="flex items-center gap-2 my-3 text-[9.5px] uppercase tracking-wider t-dim2">
+                                  <span className="flex-1 h-px" style={{ background: "color-mix(in srgb, var(--border) 45%, transparent)" }} />
+                                  <span>resumed here</span>
+                                  <span className="flex-1 h-px" style={{ background: "color-mix(in srgb, var(--border) 45%, transparent)" }} />
+                                </div>
+                              )}
+                              {/* One rail, one column — the same shape as the pull
+                                  request's conversation and the tracker card's
+                                  history, not a phone app's two-sided bubbles. The
+                                  speaker's face sits outside the card, on the rail;
+                                  the card itself is the one neutral surface every
+                                  remark gets, whoever sent it. */}
+                              <div className="agx-chat-ev">
+                                <span className="agx-chat-av"><RoleAvatar role={m.role} agent={active.agent} /></span>
+                                <div className="min-w-0 rounded-xl px-3.5 py-2.5 text-[12px] leading-relaxed break-words"
+                                  style={{ background: "var(--surface-card)", border: EDGE, color: "var(--text)" }}>
+                                  <div className="text-[10px] uppercase tracking-wider mb-1 flex items-center gap-2"
+                                    style={{ color: m.role === "user" ? "var(--text2)" : "var(--info)" }}>
+                                    <span style={{ fontWeight: 600 }}>{m.role === "user" ? "you" : agentLabel(active.agent)}</span>
+                                    <span className="t-dim2 normal-case tracking-normal">{fmtTime(m.ts)}</span>
+                                  </div>
+                                  {m.thinking && <Thinking text={m.thinking} streaming={!!m.streaming && !m.text} />}
+                                  {/* Behind a fold, not in front of the answer. The
+                                      summary line carries the running call and any
+                                      failure; the feed itself is one click away. */}
+                                  <ToolFeed tools={m.tools} streaming={!!m.streaming}>
+                                    {/* Folded the same way the session timeline
+                                        folds it: a subagent's work nests under the
+                                        call that spawned it rather than being
+                                        interleaved with the main thread's. */}
+                                    {buildRows(m.tools.map((t) => ({
+                                      kind: "tool" as const, ts: t.ts, tool: t.name, target: t.target,
+                                      is_error: t.error, output: t.output, note: t.note,
+                                      agent_id: t.agentId, agent_type: t.agentType, tool_use_id: t.id,
+                                    }))).map((r) => r.kind === "tool" && (
+                                      <ToolRow key={r.key} e={r.e} sub={r.children} />
+                                    ))}
+                                  </ToolFeed>
+                                  {!!m.images?.length && (
+                                    <div className="flex flex-wrap gap-1.5 mb-1.5">
+                                      {m.images.map((img, j) => (
+                                        <img key={j} src={`data:${img.mediaType};base64,${img.data}`} alt="Attached image"
+                                          className="block max-h-40 max-w-full rounded-lg"
+                                          style={{ border: EDGE }} />
+                                      ))}
+                                    </div>
+                                  )}
+                                  {!!m.imagesDropped && (
+                                    <div className="mb-1.5 text-[10px] t-dim2 italic">
+                                      {m.imagesDropped} image{m.imagesDropped > 1 ? "s" : ""} sent with this turn, not kept when the chat was restored
+                                    </div>
+                                  )}
+                                  {/* Prose font for what was written, mono for what
+                                      was run — `agx-cu-body` (index.css) is that
+                                      split already, built for a tracker card's
+                                      description: paragraphs in `--font-prose`,
+                                      `code`/`pre`/tables held to the mono stack.
+                                      A reading measure. `82ch` bounds the card
+                                      against the panel, which on a 1600px window
+                                      is a 1400px line the eye would lose the start
+                                      of on every wrap. Characters rather than
+                                      pixels, so it holds when the display size or
+                                      the font changes. */}
+                                  <div className="agx-cu-body" style={{ maxWidth: "82ch" }}>
+                                    {m.text
+                                      ? <Foldable text={m.text}>{(shown) => <Markdown text={shown} />}</Foldable>
+                                      : (m.streaming ? <TypingDots /> : "")}
+                                  </div>
+                                  {m.streaming && m.text && <span className="t-dim2 agx-caret">▍</span>}
+                                </div>
                               </div>
-                            )}
-                            {!!m.imagesDropped && (
-                              <div className="mb-1.5 text-[10px] t-dim2 italic">
-                                {m.imagesDropped} image{m.imagesDropped > 1 ? "s" : ""} sent with this turn, not kept when the chat was restored
-                              </div>
-                            )}
-                            {/* A reading measure. `max-w-[86%]` bounds the
-                                bubble against the panel, which on a 1600px
-                                window is a 1400px line — the eye loses the
-                                start of the next one on every wrap. Characters
-                                rather than pixels, so it holds when the display
-                                size or the font changes. */}
-                            <div style={{ maxWidth: "82ch" }}>
-                              {m.text
-                                ? <Foldable text={m.text}>{(shown) => <Markdown text={shown} />}</Foldable>
-                                : (m.streaming ? <TypingDots /> : "")}
                             </div>
-                            {m.streaming && m.text && <span className="t-dim2 agx-caret">▍</span>}
-                          </div>
-                          </div>
+                          ))}
                         </div>
-                      ))}
+                      )}
                     </div>
                   </div>
 
