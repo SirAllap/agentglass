@@ -36,6 +36,7 @@ import { findRanges, paint as paintFind, clear as clearFind, step as stepFind, r
 import { groupAt, groupLabel, groupTotals, type ChangeGroup } from "../lib/changeGroups.ts";
 import { IconLabel, SearchIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 export type Peek = {
   root: string;
@@ -871,8 +872,8 @@ function FindBar({ inputRef, value, onValue, hit, hits, onStep, onClose }: {
       <span className="flex" style={{ color: "var(--text3)" }}><SearchIcon size={ICON.xs} /></span>
       <input ref={inputRef} value={value} onChange={(e) => onValue(e.target.value)}
         spellCheck={false} autoComplete="off" placeholder="Find in this document…"
-        className="flex-1 min-w-0 bg-transparent outline-none text-[12px]"
-        style={{ color: none ? "var(--error)" : "var(--text)" }}
+        className={`flex-1 min-w-0 ${INPUT}`}
+        style={{ ...INPUT_STYLE, color: none ? "var(--error)" : "var(--text)" }}
         onKeyDown={(e) => {
           // Enter walks forward, Shift+Enter back — and they stop here, or the
           // panel's own Escape would close the document instead of the bar.

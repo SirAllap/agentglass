@@ -8,6 +8,7 @@ import { friendly } from "../lib/labels.ts";
 import { fmtTime, fmtUsd, fmtMs, agentKey } from "../lib/format.ts";
 import { SearchIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 /** Render an FTS snippet, highlighting the \x01…\x02 matched spans. */
 function Snippet({ text }: { text: string }) {
@@ -203,7 +204,7 @@ export function SearchModal({
                   <input
                     autoFocus value={q} onChange={(e) => setQ(e.target.value)}
                     placeholder={mode === "fleet" ? "Search prompts, commands, replies, errors…" : mode === "commits" ? "Commit messages… (or a sha prefix)" : mode === "working tree" ? "Grep the working tree…" : "Which commits introduced or removed this string…"}
-                    className="flex-1 bg-transparent outline-none text-[13px]" style={{ color: "var(--text)" }}
+                    className={`flex-1 ${INPUT}`} style={INPUT_STYLE}
                   />
                   {mode !== "fleet" && (
                     <select value={repo} onChange={(e) => setRepo(e.target.value)}

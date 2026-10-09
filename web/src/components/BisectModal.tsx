@@ -12,6 +12,7 @@ import { api } from "../lib/api.ts";
 import type { GitBisectStatus } from "../../../shared/types.ts";
 import { CrossIcon, DoneIcon, IconLabel } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 export function BisectModal({ root, onClose, onReset, onOpenCommit, onChanged }: {
   root: string;
@@ -116,8 +117,8 @@ export function BisectModal({ root, onClose, onReset, onOpenCommit, onChanged }:
               <div className="space-y-3">
                 <div className="text-[10.5px] t-dim2">No bisect in progress — start one with a known-bad and a known-good commit.</div>
                 <div className="flex gap-2">
-                  <input value={bad} onChange={(e) => setBad(e.target.value)} placeholder="bad commit (ref or sha)" className="flex-1 px-2.5 py-1.5 rounded-lg text-[11.5px] outline-none" style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }} />
-                  <input value={good} onChange={(e) => setGood(e.target.value)} placeholder="good commit" className="flex-1 px-2.5 py-1.5 rounded-lg text-[11.5px] outline-none" style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }} />
+                  <input value={bad} onChange={(e) => setBad(e.target.value)} placeholder="bad commit (ref or sha)" className={`flex-1 ${INPUT}`} style={INPUT_STYLE} />
+                  <input value={good} onChange={(e) => setGood(e.target.value)} placeholder="good commit" className={`flex-1 ${INPUT}`} style={INPUT_STYLE} />
                 </div>
                 <button onClick={() => void start()} disabled={busy || !bad.trim() || !good.trim()} className="w-full text-[11.5px] font-medium py-2 rounded-lg" style={{ background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)", color: "var(--text)", opacity: busy || !bad.trim() || !good.trim() ? .5 : 1 }}>start bisect</button>
               </div>

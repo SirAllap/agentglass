@@ -32,6 +32,7 @@ import { SplitDiff, UnifiedDiff, SCROLLBAR_CSS, SPLIT_SEL_CSS } from "./DiffLine
 import { ThemePicker, Toggle, DiffSettingsLink } from "./DiffControls.tsx";
 import { WarningIcon } from "../../lib/glyphIcons.tsx";
 import { riskColor, riskTitle } from "../../lib/riskView.ts";
+import { INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
 
 export type PresetDiffProps = {
   open: boolean;
@@ -136,8 +137,8 @@ function Inner({ changes, title, path, onBack, backLabel, onClose }: Omit<Preset
               <input
                 value={q} onChange={(e) => setQ(e.target.value)}
                 placeholder="Filter by file path…" aria-label="Filter the list" spellCheck={false}
-                className="w-full px-3 py-1.5 rounded-lg text-[11.5px] outline-none"
-                style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", color: "var(--text)" }}
+                className={`w-full ${INPUT}`}
+                style={INPUT_STYLE}
               />
             </div>
           )}

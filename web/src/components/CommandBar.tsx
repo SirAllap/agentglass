@@ -35,6 +35,7 @@ import { useDismiss } from "../lib/useDismiss.ts";
 import { keepTermFocus } from "../lib/keepFocus.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { IconLabel, PlusIcon, StarIcon } from "../lib/glyphIcons.tsx";
+import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 /**
  * The four git one-liners this row used to hardcode as always-visible chips.
@@ -555,8 +556,8 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
                 description. */}
             <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)}
               placeholder="filter commands…"
-              className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
-              style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+              className={`m-1.5 shrink-0 ${INPUT}`}
+              style={INPUT_STYLE} />
             <div className="px-2 pb-1.5 shrink-0">
               <button type="button" onClick={() => { setCustomOpen((v) => !v); setCustomError(""); }} disabled={full}
                 className="text-[10.5px] px-2 py-1 rounded-md"
@@ -566,11 +567,11 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
               {customOpen && !full && (
                 <form onSubmit={(e) => { e.preventDefault(); saveCustom(); }} className="mt-1.5 grid grid-cols-[92px_minmax(0,1fr)_auto] gap-1.5 items-center">
                   <input value={customLabel} onChange={(e) => setCustomLabel(e.target.value)} autoFocus placeholder="chip label"
-                    aria-label="Custom command chip label" className="px-2 py-1 rounded outline-none min-w-0"
-                    style={{ background: "var(--bg3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+                    aria-label="Custom command chip label" className={`min-w-0 ${INPUT}`}
+                    style={INPUT_STYLE} />
                   <input value={customCmd} onChange={(e) => setCustomCmd(e.target.value)} placeholder="command, e.g. clear"
-                    aria-label="Custom command" className="px-2 py-1 rounded outline-none min-w-0"
-                    style={{ background: "var(--bg3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+                    aria-label="Custom command" className={`min-w-0 ${INPUT}`}
+                    style={INPUT_STYLE} />
                   <button type="submit" className="px-2 py-1 rounded" style={{ color: "var(--text)", background: "color-mix(in srgb, var(--primary) 18%, transparent)" }}>Pin</button>
                   {customError && <span className="col-span-3 text-[10px]" style={{ color: "var(--error-ink)" }}>{customError}</span>}
                 </form>

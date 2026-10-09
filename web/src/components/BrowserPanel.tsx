@@ -66,6 +66,7 @@ import {
   SpinnerIcon, StopIcon, TargetIcon, FolderIcon, ContainerIcon, SpaceIcon, CameraIcon, PanelIcon, UpIcon, DownIcon, SplitIcon,
 } from "./browser/icons.tsx";
 import { CheckboxIcon, DoneIcon, SwapIcon } from "../lib/glyphIcons.tsx";
+import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 /** Electron's `<webview>` is not in React's JSX catalogue, and its methods are
  *  not on HTMLElement. Narrowed to the handful actually called here rather than
@@ -2802,8 +2803,8 @@ export function BrowserView({ active: viewOn, scope }: {
               if (e.key === "Enter") makeProfile(naming);
               if (e.key === "Escape") { e.stopPropagation(); setNaming(null); }
             }}
-            className="w-full text-[10.5px] px-2 py-1 rounded-md outline-none"
-            style={{ background: "var(--bg2)", color: "var(--text)" }} />
+            className={`w-full ${INPUT}`}
+            style={INPUT_STYLE} />
         </div>
       )}
       <LanesRow />
@@ -2861,8 +2862,8 @@ export function BrowserView({ active: viewOn, scope }: {
                 if (e.key === "Escape") { e.preventDefault(); closeFind(); }
               }}
               placeholder="Find in page" spellCheck={false}
-              className="flex-1 min-w-0 text-[12px] px-2.5 py-1.5 rounded-lg outline-none bg-transparent"
-              style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }} />
+              className={`flex-1 min-w-0 ${INPUT}`}
+              style={INPUT_STYLE} />
             {/* The tally, where the eye already is. "0 of 0" is the answer to
                 "is this word here at all", and it is the thing the old strip
                 could not say. */}

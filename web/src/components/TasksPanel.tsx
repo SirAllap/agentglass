@@ -48,7 +48,7 @@ import { matchesQuery } from "../lib/boardSearch.ts";
 import { openCard, type CardJump } from "../lib/openCard.ts";
 import type { IssueJump } from "../lib/openIssue.ts";
 import { TASK_SOURCES, shownTaskSources, subscribeTaskSources, type TaskSourceId } from "../lib/taskSources.ts";
-import { CHIP, CTRL_H, EDGE, RefreshButton } from "./workspace/Chrome.tsx";
+import { CHIP, CTRL_H, EDGE, INPUT, INPUT_STYLE, RefreshButton } from "./workspace/Chrome.tsx";
 import { useTaskConnected, visibleTaskSources } from "../lib/taskConnected.ts";
 import { landingSource, rememberTaskSource } from "../lib/taskLanding.ts";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
@@ -344,11 +344,11 @@ function IssuesBody({ root, active, jump }: { root: string; active: boolean; jum
           style={mine
             ? { color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }
             : { color: "var(--text3)", border: edge(20) }}>Assigned to me</button>
-        <span className="flex items-center gap-1.5 flex-1 min-w-0 px-2 py-1 rounded-md" style={{ background: "var(--bg)", border: edge(20) }}>
+        <span className="flex items-center gap-1.5 flex-1 min-w-0">
           <span className="flex" style={{ color: "var(--text3)" }}><SearchIcon size={ICON.xs} /></span>
           <input value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") load(); }}
             placeholder="Search issues — press ↵" spellCheck={false}
-            className="flex-1 min-w-0 bg-transparent outline-none text-[11px]" style={{ color: "var(--text)" }} />
+            className={`flex-1 min-w-0 ${INPUT}`} style={INPUT_STYLE} />
         </span>
         <RefreshButton onRefresh={load} title="Refresh" />
       </div>
@@ -2874,8 +2874,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, jump }: {
             {railOpen && (
               <input value={railQ} onChange={(e) => setRailQ(e.target.value)} placeholder="Filter lists…" spellCheck={false}
                 aria-label="Filter lists"
-                className="min-w-0 flex-1 px-2 py-1 rounded text-[11px] outline-none"
-                style={{ background: "color-mix(in srgb, var(--text) 8%, transparent)", color: "var(--text)", border: edge(14) }} />
+                className={`min-w-0 flex-1 ${INPUT}`}
+                style={INPUT_STYLE} />
             )}
           </div>
           {/*
@@ -3882,8 +3882,8 @@ function AddBoardBar({ value, onValue, onAdd, onClose, busy, editing, folders, o
             onKeyDown={(e) => { if (e.key === "Enter") onAdd(); if (e.key === "Escape") { e.stopPropagation(); onClose(); } }}
             placeholder={editing ? `New address for ${editing} — the board itself is untouched` : "Paste the address of a ClickUp board — the one in your browser's bar"}
             spellCheck={false} autoComplete="off"
-            className="flex-1 min-w-0 text-[11.5px] px-2.5 py-1.5 rounded-lg outline-none"
-            style={{ background: "var(--bg2)", border: edge(18), color: "var(--text)" }} />
+            className={`flex-1 min-w-0 ${INPUT}`}
+            style={INPUT_STYLE} />
           <button onClick={onAdd} disabled={busy || !value.trim()}
             className="text-[11.5px] px-3 py-1.5 rounded-lg"
             style={{ background: "color-mix(in srgb, var(--primary) 20%, transparent)",
@@ -4060,8 +4060,8 @@ function ListViews({ listId, busy, onPick }: { listId: string; busy: boolean; on
         <span className="tabular-nums text-[10px]" style={{ color: "var(--text4)" }}>{views.length}</span>
         {views.length > 8 && (
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter…"
-            className="ml-auto text-[11px] px-2 py-0.5 rounded outline-none w-[140px]"
-            style={{ background: "var(--bg)", border: edge(18), color: "var(--text)" }} />
+            className={`ml-auto w-[140px] ${INPUT}`}
+            style={INPUT_STYLE} />
         )}
       </div>
       <div className="flex flex-wrap gap-1.5">
@@ -4151,8 +4151,8 @@ function AddFirstBoard({ value, onValue, onAdd, busy, note, why }: {
         <input autoFocus value={value} onChange={(e) => onValue(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") onAdd(); }}
           placeholder="Paste a board address" spellCheck={false} autoComplete="off"
-          className="flex-1 min-w-0 text-[11.5px] px-2.5 py-1.5 rounded-lg outline-none"
-          style={{ background: "var(--bg2)", border: edge(18), color: "var(--text)" }} />
+          className={`flex-1 min-w-0 ${INPUT}`}
+          style={INPUT_STYLE} />
         <button onClick={onAdd} disabled={busy || !value.trim()}
           className="text-[11.5px] px-3 py-1.5 rounded-lg"
           style={{ background: "color-mix(in srgb, var(--primary) 20%, transparent)",
@@ -5432,8 +5432,8 @@ function CardHop({ list, id, onGo }: { list: ProviderTask[]; id: string; onGo: (
                 if (e.key === "Escape") { e.stopPropagation(); setOpen(false); }
                 else if (e.key === "Enter" && shown[0]) { e.stopPropagation(); onGo(shown[0].id); }
               }}
-              className="px-2.5 py-1.5 text-[11px] outline-none shrink-0"
-              style={{ background: "transparent", color: "var(--text)", borderBottom: edge(16) }} />
+              className={`shrink-0 ${INPUT}`}
+              style={INPUT_STYLE} />
             <div className="agx-scroll overflow-y-auto overflow-x-hidden">
               {shown.length === 0 && (
                 <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text4)" }}>Nothing on this board matches.</div>
@@ -7884,7 +7884,6 @@ function NewTask({ projects, tags, onAdd, onClose }: {
     if (ok) onClose();
   };
 
-  const field = { background: "var(--bg2)", border: edge(18), color: "var(--text)" };
   const label = "text-[8.5px] uppercase tracking-[0.18em] mb-1 block";
   return (
     <form id="agx-new" onSubmit={submit} onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } }}
@@ -7894,7 +7893,7 @@ function NewTask({ projects, tags, onAdd, onClose }: {
         <label className={label} style={{ color: "var(--text3)" }} htmlFor="nt-desc">What needs doing</label>
         <input id="nt-desc" ref={first} value={description} onChange={(e) => setDescription(e.target.value)}
           placeholder="Describe the task" spellCheck={false} autoComplete="off"
-          className="w-full text-[12px] px-2 py-1.5 rounded-lg outline-none" style={field} />
+          className={`w-full ${INPUT}`} style={INPUT_STYLE} />
       </div>
       <div className="flex items-end gap-2 flex-wrap">
         <div>
@@ -7917,18 +7916,18 @@ function NewTask({ projects, tags, onAdd, onClose }: {
           <label className={label} style={{ color: "var(--text3)" }} htmlFor="nt-proj">Project</label>
           <input id="nt-proj" list="agx-projects" value={project} onChange={(e) => setProject(e.target.value)}
             placeholder="none" spellCheck={false} autoComplete="off"
-            className="text-[11px] px-2 py-1 rounded-lg outline-none" style={{ ...field, width: 150 }} />
+            className={`w-[150px] ${INPUT}`} style={INPUT_STYLE} />
         </div>
         <div>
           <label className={label} style={{ color: "var(--text3)" }} htmlFor="nt-tags">Tags</label>
           <input id="nt-tags" list="agx-tags" value={tagText} onChange={(e) => setTagText(e.target.value)}
             placeholder="space separated" spellCheck={false} autoComplete="off"
-            className="text-[11px] px-2 py-1 rounded-lg outline-none" style={{ ...field, width: 170 }} />
+            className={`w-[170px] ${INPUT}`} style={INPUT_STYLE} />
         </div>
         <div>
           <label className={label} style={{ color: "var(--text3)" }} htmlFor="nt-due">Due</label>
           <input id="nt-due" type="date" value={due} onChange={(e) => setDue(e.target.value)}
-            className="text-[11px] px-2 py-1 rounded-lg outline-none" style={field} />
+            className={INPUT} style={INPUT_STYLE} />
         </div>
         <datalist id="agx-projects">{projects.map((p) => <option key={p} value={p} />)}</datalist>
         <datalist id="agx-tags">{tags.map((t) => <option key={t} value={t} />)}</datalist>
@@ -7978,8 +7977,8 @@ function BulkBar({ n, tagging, tag, onTag, onTagging, onRun, onClear }: {
           <input autoFocus value={tag} onChange={(e) => onTag(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); onTagging(false); onTag(""); } }}
             placeholder="tag to add" spellCheck={false}
-            className="text-[10.5px] px-2 py-1 rounded-lg outline-none"
-            style={{ background: "var(--bg2)", border: edge(20), color: "var(--text)", width: 140 }} />
+            className={`w-[140px] ${INPUT}`}
+            style={INPUT_STYLE} />
           <button type="submit" className={btn} style={quiet}>Add</button>
         </form>
       ) : (

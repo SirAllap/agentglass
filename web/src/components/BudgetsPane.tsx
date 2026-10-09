@@ -5,6 +5,7 @@ import { fmtUsd } from "../lib/format.ts";
 import type { GitRepoRef } from "../../../shared/types.ts";
 import type { Budget, BudgetPeriod, BudgetStatus } from "../../../shared/types.ts";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
+import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 /**
  * A number you chose, instead of one this app picked.
@@ -88,8 +89,8 @@ export function BudgetsPane({ open }: { open: boolean }) {
               <span className="flex items-center gap-1">
                 <span className="text-[11px] t-dim2">$</span>
                 <input
-                  className="w-16 text-[12px] px-1.5 py-1 rounded-md t-mono"
-                  style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}
+                  className={`w-16 t-mono ${INPUT}`}
+                  style={INPUT_STYLE}
                   inputMode="decimal"
                   value={b.limit || ""}
                   placeholder="40"

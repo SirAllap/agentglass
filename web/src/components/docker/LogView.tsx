@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../lib/api.ts";
 import { createLogFeed, filterLines, levelOf, type LogFeed, type LogLevel } from "../../lib/dockerLogFeed.ts";
 import { CODE_FONT_STYLE } from "../diff/DiffLines.tsx";
+import { INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
 
 /** How many lines are drawn. The feed keeps more; a browser asked to lay out
  *  five thousand elements while more arrive is a browser that stutters. */
@@ -153,8 +154,8 @@ export function LogView({ id, tail, running }: { id: string; tail: number; runni
         ))}
 
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="find in log"
-          className="text-[10px] px-2 py-0.5 rounded-md outline-none min-w-0 flex-1 max-w-[220px]"
-          style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} />
+          className={`min-w-0 flex-1 max-w-[220px] ${INPUT}`}
+          style={INPUT_STYLE} />
 
         {(q || min) && (
           <span className="text-[9.5px] t-dim2 tabular-nums shrink-0">{shown.length} of {all.length}</span>

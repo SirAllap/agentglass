@@ -13,6 +13,7 @@
  */
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { closeFind, findHidden, findState, runQuery, stepFind, subscribeFind, topScope } from "../lib/findScope.ts";
+import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 import { CloseButton } from "./CloseButton.tsx";
 import { clear as clearHighlights } from "../lib/mdFind.ts";
 import { SearchIcon } from "../lib/glyphIcons.tsx";
@@ -78,8 +79,8 @@ export function FindBar() {
         }}
         placeholder={st.label ? `Find in the ${st.label}` : "Find on this screen"}
         aria-label="Find"
-        className="bg-transparent outline-none text-[11.5px] min-w-[180px]"
-        style={{ color: nothing ? "var(--error)" : "var(--text)", caretColor: "var(--primary)" }} />
+        className={`min-w-[180px] ${INPUT}`}
+        style={{ ...INPUT_STYLE, color: nothing ? "var(--error)" : "var(--text)", caretColor: "var(--primary)" }} />
       {/* The count, in the shape every find bar uses. `0/0` rather than blank
           while you type: an empty counter reads as "still thinking". */}
       <span className="tabular-nums text-[10px] shrink-0" style={{ color: nothing ? "var(--error)" : "var(--text4)" }}>

@@ -50,6 +50,7 @@ import { CloseButton } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { inOpenProjects } from "../lib/projectPick.ts";
 import { BoltIcon, CopyIcon, IconLabel, PinIcon, RefreshIcon, StarIcon } from "../lib/glyphIcons.tsx";
+import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 // Claude's list arrives from the server, like the other two agents'. It is data
 // there (shared/claude-models.json), filtered to the models whose shutdown date
@@ -650,8 +651,8 @@ function ResumePicker({ onPick, onClose }: { onPick: (s: SessionRollup) => void;
         }}
       >
         <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter sessions…"
-          className="mx-1 mt-0.5 mb-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
-          style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", color: "var(--text)" }} />
+          className={`mx-1 mt-0.5 mb-1.5 shrink-0 ${INPUT}`}
+          style={INPUT_STYLE} />
         <div role="listbox" aria-label="sessions to resume" className="agx-scroll flex-1 min-h-0 overflow-y-auto flex flex-col gap-0.5">
           {rows === null && <div className="px-2.5 py-3 text-[11px] t-dim2">Loading sessions…</div>}
           {rows !== null && !shown.length && <div className="px-2.5 py-3 text-[11px] t-dim2">No sessions to resume</div>}
@@ -1318,8 +1319,8 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                 <div className="shrink-0 flex flex-col" style={{ width: sidebarW, background: "color-mix(in srgb, var(--bg) 40%, transparent)" }}>
                   {chats.length > 6 && (
                     <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter chats…"
-                      className="mx-2.5 mt-2.5 mb-2 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
-                      style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", color: "var(--text)" }} />
+                      className={`mx-2.5 mt-2.5 mb-2 shrink-0 ${INPUT}`}
+                      style={INPUT_STYLE} />
                   )}
                   <div role="listbox" aria-label="open chats" className="agx-scroll flex-1 min-h-0 overflow-y-auto px-2 pt-2.5 pb-2 flex flex-col gap-0.5">
                     {shown.map((c) => (
@@ -1399,8 +1400,8 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                             onChange={(e) => setAllowed(e.target.value)}
                             placeholder="Allowed tools…"
                             title={"Tools that may run without asking — space-separated.\n\nExamples: Read  Edit  Bash(git status)  Bash(gh pr view:*)\n\nWithout this, `claude -p` refuses anything that would normally prompt, because there is no terminal to prompt from."}
-                            className="text-[10px] px-2 py-1 rounded-md outline-none min-w-0 flex-1 max-w-[280px]"
-                            style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text2)" }}
+                            className={`min-w-0 flex-1 max-w-[280px] ${INPUT}`}
+                            style={INPUT_STYLE}
                           />
                         )}
                         {/* Same reasoning as the allowlist above: `--effort` is

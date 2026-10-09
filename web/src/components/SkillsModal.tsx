@@ -8,6 +8,7 @@ import { fmtAgo, fmtUsd } from "../lib/format.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { DoneIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 type Kind = "all" | "skill" | "command";
 type Usage = "all" | "used" | "never";
@@ -247,8 +248,8 @@ export function SkillsModal({ open, onClose }: { open: boolean; onClose: () => v
                   value={q}
                   onChange={(e) => setQ(e.target.value)}
                   placeholder="Search skills — name or description…"
-                  className="flex-1 min-w-[180px] px-3 py-1.5 rounded-lg text-[11px] outline-none"
-                  style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }}
+                  className={`flex-1 min-w-[180px] ${INPUT}`}
+                  style={INPUT_STYLE}
                 />
                 <div className="flex gap-1">
                   {(["all", "skill", "command"] as Kind[]).map((k) => (

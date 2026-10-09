@@ -5,6 +5,7 @@ import { THEMES, chooseTheme } from "../lib/themes.ts";
 import { IS_DESKTOP } from "../lib/desktop.ts";
 import { api } from "../lib/api.ts";
 import { openSettings } from "../lib/openSettings.ts";
+import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 interface Cmd {
   id: string;
@@ -141,8 +142,8 @@ export function CommandPalette({
                   else if (e.key === "Escape") onClose();
                 }}
                 placeholder="Type a command… theme, filter, window, export"
-                className="w-full px-4 py-3 text-[13px] outline-none"
-                style={{ background: "transparent", color: "var(--text)", borderBottom: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
+                className={`w-full ${INPUT}`}
+                style={INPUT_STYLE}
               />
               <div className="max-h-[52vh] overflow-auto py-1">
                 {filtered.map((c, i) => (

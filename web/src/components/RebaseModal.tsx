@@ -17,6 +17,7 @@ import { Portal } from "./Portal.tsx";
 import { CloseButton } from "./CloseButton.tsx";
 import { api } from "../lib/api.ts";
 import { ICON } from "../lib/iconSize.ts";
+import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 export type RebaseStep = { action: "pick" | "squash" | "fixup" | "drop" | "reword" | "edit"; hash: string; subject: string; newMessage?: string };
 
@@ -128,8 +129,8 @@ export function RebaseModal({ root, base, branch, onClose, onDone }: {
                         <span className="block truncate text-[11.5px]" style={{ color: s.action === "drop" ? "var(--text3)" : "var(--text)", textDecoration: s.action === "drop" ? "line-through" : "none" }}>{s.subject}</span>
                         {s.action === "reword" && (
                           <input value={s.newMessage ?? ""} onChange={(e) => setMsg(i, e.target.value)} placeholder={s.subject} autoFocus={i === steps.findIndex((x) => x.action === "reword")}
-                            className="w-full mt-0.5 px-2 py-0.5 rounded text-[11px] outline-none"
-                            style={{ background: "color-mix(in srgb, var(--bg2) 70%, black)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", color: "var(--text)" }} />
+                            className={`w-full mt-0.5 ${INPUT}`}
+                            style={INPUT_STYLE} />
                         )}
                       </span>
                       <span className="shrink-0 tabular-nums text-[9.5px] t-dim2 font-mono">{s.hash.slice(0, 7)}</span>

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
+import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 /**
  * The app's own confirm/prompt, because the browser's belong to the browser.
@@ -97,8 +98,8 @@ export function ConfirmDialog({ pending }: { pending: Pending | null }) {
                     <input
                       ref={inputRef} value={text} onChange={(e) => setText(e.target.value)}
                       placeholder={pending.input!.placeholder}
-                      className="w-full text-[12px] px-2 py-1.5 rounded outline-none"
-                      style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--text)" }}
+                      className={`w-full ${INPUT}`}
+                      style={INPUT_STYLE}
                     />
                   </div>
                 )}

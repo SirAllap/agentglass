@@ -12,7 +12,7 @@
 // because "is 5173 still up?" is a question you have while looking at anything.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CopyIcon, DiskIcon, IconLabel, RefreshIcon } from "../lib/glyphIcons.tsx";
-import { RefreshButton } from "./workspace/Chrome.tsx";
+import { RefreshButton, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
 import type { GitLock, GitLocksReport, GitRepoRef, ProcDetail, MachineTotals, PortEntry, PortsReport, ProcEntry, ResourceReport, SpaceReport } from "../../../shared/types.ts";
@@ -148,8 +148,8 @@ function Ports({ onOpenBrowser }: { onOpenBrowser?: () => void }) {
       <div className="px-3.5 py-1.5" style={{ borderBottom: edge(7) }}>
         <input value={q} onChange={(e) => setQ(e.target.value)}
           placeholder="Filter by port, process, checkout or what started it…"
-          className="text-[10.5px] px-2 py-1 rounded w-full outline-none bg-transparent"
-          style={{ color: "var(--text)", border: edge(20) }} />
+          className={`w-full ${INPUT}`}
+          style={INPUT_STYLE} />
       </div>
 
       <Group label="Yours" count={mine.length} />
@@ -564,8 +564,8 @@ function Resources() {
         <div className="px-3.5 py-1.5" style={{ borderBottom: edge(7) }}>
           <input value={q} onChange={(e) => setQ(e.target.value)}
             placeholder="Filter by process, command, checkout or pid…"
-            className="text-[10.5px] px-2 py-1 rounded w-full outline-none bg-transparent"
-            style={{ color: "var(--text)", border: edge(20) }} />
+            className={`w-full ${INPUT}`}
+            style={INPUT_STYLE} />
         </div>
         <div className="flex items-baseline gap-3 px-3.5 py-3" style={{ borderBottom: edge(12) }}>
           <span className="text-[22px] tabular-nums leading-none" style={{ color: "var(--text)" }}>
@@ -918,8 +918,8 @@ function DetailPane({ pid, onClose }: { pid: number; onClose: () => void }) {
 
           <Field label={envLabel(d.env.length, q, d.env.filter((v) => matches(v.key, q)).length)}>
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter…"
-              className="text-[10px] px-1.5 py-1 rounded mb-1 outline-none bg-transparent w-full"
-              style={{ color: "var(--text)", border: edge(20) }} />
+              className={`w-full mb-1 ${INPUT}`}
+              style={INPUT_STYLE} />
             {/* Matched on the KEY only. The values are the thing being
                 protected, and a filter that searched them would answer "does
                 this process hold a variable containing <string>" for anything

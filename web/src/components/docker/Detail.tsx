@@ -18,6 +18,7 @@ import { CODE_FONT_STYLE } from "../diff/DiffLines.tsx";
 import { Select } from "../Select.tsx";
 import { LogView } from "./LogView.tsx";
 import { healthLabel, healthTint, ownerTitle, portLabel, portUrl } from "../../lib/dockerRow.ts";
+import { INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
 
 export type DetailSection = "env" | "config" | "top" | "compare";
 
@@ -169,8 +170,8 @@ export function Detail({
         ) : (
           <>
             <input value={envQ} onChange={(e) => setEnvQ(e.target.value)} placeholder="find a variable"
-              className="text-[10px] px-2 py-0.5 rounded-md outline-none w-full max-w-[280px] my-1"
-              style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} />
+              className={`w-full max-w-[280px] my-1 ${INPUT}`}
+              style={INPUT_STYLE} />
             <div className="text-[11px] leading-[1.6]" style={CODE_FONT_STYLE}>
               {shownEnv!.map((line, i) => {
                 const eq = line.indexOf("=");

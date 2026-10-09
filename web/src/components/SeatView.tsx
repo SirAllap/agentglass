@@ -7,6 +7,7 @@ import { whatWaits } from "../lib/seatWaiting.ts";
 import { api, type SeatAnswer, type SeatTask, type SeatFieldRow, type SeatReportRow } from "../lib/api.ts";
 import { Persona } from "./understudy/persona/Persona.tsx";
 import { useCosmetic } from "./understudy/persona/cosmeticStore.ts";
+import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 /**
  * THE ORCHESTRATOR — who is minding this project, and what they have to go on.
@@ -514,11 +515,11 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
                   });
                 }}>
                 <input value={adding} onChange={(e) => setAdding(e.target.value)} placeholder="Ask the seat to see something done"
-                  className="flex-1 min-w-0 rounded-md px-2.5 py-1.5 text-[12px]"
-                  style={{ background: "var(--bg2)", border: edge(18), color: "var(--text)" }} />
+                  className={`flex-1 min-w-0 ${INPUT}`}
+                  style={INPUT_STYLE} />
                 <input value={proof} onChange={(e) => setProof(e.target.value)} placeholder="done when… a test, a file, an output"
-                  className="min-w-0 rounded-md px-2.5 py-1.5 text-[12px]"
-                  style={{ flex: "0 1 42%", background: "var(--bg2)", border: edge(18), color: "var(--text3)" }} />
+                  className={`min-w-0 ${INPUT}`}
+                  style={{ ...INPUT_STYLE, flex: "0 1 42%", color: "var(--text3)" }} />
                 <button type="submit" disabled={!adding.trim() || !!busy || !root}
                   className="agx-btn shrink-0 text-[11px] px-2.5 py-1.5 rounded disabled:opacity-50"
                   style={{ color: "var(--text2)", border: edge(20) }}>Add</button>
@@ -668,8 +669,8 @@ export function SeatView({ onLantern }: { onLantern?: () => void }) {
                   }}>
                   <input value={saying} onChange={(e) => { setSaying(e.target.value); setSentTo(""); }}
                     placeholder={`Say something to all ${field.length}`}
-                    className="flex-1 min-w-0 rounded-md px-2.5 py-1.5 text-[12px]"
-                    style={{ background: "var(--bg)", border: edge(18), color: "var(--text)" }} />
+                    className={`flex-1 min-w-0 ${INPUT}`}
+                    style={INPUT_STYLE} />
                   <button type="submit" disabled={!saying.trim() || !!busy}
                     className="agx-btn shrink-0 text-[11px] px-2.5 py-1.5 rounded disabled:opacity-50"
                     style={{ color: "var(--text2)", border: edge(20) }}>

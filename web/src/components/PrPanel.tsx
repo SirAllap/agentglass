@@ -37,7 +37,7 @@ import { flashElement } from "../lib/flash.ts";
 import { shaFromHref } from "../lib/commitLink.ts";
 import { isShortRef, openInApp, wantsExternal } from "../lib/linkRouter.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
-import { RefreshButton, ScopeChip, CTRL_H, EDGE, CHIP_SURFACE } from "./workspace/Chrome.tsx";
+import { RefreshButton, ScopeChip, CTRL_H, EDGE, CHIP_SURFACE, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import type {
   PrSummary, PrDetail, PrRepoId, PrThread, PrComment, PrReview, PrReviewer, PrCheck, GitRepoRef, FileChange,
@@ -6817,8 +6817,8 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
         </div>
         <div className="p-1.5 shrink-0">
           <input ref={filterInput} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter…"
-            className="w-full px-2 py-1 rounded text-[11px] outline-none"
-            style={{ background: "color-mix(in srgb, var(--text) 8%, transparent)", color: "var(--text)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }} />
+            className={`w-full ${INPUT}`}
+            style={INPUT_STYLE} />
         </div>
         <div className="overflow-y-auto agx-scroll flex-1 min-h-0 pb-1">
           {loading ? (
@@ -7184,8 +7184,8 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
           <div className="px-2 pt-2 shrink-0">
             <div className="text-[9px] uppercase tracking-[0.16em] mb-1" style={{ color: "var(--text4)" }}>Assigned</div>
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter people…" spellCheck={false}
-              className="w-full px-2 py-1 rounded text-[11px] outline-none"
-              style={{ background: "color-mix(in srgb, var(--text) 8%, transparent)", color: "var(--text)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }} />
+              className={`w-full ${INPUT}`}
+              style={INPUT_STYLE} />
           </div>
           <div className="overflow-y-auto agx-scroll flex-1 min-h-0 py-1">
             {members === null && <div className="px-3 py-2 text-[11px]" style={{ color: "var(--text3)" }}>Reading the team…</div>}
@@ -8749,8 +8749,8 @@ function FindBar({ value, onChange, inputRef, listRef, hits, groups, at, onGo, o
           ref={inputRef} value={value} onChange={(e) => onChange(e.target.value)}
           placeholder={`Search the code of ${fileCount} file${fileCount === 1 ? "" : "s"}…`}
           spellCheck={false} autoComplete="off"
-          className="flex-1 min-w-0 bg-transparent outline-none text-[11px]"
-          style={{ ...CODE_FONT_STYLE, color: "var(--text)" }}
+          className={`flex-1 min-w-0 ${INPUT}`}
+          style={{ ...INPUT_STYLE, ...CODE_FONT_STYLE }}
           onKeyDown={(e) => {
             // Held here rather than on the frame: while you are typing, the
             // frame never sees a key, and Enter has to mean "next" for this to

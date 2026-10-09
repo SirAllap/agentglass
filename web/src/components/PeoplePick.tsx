@@ -5,6 +5,7 @@ import { menuUnder, PICK_W, PICK_H } from "../lib/menuPos.ts";
 import type { ListMember } from "../../../shared/providers.ts";
 import { DoneIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 /*
  * The picker this app uses to put somebody on a card.
@@ -70,8 +71,8 @@ export function PeoplePick(p: PeoplePickProps) {
         {!p.busy && all.length > (p.filterOver ?? 12) && (
           <input value={q} onChange={(e) => setQ(e.target.value)} autoFocus
             placeholder="Filter people…" spellCheck={false}
-            className="mx-1 mb-1 px-2 py-1 rounded text-[11px] outline-none shrink-0"
-            style={{ background: "var(--bg3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", color: "var(--text)" }} />
+            className={`mx-1 mb-1 shrink-0 ${INPUT}`}
+            style={INPUT_STYLE} />
         )}
         {p.busy && <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>Reading the team…</div>}
         {!p.busy && all.length === 0 && (

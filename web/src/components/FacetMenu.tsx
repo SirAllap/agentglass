@@ -5,6 +5,7 @@ import { Avatar } from "./Avatar.tsx";
 import { StatusPill } from "./StatusPill.tsx";
 import { DoneIcon, DotIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 /**
  * A multi-select facet dropdown, GitHub-style: a pill that opens a checkbox list
@@ -169,8 +170,8 @@ export function FacetMenu({
                     value={q}
                     onChange={(e) => { setQ(e.target.value); setCursor(0); }}
                     placeholder={`Filter ${label.toLowerCase()}…`}
-                    className="text-[11px] px-2 py-1 mb-1 rounded-lg bg-transparent"
-                    style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", outline: "none" }}
+                    className={`mb-1 ${INPUT}`}
+                    style={INPUT_STYLE}
                   />
                 )}
                 <div ref={listRef} className="flex flex-col gap-0.5 overflow-y-auto agw-noscrollbar">

@@ -15,7 +15,7 @@ import { BisectModal } from "./BisectModal.tsx";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
-import { CHIP, RefreshButton } from "./workspace/Chrome.tsx";
+import { CHIP, RefreshButton, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { BlockedIcon, BranchIcon, ChartIcon, CommitIcon, CrossIcon, DoneIcon, FileIcon, IconLabel, ListIcon, MinusIcon, PlusIcon, RefreshIcon, SparkleIcon, StashIcon, TargetIcon, TreeIcon, UndoIcon } from "../lib/glyphIcons.tsx";
 import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, ConflictBlock, BlockChoice, MergeInfo, FileChange, WalkthroughResult, WalkthroughFile, TidyReport, TidyFinding, GitSubmodule } from "../../../shared/types.ts";
@@ -459,8 +459,8 @@ function ListToolbar({ q, onQ, placeholder, sort, onSort, sorts, count, total, c
         value={q}
         onChange={(e) => onQ(e.target.value)}
         placeholder={placeholder}
-        className="px-3 py-1.5 rounded-lg text-[11.5px] outline-none min-w-0 flex-1 max-w-md transition-colors"
-        style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text)" }}
+        className={`min-w-0 flex-1 max-w-md ${INPUT}`}
+        style={INPUT_STYLE}
       />
       {sorts && sort && onSort && (
         <div className="flex items-center gap-1 shrink-0">
@@ -3186,7 +3186,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                           rather than pick, so it gets a surface of its own rather
                           than a hairline and the panel's ground. */}
                       <div className="shrink-0 border-t p-3 space-y-2" style={{ borderColor: "color-mix(in srgb, var(--text) 8%, transparent)", background: "color-mix(in srgb, var(--bg3) 22%, transparent)" }}>
-                        <input value={title} onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") doCommit(); }} placeholder="Summary of what changed…" disabled={!writeEnabled} className="w-full px-2.5 py-1.5 rounded-lg text-[11.5px] outline-none" style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text)" }} />
+                        <input value={title} onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") doCommit(); }} placeholder="Summary of what changed…" disabled={!writeEnabled} className={`w-full ${INPUT}`} style={INPUT_STYLE} />
                         <textarea value={body} onChange={(e) => setBody(e.target.value)} onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") doCommit(); }} placeholder="Why, if it needs saying (optional)…" rows={2} disabled={!writeEnabled} className="agx-scroll w-full px-2.5 py-1.5 rounded-lg text-[11px] outline-none resize-none" style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text)" }} />
                         <button onClick={doCommit} disabled={!writeEnabled || busy || !tree?.staged.length || !title.trim()} className="w-full py-1.5 rounded-lg text-[11.5px] font-semibold" style={{ background: "color-mix(in srgb, var(--primary) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)", opacity: (!writeEnabled || !tree?.staged.length || !title.trim()) ? 0.45 : 1 }}><IconLabel icon={<CommitIcon size={ICON.xs} />}>Commit {tree?.staged.length ? `${tree.staged.length} staged` : ""}</IconLabel></button>
                         {!writeEnabled && <div className="text-[9.5px] t-dim2 text-center">read-only (AGENTGLASS_GIT_WRITE_DISABLED)</div>}
@@ -3427,7 +3427,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     <ListToolbar
                       lead={writeEnabled ? (
                         <>
-                          <input value={newBranch} onChange={(e) => setNewBranch(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") createBranch(); }} placeholder="new-branch-name" className="px-3 py-1.5 rounded-lg text-[11.5px] outline-none min-w-0 w-56 shrink-0" style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text)" }} />
+                          <input value={newBranch} onChange={(e) => setNewBranch(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") createBranch(); }} placeholder="new-branch-name" className={`min-w-0 w-56 shrink-0 ${INPUT}`} style={INPUT_STYLE} />
                           <button onClick={createBranch} disabled={busy || !newBranch.trim()} className={`${CHIP} font-medium`} style={{ background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)", color: "var(--text)", opacity: newBranch.trim() ? 1 : 0.5 }}>+ create & switch</button>
                         </>
                       ) : null}
@@ -3573,7 +3573,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         restore even after the experiment goes sideways. */}
                     {writeEnabled && (
                       <>
-                        <input value={snapshotLabel} onChange={(e) => setSnapshotLabel(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") snapshotNow(); }} placeholder="snapshot label (optional) — tree is not touched" className="px-3 min-h-[28px] rounded-lg text-[11.5px] outline-none min-w-0 w-56 shrink-0" style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text)" }} />
+                        <input value={snapshotLabel} onChange={(e) => setSnapshotLabel(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") snapshotNow(); }} placeholder="snapshot label (optional) — tree is not touched" className={`min-w-0 w-56 shrink-0 ${INPUT}`} style={INPUT_STYLE} />
                         <button onClick={snapshotNow} disabled={busy || tree?.clean} className={`${CHIP} font-medium`} style={{ background: "color-mix(in srgb, var(--info) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--info) 35%, transparent)", color: "var(--text)", opacity: tree?.clean ? 0.5 : 1 }} title="Copy the current tree into refs/agx/wip — nothing moves, restore anytime"><IconLabel icon={<RefreshIcon size={ICON.xs} />}>snapshot now</IconLabel></button>
                       </>
                     )}
@@ -3587,8 +3587,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     {!!stashes.length && (
                       <input value={q} onChange={(e) => { setQ(e.target.value); setRowIdx(0); }}
                         placeholder="Search stashes…"
-                        className="px-3 min-h-[28px] rounded-lg text-[11.5px] outline-none min-w-0 flex-1 max-w-xs"
-                        style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text)" }} />
+                        className={`min-w-0 flex-1 max-w-xs ${INPUT}`}
+                        style={INPUT_STYLE} />
                     )}
                     </div>
                     {snapshots.length > 0 && (
@@ -3692,8 +3692,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         <div className="flex items-center gap-2 flex-1 min-w-[16rem]">
                           <input value={remoteQuery} onChange={(e) => { setRemoteQuery(e.target.value); setRowIdx(0); }}
                             placeholder={`search ${remoteSel || "remote"} branches…`}
-                            className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg text-[11.5px] outline-none"
-                            style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text)" }} />
+                            className={`flex-1 min-w-0 ${INPUT}`}
+                            style={INPUT_STYLE} />
                           {/* Counted against the whole list, not the page: "36
                               of 790" is the only way to know whether the search
                               narrowed anything. */}
@@ -3781,7 +3781,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                   <div className="agx-scroll flex-1 min-h-0 overflow-y-auto p-3">
                     <ListToolbar
                       lead={writeEnabled ? (<>
-                        <input value={newWtBranch} onChange={(e) => setNewWtBranch(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addWorktree(); }} placeholder="new-branch → new worktree (sibling dir)" className="px-3 py-1.5 rounded-lg text-[11.5px] outline-none min-w-0 w-56 shrink-0" style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 9%, transparent)", color: "var(--text)" }} />
+                        <input value={newWtBranch} onChange={(e) => setNewWtBranch(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addWorktree(); }} placeholder="new-branch → new worktree (sibling dir)" className={`min-w-0 w-56 shrink-0 ${INPUT}`} style={INPUT_STYLE} />
                         <button onClick={addWorktree} disabled={busy || !newWtBranch.trim()} className={`${CHIP} font-medium`} style={{ background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)", color: "var(--text)", opacity: newWtBranch.trim() ? 1 : 0.5 }}>+ add worktree</button>
                       </>) : null}
                       q={q} onQ={(v) => { setQ(v); setRowIdx(0); }}

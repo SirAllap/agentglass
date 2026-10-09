@@ -27,7 +27,7 @@ import { api } from "../lib/api.ts";
 import { ago } from "../lib/fileRecents.ts";
 import { Portal } from "./Portal.tsx";
 import { LAYER } from "../lib/layers.ts";
-import { CHIP, CHIP_SURFACE, CHIP_SURFACE_CLS } from "./workspace/Chrome.tsx";
+import { CHIP, CHIP_SURFACE, CHIP_SURFACE_CLS, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 import { ICON } from "../lib/iconSize.ts";
 
 const YOLO_KEY = "agentglass.resume.yolo";
@@ -150,8 +150,8 @@ export function ResumeSessions({ root, disabled, onOpen, onGo }: {
                   style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 10%, transparent)" }}>
                   <input autoFocus value={q} onChange={(e) => setQ(e.target.value)}
                     placeholder="Filter these sessions…"
-                    className="flex-1 min-w-0 rounded-md px-2 py-1 text-[11px] outline-none"
-                    style={{ background: "color-mix(in srgb, var(--text) 6%, transparent)", color: "var(--text)" }} />
+                    className={`flex-1 min-w-0 ${INPUT}`}
+                    style={INPUT_STYLE} />
                   {/* Remembered, and stated where the press happens: what a
                       resumed agent may do without asking is not something to
                       find out afterwards. */}

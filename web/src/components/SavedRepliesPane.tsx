@@ -12,6 +12,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api.ts";
 import { bumpSavedReplies } from "./PrPanel.tsx";
+import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 interface Reply { id: string; title: string; text: string }
 
@@ -110,8 +111,8 @@ export function SavedRepliesPane({ open }: { open: boolean }) {
         </div>
         <input value={title} onChange={(e) => setTitle(e.target.value)}
           placeholder="What the menu shows — left empty, the first line is used"
-          className="px-2 py-1 rounded text-[11px] outline-none"
-          style={{ background: "var(--bg2)", color: "var(--text)", border: edge(16) }} />
+          className={INPUT}
+          style={INPUT_STYLE} />
         <textarea value={text} onChange={(e) => setText(e.target.value)} rows={5}
           placeholder="What goes in the box. Markdown works here."
           className="px-2 py-1.5 rounded text-[11px] outline-none resize-y"

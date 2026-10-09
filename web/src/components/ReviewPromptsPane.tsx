@@ -27,6 +27,7 @@ import { SettingRow } from "./SettingRow.tsx";
 import { bumpReviewRecipes } from "./PrPanel.tsx";
 import { IconLabel, PlusIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--border) ${pct}%, transparent)`;
 
@@ -282,7 +283,7 @@ function Editor({ r, skills, projects, presets, onChange, onSave, onCancel }: {
         <label className="flex flex-col gap-1 flex-1 min-w-[200px]">
           <span className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>Title — what the menu shows</span>
           <input ref={first} value={r.title} onChange={(e) => set({ title: e.target.value })} placeholder="What changed since my review"
-            className={inp} style={style} />
+            className={INPUT} style={INPUT_STYLE} />
         </label>
         <label className="flex flex-col gap-1">
           <span className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>Group</span>
@@ -358,7 +359,7 @@ function Editor({ r, skills, projects, presets, onChange, onSave, onCancel }: {
             disabled={!chosen}
             placeholder={chosen?.argument_hint ?? "{number}"}
             onChange={(e) => set({ skill: `/${chosen?.name ?? ""}${e.target.value ? ` ${e.target.value}` : ""}` })}
-            className={`${inp} font-mono`} style={{ ...style, opacity: chosen ? 1 : 0.5 }} />
+            className={`font-mono ${INPUT}`} style={{ ...INPUT_STYLE, opacity: chosen ? 1 : 0.5 }} />
         </label>
       </div>
 

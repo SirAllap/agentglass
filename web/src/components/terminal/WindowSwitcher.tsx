@@ -21,6 +21,7 @@ import { STATUS_WORDS } from "../../../../shared/windowStatus.ts";
 import { SearchIcon } from "../../lib/glyphIcons.tsx";
 import { Portal } from "../Portal.tsx";
 import { StatusMark, STATUS_COLOR } from "./StatusMark.tsx";
+import { INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
 
 /** While open, the list is re-read this often: a status is a live thing, and
  *  a row that says "working" after its agent asked a question is the one lie
@@ -162,7 +163,7 @@ export function WindowSwitcher({ open, onClose, onGone }: {
               placeholder="Go to a window — its name, folder or session"
               role="combobox" aria-expanded="true" aria-controls="agx-window-list"
               aria-activedescendant={ranked[at] ? `agx-win-${ranked[at]!.windowId}` : undefined}
-              className="flex-1 min-w-0 bg-transparent outline-none text-[12.5px]" style={{ color: "var(--text)" }} />
+              className={`flex-1 min-w-0 ${INPUT}`} style={INPUT_STYLE} />
             {waiting > 0 && (
               <span className="shrink-0 text-[10.5px] tabular-nums" style={{ color: STATUS_COLOR.waiting }}>
                 {waiting} waiting

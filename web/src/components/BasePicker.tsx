@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { DoneIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 /**
  * Pick what a branch is measured and merged against.
@@ -140,8 +141,8 @@ export function BasePicker({
                     the list is only usable with a filter. */}
                 <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)}
                   placeholder="filter branches…"
-                  className="mx-1.5 mb-1 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
-                  style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+                  className={`mx-1.5 mb-1 shrink-0 ${INPUT}`}
+                  style={INPUT_STYLE} />
                 {/* Padded on both ends: bottom-only put the first branch
                     against the filter field, where it read as part of it. */}
                 <div className="agx-scroll overflow-y-auto overflow-x-hidden py-1.5">

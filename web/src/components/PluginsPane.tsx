@@ -21,6 +21,7 @@ import { api } from "../lib/api.ts";
 import { fmtAgo } from "../lib/format.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import type { DeviceScope, InstallSource, PublicPlugin } from "../../../shared/types.ts";
+import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 /** The one-line "From …" a reviewer reads — a local path plainly, a git
  *  source with its ref if one was pinned, a market install naming the list
@@ -101,8 +102,8 @@ function AddPluginCard({ onInstalled, open, setOpen, prefill }: {
           placeholder="/path/to/plugin or https://…"
           disabled={busy}
           autoFocus
-          className="t-mono text-[11.5px] px-2.5 py-1.5 rounded-lg min-w-0 flex-1"
-          style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }} />
+          className={`t-mono min-w-0 flex-1 ${INPUT}`}
+          style={INPUT_STYLE} />
         <button onClick={install} disabled={busy || !source.trim()}
           className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80 disabled:opacity-50"
           style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
@@ -270,8 +271,8 @@ export function PluginsPane({ open, focus }: {
         <span className="chip tabular-nums t-dim">{plugins.length}</span>
         <div className="ml-auto flex items-center gap-2">
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search plugins"
-            className="w-[190px] px-2.5 py-1.5 rounded-lg text-[12.5px] outline-none"
-            style={{ background: "var(--bg)", border: "1px solid var(--surface-line)", color: "var(--text)" }} />
+            className={`w-[190px] ${INPUT}`}
+            style={INPUT_STYLE} />
           <button onClick={load}
             className="text-[12px] px-2.5 py-1.5 rounded-lg whitespace-nowrap hover:opacity-80"
             style={{ color: "var(--text2)", border: "1px solid var(--surface-line)" }}>

@@ -34,7 +34,7 @@ import { Spinner } from "../Spinner.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { CommentIcon, DoneIcon, EyeIcon, FlagIcon, HandIcon, InboxIcon, UserIcon } from "../../lib/glyphIcons.tsx";
 import { GitIcon } from "../workspace/icons.tsx";
-import { RefreshButton } from "../workspace/Chrome.tsx";
+import { RefreshButton, INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 
@@ -274,8 +274,8 @@ export function Inbox({ repo, onFlash, onUnread }: {
           </div>
           <input value={q} onChange={(e) => setQ(e.target.value)} spellCheck={false}
             placeholder="Filter these — title, repo, or #number"
-            className="text-[11px] px-2 py-1 rounded-md outline-none flex-1 min-w-[160px]"
-            style={{ background: "var(--bg2)", color: "var(--text)", border: `1px solid ${q ? "var(--primary)" : "color-mix(in srgb, var(--text) 14%, transparent)"}` }} />
+            className={`flex-1 min-w-[160px] ${INPUT}`}
+            style={q ? { ...INPUT_STYLE, border: "1px solid var(--primary)" } : INPUT_STYLE} />
           <button onClick={() => setNewest((v) => !v)} className="agx-btn rounded-md px-2 py-1 text-[10.5px] shrink-0"
             style={{ color: "var(--text3)", border: edge(14) }}
             title="Turn the order round">

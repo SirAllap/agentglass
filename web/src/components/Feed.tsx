@@ -8,6 +8,7 @@ import { fmtTime, fmtMs, fmtUsd, agentKey, hashColor } from "../lib/format.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { ChartIcon, CopyIcon, CrossIcon, ExpandIcon, IconLabel } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 type Category = "all" | "tools" | "chat" | "alerts";
 
@@ -330,8 +331,8 @@ function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }:
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Search events — type to filter (regex ok, e.g. tool.*fail)"
-            className="flex-1 min-w-0 px-3 py-1.5 rounded-lg text-[11px] outline-none"
-            style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }}
+            className={`flex-1 min-w-0 ${INPUT}`}
+            style={INPUT_STYLE}
           />
           <div className="flex gap-1 shrink-0">
             {CATS.map((c) => (

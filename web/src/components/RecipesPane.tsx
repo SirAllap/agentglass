@@ -22,6 +22,7 @@ import { SettingRow } from "./SettingRow.tsx";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import { IconLabel, PlusIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--border) ${pct}%, transparent)`;
 const PARAM_TYPES: RecipeParam["type"][] = ["text", "choice", "flag", "repo", "worktree", "branch"];
@@ -143,9 +144,9 @@ function Editor({ r, repos, onChange, onSave, onDrop, onCancel }: {
     <div className="rounded-xl p-3 flex flex-col gap-2.5" style={{ border: edge(28), background: "color-mix(in srgb, var(--bg3) 25%, transparent)" }}>
       <div className="flex gap-2 flex-wrap">
         <input value={r.name} onChange={(e) => set({ name: e.target.value })} placeholder="Name — how you will call it"
-          className={inp} style={{ ...style, maxWidth: 220 }} />
+          className={`max-w-[220px] ${INPUT}`} style={INPUT_STYLE} />
         <input value={r.desc} onChange={(e) => set({ desc: e.target.value })} placeholder="What it does"
-          className={`${inp} flex-1 min-w-[180px]`} style={style} />
+          className={`flex-1 min-w-[180px] ${INPUT}`} style={INPUT_STYLE} />
       </div>
 
       {/* One step per line. A textarea rather than a list of rows: these are
@@ -207,18 +208,18 @@ function Editor({ r, repos, onChange, onSave, onDrop, onCancel }: {
         {(r.params ?? []).map((p, i) => (
           <div key={i} className="flex gap-1.5 flex-wrap items-center">
             <input value={p.key} onChange={(e) => set({ params: (r.params ?? []).map((x, j) => j === i ? { ...x, key: e.target.value } : x) })}
-              placeholder="name" className="text-[11px] px-2 py-1 rounded-lg font-mono" style={{ ...style, width: 130 }} />
+              placeholder="name" className={`w-[130px] font-mono ${INPUT}`} style={INPUT_STYLE} />
             <select value={p.type} onChange={(e) => set({ params: (r.params ?? []).map((x, j) => j === i ? { ...x, type: e.target.value as RecipeParam["type"] } : x) })}
               className="text-[11px] px-2 py-1 rounded-lg" style={style}>
               {PARAM_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
             {p.type === "choice" && (
               <input value={(p.options ?? []).join(", ")} onChange={(e) => set({ params: (r.params ?? []).map((x, j) => j === i ? { ...x, options: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) } : x) })}
-                placeholder="one, two, three" className="text-[11px] px-2 py-1 rounded-lg flex-1 min-w-[140px]" style={style} />
+                placeholder="one, two, three" className={`flex-1 min-w-[140px] ${INPUT}`} style={INPUT_STYLE} />
             )}
             {p.type === "flag" && (
               <input value={p.value ?? ""} onChange={(e) => set({ params: (r.params ?? []).map((x, j) => j === i ? { ...x, value: e.target.value } : x) })}
-                placeholder="--rebuild-fe" className="text-[11px] px-2 py-1 rounded-lg font-mono flex-1 min-w-[140px]" style={style} />
+                placeholder="--rebuild-fe" className={`font-mono flex-1 min-w-[140px] ${INPUT}`} style={INPUT_STYLE} />
             )}
             <CloseButton onClick={() => set({ params: (r.params ?? []).filter((_, j) => j !== i) })} style={{ color: "var(--text4)" }} className="rounded" />
           </div>
@@ -407,7 +408,7 @@ export function RunDialog({ r, repos, onClose, onNote, onRunStep, targetInTmux }
               placeholder="—" triggerMaxWidth={220} />
           ) : (
             <input value={values[p.key] ?? ""} onChange={(e) => setValues((v) => ({ ...v, [p.key]: e.target.value }))}
-              className="text-[11.5px] px-2 py-1.5 rounded-lg" style={style} spellCheck={false} />
+              className={INPUT} style={INPUT_STYLE} spellCheck={false} />
           )}
         </label>
       ))}

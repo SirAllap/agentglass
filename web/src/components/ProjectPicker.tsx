@@ -32,6 +32,7 @@ import { FolderIcon, MonitorIcon, PlusIcon } from "../lib/glyphIcons.tsx";
 import { GitIcon } from "./workspace/icons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { allOpen, autoPick, clickScope, firstRun, initialTicks, nextScope, openFolders, rootsToAdd, scopeLabel } from "../lib/projectPick.ts";
+import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 /** Set once the user has answered the startup question (either way), so an
  *  unscoped instance doesn't re-ask on every reload. */
@@ -159,8 +160,8 @@ function FolderField({
       )}
       <input ref={ref} value={value} onChange={(e) => onChange(e.target.value)} onKeyDown={onKey} onBlur={() => setSugg([])}
         placeholder={placeholder} spellCheck={false} autoComplete="off" autoFocus={autoFocus}
-        className={`w-full rounded-lg outline-none ${small ? "px-3 py-1.5 text-[11px]" : "px-3 py-2 text-[12px]"}`}
-        style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+        className={`w-full ${INPUT}`}
+        style={INPUT_STYLE} />
     </div>
   );
 }
@@ -457,8 +458,8 @@ export function ProjectPicker({ open, workspaces, known, onClose }: {
                     {!isFirstRun && (
                       <div className="px-4 pt-3 shrink-0">
                         <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter projects…"
-                          className="w-full px-3 py-2 rounded-lg text-[12px] outline-none"
-                          style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+                          className={`w-full ${INPUT}`}
+                          style={INPUT_STYLE} />
                       </div>
                     )}
 
@@ -652,8 +653,8 @@ export function ProjectPicker({ open, workspaces, known, onClose }: {
                         <input autoFocus value={url} onChange={(e) => setUrl(e.target.value)} spellCheck={false} autoComplete="off"
                           onKeyDown={(e) => { if (e.key === "Enter" && url.trim()) runClone(); }}
                           placeholder="https://github.com/owner/repo.git  ·  git@github.com:owner/repo.git"
-                          className="w-full px-3 py-2 rounded-lg text-[12px] outline-none"
-                          style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+                          className={`w-full ${INPUT}`}
+                          style={INPUT_STYLE} />
                       </label>
                     ) : (
                       <label className="flex flex-col gap-1">
@@ -661,8 +662,8 @@ export function ProjectPicker({ open, workspaces, known, onClose }: {
                         <input autoFocus value={name} onChange={(e) => setName(e.target.value)} spellCheck={false} autoComplete="off"
                           onKeyDown={(e) => { if (e.key === "Enter" && name.trim()) runCreate(); }}
                           placeholder="my-project"
-                          className="w-full px-3 py-2 rounded-lg text-[12px] outline-none"
-                          style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+                          className={`w-full ${INPUT}`}
+                          style={INPUT_STYLE} />
                       </label>
                     )}
 

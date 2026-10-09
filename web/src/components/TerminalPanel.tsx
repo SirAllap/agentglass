@@ -71,7 +71,7 @@ import { sharedPhase } from "../lib/sharedPhase.ts";
 import { StatusMark, STATUS_COLOR } from "./terminal/StatusMark.tsx";
 import { STATUS_WORDS } from "../../../shared/windowStatus.ts";
 import { buildGroups, openGroups, parseRules, setOpenGroups, subscribeTabGroups, tabGroupRulesText, tabGroupsOn, tabGroupsVersion, worthGrouping, type TabGroup } from "../lib/tabGroups.ts";
-import { CTRL_H, EDGE, chipTone } from "./workspace/Chrome.tsx";
+import { CTRL_H, EDGE, chipTone, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 const ROOT_KEY = "agentglass.terminalRoot";
 /** The repo the terminal view last used — what a docked console should open
@@ -1214,8 +1214,8 @@ function FindBar({ sess, onClose }: { sess: Sess | undefined; onClose: () => voi
         }}
         placeholder="Find in the scrollback"
         aria-label="Find"
-        className="bg-transparent outline-none text-[11.5px] min-w-[180px]"
-        style={{ color: nothing ? "var(--error)" : "var(--text)", caretColor: "var(--primary)" }}
+        className={`min-w-[180px] ${INPUT}`}
+        style={{ ...INPUT_STYLE, color: nothing ? "var(--error)" : "var(--text)", caretColor: "var(--primary)" }}
       />
       {/* `0/0` rather than blank while you type: an empty counter reads as
           "still thinking". Same shape as the app's own. */}
@@ -3660,8 +3660,8 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                                 close();
                                 tmuxCmd({ cmd: "group", window: w.id, name });
                               }}
-                              className="w-full bg-transparent outline-none text-[11px] px-1 py-0.5 rounded"
-                              style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }} />
+                              className={`w-full ${INPUT}`}
+                              style={INPUT_STYLE} />
                           </div>
                         </ContextMenu>
                       );

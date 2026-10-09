@@ -10,6 +10,7 @@ import { api } from "../lib/api.ts";
 import { MOD_KEY } from "../lib/format.ts";
 import { WarningIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 /**
  * The last question before a pull request lands.
@@ -305,8 +306,8 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
                       <input
                         ref={subjectRef} value={subject} onChange={(e) => setSubject(e.target.value)}
                         spellCheck={false}
-                        className="w-full text-[12px] px-2.5 py-1.5 rounded outline-none"
-                        style={FIELD}
+                        className={`w-full ${INPUT}`}
+                        style={INPUT_STYLE}
                       />
                     </Field>
                     <Field

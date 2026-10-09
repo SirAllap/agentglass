@@ -118,7 +118,7 @@ import { emitControl } from "../lib/controlBus.ts";
 import { refreshUnderstudy } from "../lib/understudyStore.ts";
 import { mutedSources, setMuted, sourceLabel, subscribeMuted } from "../lib/notePolicy.ts";
 import { MuteGlyph } from "./TopBarNotes.tsx";
-import { RefreshButton } from "./workspace/Chrome.tsx";
+import { RefreshButton, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 /** A heading inside a Section, for a pane that answers the same question about
  *  two different sources. Without it "Quiet" and "Alert sounds" sit in one flat
@@ -599,10 +599,10 @@ function BrowserPane() {
             onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); save(); } }}
             placeholder="https://duckduckgo.com"
             spellCheck={false}
-            className="text-[12px] px-2 py-1 rounded outline-none bg-transparent w-[210px]"
+            className={`w-[210px] ${INPUT}`}
             style={{
-              color: "var(--text)",
-              border: `1px solid color-mix(in srgb, ${bad ? "var(--error) 60%" : "var(--border) 55%"}, transparent)`,
+              ...INPUT_STYLE,
+              ...(bad ? { border: "1px solid color-mix(in srgb, var(--error) 60%, transparent)" } : {}),
             }}
           />
           <button onClick={save}
@@ -1822,8 +1822,8 @@ function CookieImport() {
         <>
           <div className="flex items-center gap-2">
             <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter sites…"
-              className="flex-1 px-2.5 py-1.5 rounded-lg text-[11px] outline-none"
-              style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+              className={`flex-1 ${INPUT}`}
+              style={INPUT_STYLE} />
             <Bulk label="All" onClick={() => setChosen(allSites(current.sites))} off={chosen.size === total} />
             <Bulk label="None" onClick={() => setChosen(new Set())} off={!chosen.size} />
             {!!filter.trim() && <Bulk label={`These ${view.matched.length}`} onClick={() => setChosen(addVisible(chosen, view))} />}
@@ -2277,7 +2277,6 @@ function WorkerRolesSection({ open }: { open: boolean }) {
       .then((r) => { if (!r.ok) setNote(r.error ?? "Could not save."); else { take(r); setNote("Saved. Applies to the next worker started in that role."); } })
       .catch(() => setNote("Could not save."));
   };
-  const field = { color: "var(--text)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" };
   return (
     <Section title="Worker roles"
       desc="Which CLI and model a worker started in a role runs on (agentglass-agent start --role). Every role is locked against push, commit, merge and the network clients, in a layer the project's own config cannot loosen (OpenCode's is checked against the project's config at each start, and refused if loosened); a CLI with no such lock is not offered.">
@@ -2302,8 +2301,8 @@ function WorkerRolesSection({ open }: { open: boolean }) {
                 placeholder="default model"
                 aria-label={`${r.title} model`}
                 spellCheck={false}
-                className="text-[12px] t-mono px-2 py-1 rounded outline-none bg-transparent w-[150px]"
-                style={field} />
+                className={`t-mono w-[150px] ${INPUT}`}
+                style={INPUT_STYLE} />
             </span>} />
         );
       })}
@@ -3092,8 +3091,8 @@ function ProviderCard({ spec, status, checking, onChanged }: {
           <input type="password" value={token} onChange={(e) => setToken(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") void connect(); }}
             placeholder="Paste your personal API token" spellCheck={false} autoComplete="off"
-            className="flex-1 min-w-[200px] text-[11.5px] px-2.5 py-1.5 rounded-lg outline-none"
-            style={{ background: "var(--bg3)", border: line, color: "var(--text)" }} />
+            className={`flex-1 min-w-[200px] ${INPUT}`}
+            style={INPUT_STYLE} />
           <button onClick={() => void connect()} disabled={busy || !token.trim()}
             className="text-[11.5px] px-3 py-1.5 rounded-lg"
             style={{ background: "color-mix(in srgb, var(--primary) 20%, transparent)",
@@ -3467,8 +3466,8 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
           </select>
           {source === "custom" && (
             <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="/path/to/tmux"
-              className="text-[12px] px-2 py-1 rounded-lg bg-transparent w-[180px]"
-              style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }} />
+              className={`w-[180px] ${INPUT}`}
+              style={INPUT_STYLE} />
           )}
           <button onClick={saveSettings} disabled={busy}
             className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
@@ -3510,8 +3509,8 @@ function TmuxPane({ open, onGoTerminal }: { open: boolean; onGoTerminal: () => v
           </select>
           {(prefixCustom || !PREFIXES.some((p) => p.value === prefix)) && (
             <input value={prefix} onChange={(e) => setPrefix(e.target.value)} placeholder="C-a" spellCheck={false}
-              className="text-[12px] t-mono px-2 py-1 rounded-lg bg-transparent w-[90px]"
-              style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }} />
+              className={`t-mono w-[90px] ${INPUT}`}
+              style={INPUT_STYLE} />
           )}
           <button onClick={savePrefix} disabled={busy}
             className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
@@ -4227,8 +4226,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                 <div className="relative">
                   <input ref={searchRef} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onSearchKeyDown} placeholder="Search settings"
                     aria-keyshortcuts="Control+F"
-                    className="w-full pl-2.5 pr-14 py-1.5 rounded-lg text-[12.5px] outline-none"
-                    style={{ background: "var(--bg)", border: "1px solid var(--surface-line)", color: "var(--text)" }} />
+                    className={`w-full pr-14 ${INPUT}`}
+                    style={INPUT_STYLE} />
                   <span className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-[10.5px] tabular-nums"
                     style={{ color: "var(--text4)" }}>Ctrl F</span>
                 </div>
@@ -4614,8 +4613,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                           onBlur={() => setTabGroupRulesText(groupRules)}
                           onKeyDown={(e) => { if (e.key === "Enter") setTabGroupRulesText(groupRules); }}
                           placeholder="agx=agentglass" spellCheck={false} aria-label="Group-by-name rules"
-                          className="text-[12px] t-mono px-2 py-1 rounded-lg bg-transparent w-[200px] justify-self-end"
-                          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }} />
+                          className={`t-mono w-[200px] justify-self-end ${INPUT}`}
+                          style={INPUT_STYLE} />
                       } />
                   </Section>
 
@@ -4651,8 +4650,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, th
                       </div>
                       <input value={wordSep} spellCheck={false}
                         onChange={(e) => { setWordSepState(e.target.value); setWordSeparators(e.target.value); }}
-                        className="mt-2 w-full rounded-lg px-2.5 py-1.5 text-[12px] outline-none"
-                        style={{ fontFamily: "ui-monospace, monospace", background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", color: "var(--text)" }} />
+                        className={`mt-2 w-full ${INPUT}`}
+                        style={{ ...INPUT_STYLE, fontFamily: "ui-monospace, monospace" }} />
                     </div>
                   </Section>
                   <TerminalRunsOn open={open} />

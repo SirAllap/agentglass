@@ -82,6 +82,20 @@ export const CHIP_SURFACE = {
 export const CHIP_SURFACE_CLS = "hover:brightness-125";
 
 /**
+ * The one text input, `control, large` in the canon table: `rounded-lg`,
+ * `CTRL_H.large` (32, the same row height as a dialog's primary button), a
+ * well fill instead of a card fill, and `EDGE`. Every `<input>` outside the
+ * three structurally-excused ones (§ guard test) reaches for this instead of
+ * typing its own `px-2 py-1 rounded-md border` again — that was the search
+ * box being a third height next to a 28px filter chip and a 22px row action
+ * in the same view.
+ */
+export const INPUT =
+  "text-[12px] px-2.5 h-[32px] rounded-lg bg-[var(--surface-inset)] text-[var(--text)] " +
+  "placeholder:text-[var(--text3)] outline-none transition-colors";
+export const INPUT_STYLE: CSSProperties = { border: EDGE };
+
+/**
  * What a pressed control looks like.
  *
  * One tint, one weight. The variants that existed — a filled violet block, a
@@ -470,12 +484,8 @@ export function FilterField({ value, onChange, placeholder, label, className = "
       aria-label={label}
       spellCheck={false}
       autoComplete="off"
-      className={`px-3 py-1.5 rounded-lg text-[11.5px] outline-none ${className}`.trim()}
-      style={{
-        background: "color-mix(in srgb, var(--bg3) 40%, transparent)",
-        border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)",
-        color: "var(--text)",
-      }}
+      className={`${INPUT} ${className}`.trim()}
+      style={INPUT_STYLE}
     />
   );
 }

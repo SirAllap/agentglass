@@ -38,6 +38,7 @@ import { CloseButton } from "./CloseButton.tsx";
 import { FileViewer } from "./CardFiles.tsx";
 import type { CardAttachment } from "../../../shared/providers.ts";
 import type { FinderTarget } from "../lib/finderTarget.ts";
+import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 export type PaletteTab = "names" | "contents" | "recent" | "machine";
 
@@ -1301,8 +1302,8 @@ function RepoChip({ repo, repos, openState, onPick }: {
             {repos.length > 6 && (
               <input ref={field} value={filter} onChange={(e) => setFilter(e.target.value)}
                 placeholder="Filter checkouts…" spellCheck={false}
-                className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
-                style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: edge(20), color: "var(--text)" }} />
+                className={`m-1.5 shrink-0 ${INPUT}`}
+                style={INPUT_STYLE} />
             )}
             {/* Padded on both ends: bottom-only put the first row against the
                 filter field, where it read as part of it. */}
@@ -1445,8 +1446,8 @@ function PlaceChip({ place, places, recents, error, openState, onPick }: {
                 if (e.key === "Tab") { e.preventDefault(); if (sugg.length) setTyped(`${sugg[0]!.path}/`); return; }
                 if (e.key === "Enter" && isPath(typed.trim())) { e.preventDefault(); onPick(typed.trim().replace(/\/+$/, "")); }
               }}
-              className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
-              style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: edge(20), color: "var(--text)" }} />
+              className={`m-1.5 shrink-0 ${INPUT}`}
+              style={INPUT_STYLE} />
             <div className="agx-scroll overflow-y-auto overflow-x-hidden py-1.5" style={{ minHeight: 0 }}>
               {error && <div className="px-3 py-2" style={{ color: "var(--error-ink)" }}>{error}</div>}
               {sugg.map((e) => <Row key={e.path} path={e.path} primary={e.name} secondary={e.path} />)}
@@ -1563,8 +1564,8 @@ function ScopeChip({ repo, repos, ref_, refs, openState, onPickRoot, onPickRef }
                 if (copies[0]) onPickRoot(copies[0].root);
                 else onPickRef(local[0] ?? remote[0]!);
               }}
-              className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
-              style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: edge(20), color: "var(--text)" }} />
+              className={`m-1.5 shrink-0 ${INPUT}`}
+              style={INPUT_STYLE} />
             <div className="agx-scroll overflow-y-auto overflow-x-hidden py-1.5" style={{ minHeight: 0 }}>
               {copies.length + local.length + remote.length === 0 && (
                 <div className="px-3 py-2" style={{ color: "var(--text3)" }}>Nothing matches “{filter.trim()}”.</div>
@@ -1687,8 +1688,8 @@ function RefChip({ value, refs, openState, onPick }: {
                   // typing towards. Escape is the menu's — see menuKeys.
                   if (e.key === "Enter" && shown === 1) { e.preventDefault(); onPick(local[0] ?? remote[0]!); }
                 }}
-                className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
-                style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: edge(20), color: "var(--text)" }} />
+                className={`m-1.5 shrink-0 ${INPUT}`}
+                style={INPUT_STYLE} />
             )}
             <div className="agx-scroll overflow-y-auto overflow-x-hidden py-1.5" style={{ minHeight: 0 }}>
               {/* The working tree stays reachable whatever is typed: it is not

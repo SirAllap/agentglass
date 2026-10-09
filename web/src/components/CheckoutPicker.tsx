@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CHIP, CHIP_SURFACE, CHIP_SURFACE_CLS } from "./workspace/Chrome.tsx";
+import { CHIP, CHIP_SURFACE, CHIP_SURFACE_CLS, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import type { GitRepoRef, GitBranch } from "../../../shared/types.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
@@ -222,12 +222,8 @@ export function CheckoutPicker({
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Filter checkouts…"
             aria-label="Filter checkouts"
-            className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
-            style={{
-              background: "color-mix(in srgb, var(--bg3) 50%, transparent)",
-              border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)",
-              color: "var(--text)",
-            }}
+            className={`m-1.5 shrink-0 ${INPUT}`}
+            style={INPUT_STYLE}
           />
           <div ref={rowsRef} className="agx-scroll overflow-y-auto overflow-x-hidden pb-1" style={{ minHeight: 0 }}>
             {unlisted && (

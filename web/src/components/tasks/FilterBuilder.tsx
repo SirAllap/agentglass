@@ -15,6 +15,7 @@ import type { ProviderTask } from "../../../../shared/providers.ts";
 
 import { StatusPill } from "../StatusPill.tsx";
 import { DoneIcon } from "../../lib/glyphIcons.tsx";
+import { INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
 
 /** The panel's narrowest, shared by the box and by the clamp that keeps it on
  *  screen — two places that must not drift apart. */
@@ -120,8 +121,8 @@ function Menu({ items, onPick, selected, current }: {
     <>
       {items.length > 8 && (
         <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…"
-          className="text-[11.5px] px-2.5 py-1.5 outline-none shrink-0"
-          style={{ background: "var(--bg)", borderBottom: "1px solid var(--border)", color: "var(--text)" }} />
+          className={`shrink-0 ${INPUT}`}
+          style={INPUT_STYLE} />
       )}
       <span className="agx-scroll overflow-y-auto overflow-x-hidden flex flex-col" style={{ maxHeight: 260 }}>
         {shown.map((i) => {

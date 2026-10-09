@@ -6,6 +6,7 @@ import { api } from "../lib/api.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { BranchIcon, DoneIcon, IconLabel } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 // Commits the repo's LIVE working tree (not the telemetry snapshot): the agent's
 // changed-file list is only the entry point — we read `git status` fresh and
@@ -191,8 +192,8 @@ export function CommitModal({ open, onClose, paths }: { open: boolean; onClose: 
                         <input
                           value={title} onChange={(e) => { setTitle(e.target.value); setConfirming(false); }}
                           placeholder={suggestTitle(selPaths) || "Commit title…"}
-                          className="w-full px-3 py-1.5 rounded-lg text-[12px] outline-none mb-1.5"
-                          style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }}
+                          className={`w-full mb-1.5 ${INPUT}`}
+                          style={INPUT_STYLE}
                         />
                         <textarea
                           value={body} onChange={(e) => setBody(e.target.value)}

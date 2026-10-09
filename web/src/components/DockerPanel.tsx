@@ -3,7 +3,7 @@
 // stop/restart/rm actions. Images / volumes / networks get their own tabs.
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { PlayIcon, RefreshIcon } from "../lib/glyphIcons.tsx";
-import { RefreshButton, CTRL_H } from "./workspace/Chrome.tsx";
+import { RefreshButton, CTRL_H, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
 import type { DockerOverview, DockerContainer, DockerStat, DockerCapability } from "../../../shared/types.ts";
 import { depSpec } from "../../../shared/deps.ts";
@@ -644,8 +644,8 @@ export function DockerView({ active, onOpenBrowser }: {
                         the published port — so typing 8000 finds whatever is
                         serving it, which the flat list could never answer. */}
                     <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="filter"
-                      className="text-[10px] px-2.5 min-h-[28px] rounded-lg outline-none w-[120px]"
-                      style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} />
+                      className={`w-[120px] ${INPUT}`}
+                      style={INPUT_STYLE} />
                     <button onClick={() => { const next = groupBy === "stack" ? "worktree" : "stack"; setGroupBy(next); try { localStorage.setItem(GROUP_KEY, next); } catch { /* private mode */ } }}
                       title={groupBy === "stack" ? "Group by the checkout each container came from" : "Group by compose project"}
                       className="text-[10px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg"

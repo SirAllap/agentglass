@@ -28,6 +28,7 @@ import { Empty, wash } from "../git/ui.tsx";
 import { fmtBytes } from "../../lib/goneCleanup.ts";
 import { HIT, ICON } from "../../lib/iconSize.ts";
 import { DoneIcon } from "../../lib/glyphIcons.tsx";
+import { INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
 
 interface SourcesBody {
   sources: UnderstudySource[];
@@ -452,8 +453,8 @@ export function Teach({ active }: { active: boolean }) {
             onKeyDown={(e) => { if (e.key === "Enter") void add(); }}
             spellCheck={false}
             placeholder="/home/you/notes"
-            className="flex-1 min-w-0 px-2 py-1 text-[11.5px] rounded-lg"
-            style={{ background: wash("--text", 4), border: `1px solid ${wash("--border", 60)}`, color: "var(--text)", fontFamily: "inherit" }}
+            className={`flex-1 min-w-0 ${INPUT}`}
+            style={INPUT_STYLE}
           />
           <Chip onClick={() => void add()}>Add</Chip>
         </div>

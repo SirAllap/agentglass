@@ -16,6 +16,7 @@ import { fmtAgo } from "../lib/format.ts";
 import { edge, wash } from "./git/ui.tsx";
 import { ClockIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
+import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
 
 export interface AgentSchedule {
   id: string; name: string; cwd: string; kind: string; prompt: string; yolo: boolean;
@@ -93,16 +94,16 @@ export function ScheduleDialog({ open, checkouts, onClose, onAdded }: {
                 <div className="grid gap-3.5" style={{ gridTemplateColumns: "1fr 160px" }}>
                   <div>
                     {label("Name", "letters, digits, - _ .")}
-                    <input ref={nameRef} value={name} onChange={(e) => setName(e.target.value)} placeholder="nightly-tests" className={field} style={fieldStyle} />
+                    <input ref={nameRef} value={name} onChange={(e) => setName(e.target.value)} placeholder="nightly-tests" className={INPUT} style={INPUT_STYLE} />
                   </div>
                   <div>
                     {label("When", "08:00 · +30m")}
-                    <input value={when} onChange={(e) => setWhen(e.target.value)} placeholder="08:00" className={`${field} tabular-nums`} style={fieldStyle} />
+                    <input value={when} onChange={(e) => setWhen(e.target.value)} placeholder="08:00" className={`tabular-nums ${INPUT}`} style={INPUT_STYLE} />
                   </div>
                 </div>
                 <div>
                   {label("Checkout")}
-                  <input value={cwd} onChange={(e) => setCwd(e.target.value)} list="agx-schedule-checkouts" placeholder="/path/to/a/checkout in the open project" className={field} style={fieldStyle} />
+                  <input value={cwd} onChange={(e) => setCwd(e.target.value)} list="agx-schedule-checkouts" placeholder="/path/to/a/checkout in the open project" className={INPUT} style={INPUT_STYLE} />
                   <datalist id="agx-schedule-checkouts">{checkouts.map((c) => <option key={c} value={c} />)}</datalist>
                 </div>
                 <div>
