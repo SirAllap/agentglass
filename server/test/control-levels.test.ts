@@ -5,6 +5,7 @@
  * control-levels-live.test.ts.
  */
 import { describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { controlRefusal, controlSwitch, makeRefusalThrottle, parseControlCmd, UI_MAX_LEVEL } from "../src/control.ts";
@@ -241,8 +242,8 @@ const ROOT = join(import.meta.dir, "..", "..");
  * variables" failed on every machine that had run `make desktop-install`.
  */
 function walk(dir: string): string[] {
-  const r = Bun.spawnSync(["git", "ls-files", "-z", "--", relative(ROOT, dir)], { cwd: ROOT });
-  return r.stdout.toString().split("\0")
+  const out = execFileSync("git", ["ls-files", "-z", "--", relative(ROOT, dir)], { cwd: ROOT }).toString();
+  return out.split("\0")
     .filter((f) => { const n = f.split("/").pop() ?? ""; return /\.(ts|tsx|js|mjs|cjs)$/.test(n) || (n !== "" && !n.includes(".")); })
     .map((f) => join(ROOT, f));
 }
