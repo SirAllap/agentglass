@@ -13,7 +13,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
-  MANIFEST_NAME, __resetPlugins, installPlugin, listPlugins, pluginOwnSettings, pluginSettings, pluginsPath, removePlugin, secretsPath, setPluginSettings, validPluginName,
+  MANIFEST_NAME, __resetPlugins, installPlugin, listPlugins, pluginInstallDir, pluginOwnSettings, pluginSettings, pluginsPath, removePlugin, secretsPath, setPluginSettings, validPluginName,
 } from "../src/plugins.ts";
 import { __resetSandboxProbe, resolveGrants } from "../src/plugin-sandbox.ts";
 import type { PluginSandbox } from "../../shared/pluginSandbox.ts";
@@ -394,6 +394,72 @@ describe("a key that could not be deleted is not handed to what comes next", () 
     await withWriteBlocked(f, async () => {
       await expect(removePlugin("orbit-scorer", { dropSettings: true })).rejects.toThrow("could not drop");
     });
+  });
+});
+
+/** secrets.json present and unreadable (mode 000) in a folder that is still
+ *  writable: a read fails the way an EIO does and a rewrite would go through. */
+async function withSecretsUnreadable(fn: () => void | Promise<void>): Promise<void> {
+  chmodSync(secretsPath(), 0o000);
+  expect(() => readFileSync(secretsPath()), "the file is still readable, so nothing is being tested").toThrow();
+  try { await fn(); } finally { chmodSync(secretsPath(), 0o600); }
+}
+
+describe("a key that could not be read is not taken for no key", () => {
+  test("a different source is refused, and the key is not served to it afterwards", async () => {
+    setPluginSettings("orbit-scorer", { apiKey: KEY });
+    await withSecretsUnreadable(async () => {
+      const r = await installPlugin(fixture());
+      expect(r.ok, "the install went on as if the file held nothing").toBe(false);
+      if (!r.ok) expect(r.error).toContain("could not drop the old key");
+    });
+    expect(pluginOwnSettings("orbit-scorer").apiKey, "the plugin that was there lost its key to a failed install").toBe(KEY);
+    expect((await installPlugin(fixture())).ok).toBe(true);
+    expect(pluginOwnSettings("orbit-scorer").apiKey).toBeNull();
+  });
+
+  test("a remove is refused and leaves the record and the key", async () => {
+    setPluginSettings("orbit-scorer", { apiKey: KEY });
+    await withSecretsUnreadable(async () => {
+      await expect(removePlugin("orbit-scorer")).rejects.toThrow("could not drop");
+    });
+    expect(listPlugins().map((p) => p.name)).toEqual(["orbit-scorer"]);
+    expect(rawSecrets()).toEqual({ "orbit-scorer": { apiKey: KEY } });
+  });
+
+  test("a key typed for one plugin does not rewrite the file without the others'", async () => {
+    expect((await installPlugin(fixture("orbit-other"))).ok).toBe(true);
+    setPluginSettings("orbit-other", { apiKey: OTHER_KEY });
+    await withSecretsUnreadable(() => {
+      expect(setPluginSettings("orbit-scorer", { apiKey: KEY }).ok, "answered ok over a file it could not read").toBe(false);
+    });
+    expect(rawSecrets(), "another plugin's key went with the rewrite").toEqual({ "orbit-other": { apiKey: OTHER_KEY } });
+  });
+
+  test("a key still in plugins.json is not moved over a file that could not be read", async () => {
+    setPluginSettings("orbit-scorer", { apiKey: KEY });
+    plantKeyInPluginsFile("orbit-scorer", "apiKey", OTHER_KEY);
+    await withSecretsUnreadable(() => {
+      pluginOwnSettings("orbit-scorer");
+    });
+    expect(rawSecrets(), "the file was rewritten from a read that failed").toEqual({ "orbit-scorer": { apiKey: KEY } });
+  });
+});
+
+describe("an install whose record cannot be saved puts nothing in place", () => {
+  test("the old folder is back, and the install says it failed", async () => {
+    const dir = pluginInstallDir("orbit-scorer");
+    const before = readFileSync(join(dir, "run.sh"), "utf8");
+    const next = fixture();
+    writeFileSync(join(next, "run.sh"), "#!/bin/bash\necho changed\n");
+    await withWriteBlocked(pluginsPath(), async () => {
+      const r = await installPlugin(next);
+      expect(r.ok, "ok, with the record on disk still the old one").toBe(false);
+    });
+    expect(readFileSync(join(dir, "run.sh"), "utf8"), "new bytes under the old record").toBe(before);
+    expect(readdirSync(dirname(dir)).filter((f) => f.includes(".old-")), "the folder put aside was left").toEqual([]);
+    expect((await installPlugin(next)).ok).toBe(true);
+    expect(readFileSync(join(dir, "run.sh"), "utf8")).toContain("changed");
   });
 });
 

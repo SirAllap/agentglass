@@ -470,7 +470,8 @@ function migrate(store: Store): Store {
   // (secrets.json may have moved on since), so it is neither moved again nor
   // trusted; the store goes out stripped and the strip is retried by a write.
   if (stripPending) return { ...store, plugins: store.plugins.map(stripped) };
-  const secrets = readSecrets();
+  const secrets = loadSecrets();
+  if (!secrets) return store; // a rewrite from a failed read would lose the other plugins' keys
   const moving: [string, string, string][] = [];
   const plugins = store.plugins.map((rec) => {
     for (const k of inRecord(rec)) {
@@ -572,11 +573,19 @@ type Secrets = Record<string, Record<string, string>>;
  *  `table["__proto__"]` is then an entry like any other. */
 const table = <T>(): Record<string, T> => Object.create(null) as Record<string, T>;
 
-function readSecrets(): Secrets {
+/** null when the file is there and could not be read (EIO, EACCES, EMFILE):
+ *  what it holds is unknown, which is not the same as nothing. A caller that
+ *  decides about a key, or rewrites the file, stops on null; a plain read takes
+ *  it for empty (`readSecrets`). A file that reads but is not JSON holds no key
+ *  anyone can be served, so it stays empty; a rewrite then drops the others'
+ *  keys, which is availability and not a leak. */
+function loadSecrets(): Secrets | null {
   const p = secretsPath();
-  if (offLimits(p) || !existsSync(p)) return table();
+  if (offLimits(p)) return table();
+  let text: string;
+  try { text = readFileSync(p, "utf8"); } catch (e) { return (e as NodeJS.ErrnoException).code === "ENOENT" ? table() : null; }
   try {
-    const parsed = JSON.parse(readFileSync(p, "utf8"));
+    const parsed = JSON.parse(text);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return table();
     const out: Secrets = table();
     for (const [name, byKey] of Object.entries(parsed as Record<string, unknown>)) {
@@ -587,11 +596,13 @@ function readSecrets(): Secrets {
     }
     return out;
   } catch {
-    // Unreadable is treated as empty, as `read` does for plugins.json: the
-    // cost is each key is asked for again, never a crash on boot.
     return table();
   }
 }
+
+/** Unreadable is empty, as `read` does for plugins.json: the cost is each key
+ *  is asked for again, never a crash on boot. */
+const readSecrets = (): Secrets => loadSecrets() ?? table();
 
 /** Set one plugin's keys (none drops its entry) and write the file. */
 function putSecrets(all: Secrets, name: string, held: Record<string, string>): boolean {
@@ -623,7 +634,8 @@ function settingsWithSecrets(rec: PluginRecord): Record<string, unknown> {
  *  name. */
 function keepSecrets(store: Store, name: string, keys: string[] = []): boolean {
   if (!settleStrip(store)) return false;
-  const all = readSecrets();
+  const all = loadSecrets();
+  if (!all) return false;
   const held = all[name];
   if (!held) return true;
   const kept = Object.fromEntries(Object.entries(held).filter(([k]) => keys.includes(k)));
@@ -1138,7 +1150,8 @@ export function setPluginSettings(name: string, raw: unknown): { ok: true; value
     if (!settleStrip(store)) return { ok: false, error: "could not save the key" };
     // Secrets first, as the migration does: a crash between the two files can
     // only leave a plain setting unsaved, never a key in the wrong place.
-    const all = readSecrets();
+    const all = loadSecrets();
+    if (!all) return { ok: false, error: "could not save the key" };
     const held = { ...(all[name] ?? {}) };
     for (const [k, v] of sent) { if (v === "") delete held[k]; else held[k] = v as string; }
     if (!putSecrets(all, name, held)) return { ok: false, error: "could not save the key" };
@@ -1352,12 +1365,22 @@ async function finishInstall(
   // the assertion that survives a future edit to the regex. Nothing on disk
   // is touched unless the target is a child of the plugins folder.
   if (!insidePluginsRoot(installDir)) return { ok: false, error: "plugin name would install outside the plugins folder" };
-  rmSync(installDir, { recursive: true, force: true });
+  // The old folder is put aside, not deleted, until the record is saved: new
+  // bytes under the old approval are what a failed save would otherwise leave.
+  // The ceiling: a crash between the rename and the save leaves the old folder
+  // under `.old-<pid>` and nothing at the name; a reinstall puts it right.
+  const aside = `${installDir}.old-${process.pid}`;
+  rmSync(aside, { recursive: true, force: true });
+  if (existsSync(installDir)) renameSync(installDir, aside);
+  const putBack = (): void => {
+    rmSync(installDir, { recursive: true, force: true });
+    if (existsSync(aside)) renameSync(aside, installDir);
+  };
   mkdirSync(dirname(installDir), { recursive: true });
   // The app's own copy, not `cp`, which Windows does not have; a link is
   // copied as the link it is, not rewritten to where it pointed in staging.
   try { cpSync(staging, installDir, { recursive: true, verbatimSymlinks: true, filter: copied }); } catch (e) {
-    rmSync(installDir, { recursive: true, force: true });
+    putBack();
     return { ok: false, error: `could not copy the plugin into place: ${e instanceof Error ? e.message : String(e)}` };
   }
 
@@ -1376,13 +1399,18 @@ async function finishInstall(
     hadApproval: existing?.hadApproval === true,
     ...(settings ? { settings } : {}),
   };
-  write({
+  const saved = write({
     ...store,
     plugins: [...store.plugins.filter((p) => p.name !== manifest.name), record],
     // Consumed only by the reinstall they belong to: a plugin from elsewhere
     // under the same name neither reads them nor throws them away.
     keptSettings: restored ? withoutKept(displaced, manifest.name, from) : displaced,
   });
+  if (!saved) {
+    putBack();
+    return { ok: false, error: "could not save the plugin record, so nothing was installed" };
+  }
+  rmSync(aside, { recursive: true, force: true });
   return { ok: true, plugin: { ...record, ...liveState(record) } };
 }
 
