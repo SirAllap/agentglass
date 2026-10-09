@@ -11,6 +11,7 @@
  */
 import { useEffect, useState, type ReactNode } from "react";
 import type { CiFailure, PrCheck, PrCheckJob } from "../../../shared/types.ts";
+import { verdictLabel, type TestVerdict } from "../../../shared/failureVerdict.ts";
 import { ArrowIcon, CaretIcon, ClockIcon, CopyIcon, DoneIcon, FileIcon, RefreshIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { externalUrl } from "../lib/externalUrl.ts";
 import { ICON } from "../lib/iconSize.ts";
@@ -44,8 +45,11 @@ function Excerpt({ text }: { text: string }) {
   );
 }
 
+/** Only a positive fact earns a chip: "this PR only" and "seen once" are the absence of one, and say nothing a reader needs here. */
+const notable = (v: TestVerdict | undefined): TestVerdict | undefined => (v && (v.kind === "main" || v.kind === "flaky" || v.kind === "others") ? v : undefined);
+
 /** One failure: its name, what it said in a few words, a copy button, and the excerpt when open. */
-function FailureRow({ f, open, onToggle, first }: { f: CiFailure; open: boolean; onToggle: () => void; first: boolean }) {
+function FailureRow({ f, verdict, open, onToggle, first }: { f: CiFailure; verdict?: TestVerdict; open: boolean; onToggle: () => void; first: boolean }) {
   const gist = failureGist(f);
   return (
     <div style={first ? undefined : { borderTop: LINE }}>
@@ -53,8 +57,9 @@ function FailureRow({ f, open, onToggle, first }: { f: CiFailure; open: boolean;
         <button onClick={onToggle} aria-expanded={open} className="flex-1 min-w-0 flex items-center gap-2 text-left">
           <span aria-hidden className="shrink-0 flex" style={{ color: "var(--text3)", transform: open ? undefined : "rotate(-90deg)" }}><CaretIcon size={ICON.xs} /></span>
           <span className="truncate font-semibold min-w-0" title={f.title} style={{ ...CODE_FONT_STYLE, color: "var(--text)" }}>{f.title}</span>
-          {!open && gist && <Tag title={gist}><span className="truncate max-w-[16rem]">{gist}</span></Tag>}
+          {!open && gist && !verdict && <Tag title={gist}><span className="truncate max-w-[16rem]">{gist}</span></Tag>}
         </button>
+        {verdict && <Tag tone={verdict.kind === "main" ? "warn" : "plain"} title="Counted from the failures this app has read"><span className="rounded-full" style={{ background: verdict.kind === "main" || verdict.kind === "others" ? "var(--warning)" : "var(--text3)", width: 6, height: 6 }} />{verdictLabel(verdict)}</Tag>}
         <CopyFailure f={f} />
       </div>
       {open && <Excerpt text={f.excerpt} />}
@@ -123,7 +128,22 @@ function StateBox({ tag, title, children }: { tag: ReactNode; title: string; chi
   );
 }
 
-export function CheckFailuresPanel({ root, check, job }: { root: string; check: PrCheck; job: PrCheckJob }) {
+/** Whatever the row is, it says something: with no job to read, it says why and where to go. */
+export function CheckFailuresPanel({ root, check, job }: { root: string; check: PrCheck; job?: PrCheckJob }) {
+  if (!job) {
+    return (
+      <div className="mx-2.5 mb-2 rounded-xl overflow-hidden text-[11px]" style={{ border: EDGE, background: "var(--surface-card)" }}>
+        <StateBox tag={<Tag><FileIcon size={ICON.xs} />Nothing to read</Tag>} title="This check does not say which job ran it">
+          <Body>Its link names no job, so there is no log to look for. Open it on GitHub to see what it says.</Body>
+        </StateBox>
+        <Footer url={check.url || ""} label="Open on GitHub" />
+      </div>
+    );
+  }
+  return <JobFailures root={root} check={check} job={job} />;
+}
+
+function JobFailures({ root, check, job }: { root: string; check: PrCheck; job: PrCheckJob }) {
   useFailureStore();
   const key = failureKey(root, job.id);
   const hints = { attempt: job.attempt, step: job.failedStep };
@@ -135,7 +155,7 @@ export function CheckFailuresPanel({ root, check, job }: { root: string; check: 
   const retry = (force: boolean) => void load(root, job.id, hints, force);
   const age = logAgeDays(check.completedAt);
 
-  const noJobLog = view.kind === "output" || view.kind === "nolog";
+  const noJobLog = view.kind === "output" || view.kind === "nolog" || view.kind === "unlogged" || (view.kind === "failures" && view.notice === "unlogged");
   let body: ReactNode;
   let note: ReactNode;
   let action: ReactNode;
@@ -152,11 +172,12 @@ export function CheckFailuresPanel({ root, check, job }: { root: string; check: 
             <span className="text-[10.5px] truncate">{readLine(r)}</span>
             <span className="ml-auto flex items-center gap-1.5">
               {view.notice === "expired" && <Tag tone="warn" title="GitHub no longer has this log; what is shown is what its annotations kept"><ClockIcon size={ICON.xs} />Log expired</Tag>}
+              {view.notice === "unlogged" && <Tag tone="warn" title="GitHub holds no log for this job; what is shown is what its annotations kept"><FileIcon size={ICON.xs} />No log</Tag>}
               {view.notice === "toolarge" && <Tag tone="warn" title="The log was too large to read; what is shown is what its annotations kept"><FileIcon size={ICON.xs} />Too large</Tag>}
               {r.cached && <Tag title="Read earlier and kept: opening it again made no request">cached</Tag>}
             </span>
           </div>
-          {r.failures.map((f, i) => <FailureRow key={`${i}-${f.signature}`} f={f} first={i === 0} open={openRows.has(i)} onToggle={() => toggle(i)} />)}
+          {r.failures.map((f, i) => <FailureRow key={`${i}-${f.signature}`} f={f} verdict={notable(r.verdicts[i])} first={i === 0} open={openRows.has(i)} onToggle={() => toggle(i)} />)}
           {r.more > 0 && <div className="px-2.5 py-1.5 text-[10.5px]" style={{ borderTop: LINE, color: "var(--text3)" }}>+{r.more} more not shown here. The full log has them.</div>}
         </>
       );
@@ -187,7 +208,7 @@ export function CheckFailuresPanel({ root, check, job }: { root: string; check: 
       body = (
         <div className="px-2.5 py-2.5 flex flex-col gap-1.5">
           <div>{expired ? <Tag tone="warn" title="GitHub no longer has the log"><ClockIcon size={ICON.xs} />Log expired</Tag> : <Tag><FileIcon size={ICON.xs} />Posted by an app</Tag>}</div>
-          <Heading>{expired ? "GitHub no longer has the log. This is the check’s own message" : "This check has no log. This is its own message"}</Heading>
+          <Heading>{expired ? "GitHub no longer has the log. This is the check’s own message" : view.why === "unlogged" ? "GitHub holds no log for this job. This is the check’s own message" : "This check has no log. This is its own message"}</Heading>
           <div className="rounded-lg overflow-hidden" style={{ border: EDGE }}>
             <div className="flex items-center gap-2 px-2.5 py-1 text-[10px]" style={{ color: "var(--text3)", background: "var(--surface-inset)", ...CODE_FONT_STYLE }}>
               <span className="truncate" title={f.title}>{f.title}</span>
@@ -195,11 +216,18 @@ export function CheckFailuresPanel({ root, check, job }: { root: string; check: 
             </div>
             <Excerpt text={f.excerpt} />
           </div>
-          {!expired && <Body>An app or a script posted this check through GitHub’s Checks API, so GitHub keeps no job log for it. Open it on GitHub for anything beyond what it wrote.</Body>}
+          {view.why === "nolog" && <Body>An app or a script posted this check through GitHub’s Checks API, so GitHub keeps no job log for it. Open it on GitHub for anything beyond what it wrote.</Body>}
         </div>
       );
       break;
     }
+    case "unlogged":
+      body = (
+        <StateBox tag={<Tag tone="warn"><FileIcon size={ICON.xs} />No log</Tag>} title="GitHub holds no log for this job">
+          <Body>{job.failedStep ? `It stopped in the step “${job.failedStep}”. ` : ""}The job ran, but no log was uploaded; a runner that stops mid-job can leave none. It also left no message. Open it on GitHub to see how it ended.</Body>
+        </StateBox>
+      );
+      break;
     case "nolog":
       body = (
         <StateBox tag={<Tag><FileIcon size={ICON.xs} />No log</Tag>} title="This check has no log">

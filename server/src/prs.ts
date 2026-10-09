@@ -17,6 +17,7 @@
 import { ttlRead, forgetReads } from "./ttlread.ts";
 import { singleFlight } from "./singleflight.ts";
 import { learnFromRead } from "./checkRuns.ts";
+import { failingTests, refreshFailingTests, type LensSources, type MainRun, type MainJob } from "./ciFailureLens.ts";
 import { readCheckFailures, cachedSummaries, type LogRead, type AnnotationsRead, type OutputRead, type CheckAnnotation } from "./ciFailures.ts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { failed } from "./refused.ts";
@@ -31,7 +32,7 @@ import type {
   PrRepoId, PrSummary, PrBranchSummary, PrDetail, PrListResponse, PrActionResult, PrCheck, PrCheckRollup,
   PrCheckState, PrThread, PrReview, PrComment, PrCommit, PrFile, PrChecklistItem, PrMergeState, CiVerdict,
   PrTalk, PrTalkNote,
-  PrAuthored, PrReaction, PrEvent, PrCheckJob, PrReviewer, PrMergePolicy, PrMergeGate, PrMergeMethod, PrLocalHead,
+  PrAuthored, PrReaction, PrEvent, PrCheckJob, PrReviewer, PrMergePolicy, PrMergeGate, PrMergeMethod, PrLocalHead, FailingTests,
 } from "../../shared/types.ts";
 import { CARD_PEOPLE_MAX } from "../../shared/cardPeople.ts";
 
@@ -4801,7 +4802,7 @@ async function readLogCapped(nameWithOwner: string, jobId: string, maxBytes: num
   const timer = setTimeout(() => { try { proc.kill(); } catch { /* gone */ } }, 90_000);
   const stderrP = new Response(proc.stderr).text();
   const chunks: Uint8Array[] = [];
-  let total = 0, bodyAt = -1, status = 0, length = 0;
+  let total = 0, bodyAt = -1, status = 0, length = 0, blobMissing = false;
   let verdict: LogRead | null = null;
   try {
     for await (const chunk of proc.stdout as unknown as AsyncIterable<Uint8Array>) {
@@ -4813,6 +4814,8 @@ async function readLogCapped(nameWithOwner: string, jobId: string, maxBytes: num
         bodyAt = end + 4;
         status = Number(/^HTTP\/[\d.]+ (\d+)/.exec(head)?.[1] ?? 0);
         length = Number(/^content-length:\s*(\d+)/im.exec(head.slice(0, end))?.[1] ?? 0);
+        // The redirect landed on storage that has no such blob: the job is real, its log was never written.
+        blobMissing = /^x-ms-error-code:\s*BlobNotFound/im.test(head.slice(0, end));
         if (status === 200 && length > maxBytes) { verdict = { ok: false, kind: "toolarge", bytes: length }; break; }
       }
       if (status === 200 && bodyAt >= 0 && total - bodyAt > maxBytes) { verdict = { ok: false, kind: "toolarge", bytes: total - bodyAt }; break; }
@@ -4822,7 +4825,7 @@ async function readLogCapped(nameWithOwner: string, jobId: string, maxBytes: num
   const code = await proc.exited;
   const stderr = await stderrP;
   if (status === 410) return { ok: false, kind: "expired" };
-  if (status === 404) return { ok: false, kind: "notfound" };
+  if (status === 404) return blobMissing ? { ok: false, kind: "missing" } : { ok: false, kind: "notfound" };
   if (code !== 0 || status !== 200) return ghFailure(stderr || `HTTP ${status}`);
   return { ok: true, text: Buffer.concat(chunks).subarray(bodyAt).toString("utf8"), bytes: total - bodyAt };
 }
@@ -4874,11 +4877,84 @@ export async function checkFailures(rootIn: unknown, jobIdIn: unknown, hints: { 
   }, { force });
 }
 
+const defaultBranches = new Map<string, string>();
+const lensRunning = new Map<string, Promise<FailingTests>>();
+
+/**
+ * The newest finished push to the default branch: one request for the run, and
+ * one more for the branch's name only when it is not already known.
+ */
+async function newestMainRun(repo: PrRepoId, known?: string): Promise<{ ok: true; run: MainRun | null; requests: number } | { ok: false; error: string; requests: number }> {
+  let requests = 0;
+  let branch = known || defaultBranches.get(repo.key);
+  if (!branch) {
+    const b = await gh(["api", `repos/${repo.nameWithOwner}`, "--jq", ".default_branch"]); requests++;
+    branch = b.stdout.trim();
+    if (b.code !== 0 || !branch) return { ok: false, error: RATE_LIMITED.test(b.stderr) ? "GitHub's hourly budget is used up" : (b.stderr.trim().split("\n")[0] || "could not read the repository"), requests };
+  }
+  defaultBranches.set(repo.key, branch);
+  const runs = await ghJson<{ workflow_runs?: any[] }>(["api", `repos/${repo.nameWithOwner}/actions/runs?branch=${encodeURIComponent(branch)}&event=push&status=completed&per_page=1`]); requests++;
+  if (!runs) return { ok: false, error: "could not list the newest push to the default branch", requests };
+  const r = runs.workflow_runs?.[0];
+  if (!r) return { ok: true, run: null, requests };
+  return { ok: true, run: { id: String(r.id), sha: String(r.head_sha ?? ""), branch, conclusion: r.conclusion ?? null, at: Date.parse(r.updated_at ?? "") || Date.now() }, requests };
+}
+
+async function mainJobs(repo: PrRepoId, runId: string): Promise<{ ok: true; jobs: MainJob[]; requests: number } | { ok: false; error: string; requests: number }> {
+  const jobs = await ghJson<{ jobs?: any[] }>(["api", `repos/${repo.nameWithOwner}/actions/runs/${runId}/jobs?per_page=100`]);
+  if (!jobs) return { ok: false, error: "could not list the jobs of the newest push", requests: 1 };
+  return {
+    ok: true, requests: 1,
+    jobs: (jobs.jobs ?? []).filter((j) => j.conclusion === "failure").map((j) => ({
+      id: String(j.id), name: String(j.name ?? ""), at: Date.parse(j.completed_at ?? "") || Date.now(),
+      step: (j.steps ?? []).find((st: any) => st?.conclusion === "failure")?.name || undefined,
+    })),
+  };
+}
+
+/**
+ * The CI view's "Failing tests": a table read by default (no request), and with
+ * `refresh` a capped backfill that reads the failed runs it has not read — see
+ * ciFailureLens.ts for what it does and what it costs. One refresh at a time per
+ * repository: a second press while one runs gets that one's answer.
+ */
+export async function failingTestsFor(rootIn: unknown, refresh: boolean): Promise<FailingTests | { ok: false; error: string }> {
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
+  if (!refresh) return failingTests(repo.key);
+  const running = lensRunning.get(repo.key);
+  if (running) return running;
+  const src: LensSources = {
+    newestMainRun: (known) => newestMainRun(repo, known),
+    mainJobs: (runId) => mainJobs(repo, runId),
+    readJob: (job, step) => readCheckFailures(repo.key, job, { step }, { annotations: () => readAnnotations(repo.nameWithOwner, job), log: (max) => readLogCapped(repo.nameWithOwner, job, max), output: () => readCheckOutput(repo.nameWithOwner, job) }),
+  };
+  const p = refreshFailingTests(repo.key, src).finally(() => lensRunning.delete(repo.key));
+  lensRunning.set(repo.key, p);
+  return p;
+}
+
 /** What is already known about these jobs' failures. Reads the cache only: not one GitHub request. */
 export async function cachedCheckFailures(rootIn: unknown, jobsIn: unknown) {
   const repo = await repoIdFor(rootIn);
   if (!repo) return { ok: false as const, error: "no GitHub remote on this repository" };
   return { ok: true as const, summaries: cachedSummaries(repo.key, String(jobsIn ?? "").split(",").filter(Boolean)) };
+}
+
+/**
+ * The runs whose jobs are listed, at most six, the runs of FAILED checks first.
+ * A pull request has dozens of runs and the list is capped; taking them in the
+ * order the checks arrive left the one red check's own run off it on a real pull
+ * request (72 checks, the failing run beyond the sixth), so the row that mattered
+ * had no job to open.
+ */
+export function runsToList(checks: { url?: string; state: string }[], max = 6): string[] {
+  const failed = new Set<string>(), others = new Set<string>();
+  for (const c of checks) {
+    const m = /\/actions\/runs\/(\d+)/.exec(c.url || "");
+    if (m) (c.state === "failure" ? failed : others).add(m[1]!);
+  }
+  return [...failed, ...[...others].filter((r) => !failed.has(r))].slice(0, max);
 }
 
 /**
@@ -4894,13 +4970,9 @@ export async function checkJobs(rootIn: unknown, number: unknown): Promise<{ ok:
   if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
   const det = await prDetail(rootIn, n);
   if (!det.ok || !det.detail) return { ok: false, error: det.error };
-  const runIds = new Set<string>();
-  for (const c of det.detail.checksAll) {
-    const m = /\/actions\/runs\/(\d+)/.exec(c.url || "");
-    if (m) runIds.add(m[1]!);
-  }
+  const runIds = runsToList(det.detail.checksAll);
   const jobs: PrCheckJob[] = [];
-  for (const id of [...runIds].slice(0, 6)) {
+  for (const id of runIds) {
     const r = await ghJson<any>(["api", `repos/${repo.nameWithOwner}/actions/runs/${id}/jobs`, "--paginate"]);
     for (const j of r?.jobs ?? []) {
       jobs.push({

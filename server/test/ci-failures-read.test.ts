@@ -46,6 +46,7 @@ case "$*" in
       nolength) printf 'HTTP/1.1 200 OK\\r\\nContent-Type: text/plain\\r\\n\\r\\n'; cat "$AGX_STUB_BODY" ;;
       big) printf 'HTTP/1.1 200 OK\\r\\nContent-Length: 64000000\\r\\n\\r\\n'; exec sleep 30 ;;
       notfound) printf 'HTTP/1.1 404 Not Found\\r\\n\\r\\n{"message":"Not Found"}'; echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;
+      blob) printf 'HTTP/1.1 404 The specified blob does not exist.\\r\\nX-Ms-Error-Code: BlobNotFound\\r\\n\\r\\n<?xml version="1.0"?><Error><Code>BlobNotFound</Code></Error>'; echo "gh: The specified blob does not exist. (HTTP 404)" >&2; exit 1 ;;
       gone) printf 'HTTP/1.1 410 Gone\\r\\n\\r\\n{"message":"Gone"}'; echo "gh: Gone (HTTP 410)" >&2; exit 1 ;;
       limited) echo "gh: API rate limit exceeded for user ID 1. (HTTP 403)" >&2; exit 1 ;;
       broken) echo "gh: Internal Server Error (HTTP 500)" >&2; exit 1 ;;
@@ -159,5 +160,14 @@ describe("a failed check, read through gh", () => {
   it("no log and no message: it says there is nothing, in the state, with no error", async () => {
     const { got } = await read("notfound", { out: "out-none.json" });
     expect(got).toMatchObject({ ok: true, state: "nolog", source: "none", failures: [] });
+  });
+
+  it("a job whose log blob does not exist is a real job with no log, not an app's check", async () => {
+    writeFileSync(join(dir, "ann-runner.json"), JSON.stringify([{ annotation_level: "failure", path: ".github", start_line: 1, message: "The self-hosted runner lost communication with the server." }]));
+    const { got, lines } = await read("blob", { ann: "ann-runner.json" });
+    expect(got).toMatchObject({ ok: true, state: "unlogged", source: "annotations", requests: 2 });
+    expect(got.failures[0].title).toContain("self-hosted runner lost communication");
+    expect(JSON.stringify(got)).not.toContain("HTTP 404");
+    expect(lines).toHaveLength(2); // the annotation was enough: no output request
   });
 });

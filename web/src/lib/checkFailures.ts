@@ -61,11 +61,15 @@ export const FORCE_CAP = 150_000_000;
 
 export type FailureView =
   | { kind: "loading" }
-  | { kind: "failures"; read: Read; notice: "expired" | "toolarge" | null }
+  | { kind: "failures"; read: Read; notice: "expired" | "toolarge" | "unlogged" | null }
   | { kind: "no-test"; read: Read }
   /** A check an app or a script posted: no job log, its own message is the failure. `why`: it never had one, or it expired. */
-  | { kind: "output"; read: Read; why: "nolog" | "expired" }
+  | { kind: "output"; read: Read; why: "nolog" | "expired" | "unlogged" }
   | { kind: "nolog"; read: Read }
+  /** A job GitHub holds no log for (a runner that stopped mid-job uploads none) and that left no message. */
+  | { kind: "unlogged"; read: Read }
+  /** The row says nothing about which job ran it: nothing to read, said so. */
+  | { kind: "nojob" }
   | { kind: "expired"; read: Read }
   | { kind: "toolarge"; read: Read; size: number; canForce: boolean }
   | { kind: "unparsed"; read: Read }
@@ -77,15 +81,38 @@ export function failureView(r: CheckFailures | undefined): FailureView {
   if (!r) return { kind: "loading" };
   if (!r.ok) return r.kind === "budget" ? { kind: "budget", resetAt: r.resetAt } : { kind: "error", error: r.error };
   if (r.state === "read" && r.source === "step") return { kind: "no-test", read: r };
-  if (r.source === "output" && r.failures.length) return { kind: "output", read: r, why: r.state === "expired" ? "expired" : "nolog" };
+  if (r.source === "output" && r.failures.length) return { kind: "output", read: r, why: r.state === "expired" ? "expired" : r.state === "unlogged" ? "unlogged" : "nolog" };
   if (r.state === "nolog" && !r.failures.length) return { kind: "nolog", read: r };
-  if (r.failures.length) return { kind: "failures", read: r, notice: r.state === "expired" || r.state === "toolarge" ? r.state : null };
+  if (r.state === "unlogged" && !r.failures.length) return { kind: "unlogged", read: r };
+  if (r.failures.length) return { kind: "failures", read: r, notice: r.state === "expired" || r.state === "toolarge" || r.state === "unlogged" ? r.state : null };
   if (r.state === "expired") return { kind: "expired", read: r };
   if (r.state === "toolarge") return { kind: "toolarge", read: r, size: r.sizeBytes ?? 0, canForce: (r.sizeBytes ?? 0) <= FORCE_CAP };
   return { kind: "unparsed", read: r };
 }
 
-/** The job behind a check row. GitHub names a check after its job, so the names match; a matrix job's check name only contains it. */
-export function jobFor(check: Pick<PrCheck, "name">, jobs: PrCheckJob[]): PrCheckJob | undefined {
-  return jobs.find((j) => j.name === check.name) ?? jobs.find((j) => check.name.includes(j.name));
+/**
+ * The job behind a check row, or what stands in for one.
+ *
+ * The job id is in the check's own URL (`…/actions/runs/<run>/job/<job>`), which
+ * is the one thing that cannot name the wrong job; names can: a reusable
+ * workflow's job is "Caller / callee", so the check's name is shorter than the
+ * job's and neither containment matches. The list of jobs is capped to a few
+ * runs, so the job a red check belongs to may not be in it — on a real pull
+ * request with 72 checks it was not, and the panel said nothing at all. So: the
+ * listed job with that id; else one made from the URL (the id is all a read
+ * needs); else the old name rules; else, for a check run an app posted
+ * (`…/runs/<id>`, no job), that id. `undefined` only when the check names nothing.
+ */
+export function jobFor(check: Pick<PrCheck, "name" | "url" | "startedAt" | "completedAt">, jobs: PrCheckJob[]): PrCheckJob | undefined {
+  const url = check.url ?? "";
+  const id = /\/job\/(\d+)/.exec(url)?.[1];
+  if (id) {
+    const listed = jobs.find((j) => j.id === id);
+    if (listed) return listed;
+    return { id, runId: /\/actions\/runs\/(\d+)/.exec(url)?.[1] ?? "", name: check.name, status: "completed", conclusion: "failure", startedAt: check.startedAt ?? null, completedAt: check.completedAt ?? null, url };
+  }
+  const byName = jobs.find((j) => j.name === check.name) ?? jobs.find((j) => check.name.includes(j.name));
+  if (byName) return byName;
+  const posted = /\/runs\/(\d+)(?:$|[/?#])/.exec(url)?.[1];
+  return posted ? { id: posted, runId: "", name: check.name, status: "completed", conclusion: "failure", startedAt: check.startedAt ?? null, completedAt: check.completedAt ?? null, url } : undefined;
 }

@@ -22,6 +22,8 @@
  * Another runner shows its step, not its tests, until it is added here.
  */
 import { db } from "./db.ts";
+import "./checkRuns.ts"; // the check_runs table the verdicts read
+import { testVerdict, type Seen, type TestVerdict } from "../../shared/failureVerdict.ts";
 import type { CiFailure, CheckFailures, CheckFailuresHints, CheckFailureSummary } from "../../shared/types.ts";
 
 export const MAX_FAILURES = 10;
@@ -311,18 +313,41 @@ CREATE TABLE IF NOT EXISTS ci_failure_items (
   PRIMARY KEY (repo, job_id, attempt, idx)
 );
 CREATE INDEX IF NOT EXISTS ci_failure_items_by_signature ON ci_failure_items (repo, signature);
+-- The newest push to the default branch the app has looked at, and the jobs of it that failed: "red on main" is
+-- the same signature on THIS run, and stops being true the moment a newer run is looked at and passed.
+CREATE TABLE IF NOT EXISTS ci_main_run (
+  repo TEXT PRIMARY KEY,
+  branch TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  sha TEXT NOT NULL,
+  conclusion TEXT NOT NULL,
+  at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ci_main_jobs (
+  repo TEXT NOT NULL,
+  job_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  completed_at INTEGER NOT NULL,
+  PRIMARY KEY (repo, job_id)
+);
 `);
 
 type Ok = Extract<CheckFailures, { ok: true }>;
 
-export function storedFailures(repo: string, jobId: string, attempt: number): Ok | null {
-  const r = db.prepare(`SELECT state, source, framework, more, read_bytes, size_bytes, step, at FROM ci_failure_reads WHERE repo = ? AND job_id = ? AND attempt = ?`)
-    .get(repo, jobId, attempt) as { state: Ok["state"]; source: Ok["source"]; framework: Kind | null; more: number; read_bytes: number; size_bytes: number; step: string; at: number } | null;
+/**
+ * What was kept for a job. A job id is one attempt of one run (a re-run makes new
+ * job ids), so the attempt is metadata, not a second key: whichever attempt
+ * `attempt` names, or the newest read when it is not given.
+ */
+export function storedFailures(repo: string, jobId: string, attempt?: number): Ok | null {
+  const r = db.prepare(`SELECT attempt, state, source, framework, more, read_bytes, size_bytes, step, at FROM ci_failure_reads WHERE repo = ? AND job_id = ? AND (? IS NULL OR attempt = ?) ORDER BY at DESC LIMIT 1`)
+    .get(repo, jobId, attempt ?? null, attempt ?? null) as { attempt: number; state: Ok["state"]; source: Ok["source"]; framework: Kind | null; more: number; read_bytes: number; size_bytes: number; step: string; at: number } | null;
   if (!r) return null;
   const items = db.prepare(`SELECT kind, title, signature, excerpt, truncated FROM ci_failure_items WHERE repo = ? AND job_id = ? AND attempt = ? ORDER BY idx`)
-    .all(repo, jobId, attempt) as { kind: Kind; title: string; signature: string; excerpt: string; truncated: number }[];
+    .all(repo, jobId, r.attempt) as { kind: Kind; title: string; signature: string; excerpt: string; truncated: number }[];
   return {
-    ok: true, state: r.state, source: r.source, framework: r.framework, more: r.more,
+    ok: true, state: r.state, source: r.source, framework: r.framework, more: r.more, verdicts: [],
     readBytes: r.read_bytes, sizeBytes: r.size_bytes || undefined, step: r.step || undefined, at: r.at, cached: true, requests: 0,
     failures: items.map((i) => ({ kind: i.kind, title: i.title, signature: i.signature, excerpt: i.excerpt, truncated: !!i.truncated })),
   };
@@ -353,21 +378,81 @@ export function cachedSummaries(repo: string, jobIds: string[]): Record<string, 
   if (!ids.length) return out;
   const marks = ids.map(() => "?").join(",");
   const reads = db.prepare(`SELECT job_id, attempt, state, source, more FROM ci_failure_reads WHERE repo = ? AND job_id IN (${marks}) ORDER BY at ASC`).all(repo, ...ids) as { job_id: string; attempt: number; state: Ok["state"]; source: Ok["source"]; more: number }[];
-  for (const r of reads) out[r.job_id] = { state: r.state, source: r.source, count: 0, more: r.more, titles: [] };
+  for (const r of reads) out[r.job_id] = { state: r.state, source: r.source, count: 0, more: r.more, titles: [], verdicts: [] };
   for (const r of reads) {
-    const items = db.prepare(`SELECT title FROM ci_failure_items WHERE repo = ? AND job_id = ? AND attempt = ? ORDER BY idx`).all(repo, r.job_id, r.attempt) as { title: string }[];
+    const items = db.prepare(`SELECT kind, title, signature FROM ci_failure_items WHERE repo = ? AND job_id = ? AND attempt = ? ORDER BY idx`).all(repo, r.job_id, r.attempt) as { kind: Kind; title: string; signature: string }[];
     const mine = out[r.job_id]!;
     mine.count = items.length; mine.titles = items.map((i) => i.title);
+    mine.verdicts = verdictsFor(repo, r.job_id, items.map((i) => ({ kind: i.kind, title: i.title, signature: i.signature, excerpt: "", truncated: false })));
   }
   return out;
+}
+
+// ── verdicts ──────────────────────────────────────────────────────────────
+/** Where a job ran, as far as the app has seen: the pull request, the commit, which check it is, when it ended. */
+export interface JobContext { pr: number | null; sha: string; name: string; completed: number; main: boolean; key: string }
+
+/** A check run's own row names its job in its URL (`…/job/<id>`); a rerun is a new job, so the id is one run. */
+export function jobContext(repo: string, jobId: string): JobContext | null {
+  const main = db.prepare(`SELECT j.name, j.completed_at AS completed, r.sha FROM ci_main_jobs j JOIN ci_main_run r ON r.repo = j.repo AND r.run_id = j.run_id WHERE j.repo = ? AND j.job_id = ?`)
+    .get(repo, jobId) as { name: string; completed: number; sha: string } | null;
+  if (main) return { pr: null, sha: main.sha, name: main.name, completed: main.completed, main: true, key: "" };
+  const r = db.prepare(`SELECT pr, head_sha AS sha, key, completed_at AS completed FROM check_runs WHERE repo = ? AND run_id LIKE ? ORDER BY completed_at DESC LIMIT 1`)
+    .get(repo, `%/job/${jobId}`) as { pr: number | null; sha: string; key: string; completed: number } | null;
+  if (!r) return null;
+  const [, name = ""] = r.key.split("\u0001");
+  return { pr: r.pr, sha: r.sha, name, completed: r.completed, main: false, key: r.key };
+}
+const contextOf = jobContext;
+
+/** Is this job a failed job of the NEWEST main push run the app has looked at, and did that run fail? */
+function onRedMain(repo: string, jobId: string): boolean {
+  return !!db.prepare(`SELECT 1 FROM ci_main_jobs j JOIN ci_main_run r ON r.repo = j.repo AND r.run_id = j.run_id WHERE j.repo = ? AND j.job_id = ? AND r.conclusion = 'failure'`).get(repo, jobId);
+}
+
+/** Every place these signatures were read, with the pull request each belonged to when it is known. */
+export function seenSignatures(repo: string, signatures: string[]): Seen[] {
+  if (!signatures.length) return [];
+  const marks = signatures.map(() => "?").join(",");
+  const rows = db.prepare(`SELECT DISTINCT signature, job_id FROM ci_failure_items WHERE repo = ? AND signature IN (${marks})`).all(repo, ...signatures) as { signature: string; job_id: string }[];
+  const ctx = new Map<string, JobContext | null>();
+  return rows.map((r) => {
+    if (!ctx.has(r.job_id)) ctx.set(r.job_id, contextOf(repo, r.job_id));
+    return { signature: r.signature, job: r.job_id, pr: ctx.get(r.job_id)?.pr ?? null, main: onRedMain(repo, r.job_id) };
+  });
+}
+
+/**
+ * Did this job re-run on the same commit and pass? Same check key, same commit
+ * (never an unknown one), a later success. The later run passing means every
+ * test the job ran passed that time, so a test that failed here is flaky without
+ * any passing log being read.
+ */
+export function passedOnRetry(repo: string, jobId: string): boolean {
+  const me = contextOf(repo, jobId);
+  if (!me || !me.sha) return false;
+  if (me.main) return false;
+  const later = db.prepare(`SELECT 1 FROM check_runs WHERE repo = ? AND key = ? AND head_sha = ? AND conclusion = 'success' AND completed_at > ? LIMIT 1`).get(repo, me.key, me.sha, me.completed);
+  return !!later;
+}
+
+export function verdictsFor(repo: string, jobId: string, failures: CiFailure[]): TestVerdict[] {
+  if (!failures.length) return [];
+  try {
+    const seen = seenSignatures(repo, [...new Set(failures.map((f) => f.signature))]);
+    const me = { job: jobId, pr: contextOf(repo, jobId)?.pr ?? null, passedOnRetry: passedOnRetry(repo, jobId) };
+    return failures.map((f) => testVerdict(f.signature, seen, { ...me, weak: f.kind === "step" }));
+  } catch { return failures.map(() => ({ kind: "once" as const })); }
 }
 
 // ── reading one check ─────────────────────────────────────────────────────
 export type LogRead =
   | { ok: true; text: string; bytes: number }
   | { ok: false; kind: "expired" }
-  /** A 404 on the log: the id is not an Actions job (a check an app posted), or the repository is not visible to this token. */
+  /** A 404 from GitHub's API on the log: the id is not an Actions job (a check an app posted), or the repository is not visible to this token. */
   | { ok: false; kind: "notfound" }
+  /** The job exists and its log blob does not (`BlobNotFound`): a runner that stopped mid-job uploads none. */
+  | { ok: false; kind: "missing" }
   | { ok: false; kind: "toolarge"; bytes: number }
   | { ok: false; kind: "budget"; resetAt: number | null }
   | { ok: false; kind: "error"; error: string };
@@ -403,12 +488,20 @@ const inflight = new Map<string, Promise<CheckFailures>>();
  * Not kept: a budget or network error (it says nothing about the job), so the
  * next open tries again. `force` lifts the size cap and ignores the cache.
  */
-export function readCheckFailures(
+export async function readCheckFailures(
   repo: string, jobId: string, hints: CheckFailuresHints, src: FailureSources, opts: { force?: boolean; now?: number } = {},
+): Promise<CheckFailures> {
+  const v = await readOnce(repo, jobId, hints, src, opts);
+  // The verdicts are not part of what is kept: other PRs fail and pass after this was read, and the history is as of now.
+  return v.ok ? { ...v, verdicts: verdictsFor(repo, jobId, v.failures) } : v;
+}
+
+function readOnce(
+  repo: string, jobId: string, hints: CheckFailuresHints, src: FailureSources, opts: { force?: boolean; now?: number },
 ): Promise<CheckFailures> {
   const attempt = hints.attempt && hints.attempt > 0 ? hints.attempt : 1;
   if (!opts.force) {
-    const hit = storedFailures(repo, jobId, attempt);
+    const hit = storedFailures(repo, jobId);
     if (hit) return Promise.resolve(hit);
   }
   const key = `${repo}#${jobId}#${attempt}#${opts.force ? "f" : ""}`;
@@ -438,25 +531,25 @@ async function readFresh(
     const e = extractFailures(log.text, { step: hints.step });
     const named = e.framework && e.framework !== "step";
     if (named || (!fromAnnotations.failures.length && e.failures.length)) {
-      out = { ok: true, state: "read", source: named ? "log" : "step", framework: e.framework, failures: e.failures, more: e.more, readBytes: log.bytes, step: hints.step, at: now, cached: false, requests };
+      out = { ok: true, state: "read", source: named ? "log" : "step", framework: e.framework, failures: e.failures, more: e.more, verdicts: [], readBytes: log.bytes, step: hints.step, at: now, cached: false, requests };
     } else if (fromAnnotations.failures.length) {
-      out = { ok: true, state: "read", source: "annotations", framework: null, failures: fromAnnotations.failures, more: fromAnnotations.more, readBytes: log.bytes, step: hints.step, at: now, cached: false, requests };
+      out = { ok: true, state: "read", source: "annotations", framework: null, failures: fromAnnotations.failures, more: fromAnnotations.more, verdicts: [], readBytes: log.bytes, step: hints.step, at: now, cached: false, requests };
     } else {
-      out = { ok: true, state: "unparsed", source: "none", framework: null, failures: [], more: 0, readBytes: log.bytes, step: hints.step, at: now, cached: false, requests };
+      out = { ok: true, state: "unparsed", source: "none", framework: null, failures: [], more: 0, verdicts: [], readBytes: log.bytes, step: hints.step, at: now, cached: false, requests };
     }
   } else {
     // No log is coming (expired, not an Actions job, too large). What GitHub's annotations kept comes first; then,
     // when there is none and the log is gone rather than just big, the check's own output — one more request.
     let failures = fromAnnotations.failures, more = fromAnnotations.more;
     let source: Ok["source"] = failures.length ? "annotations" : "none";
-    if (!failures.length && (log.kind === "expired" || log.kind === "notfound")) {
+    if (!failures.length && (log.kind === "expired" || log.kind === "notfound" || log.kind === "missing")) {
       const o = await src.output(); requests++;
       if (!o.ok) return o.kind === "budget" ? { ok: false, kind: "budget", resetAt: o.resetAt, requests } : { ok: false, kind: "error", error: o.error, requests };
       if (o.output) { const f = outputFailures(o.output); failures = f.failures; more = f.more; if (failures.length) source = "output"; }
     }
     out = {
-      ok: true, state: log.kind === "expired" ? "expired" : log.kind === "notfound" ? "nolog" : "toolarge", source, framework: null,
-      failures, more, readBytes: 0, sizeBytes: log.kind === "toolarge" ? log.bytes : undefined,
+      ok: true, state: log.kind === "expired" ? "expired" : log.kind === "notfound" ? "nolog" : log.kind === "missing" ? "unlogged" : "toolarge", source, framework: null,
+      failures, more, verdicts: [], readBytes: 0, sizeBytes: log.kind === "toolarge" ? log.bytes : undefined,
       step: hints.step, at: now, cached: false, requests,
     };
   }

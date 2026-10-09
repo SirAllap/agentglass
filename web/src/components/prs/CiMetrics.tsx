@@ -20,6 +20,9 @@ import { usePoll } from "../../lib/usePoll.ts";
 import { barScale, barTop, chipCounts, CHIPS, DEFAULT_SORT, rerunWhy, inChip, isSlow, matches, nextSort, sortRows, sparkPaths, span, toRow, verdictWords, type Chip, type Row, type Sort, type SortKey } from "../../lib/ciMetrics.ts";
 import { FilterField, LINE, RefreshButton, Segmented } from "../workspace/Chrome.tsx";
 import { Spinner } from "../Spinner.tsx";
+import { LENS_REFRESH_CAP } from "../../../../shared/failureVerdict.ts";
+import { FailingTestsLens } from "./FailingTestsLens.tsx";
+import type { FailingTests } from "../../../../shared/types.ts";
 
 const CHIP_TEXT: Record<Chip, { label: string; title: string }> = {
   all: { label: "All", title: "Every check that has run on this repository" },
@@ -121,7 +124,14 @@ export function CiMetrics({ root, repo, active }: { root: string; repo: string; 
   const [checks, setChecks] = useState<CheckMetric[] | null>(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
-  const [chip, setChip] = useState<Chip>("all");
+  const [chip, setChip] = useState<Chip | "tests">("all");
+  // The failing tests: read from this server's own record with every poll (no GitHub request), refreshed from GitHub only when asked.
+  const [tests, setTests] = useState<FailingTests | null>(null);
+  const [testsBusy, setTestsBusy] = useState(false);
+  const [testsErr, setTestsErr] = useState("");
+  // What the last refresh did stays on the page: the next poll re-reads the table and carries no refresh of its own.
+  const [lastRefresh, setLastRefresh] = useState<FailingTests["refresh"]>(undefined);
+  const refreshed = useRef(new Set<string>());
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<Sort>(DEFAULT_SORT);
 
@@ -137,15 +147,36 @@ export function CiMetrics({ root, repo, active }: { root: string; repo: string; 
       .catch(() => { if (mine === asked.current) setErr("Could not reach the server"); })
       .finally(() => { if (mine === asked.current) setBusy(false); });
   }, [root]);
+  const loadTests = useCallback(() => {
+    if (!root) return;
+    api.prFailingTests(root)
+      .then((r) => { if ("rows" in r) { setTests(r); setTestsErr(""); } else if (!tests) setTestsErr(r.error || "Could not read the failures"); })
+      .catch(() => { if (!tests) setTestsErr("Could not reach the server"); });
+  }, [root]); // eslint-disable-line react-hooks/exhaustive-deps
+  /** The one thing that reaches GitHub: a few failed runs, newest first. Pressed, or on the first look at the lens. */
+  const refreshTests = useCallback(() => {
+    if (!root || testsBusy) return;
+    setTestsBusy(true);
+    api.prFailingTests(root, true)
+      .then((r) => { if ("rows" in r) { setTests(r); setLastRefresh(r.refresh); setTestsErr(""); } else setTestsErr(r.error || "Could not read the failures"); })
+      .catch(() => setTestsErr("Could not reach the server"))
+      .finally(() => setTestsBusy(false));
+  }, [root, testsBusy]);
   // Another project starts empty: the last one's checks are not this one's.
-  useEffect(() => { setChecks(null); load(); }, [load]);
+  useEffect(() => { setChecks(null); setTests(null); setLastRefresh(undefined); load(); loadTests(); }, [load, loadTests]);
+  useEffect(() => {
+    if (chip !== "tests" || !tests || refreshed.current.has(root)) return;
+    refreshed.current.add(root);
+    if (tests.failedRuns > tests.readRuns) refreshTests();
+  }, [chip, tests, root, refreshTests]);
   // The runs it reads are recorded whenever a Checks tab loads, so a minute is as fresh as anything upstream of it.
-  usePoll(active, load, 60_000);
+  usePoll(active, () => { load(); loadTests(); }, 60_000);
 
   const rows = useMemo(() => (checks ?? []).map(toRow), [checks]);
   const found = useMemo(() => rows.filter((r) => matches(r, query)), [rows, query]);
   const counts = useMemo(() => chipCounts(found), [found]);
-  const shown = useMemo(() => sortRows(found.filter((r) => inChip(chip, r)), sort), [found, chip, sort]);
+  const testChip = chip === "tests";
+  const shown = useMemo(() => sortRows(found.filter((r) => inChip(testChip ? "all" : chip, r)), sort), [found, chip, testChip, sort]);
   const top = useMemo(() => barTop(rows), [rows]);
   const total = useMemo(() => rows.reduce((n, r) => n + r.runs, 0), [rows]);
 
@@ -155,15 +186,21 @@ export function CiMetrics({ root, repo, active }: { root: string; repo: string; 
         <h2 className="text-[13px] font-semibold" style={{ color: "var(--text)" }}>CI metrics</h2>
         {checks && <span className="text-[11px]" style={{ color: "var(--text3)" }}>{repo} · {total} runs recorded</span>}
         <span className="flex-1" />
-        <RefreshButton onRefresh={load} busy={busy} title="Read the recorded runs again" />
+        <RefreshButton onRefresh={testChip ? refreshTests : () => { load(); loadTests(); }} busy={testChip ? testsBusy : busy}
+          title={testChip ? `Read the failed runs it has not read yet: at most ${LENS_REFRESH_CAP}, newest first, and the cost is stated below` : "Read the recorded runs again"} />
       </div>
       <div className="flex items-center gap-3">
-        <Segmented<Chip> label="Which checks" value={chip} onChange={setChip}
-          options={CHIPS.map((c) => ({ id: c, title: CHIP_TEXT[c].title, label: <>{CHIP_TEXT[c].label} <span className="tabular-nums" style={{ opacity: 0.7 }}>{counts[c]}</span></> }))} />
+        <Segmented<Chip | "tests"> label="Which checks" value={chip} onChange={setChip}
+          options={[
+            ...CHIPS.map((c) => ({ id: c as Chip | "tests", title: CHIP_TEXT[c].title, label: <>{CHIP_TEXT[c].label} <span className="tabular-nums" style={{ opacity: 0.7 }}>{counts[c]}</span></> })),
+            { id: "tests" as const, title: "Every failing test the app has read, counted over runs and pull requests", label: <>Failing tests <span className="tabular-nums" style={{ opacity: 0.7 }}>{tests ? tests.rows.length : "…"}</span></> },
+          ]} />
         <span className="flex-1" />
-        <FilterField value={query} onChange={setQuery} placeholder="Filter checks…" label="Filter checks" className="w-[220px]" />
+        <FilterField value={query} onChange={setQuery} placeholder={testChip ? "Filter tests…" : "Filter checks…"} label={testChip ? "Filter tests" : "Filter checks"} className="w-[220px]" />
       </div>
-      {err && !checks ? (
+      {testChip ? (
+        <FailingTestsLens data={tests && { ...tests, refresh: lastRefresh }} query={query} busy={testsBusy} error={testsErr} />
+      ) : err && !checks ? (
         <div className="text-[11px] px-1 py-6" style={{ color: "var(--text3)" }}>{err}</div>
       ) : !checks ? (
         <div className="flex items-center gap-2 text-[11px] px-1 py-6" style={{ color: "var(--text3)" }}><Spinner /> Reading the recorded runs…</div>

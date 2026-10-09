@@ -3647,6 +3647,8 @@ export interface PrCheckJob {
   failedStep?: string;
 }
 
+import type { TestVerdict } from "./failureVerdict.ts";
+
 /** One failing test (or file, or step) cut out of a CI job. */
 export interface CiFailure {
   kind: "bun" | "pytest" | "django" | "jest" | "tsc" | "step" | "annotation" | "output";
@@ -3667,19 +3669,22 @@ export interface CheckFailuresHints { attempt?: number; step?: string }
  * read), `expired` (GitHub keeps logs 90 days), `toolarge` (over the 25 MB the
  * panel reads unasked; `sizeBytes` says how big), `unparsed` (read, and nothing in
  * it names a failure), `nolog` (GitHub has no job log for this id: an app or a
- * script posted the check). `failures` may still hold what GitHub's annotations
+ * script posted the check), `unlogged` (it IS a job, and GitHub holds no log for it:
+ * a runner that stops mid-job can leave none). `failures` may still hold what GitHub's annotations
  * or the check's own output kept.
  * `requests` is what this call cost on GitHub, 0 when it came from the cache.
  */
 export type CheckFailures =
   | {
       ok: true;
-      state: "read" | "expired" | "toolarge" | "unparsed" | "nolog";
+      state: "read" | "expired" | "toolarge" | "unparsed" | "nolog" | "unlogged";
       source: "log" | "annotations" | "output" | "step" | "none";
       framework: CiFailure["kind"] | null;
       failures: CiFailure[];
       /** Failures found beyond the ten kept. */
       more: number;
+      /** What each failure's history says (shared/failureVerdict.ts), one per entry of `failures`. Worked out when asked, never stored. */
+      verdicts: TestVerdict[];
       readBytes: number;
       sizeBytes?: number;
       step?: string;
@@ -3690,6 +3695,44 @@ export type CheckFailures =
   | { ok: false; kind: "budget"; resetAt: number | null; requests: number }
   | { ok: false; kind: "error"; error: string; requests: number };
 
+/** One failing test in the CI view's "Failing tests" lens: a signature, counted over everything the app has read. */
+export interface FailingTestRow {
+  /** The test as a log named it (or the step, when no test was named). */
+  title: string;
+  /** What it said, in a few words (the normalised first message line). */
+  gist: string;
+  /** The check it failed in. */
+  check: string;
+  runs: number;
+  prs: number;
+  /** ms since epoch. */
+  firstSeen: number;
+  lastSeen: number;
+  verdict: TestVerdict;
+}
+
+/** What `/prs/failing-tests` answers: the rows, and how much of the history they are counted from. */
+export interface FailingTests {
+  ok: true;
+  rows: FailingTestRow[];
+  /** Failed runs the app knows of in the last 90 days, and how many of them have been read for their tests. */
+  failedRuns: number;
+  readRuns: number;
+  /** Only with `refresh`: what this call did. */
+  refresh?: {
+    /** Failed runs it read now (newest first), the most one refresh will. */
+    read: number;
+    cap: number;
+    /** Left unread after this, for the next refresh. */
+    pending: number;
+    /** GitHub requests this call made: the whole cost. */
+    requests: number;
+    /** The newest push to the default branch, when it could be looked at. */
+    main: "red" | "green" | "unknown";
+    error?: string;
+  };
+}
+
 /** What the cache already knows of a job's failures, for wording a row without asking GitHub. */
 export interface CheckFailureSummary {
   state: Extract<CheckFailures, { ok: true }>["state"];
@@ -3697,6 +3740,8 @@ export interface CheckFailureSummary {
   count: number;
   more: number;
   titles: string[];
+  /** One per title: what that failure's history says. */
+  verdicts: TestVerdict[];
 }
 
 export interface PrChecklistItem { checked: boolean; text: string }

@@ -301,7 +301,7 @@ describe("readCheckFailures", () => {
     expect(calls).toEqual(["annotations", "log<=25000000"]);
   });
 
-  test("another attempt or another repo is another read", async () => {
+  test("a job id is one attempt of one run, so another attempt hint is the same read; another repo is another", async () => {
     const id = job();
     const a = sources();
     await readCheckFailures("github.com/acme/orbit", id, { attempt: 1 }, a.src);
@@ -309,7 +309,7 @@ describe("readCheckFailures", () => {
     await readCheckFailures("github.com/acme/orbit", id, { attempt: 2 }, b.src);
     const c = sources();
     await readCheckFailures("github.com/acme/harbor", id, { attempt: 1 }, c.src);
-    expect([a.calls.length, b.calls.length, c.calls.length]).toEqual([2, 2, 2]);
+    expect([a.calls.length, b.calls.length, c.calls.length]).toEqual([2, 0, 2]);
   });
 
   test("tests the log names win over annotations, which carry no test name", async () => {
@@ -468,5 +468,33 @@ describe("readCheckFailures when there is no job log", () => {
     const { src } = sources({ log: { ok: false, kind: "notfound" }, out: { ok: false, kind: "budget", resetAt: 1_790_000_000_000 } });
     expect(await readCheckFailures("github.com/acme/orbit", id, {}, src)).toMatchObject({ ok: false, kind: "budget" });
     expect(storedFailures("github.com/acme/orbit", id, 1)).toBeNull();
+  });
+});
+
+// ── a job GitHub holds no log for: the runner stopped mid-job ──────────────
+describe("a job with no log", () => {
+  const RUNNER = { level: "failure", path: ".github", line: 1, message: "The self-hosted runner lost communication with the server. Verify the machine is running and has a healthy network connection." };
+
+  test("the annotation GitHub kept is the failure, and the state says the job has no log", async () => {
+    const { src, calls } = sources({ log: { ok: false, kind: "missing" }, ann: { ok: true, items: [RUNNER] } });
+    const r = await readCheckFailures("github.com/acme/orbit", job(), { step: "Tests" }, src);
+    expect(calls).toEqual(["annotations", "log<=25000000"]);
+    expect(r).toMatchObject({ ok: true, state: "unlogged", source: "annotations" });
+    if (r.ok) expect(r.failures[0]!.title).toContain("self-hosted runner lost communication");
+  });
+
+  test("with no annotation either, the check's output is asked for; with none, the state is the answer", async () => {
+    const { src, calls } = sources({ log: { ok: false, kind: "missing" } });
+    const r = await readCheckFailures("github.com/acme/orbit", job(), {}, src);
+    expect(calls).toEqual(["annotations", "log<=25000000", "output"]);
+    expect(r).toMatchObject({ ok: true, state: "unlogged", source: "none", failures: [] });
+  });
+
+  test("it is kept like any other answer", async () => {
+    const id = job();
+    await readCheckFailures("github.com/acme/orbit", id, {}, sources({ log: { ok: false, kind: "missing" } }).src);
+    const again = sources();
+    expect(await readCheckFailures("github.com/acme/orbit", id, {}, again.src)).toMatchObject({ state: "unlogged", cached: true });
+    expect(again.calls).toEqual([]);
   });
 });

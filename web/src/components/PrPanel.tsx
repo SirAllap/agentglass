@@ -12209,8 +12209,8 @@ export function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyW
             {/* GitHub offers all three, and "the whole run failed again for one
                 job" is exactly when you want the single-job one. */}
             {(() => {
-              const job = jobs.find((j) => j.name === k.name) ?? jobs.find((j) => k.name.includes(j.name));
-              if (!job || !onRerunJobs) return null;
+              const job = jobFor(k, jobs);
+              if (!job || !job.runId || !onRerunJobs) return null;
               return (
                 <>
                   <Btn onClick={() => onRerunJobs("job", job.id)} disabled={busy} small pending={busyWhat === "Re-run"} title={`Re-run only ${job.name}`}><RefreshIcon size={ICON.xs} />This job</Btn>
@@ -12222,7 +12222,7 @@ export function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy, busyW
         )}
         {/* The log, here. It used to say "the log lives on GitHub" and send you
             to a browser for the one thing you opened the check to read. */}
-        {expanded && (() => { const job = jobFor(k, jobs); return job ? <CheckFailuresPanel root={root} check={k} job={job} /> : null; })()}
+        {expanded && <CheckFailuresPanel root={root} check={k} job={jobFor(k, jobs)} />}
         {expanded && <JobLog root={root} name={k.name} jobs={jobs} />}
       </div>
     );

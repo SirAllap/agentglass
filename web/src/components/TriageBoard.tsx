@@ -27,9 +27,12 @@ import { CHIP_H } from "../lib/priority.tsx";
 import { CardTracker } from "./CardTracker.tsx";
 import { repoUsesTracker, trackerBlock } from "../lib/prCardBlock.ts";
 import { CTRL_H, EDGE, LINE } from "./workspace/Chrome.tsx";
+import { CODE_FONT_STYLE } from "./diff/DiffLines.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { askingBehind, behindOf, onBehind } from "../lib/prBehindStore.ts";
 import { onRollup, rollupOf } from "../lib/prRollupStore.ts";
+import { failureHint, jobIdOf } from "../lib/prFailureHint.ts";
+import { failureKey, loadCached, summaryOf, useFailureStore } from "../lib/checkFailuresStore.ts";
 import { stamp } from "../lib/whenStamp.ts";
 import { onSeenChange, readSeen } from "../lib/prNew.ts";
 import { unreadOf, type Unread } from "../lib/prUnread.ts";
@@ -168,7 +171,7 @@ export function TriageBoard({
    * cards claiming red ask, only while they are on screen, and the answer is
    * remembered for a minute. Everything green is already telling the truth.
    */
-  const [, bumpRollup] = useState(0);
+  const [rollupTick, bumpRollup] = useState(0);
   useEffect(() => onRollup(() => bumpRollup((n) => n + 1)), []);
   const trueChecks = useCallback((p: PrSummary): PrSummary => {
     if (!root || !p.checks || p.checks.failure === 0) return p;
@@ -178,6 +181,18 @@ export function TriageBoard({
     return real ? { ...p, checks: real } : p;
   }, [root]);
 
+  /* WHICH TEST is failing, from what the app already read and kept. One request
+     to this server's own cache, for the red cards on the board; nothing here
+     reaches GitHub, and a card whose failures nobody opened says what it always
+     did. Asked again only when a card's checks move. */
+  const failureTick = useFailureStore();
+  useEffect(() => {
+    if (!root) return;
+    const ids = new Set<string>();
+    for (const p of [...mine, ...review]) for (const c of trueChecks(p).checks?.failing ?? []) { const j = jobIdOf(c); if (j) ids.add(j); }
+    if (ids.size) void loadCached(root, [...ids]);
+  }, [root, mine, review, trueChecks, rollupTick]);
+
   const lanes = useMemo(() => {
     // De-duplicated by number before filing: a pull request that is both yours
     // and asked of you arrives twice, and would otherwise be drawn twice.
@@ -185,9 +200,10 @@ export function TriageBoard({
     for (const p of [...mine, ...review]) if (!by.has(p.number)) by.set(p.number, trueChecks(p));
     const m = new Set(mine.map((p) => p.number));
     const r = new Set(review.map((p) => p.number));
-    return fileAll([...by.values()], (p) => ({ mine: m.has(p.number), asked: r.has(p.number) }));
+    return fileAll([...by.values()], (p) => ({ mine: m.has(p.number), asked: r.has(p.number) }),
+      (p) => (root && p.checks?.failing?.length ? failureHint(p.checks.failing, (job) => summaryOf(failureKey(root, job))) : null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mine, review, trueChecks, bumpRollup]);
+  }, [mine, review, trueChecks, bumpRollup, root, failureTick]);
 
   const cards = useMemo(() => [...lanes.values()].flat(), [lanes]);
   /* Per repository: this board IS one repository's, so the answer is read off
@@ -1499,6 +1515,15 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, cursor, onOpen, onPin,
               </span>
             )}
           </div>
+          {/* WHICH TEST, when one was read and kept: the sentence says whose it
+              is, this says what it is. Absent, not blank, when nothing is known. */}
+          {p.filed.test && (
+            <div className="flex items-center gap-1.5 min-w-0" style={{ marginTop: 4, paddingLeft: 18 }}>
+              <span className="truncate rounded-md px-1.5" title={p.filed.test.title}
+                style={{ ...CODE_FONT_STYLE, fontSize: 10, color: "var(--text)", background: "var(--surface-inset)", border: LINE }}>{p.filed.test.title}</span>
+              {p.filed.test.more > 0 && <span className="shrink-0 tabular-nums" style={{ color: "var(--text3)" }}>+{p.filed.test.more}</span>}
+            </div>
+          )}
           {/* A week of nothing is said in words too: ten cards reading
               "8d" look exactly like ten reading "1h". */}
           {ev.quiet && <div className="tabular-nums" style={{ fontSize: 10, marginTop: 2, paddingLeft: 18, color: "var(--text3)" }}>{ev.quiet}</div>}

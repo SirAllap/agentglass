@@ -12,7 +12,7 @@ import { makeFailureStore } from "../src/lib/checkFailuresStore.ts";
 const F = (title: string, excerpt: string, kind: CiFailure["kind"] = "bun"): CiFailure => ({ kind, title, excerpt, signature: `${title} :: x`, truncated: false });
 const read = (o: Partial<Extract<CheckFailures, { ok: true }>> = {}): Extract<CheckFailures, { ok: true }> => ({
   ok: true, state: "read", source: "log", framework: "bun", failures: [F("orbit board > keeps four lanes", "error: expect(received).toBe(expected)\n\nExpected: 4\nReceived: 5")],
-  more: 0, readBytes: 1_153_433, at: 0, cached: false, requests: 2, ...o,
+  more: 0, verdicts: [{ kind: "this-pr" }], readBytes: 1_153_433, at: 0, cached: false, requests: 2, ...o,
 });
 
 describe("the row says what the failure is, or nothing", () => {
@@ -59,6 +59,12 @@ describe("one answer, one screen", () => {
   test("annotations on a check with no log are still a failure list", () => {
     expect(failureView(read({ state: "nolog", source: "annotations", framework: null, failures: [F("web/src/board.ts:12", "boom", "annotation")], readBytes: 0 })).kind).toBe("failures");
   });
+  test("a job GitHub holds no log for says so, with what its annotations kept, or with nothing", () => {
+    const runner = F("The self-hosted runner lost communication with the server.", "Verify the machine is running", "annotation");
+    expect(failureView(read({ state: "unlogged", source: "annotations", framework: null, failures: [runner], readBytes: 0 }))).toMatchObject({ kind: "failures", notice: "unlogged" });
+    expect(failureView(read({ state: "unlogged", source: "none", framework: null, failures: [], readBytes: 0 })).kind).toBe("unlogged");
+    expect(failureView(read({ state: "unlogged", source: "output", framework: null, failures: [F("t", "m", "output")], readBytes: 0 }))).toMatchObject({ kind: "output", why: "unlogged" });
+  });
   test("a spent budget carries the time it comes back; an error carries its words", () => {
     expect(failureView({ ok: false, kind: "budget", resetAt: 1_790_000_000_000, requests: 1 })).toEqual({ kind: "budget", resetAt: 1_790_000_000_000 });
     expect(failureView({ ok: false, kind: "error", error: "boom", requests: 1 })).toEqual({ kind: "error", error: "boom" });
@@ -90,11 +96,26 @@ describe("words", () => {
     expect(resetClock(new Date(2026, 9, 1, 14, 5).getTime())).toBe("14:05");
     expect(plural(1, "day")).toBe("1 day");
   });
-  test("a check finds its job by name, or by the job name inside a matrix name", () => {
+  test("a check finds its job by the id in its own URL, which cannot name the wrong job", () => {
+    const jobs = [{ id: "11", name: "Tests / vart-evals" }, { id: "12", name: "vart-evals" }] as never[];
+    // the name alone would pick job 12, whose name matches: the URL says 11
+    expect(jobFor({ name: "vart-evals", url: "https://github.com/acme/orbit/actions/runs/9/job/11" }, jobs)?.id).toBe("11");
+  });
+  test("a job the capped list does not hold is made from the URL: the panel is never silently absent", () => {
+    const j = jobFor({ name: "vart-evals", url: "https://github.com/acme/orbit/actions/runs/9/job/777", startedAt: "2026-10-01T10:00:00Z" }, [{ id: "1", name: "build" }] as never[]);
+    expect(j).toMatchObject({ id: "777", runId: "9", name: "vart-evals", url: "https://github.com/acme/orbit/actions/runs/9/job/777", startedAt: "2026-10-01T10:00:00Z" });
+  });
+  test("without an id in the link, the old name rules still apply", () => {
     const jobs = [{ id: "1", name: "build" }, { id: "2", name: "Sidecar (macos-latest)" }] as never[];
     expect(jobFor({ name: "build" }, jobs)?.id).toBe("1");
     expect(jobFor({ name: "CI / Sidecar (macos-latest)" }, jobs)?.id).toBe("2");
-    expect(jobFor({ name: "deploy" }, jobs)).toBeUndefined();
+  });
+  test("a check an app posted names a check run, not a job: that id is what is read", () => {
+    expect(jobFor({ name: "Docs gate", url: "https://github.com/acme/orbit/runs/4242" }, [])).toMatchObject({ id: "4242", runId: "" });
+  });
+  test("a check that names nothing has no job, and the screen says so", () => {
+    expect(jobFor({ name: "deploy" }, [{ id: "1", name: "build" }] as never[])).toBeUndefined();
+    expect(jobFor({ name: "deploy", url: "https://example.com/status" }, [])).toBeUndefined();
   });
 });
 
@@ -104,7 +125,7 @@ describe("the store asks once, and only when told to", () => {
     let i = 0;
     const store = makeFailureStore({
       failures: async (_r, job, _h, force) => { calls.push(`failures ${job}${force ? " force" : ""}`); return answers[Math.min(i++, answers.length - 1)]!; },
-      cached: async (_r, jobs) => { calls.push(`cached ${jobs.join(",")}`); return { ok: true, summaries: { "1": { state: "read", source: "log", count: 2, more: 0, titles: ["a", "b"] } } }; },
+      cached: async (_r, jobs) => { calls.push(`cached ${jobs.join(",")}`); return { ok: true, summaries: { "1": { state: "read", source: "log", count: 2, more: 0, titles: ["a", "b"], verdicts: [{ kind: "this-pr" }, { kind: "this-pr" }] } } }; },
     });
     return { store, calls };
   };
@@ -157,18 +178,20 @@ describe("the screen, against its source", () => {
   const code = (t: string) => t.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
 
   test("the way out is drawn once, in the footer every state shares; only its words change", () => {
-    expect(code(src).split("<Footer ").length - 1).toBe(1);
+    // one footer component, used by the panel and by the no-job card: the link itself is drawn in one place
+    expect(code(src).split("function Footer(").length - 1).toBe(1);
     expect(code(src).split("<a href={href}").length - 1).toBe(1);
   });
   test("opening the check is the only thing that asks: the effect that loads is keyed on the job, not on a timer", () => {
     expect(code(src)).not.toMatch(/setInterval|setTimeout\([^)]*load\(/);
     expect(src).toMatch(/useEffect\(\(\) => \{ void load\(root, job\.id, hints\); \}, \[root, job\.id\]\)/);
   });
-  test("the panel is mounted only for an expanded failed check", () => {
-    expect(prPanel).toMatch(/\{expanded && \(\(\) => \{ const job = jobFor\(k, jobs\); return job \? <CheckFailuresPanel/);
+  test("the panel is mounted for every expanded failed check, with or without a job: it always says something", () => {
+    expect(prPanel).toContain("{expanded && <CheckFailuresPanel root={root} check={k} job={jobFor(k, jobs)} />}");
+    expect(src).toContain("This check does not say which job ran it");
   });
   test("every state in the mockup has its words", () => {
-    for (const w of ["Open on GitHub", "Posted by an app", "This check has no log", "Log expired", "Too large", "No test named", "Budget spent", "Read it anyway", "Reading the log…", "GitHub no longer has this log", "GitHub’s hourly budget is used up", "The log names no failing test"]) expect(src).toContain(w);
+    for (const w of ["GitHub holds no log for this job", "Nothing to read", "Open on GitHub", "Posted by an app", "This check has no log", "Log expired", "Too large", "No test named", "Budget spent", "Read it anyway", "Reading the log…", "GitHub no longer has this log", "GitHub’s hourly budget is used up", "The log names no failing test"]) expect(src).toContain(w);
   });
   test("surfaces and borders are the house's: tokens and EDGE/LINE, no raw colour", () => {
     expect(code(src)).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgb\(|var\(--bg2\)/);
