@@ -11,7 +11,7 @@
 // whichever bites first.
 import { db } from "./db.ts";
 import type { PrCheck } from "../../shared/types.ts";
-import { runKey, baselineStats, aggregateRuns, BASELINE_RUNS, type CheckAggregate, type StoredRun } from "../../shared/checkBaseline.ts";
+import { runKey, baselineStats, aggregateRuns, BASELINE_RUNS, type CheckMetric, type StoredRun } from "../../shared/checkBaseline.ts";
 
 export const RUN_DAYS = 90;
 export const RUNS_PER_KEY = 200;
@@ -101,7 +101,7 @@ export function learnFromRead(repo: string, pr: number | null, sha: string, all:
 }
 
 /** Per check key: count, median, p90, failure rate, 14-day trend. For the metrics view to come. */
-export function repoMetrics(repo: string, now = Date.now()): { key: string; workflow: string; name: string; event: string; aggregate: CheckAggregate }[] {
+export function repoMetrics(repo: string, now = Date.now()): CheckMetric[] {
   const rows = db.prepare(`SELECT key, conclusion, ms, completed_at FROM check_runs WHERE repo = ? ORDER BY key`).all(repo) as { key: string; conclusion: StoredRun["conclusion"]; ms: number; completed_at: number }[];
   const by = new Map<string, StoredRun[]>();
   for (const r of rows) (by.get(r.key) ?? by.set(r.key, []).get(r.key)!).push({ conclusion: r.conclusion, ms: r.ms, completedAt: r.completed_at });

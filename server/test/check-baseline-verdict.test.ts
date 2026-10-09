@@ -56,5 +56,14 @@ describe("aggregates", () => {
     expect(a.trend).toHaveLength(14);
     expect(a.trend[13]).toMatchObject({ day: "2026-09-30", runs: 3, median: 10 });
     expect(a.trend[10].median).toBe(30);
+    // The newest run that was not cancelled, and the successes the median stands on.
+    expect(a.successes).toBe(2);
+    expect(a.latest).toEqual({ ms: 10, conclusion: "success", completedAt: now - 1000 });
+  });
+  test("latest skips a cancelled run and is null with nothing but cancellations", () => {
+    const now = Date.parse("2026-09-30T12:00:00Z");
+    expect(aggregateRuns([{ conclusion: "cancelled", ms: 1, completedAt: now - 10 }, { conclusion: "failure", ms: 7, completedAt: now - 500 }], now).latest)
+      .toEqual({ ms: 7, conclusion: "failure", completedAt: now - 500 });
+    expect(aggregateRuns([{ conclusion: "cancelled", ms: 1, completedAt: now - 10 }], now).latest).toBeNull();
   });
 });

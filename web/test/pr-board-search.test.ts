@@ -23,7 +23,7 @@ describe("a search falls through to the table", () => {
   it("derives what is shown from the query, not only from the stored setting", () => {
     // The inbox is a third surface and wins over both, so it is in the gate
     // too — but the rule this pins is unchanged: a search is a table.
-    expect(src).toContain("const boardShown = boardOn && !searching && !inboxOn;");
+    expect(src).toContain("const boardShown = boardOn && !searching && !inboxOn && !metricsOn;");
     expect(src).toContain("const searching = query.trim().length > 0;");
   });
 
@@ -67,7 +67,7 @@ describe("a search falls through to the table", () => {
        active, and with a search up one of them is. `inboxOn` joined this the day
        the inbox stopped being a toggle: it hides the table too, so a scope lit
        under it was the same lie. */
-    expect(src).toContain("const on = !boardShown && !inboxOn && activeView?.id === v.id;");
+    expect(src).toContain("const on = !boardShown && !inboxOn && !metricsOn && activeView?.id === v.id;");
   });
 });
 

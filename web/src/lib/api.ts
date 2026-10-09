@@ -5,6 +5,7 @@ import type { PrWatchFire, PrWatchRule, PrWatchState } from "../../../shared/typ
 import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerVolumeDetail, DockerPeek, DockerEnvRow, BrowseReport, FileFacts, FileGitFacts, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, PrCheckRollup, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, DiskPlaces, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, GitGrepHit, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest } from "../../../shared/types.ts";
 import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember } from "../../../shared/providers.ts";
 import { DEFAULT_NOTIFY_PREFS, type NotifyPrefs } from "../../../shared/notifyPrefs.ts";
+import type { CheckMetric } from "../../../shared/checkBaseline.ts";
 
 /** What every ClickUp write answers with: the card as it now stands, or why not. */
 /* `conflict` and `unauthorised` are the two failures with a remedy the app can
@@ -2016,6 +2017,9 @@ const realApi = {
   /** What this project's agents have spent, by branch and by checkout. One
    *  request for the whole repository — the board looks each row up in it. */
   prSpend: (root: string) => get<RepoSpend>(`/prs/spend?root=${encodeURIComponent(root)}`),
+  /** Every check of this repository against its own history — local, no GitHub call. */
+  prCheckMetrics: (root: string) =>
+    get<{ ok: boolean; repo?: string; checks?: CheckMetric[]; error?: string }>(`/prs/check-metrics?root=${encodeURIComponent(root)}`),
   /** Which checkout on this machine is `owner/name` — so a link to a pull
    *  request in another project opens instead of landing nowhere. */
   prLocate: (repo: string) =>
@@ -2543,6 +2547,7 @@ const demoApi: typeof realApi = {
   prCheckJobs: () => D({ ok: false, error: "not available in the demo" } as { ok: boolean; jobs?: PrCheckJob[]; error?: string }),
   prRerunJobs: () => D(demoPrAction()),
   prCounts: (_r: string, _s: "open" | "closed" | "all") => D({ ok: false, error: "not available in the demo" } as { ok: boolean; counts?: { review: number; mine: number; failing: number; ready: number; all: number }; error?: string }),
+  prCheckMetrics: (_r: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; repo?: string; checks?: CheckMetric[]; error?: string }),
   /* The demo has no local event history, and a spend chip invented for it would
      be the one number on the page that is a fiction. `ok: false` draws nothing. */
   prSpend: (_r: string) => D({ ok: false, error: "not available in the demo", since: 0, seamDay: null, beforeSeamUsd: 0, branches: [], worktrees: [] } as RepoSpend),

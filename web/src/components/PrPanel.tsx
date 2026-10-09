@@ -110,7 +110,7 @@ import { useClickupSetup } from "../lib/clickupSetup.ts";
 import type { ListStatus as CuStatus, ListMember as CuMember, ProviderTask } from "../../../shared/providers.ts";
 import { CloseButton, CloseIcon } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { AgentIcon, ArrowIcon, AttachIcon, BlockedIcon, BoltIcon, BranchIcon, CaretIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CommitIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, EditIcon, EyeIcon, FileIcon, FlagIcon, IconLabel, LinkIcon, MergeIcon, MoreIcon, PlusIcon, RefreshIcon, SearchIcon, SparkleIcon, StarIcon, TagIcon, UndoIcon, UserIcon } from "../lib/glyphIcons.tsx";
+import { AgentIcon, ArrowIcon, AttachIcon, BlockedIcon, BoltIcon, BranchIcon, CaretIcon, ChartIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CommitIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, EditIcon, EyeIcon, FileIcon, FlagIcon, IconLabel, LinkIcon, MergeIcon, MoreIcon, PlusIcon, RefreshIcon, SearchIcon, SparkleIcon, StarIcon, TagIcon, UndoIcon, UserIcon } from "../lib/glyphIcons.tsx";
 import { PrIcon } from "./workspace/icons.tsx";
 import { PrWatchMenu } from "./PrWatchMenu.tsx";
 import { onChecksRead } from "../lib/prWatchStore.ts";
@@ -119,6 +119,7 @@ import { ColumnsIcon, InboxIcon, QuoteIcon } from "./settingsNavIcons.tsx";
 import { pins, isPinned, togglePin, subscribePins, type Pin } from "../lib/prPins.ts";
 import { TriageBoard } from "./TriageBoard.tsx";
 import { Inbox } from "./prs/Inbox.tsx";
+import { CiMetrics } from "./prs/CiMetrics.tsx";
 import { FileRail } from "./FileRail.tsx";
 import { Optimistic, type Sent, reactionPatch, bodyPatch, resolvedPatch, labelsPatch, assigneesPatch, reviewersPatch, milestonePatch, draftPatch, titlePatch, statePatch, autoMergePatch } from "../lib/prOptimistic.ts";
 import { prTimeline } from "../lib/prTimeline.ts";
@@ -3080,7 +3081,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    */
   const [inboxOn, setInboxOn] = useState(false);
   const [inboxUnread, setInboxUnread] = useState(0);
-  const boardShown = boardOn && !searching && !inboxOn;
+  /* CI metrics: the repository's checks against their own history. Another view of the same exclusive row as the Inbox. */
+  const [metricsOn, setMetricsOn] = useState(false);
+  const boardShown = boardOn && !searching && !inboxOn && !metricsOn;
   /* The board is never paginated: a page left over from the table would fetch and
      count a page nobody is looking at. Back on the table it starts at page one. */
   useEffect(() => { if (boardShown) setPages([]); }, [boardShown]);
@@ -4578,28 +4581,31 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
               * left the screen exactly as it was. Asked, looking at it: "I don't
               * see the point of putting a toggle there for it".
               *
-              * So all seven are one exclusive group and say so — `role="tab"`,
+              * So all of them are one exclusive group and say so — `role="tab"`,
               * `aria-selected`, one of them lit. Picking any view is picking a
               * view.
               */}
             <Pill on={boardShown} icon={<ColumnsIcon size={ICON.xs} />} label="Board"
               title={searching ? "Clear the search and go back to the lanes" : "Yours and the ones you were asked to look at, in lanes"}
-              onClick={() => { if (searching) setQuery(""); setInboxOn(false); setStateSel("open"); setBoard(true); }} />
+              onClick={() => { if (searching) setQuery(""); setInboxOn(false); setMetricsOn(false); setStateSel("open"); setBoard(true); }} />
             {/* Its number is the only one on this row counting things nobody
                 has looked at yet, so it keeps the warning colour when it is not
                 the view you are in. */}
             <Pill on={inboxOn} icon={<InboxIcon size={ICON.xs} />} label="Inbox"
               title="What happened while you were away — GitHub's notifications, filtered to this repository"
               count={inboxUnread || undefined} countTint="var(--warning)"
-              onClick={() => setInboxOn(true)} />
+              onClick={() => { setMetricsOn(false); setInboxOn(true); }} />
+            <Pill on={metricsOn} icon={<ChartIcon size={ICON.xs} />} label="CI"
+              title="Every check of this repository against its own history — slow, flaky, drifting"
+              onClick={() => { setInboxOn(false); setMetricsOn(true); }} />
             <span className="self-center shrink-0" style={{ width: 1, height: 12, background: "color-mix(in srgb, var(--text) 14%, transparent)" }} />
             {VIEWS.map((v) => {
               const n = viewCount(v);
-              const on = !boardShown && !inboxOn && activeView?.id === v.id;
+              const on = !boardShown && !inboxOn && !metricsOn && activeView?.id === v.id;
               return (
                 <Pill key={v.id} on={on} label={v.label} title={v.hint}
                   dot={v.tint ?? undefined} count={n ?? undefined}
-                  onClick={() => { setInboxOn(false); setBoard(false); setFilter(v.scope); setQuery(v.query); }} />
+                  onClick={() => { setInboxOn(false); setMetricsOn(false); setBoard(false); setFilter(v.scope); setQuery(v.query); }} />
               );
             })}
             {!activeView && (
@@ -4659,7 +4665,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
             />
           )}
           <div ref={listRef} tabIndex={-1} onKeyDown={onListKey} className="flex-1 overflow-y-auto min-h-0 agx-scroll outline-none">
-            {inboxOn ? (
+            {metricsOn ? (
+              <CiMetrics root={projectRoot} repo={repo?.nameWithOwner ?? ""} active={active && selected == null} />
+            ) : inboxOn ? (
               <Inbox repo={repo?.nameWithOwner ?? ""} onFlash={flash} onUnread={setInboxUnread} active={active && selected == null} />
             ) : boardShown && repo && !listState.needsAuth ? (
               /* The board replaces the TABLE, not the panel: every pill, facet
@@ -4686,7 +4694,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                 pinned={(n) => isPinned(repo.nameWithOwner, n)}
                 onOpen={openPr}
                 onTogglePin={(p) => togglePin(repo.nameWithOwner, p.number, p.title)}
-                onShowTable={() => { setInboxOn(false); setBoard(false); setFilter("all"); setQuery(""); }}
+                onShowTable={() => { setInboxOn(false); setMetricsOn(false); setBoard(false); setFilter("all"); setQuery(""); }}
                 busy={busy}
                 loading={boardLoading} settling={boardSettling} acting={actingOn} root={root}
                 /* `repo.key`, because that is what the conversation's "last

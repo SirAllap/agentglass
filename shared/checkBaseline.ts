@@ -71,6 +71,10 @@ export interface StoredRun { conclusion: "success" | "failure" | "cancelled"; ms
 
 export interface CheckAggregate {
   runs: number;
+  /** Successful runs: what median and p90 stand on, so the view can refuse a verdict under MIN_SAMPLES. */
+  successes: number;
+  /** The newest run that was not cancelled, the one the view holds up against the rest. Null with none. */
+  latest: { ms: number; conclusion: "success" | "failure"; completedAt: number } | null;
   /** Successful runs only, like the baseline. Null with none. */
   median: number | null;
   p90: number | null;
@@ -91,11 +95,17 @@ export function aggregateRuns(rows: StoredRun[], now: number, days = 14): CheckA
     const s = inDay.filter((r) => r.conclusion === "success").map((r) => r.ms);
     return { day: new Date(d * dayMs).toISOString().slice(0, 10), runs: inDay.length, median: s.length ? median(s) : null };
   });
+  const newest = rows.filter((r) => r.conclusion !== "cancelled").reduce<StoredRun | null>((a, r) => (!a || r.completedAt > a.completedAt ? r : a), null);
   return {
     runs: rows.length,
+    successes: ok.length,
+    latest: newest ? { ms: newest.ms, conclusion: newest.conclusion as "success" | "failure", completedAt: newest.completedAt } : null,
     median: ok.length ? median(ok) : null,
     p90: ok.length ? percentile(ok, 0.9) : null,
     failureRate: ok.length + bad ? bad / (ok.length + bad) : null,
     trend,
   };
 }
+
+/** One check of the repository, as `/prs/check-metrics` answers it. */
+export interface CheckMetric { key: string; workflow: string; name: string; event: string; aggregate: CheckAggregate }

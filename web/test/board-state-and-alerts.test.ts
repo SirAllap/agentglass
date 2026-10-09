@@ -32,7 +32,7 @@ describe("PR board state axis", () => {
   });
 
   it("puts the board back on Open when Board is picked", () => {
-    expect(pr).toContain('setInboxOn(false); setStateSel("open"); setBoard(true);');
+    expect(pr).toContain('setInboxOn(false); setMetricsOn(false); setStateSel("open"); setBoard(true);');
   });
 });
 
