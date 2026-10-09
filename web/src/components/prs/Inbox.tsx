@@ -21,7 +21,7 @@
  *     on this machine — see inboxMarks.ts — rather than left out and sending
  *     somebody to a browser for them.
  */
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { InboxItem } from "../../../../shared/types.ts";
 import { api } from "../../lib/api.ts";
 import { byDay, facetCounts, facetOrder, FACETS, filterInbox, inFacet, reasonLabel, searchInbox } from "../../lib/ghInbox.ts";
@@ -35,6 +35,24 @@ import { ICON } from "../../lib/iconSize.ts";
 import { CommentIcon, DoneIcon, EyeIcon, FlagIcon, HandIcon, InboxIcon, UserIcon } from "../../lib/glyphIcons.tsx";
 import { GitIcon } from "../workspace/icons.tsx";
 import { RefreshButton, INPUT, INPUT_STYLE, EDGE, LINE } from "../workspace/Chrome.tsx";
+import { Optimistic } from "../../lib/prOptimistic.ts";
+
+/** The list with the given threads set read. A pure patch, kept outside the
+ *  component so the layer it draws — see `Optimistic` — can be exercised
+ *  without mounting anything: `unread` is the one field GitHub's "read" call
+ *  changes, and setting it (never toggling it) is what makes a layer drawn
+ *  twice over the same thread harmless. */
+export const markReadPatch = (ids: string[]) => (items: InboxItem[]): InboxItem[] => {
+  if (!ids.length) return items;
+  const set = new Set(ids);
+  let changed = false;
+  const next = items.map((n) => {
+    if (!set.has(n.id) || !n.unread) return n;
+    changed = true;
+    return { ...n, unread: false };
+  });
+  return changed ? next : items;
+};
 
 
 /** A pull request, an issue, or something with no page of its own here. */
@@ -124,17 +142,32 @@ export function Inbox({ repo, onFlash, onUnread }: {
      them — so the list subscribes rather than copying them into state. */
   const marksTick = useSyncExternalStore(subscribeMarks, () => `${savedIds().length}:${doneIds().length}`, () => "0:0");
 
+  /* The "Read" tick is drawn at once and taken back only if GitHub refuses it —
+     the same layer-over-the-last-answer pattern as the pull request panel's
+     reactions (`prOptimistic.ts`). `onFlash` is read through a ref so the
+     Optimistic instance, and the layers it is holding, survive a re-render
+     that hands this component a new closure for it. */
+  const onFlashRef = useRef(onFlash);
+  onFlashRef.current = onFlash;
+  const [, bumpOptimistic] = useState(0);
+  const optimistic = useMemo(() => new Optimistic<InboxItem[]>({
+    onChange: () => bumpOptimistic((t) => t + 1),
+    onFail: (text) => onFlashRef.current?.(false, text),
+  }), []);
+
   const load = useCallback((force = false) => {
     setBusy(true);
+    const ticket = optimistic.readStarted();
     void api.prsInbox(force)
       .then((r) => {
         setRaw(r.items ?? []);
         setAt(r.at ?? Date.now());
         setErr(r.ok ? (r.error ?? "") : (r.error ?? "GitHub did not answer"));
+        optimistic.readLanded(ticket);
       })
       .catch(() => setErr("Could not reach the server"))
       .finally(() => setBusy(false));
-  }, []);
+  }, [optimistic]);
 
   useEffect(() => { load(); }, [load]);
   /* Polled while it is on screen, at GitHub's own asking distance for this
@@ -144,7 +177,7 @@ export function Inbox({ repo, onFlash, onUnread }: {
     return () => clearInterval(timer);
   }, [load]);
 
-  const all = raw ?? [];
+  const all = optimistic.view(raw ?? []);
   /** Everything on this shelf, in this repository unless asked otherwise. Every
    *  count below is computed from here, so a chip says what pressing it does. */
   const shelved = useMemo(
@@ -174,9 +207,23 @@ export function Inbox({ repo, onFlash, onUnread }: {
 
   const act = async (ids: string[], what: "read" | "unsubscribe") => {
     if (!ids.length) return;
+    if (what === "read") {
+      // Drawn on the press: a bold row goes plain at once, and a refusal takes
+      // it back through onFail rather than a re-read of the whole inbox — see
+      // markReadPatch and prOptimistic.ts. Each thread is its own lane so two
+      // "Read" presses on the same row cannot land out of order.
+      setPicked(new Set());
+      await Promise.all(ids.map((id) => optimistic.run({
+        patch: markReadPatch([id]),
+        send: () => api.prsInboxAct({ act: "read", id }),
+        failText: "Could not mark it read",
+        lane: id,
+      })));
+      return;
+    }
     setBusy(true);
     for (const id of ids) {
-      const r = await api.prsInboxAct(what === "read" ? { act: "read", id } : { act: "unsubscribe", id });
+      const r = await api.prsInboxAct({ act: "unsubscribe", id });
       if (!r.ok) onFlash?.(false, r.error ?? "GitHub refused that");
     }
     setPicked(new Set());
@@ -187,8 +234,9 @@ export function Inbox({ repo, onFlash, onUnread }: {
     if (n.number == null) return;
     // Reading it here is reading it: GitHub marks a thread read when you open
     // the page, and a row that stays bold after you have dealt with it is how
-    // an inbox stops meaning anything.
-    if (n.unread) void api.prsInboxAct({ act: "read", id: n.id }).then(() => load(true));
+    // an inbox stops meaning anything. Goes through `act` so the tick is drawn
+    // at once instead of waiting on this same call.
+    if (n.unread) void act([n.id], "read");
     /* An issue opens in Tasks, which is where this app keeps them; a pull
        request in this very panel. `openIssue` takes the number alone — issues
        are addressed by the checkout on screen, not by `owner/name`. */
