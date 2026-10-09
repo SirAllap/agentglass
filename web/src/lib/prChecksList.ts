@@ -126,7 +126,7 @@ export function applyFilter(all: PrCheck[], filter: CheckFilter, query: string):
   return all.filter((k) => matches(k, filter) && (!q || checkLabel(k).toLowerCase().includes(q)));
 }
 
-/** "E2E (chat-widget)" reads as "E2E · chat-widget": a matrix's arguments are the part that tells its jobs apart. */
+/** "E2E (checkout)" reads as "E2E · checkout": a matrix's arguments are the part that tells its jobs apart. */
 export function shortName(k: PrCheck): string {
   return k.name.replace(/\s*\(([^()]*)\)$/, " · $1").replace(/\s+/g, " ").trim();
 }

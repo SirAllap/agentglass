@@ -37,10 +37,10 @@ describe("Checks tab", () => {
   });
 
   test("a failing check is pinned above the workflow cards with its own words", () => {
-    const html = draw([...green.slice(0, 5), mk("e2e (chat-widget)", "failure", { ...at(505), title: "3 tests failed" })]);
+    const html = draw([...green.slice(0, 5), mk("e2e (checkout)", "failure", { ...at(505), title: "3 tests failed" })]);
     expect(html).toContain("1 check failing");
     expect(html).toContain("Needs attention");
-    expect(html).toContain("CI / e2e · chat-widget");
+    expect(html).toContain("CI / e2e · checkout");
     expect(html).toContain("3 tests failed");
     expect(html.indexOf("Needs attention")).toBeLessThan(html.indexOf("aria-expanded"));
   });

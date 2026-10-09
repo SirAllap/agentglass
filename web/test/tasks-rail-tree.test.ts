@@ -74,10 +74,10 @@ describe("railKey, the keyboard model", () => {
 
 describe("the filter's match", () => {
   it("cuts a name around the match, case-insensitively", () => {
-    expect(railSplit("Voice and Transcript", "TRANS")).toEqual(["Voice and ", "Trans", "cript"]);
-    expect(railSplit("Billing Rules", "")).toEqual(["Billing Rules", "", ""]);
+    expect(railSplit("Search and Transcript", "TRANS")).toEqual(["Search and ", "Trans", "cript"]);
+    expect(railSplit("Release Notes", "")).toEqual(["Release Notes", "", ""]);
     // Matched on a name that is not drawn (the tooltip's list name): nothing to underline.
-    expect(railSplit("Caller Identity", "regional")).toEqual(["Caller Identity", "", ""]);
+    expect(railSplit("Sync Engine", "nightly")).toEqual(["Sync Engine", "", ""]);
   });
 });
 

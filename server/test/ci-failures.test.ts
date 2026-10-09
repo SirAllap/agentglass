@@ -484,13 +484,13 @@ describe("readCheckFailures", () => {
 });
 
 // ── a check an app posted: no job log, only its own output ─────────────────
-const GATE = { title: "Critical file requirements not met", summary: "❌ Core: missing checklist item: \"Add a performance item to Testing Criteria\"", text: "" };
+const GATE = { title: "Required files check failed", summary: "missing checklist item: \"Add a changelog entry\"", text: "" };
 
 describe("outputFailures", () => {
   test("the title and the summary are the failure", () => {
     const r = outputFailures(GATE);
     expect(r.failures).toHaveLength(1);
-    expect(r.failures[0]).toMatchObject({ kind: "output", title: "Critical file requirements not met" });
+    expect(r.failures[0]).toMatchObject({ kind: "output", title: "Required files check failed" });
     expect(r.failures[0]!.excerpt).toContain("missing checklist item");
   });
   test("summary and text are kept together, in that order", () => {
@@ -518,7 +518,7 @@ describe("readCheckFailures when there is no job log", () => {
     const r = await readCheckFailures("github.com/acme/orbit", job(), {}, src);
     expect(calls).toEqual(["annotations", "log<=25000000", "output"]);
     expect(r).toMatchObject({ ok: true, state: "nolog", source: "output", requests: 3 });
-    if (r.ok) expect(r.failures[0]).toMatchObject({ kind: "output", title: "Critical file requirements not met" });
+    if (r.ok) expect(r.failures[0]).toMatchObject({ kind: "output", title: "Required files check failed" });
   });
 
   test("it is kept: opened again it costs nothing", async () => {

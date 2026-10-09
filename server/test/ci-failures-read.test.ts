@@ -29,7 +29,7 @@ const BODY = [
 ].join("\n");
 writeFileSync(join(dir, "body.txt"), BODY);
 writeFileSync(join(dir, "ann-empty.json"), "[]");
-writeFileSync(join(dir, "out-gate.json"), JSON.stringify({ title: "Critical file requirements not met", summary: "missing checklist item: add a performance item", text: "" }));
+writeFileSync(join(dir, "out-gate.json"), JSON.stringify({ title: "Required files check failed", summary: "missing checklist item: add a changelog entry", text: "" }));
 writeFileSync(join(dir, "out-none.json"), JSON.stringify({ title: "", summary: "", text: "" }));
 writeFileSync(join(dir, "ann-none.json"), JSON.stringify([{ annotation_level: "failure", path: ".github", start_line: 1, message: "Process completed with exit code 2." }]));
 
@@ -150,7 +150,7 @@ describe("a failed check, read through gh", () => {
   it("a 404 on the log is a check an app posted: it shows the check's own message, not GitHub's error", async () => {
     const { got, lines } = await read("notfound");
     expect(got).toMatchObject({ ok: true, state: "nolog", source: "output", requests: 3 });
-    expect(got.failures[0]).toMatchObject({ kind: "output", title: "Critical file requirements not met" });
+    expect(got.failures[0]).toMatchObject({ kind: "output", title: "Required files check failed" });
     expect(got.failures[0].excerpt).toContain("missing checklist item");
     expect(JSON.stringify(got)).not.toContain("HTTP 404");
     expect(lines).toHaveLength(3);

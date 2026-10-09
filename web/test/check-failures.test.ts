@@ -49,7 +49,7 @@ describe("one answer, one screen", () => {
     expect(failureView(read({ state: "unparsed", source: "none", failures: [] })).kind).toBe("unparsed");
   });
   test("a check an app posted shows its own message, whether it never had a log or the log expired", () => {
-    const msg = F("Critical file requirements not met", "missing checklist item", "output");
+    const msg = F("Required files check failed", "missing checklist item", "output");
     expect(failureView(read({ state: "nolog", source: "output", framework: null, failures: [msg], readBytes: 0 }))).toMatchObject({ kind: "output", why: "nolog" });
     expect(failureView(read({ state: "expired", source: "output", framework: null, failures: [msg], readBytes: 0 }))).toMatchObject({ kind: "output", why: "expired" });
   });
