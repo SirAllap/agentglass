@@ -13,9 +13,13 @@ import * as P from "../src/clickupPrefs.ts";
 import { freePort } from "./freePort.ts";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
+import { story } from "./story.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "agx-cu-prefs-"));
 const file = join(dir, "prefs.json");
+// Removed once, after every describe: with --seed the describes run in any
+// order, and the route's own cleanup used to delete this under the store's tests.
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("the store", () => {
   beforeEach(() => { rmSync(file, { force: true }); P.__setPrefsPath(file); });
@@ -238,6 +242,8 @@ describe("the store", () => {
 });
 
 describe("the route", () => {
+  // One server, read and written in order: the first GET is the never-saved one.
+  const step = story();
   let proc: ReturnType<typeof Bun.spawn> | null = null, base = "";
   const cfg = join(dir, "srv");
 
@@ -269,20 +275,20 @@ describe("the route", () => {
 
   afterAll(() => {
     try { proc?.kill(); } catch { /* already gone */ }
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(cfg, { recursive: true, force: true });
   });
 
   const post = (body: unknown, headers: Record<string, string> = {}) =>
     fetch(base + "/clickup/prefs", { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
 
-  test("GET answers the defaults when nothing was ever saved", async () => {
+  step("GET answers the defaults when nothing was ever saved", async () => {
     const j = await (await fetch(base + "/clickup/prefs")).json() as any;
     expect(j.ok).toBe(true);
     expect(j.prefs.handoff.enabled).toBe(false);
     expect(j.prefs.bell.kinds).toHaveLength(4);
   });
 
-  test("POST saves, GET reads it back, and the file lands under XDG_CONFIG_HOME", async () => {
+  step("POST saves, GET reads it back, and the file lands under XDG_CONFIG_HOME", async () => {
     const r = await post({ handoff: { enabled: true, statusNames: ["Testing"] } });
     expect(r.status).toBe(200);
     const j = await (await fetch(base + "/clickup/prefs")).json() as any;
@@ -291,7 +297,7 @@ describe("the route", () => {
     expect(onDisk.handoff.enabled).toBe(true);
   });
 
-  test("a refusal is a 400 with a sentence", async () => {
+  step("a refusal is a 400 with a sentence", async () => {
     const r = await post({ handoff: { unassign: "everyone" } });
     expect(r.status).toBe(400);
     expect(((await r.json()) as any).error).toMatch(/handoff\.unassign/);
@@ -303,7 +309,7 @@ describe("the route", () => {
      Origin. It is turned away by the gate every route sits behind; the route
      repeats the check with trustedCaller, as every other ClickUp write does,
      for the day it is reached by a path that skips the gate. */
-  test("a write from a page on another origin is blocked and changes nothing", async () => {
+  step("a write from a page on another origin is blocked and changes nothing", async () => {
     const r = await post({ prLinkField: "Hijacked" }, { origin: "https://evil.example" });
     expect(r.status).toBe(403);
     const j = await (await fetch(base + "/clickup/prefs")).json() as any;
