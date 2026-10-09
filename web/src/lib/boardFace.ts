@@ -18,16 +18,11 @@
  * and a decision can be tested without a browser.
  */
 
-/**
- * How soon the board asks again after a list said it was still reading.
- *
- * The table's own re-ask waits 1.5s, and it is that wait that kept a freshly
- * invalidated board blank for the whole of it even when the read behind it took
- * 400ms (measured, fake GitHub). The ask is to this server's cache and starts no
- * read of its own — `refreshList` joins the one in flight — so a short first
- * delay costs no GitHub request. It doubles from here, see prSettle.ts.
- */
-export const BOARD_ASK_MS = 500;
+import { SETTLE_MS } from "./prSettle.ts";
+
+/** How soon the board asks again after a list said it was still reading: the
+ *  table's own first ask, see SETTLE_MS in prSettle.ts for why it is short. */
+export const BOARD_ASK_MS = SETTLE_MS;
 
 /** The part of a list response the decision reads. `null` is a call that threw. */
 export type ListRead = { prs: readonly unknown[]; loading?: boolean; error?: string } | null;

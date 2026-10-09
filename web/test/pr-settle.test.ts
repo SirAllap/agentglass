@@ -50,12 +50,12 @@ describe("a server that never settles", () => {
   it("is asked at a doubling interval, capped at the poll", () => {
     const seen: number[] = [];
     let d = SETTLE_MS;
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 10; i++) {
       const s = settleAfter({ loading: true }, d);
       seen.push(s.wait!);
       d = s.next;
     }
-    expect(seen.slice(0, 4)).toEqual([1_500, 3_000, 6_000, 12_000]);
+    expect(seen.slice(0, 4)).toEqual([500, 1_000, 2_000, 4_000]);
     // And never faster than it would have been polled anyway — the point of
     // the cap is that the pathological case costs no more than doing nothing.
     for (const w of seen) expect(w).toBeLessThanOrEqual(POLL_MS);

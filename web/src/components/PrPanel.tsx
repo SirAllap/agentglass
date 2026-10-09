@@ -2586,19 +2586,22 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     return api.prList(root, filter, stateSel, force, cursor, serverQuery).then((r) => {
       if (req !== listReq.current) return; // a newer request already won
       setRepo(r.repo);
+      // `{ prs: [], loading: true }` after a write is not an answer: the rows stay (as on the board, lib/boardFace.ts) and the settle timer below collects the real list.
+      const reading = listOutcome(r) === "reading";
       // Same rule as the board: a refresh may add and correct, but it may not
       // un-know. Every fetch starts at the fast pass, so without this a list
       // that had its check states dropped back to "not in yet" on every poll.
-      setPrs((cur) => (want === "mine" ? withReopened : (x: PrSummary[]) => x)(openLists(holdEdits(keepLoadedChecks(cur, r.prs), editLog.current, r.fetchedAt)), r.startedAt));
-      setListState({ fetchedAt: r.fetchedAt, loading: r.loading, checksPending: r.checksPending, error: r.error, needsAuth: r.needsAuth, total: r.total, hasNext: r.hasNext, cursor: r.cursor ?? null, pageSize: r.pageSize });
+      if (!reading) setPrs((cur) => (want === "mine" ? withReopened : (x: PrSummary[]) => x)(openLists(holdEdits(keepLoadedChecks(cur, r.prs), editLog.current, r.fetchedAt)), r.startedAt));
+      // fetchedAt 0 is "nothing read yet", not a time: the masthead keeps "ago · updating" over the rows that stayed.
+      setListState((st) => ({ fetchedAt: reading ? st.fetchedAt : r.fetchedAt, loading: r.loading, checksPending: r.checksPending, error: r.error, needsAuth: r.needsAuth, total: r.total, hasNext: r.hasNext, cursor: r.cursor ?? null, pageSize: r.pageSize }));
       // The keyboard cursor, never the open pull request. This lands on every
       // poll and on every scope switch, and when the list was a column beside a
       // detail pane, falling back to `prs[0]` only decided which one the pane
       // previewed. Now that a pull request is a page, the same line meant
       // picking a view — or just waiting through a refresh — opened whatever
       // happened to be first. A row is opened when somebody opens it.
-      if (pageRanOut({ pageDepth: pages.length, rows: r.prs.length, hasNext: !!r.hasNext })) setPages([]);
-      setRowCursor((cur) => (cur && r.prs.some((p) => p.number === cur) ? cur : null));
+      if (!reading && pageRanOut({ pageDepth: pages.length, rows: r.prs.length, hasNext: !!r.hasNext })) setPages([]);
+      if (!reading) setRowCursor((cur) => (cur && r.prs.some((p) => p.number === cur) ? cur : null));
       const settle = settleAfter(r, settleDelay.current);
       if (settleTimer.current) clearTimeout(settleTimer.current);
       settleTimer.current = settle.wait == null

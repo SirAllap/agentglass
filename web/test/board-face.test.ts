@@ -122,3 +122,23 @@ describe("the panel's board fetch", () => {
     expect(fetch).toContain('x.status === "fulfilled" ? x.value : listOutcome(null)');
   });
 });
+
+describe("the table's list fetch", () => {
+  const start = panel.indexOf("const loadList = useCallback(");
+  const end = panel.indexOf("loadListRef.current = loadList;", start);
+  const load = panel.slice(start, end);
+  it("found its own callback", () => {
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+  });
+  it("keeps the rows, the pager and the cursor while the server is still reading", () => {
+    expect(load).toContain('const reading = listOutcome(r) === "reading";');
+    expect(load).toContain("if (!reading) setPrs(");
+    expect(load).toContain("if (!reading && pageRanOut(");
+    expect(load).toContain("if (!reading) setRowCursor(");
+  });
+  it("still records the loading state, so the settle timer asks again", () => {
+    expect(load).toContain("fetchedAt: reading ? st.fetchedAt : r.fetchedAt, loading: r.loading");
+    expect(load).toContain("settleAfter(r, settleDelay.current)");
+  });
+});
