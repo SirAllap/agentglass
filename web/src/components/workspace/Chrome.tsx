@@ -21,6 +21,7 @@
  */
 
 import type { ButtonHTMLAttributes, CSSProperties, KeyboardEvent, ReactNode } from "react";
+import { externalUrl } from "../../lib/externalUrl.ts";
 import { HIT, ICON } from "../../lib/iconSize.ts";
 import { DoneIcon, RefreshIcon } from "../../lib/glyphIcons.tsx";
 
@@ -389,8 +390,9 @@ export function ScopeChip({ label, kind, trailing = "none", on, onClick, title, 
    * this right — they are what say "this is a control".
    */
   const style = on ? chipTone(true) : CHIP_SURFACE;
-  return href
-    ? <a href={href} target="_blank" rel="noreferrer" title={title} className={cls} style={style}>{inner}</a>
+  const safe = href ? externalUrl(href) : undefined;
+  return safe
+    ? <a href={safe} target="_blank" rel="noreferrer" title={title} className={cls} style={style}>{inner}</a>
     : <button onClick={onClick} title={title} className={cls} style={style}>{inner}</button>;
 }
 

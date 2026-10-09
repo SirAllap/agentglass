@@ -378,7 +378,7 @@ export function FileViewer({ files, at, setAt, openLink = true }: {
                 <span className="text-[10.5px]" style={{ color: "var(--text4)" }}>
                   Usually a codec it has no decoder for — some recorders write HEVC. It will open outside.
                 </span>
-                <a href={open.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
+                <a href={externalUrl(open.url)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
                   className="text-[11px] px-2.5 py-1 rounded-lg"
                   style={{ border: edge(28), color: "var(--text)" }}>Open it outside ↗</a>
               </span>

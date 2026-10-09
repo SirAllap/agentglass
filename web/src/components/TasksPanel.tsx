@@ -6181,8 +6181,8 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
             controls travel together — refresh is always the last control on
             a toolbar (see the board's own bar, Git, Docker, Lantern). */}
         <span className="flex-1" />
-        {t.url && (
-          <a href={t.url} target="_blank" rel="noreferrer" className="text-[10.5px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg"
+        {externalUrl(t.url) && (
+          <a href={externalUrl(t.url)} target="_blank" rel="noreferrer" className="text-[10.5px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg"
             style={{ border: line, color: "var(--text2)" }}>Open ↗</a>
         )}
         {/*
@@ -8453,7 +8453,7 @@ function TaskDetail({ t, today, reminder, onCancel, writable, onToggleNote, onSh
         <>
           <div className={`${EYEBROW} mt-4 mb-1.5`} style={{ color: "var(--text3)" }}>Links</div>
           {t.urls.map((u) => (
-            <a key={u} href={u} target="_blank" rel="noreferrer"
+            <a key={u} href={externalUrl(u)} target="_blank" rel="noreferrer"
               className="block text-[10px] break-all mb-1" style={{ color: "var(--info-ink)" }}>{u}</a>
           ))}
         </>

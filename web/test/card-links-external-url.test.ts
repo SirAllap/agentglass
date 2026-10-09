@@ -24,3 +24,29 @@ describe("the card's link squares", () => {
     expect(row).not.toContain("<a href={href}");
   });
 });
+
+const read = (rel: string) => Bun.file(new URL(`../src/components/${rel}`, import.meta.url)).text();
+
+describe("every other anchor that carries a provider's or a plugin's address", () => {
+  it("the card's Open button and its Links list", () => {
+    expect(src).toContain("<a href={externalUrl(t.url)} target=\"_blank\"");
+    expect(src).toContain("<a key={u} href={externalUrl(u)}");
+    expect(src).not.toContain("<a href={t.url}");
+    expect(src).not.toContain("<a key={u} href={u}");
+  });
+  it("the file viewer's open-outside link", async () => {
+    const files = await read("CardFiles.tsx");
+    expect(files).toContain("<a href={externalUrl(open.url)}");
+    expect(files).not.toContain("<a href={open.url}");
+  });
+  it("a plugin tree's link, so a middle click does not follow the raw value", async () => {
+    const tree = await read("plugins/PluginTree.tsx");
+    expect(tree).toContain("<a href={externalUrl(node.href)}");
+    expect(tree).not.toContain("<a href={node.href}");
+  });
+  it("the scope chip's link", async () => {
+    const chrome = await read("workspace/Chrome.tsx");
+    expect(chrome).toContain("externalUrl(href)");
+    expect(chrome).not.toContain("<a href={href}");
+  });
+});
