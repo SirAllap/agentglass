@@ -292,7 +292,7 @@ export function ClickUpPane() {
       <section className="agx-settings-section" aria-label="Connection">
         <div className="grid items-center gap-6 p-6" style={{ gridTemplateColumns: "minmax(0,1fr) auto" }}>
           <div className="flex items-center gap-4 min-w-0">
-            <span aria-hidden className="grid place-items-center rounded-full font-bold text-[15px] shrink-0" style={{ width: 40, height: 40, background: "var(--primary)", color: "var(--bg)" }}>{(provider?.detail?.match(/as (\S)/)?.[1] ?? "C").toUpperCase()}</span>
+            <span aria-hidden className="grid place-items-center rounded-full font-bold text-[15px] shrink-0" style={{ width: 40, height: 40, background: "var(--primary)", color: "var(--on-primary)" }}>{(provider?.detail?.match(/as (\S)/)?.[1] ?? "C").toUpperCase()}</span>
             <div className="flex flex-col gap-0.5 min-w-0">
               <div className="flex items-center gap-2 flex-wrap"><h1 className="m-0 text-[18px] font-bold">{n.name}</h1><Badge tone="ok">Connected</Badge></div>
               {provider?.detail && hint(provider.detail)}

@@ -82,7 +82,7 @@ function Tick({ on }: { on: boolean }) {
       style={{ width: 16, height: 16, border: `1px solid color-mix(in srgb, var(--text) ${on ? 0 : 26}%, transparent)`, background: on ? "var(--primary)" : "transparent" }}>
       {on && (
         /* ICON.xs is the floor for a stroked glyph, tick included. */
-        <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 24 24" fill="none" stroke="var(--bg)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 24 24" fill="none" stroke="var(--on-primary)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
           <path d="M4 12l5 5L20 6" />
         </svg>
       )}
@@ -449,7 +449,7 @@ export function Inbox({ repo, root, prs, onFlash, onUnread, active = true }: {
               <button key={String(label)} onClick={() => setUnreadOnly(on as boolean)}
                 className="agx-btn text-[10.5px] px-2 py-0.5"
                 style={{
-                  color: unreadOnly === on ? "var(--bg)" : "var(--text2)",
+                  color: unreadOnly === on ? "var(--on-primary)" : "var(--text2)",
                   background: unreadOnly === on ? "var(--primary)" : "transparent",
                 }}>{label}</button>
             ))}
@@ -466,7 +466,7 @@ export function Inbox({ repo, root, prs, onFlash, onUnread, active = true }: {
                 return (
                   <button key={String(label)} onClick={() => setSortBy(id as string | null)}
                     className="agx-btn text-[10.5px] px-2 py-0.5"
-                    style={{ color: on ? "var(--bg)" : "var(--text2)", background: on ? "var(--primary)" : "transparent" }}>{label}</button>
+                    style={{ color: on ? "var(--on-primary)" : "var(--text2)", background: on ? "var(--primary)" : "transparent" }}>{label}</button>
                 );
               })}
             </div>

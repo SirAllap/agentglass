@@ -63,7 +63,7 @@ function Action({ children, onClick, primary }: { children: React.ReactNode; onC
       onClick={onClick}
       className="text-[10px] px-2 py-1 rounded"
       style={{
-        color: primary ? "var(--bg)" : "var(--text2)",
+        color: primary ? "var(--on-primary)" : "var(--text2)",
         background: primary ? "var(--primary)" : "transparent",
         border: `1px solid ${primary ? "var(--primary)" : "var(--border2)"}`,
       }}

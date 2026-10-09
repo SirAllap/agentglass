@@ -55,7 +55,7 @@ export const SPLIT_SEL_CSS = '.agx-split[data-sel="l"] [data-side="r"]{user-sele
    pane. They scrolled off the left with everything else and a diff scrolled
    sideways had nothing left saying which line you were on. Sticky establishes a
    containing block just as well, so the absolutely placed "+" is unaffected. */
-export const LINEBTN_CSS = '.agx-gutter{position:sticky}.agx-linebtn{position:absolute;right:-14px;top:50%;transform:translateY(-50%);width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:6px;background:var(--primary);color:#fff;font-size:16px;font-weight:600;line-height:1;opacity:0;transition:opacity .12s,transform .12s;cursor:pointer;z-index:3;box-shadow:0 1px 3px rgba(0,0,0,.35)}.agx-gutter:hover .agx-linebtn,.agx-linebtn:focus-visible,.agx-linebtn[data-open="1"]{opacity:1}.agx-linebtn:hover{transform:translateY(-50%) scale(1.08)}';
+export const LINEBTN_CSS = '.agx-gutter{position:sticky}.agx-linebtn{position:absolute;right:-14px;top:50%;transform:translateY(-50%);width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:6px;background:var(--primary);color:var(--on-primary);font-size:16px;font-weight:600;line-height:1;opacity:0;transition:opacity .12s,transform .12s;cursor:pointer;z-index:3;box-shadow:0 1px 3px rgba(0,0,0,.35)}.agx-gutter:hover .agx-linebtn,.agx-linebtn:focus-visible,.agx-linebtn[data-open="1"]{opacity:1}.agx-linebtn:hover{transform:translateY(-50%) scale(1.08)}';
 
 /*
  * A pane that has handed its scrollbar to the rail below it.

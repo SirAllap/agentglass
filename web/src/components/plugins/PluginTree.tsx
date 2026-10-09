@@ -545,7 +545,7 @@ function MultiPick({ field, value, onChange }: { field: Field; value: string[]; 
                   <span className="shrink-0 grid place-items-center rounded" style={{
                     width: 16, height: 16,
                     border: `1px solid ${on ? "var(--primary)" : "color-mix(in srgb, var(--border) 70%, transparent)"}`,
-                    background: on ? "var(--primary)" : "transparent", color: "var(--bg)",
+                    background: on ? "var(--primary)" : "transparent", color: "var(--on-primary)",
                   }}>{on && <DoneIcon size={ICON.xs} />}</span>
                   <span className="truncate">{o.label}</span>
                 </button>

@@ -10,6 +10,7 @@
  * the theme's own primary shows through.
  */
 import { ACCENTS as SHARED_ACCENTS } from "../../../shared/palettes.ts";
+import { onPrimaryInk } from "./contrast.ts";
 
 export interface Accent { id: string; name: string; primary: string; hover: string }
 
@@ -56,6 +57,11 @@ export function applyAccent(): void {
   if (a && a.primary) {
     root.setProperty("--primary", a.primary);
     root.setProperty("--primary-hover", a.hover);
+    // The ink on the fill follows the colour that is now the fill, not the one
+    // the theme painted it for.
+    const cs = getComputedStyle(document.documentElement);
+    const on = onPrimaryInk(a.primary, cs.getPropertyValue("--bg").trim(), cs.getPropertyValue("--text").trim());
+    if (on) root.setProperty("--on-primary", on);
   }
 }
 

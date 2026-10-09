@@ -610,10 +610,10 @@ export function FileRail({
             {onSubmit && (
               <button onClick={onSubmit} disabled={busyWhat === "Review"}
                 className="agx-btn w-full mt-1.5 rounded-md py-1 text-[10.5px] inline-flex items-center justify-center gap-1.5 disabled:opacity-60"
-                style={{ background: "var(--primary)", color: "var(--bg)", border: EDGE }}>
+                style={{ background: "var(--primary)", color: "var(--on-primary)", border: EDGE }}>
                 {busyWhat === "Review" && (
                   <span className="agx-spin" aria-hidden
-                    style={{ width: 9, height: 9, borderWidth: 1.5, borderColor: "color-mix(in srgb, var(--bg) 55%, transparent)", borderTopColor: "transparent" }} />
+                    style={{ width: 9, height: 9, borderWidth: 1.5, borderColor: "color-mix(in srgb, var(--on-primary) 55%, transparent)", borderTopColor: "transparent" }} />
                 )}
                 Submit review
               </button>
@@ -645,7 +645,7 @@ export function FileRail({
         <button onClick={onMerge} disabled={!canMerge || !!refusal || busyWhat === "Merge"}
           title={refusal ? `${refusal.title} — ${refusal.detail}` : undefined}
           className="agx-btn w-full mt-2 rounded-md py-1 text-[10.5px] inline-flex items-center justify-center gap-1.5 disabled:opacity-40"
-          style={{ background: allClear ? "var(--primary)" : "transparent", color: allClear ? "var(--bg)" : "var(--text2)", border: EDGE }}>
+          style={{ background: allClear ? "var(--primary)" : "transparent", color: allClear ? "var(--on-primary)" : "var(--text2)", border: EDGE }}>
           {/* "anyway" is a word about overriding something. With nothing to
               override it turned a plain press into a dare. */}
           {busyWhat === "Merge" && (

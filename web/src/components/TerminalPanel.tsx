@@ -3147,7 +3147,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       title={prefixLive ? "tmux is waiting for the rest of the sequence" : `tmux prefix: ${(sess?.tmuxPrefix ?? []).join(" or ") || "unknown"}`}
                       className="shrink-0 px-2.5 min-h-[28px] inline-flex items-center rounded-lg text-[10px] font-semibold tabular-nums transition-colors duration-75"
                       style={prefixLive
-                        ? { background: "var(--primary)", color: "var(--bg2)" }
+                        ? { background: "var(--primary)", color: "var(--on-primary)" }
                         : { color: "var(--text4)", border: EDGE }}>
                       {(sess?.tmuxPrefix[0] ?? "tmux")}
                     </span>

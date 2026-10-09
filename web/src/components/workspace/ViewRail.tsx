@@ -422,7 +422,7 @@ export function ViewRail({
             {dragging ? <EyeOffIcon size={ICON.rail} /> : <PlusIcon size={ICON.rail} />}
             {hiddenViews.length > 0 && !dragging && (
               <span className="absolute top-[5px] right-[6px] min-w-[14px] h-[14px] px-1 grid place-items-center rounded-full text-[10px] font-bold tabular-nums"
-                style={{ background: "color-mix(in srgb, var(--primary) 70%, transparent)", color: "var(--bg)" }}>{hiddenViews.length}</span>
+                style={{ background: "color-mix(in srgb, var(--primary) 70%, transparent)", color: "var(--on-primary)" }}>{hiddenViews.length}</span>
             )}
           </button>
         )}

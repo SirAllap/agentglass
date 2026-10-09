@@ -17,7 +17,7 @@ export function Avatar({ login, size = 18 }: { login: string; size?: number }) {
   if (failed || !login) {
     return (
       <span className="shrink-0 rounded-full inline-flex items-center justify-center"
-        style={{ width: size, height: size, background: "var(--primary)", color: "var(--bg)", fontSize: size * 0.42 }}>{initials}</span>
+        style={{ width: size, height: size, background: "var(--primary)", color: "var(--on-primary)", fontSize: size * 0.42 }}>{initials}</span>
     );
   }
   return (

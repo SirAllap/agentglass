@@ -4382,7 +4382,7 @@ const LOOKED_MAX = 12;
  * the same way the app marks a pressed control everywhere else.
  */
 const ON_CHIP = {
-  background: "var(--primary)", border: "1px solid var(--primary)", color: "var(--bg)", fontWeight: 600,
+  background: "var(--primary)", border: "1px solid var(--primary)", color: "var(--on-primary)", fontWeight: 600,
 } as const;
 const ON_CHIP_OK = {
   background: "var(--success)", border: "1px solid var(--success)", color: "var(--bg)", fontWeight: 600,

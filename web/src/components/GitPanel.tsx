@@ -704,7 +704,7 @@ function FileRow({ c, root, active, writeEnabled, desc, onSelect, action, onActi
           <button onClick={(e) => { e.stopPropagation(); onAction(); }}
             title={action === "stage" ? "Stage this file — right-click for the rest" : "Unstage this file — right-click for the rest"}
             className="text-[10px] px-2 py-0.5 rounded-md font-medium whitespace-nowrap"
-            style={{ color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)" }}>
+            style={{ color: "var(--on-primary)", background: "var(--primary)", border: "1px solid var(--primary)" }}>
             {action === "stage" ? "Stage" : "Unstage"}
           </button>
         </div>
@@ -3389,7 +3389,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         <span className="min-w-0 flex-1 truncate text-[10.5px] t-dim2">cherry-pick: oldest first, one run</span>
                         <button onClick={() => void runCherryPick()} disabled={busy || !writeEnabled}
                           className="agx-btn text-[10.5px] px-2.5 py-1 rounded-md font-medium whitespace-nowrap"
-                          style={{ color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)", opacity: busy || !writeEnabled ? 0.5 : 1 }}
+                          style={{ color: "var(--on-primary)", background: "var(--primary)", border: "1px solid var(--primary)", opacity: busy || !writeEnabled ? 0.5 : 1 }}
                           title="Replay the picked commits onto this branch in one run — a conflict pauses the series, and Continue finishes it">
                           {pending === `pick:${pickSet.size}` ? "picking…" : `cherry-pick ${pickSet.size}`}
                         </button>

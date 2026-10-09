@@ -178,6 +178,37 @@ export function dataInk(hex: string, bg?: string): string {
   return ink;
 }
 
+/** The ink for text on a solid `--primary` fill: WCAG AA body text. An icon
+ *  alone on the fill would only need 3:1; nothing here is drawn as icon-only
+ *  without a label, so one bar, the higher one. */
+export const ON_PRIMARY = 4.5;
+const NEAR_BLACK = "#0a0a0a", NEAR_WHITE = "#fafafa";
+
+/**
+ * What to write on a button, badge or selected chip that is filled with the
+ * primary colour.
+ *
+ * The app used `--bg` for this, which is the right answer only while the
+ * primary is far from the background in lightness. Measured on the 23 desktop
+ * palettes, seven put a primary within reach of their own background (a mid
+ * blue or green on a cream page: 3.1 to 4.3:1), so the label on every primary
+ * button was dim. The ink is chosen from the primary's own luminance instead:
+ * the theme's background if that reads (a theme that got it right is left
+ * alone), then its text colour, then whichever of near-black and near-white is
+ * farther from the primary, which always reaches 4.5:1 because one of the two
+ * poles is at least that far from any colour. `--primary-hover` is not held to
+ * it: no control fills with it (it is a text colour, and a button's hover is a
+ * brightness step), and on a mid-tone primary no single ink clears both a
+ * primary and its darker hover.
+ */
+export function onPrimaryInk(primary: string, bg?: string, text?: string): string | undefined {
+  const p = parseColor(primary);
+  if (!p) return undefined;
+  const poles = [NEAR_BLACK, NEAR_WHITE].sort((a, b) => contrast(parseColor(b)!, p) - contrast(parseColor(a)!, p));
+  const candidates = [bg, text, ...poles].filter((c): c is string => !!c && !!parseColor(c));
+  return candidates.find((c) => contrast(parseColor(c)!, p) >= ON_PRIMARY) ?? poles[0];
+}
+
 /**
  * `--success-ink` etc. alongside the tint they are read off — one pass per
  * theme rather than per screen, the same shape as `floorTiers`.
@@ -196,6 +227,8 @@ export function inkTints(vars: Record<string, string>, ansi?: Shades): Record<st
     if (!v) continue;
     out[`${key}-ink`] = inkFor(v, text, bg, 4.5, ansi);
   }
+  const on = vars["--primary"] && onPrimaryInk(vars["--primary"], vars["--bg"], text);
+  if (on) out["--on-primary"] = on;
   return out;
 }
 

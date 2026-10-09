@@ -437,7 +437,7 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
                     onClick={() => pending.resolve(answer())}
                     disabled={!rebase && !subject.trim()}
                     className="text-[11px] px-2.5 py-1 rounded font-medium disabled:opacity-40"
-                    style={{ color: "var(--bg)", background: "var(--primary)" }}>{how.label}</button>
+                    style={{ color: "var(--on-primary)", background: "var(--primary)" }}>{how.label}</button>
                 </span>
               </div>
             </motion.div>

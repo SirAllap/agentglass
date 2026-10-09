@@ -39,7 +39,7 @@ function Checkbox({ on }: { on: boolean }) {
     <span
       className="shrink-0 w-3.5 h-3.5 rounded flex items-center justify-center text-[10px] leading-none"
       style={{
-        color: on ? "var(--bg)" : "transparent",
+        color: on ? "var(--on-primary)" : "transparent",
         background: on ? "var(--primary)" : "transparent",
         border: `1px solid ${on ? "var(--primary)" : "color-mix(in srgb, var(--border) 60%, transparent)"}`,
       }}
@@ -153,7 +153,7 @@ export function CommitModal({ open, onClose, paths }: { open: boolean; onClose: 
                       </div>
                       <div className="flex items-center gap-2 mt-2">
                         <button onClick={load} className="px-3 py-1.5 rounded-lg text-[11px]" style={{ background: "color-mix(in srgb, var(--bg3) 45%, transparent)", border: EDGE, color: "var(--text)" }}>Commit more</button>
-                        <button onClick={onClose} className="px-3 py-1.5 rounded-lg text-[11px]" style={{ background: "var(--primary)", color: "var(--bg)" }}>Done</button>
+                        <button onClick={onClose} className="px-3 py-1.5 rounded-lg text-[11px]" style={{ background: "var(--primary)", color: "var(--on-primary)" }}>Done</button>
                       </div>
                     </div>
                   ) : repo ? (
@@ -246,7 +246,7 @@ export function CommitModal({ open, onClose, paths }: { open: boolean; onClose: 
                       ) : (
                         <button onClick={() => canCommit && setConfirming(true)} disabled={!canCommit}
                           className="px-3.5 py-1.5 rounded-lg text-[11px] font-medium transition-opacity"
-                          style={{ background: amending ? "var(--warning)" : "var(--primary)", color: "var(--bg)", opacity: canCommit ? 1 : 0.45, cursor: canCommit ? "pointer" : "not-allowed" }}>
+                          style={{ background: amending ? "var(--warning)" : "var(--primary)", color: amending ? "var(--bg)" : "var(--on-primary)", opacity: canCommit ? 1 : 0.45, cursor: canCommit ? "pointer" : "not-allowed" }}>
                           {amending ? "Amend last commit…" : `Commit ${selPaths.length || ""} ${selPaths.length === 1 ? "file" : "files"}…`}
                         </button>
                       )}

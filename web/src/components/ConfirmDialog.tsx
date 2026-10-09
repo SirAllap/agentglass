@@ -117,7 +117,7 @@ export function ConfirmDialog({ pending }: { pending: Pending | null }) {
                 <button onClick={() => pending.resolve(isPrompt ? text.trim() : true)}
                   disabled={isPrompt && !text.trim()}
                   className="text-[11px] px-2.5 py-1 rounded font-medium disabled:opacity-40"
-                  style={{ color: "var(--bg)", background: pending.danger ? "var(--error)" : "var(--primary)" }}>
+                  style={{ color: pending.danger ? "var(--bg)" : "var(--on-primary)", background: pending.danger ? "var(--error)" : "var(--primary)" }}>
                   {pending.confirmLabel ?? (pending.danger ? "Delete" : "Ok")}
                 </button>
               </div>

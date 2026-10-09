@@ -155,7 +155,7 @@ export function RebaseModal({ root, base, branch, onClose, onDone }: {
               <span className="text-[10px] t-dim2">Rewrites {after} unpushed commit{after === 1 ? "" : "s"} — ORIG_HEAD holds the old tip until the next history move.</span>
               <button onClick={start} disabled={!steps?.length || busy}
                 className="ml-auto px-3.5 py-1.5 rounded-lg text-[11px] font-medium"
-                style={{ background: "var(--primary)", color: "var(--bg)", opacity: !steps?.length || busy ? 0.45 : 1 }}>
+                style={{ background: "var(--primary)", color: "var(--on-primary)", opacity: !steps?.length || busy ? 0.45 : 1 }}>
                 {busy ? "Rebasing…" : `Start rebase`}
               </button>
             </div>

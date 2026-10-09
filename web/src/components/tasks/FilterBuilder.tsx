@@ -139,7 +139,7 @@ function Menu({ items, onPick, selected, current }: {
                   width: 13, height: 13,
                   border: on ? "1px solid var(--primary)" : edge(45),
                   background: on ? "var(--primary)" : "transparent",
-                  color: "var(--bg)", fontSize: 9, lineHeight: "13px",
+                  color: "var(--on-primary)", fontSize: 9, lineHeight: "13px",
                 }}>{on ? <DoneIcon size={ICON.xs} /> : null}</span>
               )}
               {/* AS THE CHIP IT STANDS FOR, not a dot beside a word.

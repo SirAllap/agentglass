@@ -130,7 +130,7 @@ export function FacetMenu({
         aria-label={label}
         className={pill}
         style={{
-          color: active ? "var(--bg)" : "var(--text2)",
+          color: active ? "var(--on-primary)" : "var(--text2)",
           background: active ? "var(--primary)" : "transparent",
           border: `1px solid ${active || open ? "var(--primary)" : "color-mix(in srgb, var(--border) 45%, transparent)"}`,
           opacity: disabled ? 0.5 : 1,
@@ -193,7 +193,7 @@ export function FacetMenu({
                             borderRadius: mode === "radio" ? 999 : 4,
                             border: `1px solid ${on ? "var(--primary)" : "color-mix(in srgb, var(--border) 70%, transparent)"}`,
                             background: on ? "var(--primary)" : "transparent",
-                            color: "var(--bg)",
+                            color: "var(--on-primary)",
                           }}>
                           {on ? (mode === "radio" ? <DotIcon size={ICON.xs} /> : <DoneIcon size={ICON.xs} />) : null}
                         </span>

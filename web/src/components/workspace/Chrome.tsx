@@ -445,7 +445,7 @@ export function IconButton(props: Omit<Parameters<typeof IconChip>[0], "size">) 
 export type ButtonTone = "plain" | "primary" | "danger" | "ok" | "warn";
 
 const TONE_INK: Record<ButtonTone, string> = {
-  plain: "var(--text)", primary: "var(--bg)", danger: "var(--error-ink)", ok: "var(--success-ink)", warn: "var(--warning-ink)",
+  plain: "var(--text)", primary: "var(--on-primary)", danger: "var(--error-ink)", ok: "var(--success-ink)", warn: "var(--warning-ink)",
 };
 const TONE_HUE: Record<Exclude<ButtonTone, "plain">, string> = {
   primary: "var(--primary)", danger: "var(--error)", ok: "var(--success)", warn: "var(--warning)",
@@ -549,7 +549,7 @@ export function Button({
       {pending && (
         <span className="agx-spin mr-0.5 shrink-0" aria-hidden
           style={{ width: 9, height: 9, borderWidth: 1.5,
-            borderColor: tone === "primary" && !tint && on === undefined ? "color-mix(in srgb, var(--bg) 55%, transparent)" : "currentColor",
+            borderColor: tone === "primary" && !tint && on === undefined ? "color-mix(in srgb, var(--on-primary) 55%, transparent)" : "currentColor",
             borderTopColor: "transparent" }} />
       )}
       {children}

@@ -772,7 +772,7 @@ export function NotifyBell({ noDrag, onGoto }: {
             className="absolute text-[9px] font-bold tabular-nums grid place-items-center rounded-full"
             style={{
               top: -1, right: -2, minWidth: 11, height: 11, padding: "0 2px",
-              background: "var(--primary)", color: "var(--bg)",
+              background: "var(--primary)", color: "var(--on-primary)",
             }}
           >{unread > 9 ? "9+" : unread}</span>
         )}

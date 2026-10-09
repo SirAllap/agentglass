@@ -740,7 +740,7 @@ ${TL_CSS}
 .agx-md .agx-task{list-style:none;padding-left:0}
 .agx-md .agx-task li{display:flex;gap:.55em;align-items:flex-start}
 .agx-md .agx-box{flex:none;width:13px;height:13px;margin-top:.28em;border-radius:3px;border:1px solid color-mix(in srgb,var(--text) 24%,transparent);display:inline-flex;align-items:center;justify-content:center;font-size:9px;line-height:1}
-.agx-md .agx-box[data-on="1"]{background:var(--primary);border-color:var(--primary);color:var(--bg)}
+.agx-md .agx-box[data-on="1"]{background:var(--primary);border-color:var(--primary);color:var(--on-primary)}
 /* Interactive checkboxes are a button carrying agx-box and agx-btn, so the
    base button chrome — its own background, padding, border and font — has
    to give way to the same 13px square a read-only box already draws. */
@@ -5869,7 +5869,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
                     background: HAZARD_STRIPE,
                     color: "var(--bg)", fontWeight: 600,
                   }
-                : { background: "var(--primary)", color: "var(--bg)", fontWeight: 500 }}>
+                : { background: "var(--primary)", color: "var(--on-primary)", fontWeight: 500 }}>
               {mergeWork
                 ? (
                   /* The ring the rest of the app spins, sized to a 10.5px
@@ -5896,7 +5896,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
                 disabled={busy || !!mergeWork}
                 align="right"
                 className="text-[10.5px] px-1.5 py-1 outline-none"
-                style={{ background: "var(--primary)", color: "var(--bg)", borderLeft: "1px solid color-mix(in srgb, var(--bg) 35%, transparent)" }}
+                style={{ background: "var(--primary)", color: "var(--on-primary)", borderLeft: "1px solid color-mix(in srgb, var(--on-primary) 35%, transparent)" }}
                 placeholder=""
               />
             )}
@@ -6151,7 +6151,7 @@ export function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWor
         <section className="rounded-lg overflow-hidden" style={{ border: EDGE }}>
           <div className="flex gap-2.5 items-start p-3">
             <span className="shrink-0 rounded-full flex items-center justify-center text-[13px]"
-              style={{ width: 26, height: 26, background: d.state === "MERGED" ? "var(--primary)" : "color-mix(in srgb, var(--text3) 60%, transparent)", color: "var(--bg)" }}>
+              style={{ width: 26, height: 26, background: d.state === "MERGED" ? "var(--primary)" : "color-mix(in srgb, var(--text3) 60%, transparent)", color: d.state === "MERGED" ? "var(--on-primary)" : "var(--bg)" }}>
               {d.state === "MERGED" ? <MergeIcon size={ICON.sm} /> : <BlockedIcon size={ICON.sm} />}
             </span>
             <span className="min-w-0">
@@ -7122,8 +7122,8 @@ function FieldPicker({ anchor, title, hint, multi, loading, options, selected, o
                 }}
                 disabled={running}
                 className="agx-btn ml-auto px-2.5 py-1 rounded text-[10.5px] inline-flex items-center gap-1.5 disabled:opacity-50"
-                style={{ background: "var(--primary)", color: "var(--bg)" }}>
-                {running && <span className="agx-spin" aria-hidden style={{ width: 8, height: 8, borderWidth: 1.5, borderColor: "color-mix(in srgb, var(--bg) 55%, transparent)", borderTopColor: "transparent" }} />}
+                style={{ background: "var(--primary)", color: "var(--on-primary)" }}>
+                {running && <span className="agx-spin" aria-hidden style={{ width: 8, height: 8, borderWidth: 1.5, borderColor: "color-mix(in srgb, var(--on-primary) 55%, transparent)", borderTopColor: "transparent" }} />}
                 {/* The button names what it is about to do. "Done · and
                     ClickUp" over a menu where only the card changed claimed a
                     GitHub write that was not going to happen. */}
@@ -9078,7 +9078,7 @@ function FilesFilterMenu({ facets, hiddenExts, onToggleExt, onClearExts, showVie
     }
   }, [open]);
   const active = hiddenExts.length > 0 || !showViewed;
-  const box = (on: boolean) => ({ width: 14, height: 14, borderRadius: 4, border: `1px solid ${on ? "var(--primary)" : "color-mix(in srgb, var(--border) 70%, transparent)"}`, background: on ? "var(--primary)" : "transparent", color: "var(--bg)" });
+  const box = (on: boolean) => ({ width: 14, height: 14, borderRadius: 4, border: `1px solid ${on ? "var(--primary)" : "color-mix(in srgb, var(--border) 70%, transparent)"}`, background: on ? "var(--primary)" : "transparent", color: "var(--on-primary)" });
   return (
     <>
       <button ref={btnRef} onClick={() => setOpen((o) => !o)} title="Filter changed files"

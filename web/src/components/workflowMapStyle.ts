@@ -35,7 +35,7 @@ export const WFM_CSS = `
 .wfm-pin{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 4px;border-radius:10px;background:var(--text);color:var(--bg);font-size:10px;font-weight:700;font-variant-numeric:tabular-nums;transition:background .12s;border:0}
 .wfm-pin[data-lg]{min-width:28px;height:28px;border-radius:14px;font-size:13px}
 .wfm-pin[data-off]{background:transparent;color:var(--text3);box-shadow:inset 0 0 0 1px var(--w-edge)}
-.wfm-step:hover .wfm-pin:not([data-off]),.wfm-step[data-hl] .wfm-pin:not([data-off]),.wfm-step:focus-within .wfm-pin:not([data-off]),.wfm-pin[data-hl]:not([data-off]){background:var(--primary)}
+.wfm-step:hover .wfm-pin:not([data-off]),.wfm-step[data-hl] .wfm-pin:not([data-off]),.wfm-step:focus-within .wfm-pin:not([data-off]),.wfm-pin[data-hl]:not([data-off]){background:var(--primary);color:var(--on-primary)}
 .wfm-pin[data-off][data-hl]{color:var(--text)}
 .wfm-ctl{display:flex;flex-direction:column;border-radius:10px;background:var(--surface-inset);box-shadow:inset 0 0 0 1px var(--w-line)}
 .wfm-crow{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 16px}.wfm-crow+.wfm-crow{border-top:var(--w-rule)}

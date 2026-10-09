@@ -11,7 +11,9 @@
 // and a border too faint to see.
 import { describe, expect, test } from "bun:test";
 import { desktopTheme } from "../../shared/desktopPalette.ts";
-import { contrast, floorTiers, inkTints, paintDesktop, parseColor } from "../src/lib/contrast.ts";
+import { ACCENTS } from "../src/lib/accent.ts";
+import { contrast, floorTiers, inkTints, onPrimaryInk, ON_PRIMARY, paintDesktop, parseColor } from "../src/lib/contrast.ts";
+import { THEMES } from "../src/lib/themes.ts";
 import { OMARCHY_PALETTES } from "./fixtures/omarchy-palettes.ts";
 
 type Paint = (vars: Record<string, string>, ansi: Parameters<typeof inkTints>[1]) => Record<string, string>;
@@ -42,6 +44,12 @@ function failures(paint: Paint): string[] {
         }
       }
       for (const [a, b, min] of STEPS) if (r(a, b) < min) out.push(`${label}: ${a} vs ${b} ${r(a, b).toFixed(2)} < ${min}`);
+      // Text on a solid primary fill (buttons, selected chips, badges): the ink
+      // the call sites paint with is --on-primary, never --bg.
+      if (!v["--on-primary"]) out.push(`${label}: no --on-primary`);
+      else {
+        if (r("--on-primary", "--primary") < ON_PRIMARY) out.push(`${label}: --on-primary on --primary ${r("--on-primary", "--primary").toFixed(2)} < ${ON_PRIMARY}`);
+      }
       for (const k of ["--success", "--warning", "--error", "--info", "--primary"]) {
         if (r(`${k}-ink`, "--bg3") < 4.5) out.push(`${label}: ${k}-ink on --bg3 ${r(`${k}-ink`, "--bg3").toFixed(2)} < 4.5`);
       }
@@ -63,5 +71,50 @@ describe("desktop themes, as painted", () => {
     const bare = failures((vars, ansi) => inkTints(floorTiers(vars), ansi));
     expect(bare.length).toBeGreaterThan(20);
     expect(bare.some((f) => f.startsWith("solarized-light-derived") && f.includes("--text2 on --bg3"))).toBe(true);
+  });
+
+  test("the old ink, --bg on --primary, is what this guards against: it fails on palettes of the set", () => {
+    const old: string[] = [];
+    for (const [name, colors] of Object.entries(OMARCHY_PALETTES)) {
+      const th = desktopTheme(colors, name)!;
+      const v = paintDesktop(th.vars, th.ansi);
+      if (contrast(parseColor(v["--bg"]!)!, parseColor(v["--primary"]!)!) < ON_PRIMARY) old.push(name);
+    }
+    expect(old.length).toBeGreaterThanOrEqual(4);
+  });
+
+  test("the listed themes, and every accent laid over each, keep their ink on the primary", () => {
+    const bad: string[] = [];
+    for (const t of THEMES) {
+      const v = inkTints(floorTiers(t.vars as Record<string, string>), t.ansi);
+      const rows = [{ id: t.id, primary: v["--primary"]!, on: v["--on-primary"] }];
+      for (const a of ACCENTS) {
+        if (!a.primary) continue;
+        rows.push({ id: `${t.id}+${a.id}`, primary: a.primary, on: onPrimaryInk(a.primary, v["--bg"], v["--text"])! });
+      }
+      for (const row of rows) {
+        const on = parseColor(row.on ?? "");
+        if (!on) { bad.push(`${row.id}: no ink`); continue; }
+        const c = contrast(on, parseColor(row.primary)!);
+        if (c < ON_PRIMARY) bad.push(`${row.id}: ${c.toFixed(2)}`);
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+
+  test("a primary button's label is --on-primary in source, not --bg", async () => {
+    // The sites differ in shape (inline style, CSS string, ternary), so the rule
+    // is the one thing they share: a line that fills with --primary and writes
+    // in --bg or --bg2 on the same line.
+    const glob = new Bun.Glob("**/*.{ts,tsx,css}");
+    const bad: string[] = [];
+    for await (const f of glob.scan({ cwd: new URL("../src", import.meta.url).pathname })) {
+      const text = await Bun.file(new URL(`../src/${f}`, import.meta.url)).text();
+      text.split("\n").forEach((line, i) => {
+        const code = line.replace(/color-mix\([^)]*\)/g, "");
+        if (/(background|bg-)[^;]*var\(--primary\)(?!-)/.test(code) && /(^|[^-\w])color\s*:\s*"?var\(--bg2?\)/.test(code)) bad.push(`${f}:${i + 1}`);
+      });
+    }
+    expect(bad).toEqual([]);
   });
 });
