@@ -87,6 +87,7 @@ import { StatusPill } from "./StatusPill.tsx";
 import { PeekFile, type Peek } from "./PeekFile.tsx";
 import { MERGE_WHY, mergeBlockedWhy, checksLine, checksStanding, standingLine, checksShort, mergeVerdict, githubWillMerge } from "../../../shared/mergeReason.ts";
 import { mergeBlockers, mergeRefusal, autoMergeRefusal, staleApproval, type MergeBlocker } from "../../../shared/mergeBlockers.ts";
+import { pagerShown, pageRanOut } from "../lib/prPager.ts";
 import { parseQuery, applyFilters, applyRulesKeepUnread, peopleMatched, buildFacets, activeCount, readPrField, builderFields, queryToRules, type RepoFacets } from "../lib/prFilter.ts";
 import { CodeBlock as MdCodeBlock } from "../lib/mdCode.tsx";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
@@ -2620,6 +2621,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       // previewed. Now that a pull request is a page, the same line meant
       // picking a view — or just waiting through a refresh — opened whatever
       // happened to be first. A row is opened when somebody opens it.
+      if (pageRanOut({ pageDepth: pages.length, rows: r.prs.length, hasNext: !!r.hasNext })) setPages([]);
       setRowCursor((cur) => (cur && r.prs.some((p) => p.number === cur) ? cur : null));
       const settle = settleAfter(r, settleDelay.current);
       if (settleTimer.current) clearTimeout(settleTimer.current);
@@ -2641,7 +2643,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       if (req !== listReq.current) return;
       setListState({ fetchedAt: 0, loading: false, error: String(e) });
     });
-  }, [root, filter, stateSel, cursor, serverQuery]);
+  }, [root, filter, stateSel, cursor, serverQuery, pages.length]);
   loadListRef.current = loadList;
 
   /**
@@ -3154,6 +3156,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const [inboxOn, setInboxOn] = useState(false);
   const [inboxUnread, setInboxUnread] = useState(0);
   const boardShown = boardOn && !searching && !inboxOn;
+  /* The board is never paginated: a page left over from the table would fetch and
+     count a page nobody is looking at. Back on the table it starts at page one. */
+  useEffect(() => { if (boardShown) setPages([]); }, [boardShown]);
   const setBoard = useCallback((on: boolean) => {
     setBoardOn(on);
     try { localStorage.setItem("agentglass.pr.board", on ? "1" : "0"); } catch { /* private mode */ }
@@ -4852,7 +4857,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
           {/* Pages, because a repository has more pull requests than one screen
               of them and the panel used to stop at the first fifty with no way
               to say so. Cursors only move forward, so Previous walks a stack. */}
-          {repo && (listState.hasNext || pages.length > 0) && (
+          {pagerShown({ hasRepo: !!repo, boardShown, hasNext: !!listState.hasNext, pageDepth: pages.length }) && (
             <div className="flex items-center gap-2 px-2 py-1.5 border-t shrink-0 text-[10px]"
               style={{ borderColor: "color-mix(in srgb, var(--text) 11%, transparent)", color: "var(--text3)" }}>
               <button onClick={() => setPages((p) => p.slice(0, -1))} disabled={pages.length === 0 || listState.loading}
