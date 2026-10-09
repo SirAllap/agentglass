@@ -1182,10 +1182,15 @@ const printed = (r: { ok: boolean; stdout: string }): string => (r.ok ? r.stdout
 /** The panes of a window beyond its first, split into the window that exists
  *  now and given their scrollback back. */
 async function restorePanes(name: string, windowId: string, panes: CapturedPane[], mode: "lazy" | "all"): Promise<void> {
+  /* Each split targets the pane the previous one printed. Targeting the window
+     means its ACTIVE pane, the first, so every new pane landed right after it
+     and a window of four came back as [1, 4, 3, 2]. */
+  let after = `=${name}:${windowId}`;
   for (const p of panes) {
-    const r = await tmux(["split-window", "-d", "-v", "-P", "-F", "#{pane_id}", "-t", `=${name}:${windowId}`,
+    const r = await tmux(["split-window", "-d", "-v", "-P", "-F", "#{pane_id}", "-t", after,
       "-c", p.path || ".", ...runArgs(mode, p)]);
     const pid = printed(r);
+    if (pid) after = pid;
   }
 }
 
