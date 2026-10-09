@@ -62,3 +62,16 @@ describe("the reader", () => {
     expect(ask).toBeLessThan(stop);
   });
 });
+
+describe("a menu", () => {
+  it("asks before it stops a key, so an app chord works with a menu open", () => {
+    const from = palette.indexOf("const menuKeys = (");
+    expect(from).not.toBe(-1);
+    const body = palette.slice(from, palette.indexOf("\n};", from));
+    const ask = body.indexOf("isAppChord(e.nativeEvent)");
+    const stop = body.indexOf("e.stopPropagation()");
+    expect(ask).not.toBe(-1);
+    expect(stop).not.toBe(-1);
+    expect(ask).toBeLessThan(stop);
+  });
+});

@@ -129,6 +129,44 @@ describe("the local copy of a branch", () => {
     git(REPO, "merge", "--abort");
   });
 
+  // A rebase that stops on a conflict leaves HEAD detached, so `git worktree
+  // list` no longer says which branch the checkout belongs to. The branch being
+  // rebased is named only in the rebase's own state directory.
+  test("a checkout stopped in the middle of a rebase is busy, though HEAD is detached", async () => {
+    git(REPO, "checkout", "-q", "main");
+    git(REPO, "checkout", "-q", "-b", "rebasing");
+    commit(REPO, "rb.txt", "ours");
+    git(REPO, "checkout", "-q", "-b", "rebasing-onto", "HEAD~1");
+    commit(REPO, "rb.txt", "theirs");
+    git(REPO, "checkout", "-q", "rebasing");
+    git(REPO, "rebase", "rebasing-onto");
+    expect(git(REPO, "rev-parse", "--abbrev-ref", "HEAD")).toBe("HEAD");
+    const st = await localHead(REPO, "rebasing");
+    expect(st.sync).toBe("busy");
+    expect(st.worktree).toBe(REPO);
+    git(REPO, "rebase", "--abort");
+    git(REPO, "checkout", "-q", "main");
+  });
+
+  test("a cherry-pick or a revert stopped on a conflict is busy too", async () => {
+    git(REPO, "checkout", "-q", "main");
+    git(REPO, "checkout", "-q", "-b", "picking");
+    commit(REPO, "pick.txt", "base");
+    git(REPO, "checkout", "-q", "-b", "picking-other");
+    commit(REPO, "pick.txt", "other");
+    const other = git(REPO, "rev-parse", "HEAD");
+    git(REPO, "checkout", "-q", "picking");
+    commit(REPO, "pick.txt", "mine");
+    git(REPO, "cherry-pick", other);
+    expect((await localHead(REPO, "picking")).sync).toBe("busy");
+    git(REPO, "cherry-pick", "--abort");
+    const base = git(REPO, "rev-parse", "HEAD~1");
+    git(REPO, "revert", "--no-edit", base);
+    expect((await localHead(REPO, "picking")).sync).toBe("busy");
+    git(REPO, "revert", "--abort");
+    git(REPO, "checkout", "-q", "main");
+  });
+
   test("moving a branch nobody has checked out touches no working tree", async () => {
     // The whole point of the refspec form: `behind-one` is not checked out, so
     // this moves a ref while the checkout stays on whatever it was on.

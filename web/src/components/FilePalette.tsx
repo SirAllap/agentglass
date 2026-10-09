@@ -117,6 +117,8 @@ export { humanBytes };
 /** Every key pressed inside a menu belongs to the menu. Escape closes it —
  *  here rather than in each field, so it also works from a row. */
 const menuKeys = (close: () => void) => (e: React.KeyboardEvent) => {
+  // The app's own chords are answered on window; see the reader's handler.
+  if (isAppChord(e.nativeEvent)) return;
   e.stopPropagation();
   if (e.key === "Escape") { e.preventDefault(); close(); }
 };

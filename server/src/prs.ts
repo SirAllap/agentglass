@@ -427,16 +427,33 @@ async function upstreamOf(root: string, branch: string): Promise<{ remote: strin
   return guess.code === 0 ? { remote: "origin", ref: `refs/remotes/origin/${branch}`, remoteBranch: branch } : null;
 }
 
-/** Which worktree has this branch checked out, if any. */
+/** The branch a stopped rebase is rebasing, read from its own state directory:
+ *  HEAD is detached for the whole rebase, so nothing else names it. */
+async function rebasingBranch(dir: string): Promise<string | undefined> {
+  const p = await gitAsync(dir, ["rev-parse", "--git-path", "rebase-merge/head-name", "--git-path", "rebase-apply/head-name"]);
+  if (p.code !== 0) return undefined;
+  for (const rel of p.stdout.split("\n").filter(Boolean)) {
+    const name = await Bun.file(resolve(dir, rel)).text().catch(() => "");
+    if (name) return name.trim();
+  }
+  return undefined;
+}
+
+/** Which worktree has this branch checked out, if any. A worktree stopped in
+ *  the middle of a rebase of it counts: it is detached, but it is still the
+ *  one somebody is standing in. */
 async function worktreeOf(root: string, branch: string): Promise<string | undefined> {
   const r = await gitAsync(root, ["worktree", "list", "--porcelain"]);
   if (r.code !== 0) return undefined;
   let path = "";
+  const detached: string[] = [];
   for (const line of r.stdout.split("\n")) {
     if (line.startsWith("worktree ")) path = line.slice("worktree ".length).trim();
     else if (line.trim() === `branch refs/heads/${branch}`) return path || undefined;
+    else if (line.trim() === "detached") detached.push(path);
   }
-  return undefined;
+  const names = await Promise.all(detached.map(rebasingBranch));
+  return detached[names.indexOf(`refs/heads/${branch}`)];
 }
 
 /** Mid-merge, mid-rebase, mid-cherry-pick: a checkout in the middle of an
