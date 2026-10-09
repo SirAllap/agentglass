@@ -252,6 +252,34 @@ describe("the verdict, as a sentence", () => {
 });
 
 /*
+ * THE PICKER LISTS PAST REVIEWERS FIRST.
+ *
+ * Screenshot 36: the "Request reviewers" picker showed every collaborator in
+ * GitHub's own request order, with no sign of who had already looked — the
+ * person you would ask again was a name to scroll past, not the one at the
+ * top. A stale approval (commits landed after it) is the one case where
+ * re-asking matters most, so it leads even the other past reviewers.
+ */
+describe("the reviewer picker leads with past reviewers", () => {
+  const panel = readSrc(new URL("../src/components/PrPanel.tsx", import.meta.url), "utf8");
+  const fn = panel.slice(panel.indexOf("function usePrFieldPicker("), panel.indexOf("function CardStatusPick("));
+
+  test("a stale approval sorts before every other past reviewer", () => {
+    expect(fn).toContain("staleApproved");
+    expect(fn).toContain("const reviewed = [...byRecent(staleApproved), ...byRecent(otherPast)];");
+  });
+
+  test("each past reviewer carries their last verdict as a muted hint", () => {
+    expect(fn).toContain("sub: `${mark.said}${r.at ? ` ${ago(r.at)}` : \"\"}`");
+  });
+
+  test("the rest of the collaborators keep their current order after the reviewed group", () => {
+    expect(fn).toContain("const rest = people.filter((p) => !reviewedLogins.has(p.value.toLowerCase()));");
+    expect(fn).toContain("options={[...reviewedOptions, ...rest]}");
+  });
+});
+
+/*
  * THE TWO SCREENS MUST NOT DISAGREE.
  *
  * The board's card said "Waiting on bjorn"; the pull request's own
@@ -303,8 +331,20 @@ describe("the Overview and the board agree", () => {
     expect(fn.match(/noGoTo: true/g)?.length).toBe(2);
   });
 
-  test("Go to it in the merge box is skipped for a changes verdict", () => {
-    expect(panel).toContain("v.url && !v.noGoTo");
+  test("the merge box's verdict band matches the reason rows' own size, not its own", () => {
+    // Reported alongside the Go to it removal: the band sat at 12px/py-2 while
+    // every row below it (Reason, ReviewHistory) reads at 11.5px/py-1.5 — one
+    // taller line in a stack that is otherwise even.
+    const band = panel.slice(panel.indexOf("const v = p2Verdict(d.humanReview"), panel.indexOf("<ReviewHistory reviews={d.reviews}"));
+    expect(band).toContain('px-3 py-1.5 text-[11.5px]');
+  });
+
+  test("the merge box's own verdict band carries no Go to it any more", () => {
+    // Review history right below it already has a go-to per round, including
+    // this one — a second button beside the band pointed at the same place.
+    const band = panel.slice(panel.indexOf("const v = p2Verdict(d.humanReview"), panel.indexOf("<ReviewHistory reviews={d.reviews}"));
+    expect(band).not.toContain(">Go to it<");
+    expect(band).not.toContain("onGoReview(node, v.url");
   });
 
   test("the review history lists past rounds and is gated on a changes or commented one", () => {

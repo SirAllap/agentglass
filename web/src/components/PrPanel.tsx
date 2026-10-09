@@ -5640,7 +5640,7 @@ function Overview({ d, root, busy, local, onShowLocal, busyWhat, mergeWork, open
 const v = p2Verdict(d.humanReview, reviewerRoster(d), d.reviewDecision, d.gate);
             if (!v) return null;
             return (
-              <div className="flex gap-2.5 items-center px-3 py-2 text-[12px]"
+              <div className="flex gap-2.5 items-center px-3 py-1.5 text-[11.5px]"
                 style={{
                   background: `color-mix(in srgb, ${v.tint} 10%, transparent)`,
                   borderLeft: `2px solid ${v.tint}`,
@@ -5656,23 +5656,9 @@ const v = p2Verdict(d.humanReview, reviewerRoster(d), d.reviewDecision, d.gate);
                     <span className="block text-[11px] mt-0.5" style={{ color: "var(--text3)" }}>{v.note}</span>
                   )}
                 </span>
-                {v.url && !v.noGoTo && (() => {
-                  /*
-                   * The same review, as a row this panel already draws.
-                   *
-                   * Matched on the URL rather than by parsing `#pullrequestreview-…`
-                   * out of it: `humanReview.url` and `PrReview.url` are the one
-                   * string GitHub gave for that submission, so equality is exact and
-                   * there is no fragment format to keep in step with.
-                   */
-                  const node = d.reviews?.find((r) => r.url && r.url === v.url)?.nodeId;
-                  return (
-                    <button className="agx-btn shrink-0 rounded px-1.5 py-0.5 text-[11px]"
-                      style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}
-                      title="Go to that review in the conversation"
-                      onClick={() => onGoReview(node, v.url!)}>Go to it</button>
-                  );
-                })()}
+                {/* No "Go to it" here any more — the Review history right below
+                    this band already carries a go-to per round, including this
+                    one, and a second button beside it pointed at the same place. */}
               </div>
             );
           })()}
@@ -6613,7 +6599,9 @@ function ReviewerList({ rows, author, onAsk }: { rows: ReviewerRow[]; author?: s
         const mark = REVIEW_MARK[r.state];
         // GitHub offers "Re-request review" only to a person who has already
         // answered; a bot, a team and the author cannot be asked this way.
-        const canAsk = !!onAsk && r.state !== "awaiting" && !r.again && !r.isBot && !r.isTeam && r.login !== author;
+        // An APPROVED reviewer keeps the tick alone — a ↻ beside it read as
+        // "something is wrong with this approval" rather than as an option.
+        const canAsk = !!onAsk && r.state !== "awaiting" && r.state !== "approved" && !r.again && !r.isBot && !r.isTeam && r.login !== author;
         const ask = asked[r.login];
         // Asked again after answering: GitHub drops the old verdict and shows
         // the reviewer as pending, one amber dot. An arrow beside the old
@@ -7316,13 +7304,41 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
         const n = ownedBy.get(u.toLowerCase());
         return { value: u, label: u, avatar: u, ...(n ? { sub: `owns ${n}` } : null) };
       }).sort((x, y) => (ownedBy.get(y.value.toLowerCase()) ?? 0) - (ownedBy.get(x.value.toLowerCase()) ?? 0));
+
+      /*
+       * PAST REVIEWERS FIRST — the person you would ask again is almost
+       * always somebody who has already read this, not a stranger further
+       * down the collaborator list. An approval left behind by new commits
+       * comes before every other past reviewer, because that is the one
+       * whose "yes" this pull request no longer actually has.
+       *
+       * Ranked by their own last verdict's timestamp, most recent first,
+       * within each of the two groups — same order the sidebar already
+       * reads reviewers in, for the same reason: what it costs you.
+       */
+      const lastCommitAt = d.commits.length ? d.commits[d.commits.length - 1]!.committedAt : undefined;
+      const past = reviewerRoster(d).filter((r) => r.state !== "awaiting" && !r.isBot && !r.isTeam);
+      const staleApproved = past.filter((r) => r.state === "approved" && r.at && lastCommitAt && r.at < lastCommitAt);
+      const otherPast = past.filter((r) => !staleApproved.includes(r));
+      const byRecent = (rows: ReviewerRow[]) => [...rows].sort((x, y) => (y.at ?? "").localeCompare(x.at ?? ""));
+      const reviewed = [...byRecent(staleApproved), ...byRecent(otherPast)];
+      const reviewedLogins = new Set(reviewed.map((r) => r.login.toLowerCase()));
+      const reviewedOptions = reviewed
+        .filter((r) => (mentions?.users ?? []).some((u) => u.toLowerCase() === r.login.toLowerCase()))
+        .map((r) => {
+          const mark = REVIEW_MARK[r.state];
+          return { value: r.login, label: r.login, avatar: r.login,
+            sub: `${mark.said}${r.at ? ` ${ago(r.at)}` : ""}` };
+        });
+      const rest = people.filter((p) => !reviewedLogins.has(p.value.toLowerCase()));
+
       node = <FieldPicker anchor={a} title="Request reviewers" multi loading={loading}
         hint={teams.length
           ? `Owners first, from ${owns.path ?? "CODEOWNERS"} · ${teams.join(", ")} — ask a team on GitHub`
           : ownedBy.size
           ? `Owners first, from ${owns.path ?? "CODEOWNERS"}`
           : "Collaborators on this repository"}
-        options={people}
+        options={[...reviewedOptions, ...rest]}
         side={(h) => <ClickUpSide d={d} note={note} {...h} />}
         selected={was} onClose={close} onCommit={commit(was, "Reviewers", (add, remove) => api.prReviewers(root, d.number, add, remove))} />;
     } else if (picker.field === "assignees") {

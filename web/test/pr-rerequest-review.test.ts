@@ -23,6 +23,10 @@ describe("re-request review from the sidebar", () => {
   test("asks through the reviewers endpoint, adding that one login", () => {
     expect(src).toContain("onAsk={(login) => api.prReviewers(root, d.number, [login], [])}");
   });
+
+  test("is not offered beside a tick — an approver reads confusing with a ↻ next to it", () => {
+    expect(body).toContain('r.state !== "approved"');
+  });
 });
 
 describe("a reviewer asked again", () => {
