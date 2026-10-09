@@ -68,7 +68,7 @@ export interface UiTimelineItem {
   open?: UiOpenPr;
 }
 
-export type FieldType = "string" | "text" | "number" | "boolean" | "select" | "list" | "multi";
+export type FieldType = "string" | "text" | "number" | "boolean" | "select" | "list" | "multi" | "secret";
 
 export interface FieldOption { value: string; label: string }
 
@@ -77,7 +77,12 @@ export interface FieldOption { value: string; label: string }
  * shape serves both so a plugin author learns one vocabulary. `list` is a list
  * of short strings typed one per row; `multi` is several picked from
  * `options` — which a plugin can fill at run time, like the repositories the
- * person can reach — with a search when there are many.
+ * person can reach — with a search when there are many. `secret` is a token or
+ * a key: typed into a masked box, kept in the same 0600 file as the rest, and
+ * read back only by the plugin that declared it (see `redactSecrets`). The
+ * ceiling: that file is readable by a plugin that runs outside its box and by
+ * any program running as the same user; this hides the value from the app's
+ * screens and its API, not from the disk.
  */
 export interface Field {
   key: string;
@@ -221,7 +226,7 @@ export function validateField(raw: unknown, w: Walk): Field | null {
   const key = str(f.key, 60, w, "field.key");
   if (typeof key !== "string") return null;
   if (!/^[A-Za-z][A-Za-z0-9_.-]*$/.test(key)) return w.fail(`field key "${key}" must start with a letter and hold only letters, digits, . _ -`);
-  const type = oneOf(f.type, ["string", "text", "number", "boolean", "select", "list", "multi"] as const);
+  const type = oneOf(f.type, ["string", "text", "number", "boolean", "select", "list", "multi", "secret"] as const);
   if (!type) return w.fail(`field "${key}" has an unknown type`);
   const label = str(f.label, 120, w, `field "${key}" label`);
   if (typeof label !== "string") return null;
@@ -249,6 +254,9 @@ export function validateField(raw: unknown, w: Walk): Field | null {
   }
   if (typeof f.min === "number" && Number.isFinite(f.min)) out.min = f.min;
   if (typeof f.max === "number" && Number.isFinite(f.max)) out.max = f.max;
+  // A default is written in the manifest, and a manifest is a public file: a
+  // key that ships in one is not a secret any more.
+  if (type === "secret" && f.default !== undefined) return w.fail(`field "${key}" is a secret and cannot have a default`);
   if (f.default !== undefined) {
     const d = coerceValue(out, f.default);
     if (d !== undefined) out.default = d;
@@ -275,6 +283,12 @@ export function coerceValue(f: Field, v: unknown): unknown {
     }
     case "boolean":
       return typeof v === "boolean" ? v : undefined;
+    case "secret": {
+      // One line, no padding: a key pasted with its newline is a key the
+      // service rejects, and nothing about it is worth a second look.
+      if (typeof v !== "string") return undefined;
+      return v.trim().slice(0, SECRET_MAX);
+    }
     case "select": {
       if (typeof v !== "string") return undefined;
       // Options can arrive after the value (a plugin publishes them once it
@@ -294,6 +308,9 @@ export function coerceValue(f: Field, v: unknown): unknown {
     }
   }
 }
+
+/** Longest secret kept. Real keys and tokens are well under 200. */
+export const SECRET_MAX = 512;
 
 export function validateFields(raw: unknown): Ok<Field[]> | Err {
   if (!Array.isArray(raw)) return { ok: false, error: "fields must be a list" };
@@ -483,6 +500,9 @@ function node(raw: unknown, w: Walk, depth: number): UiNode | null {
       const values: Record<string, unknown> = {};
       if (n.values && typeof n.values === "object" && !Array.isArray(n.values)) {
         for (const f of fields.value) {
+          // A drawn tree is served to every window and to any plugin holding a
+          // read token; a secret has no business in it.
+          if (f.type === "secret") continue;
           const v = coerceValue(f, (n.values as Record<string, unknown>)[f.key]);
           if (v !== undefined) values[f.key] = v;
         }
@@ -658,6 +678,8 @@ export interface Contributes {
   panels?: PanelContribution[];
   prNotes?: boolean;
   prActions?: PrActionContribution[];
+  /** Puts a badge and a sort order on Inbox rows. See `InboxAnnotation`. */
+  inboxAnnotations?: boolean;
 }
 
 /** Icons a panel may name. A word, mapped to the app's own icon set, so a
@@ -693,6 +715,10 @@ export function validateContributes(raw: unknown): Ok<Contributes> | Err {
     if (typeof c.prNotes !== "boolean") return { ok: false, error: "contributes.prNotes must be true or false" };
     out.prNotes = c.prNotes;
   }
+  if (c.inboxAnnotations !== undefined) {
+    if (typeof c.inboxAnnotations !== "boolean") return { ok: false, error: "contributes.inboxAnnotations must be true or false" };
+    out.inboxAnnotations = c.inboxAnnotations;
+  }
   if (c.prActions !== undefined) {
     // A few, short: the first shares a header row with the app's own buttons
     // and the others hang off its caret.
@@ -721,4 +747,94 @@ export function resolveSettings(fields: Field[] | undefined, stored: Record<stri
     out[f.key] = v !== undefined ? v : f.default !== undefined ? f.default : f.type === "list" || f.type === "multi" ? [] : f.type === "boolean" ? false : null;
   }
   return out;
+}
+
+/**
+ * Settings as anything but the plugin itself may read them: every secret is
+ * `null`, and `set` says which of them hold a value. The person sees "set,
+ * replace, clear" and never the value; a screen, a log line or a second plugin
+ * holding `full` scope reading `/plugins/settings` gets nothing to leak.
+ */
+export function redactSecrets(fields: Field[] | undefined, values: Record<string, unknown>): { values: Record<string, unknown>; set: string[] } {
+  const out = { ...values };
+  const set: string[] = [];
+  for (const f of fields ?? []) {
+    if (f.type !== "secret") continue;
+    if (typeof out[f.key] === "string" && out[f.key] !== "") set.push(f.key);
+    out[f.key] = null;
+  }
+  return { values: out, set };
+}
+
+// ------------------------------------------------------- inbox annotations
+
+/**
+ * What a plugin says about one Inbox row: a small badge, a tip, and a number
+ * to order by. Vendor-neutral on purpose — the core draws it and sorts by it
+ * and knows nothing about who produced it.
+ *
+ * It can decorate and reorder and nothing else. It cannot remove a row, mark
+ * one read, or change what the row says.
+ */
+export interface InboxAnnotation {
+  /** The plugin that wrote it; the sort choice is named after it. */
+  plugin: string;
+  /** 0..1, higher first. Ignored when `rank` is set. */
+  score?: number;
+  /** Any finite number, higher first. Wins over `score`. */
+  rank?: number;
+  badge?: { text: string; tone?: Tone };
+  tip?: string;
+}
+
+/** What a plugin posts: the annotation, and the row and version it is about. */
+export interface InboxAnnotationInput extends Omit<InboxAnnotation, "plugin"> {
+  /** The notification thread id, as `InboxItem.id`. */
+  id: string;
+  /** The row's `at` it was made for. A row that has moved on (a new comment)
+   *  is a different question, and the old answer stops showing. */
+  updatedAt: number;
+}
+
+/** Control, zero-width and bidi-override characters: a badge that reads one way
+ *  and is drawn another is a way to steer a person away from a row. */
+const INVISIBLE = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g;
+
+export const ANNOTATION_LIMITS = { items: 500, id: 64, badge: 24, tip: 200 } as const;
+
+export function validateAnnotations(raw: unknown): Ok<InboxAnnotationInput[]> | Err {
+  if (!Array.isArray(raw)) return { ok: false, error: "items must be a list" };
+  if (raw.length > ANNOTATION_LIMITS.items) return { ok: false, error: `at most ${ANNOTATION_LIMITS.items} items per post` };
+  const out: InboxAnnotationInput[] = [];
+  for (const r of raw) {
+    if (!r || typeof r !== "object" || Array.isArray(r)) return { ok: false, error: "an item must be an object" };
+    const o = r as Record<string, unknown>;
+    if (typeof o.id !== "string" || !o.id || o.id.length > ANNOTATION_LIMITS.id) return { ok: false, error: `item.id must be 1-${ANNOTATION_LIMITS.id} characters` };
+    const updatedAt = validMs(o.updatedAt);
+    if (updatedAt === undefined) return { ok: false, error: "item.updatedAt must be epoch milliseconds" };
+    const a: InboxAnnotationInput = { id: o.id, updatedAt };
+    if (o.score !== undefined) {
+      if (typeof o.score !== "number" || !Number.isFinite(o.score)) return { ok: false, error: "item.score must be a number" };
+      a.score = Math.min(1, Math.max(0, o.score));
+    }
+    if (o.rank !== undefined) {
+      if (typeof o.rank !== "number" || !Number.isFinite(o.rank)) return { ok: false, error: "item.rank must be a number" };
+      a.rank = o.rank;
+    }
+    if (o.badge !== undefined) {
+      const b = o.badge as Record<string, unknown> | null;
+      if (!b || typeof b !== "object" || typeof b.text !== "string" || !b.text.trim()) return { ok: false, error: "item.badge needs text" };
+      if (b.text.length > ANNOTATION_LIMITS.badge) return { ok: false, error: `badge text is longer than ${ANNOTATION_LIMITS.badge} characters` };
+      const text = b.text.replace(INVISIBLE, "").trim();
+      if (!text) return { ok: false, error: "item.badge needs text" };
+      a.badge = { text, tone: tone(b.tone) };
+    }
+    if (o.tip !== undefined) {
+      if (typeof o.tip !== "string") return { ok: false, error: "item.tip must be a string" };
+      if (o.tip.length > ANNOTATION_LIMITS.tip) return { ok: false, error: `tip is longer than ${ANNOTATION_LIMITS.tip} characters` };
+      a.tip = o.tip.replace(INVISIBLE, "");
+    }
+    out.push(a);
+  }
+  return { ok: true, value: out };
 }

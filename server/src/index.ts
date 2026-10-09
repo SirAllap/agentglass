@@ -206,7 +206,7 @@ import { DESK_HEADER, claimDesk, deskHeld } from "./desk.ts";
 import { resolveToken, healthProof, tokenOk, isIntake, isAuthExempt, callerFor, allowed, scopeNeeded, pluginOfRequest, answersFromADevice, deskKeyOk, understudyRequiresToken, UNDERSTUDY_NO_TOKEN_ERROR, mintUnderstudyToken, revokeUnderstudyToken, tokenlessWarning, type Caller, type Origin } from "./auth.ts";
 import {
   listPlugins, masterEnabled, setMaster, installPlugin, installFromCatalogue, updatePlugin, enablePlugin, disablePlugin, removePlugin, setPluginUnboxedConsent,
-  contributesOf, isRunning, pluginSettings, setPluginSettings, resumeEnabledPlugins, stopAllPluginsSync, pluginIcon,
+  contributesOf, isRunning, pluginSettings, pluginOwnSettings, setPluginSettings, resumeEnabledPlugins, stopAllPluginsSync, pluginIcon,
 } from "./plugins.ts";
 import { setPluginSocketHandler, viaPluginSocket } from "./plugin-socket.ts";
 import {
@@ -215,6 +215,7 @@ import {
 import { validPrRef } from "../../shared/pluginUi.ts";
 import { readNotifyPrefs, writeNotifyPrefs } from "./notifyPrefs.ts";
 import { fetchCatalogue } from "./plugin-catalogue.ts";
+import { annotate, setAnnotations } from "./inbox-annotations.ts";
 import {
   openStub, settleLedger, recordDecision, recordFence, scorecard,
   setMode, halt, setEnabled, enabled as understudyEnabled, sealSituation,
@@ -5109,7 +5110,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       const body = async <T,>(): Promise<T | null> => { try { return (await req.json()) as T; } catch { return null; } };
 
       if (pathname === "/plugin/self" && req.method === "GET") {
-        return json({ ok: true, name: self, contributes: c, settings: pluginSettings(self)?.values ?? {} });
+        return json({ ok: true, name: self, contributes: c, settings: pluginOwnSettings(self) });
       }
       if (pathname === "/plugin/self/events" && req.method === "GET") {
         const wait = Math.max(0, Math.min(30_000, Number(url.searchParams.get("wait") ?? 25_000) || 0));
@@ -5126,6 +5127,12 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
         const b = await body<{ key?: unknown; options?: unknown }>();
         if (!b || typeof b.key !== "string") return json({ ok: false, error: "key and options are required" }, 400);
         const r = setOptions(self, c, b.key, b.options);
+        return json(r, r.ok ? 200 : 400);
+      }
+      if (pathname === "/plugin/self/inbox/annotations") {
+        const b = await body<{ items?: unknown; replace?: unknown }>();
+        if (!b) return json({ ok: false, error: "invalid json" }, 400);
+        const r = setAnnotations(self, c, b);
         return json(r, r.ok ? 200 : 400);
       }
       if (pathname === "/plugin/self/settings" && req.method === "POST") {
@@ -6974,7 +6981,10 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      * a comment and an issue that is not a pull request.
      */
     if (pathname === "/prs/inbox") {
-      return json(await inbox(url.searchParams.get("unread") !== "1", url.searchParams.get("force") === "1"));
+      const page = await inbox(url.searchParams.get("unread") !== "1", url.searchParams.get("force") === "1");
+      // What plugins say about the rows is added here, after the cache, so a
+      // plugin's word is never frozen into the page GitHub sent.
+      return json({ ...page, items: annotate(page.items) });
     }
     if (pathname === "/prs/inbox/act" && req.method === "POST") {
       if (!trustedCaller(req, from)) return csrfBlocked();

@@ -2,6 +2,7 @@
 // Keep this file dependency-free so both sides can import it.
 import type { NotifyKind, NotifyPrefs } from "./notifyPrefs.ts";
 import type { CheckUsual } from "./checkBaseline.ts";
+import type { InboxAnnotation } from "./pluginUi.ts";
 
 export type HookEventType =
   | "SessionStart"
@@ -4950,6 +4951,10 @@ export interface InboxItem {
   title: string;
   at: number;
   number?: number;
+  /** What plugins that declared `inboxAnnotations` say about this row. Only
+   *  ever added by the server, never stored with the notification, and never a
+   *  reason for a row to be missing. */
+  annotations?: InboxAnnotation[];
 }
 
 /**

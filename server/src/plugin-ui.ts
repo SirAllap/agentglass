@@ -27,6 +27,7 @@ import {
   NOTE_STATUSES, coerceValue, resolveSettings, validateNote, validateRun, validateTree, validPrRef,
 } from "../../shared/pluginUi.ts";
 import { pluginsConfigDir } from "./plugins.ts";
+import { forgetAnnotations } from "./inbox-annotations.ts";
 
 export type PluginUiFrame =
   /** `plugin`/`panel` name what was redrawn, so a window fetches that one
@@ -159,6 +160,7 @@ export async function takeEvents(plugin: string, waitMs: number): Promise<Plugin
 export function forgetPlugin(plugin: string): void {
   panels.delete(plugin);
   options.delete(plugin);
+  forgetAnnotations(plugin);
   queues.delete(plugin);
   for (const w of waiters.get(plugin) ?? []) w();
   waiters.delete(plugin);

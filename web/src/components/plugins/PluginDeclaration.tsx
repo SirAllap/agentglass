@@ -55,8 +55,13 @@ export function surfaces(p: PublicPlugin): Surface[] {
     out.push({
       icon: <SlidersIcon size={ICON.sm} />,
       what: `Settings page · ${c.settings.length} ${c.settings.length === 1 ? "field" : "fields"}`,
-      where: "in this window, filled in by you",
+      where: c.settings.some((f) => f.type === "secret")
+        ? "in this window, filled in by you; asks for a secret, kept in a file only you can read (a plugin running outside its box could too)"
+        : "in this window, filled in by you",
     });
+  }
+  if (c.inboxAnnotations) {
+    out.push({ icon: <PuzzleIcon size={ICON.sm} />, what: "Badge and sort order on Inbox rows", where: "it can mark and order rows, never hide one" });
   }
   if (c.prNotes) {
     out.push({ icon: <NoteIcon size={ICON.sm} />, what: "Notes on pull requests", where: "shown here only, never sent to GitHub" });

@@ -1,3 +1,3 @@
-server 7550
-web 6060
+server 7620
+web 6280
 mobile 1000

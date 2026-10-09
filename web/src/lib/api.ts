@@ -1865,9 +1865,9 @@ const realApi = {
   },
   postMarks: (ops: MarkOp[]) => post<{ ok: boolean; changed?: MarkRow[]; error?: string; needs?: string }>("/marks", { ops }),
   pluginSettings: (name: string) =>
-    get<{ ok: boolean; fields: Field[]; values: Record<string, unknown>; error?: string }>(`/plugins/settings?name=${encodeURIComponent(name)}`),
+    get<{ ok: boolean; fields: Field[]; values: Record<string, unknown>; set?: string[]; error?: string }>(`/plugins/settings?name=${encodeURIComponent(name)}`),
   pluginSettingsSave: (name: string, values: Record<string, unknown>) =>
-    post<{ ok: boolean; values?: Record<string, unknown>; error?: string }>("/plugins/settings", { name, values }),
+    post<{ ok: boolean; values?: Record<string, unknown>; set?: string[]; error?: string }>("/plugins/settings", { name, values }),
   /** Runs and notes plugins wrote on one pull request. Local only. */
   pluginPrNotes: (repo: string, number: number) =>
     get<PluginPrNotes>(`/plugins/pr-notes?repo=${encodeURIComponent(repo)}&number=${number}`),

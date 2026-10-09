@@ -15,7 +15,8 @@
 // somewhere new asks again.
 import { createHash } from "node:crypto";
 import {
-  closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync,
+  chmodSync, closeSync, cpSync, existsSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync,
+  renameSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { homedir, tmpdir } from "node:os";
@@ -29,7 +30,7 @@ import { pluginGitEnv, PLUGIN_GIT_CONFIG } from "./plugin-env.ts";
 import { fetchCatalogue } from "./plugin-catalogue.ts";
 import type { GuardedFetchOptions } from "./net.ts";
 import { blockedEntry, type BlockEntry } from "./plugin-blocklist.ts";
-import { type Contributes, validateContributes } from "../../shared/pluginUi.ts";
+import { type Contributes, type Field, redactSecrets, validateContributes } from "../../shared/pluginUi.ts";
 import { type PluginSandbox, validateSandbox } from "../../shared/pluginSandbox.ts";
 import {
   hostResolvConfExtraRo, hostSystemPaths, openGrantFds, pluginDataDir, removePluginDataDir, resolveGrants,
@@ -431,12 +432,36 @@ function read(): Store {
 function write(store: Store): void {
   const p = pluginsPath();
   if (offLimits(p)) return;
+  // Written beside the file and renamed over it: a crash half way leaves the old
+  // file whole, where truncate-then-write left invalid JSON that `read` takes for
+  // an empty store — every plugin, approval and secret gone on the next write.
+  // The mode is set on the file that is kept, not only when it is created: a
+  // plugins.json restored from a backup at 0644 would otherwise stay readable
+  // by everyone after a key is stored in it.
+  const tmp = `${p}.${process.pid}.tmp`;
   try {
-    mkdirSync(dirname(p), { recursive: true });
-    writeFileSync(p, JSON.stringify(store, null, 2) + "\n", { mode: 0o600 });
+    mkdirSync(dirname(p), { recursive: true, mode: 0o700 });
+    const fd = openSync(tmp, "w", 0o600);
+    try { writeSync(fd, JSON.stringify(store, null, 2) + "\n"); fsyncSync(fd); } finally { closeSync(fd); }
+    chmodSync(tmp, 0o600);
+    renameSync(tmp, p);
   } catch {
-    /* best effort */
+    try { unlinkSync(tmp); } catch { /* nothing to clean */ }
   }
+}
+
+/** The settings without the values of fields that are `secret` in `fields`. */
+function withoutSecrets(fields: Field[] | undefined, settings: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (!settings) return settings;
+  const secret = new Set((fields ?? []).filter((f) => f.type === "secret").map((f) => f.key));
+  return Object.fromEntries(Object.entries(settings).filter(([k]) => !secret.has(k)));
+}
+
+/** A key that was a secret and is not any more must not carry its value into a
+ *  field that is drawn and served in the clear. */
+function withoutRetypedSecrets(prev: Field[] | undefined, next: Field[] | undefined, settings: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  const still = new Set((next ?? []).filter((f) => f.type === "secret").map((f) => f.key));
+  return withoutSecrets((prev ?? []).filter((f) => !still.has(f.key)), settings);
 }
 
 /**
@@ -861,18 +886,32 @@ export function isRunning(name: string): boolean {
   return running.has(name);
 }
 
-export function pluginSettings(name: string): { fields: ReturnType<typeof fieldsWithOptions>; values: Record<string, unknown> } | null {
+/**
+ * What the window and any other reader gets: every `secret` field is `null`
+ * and `set` names the ones that hold a value. The value itself leaves this
+ * file only through `pluginOwnSettings`.
+ */
+export function pluginSettings(name: string): { fields: ReturnType<typeof fieldsWithOptions>; values: Record<string, unknown>; set: string[] } | null {
   const rec = read().plugins.find((p) => p.name === name);
   if (!rec) return null;
-  return { fields: fieldsWithOptions(name, rec.contributes?.settings), values: resolveSettings(rec.contributes?.settings, rec.settings) };
+  const r = redactSecrets(rec.contributes?.settings, resolveSettings(rec.contributes?.settings, rec.settings));
+  return { fields: fieldsWithOptions(name, rec.contributes?.settings), values: r.values, set: r.set };
+}
+
+/** The plugin's own view of its settings, secrets included. Only for the
+ *  `/plugin/self` routes and the `settings` event, which are its alone. */
+export function pluginOwnSettings(name: string): Record<string, unknown> {
+  const rec = read().plugins.find((p) => p.name === name);
+  return rec ? resolveSettings(rec.contributes?.settings, rec.settings) : {};
 }
 
 /**
  * Save what the person chose, typed by the manifest, and tell the plugin.
  * Merged over what was there, so a form that only shows some fields cannot
- * erase the rest.
+ * erase the rest. A secret the caller did not send is left alone; sending an
+ * empty string clears it.
  */
-export function setPluginSettings(name: string, raw: unknown): { ok: true; values: Record<string, unknown> } | { ok: false; error: string } {
+export function setPluginSettings(name: string, raw: unknown): { ok: true; values: Record<string, unknown>; set: string[] } | { ok: false; error: string } {
   const store = read();
   const rec = store.plugins.find((p) => p.name === name);
   if (!rec) return { ok: false, error: "no such plugin" };
@@ -882,7 +921,7 @@ export function setPluginSettings(name: string, raw: unknown): { ok: true; value
   write(store);
   const values = resolveSettings(fields, rec.settings);
   pushEvent(name, { type: "settings", settings: values, at: Date.now() });
-  return { ok: true, values };
+  return { ok: true, ...redactSecrets(fields, values) };
 }
 
 /**
@@ -1045,10 +1084,13 @@ async function finishInstall(
   // plugin being replaced, and they are kept for it as a remove would.
   const from = sourceKey(source);
   const same = existing !== undefined && sourceKey(existing.source) === from;
-  const displaced = existing && !same && existing.settings && Object.keys(existing.settings).length > 0
-    ? { ...(store.keptSettings ?? {}), [manifest.name]: { ...(store.keptSettings?.[manifest.name] ?? {}), [sourceKey(existing.source)]: existing.settings } }
+  // A secret is never kept for a later reinstall: removing a plugin to revoke
+  // its key must actually revoke it.
+  const displacedSettings = existing && !same ? withoutSecrets(existing.contributes?.settings, existing.settings) : undefined;
+  const displaced = displacedSettings && Object.keys(displacedSettings).length > 0
+    ? { ...(store.keptSettings ?? {}), [manifest.name]: { ...(store.keptSettings?.[manifest.name] ?? {}), [sourceKey(existing!.source)]: displacedSettings } }
     : store.keptSettings;
-  const carried = same ? existing!.settings : undefined;
+  const carried = same ? withoutRetypedSecrets(existing!.contributes?.settings, manifest.contributes?.settings, existing!.settings) : undefined;
   const kept = displaced?.[manifest.name]?.[from];
   const restored = !carried && kept !== undefined;
   const settings = carried ?? (restored ? kept : undefined);
@@ -1338,7 +1380,8 @@ export async function removePlugin(name: string, opts: { dropSettings?: boolean 
   // A different author's plugin installed later under this same name must
   // not inherit whatever this one cached here.
   removePluginDataDir(name);
-  const keep = !opts.dropSettings && rec.settings && Object.keys(rec.settings).length > 0;
+  const keepable = withoutSecrets(rec.contributes?.settings, rec.settings);
+  const keep = !opts.dropSettings && keepable && Object.keys(keepable).length > 0;
   const from = sourceKey(rec.source);
   write({
     ...store,
@@ -1347,7 +1390,7 @@ export async function removePlugin(name: string, opts: { dropSettings?: boolean 
     // same name belong to that plugin, and neither a keep nor a drop here
     // touches them.
     keptSettings: keep
-      ? { ...(store.keptSettings ?? {}), [name]: { ...(store.keptSettings?.[name] ?? {}), [from]: rec.settings! } }
+      ? { ...(store.keptSettings ?? {}), [name]: { ...(store.keptSettings?.[name] ?? {}), [from]: keepable! } }
       : opts.dropSettings ? withoutKept(store.keptSettings, name, from) : store.keptSettings,
   });
   dropNotesOf(name);

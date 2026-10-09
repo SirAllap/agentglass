@@ -7,7 +7,8 @@ import { ago } from "../../lib/fileRecents.ts";
 import { Select } from "../Select.tsx";
 import { Switch } from "../SettingRow.tsx";
 import { useDialogs, type ConfirmSpec } from "../ConfirmDialog.tsx";
-import { Row, Chip, type Tone as RowTone } from "../git/ui.tsx";
+import { Row, Chip } from "../git/ui.tsx";
+import { TO_ROW_TONE } from "../../lib/pluginTones.ts";
 import { DoneIcon } from "../../lib/glyphIcons.tsx";
 import { CloseIcon } from "../CloseButton.tsx";
 import { ExternalIcon } from "../browser/icons.tsx";
@@ -36,10 +37,6 @@ const TONE_COLOR: Record<Tone, string> = {
   success: "var(--success)",
   warning: "var(--warning)",
   danger: "var(--error)",
-};
-
-const TO_ROW_TONE: Record<Tone, RowTone> = {
-  default: "neutral", muted: "neutral", accent: "accent", success: "good", warning: "warn", danger: "bad",
 };
 
 const GAP = { sm: 6, md: 12, lg: 20 } as const;
@@ -349,8 +346,11 @@ function Form({ node, ctx }: { node: Extract<UiNode, { type: "form" }>; ctx: Ctx
  * One input for one declared field. Shared with the plugin's settings page so
  * a field looks and behaves the same wherever a plugin asks for it.
  */
-export function FieldRow({ field, value, onChange, onCommit }: {
+export function FieldRow({ field, value, onChange, onCommit, secretSet }: {
   field: Field; value: unknown; onChange: (v: unknown) => void;
+  /** Settings page only: whether a `secret` field already holds a value. The
+   *  value itself never arrives here. Left out, the field is a plain masked box. */
+  secretSet?: boolean;
   /** Settings save on blur or on a discrete change; a plugin's own form
    *  saves on submit and leaves this out. */
   onCommit?: (v: unknown) => void;
@@ -421,6 +421,8 @@ export function FieldRow({ field, value, onChange, onCommit }: {
         </div>
       </div>
     );
+  } else if (field.type === "secret") {
+    control = <SecretInput field={field} value={value} isSet={secretSet} onChange={onChange} onCommit={onCommit} style={inputStyle} />;
   } else {
     control = (
       <input className="agx-input" style={inputStyle} type="text" placeholder={field.placeholder}
@@ -447,6 +449,37 @@ export function FieldRow({ field, value, onChange, onCommit }: {
       {label}
       <div className="shrink-0" style={{ width: 260, maxWidth: "46%" }}>{control}</div>
     </label>
+  );
+}
+
+/**
+ * A key or token. Masked while typed, and once saved it is never shown again,
+ * only "set" with the two things a person can do about it: replace it or clear
+ * it. The app does not have the value to show — the server withholds it from
+ * every read but the plugin's own.
+ */
+function SecretInput({ field, value, isSet, onChange, onCommit, style }: {
+  field: Field; value: unknown; isSet?: boolean; onChange: (v: unknown) => void; onCommit?: (v: unknown) => void; style: CSSProperties;
+}) {
+  const [replacing, setReplacing] = useState(false);
+  const typed = typeof value === "string" ? value : "";
+  if (isSet && !replacing) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="flex-1 text-[11.5px]" style={{ color: "var(--text3)" }}>Set, hidden</span>
+        <button type="button" className="agx-btn rounded px-1.5 py-0.5 text-[10px]" style={{ color: "var(--text2)", border: EDGE }}
+          onClick={() => setReplacing(true)}>Replace</button>
+        <button type="button" className="agx-btn rounded px-1.5 py-0.5 text-[10px]" style={{ color: "var(--text2)", border: EDGE }}
+          onClick={() => onCommit?.("")}>Clear</button>
+      </div>
+    );
+  }
+  return (
+    <input className="agx-input" style={style} type="password" autoComplete="off" spellCheck={false}
+      autoFocus={replacing} placeholder={field.placeholder ?? "Paste it here"} value={typed}
+      onChange={(e) => onChange(e.target.value)}
+      onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+      onBlur={(e) => { if (e.target.value) onCommit?.(e.target.value); setReplacing(false); }} />
   );
 }
 

@@ -110,6 +110,8 @@ const ALLOWED: { file: string; marker: string; why: string }[] = [
     why: "one of a generative-plugin field's input/textarea/select triad sharing `.agx-input`; converting only the input would split the triad's look back apart" },
   { file: "plugins/PluginTree.tsx", marker: 'className="agx-input" style={style} type="text" inputMode="decimal"',
     why: "same `.agx-input` triad as the field above" },
+  { file: "plugins/PluginTree.tsx", marker: 'className="agx-input" style={style} type="password"',
+    why: "same `.agx-input` triad as the text field above; a masked key box that looks like the field it replaces" },
   { file: "plugins/PluginTree.tsx", marker: 'className="agx-input t-mono w-full"',
     why: "same `.agx-input` family; a borderless search row inside a popover list" },
 

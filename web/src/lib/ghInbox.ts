@@ -133,3 +133,43 @@ export function searchInbox(items: InboxItem[], q: string): InboxItem[] {
   if (num) return items.filter((n) => String(n.number ?? "") === num[1]);
   return items.filter((n) => `${n.title} ${n.repo} #${n.number ?? ""} ${n.reason}`.toLowerCase().includes(needle));
 }
+
+/*
+ * What plugins say about rows: a number to order by, and the plugins that gave
+ * one.
+ *
+ * The order is a CHOICE the person makes — "Sort: <plugin>" — and the default
+ * stays newest first, so installing a plugin never moves a row on its own. It
+ * reorders and nothing else: `orderByAnnotation` returns every row it was
+ * given, and the ceiling is stated here rather than discovered — a row the
+ * plugin gave no number sorts after the ones it did, newest first, so a
+ * plugin that wants an unknown row in the middle says so with a number.
+ */
+
+/** The number a plugin ordered a row by: `rank` when it set one, else `score`. */
+export function annotationKey(item: InboxItem, plugin: string): number | undefined {
+  const a = item.annotations?.find((x) => x.plugin === plugin);
+  return a?.rank ?? a?.score;
+}
+
+/** Plugins that ordered at least one of these rows, in the order first seen. */
+export function sorters(items: InboxItem[]): string[] {
+  const out: string[] = [];
+  for (const n of items) {
+    for (const a of n.annotations ?? []) {
+      if ((a.rank ?? a.score) !== undefined && !out.includes(a.plugin)) out.push(a.plugin);
+    }
+  }
+  return out;
+}
+
+/** Highest number first; ties and unnumbered rows newest first. Never drops a row. */
+export function orderByAnnotation(items: InboxItem[], plugin: string): InboxItem[] {
+  return [...items].sort((a, b) => {
+    const ka = annotationKey(a, plugin);
+    const kb = annotationKey(b, plugin);
+    if (ka !== undefined && kb !== undefined && ka !== kb) return kb - ka;
+    if ((ka === undefined) !== (kb === undefined)) return ka === undefined ? 1 : -1;
+    return b.at - a.at;
+  });
+}

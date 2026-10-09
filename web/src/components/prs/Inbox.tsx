@@ -25,7 +25,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { usePoll } from "../../lib/usePoll.ts";
 import type { InboxItem } from "../../../../shared/types.ts";
 import { api } from "../../lib/api.ts";
-import { byDay, facetCounts, facetOrder, FACETS, filterInbox, inFacet, reasonLabel, searchInbox } from "../../lib/ghInbox.ts";
+import { byDay, facetCounts, facetOrder, FACETS, filterInbox, inFacet, orderByAnnotation, reasonLabel, searchInbox, sorters } from "../../lib/ghInbox.ts";
 import { doneIds, isDone, isSaved, onShelf, savedIds, setDone, setSaved, subscribeMarks, type Shelf } from "../../lib/inboxMarks.ts";
 import { fmtAgo } from "../../lib/format.ts";
 import { openPr } from "../../lib/openPrs.ts";
@@ -37,6 +37,8 @@ import { CommentIcon, DoneIcon, EyeIcon, FlagIcon, HandIcon, InboxIcon, UserIcon
 import { GitIcon } from "../workspace/icons.tsx";
 import { RefreshButton, INPUT, INPUT_STYLE, EDGE, LINE } from "../workspace/Chrome.tsx";
 import { Optimistic } from "../../lib/prOptimistic.ts";
+import { Chip } from "../git/ui.tsx";
+import { TO_ROW_TONE } from "../../lib/pluginTones.ts";
 
 /** The list with the given threads set read. A pure patch, kept outside the
  *  component so the layer it draws — see `Optimistic` — can be exercised
@@ -139,6 +141,8 @@ export function Inbox({ repo, onFlash, onUnread, active = true }: {
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [q, setQ] = useState("");
   const [newest, setNewest] = useState(true);
+  /** A plugin whose numbers order the list, or null for time. Only ever the person's pick. */
+  const [sortBy, setSortBy] = useState<string | null>(null);
   const [allRepos, setAllRepos] = useState(false);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   /* The local shelves are a store outside React — two other windows can move
@@ -195,13 +199,17 @@ export function Inbox({ repo, onFlash, onUnread, active = true }: {
     return m;
   }, [shelved, unreadOnly]);
 
+  /** Plugins that gave rows a number to order by; each is a "Sort" choice. */
+  const orderers = useMemo(() => sorters(all), [all]);
   const rows = useMemo(() => {
     const list = searchInbox(
       filterInbox(shelved, { unread: unreadOnly }).filter((n) => !facet || inFacet(n, facet)),
       q,
     );
-    return [...list].sort((a, b) => (newest ? b.at - a.at : a.at - b.at));
-  }, [shelved, unreadOnly, facet, q, newest]);
+    return sortBy && orderers.includes(sortBy)
+      ? orderByAnnotation(list, sortBy)
+      : [...list].sort((a, b) => (newest ? b.at - a.at : a.at - b.at));
+  }, [shelved, unreadOnly, facet, q, newest, sortBy, orderers]);
 
   const repoCounts = useMemo(() => facetOrder(facetCounts(onShelf(all, shelf), {}, "repo")), [all, shelf, marksTick]);
   const unread = shelved.filter((n) => n.unread).length;
@@ -326,11 +334,26 @@ export function Inbox({ repo, onFlash, onUnread, active = true }: {
             placeholder="Filter these — title, repo, or #number"
             className={`flex-1 min-w-[160px] ${INPUT}`}
             style={q ? { ...INPUT_STYLE, border: "1px solid var(--primary)" } : INPUT_STYLE} />
-          <button onClick={() => setNewest((v) => !v)} className="agx-btn rounded-md px-2 py-1 text-[10.5px] shrink-0"
-            style={{ color: "var(--text3)", border: EDGE }}
-            title="Turn the order round">
-            {newest ? "Newest first" : "Oldest first"}
-          </button>
+          {orderers.length > 0 && (
+            <div className="flex rounded-md overflow-hidden shrink-0" style={{ border: EDGE }}
+              title="Sort by time, or by the numbers an installed plugin gave the rows">
+              {[["Time", null], ...orderers.map((p) => [p, p] as const)].map(([label, id]) => {
+                const on = (sortBy && orderers.includes(sortBy) ? sortBy : null) === id;
+                return (
+                  <button key={String(label)} onClick={() => setSortBy(id as string | null)}
+                    className="agx-btn text-[10.5px] px-2 py-0.5"
+                    style={{ color: on ? "var(--bg)" : "var(--text2)", background: on ? "var(--primary)" : "transparent" }}>{label}</button>
+                );
+              })}
+            </div>
+          )}
+          {!(sortBy && orderers.includes(sortBy)) && (
+            <button onClick={() => setNewest((v) => !v)} className="agx-btn rounded-md px-2 py-1 text-[10.5px] shrink-0"
+              style={{ color: "var(--text3)", border: EDGE }}
+              title="Turn the order round">
+              {newest ? "Newest first" : "Oldest first"}
+            </button>
+          )}
           <RefreshButton onRefresh={() => load(true)} busy={busy}
             title={at ? `Read ${fmtAgo(at)}` : "Read the inbox again"} />
         </div>
@@ -392,6 +415,9 @@ export function Inbox({ repo, onFlash, onUnread, active = true }: {
                       {n.title}
                     </div>
                   </button>
+                  {n.annotations?.map((a) => a.badge && (
+                    <Chip key={a.plugin} tone={TO_ROW_TONE[a.badge.tone ?? "default"]} title={a.tip ? `${a.tip} — ${a.plugin}` : a.plugin}>{a.badge.text}</Chip>
+                  ))}
                   <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-md whitespace-nowrap"
                     style={{ color: "var(--text3)", border: EDGE }}>{reasonLabel(n.reason)}</span>
                   <span className="shrink-0 text-[10px] tabular-nums w-[52px] text-right" style={{ color: "var(--text4)" }}

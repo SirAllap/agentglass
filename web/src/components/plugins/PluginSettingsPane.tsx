@@ -60,6 +60,8 @@ function Group({ name, count, children }: { name?: string; count: number; childr
 export function PluginSettingsPane({ name, open }: { name: string; open: boolean }) {
   const [fields, setFields] = useState<Field[] | null>(null);
   const [values, setValues] = useState<Record<string, unknown>>({});
+  /** Which secret fields hold a value. The values are never sent here. */
+  const [secretsSet, setSecretsSet] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -70,6 +72,7 @@ export function PluginSettingsPane({ name, open }: { name: string; open: boolean
       if (!r.ok) { setError(r.error ?? "no such plugin"); setFields([]); return; }
       setFields(r.fields);
       if (!keepValues) setValues(r.values);
+      setSecretsSet(r.set ?? []);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -89,6 +92,7 @@ export function PluginSettingsPane({ name, open }: { name: string; open: boolean
     const r = await api.pluginSettingsSave(name, { [key]: v });
     if (!r.ok) { setError(r.error ?? "not saved"); return; }
     if (r.values) setValues(r.values);
+    if (r.set) setSecretsSet(r.set);
     setError(null);
     setSaved(key);
     if (savedTimer.current) clearTimeout(savedTimer.current);
@@ -106,7 +110,7 @@ export function PluginSettingsPane({ name, open }: { name: string; open: boolean
         <Group key={g.name ?? ""} name={g.name} count={g.fields.length}>
           {g.fields.map((f, i) => (
             <div key={f.key} className="px-4 py-3.5 flex flex-col gap-1" style={{ borderTop: i ? LINE : undefined }}>
-              <FieldRow field={f} value={values[f.key]}
+              <FieldRow field={f} value={values[f.key]} secretSet={f.type === "secret" ? secretsSet.includes(f.key) : undefined}
                 onChange={(v) => setValues((s) => ({ ...s, [f.key]: v }))}
                 onCommit={(v) => { void commit(f.key, v); }} />
               <div className="h-3 text-[10.5px]" style={{ color: "var(--success-ink)" }} aria-live="polite">{saved === f.key ? "Saved" : ""}</div>

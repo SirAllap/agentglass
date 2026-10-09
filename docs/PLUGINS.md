@@ -260,7 +260,7 @@ into the manifest hash, so a plugin that starts drawing somewhere new is asked
 about again. A manifest with no `contributes` hashes exactly as it did before
 drawing existed, so upgrading the app clears no approval.
 
-Four places a plugin can appear:
+Five places a plugin can appear:
 
 | Contribution | Where it shows | What the plugin sends |
 |---|---|---|
@@ -268,6 +268,7 @@ Four places a plugin can appear:
 | `settings` | A page of its own in **Settings**, under Connections | Nothing: the app draws the fields and stores the values |
 | `prNotes` | Inside a pull request: one entry per pass in the conversation's **Local** lane, and each note under its line in the Files tab | Runs and notes, with a severity, a path and a line |
 | `prActions` | A button in every pull request's header, in the plugin's own colour, with the rest of its actions under a caret | Nothing to draw: the button's state is read from the plugin's runs on that pull request |
+| `inboxAnnotations` | A small badge on Inbox rows, and a "Sort: <plugin>" choice in the Inbox's toolbar | A badge, a tip and a number per row (below). It cannot hide a row |
 
 Everything goes through the plugin's own channel, `/plugin/self/…`, over its own
 token. That channel is open at any scope, because drawing is not a power over
@@ -281,6 +282,7 @@ plugin cannot draw into another's panel.
 | `POST /plugin/self/panel` `{id, tree}` | Draw a declared panel |
 | `POST /plugin/self/options` `{key, options}` | Choices for a `select` it could only find at run time |
 | `POST /plugin/self/settings` `{values}` | Fill in its own declared settings — for a box the person edits that has to arrive with something in it |
+| `POST /plugin/self/inbox/annotations` `{items, replace?}` | Badge and order Inbox rows (`inboxAnnotations`) |
 
 `~/.config/agentglass/plugins.json` (mode 0600) is the whole record: what is
 installed and where it came from, the approval on file, the master switch, the
@@ -297,6 +299,37 @@ the counts it found, which open the findings. So a plugin posts its `queued`
 run the moment it accepts the press — before any work starts — or the press
 looks ignored. The event carries the action id and the pull request and
 nothing else; an id the manifest never declared is refused.
+
+**A key or a token** is a settings field of type `secret`. The window draws a
+masked box; once saved the value is shown as *Set, hidden* with **Replace** and
+**Clear**, and it is never sent back to the window. Every read of the settings
+(`GET /plugins/settings`, the plugin list, a plugin holding `full` scope) gets
+`null` in its place and a `set` list naming the secrets that hold a value; only
+the plugin that declared it reads the value, over its own `GET /plugin/self` and
+in its `settings` event. It lives in the same 0600 file as the other settings
+(rewritten whole and kept at 0600 on every save). That is a file only your user
+can read and not a keyring, so the ceiling is plain: **a plugin running outside
+its box, and any program running as you, can read it.** This hides the value
+from the app's screens and its API, not from the disk. A manifest cannot give a
+`secret` a default (a manifest is a public file), an update that turns the field
+into anything else drops the stored value, a removed plugin's secret is never
+kept for a reinstall, and a drawn `form` node never echoes one. From the
+terminal, `agentglass-plugin settings <name> apiKey=-` reads the value from
+standard input, because a value on the command line lands in shell history. The
+review screen says when a plugin asks for one.
+
+**Marking Inbox rows** (`inboxAnnotations: true`) is for a plugin that knows
+something about a notification the list does not. It posts, per row, the thread
+`id` and the `updatedAt` it was made for, and any of: a `score` (0 to 1) or a
+`rank` (any number) to order by, a `badge` `{text, tone}` of at most 24
+characters, and a `tip` of at most 200 (control, zero-width and bidi characters are stripped from both). At most 500 rows a post and 1000 kept per
+plugin, in memory: a plugin posts again when it starts. `replace: true` drops
+what it posted before. The app draws the badge as a chip on the row and adds
+**Sort: <plugin>** beside **Time**, highest number first, rows it gave no number
+after the ones it did. Newest first stays the default until the person picks the
+plugin, and nothing here can remove a row, mark one read or change what it
+says: an annotation for an older version of a row (`updatedAt` is not the row's
+last update) is not shown, and the list has the same rows with or without it.
 
 **The vocabulary** ([shared/pluginUi.ts](../shared/pluginUi.ts)) is a closed set
 of nodes the app draws with its own parts:
