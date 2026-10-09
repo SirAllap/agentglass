@@ -15,6 +15,7 @@ import { Fragment, type CSSProperties, type ReactNode, useCallback, useEffect, u
 import { BlockedIcon, CheckboxIcon, CircleIcon, ClockIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, DotIcon, IconLabel, KeyboardIcon, LockIcon, MonitorIcon, NoteIcon, PlusIcon, PullRequestIcon, RefreshIcon, SearchIcon } from "../lib/glyphIcons.tsx";
 import { pickCardPr, cardPrTint, cardPrInk, mergedInk, sortedCardPrs, type CardPr } from "../lib/cardPrPick.ts";
 import { cardPrsOf, onCardPrs, cardPrVersion } from "../lib/cardPrStore.ts";
+import { paintThenRevalidate, PRS_TTL_MS, swr, THREAD_TTL_MS } from "../lib/cardTabCache.ts";
 import { api } from "../lib/api.ts";
 import { Optimistic, commentResolvedPatch } from "../lib/taskOptimistic.ts";
 import { FilterBuilder } from "./tasks/FilterBuilder.tsx";
@@ -2278,7 +2279,9 @@ function ClickUpBody({ active, repos, here, onOpenChatWith, onOpenBrowser, jump 
     skills={skills}
     onNote={(text) => setNote({ ok: true, text })}
     onFresh={(task) => setOver((m) => ({ ...m, [task.id]: task }))}
-    onApply={(key, p) => picked && apply(picked, key, p)}
+    /* A write made here makes the cached thread due, so the next time the card
+       is opened it is read again instead of shown as it was before the edit. */
+    onApply={(key, p) => { if (picked) { threadCache.stale(picked.id); apply(picked, key, p); } }}
     saving={(key) => queue.busy(picked?.id ?? "", key)}
     /* Offered only when it goes somewhere: a card on the board you are already
        looking at has nowhere to take you, and the panel reads any list by id
@@ -5033,6 +5036,11 @@ function CommentAction({ label, title, d, onClick, busy, on, tone }: {
   );
 }
 
+/** Per card, for the life of the window: see lib/cardTabCache.ts. */
+type PrsRead = { prs: { number: number; title: string; state: string; draft?: boolean; url: string; stated?: boolean }[]; err: boolean };
+const prsCache = swr<PrsRead>(PRS_TTL_MS, (v) => !v.err);
+const threadCache = swr<Awaited<ReturnType<typeof api.clickupTask>>>(THREAD_TTL_MS, (r) => !!r.ok);
+
 /** One row of the card's GitHub tab, pull request or other link. The text takes
  *  the room and the buttons sit at the row's right edge, top-aligned with the
  *  title line, so both kinds of row put their buttons in the same place. */
@@ -5757,40 +5765,52 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
   });
   useEffect(() => { try { localStorage.setItem(YOLO_KEY, yolo ? "1" : "0"); } catch { /* private mode */ } }, [yolo]);
 
-  const [prs, setPrs] = useState<{ number: number; title: string; state: string; draft?: boolean; url: string; stated?: boolean }[]>([]);
+  const prField = t.custom?.find((c) => /github/i.test(c.name))?.value ?? "";
+  const prCwd = rootForTask(t.list, repos, here) ?? here;
+  const prKey = [t.id, t.customId || "", prField, prCwd].join("\n");
+  const [prs, setPrs] = useState<PrsRead["prs"]>(() => prsCache.peek(prKey)?.prs ?? []);
   const [prsErr, setPrsErr] = useState(false);
+  /** False until a search for THIS card has answered (or one is cached): the
+   *  empty-state sentence is only true after that. */
+  const [prsLoaded, setPrsLoaded] = useState(() => prsCache.peek(prKey) !== undefined);
 
   // Read out of text the card already carries: no request, and the targets are
   // never fetched. See shared/githubLinks.ts.
   const others = useMemo(
-    () => otherGithubLinks(full?.description, t.custom?.find((c) => /github/i.test(c.name))?.value),
-    [full?.description, t.custom],
+    () => otherGithubLinks(full?.description, prField),
+    [full?.description, prField],
   );
   // A wiki page, an issue or a commit is not something the app draws, so these
   // leave for the desktop's default browser rather than the in-app one.
   const openOther = useCallback((url: string) => { openExternal(url); }, []);
 
 
+  /* Keyed on the strings the search is made of, not on `t.custom` or `repos`:
+     those are new objects every time the board re-reads itself, which it does
+     on coming back to the window, and the old effect emptied the list and
+     searched again each time. See lib/cardTabCache.ts. */
   useEffect(() => {
     let live = true;
-    setPrs([]); setPrsErr(false);
-    const field = t.custom?.find((c) => /github/i.test(c.name))?.value ?? "";
-    const cwd = rootForTask(t.list, repos, here) ?? here;
-    void api.clickupPrs(t.customId || "", field, cwd)
-      .then((r) => { if (live) { setPrs(r.prs ?? []); setPrsErr(!r.ok); } })
-      .catch(() => { if (live) setPrsErr(true); });
+    const hit = prsCache.peek(prKey);
+    setPrs(hit?.prs ?? []); setPrsErr(false); setPrsLoaded(hit !== undefined);
+    void paintThenRevalidate(prsCache, prKey,
+      () => api.clickupPrs(t.customId || "", prField, prCwd)
+        .then((r): PrsRead => ({ prs: r.prs ?? [], err: !r.ok }))
+        .catch((): PrsRead => ({ prs: [], err: true })),
+      (v) => { if (live) { setPrs(v.prs); setPrsErr(v.err); setPrsLoaded(true); } });
     return () => { live = false; };
-  }, [t.id, t.customId, t.custom, t.list, repos, here]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prKey]);
 
   useEffect(() => {
     let live = true;
-    setFull(null); setStatusOpen(false); setAskOpen(false);
-    const ticket = layers.readStarted();
-    void api.clickupTask(t.id).then((r) => {
-      if (!live) return;
-      if (r.ok) layers.readLanded(ticket);
-      setFull(r);
-    }).catch(() => { if (live) setFull({ ok: false, error: "Could not read the card" }); });
+    const hit = threadCache.peek(t.id);
+    setFull(hit ?? null); setStatusOpen(false); setAskOpen(false);
+    void paintThenRevalidate(threadCache, t.id, () => {
+      const ticket = layers.readStarted();
+      return api.clickupTask(t.id).then((r) => { if (r.ok) layers.readLanded(ticket); return r; })
+        .catch((): CardRead => ({ ok: false, error: "Could not read the card" }));
+    }, (r) => { if (live) setFull(r); });
     return () => { live = false; };
   }, [t.id, layers]);
 
@@ -5799,8 +5819,9 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
      so a comment posted here would otherwise not appear until the card was
      closed and opened again. */
   const reread = useCallback(() => {
+    threadCache.stale(t.id);
     const ticket = layers.readStarted();
-    void api.clickupTask(t.id).then((r) => {
+    void threadCache.load(t.id, () => api.clickupTask(t.id), { force: true }).then((r) => {
       if (r.ok) layers.readLanded(ticket);
       setFull(r);
     }).catch(() => { /* the card stays as it was */ });
@@ -6108,7 +6129,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
         <RefreshButton onRefresh={() => {
           setRereading(true);
           const ticket = layers.readStarted();
-          void api.clickupTask(t.id)
+          void threadCache.load(t.id, () => api.clickupTask(t.id), { force: true })
             .then((r) => {
               if (r.ok) layers.readLanded(ticket);
               setFull(r);
@@ -6761,7 +6782,8 @@ function CardDetail({ t, today, statuses, fields, place, writable, repos, here, 
         </div>
       )}
 
-        {!prs.length && !prsErr && (
+        {!prs.length && !prsErr && !prsLoaded && <div className="mb-2"><Spinner label="Looking for pull requests…" className="" /></div>}
+        {!prs.length && !prsErr && prsLoaded && (
           <div className="text-[11px] px-1 pb-2" style={{ color: "var(--text4)" }}>
             No pull request names this card yet.
           </div>
