@@ -163,6 +163,18 @@ describe("every shared floating component closes with its owner", () => {
     expect(code("lib/benchStore.ts")).toMatch(/if \(hidden\) announceHidden\(BENCH_OWNER\)/);
   });
 
+  /* The card in modal mode is not a floating layer: it is drawn inside the
+     board's own panel, so it travels with the board and is never left over a
+     view the board is not in. Moved into a Portal it would be the one thing
+     that stays behind when the bench hides. */
+  it("the card detail modal stays inside the board's panel, not in a portal", () => {
+    const src = code("components/TasksPanel.tsx");
+    const at = src.indexOf('{cardMode === "modal" && picked && (');
+    expect(at).toBeGreaterThan(0);
+    expect(src.slice(at, at + 200)).toContain('className="absolute inset-0');
+    expect(src.slice(at, at + 200)).not.toContain("<Portal");
+  });
+
   it("a closed layer hands no focus back to a window that is being hidden", () => {
     const sel = code("components/Select.tsx");
     expect(sel).toMatch(/useCloseWithOwner\(\(\) => setOpen\(false\)/);
