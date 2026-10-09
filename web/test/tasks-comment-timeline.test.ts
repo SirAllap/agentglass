@@ -149,7 +149,8 @@ describe("the resolve patch", () => {
 
   it("leaves a card without that comment untouched", () => {
     expect(commentResolvedPatch("nope", true)(detail)).toBe(detail);
-    const partial = { ok: false, error: "Could not read the card" };
+    // A failed read carries no comments; the annotation says the key can be absent.
+    const partial: { ok: boolean; error: string; comments?: [] } = { ok: false, error: "Could not read the card" };
     expect(commentResolvedPatch("c1", true)(partial)).toBe(partial);
   });
 });
