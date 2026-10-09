@@ -1211,7 +1211,21 @@ export function humanVerdict(
     };
   };
 
-  if (changes.length) return build("changes", changes, approved.length);
+  if (changes.length) {
+    /*
+     * EVERY CHANGES-REQUESTER RE-ASKED CLEARS THE RED.
+     *
+     * `who` still names all of them — GitHub's own page does too, re-request
+     * arrow or not. One left un-re-asked and their thread is genuinely still
+     * the one to answer, so the merge box stays red. Only once EVERY one of
+     * them is back in `pending` (this pull request's own re-request list)
+     * does `cleared` say nobody named here is still holding it up — draw it
+     * like a fresh, unanswered request instead.
+     */
+    const allAskedAgain = changes.every(([login]) => pendingLogins.has(login.toLowerCase()));
+    const v = build("changes", changes, approved.length) as NonNullable<PrSummary["humanReview"]>;
+    return allAskedAgain ? { ...v, cleared: true } : v;
+  }
   if (approved.length) return build("approved", approved, changes.length);
   /*
    * WAITING OUTRANKS COMMENTED, because it is the more useful half.

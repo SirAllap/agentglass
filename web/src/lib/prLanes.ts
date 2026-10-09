@@ -270,11 +270,18 @@ export function fileInLane(p: PrSummary, stake: Stake): Filed {
      * `reviewRequests` GitHub's own ↻ reads.
      */
     const again = p.humanReview?.askedAgain;
+    /* CLEARED: every changes-requester has been re-asked, so this reads the
+       same amber fact the card header and the merge box now both draw —
+       waiting on THEIR review, not still-blocked. Matched in wording so the
+       header strip and the line under it do not disagree. */
+    const cleared = p.humanReview?.cleared;
     return { lane: stake.mine ? "flight" : "others",
       reason: stake.mine
-        ? (again ? "Changes were asked for, and you've asked them to look again — the ball is with them now."
+        ? (cleared ? "Changes applied, and you've asked them to look again — waiting on their review now."
+          : again ? "Changes were asked for, and you've asked them to look again — the ball is with them now."
           : "Changes were asked for. The ball is with you.")
-        : (again ? "Changes were asked for, and the author has asked for another look."
+        : (cleared ? "Changes applied, and the author has asked for another look — waiting on the reviewer now."
+          : again ? "Changes were asked for, and the author has asked for another look."
           : "Changes were asked for. The ball is with the author, not you.") };
   }
 

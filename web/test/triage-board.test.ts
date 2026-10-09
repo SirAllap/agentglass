@@ -736,3 +736,31 @@ describe("the shortcuts the legend promises", () => {
     expect(SRC).not.toContain("</K> open it<");
   });
 });
+
+describe("a stale approval on the card", () => {
+  it("is green when GitHub still counts it, amber only once re-requested", () => {
+    // Reported beside the merge box on the same pull request reading the
+    // identical fact green ("still counts") while this card was amber for
+    // commits alone.
+    const fn = board.slice(board.indexOf('if (v.kind === "approved") {'), board.indexOf("function CardView("));
+    expect(fn).toContain("staleApproval(p.reviewDecision).counts");
+    expect(fn).toContain("if (!v.askedAgain && counts)");
+  });
+});
+
+describe("the card header strip, cleared", () => {
+  // Reported on the installed build: the merge box had already gone amber for
+  // "every changes-requester re-asked", and this strip — the same fact, a
+  // different surface — still read red. One truth, one wording, two places.
+  const fn = board.slice(board.indexOf('if (v.kind === "changes") {'), board.indexOf('if (v.kind === "awaiting") {'));
+
+  it("draws amber, not red, once every changes-requester is cleared", () => {
+    expect(fn).toContain("if (v.cleared)");
+    expect(fn).toContain("var(--warning)");
+  });
+
+  it("says the same thing the merge box says", () => {
+    expect(fn).toContain("Waiting on review by");
+    expect(fn).toContain("Changes applied, asked to look again.");
+  });
+});

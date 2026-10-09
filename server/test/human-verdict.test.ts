@@ -142,6 +142,21 @@ describe("what travels with the verdict", () => {
       { author: "maintainer", pending: ["okoro"] });
     expect(v?.kind).toBe("changes");
     expect(v?.askedAgain).toBe(true);
+    /* EVERY changes-requester is re-asked here (there is only one) — nobody
+       is still the one holding up the merge, so `cleared` says the merge box
+       should draw it amber, like a fresh request, not the still-standing
+       red. */
+    expect(v?.cleared).toBe(true);
+  });
+
+  test("not cleared while one of several changes-requesters has not been re-asked", () => {
+    const v = humanVerdict([r("okoro", "CHANGES_REQUESTED"), r("orbit-dev", "CHANGES_REQUESTED")],
+      { author: "maintainer", pending: ["okoro"] });
+    expect(v?.kind).toBe("changes");
+    // okoro was re-asked but orbit-dev was not — orbit-dev's thread is still
+    // the one to answer, so the merge stays red, and both are still named.
+    expect(v?.cleared).toBeFalsy();
+    expect(v?.who).toEqual(["okoro", "orbit-dev"]);
   });
 
   test("not asked again when nobody has re-requested them", () => {

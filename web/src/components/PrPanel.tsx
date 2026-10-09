@@ -36,7 +36,7 @@ import { flashElement } from "../lib/flash.ts";
 import { shaFromHref } from "../lib/commitLink.ts";
 import { isShortRef, openInApp, wantsExternal } from "../lib/linkRouter.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
-import { RefreshButton, ScopeChip } from "./workspace/Chrome.tsx";
+import { RefreshButton, ScopeChip, CTRL_H, EDGE, CHIP_SURFACE } from "./workspace/Chrome.tsx";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import type {
   PrSummary, PrDetail, PrRepoId, PrThread, PrComment, PrReview, PrReviewer, PrCheck, GitRepoRef, FileChange,
@@ -395,6 +395,9 @@ function PrCardChip({ pr, card }: {
  */
 function p2Verdict(hv: PrSummary["humanReview"], rows: ReviewerRow[], decision?: string | null, gate?: PrDetail["gate"]): {
   tint: string; glyph: React.ReactNode; head: string; who?: string; note?: string; url?: string;
+  /** A changes-requested verdict's own Go to it moved into the review
+   *  history below, which lists every round rather than only this one. */
+  noGoTo?: boolean;
 } | null {
   const named = (list: string[]) =>
     list.slice(0, 2).join(" and ") + (list.length > 2 ? ` +${list.length - 2}` : "");
@@ -403,7 +406,8 @@ function p2Verdict(hv: PrSummary["humanReview"], rows: ReviewerRow[], decision?:
     ? hv
     : (() => {
       const r = reviewVerdict(rows);
-      return r.kind === "none" ? null : { kind: r.kind, who: r.who, mine: false } as NonNullable<PrSummary["humanReview"]>;
+      return r.kind === "none" ? null
+        : { kind: r.kind, who: r.who, mine: false, askedAgain: r.askedAgain, cleared: r.cleared } as NonNullable<PrSummary["humanReview"]>;
     })();
   if (!v) return null;
   const who = named(Array.isArray(v.who) ? v.who : []);
@@ -420,9 +424,15 @@ function p2Verdict(hv: PrSummary["humanReview"], rows: ReviewerRow[], decision?:
        */
       /* Whether it still COUNTS is GitHub's answer — see staleApproval. Where
          GitHub still counts it, amber would say "gone" about an approval the
-         merge box on github.com lists as valid. */
+         merge box on github.com lists as valid — commits on top of it are a
+         quiet note, not a colour change. AMBER IS FOR A RE-REQUEST, not for
+         time passing: reported side by side with the board card, which drew
+         this exact stale-but-counted approval amber with nothing re-asked —
+         a fact this row got right and that one did not. */
       const s = staleApproval(decision, v.mine ? "You approved" : who ? `Approved by ${who}` : "Approved", gate);
-      return { tint: s.counts ? "var(--success)" : "var(--warning)", glyph: <RefreshIcon size={ICON.xs} />, url: v.url,
+      const amber = v.askedAgain || !s.counts;
+      return { tint: amber ? "var(--warning)" : "var(--success)",
+        glyph: amber ? <RefreshIcon size={ICON.xs} /> : <DoneIcon size={ICON.xs} />, url: v.url,
         // The reviewer is inside the sentence: "… — still counts by ada" was
         // the one order the trailing " by" could not read in.
         head: s.head, who: undefined,
@@ -435,9 +445,21 @@ function p2Verdict(hv: PrSummary["humanReview"], rows: ReviewerRow[], decision?:
       note: "Whatever is listed below, the review is done" };
   }
   if (v.kind === "changes") {
+    /*
+     * CLEARED: every one of them has been re-asked, so nobody named here is
+     * still the one holding up the merge — draw it like GitHub's own pending
+     * arrow (amber), not the still-standing red. `v.who` still names them:
+     * the merge is waiting on their SECOND look, not on a stranger.
+     */
+    if (v.cleared) {
+      return { tint: "var(--warning)", glyph: <CircleIcon size={ICON.xs} />, url: v.url, noGoTo: true,
+        head: v.mine ? "Waiting on you" : "Waiting on review",
+        who: v.mine ? undefined : who,
+        note: v.mine ? "You were asked to look again." : "Changes applied, asked to look again." };
+    }
     /* A band, not a line among the obstacles. It is the same kind of fact as an
        approval — a person decided — and it was drawn as neither. */
-    return { tint: "var(--error)", glyph: <CrossIcon size={ICON.xs} />, url: v.url,
+    return { tint: "var(--error)", glyph: <CrossIcon size={ICON.xs} />, url: v.url, noGoTo: true,
       head: v.mine ? "You asked for changes" : "Changes requested",
       who: v.mine ? undefined : who,
       /*
@@ -462,22 +484,157 @@ function p2Verdict(hv: PrSummary["humanReview"], rows: ReviewerRow[], decision?:
     note: "Somebody wrote, without approving or asking for changes." };
 }
 
-function ReviewChip({ v }: { v: PrSummary["humanReview"] }) {
+function ReviewChip({ v, decision }: { v: PrSummary["humanReview"]; decision?: string | null }) {
   if (!v) return null;
   /* Capitalised, like GitHub's own — "approved" all lower case beside
      "APPROVED" on the same screen was the inconsistency reported. */
   if (v.kind === "approved") {
-    return v.stale
+    /* Amber for a RE-REQUEST, not for time passing — see p2Verdict's own
+       note. An approval GitHub still counts is green here too, even with
+       commits on top of it; this chip has no room for the quiet note, so it
+       drops the "moved" word rather than say something the merge box, right
+       below it on the same pull request, does not. */
+    const amber = v.askedAgain || !staleApproval(decision).counts;
+    return v.stale && amber
       ? <Chip text="Approved · moved" tint="var(--warning)" />
       : <Chip text="Approved" tint="var(--success)" />;
   }
   if (v.kind === "changes") {
+    /* Everybody who requested changes has since been re-asked — pending, like
+       the list's own "Awaiting review" chip, not still red. */
+    if (v.cleared) return <Chip text="Awaiting review" tint="var(--warning)" />;
     return v.askedAgain
       ? <Chip text="Changes requested · asked again" tint="var(--error)" />
       : <Chip text="Changes requested" tint="var(--error)" />;
   }
   if (v.kind === "awaiting") return <Chip text="Awaiting review" tint="var(--warning)" />;
   return <Chip text="Commented" tint="var(--text3)" />;
+}
+
+const REVIEW_ROUND: Record<string, { word: string; tint: string; glyph: React.ReactNode }> = {
+  APPROVED: { word: "Approved", tint: "var(--success)", glyph: <DoneIcon size={ICON.xs} /> },
+  CHANGES_REQUESTED: { word: "Changes requested", tint: "var(--error)", glyph: <CrossIcon size={ICON.xs} /> },
+  COMMENTED: { word: "Commented", tint: "var(--text3)", glyph: <CommentIcon size={ICON.xs} /> },
+};
+
+/**
+ * PAST ROUNDS, not just the newest verdict.
+ *
+ * The merge box used to carry one review as a fact with a "Go to it" beside
+ * it, and round one read exactly like round three once round three's
+ * re-request went out — the box had already forgotten there had been a first
+ * round at all. Collapsed by default: most pull requests never need it open,
+ * and it would otherwise out-grow the box it sits in on anything reviewed
+ * more than a couple of times.
+ *
+ * THE AUTHOR'S OWN COMMENTS ARE NOT A ROUND. Answering your own threads
+ * arrives as a COMMENTED review — see `humanVerdict`'s own reason for
+ * dropping them from the verdict — and on the installed build they filled the
+ * list eight deep with the one person who is never a reviewer of their own
+ * pull request, before the one real round anybody needed to see.
+ *
+ * No per-round thread or line-comment count: GitHub prices that as a nested
+ * connection per review (see the note by `SEL_TALK` in prs.ts — sixty
+ * reviews would each cost their own `comments(first:0)`), and a thread carries
+ * no link back to the review it came from either, so there is nothing in what
+ * this panel already fetches to count it from. The same is true of WHEN a
+ * re-request went out: `reviewRequests` says who is outstanding, never since
+ * when, so the ↻ here is a fact ("asked again"), not a time.
+ */
+function ReviewHistory({ reviews, pending, author, onGoReview }: {
+  reviews?: PrReview[];
+  pending?: PrReviewer[];
+  /** The pull request's own author — their replies are not a reviewer's
+   *  round, whatever state GitHub filed them under. */
+  author?: string;
+  onGoReview: (nodeId: string | undefined, url: string) => void;
+}) {
+  /* Closed by default — most pull requests never need it, and open by
+     default would out-grow the box on anything reviewed more than a couple
+     of times. */
+  const [open, setOpen] = useState(false);
+  const authorLc = (author || "").toLowerCase();
+  const rounds = (reviews ?? [])
+    .filter((r) => !r.isBot && r.author?.toLowerCase() !== authorLc && REVIEW_ROUND[r.state])
+    .sort((a, b) => (b.submittedAt || "").localeCompare(a.submittedAt || ""));
+  // Nothing to look back on unless a round once asked for changes or just
+  // commented — an all-approvals pull request has no "history" worth a box.
+  if (!rounds.some((r) => r.state === "CHANGES_REQUESTED" || r.state === "COMMENTED")) return null;
+
+  const pendingLogins = new Set((pending ?? []).filter((p) => !p.isTeam).map((p) => p.login.toLowerCase()));
+  const seenAuthor = new Set<string>();
+
+  return (
+    <div className="rounded-lg overflow-hidden" style={{ background: "var(--surface-inset)", border: EDGE }}>
+      {/*
+       * A REAL DISCLOSURE, copied from the board's own group headers
+       * (TasksPanel's status groups): the whole row is the control, not a
+       * glyph beside it, and the chevron is a drawn triangle that rotates
+       * rather than a text arrow disappearing into this font at 11px.
+       */}
+      <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open}
+        title={open ? "Hide past rounds" : "Show past rounds"}
+        className="agx-btn w-full flex items-center gap-2 px-3 text-left hover:bg-white/5"
+        style={{ minHeight: CTRL_H.regular, color: "var(--text2)" }}>
+        <span aria-hidden className="inline-flex items-center justify-center shrink-0"
+          style={{ width: 16, height: 16, borderRadius: 6, background: "color-mix(in srgb, var(--text) 6%, transparent)" }}>
+          <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none"
+            style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform 120ms ease" }}>
+            <path d="M4 2.5 L8.5 6 L4 9.5" stroke="var(--text2)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </span>
+        <span className="text-[11px] font-medium">Review history</span>
+        <span className="text-[10px] tabular-nums px-1.5 rounded-full" style={{ ...CHIP_SURFACE, color: "var(--text3)" }}>{rounds.length}</span>
+      </button>
+      {open && (
+        <div className="flex flex-col" style={{ borderTop: EDGE }}>
+          {rounds.map((r, i) => {
+            const kind = REVIEW_ROUND[r.state]!;
+            // Only the reviewer's OWN latest round can have been re-asked since —
+            // an earlier round of theirs was superseded before any re-request.
+            const isLatestForAuthor = !seenAuthor.has(r.author.toLowerCase());
+            seenAuthor.add(r.author.toLowerCase());
+            const again = isLatestForAuthor && pendingLogins.has(r.author.toLowerCase());
+            /*
+             * THE WHOLE ROW IS THE JUMP, not a button squeezed in beside the
+             * text — the same "the heading is the control" rule the
+             * disclosure above already follows. Disabled (no pointer, no
+             * hover) on the rare review GitHub gave no URL for.
+             */
+            return (
+              <button key={r.nodeId ?? `${r.author}-${r.submittedAt}-${i}`}
+                type="button" disabled={!r.url} onClick={() => r.url && onGoReview(r.nodeId, r.url)}
+                title={r.url ? "Go to this review in the conversation" : undefined}
+                className="agx-btn w-full flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-left whitespace-nowrap hover:bg-white/5 disabled:hover:bg-transparent disabled:cursor-default"
+                style={{ borderTop: i ? EDGE : undefined }}>
+                <span aria-hidden className="flex shrink-0" style={{ color: kind.tint }}>{kind.glyph}</span>
+                <Avatar login={r.author} size={14} />
+                <b className="shrink-0 truncate max-w-[110px]" style={{ color: "var(--text2)", fontWeight: 500 }}>{r.author}</b>
+                <Chip text={kind.word} tint={kind.tint} />
+                <span className="shrink-0" style={{ color: "var(--text3)" }}
+                  title={r.submittedAt ? new Date(r.submittedAt).toLocaleString() : undefined}>
+                  {ago(r.submittedAt)}
+                </span>
+                {/* No per-round thread count: a thread carries no link back to
+                    the review it came from, so there is nothing in what this
+                    panel already fetches to count it from — see the note on
+                    this component. A chip that cannot be true for any round
+                    is worse than no chip. */}
+                {again && <Chip text="asked again" tint="var(--warning)" title="Re-requested since this round" />}
+                <span className="flex-1 min-w-0" />
+                {r.url && (
+                  <span aria-hidden className="shrink-0 inline-flex items-center gap-1"
+                    style={{ height: CTRL_H.compact, color: "var(--text3)" }}>
+                    Go to it<ArrowIcon size={ICON.xs} />
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function Bar({ parts }: { parts: { pct: number; tint: string }[] }) {
@@ -1743,7 +1900,7 @@ function PrRow({ p, active, onSelect, onReview, pinned, onTogglePin, q, unread, 
             <span className="shrink-0 tabular-nums" title={spend.title}
               style={{ color: "var(--text3)" }}>{spend.text}</span>
           )}
-          {p.isDraft ? <Chip text="draft" tint="var(--text3)" /> : <ReviewChip v={p.humanReview} />}
+          {p.isDraft ? <Chip text="draft" tint="var(--text3)" /> : <ReviewChip v={p.humanReview} decision={p.reviewDecision} />}
           {shownLabels.map((l) => <Chip key={l.name} text={l.name} tint={l.color ? `#${l.color}` : "var(--primary)"} />)}
           {p.labels.length > shownLabels.length && (
             <span className="tabular-nums shrink-0" title={p.labels.map((l) => l.name).join(", ")}>+{p.labels.length - shownLabels.length}</span>
@@ -5499,7 +5656,7 @@ const v = p2Verdict(d.humanReview, reviewerRoster(d), d.reviewDecision, d.gate);
                     <span className="block text-[11px] mt-0.5" style={{ color: "var(--text3)" }}>{v.note}</span>
                   )}
                 </span>
-                {v.url && (() => {
+                {v.url && !v.noGoTo && (() => {
                   /*
                    * The same review, as a row this panel already draws.
                    *
@@ -5519,6 +5676,7 @@ const v = p2Verdict(d.humanReview, reviewerRoster(d), d.reviewDecision, d.gate);
               </div>
             );
           })()}
+          <ReviewHistory reviews={d.reviews} pending={d.reviewers} author={d.author} onGoReview={onGoReview} />
           {openThreads > 0 && (
             <Reason tint={blockers.some((b) => b.kind === "threads") ? "var(--error)" : "var(--warning)"} glyph={<CircleIcon size={ICON.xs} />} action={<button onClick={onGoThreads} style={{ color: "var(--primary)" }}>Go to thread</button>}>
               {openThreads} review thread{openThreads === 1 ? "" : "s"} still open — <span style={{ color: "var(--text3)" }}>
@@ -7597,10 +7755,15 @@ function PrSidebar({ d, root, spend, onEditField }: {
            */
           const rows = reviewerRoster(d);
           const v = reviewVerdict(rows);
-          const tint = v.kind === "approved" ? "var(--success)"
+          /* `cleared` — every changes/commented reviewer already re-asked — draws
+             like a pending request (amber), not the still-standing verdict, even
+             though `kind` itself stays theirs. See the type's own comment. */
+          const tint = v.cleared ? "var(--warning)"
+            : v.kind === "approved" ? "var(--success)"
             : v.kind === "changes" ? "var(--error)"
             : v.kind === "awaiting" ? "var(--warning)" : "var(--text3)";
-          const mark = v.kind === "approved" ? <DoneIcon size={ICON.sm} /> : v.kind === "changes" ? <CrossIcon size={ICON.sm} />
+          const mark = v.cleared ? <CircleIcon size={ICON.sm} />
+            : v.kind === "approved" ? <DoneIcon size={ICON.sm} /> : v.kind === "changes" ? <CrossIcon size={ICON.sm} />
             : v.kind === "commented" ? <CommentIcon size={ICON.sm} /> : <CircleIcon size={ICON.sm} />;
           return (
             <>
@@ -7608,10 +7771,11 @@ function PrSidebar({ d, root, spend, onEditField }: {
                 <div className="flex items-center gap-1.5 text-[11px] mb-1.5" style={{ color: tint }} title={verdictLine(v)}>
                   <span aria-hidden className="flex">{mark}</span>
                   <b style={{ fontWeight: 500 }}>
-                    {v.kind === "approved" ? "Approved" : v.kind === "changes" ? "Changes requested"
+                    {v.cleared ? "Awaiting"
+                      : v.kind === "approved" ? "Approved" : v.kind === "changes" ? "Changes requested"
                       : v.kind === "commented" ? "Commented" : "Awaiting"}
                   </b>
-                  {v.askedAgain && <span className="truncate" style={{ color: "var(--text4)" }}>· asked again</span>}
+                  {v.askedAgain && !v.cleared && <span className="truncate" style={{ color: "var(--text4)" }}>· asked again</span>}
                 </div>
               )}
               <ReviewerList rows={rows} author={d.author} onAsk={(login) => api.prReviewers(root, d.number, [login], [])} />

@@ -18,6 +18,7 @@ import { InfoIcon } from "./settingsNavIcons.tsx";
 import { CircleIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, DraftIcon, FlagIcon, RefreshIcon, SearchIcon, StarIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { ALWAYS_OPEN, foldable, foldedLanes, setFoldedLanes, walkable } from "../lib/boardPrefs.ts";
 import type { PrSummary } from "../../../shared/types.ts";
+import { staleApproval } from "../../../shared/mergeBlockers.ts";
 import { LANES, LANE_CAP, board as fileAll, suggestedAction, ACTION_LABEL, type Filed, type LaneId } from "../lib/prLanes.ts";
 import { taskLink, taskLinkTitle } from "../lib/taskLink.ts";
 import { onCard, cardVersion, withCard } from "../lib/prCardStore.ts";
@@ -1046,7 +1047,25 @@ function cardVerdict(p: PrSummary): {
        * the same reviewer with the re-request icon. `askedAgain` is the same
        * field the changes-requested branch below reads — see `humanVerdict`
        * in prs.ts, which computes it once from `pending` for either kind.
+       *
+       * AMBER IS FOR THE RE-REQUEST, NOT FOR TIME PASSING. This card used to
+       * turn amber the moment ANY commit landed after the approval, whether
+       * or not GitHub still counted it — reported beside the merge box on the
+       * same pull request, which read the identical fact green ("still
+       * counts"). One truth, two colours. `staleApproval` is the merge box's
+       * own answer to whether GitHub counts it; a card has no `gate` (that is
+       * PrDetail-only), so it asks with `reviewDecision` alone, which still
+       * answers the common case right.
        */
+      const counts = staleApproval(p.reviewDecision).counts;
+      if (!v.askedAgain && counts) {
+        return {
+          tint: "var(--success)", glyph: <DoneIcon size={ICON.xs} />, url: v.url,
+          line: (v.mine ? "You approved" : names ? `Approved by ${names}` : "Approved") + " · commits since" + also,
+          aria: names ? `Approved by ${names}; commits have landed since, GitHub still counts it`
+            : "Approved; commits have landed since, GitHub still counts it",
+        };
+      }
       const line = v.askedAgain && v.mine ? "You were asked to look again"
         : v.mine ? "You approved, but it has moved since"
           : (names ? `Approved by ${names}, but it has moved since` : "Approved, but it has moved since") + (v.askedAgain ? " — asked to look again" : "");
@@ -1064,6 +1083,22 @@ function cardVerdict(p: PrSummary): {
     };
   }
   if (v.kind === "changes") {
+    /*
+     * CLEARED: every one of them has been re-asked, so nobody named here is
+     * still the one holding up the merge \u2014 the same amber the merge box
+     * draws for this exact fact (see p2Verdict in PrPanel.tsx). Reported on
+     * the installed build still reading red here after the merge box had
+     * already gone amber: one fact, two surfaces, two answers.
+     */
+    if (v.cleared) {
+      const line = v.mine ? "You were asked to look again"
+        : (names ? `Waiting on review by ${names}` : "Waiting on review") + " \u00b7 Changes applied, asked to look again.";
+      return {
+        tint: "var(--warning)", glyph: <CircleIcon size={ICON.xs} />, url: v.url,
+        line: line + also,
+        aria: (names ? `Waiting on review by ${names}, changes applied and asked to look again` : "Waiting on review, changes applied and asked to look again"),
+      };
+    }
     /*
      * STILL RED, because it still blocks the merge exactly as GitHub shows
      * it \u2014 a re-request does not withdraw the standing review. What was

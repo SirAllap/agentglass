@@ -3295,6 +3295,10 @@ export interface PrSummary {
      *  the other half of that same screen, that a re-request already went
      *  out and the ball is with them again, not with the reader. */
     askedAgain?: boolean;
+    /** Only for `kind: "changes"`: every one of `who` has been re-asked, so
+     *  nobody named here is still the one holding up the merge — draw it like
+     *  a fresh request (amber), not a still-standing one (red). */
+    cleared?: boolean;
   } | null;
   /**
    * The tracker card this pull request came from, when we already know it.
