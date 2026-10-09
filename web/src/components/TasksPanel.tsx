@@ -4706,15 +4706,19 @@ function PriorityPick({ t, writable, busy, onApply }: {
       {open && (
         <div className="absolute left-0 mt-1 rounded-lg shadow-2xl flex flex-col overflow-hidden"
           style={{ zIndex: 30, background: "var(--surface-card)", border: edge(28), minWidth: 150 }}>
-          {[...PRIOS, { id: "", label: "None", c: "var(--text4)" } as const]
-            .filter((o) => o.id !== (t.priority ?? ""))
-            .map((o) => (
-              <button key={o.id || "none"} className="text-left px-2 py-1.5 flex items-center gap-2 hover:bg-white/5"
-                onClick={() => choose(o.id, o.label)}>
-                <Flag c={o.c} on={!!o.id} />
-                <span className="text-[11px]" style={{ color: o.id ? o.c : "var(--text3)" }}>{o.label}</span>
-              </button>
-            ))}
+          {[...PRIOS, { id: "", label: "Clear", c: "var(--text4)" } as const]
+            .map((o) => {
+              const now = o.id === (t.priority ?? "");
+              return (
+                <button key={o.id || "none"} className="text-left px-2 py-1.5 flex items-center gap-2 hover:bg-white/5"
+                  aria-current={now ? "true" : undefined}
+                  onClick={() => (now ? setOpen(false) : choose(o.id, o.label))}>
+                  <Flag c={o.c} on={!!o.id} />
+                  <span className="text-[11px]" style={{ color: o.id ? o.c : "var(--text3)" }}>{o.label}</span>
+                  {now && <span className="ml-auto shrink-0" style={{ color: "var(--success)" }}><DoneIcon size={ICON.xs} /></span>}
+                </button>
+              );
+            })}
         </div>
       )}
     </div>

@@ -31,6 +31,13 @@
   --warning: #d29922;
   --error: #f85149;
   --info: #58a6ff;
+  /* ClickUp's own four priority colours, fixed on purpose: a theme that retints
+     --info or --warning turned Normal orange, and a flag that says Normal in
+     the colour of High is worse than no colour. */
+  --prio-urgent: #f27171;
+  --prio-high: #f5b82e;
+  --prio-normal: #4d6bf0;
+  --prio-low: #8a8f99;
   /* Somebody is looking at this from their phone.
      Its own colour on purpose, and not one of the four above: those are states
      of the work — good, careful, broken, worth reading — and a second person

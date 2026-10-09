@@ -34,12 +34,12 @@ import { FlagIcon } from "./glyphIcons.tsx";
  */
 export const CHIP_H = 18;
 
-/** ClickUp's four, in its own order and this app's own colours. */
+/** ClickUp's four, in its own order and its own colours (fixed tokens, see index.css). */
 export const PRIOS = [
-  { id: "urgent", label: "Urgent", c: "var(--error)" },
-  { id: "high", label: "High", c: "var(--warning)" },
-  { id: "normal", label: "Normal", c: "var(--info)" },
-  { id: "low", label: "Low", c: "var(--text4)" },
+  { id: "urgent", label: "Urgent", c: "var(--prio-urgent)" },
+  { id: "high", label: "High", c: "var(--prio-high)" },
+  { id: "normal", label: "Normal", c: "var(--prio-normal)" },
+  { id: "low", label: "Low", c: "var(--prio-low)" },
 ] as const;
 
 /** Colour and label for a priority, including the one that is not set. */

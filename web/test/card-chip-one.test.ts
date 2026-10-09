@@ -64,10 +64,19 @@ describe("the tracker card's chip", () => {
     expect(fn).toContain('"var(--accent, var(--primary))"');
   });
 
+  test("the priority menu lists all five, ticks the current one and calls the empty one Clear", async () => {
+    const src = await Bun.file(new URL("../src/components/TasksPanel.tsx", import.meta.url)).text();
+    const menu = src.slice(src.indexOf('{[...PRIOS, { id: "", label: "Clear"'));
+    expect(menu.length, "the menu should list Clear last").toBeGreaterThan(0);
+    const body = menu.slice(0, menu.indexOf("</div>\n      )}"));
+    expect(body).not.toMatch(/\.filter\(/);
+    expect(body).toContain("<DoneIcon");
+  });
+
   test("and each priority has a colour of its own", () => {
     const lib = read("src/lib/priority.tsx");
     const prios = lib.slice(lib.indexOf("export const PRIOS"), lib.indexOf("export const prioLook"));
-    for (const [id, token] of [["urgent", "--error"], ["high", "--warning"], ["normal", "--info"]] as const) {
+    for (const [id, token] of [["urgent", "--prio-urgent"], ["high", "--prio-high"], ["normal", "--prio-normal"], ["low", "--prio-low"]] as const) {
       expect(prios, `${id} has no colour of its own`).toContain(token);
     }
   });
