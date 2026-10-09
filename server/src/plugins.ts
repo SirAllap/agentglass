@@ -932,9 +932,9 @@ async function startProcess(rec: PluginRecord): Promise<void> {
       // run without it: refuse to start rather than run it wide open behind
       // a warning the reviewer may never scroll to. `enabled` stays true —
       // this is the same shape as a crashed plugin, not an uninstall — so
-      // turning on `allowUnboxed` (POST /plugins/allow-unboxed — no Settings
-      // UI for this yet) or fixing the host
-      // (installing bwrap, etc.) picks it back up without reinstalling.
+      // turning on `allowUnboxed` (POST /plugins/allow-unboxed, the button on
+      // the plugin's card in Settings) or fixing the host (installing bwrap,
+      // etc.) picks it back up without reinstalling.
       console.warn(
         `[plugin sandbox] ${rec.name}: refused to start unboxed (${probe.reason}) — ` +
         `this host cannot build the box it declared; allow it explicitly per plugin, ` +
@@ -1060,8 +1060,14 @@ function planFor(rec: PluginRecord): BoxPlan {
     platform: process.platform,
     probeOk: sandboxProbe().ok,
     allowUnboxed: rec.allowUnboxed,
-    envAllowsAll: process.env.AGENTGLASS_PLUGINS_UNBOXED === "1",
+    envAllowsAll: envAllowsUnboxed(),
   });
+}
+
+/** `AGENTGLASS_PLUGINS_UNBOXED=1`, read in one place so the start path and
+ *  the Settings notice cannot disagree about whether the hatch is open. */
+export function envAllowsUnboxed(): boolean {
+  return process.env.AGENTGLASS_PLUGINS_UNBOXED === "1";
 }
 
 /** Outside a box now, or enabled and about to be: a plugin that is not running

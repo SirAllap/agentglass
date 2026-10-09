@@ -5154,6 +5154,9 @@ export interface PublicPlugin {
    *  screen: it says "missing" on every non-Linux host, where the plugin
    *  starts unboxed all the same. */
   boxPlan?: import("./pluginBoxPlan.ts").BoxPlan;
+  /** This plugin's own consent to run unboxed on a host that cannot build its
+   *  box (`POST /plugins/allow-unboxed`). Absent or false: not given. */
+  allowUnboxed?: boolean;
   /** The first line bwrap wrote to stderr the last time this plugin's box
    *  died in its opening instant. Set only while nothing is running. */
   lastBoxFailure?: string;
@@ -5164,6 +5167,8 @@ export interface PublicPlugin {
 
 export interface PluginsStatus {
   master: boolean;
+  /** `AGENTGLASS_PLUGINS_UNBOXED=1` is set: every plugin may run unboxed. */
+  envAllowsUnboxed?: boolean;
   plugins: PublicPlugin[];
 }
 

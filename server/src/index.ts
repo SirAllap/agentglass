@@ -205,7 +205,7 @@ import { privateHost, resolvePeer, originOf, guardedFetch, hostsOnly } from "./n
 import { DESK_HEADER, claimDesk, deskHeld } from "./desk.ts";
 import { resolveToken, healthProof, tokenOk, isIntake, isAuthExempt, callerFor, allowed, scopeNeeded, pluginOfRequest, answersFromADevice, deskKeyOk, understudyRequiresToken, UNDERSTUDY_NO_TOKEN_ERROR, mintUnderstudyToken, revokeUnderstudyToken, tokenlessWarning, type Caller, type Origin } from "./auth.ts";
 import {
-  listPlugins, masterEnabled, setMaster, installPlugin, installFromCatalogue, updatePlugin, enablePlugin, disablePlugin, removePlugin, setPluginUnboxedConsent,
+  listPlugins, masterEnabled, setMaster, installPlugin, installFromCatalogue, updatePlugin, enablePlugin, disablePlugin, removePlugin, setPluginUnboxedConsent, envAllowsUnboxed,
   contributesOf, isRunning, pluginSettings, pluginOwnSettings, setPluginSettings, resumeEnabledPlugins, stopAllPluginsSync, pluginIcon,
 } from "./plugins.ts";
 import { setPluginSocketHandler, viaPluginSocket } from "./plugin-socket.ts";
@@ -5022,7 +5022,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      * privileged as git write or docker control, which is what it is.
      */
     if (pathname === "/plugins" && req.method === "GET") {
-      return json({ master: masterEnabled(), plugins: listPlugins({ keyExposure: pluginOfRequest(req, url) === null }) });
+      return json({ master: masterEnabled(), envAllowsUnboxed: envAllowsUnboxed(), plugins: listPlugins({ keyExposure: pluginOfRequest(req, url) === null }) });
     }
 
     if (pathname === "/plugins/master" && req.method === "POST") {
@@ -5100,8 +5100,12 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       // because a missing or malformed field defaulting to GRANT is the
       // wrong failure direction for exactly this switch.
       if (typeof b.allow !== "boolean") return json({ ok: false, error: "allow must be true or false" }, 400);
-      const r = await setPluginUnboxedConsent(b.name, b.allow);
-      return json(r, r.ok ? 200 : 400);
+      try {
+        const r = await setPluginUnboxedConsent(b.name, b.allow);
+        return json(r, r.ok ? 200 : 400);
+      } catch (e) {
+        return json({ ok: false, error: failed("plugins/allow-unboxed", e, "the plugin could not be started or stopped after the change; refresh to see where it stands") }, 500);
+      }
     }
 
     if (pathname === "/plugins/disable" && req.method === "POST") {

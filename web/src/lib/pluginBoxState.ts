@@ -131,3 +131,46 @@ export function neighbourKeyWording(plugin: Pick<PublicPlugin, "name" | "canRead
   if (!holders?.length) return null;
   return `${plugin.name} runs outside its box and can read ${holders.join(", ")}'s key.`;
 }
+
+/**
+ * The one control a plugin's card may carry about running without its box.
+ * It follows the server's own plan and nothing else: offered only while the
+ * start is REFUSED for lack of a box, and kept (as a revoke) only while this
+ * plugin's own consent is what lets it start. Where a box can be built, where
+ * the platform never has one, or where only the machine-wide hatch lets it
+ * run, there is nothing for the person to decide on this card.
+ */
+export type UnboxedControl =
+  | { kind: "allow"; text: string; button: string }
+  | { kind: "revoke"; text: string; button: string };
+
+export function unboxedControl(
+  plugin: Pick<PublicPlugin, "sandbox" | "boxPlan" | "allowUnboxed">,
+  envAllowsAll: boolean,
+): UnboxedControl | null {
+  if (!plugin.sandbox) return null;
+  if (plugin.boxPlan === "refuse") {
+    return {
+      kind: "allow",
+      text: "This system cannot build the box this plugin asked for, so it does not start. You can allow it to run without one: it then runs as you and can read your files and run programs. Allow that only if you would run its code yourself.",
+      button: "Allow it to run unboxed",
+    };
+  }
+  if (plugin.boxPlan === "unboxed-consented" && plugin.allowUnboxed === true) {
+    return {
+      kind: "revoke",
+      text: envAllowsAll
+        ? "You allowed this plugin to run without its box. Revoking stops it now, and it can start again while the machine-wide setting above is on."
+        : "You allowed this plugin to run without its box, so it runs as you. Revoking stops it, and it will not start again until you allow it or the host can build the box.",
+      button: "Revoke",
+    };
+  }
+  return null;
+}
+
+/** The line shown on the Plugins page while `AGENTGLASS_PLUGINS_UNBOXED=1` is
+ *  set: it has no switch there, so the one thing Settings can do is say it. */
+export function envHatchNotice(envAllowsAll: boolean | undefined): string | null {
+  if (!envAllowsAll) return null;
+  return "AGENTGLASS_PLUGINS_UNBOXED=1 is set for this machine: any plugin whose box cannot be built runs without it, as you, with no per-plugin consent asked. Unset it and restart agentglass to go back to deciding one plugin at a time.";
+}

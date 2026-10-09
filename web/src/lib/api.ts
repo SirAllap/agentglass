@@ -1848,6 +1848,10 @@ const realApi = {
     post<{ ok: boolean; error?: string }>("/plugins/enable", { name }),
   pluginDisable: (name: string) =>
     post<{ ok: boolean; error?: string }>("/plugins/disable", { name }),
+  /** Consent, or its revocation, to run this plugin without its box on a host
+   *  that cannot build one. Revoking stops it if that consent is why it runs. */
+  pluginAllowUnboxed: (name: string, allow: boolean) =>
+    post<{ ok: boolean; error?: string }>("/plugins/allow-unboxed", { name, allow }),
   /** Its settings are kept for a reinstall unless `dropSettings`. */
   pluginRemove: (name: string, dropSettings = false) =>
     post<{ ok: boolean }>("/plugins/remove", { name, dropSettings }),
@@ -2463,6 +2467,7 @@ const demoApi: typeof realApi = {
   pluginInstall: (_source: string) => D({ ok: false, error: "not available in the demo" } as { ok: false; error: string }),
   pluginEnable: (_name: string) => D({ ok: false, error: "not available in the demo" }),
   pluginDisable: (_name: string) => D({ ok: false }),
+  pluginAllowUnboxed: (_name: string, _allow: boolean) => D({ ok: false }),
   pluginRemove: (_name: string, _dropSettings?: boolean) => D({ ok: false }),
   pluginPanels: (_plugin?: string, _panel?: string) => D({ ok: true, panels: [] as PluginPanel[] }),
   pluginAction: (_p: string, _panel: string | undefined, _a: UiAction, _v?: Record<string, unknown>) => D({ ok: false, error: "not available in the demo" }),

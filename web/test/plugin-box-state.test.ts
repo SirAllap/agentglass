@@ -4,7 +4,7 @@
  * pinned without a renderer.
  */
 import { describe, expect, test } from "bun:test";
-import { boxWording, neighbourKeyWording, USERNS_FIX } from "../src/lib/pluginBoxState.ts";
+import { boxWording, envHatchNotice, neighbourKeyWording, unboxedControl, USERNS_FIX } from "../src/lib/pluginBoxState.ts";
 import type { PublicPlugin } from "../../shared/types.ts";
 
 const SANDBOX = { network: "agentglass" as const, read: [], write: [], programs: [] };
@@ -163,5 +163,44 @@ describe("neighbourKeyWording", () => {
     expect(neighbourKeyWording({ name: "orbit-peer", canReadKeysOf: ["orbit-scorer", "orbit-trace"] })).toContain("orbit-scorer, orbit-trace's key");
     expect(neighbourKeyWording({ name: "orbit-peer" })).toBeNull();
     expect(neighbourKeyWording({ name: "orbit-peer", canReadKeysOf: [] })).toBeNull();
+  });
+});
+
+describe("unboxedControl: the consent control on a plugin's card", () => {
+  // [boxPlan, allowUnboxed, envAllowsAll] -> what the card carries
+  const table: [string, Partial<Pick<PublicPlugin, "boxPlan" | "allowUnboxed" | "sandbox">>, boolean, "allow" | "revoke" | null][] = [
+    ["refused, no consent: offer it", { boxPlan: "refuse" }, false, "allow"],
+    ["refused, consent explicitly false: offer it", { boxPlan: "refuse", allowUnboxed: false }, false, "allow"],
+    ["consented, running or not: a one-click revoke", { boxPlan: "unboxed-consented", allowUnboxed: true }, false, "revoke"],
+    ["consented with the machine-wide hatch on too: revoke, and it says the hatch remains", { boxPlan: "unboxed-consented", allowUnboxed: true }, true, "revoke"],
+    ["revoked: back to offering it", { boxPlan: "refuse", allowUnboxed: false }, false, "allow"],
+    ["only the machine-wide hatch lets it run: nothing to decide here", { boxPlan: "unboxed-consented", allowUnboxed: false }, true, null],
+    ["a box can be built: no control", { boxPlan: "box" }, false, null],
+    ["macOS or Windows, unboxed by design: no control", { boxPlan: "unboxed-platform" }, false, null],
+    ["a stray consent where a box can be built: no control", { boxPlan: "box", allowUnboxed: true }, false, null],
+    ["no sandbox declared: no control", { sandbox: undefined, boxPlan: "refuse" }, false, null],
+    ["plan not known: no control", { boxPlan: undefined }, false, null],
+  ];
+  for (const [name, over, env, want] of table) {
+    test(name, () => {
+      const c = unboxedControl({ sandbox: SANDBOX, boxPlan: undefined, allowUnboxed: undefined, ...over }, env);
+      expect(c?.kind ?? null).toBe(want);
+    });
+  }
+
+  test("the offer names what is given up; the revoke names what happens next", () => {
+    const allow = unboxedControl({ sandbox: SANDBOX, boxPlan: "refuse" }, false)!;
+    expect(allow.text).toMatch(/runs as you/);
+    expect(allow.text).toMatch(/does not start/);
+    const revoke = unboxedControl({ sandbox: SANDBOX, boxPlan: "unboxed-consented", allowUnboxed: true }, true)!;
+    expect(revoke.text).toMatch(/machine-wide/);
+  });
+});
+
+describe("envHatchNotice", () => {
+  test("silent unless the machine-wide hatch is on", () => {
+    expect(envHatchNotice(undefined)).toBeNull();
+    expect(envHatchNotice(false)).toBeNull();
+    expect(envHatchNotice(true)).toMatch(/AGENTGLASS_PLUGINS_UNBOXED=1/);
   });
 });

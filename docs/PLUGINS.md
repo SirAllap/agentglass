@@ -35,9 +35,11 @@ program from it must now declare that. **On Linux**, a host that cannot build
 the box (bubblewrap missing, or Ubuntu's AppArmor limit on user namespaces)
 **does not start** the plugin until you say it may run unboxed anyway — one
 plugin at a time (`POST /plugins/allow-unboxed {"name", "allow": true|false}`,
-revocable the same way; there is no Settings UI for this yet, only the route),
-or `AGENTGLASS_PLUGINS_UNBOXED=1` for every plugin on a host you already trust
-completely. Refused starts show why and how to fix it (install bubblewrap,
+revocable the same way; the plugin's card in Settings → Plugins has the button,
+shown only while the plugin is refused or allowed that way), or
+`AGENTGLASS_PLUGINS_UNBOXED=1` for every plugin on a host you already trust
+completely — Settings → Plugins says so at the top while that is set, since it
+has no switch there to turn off. Refused starts show why and how to fix it (install bubblewrap,
 lift the AppArmor limit, or grant the consent) rather than widening the grant
 silently; there is no per-plugin switch to run outside a box on a Linux host
 that has one. **On macOS and Windows**, where bwrap does not exist at all,
