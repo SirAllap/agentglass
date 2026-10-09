@@ -9649,7 +9649,7 @@ subscribeWatchChange(() => broadcast({ type: "prwatch", data: listWatches() }));
 subscribeWatchFire((f) => broadcast({ type: "prwatchfire", data: f }));
 subscribeWatchChecks((c) => broadcast({ type: "prchecks", data: c }));
 const prNotifyKick = process.env.NODE_ENV === "test" ? () => {} : startPrNotifyWatch(async (root, number) => {
-  const r = await prRollup(root, number);
+  const r = await prRollup(root, number, true); // forced: the watch's own cadence is the budget, and a cached read would add its age to the wait
   if (!(r.ok && r.checks && r.all)) return null;
   // Past 100 contexts `all` is only the first page: never conclude "all done" from it.
   const complete = !r.truncated;

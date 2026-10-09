@@ -288,21 +288,29 @@ describe("a PR that is no longer open ends every watch on it", () => {
 
 describe("the read budget", () => {
   const mk = () => reader(snap([chk("a", "pending")]));
-  it("a PR is read once a minute, not on every tick", async () => {
+  it("a PR whose CI is running is read every 30 s, not on every tick", async () => {
     add({ type: "ci-pass" });
     const { box, read } = mk();
     const t = Date.now();
     await W.checkWatches(read, t, true);
     await W.checkWatches(read, t + 10_000, true);
-    await W.checkWatches(read, t + 59_000, true);
+    await W.checkWatches(read, t + 29_000, true);
     expect(box.calls).toBe(1);
-    await W.checkWatches(read, t + 61_000, true);
+    await W.checkWatches(read, t + 31_000, true);
     expect(box.calls).toBe(2);
   });
-  it("a rule that has waited half an hour is read every three minutes, and a comment-only PR every ten", async () => {
+  it("a long-armed rule on a running suite stays on the 30 s cadence: age does not slow it", async () => {
     add({ type: "ci-pass" });
     const { box, read } = mk();
     const t = Date.now() + 31 * 60_000; // 31 min after the rule was added
+    await W.checkWatches(read, t, true);
+    await W.checkWatches(read, t + 31_000, true);
+    expect(box.calls).toBe(2);
+  });
+  it("a PR with nothing running is read every three minutes, and a comment-only PR every ten", async () => {
+    add({ type: "ci-fail" });
+    const { box, read } = reader(snap([chk("a", "success")]));
+    const t = Date.now();
     await W.checkWatches(read, t, true);
     await W.checkWatches(read, t + 61_000, true);
     expect(box.calls).toBe(1);
@@ -315,17 +323,49 @@ describe("the read budget", () => {
     await W.checkWatches(c.read, Date.now() + 5 * 60_000, true);
     expect(c.box.calls).toBe(1);
   });
+  it("a suite that goes green is announced within 45 s of going green, on the real timer's cadence", async () => {
+    add({ type: "ci-pass" });
+    const { box, read } = mk();
+    const t = Date.now() + 40 * 60_000; // armed long ago
+    let announcedAt = -1;
+    for (let s = 0; s <= 120; s += W.WATCH_POLL_MS / 1000) {
+      if (s === 10) box.s = snap([chk("a", "success")]); // green at t0 + 10 s
+      if ((await W.checkWatches(read, t + s * 1000, true)) && announcedAt < 0) announcedAt = s;
+    }
+    expect(announcedAt).toBeGreaterThan(10);
+    expect(announcedAt - 10).toBeLessThanOrEqual(45);
+    expect(fired.length).toBe(1);
+  });
+  it("a head change in the middle of the wait: the new head's checks are shared at once and green fires exactly once", async () => {
+    add({ type: "ci-pass" });
+    const rollup = (s: ReturnType<typeof snap>) => {
+      const pending = s.all.filter((c) => !c.done).length;
+      return { ...s, checks: { total: s.all.length, success: s.all.length - pending, failure: 0, skipped: 0, pending, allDone: s.allDone, verdict: s.verdict, failing: [] } };
+    };
+    const frames: number[] = [];
+    const off = W.subscribeWatchChecks((c) => frames.push(c.checks.total));
+    const { box, read } = reader(rollup(snap([chk("a", "pending"), chk("b", "pending")]))); // head A
+    const t = Date.now() + 40 * 60_000;
+    await W.checkWatches(read, t, true);
+    box.s = rollup(snap([chk("a", "pending"), chk("b", "pending"), chk("c", "pending")])); // head B: one more check
+    await W.checkWatches(read, t + 31_000, true);
+    expect(frames).toEqual([2, 3]); // the board's counts follow the new head on the very next read
+    box.s = rollup(snap([chk("a", "success"), chk("b", "success"), chk("c", "success")]));
+    for (let s = 62; s <= 200; s += 10) await W.checkWatches(read, t + s * 1000, true);
+    off();
+    expect(fired.length).toBe(1);
+  });
   it("a failed read backs that PR off, doubling, so a rate-limited account is not asked every minute", async () => {
     add({ type: "ci-pass" });
     let calls = 0;
     const t = Date.now();
     const bad = async () => { calls++; return null; };
     await W.checkWatches(bad, t, true);
-    await W.checkWatches(bad, t + 61_000, true); // first retry is at 2 min, not 1
+    await W.checkWatches(bad, t + 31_000, true); // first retry is at 1 min, not 30 s
     expect(calls).toBe(1);
-    await W.checkWatches(bad, t + 121_000, true);
+    await W.checkWatches(bad, t + 61_000, true);
     expect(calls).toBe(2);
-    await W.checkWatches(bad, t + 121_000 + 200_000, true); // next wait is 4 min
+    await W.checkWatches(bad, t + 61_000 + 100_000, true); // next wait is 2 min
     expect(calls).toBe(2);
   });
   it("one tick reads at most 20 PRs, however many are watched", async () => {
@@ -444,7 +484,7 @@ describe("wiring in the server", () => {
     const prs = strip(await Bun.file(join(import.meta.dir, "../src/prs.ts")).text());
     expect(prs).toContain("contexts(first:100){totalCount");
     expect(prs).toContain("truncated: Number(ctxs?.totalCount ?? 0) > raw.length");
-    expect(ix).toMatch(/startPrNotifyWatch\(async \(root, number\) => \{\s*const r = await prRollup\(root, number\);/);
+    expect(ix).toMatch(/startPrNotifyWatch\(async \(root, number\) => \{\s*const r = await prRollup\(root, number, true\);/);
     // the POSTs are behind the same caller check as every other write
     const route = ix.slice(ix.indexOf('pathname.startsWith("/prs/notify-watch/")'));
     expect(route.slice(0, 200)).toContain("trustedCaller(req, from)");

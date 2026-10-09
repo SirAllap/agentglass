@@ -11,9 +11,14 @@
  * case in `evalRule`.
  *
  * Requests. Nothing here polls on its own account except the CI tick, and the
- * CI tick reads through `prRollup` — the same one-GraphQL-call read (30 s TTL,
- * shared with the board's card) the detail already uses — once a minute per PR
- * that has a CI rule waiting, and NOT AT ALL when nothing is waiting. Comments
+ * CI tick reads through `prRollup` — one GraphQL call, forced past the 30 s TTL
+ * it shares with the board's card, because a cached answer would add its age to
+ * the wait — every 30 s per PR whose CI is RUNNING and every three minutes per
+ * PR with nothing running (a push or a re-run shows up as running on the next
+ * of those), and NOT AT ALL when nothing is waiting. The cadence follows the
+ * suite, not the age of the rule: measured, a rule armed for over half an hour
+ * was read every three minutes and a suite that went green was announced four
+ * to five minutes later, with the board's counts just as stale. Comments
  * cost nothing: they ride the talk note the list poll already derives
  * (`subscribeTalk` in prs.ts), so a `comment` rule only hears about a PR the
  * list poll reads (yours, or one you were asked to review).
@@ -78,7 +83,11 @@ CREATE TABLE IF NOT EXISTS pr_watch_seen (
 );
 `);
 
-export const CI_TICK_MS = 60_000;
+/** How often the timer looks at what is due; the reads themselves are spread by `readEveryMs`. */
+export const WATCH_POLL_MS = 10_000;
+/** A PR whose CI is running is re-read this often, however long the rule has waited. */
+export const RUNNING_READ_MS = 30_000;
+const IDLE_READ_MS = 3 * 60_000;
 export const CI_RULE_TTL_MS = 7 * 24 * 60 * 60_000;
 const KEEP_FIRED_MS = 14 * 24 * 60 * 60_000;
 
@@ -360,15 +369,16 @@ export function onTalkSeen(repo: string, number: number, title: string, talk: Pr
   return fired;
 }
 
-/** When a PR is next worth reading. CI rules: every minute for the first half hour, every three after (a
- *  suite that has not moved in half an hour is not about to); comment-only PRs are read only to learn
- *  whether the PR is still open, every ten minutes. */
-export function readEveryMs(rows: Row[], now: number): number {
+/** When a PR is next worth reading. CI rules: every 30 s while its suite is running (`running`, from the last
+ *  read; unknown counts as running), every three minutes once nothing is; comment-only PRs are read only to
+ *  learn whether the PR is still open, every ten minutes. Ceiling: a suite that sits pending for hours
+ *  (a job waiting on an approval) is read every 30 s for as long as it does. */
+export function readEveryMs(rows: Row[], running = true): number {
   const ci = rows.some((r) => ruleOf(r)?.type !== "comment");
   if (!ci) return 10 * 60_000;
-  return now - Math.min(...rows.map((r) => r.created)) < 30 * 60_000 ? CI_TICK_MS : 3 * CI_TICK_MS;
+  return running ? RUNNING_READ_MS : IDLE_READ_MS;
 }
-const schedule = new Map<string, { next: number; wait: number }>();
+const schedule = new Map<string, { next: number; wait: number; running: boolean }>();
 export function __resetSchedule(): void { schedule.clear(); }
 
 /**
@@ -396,9 +406,10 @@ export async function checkWatches(read: ReadChecks, now = Date.now(), gate = fa
   for (const [k, rows] of due) {
     let snap: Snapshot | null = null;
     try { snap = await read(rows[0]!.root, rows[0]!.number); } catch { /* the next tick asks again */ }
-    const base = readEveryMs(rows, now);
+    const running = snap ? !snap.allDone || snap.all.some((c) => !c.done) : schedule.get(k)?.running ?? true;
+    const base = readEveryMs(rows, running);
     const wait = schedule.get(k)?.wait ?? base;
-    schedule.set(k, snap ? { next: now + base, wait: base } : { next: now + Math.min(wait * 2, 10 * 60_000), wait: Math.min(wait * 2, 10 * 60_000) });
+    schedule.set(k, snap ? { next: now + base, wait: base, running } : { next: now + Math.min(wait * 2, 10 * 60_000), wait: Math.min(wait * 2, 10 * 60_000), running });
     if (!snap) continue;
     shareChecks(rows[0]!.repo, rows[0]!.number, snap);
     if (snap.state && snap.state !== "OPEN") { endPr(rows[0]!.repo, rows[0]!.number, snap.state === "MERGED" ? "merged" : "closed", now); continue; }
@@ -421,7 +432,7 @@ export function startPrNotifyWatch(read: ReadChecks): { kick: () => void } {
     void checkWatches(read, Date.now(), gate).catch(() => {}).finally(() => { running = false; });
   };
   if (!timer) {
-    timer = setInterval(() => run(true), CI_TICK_MS);
+    timer = setInterval(() => run(true), WATCH_POLL_MS);
     (timer as unknown as { unref?: () => void }).unref?.();
     setTimeout(() => run(true), 5_000); // rules waiting when the server went down are read shortly after boot, off the startup path
   }
