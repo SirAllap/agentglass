@@ -107,6 +107,28 @@ export function askingCard(query: string): boolean {
 }
 
 /**
+ * Store the card a write just returned, as the freshest reading there is.
+ *
+ * A write to the tracker answers with the card as it now stands. Forgetting the
+ * entry instead threw that answer away and made the sidebar ask again, while a
+ * board row carrying the server's older copy went on drawing the status from
+ * before the press for up to five minutes (`withCard` leaves a reading younger
+ * than that alone). Keeping the answer here costs no request, and `withCard`
+ * lets it outrank any row copy that is older than it.
+ */
+export function putCard(query: string, task: ProviderTask | undefined | null): void {
+  if (!query) return;
+  if (!task) { forgetCard(query); return; }
+  seen.set(query, { at: Date.now(), task, error: "" });
+  tell();
+}
+
+/** What is held for this card, without asking for it. */
+export function peekCard(query: string): Entry | null {
+  return seen.get(query) ?? null;
+}
+
+/**
  * Throw one away — after the picker moves the card, where the status we are
  * holding is exactly the thing that just stopped being true.
  */
@@ -153,8 +175,14 @@ export function withCard<T extends PrSummary>(p: T, hasTaskProvider: boolean): T
      until an answer arrives: a stale status is worse than a fresh one and
      better than none. */
   const mine = p.card;
-  if (mine?.at && Date.now() - mine.at < FRESH_ENOUGH_MS) return p;
-  const hit = cardOf(t.query, FRESH_ENOUGH_MS);
+  /* …unless what this session holds is NEWER than the row's copy: a status or
+     an assignee edited in the detail, or a poll that brought the server's older
+     board reading back over it. The newer reading wins whichever way round the
+     two arrived, and peeking asks nobody. */
+  const held = peekCard(t.query);
+  const heldWins = !!held?.task && (!mine?.at || held.at > mine.at);
+  if (!heldWins && mine?.at && Date.now() - mine.at < FRESH_ENOUGH_MS) return p;
+  const hit = heldWins ? held : cardOf(t.query, FRESH_ENOUGH_MS);
   const k = hit?.task;
   if (!k) return p;
   return {

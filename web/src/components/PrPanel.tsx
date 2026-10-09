@@ -54,7 +54,7 @@ import { useDialogs } from "./ConfirmDialog.tsx";
 import { useMergeDialog } from "./MergeDialog.tsx";
 import { mergeCardRef, mergeNote, statusColor, rfqaStatus } from "../lib/cardMove.ts";
 import { cardPlan, cardPlanNote } from "../lib/cardPlan.ts";
-import { cardOf, askingCard, onCard, forgetCard, forgetCards, cardVersion, withCard } from "../lib/prCardStore.ts";
+import { cardOf, askingCard, onCard, putCard, forgetCards, cardVersion, withCard } from "../lib/prCardStore.ts";
 import { PeoplePick } from "./PeoplePick.tsx";
 import { SCROLLBAR_CSS, LINEBTN_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, LineMenuCtx, type LinePick, type LineSel } from "./diff/DiffLines.tsx";
 import { Toggle } from "./diff/DiffControls.tsx";
@@ -67,7 +67,7 @@ import { POLL_MS, SETTLE_MS, settleAfter } from "../lib/prSettle.ts";
 import { keepLoadedChecks } from "../lib/prMerge.ts";
 import { askingBehind, behindAnswer, forgetBehind, forgetOneBehind, onBehind, refreshBehind } from "../lib/prBehindStore.ts";
 import { refreshRollup } from "../lib/prRollupStore.ts";
-import { overlayDetail, refreshPlan } from "../lib/prRefresh.ts";
+import { overlayDetail, holdEdits, EDIT_HOLD_MS, refreshPlan, rowPatch, type EditLog } from "../lib/prRefresh.ts";
 import {
   anchorId, bootstrapSince, clearSeen, foldedIdx, markAllSeen, newKeys, newSince, onSeenChange, readSeen,
   reviewSpeaks, writeSeen, type NewAtom,
@@ -113,7 +113,7 @@ import { pins, isPinned, togglePin, subscribePins, type Pin } from "../lib/prPin
 import { TriageBoard } from "./TriageBoard.tsx";
 import { Inbox } from "./prs/Inbox.tsx";
 import { FileRail } from "./FileRail.tsx";
-import { Optimistic, reactionPatch, bodyPatch, resolvedPatch, labelsPatch } from "../lib/prOptimistic.ts";
+import { Optimistic, type Sent, reactionPatch, bodyPatch, resolvedPatch, labelsPatch, assigneesPatch, reviewersPatch, milestonePatch, draftPatch, titlePatch } from "../lib/prOptimistic.ts";
 import { prTimeline } from "../lib/prTimeline.ts";
 
 /**
@@ -2583,6 +2583,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settleDelay = useRef(SETTLE_MS);
   const loadListRef = useRef<((force?: boolean) => void) | null>(null);
+  /** When each pull request was last edited from the detail, and the row as the
+   *  detail then drew it — so a list read before the edit cannot undo it. */
+  const editedAt = useRef(new Map<number, number>());
+  const editLog = useRef<EditLog>(new Map());
 
   const loadList = useCallback((force = false) => {
     if (!root) return;
@@ -2594,7 +2598,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
       // Same rule as the board: a refresh may add and correct, but it may not
       // un-know. Every fetch starts at the fast pass, so without this a list
       // that had its check states dropped back to "not in yet" on every poll.
-      setPrs((cur) => keepLoadedChecks(cur, r.prs));
+      setPrs((cur) => holdEdits(keepLoadedChecks(cur, r.prs), editLog.current, r.fetchedAt));
       setListState({ fetchedAt: r.fetchedAt, loading: r.loading, checksPending: r.checksPending, error: r.error, needsAuth: r.needsAuth, total: r.total, hasNext: r.hasNext, cursor: r.cursor ?? null, pageSize: r.pageSize });
       // The keyboard cursor, never the open pull request. This lands on every
       // poll and on every scope switch, and when the list was a column beside a
@@ -2805,10 +2809,13 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
      up to date from it instead (see `overlayDetail`). */
   useEffect(() => {
     if (!detail || away) return;
+    /* Only a reading the panel stands behind, after an edit made here. */
+    const edited = editedAt.current.get(detail.number);
+    if (edited && !detailStale && Date.now() - edited < EDIT_HOLD_MS) editLog.current.set(detail.number, { at: Date.now(), patch: rowPatch(detail) });
     setPrs((cur) => overlayDetail(cur, detail));
     setBoardMine((cur) => overlayDetail(cur, detail));
     setBoardReview((cur) => overlayDetail(cur, detail));
-  }, [detail, away]);
+  }, [detail, away, detailStale]);
 
   useEffect(() => {
     if (!active || !root) return;
@@ -3276,12 +3283,12 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     void Promise.allSettled([
       api.prList(root, "mine", stateSel, force).then((r) => {
         if (!live) return;
-        setBoardMine((cur) => keepLoadedChecks(cur, r.prs ?? []));
+        setBoardMine((cur) => holdEdits(keepLoadedChecks(cur, r.prs ?? []), editLog.current, r.fetchedAt));
         if (typeof r.total === "number") setViewCounts((c) => ({ ...c, mine: r.total! }));
       }),
       api.prList(root, "review", stateSel, force).then((r) => {
         if (!live) return;
-        setBoardReview((cur) => keepLoadedChecks(cur, r.prs ?? []));
+        setBoardReview((cur) => holdEdits(keepLoadedChecks(cur, r.prs ?? []), editLog.current, r.fetchedAt));
         if (typeof r.total === "number") setViewCounts((c) => ({ ...c, review: r.total! }));
       }),
     ]).then(() => { if (live) setBoardLoading(false); });
@@ -3524,7 +3531,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   // so it can open from the masthead on every tab, not only where the sidebar
   // renders.
   const fieldPicker = usePrFieldPicker(detail, root, act, flash,
-    (add, remove, colors) => setLabels(add, remove, colors));
+    (add, remove, colors) => setLabels(add, remove, colors), (...a) => field(...a));
 
   const key = repo && detail ? `${repo.key}#${detail.number}` : "";
 
@@ -4028,7 +4035,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     if (!detail) return;
     const title = await askText({ title: `Rename #${detail.number}`, confirmLabel: "Save", input: { label: "Title", initial: detail.title } });
     if (!title?.trim() || title.trim() === detail.title) return;
-    await act("Edit title", () => api.prEdit(root, detail.number, { title: title.trim() }));
+    void field(titlePatch(detail.number, title.trim()), () => api.prEdit(root, detail.number, { title: title.trim() }), "The title did not save", "title");
   };
 
   const doEditBody = async (body: string) => {
@@ -4045,13 +4052,20 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
    * open — the list is the slow read that made these feel slow in the first
    * place, and it catches up on its own poll.
    */
-  const cheap = (n: number, w: Parameters<typeof layers.run>[0], alsoList = false) => {
-    void layers.run(w).then((ok) => {
-      if (!ok || selectedRef.current !== n) return;
+  const cheap = (n: number, w: Parameters<typeof layers.run>[0], alsoList = false): Promise<boolean> => {
+    editedAt.current.set(n, Date.now());
+    return layers.run(w).then((ok) => {
+      if (!ok || selectedRef.current !== n) return ok;
       loadDetail(n, true);
       if (alsoList) loadList(true);
+      return ok;
     });
   };
+  /** A sidebar field or the masthead: drawn on the press like a label, and the
+   *  answer still awaited by whoever needs it (the reviewer picker moves the
+   *  card only if GitHub took the change). */
+  const field = (patch: (d: PrDetail) => PrDetail, send: () => Promise<Sent>, failText: string, lane: string) =>
+    detail ? cheap(detail.number, { patch, send, failText, lane: `${lane}:${detail.number}` }) : Promise.resolve(false);
 
   /** A box ticked in the description. The whole body is the write, as it is on
    *  github.com; one lane so two quick ticks cannot land in the wrong order and
@@ -4164,7 +4178,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
     const add = want.filter((l) => !cur.includes(l));
     const remove = cur.filter((l) => !want.includes(l));
     if (add.length === 0 && remove.length === 0) return;
-    await act("Reviewers", () => api.prReviewers(root, detail.number, add, remove));
+    void field(reviewersPatch(detail.number, add, remove), () => api.prReviewers(root, detail.number, add, remove), "Reviewers did not save", "reviewers");
   };
 
   /** The chase, written for you: who it waits on, what for, where — on the
@@ -4802,7 +4816,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                   the MouseEvent in as the pull request number. */}
               <Masthead
                 d={d} busy={busy} local={local} onShowLocal={showLocal}
-                onEditTitle={doEditTitle} onDraft={() => act(d.isDraft ? "Mark ready" : "Convert to draft", () => api.prDraft(root, d.number, !d.isDraft))}
+                onEditTitle={doEditTitle} onDraft={() => { void field(draftPatch(d.number, !d.isDraft), () => api.prDraft(root, d.number, !d.isDraft), d.isDraft ? "Mark ready failed" : "Convert to draft failed", "draft"); }}
                 onClose={doClose} onLocalReview={(recipe) => doLocalReview(undefined, recipe)}
                 onReviewInTerminal={onReviewInTerminal && d ? (recipe) => onReviewInTerminal(root, d.number, recipe, cardRef(d)?.label ?? "") : undefined}
                 condensed={condensed}
@@ -4959,7 +4973,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
                           onRerun={() => act("Re-run checks", () => api.prRerun(root, d.number))}
                           onAutoMerge={doAutoMerge}
                           onCancelAutoMerge={() => act("Auto-merge cancelled", () => api.prMerge(root, d.number, mergeMethod, { disableAuto: true }))}
-                          onDraft={() => act(d.isDraft ? "Mark ready" : "Convert to draft", () => api.prDraft(root, d.number, !d.isDraft))}
+                          onDraft={() => { void field(draftPatch(d.number, !d.isDraft), () => api.prDraft(root, d.number, !d.isDraft), d.isDraft ? "Mark ready failed" : "Convert to draft failed", "draft"); }}
                           onGoThreads={() => setTab("conversation")}
                           /*
                            * The review, in THIS panel.
@@ -7070,8 +7084,9 @@ function ClickUpSide({ d, folded, onFold, onPlan, note }: {
       setCard((c) => c ? { ...c, status: moved || c.status, updated: r.task?.updated ?? c.updated } : c);
       /* The sidebar is holding the status this write just changed. Throwing it
          away is what makes the card's own section agree with the menu that
-         moved it, without waiting out the minute. */
-      forgetCard(query);
+         moved it, without waiting out the minute. The write's own answer
+         replaces it, so the board's row agrees too. */
+      putCard(query, r.task);
     }
     return r.ok;
   }, [folded, card, plan, on, label, note, query]);
@@ -7235,7 +7250,9 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
    *  ClickUp write reports where every other write reports. */
   note: (ok: boolean, msg: string) => void,
   /** Labels are a cheap write, drawn on the press rather than awaited. */
-  setLabels: (add: string[], remove: string[], colors: Record<string, string>) => boolean) {
+  setLabels: (add: string[], remove: string[], colors: Record<string, string>) => boolean,
+  /** The other sidebar fields: drawn now, the answer awaited. */
+  field: (patch: (d: PrDetail) => PrDetail, send: () => Promise<Sent>, failText: string, lane: string) => Promise<boolean>) {
   const [facets, setFacets] = useState<Facets | null>(null);
   const [mentions, setMentions] = useState<Mentions | null>(null);
   /* CODEOWNERS, read once per checkout when a picker is first opened. Empty rules
@@ -7264,14 +7281,14 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
   // The picker holds its selection locally and hands back the final set; here
   // we diff it against what the PR has now and write just the delta — the shape
   // the endpoints already take.
-  const commit = (was: string[], label: string, fn: (add: string[], remove: string[]) => Promise<{ ok: boolean; error?: string; detail?: string }>) => (next: string[]) => {
+  const commit = (was: string[], label: string, patch: (n: number, add: string[], remove: string[]) => (d: PrDetail) => PrDetail, fn: (add: string[], remove: string[]) => Promise<{ ok: boolean; error?: string; detail?: string }>) => (next: string[]) => {
     const add = next.filter((x) => !was.includes(x));
     const remove = was.filter((x) => !next.includes(x));
     // Nothing to write is not a failure — and the answer is awaited now, so
     // "GitHub first, and the card only if it landed" is true rather than
     // aspirational.
     if (!add.length && !remove.length) return true;
-    return act(label, () => fn(add, remove));
+    return field(patch(d!.number, add, remove), () => fn(add, remove), `${label} did not save`, label.toLowerCase());
   };
 
   let node: React.ReactNode = null;
@@ -7350,13 +7367,13 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
           : "Collaborators on this repository"}
         options={[...reviewedOptions, ...rest]}
         side={(h) => <ClickUpSide d={d} note={note} {...h} />}
-        selected={was} onClose={close} onCommit={commit(was, "Reviewers", (add, remove) => api.prReviewers(root, d.number, add, remove))} />;
+        selected={was} onClose={close} onCommit={commit(was, "Reviewers", reviewersPatch, (add, remove) => api.prReviewers(root, d.number, add, remove))} />;
     } else if (picker.field === "assignees") {
       const was = d.assignees;
       node = <FieldPicker anchor={a} title="Assign people" hint="Up to 10 assignees" multi loading={loading}
         options={(facets?.assignees ?? []).map((u) => ({ value: u, label: u, avatar: u }))}
         side={(h) => <ClickUpSide d={d} note={note} {...h} />}
-        selected={was} onClose={close} onCommit={commit(was, "Assignees", (add, remove) => api.prAssignees(root, d.number, add, remove))} />;
+        selected={was} onClose={close} onCommit={commit(was, "Assignees", assigneesPatch, (add, remove) => api.prAssignees(root, d.number, add, remove))} />;
     } else {
       // Milestone is one-of, not many: picking commits at once, and a leading
       // "No milestone" entry clears it — passing "" to the endpoint, exactly as
@@ -7365,7 +7382,7 @@ function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct,
       node = <FieldPicker anchor={a} title="Set milestone" hint="Choose one, or clear it" multi={false} loading={loading}
         options={[{ value: "", label: "No milestone" }, ...(facets?.milestones ?? []).map((m) => ({ value: m, label: m }))]}
         selected={was} onClose={close}
-        onCommit={(next) => { const title = next[0] ?? ""; return title === (d.milestone ?? "") ? true : act("Milestone", () => api.prMilestone(root, d.number, title)); }} />;
+        onCommit={(next) => { const title = next[0] ?? ""; return title === (d.milestone ?? "") ? true : field(milestonePatch(d.number, title), () => api.prMilestone(root, d.number, title), "Milestone did not save", "milestone"); }} />;
     }
   }
 
@@ -7420,10 +7437,10 @@ function CardStatusPick({ task, query, onSaid }: { task: ProviderTask; query: st
     setBusy(true);
     onSaid("moving…");
     const r = await api.clickupCard(task.id, { status }, task.updated)
-      .catch(() => ({ ok: false, error: "Could not reach the server" }));
+      .catch(() => ({ ok: false, error: "Could not reach the server", task: undefined }));
     setBusy(false);
     onSaid(r.ok ? `now ${status}` : `!${r.error || "ClickUp refused that"}`);
-    if (r.ok) forgetCard(query);
+    if (r.ok) putCard(query, r.task);
   };
 
   return (
@@ -7463,10 +7480,10 @@ function CardPeoplePick({ task, query, onSaid }: { task: ProviderTask; query: st
     const off = on.has(m.id);
     setSaving(m.id);
     const r = await api.clickupCard(task.id, off ? { rem: [m.id] } : { add: [m.id] }, task.updated)
-      .catch(() => ({ ok: false, error: "Could not reach the server" }));
+      .catch(() => ({ ok: false, error: "Could not reach the server", task: undefined }));
     setSaving(null);
     onSaid(r.ok ? (off ? `${m.name} off` : `${m.name} on`) : `!${r.error || "ClickUp refused that"}`);
-    if (r.ok) forgetCard(query);
+    if (r.ok) putCard(query, r.task);
   };
 
   return (
@@ -7542,10 +7559,10 @@ function CardRfqaButton({ task, query, onSaid, ask }: {
     // own `updated` stamp.
     const rem = (task.people ?? []).map((p) => p.id).filter((n): n is number => n != null);
     const r = await api.clickupCard(task.id, { status: target, rem }, task.updated)
-      .catch(() => ({ ok: false, error: "Could not reach the server" }));
+      .catch(() => ({ ok: false, error: "Could not reach the server", task: undefined }));
     setBusy(false);
     onSaid(r.ok ? `now ${target} · unassigned` : `!${r.error || "ClickUp refused that"}`);
-    if (r.ok) forgetCard(query);
+    if (r.ok) putCard(query, r.task);
   };
 
   return (

@@ -166,3 +166,27 @@ export const labelsPatch = (number: number, add: string[], remove: string[], col
       .map((name) => (colors[name] ? { name, color: colors[name] } : { name }));
     return { ...d, labels: [...kept, ...fresh] };
   };
+
+/* The sidebar's other fields, drawn the same way. Each one SETS: the assignee
+   list after the edit is what the layer says, never "toggle this login". */
+
+const names = (list: string[], add: string[], remove: string[]) =>
+  [...list.filter((x) => !remove.includes(x)), ...add.filter((x) => !list.includes(x))];
+
+export const assigneesPatch = (number: number, add: string[], remove: string[]) => (d: PrDetail): PrDetail =>
+  d.number === number ? { ...d, assignees: names(d.assignees, add, remove) } : d;
+
+export const reviewersPatch = (number: number, add: string[], remove: string[]) => (d: PrDetail): PrDetail => {
+  if (d.number !== number) return d;
+  const kept = d.reviewers.filter((r) => !remove.includes(r.login));
+  return { ...d, reviewers: [...kept, ...add.filter((l) => !kept.some((r) => r.login === l)).map((login) => ({ login }))] };
+};
+
+export const milestonePatch = (number: number, title: string) => (d: PrDetail): PrDetail =>
+  d.number === number ? { ...d, milestone: title || null } : d;
+
+export const draftPatch = (number: number, isDraft: boolean) => (d: PrDetail): PrDetail =>
+  d.number === number ? { ...d, isDraft } : d;
+
+export const titlePatch = (number: number, title: string) => (d: PrDetail): PrDetail =>
+  d.number === number ? { ...d, title } : d;
