@@ -221,12 +221,19 @@ export function safeHref(v: unknown): string | null {
   }
 }
 
+/** Names that are properties of every object. A plugin name and a field key end
+ *  up as keys of plain objects (the store, a plugin's settings, the secrets);
+ *  `__proto__` among them is the object's prototype, not an entry, so a write
+ *  under it lands on Object.prototype and is read back by every object. */
+export const RESERVED_KEYS: ReadonlySet<string> = new Set(["__proto__", "constructor", "prototype"]);
+
 export function validateField(raw: unknown, w: Walk): Field | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return w.fail("a field must be an object");
   const f = raw as Record<string, unknown>;
   const key = str(f.key, 60, w, "field.key");
   if (typeof key !== "string") return null;
   if (!/^[A-Za-z][A-Za-z0-9_.-]*$/.test(key)) return w.fail(`field key "${key}" must start with a letter and hold only letters, digits, . _ -`);
+  if (RESERVED_KEYS.has(key)) return w.fail(`field key "${key}" is a property every object has, so it cannot name a setting`);
   const type = oneOf(f.type, ["string", "text", "number", "boolean", "select", "list", "multi", "secret"] as const);
   if (!type) return w.fail(`field "${key}" has an unknown type`);
   const label = str(f.label, 120, w, `field "${key}" label`);

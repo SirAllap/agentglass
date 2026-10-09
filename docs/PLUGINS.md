@@ -287,7 +287,8 @@ plugin cannot draw into another's panel.
 
 `~/.config/agentglass/plugins.json` (mode 0600) is the whole record: what is
 installed and where it came from, the approval on file, the master switch, the
-catalogues added, and the settings values the person typed — which is why a
+catalogues added, and the settings values the person typed (a `secret` field's
+value is the exception: it is in `secrets.json`, below) — which is why a
 prompt written in a settings box never travels with the plugin.
 | `POST /plugin/self/pr/run` | Start or finish a pass over a pull request |
 | `POST /plugin/self/pr/notes` `{notes}` | Add or update notes |
@@ -307,11 +308,16 @@ masked box; once saved the value is shown as *Set, hidden* with **Replace** and
 (`GET /plugins/settings`, the plugin list, a plugin holding `full` scope) gets
 `null` in its place and a `set` list naming the secrets that hold a value; only
 the plugin that declared it reads the value, over its own `GET /plugin/self` and
-in its `settings` event. It lives in the same 0600 file as the other settings
-(rewritten whole and kept at 0600 on every save). That is a file only your user
-can read and not a keyring, so the ceiling is plain: **a plugin running outside
-its box, and any program running as you, can read it.** This hides the value
-from the app's screens and its API, not from the disk. A manifest cannot give a
+in its `settings` event. It lives in `~/.config/agentglass/secrets.json`, a 0600 file of its own
+(`{plugin: {field: value}}`, rewritten whole and kept at 0600 on every save), so
+that one code path reads it and `plugins.json`, which more of the app reads, never
+holds a value; a key an older build left in `plugins.json` moves over the first
+time it is read. That is a file only your user can read and not a keyring, so the
+ceiling is plain: **a plugin running outside its box, and any program running as
+you, can read it.** This hides the value from the app's screens and its API, not
+from the disk. When a plugin runs outside its box while another holds a key, the
+plugin's card and `agentglass-plugin list` say so: "<plugin> runs outside its box
+and can read <holder>'s key". A manifest cannot give a
 `secret` a default (a manifest is a public file), an update that turns the field
 into anything else drops the stored value, a removed plugin's secret is never
 kept for a reinstall, and a drawn `form` node never echoes one. From the

@@ -602,6 +602,8 @@ def cmd_list(args):
         state = "running" if p.get("running") else ("enabled" if p.get("enabled") else "off")
         draws = ", ".join(sorted(p.get("contributes") or {})) or "nothing"
         print(f"{p['name']:<24} {state:<8} {p.get('scope', '?'):<7} draws {draws}")
+        if p.get("canReadKeysOf"):
+            print(f"  ! {p['name']} runs outside its box and can read {', '.join(p['canReadKeysOf'])}'s key")
     return 0
 
 

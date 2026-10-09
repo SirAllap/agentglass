@@ -83,3 +83,11 @@ export function boxWording(
   }
   return { tone: "neutral", text: "Will run in a box when started." };
 }
+
+/** The red line for a plugin that runs outside its box while another holds a
+ *  key: a same-user process reads the key file. Generic, any plugin, any key. */
+export function neighbourKeyWording(plugin: Pick<PublicPlugin, "name" | "canReadKeysOf">): string | null {
+  const holders = plugin.canReadKeysOf;
+  if (!holders?.length) return null;
+  return `${plugin.name} runs outside its box and can read ${holders.join(", ")}'s key.`;
+}

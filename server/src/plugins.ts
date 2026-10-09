@@ -15,7 +15,7 @@
 // somewhere new asks again.
 import { createHash } from "node:crypto";
 import {
-  chmodSync, closeSync, cpSync, existsSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync,
+  closeSync, cpSync, existsSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync,
   renameSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
@@ -31,7 +31,7 @@ import { pluginGitEnv, PLUGIN_GIT_CONFIG } from "./plugin-env.ts";
 import { fetchCatalogue } from "./plugin-catalogue.ts";
 import type { GuardedFetchOptions } from "./net.ts";
 import { blockedEntry, type BlockEntry } from "./plugin-blocklist.ts";
-import { type Contributes, type Field, redactSecrets, validateContributes } from "../../shared/pluginUi.ts";
+import { type Contributes, type Field, RESERVED_KEYS, redactSecrets, validateContributes } from "../../shared/pluginUi.ts";
 import { type PluginSandbox, validateSandbox } from "../../shared/pluginSandbox.ts";
 import {
   hostResolvConfExtraRo, hostSystemPaths, openGrantFds, pluginDataDir, removePluginDataDir, resolveGrants,
@@ -118,10 +118,12 @@ const NAME_RE = /^[A-Za-z0-9._-]{1,60}$/;
  * to anything. `projectadd.ts` had the `.`/`..` guard; this copy had dropped
  * it. A leading dot is refused too: a hidden install directory is never
  * what a catalogue entry means, and `.git`-shaped names are how a folder
- * copy turns into something git reads.
+ * copy turns into something git reads. `__proto__`, `constructor` and
+ * `prototype` are refused because the name is also a key of plain objects
+ * (the store, the secrets), where the first is the object's prototype.
  */
 export function validPluginName(name: unknown): name is string {
-  return typeof name === "string" && NAME_RE.test(name) && name !== "." && name !== ".." && !name.startsWith(".");
+  return typeof name === "string" && NAME_RE.test(name) && name !== "." && name !== ".." && !name.startsWith(".") && !RESERVED_KEYS.has(name);
 }
 const MAX_TEXT = 500;
 const NO_CONTROL_CHARS = /[\x00-\x1f\x7f]/;
@@ -418,11 +420,15 @@ function read(): Store {
   try {
     const parsed = JSON.parse(readFileSync(p, "utf8")) as Partial<Store>;
     const kept = parsed.keptSettings;
-    return {
+    const store: Store = {
       master: typeof parsed.master === "boolean" ? parsed.master : true,
-      plugins: Array.isArray(parsed.plugins) ? parsed.plugins.map(boxedByDefault) : [],
+      // A record on disk is trusted no more than a manifest: one named for a
+      // property every object has (a hand edit, a build before the rule) is left
+      // out rather than let its name act as a property of another object.
+      plugins: Array.isArray(parsed.plugins) ? parsed.plugins.filter((r) => r && typeof r === "object" && typeof r.name === "string" && !RESERVED_KEYS.has(r.name)).map(boxedByDefault) : [],
       ...(kept && typeof kept === "object" && !Array.isArray(kept) ? { keptSettings: kept } : {}),
     };
+    return moveSecretsOut(store);
   } catch {
     // A corrupt file must not take the server down on boot — same rule
     // devices.ts follows. The cost is every plugin needs re-installing.
@@ -430,39 +436,212 @@ function read(): Store {
   }
 }
 
-function write(store: Store): void {
-  const p = pluginsPath();
-  if (offLimits(p)) return;
-  // Written beside the file and renamed over it: a crash half way leaves the old
-  // file whole, where truncate-then-write left invalid JSON that `read` takes for
-  // an empty store — every plugin, approval and secret gone on the next write.
-  // The mode is set on the file that is kept, not only when it is created: a
-  // plugins.json restored from a backup at 0644 would otherwise stay readable
-  // by everyone after a key is stored in it.
+/**
+ * One-time move of the keys an older build kept inside `plugins.json`, run on
+ * every read and a no-op once nothing is left to move. `secrets.json` is
+ * written first and read back, and only then does `plugins.json` lose the key,
+ * so a failed write (a full disk, a path that is a directory) or a crash
+ * between the two leaves the key in plugins.json or in both files, never in
+ * neither; the store comes back unmigrated and the next read tries again.
+ *
+ * The copy in `plugins.json` wins over one `secrets.json` already holds. This
+ * build never writes a key there, so one found there was put there by an older
+ * build sharing the config folder (a downgrade, an installed app beside a dev
+ * server), after this build moved the first one: the newer value. A crash
+ * between the two writes leaves the same value in both, so nothing is lost
+ * either way. Nothing about a value is logged.
+ *
+ * It never throws: `read()` takes a throw for "plugins.json is not JSON" and
+ * returns an empty store that the next write would save over every plugin and
+ * approval, so a record this cannot make sense of is a reason not to migrate.
+ */
+function moveSecretsOut(store: Store): Store {
+  try { return migrate(store); } catch { return store; }
+}
+
+function migrate(store: Store): Store {
+  const inRecord = (rec: PluginRecord): string[] => {
+    const held = rec.settings;
+    return held && typeof held === "object" ? secretKeysOf(rec.contributes?.settings).filter((k) => Object.hasOwn(held, k)) : [];
+  };
+  if (!store.plugins.some((rec) => inRecord(rec).length)) return store;
+  const stripped = (rec: PluginRecord): PluginRecord => (inRecord(rec).length ? { ...rec, settings: withoutSecrets(rec.contributes?.settings, rec.settings) } : rec);
+  // plugins.json could not be rewritten the last time: its copy is stale
+  // (secrets.json may have moved on since), so it is neither moved again nor
+  // trusted; the store goes out stripped and the strip is retried by a write.
+  if (stripPending) return { ...store, plugins: store.plugins.map(stripped) };
+  const secrets = readSecrets();
+  const moving: [string, string, string][] = [];
+  const plugins = store.plugins.map((rec) => {
+    for (const k of inRecord(rec)) {
+      const v = rec.settings![k];
+      if (typeof v === "string" && v !== "") { (secrets[rec.name] ??= table())[k] = v; moving.push([rec.name, k, v]); }
+    }
+    return stripped(rec);
+  });
+  if (moving.length) {
+    if (!writeAtomic(secretsPath(), secrets)) return store;
+    const back = readSecrets();
+    if (!moving.every(([name, k, v]) => back[name]?.[k] === v)) return store;
+  }
+  const moved = { ...store, plugins };
+  // The keys are in secrets.json and read back, so the store is right either
+  // way; what a failed write leaves behind is a stale copy on disk (see above).
+  if (!write(moved)) stripPending = true;
+  return moved;
+}
+
+/** True from the moment a read moved a key into `secrets.json` and could not
+ *  take it out of `plugins.json`, until a write of plugins.json lands. While it
+ *  is set the old value is still on disk there, and the next start would take
+ *  it back over whatever `secrets.json` holds by then: a key rotated or deleted
+ *  in between would come back. So reads stop retrying (each retry rewrote and
+ *  fsynced secrets.json), and nothing may change a key until the strip has
+ *  been written (`settleStrip`, which every caller of `putSecrets` runs first).
+ *
+ *  The ceiling: the flag is in memory. A restart forgets it, which is safe only
+ *  because both files hold the same value for as long as it was set; a key
+ *  changed by another process meanwhile (an older build sharing the folder)
+ *  is the case it does not cover. */
+let stripPending = false;
+
+function write(store: Store): boolean {
+  const ok = writeAtomic(pluginsPath(), store);
+  if (ok) stripPending = false;
+  return ok;
+}
+
+/** The store a read hands out is already stripped of keys, so writing it IS the
+ *  retry of a strip that failed. A caller about to change a key runs this
+ *  first; false means plugins.json still holds the old value and the key must
+ *  not be changed. */
+function settleStrip(store: Store): boolean {
+  return !stripPending || write(store);
+}
+
+
+/** Written beside the file and renamed over it: a crash half way leaves the old
+ *  file whole, where truncate-then-write left invalid JSON that `read` takes for
+ *  an empty store — every plugin, approval and secret gone on the next write.
+ *  The mode is set on the file that is kept, not only when it is created: a
+ *  file restored from a backup at 0644 would otherwise stay readable by
+ *  everyone after a key is stored in it. Whether it worked is the answer: a
+ *  caller that is about to delete the only other copy of a value needs to know. */
+function writeAtomic(p: string, data: unknown): boolean {
+  if (offLimits(p)) return false;
   const tmp = `${p}.${process.pid}.tmp`;
   try {
     mkdirSync(dirname(p), { recursive: true, mode: 0o700 });
-    const fd = openSync(tmp, "w", 0o600);
-    try { writeSync(fd, JSON.stringify(store, null, 2) + "\n"); fsyncSync(fd); } finally { closeSync(fd); }
-    chmodSync(tmp, 0o600);
+    // A file or a link already at the temp name (left by a crash, or put there)
+    // would keep its own mode while the key is written into it, or send the
+    // key to wherever the link points. Removed first and created with `wx`
+    // (O_EXCL, which never follows a link), so what is written is a new file
+    // that is 0600 (umask only narrows it) before it holds anything.
+    try { unlinkSync(tmp); } catch { /* none there */ }
+    const fd = openSync(tmp, "wx", 0o600);
+    try { writeSync(fd, JSON.stringify(data, null, 2) + "\n"); fsyncSync(fd); } finally { closeSync(fd); }
     renameSync(tmp, p);
+    return true;
   } catch {
     try { unlinkSync(tmp); } catch { /* nothing to clean */ }
+    return false;
   }
+}
+
+/**
+ * Where the values of `secret` fields live: `secrets.json`, beside
+ * `plugins.json`, `{ <plugin name>: { <field key>: <value> } }`.
+ *
+ * It exists so a secret has exactly one reader. `plugins.json` is the file the
+ * approvals, fingerprints and settings live in, and more code reads it than
+ * ever needs a key (the config browser, exports, a support paste); this one is
+ * read by `pluginOwnSettings` and nothing else. A box never mounts the config
+ * directory, so a boxed plugin cannot open either file, and the broker names
+ * the plugin from its token, so plugin A cannot ask for B's.
+ *
+ * The ceiling: a plugin that runs unboxed, or any program running as the same
+ * user, can still read this file. Moving the value out of `plugins.json` does
+ * not stop a same-uid process; it stops every other reader of `plugins.json`.
+ */
+export function secretsPath(): string {
+  return join(pluginsConfigDir(), "secrets.json");
+}
+type Secrets = Record<string, Record<string, string>>;
+
+/** An object with no prototype, for a table keyed by names a plugin chose:
+ *  `table["__proto__"]` is then an entry like any other. */
+const table = <T>(): Record<string, T> => Object.create(null) as Record<string, T>;
+
+function readSecrets(): Secrets {
+  const p = secretsPath();
+  if (offLimits(p) || !existsSync(p)) return table();
+  try {
+    const parsed = JSON.parse(readFileSync(p, "utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return table();
+    const out: Secrets = table();
+    for (const [name, byKey] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!byKey || typeof byKey !== "object" || Array.isArray(byKey)) continue;
+      const held = table<string>();
+      for (const [k, v] of Object.entries(byKey as Record<string, unknown>)) if (typeof v === "string" && v !== "") held[k] = v;
+      if (Object.keys(held).length) out[name] = held;
+    }
+    return out;
+  } catch {
+    // Unreadable is treated as empty, as `read` does for plugins.json: the
+    // cost is each key is asked for again, never a crash on boot.
+    return table();
+  }
+}
+
+/** Set one plugin's keys (none drops its entry) and write the file. */
+function putSecrets(all: Secrets, name: string, held: Record<string, string>): boolean {
+  if (Object.keys(held).length) all[name] = held; else delete all[name];
+  return writeAtomic(secretsPath(), all);
+}
+
+const secretKeysOf = (fields: Field[] | undefined): string[] =>
+  (Array.isArray(fields) ? fields : []).filter((f) => f?.type === "secret" && typeof f.key === "string" && !RESERVED_KEYS.has(f.key)).map((f) => f.key);
+
+/** What one plugin holds, for the keys its manifest still declares as secret. */
+function secretValuesOf(name: string, fields: Field[] | undefined): Record<string, string> {
+  const keys = secretKeysOf(fields);
+  if (!keys.length) return {}; // most plugins declare none: no second file to read
+  const held = readSecrets()[name] ?? {};
+  return Object.fromEntries(keys.filter((k) => Object.hasOwn(held, k)).map((k) => [k, held[k]]));
+}
+
+/** A plugin's stored settings with its keys put back, for the readers that hand
+ *  them to the plugin or redact them straight away. */
+function settingsWithSecrets(rec: PluginRecord): Record<string, unknown> {
+  return resolveSettings(rec.contributes?.settings, { ...rec.settings, ...secretValuesOf(rec.name, rec.contributes?.settings) });
+}
+
+/** Keep only `keys` of one plugin's secrets (none by default) and write when
+ *  that changed anything — a revoke, a retype, a remove, a replacement. False
+ *  when a key that had to go is still on disk: the caller then stops, because
+ *  carrying on would hand the old key to whatever is installed next under this
+ *  name. */
+function keepSecrets(store: Store, name: string, keys: string[] = []): boolean {
+  if (!settleStrip(store)) return false;
+  const all = readSecrets();
+  const held = all[name];
+  if (!held) return true;
+  const kept = Object.fromEntries(Object.entries(held).filter(([k]) => keys.includes(k)));
+  return Object.keys(kept).length === Object.keys(held).length || putSecrets(all, name, kept);
 }
 
 /** The settings without the values of fields that are `secret` in `fields`. */
 function withoutSecrets(fields: Field[] | undefined, settings: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
   if (!settings) return settings;
-  const secret = new Set((fields ?? []).filter((f) => f.type === "secret").map((f) => f.key));
-  return Object.fromEntries(Object.entries(settings).filter(([k]) => !secret.has(k)));
+  const secret = secretKeysOf(fields);
+  return Object.fromEntries(Object.entries(settings).filter(([k]) => !secret.includes(k)));
 }
 
 /** A key that was a secret and is not any more must not carry its value into a
  *  field that is drawn and served in the clear. */
 function withoutRetypedSecrets(prev: Field[] | undefined, next: Field[] | undefined, settings: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
-  const still = new Set((next ?? []).filter((f) => f.type === "secret").map((f) => f.key));
-  return withoutSecrets((prev ?? []).filter((f) => !still.has(f.key)), settings);
+  const still = secretKeysOf(next);
+  return withoutSecrets((prev ?? []).filter((f) => !still.includes(f.key)), settings);
 }
 
 /**
@@ -719,7 +898,7 @@ async function startProcess(rec: PluginRecord): Promise<void> {
       parentFds = built.parentFds;
       boxState = built.refused.length > 0 ? { kind: "boxed", refused: built.refused } : { kind: "boxed" };
       for (const r of built.refused) console.warn(`[plugin sandbox] ${rec.name}: refused ${r.path}: ${r.why}`);
-    } else if (process.platform !== "linux" || rec.allowUnboxed || process.env.AGENTGLASS_PLUGINS_UNBOXED === "1") {
+    } else if (mayRunUnboxed(rec)) {
       // `process.platform !== "linux"` first, and unconditional: bwrap is a
       // Linux mechanism, so on macOS/Windows `sandboxProbe()` fails with
       // "missing" for every single plugin, always — there is no box to
@@ -840,6 +1019,11 @@ export type PublicPlugin = PluginRecord & {
    *  Set only while nothing is running: a plugin currently up has nothing
    *  to explain. */
   lastBoxFailure?: string;
+  /** The other plugins whose key THIS one can read: set only while it runs
+   *  outside its box (a same-user process reads `secrets.json`) and another
+   *  plugin holds a key. Static, a line on the plugin and in `plugins list`,
+   *  never a notification. */
+  canReadKeysOf?: string[];
 };
 
 /** A record from before `contributes` existed has none on disk. */
@@ -850,6 +1034,20 @@ function withContributes(p: PluginRecord): PluginRecord {
 function publicProbe(): PublicSandboxProbe {
   const p = sandboxProbe();
   return p.ok ? { ok: true } : { ok: false, reason: p.reason, detail: p.detail };
+}
+
+/** Whether a host that cannot build the box lets this plugin run without it. */
+function mayRunUnboxed(rec: PluginRecord): boolean {
+  return process.platform !== "linux" || rec.allowUnboxed === true || process.env.AGENTGLASS_PLUGINS_UNBOXED === "1";
+}
+
+/** Outside a box now, or enabled and about to be: a plugin that is not running
+ *  (crashed, master off, between boots) starts the same way it did last time,
+ *  and the red line is for what it could read then, not only while it is up. */
+function runsUnboxed(p: PluginRecord, boxState: BoxState | undefined): boolean {
+  if (boxState) return boxState.kind === "unboxed";
+  if (!p.enabled) return false;
+  return !p.sandbox || (!sandboxProbe().ok && mayRunUnboxed(p));
 }
 
 /** `running`/`pid`/`boxState` together, from the one live entry — so a
@@ -876,8 +1074,21 @@ function liveState(p: PluginRecord): Pick<PublicPlugin, "running" | "pid" | "box
  *  key, a private repository) is not for every read-scope caller of /plugins
  *  — another plugin, a paired phone — to see. It is served on its own, at
  *  `full`, and to the plugin itself over its own token. */
-export function listPlugins(): PublicPlugin[] {
-  return read().plugins.map(({ settings: _s, ...p }) => ({ ...withContributes(p), ...liveState(p) }));
+export function listPlugins(opts: { keyExposure?: boolean } = {}): PublicPlugin[] {
+  const store = read();
+  const installed = new Set(store.plugins.map((q) => q.name));
+  let holders: string[] | undefined; // read only when somebody runs outside a box
+  return store.plugins.map(({ settings: _s, ...p }) => {
+    const live = liveState(p);
+    // Who holds a key is for the window, so it is opt-in: a plugin that asks the
+    // list must not get a free map of whom to go after (an unboxed one can read
+    // the file anyway). Only plugins still installed count; an entry left in
+    // secrets.json by one that is gone is nobody's to be told about.
+    const exposed = opts.keyExposure && runsUnboxed(p, live.boxState)
+      ? (holders ??= Object.keys(readSecrets()).filter((h) => installed.has(h))).filter((h) => h !== p.name)
+      : [];
+    return { ...withContributes(p), ...live, ...(exposed.length ? { canReadKeysOf: exposed } : {}) };
+  });
 }
 
 /** What a plugin declared, for the routes that check a draw against it. */
@@ -897,7 +1108,7 @@ export function isRunning(name: string): boolean {
 export function pluginSettings(name: string): { fields: ReturnType<typeof fieldsWithOptions>; values: Record<string, unknown>; set: string[] } | null {
   const rec = read().plugins.find((p) => p.name === name);
   if (!rec) return null;
-  const r = redactSecrets(rec.contributes?.settings, resolveSettings(rec.contributes?.settings, rec.settings));
+  const r = redactSecrets(rec.contributes?.settings, settingsWithSecrets(rec));
   return { fields: fieldsWithOptions(name, rec.contributes?.settings), values: r.values, set: r.set };
 }
 
@@ -905,7 +1116,7 @@ export function pluginSettings(name: string): { fields: ReturnType<typeof fields
  *  `/plugin/self` routes and the `settings` event, which are its alone. */
 export function pluginOwnSettings(name: string): Record<string, unknown> {
   const rec = read().plugins.find((p) => p.name === name);
-  return rec ? resolveSettings(rec.contributes?.settings, rec.settings) : {};
+  return rec ? settingsWithSecrets(rec) : {};
 }
 
 /**
@@ -920,9 +1131,23 @@ export function setPluginSettings(name: string, raw: unknown): { ok: true; value
   if (!rec) return { ok: false, error: "no such plugin" };
   const fields = rec.contributes?.settings;
   if (!fields?.length) return { ok: false, error: "this plugin has no settings" };
-  rec.settings = { ...(rec.settings ?? {}), ...coerceSettings(fields, raw) };
-  write(store);
-  const values = resolveSettings(fields, rec.settings);
+  const given = coerceSettings(fields, raw);
+  const secretKeys = secretKeysOf(fields);
+  const sent = Object.entries(given).filter(([k]) => secretKeys.includes(k));
+  if (sent.length) {
+    if (!settleStrip(store)) return { ok: false, error: "could not save the key" };
+    // Secrets first, as the migration does: a crash between the two files can
+    // only leave a plain setting unsaved, never a key in the wrong place.
+    const all = readSecrets();
+    const held = { ...(all[name] ?? {}) };
+    for (const [k, v] of sent) { if (v === "") delete held[k]; else held[k] = v as string; }
+    if (!putSecrets(all, name, held)) return { ok: false, error: "could not save the key" };
+  }
+  rec.settings = { ...(rec.settings ?? {}), ...withoutSecrets(fields, given) };
+  // The key is already kept, so a failure here is a plain setting not saved,
+  // said as such: an ok would let the next read put the old plugins.json back.
+  if (!write(store)) return { ok: false, error: "could not save the settings" };
+  const values = settingsWithSecrets(rec);
   pushEvent(name, { type: "settings", settings: values, at: Date.now() });
   return { ok: true, ...redactSecrets(fields, values) };
 }
@@ -1106,6 +1331,23 @@ async function finishInstall(
   const approvedFingerprint = stillApproved ? existing!.approvedFingerprint! : null;
   if (existing?.enabled && !stillApproved) await stopRunning(manifest.name);
 
+  // A key follows an update from the same place that still declares the field
+  // as a secret; a different source, a retyped field or a first install holds
+  // none. Dropped before the folder or the record is touched, so a crash in between
+  // leaves a plugin without its key and never one with somebody else's, and a
+  // drop that fails refuses the install with nothing replaced.
+  //
+  // The ceiling: "the same place" is the name plus `sourceKey`, not an identity.
+  // A local-path source is the same whenever the folder path matches, so
+  // different content put at that path inherits the key on update. The
+  // fingerprint changes with the content and resets the approval, so it cannot
+  // run until a person approves it again, but nothing on that approval says a
+  // stored key will be handed over with it. Same semantics as the plain settings
+  // an update carries; a line on the consent screen is the next thing after this
+  // and is not here.
+  if (!keepSecrets(store, manifest.name, same ? secretKeysOf(manifest.contributes?.settings) : [])) {
+    return { ok: false, error: "could not drop the old key of a plugin with this name, so nothing was installed" };
+  }
   // Belt over braces: `validPluginName` already refused `..`, and this is
   // the assertion that survives a future edit to the regex. Nothing on disk
   // is touched unless the target is a child of the plugins folder.
@@ -1356,6 +1598,12 @@ export async function disablePlugin(name: string): Promise<boolean> {
   return true;
 }
 
+/** Throws rather than answer false, which means "no such plugin": a remove that
+ *  could not revoke the key is not that. */
+function dropKeyOrThrow(store: Store, name: string): void {
+  if (!keepSecrets(store, name)) throw new Error("could not drop this plugin's key, so nothing was removed");
+}
+
 /** Disable and remove: stop the process, revoke its token, delete the
  *  copied folder, drop the record. A plugin left running after it was
  *  removed is the same failure a plugin left running after it was
@@ -1369,10 +1617,15 @@ export async function removePlugin(name: string, opts: { dropSettings?: boolean 
     // clear them, since there is no card to press Remove on. Every source's
     // under that name goes — the command names a plugin, not where it came
     // from.
-    if (!opts.dropSettings || !store.keptSettings?.[name]) return false;
+    if (!opts.dropSettings || !Object.hasOwn(store.keptSettings ?? {}, name)) return false; // `keptSettings["__proto__"]` is not an entry
+    dropKeyOrThrow(store, name);
     write({ ...store, keptSettings: withoutKey(store.keptSettings, name) });
     return true;
   }
+  // First, before anything is deleted: a key that cannot be revoked leaves the
+  // record, the folder and the name as they were, so nothing installed later
+  // under it can be handed the key.
+  dropKeyOrThrow(store, name);
   await stopRunning(name);
   lastBoxFailure.delete(name);
   // A record is read back from disk, so its `installDir` is trusted no more
@@ -1426,5 +1679,6 @@ function withoutKept(m: Store["keptSettings"], name: string, from: string): Stor
 export async function __resetPlugins(): Promise<void> {
   for (const name of [...running.keys()]) await stopRunning(name);
   write({ master: true, plugins: [] });
+  writeAtomic(secretsPath(), {});
   try { rmSync(join(pluginsConfigDir(), "plugins"), { recursive: true, force: true }); } catch { /* nothing to clear */ }
 }

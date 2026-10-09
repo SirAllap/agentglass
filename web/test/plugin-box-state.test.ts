@@ -4,7 +4,7 @@
  * pinned without a renderer.
  */
 import { describe, expect, test } from "bun:test";
-import { boxWording, USERNS_FIX } from "../src/lib/pluginBoxState.ts";
+import { boxWording, neighbourKeyWording, USERNS_FIX } from "../src/lib/pluginBoxState.ts";
 import type { PublicPlugin } from "../../shared/types.ts";
 
 const SANDBOX = { network: "agentglass" as const, read: [], write: [], programs: [] };
@@ -87,5 +87,15 @@ describe("boxWording", () => {
   test("running unboxed: no-block reads neutral, not red — a declared sandbox never actually reaches this reason", () => {
     const w = boxWording(plugin({ running: true, boxState: { kind: "unboxed", reason: "no-block" } }));
     expect(w!.tone).toBe("neutral");
+  });
+});
+
+describe("neighbourKeyWording", () => {
+  test("says whose key an unboxed plugin could read, and says nothing when there is none", () => {
+    expect(neighbourKeyWording({ name: "orbit-peer", canReadKeysOf: ["orbit-scorer"] }))
+      .toBe("orbit-peer runs outside its box and can read orbit-scorer's key.");
+    expect(neighbourKeyWording({ name: "orbit-peer", canReadKeysOf: ["orbit-scorer", "orbit-trace"] })).toContain("orbit-scorer, orbit-trace's key");
+    expect(neighbourKeyWording({ name: "orbit-peer" })).toBeNull();
+    expect(neighbourKeyWording({ name: "orbit-peer", canReadKeysOf: [] })).toBeNull();
   });
 });

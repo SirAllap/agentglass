@@ -5022,7 +5022,7 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
      * privileged as git write or docker control, which is what it is.
      */
     if (pathname === "/plugins" && req.method === "GET") {
-      return json({ master: masterEnabled(), plugins: listPlugins() });
+      return json({ master: masterEnabled(), plugins: listPlugins({ keyExposure: pluginOfRequest(req, url) === null }) });
     }
 
     if (pathname === "/plugins/master" && req.method === "POST") {
@@ -5114,8 +5114,12 @@ async function handleServerRequest(req: Request, srv: Server<WsData>): Promise<R
       let b: { name?: unknown; dropSettings?: unknown };
       try { b = (await req.json()) as { name?: unknown; dropSettings?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       if (typeof b.name !== "string" || !b.name) return json({ ok: false, error: "name is required" }, 400);
-      const ok = await removePlugin(b.name, { dropSettings: b.dropSettings === true });
-      return json({ ok }, ok ? 200 : 404);
+      try {
+        const ok = await removePlugin(b.name, { dropSettings: b.dropSettings === true });
+        return json({ ok }, ok ? 200 : 404);
+      } catch (e) {
+        return json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 500);
+      }
     }
 
     /**

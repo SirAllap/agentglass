@@ -3,7 +3,7 @@
  * real server and a real plugin process:
  *
  *   a `secret` settings field — typed into a masked box, kept in the 0600
- *   plugins file, handed back to the plugin that declared it and to nobody
+ *   secrets file, handed back to the plugin that declared it and to nobody
  *   else, in any read;
  *
  *   `inboxAnnotations` — a badge and a number to order by on Inbox rows,
@@ -113,6 +113,7 @@ const post = async (p: string, b: unknown): Promise<Response> =>
   fetch(base + p, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) });
 const pluginDir = () => join(dir, "agentglass", "plugins", MANIFEST.name);
 const plugins = () => join(dir, "agentglass", "plugins.json");
+const secrets = () => join(dir, "agentglass", "secrets.json");
 
 async function until<T>(read: () => Promise<T>, ok: (v: T) => boolean, ms = 8000): Promise<T> {
   let v = await read();
@@ -174,9 +175,10 @@ describe("a secret settings field", () => {
     expect(r.set).toEqual(["apiKey"]);
   });
 
-  test("it is kept in the plugins file, which only its owner can read", () => {
-    expect(readFileSync(plugins(), "utf8")).toContain(KEY);
-    expect(statSync(plugins()).mode & 0o777).toBe(0o600);
+  test("it is kept in the secrets file, which only its owner can read, and not in the plugins file", () => {
+    expect(readFileSync(secrets(), "utf8")).toContain(KEY);
+    expect(statSync(secrets()).mode & 0o777).toBe(0o600);
+    expect(readFileSync(plugins(), "utf8")).not.toContain(KEY);
   });
 
   test("the plugin hears it in its settings event and reads it from its own self", async () => {

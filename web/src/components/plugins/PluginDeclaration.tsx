@@ -3,7 +3,7 @@ import type { DeviceScope, PublicPlugin } from "../../../../shared/types.ts";
 import { CopyIcon, EyeIcon, NoteIcon, HandIcon } from "../../lib/glyphIcons.tsx";
 import { CommandIcon, PuzzleIcon, ShieldIcon, SlidersIcon } from "../settingsNavIcons.tsx";
 import { describeSandbox, type SandboxGrant } from "../../../../shared/pluginSandbox.ts";
-import { boxWording } from "../../lib/pluginBoxState.ts";
+import { boxWording, neighbourKeyWording } from "../../lib/pluginBoxState.ts";
 import { HIT, ICON } from "../../lib/iconSize.ts";
 import { EDGE } from "../workspace/Chrome.tsx";
 
@@ -86,6 +86,7 @@ export function PluginDeclaration({ plugin }: { plugin: PublicPlugin }) {
   const drawn = surfaces(plugin);
   const d = plugin.sandbox ? describeSandbox(plugin.sandbox) : null;
   const box = boxWording(plugin);
+  const neighbourKey = neighbourKeyWording(plugin);
   return (
     <div className="flex flex-col gap-2.5 min-w-0">
       <Block icon={<EyeIcon size={ICON.sm} />} tint={tint} head="What it sees" chip={SCOPE_WORD[plugin.scope]}>
@@ -111,6 +112,7 @@ export function PluginDeclaration({ plugin }: { plugin: PublicPlugin }) {
         >
           <p className="m-0 mb-1.5 text-[12px] leading-relaxed" style={{ color: box.tone === "warning" ? "var(--error)" : "var(--text2)" }}>{box.text}</p>
           {box.tone === "warning" && "fix" in box && box.fix && <FixBlock command={box.fix} />}
+          {neighbourKey && <p className="m-0 mb-1.5 text-[12px] leading-relaxed" style={{ color: "var(--error)" }}>{neighbourKey}</p>}
           {box.tone === "boxed" && box.refused && box.refused.length > 0 && (
             <div className="flex flex-col gap-0.5 mb-1.5">
               {box.refused.map((r) => (

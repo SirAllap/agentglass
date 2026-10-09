@@ -430,6 +430,7 @@ sessions.
 | `~/.config/agentglass/config.json` | The active project scope and the UI switches. |
 | `~/.config/agentglass/clickup-views.json` | The ClickUp boards you saved, and a copy of the last thing each one returned — task titles, statuses and tags. Not a secret and not `0600`: it is a cache of things you can already see, kept on disk so the panel opens instantly instead of waiting a second and a half after every restart. Delete it and it rebuilds. |
 | `~/.config/agentglass/credentials.json` | **API tokens for services you connected in Settings → Integrations**, `0600`, alongside what the service said about each one — the account name and workspace, so a card can say who you are without a round trip. Only providers with no CLI of their own land here: `gh` keeps GitHub's token in your system keyring and agentglass never reads it. |
+| `~/.config/agentglass/secrets.json` | **The keys plugins asked you for** (a `secret` settings field), `0600`, by plugin name. Handed only to the plugin that declared the field, and never to the window or the API. A plugin running outside its box, or any program running as you, can read it; the plugin list says when one does. |
 
 ### About that credentials file
 

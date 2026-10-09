@@ -5149,6 +5149,9 @@ export interface PublicPlugin {
   /** The first line bwrap wrote to stderr the last time this plugin's box
    *  died in its opening instant. Set only while nothing is running. */
   lastBoxFailure?: string;
+  /** The other plugins whose key this one can read — see `PublicPlugin` in
+   *  server/src/plugins.ts. Present only while it runs outside its box. */
+  canReadKeysOf?: string[];
 }
 
 export interface PluginsStatus {

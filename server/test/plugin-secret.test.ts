@@ -1,7 +1,7 @@
 /*
  * A `secret` settings field: a key or a token a plugin asks for.
  *
- * Kept in the same 0600 file as the other settings, handed back to the plugin
+ * Kept in `secrets.json`, a 0600 file of its own, handed back to the plugin
  * that declared it, and to nothing else. The whole promise is in what the
  * OTHER reads return, so every one of them is asserted on the raw text, not on
  * a field that might be renamed.
@@ -11,7 +11,7 @@ import { chmodSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileS
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
-  MANIFEST_NAME, __resetPlugins, installPlugin, listPlugins, pluginOwnSettings, pluginSettings, pluginsPath, removePlugin, setPluginSettings,
+  MANIFEST_NAME, __resetPlugins, installPlugin, listPlugins, pluginOwnSettings, pluginSettings, pluginsPath, removePlugin, secretsPath, setPluginSettings,
 } from "../src/plugins.ts";
 import { coerceValue, validateFields, validateTree } from "../../shared/pluginUi.ts";
 
@@ -61,10 +61,11 @@ describe("a secret field", () => {
     expect(pluginOwnSettings("orbit-scorer").apiKey).toBe(KEY);
   });
 
-  test("it is kept in the plugins file, mode 0600", () => {
+  test("it is kept in the secrets file, mode 0600, and not in the plugins file", () => {
     setPluginSettings("orbit-scorer", { apiKey: KEY });
-    expect(readFileSync(pluginsPath(), "utf8")).toContain(KEY);
-    expect(statSync(pluginsPath()).mode & 0o777).toBe(0o600);
+    expect(readFileSync(secretsPath(), "utf8")).toContain(KEY);
+    expect(statSync(secretsPath()).mode & 0o777).toBe(0o600);
+    expect(readFileSync(pluginsPath(), "utf8"), "the key stayed in plugins.json").not.toContain(KEY);
   });
 
   test("another field's save, or a null from a window that never had the value, leaves it alone", () => {
@@ -84,19 +85,20 @@ describe("a secret field", () => {
   test("dropping the plugin's settings takes the secret off disk too", async () => {
     setPluginSettings("orbit-scorer", { apiKey: KEY });
     await removePlugin("orbit-scorer", { dropSettings: true });
-    expect(readFileSync(pluginsPath(), "utf8"), "a dropped secret stayed on disk").not.toContain(KEY);
+    expect(readFileSync(secretsPath(), "utf8"), "a dropped secret stayed on disk").not.toContain(KEY);
   });
 });
 
 describe("the file the secret lives in", () => {
   test("stays 0600 when it already existed wider, and is replaced whole rather than truncated", () => {
-    chmodSync(pluginsPath(), 0o644);
-    const before = statSync(pluginsPath()).ino;
     setPluginSettings("orbit-scorer", { apiKey: KEY });
-    expect(statSync(pluginsPath()).mode & 0o777, "a wider file stayed wider after a key was stored").toBe(0o600);
-    expect(statSync(pluginsPath()).ino, "written in place: a crash half way leaves invalid JSON").not.toBe(before);
-    expect(() => JSON.parse(readFileSync(pluginsPath(), "utf8"))).not.toThrow();
-    expect(readdirSync(dirname(pluginsPath())).filter((f) => f.endsWith(".tmp")), "a temp file was left behind").toEqual([]);
+    chmodSync(secretsPath(), 0o644);
+    const before = statSync(secretsPath()).ino;
+    setPluginSettings("orbit-scorer", { apiKey: `${KEY}-2` });
+    expect(statSync(secretsPath()).mode & 0o777, "a wider file stayed wider after a key was stored").toBe(0o600);
+    expect(statSync(secretsPath()).ino, "written in place: a crash half way leaves invalid JSON").not.toBe(before);
+    expect(() => JSON.parse(readFileSync(secretsPath(), "utf8"))).not.toThrow();
+    expect(readdirSync(dirname(secretsPath())).filter((f) => f.endsWith(".tmp")), "a temp file was left behind").toEqual([]);
   });
 });
 
@@ -109,7 +111,7 @@ describe("a secret does not outlive what it was given for", () => {
     writeFileSync(join(src, MANIFEST_NAME), JSON.stringify(retyped));
     expect((await installPlugin(src)).ok).toBe(true);
     expect(JSON.stringify(pluginSettings("orbit-scorer")), "the old key came back as a plain field").not.toContain(KEY);
-    expect(readFileSync(pluginsPath(), "utf8")).not.toContain(KEY);
+    expect(readFileSync(secretsPath(), "utf8")).not.toContain(KEY);
   });
 
   test("an update that keeps it a secret keeps the value", async () => {
@@ -125,7 +127,7 @@ describe("a secret does not outlive what it was given for", () => {
     expect((await installPlugin(src)).ok).toBe(true);
     setPluginSettings("orbit-scorer", { apiKey: KEY, mode: "live" });
     await removePlugin("orbit-scorer");
-    expect(readFileSync(pluginsPath(), "utf8"), "the key stayed on disk after an uninstall").not.toContain(KEY);
+    expect(readFileSync(secretsPath(), "utf8"), "the key stayed on disk after an uninstall").not.toContain(KEY);
     expect((await installPlugin(src)).ok).toBe(true);
     expect(pluginOwnSettings("orbit-scorer").mode).toBe("live");
     expect(pluginSettings("orbit-scorer")!.set).toEqual([]);
@@ -134,7 +136,7 @@ describe("a secret does not outlive what it was given for", () => {
   test("replacing the plugin with one from another source does not park the key for it either", async () => {
     setPluginSettings("orbit-scorer", { apiKey: KEY });
     expect((await installPlugin(fixture())).ok).toBe(true);
-    expect(readFileSync(pluginsPath(), "utf8")).not.toContain(KEY);
+    expect(readFileSync(secretsPath(), "utf8")).not.toContain(KEY);
   });
 });
 

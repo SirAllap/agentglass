@@ -31,6 +31,7 @@ beforeAll(() => {
   put("devices.json", 0o600);
   put("notify-prefs.json", 0o600);
   put("plugins.json", 0o600);
+  put("secrets.json", 0o600);
   put("plugin-notes.json", 0o600);
   // Perms drifted: readable, but the NAME still keeps it shut.
   put("drifted", 0o644);
@@ -58,7 +59,7 @@ afterAll(() => {
   }
 });
 
-const SECRETS = ["token", "credentials.json", "devices.json", "notify-prefs.json", "plugins.json", "plugin-notes.json"];
+const SECRETS = ["token", "credentials.json", "devices.json", "notify-prefs.json", "plugins.json", "secrets.json", "plugin-notes.json"];
 
 describe("a caller on this machine", () => {
   test("lists the folder, keys marked locked with a reason", () => {
@@ -97,8 +98,9 @@ describe("a caller on this machine", () => {
     chmodSync(join(ag, "token"), 0o644);
     chmodSync(join(ag, "credentials.json"), 0o644);
     chmodSync(join(ag, "devices.json"), 0o644);
+    chmodSync(join(ag, "secrets.json"), 0o644);
     try {
-      for (const n of ["token", "credentials.json", "devices.json", "Devices.JSON", "TOKEN"]) {
+      for (const n of ["token", "credentials.json", "devices.json", "Devices.JSON", "TOKEN", "secrets.json"]) {
         expect(fileFacts(join(ag, n), true).ok).toBe(false);
       }
       // A link with an innocent name to a drifted key: the resolved name decides.
@@ -106,7 +108,7 @@ describe("a caller on this machine", () => {
       expect(fileFacts(join(other, "innocent.txt"), true).ok).toBe(false);
       expect(browseDir(ag, false, true).entries.find((e) => e.name === "token")!.locked).toBe(true);
     } finally {
-      for (const n of ["token", "credentials.json", "devices.json"]) chmodSync(join(ag, n), 0o600);
+      for (const n of ["token", "credentials.json", "devices.json", "secrets.json"]) chmodSync(join(ag, n), 0o600);
     }
   });
 
